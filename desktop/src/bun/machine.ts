@@ -13,12 +13,12 @@ import {
   Duration,
   Effect,
   Exit,
-  Layer,
   Option,
   Predicate,
   Queue,
   Ref,
   Result,
+  Schedule,
   Schema,
   SchemaIssue,
   Scope,
@@ -38,6 +38,7 @@ import {
   type BoardSnapshot,
   PROTOCOL,
   FrontDoorRpcs,
+  IdentityRpc,
   HostRefused,
   leftSaid,
   type ProposalRefused,
@@ -108,7 +109,16 @@ export const spawned = <C extends Bun.Subprocess>(start: () => C) =>
       Effect.sync(() => {
         children.delete(child);
         child.kill();
-      }),
+      }).pipe(
+        Effect.andThen(Effect.promise(() => child.exited)),
+        Effect.timeoutOrElse({
+          duration: "1 second",
+          orElse: () =>
+            Effect.sync(() => child.kill("SIGKILL")).pipe(
+              Effect.andThen(Effect.promise(() => child.exited)),
+            ),
+        }),
+      ),
   );
 
 /** The front doors Desktop opens a Machine's channels as. */
@@ -177,21 +187,35 @@ const afterReady = (from: ReadableStream<Uint8Array>, onReady: () => void) => {
   let seen = Buffer.alloc(0);
   let ready = false;
   return from.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform: (chunk, out) => {
-        if (ready) return out.enqueue(chunk);
-        // Searched as bytes, so a character split across chunks reaches the host whole.
-        seen = Buffer.concat([seen, chunk]);
-        const at = seen.indexOf(marker);
-        if (at === -1) return;
-        ready = true;
-        onReady();
-        const rest = seen.subarray(at + marker.length);
-        if (rest.length > 0) out.enqueue(rest);
+    new TransformStream<Uint8Array, Uint8Array>(
+      {
+        transform: (chunk, out) => {
+          if (ready) return out.enqueue(chunk);
+          // Searched as bytes, so a character split across chunks reaches the host whole.
+          seen = Buffer.concat([seen, chunk]);
+          const at = seen.indexOf(marker);
+          if (at === -1) return;
+          ready = true;
+          onReady();
+          const rest = seen.subarray(at + marker.length);
+          if (rest.length > 0) out.enqueue(rest);
+        },
       },
-    }),
+      undefined,
+      // Read without a reader, so the marker is found before the client that reads it starts.
+      { highWaterMark: Number.MAX_SAFE_INTEGER },
+    ),
   );
 };
+
+const openingScope = <A, E, R>(effect: Effect.Effect<A, E, R | Scope.Scope>) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.fork(yield* Effect.scope);
+    return yield* effect.pipe(
+      Scope.provide(scope),
+      Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void)),
+    );
+  });
 
 /**
  * Starts the bridge and speaks `FrontDoorRpcs` over its stdio until the scope closes, once
@@ -213,36 +237,21 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
     }),
   );
   let isReady = false;
+  let signingIn = false;
   const said = yield* stderrTail(child.stderr, (chunk, said) =>
     Effect.sync(() => process.stderr.write(chunk)).pipe(
-      Effect.andThen(!isReady && SSO.test(said) ? waitingOnSso(said) : Effect.void),
+      Effect.andThen(
+        !isReady && SSO.test(said)
+          ? Effect.sync(() => void (signingIn = true)).pipe(Effect.andThen(waitingOnSso(said)))
+          : Effect.void,
+      ),
     ),
   );
   const ready = Promise.withResolvers<void>();
-  const socket = yield* Socket.fromTransformStream(
-    Effect.succeed({
-      readable: afterReady(child.stdout, () => {
-        isReady = true;
-        ready.resolve();
-      }),
-      writable: new WritableStream<Uint8Array>({
-        write: (chunk) => {
-          void child.stdin.write(chunk);
-          void child.stdin.flush();
-        },
-        close: () => {
-          void child.stdin.end();
-        },
-      }),
-    }),
-  );
-  const context = yield* Layer.build(
-    RpcClient.layerProtocolSocket().pipe(
-      Layer.provide(Layer.succeed(Socket.Socket, socket)),
-      Layer.provide(RpcSerialization.layerNdjson),
-    ),
-  );
-  const door = yield* RpcClient.make(FrontDoorRpcs).pipe(Effect.provideContext(context));
+  const readable = afterReady(child.stdout, () => {
+    isReady = true;
+    ready.resolve();
+  });
   const ended = Effect.promise(() => child.exited).pipe(
     Effect.flatMap((code) =>
       Effect.fail<RouteFailure>({
@@ -251,14 +260,86 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
       }),
     ),
   );
-  yield* Effect.raceFirst(
+  const started = Effect.raceFirst(
     Effect.promise(() => ready.promise),
     ended,
   );
-  return door;
-});
+  // The client starts after this: its pings would time out a bridge silent while it starts.
+  yield* started.pipe(
+    Effect.timeoutOrElse({
+      duration: "2 minutes",
+      // An SSO login takes as long as its human does.
+      orElse: () =>
+        signingIn
+          ? started
+          : Effect.fail(unreachable("the bridge did not become ready within 2 minutes")),
+    }),
+  );
+  const broken = yield* Deferred.make<never, RouteFailure>();
+  const failed = (reason: string) => Deferred.fail(broken, unreachable(reason));
+  const socket = yield* Socket.fromTransformStream(
+    Effect.succeed({
+      readable,
+      writable: new WritableStream<Uint8Array>({
+        write: (chunk) =>
+          Promise.resolve(child.stdin.write(chunk))
+            .then(() => child.stdin.flush())
+            .then(() => undefined),
+        close: () => {
+          void child.stdin.end();
+        },
+      }),
+    }),
+  );
+  const observed: Socket.Socket = {
+    ...socket,
+    reader: socket.reader.pipe(
+      Effect.map((reader) => ({
+        ...reader,
+        pull: reader.pull.pipe(Effect.tapCause((cause) => failed(Cause.pretty(cause)))),
+      })),
+    ),
+    writer: socket.writer.pipe(
+      Effect.map((writer) => ({
+        write: (chunk) =>
+          writer.write(chunk).pipe(Effect.tapCause((cause) => failed(Cause.pretty(cause)))),
+        writeAll: (chunks) =>
+          writer.writeAll(chunks).pipe(Effect.tapCause((cause) => failed(Cause.pretty(cause)))),
+      })),
+    ),
+  };
+  const protocol = yield* RpcClient.makeProtocolSocket({ retryPolicy: Schedule.recurs(0) }).pipe(
+    Effect.provideService(Socket.Socket, observed),
+    Effect.provide(RpcSerialization.layerNdjson),
+  );
+  const door = yield* RpcClient.make(FrontDoorRpcs.add(IdentityRpc)).pipe(
+    Effect.provideService(RpcClient.Protocol, {
+      ...protocol,
+      run: (id, receive) =>
+        protocol.run(id, (message) =>
+          receive(message).pipe(
+            Effect.andThen(
+              message._tag === "ClientProtocolError" ? failed(message.error.message) : Effect.void,
+            ),
+          ),
+        ),
+      send: (id, request, transferables) =>
+        protocol
+          .send(id, request, transferables)
+          .pipe(
+            Effect.tapCause((cause) =>
+              Cause.hasInterruptsOnly(cause) ? Effect.void : failed(Cause.pretty(cause)),
+            ),
+          ),
+    }),
+  );
+  // Kill before RPC finalizers wait for the bridge's streams.
+  yield* Effect.addFinalizer(() => Effect.sync(() => child.kill()));
+  const closed = Effect.raceFirst(ended, Deferred.await(broken));
+  return Object.assign(door, { closed });
+}, openingScope);
 
-export type Door = Effect.Success<ReturnType<typeof openBridge>>;
+export type Door = Omit<Effect.Success<ReturnType<typeof openBridge>>, "identity" | "closed">;
 
 /**
  * A Machine's three channels: the board's and its actions on one, its records on another, the
@@ -288,18 +369,40 @@ export const openDoors = (
     ],
     { concurrency: "unbounded" },
   ).pipe(
-    Effect.map(([desktop, record, chat]): Doors => ({
-      machine,
-      desktop,
-      record,
-      chat,
-      board: desktop.board(),
-      toasts: desktop.toasts(),
-    })),
+    Effect.flatMap(([desktop, record, chat]) =>
+      chat.identity().pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.interrupt
+            : Effect.fail(unreachable(Str.split(Cause.pretty(cause), "\n")[0]!)),
+        ),
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () =>
+            Effect.fail(unreachable("the host did not identify itself within 5 seconds")),
+        }),
+        Effect.map((identity): Doors => ({
+          machine,
+          identity,
+          desktop,
+          record,
+          chat,
+          closed: Effect.raceAllFirst([desktop.closed, record.closed, chat.closed]),
+          board: desktop.board(),
+          toasts: desktop.toasts(),
+        })),
+      ),
+    ),
+    openingScope,
   );
 
 export interface BoardSource {
+  readonly identity?: Pick<
+    typeof IdentityRpc.successSchema.Type,
+    "installation" | "protocol" | "build"
+  >;
   readonly machine?: KnownMachine;
+  readonly closed?: Effect.Effect<never, RouteFailure>;
   readonly board: Stream.Stream<BoardMessage, { readonly message: string }>;
   readonly toasts?: Stream.Stream<Toasted, unknown>;
 }
@@ -848,6 +951,7 @@ export const flockStream = <D extends BoardSource>(
   version: string,
   changes: Stream.Stream<RouteChange<D>> = Stream.empty,
   show: (notification: Notification) => void = () => {},
+  readDoors?: Map<string, D>,
 ): Stream.Stream<FlockItem> =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -927,6 +1031,22 @@ export const flockStream = <D extends BoardSource>(
             // A reopen asked while it was not live is this opening.
             yield* Queue.clear(reopens[at]!);
             const door = yield* route.open(waitingOnSso);
+            const identity = door.identity;
+            if (identity?.protocol !== undefined && identity.protocol > PROTOCOL + 1)
+              return yield* Effect.fail(tooNew(route, identity.build));
+            if (
+              readDoors !== undefined &&
+              identity?.installation !== undefined &&
+              identity.protocol !== undefined
+            ) {
+              const profile = route.machine.profile;
+              readDoors.set(profile, door);
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  if (readDoors.get(profile) === door) readDoors.delete(profile);
+                }),
+              );
+            }
             // The build of a release older than Desktop, once its board is shown.
             const due = yield* Deferred.make<{
               readonly installation: string;
@@ -934,6 +1054,13 @@ export const flockStream = <D extends BoardSource>(
             }>();
             let shown = false;
             const board = machineBoard(door.machine ?? route.machine, door).pipe(
+              Stream.mapEffect((item) =>
+                identity?.installation !== undefined &&
+                item.message._tag === "Snapshot" &&
+                item.message.installation !== identity.installation
+                  ? Effect.fail("the board named a different installation than its host identity")
+                  : Effect.succeed(item),
+              ),
               Stream.tap(() => Effect.sync(() => void (shown = true))),
               Stream.catch((reason) =>
                 Stream.fromEffect(
@@ -1002,6 +1129,7 @@ export const flockStream = <D extends BoardSource>(
             return Stream.merge(Stream.merge(board, upgrade, { haltStrategy: "left" }), toasts, {
               haltStrategy: "left",
             }).pipe(
+              Stream.interruptWhen(door.closed ?? Effect.never),
               Stream.interruptWhen(
                 Queue.take(reopens[at]!).pipe(
                   Effect.andThen(
@@ -1991,6 +2119,7 @@ export const syncNow = (
     const failed = yield* steps.sync;
     const unshared = yield* steps.syncDefinitions;
     const gave = yield* steps.give;
+    yield* steps.reopen;
     const said = Arr.join(
       [
         `${machine.name}: ${failed === null ? "settings synced" : `settings didn't sync: ${failed}`}`,
@@ -2004,7 +2133,7 @@ export const syncNow = (
       "; ",
     );
     return {
-      said,
+      said: `${said}; reopening its connection`,
       failed:
         failed !== null || unshared !== null || Arr.some(gave, ({ failed: why }) => why !== null),
     };

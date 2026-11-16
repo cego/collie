@@ -869,6 +869,65 @@ test("a menu item acts, says so, and the menu goes", () =>
     }),
   ));
 
+test("the keyboard selects each named Offer on its owning Change", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(
+        appState({
+          tasks: [
+            task({
+              state: "done",
+              landed: false,
+              run: "r-parent",
+              offers: [
+                { id: "release", title: "Release app!12", run: "r-app" },
+                { id: "stage", title: "Stage app!12", run: "r-app" },
+                { id: "release", title: "Release api!7", run: "r-api" },
+                { id: "stage", title: "Stage api!7", run: "r-api" },
+                {
+                  id: "release",
+                  title: "Release web!3",
+                  run: "r-web",
+                  unavailable: "already going",
+                },
+              ],
+            }),
+          ],
+        }),
+      );
+      const expected: Extract<Command, { _tag: "InvokeOffer" }>[] = [];
+      for (const [label, runId, offer, direction, enabled] of [
+        ["Stage app!12", "r-app", "stage", "down", true],
+        ["Release api!7", "r-api", "release", "up", true],
+        ["Stage api!7", "r-api", "stage", "down", true],
+        ["Release app!12", "r-app", "release", "up", true],
+        ["Release web!3", "r-web", "release", "down", false],
+      ] as const) {
+        yield* app.rightClickOn("Strapi prod seeder");
+        app.mockInput.pressKey("i");
+        yield* app.flush;
+        expect(app.acted()).toEqual(expected);
+        for (
+          let presses = 0;
+          presses < 20 && !pipe_(app.said(), Str.includes(`› ${label}`));
+          presses++
+        ) {
+          app.mockInput.pressArrow(direction);
+          yield* app.flush;
+        }
+        expect(app.said()).toContain(`› ${label}`);
+        app.mockInput.pressEnter();
+        yield* app.flush;
+        if (enabled) expected.push({ _tag: "InvokeOffer", runId, offer });
+        expect(app.acted()).toEqual(expected);
+        expect(pipe_(app.said(), Str.includes("Open record"))).toBe(!enabled);
+      }
+      expect(app.said()).toContain("already going");
+      yield* app.escape;
+      expect(app.said()).not.toContain("Open record");
+    }),
+  ));
+
 /** One message to this Run's agents, and what it actually reached. */
 const DELIVERED = {
   id: "d1",

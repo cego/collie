@@ -157,6 +157,10 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
 - **The Heals' findings are its input too:** they are clustered by key alongside the parks.
   A finding is filed on Collie's own repository as the general defect, for everyone who
   runs Collie. It names the affected Runs by id and leaves out the project's own details.
+- **A Heal's defect is reported as it is judged, not left to a later triage:** the host
+  files it on github.com/cego/collie, or links the issue for the same cause that the healer
+  named or that carries its key, and keeps the standing and the issue on the parked Run as
+  a `report` metrics line. A refused or uncertain report is tried again, listing first.
 - **Reopened, not refiled:** a cause key that recurs on a build that already contains its
   fixing commit reopens the closed issue. The comment names the new Runs and the build.
 - **Proof that a fix worked:** the affected Runs, which are named on the issue, recover

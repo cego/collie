@@ -1141,8 +1141,16 @@ for (const { following, retry, name } of [
             release,
             `
             import { defineWorkflow } from "collie";
+            import { Schema } from "effect";
             import ships from "${fixtures}/ships.workflow.ts";
-            export default defineWorkflow({ ...ships, id: "release" });
+            export default defineWorkflow({
+              ...ships,
+              id: "release",
+              input: Schema.Struct({
+                ...ships.input.fields,
+                ship: Schema.optionalKey(Schema.Literals(["release", "merge"])),
+              }),
+            });
           `,
           );
           const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (bin) =>
@@ -3689,7 +3697,7 @@ test("a Connection deadline provided around the host is the one its start reads 
 
       expect(reason).toContain("release needs helle");
       expect(reason).toContain("within 1ms");
-      expect(reason).not.toContain("6s");
+      expect(reason).not.toContain("within 6s");
     }).pipe(Effect.scoped),
   ));
 

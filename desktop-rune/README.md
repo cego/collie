@@ -115,7 +115,7 @@ faithfully:
 
 ### Build times and size
 
-vm-mk: 24 cores, rustc 1.99.1, dependencies already fetched, a target directory of its own.
+vm-mk: 24 cores, rustc 1.100.0, dependencies already fetched, a target directory of its own.
 
 | Build                                        | Time    |
 | -------------------------------------------- | ------- |
@@ -324,7 +324,9 @@ inspector beside it once there is room. A Step's open questions are answered one
 "Question k of n", each its own `Answer`. A question the board also has is answered through the
 board's questionnaire, as `FlowDecision.vue` does: Hold the Run among its options, words for the
 agent instead, a status line, and the next question once the host takes the answer. Its Start asks the Run what it `offers` now and sends
-`Invoke` with the inputs typed, as the board's offers dialog does.
+`Invoke` with validated inputs, as the board's offers dialog does. Both use
+`board/src/board/offer_form.rs` for typed controls, defaults, help, and field errors.
+An offer's confirmation waits for its named button even when it takes no inputs.
 
 The Diff tab reads each file's patch (`diff:<path>`) and parses it with rune-kit's
 `diff::parse`: only an open file's, four at a time, so a big file is read once it is opened; a

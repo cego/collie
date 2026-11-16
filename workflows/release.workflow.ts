@@ -617,6 +617,8 @@ const notReady = (standing: ReviewStanding) => {
       return `its head moved to ${short(standing.head)}`;
     case "Conflicting":
       return CONFLICTS;
+    case "FailedCi":
+      return `the pipeline at ${short(standing.head)}, whose ${standing.name} failed${standing.url ? ` (${standing.url})` : ""}`;
     case "Unanswered":
       return `${standing.comments.length} unanswered comment(s)`;
     case "Unreadable":
@@ -648,6 +650,10 @@ export default defineWorkflow({
       description:
         "The merge request or pull request to release, or several, separated by spaces or commas",
     }),
+    ship: Schema.optionalKey(Schema.Literals(["release", "merge"])).annotate({
+      description:
+        "release (the default) merges, tags and deploys it; merge merges it and stops, with nothing tagged or deployed",
+    }),
     merge_only: Schema.optionalKey(Schema.Boolean).annotate({
       description: "A set child ends after its merge, leaving tagging to the set",
     }),
@@ -657,7 +663,7 @@ export default defineWorkflow({
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER } },
-  hints: { mr: "diff-target" },
+  hints: { mr: "diff-target", merge_only: "internal", together: "internal" },
   path: [
     checkingOut,
     assess,
@@ -678,7 +684,7 @@ export default defineWorkflow({
       title: "Release again",
       workflow: "self",
       when: "failed",
-      inputs: { mr: "started-with", together: "started-with" },
+      inputs: { mr: "started-with", ship: "started-with", together: "started-with" },
       eligible: startedWithOne,
     },
   ],
@@ -700,6 +706,18 @@ export default defineWorkflow({
       if (tagOnly && (asked.merge_only === true || asked.together!.length === 0))
         return yield* fail("A tag Run needs merged merge requests and cannot also be merge-only");
       const set = mrSet(asked.mr);
+      const mergeAlone = asked.ship === "merge";
+      if (
+        mergeAlone &&
+        (tagOnly ||
+          asked.merge_only !== undefined ||
+          (set !== null && "mrs" in set && set.mrs.length > 1))
+      )
+        return yield* fail(
+          "Merge takes one merge request, and a release set's own inputs are the set's to give",
+        );
+      const setChild = asked.merge_only === true;
+      const mergeOnly = setChild || mergeAlone;
       if (set !== null && "unresolved" in set)
         return yield* fail(
           `${set.unresolved} is not a merge request this Run can find, so nothing was released`,
@@ -768,6 +786,8 @@ export default defineWorkflow({
       if (start._tag === "Unreadable")
         return yield* fail(`${mr} could not be read: ${start.reason}`);
       if (start._tag === "Closed") return yield* fail(`${mr} is closed, so nothing was released`);
+      if (mergeAlone && start._tag === "Merged")
+        return yield* fail(`${mr} is already merged, so there is nothing to merge`);
       if (tagOnly && start._tag !== "Merged")
         return yield* fail(`${mr} is not merged, so nothing was tagged`);
       const given =
@@ -837,37 +857,36 @@ export default defineWorkflow({
       );
       const testJobs = assessed.is_package ? [] : (assessed.stage_jobs?.merge_request ?? []);
       const stageJobs = assessed.is_package ? [] : (assessed.stage_jobs?.tag ?? []);
-      if (!assessed.is_package && testJobs.length === 0 && stageJobs.length === 0)
+      if (!mergeAlone && !assessed.is_package && testJobs.length === 0 && stageJobs.length === 0)
         return yield* fail(
           `${mr} is an application with no stage deploy that Collie can prove, on its merge request's pipeline or its tags', so nothing was released${assessed.kind_evidence ? `: ${assessed.kind_evidence}` : ""}`,
         );
-      if ((tagOnly || asked.merge_only === true) && !assessed.is_package && stageJobs.length === 0)
+      if ((tagOnly || setChild) && !assessed.is_package && stageJobs.length === 0)
         return yield* fail(
           `${mr} has no stage deploy on its tags, so the set cannot release it to stage`,
         );
-      const finishing =
-        asked.merge_only === true
-          ? []
-          : assessed.is_package
-            ? [tag]
-            : [stage, productionGo, playProduction];
+      const finishing = mergeOnly
+        ? []
+        : assessed.is_package
+          ? [tag]
+          : [stage, productionGo, playProduction];
       yield* forecast(
         recovering === null && !tagOnly
           ? [assess, proveHead, reviewWait, mergeGo, claim, merge, ...finishing]
           : [assess, claim, ...finishing],
       );
-      const goes =
-        asked.merge_only === true
-          ? [GO.merge]
-          : assessed.is_package
-            ? [GO.release]
-            : [
-                ...(testJobs.length > 0 ? [GO.test] : []),
-                ...(stageJobs.length > 0 ? [GO.stage] : []),
-              ];
-      const offered =
-        asked.merge_only === true
-          ? `${GO.merge} merges it at that head; the set tags this repository once its children have ended.`
+      const goes = mergeOnly
+        ? [GO.merge]
+        : assessed.is_package
+          ? [GO.release]
+          : [
+              ...(testJobs.length > 0 ? [GO.test] : []),
+              ...(stageJobs.length > 0 ? [GO.stage] : []),
+            ];
+      const offered = setChild
+        ? `${GO.merge} merges it at that head; the set tags this repository once its children have ended.`
+        : mergeAlone
+          ? `${GO.merge} merges it at that head and stops: nothing is tagged or deployed.`
           : assessed.is_package
             ? `${GO.release} merges it at that head and tags it;`
             : Arr.join(
@@ -1078,8 +1097,7 @@ export default defineWorkflow({
                     returnConflicts: true,
                   });
                   let standing = yield* read;
-                  // A plain push can reach git before the forge's head and mergeability read.
-                  // Give an advanced local head a short visibility window before parking or fixing again.
+                  // A push can reach git before the forge's head and mergeability read.
                   for (
                     let poll = 0;
                     previous !== null &&
@@ -1134,7 +1152,6 @@ export default defineWorkflow({
                   return { source: read.source, target: read.target };
                 }),
               });
-              // Validate the owned checkout before giving any current source head to the fixer.
               yield* moveTo(`${name}.fast-forward`, standing.head, branches.source);
               previous = standing.head;
               yield* fixRound(
@@ -1149,22 +1166,81 @@ export default defineWorkflow({
               );
             }
           });
-        /**
-         * The head proved by the checks, after as many fix rounds as it takes, up to ROUNDS.
-         * A confirmed target conflict goes to the fixer before any checks; only the repaired,
-         * pushed head is proved. An unchanged remote head or exhausted repair bound parks.
-         */
+        // Local success cannot restart the repair allowance on review reentry.
+        let repairs = 0;
+        let ciBefore: string | null = null;
         const proving = (
           name: string,
           pass: { readonly pass: "fix"; readonly round: number } | null,
+          failedCi: string | null = null,
         ) =>
           Effect.gen(function* () {
             yield* unconflicted();
-            let at = yield* checksAt(name, pass, null);
-            for (let rounds = 1; at.failed.length > 0 || at.conflicting;) {
+            let ciFailure: string | null = null;
+            if (failedCi !== null) {
+              const standing = yield* Activity.make({
+                name: `${name}.ci`,
+                success: ReviewStandingSchema,
+                error: WorkflowError,
+                execute: Effect.gen(function* () {
+                  const standing = yield* host.awaitReview({
+                    runId,
+                    cwd,
+                    proved: failedCi,
+                    seen: [],
+                    whileConflicting: true,
+                    returnConflicts: true,
+                    returnFailedCi: true,
+                  });
+                  if (standing._tag === "Held")
+                    return yield* Workflow.suspend(yield* WorkflowInstance);
+                  // An unfinished read lets resume observe external repair without repeating fixes.
+                  if (standing._tag === "FailedCi") {
+                    const why = notReady(standing);
+                    if (standing.head === ciBefore)
+                      return yield* park(
+                        `${mr}: ${why}; its remote head did not advance after fix-${fixes}`,
+                      );
+                    if (repairs >= ROUNDS)
+                      return yield* park(`${mr}: ${why} after ${ROUNDS} CI repair rounds`);
+                  }
+                  return standing;
+                }),
+              });
+              yield* gone(standing);
+              if (standing._tag === "FailedCi") {
+                ciFailure = notReady(standing);
+                ciBefore = standing.head;
+                const { n } = yield* fixRound(
+                  [
+                    {
+                      severity: "blocker",
+                      title: `CI failed: ${standing.name}`,
+                      detail: `The forge reports terminal CI failure at ${standing.head}: ${standing.name}${standing.url ? ` (${standing.url})` : ""}. Inspect its job log and repair and plain-push the source branch. Passing local Checks does not clear this failure. Collie must read and prove the pushed head before a fresh release go.`,
+                    },
+                  ],
+                  ++repairs,
+                );
+                name = `fix-${n}.checks`;
+                pass = { pass: "fix", round: n };
+              }
+              yield* unconflicted();
+            }
+            let at = yield* checksAt(
+              name,
+              pass,
+              repairs >= ROUNDS
+                ? `after ${ROUNDS} fix rounds${ciFailure === null ? "" : ` (${ciFailure})`}`
+                : null,
+            );
+            while (at.failed.length > 0 || at.conflicting) {
               if (at.conflicting) {
                 const n = yield* unconflicted();
-                at = yield* checksAt(`conflict-${n}.checks`, null, null);
+                at = yield* checksAt(
+                  `conflict-${n}.checks`,
+                  null,
+                  repairs >= ROUNDS ? `after ${ROUNDS} fix rounds` : null,
+                );
                 continue;
               }
               const findings = Arr.map(at.failed, (title) => ({
@@ -1172,14 +1248,17 @@ export default defineWorkflow({
                 title,
                 detail: `Collie ran this Run's checks on ${short(at.head)}, the merge request's head, and this is what failed.`,
               }));
-              const { n, stalled } = yield* fixRound(findings, rounds);
+              const round = ++repairs;
+              const { n, stalled } = yield* fixRound(findings, round);
               yield* unconflicted();
               at = yield* checksAt(
                 `fix-${n}.checks`,
                 { pass: "fix", round: n },
-                stalled ?? (rounds >= ROUNDS ? `after ${ROUNDS} fix rounds` : null),
+                stalled ??
+                  (round >= ROUNDS
+                    ? `after ${ROUNDS} ${ciBefore !== null ? "CI repair" : "fix"} rounds`
+                    : null),
               );
-              rounds++;
             }
             return at.head;
           });
@@ -1192,6 +1271,7 @@ export default defineWorkflow({
               seen: [],
               untilBlocked,
               returnConflicts: true,
+              returnFailedCi: true,
             });
             if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
             return standing;
@@ -1299,8 +1379,14 @@ export default defineWorkflow({
           if (!shared && askedAt !== proved) yield* offerShare(waits);
           const standing = yield* reviewWait(awaited(waits, proved));
           yield* gone(standing);
-          if (standing._tag === "Moved" || standing._tag === "Conflicting") {
-            proved = yield* proveHead(proving(`checks.${waits}`, null));
+          if (
+            standing._tag === "Moved" ||
+            standing._tag === "Conflicting" ||
+            standing._tag === "FailedCi"
+          ) {
+            proved = yield* proveHead(
+              proving(`checks.${waits}`, null, standing._tag === "FailedCi" ? standing.head : null),
+            );
             continue;
           }
           if (standing._tag === "Unanswered") {
@@ -1372,6 +1458,8 @@ export default defineWorkflow({
             continue;
           }
           if (standing._tag !== "Ready") continue;
+          repairs = 0;
+          ciBefore = null;
 
           gos += 1;
           const head = standing.head;
@@ -1391,7 +1479,7 @@ export default defineWorkflow({
               : ask({
                   name: `go-${gos}`,
                   shipping: { action: goes[0] === GO.test ? "stage" : "merge", head },
-                  prompt: `Release ${mr} at ${short(head)}, approved by ${approvers}? ${offered} Finish leaves it open.`,
+                  prompt: `${mergeAlone ? GO.merge : GO.release} ${mr} at ${short(head)}, approved by ${approvers}? ${offered} Finish leaves it open.`,
                   options: Arr.map([...goes, GO.finish], (id, at) => ({
                     id,
                     recommended: at === 0,
@@ -1607,7 +1695,7 @@ export default defineWorkflow({
 
       const released = `${mr} merged at ${landed.sha}`;
       const giveBack = landed.slugs.length === 0 ? Effect.void : host.release(runId);
-      if (asked.merge_only === true) {
+      if (mergeOnly) {
         yield* giveBack;
         return released;
       }

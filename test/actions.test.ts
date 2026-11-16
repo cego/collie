@@ -110,9 +110,15 @@ test(
           const client = yield* connect(world.state).pipe(Effect.orDie);
           const runId = yield* finished(client, project).pipe(Effect.orDie);
           const asked: string[] = [];
-          const answers = ["the diff", "pass"];
+          const choices: string[][] = [];
+          const answers = ["the diff"];
           const prompts: FlowPrompts = {
-            menu: () => Effect.succeed(null),
+            menu: (items) => {
+              choices.push(Arr.map(items, (one) => one.title));
+              return Effect.succeed(
+                Option.getOrNull(Arr.findFirst(items, (one) => one.title === "pass")),
+              );
+            },
             ask: (question) => {
               asked.push(question);
               return Effect.succeed(answers.shift() ?? null);
@@ -120,7 +126,8 @@ test(
           };
 
           const note = yield* makeOffer(yield* currentEnv, prompts, runId, "grade-it");
-          expect(asked).toEqual(["note?", "grade?"]);
+          expect(asked).toEqual(["note?"]);
+          expect(choices).toEqual([["pass", "fail"]]);
           expect(note).toStartWith("Started run ");
 
           asked.length = 0;
