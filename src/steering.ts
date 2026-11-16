@@ -175,6 +175,10 @@ export interface DeliveriesApi {
    * `unknown` still has the entry blocking that causal key.
    */
   readonly ofRun: (run: string) => Effect.Effect<ReadonlyArray<Delivery>>;
+  /** `ofRun` for each of these Runs, in one read; a Run with none is absent. */
+  readonly ofRuns: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<Delivery>>>;
   /** This incarnation's deliveries of one piece of work, newest state each, in the order first written. */
   readonly about: (
     incarnation: string,
@@ -254,6 +258,25 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
           Effect.orDie,
         ),
       ofRun: (run) => newest(run).pipe(Effect.map(deliveriesIn), Effect.orDie),
+      ofRuns: (runs) =>
+        runs.length === 0
+          ? Effect.succeed(new Map())
+          : sql<{ readonly run: string; readonly line: string }>`
+              SELECT newest.run, line FROM collie_deliveries
+              JOIN (
+                SELECT run, MIN(seq) AS first, MAX(seq) AS last FROM collie_deliveries
+                WHERE run IN ${sql.in(runs)} AND id IS NOT NULL GROUP BY run, ledger, id
+              ) AS newest ON seq = newest.last
+              ORDER BY newest.run, newest.first
+            `.pipe(
+              Effect.map((rows) => {
+                const byRun = new Map<string, Delivery[]>();
+                for (const row of rows)
+                  byRun.set(row.run, [...(byRun.get(row.run) ?? []), ...deliveriesIn([row])]);
+                return byRun;
+              }),
+              Effect.orDie,
+            ),
       about: (incarnation, causalKey) =>
         sql<{ readonly line: string }>`
           SELECT line FROM collie_deliveries

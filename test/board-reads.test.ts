@@ -19,6 +19,7 @@ import {
 } from "../src/run-records";
 import { epochMs } from "../src/time";
 import { Launches } from "../src/launches";
+import { Deliveries } from "../src/steering";
 import { appendVerification, verificationsPath } from "../src/verify";
 import { madeRun } from "./support/records";
 import { runEffect } from "./support/effect";
@@ -59,6 +60,7 @@ const readsFor = (runs: number) =>
         task: `t${runs}-${n}`,
         state: "failed",
         created: "2026-09-13T08:00:00Z",
+        finished: "2026-09-13T09:00:00Z",
       });
       yield* records.append(run.id, "steps.jsonl", [
         '{"kind":"entered","step":"build","at":"2026-09-13T08:01:00Z"}',
@@ -68,6 +70,7 @@ const readsFor = (runs: number) =>
     }
     const calls = { n: 0 };
     const launches = yield* Launches;
+    const deliveries = yield* Deliveries;
     const views = yield* buildBoard({
       env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
       runs: made,
@@ -92,6 +95,17 @@ const readsFor = (runs: number) =>
         lastOrdered: (run) => {
           calls.n++;
           return launches.lastOrdered(run);
+        },
+      }),
+      Effect.provideService(Deliveries, {
+        ...deliveries,
+        ofRun: (run) => {
+          calls.n++;
+          return deliveries.ofRun(run);
+        },
+        ofRuns: (runs) => {
+          calls.n++;
+          return deliveries.ofRuns(runs);
         },
       }),
     );
