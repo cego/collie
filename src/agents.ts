@@ -972,17 +972,15 @@ export const agentWork = <
     const reviving = (from: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
-          if (yield* host.stopRequested(runId)) return;
-          if (
-            (yield* agents.revive(
-              from,
-              unless,
-              onlyDeadServer,
-              unless == null ? undefined : usable,
-            )) &&
-            (yield* host.stopRequested(runId))
-          )
-            yield* haltLate;
+          if (yield* host.stopRequested(runId)) return false;
+          const revived = yield* agents.revive(
+            from,
+            unless,
+            onlyDeadServer,
+            unless == null ? undefined : usable,
+          );
+          if (revived && (yield* host.stopRequested(runId))) yield* haltLate;
+          return revived;
         }),
       );
     // A stale working status must not hide a dead server for the entire idle budget.
@@ -1324,8 +1322,11 @@ export const agentWork = <
           error: AgentUncertain,
           execute: stoppable(
             parkedWhenStuck(
+              // One started again was given its step, which asks for the Output anew.
               reviving(currentAsk, unusable).pipe(
-                Effect.andThen(agents.repair(current, problem, unusable, round)),
+                Effect.flatMap((revived) =>
+                  revived ? Effect.succeed(true) : agents.repair(current, problem, unusable, round),
+                ),
               ),
               host,
               work.runId,
