@@ -9,6 +9,7 @@ import { readIntent } from "../src/intent";
 import { exec } from "./support/command";
 import { until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
+import { hostRecords } from "./support/records";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Started = Schema.Struct({ runId: Schema.String });
@@ -56,7 +57,10 @@ const start = (
 
 const checksOf = (world: World, runId: string) =>
   until(
-    () => readIntent(runDir(world.state, runId)).pipe(Effect.orElseSucceed(() => null)),
+    () =>
+      hostRecords(world.state, readIntent(runDir(world.state, runId))).pipe(
+        Effect.orElseSucceed(() => null),
+      ),
     (intent) => intent !== null,
   ).pipe(Effect.map((intent) => intent!.authority.run_verification));
 

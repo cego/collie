@@ -25,8 +25,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { Clock, Effect, Fiber, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
-import { TestClock } from "effect/testing";
+import { Effect, Fiber, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { hostname } from "node:os";
 import { afterAll, expect, test } from "bun:test";
 import { app } from "../src/collie";
@@ -39,9 +38,10 @@ import { answerRead, checkLines, TOOLS, toolNamed } from "../src/tools";
 import { herdLines } from "../src/toolkit";
 import { boardLines, buildBoard } from "../src/board";
 import { Flow, SECTIONS, sortBoard, recordIn } from "../src/board-model";
-import { encodeVerifying } from "../src/verify";
+import { encodeVerifying, VERIFYING } from "../src/verify";
+import { RunRecords } from "../src/run-records";
 import { memoryWaitOf, waitForMemory } from "../src/memory-wait";
-import { madeRun } from "./support/records";
+import { hostRecords, madeRun, recordsAt } from "./support/records";
 import { task } from "./support/task";
 import { runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
@@ -367,6 +367,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["mcp", { route: "shell" }],
   ["host", { route: "shell" }],
   ["host restart", { route: "shell" }],
+  ["host rollback", { route: "shell" }],
   ["bridge", { route: "shell" }],
   ["machine list", { route: "shell" }],
   ["machine connect", { route: "shell" }],
@@ -682,19 +683,18 @@ test("collie_run and collie_herd say what a running check's card says", () =>
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-parity-check-" });
       const run = yield* madeRun(stateDir, { id: "r-check" });
-      yield* fs.writeFileString(
-        `${run.dir}/verifying`,
-        encodeVerifying({
-          name: "test",
-          executable: "bun",
-          argv: ["test"],
-          pass: "recheck",
-          round: null,
-          revision: "abc",
-          base: null,
-          started: "2026-09-14T10:00:00Z",
-        }),
-      );
+      const records = yield* RunRecords;
+      const marker = encodeVerifying({
+        name: "test",
+        executable: "bun",
+        argv: ["test"],
+        pass: "recheck",
+        round: null,
+        revision: "abc",
+        base: null,
+        started: "2026-09-14T10:00:00Z",
+      });
+      yield* records.setControl(VERIFYING, run.id, marker);
       const now = epochMs("2026-09-14T10:12:00Z");
       const [card] = yield* buildBoard({
         env: readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" }),
@@ -711,39 +711,37 @@ test("collie_run and collie_herd say what a running check's card says", () =>
       expect((yield* checkLines(run, [run], now))[0]).toBe(`Check running: ${card!.sentence}`);
       expect(herdLines([card!], now)).toContain(card!.sentence);
       const other = yield* madeRun(stateDir, { id: "r-other-check" });
-      yield* fs.copyFile(`${run.dir}/verifying`, `${other.dir}/verifying`);
+      yield* records.setControl(VERIFYING, other.id, marker);
       expect((yield* checkLines(run, [run], now, Effect.succeed([run, other])))[0]).toBe(
         `Check running: ${card!.sentence} 1 other check is running.`,
       );
     }),
   ));
 
-test("a Run with no check answers without waiting for another Run's marker", () =>
+test("a Run with no check answers without waiting for the other Runs a check is running for", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-check-answer-" });
       const run = yield* madeRun(stateDir, { id: "r-settled" });
       const other = yield* madeRun(stateDir, { id: "r-other" });
-      const clock = yield* TestClock.make();
-      const absent = FileSystem.makeNoop({});
-      yield* Effect.gen(function* () {
-        const reading = yield* checkLines(run, [run, other], 0).pipe(Effect.forkScoped);
-        yield* clock.adjust("1 millis");
-        expect(reading.pollUnsafe()).toBeDefined();
-        expect(yield* Fiber.join(reading)).toEqual([]);
-      }).pipe(
-        Effect.provideService(Clock.Clock, clock),
-        Effect.provideService(
-          FileSystem.FileSystem,
-          FileSystem.makeNoop({
-            readFileString: (path, encoding) =>
-              path === `${other.dir}/verifying`
-                ? Effect.never
-                : absent.readFileString(path, encoding),
-          }),
-        ),
+      yield* (yield* RunRecords).setControl(
+        VERIFYING,
+        other.id,
+        encodeVerifying({
+          name: "test",
+          executable: "bun",
+          argv: ["test"],
+          pass: "gate",
+          round: null,
+          revision: "abc",
+          base: null,
+          started: "2026-09-14T10:00:00Z",
+        }),
       );
+      expect(
+        yield* checkLines(run, [run, other], 0, Effect.never).pipe(Effect.timeout("2 seconds")),
+      ).toEqual([]);
     }),
   ));
 
@@ -762,8 +760,9 @@ test("collie_run gives a running check's last forty lines under the card's sente
           "\n",
         ) + "\n",
       );
-      yield* fs.writeFileString(
-        `${run.dir}/verifying`,
+      yield* (yield* RunRecords).setControl(
+        VERIFYING,
+        run.id,
         encodeVerifying({
           name: "test",
           executable: "bun",
@@ -805,7 +804,7 @@ test("the card, collie_run and collie_herd say the same of a Run waiting for mem
       const waiting = yield* Effect.forkChild(
         waitForMemory({ env, stateDir, runId: run.id, what: "r-memory-build's launch" }),
       );
-      while ((yield* memoryWaitOf(run.dir)) === null) yield* Effect.sleep("10 millis");
+      while ((yield* memoryWaitOf(run.id)) === null) yield* Effect.sleep("10 millis");
       const now = epochMs("2026-09-14T10:12:00Z");
       const [card] = yield* buildBoard({
         env,
@@ -851,7 +850,7 @@ test(
           ),
         ).toEqual(detail!.flow!);
         expect(Arr.map(detail!.flow!.lanes, (lane) => lane.run)).toEqual([run.id]);
-      }),
+      }).pipe(Effect.provide(recordsAt(world.state))),
     ),
   // A host, and a Run of it waiting on its decision.
   60_000,
@@ -864,6 +863,8 @@ test("collie_run answers from related Runs without polling unrelated live execut
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-related-answer-" });
       const run = yield* madeRun(dir, { id: "r-parent", state: "succeeded" });
       const child = yield* madeRun(dir, { id: "r-child", parent: run.id });
+      // The records a host on `dir` would have made, which collie_run reads.
+      yield* Effect.provide(Effect.void, recordsAt(dir));
       const reads = {
         runs: Effect.die("unrelated live executions were polled"),
         related: Effect.succeed([run, child]),
@@ -939,7 +940,7 @@ test(
         });
         expect(said).toContain("disposition: failed");
         expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
-        expect(yield* readDispositions(run.dir)).toEqual([]);
+        expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
       }),
     ),
   // A host, and a Run of it that finishes.
@@ -1093,7 +1094,7 @@ test(
           ],
         });
         expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
-        expect(yield* readDispositions(run.dir)).toEqual([]);
+        expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
       }),
     ),
   60_000,

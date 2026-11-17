@@ -6,13 +6,15 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema, Stream } from "effect";
+import { Effect, Schema, Stream } from "effect";
 import { TaskView } from "../src/board-model";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { until } from "./support/host";
 import { collie, collieCommand, proves, type World } from "./support/world";
 import { exec } from "./support/command";
 import { suiteEnv } from "./support/effect";
+import { hostRecords } from "./support/records";
+import { NOTIFIED, RunRecords } from "../src/run-records";
 
 test(
   "a park is recorded once per reason it moves into, and a clear records nothing",
@@ -68,12 +70,17 @@ const parkedFor = Effect.fn("test.parkedFor")(function* (world: World, causes: s
 });
 
 const parkNotices = (world: World, runId: string) =>
-  Effect.flatMap(FileSystem.FileSystem, (fs) =>
-    fs.readFileString(`${world.state}/notified.${runId}`).pipe(Effect.orElseSucceed(() => "")),
+  hostRecords(
+    world.state,
+    RunRecords.use((records) => records.controlsOf(NOTIFIED, runId)),
   ).pipe(
-    Effect.map((text) =>
-      Arr.filter(Str.split(text, "\n"), (line) => pipe(line, Str.includes(":parked:"))),
+    Effect.map((rows) =>
+      Arr.filter(
+        Arr.map(rows, (row) => row.key),
+        (line) => pipe(line, Str.includes(":parked:")),
+      ),
     ),
+    Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
 
 test(

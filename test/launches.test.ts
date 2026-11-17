@@ -15,6 +15,7 @@ import { hosted, settledRun } from "./support/hosted";
 import { collie, collieCommand } from "./support/world";
 import { recordIn } from "../src/board-model";
 import { recordsAt } from "./support/records";
+import { recordsReadLayer } from "../src/records";
 
 const launched = (runId: string, over: Partial<Launched>): Launched => ({
   agent: `${runId}-build-r1`,
@@ -144,7 +145,9 @@ test(
         ).toEqual(["review", "build", "re-review"]);
 
         // Chat's read of the Run says the same.
-        const facts = yield* runFacts(env, (yield* findRun(env, run.id))!);
+        const facts = yield* runFacts(env, (yield* findRun(env, run.id))!).pipe(
+          Effect.provide(recordsReadLayer(world.state)),
+        );
         expect(facts).toContain(`### Agents\n\n- review: codex/gpt-5 as ${run.id}-review-r1`);
 
         const shown = yield* collie(world, ["run", "show", run.id]);

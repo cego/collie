@@ -20,7 +20,8 @@ import { newsPath, pending, read as readNews } from "../src/news";
 import { herdOf } from "../src/steering";
 import { writeTask } from "../src/task";
 import { FakeBin } from "./support/bin";
-import { recordsAt } from "./support/records";
+import { hostRecords, recordsAt } from "./support/records";
+import { recordsReadLayer } from "../src/records";
 import { exec } from "./support/command";
 import { fastForward } from "./support/effect";
 import { forgeOnPath, runOnPath, serveForges } from "./support/forge";
@@ -87,7 +88,9 @@ test(
           expect(started.envelope.ok).toBe(true);
           const runId = yield* runIdOf(started.envelope);
           const recorded = yield* until(
-            readDispositions(`${world.state}/runs/${runId}`).pipe(Effect.orElseSucceed(() => [])),
+            hostRecords(world.state, readDispositions(`${world.state}/runs/${runId}`)).pipe(
+              Effect.orElseSucceed(() => []),
+            ),
             (lines) => lines.length > 0,
           );
           yield* stopHost(world.state);
@@ -124,6 +127,7 @@ test(
           const runId = yield* runIdOf(started.envelope);
           const stops = yield* until(
             readAudit(`${world.state}/runs/${runId}`).pipe(
+              Effect.provide(recordsReadLayer(world.state)),
               Effect.map((lines) => Arr.filter(lines, (line) => line.operation === "stop")),
               Effect.orElseSucceed(() => []),
             ),
@@ -168,6 +172,7 @@ test(
           );
           yield* until(
             readAudit(`${world.state}/runs/${runId}`).pipe(
+              Effect.provide(recordsReadLayer(world.state)),
               Effect.map((lines) => Arr.some(lines, (line) => line.operation === "stop")),
               Effect.orElseSucceed(() => false),
             ),
@@ -352,10 +357,14 @@ test(
           const log = yield* fs
             .readFileString(`${world.state}/runs/${runId}/log.txt`)
             .pipe(Effect.orElseSucceed(() => ""));
-          const recorded = yield* readVerifications(evidenceDir(world.state, runId)).pipe(
-            Effect.orElseSucceed(() => []),
+          const recorded = yield* hostRecords(
+            world.state,
+            readVerifications(evidenceDir(world.state, runId)),
+          ).pipe(Effect.orElseSucceed(() => []));
+          const merged = yield* hostRecords(
+            world.state,
+            readDispositions(`${world.state}/runs/${runId}`),
           );
-          const merged = yield* readDispositions(`${world.state}/runs/${runId}`);
           yield* stopHost(world.state);
           expect(factsOfView(world.state, ended!).state).toBe("stopped");
           expect(ended?.status.status).toBe("suspended");
@@ -425,7 +434,7 @@ test(
               comment: `${mr}#issuecomment-${id}`,
               kind,
               body,
-            });
+            }).pipe(Effect.provide(recordsAt(world.state)));
           const told = yield* until(items, (now) => now.length === 2);
           yield* stopHost(world.state);
           expect(Arr.map(told, (item) => item.key)).toEqual([

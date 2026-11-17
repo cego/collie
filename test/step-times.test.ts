@@ -18,7 +18,6 @@ import { agentsLayer } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { buildBoard } from "../src/board";
 import { sectionOf, type Flow } from "../src/board-model";
-import { ensureStepDurations } from "../src/step-durations";
 
 test(
   "the host learns B from three completed Runs and keeps its usual time after their records go",
@@ -103,11 +102,12 @@ test(
             yield* until(() => made.workflow.poll(execution), Option.isSome);
             yield* start("four");
             expect((yield* read("four")).nodes[0]!.usual).toBe(12 * 60_000);
-            yield* fs.remove(`${dir}/step-durations.json`);
-            yield* ensureStepDurations(dir, yield* store.runs);
-            expect((yield* read("four")).nodes[0]!.usual).toBe(12 * 60_000);
-            for (const id of ["one", "two", "three"])
-              yield* fs.remove(`${dir}/runs/${id}`, { recursive: true });
+            for (const id of ["one", "two", "three"]) yield* store.accepted(id);
+            expect(yield* store.retire(["one", "two", "three"], () => Effect.void)).toEqual([
+              "one",
+              "two",
+              "three",
+            ]);
             expect((yield* read("four")).nodes[0]!.usual).toBe(12 * 60_000);
             const board = () =>
               Effect.gen(function* () {
@@ -143,7 +143,8 @@ test(
               said: "Longer than usual",
             });
             expect(after.flow.notice).toBe("B is taking longer than usual: 25 min, usually 12.");
-            expect(after.card.sentence).toBe(before.card.sentence);
+            expect(before.card.sentence).toBe("Starting, but silent for 23 minutes.");
+            expect(after.card.sentence).toBe("Starting, but silent for 25 minutes.");
             expect(sectionOf(after.card)).toBe(sectionOf(before.card));
           }).pipe(Effect.provide(made.layer));
         }).pipe(

@@ -10,11 +10,13 @@ import { evidenceDir, runDir } from "../src/engine";
 import { appendMetric } from "../src/metrics";
 import { appendDrift } from "../src/drift";
 import { readCards } from "../src/cards";
-import { readIntent } from "../src/intent";
+import { INTENT_FILE, readIntent } from "../src/intent";
+import { RunRecords } from "../src/run-records";
 import { appendLine } from "../src/steering";
-import { ledgerOf, recordsAt, registeredAt } from "./support/records";
+import { hostRecords, hostRunRecords, ledgerOf, recordsAt, registeredAt } from "./support/records";
+import { recordsReadLayer } from "../src/records";
 import { readAudit } from "../src/audit";
-import { encodeVerifying, readVerifications, VERIFYING_FILE } from "../src/verify";
+import { encodeVerifying, readVerifications, VERIFYING } from "../src/verify";
 import { runEffect } from "./support/effect";
 import { exec } from "./support/command";
 import { until } from "./support/host";
@@ -74,13 +76,13 @@ test(
               subject: "remote-slice",
               value: 1,
               note: "done",
-            });
+            }).pipe(Effect.provide(recordsAt(second.world.state)));
             yield* appendDrift(dir, {
               kind: "skipped",
               at: "2026-10-12T00:00:00Z",
               run: runId,
               reason: "remote drift",
-            });
+            }).pipe(Effect.provide(recordsAt(second.world.state)));
             yield* first.lists([second]);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
             const caller = yield* connect(first.world.state);
@@ -102,7 +104,7 @@ test(
               expect(
                 encode((yield* first.cli([...prefix, "run", "drift", runId])).envelope),
               ).toContain("remote drift");
-              const cards = yield* readCards(dir);
+              const cards = yield* hostRecords(second.world.state, readCards(dir));
               expect(cards.length).toBeGreaterThan(0);
               expect(
                 encode((yield* first.cli([...prefix, "run", "cards", runId])).envelope),
@@ -130,8 +132,10 @@ test(
             expect((yield* first.cli(change)).envelope.ok).toBe(true);
             expect(
               Option.getOrUndefined(
-                Option.map(Option.fromNullishOr(yield* readIntent(dir)), (present) =>
-                  Arr.filter(present.history, (one) => pipe_(one.change, Str.includes("goal"))),
+                Option.map(
+                  Option.fromNullishOr(yield* hostRecords(second.world.state, readIntent(dir))),
+                  (present) =>
+                    Arr.filter(present.history, (one) => pipe_(one.change, Str.includes("goal"))),
                 ),
               ),
             ).toHaveLength(1);
@@ -145,7 +149,7 @@ test(
             ).toBe(true);
             const added = Option.getOrUndefined(
               Arr.findFirst(
-                (yield* readIntent(dir))!.constraints,
+                (yield* hostRecords(second.world.state, readIntent(dir)))!.constraints,
                 (one) => one.text === "keep the evidence",
               ),
             )!;
@@ -153,7 +157,9 @@ test(
               (yield* first.cli(["run", "intent", "remove-constraint", runId, added.id])).envelope
                 .ok,
             ).toBe(true);
-            expect((yield* readIntent(dir))?.authority.auto_correct).toBe(false);
+            expect(
+              (yield* hostRecords(second.world.state, readIntent(dir)))?.authority.auto_correct,
+            ).toBe(false);
             yield* owner.declare({ frontDoor: "cli" });
             const invalidAuthority = yield* owner
               .changeIntent({
@@ -164,7 +170,10 @@ test(
               })
               .pipe(Effect.exit);
             expect(Exit.isFailure(invalidAuthority)).toBe(true);
-            expect((yield* readIntent(dir))?.authority.max_corrections_per_constraint).toBe(2);
+            expect(
+              (yield* hostRecords(second.world.state, readIntent(dir)))?.authority
+                .max_corrections_per_constraint,
+            ).toBe(2);
 
             expect(
               (yield* first.cli([
@@ -195,9 +204,9 @@ test(
               change: { ...replay.change, command: null },
               request: "withdraw-replay",
             });
-            const withdrawn = (yield* readIntent(dir))!;
+            const withdrawn = (yield* hostRecords(second.world.state, readIntent(dir)))!;
             yield* owner.changeIntent(replay);
-            expect(yield* readIntent(dir)).toEqual(withdrawn);
+            expect(yield* hostRecords(second.world.state, readIntent(dir))).toEqual(withdrawn);
             expect(Arr.map(withdrawn.authority.run_verification, (one) => one.name)).not.toContain(
               "replay",
             );
@@ -250,10 +259,18 @@ test(
                 },
               },
             });
-            expect(Arr.map(yield* readVerifications(evidence), (one) => one.name)).toContain(
-              "remote-check",
-            );
-            expect(yield* readVerifications(evidenceDir(first.world.state, runId))).toEqual([]);
+            expect(
+              Arr.map(
+                yield* hostRecords(second.world.state, readVerifications(evidence)),
+                (one) => one.name,
+              ),
+            ).toContain("remote-check");
+            expect(
+              yield* hostRecords(
+                first.world.state,
+                readVerifications(evidenceDir(first.world.state, runId)),
+              ),
+            ).toEqual([]);
             expect(
               (yield* first.cli(["--machine", "second", "run", "report"])).envelope,
             ).toMatchObject({
@@ -264,7 +281,9 @@ test(
                 ],
               },
             });
-            const audit = yield* readAudit(dir);
+            const audit = yield* readAudit(dir).pipe(
+              Effect.provide(recordsReadLayer(second.world.state)),
+            );
             expect(
               Option.getOrUndefined(Arr.findFirst(audit, (one) => one.request === "remote-intent"))
                 ?.actor.origin,
@@ -316,7 +335,9 @@ test(
             expect((yield* ledgerOf(second.world.state, terminal)).at(-1)).toMatchObject({
               kind: "override_cleared",
             });
-            yield* fs.writeFileString(`${dir}/intent.json`, "broken intent");
+            yield* RunRecords.use((records) =>
+              records.put(runId, INTENT_FILE, "broken intent"),
+            ).pipe(Effect.provide(recordsAt(second.world.state)));
             const held = yield* first.cli([
               "run",
               "intent",
@@ -362,11 +383,14 @@ test(
             );
             yield* first.lists([second]);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
-            const dir = runDir(second.world.state, runId);
-            const log = `${evidenceDir(second.world.state, runId)}/live.log`;
+            const records = hostRunRecords(() => second.world.state);
+            const evidence = evidenceDir(second.world.state, runId);
+            yield* fs.makeDirectory(evidence, { recursive: true });
+            const log = `${evidence}/live.log`;
             yield* fs.writeFileString(log, "");
-            yield* fs.writeFileString(
-              `${dir}/${VERIFYING_FILE}`,
+            yield* records.setControl(
+              VERIFYING,
+              runId,
               encodeVerifying({
                 name: "remote-live",
                 executable: "true",
@@ -404,8 +428,8 @@ test(
               () => fs.readFileString(stderr),
               (text) => pipe_(text, Str.includes("the remote line arrives")),
             );
-            expect(yield* fs.exists(`${dir}/${VERIFYING_FILE}`)).toBe(true);
-            yield* fs.remove(`${dir}/${VERIFYING_FILE}`);
+            expect(yield* records.control(VERIFYING, runId)).not.toBeNull();
+            yield* records.setControl(VERIFYING, runId, null);
             expect(Number(yield* handle.exitCode)).toBe(0);
             yield* Fiber.join(drain);
             expect(yield* Fiber.join(stdout)).toContain('"ended":null');

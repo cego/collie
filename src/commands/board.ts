@@ -15,12 +15,14 @@ function line(view: TaskView): string {
 
 /** The renderer arrives through dynamic imports, so the rest of the CLI never loads it. */
 const draw = Effect.gen(function* () {
-  const [{ currentEnv }, { Herdr, herdrFailureReason }, { workspaceFlow }] = yield* Effect.promise(
-    () => Promise.all([import("../env"), import("../herdr"), import("../flows")]),
-  );
+  const [{ currentEnv }, { Herdr, herdrFailureReason }, { workspaceFlow }, { recordsReadLayer }] =
+    yield* Effect.promise(() =>
+      Promise.all([import("../env"), import("../herdr"), import("../flows"), import("../records")]),
+    );
   const env = yield* currentEnv;
   process.exitCode = yield* workspaceFlow(new Herdr(env), env).pipe(
     Effect.catch((cause) => Console.error(herdrFailureReason(cause)).pipe(Effect.as(1))),
+    Effect.provide(recordsReadLayer(env.stateDir)),
   );
 });
 

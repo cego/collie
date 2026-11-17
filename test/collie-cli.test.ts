@@ -15,6 +15,7 @@ import { appendMetric } from "../src/metrics";
 import { hosted, settledRun } from "./support/hosted";
 import { evidenceDir } from "../src/engine";
 import { connect, frontDoor, socketOf } from "../src/host";
+import { recordsAt } from "./support/records";
 import { readAudit } from "../src/audit";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { callTool } from "../src/tools";
@@ -842,7 +843,7 @@ test(
             ),
           ),
         ).toEqual(["preserve the public --json envelope"]);
-      }),
+      }).pipe(Effect.provide(recordsAt(world.state))),
     ),
   60_000,
 );
@@ -878,7 +879,7 @@ test(
           subject: "v1",
           value: 1,
           note: "pass",
-        });
+        }).pipe(Effect.provide(recordsAt(world.state)));
 
         const shown = yield* cli(["run", "metrics", run.id], env);
         expect(shown.exit).toBe(0);
@@ -931,7 +932,7 @@ test(
 
         const replaced = yield* cli([...remember, "--replace"], env);
         expect(replaced.exit).toBe(0);
-      }),
+      }).pipe(Effect.provide(recordsAt(world.state))),
     ),
   60_000,
 );
@@ -962,7 +963,7 @@ test(
           subject: "hello-agent",
           value: 42_000,
           note: "",
-        });
+        }).pipe(Effect.provide(recordsAt(world.state)));
         const measured = yield* cli(["--json", "run", "report"], env);
         // SAFETY: `run report`'s `data` is the Report; only its peak context is read.
         const measures = (yield* parseEnvelope(measured.stdout)).data as {

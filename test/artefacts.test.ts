@@ -3,7 +3,7 @@ import { Effect, FileSystem, Schema, Option, Path, Stream } from "effect";
 import * as Arr from "effect/Array";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { stopHost, until } from "./support/host";
-import { registeredAt } from "./support/records";
+import { hostRecords, registeredAt } from "./support/records";
 import { readAudit } from "../src/audit";
 import { collie, proves } from "./support/world";
 import { artefactsOn } from "../desktop/src/bun/machine";
@@ -225,7 +225,10 @@ test(
               "base64",
             ).toString(),
           ).toBe("second");
-          const audit = yield* readAudit(dir);
+          const audit = yield* hostRecords(
+            world.state,
+            readAudit(dir).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
+          );
           expect(Arr.filter(audit, (one) => one.request === "current")).toHaveLength(1);
           expect(
             Option.getOrUndefined(Arr.findFirst(audit, (one) => one.request === "current"))?.actor

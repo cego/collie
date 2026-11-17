@@ -4,22 +4,19 @@
 import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { Seen } from "./board-model";
-import { appendJournal, readJournal } from "./journal";
+import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { epochMs } from "./time";
 
 const SeenJson = Schema.fromJsonString(Seen);
 
-export const seenPath = Effect.fn("Seen.path")(function* (runDir: string) {
-  const path = yield* Path.Path;
-  return path.join(runDir, "steering", "seen.jsonl");
-});
+export const seenPath = (runDir: string) => runJournal(runDir, "steering/seen.jsonl");
 
 export const recordSeen = Effect.fn("Seen.record")(function* (runDir: string, line: Seen) {
-  yield* appendJournal(yield* seenPath(runDir), SeenJson, line);
+  yield* appendRunJournal(seenPath(runDir), SeenJson, line);
 });
 
 export const readSeen = Effect.fn("Seen.read")(function* (runDir: string) {
-  return yield* readJournal(yield* seenPath(runDir), SeenJson);
+  return yield* readRunJournal(seenPath(runDir), SeenJson);
 });
 
 const sincePath = Effect.fn("Seen.sincePath")(function* (stateDir: string) {

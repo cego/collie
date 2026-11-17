@@ -5,15 +5,15 @@
 // request has not been merged by anyone.
 
 import { readStageProof, type ShippingAction } from "./shipping";
-import { lastOrdered } from "./launches";
+import { lastOrdered, Launches, launchesAhead } from "./launches";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
-import { Clock, Effect, FileSystem, Option, Path, Result, Schema, flow } from "effect";
-import { AUDIT_FILE, readAudit } from "./audit";
-import { FINAL_DIFF, planDirOf } from "./run-detail";
-import { LOG_INDEX } from "./run-log";
+import { Clock, Effect, FileSystem, Option, Result, Schema, flow } from "effect";
+import { lastAudit } from "./audit";
+import { planDirOf } from "./run-detail";
+import { readAhead, RunRecords, type RunRecordsApi } from "./run-records";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
@@ -33,6 +33,7 @@ import {
   ranOneTest,
   ranCommand,
   passed,
+  readProofsOf,
   readVerifications,
   type CheckCommand,
   type Verification,
@@ -40,13 +41,13 @@ import {
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
 import { findingsIn, isBlocking } from "./output";
-import { type KeptMarkers, markersOf, runningCheck } from "./checks";
-import { recordsIn } from "./check-processes";
+import { markersOf, runningCheck } from "./checks";
+import { runningChecks } from "./check-processes";
 import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
 import { awaitingLine } from "./awaiting";
 import { MERGE_POLL_MS, mrOf, readForge, readMrStates } from "./merges";
-import { filed, nothingToLandFile, type Recorded, settlementOf, standingOf } from "./standing";
+import { filed, NOTHING_TO_LAND, type Recorded, settlementOf, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import { mrIdIn, shell } from "./mr";
 import type {
@@ -61,7 +62,7 @@ import { laneWaitOf, stripOf } from "./flow";
 import { Foreground } from "./foreground";
 import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName, peersOf } from "./peers";
-import { deliveriesOf, SENT_STATES, toldIn } from "./steering";
+import { Deliveries, deliveriesAhead, deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { finishedOnRecord } from "./cards";
 import { branchMovement } from "./recovery";
 import { owedLocally } from "./check-proof";
@@ -69,6 +70,7 @@ import {
   Answered,
   flowActions,
   mrId,
+  mrIdProject,
   waitsOnOf,
   mrLabel,
   mrWords,
@@ -647,7 +649,7 @@ function stateOf(
  * again is not failing "three times in a row".
  */
 export function lastFailure(
-  records: ReadonlyArray<Verification>,
+  records: ReadonlyArray<Pick<Verification, "name" | "result">>,
 ): { name: string; times: number } | null {
   const last = records.at(-1);
   if (last === undefined || last.result !== "fail") return null;
@@ -802,16 +804,17 @@ function agentsOf(
 
 /** Who set the hold that stands, and why, as the Run's audit trail recorded it. */
 const holderOf = Effect.fn("Board.holderOf")(function* (run: RunFacts) {
-  const lines = yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []));
   const last = Option.getOrUndefined(
-    Arr.findLast(lines, (line) => line.operation === "hold" || line.operation === "unhold"),
+    yield* lastAudit(run.dir, ["hold", "unhold"]).pipe(Effect.orElseSucceed(() => Option.none())),
   );
   return last?.operation === "hold" ? { by: last.actor.origin, reason: last.reason ?? "" } : null;
 });
 
 /** The answer a Run carried on with, while nothing has been launched since it was given. */
 const resumedWith = Effect.fn("Board.resumedWith")(function* (run: RunFacts) {
-  const last = (yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []))).at(-1);
+  const last = Option.getOrUndefined(
+    yield* lastAudit(run.dir, null).pipe(Effect.orElseSucceed(() => Option.none())),
+  );
   if (last?.operation !== "answer") return null;
   if (((yield* lastOrdered(run.id))?.at ?? 0) > epochMs(last.at)) return null;
   const answered = Schema.decodeUnknownOption(Answered)(last.result);
@@ -897,12 +900,8 @@ function over(run: RunFacts, runs: ReadonlyArray<RunFacts>): boolean {
 
 /** Who made a Run's latest stop, from its audit trail (ADR-0039). */
 const lastStopBy = (run: RunFacts) =>
-  readAudit(run.dir).pipe(
-    Effect.map(
-      (lines) =>
-        Option.getOrUndefined(Arr.findLast(lines, (line) => line.operation === "stop"))?.actor
-          .origin,
-    ),
+  lastAudit(run.dir, ["stop"]).pipe(
+    Effect.map((last) => Option.getOrUndefined(last)?.actor.origin),
     Effect.orElseSucceed(() => undefined),
   );
 
@@ -924,50 +923,6 @@ const dispositionOf = Effect.fn("Board.dispositionOf")(function* (runs: Readonly
 /** How long finished work stays on the board. A day, so an evening's work is still there
     in the morning — midnight is not when a human stops calling it today. */
 const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
-
-/**
- * When anything in this directory was last written, as `touchedDirAt` measures it but
- * without the files Collie writes about a Run from outside: a disposition, who saw it, the
- * diff kept for its drawer, its log's index written by a read, and the trail of who asked for
- * what are bookkeeping, and must not make a dead Run look alive or ended just now.
- */
-const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const at = (file: string) =>
-    fs.stat(file).pipe(
-      Effect.map((stat) => (Option.isSome(stat.mtime) ? stat.mtime.value.getTime() : 0)),
-      Effect.orElseSucceed(() => 0),
-    );
-  let newest = 0;
-  for (const name of yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))) {
-    if (name === FINAL_DIFF || name === AUDIT_FILE || name === LOG_INDEX) continue;
-    if (name !== "steering") {
-      newest = Math.max(newest, yield* at(path.join(dir, name)));
-      continue;
-    }
-    const inside = yield* fs
-      .readDirectory(path.join(dir, name))
-      .pipe(Effect.orElseSucceed(() => []));
-    for (const entry of inside) {
-      if (entry === "disposition.jsonl" || entry === "seen.jsonl") continue;
-      newest = Math.max(newest, yield* at(path.join(dir, name, entry)));
-    }
-  }
-  return newest;
-});
-
-/** When the Run last did anything: its own directory, its agents' and its evidence. */
-const lastActivityAt = Effect.fn("Board.lastActivityAt")(function* (
-  stateDir: string,
-  run: RunFacts,
-) {
-  return Math.max(
-    yield* writtenIn(run.dir),
-    yield* writtenIn(`${stateDir}/agents/${run.id}`),
-    yield* writtenIn(run.evidence),
-  );
-});
 
 /** The MR id of `mrOf(run)`, a legacy bare or hostless one read in the Run's checkout. */
 const mrIdOf = (run: RunFacts) => {
@@ -1055,7 +1010,8 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
           ? line.successor.work.mr
           : line.ref === ""
             ? null
-            : yield* mrIdIn(line.ref, run.cwd, shell);
+            : (mrId(line.ref, { project: carried === null ? null : mrIdProject(carried) }) ??
+              (yield* mrIdIn(line.ref, run.cwd, shell)));
       const local = yield* Effect.forEach(
         refRuns(line.ref, machine),
         Effect.fnUntraced(function* (word) {
@@ -1114,11 +1070,8 @@ const dispositionLine = (line: Disposition) =>
 /** The branch a Run left to land: none where it recorded it had nothing to land. */
 const branchOwed = Effect.fn("Board.branchOwed")(function* (run: RunFacts) {
   if (run.branch === null) return null;
-  const fs = yield* FileSystem.FileSystem;
-  const nothing = yield* fs
-    .exists(nothingToLandFile(run.dir))
-    .pipe(Effect.orElseSucceed(() => false));
-  return nothing ? null : run.branch;
+  const nothing = yield* RunRecords.use((records) => records.fact(run.id, NOTHING_TO_LAND));
+  return nothing !== null ? null : run.branch;
 });
 
 /** Whether none of these Runs left anything anyone has to file. */
@@ -1178,7 +1131,6 @@ interface Retimed {
 export interface KeptCards {
   readonly revision: (runs: ReadonlyArray<string>) => number;
   readonly kept: Map<string, KeptCard>;
-  readonly markers: KeptMarkers["markers"];
 }
 
 const cardKey = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -1200,7 +1152,21 @@ const nextChange = (then: number, now: number) => {
  * Herd-wide on purpose: the board is one board per Herd (ADR-0009), and a workspace is a
  * filter over it rather than a board of its own.
  */
-export const buildBoard = Effect.fn("Board.build")(function* (opts: {
+export const buildBoard = Effect.fn("Board.build")(function* (opts: BoardOptions) {
+  const runs = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
+  const records = yield* RunRecords;
+  return yield* drawBoard({ ...opts, runs }, records).pipe(
+    Effect.provideService(
+      RunRecords,
+      readAhead(
+        records,
+        Arr.map(runs, (run) => run.id),
+      ),
+    ),
+  );
+});
+
+interface BoardOptions {
   env: PluginEnv;
   /** What herdr says is alive, so a card can say who is on it. */
   alive?: ReadonlyArray<AgentInfo>;
@@ -1228,13 +1194,16 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   head?: (run: RunFacts) => Effect.Effect<string | null>;
   /** Cards from the last build, reused where nothing they were derived from moved. */
   cards?: KeptCards;
-}) {
+}
+
+const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: RunRecordsApi) {
   const { stateDir } = opts.env;
   const fs = yield* FileSystem.FileSystem;
   const { boundary } = yield* Foreground;
   const wall = yield* Clock.currentTimeMillis;
   const now = opts.now ?? wall;
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
+  const machine = opts.env.machine ?? machineName();
   const all = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const tasks = new Map(Arr.map(opts.tasks ?? (yield* listTasks), (task) => [task.id, task]));
   const registered = opts.registered ?? (yield* everyRegistered);
@@ -1249,13 +1218,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const since = yield* seenSince(stateDir);
   const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
-  const records = yield* recordsIn(stateDir);
-  const keptCards = opts.only === undefined ? opts.cards : undefined;
-  const markers = yield* markersOf(
-    all,
-    records,
-    keptCards && { revision: (run) => keptCards.revision([run]), markers: keptCards.markers },
-  );
+  const records = yield* runningChecks;
+  const markers = yield* markersOf(records);
   const checked = new Set(Arr.map(records, (record) => record.run));
   const offersOfRun =
     opts.offers ??
@@ -1285,6 +1249,17 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       for (const one of [run, ...(repoRunsOf.get(run.id) ?? [])]) cardOf.set(one.id, key);
 
   const flowInputs = yield* flowInputsFor(opts.env, all);
+  // A card asks what its leader ordered last, and an ended leader's deliveries.
+  const leaders = Arr.map([...groups.values()], leaderOf);
+  const launches = yield* launchesAhead(
+    yield* Launches,
+    Arr.map(all, (run) => run.id),
+    Arr.map(leaders, (run) => run.id),
+  );
+  const deliveries = yield* deliveriesAhead(
+    yield* Deliveries,
+    Arr.flatMap(leaders, (run) => (ended(run) ? [run.id] : [])),
+  );
   const views = yield* Effect.forEach(
     groups,
     ([id, runs]) =>
@@ -1349,8 +1324,9 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           return view;
         };
         yield* boundary;
-        const touched = new Map<string, number>();
-        for (const run of everyRun) touched.set(run.id, yield* lastActivityAt(stateDir, run));
+        const touched = yield* RunRecords.use((records) =>
+          records.activity(Arr.map(everyRun, (run) => run.id)),
+        );
         // A Run records no end of its own: its last activity is when it ended, and a Run
         // that wrote nothing ended no later than it began.
         const endedAt = (run: RunFacts) =>
@@ -1392,7 +1368,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const ledgers = new Map(
           yield* Effect.forEach(everyRun, (run) =>
             Effect.map(
-              ledgerOf(run, id, cardOf, opts.env.machine ?? machineName(), paired, runsById),
+              ledgerOf(run, id, cardOf, machine, paired, runsById),
               (lines) => [run.id, lines] as const,
             ),
           ),
@@ -1573,13 +1549,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const settledNow =
           state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
         const failure =
-          state === "failed"
-            ? lastFailure(
-                yield* readVerifications(leader.evidence).pipe(Effect.orElseSucceed(() => [])),
-              )
-            : null;
+          state === "failed" ? lastFailure(yield* readProofsOf([leader.evidence])) : null;
         const open = openReports(yield* readDrift(leader.dir).pipe(Effect.orElseSucceed(() => [])));
-        const movement = yield* branchMovement(leader);
         const task = leader.task === null ? null : (tasks.get(leader.task) ?? null);
         const { name, project } = namesOf(task?.label ?? "", leader);
         const started = Arr.filter(
@@ -1610,6 +1581,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           disposed: disposition !== null,
           asking: decision !== null,
         });
+        const movement = landed ? null : yield* branchMovement(leader);
         /** A merge request's checks and readiness, read in the Run `merging`. */
         const judged = Effect.fnUntraced(function* (
           id: string | null,
@@ -1622,7 +1594,9 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           // Collie's own evidence counts at the head the forge reported, where it reported one.
           const verified = awaiting
             ? {
+                // One Run's whole records, which the read-ahead would read for every Run.
                 records: yield* readVerifications(merging.evidence).pipe(
+                  Effect.provideService(RunRecords, whole),
                   Effect.orElseSucceed(() => []),
                 ),
                 head: forged?.head ?? (yield* opts.head?.(merging) ?? branchHead(merging, now)),
@@ -1827,6 +1801,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             waves: fan?.waves ?? [],
             leader,
             settled: settledNow,
+            leaderOnly: opts.flows === undefined,
             waitOf: (run) => {
               const waits = waitsOf(run);
               const running = checksOf.get(run.id) ?? null;
@@ -1839,7 +1814,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                 usage: waits.usage,
                 check: running,
                 awaiting: waits.awaiting !== null,
-                machine: opts.env.machine ?? machineName(),
+                machine,
                 // A check's minutes are counted on the clock its Flow is said by.
                 now: wall,
                 sleeping:
@@ -2078,7 +2053,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       }),
     // The host's own build goes one Task at a time, so the loop stays free between them.
     { concurrency: opts.cards === undefined ? READS_AT_ONCE : 1 },
-  );
+  ).pipe(Effect.provideService(Launches, launches), Effect.provideService(Deliveries, deliveries));
   if (opts.only === undefined && opts.cards !== undefined)
     for (const id of opts.cards.kept.keys()) if (!groups.has(id)) opts.cards.kept.delete(id);
   return sortBoard(Arr.filter(views, (view) => view !== null));

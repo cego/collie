@@ -335,7 +335,7 @@ attachments is `RequestConflict`, and with the same ones it is the same Run. The
 answers a `--request-id` it already has a receipt for from that receipt, before the host
 is asked, so there it is the first Run whatever is attached. They are not
 an Input, so the Workflow's own input, and with it the execution, is the same either way.
-The operation's line in the Run's `operations.jsonl` names each file under `asked`, by the
+The operation's line in the Run's audit trail, kept in `host.db`, names each file under `asked`, by the
 name the Run keeps it under and the path it came from. Chat's `start`, `followup`,
 `take_offer` and `deliver` actions take the same paths as `attachments`
 ([ADR-0046](adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
@@ -1097,7 +1097,7 @@ It is bound argument for argument — `bun test` and `bun test --bail` are two d
 checks — and `--cwd` is `worktree` or a path relative to the run's cwd. Anyone may name or
 withdraw one, the run's own agent included, and nobody approves it. A check whose name a
 `rule:command_exit` constraint refers to is run once, at the run's finish, so that rule is checked against a result rather than against nobody having
-looked. Everything else on `steering/verifications.jsonl` is written by an agent calling
+looked. Every other verification the Run records is written by an agent calling
 `collie verify`, and is recorded `by: agent`.
 
 `--propagate` applies the amended Intent to every child run that is still going: the
@@ -1908,7 +1908,7 @@ shell: what was written down is what ran. The command's own exit status is passe
 through, so anything wrapping `collie verify -- bun test` behaves as it would around
 `bun test`.
 
-Results go to the run's `steering/verifications.jsonl`. An agent's Output saying the tests
+Results are recorded as the Run's verifications, in `host.db`. An agent's Output saying the tests
 passed is a **claim** and is shown as one; only a collected result is a verification.
 
 A repository's checks are remembered from a Run that already has them:
@@ -2052,7 +2052,7 @@ A Measurement ends without a verdict when:
 - either tree's commit or fingerprint changed after prepare or after any sample, even where a
   later sample put it back (`Unjudged`, naming the tree).
 
-Each record goes to the Run's `measurements.jsonl` in its evidence directory. Under
+Each record is kept with the Run's records in `host.db`. Under
 `--json`, the envelope's `data` is `{ "measurement": <the record>, "ran": <bool> }`:
 
 ```json
@@ -2313,7 +2313,7 @@ answering, say — is in `keep` with that reason, never removed.
 The `check` kind is a check's processes that no host is collecting, such as a child that left
 its group, or one a starting host could not end. Its target is the check's id, and its
 reason names the Run, the check, its pid and how long it has run; it frees 0 bytes. It is
-proved by the check's record under `running-checks/`, or by the marker in its environment
+proved by the check's running-check record in `host.db`, or by the marker in its environment
 naming this installation and the check, which is read only from `/proc`. A process proved by
 neither, or marked for another state directory, is never listed. A sweep ends it with SIGTERM, then SIGKILL if that leaves
 it running, because a check's result is thrown away
@@ -2865,6 +2865,7 @@ everything is ready, or what is missing and how to fix each one.
 ```sh
 collie host --dir <state-dir>
 collie host restart [--dir <state-dir>]
+collie host rollback [--dir <state-dir>]
 ```
 
 The process durable work runs in. Nobody is expected to type the first: a client that needs
@@ -2882,6 +2883,22 @@ what the old one was doing, exactly as on any start, so a parked Run is still pa
 step that was cut short runs again. A check the old host was running is ended with it and
 runs again on the new one. One a host left without ending it, because it was killed or
 crashed, is ended by the next host to start, named in the Run's log, and runs once more.
+
+`host rollback` is for going back to an older build. A Run's own records, such as its
+Steps, its audit trail, its Intent and its steering cards, are rows in the state
+directory's `host.db`; a build from before that kept them as files in the Run's
+directories and does not read the rows. `rollback` writes every Run's records back to
+those files, each dated by when its Run last did work, removes the file of a fact the host
+has since removed, writes each Step's usual times back to `step-durations.json`, then
+drops the records' tables, so the next upgrade imports the files
+again. A state directory a later build has migrated further is refused with
+`invalid_state`, naming that migration, and changes nothing: roll that build back first. It needs the state directory
+(this installation's by default) to have no host: with one running it is `invalid_state`,
+and it changes nothing. A state directory whose records were never moved into `host.db`
+is left alone and said so. `data` under `--json` is `{ "dir", "done" }`, with `done`
+`rolled-back` or `not-migrated`. Run it with the newer build once its host has stopped,
+then start the older one. An older build started without it reads the files as
+they were when the newer build first started.
 
 A host works for this Machine's core Herd, found through `HC_SOCKET`, core's config or
 `HC_SESSION`. Its canonical socket path keys judgements and cross-run checks. A host
@@ -2928,7 +2945,7 @@ its own merge watch and News. A client that subscribes is told the latest board 
 covers every change seen before it subscribed, so it reads its own writes: at once when no
 build is owed, or once the build under way or owed is done. It builds again when a Run is recorded, from any door, when
 one of its records in `host.db` is written, when a file under one of a Run's own directories is
-written (`runs/<id>`, `agents/<id>`, `evidence/<id>`, or a control file named for it), when a
+written (`runs/<id>`, `agents/<id>` or `evidence/<id>`), when a
 file anywhere else under its state directory is written that a build or a Run's record read,
 or that is in a directory one listed, when core pushes a terminal or agent status event,
 and every five seconds: one build at a time, with what changes meanwhile folded into the
@@ -2968,7 +2985,7 @@ as well as in `cleanup.jsonl`. `claimedInHelle`, which Desktop's `collie_helle` 
 a claim, drops that project from every Run's Helle claim record, recorded in
 `helle/operations.jsonl` and in each Run's own trail. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
 channel first sends `declare` with its front door, and the host stamps every operation on
-it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
+it with that, as a line of the Run's audit trail in `host.db`: the operation, the request, the
 Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A
 channel that declares nothing is `cli`. The historical `session` field is accepted for
 older clients and ignored; operations use this host's core Herd. A `chat` channel may carry `conversation` and `said`,

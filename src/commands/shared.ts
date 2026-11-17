@@ -13,6 +13,7 @@ import { err, workspaceNamed, type Failure, type NamedDirectory } from "../opera
 import { evidenceDir, runDir, type Given, type RunView } from "../engine";
 import { asks, asksRun, hostTaskOf, hostTasks } from "../lifecycle";
 import { readAudit, type AuditLine } from "../audit";
+import { recordsReadLayer } from "../records";
 import { readIntent } from "../intent";
 import { FrontDoor } from "../board-model";
 import { connect } from "../host";
@@ -85,9 +86,13 @@ const callerReaches = Effect.fn("collie.callerReaches")(function* (
 ) {
   if (caller === null) return false;
   if (view.parent === caller || view.requestedBy?.run === caller) return true;
-  const trail = yield* readAudit(runDir(env.stateDir, caller)).pipe(Effect.orElseSucceed(() => []));
+  const trail = yield* readAudit(runDir(env.stateDir, caller)).pipe(
+    Effect.provide(recordsReadLayer(env.stateDir)),
+    Effect.orElseSucceed(() => []),
+  );
   if (Arr.some(trail, (line) => steered(line, view.runId))) return true;
   const intent = yield* readIntent(runDir(env.stateDir, caller)).pipe(
+    Effect.provide(recordsReadLayer(env.stateDir)),
     Effect.orElseSucceed(() => null),
   );
   if (pipe_(intent?.goal ?? "", Str.includes(view.runId))) return true;

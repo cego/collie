@@ -29,6 +29,7 @@ import {
   type Toasted,
 } from "../src/board-model";
 import { readAudit } from "../src/audit";
+import { hostRecords } from "./support/records";
 import { runDir } from "../src/engine";
 import {
   act,
@@ -144,7 +145,12 @@ test(
           expect(noWork.reason).toContain("finished");
           expect(noWork.reason).not.toContain("Resumed");
 
-          const trail = yield* readAudit(runDir(world.state, runId));
+          const trail = yield* hostRecords(
+            world.state,
+            readAudit(runDir(world.state, runId)).pipe(
+              Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
+            ),
+          );
           expect(Arr.map(trail, (line) => line.actor)).toEqual([
             { origin: "desktop", requestId: "start-1", from: { client: "mk-pc" } },
             { origin: "desktop", requestId: "hold-1", from: { client: "mk-pc" } },

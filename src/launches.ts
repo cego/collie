@@ -22,6 +22,7 @@ import { RanOn, type RunAgent, type RunStep } from "./board-model";
 import { StepPlace } from "./steps";
 import { ClaudeSubagents } from "./subagents";
 import { StoreWrites } from "./store-writes";
+import { markWorked } from "./run-records";
 
 /** The Step run an agent's work was given in. */
 export const LaunchedIn = Schema.Struct({
@@ -146,6 +147,10 @@ export interface LaunchesApi {
   readonly of: (
     runs: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<Launched>>>;
+  /** Each of these Runs' launch records as written, oldest first; a Run with none is absent. */
+  readonly recordsOf: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
   /** Every launch of these agents, whichever Run. */
   readonly byAgent: (agents: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<Launched>>;
   /** Every harness session a launch recorded. */
@@ -154,6 +159,10 @@ export interface LaunchesApi {
   readonly record: (launched: Launched) => Effect.Effect<void>;
   /** Puts the launch last in its Run's order: its agent was given the work. */
   readonly order: (launched: Launch) => Effect.Effect<void>;
+  /** The launch each of these Runs ordered last, and when, in one read; a Run with none is absent. */
+  readonly lastOrderedOf: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, { readonly stem: string; readonly at: number }>>;
   /** The launch its Run ordered last, and when. */
   readonly lastOrdered: (
     run: string,
@@ -199,6 +208,20 @@ export const launchesLayer = Layer.effect(Launches)(
               }),
               Effect.orDie,
             ),
+      recordsOf: (runs) =>
+        runs.length === 0
+          ? Effect.succeed(new Map())
+          : sql<{ readonly run: string; readonly record: string }>`
+              SELECT run, record FROM collie_launches WHERE run IN ${sql.in(runs)} ${inOrder}
+            `.pipe(
+              Effect.map((rows) => {
+                const byRun = new Map<string, string[]>();
+                for (const row of rows)
+                  byRun.set(row.run, [...(byRun.get(row.run) ?? []), row.record]);
+                return byRun;
+              }),
+              Effect.orDie,
+            ),
       byAgent: (agents) =>
         agents.length === 0
           ? Effect.succeed([])
@@ -217,7 +240,13 @@ export const launchesLayer = Layer.effect(Launches)(
         sql`
           INSERT INTO collie_launches (run, stem, record) VALUES (${launched.runId}, ${stemOf(launched)}, ${encodeLaunched(launched)})
           ON CONFLICT (run, stem) DO UPDATE SET record = excluded.record
-        `.pipe(Effect.andThen(moved(launched.runId)), Effect.orDie),
+        `.pipe(
+          Effect.andThen(markWorked(launched.runId)),
+          sql.withTransaction,
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.andThen(moved(launched.runId)),
+          Effect.orDie,
+        ),
       order: (launched) =>
         Effect.flatMap(
           Clock.currentTimeMillis,
@@ -227,7 +256,29 @@ export const launchesLayer = Layer.effect(Launches)(
               ordered_at = ${now}
             WHERE run = ${launched.runId} AND stem = ${stemOf(launched)}
           `,
-        ).pipe(Effect.andThen(moved(launched.runId)), Effect.orDie),
+        ).pipe(
+          Effect.andThen(markWorked(launched.runId)),
+          sql.withTransaction,
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.andThen(moved(launched.runId)),
+          Effect.orDie,
+        ),
+      lastOrderedOf: (runs) =>
+        runs.length === 0
+          ? Effect.succeed(new Map())
+          : sql<{ readonly run: string; readonly stem: string; readonly at: number | null }>`
+              SELECT run, stem, ordered_at AS at FROM (
+                SELECT run, stem, ordered_at,
+                  row_number() OVER (PARTITION BY run ORDER BY ordered DESC) AS nth
+                FROM collie_launches WHERE run IN ${sql.in(runs)} AND ordered IS NOT NULL
+              ) WHERE nth = 1
+            `.pipe(
+              Effect.map(
+                (rows) =>
+                  new Map(Arr.map(rows, (row) => [row.run, { stem: row.stem, at: row.at ?? 0 }])),
+              ),
+              Effect.orDie,
+            ),
       lastOrdered: (run) =>
         sql<{ readonly stem: string; readonly at: number | null }>`
           SELECT stem, ordered_at AS at FROM collie_launches
@@ -264,6 +315,41 @@ export const launchesLayer = Layer.effect(Launches)(
     } satisfies LaunchesApi;
   }),
 );
+
+/**
+ * `launches` for one pass over these Runs, as `readAhead` reads their records; what was
+ * ordered last is read ahead for the Runs in `ordering` alone.
+ */
+export const launchesAhead = Effect.fn("Launches.ahead")(function* (
+  launches: LaunchesApi,
+  runs: ReadonlyArray<string>,
+  ordering: ReadonlyArray<string>,
+) {
+  const ids = new Set(runs);
+  const ordered = new Set(ordering);
+  const all = yield* Effect.cached(launches.recordsOf(runs));
+  const last = yield* Effect.cached(launches.lastOrderedOf(ordering));
+  return {
+    ...launches,
+    of: (some) =>
+      Arr.every(some, (run) => ids.has(run))
+        ? Effect.map(
+            all,
+            (got) =>
+              new Map(
+                Arr.flatMap(some, (run) => {
+                  const launched = decoded(Arr.map(got.get(run) ?? [], (record) => ({ record })));
+                  return launched.length === 0 ? [] : [[run, launched]];
+                }),
+              ),
+          )
+        : launches.of(some),
+    lastOrdered: (run) =>
+      ordered.has(run)
+        ? Effect.map(last, (got) => got.get(run) ?? null)
+        : launches.lastOrdered(run),
+  } satisfies LaunchesApi;
+});
 
 /** Every agent this Run has launched, oldest first, in the order they were launched. */
 export const readLaunches = Effect.fn("Launches.read")(function* (runId: string) {

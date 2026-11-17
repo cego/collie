@@ -13,16 +13,10 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Data, Effect, FileSystem } from "effect";
+import { RELAUNCH, RunRecords } from "./run-records";
 import { STOP_WAIT_MS, notStopped, stopAgent, type CompactionDeps } from "./compaction";
 import type { AgentInfo, Herdr, HerdrError } from "./herdr";
-import {
-  launchDir,
-  readLaunches,
-  startedDir,
-  stemOf,
-  withRelaunchLock,
-  type Launched,
-} from "./launches";
+import { launchDir, readLaunches, stemOf, withRelaunchLock, type Launched } from "./launches";
 import { reason } from "./naming";
 
 export interface EndDeps extends Pick<CompactionDeps, "ports" | "stateDir" | "log"> {
@@ -158,12 +152,9 @@ const ending = Effect.fnUntraced(function* (
     } satisfies Ended;
 
   // Ended on purpose, so nothing starts it again.
-  if (launched.runId !== undefined)
-    yield* (yield* FileSystem.FileSystem)
-      .remove(`${startedDir(deps.stateDir, launched.runId)}/${launched.agent}.json`, {
-        force: true,
-      })
-      .pipe(Effect.ignore);
+  const runId = launched.runId;
+  if (runId !== undefined)
+    yield* RunRecords.use((records) => records.setControl(RELAUNCH, runId, null, launched.agent));
   if (one !== undefined && closes === "close")
     yield* deps.herdr
       .terminalKill(one.paneId)

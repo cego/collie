@@ -5,6 +5,7 @@ import { Effect, FileSystem, Schema, flow as Schemaflow, Result } from "effect";
 import * as Str from "effect/String";
 import { Flow, type FlowRun } from "../src/board-model";
 import { readAudit } from "../src/audit";
+import { recordsReadLayer } from "../src/records";
 import { runDir } from "../src/engine";
 import { readEnv } from "../src/env";
 import { asksRun } from "../src/lifecycle";
@@ -398,7 +399,9 @@ test(
                 report: { state: "delivered", tries: [{ state: "undelivered" }] },
               },
             });
-            const asked = yield* readAudit(runDir(first.world.state, a));
+            const asked = yield* readAudit(runDir(first.world.state, a)).pipe(
+              Effect.provide(recordsReadLayer(first.world.state)),
+            );
             const askedFor = (request: string) =>
               Option.getOrUndefined(Arr.findFirst(asked, (one) => one.request === request))?.asked;
             const settledNotice = yield* Schema.decodeUnknownEffect(RunLinkNotice)(

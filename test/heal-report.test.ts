@@ -21,6 +21,7 @@ import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { foundationLayer, type RunView } from "../src/engine";
 import type { PlatformServices } from "../src/platform";
+import type { Records } from "../src/records";
 import { healParks } from "../src/park-recovery";
 import { Host, type HostApi } from "../src/sdk";
 import { knownIn, pendingIn, report, type Pending } from "../src/heal-report";
@@ -162,7 +163,7 @@ const onCollie = <A, E>(
     host: HostApi,
     forge: Effect.Success<ReturnType<typeof forgeOnPath>>,
     rig: Rig,
-  ) => Effect.Effect<A, E, PlatformServices>,
+  ) => Effect.Effect<A, E, PlatformServices | Records>,
 ) =>
   runEffect(
     Effect.gen(function* () {

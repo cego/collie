@@ -9,6 +9,7 @@ import { expect, test } from "bun:test";
 import { Config, Effect, FileSystem, Schema } from "effect";
 import { connect } from "../src/host";
 import { readAudit } from "../src/audit";
+import { hostRecords } from "./support/records";
 import { runDir } from "../src/engine";
 import { suiteEnv } from "./support/effect";
 import { until } from "./support/host";
@@ -87,7 +88,12 @@ test(
           const said = yield* Effect.promise(() => new Response(child.stdout).text());
           expect(yield* Effect.promise(() => child.exited)).toBe(0);
           expect(said).toContain('"ok":true');
-          const trail = yield* readAudit(runDir(world.state, runId));
+          const trail = yield* hostRecords(
+            world.state,
+            readAudit(runDir(world.state, runId)).pipe(
+              Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
+            ),
+          );
           expect(
             Option.getOrUndefined(Arr.findFirst(trail, (line) => line.request === "from-terminal"))
               ?.actor,

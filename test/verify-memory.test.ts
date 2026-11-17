@@ -11,14 +11,17 @@ import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { resetExecutors } from "../src/executors";
-import { runDir } from "../src/engine";
 import { holdsBudgetOf, memoryWaitOf, waitLine } from "../src/memory-wait";
 import { readVerifications } from "../src/verify";
-import { deliveredTo, registeredAt, launchOf } from "./support/records";
+import { deliveredTo, hostRecords, registeredAt, launchOf } from "./support/records";
 import { evidenceDir } from "../src/engine";
 import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
+
+/** The wait for memory the host on `state` has for the Run; none before it has made `host.db`. */
+const waitAt = (state: string, runId: string) =>
+  hostRecords(state, memoryWaitOf(runId)).pipe(Effect.orElseSucceed(() => null));
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Shown = Schema.Struct({ memory: Schema.NullOr(Schema.String) });
@@ -97,9 +100,9 @@ test(
               ["verify", "--run", runId, "--cwd", world.project, "--name", name, "--", "/bin/true"],
               { COLLIE_AGENT: agent },
             );
-          const waiting = () => memoryWaitOf(runDir(world.state, runId));
+          const waiting = () => waitAt(world.state, runId);
           const ran = () =>
-            readVerifications(evidenceDir(world.state, runId)).pipe(
+            hostRecords(world.state, readVerifications(evidenceDir(world.state, runId))).pipe(
               Effect.orElseSucceed(() => []),
               Effect.map((all) => all.length),
             );
@@ -114,7 +117,9 @@ test(
             expect(wait?.sentence).toMatch(
               /^waiting for memory on .+: 2\.0 of 100\.0 GB available$/,
             );
-            expect(yield* holdsBudgetOf(world.state, runId, launched.agent)).toBe(pauses);
+            expect(yield* hostRecords(world.state, holdsBudgetOf(runId, launched.agent))).toBe(
+              pauses,
+            );
             const shown = yield* collie(world, ["run", "show", runId]);
             expect(
               (yield* Schema.decodeUnknownEffect(Shown)(shown.envelope.data).pipe(Effect.orDie))
@@ -157,7 +162,7 @@ test(
             .pipe(Effect.orDie);
           expect(yield* client.run({ runId: second.runId }).pipe(Effect.orDie)).not.toBeNull();
           yield* until(
-            () => memoryWaitOf(runDir(world.state, second.runId)),
+            () => waitAt(world.state, second.runId),
             (one) => one !== null,
           );
           yield* client
@@ -172,7 +177,7 @@ test(
             .control({ runId: second.runId, control: "stop", set: true, request: "stop-short" })
             .pipe(Effect.orDie);
           yield* until(
-            () => memoryWaitOf(runDir(world.state, second.runId)),
+            () => waitAt(world.state, second.runId),
             (one) => one === null,
           );
           yield* memory(50);

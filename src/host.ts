@@ -70,7 +70,9 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../package.json";
 import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
-import type { Records } from "./records";
+import { recordsAt, type Records } from "./records";
+import { RunRecords } from "./run-records";
+import { controlOf, controlSet } from "./controls";
 import {
   FINISHED_STEPS,
   drawerWrites,
@@ -109,7 +111,6 @@ import {
   evidenceDir,
   STOP,
   AWAITING,
-  controlPath,
   type HostServices,
   type KeptViews,
   type Locate,
@@ -145,7 +146,7 @@ import {
   readIntent,
   amend,
   verificationGrant,
-  writeIntentHeld,
+  updateIntent,
   propagate as propagateIntent,
 } from "./intent";
 import { ChangedIntent } from "./intent-model";
@@ -310,7 +311,7 @@ import { AgentEntrySchema, everyRegistered, REGISTERED } from "./registry";
 import { listTasks, readTask, TASKS, TaskSchema } from "./task";
 import { epochMs, nowIso } from "./time";
 import { appendLog } from "./oversight";
-import { VERIFYING_FILE, verifyingIn } from "./verify";
+import { decodeVerifying, VERIFYING, verifyingOf } from "./verify";
 import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
 import { receive, uploadsDir } from "./uploads";
@@ -351,7 +352,6 @@ import { Store } from "./store";
 import type { Woke } from "./mr-watch-model";
 import { SESSIONS_EVERY, agentsIn, focusPane, herdChanges, liveHerds } from "./herds";
 import {
-  withDirLock,
   currentPid,
   ensureLockDir,
   holderLives,
@@ -1062,7 +1062,7 @@ const handlers = (
               running: yield* runningCheck(
                 run,
                 runs,
-                yield* markersOf(runs),
+                yield* markersOf(),
                 yield* Clock.currentTimeMillis,
               ),
               done: yield* donePasses(run),
@@ -1079,7 +1079,7 @@ const handlers = (
               const running = yield* runningCheck(
                 run,
                 runs,
-                yield* markersOf(runs),
+                yield* markersOf(),
                 yield* Clock.currentTimeMillis,
               );
               if (running?.log == null) return Stream.make({ _tag: "Ended" as const, check: null });
@@ -1152,7 +1152,7 @@ const handlers = (
                 bytes: file.bytes,
               })),
               replies: yield* readReplies(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
-              memory: yield* Effect.map(memoryWaitOf(runDir(dir, runId)), (wait) =>
+              memory: yield* Effect.map(memoryWaitOf(runId), (wait) =>
                 wait === null ? null : waitLine(wait),
               ),
               flow:
@@ -1421,9 +1421,7 @@ const hostBoard = (dir: string) =>
     const idle: IdleSince = new Map();
     const finishedSince: FinishedSince = new Map();
     const cards: KeptCards | undefined =
-      model === undefined
-        ? undefined
-        : { revision: model.inputsAt, kept: new Map(), markers: new Map() };
+      model === undefined ? undefined : { revision: model.inputsAt, kept: new Map() };
     /** The offers a build read, which the door is told of with its listing. */
     const offered = new Map<string, ReadonlyArray<OfferView>>();
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
@@ -2377,7 +2375,9 @@ const frontDoorHandlers = (
           });
         };
       /** A file operation's failure as the host's refusal, in its own words. */
-      const refusedPlainly = <A, E, R extends PlatformServices>(effect: Effect.Effect<A, E, R>) =>
+      const refusedPlainly = <A, E, R extends PlatformServices | Records>(
+        effect: Effect.Effect<A, E, R>,
+      ) =>
         effect.pipe(
           Effect.mapError((cause) =>
             Schema.is(RequestConflict)(cause) || Schema.is(HostRefused)(cause)
@@ -3419,9 +3419,10 @@ const frontDoorHandlers = (
                           )?.step
                         : undefined;
                     const fs = yield* FileSystem.FileSystem;
-                    const stopped = fs
-                      .exists(controlPath(env.stateDir, STOP, runId))
-                      .pipe(Effect.orElseSucceed(() => false));
+                    const runRecords = yield* RunRecords;
+                    const stopped = controlSet(runId, STOP).pipe(
+                      Effect.provideService(RunRecords, runRecords),
+                    );
                     const memory = yield* waitForMemory({
                       env,
                       stateDir: env.stateDir,
@@ -3469,6 +3470,7 @@ const frontDoorHandlers = (
                             echo("stderr")(`${line}\n`).pipe(
                               Effect.andThen(appendLog(runDir(env.stateDir, runId), line)),
                               Effect.ignore({ log: "Warn" }),
+                              Effect.provideService(RunRecords, runRecords),
                               Effect.provideService(FileSystem.FileSystem, fs),
                             ),
                         },
@@ -3551,7 +3553,7 @@ const frontDoorHandlers = (
               return Stream.callback<typeof MeasureEvent.Type, HostRefused>(
                 (queue) =>
                   Effect.gen(function* () {
-                    const fs = yield* FileSystem.FileSystem;
+                    const runRecords = yield* RunRecords;
                     const answered = yield* measure({
                       stateDir: env.stateDir,
                       env,
@@ -3564,10 +3566,10 @@ const frontDoorHandlers = (
                         ...(reason !== undefined && { reason }),
                       },
                       evidence: evidenceDir(env.stateDir, runId),
-                      awaiting: controlPath(env.stateDir, AWAITING, runId),
-                      stopped: fs
-                        .exists(controlPath(env.stateDir, STOP, runId))
-                        .pipe(Effect.orElseSucceed(() => false)),
+                      awaiting: controlOf(runRecords, AWAITING, runId),
+                      stopped: controlSet(runId, STOP).pipe(
+                        Effect.provideService(RunRecords, runRecords),
+                      ),
                       say: (text) => Queue.offer(queue, { _tag: "Said", text }).pipe(Effect.asVoid),
                     }).pipe(
                       Effect.mapError(
@@ -3704,10 +3706,8 @@ const frontDoorHandlers = (
                         registry.grant({ runId, name: change.name, command: change.command }),
                       )
                     : undefined;
-                const updated = yield* withDirLock(
-                  runDir(env.stateDir, runId),
+                const updated = yield* updateIntent(runDir(env.stateDir, runId), (current) =>
                   Effect.gen(function* () {
-                    const current = yield* readIntent(runDir(env.stateDir, runId));
                     if (current === null) return null;
                     if (expected !== undefined && current.version !== expected)
                       return yield* new HostRefused({
@@ -3727,7 +3727,7 @@ const frontDoorHandlers = (
                       change.kind === "verification" &&
                       Arr.some(current.history, (one) => one.by === actorName(amendedBy))
                     )
-                      return current;
+                      return null;
                     const wanted =
                       change.kind === "verification"
                         ? verificationGrant(current, change.name, change.command)
@@ -3739,9 +3739,7 @@ const frontDoorHandlers = (
                       yield* nowIso,
                       voiceOf(amendedBy),
                     );
-                    if (amended !== current)
-                      yield* writeIntentHeld(runDir(env.stateDir, runId), amended);
-                    return amended;
+                    return amended === current ? null : amended;
                   }),
                 ).pipe(Effect.result);
                 if (updated._tag === "Failure") {
@@ -3769,19 +3767,17 @@ const frontDoorHandlers = (
                     yield* registry.views(null),
                     (view) => view.parent === runId && !terminalStatus(view.status),
                   )) {
-                    const note = yield* withDirLock(
-                      runDir(env.stateDir, child.runId),
-                      Effect.gen(function* () {
-                        const current = yield* readIntent(runDir(env.stateDir, child.runId)).pipe(
-                          Effect.orElseSucceed(() => null),
-                        );
-                        if (current === null) return null;
-                        const carried = propagateIntent(next, current);
-                        yield* writeIntentHeld(runDir(env.stateDir, child.runId), carried.intent);
-                        return `  ${child.runId}: propagated${carried.conflicts.length ? ` (${Arr.join(carried.conflicts, "; ")})` : ""}`;
-                      }),
-                    ).pipe(Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })));
-                    if (note !== null) propagated.push(note);
+                    yield* updateIntent(runDir(env.stateDir, child.runId), (current) => {
+                      if (current === null) return Effect.succeed(null);
+                      const carried = propagateIntent(next, current);
+                      propagated.push(
+                        `  ${child.runId}: propagated${carried.conflicts.length ? ` (${Arr.join(carried.conflicts, "; ")})` : ""}`,
+                      );
+                      return Effect.succeed(carried.intent);
+                    }).pipe(
+                      Effect.catchTag("IntentUnreadable", () => Effect.void),
+                      Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
+                    );
                   }
                 const answer = { version: next?.version ?? null, propagated };
                 return approved === undefined ? answer : { ...answer, approved };
@@ -4335,7 +4331,7 @@ const onLeftoversRun = (dir: string) => (leftover: Leftover, outcome: LeftoverEn
     const fs = yield* FileSystem.FileSystem;
     const at = runDir(dir, leftover.run);
     if (!(yield* fs.exists(at).pipe(Effect.orElseSucceed(() => false)))) return;
-    const marker = yield* verifyingIn(at);
+    const marker = yield* verifyingOf(leftover.run);
     // A marker started after the check is a later check's.
     if (
       outcome !== "still running" &&
@@ -4344,9 +4340,16 @@ const onLeftoversRun = (dir: string) => (leftover: Leftover, outcome: LeftoverEn
       marker.pass === leftover.pass &&
       epochMs(marker.started) <= leftover.started
     )
-      yield* fs.remove(`${at}/${VERIFYING_FILE}`, { force: true }).pipe(Effect.ignore);
+      yield* RunRecords.use((records) => records.setControl(VERIFYING, leftover.run, null));
     yield* appendLog(at, line).pipe(Effect.ignore);
   });
+
+/** A CI wait runs only in the host that started it, so a starting host has none. */
+const endCiWaits = Effect.gen(function* () {
+  for (const row of yield* RunRecords.use((records) => records.everyControl(VERIFYING)))
+    if (decodeVerifying(row.data)?.pass === "ci")
+      yield* RunRecords.use((records) => records.setControl(VERIFYING, row.run, null));
+});
 
 /**
  * One host, for as long as it owns this directory. It runs until it is interrupted:
@@ -4383,6 +4386,9 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
           .readFileString(handedOverOf(dir))
           .pipe(Effect.flatMap(Schema.decodeUnknownEffect(HandedOverJson)), Effect.option);
         yield* fs.remove(handedOverOf(dir), { force: true }).pipe(Effect.ignore);
+        // Its own connection, since the host's opens after the checks a host before it left
+        // are taken over; the store it migrates first is the one the host's then finds.
+        const checkRecords = yield* Layer.build(recordsAt(dir));
         const checks = yield* hostCheckProcesses({
           dir,
           installation,
@@ -4392,7 +4398,8 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
           // Only a host of the build it was handed to takes the checks over.
           ...(Option.isSome(handedOver) &&
             handedOver.value.build === BUILD && { handedOver: handedOver.value }),
-        });
+        }).pipe(Effect.provideContext(checkRecords));
+        yield* endCiWaits.pipe(Effect.provideContext(checkRecords));
         const sweep = fresh
           ? Effect.void
           : checks.left.pipe(

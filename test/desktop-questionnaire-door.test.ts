@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Config, Effect, Exit, Option, Schema, Stream, flow, Result } from "effect";
+import { Config, Effect, Exit, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { readAudit } from "../src/audit";
 import type { Question } from "../src/board-model";
 import { runDir } from "../src/engine";
@@ -23,6 +23,7 @@ import {
 } from "../desktop/src/shared/questionnaire";
 import { suiteEnv } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
+import { hostRecords } from "./support/records";
 import { collie, proves, type World } from "./support/world";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -114,8 +115,17 @@ const submitted = Effect.fn("test.submitted")(function* (
   };
 });
 
+/** The Run's audit trail, as its host recorded it. */
+const trailOf = (world: World, runId: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    hostRecords(
+      world.state,
+      readAudit(runDir(world.state, runId)).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
+    ),
+  );
+
 const answersIn = (world: World, runId: string) =>
-  readAudit(runDir(world.state, runId)).pipe(
+  trailOf(world, runId).pipe(
     Effect.map((lines) => Arr.filter(lines, (line) => line.operation === "answer")),
     Effect.orDie,
   );
@@ -226,7 +236,7 @@ test(
           );
           expect(held.failed).toBeNull();
           expect(questionnaireView(held.state).status).toBe("Run held · question still open");
-          const audit = yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie);
+          const audit = yield* trailOf(world, runId).pipe(Effect.orDie);
           expect(
             Option.getOrUndefined(Arr.findFirst(audit, (line) => line.operation === "hold"))
               ?.reason,

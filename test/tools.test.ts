@@ -30,7 +30,7 @@ import { hostname } from "node:os";
 import { readEnv, type PluginEnv } from "../src/env";
 import { setSetting } from "../src/config";
 import { reachKey } from "../src/reach";
-import { amend, readIntent, writeIntentHeld } from "../src/intent";
+import { amend, readIntent, writeIntent } from "../src/intent";
 import { ensureLockDir, withLock } from "../src/lock";
 import { nowIso } from "../src/time";
 import { changeSchedule, runView, scheduleListing } from "../src/lifecycle";
@@ -71,8 +71,10 @@ import { runEffect } from "./support/effect";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { runDir, type RunView } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
-import { appendLog } from "../src/oversight";
-import { readAudit, trimAudit } from "../src/audit";
+import { appendLog, MERGE_REQUEST } from "../src/oversight";
+import { RunRecords } from "../src/run-records";
+import { AUDIT_FILE, readAudit } from "../src/audit";
+import * as SqlClient from "effect/sql/SqlClient";
 import { storedAnswers } from "./support/forge";
 import { Flow, FrontDoorRpcs, type Declaration, type FLOCK_READS } from "../src/board-model";
 
@@ -446,55 +448,33 @@ test("of two outcome changes made on the same Intent version at once, only one a
     }),
   ));
 
-test(
-  "an outcome change that waits out a long-held Intent lock is refused for its version, not as busy",
-  () =>
-    inWorld(
-      Effect.gen(function* () {
-        const run = yield* aRun("add a picker");
-        const journal = KEY;
-        const pending = yield* withLock(
-          `${run.dir}/run.json.lock`,
-          Effect.die("the Run's lock was already taken"),
-          Effect.gen(function* () {
-            const change = yield* call("collie_propose", {
-              interpretation: "change the kind",
-              actions: [
-                {
-                  kind: "update_intent",
-                  run: run.id,
-                  change: "set-outcome",
-                  patch: "bug",
-                  base_version: 1,
-                },
-              ],
-            }).pipe(Effect.forkScoped);
-            yield* until(
-              () => readProposals(journal),
-              (lines) =>
-                Arr.some(lines, (line) => line.kind === "step" && line.state === "started"),
-            );
-            yield* Effect.sleep("3 seconds");
-            const intent = yield* readIntent(run.dir);
-            if (intent === null) return yield* Effect.die("the Run has no Intent");
-            yield* writeIntentHeld(
-              run.dir,
-              amend(
-                intent,
-                { kind: "set-goal", goal: "a wider picker" },
-                "human:test",
-                yield* nowIso,
-              ),
-            );
-            return change;
-          }),
-        );
-        expect(yield* Fiber.join(pending)).toContain("the Intent is v2, not v1");
-        expect((yield* readIntent(run.dir))?.goal).toBe("a wider picker");
-      }),
-    ),
-  60_000,
-);
+test("an outcome change made on an Intent amended since its version is refused for its version", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const intent = yield* readIntent(run.dir);
+      if (intent === null) return yield* Effect.die("the Run has no Intent");
+      yield* writeIntent(
+        run.dir,
+        amend(intent, { kind: "set-goal", goal: "a wider picker" }, "human:test", yield* nowIso),
+      );
+      const change = yield* call("collie_propose", {
+        interpretation: "change the kind",
+        actions: [
+          {
+            kind: "update_intent",
+            run: run.id,
+            change: "set-outcome",
+            patch: "bug",
+            base_version: 1,
+          },
+        ],
+      });
+      expect(change).toContain("which is now v2");
+      expect(change).not.toContain("applied");
+      expect((yield* readIntent(run.dir))?.goal).toBe("a wider picker");
+    }),
+  ));
 
 test(
   "an outcome change that waits out a long-held Proposals journal lock is applied, not refused as busy",
@@ -1865,7 +1845,12 @@ test("each answer says who gave it, the newest five are listed, and an unrecorde
         );
       }
       // The trail keeps only the newest four answers, so q2's author is gone from it.
-      yield* trimAudit(run.dir, 4);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DELETE FROM collie_run_lines WHERE run = ${run.id} AND journal = ${AUDIT_FILE}
+          AND seq NOT IN (SELECT seq FROM collie_run_lines WHERE run = ${run.id}
+            AND journal = ${AUDIT_FILE} ORDER BY seq DESC LIMIT 4)`;
+      }).pipe(Effect.provide(recordsAt(stateDir)), Effect.orDie);
 
       const said = yield* call("collie_run", { run: run.id });
       const answered = Str.split(Str.split(said, "### Answered\n\n")[1]!, "\n\n")[0]!;
@@ -1907,10 +1892,7 @@ test("a Run's row for a Run it started shows that Run's merge request as the mer
       const parent = yield* aRun("start a child");
       const child = yield* startedRun("hello", { name: "child" }, isSettled, parent.id);
       const mr = "https://gitlab.cego.dk/mk/api/-/merge_requests/4";
-      yield* (yield* FileSystem.FileSystem).writeFileString(
-        `${child.dir}/merge-request`,
-        `${mr}\n`,
-      );
+      yield* RunRecords.use((records) => records.put(child.id, MERGE_REQUEST, `${mr}\n`));
       expect(yield* call("collie_run", { run: parent.id })).toContain(
         `- run ${child.id}: hello, succeeded; mk/api!4 not watched`,
       );
@@ -1929,10 +1911,9 @@ test("a Run's row for a Run it started shows that Run's merge request as the mer
 test("a Run's own merge request is shown as recorded, with what the merge watch last said of it", () =>
   inWorld(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const run = yield* settledRun(world, "hello");
       const pull = "https://github.com/cego/collie/pull/61";
-      yield* fs.writeFileString(`${run.dir}/merge-request`, `${pull}\n`);
+      yield* RunRecords.use((records) => records.put(run.id, MERGE_REQUEST, `${pull}\n`));
       expect(yield* call("collie_run", { run: run.id })).toContain(
         `Pull request: ${pull} — not watched`,
       );

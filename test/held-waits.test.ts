@@ -10,6 +10,9 @@ import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
+import { hostRecords } from "./support/records";
+import { RunRecords } from "../src/run-records";
+import { AWAITING } from "../src/engine";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
@@ -34,6 +37,13 @@ const hostWith = Effect.fn("test.hostWith")(function* (
   );
   return yield* connect(world.state).pipe(Effect.orDie);
 });
+
+/** Whether the host on `world` keeps an `awaiting` control over the Run. */
+const awaiting = (world: World, runId: string) =>
+  hostRecords(
+    world.state,
+    RunRecords.use((records) => records.control(AWAITING, runId)),
+  ).pipe(Effect.map((data) => data !== null));
 
 const suspended = (client: Effect.Success<ReturnType<typeof hostWith>>, runId: string) =>
   until(
@@ -91,7 +101,6 @@ test(
       "collie-hold-review-",
       (world) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
           const client = yield* hostWith(world, {});
           const { runId } = yield* client
             .start({
@@ -106,15 +115,14 @@ test(
             .pipe(Effect.orDie);
           // Unreadable, so the wait goes on and says so on the card.
           yield* until(
-            () =>
-              fs.exists(`${world.state}/awaiting.${runId}`).pipe(Effect.orElseSucceed(() => false)),
+            () => awaiting(world, runId).pipe(Effect.orElseSucceed(() => false)),
             (waiting) => waiting,
           );
 
           const held = yield* collie(world, ["run", "hold", runId]);
           expect(held.envelope.ok).toBe(true);
           yield* suspended(client, runId);
-          const waiting = yield* fs.exists(`${world.state}/awaiting.${runId}`);
+          const waiting = yield* awaiting(world, runId);
           yield* stopHost(world.state);
           expect(waiting).toBe(false);
         }).pipe(Effect.orDie),

@@ -132,7 +132,8 @@ Pause transitions and note receipts still persist; the live Steps keep writing t
 Model-backed Run listings use the supplied file reader for intent and displayed controls as well.
 Direct Run reads and live control decisions keep their fresh filesystem reads.
 
-Kept cards and check markers use their source-input revisions. Stamping a changed age or
+Kept cards use their source-input revisions; every Run's check marker, its `verifying`
+control, is one read per build. Stamping a changed age or
 record still advances the public revision, but does not invalidate the card that produced it.
 File, row and observed Run-fact changes still invalidate the affected cards.
 
@@ -182,13 +183,37 @@ Reactivity key, which the board follows. The first host on a state directory imp
 A starting host registers every saved generation before a Run it recovers looks one up, so a
 parent resumed in the swap reads a child of any generation.
 
+A Run's own records are rows of the same file, kept by `src/run-records.ts`
+([ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database](adr/draft-a-runs-own-records-are-rows-in-the-hosts-database.md)).
+A journal, such as `steps.jsonl`, `operations.jsonl` or `steering/cards.jsonl`, is lines of
+`collie_run_lines` in the order they were written. A fact, such as `intent.json`,
+`landing.json` or a progress checkpoint, is one row of `collie_run_facts`, and a change to
+one reads and writes it in one transaction. Each keeps the name of the file an older build
+kept it in, relative to the Run's directory, with `evidence/` first for the evidence
+directory's. `collie_run_activity` holds when each Run last did work: every write moves it
+except the host's own bookkeeping, which is the audit trail, dispositions and what was seen.
+A Step's usual time is one query over the Step rows. Only the host writes them
+([ADR-0040](adr/0040-the-host-is-the-only-writer.md)); the CLI, the MCP tools and the door's
+thread read them over a read-only connection (`recordsReadLayer`). The migration that made
+the tables, 25, imported every Run's journal and fact files under `runs/` and `evidence/`
+once, and each Run's last activity from those files' modification times, and left the files
+in place. A torn last line was dropped and a corrupt one kept, so a reader that fails closed
+still does. `collie host rollback` undoes it for an older build: with no host running, it
+writes every row back to its file, dated by when its Run last did work, then drops this
+migration's tables and its record, so the next upgrade imports the files again. It refuses
+while a later build's migration is recorded, since dropping this one beneath it would never
+import again ([CLI](cli.md#the-local-workflow-host)). The controls the host sets over a Run,
+the relaunch records and the running checks' records are rows of `collie_controls` beside
+them, imported from and rolled back to the files an older build kept. A board build reads each
+journal, fact and activity it uses for all its Runs in one query.
+
 `patches/effect@4.1.4.patch` prevents a conditional SQL activity reset from replaying the
 interrupt that suspended it. The existing transaction protects the reply check and cleanup;
 a stale reset leaves newer replies and interrupts intact. Remove the patch only when an
 upstream release passes `test/effect-sql-reset.test.ts` and the release-set scenarios.
 
 Once it answers, a starting host ends every check a previous host left running in its
-state directory: one recorded under `running-checks/`, or a process marked with this
+state directory: one with a running-check record in `host.db`, or a process marked with this
 installation's id. A host that has just made that id looks for none, since no process can
 carry it. Each gets SIGTERM, then SIGKILL two seconds later, and is never adopted unless it
 was handed over. The Run's log and `host.log` name the check and the host that left it, and
@@ -222,7 +247,7 @@ goes leaves it writing: those three files answer each reason a host could not ta
 check it did not start, which are that its output went to the old host's pipe, that only a
 parent reads an exit status, and that its starting tree was in the old host's memory, where
 `<id>.json` now keeps it. The host that ran it finishes it from what it kept; another host
-finishes it from those files. They go with its record, `running-checks/<id>.json`.
+finishes it from those files. They go with its running-check record.
 
 Recovery re-enters the module as it is now. Completed Activities are reused, a question
 already asked is still asked, and an agent already launched is reattached to. There is no
@@ -239,9 +264,9 @@ so a resume reattaches to the launch already recorded. A Run that cannot go on b
 pane that will not take a prompt, a check that still fails, or none named, after its gate fixes, a workspace closed with its
 checkout gone — parks with the reason and the repair, and `run resume` picks it up.
 
-Beside the database, a Run's files are its audit trail: `agents/<run>/<operation>.prompt.md`
-with the Output it came back with, `evidence/<run>/` with its checks
-and the ones collected, and `runs/<run>/` with its cards, its `plan/`, the review it left and the notes its agents
+Beside the database, a Run's files are the rest of its trail: `agents/<run>/<operation>.prompt.md`
+with the Output it came back with, `evidence/<run>/` with its checks' logs,
+and `runs/<run>/` with its `plan/`, the review it left and the notes its agents
 handed on in `handoffs/`, which the shipped workflows tell them to write there rather than in
 `/tmp` and which `run show` and the Run's record list. `handoffs/` is made when the Run is
 placed, before any agent of it starts, and a Claude Code agent is started with
@@ -256,8 +281,8 @@ workspace of it is open, no agent it launched is alive, no checkout it made is o
 Run outside it names one of its Runs as parent or points an input into one of its run
 directories, and its last Run ended more than 30 days ago — the board's finish time, else the
 newest of its files. The rows go first, in one transaction under the Task's lock: each
-execution's messages and replies, through `MessageStorage.clearAddress`, then its decisions
-and its `collie_runs` row; a row the engine never accepted is left for recovery. Then its
+execution's messages and replies, through `MessageStorage.clearAddress`, then its decisions,
+its own records and its `collie_runs` row; a row the engine never accepted is left for recovery. Then its
 `runs/`, `agents/` and `evidence/` directories, its markers, the steering ledgers that name
 only its Runs, and the Task's record. A file a failure leaves behind has no row any more,
 and the next sweep's no-row rule removes it.
@@ -290,12 +315,12 @@ core to start anything; a Check pass, in the engine's `check` once no earlier pa
 relied on and before the checkout moves; and `collie verify`, in the host's `verify`
 handler, so the CLI and the agent's tool wait alike. The reading is `src/memory.ts`'s,
 taken with `memory_hold` fresh at the start and every 15 seconds after. While it waits, a
-start keeps a file in its run directory's `memory-waits/` naming what waits, its sentence,
+start keeps a `memory-wait` control over its Run naming what waits, its sentence,
 when it began, when it last read the Machine and, for an agent's verify, that agent. The
 board, the drawer, `collie run show` and `collie_run` read the oldest one through
 `memoryWaitOf`, a card reading those of every Run it shows, and an agent's Output budget
-does not run while one names it (`holdsBudgetOf`). A file not read again for three periods
-was left by a host that died, and is not read. Each start passes its Run's stop file to
+does not run while one names it (`holdsBudgetOf`). A wait not read again for three periods
+was left by a host that died, and is not read. Each start passes its Run's stop control to
 the wait, which reads it again as memory frees: a stop during the wait, or as it ends,
 ends it with nothing started.
 The chats' agents start elsewhere, and never wait.
@@ -449,7 +474,7 @@ Machine and the requesting Run's agent, and records each request once on that Ru
 Flow hangs the link under the Step whose launch made the start and keeps that placement
 when settlement arrives. Settlement takes precedence over an admission delivered late.
 The started Run records each try's result in `linkNotices`, shown by `collie run show`,
-and keeps each notice as first sent in `link-notices.jsonl`. Each time a paired Machine's
+and keeps each notice as first sent among its records in `host.db`. Each time a paired Machine's
 link comes up, `onLink` tells the reports layer. While that link stays up and anything is
 still owed to the Machine, every five seconds it asks the Machine's host for its identity
 and, once that answers, sends again every undelivered notice to it, unchanged and under
@@ -868,7 +893,7 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   call whose repair goes as a Delivery), so the call after it is posted whatever it holds.
 - **Stop** at the Run's end is `terminal.kill`.
 - **Resume.** What each agent was started with, less its credentials and its Run's
-  authority, is kept in `relaunch/<run>/<agent>.json` under the state directory until it is
+  authority, is kept as the Run's relaunch control in `host.db`, one per agent, until it is
   ended. The host follows core's events, and on subscribing and on each terminal that ends,
   starts again every agent of a running Run that `terminal.list` no longer has: a new
   `terminal.run` under its name, in its cwd, with its harness's resume of the recorded
@@ -1072,8 +1097,8 @@ what the review read says, never on an agent's Output
   `host.readTag` counts it as not finished.
 
 A Run merges through `host.merge`, never through `merge` itself, so that it lands with a
-**landing record** (`src/landing.ts`), kept as `landing.json` and log lines in the Run's
-own directory. The attempt, naming the merge request, the head and when, is written before
+**landing record** (`src/landing.ts`), kept as one of the Run's records in `host.db` and as
+lines in its log. The attempt, naming the merge request, the head and when, is written before
 the forge is asked; it becomes landed with the merged commit when the forge answers that
 this call merged it, and withdrawn on a refusal, a moved head, or a merge someone else made
 first.

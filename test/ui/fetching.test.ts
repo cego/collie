@@ -7,6 +7,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
 import type { PlatformServices } from "../../src/platform";
+import type { Records } from "../../src/records";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Layer, PlatformError } from "effect";
 import { Rig, type RigError } from "../support/recorder";
@@ -37,7 +38,7 @@ function effectTest(
   body: () => Effect.gen.Return<
     void,
     RigError | PlatformError.PlatformError | Error,
-    PlatformServices
+    PlatformServices | Records
   >,
 ) {
   test(name, () => runEffect(Effect.gen(body)));

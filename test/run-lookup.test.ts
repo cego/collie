@@ -18,6 +18,7 @@ import { Launched } from "../src/launches";
 import { factsOfView, findRun } from "../src/runs";
 import { answerRead, toolNamed } from "../src/tools";
 import { runEffect } from "./support/effect";
+import { recordsAt } from "../src/records";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 
@@ -70,7 +71,7 @@ const hostOf = (dir: string, views: ReadonlyArray<RunView>, build = BUILD) =>
   Effect.gen(function* () {
     const asked: Array<string> = [];
     const count = (rpc: string) => Effect.sync(() => asked.push(rpc));
-    yield* (yield* FileSystem.FileSystem).writeFileString(`${dir}/host.db`, "");
+    yield* Layer.build(recordsAt(dir));
     yield* Layer.build(
       RpcServer.layer(Asked).pipe(
         Layer.provide(

@@ -30,7 +30,7 @@ import {
   endCheck,
   hostCheckProcesses,
   KILL_CEILING,
-  runningChecksDir,
+  runningChecks,
   type RunningCheck,
 } from "../src/check-processes";
 import {
@@ -48,6 +48,7 @@ import {
   startCheck,
   type Verification,
 } from "../src/verify";
+import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { runEffect } from "./support/effect";
 import { exec, startDetached } from "./support/command";
 import { until } from "./support/host";
@@ -107,18 +108,14 @@ const startedIn = (notes: string) =>
 const noneRunning = (ones: ReadonlyArray<{ readonly pid: number; readonly started: string }>) =>
   Effect.map(Effect.forEach(ones, stillRunning), (running) => !Arr.some(running, Boolean));
 
-const records = (state: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readDirectory(runningChecksDir(state))),
-    Effect.orElseSucceed((): Array<string> => []),
-  );
+const recorded = runningChecks.pipe(Effect.map((ones) => Arr.map(ones, (one) => one.id)));
 
 test.skipIf(process.platform !== "linux")(
   "an interrupted check that ignores SIGTERM is gone with its child, and leaves no record",
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { state, notes, checks } = yield* world;
+        const { notes, checks } = yield* world;
         const running = yield* Effect.forkScoped(
           Effect.scoped(
             checks
@@ -130,7 +127,7 @@ test.skipIf(process.platform !== "linux")(
 
         yield* Fiber.interrupt(running);
         expect(yield* noneRunning(ones)).toBe(true);
-        expect(yield* records(state)).toEqual([]);
+        expect(yield* recorded).toEqual([]);
       }),
     ),
   30_000,
@@ -211,7 +208,7 @@ test.skipIf(process.platform !== "linux")(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const { state, notes, checks } = yield* world;
+        const { notes, checks } = yield* world;
         const exit = yield* Effect.forkScoped(
           Effect.scoped(
             checks
@@ -221,7 +218,7 @@ test.skipIf(process.platform !== "linux")(
         );
         const ones = yield* startedIn(notes);
 
-        expect(yield* records(state)).toHaveLength(1);
+        expect(yield* recorded).toHaveLength(1);
         const bound = yield* Effect.forEach(ones, ({ pid }) =>
           bindingsOf(pid, [CHECK_INSTALLATION, CHECK_ID]),
         );
@@ -231,7 +228,7 @@ test.skipIf(process.platform !== "linux")(
 
         yield* fs.writeFileString(`${notes}/release`, "");
         expect(yield* Fiber.join(exit)).toBe(0);
-        expect(yield* records(state)).toEqual([]);
+        expect(yield* recorded).toEqual([]);
       }),
     ),
   30_000,
@@ -260,15 +257,15 @@ test.skipIf(process.platform !== "linux")(
           ),
         );
         const ones = yield* startedIn(notes);
-        expect(yield* records(state)).toHaveLength(1);
+        expect(yield* recorded).toHaveLength(1);
         const bound = yield* bindingsOf(ones[1]!.pid, [CHECK_INSTALLATION, CHECK_ID]);
         expect(bound?.[CHECK_ID]).toStartWith("run-1@");
 
         // The host that adopted it died: the next one on the state directory ends it.
         yield* hostCheckProcesses({ dir: state, installation, sweep: true });
         expect(yield* noneRunning(ones)).toBe(true);
-        expect(yield* records(state)).toEqual([]);
-      }),
+        expect(yield* recorded).toEqual([]);
+      }).pipe(Effect.scoped),
     ),
   30_000,
 );
@@ -574,7 +571,7 @@ test.skipIf(process.platform !== "linux")(
     runEffect(
       Effect.gen(function* () {
         const { gate, gated } = yield* gatedSpawn;
-        const { state, notes, checks } = yield* worldWith({}, { spawner: gated });
+        const { notes, checks } = yield* worldWith({}, { spawner: gated });
         gate.armed = notes;
         const running = yield* runHeld(checks, notes);
         yield* Effect.addFinalizer(() => Deferred.succeed(gate.release, undefined));
@@ -585,7 +582,7 @@ test.skipIf(process.platform !== "linux")(
         yield* Deferred.succeed(gate.release, undefined);
         yield* Fiber.join(interrupted).pipe(Effect.timeout("10 seconds"));
         expect(yield* noneRunning(ones)).toBe(true);
-        expect(yield* records(state)).toEqual([]);
+        expect(yield* recorded).toEqual([]);
       }),
     ),
   30_000,
@@ -1130,7 +1127,7 @@ test(
  * Check `held` of pass `gate` of run-1, left running and recorded by host 4242, for a kill
  * that signals nothing; let go and waited for once the test is done. Gives back its leader.
  */
-const survivingLeftover = (state: string, notes: string) =>
+const survivingLeftover = (notes: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* leftBehind(notes, { installation, id: "run-1@1-left" });
@@ -1141,9 +1138,9 @@ const survivingLeftover = (state: string, notes: string) =>
         .pipe(Effect.andThen(until(() => noneRunning(left), Boolean)), Effect.ignore),
     );
     const leader = left[0]!;
-    yield* fs.makeDirectory(runningChecksDir(state), { recursive: true });
-    yield* fs.writeFileString(
-      `${runningChecksDir(state)}/run-1@1-left.json`,
+    yield* (yield* RunRecords).setControl(
+      RUNNING_CHECK,
+      "",
       encodeCheckRecord({
         id: "run-1@1-left",
         run: "run-1",
@@ -1158,6 +1155,7 @@ const survivingLeftover = (state: string, notes: string) =>
         host: { pid: 4242, started: "2" },
         started: "1970-01-01T00:00:00.001Z",
       }),
+      "run-1@1-left",
     );
     return leader;
   });
@@ -1169,10 +1167,10 @@ test.skipIf(process.platform !== "linux")(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const events: string[] = [];
-        const { state, notes, checks } = yield* worldWith({
+        const { notes, checks } = yield* worldWith({
           kill: (_target, name) => void events.push(`kill ${name}`),
         });
-        const leader = yield* survivingLeftover(state, notes);
+        const leader = yield* survivingLeftover(notes);
 
         const refused = yield* Effect.scoped(
           checks.run(check, { executable: held, argv: [notes], cwd: notes }, (line) =>
@@ -1205,8 +1203,8 @@ test.skipIf(process.platform !== "linux")(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { root, state, notes, checks } = yield* worldWith({ kill: () => {} });
-        const leader = yield* survivingLeftover(state, notes);
+        const { root, notes, checks } = yield* worldWith({ kill: () => {} });
+        const leader = yield* survivingLeftover(notes);
         const said: string[] = [];
 
         const refused = yield* collect(
@@ -1358,7 +1356,7 @@ test.skipIf(process.platform !== "linux")(
           tail: { stdout: "out\n", stderr: "err\n" },
           expect: "fail",
         });
-        expect(yield* records(state)).toEqual([]);
+        expect(yield* recorded).toEqual([]);
       }),
     ),
   30_000,
@@ -1709,16 +1707,20 @@ for (const stream of ["stdout", "stderr"] as const)
 test("a check whose Verification cannot be appended gives no verdict", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const one = yield* world;
-      yield* fs.makeDirectory(`${one.root}/evidence/steering/verifications.jsonl`, {
-        recursive: true,
-      });
-      const refused = yield* collected(one, "true", { cwd: one.notes }).pipe(Effect.flip);
+      const records = yield* RunRecords;
+      const refused = yield* collected(one, "true", { cwd: one.notes }).pipe(
+        Effect.provideService(RunRecords, {
+          ...records,
+          append: () => Effect.die(new Error("disk full")),
+        }),
+        Effect.flip,
+      );
 
       expect(refused._tag).toBe("VerifyRefused");
       expect(refused.state).toBe(true);
       expect(refused.why).toContain('"streams" gave no verdict');
       expect(refused.why).toContain("record");
+      expect(refused.why).toContain("disk full");
     }),
   ));

@@ -1,6 +1,6 @@
 // The one wait an agent's launch, a Check pass and `collie verify` make while their Machine
 // is Short of memory (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory, D2–D7).
-// Each wait is a file in its Run's directory, so every door reads it the one way.
+// Each wait is a control row over its Run, so every door reads it the one way.
 
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -11,6 +11,7 @@ import type { PluginEnv } from "./env";
 import { launchDir } from "./launches";
 import { machineMemory, PRESSURE_SHORT, type Memory } from "./memory";
 import { machineName } from "./peers";
+import { RunRecords } from "./run-records";
 import { took } from "./time";
 
 /** How often a wait reads again; a test of the shipped host names a shorter one. */
@@ -18,7 +19,8 @@ const every = Config.Duration("COLLIE_MEMORY_EVERY").pipe(
   Config.withDefault(Duration.seconds(15)),
   Effect.orElseSucceed(() => Duration.seconds(15)),
 );
-const WAITS_DIR = "memory-waits";
+/** A wait for memory, keyed by its start and a random number (`memory-waits/<key>`). */
+export const MEMORY_WAIT = "memory-wait";
 
 const GB = 1024 ** 3;
 
@@ -40,16 +42,13 @@ export type MemoryWait = typeof MemoryWaitJson.Type;
 export const memorySentence = (memory: Memory & { known: true }) =>
   `waiting for memory on ${machineName()}: ${(memory.available / GB).toFixed(1)} of ${(memory.total / GB).toFixed(1)} GB available${memory.pressure !== null && memory.pressure >= PRESSURE_SHORT ? `, pressure ${memory.pressure.toFixed(1)}` : ""}`;
 
-const waitsOf = (runDir: string) =>
+const waitsOf = (runId: string) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
+    const rows = yield* RunRecords.use((records) => records.controlsOf(MEMORY_WAIT, runId));
     const now = yield* Clock.currentTimeMillis;
-    const dir = `${runDir}/${WAITS_DIR}`;
-    const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
     const waits: MemoryWait[] = [];
-    for (const name of names) {
-      const text = yield* fs.readFileString(`${dir}/${name}`).pipe(Effect.orElseSucceed(() => ""));
-      const decoded = Schema.decodeOption(MemoryWaitJson)(text);
+    for (const row of rows) {
+      const decoded = Schema.decodeOption(MemoryWaitJson)(row.data);
       if (Option.isSome(decoded) && now - decoded.value.read <= 3 * decoded.value.every)
         waits.push(decoded.value);
     }
@@ -61,16 +60,12 @@ export const waitLine = (wait: MemoryWait) =>
   `${Str.toUpperCase(wait.sentence[0]!)}${pipe_(wait.sentence, Str.slice(1))}.`;
 
 /** What of this Run waits for memory longest, or null where nothing does. */
-export const memoryWaitOf = (runDir: string) =>
-  Effect.map(waitsOf(runDir), (waits) => waits[0] ?? null);
-
-const waitsDir = (stateDir: string, runId: string) => `${stateDir}/runs/${runId}/${WAITS_DIR}`;
+export const memoryWaitOf = (runId: string) =>
+  Effect.map(waitsOf(runId), (waits) => waits[0] ?? null);
 
 /** Whether a `collie verify` `agent` asked for waits for memory, which pauses its Output budget. */
-export const holdsBudgetOf = (stateDir: string, runId: string, agent: string) =>
-  Effect.map(waitsOf(`${stateDir}/runs/${runId}`), (waits) =>
-    Arr.some(waits, (one) => one.asker === agent),
-  );
+export const holdsBudgetOf = (runId: string, agent: string) =>
+  Effect.map(waitsOf(runId), (waits) => Arr.some(waits, (one) => one.asker === agent));
 
 /**
  * Returns once this Machine is not short of memory, reading it and `memory_hold` again every
@@ -90,7 +85,7 @@ export const waitForMemory = (opts: {
 }): Effect.Effect<
   "free" | "waited" | "stopped",
   never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | RunRecords
 > =>
   Effect.gen(function* () {
     const read = machineMemory(opts.env).pipe(
@@ -101,9 +96,9 @@ export const waitForMemory = (opts: {
     const reading = first.memory;
     const stopped = opts.stopped ?? Effect.succeed(false);
     const fs = yield* FileSystem.FileSystem;
-    const dir = waitsDir(opts.stateDir, opts.runId);
+    const records = yield* RunRecords;
     const since = yield* Clock.currentTimeMillis;
-    const file = `${dir}/${since}-${yield* Random.nextInt}.json`;
+    const key = `${since}-${yield* Random.nextInt}.json`;
     const runLog = launchDir(opts.stateDir, opts.runId);
     const log = (line: string) =>
       fs
@@ -115,8 +110,9 @@ export const waitForMemory = (opts: {
     const period = yield* every;
     const mark = (memory: Memory & { known: true }) =>
       Effect.gen(function* () {
-        yield* fs.writeFileString(
-          file,
+        yield* records.setControl(
+          MEMORY_WAIT,
+          opts.runId,
           yield* Schema.encodeEffect(MemoryWaitJson)({
             what: opts.what,
             sentence: memorySentence(memory),
@@ -125,6 +121,7 @@ export const waitForMemory = (opts: {
             every: Duration.toMillis(period),
             asker: opts.asker ?? null,
           }).pipe(Effect.orDie),
+          key,
         );
       }).pipe(Effect.ignore({ log: "Warn" }));
     const freed = Effect.gen(function* () {
@@ -140,7 +137,6 @@ export const waitForMemory = (opts: {
     });
     return yield* Effect.gen(function* () {
       const sentence = memorySentence(reading);
-      yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore);
       yield* mark(reading);
       yield* log(`${opts.what}: ${sentence}`);
       if (opts.say !== undefined) yield* opts.say(sentence);
@@ -152,7 +148,7 @@ export const waitForMemory = (opts: {
     }).pipe(
       Effect.onExit((exit) =>
         Effect.gen(function* () {
-          yield* fs.remove(file).pipe(Effect.ignore);
+          yield* records.setControl(MEMORY_WAIT, opts.runId, null, key);
           const waited = took((yield* Clock.currentTimeMillis) - since);
           yield* log(
             exit._tag === "Success" && exit.value === "waited"

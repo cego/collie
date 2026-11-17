@@ -15,8 +15,18 @@ import { runDir, type RunView } from "../src/engine";
 import { connect } from "../src/host";
 import { isSettled } from "../src/lifecycle";
 import { stopHost, until } from "./support/host";
+import { hostRecords } from "./support/records";
 import { collie, proves, type World } from "./support/world";
 import type { FakeHc } from "./support/fake-hc";
+
+/** The Run's audit trail, as its host on `state` recorded it. */
+const trailOf = (state: string, runId: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    hostRecords(
+      state,
+      readAudit(runDir(state, runId)).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
+    ),
+  );
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Payload = Schema.Struct({
@@ -126,7 +136,7 @@ test(
 
         const line = Option.getOrUndefined(
           Arr.findFirst(
-            yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie),
+            yield* trailOf(world.state, runId).pipe(Effect.orDie),
             (one) => one.operation === "start",
           ),
         );
@@ -266,7 +276,7 @@ test(
         expect(yield* read(kept)).toBe(`look at this\nAttached: ${copy}`);
         const delivered = Option.getOrUndefined(
           Arr.findFirst(
-            yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie),
+            yield* trailOf(world.state, runId).pipe(Effect.orDie),
             (one) => one.operation === "deliver",
           ),
         );
@@ -315,7 +325,7 @@ test(
         expect(said).not.toContain("line of the review");
         const delivered = Option.getOrUndefined(
           Arr.findFirst(
-            yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie),
+            yield* trailOf(world.state, runId).pipe(Effect.orDie),
             (one) => one.request === "req-long",
           ),
         );

@@ -23,6 +23,7 @@ import {
 import { runEffect } from "./support/effect";
 import { events, openHost, runDirOf, until, workspace } from "./support/host";
 import { readAudit } from "../src/audit";
+import { recordsReadLayer } from "../src/records";
 import { frontDoor, socketOf } from "../src/host";
 import { Host } from "../src/sdk";
 import { callFlockTool, chatDoor } from "../desktop/src/bun/flock-tools";
@@ -1537,7 +1538,7 @@ test(
           result: [runId],
         });
         const onRun = Arr.filter(
-          yield* readAudit(dir),
+          yield* readAudit(dir).pipe(Effect.provide(recordsReadLayer(state))),
           (line) => line.operation === "helle_claimed",
         );
         const { requested: _, ...asked } = onHost!;

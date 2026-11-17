@@ -11,6 +11,7 @@ import { agentsLayer } from "../src/agents";
 import { land, readLanding, takeOver, writeLanding, type Landing } from "../src/landing";
 import { forgeHttpTest } from "../src/forge/http";
 import { WorkflowError } from "../src/sdk";
+import { RunRecords } from "../src/run-records";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -60,7 +61,7 @@ const landing = Effect.fn("landing.landing")(function* (
   const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-landing-" });
   const fake = fakeForge(forge, model(forge, over));
   const seen: Array<Landing | null> = [];
-  const services = yield* Effect.context<FileSystem.FileSystem>();
+  const services = yield* Effect.context<FileSystem.FileSystem | RunRecords>();
   const http = forgeHttpTest(fake.run, (input, init = {}) =>
     Effect.runPromiseWith(services)(
       Effect.gen(function* () {
@@ -228,6 +229,17 @@ test("gitlab: an attempt left settles as merged outside the Run when a user name
         state: "withdrawn",
         why: "merged outside this Run by github-merge-queue",
       });
+    }),
+  ));
+
+test("a landing an older build kept is read from its Run's records", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const kept = attempt("gitlab", { state: "landed", sha: MERGED });
+      yield* RunRecords.use((records) =>
+        records.put("r-kept", "landing.json", JSON.stringify(kept)),
+      );
+      expect(yield* readLanding("/state/runs/r-kept")).toEqual(kept);
     }),
   ));
 

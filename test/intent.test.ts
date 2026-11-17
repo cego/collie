@@ -5,7 +5,7 @@
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
@@ -20,14 +20,18 @@ import {
   propagate,
   readIntent,
   seedIntent,
+  updateIntent,
   writeIntent,
+  INTENT_FILE,
 } from "../src/intent";
+import { RunRecords, runOfDir } from "../src/run-records";
 import { runEffect } from "./support/effect";
 import { connect } from "../src/host";
 import { runDir } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
 import { MODULES, hosted } from "./support/hosted";
 import { until } from "./support/host";
+import { hostRecords } from "./support/records";
 
 let dir: string;
 
@@ -77,11 +81,47 @@ test("a Run with no Intent reads as none, and a written one round trips", () =>
 test("an Intent that cannot be decoded is an error, never a default", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      yield* fs.writeFileString(path.join(dir, "intent.json"), `{"version":"one"}`);
+      yield* RunRecords.use((records) =>
+        records.put(runOfDir(dir), INTENT_FILE, `{"version":"one"}`),
+      );
       const failure = yield* readIntent(dir).pipe(Effect.flip);
       expect(failure).toBeInstanceOf(IntentUnreadable);
+    }),
+  ));
+
+test("two amendments at once each take a version of their own", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeIntent(dir, seedIntent("r1", {}));
+      const add = (text: string) =>
+        updateIntent(dir, (intent) =>
+          Effect.succeed(
+            intent === null
+              ? null
+              : amend(
+                  intent,
+                  {
+                    kind: "add-constraint",
+                    constraint: {
+                      id: text,
+                      kind: "semantic",
+                      text,
+                      severity: "warn",
+                      source: "human",
+                    },
+                  },
+                  "human:x",
+                  "2026-11-16T00:00:00Z",
+                ),
+          ).pipe(Effect.delay("5 millis")),
+        );
+      yield* Effect.all([add("one"), add("two")], { concurrency: "unbounded" });
+      const after = yield* readIntent(dir);
+      expect(after?.version).toBe(3);
+      expect(Arr.map(after?.constraints ?? [], (constraint) => constraint.text).sort()).toEqual([
+        "one",
+        "two",
+      ]);
     }),
   ));
 
@@ -498,7 +538,10 @@ test(
             },
           })
           .pipe(Effect.orDie);
-        const seeded = yield* readIntent(runDir(world.state, started.runId));
+        const seeded = yield* hostRecords(
+          world.state,
+          readIntent(runDir(world.state, started.runId)),
+        );
         expect(seeded?.version).toBe(1);
         expect(seeded?.goal).toBe("greet whoever asks");
         // What was named at launch replaces the workspace's own entry with the same id.
@@ -521,7 +564,10 @@ test(
             parent: started.runId,
           })
           .pipe(Effect.orDie);
-        const inherited = yield* readIntent(runDir(world.state, child.runId));
+        const inherited = yield* hostRecords(
+          world.state,
+          readIntent(runDir(world.state, child.runId)),
+        );
         expect(inherited?.goal).toBe("greet whoever asks");
         expect(inherited?.parent?.run).toBe(started.runId);
         expect(
@@ -568,13 +614,15 @@ test(
 
           const changed = yield* setOutcome("feature", "feature").pipe(Effect.orDie);
           expect(changed.version).toBe(2);
-          const intent = yield* readIntent(runDir(world.state, runId));
+          const intent = yield* hostRecords(world.state, readIntent(runDir(world.state, runId)));
           expect(intent?.history.at(-1)?.change).toBe("outcome set to feature");
           expect((yield* client.run({ runId }).pipe(Effect.orDie))?.outcome).toBe("feature");
 
           const refused = yield* setOutcome("chore", "chore").pipe(Effect.flip);
           expect(String(refused.reason)).toStartWith("invalid_input:");
-          expect((yield* readIntent(runDir(world.state, runId)))?.version).toBe(2);
+          expect(
+            (yield* hostRecords(world.state, readIntent(runDir(world.state, runId))))?.version,
+          ).toBe(2);
 
           yield* setOutcome(null, "cleared").pipe(Effect.orDie);
           expect((yield* client.run({ runId }).pipe(Effect.orDie))?.outcome).toBe("unspecified");

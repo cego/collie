@@ -2,7 +2,7 @@
 
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Layer } from "effect";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
@@ -13,6 +13,7 @@ import { answerRead } from "../src/tools";
 import { readEnv } from "../src/env";
 import type { RunProgress, TaskMr } from "../src/board-model";
 import { madeRun } from "./support/records";
+import { recordsAt } from "../src/records";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -195,6 +196,7 @@ test("collie_run on a Task of several merge requests names each, ready at its he
       const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
         prefix: "collie-run-mrs-",
       });
+      yield* Layer.build(recordsAt(dir));
       const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
       const run = yield* madeRun(dir, { id: "r-fan", task: "task-1", state: "succeeded" });
       const app = taskMr("app", 12, { ready: true, head: shaOf("a") });

@@ -33,6 +33,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcessSpawner } from "effect/process";
 import type { PluginEnv } from "./env";
 import { choiceLines, newRequestId, runFacts } from "./operations";
+import { recordsReadLayer } from "./records";
 import { projectsRoot } from "./projects";
 import type { Action } from "./actions";
 import type { Launched } from "./launches";
@@ -225,7 +226,8 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
           selected,
           input,
           "collie_run",
-          (run) => said(runAnswer(env, run, reads)),
+          (run) =>
+            said(runAnswer(env, run, reads).pipe(Effect.provide(recordsReadLayer(env.stateDir)))),
           reads?.related ?? reads?.runs,
         ),
       ),
@@ -507,11 +509,10 @@ export const checkLines = Effect.fn("Tools.checkLines")(function* (
   now: number,
   all?: Effect.Effect<ReadonlyArray<RunFacts>>,
 ) {
-  const own = yield* markersOf([run]);
-  const every = own.has(run.id) && all !== undefined ? yield* all : runs;
-  const markers = own.has(run.id) ? yield* markersOf(every) : own;
+  const markers = yield* markersOf();
+  const every = markers.has(run.id) && all !== undefined ? yield* all : runs;
   const check = yield* runningCheck(run, every, markers, now);
-  const memory = yield* memoryWaitOf(run.dir);
+  const memory = yield* memoryWaitOf(run.id);
   const waiting = memory === null ? [] : [waitLine(memory)];
   if (check === null) return waiting;
   return [

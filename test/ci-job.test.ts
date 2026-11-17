@@ -13,7 +13,9 @@ import { recheckPark, rememberCiTarget } from "../src/park-recheck";
 import type { MrForge } from "../src/board-model";
 import type { Runner } from "../src/mr";
 import type { FetchLike } from "forges";
-import { readVerifications, verifyingIn, type CheckCommand } from "../src/verify";
+import { readVerifications, VERIFYING, verifyingOf, type CheckCommand } from "../src/verify";
+import { controlOf } from "../src/controls";
+import { RunRecords } from "../src/run-records";
 import type { VerifySpec } from "../src/verify-spec";
 import { exec } from "./support/command";
 import { fastForward, runEffect } from "./support/effect";
@@ -95,6 +97,7 @@ const waiting = Effect.fn("ciJob.waiting")(function* (
     command,
     mr,
     wait: true,
+    verifying: controlOf(yield* RunRecords, VERIFYING, "r1"),
     run,
   };
   return { asked, at, root, forge };
@@ -277,7 +280,7 @@ test("a job still running is waited on, saying which check, job and commit, and 
       const { asked, at, forge } = yield* waiting("running");
       const fiber = yield* Effect.forkChild(read(asked, forge));
       const marker = yield* Effect.retry(
-        verifyingIn(asked.runDir).pipe(Effect.filterOrFail((one) => one !== null)),
+        verifyingOf(asked.runId).pipe(Effect.filterOrFail((one) => one !== null)),
         { schedule: Schedule.spaced("20 millis"), times: 250 },
       );
       expect(marker).toMatchObject({
@@ -291,7 +294,7 @@ test("a job still running is waited on, saying which check, job and commit, and 
       );
       // As a merge stops the Run while it waits.
       yield* Fiber.interrupt(fiber);
-      expect(yield* verifyingIn(asked.runDir)).toBeNull();
+      expect(yield* verifyingOf(asked.runId)).toBeNull();
       expect(yield* readVerifications(asked.journal).pipe(Effect.orElseSucceed(() => []))).toEqual(
         [],
       );
@@ -313,7 +316,7 @@ test("a job not finished after 2 hours leaves its check unproved, saying so", ()
         expect(
           Arr.filter(forge.requests, (one) => pipe_(one.url, Str.includes("/jobs"))).length,
         ).toBeGreaterThan(200);
-        expect(yield* verifyingIn(asked.runDir)).toBeNull();
+        expect(yield* verifyingOf(asked.runId)).toBeNull();
       }),
       60_000,
     ),

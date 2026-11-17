@@ -1,25 +1,22 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { ConfigProvider, Effect, Exit, FileSystem, Path, Schema, flow, Result } from "effect";
+import { ConfigProvider, Effect, Exit, FileSystem, Path } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Host } from "../src/sdk";
-import { controlPath, evidenceDir, foundationLayer, runDir, STOP } from "../src/engine";
+import { evidenceDir, foundationLayer, runDir, STOP } from "../src/engine";
 import { Store } from "../src/store";
 import { appendVerification, collect, readVerifications } from "../src/verify";
-import { VerifySpecSchema } from "../src/verify-spec";
+import { updateApproved } from "../src/verify-spec";
 import { memoryWaitOf } from "../src/memory-wait";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
+import { recordsAt } from "./support/records";
+import { RunRecords } from "../src/run-records";
 
 let rig: Rig;
 let dir: string;
 let tool: string;
 const runId = "r-once";
-
-const asApproved = flow(
-  Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
-  Result.getOrThrow,
-);
 
 beforeEach(() =>
   runEffect(
@@ -43,10 +40,9 @@ beforeEach(() =>
       yield* fs.writeFileString(tool, `#!/bin/sh\n[ ! -f ${rig.root}/red ]\n`);
       yield* fs.chmod(tool, 0o755);
       yield* fs.makeDirectory(evidenceDir(dir, runId), { recursive: true });
-      yield* fs.writeFileString(
-        `${evidenceDir(dir, runId)}/approved.json`,
-        asApproved([{ name: "unit", executable: tool, argv: [], cwd: "." }]),
-      );
+      yield* updateApproved(evidenceDir(dir, runId), () => [
+        { name: "unit", executable: tool, argv: [], cwd: "." },
+      ]).pipe(Effect.provide(recordsAt(dir)));
     }),
   ),
 );
@@ -65,14 +61,20 @@ const agentRan = (argv: ReadonlyArray<string> = [], expect: "pass" | "fail" = "p
     expect,
   }).pipe(Effect.orDie);
 
-const journal = () => readVerifications(evidenceDir(dir, runId)).pipe(Effect.orDie);
+const journal = () =>
+  readVerifications(evidenceDir(dir, runId)).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
 
 /** The host's check of `unit`, for the gate unless asked otherwise, once `before` has run inside that host. */
 const gate = <A>(
   before: Effect.Effect<
     A,
     never,
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Store | Host
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Store
+    | Host
+    | RunRecords
   >,
   asked: { readonly pass?: "gate"; readonly expect?: "fail" } = { pass: "gate" },
 ) =>
@@ -142,7 +144,7 @@ test("a pass collected in another environment is not relied on", () =>
 test("a pass recorded before this host started is not relied on", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* agentRan();
+      yield* agentRan().pipe(Effect.provide(recordsAt(dir)));
       yield* ranAgain(yield* gate(Effect.void));
     }),
   ));
@@ -189,7 +191,7 @@ const gateOnRig = <A>(
     ),
   );
 
-const waitingFor = () => memoryWaitOf(runDir(dir, runId));
+const waitingFor = () => memoryWaitOf(runId);
 
 test("a Check pass waits while its Machine is short of memory, runs nothing meanwhile, then runs", () =>
   runEffect(
@@ -220,10 +222,9 @@ test("a Check pass waits while its Machine is short of memory, runs nothing mean
 test("a stop of a Run whose Check pass waits for memory runs nothing, however soon memory frees", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const stopOnceWaiting = Effect.gen(function* () {
         while ((yield* waitingFor()) === null) yield* Effect.sleep("20 millis");
-        yield* fs.writeFileString(controlPath(dir, STOP, runId), "").pipe(Effect.orDie);
+        yield* RunRecords.use((records) => records.setControl(STOP, runId, "2026-09-14T10:00:00Z"));
         yield* rig.memory(50).pipe(Effect.orDie);
       });
       const got = yield* gateOnRig(

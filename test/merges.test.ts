@@ -32,7 +32,7 @@ import type { Runner } from "../src/mr";
 import { readEnv } from "../src/env";
 import { madeRun } from "./support/records";
 import { task, taskMr } from "./support/task";
-import { runEffect } from "./support/effect";
+import { memoryRecords, runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
 import { readLanding, writeLanding, type Landing } from "../src/landing";
 import {
@@ -987,23 +987,31 @@ const TEN = epochMs("2026-10-15T10:00:00Z");
 
 test("a merge request opened from a Task's branch by anyone is found, recorded as its Run's, and lands it", () =>
   runWithForge(
-    Effect.gen(function* () {
-      for (const name of ["github", "gitlab"] as const) {
-        const { run, recorded, card, round } = yield* onBranch(name, [
-          fromBranch(name, { state: "merged", mergedAt: "2026-10-15T08:40:00Z", mergedSha: HEAD }),
-        ]);
-        expect((yield* card(TEN)).mr).toBeNull();
-        yield* round(TEN);
-        expect(recorded).toEqual(new Map([["r-implement", URL115[name]]]));
-        expect(
-          Arr.map(yield* readDispositions(run.dir), (line) => [line.by, line.kind, line.ref]),
-        ).toEqual([[name, "merged", ID115[name]]]);
-        const after = yield* card(TEN);
-        expect(after.mr).not.toBeNull();
-        expect(after.disposition).toBe(`merged ${LABEL[name]}`);
-        expect(after.sentence).toBe(`Merged as ${LABEL[name]}.`);
-      }
-    }),
+    Effect.forEach(
+      ["github", "gitlab"] as const,
+      (name) =>
+        Effect.gen(function* () {
+          const { run, recorded, card, round } = yield* onBranch(name, [
+            fromBranch(name, {
+              state: "merged",
+              mergedAt: "2026-10-15T08:40:00Z",
+              mergedSha: HEAD,
+            }),
+          ]);
+          expect((yield* card(TEN)).mr).toBeNull();
+          yield* round(TEN);
+          expect(recorded).toEqual(new Map([["r-implement", URL115[name]]]));
+          expect(
+            Arr.map(yield* readDispositions(run.dir), (line) => [line.by, line.kind, line.ref]),
+          ).toEqual([[name, "merged", ID115[name]]]);
+          const after = yield* card(TEN);
+          expect(after.mr).not.toBeNull();
+          expect(after.disposition).toBe(`merged ${LABEL[name]}`);
+          expect(after.sentence).toBe(`Merged as ${LABEL[name]}.`);
+          // Each forge's Run is `r-implement`, so each keeps records of its own.
+        }).pipe(Effect.provide(Layer.fresh(memoryRecords))),
+      { discard: true },
+    ),
   ));
 
 test("a merge request opened by hand from one Change run's branch is found when another Change run's is already recorded", () =>

@@ -18,7 +18,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { isSettled, type Herdr, type AgentInfo } from "./herdr";
 import type { CheckoutKind } from "./definitions";
 import { diffTargetOf, planRunOf, repositoryOf, workSourceOf } from "./strategies";
-import { recordsIn } from "./check-processes";
+import { runningChecks } from "./check-processes";
 import { defaultBase, linearIssueOf } from "./inputs";
 import {
   branchTargetHead,
@@ -2092,7 +2092,7 @@ export const reportedWorktrees = Effect.fn("worktree.reportedWorktrees")(functio
  */
 const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
   const fs = yield* FileSystem.FileSystem;
-  const checking = new Set(Arr.map(yield* recordsIn(opts.stateDir), (record) => record.run));
+  const checking = new Set(Arr.map(yield* runningChecks, (record) => record.run));
   const recorded = fromRuns(
     opts.runs,
     opts.registered,

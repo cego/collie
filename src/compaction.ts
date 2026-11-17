@@ -429,7 +429,7 @@ export interface CompactionDeps {
   sample?: (
     at: { readonly agent: string; readonly run: string; readonly step: string },
     tokens: number,
-  ) => Effect.Effect<void, PortError, PortServices>;
+  ) => Effect.Effect<void, PortError, PortServices | Records>;
   waitMs: number;
   pollMs: number;
   /** How long a stop may wait for Quiet; the fixed budget where left out. */

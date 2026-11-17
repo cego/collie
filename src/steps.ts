@@ -2,8 +2,8 @@
 // it (ADR-draft-a-step-is-declared-where-its-work-is-written D1–D4). The SDK's `step` makes
 // one, and the Flow is built from these records.
 
-import * as Str from "effect/String";
-import { Context, Effect, FileSystem, Schema, flow, Result } from "effect";
+import { Context, Effect, Schema, flow, Result } from "effect";
+import { RunRecords, runOfDir, STEPS } from "./run-records";
 
 export const StepKind = Schema.Literals(["agent", "question", "workflow", "check"]);
 export type StepKind = typeof StepKind.Type;
@@ -79,35 +79,25 @@ export type StepNote = StepLine extends infer L
     : never
   : never;
 
-export const STEPS_FILE = "steps.jsonl";
+export const STEPS_FILE = STEPS;
 
 const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(StepLine));
 const encodeLine = flow(Schema.encodeResult(Schema.fromJsonString(StepLine)), Result.getOrThrow);
 
 export const encodeStepLine = (line: StepLine): string => encodeLine(line);
 
-/** What a Run's directory records of its Steps, in the order it was written. */
+/** What a Run records of its Steps, in the order it was written. */
 export const readStepLines = Effect.fn("Steps.read")(function* (runDir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const text = yield* fs
-    .readFileString(`${runDir}/${STEPS_FILE}`)
-    .pipe(Effect.orElseSucceed(() => ""));
-  const was = decoded.get(runDir);
-  if (was?.text === text) return was.lines;
+  const texts = yield* RunRecords.use((records) => records.lines(runOfDir(runDir), STEPS_FILE));
   const lines: StepLine[] = [];
   // A line at a time, so a long Run is read in the scheduler's turns.
-  for (const line of Str.split(text, "\n")) {
-    const read = yield* Effect.sync(() => decodeLine(line));
+  for (const text of texts) {
+    const read = yield* Effect.sync(() => decodeLine(text));
     if (read._tag === "Some") lines.push(read.value);
   }
-  // ponytail: dropped whole when full; an LRU if hosts see more Runs than this at once.
-  if (decoded.size >= DECODED_RUNS) decoded.clear();
-  decoded.set(runDir, { text, lines });
   return lines;
 });
-/** Each Run's Steps as last decoded, by the text they were decoded from. */
-const decoded = new Map<
-  string,
-  { readonly text: string; readonly lines: ReadonlyArray<StepLine> }
->();
-const DECODED_RUNS = 2_048;
+
+/** Records one Step line for the Run. The host is their only writer. */
+export const appendStepLine = (runDir: string, line: StepLine) =>
+  RunRecords.use((records) => records.append(runOfDir(runDir), STEPS_FILE, [encodeLine(line)]));

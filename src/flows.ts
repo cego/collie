@@ -36,6 +36,7 @@ import { reachOf, savedFirst } from "./reach";
 import { parseSetting, settingText } from "./settings";
 import { herdDir, machineHerd } from "./steering";
 import { liveFor, markedOf, type Ledgers } from "./live";
+import { RunRecords } from "./run-records";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
 import type { PluginEnv } from "./env";
 import { Herdr, type AgentInfo } from "./herdr";
@@ -836,6 +837,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     (yield* Effect.gen(function* () {
       const { runApp } = yield* Effect.promise(() => import("./ui/bridge"));
       const app = appState(session, env);
+      const records = yield* RunRecords;
       /**
        * The board's own dispatch, once it is running. A confirmed `navigate` puts its
        * target on screen through this and through nothing else: the board never calls a
@@ -853,7 +855,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
         // All the Herd's work: `g` and a group row are what narrow it after that.
         filter: { kind: "all" },
         origin: null,
-        load: (focus) => app.load(focus),
+        load: (focus) => app.load(focus).pipe(Effect.provideService(RunRecords, records)),
         act: (command, prompts) => runCommand(session, env, command, prompts, navigate),
         // What the board has open, where chat can read it. Nothing to write it to without
         // a Herd.

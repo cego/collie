@@ -18,6 +18,7 @@ import { REVIEW_FILE } from "./output";
 import { settled, type RunFacts } from "./runs";
 import { workSourceOf } from "./strategies";
 import { readVerifications } from "./verify";
+import type { RunRecords } from "./run-records";
 
 /** What a Run's own plan directory is called inside it (ADR-0002). */
 export const PLAN_DIR = "plan";
@@ -259,7 +260,11 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
 ): Effect.fn.Return<
   RunFile,
   HostRefused,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | ForgeHttp
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | ForgeHttp
+  | RunRecords
 > {
   const part = {
     offset: Math.max(0, range.offset),

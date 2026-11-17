@@ -3,7 +3,8 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, Queue } from "effect";
-import { recordDisposition } from "../../src/disposition";
+import { connect } from "../../src/host";
+import { recordsAt, recordsReadLayer } from "../../src/records";
 import { currentEnv } from "../../src/env";
 import { appState, workspaceFlow } from "../../src/flows";
 import { Herdr } from "../../src/herdr";
@@ -26,7 +27,7 @@ const printed = Effect.gen(function* () {
     return true;
   }) as typeof process.stdout.write;
   const code = yield* Effect.ensuring(
-    workspaceFlow(new Herdr(env), env),
+    workspaceFlow(new Herdr(env), env).pipe(Effect.provide(recordsAt(env.stateDir))),
     Effect.sync(() => {
       process.stdout.write = write;
     }),
@@ -154,13 +155,16 @@ test(
               yield* changed;
               const beforeChange = notifications;
 
-              yield* recordDisposition(`${world.state}/runs/${before.tasks[0]!.run}`, {
-                kind: "merged",
-                ref: "",
-                at: "2026-10-01T12:00:00Z",
-                by: "human",
-                note: null,
-              }).pipe(Effect.orDie);
+              // Through the host, the only writer of a Run's records (ADR-0040).
+              yield* (yield* connect(world.state))
+                .dispose({
+                  runId: before.tasks[0]!.run,
+                  kind: "merged",
+                  ref: "",
+                  note: null,
+                  request: "merged-1",
+                })
+                .pipe(Effect.orDie);
               const after = yield* changed.pipe(
                 Effect.repeat({
                   until: (state) => state.tasks[0]?.disposition === "merged",
@@ -191,7 +195,7 @@ test(
               );
               expect(reconnected.tasks[0]?.disposition).toBe("merged");
               expect(notifications).toBeGreaterThan(beforeReconnect);
-            }),
+            }).pipe(Effect.provide(recordsReadLayer(world.state))),
           );
           yield* stopHost(world.state);
         }),

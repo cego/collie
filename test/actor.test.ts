@@ -15,7 +15,7 @@ import { Host } from "../src/sdk";
 import { readSeen } from "../src/seen";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
-import { registeredAt } from "./support/records";
+import { hostRecords, registeredAt } from "./support/records";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
@@ -25,9 +25,18 @@ const startedOf = (state: string, runId: string) =>
     return (yield* (yield* Host).place(runId)).authority.started;
   }).pipe(Effect.provide(foundationLayer({ dir: state })), Effect.scoped);
 
+/** The Run's audit trail, as its host on `state` recorded it. */
+const trailOf = (state: string, runId: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    hostRecords(
+      state,
+      readAudit(runDir(state, runId)).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
+    ),
+  );
+
 /** What the Run's audit trail says was done, by whom, under which request. */
 const audited = (state: string, runId: string) =>
-  readAudit(runDir(state, runId)).pipe(
+  trailOf(state, runId).pipe(
     Effect.map((lines) =>
       Arr.map(lines, (line) => [line.operation, line.actor.origin, line.actor.requestId]),
     ),
@@ -87,7 +96,7 @@ test(
             ["resume", "board", "resume-1"],
             ["answer", "board", "answer-1"],
           ]);
-          expect(yield* fs.exists(`${runDir(world.state, runId)}/operations.jsonl`)).toBe(true);
+          expect(yield* trailOf(world.state, runId)).not.toEqual([]);
           // A Run nobody has is refused, and nothing is audited for it, inside or outside.
           for (const unknown of ["r-nobody", "../../escaped"]) {
             const refused = yield* door
@@ -127,7 +136,7 @@ test(
           );
           const held = yield* collie(world, ["run", "hold", runId, "--reason", "lunch"]);
           expect(held.envelope.ok).toBe(true);
-          const lines = yield* readAudit(runDir(world.state, runId));
+          const lines = yield* trailOf(world.state, runId);
           expect(
             Option.getOrUndefined(Arr.findFirst(lines, (line) => line.operation === "hold"))
               ?.reason,
@@ -320,7 +329,7 @@ test(
           yield* door.declare({ frontDoor: "chat", conversation, said: "hold it" });
           yield* door.control({ runId, control: "hold", set: true, request: "hold-1" });
 
-          const trail = yield* readAudit(runDir(world.state, runId));
+          const trail = yield* trailOf(world.state, runId);
           expect(Arr.map(trail, ({ operation, actor }) => [operation, actor.said])).toEqual([
             ["start", "start the proof"],
             ["hold", "hold it"],
@@ -363,7 +372,7 @@ test(
             (status) => status.status === "suspended",
           );
 
-          const [line] = yield* readAudit(runDir(world.state, runId));
+          const [line] = yield* trailOf(world.state, runId);
           expect(line?.actor).toMatchObject({
             origin: "chat",
             said: "start a proof for this",
@@ -430,14 +439,14 @@ test(
           ).toBe(true);
 
           const seenBy = (runId: string) =>
-            Effect.map(readSeen(runDir(world.state, runId)), (lines) =>
+            Effect.map(hostRecords(world.state, readSeen(runDir(world.state, runId))), (lines) =>
               Arr.map(lines, (one) => one.by),
             );
           expect(yield* seenBy(byAgent)).toEqual([expect.stringMatching(/^agent:/)]);
           expect(
             Option.getOrUndefined(
               Arr.findFirst(
-                yield* readAudit(runDir(world.state, byAgent)),
+                yield* trailOf(world.state, byAgent),
                 (line) => line.operation === "seen",
               ),
             )?.actor,

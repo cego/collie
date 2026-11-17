@@ -54,7 +54,7 @@ import { task as taskView } from "./support/task";
 import { factsOfView } from "../src/runs";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import { SqlClient } from "effect/sql";
-import { VerifySpecSchema } from "../src/verify-spec";
+import { approvedIn } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
 import { type MrState } from "../src/board-model";
 import { HELLE_URL } from "../src/helle-url";
@@ -874,12 +874,9 @@ test(
               () =>
                 Effect.all([
                   registry.view(`${runId}.implement-api`),
-                  fs
-                    .readFileString(`${evidenceDir(dir(), `${runId}.implement-api`)}/approved.json`)
-                    .pipe(Effect.orElseSucceed(() => null)),
+                  approvedIn(evidenceDir(dir(), `${runId}.implement-api`)),
                 ]),
-              // Written in place, so a read can land between the open and the write.
-              ([view, read]) => view?.branch != null && Str.trim(read ?? "") !== "",
+              ([view, frozen]) => view?.branch != null && frozen.length > 0,
             );
             return {
               runId,
@@ -896,7 +893,7 @@ test(
         expect(seen.api?.worktree?.path).toStartWith(`${rig.root}/.collie/worktrees/api/`);
         expect(seen.api?.branch).toBe(`${LOGIN}/${seen.runId}`);
         // Held to what its own repository approved, not the project it was started from.
-        expect(seen.approved).toContain('"api-unit"');
+        expect(Arr.map(seen.approved, (spec) => spec.name)).toContain("api-unit");
         // The web waits on the api, so nothing has started it yet.
         expect(seen.web).toBeNull();
       }),
@@ -1215,13 +1212,7 @@ const checksCommitted = (at: string) =>
 
 /** What a Run was frozen with at admission. */
 const frozen = (runId: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(`${evidenceDir(dir(), runId)}/approved.json`)),
-    Effect.flatMap(
-      Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
-    ),
-    Effect.orDie,
-  );
+  approvedIn(evidenceDir(dir(), runId)).pipe(Effect.provide(recordsAt(dir())));
 
 test(
   "an empty set given with a start is none given, and the project's verify.json proves it",

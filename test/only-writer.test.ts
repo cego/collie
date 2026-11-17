@@ -9,6 +9,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schema } from "effect";
 import { readAudit } from "../src/audit";
+import { recordsReadLayer } from "../src/records";
 import { readDispositions } from "../src/disposition";
 import { runDir } from "../src/engine";
 import { connect } from "../src/host";
@@ -28,6 +29,10 @@ import { herdDir } from "../src/steering";
 import { stopHost, until } from "./support/host";
 import { hostRecords, recordsAt } from "./support/records";
 import { collie, proves } from "./support/world";
+
+/** A trail as the host on `state` keeps it: a Run's in its `host.db`, any other a file. */
+const auditAt = (state: string, dir: string) =>
+  readAudit(dir).pipe(Effect.provide(recordsReadLayer(state)));
 
 const answers = (lines: ReadonlyArray<{ readonly kind: string }>) =>
   Arr.filter(lines, (line) => line.kind === "confirmed" || line.kind === "declined");
@@ -283,9 +288,13 @@ test(
           });
           yield* client.grant({ runId, name: "lint", command: null, request: "g-1" });
           const dir = runDir(world.state, runId);
-          expect(yield* readDispositions(dir)).toEqual([line]);
+          expect(yield* hostRecords(world.state, readDispositions(dir))).toEqual([line]);
           expect(
-            Arr.map(yield* readAudit(dir), (one) => [one.operation, one.actor.origin, one.request]),
+            Arr.map(yield* auditAt(world.state, dir), (one) => [
+              one.operation,
+              one.actor.origin,
+              one.request,
+            ]),
           ).toEqual([
             ["start", "board", "s-1"],
             ["followup", "board", "a-1:0"],
@@ -350,7 +359,7 @@ test(
             env,
           );
           expect(said.envelope).toMatchObject({ ok: true });
-          const audit = yield* readAudit(runDir(world.state, runId));
+          const audit = yield* auditAt(world.state, runDir(world.state, runId));
           expect(Arr.map(audit, (one) => [one.operation, one.actor.origin])).toContainEqual([
             "steer",
             "cli",
@@ -434,7 +443,10 @@ test(
           });
           expect((yield* client.run({ runId }))?.status.status).toBe("suspended");
           expect(
-            Arr.map(yield* readAudit(runDir(world.state, runId)), (one) => one.operation),
+            Arr.map(
+              yield* auditAt(world.state, runDir(world.state, runId)),
+              (one) => one.operation,
+            ),
           ).not.toContain("grant");
 
           yield* client.grant({
@@ -522,7 +534,7 @@ test(
           const lines = yield* readNews(file);
           expect(pending(lines, NATIVE).items).toHaveLength(1);
           const trail = yield* newsTrail(world.state, "some-herd");
-          const audit = yield* readAudit(trail);
+          const audit = yield* auditAt(world.state, trail);
           expect(Arr.map(audit, (one) => [one.operation, one.actor.origin, one.request])).toEqual([
             ["news", "chat", "n-1"],
             ["news", "chat", "n-2"],
@@ -530,11 +542,11 @@ test(
           // Read every turn, so its trail is bounded and the Herd's own audit takes none of it.
           for (let n = 0; n < NEWS_TRAIL + 5; n++)
             yield* client.news({ ...asked, request: `more-${n}` });
-          const kept = yield* readAudit(trail);
+          const kept = yield* auditAt(world.state, trail);
           yield* stopHost(world.state);
           expect(kept).toHaveLength(NEWS_TRAIL);
           expect(kept.at(-1)?.request).toBe(`more-${NEWS_TRAIL + 4}`);
-          expect(yield* readAudit(yield* herdDir(world.state, "some-herd"))).toEqual([]);
+          expect(yield* auditAt(world.state, yield* herdDir(world.state, "some-herd"))).toEqual([]);
         }),
       [],
     ),

@@ -2,11 +2,13 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import type { BoardAgent } from "../src/board-model";
 import type { ProposalLine } from "../src/proposals";
 import { runWaits } from "../src/run-waits";
+import { MEMORY_WAIT } from "../src/memory-wait";
+import { RunRecords } from "../src/run-records";
 import { epochMs } from "../src/time";
 import { runEffect } from "./support/effect";
 import { runFacts } from "./support/records";
@@ -28,17 +30,14 @@ const proposal = (id: string, run: string, expires_at = "2026-09-14T11:00:00Z"):
   state: "pending",
 });
 
-test("a memory wait belongs only to the Run whose directory records it", () =>
+test("a memory wait belongs only to the Run it is recorded over", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-waits-" });
-      const a = runFacts({ id: "a", dir: `${root}/a` });
-      const b = runFacts({ id: "b", dir: `${root}/b` });
-      yield* fs.makeDirectory(`${a.dir}/memory-waits`, { recursive: true });
-      yield* fs.makeDirectory(b.dir);
-      yield* fs.writeFileString(
-        `${a.dir}/memory-waits/0-1.json`,
+      const a = runFacts({ id: "a", dir: "/nowhere/a" });
+      const b = runFacts({ id: "b", dir: "/nowhere/b" });
+      yield* (yield* RunRecords).setControl(
+        MEMORY_WAIT,
+        a.id,
         yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
           what: "build's agent",
           sentence: "waiting for memory on vm-mk: 2.0 of 100.0 GB available",
@@ -47,6 +46,7 @@ test("a memory wait belongs only to the Run whose directory records it", () =>
           every: 15_000,
           asker: "a-build",
         }).pipe(Effect.orDie),
+        "0-1.json",
       );
 
       const waiting = yield* runWaits(a, [], [], now);

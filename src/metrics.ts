@@ -14,8 +14,9 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-import { Effect, FileSystem, Path, Schema } from "effect";
-import { appendJournal, readJournal } from "./journal";
+import { Effect, Schema } from "effect";
+import { appendRunJournal, readRunJournal, runJournal } from "./journal";
+import type { RunRecords } from "./run-records";
 import type { Metrics } from "./board-model";
 import { epochMs } from "./time";
 import { ParkCause } from "./park-cause";
@@ -114,16 +115,13 @@ const MetricJson = Schema.fromJsonString(MetricSchema);
 
 export const METRICS_FILE = "metrics.jsonl";
 
-export const metricsPath = Effect.fn("Metrics.path")(function* (runDir: string) {
-  const path = yield* Path.Path;
-  return path.join(runDir, METRICS_FILE);
-});
+export const metricsPath = (runDir: string) => runJournal(runDir, METRICS_FILE);
 
 export const appendMetric = Effect.fn("Metrics.append")(function* (
   runDir: string,
   line: Metric,
-): Effect.fn.Return<void, never, FileSystem.FileSystem | Path.Path> {
-  yield* appendJournal(yield* metricsPath(runDir), MetricJson, line).pipe(Effect.orDie);
+): Effect.fn.Return<void, never, RunRecords> {
+  yield* appendRunJournal(metricsPath(runDir), MetricJson, line);
 });
 
 /**
@@ -139,7 +137,7 @@ export const noteVerification = (
     readonly result: string;
     readonly by: "agent" | "collie";
   },
-): Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<void, never, RunRecords> =>
   appendMetric(runDir, {
     at: record.at,
     kind: "verification",
@@ -179,7 +177,7 @@ export const noteContext = (runDir: string, at: string, agent: string, tokens: n
 
 export const readMetrics = Effect.fn("Metrics.read")(function* (runDir: string) {
   const none: Metric[] = [];
-  return yield* readJournal(yield* metricsPath(runDir), MetricJson).pipe(
+  return yield* readRunJournal(metricsPath(runDir), MetricJson).pipe(
     Effect.orElseSucceed(() => none),
   );
 });

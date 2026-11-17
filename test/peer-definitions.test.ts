@@ -8,7 +8,7 @@ import { readAudit } from "../src/audit";
 import { connect } from "../src/host";
 import { withLock } from "../src/lock";
 import { fileTime } from "../src/time";
-import { runEffect } from "./support/effect";
+import { memoryRecords, runEffect } from "./support/effect";
 import { until } from "./support/host";
 import { twoMachines, type Side } from "./support/peers";
 import { proves } from "./support/world";
@@ -109,6 +109,7 @@ test(
             const shares = Effect.all(
               Arr.map([first, second], (side) =>
                 readAudit(`${side.world.state}/definitions`).pipe(
+                  Effect.provide(memoryRecords),
                   Effect.map(
                     (lines) =>
                       Arr.filter(lines, (line) => line.operation === "share definitions").length,

@@ -10,8 +10,8 @@ import * as Arr from "effect/Array";
 import type { Disposition } from "./board-model";
 import { epochMs } from "./time";
 
-/** Says why a Run completed with nothing to land, in the Run's directory `dir`. */
-export const nothingToLandFile = (dir: string) => `${dir}/nothing-to-land`;
+/** The fact that says why a Run completed with nothing to land. */
+export const NOTHING_TO_LAND = "nothing-to-land";
 
 /** What a Run left behind, as a card reads it. */
 export interface WorkFacts {

@@ -5,11 +5,12 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Config, Effect, Layer, Option, Schema, flow, Result } from "effect";
+import { Config, Effect, FileSystem, Layer, Option, Schema, flow, Result } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
 import { readAudit } from "../src/audit";
+import { hostRecords } from "./support/records";
 import { BRIDGE_READY, FrontDoorRpcs } from "../src/board-model";
 import { runDir } from "../src/engine";
 import { ownerOf } from "../src/host";
@@ -139,7 +140,12 @@ test(
           const chat = yield* bridged(world, ["--as", "chat"], legacy);
           yield* chat.door.control({ runId, control: "hold", set: false, request: "unhold-1" });
 
-          const trail = yield* readAudit(runDir(world.state, runId));
+          const trail = yield* hostRecords(
+            world.state,
+            readAudit(runDir(world.state, runId)).pipe(
+              Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
+            ),
+          );
           expect(Arr.map(trail, (line) => [line.operation, line.actor])).toEqual([
             [
               "start",

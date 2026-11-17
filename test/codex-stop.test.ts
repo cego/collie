@@ -4,7 +4,9 @@
 // is asserted is what a human could see: whether its checkout stops changing, what the
 // stop says, what it was sent, and whether anything started beside it.
 
-import { recordsAt } from "./support/records";
+import { hostRecords, hostRunRecords, recordsAt } from "./support/records";
+import { RunRecords } from "../src/run-records";
+import { nowIso } from "../src/time";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -29,7 +31,7 @@ import { Rig } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { Agents, agentWork, agentsLayer, type AgentHost } from "../src/agents";
 import { asRun, enveloped } from "./support/enveloped";
-import { PARKED, controlPath, foundationLayer, pollStatus } from "../src/engine";
+import { PARKED, STOP, foundationLayer, pollStatus } from "../src/engine";
 import { compactionSweeper, sweep } from "../src/cleanup";
 import { Herdr, HerdrError } from "../src/herdr";
 import { isString } from "../src/schema";
@@ -742,17 +744,15 @@ const release = () =>
     Effect.flatMap((fs) => fs.writeFileString(`${eventsFile()}.release`, "")),
     Effect.orDie,
   );
+const controls = hostRunRecords(() => dir);
 const stopFlag = (set: boolean) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => {
-      const path = controlPath(dir, "stop", "r1");
-      return set ? fs.writeFileString(path, "") : fs.remove(path).pipe(Effect.ignore);
-    }),
-    Effect.orDie,
-  );
+  Effect.flatMap(nowIso, (at) => controls.setControl(STOP, "r1", set ? at : null));
 const parkedWhy = () =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(controlPath(dir, PARKED, "r1"))),
+  hostRecords(
+    dir,
+    RunRecords.use((records) => records.control(PARKED, "r1")),
+  ).pipe(
+    Effect.map((why) => why ?? ""),
     Effect.orElseSucceed(() => ""),
   );
 const agentStarts = () =>
