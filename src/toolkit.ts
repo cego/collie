@@ -458,6 +458,13 @@ export const CollieTools = Toolkit.make(
 
 export type ToolName = keyof typeof CollieTools.tools;
 
+/** The tools a role is offered under `role_tools: role`. A role not here, and the chat, get every tool. */
+export const ROLE_TOOLS = new Map<string, ReadonlyArray<ToolName>>([
+  ["implementer", ["collie_run", "collie_artefacts", "collie_report", "collie_do"]],
+  ["reviewer", ["collie_run", "collie_artefacts", "collie_report"]],
+  ["healer", ["collie_do", "collie_artefacts", "collie_report", "collie_run"]],
+]);
+
 /** What each tool says it takes when it refuses what it was given. */
 export const TAKES: Record<ToolName, string> = {
   collie_artefacts:

@@ -16,6 +16,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  Layer,
   Logger,
   Ref,
   Schema,
@@ -31,6 +32,7 @@ import { replacedOnDisk } from "./flows";
 import { shell } from "./mr";
 import { isJsonObject, type JsonObject } from "./schema";
 import { callTool, TOOLS } from "./tools";
+import { ROLE_TOOLS } from "./toolkit";
 
 /**
  * Serve until stdin closes. Nothing is written to stdout but the protocol — a stray log
@@ -47,9 +49,16 @@ export const serveMcp = Effect.fn("Mcp.serve")(
       rebuilt: (name, input) =>
         rebuiltAnswer(process.execPath, env.cwd, name, input).pipe(Effect.provideContext(services)),
     });
+    const role = env.raw.COLLIE_TOOLS_ROLE;
+    const offered = role === undefined ? undefined : ROLE_TOOLS.get(role);
+    // Still registered, so a call to one names the role rather than reading as unknown.
+    const unlisted = yield* Layer.build(
+      McpServer.visibility(({ method }) => Effect.succeed(method !== "tools/list")).layer,
+    );
     // Not `McpServer.toolkit`, which answers in JSON and refuses bad input as a protocol
     // error: chat is answered in sentences, a refusal included.
     for (const tool of TOOLS) {
+      const listed = offered?.includes(tool.name) ?? true;
       const descriptor = yield* Schema.decodeUnknownEffect(McpSchema.Tool)({
         name: tool.name,
         title: tool.title,
@@ -62,12 +71,19 @@ export const serveMcp = Effect.fn("Mcp.serve")(
       yield* server.addTool({
         tool: descriptor,
         annotations: Context.empty(),
+        services: listed ? undefined : unlisted,
         handle: (input) =>
-          answer(tool.name, isJsonObject(input) ? input : {}).pipe(
-            Effect.map(
-              (text) => new McpSchema.CallToolResult({ content: [{ type: "text", text }] }),
-            ),
-          ),
+          !listed
+            ? Effect.fail(
+                new McpSchema.InvalidParams({
+                  message: `${tool.name} is not among the ${role}'s Collie tools under role_tools: role. \`collie tools call ${tool.name}\` reaches it.`,
+                }),
+              )
+            : answer(tool.name, isJsonObject(input) ? input : {}).pipe(
+                Effect.map(
+                  (text) => new McpSchema.CallToolResult({ content: [{ type: "text", text }] }),
+                ),
+              ),
       });
     }
     return yield* Effect.never;

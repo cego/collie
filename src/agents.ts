@@ -2549,8 +2549,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     yield* write(persona, `${personaBody}\n`);
     const { mcpConfig, piExtension } = yield* Effect.promise(() => import("./chat"));
     const { TOOLS } = yield* Effect.promise(() => import("./tools"));
+    const { ROLE_TOOLS } = yield* Effect.promise(() => import("./toolkit"));
+    const byRole = config.role_tools === "role";
+    const roleTools = byRole ? ROLE_TOOLS.get(ask.role) : undefined;
     const command = host.self ?? selfCommand();
-    const serverEnv = {
+    const runEnv = {
       HERDR_PLUGIN_ROOT: host.env.pluginRoot,
       HERDR_PLUGIN_STATE_DIR: host.env.stateDir,
       COLLIE_USER_DIR: host.env.userDir,
@@ -2559,6 +2562,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       COLLIE_RUN: ask.runId,
       COLLIE_AGENT: agent,
     };
+    const serverEnv = roleTools === undefined ? runEnv : { ...runEnv, COLLIE_TOOLS_ROLE: ask.role };
     const configFile = `${dirFor(ask.runId)}/${stemOf(ask)}.mcp.json`;
     const extension = `${dirFor(ask.runId)}/${stemOf(ask)}.tools.ts`;
     yield* write(configFile, mcpConfig(command, serverEnv));
@@ -2567,12 +2571,15 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         extension,
         piExtension(
           command,
-          Arr.map(TOOLS, (tool) => ({
-            name: tool.name,
-            label: tool.title,
-            description: tool.description,
-            parameters: tool.input,
-          })),
+          Arr.map(
+            Arr.filter(TOOLS, (tool) => roleTools?.includes(tool.name) ?? true),
+            (tool) => ({
+              name: tool.name,
+              label: tool.title,
+              description: tool.description,
+              parameters: tool.input,
+            }),
+          ),
           serverEnv,
           "",
           "",
@@ -2664,7 +2671,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ...settingsArgs,
           ...mcp.args,
         ];
-        const started = `permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}${window.passed === null ? "" : `, auto-compact window ${window.passed}`}`;
+        const tools = !byRole
+          ? ""
+          : roleTools === undefined
+            ? `, Collie tools: every tool, as the ${ask.role} has no list`
+            : `, Collie tools: the ${ask.role}'s ${roleTools.length}`;
+        const started = `permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}${window.passed === null ? "" : `, auto-compact window ${window.passed}`}${tools}`;
         if (backend === "core") {
           const named = { [RUN_LABEL]: ask.runId, operation: ask.operation };
           const labels = ask.task === null ? named : { ...named, task: ask.task };

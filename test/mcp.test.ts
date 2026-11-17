@@ -7,6 +7,7 @@ import {
   Fiber,
   FileSystem,
   Option,
+  Order,
   Queue,
   Schema,
   Stream,
@@ -174,6 +175,48 @@ test(
         });
         expect(unknown.error).toMatchObject({ code: -32602 });
         expect((yield* server.request("ping", {})).result).toEqual({});
+        yield* server.close;
+      }).pipe(Effect.scoped),
+    ),
+  15_000,
+);
+
+test(
+  "the Collie server started for a reviewer under role_tools: role lists and accepts only the reviewer's tools",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const server = yield* openServer({ COLLIE_TOOLS_ROLE: "reviewer" });
+        const listed = yield* server.request("tools/list", {});
+        const names = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ tools: Schema.Array(Schema.Struct({ name: Schema.String })) }),
+        )(listed.result);
+        expect(
+          Arr.sort(
+            Arr.map(names.tools, (tool) => tool.name),
+            Order.String,
+          ),
+        ).toEqual(["collie_artefacts", "collie_report", "collie_run"]);
+        const offered = yield* server.request("tools/call", {
+          name: "collie_run",
+          arguments: { run: "missing-run" },
+        });
+        expect(offered.result).toMatchObject({
+          content: [{ type: "text", text: expect.stringContaining("missing-run") }],
+        });
+        const unlisted = yield* server.request("tools/call", {
+          name: "collie_hold",
+          arguments: { run: "missing-run" },
+        });
+        expect(unlisted.result).toMatchObject({
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: expect.stringMatching(/^collie_hold is not among the reviewer's Collie tools/),
+            },
+          ],
+        });
         yield* server.close;
       }).pipe(Effect.scoped),
     ),

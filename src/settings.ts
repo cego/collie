@@ -295,6 +295,12 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description:
       "Who decides whether an agent's tool call runs: the harness's own review (auto), no one (bypass), or a prompt in the agent's pane (harness).",
   }),
+  choice("role_tools", ["all", "role"], "all", {
+    group: "Agents",
+    label: "Collie tools per role",
+    description:
+      "Whether every agent is offered all of Collie's tools (all), or only those its role uses (role). The chat always has every tool, and the command line reaches the rest.",
+  }),
   choice("trust", ["auto", "never"], D.trust, {
     group: "Agents",
     label: "Trust new folders",

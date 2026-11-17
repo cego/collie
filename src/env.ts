@@ -173,6 +173,7 @@ const environmentKeys = [
   "COLLIE_CWD",
   "COLLIE_RUN",
   "COLLIE_AGENT",
+  "COLLIE_TOOLS_ROLE",
   "OPENCODE_CONFIG_CONTENT",
   // Which environment file Helle's credentials are read from, for a machine that keeps
   // them somewhere other than the MCP wrapper's default.

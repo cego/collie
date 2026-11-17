@@ -425,8 +425,37 @@ const launchedChat = (opts: {
       systemPrompt: yield* fs
         .readFileString(`${yield* chatDir(env.stateDir, KEY)}/system-prompt.md`)
         .pipe(Effect.orElseSucceed(() => "")),
+      mcpConfig: yield* fs
+        .readFileString(`${yield* chatDir(env.stateDir, KEY)}/mcp.json`)
+        .pipe(Effect.orElseSucceed(() => "")),
     };
   }).pipe(Effect.scoped);
+
+test.each(["all", "role"])(
+  "the Home chat is offered every Collie tool under role_tools: %s",
+  (value) =>
+    runEffect(
+      Effect.gen(function* () {
+        const chat = yield* launchedChat({
+          config: `{ "role_tools": "${value}" }`,
+        });
+        expect(chat.ensured.kind).toBe("launched");
+        const config = yield* Schema.decodeEffect(
+          Schema.fromJsonString(
+            Schema.Struct({
+              mcpServers: Schema.Struct({
+                collie: Schema.Struct({
+                  env: Schema.Record(Schema.String, Schema.String),
+                }),
+              }),
+            }),
+          ),
+        )(chat.mcpConfig);
+        expect(config.mcpServers.collie.env.COLLIE_CWD).toBeDefined();
+        expect(config.mcpServers.collie.env.COLLIE_TOOLS_ROLE).toBeUndefined();
+      }),
+    ),
+);
 
 test("chat on Claude Code starts as collie-chat with a 400000 auto-compact window when none is set", () =>
   runEffect(

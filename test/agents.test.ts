@@ -124,6 +124,7 @@ interface Clearing {
   readonly clears?: ReadonlyArray<string>;
   readonly skill?: string;
   readonly claudeSubagents?: ClaudeSubagents;
+  readonly role?: string;
 }
 let clearing: Clearing = {};
 
@@ -8404,6 +8405,95 @@ const settingsAt = (calls: ReadonlyArray<Call>) => {
   const args = launchArgs(calls);
   return read(args[args.indexOf("--settings") + 1] ?? "");
 };
+
+const ClaudeMcpConfig = Schema.fromJsonString(
+  Schema.Struct({
+    mcpServers: Schema.Struct({
+      collie: Schema.Struct({
+        env: Schema.Record(Schema.String, Schema.String),
+      }),
+    }),
+  }),
+);
+
+const collieServerOf = Effect.fn("AgentsTest.collieServerOf")(function* () {
+  const args = launchArgs(yield* rig.calls());
+  const config = yield* Schema.decodeEffect(ClaudeMcpConfig)(
+    yield* read(args[args.indexOf("--mcp-config") + 1] ?? ""),
+  );
+  return { args, env: config.mcpServers.collie.env };
+});
+
+test("a reviewer's Claude launch under the default role_tools carries every Collie tool and no strict MCP config", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const { args, env } = yield* collieServerOf();
+      expect(args).not.toContain("--strict-mcp-config");
+      expect(env.COLLIE_RUN).toBe("r1");
+      expect(env.COLLIE_TOOLS_ROLE).toBeUndefined();
+    }),
+  ));
+
+test("under role_tools: role a reviewer's Claude launch names its role to the Collie server, with no strict MCP config", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* configured(encodeJson({ role_tools: "role" }));
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const { args, env } = yield* collieServerOf();
+      expect(args).not.toContain("--strict-mcp-config");
+      expect(env.COLLIE_TOOLS_ROLE).toBe("reviewer");
+      expect(env.COLLIE_RUN).toBe("r1");
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        "Collie tools: the reviewer's 3",
+      );
+    }),
+  ));
+
+test("under role_tools: role a role the table does not name keeps every tool, and its start line says so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      clearing = { role: "planner" };
+      yield* configured(encodeJson({ role_tools: "role" }));
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      expect((yield* collieServerOf()).env.COLLIE_TOOLS_ROLE).toBeUndefined();
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        "Collie tools: every tool, as the planner has no list",
+      );
+    }),
+  ));
+
+test("under role_tools: role a Claude launch keeps the operator's profile and no strict MCP config", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* configured(
+        encodeJson({
+          role_tools: "role",
+          agent_profile: encodeJson({
+            "*": {
+              claude: {
+                enabledPlugins: { "linear@official": true },
+                disableClaudeAiConnectors: false,
+              },
+            },
+          }),
+        }),
+      );
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const { args, env } = yield* collieServerOf();
+      const settings = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.JsonObject))(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(env.COLLIE_TOOLS_ROLE).toBe("reviewer");
+      expect(args).not.toContain("--strict-mcp-config");
+      expect(settings.enabledPlugins).toEqual({ "linear@official": true });
+      expect(settings.disableClaudeAiConnectors).toBe(false);
+    }),
+  ));
 
 test.each([0, 1000])(
   "Claude subagent policy reaches launch settings with compaction at %s",

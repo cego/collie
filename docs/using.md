@@ -3417,6 +3417,9 @@ See [What Collie's agents get](#what-collies-agents-get).
 `claude_subagents` controls native Claude delegation for managed Run agents.
 See [Claude subagents](#claude-subagents).
 
+`role_tools` says which of Collie's tools each agent is offered: `all`, the default, or
+`role`. See [Collie's tools per role](#collies-tools-per-role).
+
 `gitlab_host` is the one GitLab this Machine works against, `gitlab.cego.dk` unless you
 change it under Settings, which refuses anything that is not a host name. `collie doctor`
 checks glab's login, the token and `git push` for that host alone, and `collie onboard` logs
@@ -3527,6 +3530,35 @@ chat is given it after its own prompt. It says that work which cannot be wrong, 
 **Tautology**, proves nothing: a builder makes none, and a reviewer or judge raises each one
 it finds. It also holds the code comment rules. Fork it like any persona to change what
 every agent is told; [authoring](authoring.md#every-agent) says how.
+
+### Collie's tools per role
+
+The shared **Collie tools per role** setting, `role_tools`, is `all` until you change it:
+every agent Collie launches is offered all of Collie's tools. Under `role`, an agent is
+offered only the tools its role uses:
+
+| Role                             | Collie tools                                                   |
+| -------------------------------- | -------------------------------------------------------------- |
+| `implementer` (builds and fixes) | `collie_run`, `collie_artefacts`, `collie_report`, `collie_do` |
+| `reviewer`                       | `collie_run`, `collie_artefacts`, `collie_report`              |
+| `healer`                         | `collie_do`, `collie_artefacts`, `collie_report`, `collie_run` |
+| any other role                   | every tool, as under `all`                                     |
+
+`collie_do` is offered whole: none of its actions is taken from a role that has it. The Home
+chat keeps every tool under both values. The role reaches Collie's tool server in the entry
+Collie gives each harness, Claude Code, Codex, OpenCode and Pi alike, and the server lists
+and accepts only that role's tools. No harness flag is added, so your own MCP servers,
+plugins and skills, and your `agent_profile`, reach the agent exactly as under `all`.
+
+A tool left out is still reached on the command line, `collie tools call <tool>`, through
+the same checks. A call to it through the server is refused with the tool and the role
+named. Each agent's start line in its Run's `agents.log` says what the setting did: the
+role and how many tools it has, or every tool for a role without a list. It takes effect
+for agents started after the change.
+
+```sh
+collie settings set role_tools role
+```
 
 ### Claude subagents
 
