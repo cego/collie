@@ -4241,7 +4241,9 @@ The numbers come from where the harnesses' own `/usage` and `/status` get them:
 
 Nothing polls. The host asks only when something wants the numbers — `collie usage`, the
 board, Desktop — and calls each endpoint at most once every five minutes; between calls it
-answers with the last reading and its age. An endpoint that refuses is left alone for as
+answers with the last reading and its age. The board asks at most once every 15 seconds,
+however often it redraws, and the host reads again only the status lines that changed since
+it last read them. An endpoint that refuses is left alone for as
 long as it asks (five minutes where it does not say), and one that does not answer within
 ten seconds becomes a problem; either way the last good windows stand. A window whose reset
 has passed counts as unused, whatever was read before it. Each reading says when it was

@@ -19,6 +19,7 @@ import {
   externalSubmissions,
   newestRateLimits,
   questionsSince,
+  rateLimitsReader,
   ranOutSince,
   recordClaudeEvent,
   stoppedSince,
@@ -555,6 +556,42 @@ test("a status line's rate_limits are the Machine's newest Claude sample, and it
       );
 
       expect((yield* newestRateLimits(stateDir))?.limits).toEqual(fiveHour(40));
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("the status-line reader decodes again only the agents whose telemetry changed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stateDir = path.join(rig.root, "state");
+      const build = path.join(stateDir, "compaction", "build-r1");
+      const review = path.join(stateDir, "compaction", "review-r1");
+      yield* recordClaudeEvent(build, limited(fiveHour(31)));
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(review, limited(fiveHour(40)));
+
+      const fs = yield* FileSystem.FileSystem;
+      const decoded: string[] = [];
+      const counting: FileSystem.FileSystem = {
+        ...fs,
+        readFileString: (file, encoding) => {
+          decoded.push(path.basename(path.dirname(file)));
+          return fs.readFileString(file, encoding);
+        },
+      };
+      const { newest: read } = yield* rateLimitsReader(stateDir).pipe(
+        Effect.provideService(FileSystem.FileSystem, counting),
+      );
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+      expect(decoded.sort()).toEqual(["build-r1", "review-r1"]);
+
+      decoded.length = 0;
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+      expect(decoded).toEqual([]);
+
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(build, limited(fiveHour(55)));
+      expect((yield* read)?.limits).toEqual(fiveHour(55));
+      expect(decoded).toEqual(["build-r1"]);
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
