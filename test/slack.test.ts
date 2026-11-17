@@ -85,6 +85,22 @@ test("a refused reaction names only the reactions Slack lacks, not the ones it h
     }),
   ));
 
+test("a refused reaction does not name a later reaction Slack already holds", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fake = fakeSlack();
+      const ts = "1794474000.000001";
+      fake.messages([{ channel: "C456", ts, text: "Review" }]);
+      const api = slackApi("xoxp-fixture", fake.client);
+      yield* api.reconcile("C456", ts, ["eyes", "white_check_mark"]);
+      fake.refuse("token_expired", "reactions.add");
+      const refused = yield* Effect.flip(
+        api.reconcile("C456", ts, ["eyes", "memo", "white_check_mark"]),
+      );
+      expect(refused.missing).toEqual(["memo"]);
+    }),
+  ));
+
 test("a user token reads its workspace and user; invalid_auth refuses without logging it", () =>
   runEffect(
     Effect.gen(function* () {

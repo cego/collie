@@ -199,19 +199,16 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
           timestamp: ts,
           full: "true",
         });
+        for (const one of got.message.reactions ?? [])
+          if (one.users.includes(owner.user_id)) missing.delete(one.name);
         for (const name of wanted) {
-          if (
-            !Arr.some(
-              got.message.reactions ?? [],
-              (one) => one.name === name && one.users.includes(owner.user_id),
-            )
-          )
-            yield* call("reactions.add", Schema.Struct({}), { channel, timestamp: ts, name }).pipe(
-              Effect.catchIf(
-                (reason) => reason === "Slack reactions.add: already_reacted",
-                () => Effect.succeed({}),
-              ),
-            );
+          if (!missing.has(name)) continue;
+          yield* call("reactions.add", Schema.Struct({}), { channel, timestamp: ts, name }).pipe(
+            Effect.catchIf(
+              (reason) => reason === "Slack reactions.add: already_reacted",
+              () => Effect.succeed({}),
+            ),
+          );
           missing.delete(name);
         }
       }).pipe(Effect.mapError((reason) => ({ reason, missing: [...missing] })));
