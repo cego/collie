@@ -1145,6 +1145,7 @@ test(
               (one) => one.watch?.name === "improved-head-2" || one.starts.length > 2,
             );
             expect(settled.watch?.name).toBe("improved-head-2");
+            expect(settled.watch?.cursor.head).toBe(second);
             expect(settled.starts).toHaveLength(2);
           }),
         );
