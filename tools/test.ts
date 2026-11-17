@@ -1,11 +1,10 @@
 // `bun run test`: the suite, against executables built from this tree.
 //
-// A test that starts a host, runs a command or answers as herdr starts a process, and the
+// A test that starts a host, runs a command or answers as a forge starts a process, and the
 // suite starts well over a thousand. From the sources each one spends most of a second
 // loading modules; compiled to bytecode it is a fraction of that. So this builds `collie`
 // the way a release does and the fakes' forwarder the same way, then runs the suite with
-// `COLLIE_TEST_BINARY`, and `COLLIE_TEST_FAKE_HERDR` and `COLLIE_TEST_FAKE_FORGE` both
-// naming the forwarder.
+// `COLLIE_TEST_BINARY` naming Collie and `COLLIE_TEST_FAKE_FORGE` naming the forwarder.
 // `bun test <file>` on its own still runs the sources, which is the quicker loop for one file.
 //
 // A suite that was killed left its files' roots, and maybe processes carrying their marker:
@@ -143,7 +142,6 @@ const suite = (targeted: boolean, kind: Kind, since: bigint, budget: Budget, see
             env: {
               ...suiteEnv(),
               COLLIE_TEST_BINARY: `${out}/collie`,
-              COLLIE_TEST_FAKE_HERDR: `${out}/fake-forward`,
               COLLIE_TEST_FAKE_FORGE: `${out}/fake-forward`,
               COLLIE_TEST_FAKE_SSH: `${out}/fake-ssh`,
               COLLIE_TEST_CODEX_SERVER: `${out}/codex-server`,

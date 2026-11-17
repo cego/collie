@@ -15,7 +15,7 @@ import { signRelease } from "../src/signing";
 import { FakeBin } from "./support/bin";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 
 const pair = () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");

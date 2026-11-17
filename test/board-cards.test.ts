@@ -97,7 +97,7 @@ const planners = (count: number, finished = "2026-10-27T10:00:00Z") =>
     const fs = yield* FileSystem.FileSystem;
     const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-cards-" });
     const created = DateTime.formatIso(DateTime.makeUnsafe(epochMs(finished) - 60 * 60_000));
-    const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+    const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
     const runs = yield* Effect.forEach(Arr.range(1, count), (n) =>
       Effect.gen(function* () {
         const task = `task-${n}`;

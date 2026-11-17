@@ -26,7 +26,7 @@ export type Answerer<E> = (
 ) => Effect.Effect<Answer, E>;
 
 /** How a shim starts the forwarder: what `bun run test` compiled of it, or else its source. */
-export const forwarderCommand = (compiled = Bun.env.COLLIE_TEST_FAKE_HERDR ?? ""): string[] =>
+export const forwarderCommand = (compiled: string): string[] =>
   compiled === ""
     ? [process.execPath, new URL("./forwarder.ts", import.meta.url).pathname]
     : [compiled];

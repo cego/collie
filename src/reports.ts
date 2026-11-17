@@ -8,9 +8,6 @@ import { Agents } from "./agents";
 import { readLaunches } from "./launches";
 import { asks, asksRun, isSettled } from "./lifecycle";
 import { machineName, peersOf } from "./peers";
-import { Herdr, herdrFailureReason } from "./herdr";
-import { readTask, listTasks, withTaskLock } from "./task";
-import { isLaunched, launchedPanes, paneNotOwned } from "./cleanup";
 import { currentPid, signalProcess } from "./lock";
 import { socketOf } from "./host";
 import { nowIso } from "./time";
@@ -37,7 +34,6 @@ export const reportsLayer = (opts: {
       const agents = yield* Agents;
       const fs = yield* FileSystem.FileSystem;
       const env = { ...opts.env, hostStamp: opts.stamp, pairs: false };
-      const herdr = new Herdr(env);
       const ownMachine = { installation: opts.installation, name: machineName() };
       const write = store.reported;
 
@@ -45,60 +41,8 @@ export const reportsLayer = (opts: {
         Effect.gen(function* () {
           const stopped = yield* agents.halt(view.runId);
           if (stopped.left.length > 0) return { done: false, note: Arr.join(stopped.left, "; ") };
-          if (view.task === null)
-            return { done: true, note: "The Run's agents are closed; it has no Task workspace." };
-          return yield* withTaskLock(
-            view.task,
-            Effect.gen(function* () {
-              const task = yield* readTask(view.task!);
-              if (task === null)
-                return { done: true, note: "The Run's agents are closed; its Task is gone." };
-              if (task.workspace === null)
-                return {
-                  done: true,
-                  note: "The Run's agents are closed; its Task has no workspace.",
-                };
-              const tasks = yield* listTasks;
-              if (Arr.some(tasks, (one) => one.id !== task.id && one.workspace === task.workspace))
-                return { done: true, note: "The workspace is kept: another Task names it." };
-              const runs = yield* registry.views(task.id);
-              if (Arr.some(runs, (one) => one.runId !== view.runId && !isSettled(one)))
-                return { done: true, note: "The workspace is kept: another Run needs it." };
-              const workspaces = yield* herdr.workspaceList();
-              const open = Option.getOrUndefined(
-                Arr.findFirst(workspaces, (one) => one.workspaceId === task.workspace),
-              );
-              if (open === undefined)
-                return { done: true, note: "The Task workspace is already closed." };
-              if ("collie_home" in open.tokens)
-                return { done: true, note: "The workspace is kept: it is the Home." };
-              const panes = yield* herdr.paneList();
-              const siblings = yield* launchedPanes(
-                Arr.map(
-                  Arr.filter(runs, (one) => one.runId !== view.runId),
-                  (one) => one.runId,
-                ),
-              );
-              if (
-                Arr.some(
-                  panes,
-                  (pane) => pane.workspaceId === task.workspace && isLaunched(siblings, pane),
-                )
-              )
-                return { done: true, note: "The workspace is kept: another Run has a live agent." };
-              const foreign = paneNotOwned(task, panes, yield* launchedPanes([view.runId]));
-              if (foreign !== undefined)
-                return {
-                  done: true,
-                  note: `The workspace is kept: pane ${foreign.paneId} was not opened by Collie.`,
-                };
-              yield* herdr.workspaceClose(task.workspace);
-              return { done: true, note: "The Run's agents and Task workspace are closed." };
-            }),
-          );
-        }).pipe(
-          Effect.catch((cause) => Effect.succeed({ done: false, note: herdrFailureReason(cause) })),
-        );
+          return { done: true, note: "The Run's agents are closed." };
+        });
 
       const tell = (view: RunView) =>
         Effect.gen(function* () {

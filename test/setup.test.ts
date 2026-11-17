@@ -33,7 +33,7 @@ test("the installer checks with the key release-p256.pub holds", () =>
     }),
   ));
 
-/** A Machine with herdr, and `runner` published under `dir/releases/<at>`, signed by `sign` or not. */
+/** A scratch Machine, and `runner` published under `dir/releases/<at>`, signed by `sign` or not. */
 const machine = (
   dir: string,
   runner: Uint8Array,
@@ -56,7 +56,7 @@ const machine = (
     // placing, as the real runner's own upgrade does it.
     yield* stub(
       "upgrade",
-      `echo "$HERDR_PLUGIN_ROOT upgrade\${*:+ $*}" >> "${dir}/placed"
+      `echo "$COLLIE_ROOT upgrade\${*:+ $*}" >> "${dir}/placed"
 mkdir -p "$COLLIE_DIR/release/bin"
 printf '#!/bin/sh\\necho "$*" >> "${dir}/collie-calls"\\n' > "$COLLIE_DIR/release/bin/collie"
 chmod +x "$COLLIE_DIR/release/bin/collie"`,
@@ -99,6 +99,23 @@ const install = (dir: string, publicKey: string, extra: Record<string, string> =
 // Where coreutils is one multi-call binary, `env` runs as whatever it is named; `gnuenv` does not.
 const ENV = (await Bun.file("/usr/bin/gnuenv").exists()) ? "/usr/bin/gnuenv" : "/usr/bin/env";
 const env = () => Effect.promise(() => Bun.file(ENV).bytes());
+
+test("a signed runner installs without Herdr on PATH", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const key = pair();
+      yield* machine(dir, yield* env(), (bytes) => signReleaseP256(bytes, key.privateKey));
+      yield* fs.remove(`${dir}/stubs/herdr`);
+
+      const done = yield* install(dir, key.publicKey);
+
+      expect(done.code).toBe(0);
+      expect(done.calls).toEndWith("doctor\n");
+      expect(done.herdr).toBe("");
+    }).pipe(Effect.scoped),
+  ));
 
 test("a signed runner places the release, and setup ends in doctor", () =>
   runEffect(

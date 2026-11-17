@@ -470,13 +470,12 @@ describe("the main process asks each Machine's host", () => {
             const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
               PATH: "/usr/bin:/bin",
               HOME: world.home,
-              HERDR_PLUGIN_ROOT: world.install,
-              HERDR_PLUGIN_STATE_DIR: world.state,
+              COLLIE_ROOT: world.install,
+              COLLIE_STATE_DIR: world.state,
               COLLIE_USER_DIR: world.config,
               COLLIE_HOST: asCommand(collie),
               ...(yield* suiteEnv),
-              HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
-              FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
+              HC_SOCKET: Bun.env.HC_SOCKET ?? "",
             });
             const read = yield* usageOn(mkPc, door);
             expect(read).toMatchObject({ profile: "local", name: "mk-pc", problem: null });

@@ -89,7 +89,7 @@ test("the Live region is the Selection's own cards, drift and deliveries", () =>
       const { live } = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: { id: "r1", dir: runDir },
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
         region: true,
@@ -97,7 +97,7 @@ test("the Live region is the Selection's own cards, drift and deliveries", () =>
 
       expect(Arr.map(live!.cards, (c) => c.id)).toEqual(["c1"]);
       expect(Arr.map(live!.drift, (d) => d.id)).toEqual(["d1"]);
-      // No Herd — no socket — is no proposals, not a failed read.
+      // No Herd is no proposals, not a failed read.
       expect(live!.proposals).toEqual([]);
     }),
   ));
@@ -125,7 +125,7 @@ test("one pass answers both: the region and the row's marks", () =>
       const { live, marks } = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: { id: "r1", dir: runDir },
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
         region: true,
@@ -187,7 +187,7 @@ test("a Run's marks come from its own journals and nowhere else", () =>
       const { live, marks } = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: null,
         runs: [{ id: "r1", dir: runDir, held: true, harnesses: [] }],
         region: false,
@@ -225,7 +225,7 @@ test("correcting a Run nobody can prove they own says so on the row, permanently
       const on = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: null,
         runs: [marked],
         region: false,
@@ -240,7 +240,7 @@ test("correcting a Run nobody can prove they own says so on the row, permanently
       const off = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: null,
         runs: [marked],
         region: false,
@@ -256,7 +256,7 @@ test("a Run with nothing recorded about it has no marks at all", () =>
       const { marks } = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: null,
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
         region: false,
@@ -322,7 +322,7 @@ test("a proposal about the installation is drawn whatever row is selected", () =
         const { live } = yield* liveFor({
           stateDir,
           ledgers,
-          socketPath,
+          herd: yield* herdOf(socketPath),
           run: selected,
           runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
           region: true,

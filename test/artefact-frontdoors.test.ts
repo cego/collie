@@ -182,8 +182,8 @@ test(
           expect(seen).toMatchObject({ revision: 2, seen: { revision: 1 } });
           const env = readEnv({
             HOME: world.home,
-            HERDR_PLUGIN_ROOT: world.install,
-            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_ROOT: world.install,
+            COLLIE_STATE_DIR: world.state,
             COLLIE_USER_DIR: world.user,
             COLLIE_CWD: world.project,
           });

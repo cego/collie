@@ -1,6 +1,7 @@
 // A listing pays only for what can still change: the engine is asked about a finished Run
 // once, and everything a finished Run may still be given is read on every view.
 
+import { Herdr } from "../src/herdr";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
@@ -9,7 +10,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import { Effect, FileSystem, Layer, Queue, Schema, type Scope } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { fixtures, until } from "./support/host";
@@ -50,7 +51,7 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-const env = () => rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT });
+const env = () => rig.pluginEnv({ COLLIE_ROOT: ROOT });
 const dir = () => env().stateDir;
 
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
@@ -80,7 +81,7 @@ const hosted = <A, E>(
     Effect.provide(
       registryLayer(dir(), {
         placing: {
-          herdr: new FakeHerdr(env()),
+          herdr: new Herdr(env()),
           env: env(),
         },
       }).pipe(
@@ -89,7 +90,7 @@ const hosted = <A, E>(
           agentsLayer({
             dir: dir(),
             env: env(),
-            herdr: new FakeHerdr(env()),
+            herdr: new Herdr(env()),
             harness: "claude",
             model: "opus",
             permissions: "auto",
@@ -333,10 +334,9 @@ test(
         Effect.gen(function* () {
           const registry = yield* Registry;
           const store = yield* Store;
-          yield* rig.addWorkspace("wT", "Project | Picker", rig.projectDir);
           yield* writeTask({
             id: "task-1",
-            workspace: "wT",
+            workspace: null,
             label: "Project | Picker",
             cwd: rig.projectDir,
             created_at: "2026-10-15T00:00:00.000Z",
@@ -443,37 +443,6 @@ test(
 
           expect(new Set(built)).toEqual(new Set([waiting.runId]));
           expect((yield* (yield* Registry).view(asked.runId))?.report).toEqual(REPORT);
-        }),
-      ),
-    ),
-  120_000,
-);
-
-test(
-  "the reports sweep closing a Task lists that Task's Runs only",
-  () =>
-    runEffect(
-      hosted(
-        Effect.gen(function* () {
-          yield* rig.addWorkspace("wT", "Project | Picker", rig.projectDir);
-          yield* writeTask({
-            id: "task-1",
-            workspace: "wT",
-            label: "Project | Picker",
-            cwd: rig.projectDir,
-            created_at: "2026-10-15T00:00:00.000Z",
-          });
-          const run = yield* started(yield* loaded("reported"), "r1", {}, "task-1");
-          yield* settled(run.runId, "complete");
-          yield* (yield* Store).reported(run.runId, { ...REPORT, closed: false });
-
-          yield* sweeping;
-          yield* until(
-            () => Effect.succeed(built),
-            (views) => views.includes("task-1"),
-          );
-
-          expect(Arr.filter(built, (one) => one !== run.runId)).toEqual(["task-1"]);
         }),
       ),
     ),

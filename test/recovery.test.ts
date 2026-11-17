@@ -150,7 +150,6 @@ test(
           const extra = {
             PATH: `${bin.dir}:${yield* Config.String("PATH")}`,
             COLLIE_FORGE_API,
-            FAKE_HERDR_OUTPUTS: outputs,
             COLLIE_RECOVERY_EVERY: "100 millis",
           };
           expect(
@@ -187,19 +186,16 @@ test(
 );
 
 test(
-  "a herdr park stays parked while herdr cannot list its agents, though it lists its sessions, and resumes once it can",
+  "a core park stays parked while core cannot list its agents, though it answers, and resumes once it can",
   () =>
     proves(
-      "collie-recovery-herdr-",
-      (world) =>
+      "collie-recovery-core-",
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const down = `${world.home}/agents-down`;
-          yield* fs.writeFileString(down, "").pipe(Effect.orDie);
+          core.refuse("terminal.list", "server_not_running", "core cannot list its terminals");
           const on = yield* collie(world, ["settings", "set", "recovery.resume", "true"], {
             COLLIE_RECOVERY_EVERY: "100 millis",
-            FAKE_HERDR_SESSIONS: "[]",
-            FAKE_HERDR_AGENTS_DOWN: down,
           });
           expect(on.envelope).toMatchObject({ ok: true });
           const client = yield* connect(world.state).pipe(Effect.orDie);
@@ -220,7 +216,7 @@ test(
           );
           for (const line of rechecked(down5)) {
             expect(line.outcome).not.toBe("cleared");
-            expect(line.note).toContain("server_not_running");
+            expect(line.note).toContain("core cannot list its terminals");
           }
           expect(Arr.some(down5, (line) => line.action === "resumed")).toBe(false);
           expect(
@@ -230,7 +226,7 @@ test(
             ),
           ).toEqual([]);
           yield* fs.writeFileString(`${world.home}/fact`, "ready").pipe(Effect.orDie);
-          yield* fs.remove(down).pipe(Effect.orDie);
+          core.restore("terminal.list");
           yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
             (view) => view?.status.status === "complete",
@@ -257,19 +253,15 @@ test(
   () =>
     proves(
       "collie-recovery-human-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
-          const status = `${world.home}/status`;
           yield* fs
             .writeFileString(outputs, asJson([{ verdict: "done" }, { verdict: "done" }]))
             .pipe(Effect.orDie);
-          yield* fs.writeFileString(status, "working").pipe(Effect.orDie);
           const off = yield* collie(world, ["settings", "set", "recovery.resume", "false"], {
             COLLIE_RECOVERY_EVERY: "100 millis",
-            FAKE_HERDR_OUTPUTS: outputs,
-            FAKE_HERDR_AGENT_STATUS_FILE: status,
             COLLIE_HOST_SUPERSEDE_GRACE_MS: "600000",
           });
           expect(off.envelope).toMatchObject({ ok: true });
@@ -298,6 +290,8 @@ test(
                 .pipe(Effect.orDie);
             if (kind === "superseded") {
               const [launch] = yield* client.launches({ run: runId }).pipe(Effect.orDie);
+              core.reportedOnly([launch!.agent]);
+              yield* core.report(launch!.agent, "working");
               const desktop = yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie);
               yield* desktop.declare({ frontDoor: "desktop" }).pipe(Effect.orDie);
               yield* desktop
@@ -362,7 +356,7 @@ test(
   () =>
     proves(
       "collie-recovery-failing-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           yield* exec(
             ["git", "remote", "add", "origin", "https://gitlab.example.com/mk/project.git"],
@@ -380,7 +374,6 @@ test(
           };
           const forge = yield* forgeOnPath(bin, "gitlab", model);
           const COLLIE_FORGE_API = yield* serveForges(forge);
-          const socket = `${world.home}/herdr.sock`;
           const started = yield* collie(
             world,
             [
@@ -397,14 +390,17 @@ test(
             {
               PATH: `${bin.dir}:/usr/bin:/bin`,
               COLLIE_FORGE_API,
-              HERDR_SOCKET_PATH: socket,
+              HC_SOCKET: core.socketPath,
               COLLIE_RECOVERY_EVERY: "100 millis",
             },
           );
           expect(started.envelope).toMatchObject({ ok: true });
           const runId = yield* idOf(started.envelope.data);
           const client = yield* connect(world.state).pipe(Effect.orDie);
-          const file = yield* newsPath(world.state, yield* herdOf(socket).pipe(Effect.orDie));
+          const file = yield* newsPath(
+            world.state,
+            yield* herdOf(core.socketPath).pipe(Effect.orDie),
+          );
           const failed = yield* until(
             () => client.runMetrics({ runId }).pipe(Effect.orDie),
             (lines) =>
@@ -1214,7 +1210,7 @@ const failedCiRecheck = (now: Partial<FakeMr>, { recorded = true, unreadable = f
           park: { cause: "ci-failed", kind: "rechecks" },
         },
         root,
-        { agentList: () => Effect.die("CI rechecks must not ask herdr") },
+        { agentList: () => Effect.die("CI rechecks must not ask core") },
       ).pipe(Effect.provide(forge.layer));
     }),
   );

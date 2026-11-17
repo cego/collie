@@ -16,7 +16,7 @@ import { eventText } from "../src/commands/onboard";
 import { onboard, type OnboardEvent, type OnboardOptions } from "../src/onboard";
 import { err, type OpResult } from "../src/operations";
 import { writeConfigValue } from "../src/config";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 
 let home: string;
 let root: string;
@@ -47,7 +47,10 @@ const carry = Effect.fn("test.carry")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const tree = `${home}/carried/release`;
   yield* fs.makeDirectory(tree, { recursive: true });
-  yield* fs.writeFileString(`${tree}/herdr-plugin.toml`, `version = "${manifest.version}"\n`);
+  yield* fs.writeFileString(
+    `${tree}/package.json`,
+    `{"name":"collie","version":"${manifest.version}"}\n`,
+  );
   yield* fs.writeFileString(
     `${tree}/prepare.sh`,
     `echo ran >> "$HOME/prepared"\necho "prepare: runner: done"\necho "prepare: skills: done"\n`,
@@ -108,7 +111,7 @@ const onboarded = (overrides: Record<string, string> = {}, options: Partial<Onbo
       HOME: home,
       PATH: `${home}/stubs:/usr/bin:/bin`,
       SHELL: "/bin/bash",
-      HERDR_PLUGIN_ROOT: `${home}/nowhere`,
+      COLLIE_ROOT: `${home}/nowhere`,
       ...overrides,
     });
     const result = yield* onboard(
@@ -136,13 +139,11 @@ beforeEach(() =>
       doctorRan = 0;
       carried = yield* carry();
       bin = yield* FakeBin.make(`${home}/stubs`);
-      yield* fs.writeFileString(`${home}/herdr-installer`, installer("herdr"));
       yield* fs.writeFileString(`${home}/claude-installer`, installer("claude", LOGGED_IN));
       yield* bin.add(
         "curl",
         `echo "$*" >> "${home}/curl-calls"
         case "$*" in
-          *herdr.dev/install.sh*) cat "${home}/herdr-installer" ;;
           *claude.ai/install.sh*) cat "${home}/claude-installer" ;;
           *) exit 22 ;;
         esac`,
@@ -168,7 +169,7 @@ afterEach(() =>
   ),
 );
 
-test("a bare Machine gets herdr, Claude Code, the release placed, the plugin and PATH", () =>
+test("a bare Machine gets Collie and Claude Code without installing Herdr", () =>
   runEffect(
     Effect.gen(function* () {
       const { result, events } = yield* onboarded();
@@ -179,10 +180,9 @@ test("a bare Machine gets herdr, Claude Code, the release placed, the plugin and
       expect(steps).toEqual([
         "system",
         "collie",
-        "herdr",
         "claude",
         "path",
-        "plugin",
+        "prepare",
         "claude-login",
         "gitlab",
         "push",
@@ -202,17 +202,17 @@ test("a bare Machine gets herdr, Claude Code, the release placed, the plugin and
         expect(start).toBeGreaterThanOrEqual(0);
         expect(start).toBeLessThan(end);
       }
-      for (const step of ["collie", "herdr", "claude", "path", "plugin", "doctor"]) {
+      for (const step of ["collie", "claude", "path", "prepare", "doctor"]) {
         expect(statusOf(events, step)).toBe("done");
       }
       for (const step of ["system", "claude-login", "gitlab", "push"])
         expect(statusOf(events, step)).toBe("in_place");
       for (const step of ["helle", "linear"]) expect(statusOf(events, step)).toBe("skipped");
-      expect(yield* read(`${root}/release/herdr-plugin.toml`)).toContain(manifest.version);
+      expect(yield* read(`${root}/release/package.json`)).toContain(manifest.version);
       expect(yield* (yield* FileSystem.FileSystem).exists(`${root}/.git`)).toBe(false);
-      expect(yield* read(`${home}/curl-calls`)).toContain("https://herdr.dev/install.sh");
+      expect(yield* read(`${home}/curl-calls`)).not.toContain("https://herdr.dev/install.sh");
       expect(yield* read(`${home}/curl-calls`)).toContain("https://claude.ai/install.sh");
-      // Once as the release is placed, and once more with herdr installed.
+      // Once as the release is placed, and once more after the harness is installed.
       expect(yield* read(`${home}/prepared`)).toBe("ran\nran\n");
       expect(yield* read(`${home}/.bashrc`)).toContain(`export PATH="${home}/.local/bin:$PATH"`);
       expect(doctorRan).toBe(1);
@@ -229,7 +229,7 @@ test("a re-run is a repair: everything already in place is left alone", () =>
       const { result, events } = yield* onboarded();
 
       expect(result).toMatchObject({ ok: true, data: { ready: true } });
-      for (const step of ["system", "collie", "herdr", "claude", "path"]) {
+      for (const step of ["system", "collie", "claude", "path"]) {
         expect(statusOf(events, step)).toBe("in_place");
       }
       expect(yield* read(`${home}/curl-calls`)).toBe(curls);
@@ -242,12 +242,15 @@ test("a release at another version is replaced by the one asked for", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${root}/release`, { recursive: true });
-      yield* fs.writeFileString(`${root}/release/herdr-plugin.toml`, `version = "0.1.0"\n`);
+      yield* fs.writeFileString(
+        `${root}/release/package.json`,
+        `{"name":"collie","version":"0.1.0"}\n`,
+      );
 
       const { events } = yield* onboarded();
 
       expect(statusOf(events, "collie")).toBe("done");
-      expect(yield* read(`${root}/release/herdr-plugin.toml`)).toContain(manifest.version);
+      expect(yield* read(`${root}/release/package.json`)).toContain(manifest.version);
     }),
   ));
 
@@ -340,7 +343,7 @@ test("a development checkout gets the checks, and nothing installed or moved", (
       const head = yield* git(dev, "rev-parse", "HEAD");
       yield* claudeAt(`case "$*" in "auth status --json") ${LOGGED_IN} ;; esac`);
 
-      const { result, events } = yield* onboarded({ HERDR_PLUGIN_ROOT: dev });
+      const { result, events } = yield* onboarded({ COLLIE_ROOT: dev });
 
       expect(result).toMatchObject({ ok: true, data: { ready: true, development: true } });
       expect(statusOf(events, "collie")).toBe("skipped");
@@ -369,7 +372,7 @@ test("onboarded means doctor is ready", () =>
       const env = readEnv({
         HOME: home,
         PATH: `${home}/stubs:/usr/bin:/bin`,
-        HERDR_PLUGIN_ROOT: `${home}/nowhere`,
+        COLLIE_ROOT: `${home}/nowhere`,
       });
       const notReady = err("operation_failed", "1 of 2 checks failed.", {
         ready: false,

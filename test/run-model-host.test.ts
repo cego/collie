@@ -27,18 +27,6 @@ const encodeJson = flow(
   Result.getOrThrow,
 );
 
-const decodeRequest = flow(
-  Schema.decodeResult(
-    Schema.fromJsonString(Schema.Struct({ id: Schema.String, method: Schema.String })),
-  ),
-  Result.getOrThrow,
-);
-
-/** The fake herdr's agents, as its state file keeps them. */
-const FakeHerdrAgents = Schema.fromJsonString(
-  Schema.Struct({ agents: Schema.Array(Schema.Struct({ pane_id: Schema.String })) }),
-);
-
 const MERGED = "mr:gitlab.example.com/mk/project!7";
 const UNKNOWN = "mr:gitlab.example.com/mk/project!8";
 
@@ -47,40 +35,6 @@ const comparable = (view: TaskView) => {
   const { revision: _, age: __, ...rest } = view;
   return rest;
 };
-
-/** A herdr that answers an event subscription, and pushes an event when told. */
-const herdrEvents = (path: string) =>
-  Effect.acquireRelease(
-    Effect.sync(() => {
-      const subscribed = new Set<{ write: (text: string) => number }>();
-      const server = Bun.listen({
-        unix: path,
-        socket: {
-          data(socket, chunk) {
-            for (const line of Str.split(chunk.toString(), "\n")) {
-              if (Str.trim(line) === "") continue;
-              const request = decodeRequest(line);
-              if (request.method !== "events.subscribe") {
-                socket.write(`${JSON.stringify({ id: request.id, error: { message: "fake" } })}\n`);
-                continue;
-              }
-              socket.write(`${JSON.stringify({ id: request.id, result: { type: "ok" } })}\n`);
-              subscribed.add(socket);
-            }
-          },
-          close(socket) {
-            subscribed.delete(socket);
-          },
-        },
-      });
-      const push = () => {
-        const event = { event: "pane.agent_status_changed", data: { pane_id: "gone" } };
-        for (const socket of subscribed) socket.write(`${JSON.stringify(event)}\n`);
-      };
-      return { server, push, subscribers: () => subscribed.size };
-    }),
-    ({ server }) => Effect.sync(() => server.stop(true)),
-  );
 
 /** A statement run on the host's database by a SQLite connection of another process. */
 const elsewhere = (world: World, statement: string, params: ReadonlyArray<string>) =>
@@ -114,7 +68,7 @@ test(
   () =>
     proves(
       "collie-run-model-host-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const env = yield* currentEnv.pipe(Effect.orDie);
@@ -134,16 +88,9 @@ test(
           });
           const COLLIE_FORGE_API = yield* serveForges(gitlab);
           yield* bin.restore();
-          const socket = `${world.home}/herd.sock`;
-          const events = yield* herdrEvents(socket);
-          const workspace = yield* new Herdr(env)
-            .workspaceCreate({ cwd: world.project, label: "builds" })
-            .pipe(Effect.orDie);
           const extra = {
             PATH: `${bin.dir}:${Bun.env.PATH}`,
             COLLIE_FORGE_API,
-            HERDR_SOCKET_PATH: socket,
-            HERDR_WORKSPACE_ID: workspace.workspaceId,
             COLLIE_BOARD_TICK: "1 hour",
           };
           const start = (args: ReadonlyArray<string>) =>
@@ -161,7 +108,6 @@ test(
           const checkout = yield* start(["targeted", "--input", `target=${UNKNOWN}`]);
           const agent = yield* start([
             "agent",
-            "--here",
             "--input",
             "target=worktree",
             "--input",
@@ -260,20 +206,7 @@ test(
             return card._tag === "Some" && card.value.state !== "active";
           };
           yield* arrival(0, (tasks) => ended(files)(tasks) && ended(store)(tasks));
-          // herdr says the agent's pane appeared, once it has the pane and the host listens.
-          const herdrState = `${Bun.env.FAKE_HERDR_LOG}.state.json`;
-          const fake = yield* until(
-            () =>
-              fs
-                .readFileString(herdrState)
-                .pipe(Effect.flatMap(Schema.decodeEffect(FakeHerdrAgents))),
-            (state) => state.agents.length > 0,
-          );
-          yield* until(
-            () => Effect.sync(events.subscribers),
-            (count) => count > 0,
-          );
-          events.push();
+          // Core tells of the agent's terminal once it runs it.
           yield* arrival(0, (tasks) => {
             const card = cardOf(tasks, agent);
             return card._tag === "Some" && card.value.agents.length > 0;
@@ -344,18 +277,13 @@ test(
           });
           yield* equalsDisk;
 
-          // herdr drops the Run's agent. A tick would re-read herdr, so the card keeps it until herdr says so.
-          for (const one of fake.agents)
-            yield* exec([Bun.env.HERDR_BIN_PATH!, "pane", "close", one.pane_id]);
-          yield* Effect.sleep("8 seconds");
-          expect(Option.map(cardOf(board, agent), (card) => card.agents.length > 0)).toEqual(
-            Option.some(true),
-          );
+          // The Run's agent waits on the human; core's event says so, with no tick to re-read it.
           mark = seen.length;
-          events.push();
+          for (const one of yield* new Herdr(env).agentList().pipe(Effect.orDie))
+            yield* core.report(one.name, "blocked");
           yield* arrival(mark, (tasks) => {
             const card = cardOf(tasks, agent);
-            return card._tag === "Some" && card.value.agents.length === 0;
+            return card._tag === "Some" && card.value.agents[0]?.status === "blocked";
           });
           yield* equalsDisk;
 

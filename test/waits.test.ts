@@ -19,7 +19,7 @@ import {
 import { codexPort, servedEndpoint } from "../src/compactors";
 import type { Channel } from "../src/dispatcher";
 import { handOverClaim } from "../src/engine";
-import { runEffect } from "./support/effect";
+import { fastForward, runEffect } from "./support/effect";
 import { until } from "./support/host";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -249,6 +249,25 @@ test("a server log read still running at the start budget is waited for, and its
       expect(result._tag === "Success" && result.success.found).toBe("ws://127.0.0.1:1");
       expect(ended).toBe(1200);
     }),
+  ));
+
+test("a fast-forwarded server start waits for a server that takes real time to come up", () =>
+  runEffect(
+    fastForward(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-served-" });
+        const served = yield* servedEndpoint({
+          cwd: dir,
+          log: `${dir}/server.log`,
+          command: "sh -c 'sleep 1; echo listening on ws://127.0.0.1:1'",
+          listening: /listening on (\S+)/,
+          startMs: 1000,
+          what: "the stand-in",
+        });
+        expect(served.found).toBe("ws://127.0.0.1:1");
+      }).pipe(Effect.scoped),
+    ),
   ));
 
 // Past any pid_max, so no process here can be one of the machine's.

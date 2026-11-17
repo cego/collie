@@ -2,7 +2,7 @@
 
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem, Result, Schema, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Order, Result, Schema, Stream } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import {
   listTasks,
@@ -15,11 +15,9 @@ import {
   writeTask,
   type TaskRecord,
 } from "../src/task";
-import { currentEnv } from "../src/env";
-import { Herdr } from "../src/herdr";
 import { TaskWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
-import { hostRecords, recordsAt } from "./support/records";
+import { recordsAt } from "./support/records";
 import { stopHost } from "./support/host";
 import { collie, proves } from "./support/world";
 
@@ -179,38 +177,47 @@ test("a Task held is held until its holder is done, and only that Task", () =>
   ));
 
 test(
-  "starts kept here from one workspace are one Task, which the host makes and keeps there",
+  "run hold --task holds every unfinished Run of that Task and none of another's",
   () =>
     proves(
-      "collie-tasks-here-",
+      "collie-tasks-hold-",
       (world) =>
         Effect.gen(function* () {
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const workspace = yield* new Herdr(env)
-            .workspaceCreate({ cwd: world.project, label: "project | Kept here" })
-            .pipe(Effect.orDie);
-          const taskOf = Effect.gen(function* () {
-            const started = yield* collie(
-              world,
-              ["run", "start", "plain", "--here", "--input", "note=hi"],
-              { HERDR_WORKSPACE_ID: workspace.workspaceId },
+          const Started = Schema.Struct({ runId: Schema.String });
+          const start = (...more: ReadonlyArray<string>) =>
+            collie(world, ["run", "start", "asks", "--input", "goal=hold them", ...more]).pipe(
+              Effect.flatMap(({ envelope }) => Schema.decodeUnknownEffect(Started)(envelope.data)),
+              Effect.map(({ runId }) => runId),
+              Effect.orDie,
             );
-            const { runId } = yield* Schema.decodeUnknownEffect(
-              Schema.Struct({ runId: Schema.String }),
-            )(started.envelope.data);
-            const shown = yield* collie(world, ["run", "show", runId]);
-            return (yield* Schema.decodeUnknownEffect(
-              Schema.Struct({ run: Schema.Struct({ task: Schema.NullOr(Schema.String) }) }),
-            )(shown.envelope.data)).run.task;
-          }).pipe(Effect.orDie);
-          const first = yield* taskOf;
-          const second = yield* taskOf;
-          const kept = yield* hostRecords(world.state, listTasks).pipe(Effect.orDie);
+          const taskOf = (runId: string) =>
+            collie(world, ["run", "show", runId]).pipe(
+              Effect.flatMap(({ envelope }) =>
+                Schema.decodeUnknownEffect(
+                  Schema.Struct({ run: Schema.Struct({ task: Schema.String }) }),
+                )(envelope.data),
+              ),
+              Effect.map(({ run }) => run.task),
+              Effect.orDie,
+            );
+          const first = yield* start();
+          const task = yield* taskOf(first);
+          const second = yield* start("--task", task);
+          yield* start();
+
+          const held = yield* collie(world, ["run", "hold", "--task", task]);
           yield* stopHost(world.state);
-          expect(kept).toMatchObject([{ workspace: workspace.workspaceId, cwd: world.project }]);
-          expect([first, second]).toEqual([kept[0]!.id, kept[0]!.id]);
+          expect(held.envelope).toMatchObject({ ok: true, data: { task } });
+          expect(
+            Arr.sort(
+              (yield* Schema.decodeUnknownEffect(
+                Schema.Struct({ held: Schema.Array(Schema.String) }),
+              )(held.envelope.data).pipe(Effect.orDie)).held,
+              Order.String,
+            ),
+          ).toEqual(Arr.sort([first, second], Order.String));
         }),
-      ["plain.workflow.ts"],
+      ["asks.workflow.ts"],
     ),
   120_000,
 );

@@ -1,9 +1,8 @@
-// Where the benchmark's host, fake herdr and Desktop live: a state directory of its own,
+// Where the benchmark's host and Desktop live: a state directory of its own,
 // never the user's, at the same short path every time so a kept fixture's paths hold.
 
 import { tmpdir } from "node:os";
 import { Effect, FileSystem } from "effect";
-import { writeFakeHerdrShim } from "../../test/support/fake-herdr-core";
 import { GIT_QUIET } from "../../test/support/git-quiet";
 import { testBunfig } from "../../test/support/packages";
 
@@ -36,13 +35,12 @@ export const enterWorld = Effect.gen(function* () {
   for (const dir of [world.user, world.state, world.home, world.project, world.bin])
     yield* fs.makeDirectory(dir, { recursive: true });
   yield* fs.writeFileString(`${world.home}/.bunfig.toml`, testBunfig);
-  // Never the user's claude, nor their herdr and its Machines.
+  // Never the user's claude.
   yield* fs.writeFileString(
     `${world.bin}/claude`,
     `#!/bin/sh\n[ "$1" = --help ] && echo "  --autocompact <auto|tokens>" && exit 0\nexit 1\n`,
     { mode: 0o755 },
   );
-  yield* writeFakeHerdrShim(`${world.bin}/herdr`);
   // Desktop takes its login shell's environment; this one hands back the world's.
   yield* fs.writeFileString(
     `${world.bin}/login-shell`,
@@ -54,16 +52,15 @@ export const enterWorld = Effect.gen(function* () {
     TMPDIR: live,
     HOME: world.home,
     SHELL: `${world.bin}/login-shell`,
-    HERDR_PLUGIN_ROOT: world.install,
-    HERDR_PLUGIN_STATE_DIR: world.state,
-    HERDR_SOCKET_PATH: `${world.state}/herd.sock`,
+    COLLIE_ROOT: world.install,
+    COLLIE_STATE_DIR: world.state,
     COLLIE_USER_DIR: world.config,
     COLLIE_CWD: world.project,
     COLLIE_HOST: JSON.stringify([process.execPath, `${root}src/main.ts`]),
     COLLIE_HOST_WATCH_PID: String(process.pid),
     COLLIE_RECORD_MARKS: recordMarksFile,
-    HERDR_BIN_PATH: `${world.bin}/herdr`,
-    FAKE_HERDR_LOG: `${live}/herdr-calls.jsonl`,
+    // Never the user's core and its Machines.
+    HC_SOCKET: `${live}/absent-core.sock`,
     PATH: `${world.bin}:${Bun.env.PATH ?? ""}`,
   });
 });

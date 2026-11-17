@@ -19,7 +19,7 @@ import * as Socket from "effect/socket/Socket";
 import { Clock, Effect, FileSystem, Option, Path, Schema, Scope } from "effect";
 import { isString } from "../../src/schema";
 import { Kind } from "../../src/hc";
-import { answerPrompt } from "./fake-herdr-core";
+import { answerPrompt } from "./fake-agent";
 import { jsonText, replyViolation } from "./hc-schema";
 
 const Request = Schema.Struct({
@@ -30,14 +30,27 @@ const Request = Schema.Struct({
 const decodeRequest = Schema.decodeUnknownOption(Schema.fromJsonString(Request));
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Json));
 
+/** A param marking a test's own arranging call, which the call log leaves out. */
+export const SETUP = "collie_test_setup";
+
 export interface FakeHc {
   readonly socketPath: string;
+  /** Where each call it was asked is logged, one JSON line each. */
+  readonly logPath: string;
+  /** Each later `method` call is logged and then waits until the returned release is called. */
+  readonly hold: (method: string) => () => void;
   /** Answers every later `method` call with `reply`, whatever was asked. */
   readonly answer: (method: string, reply: Schema.Json) => void;
+  /** Answers the method with a core RPC error until restored. */
+  readonly refuse: (method: string, kind: string, message: string) => void;
+  /** Returns the method to its normal behavior. */
+  readonly restore: (method: string) => void;
   /** The terminal named `name` reports `state`, as its program's OSC 7501 would. */
   readonly report: (name: string, state: string) => Effect.Effect<void>;
   /** The next send is typed but never starts a turn, until an Enter is pressed. */
   readonly stallNextSend: () => void;
+  /** What is sent to these agents starts no turn: their status is the test's to report. */
+  readonly reportedOnly: (names: ReadonlyArray<string>) => void;
   /** The next terminal's program reports itself blocked once started, as one in a dialog does. */
   readonly startBlocked: () => void;
   /** The terminal named `name` prints `text` to each viewer attached to it. */
@@ -56,6 +69,12 @@ export interface FakeHc {
    * it finds a program only on the PATH the launch passes in its `env`.
    */
   readonly barePath: () => void;
+  /** What runs in the terminal named `name` changes directory to `dir`. */
+  readonly cd: (name: string, dir: string) => void;
+  /** Core's machine list from now on, as `machine add` would leave it, each one connected. */
+  readonly roster: (
+    machines: ReadonlyArray<{ readonly name: string; readonly target: string }>,
+  ) => void;
 }
 
 interface Added {
@@ -112,6 +131,8 @@ interface Terminal {
   readonly labels: Schema.Json;
   readonly argv: Schema.Json;
   readonly cwd: string;
+  /** Where its foreground process is now, which a `cd` moves. */
+  foregroundCwd: string;
   readonly pid: number;
   state: "live" | "finished";
   status: string | null;
@@ -134,6 +155,10 @@ const view = (terminal: Terminal): Schema.JsonObject => ({
   rows: 24,
   identity: "",
   pid: terminal.state === "live" ? terminal.pid : null,
+  foreground:
+    terminal.state === "live"
+      ? { pid: terminal.pid, name: "sh", argv: [], cwd: terminal.foregroundCwd }
+      : null,
   status: terminal.status === null ? null : { state: terminal.status },
   turn: terminal.turn,
 });
@@ -167,10 +192,13 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const terminals = new Map<string, Terminal>();
   const answers = new Map<string, Schema.Json>();
+  const refusals = new Map<string, { code: number; message: string; kind: string }>();
+  const holds = new Map<string, Promise<void>>();
   const subscribers = new Set<(line: string) => Effect.Effect<void>>();
   let made = 0;
   let seq = 0;
   let stall = false;
+  const onlyReported = new Set<string>();
   let blocked = false;
   const unstartable = new Set<string>();
   let bare = false;
@@ -275,7 +303,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           Effect.andThen(answerPrompt(prompt, logPath, queuePath)),
           Effect.provideContext(services),
           Effect.orDie,
-          Effect.andThen(setStatus(terminal, "idle")),
+          Effect.flatMap((then) => setStatus(terminal, then)),
         ),
         scope,
       );
@@ -351,6 +379,8 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
 
   const answer = (method: string, params: Schema.JsonObject, link: Link): Effect.Effect<Answer> =>
     Effect.gen(function* () {
+      const refused = refusals.get(method);
+      if (refused !== undefined) return { failure: refused };
       const canned = answers.get(method);
       if (canned !== undefined) return { result: canned };
       switch (method) {
@@ -390,6 +420,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
             labels: params.labels ?? {},
             argv: params.argv ?? [],
             cwd: text(params.cwd) ?? "/",
+            foregroundCwd: text(params.cwd) ?? "/",
             pid: 1000 + made,
             state: "live",
             status: null,
@@ -399,6 +430,25 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           terminals.set(terminal.address, terminal);
           yield* emit(terminal.address, "created", view(terminal));
           const argv = Arr.filter(Arr.isArray(params.argv) ? params.argv : [], isString);
+          // The harness coming up: Claude's first status-line call into the control dir its
+          // `--settings` names.
+          const settings = argv[argv.indexOf("--settings") + 1];
+          if (argv.includes("--settings") && settings !== undefined) {
+            const event = yield* encodeJson({
+              at: yield* Clock.currentTimeMillis,
+              session: "fake",
+              kind: "session",
+            }).pipe(Effect.orDie);
+            yield* fs
+              .writeFileString(
+                `${pipe(settings, Str.split("/"), Arr.dropRight(1), Arr.join("/"))}/events.jsonl`,
+                `${event}\n`,
+                {
+                  flag: "a",
+                },
+              )
+              .pipe(Effect.ignore);
+          }
           if (argv[0] === "opencode" && argv.includes("--port")) opencodeServer(terminal, argv);
           const prompt = argv[argv.indexOf("--prompt") + 1];
           if (argv.includes("--prompt") && prompt !== undefined) yield* take(terminal, prompt);
@@ -427,6 +477,8 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
             return {
               failure: { code: -32000, message: "blocked", kind: "blocked" },
             };
+          if (found.name !== null && onlyReported.has(found.name))
+            return { result: { turn: found.turn, started: true, status } };
           if (stall) {
             stall = false;
             typed.set(found.address, text(params.text) ?? "");
@@ -606,9 +658,11 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         Effect.gen(function* () {
           const asked = decodeRequest(line);
           if (Option.isNone(asked)) return;
-          const { id, method, params = {} } = asked.value;
+          const { id, method, params: { [SETUP]: setup, ...params } = {} } = asked.value;
           const entry = yield* encodeJson({ transport: "core", cmd: method, method, params });
-          yield* fs.writeFileString(logPath, `${entry}\n`, { flag: "a" });
+          if (setup !== true) yield* fs.writeFileString(logPath, `${entry}\n`, { flag: "a" });
+          const held = holds.get(method);
+          if (held !== undefined) yield* Effect.promise(() => held);
           const answered = yield* encodeJson(yield* reply(id, method, params, link));
           yield* link.framed
             ? link.write(frameOf(0, Kind.DATA, utf8(answered)))
@@ -653,8 +707,33 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   yield* Effect.forkIn(server.run(connection), scope);
   return {
     socketPath,
+    logPath,
+    cd: (name, dir) => {
+      const found = find({ terminal: name });
+      if (found !== undefined) found.foregroundCwd = dir;
+    },
+    roster: (listed) => {
+      machines.clear();
+      for (const one of listed)
+        machines.set(one.name, { ...one, via: false, state: "connected", why: null });
+    },
     answer: (method, value) => {
       answers.set(method, value);
+    },
+    refuse: (method, kind, message) => {
+      refusals.set(method, { code: -32000, kind, message });
+    },
+    restore: (method) => {
+      refusals.delete(method);
+      answers.delete(method);
+    },
+    hold: (method) => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      holds.set(method, promise);
+      return () => {
+        holds.delete(method);
+        resolve();
+      };
     },
     report: (name, state) =>
       Effect.suspend(() => {
@@ -663,6 +742,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       }),
     stallNextSend: () => {
       stall = true;
+    },
+    reportedOnly: (names) => {
+      for (const name of names) onlyReported.add(name);
     },
     startBlocked: () => {
       blocked = true;

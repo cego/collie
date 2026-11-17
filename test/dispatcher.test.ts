@@ -1,5 +1,5 @@
 // The Dispatcher's whole reason to exist is what happens when a send goes wrong, so
-// that is what is tested: the record written before herdr is called, a herdr that
+// that is what is tested: the record written before core is called, a core that
 // refuses versus one that never answers, and an agent that is no longer the one the
 // message was addressed to.
 
@@ -168,17 +168,16 @@ const entry: AgentEntry = {
   runId: "r1",
   workflow: "implement",
   at: "2026-09-09T09:00:00Z",
-  incarnation: { terminalId: "term-1", agentSession: null },
+  incarnation: { terminalId: "term-1", agentSession: null, backend: "core" },
 };
 
 const alive: AgentInfo = {
   name: "impl-1",
   paneId: "1-9",
-  workspaceId: "w1",
   status: "idle",
-  title: null,
   terminalId: "term-1",
-  agentSession: null,
+  cwd: "/project",
+  foregroundCwd: null,
 };
 
 const draft = {
@@ -190,14 +189,14 @@ const draft = {
   requestId: "req-1",
 };
 
-/** A herdr that records what it was asked, in order, beside the ledger writes. */
+/** A core adapter that records what it was asked, in order, beside the ledger writes. */
 function fake(
   options: {
     agents?: AgentInfo[];
     fail?: HerdrError;
     /** Only the first this many prompts fail; every one after is taken. */
     failing?: number;
-    /** What herdr saw of the submission; `observed` unless a test says otherwise. */
+    /** What core saw of the submission; `observed` unless a test says otherwise. */
     saw?: "observed" | "unobserved";
     /** Run inside `agentPrompt`, to observe what the ledger says at that instant. */
     onPrompt?: Effect.Effect<void, never, PlatformServices>;
@@ -209,7 +208,6 @@ function fake(
     deps: {
       stateDir,
       herdr: {
-        restoreAgentName: () => Effect.succeed(false),
         agentList: () =>
           Effect.sync(() => {
             calls.push("agentList");
@@ -247,35 +245,20 @@ const states = Effect.fn("test.states")(function* () {
   );
 });
 
-test("a continuation recovers a lost name using its recorded incarnation", () =>
+test("a continuation refuses an agent core no longer lists", () =>
   runEffect(
     Effect.gen(function* () {
-      const h = fake();
-      let restored = false;
-      const deps = {
-        ...h.deps,
-        herdr: {
-          ...h.deps.herdr,
-          agentList: () => Effect.succeed(restored ? [alive] : []),
-          restoreAgentName: (target: AgentEntry) =>
-            Effect.sync(() => {
-              expect(target).toEqual(entry);
-              restored = true;
-              return true;
-            }),
-        },
-      };
-      const outcome = yield* transaction(deps, entry, (channel) =>
+      const h = fake({ agents: [] });
+      const outcome = yield* transaction(h.deps, entry, (channel) =>
         channel.submit("continue with the spec", draft),
-      );
-      expect(outcome.ok).toBe(true);
-      expect(h.calls).toContain(
-        "agentPrompt impl-1 collie-delivery:req-1-1\ncontinue with the spec",
-      );
+      ).pipe(Effect.flip);
+      expect(outcome).toMatchObject({ _tag: "NotDeliverable", reason: "agent_gone" });
+      expect(h.calls).toEqual(["agentList"]);
+      expect(yield* states()).toEqual([]);
     }),
   ));
 
-test("the record is written before herdr is called, and settled after", () =>
+test("the record is written before core is called, and settled after", () =>
   runEffect(
     Effect.gen(function* () {
       const records = yield* Effect.context<Records>();
@@ -301,7 +284,7 @@ test("the record is written before herdr is called, and settled after", () =>
 
       expect(outcome).toEqual({ ok: true, id: "req-1-1", submission: "observed" });
       expect(atSendTime).toEqual(["reserved"]);
-      // Sent, then taken: herdr saw a turn start from it.
+      // Sent, then taken: core saw a turn start from it.
       expect(yield* states()).toEqual([
         "req-1-1 reserved",
         "req-1-1 submitted",
@@ -310,7 +293,7 @@ test("the record is written before herdr is called, and settled after", () =>
     }),
   ));
 
-test("a submission herdr saw no turn come of is submitted, with that as its note", () =>
+test("a submission core saw no turn come of is submitted, with that as its note", () =>
   runEffect(
     Effect.gen(function* () {
       const h = fake({ saw: "unobserved" });
@@ -344,8 +327,6 @@ test("a steer to a busy agent is taken once a turn starts after it settles, and 
           stateDir,
           herdr: {
             agentStatus: () => Effect.succeed(statuses[Math.min(looked++, 2)]!),
-            promptBox: () => Effect.succeed(""),
-            agentPressEnter: () => Effect.void,
           },
           log: () => Effect.void,
           taken: () => Effect.succeed(null),
@@ -361,7 +342,7 @@ test("a steer to a busy agent is taken once a turn starts after it settles, and 
     }),
   ));
 
-test("a herdr that refuses is a failure; one that never answers is unknown", () =>
+test("a core that refuses is a failure; one that never answers is unknown", () =>
   runEffect(
     Effect.gen(function* () {
       const refused = fake({
@@ -387,9 +368,9 @@ test("a herdr that refuses is a failure; one that never answers is unknown", () 
     }),
   ));
 
-/** herdr's answer for a pane showing a dialog: a fact about the pane, not about the prompt. */
+/** A blocked agent is a fact about the terminal, not about the prompt. */
 const paneBusy = new HerdrError({
-  message: "herdr agent prompt failed (exit 1)",
+  message: "core terminal.send refused",
   detail: '{"error":{"code":"agent_blocked","message":"agent impl-1 is blocked"}}',
   code: "agent_blocked",
   answered: true,
@@ -436,7 +417,7 @@ test("a pane that refuses while it is busy is retried until it takes the prompt,
     }),
   ));
 
-test("a refusal herdr does not call momentary is not retried, and neither is a send nobody answered", () =>
+test("a refusal core does not call momentary is not retried, and neither is a send nobody answered", () =>
   runEffect(
     Effect.gen(function* () {
       const refused = fake({
@@ -595,6 +576,24 @@ test.each([
     }),
   ),
 );
+
+test("a Herdr 1 incarnation cannot address a core terminal with the same name and id", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const legacy: AgentEntry = {
+        ...entry,
+        incarnation: { terminalId: "term-1", agentSession: null },
+      };
+      const h = fake();
+      const outcome = yield* transaction(h.deps, legacy, (channel) =>
+        channel.submit("hello", draft),
+      ).pipe(Effect.flip);
+
+      expect(outcome).toMatchObject({ _tag: "NotDeliverable", reason: "agent_gone" });
+      expect(h.calls).toEqual(["agentList"]);
+      expect(yield* states()).toEqual([]);
+    }),
+  ));
 
 test("an entry with no incarnation is refused before anything is read", () =>
   runEffect(

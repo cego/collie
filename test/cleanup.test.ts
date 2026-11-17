@@ -20,6 +20,8 @@ import {
 import { readAudit } from "../src/audit";
 import { loadEntry } from "../src/engine";
 import { connect } from "../src/host";
+import { connect as connectCore } from "../src/hc";
+import { SETUP } from "./support/fake-hc";
 import { record as recordProposal } from "../src/proposals";
 import { CleanupReport } from "../src/board-model";
 import {
@@ -47,10 +49,6 @@ const parsed = flow(
   Result.getOrThrow,
 );
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
-const asRecord = flow(
-  Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))),
-  Result.getOrThrow,
-);
 
 /** A staged generation last used `days` ago, holding one file of `bytes`. */
 const generation = (world: World, name: string, days: number, bytes = 8192) =>
@@ -478,22 +476,13 @@ test.skipIf(process.platform !== "linux")(
 );
 
 test(
-  "cleanup keeps the compaction controls of an agent in a session opened while the host runs",
+  "cleanup keeps the compaction controls of an agent core starts while the host runs",
   () =>
     proves(
-      "collie-cleanup-session-",
-      (world) =>
+      "collie-cleanup-late-",
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const log = Bun.env.FAKE_HERDR_LOG;
-          const desk = { name: "desk", socket_path: `${world.home}/desk.sock` };
-          const late = { name: "late", socket_path: `${world.home}/late.sock` };
-          const state = `${log}.state.json`;
-          const seeded = (yield* fs.exists(state)) ? asRecord(yield* fs.readFileString(state)) : {};
-          yield* fs.writeFileString(
-            state,
-            asJson({ ...seeded, agents: [{ name: "impl", pane_id: "p-late" }] }),
-          );
           const controls = `${world.state}/compaction/impl`;
           yield* fs.makeDirectory(controls, { recursive: true });
           yield* fs.writeFileString(
@@ -509,13 +498,21 @@ test(
               attempt: null,
             }),
           );
-          const herdr = { FAKE_HERDR_AGENTS_IN: late.socket_path };
-          yield* fs.writeFileString(`${log}.sessions.json`, asJson([desk]));
-          const before = Listed((yield* collie(world, ["cleanup"], herdr)).envelope.data);
+          const before = Listed((yield* collie(world, ["cleanup"])).envelope.data);
           expect(Arr.map(before.remove, (item) => item.target)).toContain(controls);
 
-          yield* fs.writeFileString(`${log}.sessions.json`, asJson([desk, late]));
-          const listed = yield* collie(world, ["cleanup"], herdr);
+          yield* Effect.scoped(
+            Effect.flatMap(connectCore(core.socketPath), (hc) =>
+              hc.call("terminal.run", {
+                name: "impl",
+                argv: ["codex"],
+                cwd: world.project,
+                labels: { run: "r0" },
+                [SETUP]: true,
+              }),
+            ),
+          );
+          const listed = yield* collie(world, ["cleanup"]);
           expect(listed.envelope.ok).toBe(true);
           expect(Arr.map(Listed(listed.envelope.data).remove, (item) => item.target)).not.toContain(
             controls,
@@ -722,6 +719,10 @@ const cacheItems = (listed: { readonly envelope: { readonly data?: unknown } }) 
   };
 };
 
+/** A listing judges the board the host built last, which may not have this Run's latest state yet. */
+const cacheListing = (world: World, judged: (items: ReturnType<typeof cacheItems>) => boolean) =>
+  until(() => Effect.map(collie(world, ["cleanup"]), cacheItems), judged);
+
 test(
   "cleanup lists the build cache of a checkout whose only Run failed, and --apply removes it alone",
   () =>
@@ -736,7 +737,7 @@ test(
             (status) => status === "failed",
           );
 
-          const listed = cacheItems(yield* collie(world, ["cleanup"]));
+          const listed = yield* cacheListing(world, (items) => items.remove.length > 0);
           expect(Arr.map(listed.remove, (item) => [item.target, item.reason])).toEqual([
             [cache, "no live Run works in this checkout"],
           ]);
@@ -773,7 +774,7 @@ test(
             (status) => status === "suspended",
           );
 
-          const listed = cacheItems(yield* collie(world, ["cleanup"]));
+          const listed = yield* cacheListing(world, (items) => items.keep.length > 0);
           expect(listed.remove).toEqual([]);
           expect(listed.keep).toEqual([
             { kind: "build-cache", target: cache, reason: `${runId} still works in this checkout` },

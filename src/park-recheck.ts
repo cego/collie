@@ -232,7 +232,7 @@ export const recheckPark = (
       case "herdr-unavailable": {
         const read = yield* herdr.agentList().pipe(Effect.result);
         return read._tag === "Success"
-          ? reply(true, "herdr listed its agents")
+          ? reply(true, "core listed its agents")
           : reply(false, herdrFailureReason(read.failure), true);
       }
       default:

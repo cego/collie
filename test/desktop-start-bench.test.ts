@@ -161,7 +161,7 @@ process.exit(1);
       Effect.gen(function* () {
         const ran = yield* exec([process.execPath, `${repo}bench/desktop-start/run.ts`], {
           cwd: repo,
-          env: { ...Bun.env, HERDR_PLUGIN_STATE_DIR: world.state },
+          env: { ...Bun.env, COLLIE_STATE_DIR: world.state },
         });
         expect(ran.exitCode).toBe(2);
         expect(ran.stderr).toContain("is the user's own state directory");

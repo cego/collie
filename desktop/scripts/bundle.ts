@@ -19,7 +19,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { MAC_ENTITLEMENTS, macSigning } from "./mac-signing";
 import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "../../src/signing";
-import manifest from "../../herdr-plugin.toml";
+import manifest from "../../package.json";
 import { bundleLinuxMedia } from "./linux-media";
 import { shell } from "../../src/mr";
 
