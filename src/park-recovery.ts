@@ -7,7 +7,7 @@ import type { PluginEnv } from "./env";
 import { configValue, readConfig } from "./config";
 import { appendMetric, readMetrics, recoveriesIn, type Metric } from "./metrics";
 import { recheckPark } from "./park-recheck";
-import { PARK_CAUSES, healInFlight } from "./park-cause";
+import { PARK_CAUSES, healInFlight, type ParkCause } from "./park-cause";
 import type { Herdr } from "./herdr";
 import type { NotificationKind } from "./notify";
 import { HealOutput, healOn, healerFor } from "./heal";
@@ -73,6 +73,13 @@ export const recoveryFailing = (
 
 /** Past a forge's own rate-limit reset, so the next ask is not refused again on the boundary. */
 const RATE_LIMIT_MARGIN_MS = 5_000;
+
+const ASKS_FORGE: ReadonlySet<ParkCause> = new Set([
+  "forge-unavailable",
+  "target-red",
+  "ci-job-absent",
+  "ci-failed",
+]);
 
 export const recoverParks = <E, R>(opts: {
   readonly env: PluginEnv;
@@ -166,7 +173,10 @@ export const recoverParks = <E, R>(opts: {
                 wait.event = event;
               }
               const panel = opts.panels.get(mrId(view.mr ?? "") ?? "")?.panel;
-              const limited = panel?._tag === "Unavailable" ? rateLimitedUntil(panel.reason) : null;
+              const limited =
+                panel?._tag === "Unavailable" && ASKS_FORGE.has(view.park.cause)
+                  ? rateLimitedUntil(panel.reason)
+                  : null;
               if (limited !== null) wait.next = Math.max(wait.next, limited + RATE_LIMIT_MARGIN_MS);
               waits.set(key, wait);
               if (now < wait.next) return;
