@@ -7179,28 +7179,27 @@ test("a boundary whose context cannot be sampled records no context line, never 
 /** What a reused agent was asked and told, and what herdr said of it, in order. */
 class Watched extends Herdr {
   readonly seen: string[] = [];
-  private reads = 0;
   private prompted = false;
-  private reused = false;
-  constructor(private readonly statuses: ReadonlyArray<AgentStatus>) {
+  // Held until the boundary says it waits: any number of earlier polls may read it first.
+  constructor(private readonly held: AgentStatus) {
     super(rig.pluginEnv());
   }
   override agentStatus(target: string) {
-    return super.agentStatus(target).pipe(
-      Effect.map((actual) => {
-        const status =
-          !this.reused || actual === "working"
-            ? actual
-            : (this.statuses[Math.min(this.reads++, this.statuses.length - 1)] ?? "idle");
+    const held = this.held;
+    const prompted = this.prompted;
+    return Effect.all([
+      super.agentStatus(target),
+      FileSystem.FileSystem.use((fs) => fs.readFileString(`${dir}/agents/r1/agents.log`)).pipe(
+        Effect.map(Str.includes("still working; 02-ui waits for its turn to end")),
+        Effect.orElseSucceed(() => false),
+      ),
+    ]).pipe(
+      Effect.map(([actual, waited]) => {
+        const status = !prompted || actual === "working" ? actual : waited ? "idle" : held;
         this.seen.push(status);
         return status;
       }),
     );
-  }
-  // The second launch lists first: the first item's pollers, however many reads they made, are done.
-  override agentList() {
-    this.reused ||= this.prompted;
-    return super.agentList();
   }
   override agentPrompt(target: string, text: string) {
     this.prompted = true;
@@ -7210,13 +7209,13 @@ class Watched extends Herdr {
 }
 
 /** The two-item list with its agent's status scripted, over the compaction limit. */
-const listedWhile = (status: ReadonlyArray<AgentStatus>, herdr?: Herdr) =>
+const listedWhile = (held: AgentStatus, herdr?: Herdr) =>
   Effect.gen(function* () {
     yield* rig.queueOutputs([
       { verdict: "clean", note: "first" },
       { verdict: "clean", note: "second" },
     ]);
-    const watched = herdr ?? new Watched(status);
+    const watched = herdr ?? new Watched(held);
     const seen = watched instanceof Watched ? watched.seen : [];
     const full = fullContext([]).claude!;
     const ports: CompactionPorts = {
@@ -7255,7 +7254,7 @@ for (const busy of ["working", "blocked"] as const)
   test(`a reused agent herdr reports ${busy} is given nothing until it is idle`, () =>
     runEffect(
       Effect.gen(function* () {
-        const { result, seen } = yield* listedWhile([busy, busy, busy, "idle"]);
+        const { result, seen } = yield* listedWhile(busy);
         expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
         const boundary = seen.slice(seen.indexOf("prompt 01-api") + 1);
         expect(boundary).toContain(busy);
@@ -7283,8 +7282,8 @@ class Unreadable extends Herdr {
 }
 
 for (const [what, run] of [
-  ["unknown", () => listedWhile(["unknown"])],
-  ["unreadable", () => listedWhile([], new Unreadable(rig.pluginEnv()))],
+  ["unknown", () => listedWhile("unknown")],
+  ["unreadable", () => listedWhile("idle", new Unreadable(rig.pluginEnv()))],
 ] as const)
   test(`a reused agent whose status is ${what} is given its work as before`, () =>
     runEffect(
