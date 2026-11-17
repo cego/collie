@@ -894,7 +894,13 @@ function failedAttempt(
     const url = attempt.value.web_url ?? null;
     const jobs = yield* pipelineJobs(reached, cwd, attempt.value.pipeline.id);
     if (!jobs.ok) return { url, tests: [], jobs: null };
-    const failed = Arr.filter(jobs.value, (one) => one.status === "failed");
+    const self = jobs.value.find((one) => String(one.id) === id);
+    // The job's other attempts share its pipeline, and are attempts of their own.
+    const failed = Arr.filter(
+      jobs.value,
+      (one) =>
+        one.status === "failed" && (self === undefined || one.name !== self.name || one === self),
+    );
     const traces = yield* Effect.forEach(failed, (one) =>
       requestText(reached.login, cwd, `${reached.project}/jobs/${one.id}/trace`),
     );

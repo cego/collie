@@ -1014,10 +1014,18 @@ export default defineWorkflow({
                   settle: true,
                 });
                 if ("proved" in read) {
+                  const flaked = read.proved.job?.flaked ?? [];
                   if (read.retried === true)
                     yield* host.record(
                       runId,
-                      `unsettled: ${spec.name}: job ${spec.ci} failed on ${Str.slice(0, 12)(read.proved.end.head_sha)}, then passed when retried — a Flake, so this Run has not settled it.`,
+                      `unsettled: ${spec.name}: job ${spec.ci} failed on ${Str.slice(0, 12)(read.proved.end.head_sha)}${
+                        flaked.length === 0
+                          ? ", naming no failed test"
+                          : ` in ${flaked.length === 1 ? "test" : "tests"} ${Arr.join(
+                              Arr.map(flaked, (one) => `"${one.name}"`),
+                              ", ",
+                            )}`
+                      }, then passed when retried — a Flake, so this Run has not settled it.`,
                     );
                   continue;
                 }

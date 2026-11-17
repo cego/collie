@@ -98,6 +98,9 @@ export interface TargetFailure {
   readonly jobs: ReadonlyArray<string> | null;
 }
 
+const sameFile = (one: FailedTest, other: FailedTest) =>
+  one.name === other.name && one.file === other.file;
+
 const sameTest = (one: FailedTest, other: FailedTest) =>
   one.name === other.name && (one.file === null || other.file === null || one.file === other.file);
 
@@ -303,6 +306,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
           return unproved(`passed, but ${cwd} has changes it never saw`);
         const attempts = Arr.dedupe([...read.retryOf, ...(retried === null ? [] : [retried])]);
         let change: BranchChange | undefined;
+        const flaked: Array<{ name: string; file: string | null; attempts: number }> = [];
         for (const attempt of attempts) {
           const failed = yield* forge.failedAttempt(ref, attempt, cwd, asked.run);
           const own =
@@ -319,11 +323,20 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
               failed.url,
               forge.jobLog(ref, attempt),
             );
+          for (const test of Arr.dedupeWith(failed.tests, sameFile)) {
+            const seen = flaked.find((one) => sameFile(one, test));
+            if (seen === undefined) flaked.push({ name: test.name, file: test.file, attempts: 1 });
+            else seen.attempts++;
+          }
         }
         const flake = attempts.length === 0 ? {} : { retried: true as const };
         if (recorded !== undefined && retried === null) return { proved: recorded, ...flake };
         const at = yield* nowIso;
-        const ran = { name: job, url: read.url };
+        const ran = {
+          name: job,
+          url: read.url,
+          ...(attempts.length === 0 ? {} : { flaked }),
+        };
         const proof: Verification = {
           id: `${asked.runId}-${spec.name}-${epochMs(at)}`,
           run: asked.runId,

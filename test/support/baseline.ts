@@ -9307,7 +9307,7 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        const line = `nuxi: job nuxi-job failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a flake, so it is not settled.`;
+        const line = `nuxi: job nuxi-job failed on ${pipe(head, Str.slice(0, 12))}, naming no failed test, then passed when retried — a flake, so it is not settled.`;
         expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(line);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
@@ -14052,7 +14052,7 @@ scenario(
 );
 
 scenario(
-  "a Release whose check is left to CI's test job records a retried pass of a test the branch does not touch as unsettled, naming the job and the head",
+  "a Release whose check is left to CI's test job records a retried pass of a test the branch does not touch as unsettled, naming the job, the head and the failed test",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -14096,7 +14096,7 @@ scenario(
         yield* bin.restore();
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(
-          `unsettled: check: job test failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a Flake, so this Run has not settled it.`,
+          `unsettled: check: job test failed on ${pipe(head, Str.slice(0, 12))} in test "an old thing settles on its first try", then passed when retried — a Flake, so this Run has not settled it.`,
         );
       }),
     ),
