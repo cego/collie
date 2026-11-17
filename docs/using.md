@@ -3475,14 +3475,15 @@ offered only the tools its role uses:
 | any other role                   | every tool, as under `all`                                     |
 
 `collie_do` is offered whole: none of its actions is taken from a role that has it. The Home
-chat keeps every tool under both values. The role reaches Collie's tool server in the entry
-Collie gives each harness, Claude Code, Codex, OpenCode and Pi alike, and the server lists
-and accepts only that role's tools. No harness flag is added, so your own MCP servers,
+chat keeps every tool under both values. On Claude Code, Codex and OpenCode the role
+reaches Collie's tool server in the entry Collie gives the harness, and the server lists
+and accepts only that role's tools: a call to one it left out is refused with the tool and
+the role named. Pi has no Collie tool server, so its extension lists only the role's tools
+and one left out is simply absent. No harness flag is added, so your own MCP servers,
 plugins and skills, and your `agent_profile`, reach the agent exactly as under `all`.
 
 A tool left out is still reached on the command line, `collie tools call <tool>`, through
-the same checks. A call to it through the server is refused with the tool and the role
-named. Each agent's start line in its Run's `agents.log` says what the setting did: the
+the same checks. Each agent's start line in its Run's `agents.log` says what the setting did: the
 role and how many tools it has, or every tool for a role without a list. It takes effect
 for agents started after the change.
 
