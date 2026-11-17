@@ -42,7 +42,11 @@ const SECOND = {
 };
 
 /** The peer `first` holds for `second` once a board asked for there, answered as `answered`, has paired them. */
-const pairedPeer = (first: Side, second: Side, answered: object = { ok: true }) =>
+const pairedPeer = (
+  first: Side,
+  second: Side,
+  answered: { readonly ok: boolean; readonly error?: { readonly message: string } } = { ok: true },
+) =>
   Effect.gen(function* () {
     const answer = yield* first.cli(["--machine", second.name, "board"]);
     expect(answer.envelope).toMatchObject(answered);
