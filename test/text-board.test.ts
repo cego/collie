@@ -13,6 +13,7 @@ import { workspaceFlow } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import { connect } from "../src/host";
 import { PRUNE_FILE } from "../src/worktree";
+import { recordsAt } from "../src/records";
 import { until } from "./support/host";
 import { proves } from "./support/world";
 
@@ -122,6 +123,7 @@ test(
           const board = yield* Effect.forkChild(
             workspaceFlow(new Herdr(env), env).pipe(
               Effect.provideService(FileSystem.FileSystem, failingFs),
+              Effect.provide(recordsAt(env.stateDir)),
             ),
           );
           yield* drawn(written);
@@ -153,7 +155,10 @@ test(
           yield* clock.setTime(yield* Clock.currentTimeMillis);
 
           const board = yield* Effect.forkChild(
-            workspaceFlow(new Herdr(env), env).pipe(Effect.provideService(Clock.Clock, clock)),
+            workspaceFlow(new Herdr(env), env).pipe(
+              Effect.provideService(Clock.Clock, clock),
+              Effect.provide(recordsAt(env.stateDir)),
+            ),
           );
           yield* drawn(written);
           stdin.send("q");

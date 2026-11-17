@@ -12,6 +12,7 @@ import { factsOfView } from "../src/runs";
 import { runWaits } from "../src/run-waits";
 import { stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
+import { overHost } from "./support/records";
 
 const decodeShown = flow(
   Schema.decodeUnknownResult(Schema.Struct({ run: RunView })),
@@ -26,7 +27,9 @@ const shown = (world: World, runId: string) =>
 const boardQuestions = (world: World, view: RunView) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
-    return (yield* runWaits(factsOfView(world.state, view), [], [], now)).questions;
+    return (yield* runWaits(factsOfView(world.state, view), [], [], now).pipe(
+      overHost(() => world.state),
+    )).questions;
   });
 
 const opened = (world: World, runId: string, decision: string) =>

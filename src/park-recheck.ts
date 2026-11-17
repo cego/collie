@@ -4,7 +4,7 @@ import * as Rec from "effect/Record";
 import { Effect, Schema } from "effect";
 import { mrRefOf } from "./board-model";
 import { forgeOf } from "./forge/forge";
-import { appendJournal, readJournal } from "./journal";
+import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { projectHere, shell, whatItSaid } from "./mr";
 import type { RunView } from "./engine";
 import type { Herdr } from "./herdr";
@@ -19,7 +19,7 @@ const CiTarget = Schema.fromJsonString(
 );
 
 export const rememberCiTarget = (dir: string, target: typeof CiTarget.Type) =>
-  appendJournal(`${dir}/ci-rechecks.jsonl`, CiTarget, target);
+  appendRunJournal(runJournal(dir, "ci-rechecks.jsonl"), CiTarget, target);
 
 const FailedCi = Schema.fromJsonString(
   Schema.Struct({
@@ -30,15 +30,15 @@ const FailedCi = Schema.fromJsonString(
   }),
 );
 
-const failedCiJournal = (dir: string) => `${dir}/ci-failed.jsonl`;
+const failedCiJournal = (dir: string) => runJournal(dir, "ci-failed.jsonl");
 
 export const rememberFailedCi = (dir: string, target: typeof FailedCi.Type) =>
   Effect.gen(function* () {
-    const last = (yield* readJournal(failedCiJournal(dir), FailedCi).pipe(
+    const last = (yield* readRunJournal(failedCiJournal(dir), FailedCi).pipe(
       Effect.orElseSucceed(() => []),
     )).at(-1);
     if (last?.head === target.head && last.mr === target.mr) return;
-    yield* appendJournal(failedCiJournal(dir), FailedCi, target);
+    yield* appendRunJournal(failedCiJournal(dir), FailedCi, target);
   });
 
 const reply = (cleared: boolean, note: string, error = false) => ({ cleared, note, error });
@@ -46,7 +46,7 @@ const reply = (cleared: boolean, note: string, error = false) => ({ cleared, not
 /** The CI jobs the Run last recorded, by name, at the head it recorded last. */
 const lastCiTargets = (stateDir: string, runId: string) =>
   Effect.map(
-    readJournal(`${stateDir}/runs/${runId}/ci-rechecks.jsonl`, CiTarget).pipe(
+    readRunJournal(runJournal(`${stateDir}/runs/${runId}`, "ci-rechecks.jsonl"), CiTarget).pipe(
       Effect.orElseSucceed(() => []),
     ),
     (targets) => {
@@ -114,7 +114,7 @@ export const recheckPark = (
         return reply(true, `jobs ${Arr.join([...latest.keys()], ", ")} present at parked head`);
       }
       case "ci-failed": {
-        const targets = yield* readJournal(
+        const targets = yield* readRunJournal(
           failedCiJournal(`${stateDir}/runs/${view.runId}`),
           FailedCi,
         ).pipe(Effect.orElseSucceed(() => []));

@@ -1,4 +1,6 @@
 import { Effect, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Struct from "effect/Struct";
 import { StepPlace } from "./steps";
 
 /**
@@ -82,6 +84,33 @@ export const VerificationSchema = Schema.Struct({
   ),
 });
 export type Verification = typeof VerificationSchema.Type;
+
+const BRIEFED = ["name", "executable", "argv", "seconds", "result", "at", "by", "step"] as const;
+
+/**
+ * What a verification says to a reader across Runs: none of its trees, and its output only
+ * where it failed. `collie_run_lines.brief` keeps it beside each whole record.
+ */
+export const ProofSchema = VerificationSchema.mapFields((fields) => ({
+  ...Struct.pick(fields, BRIEFED),
+  place: fields.place,
+  tail: Schema.optionalKey(fields.tail),
+}));
+export type Proof = typeof ProofSchema.Type;
+
+/**
+ * The SQL of a verifications line's brief, or of the line as written where it is not JSON.
+ * A merge patch drops nulls at every depth, so `place` is kept in the patch's target.
+ */
+export const PROOF_SQL = `CASE WHEN journal = 'evidence/steering/verifications.jsonl' THEN
+  CASE WHEN json_valid(line) THEN json_patch(
+    CASE WHEN line -> '$.place' IS NULL THEN '{}' ELSE json_object('place', line -> '$.place') END,
+    json_object(${Arr.join(
+      Arr.map(BRIEFED, (name) => `'${name}', line -> '$.${name}'`),
+      ", ",
+    )}, 'tail', CASE WHEN line ->> '$.result' = 'fail' THEN line -> '$.tail' END))
+  ELSE line END
+END`;
 export const VerifyEvent = Schema.Union([
   /** The check now running, by the id a host that takes it over knows it by. */
   Schema.TaggedStruct("Started", { check: Schema.String }),

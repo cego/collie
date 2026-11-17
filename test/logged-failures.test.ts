@@ -2,6 +2,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { HostReply, openHost, until, workspace } from "./support/host";
@@ -43,10 +44,13 @@ test(
         yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
         yield* host.ask({ op: "start", id: "echo", runId: "e1", input: { text: "hi", times: 1 } });
         yield* host.until({ op: "poll", id: "echo", runId: "e1" }, suspended);
-        const [runId] = yield* fs.readDirectory(`${state}/runs`);
-        const cards = `${state}/runs/${runId}/steering/cards.jsonl`;
-        yield* fs.remove(cards, { force: true });
-        yield* fs.makeDirectory(cards, { recursive: true });
+        const db = new Database(`${state}/host.db`);
+        db.run(
+          `CREATE TRIGGER no_cards BEFORE INSERT ON collie_run_lines
+           WHEN NEW.journal = 'steering/cards.jsonl'
+           BEGIN SELECT RAISE(ABORT, 'cards refused'); END`,
+        );
+        db.close();
 
         yield* host.ask({ op: "answer", id: "echo", runId: "e1", decision: "keep", value: "yes" });
         const done = yield* host.until({ op: "poll", id: "echo", runId: "e1" }, complete);
@@ -57,7 +61,7 @@ test(
               .readFileString(`${state}/host.log`)
               .pipe(
                 Effect.map((log) =>
-                  Arr.filter(errorLines(log), (line) => pipe_(line, Str.includes(cards))),
+                  Arr.filter(errorLines(log), (line) => pipe_(line, Str.includes("cards refused"))),
                 ),
               ),
           (lines) => lines.length > 0,

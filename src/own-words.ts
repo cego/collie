@@ -321,6 +321,12 @@ const decodeSessions = flow(
   Schema.decodeUnknownResult(Schema.Array(Schema.Struct({ session: Schema.String }))),
   Result.getOrThrow,
 );
+const decodeTrailLines = flow(
+  Schema.decodeUnknownResult(
+    Schema.Array(Schema.Struct({ run: Schema.String, line: Schema.String })),
+  ),
+  Result.getOrThrow,
+);
 const decodePlacings = flow(
   Schema.decodeUnknownResult(
     Schema.Array(Schema.Struct({ run: Schema.String, placing: Schema.String })),
@@ -532,25 +538,36 @@ class Unread {
  * under the Run it was said to.
  */
 const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, reading: boolean) {
-  const fs = yield* FileSystem.FileSystem;
-  const dir = `${stateDir}/runs`;
-  const runs = yield* fs.readDirectory(dir);
+  const trails = yield* Effect.try({
+    try: () => {
+      const db = new Database(`${stateDir}/host.db`, {
+        readonly: true,
+        create: false,
+      });
+      try {
+        const byRun = new Map<string, Array<string>>();
+        for (const { run, line } of decodeTrailLines(
+          db
+            .query("SELECT run, line FROM collie_run_lines WHERE journal = ? ORDER BY run, seq")
+            .all("operations.jsonl"),
+        )) {
+          const trail = byRun.get(run);
+          if (trail === undefined) byRun.set(run, [line]);
+          else trail.push(line);
+        }
+        return byRun;
+      } finally {
+        db.close();
+      }
+    },
+    catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
+  });
   const started = reading ? yield* startedWords(stateDir) : new Map<string, string>();
   const words: Array<OwnMessage> = [];
   const unread = new Unread();
   let entries = 0;
-  for (const run of runs) {
-    const read = yield* fs.readFileString(`${dir}/${run}/operations.jsonl`).pipe(
-      Effect.catchTag("PlatformError", (error) =>
-        error.reason._tag === "NotFound" ? Effect.succeed("") : Effect.fail(String(error)),
-      ),
-      Effect.result,
-    );
-    if (read._tag === "Failure") {
-      unread.add(run, read.failure);
-      continue;
-    }
-    const records = recordsOf(read.success);
+  for (const [run, trail] of trails) {
+    const records = recordsOf(`${Arr.join(trail, "\n")}\n`);
     if (isString(records)) {
       unread.add(run, records);
       continue;
@@ -651,7 +668,11 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
   else {
     const read = yield* openCodeStore(openCode, since).pipe(Effect.result);
     if (read._tag === "Failure")
-      stores.push({ ...notThere("opencode", openCode), found: "unreadable", why: read.failure });
+      stores.push({
+        ...notThere("opencode", openCode),
+        found: "unreadable",
+        why: read.failure,
+      });
     else {
       stores.push({
         source: "opencode",
@@ -663,12 +684,16 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
     }
   }
 
-  const runs = `${places.stateDir}/runs`;
+  const runs = `${places.stateDir}/host.db`;
   const collie = yield* collieWords(places.stateDir, since !== null).pipe(Effect.result);
   if (collie._tag === "Failure")
     stores.push(
       (yield* fs.exists(runs).pipe(Effect.orElseSucceed(() => false)))
-        ? { ...notThere("collie", runs), found: "unreadable", why: String(collie.failure) }
+        ? {
+            ...notThere("collie", runs),
+            found: "unreadable",
+            why: String(collie.failure),
+          }
         : notThere("collie", runs),
     );
   else {

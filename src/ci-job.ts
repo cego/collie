@@ -3,7 +3,7 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
-import { Clock, Duration, Effect, FileSystem } from "effect";
+import { Clock, Duration, Effect } from "effect";
 import { mrRefOf } from "./board-model";
 import { checkProof } from "./check-proof";
 import { forgeOf, type FailedAttempt, type FailedJob, type JobState } from "./forge/forge";
@@ -20,11 +20,11 @@ import {
   encodeVerifying,
   fingerprint,
   readVerifications,
-  VERIFYING_FILE,
   type CheckCommand,
   type Verification,
 } from "./verify";
 import type { VerifySpec } from "./verify-spec";
+import type { Control } from "./controls";
 
 /** How often a job still pending or running is read again. */
 export const CI_POLL = Duration.seconds(30);
@@ -203,9 +203,10 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
    * where its failed jobs and tests did not fail there too (ADR-0034).
    */
   readonly settle?: boolean;
+  /** The Run's `verifying` control, which names the job while it is waited on. */
+  readonly verifying: Control;
   readonly run: Runner<R>;
 }) {
-  const fs = yield* FileSystem.FileSystem;
   const { spec, cwd } = asked;
   const job = spec.ci ?? "";
   // The tree a pass is bound to, read again before it is recorded.
@@ -243,7 +244,6 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
       ? unproved("was never read: this Run has no merge request")
       : { proved: recorded };
   const forge = forgeOf(ref);
-  const marker = `${asked.runDir}/${VERIFYING_FILE}`;
   const began = yield* Clock.currentTimeMillis;
   let waiting = false;
   let retried: string | null = null;
@@ -385,28 +385,23 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
           asked.runDir,
           `ci: waiting on job ${job} for ${spec.name} on ${head}`,
         ).pipe(Effect.ignore);
-        yield* fs
-          .writeFileString(
-            marker,
-            encodeVerifying({
-              name: spec.name,
-              executable: spec.executable,
-              argv: spec.argv,
-              pass: "ci",
-              round: null,
-              revision: head,
-              base: null,
-              started: yield* nowIso,
-              job,
-            }),
-          )
-          .pipe(Effect.ignore);
+        yield* asked.verifying.set(
+          encodeVerifying({
+            name: spec.name,
+            executable: spec.executable,
+            argv: spec.argv,
+            pass: "ci",
+            round: null,
+            revision: head,
+            base: null,
+            started: yield* nowIso,
+            job,
+          }),
+        );
       }
       yield* Effect.sleep(CI_POLL);
     }
   }).pipe(
-    Effect.ensuring(
-      Effect.suspend(() => (waiting ? fs.remove(marker).pipe(Effect.ignore) : Effect.void)),
-    ),
+    Effect.ensuring(Effect.suspend(() => (waiting ? asked.verifying.set(null) : Effect.void))),
   );
 });

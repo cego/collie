@@ -10,7 +10,7 @@ import { Clock, Effect, FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { Flow, FlowLane, FlowNode, FlowRun, MrState } from "./board-model";
 import { mrRefOf, mrUrlOf } from "./board-model";
-import { readAudit, whoActed } from "./audit";
+import { lastAudit, whoActed } from "./audit";
 import type { PluginEnv } from "./env";
 import {
   currentOf,
@@ -32,7 +32,7 @@ import { stepTimesByWorkflow, usualStepTimes } from "./step-durations";
 import { readRunLinks } from "./run-links";
 import { settleFlow } from "./flow-timing";
 import { epochMs } from "./time";
-import { readVerifications } from "./verify";
+import { readProofsOf } from "./verify";
 import { changeKey } from "./plan";
 
 const executionOfState = (state: RunState): Execution => {
@@ -114,12 +114,12 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
       Effect.map((done) => ({ launch, done })),
     ),
   );
-  const stop = Option.getOrUndefined(
-    Arr.findLast(
-      run.state === "stopped" ? yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => [])) : [],
-      (line) => line.operation === "stop",
-    ),
-  );
+  const stop =
+    run.state === "stopped"
+      ? Option.getOrUndefined(
+          yield* lastAudit(run.dir, ["stop"]).pipe(Effect.orElseSucceed(() => Option.none())),
+        )
+      : undefined;
   return laneOf({
     run: {
       id: run.id,
@@ -133,10 +133,10 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
     machine: machineOf(env),
     lines: yield* readStepLines(run.dir),
     steering: yield* readStepSteering(run.dir),
-    usual: usual ?? (yield* usualStepTimes(env.stateDir, run.workflow)),
+    usual: usual ?? (yield* usualStepTimes(run.workflow)),
     launches,
     questions: run.engine?.questions ?? [],
-    verifications: yield* readVerifications(run.evidence).pipe(Effect.orElseSucceed(() => [])),
+    verifications: yield* readProofsOf([run.evidence]),
     ...context,
     wakes: run.engine?.wakes ?? null,
     stoppedBy: run.state === "stopped" && stop !== undefined ? whoActed(stop.actor) : null,
@@ -173,6 +173,8 @@ export interface TaskFacts {
   readonly leader: RunFacts;
   /** Whether the Task's work has settled, so nothing is current. */
   readonly settled: boolean;
+  /** Only the leader's lane, which is all a card's strip draws. */
+  readonly leaderOnly?: boolean;
   readonly waitOf: (run: RunFacts) => LaneWait | null;
   readonly offer: { readonly id: string; readonly title: string; readonly run?: string } | null;
   readonly mr: string | null;
@@ -222,7 +224,7 @@ export const flowInputsFor = Effect.fn("Flow.inputs")(function* (
       requested.set(run.requestedBy.run, rows);
     }
   }
-  return { installation, children, requested, usual: yield* stepTimesByWorkflow(env.stateDir) };
+  return { installation, children, requested, usual: yield* stepTimesByWorkflow };
 });
 
 /** A Task drawn as the work it took (ADR-draft-a-step-is-declared-where-its-work-is-written D3, D5). */
@@ -276,7 +278,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
   });
 
   const lanes: FlowLane[] = [];
-  for (const run of rows) {
+  for (const run of task.leaderOnly === true ? [task.leader] : rows) {
     const repos = task.repoRunsOf.get(run.id) ?? [];
     const own = Arr.filter(
       inputs.children.get(run.id) ?? [],

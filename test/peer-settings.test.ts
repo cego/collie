@@ -13,7 +13,7 @@ import {
 } from "../desktop/src/bun/flock-settings";
 import { editSetting, NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 import { levelPeer, peersOf, runShell, type Link } from "../src/peers";
-import { runEffect } from "./support/effect";
+import { memoryRecords, runEffect } from "./support/effect";
 import { until } from "./support/host";
 import { releaseBinary, twoMachines } from "./support/peers";
 import { collieCommand } from "./support/world";
@@ -38,7 +38,11 @@ test(
             });
             expect(result).toMatchObject({ code: 3, stdout: "answer:from stdin" });
             expect(result.stderr).toContain("warning");
-            expect((yield* readAudit(`${first.world.state}/shell`))[0]?.actor).toMatchObject({
+            expect(
+              (yield* readAudit(`${first.world.state}/shell`).pipe(
+                Effect.provide(memoryRecords),
+              ))[0]?.actor,
+            ).toMatchObject({
               origin: "desktop",
               from: { client: "test-desktop" },
             });

@@ -8,6 +8,7 @@ import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { runDir } from "../src/engine";
 import { readSeen } from "../src/seen";
+import { hostRecords } from "./support/records";
 import { epochMs } from "../src/time";
 import { stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
@@ -57,7 +58,11 @@ test(
           expect(first.by).toBe("human:seen-1");
           expect(yield* door.seen({ runId, request: "seen-1" })).toEqual(first);
           expect(yield* door.seen({ runId, request: "seen-2" })).toEqual(first);
-          expect(yield* readSeen(runDir(world.state, runId))).toEqual([first]);
+          expect(
+            yield* hostRecords(world.state, readSeen(runDir(world.state, runId))).pipe(
+              Effect.orDie,
+            ),
+          ).toEqual([first]);
           expect(
             (yield* door.seen({ runId: "r-nobody", request: "seen-3" }).pipe(Effect.flip)).reason,
           ).toBe("no Run r-nobody");
@@ -114,7 +119,11 @@ test(
             ])).envelope.ok,
           ).toBe(true);
           expect((yield* taskOf(world, runId))?.unseen).toBe(true);
-          expect(yield* readSeen(runDir(world.state, runId))).toEqual([]);
+          expect(
+            yield* hostRecords(world.state, readSeen(runDir(world.state, runId))).pipe(
+              Effect.orDie,
+            ),
+          ).toEqual([]);
 
           const seen = yield* collie(world, ["run", "seen", runId, "--request-id", "seen-cli"]);
           expect(seen.envelope.ok).toBe(true);

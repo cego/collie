@@ -55,7 +55,6 @@ import {
   PARKED,
   PARK_CAUSE,
   STOP,
-  controlPath,
   evidenceDir,
   foundationLayer,
   Registry,
@@ -67,19 +66,28 @@ import {
 import { readStepLines } from "../src/steps";
 import { readMetrics } from "../src/metrics";
 import { measuresOf } from "../src/outcomes";
-import { launchDir, recordLaunch, startedDir, stemOf } from "../src/launches";
+import { launchDir, recordLaunch, stemOf } from "../src/launches";
 import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
 import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
 import type { UsageReading } from "../src/usage-model";
-import { isoAt } from "../src/time";
-import { readCards } from "../src/cards";
+import { isoAt, nowIso } from "../src/time";
+import { readCards, writeCheckpoint } from "../src/cards";
 import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, herdOf, reconcile } from "../src/steering";
-import { deliveredTo, ledgerOf, recordsAt, registeredAt } from "./support/records";
+import {
+  deliveredTo,
+  hostRecords,
+  hostRunRecords,
+  ledgerOf,
+  overHost,
+  recordsAt,
+  registeredAt,
+} from "./support/records";
+import { RELAUNCH, RunRecords } from "../src/run-records";
 import { Store, type DecisionRow } from "../src/store";
 import type { AuditLine } from "../src/audit";
 import { listTasks, readTask, taskKeptIn, withTaskLock, writeTask } from "../src/task";
@@ -261,9 +269,12 @@ test(
   30_000,
 );
 
-/** Every wait in here is on a clock that moves many times faster than the wall's. */
-const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
-  runLive(fastForward(effect));
+/**
+ * Every wait in here is on a clock that moves many times faster than the wall's, and a Run's
+ * records are where the host on `dir` keeps them.
+ */
+const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | RunRecords>) =>
+  runLive(fastForward(effect).pipe(overHost(() => dir)));
 
 /** One host's lifetime: a fresh engine on the same directory is what a restart is. */
 const session = <A, E>(
@@ -835,7 +846,7 @@ const parkedOnOutput = (runId: string, repairs: number, resume = false) =>
       const engine = yield* WorkflowEngine.WorkflowEngine;
       if (resume) {
         // As the host wakes a parked Run: its parked reason cleared first.
-        yield* (yield* FileSystem.FileSystem).remove(controlPath(dir, PARKED, runId));
+        yield* control(PARKED, runId, false);
         yield* engine.resume(stepped, yield* stepped.executionId(steppedPayload(runId)));
       }
       yield* stepped.execute(steppedPayload(runId), { discard: true });
@@ -868,15 +879,15 @@ test("an Output still unusable after its repair parks the Step, saying what to c
     Effect.gen(function* () {
       yield* rig.queueOutputs([{ verdict: "maybe" }, { verdict: "still maybe" }]);
       yield* parkedOnOutput("r1", 1);
-      const why = yield* read(controlPath(dir, PARKED, "r1"));
+      const why = yield* controlOf(PARKED, "r1");
       expect(why).toContain(agentFor("r1"));
       expect(why).toContain(outputPath("r1"));
       expect(why).toContain(`["note"]`);
       expect(why).toEndWith("Correct it, then resume r1.");
-      expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("step-failed");
-      expect(Arr.last(yield* readStepLines(runDir(dir, "r1")))).toEqual(
-        Option.some(expect.objectContaining({ kind: "fail", key: "review", why })),
-      );
+      expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("step-failed");
+      expect(
+        Arr.last(yield* readStepLines(runDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir)))),
+      ).toEqual(Option.some(expect.objectContaining({ kind: "fail", key: "review", why })));
       // Exactly one: the allowance is one repair, not one per issue.
       expect(sent(yield* rig.calls(), "not usable")).toBe(1);
     }),
@@ -923,9 +934,7 @@ test("a parked Output whose next repair is unusable too parks again, launching n
       yield* parkedOnOutput("r1", 1);
       yield* parkedOnOutput("r1", 2, true);
       expect(yield* read(outputPath("r1"))).toContain("maybe again");
-      expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
-        `${outputPath("r1")} is still unusable`,
-      );
+      expect(yield* controlOf(PARKED, "r1")).toContain(`${outputPath("r1")} is still unusable`);
       expect(sent(yield* rig.calls(), "not usable")).toBe(2);
       expect(yield* starts()).toHaveLength(1);
     }),
@@ -1025,6 +1034,7 @@ test("a reused agent herdr still lists but no longer runs is started again in pl
 
 const cardsOf = (runId: string) =>
   readCards(runDir(dir, runId)).pipe(
+    Effect.provide(recordsAt(dir)),
     Effect.orDie,
     Effect.map((cards) =>
       Arr.map(
@@ -1041,13 +1051,12 @@ const cardsOf = (runId: string) =>
 test("finished work leaves a card of what it wrote, and a ticket it said it finished one of its own", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const progress = `${runDir(dir, "r1")}/steering/progress`;
-      yield* fs.makeDirectory(progress, { recursive: true });
-      yield* fs.writeFileString(
-        `${progress}/01-parse.json`,
-        `{"ticket":"01-parse.md","status":"done","claims":["parses the file"],"at":"2026-09-25T00:00:00Z"}`,
-      );
+      yield* writeCheckpoint(runDir(dir, "r1"), {
+        ticket: "01-parse.md",
+        status: "done",
+        claims: ["parses the file"],
+        at: "2026-09-25T00:00:00Z",
+      });
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
       yield* session(started("r1"));
       expect(yield* cardsOf("r1")).toEqual([
@@ -1089,9 +1098,12 @@ test(
         yield* session(started("r1"));
         expect(yield* cardsOf("r1")).toEqual([`review:review:wrote ${outputPath("r1")}`]);
         // The boundary before the work, once: no Herd here, so the judgement says so.
-        expect(Arr.map(yield* readDrift(runDir(dir, "r1")), (line) => line.kind)).toEqual([
-          "skipped",
-        ]);
+        expect(
+          Arr.map(
+            yield* readDrift(runDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
+            (line) => line.kind,
+          ),
+        ).toEqual(["skipped"]);
       }),
     ),
   120_000,
@@ -1119,11 +1131,7 @@ const suspended = (runId: string): Reached =>
   });
 
 /** The run has said why it parked, which it does before its step lets go of the work. */
-const parked = (runId: string): Reached =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.exists(controlPath(dir, PARKED, runId))),
-    Effect.orElseSucceed(() => false),
-  );
+const parked = (runId: string): Reached => isSet(PARKED, runId);
 
 /** An agent has been sent a prompt about this, `times` times. */
 const prompted = (about: string, times = 1): Reached =>
@@ -1185,10 +1193,10 @@ test(
 /** `r1`'s agent past its budget: the Run parked, and its work still out, not suspended. */
 const pastTheBudget = Effect.gen(function* () {
   yield* until(parked("r1"));
-  expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
+  expect(yield* controlOf(PARKED, "r1")).toContain(
     `has written nothing to ${outputPath("r1")} after 0 minutes idle. Collie keeps collecting it;`,
   );
-  expect(yield* read(controlPath(dir, PARKED, "r1"))).not.toContain("resume");
+  expect(yield* controlOf(PARKED, "r1")).not.toContain("resume");
   yield* spend(5_000);
   expect(yield* suspended("r1")).toBe(false);
 });
@@ -1211,7 +1219,7 @@ test(
           { collectMs: 400 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("late");
-        expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
+        expect(yield* isSet(PARKED, "r1")).toBe(false);
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
       }),
     ),
@@ -1255,7 +1263,7 @@ test(
           { herdr, collectMs: 400 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("revived");
-        expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
+        expect(yield* isSet(PARKED, "r1")).toBe(false);
         expect(yield* starts).toBe(2);
       }),
     ),
@@ -1637,9 +1645,7 @@ test("a dead managed Codex server whose stop cannot prove quiet is never replace
           managed.children[0]!.kill();
           yield* Effect.promise(() => managed.children[0]!.exited);
           yield* until(suspended("r1"));
-          expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
-            "a tool child may still write",
-          );
+          expect(yield* controlOf(PARKED, "r1")).toContain("a tool child may still write");
           expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
           expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
         }),
@@ -1868,9 +1874,9 @@ test.each([
             if (failure === "transient controls") yield* fs.writeFileString(controls, saved);
             unhealthy = false;
             yield* spend(4_000);
-            expect(yield* read(controlPath(dir, PARKED, "r1"))).toBe("");
+            expect(yield* controlOf(PARKED, "r1")).toBe("");
           } else {
-            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain("server health");
+            expect(yield* controlOf(PARKED, "r1")).toContain("server health");
           }
           expect(managed.children[0]!.signalCode === null).toBe(failure !== "dead hung");
           expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
@@ -1884,7 +1890,7 @@ test.each([
         { herdr, harness: "codex", model: "default", ports, readyMs: 1_000 },
       );
       expect(result._tag === "Success" && result.success.note).toBe("late health Output");
-      expect(yield* read(controlPath(dir, PARKED, "r1"))).toBe("");
+      expect(yield* controlOf(PARKED, "r1")).toBe("");
     }).pipe(Effect.scoped),
   ),
 );
@@ -1918,7 +1924,7 @@ test.each([false, true])(
             yield* Effect.forkChild(started("r1"));
             if (!replay) yield* lose;
             yield* spend(20_000);
-            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain("--reconcile");
+            expect(yield* controlOf(PARKED, "r1")).toContain("--reconcile");
             expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
             expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
             expect(yield* steps("r1")).toMatchObject([
@@ -1974,7 +1980,7 @@ test.each([
             yield* until(parked("r1"));
             expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
             expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
-            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
+            expect(yield* controlOf(PARKED, "r1")).toContain(
               "--reconcile repair-round-two --as sent|not-sent",
             );
             expect(
@@ -2070,10 +2076,9 @@ test.each(["before detection", "repair collection"] as const)(
               );
             if (when === "repair collection") yield* until(prompted("Your task for this step", 2));
             else yield* spend(20_000);
-            expect(
-              everyLaunch(yield* rig.calls()),
-              yield* read(controlPath(dir, PARKED, "r1")),
-            ).toHaveLength(when === "before detection" ? 1 : 2);
+            expect(everyLaunch(yield* rig.calls()), yield* controlOf(PARKED, "r1")).toHaveLength(
+              when === "before detection" ? 1 : 2,
+            );
             if (when === "repair collection") {
               expect(yield* read(outputPath("r1"))).toContain("wrong");
               yield* fs.writeFileString(
@@ -2164,7 +2169,6 @@ test.each(["retirement", "launch"] as const)(
   (race) =>
     runEffect(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         const managed = yield* managedCodex;
         const arrived = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -2218,7 +2222,7 @@ test.each(["retirement", "launch"] as const)(
             managed.children[0]!.kill();
             yield* Effect.promise(() => managed.children[0]!.exited);
             yield* Deferred.await(arrived);
-            yield* fs.writeFileString(controlPath(dir, STOP, "r1"), "");
+            yield* control(STOP, "r1", true);
             yield* Deferred.succeed(release, undefined);
             yield* until(suspended("r1"));
             expect(yield* herdr.agentList()).toEqual([]);
@@ -2407,13 +2411,12 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         yield* rig.queueOutputs([null]);
         yield* session(
           Effect.gen(function* () {
             yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
             yield* pastTheBudget;
-            yield* fs.writeFileString(controlPath(dir, STOP, "r1"), "").pipe(Effect.orDie);
+            yield* control(STOP, "r1", true);
             yield* until(suspended("r1"));
             expect(yield* (yield* Collecting).has("r1", agentFor("r1"))).toBe(false);
           }),
@@ -2437,7 +2440,7 @@ test(
         yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
         const result = yield* session(started("r1"), { collectMs: 400 });
         expect(result._tag === "Success" && result.success.note).toBe("late");
-        expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
+        expect(yield* isSet(PARKED, "r1")).toBe(false);
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
       }),
     ),
@@ -2588,10 +2591,10 @@ for (const [what, herdr] of [
             pollMs: 1_000,
             collectMs: 120_000,
           });
-          expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
+          expect(yield* controlOf(PARKED, "r1")).toContain(
             `has written nothing to ${outputPath("r1")} after 2 minutes idle. Collie keeps collecting it;`,
           );
-          expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("idle-budget");
+          expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("idle-budget");
           expect(Arr.map(yield* halts("r1"), (line) => line.cause)).toEqual(["idle-budget"]);
         }),
       ),
@@ -2635,7 +2638,7 @@ const reminders = Effect.map(
 );
 
 const halts = (runId: string) =>
-  Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
+  Effect.map(readMetrics(evidenceDir(dir, runId)).pipe(Effect.provide(recordsAt(dir))), (lines) =>
     Arr.filter(lines, (line) => line.kind === "halt"),
   );
 
@@ -2648,7 +2651,7 @@ test("a reminder counts as recovered once the Output decodes, including after it
       expect(yield* reminders).toHaveLength(1);
       expect(sent(yield* rig.calls(), "not usable")).toBe(1);
       const recovery = Arr.filter(
-        yield* readMetrics(evidenceDir(dir, "r1")),
+        yield* readMetrics(evidenceDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
         (line) => line.kind === "recovery",
       );
       expect(recovery.at(-1)).toMatchObject({
@@ -2702,13 +2705,13 @@ test(
         );
         expect(result).toBe("parked");
         expect(yield* reminders).toHaveLength(2);
-        expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("output-absent");
-        expect(yield* read(controlPath(dir, PARKED, "r1"))).toMatch(
+        expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("output-absent");
+        expect(yield* controlOf(PARKED, "r1")).toMatch(
           /and again after each of 2 reminders, sent \d{4}-\d\d-\d\dT\S+ and \d{4}-\d\d-\d\dT\S+\./,
         );
         expect(yield* read(outputPath("r1"))).toBe("");
         const reminded = Arr.filter(
-          yield* readMetrics(evidenceDir(dir, "r1")),
+          yield* readMetrics(evidenceDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
           (line) => line.kind === "recovery" && line.action === "reminded",
         );
         expect(Arr.map(reminded, (line) => line.outcome)).toEqual(["still-absent", "still-absent"]);
@@ -2978,7 +2981,7 @@ test(
           }),
           { collectMs: 60_000, pollMs: 1_000 },
         );
-        expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain("after 1 minutes idle");
+        expect(yield* controlOf(PARKED, "r1")).toContain("after 1 minutes idle");
       }),
     ),
   120_000,
@@ -3252,7 +3255,6 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         yield* rig.queueOutputs([{ verdict: "clean", note: "resumed" }]);
         yield* interrupted("r1", suspended("r1"), {
           herdr: busyPane(),
@@ -3261,7 +3263,7 @@ test(
 
         // Parked rather than failed: nothing about the work is lost, and nothing is uncertain.
         expect(yield* statusNow("r1")).toBe("suspended");
-        const why = yield* read(controlPath(dir, PARKED, "r1"));
+        const why = yield* controlOf(PARKED, "r1");
         expect(why).toMatch(/agent_blocked held for \d+s over \d+ attempts/);
         expect(why).toContain(promptPath("r1"));
         expect(why).toContain("collie run resume r1");
@@ -3272,7 +3274,7 @@ test(
         expect(result._tag === "Success" && result.success.note).toBe("resumed");
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
         expect(Arr.map(yield* steps("r1"), (one) => one.state)).toEqual(["acknowledged"]);
-        expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
+        expect(yield* isSet(PARKED, "r1")).toBe(false);
       }),
     ),
   120_000,
@@ -3433,7 +3435,7 @@ test(
         yield* interrupted("r1", suspended("r1"));
 
         expect(yield* statusNow("r1")).toBe("suspended");
-        expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
+        expect(yield* controlOf(PARKED, "r1")).toContain(
           `the reviewer persona in ${personas}/reviewer.md names {{inputs.target}}`,
         );
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toEqual([]);
@@ -3764,9 +3766,7 @@ for (const identity of [
             runId: identity === "another Run" ? "some-other-run" : numericRun,
             agent: identity === "another alias" ? "other-reviewer" : numericRole,
           };
-          const path = startedDir(env.stateDir, numericRun);
-          yield* fs.makeDirectory(path, { recursive: true });
-          yield* fs.writeFileString(`${path}/${oldNumericName}.json`, encodeJson(started));
+          yield* controls.setControl(RELAUNCH, numericRun, encodeJson(started), oldNumericName);
         }
         const result = yield* session(
           Effect.gen(function* () {
@@ -4002,7 +4002,7 @@ test("an agent that ran out and stays idle past its budget parks the Run, and on
           yield* Effect.forkChild(runsOut(agentFor("r1")));
           const fiber = yield* Effect.forkChild(started("r1"));
           yield* until(parkedSays("before writing"));
-          const why = yield* read(controlPath(dir, PARKED, "r1"));
+          const why = yield* controlOf(PARKED, "r1");
           expect(why).toContain("ran out (rate_limit) before writing");
           expect(why).toEndWith("Collie keeps collecting it.");
           expect(why).not.toContain("Resume");
@@ -4016,9 +4016,7 @@ test("an agent that ran out and stays idle past its budget parks the Run, and on
       );
       expect(result._tag === "Success" && result.success.note).toBe("room came");
       expect(harnessesStarted(yield* rig.calls())).toEqual(["claude", "codex"]);
-      expect(yield* (yield* FileSystem.FileSystem).exists(controlPath(dir, PARKED, "r1"))).toBe(
-        false,
-      );
+      expect(yield* isSet(PARKED, "r1")).toBe(false);
     }),
   ));
 
@@ -4084,7 +4082,7 @@ test(
             yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
             yield* stopsOnError(agentFor("r1"), EXPIRED);
             yield* spend(5_000);
-            const why = yield* read(controlPath(dir, PARKED, "r1"));
+            const why = yield* controlOf(PARKED, "r1");
             expect(why).toContain(EXPIRED);
             expect(why).toContain("pi/openai-codex/gpt-5.5");
             expect(why).toContain(outputPath("r1"));
@@ -4115,7 +4113,7 @@ test(
           { ...onPi, collectMs: 3_600_000, pollMs: 1_000 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("carried on");
-        expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
+        expect(yield* isSet(PARKED, "r1")).toBe(false);
       }),
     ),
   60_000,
@@ -4132,7 +4130,7 @@ test(
             yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
             yield* stopsOnError(agentFor("r1"), EXPIRED);
             yield* until(parkedSays("minutes idle"));
-            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(EXPIRED);
+            expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
           }),
           { ...onPi, collectMs: 60_000, pollMs: 1_000 },
         );
@@ -4152,7 +4150,7 @@ test(
             yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
             yield* stopsOnError(agentFor("r1"), EXPIRED, "not usable");
             yield* spend(5_000);
-            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(EXPIRED);
+            expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
           }),
           { ...onPi, collectMs: 3_600_000, pollMs: 1_000 },
         );
@@ -4176,19 +4174,19 @@ test(
           }),
           over,
         );
-        yield* fs.remove(controlPath(dir, PARKED, "r1"), { force: true });
+        yield* control(PARKED, "r1", false);
         const result = yield* session(
           Effect.gen(function* () {
             const fiber = yield* Effect.forkChild(started("r1"));
             yield* spend(5_000);
-            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(EXPIRED);
+            expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
             yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"carried on"}`);
             return yield* Fiber.join(fiber);
           }),
           over,
         );
         expect(result._tag === "Success" && result.success.note).toBe("carried on");
-        expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
+        expect(yield* isSet(PARKED, "r1")).toBe(false);
       }),
     ),
   120_000,
@@ -4215,7 +4213,7 @@ test("an agent that ran out with nothing to take over, and whose harness then st
             }),
           ).pipe(Effect.orDie);
           yield* until(parkedSays("ran out (rate_limit) before writing"));
-          expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(EXPIRED);
+          expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
         }),
         { fallbacks: Effect.succeed([]), collectMs: 2_000 },
       );
@@ -4311,7 +4309,6 @@ test("a repair after a Fallback goes to the agent that took over, and starts no 
 test("when nothing has room the agent that ran out is kept, and the Run parks saying when usage resets", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null]);
       // Claude reads Exhausted, and there is nothing to fall back to.
       yield* interrupted("r1", parked("r1"), {
@@ -4326,9 +4323,7 @@ test("when nothing has room the agent that ran out is kept, and the Run parks sa
       expect(yield* read(`${dir}/agents/r1/agents.log`)).toMatch(
         /review: claude\/opus ran out \(session 100%, resets .+\); nothing has room; claude\/opus: session 100%, resets /,
       );
-      const why = yield* fs
-        .readFileString(controlPath(dir, PARKED, "r1"))
-        .pipe(Effect.orElseSucceed(() => ""));
+      const why = yield* controlOf(PARKED, "r1");
       expect(why).toContain("nothing has room; claude/opus: session 100%, resets");
     }),
   ));
@@ -4338,7 +4333,6 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         yield* rig.queueOutputs([null, { verdict: "clean", note: "after it closed" }]);
         yield* Effect.scoped(
           Effect.gen(function* () {
@@ -4352,11 +4346,9 @@ test(
           }),
         );
         expect(harnessesStarted(yield* rig.calls())).toEqual(["claude"]);
-        expect(
-          yield* fs
-            .readFileString(controlPath(dir, PARKED, "r1"))
-            .pipe(Effect.orElseSucceed(() => "")),
-        ).toContain("would not close (herdr pane close failed (exit 1): pane is busy)");
+        expect(yield* controlOf(PARKED, "r1")).toContain(
+          "would not close (herdr pane close failed (exit 1): pane is busy)",
+        );
 
         const result = yield* releasedInto("r1", { ...chain, collectMs: 30_000 });
         expect(result._tag === "Success" && result.success.note).toBe("after it closed");
@@ -4809,9 +4801,7 @@ for (const recovery of ["a newer matching reset", "its known reset passing"])
           const calls = yield* rig.calls();
           expect(harnessesStarted(calls)).toEqual(["codex", "codex"]);
           expect(closedPanes(calls)).toHaveLength(1);
-          expect(yield* (yield* FileSystem.FileSystem).exists(controlPath(dir, PARKED, "r1"))).toBe(
-            false,
-          );
+          expect(yield* isSet(PARKED, "r1")).toBe(false);
         }),
       ),
     30_000,
@@ -5351,6 +5341,8 @@ test("a definition's own preference sits under a scope's, and parallel scopes ke
       ).pipe(Effect.orDie);
       const { workflow, layer } = entry.make("prefers@1");
       const none = Effect.die("this workflow starts no child");
+      // Executed without the host's start, which is what makes the Run's directory.
+      yield* (yield* FileSystem.FileSystem).makeDirectory(runDir(dir, "r1"), { recursive: true });
       // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       yield* workflow.execute({ runId: "r1", input: {} }).pipe(
         Effect.provide(
@@ -5392,6 +5384,8 @@ test("a definition's preference for a role reaches that role's work, under a sco
       ).pipe(Effect.orDie);
       const { workflow, layer } = entry.make("prefers-roles@1");
       const none = Effect.die("this workflow starts no child");
+      // Executed without the host's start, which is what makes the Run's directory.
+      yield* (yield* FileSystem.FileSystem).makeDirectory(runDir(dir, "r1"), { recursive: true });
       // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       yield* workflow.execute({ runId: "r1", input: {} }).pipe(
         Effect.provide(
@@ -5438,6 +5432,8 @@ test("each seat of a panel is its own agent, persona and instructions; the role'
       ).pipe(Effect.orDie);
       const { workflow, layer } = entry.make("panel@1");
       const none = Effect.die("this workflow starts no child");
+      // Executed without the host's start, which is what makes the Run's directory.
+      yield* (yield* FileSystem.FileSystem).makeDirectory(runDir(dir, "r1"), { recursive: true });
       // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       yield* workflow.execute({ runId: "r1", input: {} }).pipe(
         Effect.provide(
@@ -5625,7 +5621,7 @@ test("a window Claude Code would not take, hand-written into the config, stops t
       yield* interrupted("r1", suspended("r1"));
 
       expect(yield* statusNow("r1")).toBe("suspended");
-      const why = yield* read(controlPath(dir, PARKED, "r1"));
+      const why = yield* controlOf(PARKED, "r1");
       expect(why).toContain("claude_auto_compact_window");
       expect(why).toContain("50000");
       const cmds = yield* rig.cmds();
@@ -5695,7 +5691,7 @@ const parkedOn = (failing: string) =>
       herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_FAIL: failing })),
     });
     expect(yield* statusNow("r1")).toBe("suspended");
-    return yield* read(controlPath(dir, PARKED, "r1"));
+    return yield* controlOf(PARKED, "r1");
   });
 
 test("a start herdr refused parks, saying what herdr said", () =>
@@ -5713,7 +5709,7 @@ test("a herdr that cannot say what it has parks the work rather than starting an
       const why = yield* parkedOn(`{"agent list":"herdr is not answering"}`);
       expect(why).toContain("herdr cannot say which agents it has");
       expect(why).toContain("herdr is not answering");
-      expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("herdr-unavailable");
+      expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("herdr-unavailable");
       // What uncertainty must never be rounded down to.
       expect(why).toContain("Nothing here says the agent did no work.");
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(0);
@@ -6086,14 +6082,29 @@ const stoppedOnce = (runId: string, about: string): Reached => {
   });
 };
 
+/** The controls over a Run, where the host on `dir` keeps them. */
+const controls = hostRunRecords(() => dir);
+
 const control = (name: string, runId: string, set: boolean) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => {
-      const path = controlPath(dir, name, runId);
-      return set ? fs.writeFileString(path, "") : fs.remove(path).pipe(Effect.ignore);
-    }),
-    Effect.orDie,
-  );
+  Effect.flatMap(nowIso, (at) => controls.setControl(name, runId, set ? at : null));
+
+/**
+ * A control over the Run, null while it is not set or the host has yet to make its database.
+ * Read as the door reads: a poll that opened the database to migrate it would contend with
+ * the host it watches.
+ */
+const controlRead = (name: string, runId: string) =>
+  hostRecords(
+    dir,
+    RunRecords.use((records) => records.control(name, runId)),
+  ).pipe(Effect.orElseSucceed(() => null));
+
+/** A control's value over the Run, or "" while it is not set. */
+const controlOf = (name: string, runId: string) =>
+  controlRead(name, runId).pipe(Effect.map((data) => data ?? ""));
+
+const isSet = (name: string, runId: string) =>
+  controlRead(name, runId).pipe(Effect.map((data) => data !== null));
 
 /** What was typed into an agent's pane, in order, without a leading delivery token. */
 const prompts = (calls: ReadonlyArray<Call>) =>
@@ -6965,7 +6976,7 @@ test("a reused agent is compacted before its next piece of work, and a new one i
       // Once, at the boundary between the two: the agent had just started for the first.
       expect(asked).toHaveLength(1);
       const context = Arr.filter(
-        yield* readMetrics(evidenceDir(dir, "r1")),
+        yield* readMetrics(evidenceDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
         (line) => line.kind === "context",
       );
       expect(Arr.map(context, (line) => [line.subject, line.value])).toEqual([
@@ -7064,7 +7075,7 @@ const until = (reached: Reached) =>
   });
 
 const parkedSays = (about: string): Reached =>
-  read(controlPath(dir, PARKED, "r1")).pipe(Effect.map((why) => pipe(why, Str.includes(about))));
+  controlOf(PARKED, "r1").pipe(Effect.map((why) => pipe(why, Str.includes(about))));
 
 const listingSuspended: Reached = Effect.gen(function* () {
   const engine = yield* WorkflowEngine.WorkflowEngine;
@@ -7135,7 +7146,7 @@ test(
           }),
         );
         expect(result?._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
-        expect(yield* read(controlPath(dir, PARKED, "r1"))).toBe("");
+        expect(yield* controlOf(PARKED, "r1")).toBe("");
         expect(yield* read(`${dir}/agents/r1/agents.log`)).toMatch(
           /native compaction \S+ completed/,
         );
@@ -7158,7 +7169,7 @@ test(
           }),
         );
         expect(result?._tag).toBe("Success");
-        expect(yield* read(controlPath(dir, PARKED, "r1"))).toBe("");
+        expect(yield* controlOf(PARKED, "r1")).toBe("");
         expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
           "native compaction failed (the window is full) — sending the work anyway",
         );
@@ -7228,12 +7239,11 @@ test(
     runEffect(
       Effect.gen(function* () {
         const { ports } = slowCompaction();
-        const fs = yield* FileSystem.FileSystem;
         const { result } = yield* pastTheWait(
           ports,
           Effect.gen(function* () {
             yield* until(parkedSays(NOT_FINISHED));
-            yield* fs.writeFileString(controlPath(dir, STOP, "r1"), "").pipe(Effect.orDie);
+            yield* control(STOP, "r1", true);
           }),
           true,
         );
@@ -7271,7 +7281,7 @@ test("a boundary whose context cannot be sampled records no context line, never 
         Effect.scoped,
         Effect.orDie,
       );
-      const lines = yield* readMetrics(evidenceDir(dir, "r1"));
+      const lines = yield* readMetrics(evidenceDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir)));
       expect(Arr.filter(lines, (line) => line.kind === "context")).toEqual([]);
     }),
   ));
@@ -7652,7 +7662,7 @@ test(
           }),
         );
         expect(status).toBe("suspended");
-        const why = yield* read(controlPath(dir, PARKED, "r1"));
+        const why = yield* controlOf(PARKED, "r1");
         expect(why).toContain("wT");
         expect(why).toContain(rig.projectDir);
         expect(why).toContain("collie run resume r1");
@@ -8094,7 +8104,7 @@ test(
           readyMs: 300,
         });
         expect(yield* statusNow("r1")).toBe("suspended");
-        const why = yield* read(controlPath(dir, PARKED, "r1"));
+        const why = yield* controlOf(PARKED, "r1");
         expect(why).toContain(agentFor("r1"));
         expect(why).toMatch(/pane 1-\d+/);
         expect(sent(yield* rig.calls(), "Your task for this step")).toBe(0);
@@ -8121,9 +8131,7 @@ test(
           herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_HARNESS_SILENT: "1" })),
           readyMs: 300,
         });
-        expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
-          "its endpoint has 3 threads on it",
-        );
+        expect(yield* controlOf(PARKED, "r1")).toContain("its endpoint has 3 threads on it");
         expect(sent(yield* rig.calls(), "Your task for this step")).toBe(0);
       }),
     ),
@@ -8202,7 +8210,7 @@ test(
           herdr: promptNotTaken("text"),
           confirmGraceMs: 300,
         });
-        const why = yield* read(controlPath(dir, PARKED, "r1"));
+        const why = yield* controlOf(PARKED, "r1");
         const [step] = yield* steps("r1");
         expect(why).toContain(step!.id);
         expect(why).toMatch(/pane 1-\d+/);
@@ -8220,7 +8228,7 @@ const OUTLASTS_IO = 300_000;
 /** What the park's own instructions say to run, done as the command does it. */
 const reconciled = (runId: string, as: "sent" | "not-sent") =>
   Effect.gen(function* () {
-    const why = yield* read(controlPath(dir, PARKED, runId));
+    const why = yield* controlOf(PARKED, runId);
     const [step] = yield* steps(runId);
     expect(why).toContain(`--reconcile ${step!.id} --as sent|not-sent`);
     const settled = reconcile(yield* ledgerOf(dir, step!.incarnation), step!.id, as, "tester", "t");
@@ -8271,7 +8279,7 @@ test(
               yield* TestClock.withLive(Effect.sleep("10 millis"));
             }
             const [first] = yield* steps("r1");
-            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(first!.id);
+            expect(yield* controlOf(PARKED, "r1")).toContain(first!.id);
             for (let tries = 0; !(yield* suspended("r1")); tries++) {
               if (tries === 100) throw new Error("parked collection never suspended");
               yield* TestClock.withLive(Effect.sleep("10 millis"));
@@ -8317,12 +8325,12 @@ test(
             const payload = { runId: "r1", input: { skip: false } };
             yield* engine.resume(work, yield* work.executionId(payload));
             yield* work.execute(payload, { discard: true });
-            while (!pipe(yield* read(controlPath(dir, PARKED, "r1")), Str.includes("tries again")))
+            while (!pipe(yield* controlOf(PARKED, "r1"), Str.includes("tries again")))
               yield* TestClock.withLive(Effect.sleep("10 millis"));
           }),
           { herdr: refusing, collectMs: OUTLASTS_IO },
         );
-        expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain("collie run resume r1");
+        expect(yield* controlOf(PARKED, "r1")).toContain("collie run resume r1");
 
         yield* rig.queueOutputs([{ verdict: "clean", note: "third time" }]);
         const result = yield* releasedInto("r1", { collectMs: OUTLASTS_IO });
@@ -8732,9 +8740,7 @@ test.each(["2.1.200 (Claude Code)", null])(
       Effect.gen(function* () {
         clearing = { claudeSubagents: { cacheTtl: "1h" } };
         yield* interrupted("r1", suspended("r1"), { version: () => Effect.succeed(installed) });
-        expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
-          "requires Claude Code 2.1.242",
-        );
+        expect(yield* controlOf(PARKED, "r1")).toContain("requires Claude Code 2.1.242");
         expect(yield* rig.cmds()).not.toContain("tab create");
       }),
     ),
@@ -8947,7 +8953,7 @@ test("a file-held value that is not 0600 parks the launch by its path, and opens
       yield* interrupted("r1", suspended("r1"));
 
       expect(yield* statusNow("r1")).toBe("suspended");
-      const why = yield* read(controlPath(dir, PARKED, "r1"));
+      const why = yield* controlOf(PARKED, "r1");
       expect(why).toContain(`${rig.root}/token is mode 0644, not 0600`);
       expect(why).not.toContain("hunter2");
       const cmds = yield* rig.cmds();
@@ -9180,7 +9186,7 @@ test("a Codex launch writes no autoMode or Claude skill overrides", () =>
   ));
 
 const waitsForMemory = (runId: string): Reached =>
-  Effect.map(memoryWaitOf(runDir(dir, runId)), (wait) => wait !== null);
+  Effect.map(memoryWaitOf(runId), (wait) => wait !== null).pipe(overHost(() => dir));
 
 const runLogOf = (runId: string) => read(`${dir}/agents/${runId}/agents.log`);
 
@@ -9229,15 +9235,14 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         yield* rig.memory(2);
         yield* session(
           Effect.gen(function* () {
             yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
             yield* until(waitsForMemory("r1"));
-            yield* fs.writeFileString(controlPath(dir, STOP, "r1"), "").pipe(Effect.orDie);
+            yield* control(STOP, "r1", true);
             yield* until(suspended("r1"));
-            expect(yield* memoryWaitOf(runDir(dir, "r1"))).toBeNull();
+            expect(yield* memoryWaitOf("r1").pipe(overHost(() => dir))).toBeNull();
             yield* rig.memory(50);
             yield* spend(60_000);
           }),
@@ -9271,10 +9276,10 @@ test(
                 runId: "r1",
                 what: 'collie verify "unit"',
                 asker: agentFor("r1"),
-              }),
+              }).pipe(overHost(() => dir)),
             );
             // Setup IO can outlast the idle budget; finish the turns only once verify holds it.
-            yield* until(holdsBudgetOf(dir, "r1", agentFor("r1")));
+            yield* until(holdsBudgetOf("r1", agentFor("r1")).pipe(overHost(() => dir)));
             herdr.written = true;
             yield* until(parked("r2"));
             yield* spend(5_000);

@@ -55,7 +55,6 @@ import {
   recordLaunch,
   sameSession,
   StartedWith,
-  startedDir,
   withRelaunchLock,
   stemOf,
   wasOrdered,
@@ -240,6 +239,7 @@ import {
   toldLine,
 } from "./steering";
 import type { Records } from "./records";
+import { RELAUNCH, RunRecords } from "./run-records";
 import { readTask, withTaskLock, writeTask } from "./task";
 import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
 import {
@@ -2307,7 +2307,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
    * transaction so a steer still reaches it. A status herdr cannot give ends the wait.
    * `false` where the Run was stopped while it waited.
    */
-  const stoppedRun = (runId: string) => controlSet(host.dir, runId, STOP);
+  const stoppedRun = (runId: string) => under(controlSet(runId, STOP));
 
   const turnEnded = (launched: Launched) =>
     Effect.gen(function* () {
@@ -2697,10 +2697,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               ),
             );
           yield* log(ask.runId, `${agent}: ${adapter.id} in core terminal ${terminal}, ${started}`);
-          yield* write(
-            `${startedDir(host.env.stateDir, ask.runId)}/${agent}.json`,
-            encodeStarted(ask),
-          );
+          yield* setStarted(ask.runId, agent, encodeStarted(ask));
           const found = yield* entryFor(ask, agent, { paneId: terminal, workspaceId: null });
           if (found.entry === null) return undefined;
           yield* registerAgent(scopeFor(host.env, ask.cwd), found.entry, alive);
@@ -2779,10 +2776,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (legacy === canonical) return canonical;
         // Core may have started it before its launch record was written. Its saved ask
         // proves which generation owns the old name; the name alone does not.
-        const fs = yield* FileSystem.FileSystem;
-        const path = startedPath(ask.runId, legacy);
-        if (yield* fs.exists(path)) {
-          const started = yield* fs.readFileString(path).pipe(Effect.flatMap(decodeStarted));
+        const text = yield* startedWith(ask.runId, legacy);
+        if (text !== null) {
+          const started = yield* decodeStarted(text);
           if (
             started.runId === ask.runId &&
             (started.sequence ?? 1) === sequence &&
@@ -3481,7 +3477,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               budgetMs: budgetMs ?? host.collectMs ?? DEFAULT_COLLECT_MS,
               counts: Effect.gen(function* () {
                 if (asking !== null && (yield* asking(null))) return false;
-                if (yield* holdsBudgetOf(host.dir, launched.runId, launched.agent)) return false;
+                if (yield* holdsBudgetOf(launched.runId, launched.agent)) return false;
                 return yield* turnOver;
               }),
               usable: usable ?? (() => true),
@@ -3618,8 +3614,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     );
 
-  const startedPath = (runId: string, agent: string) =>
-    `${startedDir(host.env.stateDir, runId)}/${agent}.json`;
+  /** What a Run's agent on core was started with, until it is ended on purpose. */
+  const startedWith = (runId: string, agent: string) =>
+    under(RunRecords.use((records) => records.control(RELAUNCH, runId, agent)));
+  const setStarted = (runId: string, agent: string, text: string) =>
+    under(RunRecords.use((records) => records.setControl(RELAUNCH, runId, text, agent)));
 
   /** The agents the host is starting again after core lost them, until each has started. */
   const comingBack = new Map<string, Deferred.Deferred<void>>();
@@ -3655,10 +3654,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   ) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const path = startedPath(runId, agent);
+      const text = yield* startedWith(runId, agent);
       // Ended on purpose since the Run's agents were read.
-      if (!(yield* fs.exists(path))) return [];
-      const started = yield* fs.readFileString(path).pipe(Effect.flatMap(decodeStarted));
+      if (text === null) return [];
+      const started = yield* decodeStarted(text);
       const anchor = Arr.findLast(
         launches,
         (one) => one.agent === agent && stemOf(one) === stemOf(started),
@@ -3806,15 +3805,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       resuming
         .withPermits(1)(
           Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
             const agents = Arr.map(
-              Arr.filter(
-                yield* fs
-                  .readDirectory(startedDir(host.env.stateDir, runId))
-                  .pipe(Effect.orElseSucceed(() => [])),
-                (name) => pipe(name, Str.endsWith(".json")),
-              ),
-              (name) => pipe(name, Str.slice(0, -".json".length)),
+              yield* RunRecords.use((records) => records.controlsOf(RELAUNCH, runId)),
+              (one) => one.key,
             );
             if (agents.length === 0 || !(yield* run.running)) return;
             const backs = Arr.map(agents, (agent) => ({
@@ -3945,11 +3938,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         });
         if ((yield* completed) !== null) return false;
         // The host starts an agent on core again, in the session it had.
-        if (
-          lost === null &&
-          (yield* fs.exists(startedPath(ask.runId, agent)).pipe(Effect.orElseSucceed(() => false)))
-        )
-          return false;
+        if (lost === null && (yield* startedWith(ask.runId, agent)) !== null) return false;
         const listing = yield* host.herdr.agentList().pipe(Effect.option);
         if (listing._tag === "None") return false;
         if (lost !== null) {
@@ -4518,7 +4507,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     say: (runId, line) => under(log(runId, line)),
     handOff,
     halt,
-    collect,
+    collect: (...args: Parameters<typeof collect>) =>
+      Effect.tap(collect(...args), (text) =>
+        text === null
+          ? Effect.void
+          : under(RunRecords.use((records) => records.touch(args[0].runId))),
+      ),
     peekOutput: (launched) =>
       under(
         FileSystem.FileSystem.pipe(

@@ -18,7 +18,7 @@ import { frontDoor } from "../src/host";
 import { recordLaunch } from "../src/launches";
 import { registerAgent } from "../src/registry";
 import type { RunFacts } from "../src/runs";
-import { encodeStepLine, STEPS_FILE, type StepLine } from "../src/steps";
+import { appendStepLine, type StepLine } from "../src/steps";
 import { runEffect } from "./support/effect";
 import { madeRun, recordsAt } from "./support/records";
 
@@ -158,12 +158,8 @@ test("the door reads a record before any client asks, and tells the engine nothi
         { kind: "enter", key: "build", step, place: null, at: "2026-10-30T09:01:00Z" },
         { kind: "leave", key: "build", at: "2026-10-30T09:29:00Z" },
       ];
-      yield* fs.writeFileString(
-        `${run.dir}/${STEPS_FILE}`,
-        Arr.join(
-          Arr.map(lines, (line) => `${encodeStepLine(line)}\n`),
-          "",
-        ),
+      yield* Effect.forEach(lines, (line) => appendStepLine(run.dir, line)).pipe(
+        Effect.provide(recordsAt(dir)),
       );
       const { heard } = yield* silentEngine(dir, `${dir}/host.sock`, [run]);
       yield* until(() => Arr.some(heard, (one) => one._tag === "Warmed"));

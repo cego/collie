@@ -22,13 +22,13 @@ import {
 } from "effect";
 import type { Flow, FlowLane, FlowNode } from "../src/board-model";
 import { recordIn } from "../src/board-model";
-import { STEPS_FILE } from "../src/steps";
+import { readStepLines } from "../src/steps";
 import { writeTask } from "../src/task";
 import { epochMs } from "../src/time";
 import { runDir } from "../src/engine";
 import { frontDoor, ownerOf, socketOf } from "../src/host";
 import { until } from "./support/host";
-import { recordsAt } from "./support/records";
+import { hostRecords, recordsAt } from "./support/records";
 import { collie, proves, type World } from "./support/world";
 
 const encode = Schemaflow(
@@ -398,15 +398,10 @@ test(
           expect(Arr.map(build.attempts, (one) => one.cause)).toEqual([null, "restarted"]);
           expect(build.said).toEndWith(" · 2nd attempt");
           const lines = Arr.filter(
-            Str.split(
-              yield* (yield* FileSystem.FileSystem)
-                .readFileString(`${runDir(world.state, runId)}/${STEPS_FILE}`)
-                .pipe(Effect.orDie),
-              "\n",
+            yield* hostRecords(world.state, readStepLines(runDir(world.state, runId))).pipe(
+              Effect.orDie,
             ),
-            (line) =>
-              pipe_(line, Str.includes('"kind":"enter"')) &&
-              pipe_(line, Str.includes('"key":"build"')),
+            (line) => line.kind === "enter" && line.key === "build",
           );
           expect(lines).toHaveLength(1);
           const log = yield* (yield* FileSystem.FileSystem)

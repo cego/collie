@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import { FlowState, RequestedBy } from "./board-model";
-import { appendJournal, readJournal } from "./journal";
+import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { NarrativeReport } from "./narrative-model";
 
 export const RunLinkNotice = Schema.Struct({
@@ -21,7 +21,7 @@ const LinkedRunJson = Schema.fromJsonString(LinkedRun);
 
 export const readRunLinks = Effect.fn("RunLinks.read")(function* (runDir: string) {
   const latest = new Map<string, typeof LinkedRun.Type>();
-  for (const notice of yield* readJournal(`${runDir}/links.jsonl`, LinkedRunJson)) {
+  for (const notice of yield* readRunJournal(runJournal(runDir, "links.jsonl"), LinkedRunJson)) {
     const key = `${notice.machine.installation}/${notice.run}`;
     if (latest.get(key)?.phase === "settled" && notice.phase === "admitted") continue;
     latest.set(key, notice);
@@ -30,7 +30,7 @@ export const readRunLinks = Effect.fn("RunLinks.read")(function* (runDir: string
 });
 
 export const recordRunLink = (runDir: string, notice: typeof LinkedRun.Type) =>
-  appendJournal(`${runDir}/links.jsonl`, LinkedRunJson, notice);
+  appendRunJournal(runJournal(runDir, "links.jsonl"), LinkedRunJson, notice);
 
 export const LinkDelivery = Schema.Struct({
   phase: RunLinkNotice.fields.phase,
@@ -40,13 +40,13 @@ export const LinkDelivery = Schema.Struct({
 });
 const LinkDeliveryJson = Schema.fromJsonString(LinkDelivery);
 export const readLinkDeliveries = (runDir: string) =>
-  readJournal(`${runDir}/link-deliveries.jsonl`, LinkDeliveryJson);
+  readRunJournal(runJournal(runDir, "link-deliveries.jsonl"), LinkDeliveryJson);
 export const recordLinkDelivery = (runDir: string, delivery: typeof LinkDelivery.Type) =>
-  appendJournal(`${runDir}/link-deliveries.jsonl`, LinkDeliveryJson, delivery);
+  appendRunJournal(runJournal(runDir, "link-deliveries.jsonl"), LinkDeliveryJson, delivery);
 
 const RunLinkNoticeJson = Schema.fromJsonString(RunLinkNotice);
 /** Each notice as first sent: a resend under the same request id must match it. */
 export const readSentNotices = (runDir: string) =>
-  readJournal(`${runDir}/link-notices.jsonl`, RunLinkNoticeJson);
+  readRunJournal(runJournal(runDir, "link-notices.jsonl"), RunLinkNoticeJson);
 export const recordSentNotice = (runDir: string, notice: RunLinkNotice) =>
-  appendJournal(`${runDir}/link-notices.jsonl`, RunLinkNoticeJson, notice);
+  appendRunJournal(runJournal(runDir, "link-notices.jsonl"), RunLinkNoticeJson, notice);

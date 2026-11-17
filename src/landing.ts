@@ -3,7 +3,7 @@
 
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
-import { DateTime, Effect, FileSystem, Option, Schema } from "effect";
+import { DateTime, Effect, Option, Schema } from "effect";
 import { forgeOfRef, mrRefOf } from "./board-model";
 import { forgeOf } from "./forge/forge";
 import { QUEUE_MERGERS, type ReviewRead } from "./forge/review";
@@ -11,6 +11,7 @@ import { mrIdIn, type Runner } from "./mr";
 import { appendLog } from "./oversight";
 import { WorkflowError } from "./sdk";
 import { epochMs } from "./time";
+import { RunRecords, runOfDir } from "./run-records";
 
 export const LandingSchema = Schema.Struct({
   state: Schema.Literals(["attempt", "landed", "withdrawn"]),
@@ -41,16 +42,15 @@ export const MergeOutcomeSchema = Schema.Union([
 export type MergeOutcome = typeof MergeOutcomeSchema.Type;
 
 const LandingJson = Schema.fromJsonString(LandingSchema);
-const landingPath = (runDir: string) => `${runDir}/landing.json`;
+const LANDING = "landing.json";
 
 /** The Runs, by directory, whose attempt this host process is making now. */
 export const landingNow = new Set<string>();
 
 /** A Run's landing record, or null where it has none. */
 export const readLanding = Effect.fn("Landing.read")(function* (runDir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const text = yield* fs.readFileString(landingPath(runDir)).pipe(Effect.orElseSucceed(() => ""));
-  return Option.getOrNull(Schema.decodeOption(LandingJson)(text));
+  const text = yield* RunRecords.use((records) => records.fact(runOfDir(runDir), LANDING));
+  return text === null ? null : Option.getOrNull(Schema.decodeOption(LandingJson)(text));
 });
 
 const lineOf = (record: Landing) => {
@@ -64,12 +64,8 @@ const lineOf = (record: Landing) => {
 
 /** Writes the record and logs it, both in the Run's own directory. */
 export const writeLanding = Effect.fn("Landing.write")(function* (runDir: string, record: Landing) {
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.makeDirectory(runDir, { recursive: true });
-  yield* fs.writeFileString(
-    landingPath(runDir),
-    yield* Schema.encodeEffect(LandingJson)(record).pipe(Effect.orDie),
-  );
+  const text = yield* Schema.encodeEffect(LandingJson)(record).pipe(Effect.orDie);
+  yield* RunRecords.use((records) => records.put(runOfDir(runDir), LANDING, text));
   yield* appendLog(runDir, lineOf(record));
 });
 

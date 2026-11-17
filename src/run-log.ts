@@ -1,6 +1,7 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Option, Schema, Semaphore, Stream } from "effect";
+import { RunRecords, runOfDir } from "./run-records";
 export interface LogTail {
   readonly panel: { readonly _tag: "Text"; readonly text: string; readonly truncated: boolean };
   readonly firstLine: number;
@@ -42,6 +43,7 @@ const indexOf = Effect.fn("RunLog.index")(function* (dir: string) {
 
 export const appendLogLine = Effect.fn("RunLog.append")(function* (dir: string, line: string) {
   const fs = yield* FileSystem.FileSystem;
+  yield* RunRecords.use((records) => records.touch(runOfDir(dir)));
   yield* fs.makeDirectory(dir, { recursive: true });
   const before = yield* indexOf(dir);
   const prefix = before.ended ? "" : "\n";

@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Effect, FileSystem, Schema, Semaphore } from "effect";
+import { Effect, Schema } from "effect";
+import { RunRecords, runOfDir } from "./run-records";
 import { readStepLines } from "./steps";
 import { nowIso } from "./time";
 
@@ -26,37 +27,37 @@ const State = Schema.Struct({
 type State = typeof State.Type;
 const json = Schema.fromJsonString(State);
 const sameState = Schema.toEquivalence(State);
-const lock = Semaphore.makeUnsafe(1);
 const empty: State = { pauses: [], reached: null, notes: [] };
+const STEP_STEERING = "step-steering.json";
+const decode = (raw: string | null) =>
+  raw === null
+    ? Effect.succeed(empty)
+    : Schema.decodeEffect(json)(raw).pipe(Effect.orElseSucceed(() => empty));
 export const readStepSteering = Effect.fn("StepSteering.read")(function* (dir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  return yield* fs.readFileString(`${dir}/step-steering.json`).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(json)),
-    Effect.orElseSucceed(() => empty),
+  return yield* decode(
+    yield* RunRecords.use((records) => records.fact(runOfDir(dir), STEP_STEERING)),
   );
 });
 const change = <A>(
   dir: string,
   edit: (state: State) => Effect.Effect<{ state: State; value: A }>,
 ) =>
-  lock.withPermits(1)(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const before = yield* readStepSteering(dir);
-      const next = yield* edit(before);
-      if (sameState(before, next.state)) return next.value;
-      yield* fs
-        .writeFileString(
-          `${dir}/step-steering.json.tmp`,
-          yield* Schema.encodeEffect(json)(next.state).pipe(Effect.orDie),
-        )
-        .pipe(Effect.orDie);
-      yield* fs
-        .rename(`${dir}/step-steering.json.tmp`, `${dir}/step-steering.json`)
-        .pipe(Effect.orDie);
-      return next.value;
-    }),
-  );
+  Effect.gen(function* () {
+    let value: A | undefined;
+    yield* RunRecords.use((records) =>
+      records.update(runOfDir(dir), STEP_STEERING, (raw) =>
+        Effect.gen(function* () {
+          const before = yield* decode(raw);
+          const next = yield* edit(before);
+          value = next.value;
+          if (sameState(before, next.state)) return raw;
+          return yield* Schema.encodeEffect(json)(next.state).pipe(Effect.orDie);
+        }),
+      ),
+    );
+    // SAFETY: `update` ran `edit`, which set it.
+    return value as A;
+  });
 
 export const stepTarget = Effect.fn("StepSteering.target")(function* (dir: string, id: string) {
   const lines = yield* readStepLines(dir);

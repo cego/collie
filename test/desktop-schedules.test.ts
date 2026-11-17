@@ -24,7 +24,7 @@ import {
 } from "../desktop/src/shared/schedules";
 import { DesktopRpcs } from "../desktop/src/shared/flock";
 import type { ScheduleEntry } from "../src/schedule-model";
-import { suiteEnv } from "./support/effect";
+import { memoryRecords, suiteEnv } from "./support/effect";
 import { root, stopHost } from "./support/host";
 import { collie, proves } from "./support/world";
 
@@ -196,7 +196,9 @@ describe("the main process reaches each Machine's host", () => {
             for (const change of ["pause", "resume", "remove"] as const)
               yield* changeScheduleOn(door, { change, name: "daily" }, `desktop-${change}`);
             expect((yield* schedulesOn(mkPc, desktop)).schedules).toEqual([]);
-            const trail = yield* readAudit(`${world.state}/schedules/daily`);
+            const trail = yield* readAudit(`${world.state}/schedules/daily`).pipe(
+              Effect.provide(memoryRecords),
+            );
             expect(
               Arr.map(
                 Arr.filter(trail, (line) => pipe_(line.request, Str.startsWith("desktop-"))),

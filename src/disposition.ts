@@ -14,26 +14,23 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { Effect, Path, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { Disposition } from "./board-model";
-import { appendJournal, readJournal } from "./journal";
+import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 
 const RecordJson = Schema.fromJsonString(Disposition);
 
-export const dispositionPath = Effect.fn("Disposition.path")(function* (runDir: string) {
-  const path = yield* Path.Path;
-  return path.join(runDir, "steering", "disposition.jsonl");
-});
+export const dispositionPath = (runDir: string) => runJournal(runDir, "steering/disposition.jsonl");
 
 export const recordDisposition = Effect.fn("Disposition.record")(function* (
   runDir: string,
   line: Disposition,
 ) {
-  yield* appendJournal(yield* dispositionPath(runDir), RecordJson, line);
+  yield* appendRunJournal(dispositionPath(runDir), RecordJson, line);
 });
 
 export const readDispositions = Effect.fn("Disposition.read")(function* (runDir: string) {
-  return yield* readJournal(yield* dispositionPath(runDir), RecordJson);
+  return yield* readRunJournal(dispositionPath(runDir), RecordJson);
 });
 
 /** The words of a ref, any of which may be a Run's id. */
