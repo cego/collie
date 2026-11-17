@@ -1903,6 +1903,8 @@ for (const id of ["review", "second-look"])
                 });
                 expect(yield* host.agentStarts).toHaveLength(1);
                 yield* forge.set(before);
+                // The fast clock outruns the host, so the outage can last long enough for
+                // rechecks to back off to their one-hour cap.
                 yield* until(
                   () => readMetrics(`${host.dir()}/evidence/${runId}`),
                   (lines) =>
@@ -1910,6 +1912,7 @@ for (const id of ["review", "second-look"])
                       lines,
                       (line) => line.action === "resumed" && line.outcome === "resumed",
                     ),
+                  2 * 3_600,
                 );
                 const recovered = yield* until(
                   () => host.status(runId),
