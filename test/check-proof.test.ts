@@ -2,7 +2,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { checkProof, owedLocally } from "../src/check-proof";
+import { checkProof, owedLocally, owesNothingHere } from "../src/check-proof";
 import { evidenceGaps, type Collected } from "../src/outcome";
 import { settleFinalFix } from "../src/output";
 import { TOO_LARGE, UNMEASURED, type CheckCommand, type Verification } from "../src/verify";
@@ -51,6 +51,38 @@ test("a fail on this tree is not, even after an earlier pass", () => {
 
 test("a reproduced failure, expected to fail, is no pass", () => {
   expect(proofOf([record({ expect: "fail" })]).state).toBe("failed");
+});
+
+test("a stale pass reads earlier, a current fail reads failed, and a current expected-red record is no proof", () => {
+  const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
+  expect(proofOf([record({ start: EARLIER, end: EARLIER })]).state).toBe("earlier");
+  expect(proofOf([record({ result: "fail", exit: 1 })]).state).toBe("failed");
+  const red = proofOf([record({ expect: "fail" })]);
+  expect(owesNothingHere(red)).toBe(false);
+  const settled = settleFinalFix(
+    [],
+    { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [{ name: "tests" }] },
+    { verifications: red.runs, final: FINAL },
+  );
+  expect(settled.ok ? "(ok)" : settled.reasons).toEqual(["check failed: tests"]);
+});
+
+test("a stale expected-red record is history: the Check owes a pass, which the last fix leaves to the gate", () => {
+  const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
+  const red = record({ expect: "fail", start: EARLIER, end: EARLIER });
+  expect(proofOf([red])).toEqual({ state: "earlier", runs: [red], last: undefined });
+  const settled = settleFinalFix(
+    [],
+    { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [{ name: "tests" }] },
+    { verifications: [red], final: FINAL },
+  );
+  expect(settled.ok ? settled.attestation : settled.reasons).toContain(
+    "0 check(s) verified on this tree, 1 left to the gate on the final tree (tests)",
+  );
+  // It never passed, so nothing says it passed on its earlier tree.
+  expect(
+    evidenceGaps("feature", collected([red], { tickets: [{ file: "01.md", checks: ["tests"] }] })),
+  ).toContain('01.md promised check "tests", which has no passing verification on this tree');
 });
 
 test("a run on a tree that moved under it is unstable", () => {

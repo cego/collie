@@ -338,8 +338,10 @@ corrections to it stop until an explicit `run clear-override`; nothing times it 
 **Verification** — An independently collected command result bound to the tree it ran on,
 before and after. A tree is its content: committing exactly the bytes a Verification ran on
 leaves it on the same tree, and changing any of them does not. A result whose snapshots
-differ is `unstable`, never `pass`. An agent's statement about tests is a **claim**, and is
-shown as one.
+differ is `unstable`, never `pass`. One recorded with `--expect fail` reproduces a failure
+and is never a pass: on the current tree it proves no Check, and on an earlier tree it is
+history, so the Check still owes a pass on the final tree. An agent's statement about tests
+is a **claim**, and is shown as one.
 
 **Measurement** — The host's comparison of a base tree and a candidate tree on one Machine.
 It is a Run's declared benchmark commands, sampled alternately on each tree for a fixed
@@ -853,7 +855,8 @@ Run's branch, `rerun` of only the tests that just failed, on the same tree, to t
 **Flake**, `baseline` where the branch left the default branch, `recheck` of a whole check
 whose failures name no tests, on the same tree, `fix` after gate fix N, `finish` at the
 Run's end, `ci` for a check left to CI, read from the merge request's pipeline, or a plain
-`check`. Past that one `recheck`, a check is not run whole again on a tree it already
+`check`. A Check whose latest record is an expected-red reproduction on an earlier tree
+owes its pass here, as one that passed only earlier does; neither is a failure. Past that one `recheck`, a check is not run whole again on a tree it already
 failed on: after a gate fix that left the tree as it was, the records on that tree stand.
 A resume of a Run held unproved is the exception, because a repair can be outside the tree:
 each check still failing there runs whole once more (ADR-0034, amended 2026-10-19). The pass is the Workflow's declaration, never read off its

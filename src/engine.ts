@@ -2670,8 +2670,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function endsWithoutPatchOf(options: Parameters<typeof evidenceGapsOf>[0]): boolean;
 
   /**
-   * A Check's proof on this tree: passed, failed, unstable, passed only on an earlier tree, or
-   * never run; for a check left to CI, waiting on its job or proved by it.
+   * A Check's proof on this tree: passed, failed, unstable, earlier (its latest record is on an
+   * earlier tree and no failure there, so it owes a pass here), or never run; for a check left
+   * to CI, waiting on its job or proved by it.
    */
   export interface CheckProof {
     readonly state: "passed" | "failed" | "unstable" | "earlier" | "never" | "waiting" | "proved";

@@ -10924,6 +10924,81 @@ scenario(
 );
 
 scenario(
+  "a last fix with a reproduction recorded red before it and a minor finding of its own reaches the merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-final-red", ["unit"]);
+        const recorded = (name: string, argv: ReadonlyArray<string>, expect: "pass" | "fail") =>
+          collect(evidenceDir(dir, "r-final-red"), {
+            run: "r-final-red",
+            name,
+            executable: "test",
+            argv,
+            cwd: rig.projectDir,
+            by: "agent",
+            expect,
+          }).pipe(Effect.orDie);
+        yield* recorded("repro", ["-f", "fixed"], "fail");
+        yield* fs.writeFileString(`${rig.projectDir}/fixed`, "fixed\n");
+        yield* exec(["git", "add", "fixed"], { cwd: rig.projectDir });
+        yield* exec(["git", "commit", "-qm", "the fix"], { cwd: rig.projectDir });
+        yield* recorded("unit", ["-f", "fixed"], "pass");
+        const blocker = (title: string) => ({
+          severity: "blocker",
+          title,
+          file: "src/a.ts",
+          detail: "it breaks",
+        });
+        const round = (title: string): Schema.Json[] => [
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker(title)] },
+          { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
+        ];
+        yield* rig.queueOutputs([
+          BUILT,
+          ...round("one"),
+          ...round("two"),
+          ...round("three"),
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker("four")] },
+          {
+            verdict: "findings",
+            findings: [{ severity: "minor", title: "a name could be clearer", file: "src/b.ts" }],
+            fixed: [{ title: "four", file: "src/a.ts" }],
+            checks: [{ name: "repro" }, { name: "unit" }],
+          },
+          OPENED,
+        ]);
+        const [status, why] = yield* driven(
+          { entry: shipped("implement"), runId: "r-final-red", input: { plan, ...FINISH } },
+          (run) =>
+            until(
+              () => Effect.zip(run.status, parkedWhy("r-final-red")),
+              ([got, parked]) =>
+                got.status === "failed" ||
+                got.status === "complete" ||
+                (got.status === "suspended" && parked !== ""),
+            ),
+        );
+        yield* bin.restore();
+
+        expect({ status: status.status, why }).toEqual({ status: "complete", why: "" });
+        expect(yield* asked("r-final-red", "mr")).toContain(
+          "[minor] a name could be clearer (src/b.ts)",
+        );
+        expect(
+          Arr.map(yield* findingsIn(runDir(dir, "r-final-red")), (one) => one.title),
+        ).toContain("a name could be clearer");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "the merge request lists the commands the gate spawned, including one re-granted during the gate",
   () =>
     runEffect(

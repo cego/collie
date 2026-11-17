@@ -1534,7 +1534,10 @@ rally converges, stands on a dispute and runs out of rounds where these decide.
 - **`settleFinalFix(live, fix, evidence)`** — the last round has no review after it, so the
   fix's own account is what is left. Every blocking finding needs a disposition, and every
   check it names needs a passing verification on the tree as it stands, or is left to the
-  gate, which runs the Run's Checks on the final tree. A fix that holds up
+  gate, which runs the Run's Checks on the final tree. The fix's own findings follow the
+  rule every round does: a blocking one halts it with `fix_unverified`, named, and a minor
+  one, under either verdict, is carried into `outstanding` and named in the `attestation`
+  the merge request is given. A fix that holds up
   but disputes a blocking finding comes back `dispute_unresolved`, with the same
   `attestation` a fix that stands carries, since the human reads both.
 
@@ -1568,10 +1571,13 @@ passing record of it, collected on these exact bytes. A commit of the same bytes
 an edit since makes an earlier pass history — it is not that the result went off, it is that
 it is about another tree. `sameTree(one, other)` is that test for two snapshots, or two
 `{ fingerprint }`s: the same bytes at any commit, and never a tree too large to look at.
-A check the last fix names that passed only on an earlier tree, or one of the Run's Checks
-with no record yet, does not halt it: the attestation names it as left to the gate, and
+A check the last fix names that passed only on an earlier tree, one whose latest record is
+a reproduction recorded with `--expect fail` on an earlier tree, or one of the Run's Checks
+with no record yet, does not halt it: a stale expected-red record is history, and the check
+still owes a pass on the final tree. The attestation names it as left to the gate, and
 counts as verified on this tree only the checks that passed here or are left to CI. A
-check that failed or ran on a tree that moved under it still halts the fix, and so does a
+check that failed, that has an expected-red record on this tree, or that ran on a tree that
+moved under it still halts the fix, and so does a
 check that is not one of the Run's Checks and has no record, since the gate never runs it.
 
 `host.verify({ runId, name, cwd })` runs one of your Run's checks, in the directory the

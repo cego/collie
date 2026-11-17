@@ -28,7 +28,10 @@ type LeftToCi = {
 };
 
 export interface CheckProof {
-  /** A check left to CI is only ever `waiting` on its job or `proved` by it. */
+  /**
+   * `earlier`: its latest record is on an earlier tree and is no failure there, so it owes a pass here.
+   * A check left to CI is only ever `waiting` on its job or `proved` by it.
+   */
   readonly state: "passed" | "failed" | "unstable" | "earlier" | "never" | "waiting" | "proved";
   /** Every run of the Check's own command, oldest first. */
   readonly runs: ReadonlyArray<Verification>;
@@ -96,6 +99,8 @@ function stateOf(runs: ReadonlyArray<Verification>, last: Verification | undefin
   if (last !== undefined && passed(last)) return "passed";
   const latest = last ?? runs.at(-1);
   if (latest === undefined) return "never";
+  // A stale reproduction is history: the Check still owes a pass here.
+  if (last === undefined && latest.expect === "fail") return "earlier";
   if (latest.result === "fail" || latest.expect === "fail") return "failed";
   if (latest.result === "unstable") return "unstable";
   return "earlier";
