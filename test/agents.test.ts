@@ -49,6 +49,8 @@ import {
   agentsLayer,
   configuredAgents,
   decodeOutput,
+  everyAgentText,
+  personaText,
   promptFor,
   type AgentHost,
   type RanOut,
@@ -3348,6 +3350,27 @@ test("a user-Layer reviewer that extends reviewer-single-pass is launched as the
       expect(text).not.toContain("Run both review skills over the change");
       expect(text).toContain("## If the skill is missing");
       expect(mentionedSkills(text)).toEqual(["code-review-and-quality"]);
+    }),
+  ));
+
+test("a user-Layer implementer that extends implementer-handback is the implementer, then its Delegation section", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* installBaseline(rig);
+      const env = rig.pluginEnv();
+      const every = (yield* everyAgentText(env)) ?? "no every-agent persona";
+      const shipped = yield* personaText(env, "implementer");
+      const own = Str.slice(0, shipped.length - every.length)(shipped);
+      expect(shipped).toEndWith(every);
+
+      yield* writePersona(rig.userDir, "implementer", "---\nextends: implementer-handback\n---\n");
+      const text = yield* personaText(env, "implementer");
+
+      expect(text).toStartWith(own);
+      expect(text).toEndWith(every);
+      const added = Str.slice(own.length, text.length - every.length)(text);
+      expect(added).toStartWith("## Delegation\n");
+      expect(added).toContain("A child's word is not review.");
     }),
   ));
 

@@ -4672,27 +4672,43 @@ const layeredPersona = Effect.fn("Agents.layeredPersona")(function* (
     const file = `${dir}/personas/${role}.md`;
     if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) continue;
     const markdown = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-    const body = bodySections(pipe(markdown, Str.replace(PERSONA_FRONT_MATTER, ""))).preamble;
-    if (Str.trim(body) === "") {
-      // A fork stub is the persona it extends, found from its own Layer down.
+    const { preamble, sections } = bodySections(
+      pipe(markdown, Str.replace(PERSONA_FRONT_MATTER, "")),
+    );
+    if (Str.trim(preamble) === "") {
+      // A fork stub is the persona it extends, found from its own Layer down, then its own sections.
       const parent = yield* Effect.try(() => parseDocument(markdown).data.extends).pipe(
         Effect.orElseSucceed(() => undefined),
       );
-      if (isString(parent) && parent !== role && !followed.includes(parent))
-        return yield* layeredPersona(env, parent, dirs.slice(at), [...followed, role]);
+      if (isString(parent) && !followed.includes(file)) {
+        const from = parent === role ? at + 1 : at;
+        const inherited = yield* layeredPersona(env, parent, dirs.slice(from), [...followed, file]);
+        if (inherited === null || sections.size === 0) return inherited;
+        const added = Arr.map([...sections], ([name, text]) => `## ${name}\n\n${text}`);
+        return `${inherited}\n\n${yield* renderedPersona(env, role, file, Arr.join(added, "\n\n"))}`;
+      }
       continue;
     }
-    const unfilled = personaHoles(body);
-    if (unfilled.length > 0) {
-      return yield* new AgentParked({
-        operation: role,
-        reason: `the ${role} persona in ${file} names ${Arr.join(unfilled, ", ")}, and a persona is told nothing but {{skill:name}}: fix it, then resume this Run`,
-      });
-    }
-    const named = yield* installedSkills(env, skillsIn(body));
-    return renderTemplate(body, {}, { skill: skillMention(named) }).text;
+    return yield* renderedPersona(env, role, file, preamble);
   }
   return null;
+});
+
+const renderedPersona = Effect.fn("Agents.renderedPersona")(function* (
+  env: PersonaEnv,
+  role: string,
+  file: string,
+  body: string,
+) {
+  const unfilled = personaHoles(body);
+  if (unfilled.length > 0) {
+    return yield* new AgentParked({
+      operation: role,
+      reason: `the ${role} persona in ${file} names ${Arr.join(unfilled, ", ")}, and a persona is told nothing but {{skill:name}}: fix it, then resume this Run`,
+    });
+  }
+  const named = yield* installedSkills(env, skillsIn(body));
+  return renderTemplate(body, {}, { skill: skillMention(named) }).text;
 });
 
 /** What the role is stated as, in the persona and in the prompt alike. */
