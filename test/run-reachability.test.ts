@@ -216,21 +216,27 @@ const world = <A, E>(
         caller?: string,
         more: Readonly<Record<string, string>> = {},
       ) =>
-        exec([...command, "--json", ...args], {
-          cwd: ROOT,
-          env: {
-            PATH: path,
-            HOME: dir,
-            HERDR_PLUGIN_ROOT: ROOT,
-            HERDR_PLUGIN_STATE_DIR: state,
-            COLLIE_USER_DIR: `${dir}/config`,
-            HERDR_BIN_PATH: "/bin/false",
-            ...suite,
-            HERDR_WORKSPACE_ID: workspace ?? "",
-            COLLIE_RUN: caller ?? "",
-            ...more,
+        exec(
+          [
+            ...command,
+            "--json",
+            ...(workspace === null ? [] : ["--workspace", workspace]),
+            ...args,
+          ],
+          {
+            cwd: ROOT,
+            env: {
+              PATH: path,
+              HOME: dir,
+              COLLIE_ROOT: ROOT,
+              COLLIE_STATE_DIR: state,
+              COLLIE_USER_DIR: `${dir}/config`,
+              ...suite,
+              COLLIE_RUN: caller ?? "",
+              ...more,
+            },
           },
-        }).pipe(Effect.map((done) => done.stdout));
+        ).pipe(Effect.map((done) => done.stdout));
       const collie = (
         workspace: string | null,
         args: ReadonlyArray<string>,
@@ -420,7 +426,7 @@ test(
 );
 
 test(
-  "an agent known by its pane or COLLIE_AGENT, with no COLLIE_RUN, reaches a Run its Run started and no other Task's",
+  "an agent known by COLLIE_AGENT, with no COLLIE_RUN, reaches a Run its Run started and no other Task's",
   () =>
     world(({ state, collie }) =>
       Effect.gen(function* () {
@@ -444,32 +450,18 @@ test(
           { "run-a-agent": "run-a" },
           Arr.map(["a", "b", "e"], task),
         );
-        const herdr = `${state}/herdr`;
-        yield* fs.writeFileString(
-          herdr,
-          `#!/bin/sh\necho '{"result":{"agents":[{"name":"run-a-agent","pane_id":"pane-a","agent_status":"idle"}]}}'\n`,
-        );
-        yield* fs.chmod(herdr, 0o755);
-        const shells = {
-          pane: { HERDR_BIN_PATH: herdr, HERDR_PANE_ID: "pane-a", COLLIE_AGENT: "" },
-          core: { HERDR_PANE_ID: "", COLLIE_AGENT: "run-a-agent" },
-        } as const;
-
         const answers = yield* Effect.all(
-          Arr.flatMap(["pane", "core"] as const, (shell) =>
-            Arr.flatMap([["run", "show"] as const, ["run", "wait"] as const], (door) =>
-              Arr.map(["run-b", "run-e"], (run) =>
-                collie("ws-a", [...door, run], undefined, shells[shell]).pipe(
-                  Effect.map((said) => ({ shell, door, run, said })),
-                ),
+          Arr.flatMap([["run", "show"] as const, ["run", "wait"] as const], (door) =>
+            Arr.map(["run-b", "run-e"], (run) =>
+              collie("ws-a", [...door, run], undefined, { COLLIE_AGENT: "run-a-agent" }).pipe(
+                Effect.map((said) => ({ door, run, said })),
               ),
             ),
           ),
           { concurrency: "unbounded" },
         );
-        for (const { shell, door, run, said } of answers)
-          expect({ shell, door, run, said }).toEqual({
-            shell,
+        for (const { door, run, said } of answers)
+          expect({ door, run, said }).toEqual({
             door,
             run,
             said:

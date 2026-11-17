@@ -119,7 +119,6 @@ const served = (main: Channel<ToView, ToMain>) =>
         checkForUpdates: () => Effect.die("not asked"),
         onboard: () => Effect.die("not asked"),
         addMachine: () => Effect.die("not asked"),
-        answerHerdr: () => Effect.die("not asked"),
         removeMachine: () => Effect.die("not asked"),
         syncNow: () => Effect.die("not asked"),
         credentials: () => Stream.die("not asked"),
@@ -882,16 +881,13 @@ test("a Flock held across a new subscription drops each Machine its routes no lo
   expect([...again.machines.keys()]).toEqual([pc.installation]);
 });
 
-test("Add Machine takes a Machine only once its SSH target, label and session are filled", () => {
-  expect(machineToAdd({ target: " mk@vm ", label: "vm ", session: " default" })).toEqual({
+test("Add Machine takes a Machine only once its SSH target and label are filled", () => {
+  expect(machineToAdd({ target: " mk@vm ", label: "vm " })).toEqual({
     target: "mk@vm",
     label: "vm",
-    session: "default",
   });
-  for (const blank of ["target", "label", "session"] as const)
-    expect(
-      machineToAdd({ target: "mk@vm", label: "vm", session: "default", [blank]: "  " }),
-    ).toBeNull();
+  for (const blank of ["target", "label"] as const)
+    expect(machineToAdd({ target: "mk@vm", label: "vm", [blank]: "  " })).toBeNull();
 });
 
 const none: BoardState = { selected: null, page: null };

@@ -22,7 +22,7 @@ import type { Mode } from "../flows";
 import type { DefinitionRow, SettingsView } from "../views";
 import { MAX_AGENTS, type AgentRow, type RunRow } from "../workspace";
 import type { WideGroup, WideView, WorkspaceView } from "../workspace";
-import type { Density, Scope } from "../settings";
+import type { Density } from "../settings";
 import {
   type CardAction,
   cardActions,
@@ -59,15 +59,6 @@ export type Filter =
  */
 export function sessionLocal(filter: Filter): boolean {
   return filter.kind !== "all";
-}
-
-/**
- * Which filter a board opens on. `local` means the workspace it was opened from, which
- * is a thing only where that workspace is known: the Home is opened from anywhere, and
- * a Home whose shortcut recorded no origin has nothing to narrow to.
- */
-export function openingFilter(scope: Scope, origin: string | null): Filter {
-  return scope === "local" && origin !== null ? { kind: "workspace", id: origin } : { kind: "all" };
 }
 
 /**

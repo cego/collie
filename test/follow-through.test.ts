@@ -24,6 +24,7 @@ import { slackApi } from "../src/slack";
 import { findingsIn } from "../src/output";
 import { writeTask } from "../src/task";
 import { registerAgent, scopeFor } from "../src/registry";
+import { isString } from "../src/schema";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
 const TARGET = `https://${PROJECT}/-/merge_requests/7`;
@@ -977,7 +978,7 @@ test.each(["major", "minor"] as const)(
         yield* git(["checkout", "-q", "-b", "feature"]);
         const head = yield* pushed("Task work");
         const forge = yield* host.gitlab(model(head));
-        yield* rig.addAgent("impl-live", "9-1");
+        const paneId = yield* rig.addAgent("impl-live");
         yield* rig.queueOutputs([review([{ ...F1, severity }])]);
         yield* host.session(
           forge,
@@ -998,15 +999,15 @@ test.each(["major", "minor"] as const)(
               task: "task-human",
               options: { branch: "feature" },
             });
-            yield* registerAgent(scopeFor(host.env(), rig.projectDir), {
+            yield* registerAgent(scopeFor(rig.projectDir), {
               role: "implementer",
               agent: "impl-live",
-              paneId: "9-1",
+              paneId,
               workspaceId: null,
               runId: building.runId,
               workflow: "placed",
               at: "2026-11-12T09:00:00Z",
-              incarnation: { terminalId: "term-impl-live", agentSession: null },
+              incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
             });
             yield* configured(true);
             yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
@@ -1060,12 +1061,12 @@ test.each(["major", "minor"] as const)(
             const handed = Arr.filter(
               yield* rig.calls(),
               (one) =>
-                one.argv?.[0] === "agent" &&
-                one.argv?.[1] === "prompt" &&
-                one.argv?.[2] === "impl-live",
+                one.cmd === "terminal.send" &&
+                one.params?.terminal === "impl-live" &&
+                isString(one.params.text) &&
+                one.params.text.includes(`${improved.runId}/findings.json`),
             );
             expect(handed).toHaveLength(1);
-            expect(handed[0]?.argv?.[3]).toContain(`${improved.runId}/findings.json`);
           }),
         );
       }),
@@ -1082,7 +1083,7 @@ test(
         yield* git(["checkout", "-q", "-b", "feature"]);
         const first = yield* pushed("Task work");
         const forge = yield* host.gitlab(model(first));
-        yield* rig.addAgent("impl-live", "9-1");
+        const paneId = yield* rig.addAgent("impl-live");
         yield* rig.queueOutputs([
           review([F1]),
           review([{ ...F1, status: "fixed" }, F2]),
@@ -1107,15 +1108,15 @@ test(
               task: "task-human",
               options: { branch: "feature" },
             });
-            yield* registerAgent(scopeFor(host.env(), rig.projectDir), {
+            yield* registerAgent(scopeFor(rig.projectDir), {
               role: "implementer",
               agent: "impl-live",
-              paneId: "9-1",
+              paneId,
               workspaceId: null,
               runId: building.runId,
               workflow: "placed",
               at: "2026-11-12T09:00:00Z",
-              incarnation: { terminalId: "term-impl-live", agentSession: null },
+              incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
             });
             yield* configured(false);
             yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
@@ -1175,9 +1176,11 @@ test.each(["major", "minor"] as const)(
         yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
         yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
         const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
+        // The fixer works on until its Output is written by hand, so no reminder takes the
+        // second review's.
         yield* rig.queueOutputs([
           review([{ ...F1, severity }]),
-          null,
+          { writes: [], output: null, then: "working" },
           review([{ ...F1, severity, status: "fixed" }]),
         ]);
         yield* host.session(
@@ -1241,6 +1244,11 @@ test.each(["major", "minor"] as const)(
                 checks: [],
               }),
             );
+            const fixer = Arr.findLast(
+              yield* rig.calls(),
+              (one) => one.cmd === "terminal.run",
+            ).pipe(Option.getOrThrow);
+            yield* (yield* rig.startCore()).report(String(fixer.params?.name), "idle");
             const done = yield* until(
               () => host.status(improved.runId),
               (view) => view?.status.status === "complete" || view?.status.status === "failed",
@@ -1251,8 +1259,8 @@ test.each(["major", "minor"] as const)(
             ]);
             expect(yield* host.agentStarts).toHaveLength(3);
             const launched = Arr.map(
-              Arr.filter(yield* rig.calls(), (one) => one.cmd === "agent start"),
-              (one) => one.argv?.[2],
+              Arr.filter(yield* rig.calls(), (one) => one.cmd === "terminal.run"),
+              (one) => one.params?.name,
             );
             expect(new Set(launched).size).toBe(3);
           }),

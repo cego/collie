@@ -1,6 +1,6 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { sha256Hex } from "./attachments";
 import { nowIso } from "./time";
 import type { ChildProcessSpawner } from "effect/process";
@@ -54,17 +54,19 @@ export const installation = Effect.fn("release.installation")(function* (
   return { release: false, build: `${version}+${sha}`, reason: "it is a development checkout" };
 });
 
-/** One string field of the plugin manifest at `root`, or "" where there is none. */
-export const manifestField = Effect.fn("release.manifestField")(function* (
-  root: string,
-  key: string,
-) {
+const PackageVersion = Schema.fromJsonString(Schema.Struct({ version: Schema.String }));
+
+/** The version of the installation at `root`, or "" when no version is declared. */
+export const releaseVersion = Effect.fn("release.releaseVersion")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const manifest = path.join(root, "herdr-plugin.toml");
+  const manifest = path.join(root, "package.json");
   if (!(yield* fs.exists(manifest))) return "";
   const text = yield* fs.readFileString(manifest);
-  return new RegExp(`^${key}\\s*=\\s*"([^"]+)"`, "m").exec(text)?.[1] ?? "";
+  return Option.match(Schema.decodeOption(PackageVersion)(text), {
+    onNone: () => "",
+    onSome: (pkg) => pkg.version,
+  });
 });
 
 /** The release a compiled runner carries, embedded by `tools/build.ts`. */

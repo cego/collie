@@ -228,7 +228,7 @@ test(
         const host = yield* spawner.spawn(
           ChildProcess.make(executable, [...prefix, "host", "--dir", "state"], {
             cwd: `${state}/..`,
-            env: { HERDR_PLUGIN_ROOT: root, COLLIE_TEST_ROOT: (yield* suiteEnv).COLLIE_TEST_ROOT },
+            env: { COLLIE_ROOT: root, COLLIE_TEST_ROOT: (yield* suiteEnv).COLLIE_TEST_ROOT },
             extendEnv: true,
             stdout: "ignore",
             stderr: "ignore",
@@ -1558,7 +1558,7 @@ test(
           Effect.flip,
           Effect.provide(
             ConfigProvider.layer(
-              ConfigProvider.fromUnknown({ HERDR_PLUGIN_ROOT: `${old.root}/release` }),
+              ConfigProvider.fromUnknown({ COLLIE_ROOT: `${old.root}/release` }),
             ),
           ),
         );
@@ -1698,13 +1698,13 @@ test(
         const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
           Effect.flip,
           Effect.provide(
-            ConfigProvider.layer(ConfigProvider.fromUnknown({ HERDR_PLUGIN_ROOT: "/elsewhere" })),
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ COLLIE_ROOT: "/elsewhere" })),
           ),
         );
         if (refused._tag !== "HostVersionMismatch") {
           throw new Error(`connected, or refused with ${refused._tag}`);
         }
-        expect(refused.restart).toContain("HERDR_PLUGIN_STATE_DIR");
+        expect(refused.restart).toContain("COLLIE_STATE_DIR");
         expect((yield* ownerOf(state))?.pid).toBe(who.pid);
         yield* stopHost(state);
       }),
@@ -1756,7 +1756,7 @@ test(
               env: {
                 HOME: state,
                 PATH: "/usr/bin:/bin",
-                HERDR_PLUGIN_ROOT: root,
+                COLLIE_ROOT: root,
                 COLLIE_HOST_WATCH_PID: watch,
                 COLLIE_TEST_ROOT: suite.COLLIE_TEST_ROOT,
               },
@@ -1799,7 +1799,7 @@ const hostFor = (pluginRoot: string) =>
   Effect.map(Config.option(Config.String("COLLIE_TEST_BINARY")), (binary) =>
     starts([
       "env",
-      `HERDR_PLUGIN_ROOT=${pluginRoot}`,
+      `COLLIE_ROOT=${pluginRoot}`,
       ...(Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`]),
     ]),
   );

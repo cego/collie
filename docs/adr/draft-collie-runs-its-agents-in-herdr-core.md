@@ -1,7 +1,8 @@
 # Collie runs its agents in herdr-core
 
-**Status: draft.** Decided by the grill step of run-9ef16556, on the evidence of
-run-34c2168f's evaluation (its `plan/INVESTIGATION.md` and `evaluation/01`–`05`).
+**Status: accepted.** Decided by the grill step of run-9ef16556, on the evidence of
+run-34c2168f's evaluation (its `plan/INVESTIGATION.md` and `evaluation/01`–`05`). Herdr 1
+was deleted by run-41c33e22.
 
 It amends:
 
@@ -21,6 +22,8 @@ It amends:
 - [ADR-0001](0001-compiled-runner-fetched-from-release.md) and
   [ADR-0048](0048-collie-is-released-for-macos-on-apple-silicon.md): Collie's signed
   release carries the `hc` it is verified against.
+- [ADR-draft-a-finished-runs-idle-agent-is-closed](draft-a-finished-runs-idle-agent-is-closed.md)
+  D1: core cannot say a terminal's pane is unfocused, so D12 keeps every agent.
 
 ## What was true before
 
@@ -57,6 +60,9 @@ call, and no `herdr-pin.json`, `herdr-api-schema.json` or herdr contract test.
   Run that is in flight when its Machine switches finishes where its agents are.
 - Herdr 1 is deleted only once no Machine is set to it and no live incarnation records
   it. Doctor says which still do.
+- Once it is deleted, an incarnation that records no core backend is gone: it is never
+  relaunched or delivered to, and its Run is resumed on core by a new launch. A checkout
+  recorded as Herdr's is removed with git like any other.
 
 Collie keeps working while its own Runs build this.
 
@@ -172,6 +178,13 @@ scratch XDG directories, so they never touch the live core.
 - `terminal.list` is decoded tolerating a missing `machines`.
 - An upstream issue is drafted for the human to send. Collie files nothing upstream
   itself.
+
+**D12. Idle close keeps what core cannot prove unattended.** Herdr 1 told Collie which
+pane was focused, and the idle close kept a focused one. Core says nothing about who is
+viewing or typing into a terminal, and a harness's own telemetry misses unsent input and
+watching. So the idle close keeps every agent, saying `core cannot say whether a person is
+viewing or typing into it`, until core exposes that. A stop and the Quiet worktree sweep
+keep the authority they had.
 
 ## Considered
 

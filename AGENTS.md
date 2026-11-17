@@ -1,8 +1,8 @@
 # Collie
 
-Collie codifies agent workflows for herdr — `plan`, `implement`, `review`, `architecture`,
-`renovate`, `release`, `general`, `investigate`, `self-improve` — as TypeScript modules run by one Effect v4 program with two front doors:
-herdr actions, and the `collie` CLI.
+Collie codifies agent workflows — `plan`, `implement`, `review`, `architecture`,
+`renovate`, `release`, `general`, `investigate`, `self-improve` — as TypeScript modules run by one Effect v4 program.
+The CLI, Desktop and Collie tools reach the same services; agents run in herdr-core (`hc`).
 
 ## Where to look
 
@@ -20,17 +20,15 @@ here are in [`src/README.md`](src/README.md).
   joining a Task: [ADR-draft-a-tasks-work-is-what-its-runs-worked-on](docs/adr/draft-a-tasks-work-is-what-its-runs-worked-on.md),
   `taskWorking` in `src/engine.ts`, `test/placement.test.ts`, `src/flows.ts`, `src/route.ts`, `src/projects.ts`, `src/agent-start.ts`.
 - **CLI surface, error codes, `--json`** → [`docs/cli.md`](docs/cli.md), `src/envelope.ts`, `src/operations.ts`.
-- **herdr calls, red `contract`** → [`docs/internals.md`](docs/internals.md#checking-the-boundary-against-herdr),
-  `herdr-pin.json`, `test/herdr-contract.test.ts`.
 - **herdr-core (`hc`) client, red `probe:hc`** → [`docs/internals.md`](docs/internals.md#checking-core-against-its-schema-and-live),
   [ADR-draft-collie-runs-its-agents-in-herdr-core](docs/adr/draft-collie-runs-its-agents-in-herdr-core.md),
   `src/hc.ts`, `hc-pin.json`, `test/hc-contract.test.ts`, `tools/hc-probe.ts`, `test/support/fake-hc.ts`;
-  a Run's agents on core ([`docs/internals.md`](docs/internals.md#agents-on-core)): `terminal_backend`,
+  a Run's agents on core ([`docs/internals.md`](docs/internals.md#agents-on-core)):
   `src/herdr.ts`, `machineHerd` in `src/steering.ts`, `test/core-agents.test.ts`, `test/core-cli.test.ts`;
   OpenCode's reporter: `opencodeReporter` in `src/harness.ts`, `test/opencode-reporter.test.ts`;
   pi's question tool: `piQuestionTool` in `src/compactors.ts`, `piExtension` in `src/chat.ts`,
   `test/pi-question.test.ts`; the `hc` a release carries: `tools/hc-release.ts`,
-  `src/hc-install.ts`, the `hc`, `core` and `herdr 1` checks in `src/doctor.ts`,
+  `src/hc-install.ts`, the `hc` and `core` checks in `src/doctor.ts`,
   `test/hc-release.test.ts`, `test/upgrade-release.test.ts`, `test/doctor.test.ts`.
 - **Compaction** → [`docs/using.md`](docs/using.md#compaction-between-pieces-of-work),
   [`docs/internals.md`](docs/internals.md#compaction-at-a-work-boundary),
@@ -239,15 +237,11 @@ These tools inspect the native app without installing it or restarting the human
    human-only step that protects nothing — and ceremony is a defect: it taxes the user and
    defeats what Collie is for ([`PRODUCT.md`](PRODUCT.md): the human should not have to
    manage each agent). `test/chat-parity.test.ts` holds this for chat.
-2. Every capability ships in both front doors: the CLI and the herdr actions are thin
-   adapters over the same Effect services ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
-3. All herdr communication goes through `src/herdr.ts`. The exceptions never talk to a
-   session for Collie: `tools/herdr-schema.ts`, which runs a downloaded release offline to
-   print its schema; Desktop's `herdr machine list`, `add` and `remove`, and the
-   `herdr --version` that says why a list failed; and, for the human, herdr's terminal
-   controller whose pane Go to pane shows in Desktop, and the herdr
-   client it opens in a terminal where there is no pane to show — see
-   [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
+2. The CLI, Desktop and Collie tools are thin adapters over the same Effect services
+   ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
+3. Core's protocol lives in `src/hc.ts`; `src/herdr.ts` adapts it for Collie's agents.
+   Desktop attaches terminals through core and reads its Machine roster — see
+   [`docs/internals.md`](docs/internals.md#the-core-boundary).
 4. One host owns a state directory and everything it is running
    ([ADR-0015](docs/adr/0015-one-local-host-owns-a-state-directory.md)). Mutate a Run
    through it, under a request id, and never by writing its files.

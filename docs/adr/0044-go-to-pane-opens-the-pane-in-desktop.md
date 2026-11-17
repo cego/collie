@@ -5,7 +5,7 @@ Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-it
 **Status: accepted, built.** Amended by
 [ADR-draft-a-blocked-link-rides-the-machines-ssh-connection](draft-a-blocked-link-rides-the-machines-ssh-connection.md):
 Go to pane rides the Machine's shared SSH connection, which outlives Desktop. It replaces the sentence in
-[`docs/internals.md`](../internals.md#the-herdr-boundary) that said Desktop "asks it
+[`docs/internals.md`](../internals.md#the-core-boundary) that said Desktop "asks it
 nothing and reads nothing from it", and the exception in invariant 3 of
 [`AGENTS.md`](../../AGENTS.md) for "the herdr client Go to pane opens in a terminal for
 the human". Nothing else about the herdr boundary changes.

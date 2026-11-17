@@ -14,7 +14,7 @@ await runEffect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-flow-bench-" });
-    const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+    const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
     const audit = yield* Schema.encodeEffect(Schema.fromJsonString(AuditLine))({
       at: "2026-09-14T10:00:00Z",
       operation: "stop",

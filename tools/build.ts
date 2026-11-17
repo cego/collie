@@ -19,6 +19,7 @@ import {
 } from "effect";
 import solidPlugin from "@opentui/solid/bun-plugin";
 import { bundleHc } from "./hc-release";
+import { RELEASE_TREE } from "./release-tree";
 import hcPin from "../hc-pin.json";
 
 /**
@@ -43,7 +44,7 @@ function bunTarget(name: string, libc: "musl" | "glibc"): string {
  */
 const libcConfig = Config.String("OPENTUI_LIBC").pipe(Config.withDefault(""));
 /** Where hc's releases are fetched from: upstream's, unless a test serves its own. */
-const hcReleasesConfig = Config.String("HERDR_RELEASES_URL").pipe(
+const hcReleasesConfig = Config.String("COLLIE_HC_RELEASES_URL").pipe(
   Config.withDefault("https://releases.herdr.dev"),
 );
 
@@ -82,18 +83,6 @@ function nativeMarker(target: string, libc: "musl" | "glibc"): string {
   return `@opentui/core-${platform}-${arch}${suffix}/libopentui.so`;
 }
 
-/** What an Installation reads at runtime, placed by the runner as `release/`. */
-const RELEASE_TREE = [
-  "herdr-plugin.toml",
-  "install.sh",
-  "prepare.sh",
-  "release-p256.pub",
-  "workflows",
-  "personas",
-  "prompts",
-  "skills/collie",
-  "assets/brand/logos/collie-horizontal-light-512.png",
-];
 const program = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;

@@ -18,6 +18,7 @@ import { epochMs } from "../src/time";
 import { stopHost, until } from "./support/host";
 import { memoryRecords } from "./support/effect";
 import { collie, proves, type World } from "./support/world";
+import { exec } from "./support/command";
 
 const FAST = { COLLIE_HOST_SCHEDULE_SECONDS: "1" };
 const MODULES = ["hello.workflow.ts", "proof.workflow.ts", "helper.ts", "notes.md"];
@@ -231,31 +232,48 @@ test(
       (world) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          // The occurrence's first `workspace list` asks whether herdr answers; its second,
-          // inside admission, waits until the pause and the resume are both queued.
-          const hold = `${world.state}/../hold-list`;
+          // Naming reads this Markdown inside admission, while the Schedule's lock is held.
+          const source = `${world.project}/admission.md`;
+          const entered = `${world.home}/admitting`;
+          const hold = `${world.home}/hold-admission`;
           yield* fs.writeFileString(hold, "1").pipe(Effect.orDie);
-          const env = { ...FAST, FAKE_HERDR_HOLD_WORKSPACE_LIST: hold };
+          yield* Effect.addFinalizer(() => fs.remove(hold, { force: true }).pipe(Effect.ignore));
+          yield* exec(["mkfifo", source]);
+          const writing = yield* Effect.forkScoped(
+            exec([
+              "sh",
+              "-c",
+              'exec 3> "$1"\n: > "$2"\nwhile test -e "$3"; do sleep 0.02; done\nprintf "# Admission\\n" >&3',
+              "schedule-admission",
+              source,
+              entered,
+              hold,
+            ]),
+          );
           yield* collie(
             world,
             ["schedule", "add", "racing", "proof", "--cron", "* * * * * *"].concat([
               "--input",
-              "note=n",
+              "note=admission.md",
               "--workspace",
               world.project,
             ]),
-            env,
+            FAST,
           );
-          yield* past((yield* Clock.currentTimeMillis) + 2_500);
+          yield* until(
+            () => fs.exists(entered).pipe(Effect.orDie),
+            (ready) => ready,
+          );
           const pausing = yield* Effect.forkScoped(
-            collie(world, ["schedule", "pause", "racing"], env),
+            collie(world, ["schedule", "pause", "racing"], FAST),
           );
           yield* past((yield* Clock.currentTimeMillis) + 700);
           const resuming = yield* Effect.forkScoped(
-            collie(world, ["schedule", "resume", "racing"], env),
+            collie(world, ["schedule", "resume", "racing"], FAST),
           );
           yield* past((yield* Clock.currentTimeMillis) + 700);
           yield* fs.remove(hold).pipe(Effect.orDie);
+          expect((yield* Fiber.join(writing)).exitCode).toBe(0);
           expect((yield* Fiber.join(pausing)).envelope.ok).toBe(true);
           expect((yield* Fiber.join(resuming)).envelope.ok).toBe(true);
           const [first] = yield* until(
@@ -329,16 +347,13 @@ test(
 );
 
 test(
-  "a Schedule removed or paused while herdr does not answer starts no Run once herdr is back",
+  "a Schedule removed or paused while core does not answer starts no Run once core is back",
   () =>
     proves(
-      "collie-schedule-herdr-",
-      (world) =>
+      "collie-schedule-core-",
+      (world, core) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const down = `${world.state}/../herdr-down`;
-          yield* fs.writeFileString(down, "").pipe(Effect.orDie);
-          const env = { ...FAST, FAKE_HERDR_DOWN: down };
+          core.refuse("terminal.list", "unreachable", "core is down");
           const add = (name: string) =>
             collie(
               world,
@@ -348,7 +363,7 @@ test(
                 "--workspace",
                 world.project,
               ]),
-              env,
+              FAST,
             );
           yield* add("removed");
           yield* add("paused");
@@ -358,9 +373,9 @@ test(
               now.schedules.length === 2 &&
               Arr.every(now.schedules, (one) => one.last?.outcome.kind === "waiting-for-herdr"),
           );
-          yield* collie(world, ["schedule", "remove", "removed"], env);
-          yield* collie(world, ["schedule", "pause", "paused"], env);
-          yield* fs.remove(down).pipe(Effect.orDie);
+          yield* collie(world, ["schedule", "remove", "removed"], FAST);
+          yield* collie(world, ["schedule", "pause", "paused"], FAST);
+          core.restore("terminal.list");
           yield* past((yield* Clock.currentTimeMillis) + 4_000);
           expect(yield* scheduled(world, "removed")).toEqual([]);
           expect(yield* scheduled(world, "paused")).toEqual([]);

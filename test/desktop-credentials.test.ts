@@ -290,7 +290,7 @@ for await (const line of console) done("code " + line.trim());
 `,
   );
 
-const loginRun: OnboardRun = { steps: [], asked: null, ready: null, reason: null, at: 0 };
+const loginRun: OnboardRun = { steps: [], ready: null, reason: null, at: 0 };
 
 test("the Claude login finishes by approving in this computer's browser through its forwarded callback port", () =>
   run(

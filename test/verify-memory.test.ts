@@ -57,8 +57,7 @@ test(
             { cwd: world.project },
           );
           const set = {
-            FAKE_HERDR_OUTPUTS: outputs,
-            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_STATE_DIR: world.state,
             COLLIE_USER_DIR: world.config,
             COLLIE_PROC: proc,
             COLLIE_MEMORY_EVERY: "100 millis",
@@ -92,14 +91,14 @@ test(
             () => launchOf(world.state, runId, "build"),
             (one) => one !== undefined,
           ))!;
-          const pane = Option.getOrUndefined(
+          const agent = Option.getOrUndefined(
             Arr.findFirst(yield* registeredAt(world.state), (entry) => entry.runId === runId),
-          )!.paneId;
-          const verify = (name: string, paneId: string) =>
+          )!.agent;
+          const verify = (name: string, agent: string) =>
             collie(
               world,
               ["verify", "--run", runId, "--cwd", world.project, "--name", name, "--", "/bin/true"],
-              { HERDR_PANE_ID: paneId },
+              { COLLIE_AGENT: agent },
             );
           const waiting = () => waitAt(world.state, runId);
           const ran = () =>
@@ -109,11 +108,11 @@ test(
             );
 
           yield* memory(2);
-          for (const [name, paneId, pauses] of [
-            ["as-agent", pane, true],
+          for (const [name, as, pauses] of [
+            ["as-agent", agent, true],
             ["as-human", "not-an-agent", false],
           ] as const) {
-            const asked = yield* Effect.forkChild(verify(name, paneId));
+            const asked = yield* Effect.forkChild(verify(name, as));
             const wait = yield* until(waiting, (one) => one !== null);
             expect(wait?.sentence).toMatch(
               /^waiting for memory on .+: 2\.0 of 100\.0 GB available$/,

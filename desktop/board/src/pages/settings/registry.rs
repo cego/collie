@@ -261,17 +261,6 @@ pub fn settings() -> Vec<Setting> {
             )
             .unit("tokens"),
         ),
-        choice(
-            "terminal_backend",
-            &["herdr", "core"],
-            "herdr",
-            words(
-                "Agents",
-                "Terminal backend",
-                "Where this Machine starts its next agents: herdr, or herdr-core. Agents already running finish where they started. This Machine only.",
-            )
-            .machine(),
-        ),
         of(
             "quiet_ms",
             Number,
@@ -290,7 +279,7 @@ pub fn settings() -> Vec<Setting> {
             words(
                 "Agents",
                 "Close an idle agent after",
-                "An agent of a finished Run that has been idle this long since the Run finished is closed, unless something still needs it. 0 never closes one.",
+                "How long an agent of a finished Run is idle before cleanup judges it. It is closed only where core proves nobody is viewing or typing into it, which core cannot yet, so it is kept. 0 never closes one.",
             )
             .unit("minutes"),
         ),
