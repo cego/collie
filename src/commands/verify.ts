@@ -159,21 +159,27 @@ export const verify = Command.make(
           if (!opened.ok) return opened;
           const byAgent = !Schema.is(FrontDoor)(door);
           const readers = { stdout: failureReader(), stderr: failureReader() };
-          const echo: Echo = byAgent
-            ? {
-                stdout: (text) => Effect.sync(() => readers.stdout.feed(text)),
-                stderr: (text) => Effect.sync(() => readers.stderr.feed(text)),
-              }
-            : yield* echoed();
+          const shown = yield* echoed();
+          const bounding: Echo = {
+            stdout: (text) => Effect.sync(() => readers.stdout.feed(text)),
+            stderr: (text) => Effect.sync(() => readers.stderr.feed(text)),
+          };
+          // Output before Started is the host's own word, such as a memory wait, and an agent sees it.
+          let started = false;
           type Answered = { verification: Verification; ran: boolean };
           const answered = yield* Stream.runFoldEffect(
             opened.events,
             (): Answered | null => null,
             (last, event) =>
               event._tag === "Output"
-                ? echo[event.stream](event.text).pipe(Effect.as(last))
+                ? (byAgent && started ? bounding : shown)
+                    [event.stream](event.text)
+                    .pipe(Effect.as(last))
                 : event._tag === "Started"
-                  ? Effect.succeed(last)
+                  ? Effect.sync(() => {
+                      started = true;
+                      return last;
+                    })
                   : Effect.succeed({ verification: event.verification, ran: event.ran ?? true }),
           ).pipe(
             Effect.catch((cause) =>
