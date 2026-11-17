@@ -13,7 +13,7 @@ import type { NotificationKind } from "./notify";
 import { HealOutput, healOn, healerFor } from "./heal";
 import { knownIn, pendingIn, report } from "./heal-report";
 import type { HostApi } from "./sdk";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import { currentPid, signalProcess } from "./lock";
 import { machineMemory } from "./memory";
 import { appendJournal, readJournal } from "./journal";

@@ -83,7 +83,8 @@ upgrade replaces `release/` whole and never writes `user/`
 ([ADR-draft-an-installation-is-the-release-its-runner-carries](adr/draft-an-installation-is-the-release-its-runner-carries.md)). An edit made
 inside `release/` is copied to `~/.collie/kept/` by the next upgrade and is no longer in
 force, so fork instead. What Collie itself keeps — runs, the
-host's database, tasks — is state, and stays in herdr's state directory for the plugin.
+host's database, tasks — is state, kept in `~/.local/state/herdr/plugins/cego.collie` or
+where `COLLIE_STATE_DIR` names.
 
 Only entry files take part. A helper or a Markdown prompt beside one is reached because
 your entry imports it, never because it was found. Two files in one layer claiming one id

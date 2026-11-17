@@ -267,10 +267,9 @@ test(
           const app = appState(
             {
               herdr: new Herdr(env),
-              ...scopeFor(env, env.cwd),
+              ...scopeFor(env.cwd),
               stateDir: env.stateDir,
               userDir: env.userDir,
-              paneId: env.paneId,
               pluginRoot: env.pluginRoot,
               tasksOf: () => Effect.succeed({ tasks: [], unreadable: null }),
               detailOf,
@@ -813,7 +812,7 @@ test("a fan-out's record has a panel per merge request by wave, and refreshes on
       );
       const runs = [...children, parent];
       const sources: RecordSources = {
-        env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: root }),
+        env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: root }),
         model: yield* makeRunModel(dir, "installation"),
         related: () => Effect.succeed(runs),
         alive: Effect.succeed([]),

@@ -1,10 +1,11 @@
 // A Heal's resume is refused where the Stop is cleared, under the permit a Stop is set
 // under, so a person's Stop that lands while the resume is on its way still stands.
 
+import { Herdr } from "../src/herdr";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import { Array as Arr, Effect, FileSystem, Layer, Option, type Scope } from "effect";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { fixtures, until } from "./support/host";
@@ -30,7 +31,7 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-const env = () => rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT });
+const env = () => rig.pluginEnv({ COLLIE_ROOT: ROOT });
 
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(fastForward(effect));
@@ -40,12 +41,12 @@ const hosted = <A, E>(
 ) =>
   run.pipe(
     Effect.provide(
-      registryLayer(env().stateDir, { placing: { herdr: new FakeHerdr(env()), env: env() } }).pipe(
+      registryLayer(env().stateDir, { placing: { herdr: new Herdr(env()), env: env() } }).pipe(
         Layer.provideMerge(
           agentsLayer({
             dir: env().stateDir,
             env: env(),
-            herdr: new FakeHerdr(env()),
+            herdr: new Herdr(env()),
             harness: "claude",
             model: "opus",
             permissions: "auto",

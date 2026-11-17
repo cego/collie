@@ -28,7 +28,7 @@ import { findingsIn } from "./output";
 import { latest, readDispositions } from "./disposition";
 import { PLAN_DIR } from "./run-detail";
 import { tailed } from "./views";
-import { Herdr, type AgentInfo, type PaneInfo, type WorkspaceInfo } from "./herdr";
+import { Herdr, type AgentInfo } from "./herdr";
 import { carriedBefore, carryOutProposal } from "./run-actions";
 export { carryOutProposal, registerRunExecutors } from "./run-actions";
 import { mrIdIn, shell, whatItSaid, type Runner } from "./mr";
@@ -39,19 +39,18 @@ import {
   atCollieDir,
   isCheckout,
   carriedRelease,
-  manifestField,
+  releaseVersion,
   placeRelease,
   RELEASE_TAG,
   type Carried,
 } from "./release";
 import { BUNDLED_HC, placeHc } from "./hc-install";
 import hcPin from "../hc-pin.json";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, liveCheckouts, type Asked, type RunFacts } from "./runs";
 import type { TaskChoice, TaskRecord } from "./task";
-import type { KeptHere } from "./board-model";
-import { freshTaskLabel, workNamedIn, type StartAbout } from "./tasknames";
+import { freshTaskLabel, type StartAbout } from "./tasknames";
 import { readIntent, type Authority } from "./intent";
 import {
   appendLine,
@@ -60,7 +59,6 @@ import {
   readLedger,
   reserve,
   settle as settleBudget,
-  machineHerd,
 } from "./steering";
 import { append, conversationPath, tail, type NewTurn } from "./conversation";
 import {
@@ -153,93 +151,37 @@ export const newRequestId = Effect.fn("operations.newRequestId")(function* () {
   return yield* (yield* SecureRandom.SecureRandom).uuidV4();
 });
 
-/** The live workspace for this environment, shared by both adapters. */
-export const resolveWorkspace = Effect.fn("operations.resolveWorkspace")(function* (
-  herdr: Herdr,
-  env: PluginEnv,
-) {
-  if (!env.workspaceId) return null;
-  const workspace =
-    Option.getOrUndefined(
-      Arr.findFirst(yield* herdr.workspaceList(), (item) => item.workspaceId === env.workspaceId),
-    ) ?? null;
-  if (!workspace || workspace.cwd !== "") return workspace;
-  // `herdr workspace list` carries no directory, so a workspace resolved by id alone
-  // would fall back to the caller's own cwd — and a `--workspace` run would root at
-  // whatever shell it was typed in. The workspace's directory is where its panes are.
-  const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
-  return { ...workspace, cwd: workspaceCwdFromPanes(env.workspaceId, panes) };
-});
-
 /**
- * The workspace a request named, resolved to one this herdr actually has — by id, by the
- * label a human would say, or by the directory it stands for. `null` is a request that
- * named none. An error is a name that matches nothing or more than one thing: a launch
- * aimed at a guess is a Run in a repository nobody asked for.
- *
- * A directory nothing is open on is opened: the human naming a checkout has said which
- * repository they mean, and sending them to the board to open it first is chat obstructing
- * the person it serves (ADR-0011).
+ * The directory a request named, by path, by repository or by checkout under the Projects
+ * root. `null` is a request that named none. An error is a name that matches nothing or
+ * more than one thing: a launch aimed at a guess is a Run in a repository nobody asked for.
  */
 export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
   env: PluginEnv,
   named: string | undefined,
 ): Effect.fn.Return<WorkspaceNamed, never, PlatformServices> {
   if (named === undefined || Str.trim(named) === "") return null;
-  const herdr = new Herdr(env);
-  const all = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
-  const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
   const wanted = Str.trim(named);
-  const byId = Arr.filter(all, (workspace) => workspace.workspaceId === wanted);
-  const matched =
-    byId.length > 0
-      ? byId
-      : Arr.filter(
-          all,
-          (workspace) => Str.toLowerCase(workspace.label) === Str.toLowerCase(wanted),
-        );
   const refused = (error: string): WorkspaceNamed => ({ error });
-  if (matched.length === 0) {
-    const opened = yield* workspaceForDirectory(env, wanted, all, panes);
-    if (opened !== null) return opened;
-    const repository = yield* repositoryCheckout(env, wanted).pipe(
-      Effect.orElseSucceed(() => null),
-    );
-    if (repository !== null) {
-      if ("error" in repository) return refused(repository.error);
-      return yield* workspaceForDirectory(env, repository.path, all, panes);
-    }
-    if (pipe(wanted, Str.includes("/")))
-      return refused(`no directory "${named}" on this Machine; ${yield* howToName(env)}`);
-    const checkouts = yield* checkoutsNamed(env, wanted);
-    if (checkouts.paths.length === 1)
-      return yield* workspaceForDirectory(env, checkouts.paths[0]!, all, panes);
-    if (checkouts.paths.length > 1)
-      return refused(
-        `"${named}" names ${checkouts.paths.length} checkouts under ${checkouts.root} (${Arr.join(checkouts.paths, ", ")}); say which`,
-      );
-    const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
-    return refused(
-      `no workspace id, label, directory${root === null ? "" : ` or checkout under the Projects root ${root.path}`} is named "${named}"; workspaces: ${
-        Arr.join(
-          Arr.map(all, (w) => w.label),
-          ", ",
-        ) || "none"
-      }`,
-    );
+  const opened = yield* workspaceForDirectory(env, wanted);
+  if (opened !== null) return opened;
+  const repository = yield* repositoryCheckout(env, wanted).pipe(Effect.orElseSucceed(() => null));
+  if (repository !== null) {
+    if ("error" in repository) return refused(repository.error);
+    return yield* workspaceForDirectory(env, repository.path);
   }
-  if (matched.length > 1)
+  if (pipe(wanted, Str.includes("/")))
+    return refused(`no directory "${named}" on this Machine; ${yield* howToName(env)}`);
+  const checkouts = yield* checkoutsNamed(env, wanted);
+  if (checkouts.paths.length === 1) return yield* workspaceForDirectory(env, checkouts.paths[0]!);
+  if (checkouts.paths.length > 1)
     return refused(
-      `"${named}" names ${matched.length} workspaces (${Arr.join(
-        Arr.map(matched, (w) => w.workspaceId),
-        ", ",
-      )}); say which`,
+      `"${named}" names ${checkouts.paths.length} checkouts under ${checkouts.root} (${Arr.join(checkouts.paths, ", ")}); say which`,
     );
-  const workspace = matched[0]!;
-  const cwd =
-    workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
-  if (cwd === "") return refused(`workspace "${named}" has no directory to run in`);
-  return { found: { ...workspace, cwd } };
+  const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
+  return refused(
+    `no directory${root === null ? "" : ` or checkout under the Projects root ${root.path}`} is named "${named}"`,
+  );
 });
 
 /** Whether `cwd` is in Collie's state directory, the Home's among it: no checkout (ADR-0033). */
@@ -296,8 +238,6 @@ const checkoutsNamed = Effect.fn("operations.checkoutsNamed")(function* (
 const workspaceForDirectory = Effect.fn("operations.workspaceForDirectory")(function* (
   env: PluginEnv,
   named: string,
-  all: ReadonlyArray<WorkspaceInfo>,
-  panes: ReadonlyArray<Pick<PaneInfo, "workspaceId" | "cwd">>,
 ): Effect.fn.Return<WorkspaceNamed, never, PlatformServices> {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
@@ -310,46 +250,16 @@ const workspaceForDirectory = Effect.fn("operations.workspaceForDirectory")(func
     Effect.orElseSucceed(() => false),
   );
   if (!isDir) return null;
-  const already = Option.getOrUndefined(
-    Arr.findFirst(
-      all,
-      (workspace) =>
-        (workspace.cwd !== ""
-          ? workspace.cwd
-          : workspaceCwdFromPanes(workspace.workspaceId, panes)) === dir,
-    ),
-  );
-  if (already) return { found: { ...already, cwd: dir } };
-  // No workspace is opened for it: a fresh Run gets a task workspace of its own whatever
-  // it was launched from, so one opened here only to root the launch is left behind
-  // empty beside the Run's. The checkout roots the launch; the caller's workspace is
-  // where it was launched from.
-  return {
-    found: {
-      workspaceId: env.workspaceId ?? "",
-      label: path.basename(dir),
-      cwd: dir,
-      worktree: null,
-      focused: false,
-      tokens: {},
-    },
-  };
+  return { found: { label: path.basename(dir), cwd: dir } };
 });
 
-/** A workspace a request named: the one it is, why it is not one, or none named. */
-export type WorkspaceNamed = { found: WorkspaceInfo } | { error: string } | null;
-
-/** The directory a workspace stands for: where its first pane was started. */
-export function workspaceCwdFromPanes(
-  workspaceId: string,
-  panes: ReadonlyArray<Pick<PaneInfo, "workspaceId" | "cwd">>,
-): string {
-  return (
-    Option.getOrUndefined(
-      Arr.findFirst(panes, (pane) => Boolean(pane.workspaceId === workspaceId && pane.cwd)),
-    )?.cwd ?? ""
-  );
+export interface NamedDirectory {
+  readonly label: string;
+  readonly cwd: string;
 }
+
+/** A directory a request named: the one it is, why it is not one, or none named. */
+export type WorkspaceNamed = { found: NamedDirectory } | { error: string } | null;
 
 /**
  * Brings this installation up to date. A release is replaced by the target release's, which
@@ -674,7 +584,7 @@ const handOff = Effect.fn("operations.handOff")(function* (
     [
       `COLLIE_DIR=${env.collieDir}`,
       `COLLIE_USER_DIR=${env.userDir}`,
-      `HERDR_PLUGIN_ROOT=${pluginRoot}`,
+      `COLLIE_ROOT=${pluginRoot}`,
       `COLLIE_RELEASES=${source}`,
       got.success.file,
       "--json",
@@ -722,7 +632,7 @@ const prepareAndDesktop = Effect.fn("operations.prepareAndDesktop")(function* (
   }
   // Loaded here: of every front door, only an upgrade reaches Desktop.
   const { dataHomeOf, updateDesktop } = yield* Effect.promise(() => import("./desktop"));
-  const desktop = yield* updateDesktop(to ?? (yield* manifestField(root, "version")), {
+  const desktop = yield* updateDesktop(to ?? (yield* releaseVersion(root)), {
     dataHome: dataHomeOf(env.home, env.raw.XDG_DATA_HOME),
   });
   const steps = [...prepareSteps(installed.stdout), ...(desktop === null ? [] : [desktop])];
@@ -755,21 +665,10 @@ function short(result: { code: number; stdout: string }): string {
 }
 
 /**
- * The Task a start belongs to, and the herdr workspace its Runs and agents live in.
- *
- * A fresh start gets a workspace of its own, whatever workspace it was launched from:
- * that is what keeps one human's several pieces of work from accumulating beside each
- * other. It is only named here. The host opens it at admission, on the checkout the Run
- * is given, and the Task's first agent takes over the shell it comes with; a stop that
- * would close the workspace's last pane leaves a shell there first, since herdr drops a
- * workspace with its last pane.
- *
- * A continuation is given its Task, and goes where that Task already is. Membership is
- * the record, never the label: two Tasks may be called much the same thing, and a
- * workspace a human renamed is still the Task's.
- *
- * Started from outside herdr, a Run has no workspace to be opened from, and one that
- * starts no agent needs none: it gets no Task rather than a refusal.
+ * The Task a start belongs to. A fresh start is only named here: the host opens its Task
+ * at admission, on the checkout the Run is given. A continuation is given its Task:
+ * membership is the record, never the label, since two Tasks may be called much the same
+ * thing.
  */
 export const taskFor = Effect.fn("operations.taskFor")(function* (
   env: PluginEnv,
@@ -781,49 +680,9 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
     task,
     /** What a fresh Task's workspace is to be called, where this start opens one. */
     label,
-    /** The workspace whose Task the host keeps the Run in, where it is started here. */
-    here: null,
   });
-  if (choice.mode === "here") return yield* taskHere(env, about);
-  if (
-    env.workspaceId === null &&
-    env.socketPath === null &&
-    env.machine === undefined &&
-    env.asker?.from?.machine === undefined
-  )
-    return kept(choice.mode === "continue" ? choice.task : null);
-  // A workspace cleanup closed is reopened on the Run's checkout when its first agent starts.
   if (choice.mode === "continue") return kept(choice.task);
   return kept(null, yield* freshTaskLabel(env, about));
-});
-
-/**
- * The workspace this was started from, whose Task the host keeps the Run in: the Task already
- * kept there, or a new one kept there. Its checkout is still cut; only the workspace a new
- * Task would have opened is not, so the Run's agents open beside whoever started it.
- */
-const taskHere = Effect.fn("operations.taskHere")(function* (env: PluginEnv, about: StartAbout) {
-  if (env.workspaceId === null)
-    return {
-      _tag: "Rejected" as const,
-      result: err(
-        "workspace_required",
-        "--here keeps the Run in the herdr workspace it was started from, and this was started outside one.",
-      ),
-    };
-  const open = yield* new Herdr(env)
-    .workspaceList()
-    .pipe(Effect.orElseSucceed((): WorkspaceInfo[] => []));
-  const here: KeptHere = {
-    herd: yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null)),
-    workspace: env.workspaceId,
-    label:
-      Option.getOrUndefined(Arr.findFirst(open, (one) => one.workspaceId === env.workspaceId))
-        ?.label ??
-      (workNamedIn(about.inputs) || about.workflow),
-    cwd: env.cwd,
-  };
-  return { _tag: "Ok" as const, task: null, label: null, here };
 });
 
 export const clearOverride = Effect.fn("operations.clearOverride")(function* (
@@ -839,7 +698,7 @@ export const clearOverride = Effect.fn("operations.clearOverride")(function* (
   const terminalId =
     Option.getOrUndefined(Arr.findFirst(live, (a) => a.name === agent))?.terminalId ?? null;
   if (terminalId === null)
-    return err("invalid_state", `herdr has no live agent "${agent}" to clear an override on.`);
+    return err("invalid_state", `core has no live agent "${agent}" to clear an override on.`);
   if (!overrideActive(yield* readLedger(terminalId)))
     return err("invalid_state", `"${agent}" is not under a manual override.`);
   yield* appendLine({

@@ -1,5 +1,5 @@
 /* oxlint-disable effecttsgo/async-function, effecttsgo/global-console, effecttsgo/global-console-in-effect, effecttsgo/global-date, effecttsgo/global-date-in-effect, effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-record, effecttsgo/prefer-effect-string, effecttsgo/prefer-schema-over-json, no-restricted-globals, no-restricted-properties -- the benchmark's drivers speak to processes, files and /proc on their own terms, as record-open's do. */
-// Linux /proc counts the host's work separately from this driver and its fake herdr.
+// Linux /proc counts the host's work separately from this driver.
 
 import { Database } from "bun:sqlite";
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -67,7 +67,7 @@ const usage = (pid: number) => {
   return {
     // utime and stime are fields 14-15, cutime and cstime 16-17, minflt and cminflt 10-11.
     cpu_ms: (Number(f[11]) + Number(f[12])) * tickMs,
-    // Mostly the fake herdr and git it spawns: a Bun script here, a native binary in use.
+    // Mostly the git it spawns.
     children_cpu_ms: (Number(f[13]) + Number(f[14])) * tickMs,
     main_cpu_ms: threads.main,
     worker_cpu_ms: threads.worker,
@@ -105,14 +105,6 @@ const hostPid = () => {
   const found = [...log.matchAll(/host started, pid (\d+)/g)].at(-1);
   if (found === undefined) throw new Error("the host logged no pid");
   return Number(found[1]);
-};
-
-const herdrCalls = () => {
-  try {
-    return readFileSync(Bun.env.FAKE_HERDR_LOG!, "utf8").split("\n").length - 1;
-  } catch {
-    return 0;
-  }
 };
 
 const mismatchesOf = (views: ReadonlyArray<RunView>, manifest: Manifest) => {
@@ -252,7 +244,6 @@ const sample = (manifest: Manifest) =>
     const idle = {
       board: boardFrames,
       record: settledFrames.length,
-      herdr: herdrCalls(),
       at: usage(host),
     };
     yield* Effect.sleep(WINDOW);
@@ -261,7 +252,6 @@ const sample = (manifest: Manifest) =>
     for (const [key, value] of Object.entries(idleUsed)) numbers[`host_idle_${key}`] = value;
     numbers.host_idle_board_frames = boardFrames - idle.board;
     numbers.host_idle_record_frames = settledFrames.length - idle.record;
-    numbers.host_idle_herdr_calls = herdrCalls() - idle.herdr;
     numbers.machine_idle_load1 = load1();
     numbers.host_rss_kb = statusKb(host, "VmRSS");
     Object.assign(numbers, yield* hostHeap(host));

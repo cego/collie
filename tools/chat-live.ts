@@ -86,7 +86,7 @@ const disposableRun = Effect.fn("live.disposableRun")(function* (env: PluginEnv,
       id: "chat-probe",
       request: "chat-probe",
       input: { json: {}, text: {} },
-      task: { mode: "here" },
+      task: { mode: "new" },
       intent: { goal: "a disposable Run for the probe" },
     },
   ).pipe(
@@ -172,7 +172,7 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     // The probe replays the caller's complete environment into its disposable configuration.
     // oxlint-disable-next-line effecttsgo/process-env, effecttsgo/process-env-in-effect
     ...process.env,
-    HERDR_PLUGIN_STATE_DIR: stateDir,
+    COLLIE_STATE_DIR: stateDir,
     COLLIE_USER_DIR: userDir,
   });
   const socket = env.raw.HC_SOCKET;
@@ -184,7 +184,6 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     );
     return rows;
   }
-  yield* writeConfigValue(userDir, "terminal_backend", "core");
   const herdr = new Herdr(env);
   const chosen = preferredHarness(yield* chatHarnessOf(userDir));
   const key = yield* machineHerd(env);
@@ -198,7 +197,7 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
           if (owner !== null) process.kill(owner.pid, "SIGTERM");
           yield* Effect.sleep("2 seconds");
           for (const name of [BOARD_TERMINAL, CHAT_TERMINAL])
-            yield* herdr.paneClose(name, "core").pipe(Effect.ignore);
+            yield* herdr.terminalKill(name).pipe(Effect.ignore);
         }).pipe(Effect.ignore),
   );
 
@@ -232,7 +231,7 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   // the question, and an earlier version of this probe passed on exactly that.
   const prompt = (text: string) =>
     herdr
-      .agentPrompt(CHAT_TERMINAL, text, "core")
+      .agentPrompt(CHAT_TERMINAL, text)
       .pipe(Effect.catch((cause) => Effect.succeed(`refused: ${String(cause)}`)));
   const asked = yield* prompt(
     "Call your collie_herd tool. Then reply with one line: ID followed by a space and the id of the only Run it lists.",
@@ -254,7 +253,7 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
 
   // (5) The chat ended under it, as a human or a crash would: the host starts it again,
   // on a conversation of its own rather than whatever the harness wrote last.
-  yield* herdr.paneClose(CHAT_TERMINAL, "core").pipe(Effect.ignore);
+  yield* herdr.terminalKill(CHAT_TERMINAL).pipe(Effect.ignore);
   const again = yield* chatOtherThan(chatFile, chat.sessions[chat.harness]);
   say(
     "a chat that ends is started again, on a new conversation",

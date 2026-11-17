@@ -3,7 +3,6 @@
 // run in a temporary HOME with the fake-PATH rig in front of the outside world, and
 // what is asserted is the state left behind rather than the steps taken to get there.
 
-import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
@@ -32,7 +31,7 @@ const run = (
   exec(["sh", `${root}/${script}`], {
     // Only the stubs and the system tools the scripts use: a real `herdr` on the
     // developer's own PATH would answer for one a test has deliberately removed.
-    env: { HOME: home, PATH: path, HERDR_CONFIG: `${home}/.config/herdr/config.toml`, ...extra },
+    env: { HOME: home, PATH: path, ...extra },
   }).pipe(Effect.map((result) => ({ code: result.exitCode, out: result.stdout + result.stderr })));
 
 const prepare = () => run("prepare.sh");
@@ -78,7 +77,7 @@ beforeEach(() =>
       // A checkout, so install.sh builds from source rather than reaching the network.
       yield* fs.makeDirectory(`${root}/.git`, { recursive: true });
       const repo = yield* repoRoot;
-      for (const file of ["prepare.sh", "install.sh", "herdr-plugin.toml", "release-p256.pub"]) {
+      for (const file of ["prepare.sh", "install.sh", "package.json", "release-p256.pub"]) {
         yield* fs.copyFile(`${repo}/${file}`, `${root}/${file}`);
       }
       // A source tree, because whether there is anything to build is answered by
@@ -89,15 +88,8 @@ beforeEach(() =>
 
       // A git that records what it was asked to do, so a test can see a pull.
       yield* bin.add("git", `echo "$*" >> "${home}/git-calls"`);
-      // A herdr that remembers what it was told to link, so a second run can see it.
-      yield* bin.add(
-        "herdr",
-        `case "$1 $2" in
-          "--version ") echo "herdr \${FAKE_HERDR_VERSION:-}" ;;
-          "plugin list") cat "${home}/linked" 2>/dev/null || true ;;
-          "plugin link") echo "cego.collie 0.1.0 [local:$3]" > "${home}/linked"; echo link >> "${home}/herdr-calls" ;;
-        esac`,
-      );
+      // Any leftover controller call fails the test, even if its caller ignores the error.
+      yield* bin.add("herdr", `echo "$*" >> "${home}/herdr-calls"; exit 127`);
       // The build without the compiler: `bun run tools/build.ts` leaves an executable
       // at `bin/collie`, which is all install.sh does anything with — and leaves a
       // different one every time, as the real one does.
@@ -118,33 +110,33 @@ beforeEach(() =>
 afterEach(() =>
   runEffect(
     Effect.gen(function* () {
+      const calledHerdr = yield* exists(`${home}/herdr-calls`);
       yield* bin.restore();
       yield* remove(home);
+      expect(calledHerdr).toBe(false);
     }),
   ),
 );
 
-test("prepare leaves a linked plugin, a collie on PATH and the operator skill", () =>
+test("prepare leaves Collie on PATH and the operator skill without a plugin", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
 
       const first = yield* prepare();
 
-      expect(first.out).toContain("prepare: plugin-link: done");
       expect(first.out).toContain("prepare: runner: done");
       expect(first.out).toContain("prepare: operator-skill: done");
       expect(first.code).toBe(0);
       // Pinned, or the workflows would come from whatever directory it is run in.
       expect(yield* read(`${home}/.local/bin/collie`)).toContain(
-        `HERDR_PLUGIN_ROOT="\${HERDR_PLUGIN_ROOT:-${root}}"`,
+        `COLLIE_ROOT="\${COLLIE_ROOT:-${root}}"`,
       );
       expect(yield* fs.exists(`${root}/bin/collie`)).toBe(true);
       // Both stores: claude-code reads only its own, everything else reads the
       // universal one, and the skill is no use to a harness that cannot see it.
       expect(yield* fs.readLink(`${home}/.claude/skills/collie`)).toBe(`${root}/skills/collie`);
       expect(yield* fs.readLink(`${home}/.agents/skills/collie`)).toBe(`${root}/skills/collie`);
-      expect(yield* read(`${home}/linked`)).toContain(`local:${root}`);
     }),
   ));
 
@@ -154,43 +146,9 @@ test("a second run changes nothing and says every step is already in place", () 
       yield* prepare();
       const again = yield* prepare();
 
-      expect(again.out).toContain("prepare: plugin-link: already in place");
       expect(again.out).toContain("prepare: runner: already in place");
       expect(again.out).toContain("prepare: operator-skill: already in place");
       expect(again.code).toBe(0);
-      // Linked once, not once per run: a re-link fires herdr's build hook.
-      expect(Str.trim(yield* read(`${home}/herdr-calls`))).toBe("link");
-    }),
-  ));
-
-test("a herdr older than the manifest's minimum is not linked, and the rest still runs", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: "0.7.1" });
-
-      expect(done.out).toContain(
-        "prepare: plugin-link: skipped — herdr 0.7.1 is older than the 0.9.5 Collie needs; collie doctor says how to upgrade",
-      );
-      expect(yield* exists(`${home}/herdr-calls`)).toBe(false);
-      expect(done.out).toContain("prepare: runner: done");
-      expect(done.out).toContain("prepare: operator-skill: done");
-      expect(done.out).toContain("prepare: skills:");
-      expect(done.code).toBe(0);
-    }),
-  ));
-
-test("herdr's version is compared as numbers, part by part", () =>
-  runEffect(
-    Effect.gen(function* () {
-      for (const version of ["0.9.5", "0.9.10", "0.10.0", "1.0.0"]) {
-        yield* remove(`${home}/linked`);
-        const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: version });
-        expect(done.out).toContain("prepare: plugin-link: done");
-      }
-      for (const version of ["0.7.1", "0.9.4", "0.8.10"]) {
-        const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: version });
-        expect(done.out).toContain(`prepare: plugin-link: skipped — herdr ${version} is older`);
-      }
     }),
   ));
 
@@ -204,39 +162,8 @@ test("what prepare reports is what `collie upgrade` reads back", () =>
       // would notice a step line reworded on one side only.
       const steps = prepareSteps((yield* prepare()).out);
 
-      expect(Arr.map(steps, (s) => s.step)).toEqual([
-        "plugin-link",
-        "runner",
-        "operator-skill",
-        "skills",
-      ]);
+      expect(Arr.map(steps, (s) => s.step)).toEqual(["runner", "operator-skill", "skills"]);
       expect(Arr.every(steps, (s) => s.state !== "")).toBe(true);
-    }),
-  ));
-
-test("a link that builds the runner is not a second build reported as no change", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      // A herdr whose `plugin link` fires the build hook, as the real one does: the
-      // runner exists by the time the routine reaches its own runner step.
-      yield* bin.add(
-        "herdr",
-        `case "$1 $2" in
-          "plugin list") cat "${home}/linked" 2>/dev/null || true ;;
-          "plugin link") echo "cego.collie 0.1.0 [local:$3]" > "${home}/linked"
-            mkdir -p "$3/bin"; : > "$3/bin/collie"; chmod +x "$3/bin/collie"
-            echo build >> "${home}/builds" ;;
-        esac`,
-      );
-
-      const run = yield* prepare();
-
-      // Built once, by the hook, and said so — not built again and called unchanged.
-      expect(run.out).toContain("prepare: runner: done");
-      expect(Str.trim(yield* read(`${home}/builds`))).toBe("build");
-      expect(yield* fs.exists(`${home}/.local/bin/collie`)).toBe(false);
-      expect(run.code).toBe(0);
     }),
   ));
 
@@ -263,29 +190,14 @@ test("an unchanged checkout is not rebuilt, and a changed one is", () =>
     }),
   ));
 
-test("prepare never writes to the herdr config; keybindings are setup.sh's alone", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const config = `${home}/.config/herdr/config.toml`;
-      yield* fs.makeDirectory(`${home}/.config/herdr`, { recursive: true });
-      const before = '[server]\nkeep = "mine"\n';
-      yield* fs.writeFileString(config, before);
-
-      yield* prepare();
-
-      expect(yield* read(config)).toBe(before);
-    }),
-  ));
-
-test("prepare says what it skipped rather than failing when herdr is absent", () =>
+test("prepare installs normally when Herdr is absent", () =>
   runEffect(
     Effect.gen(function* () {
       yield* remove(`${home}/stubs/herdr`);
 
       const run = yield* prepare();
 
-      expect(run.out).toContain("prepare: plugin-link: skipped");
+      expect(run.out).not.toContain("plugin-link");
       expect(run.out).toContain("prepare: runner: done");
       expect(run.code).toBe(0);
     }),
@@ -312,7 +224,7 @@ test("prepare repoints a skill link to another Collie installation, as a clone i
       const fs = yield* FileSystem.FileSystem;
       const clone = `${home}/old-clone`;
       yield* fs.makeDirectory(`${clone}/skills/collie`, { recursive: true });
-      yield* fs.writeFileString(`${clone}/herdr-plugin.toml`, `id = "cego.collie"\n`);
+      yield* fs.writeFileString(`${clone}/package.json`, `{"name":"collie"}\n`);
       yield* fs.makeDirectory(`${home}/.claude/skills`, { recursive: true });
       yield* fs.symlink(`${clone}/skills/collie`, `${home}/.claude/skills/collie`);
 
@@ -556,9 +468,9 @@ test("an exact plain release stays selected on the next install", () =>
       const release = yield* downloadable();
       yield* release.signature();
       expect((yield* release.install({ COLLIE_VERSION: "0.2.0" })).code).toBe(0);
-      expect(yield* read(`${root}/herdr-plugin.toml`)).toContain('version = "0.2.0"');
+      expect(yield* read(`${root}/package.json`)).toContain('"version": "0.2.0"');
       expect((yield* release.install()).code).toBe(0);
-      expect(yield* read(`${root}/herdr-plugin.toml`)).toContain('version = "0.2.0"');
+      expect(yield* read(`${root}/package.json`)).toContain('"version": "0.2.0"');
     }),
   ));
 
@@ -567,10 +479,10 @@ test("an unavailable exact release never builds the older source", () =>
     Effect.gen(function* () {
       const release = yield* downloadable();
       yield* bin.add("bun", `echo build >> '${home}/builds'; exit 0`);
-      const manifest = yield* read(`${root}/herdr-plugin.toml`);
+      const manifest = yield* read(`${root}/package.json`);
       expect((yield* release.install({ COLLIE_VERSION: "0.2.0" })).code).not.toBe(0);
       expect(yield* exists(`${home}/builds`)).toBe(false);
-      expect(yield* read(`${root}/herdr-plugin.toml`)).toBe(manifest);
+      expect(yield* read(`${root}/package.json`)).toBe(manifest);
       expect(yield* read(`${root}/bin/collie`)).toBe("the runner already here");
     }),
   ));

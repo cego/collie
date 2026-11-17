@@ -69,7 +69,7 @@ const write = (file: string, text: string) =>
 
 /**
  * An installation of Collie with nobody's workflows in it yet, a state directory for the
- * host, and projects made on demand. `HERDR_PLUGIN_ROOT` and `COLLIE_USER_DIR` are what a
+ * host, and projects made on demand. `COLLIE_ROOT` and `COLLIE_USER_DIR` are what a
  * client tells the host it started, so it looks for modules here rather than the machine's.
  */
 const proves = <A, E>(
@@ -111,7 +111,7 @@ const proves = <A, E>(
           ConfigProvider.layer(
             ConfigProvider.fromUnknown({
               COLLIE_HOST: asCommand(command),
-              HERDR_PLUGIN_ROOT: install,
+              COLLIE_ROOT: install,
               COLLIE_USER_DIR: `${install}/user`,
             }),
           ),

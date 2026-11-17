@@ -4,23 +4,11 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import type { Asker } from "./proposals";
-import { Config, Effect, Option, Schema } from "effect";
+import { Config, Effect, Option } from "effect";
 
-// Plugin environment as herdr hands it to an action or pane entrypoint.
-// Names come from the herdr plugin runtime.
+// Collie's installation, state and invocation environment.
 
 export const PLUGIN_ID = "cego.collie";
-
-export interface PluginContext {
-  workspace_id?: string;
-  workspace_cwd?: string;
-  workspace_label?: string;
-  tab_id?: string;
-  tab_label?: string;
-  focused_pane_id?: string;
-  focused_pane_cwd?: string;
-  invocation_source?: string;
-}
 
 export interface PluginEnv {
   pluginRoot: string;
@@ -36,13 +24,6 @@ export interface PluginEnv {
   /** Where Claude Code's managed settings live: an organisation's, beyond any flag. */
   claudeManagedDir: string;
   stateDir: string;
-  binPath: string;
-  socketPath: string | null;
-  workspaceId: string | null;
-  tabId: string | null;
-  paneId: string | null;
-  actionId: string | null;
-  entrypointId: string | null;
   /** The GitLab login a generated branch is namespaced under; null leaves it to glab. */
   gitlabLogin: string | null;
   /** `GITHUB_ACTOR`: who a generated branch is namespaced under on GitHub. */
@@ -51,7 +32,6 @@ export interface PluginEnv {
   cwd: string;
   /** True when COLLIE_CWD named it: an explicit directory beats every inference. */
   cwdExplicit: boolean;
-  context: PluginContext;
   raw: Record<string, string>;
   /** The paired Machine a command was pointed at with `--machine`, for one that names no Run. */
   machine?: string;
@@ -78,10 +58,16 @@ function first(env: Record<string, string | undefined>, ...keys: string[]): stri
 export function ownRoot(
   modulePath: string = import.meta.path,
   execPath: string = process.execPath,
+  collieDir: string | null = null,
 ): string | null {
   if (!pipe(modulePath, Str.startsWith("/$bunfs/"))) return null;
   const at = Option.getOrElse(pipe(execPath, Str.lastIndexOf("/bin/")), () => -1);
-  return at > 0 ? pipe(execPath, Str.slice(0, at)) : null;
+  // A downloaded runner upgrades the installation, never the caller's stale PWD.
+  return at > 0
+    ? pipe(execPath, Str.slice(0, at))
+    : collieDir === null
+      ? null
+      : `${collieDir}/release`;
 }
 
 /**
@@ -102,19 +88,19 @@ export function selfCommand(
 
 export function readEnv(
   env: Readonly<Record<string, string | undefined>>,
-  installRoot: string | null = ownRoot(),
+  installRoot: string | null = null,
 ): PluginEnv {
-  const context: PluginContext = Option.getOrElse(
-    Schema.decodeUnknownOption(PluginContextJson)(env.HERDR_PLUGIN_CONTEXT_JSON),
-    (): PluginContext => ({}),
-  );
-
   const home = env.HOME ?? "/tmp";
-  const pluginRoot = first(env, "HERDR_PLUGIN_ROOT") ?? installRoot ?? env.PWD ?? ".";
   const collieDir = first(env, "COLLIE_DIR") ?? `${home}/.collie`;
+  const pluginRoot =
+    first(env, "COLLIE_ROOT") ??
+    installRoot ??
+    ownRoot(import.meta.path, process.execPath, collieDir) ??
+    env.PWD ??
+    ".";
   // `PWD` goes stale whenever something chdir'd; the real directory never does.
   const explicitCwd = first(env, "COLLIE_CWD");
-  const cwd = explicitCwd ?? context.workspace_cwd ?? process.cwd();
+  const cwd = explicitCwd ?? process.cwd();
 
   const raw: Record<string, string> = {};
   for (const [key, value] of Rec.toEntries(env)) {
@@ -131,42 +117,19 @@ export function readEnv(
       (process.platform === "darwin"
         ? "/Library/Application Support/ClaudeCode"
         : "/etc/claude-code"),
-    stateDir:
-      first(env, "HERDR_PLUGIN_STATE_DIR") ?? `${home}/.local/state/herdr/plugins/${PLUGIN_ID}`,
-    binPath: first(env, "HERDR_BIN_PATH") ?? "herdr",
-    socketPath: first(env, "HERDR_SOCKET_PATH"),
-    workspaceId:
-      first(env, "HERDR_WORKSPACE_ID", "HERDR_ACTIVE_WORKSPACE_ID") ?? context.workspace_id ?? null,
-    tabId: first(env, "HERDR_TAB_ID", "HERDR_ACTIVE_TAB_ID") ?? context.tab_id ?? null,
-    paneId: first(env, "HERDR_PANE_ID", "HERDR_ACTIVE_PANE_ID") ?? context.focused_pane_id ?? null,
-    actionId: first(env, "HERDR_PLUGIN_ACTION_ID"),
-    entrypointId: first(env, "HERDR_PLUGIN_ENTRYPOINT_ID"),
+    stateDir: first(env, "COLLIE_STATE_DIR") ?? `${home}/.local/state/herdr/plugins/${PLUGIN_ID}`,
     gitlabLogin: first(env, "GITLAB_USER_LOGIN"),
     githubLogin: first(env, "GITHUB_ACTOR"),
     cwd,
     cwdExplicit: explicitCwd !== null,
-    context,
     raw,
   };
 }
 
-const PluginContextJson = Schema.fromJsonString(
-  Schema.Struct({
-    workspace_id: Schema.optional(Schema.String),
-    workspace_cwd: Schema.optional(Schema.String),
-    workspace_label: Schema.optional(Schema.String),
-    tab_id: Schema.optional(Schema.String),
-    tab_label: Schema.optional(Schema.String),
-    focused_pane_id: Schema.optional(Schema.String),
-    focused_pane_cwd: Schema.optional(Schema.String),
-    invocation_source: Schema.optional(Schema.String),
-  }),
-);
-
 const environmentKeys = [
   "HOME",
   "PWD",
-  // Not herdr's, but the machine's: `doctor` answers "is it installed" by walking
+  // The machine's: `doctor` answers "is it installed" by walking
   // PATH, and "where would the shim be" from the directory the installer writes to.
   "PATH",
   "COLLIE_BIN_DIR",
@@ -183,24 +146,13 @@ const environmentKeys = [
   "COLLIE_HELLE_URL",
   // A fake proc directory to read memory from, for tests only.
   "COLLIE_PROC",
-  "HERDR_BIN_PATH",
-  "HERDR_SOCKET_PATH",
-  "HERDR_PLUGIN_ROOT",
+  "COLLIE_ROOT",
   "COLLIE_DIR",
   // Where releases are published, for a mirror or a test's fake.
   "COLLIE_RELEASES",
   "COLLIE_USER_DIR",
   "COLLIE_CLAUDE_MANAGED_DIR",
-  "HERDR_PLUGIN_STATE_DIR",
-  "HERDR_PLUGIN_ACTION_ID",
-  "HERDR_PLUGIN_ENTRYPOINT_ID",
-  "HERDR_PLUGIN_CONTEXT_JSON",
-  "HERDR_WORKSPACE_ID",
-  "HERDR_ACTIVE_WORKSPACE_ID",
-  "HERDR_TAB_ID",
-  "HERDR_ACTIVE_TAB_ID",
-  "HERDR_PANE_ID",
-  "HERDR_ACTIVE_PANE_ID",
+  "COLLIE_STATE_DIR",
   "GITLAB_USER_LOGIN",
   "GITHUB_ACTOR",
   // gitte's folder, which is the Projects root where `projects.root` names none.
@@ -257,6 +209,10 @@ export const withoutLauncher = (
   if (ICU_DATA !== undefined && ICU_DATA !== "" && ICU_DATA !== bin) kept.ICU_DATA = ICU_DATA;
   return kept;
 };
+
+/** Nothing started by Collie inherits the retired Herdr runtime's environment. */
+export const withoutHerdrOne = (env: Readonly<Record<string, string | undefined>>) =>
+  Rec.filter(env, (_, name) => !pipe(name, Str.startsWith("HERDR_")));
 
 /** Removes the launcher's variables from this process, so nothing it starts later is given them. */
 export const leaveLauncher = () => {

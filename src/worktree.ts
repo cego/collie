@@ -15,19 +15,11 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { Clock, Duration, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import {
-  herdrFailureReason,
-  type Herdr,
-  type AgentInfo,
-  type PaneInfo,
-  type WorktreeInfo,
-  type WorktreeListing,
-} from "./herdr";
+import { isSettled, type Herdr, type AgentInfo } from "./herdr";
 import type { CheckoutKind } from "./definitions";
 import { diffTargetOf, planRunOf, repositoryOf, workSourceOf } from "./strategies";
 import { runningChecks } from "./check-processes";
 import { defaultBase, linearIssueOf } from "./inputs";
-import { disambiguate, GLYPH, tabLabel } from "./naming";
 import {
   branchTargetHead,
   projectFromRemote,
@@ -40,7 +32,7 @@ import {
 import { mrWords, parseMrTarget, readMrRef, readMrUrl } from "./board-model";
 import { FORGES, forgeOf, forgeOfHost } from "./forge/forge";
 import { withLock } from "./lock";
-import { terminalBackend, worktreesDirectory } from "./config";
+import { worktreesDirectory } from "./config";
 import { withoutCredentials } from "./automode";
 import type { AgentEntry } from "./registry";
 import type { WorktreeRecord } from "./run";
@@ -149,13 +141,9 @@ export interface CheckoutAsk extends BranchAsk {
   workflow: string;
   /** What the Workflow declared it needs of the repository. */
   checkout: CheckoutKind;
-  /** Whether the Run asked for a herdr worktree workspace of its own. */
-  separate?: boolean;
   /** The workspace the Run lives in, which is its Task's. */
   workspaceId?: string | null;
   workspaceLabel?: string | null;
-  /** What to call a workspace herdr opens for this checkout, where it opens one. */
-  openLabel?: string | null;
   stateDir: string;
   /** Which Run recorded the checkout at a path, where one did. */
   recordedBy?: RecordedBy;
@@ -693,18 +681,24 @@ const isBranch = Effect.fn("worktree.isBranch")(function* (
  */
 const branchPath = (branch: string) => Str.split(branch, "/");
 
+interface Listed {
+  path: string;
+  /** Null where the checkout is detached. */
+  branch: string | null;
+}
+
 /**
- * Every checkout git itself knows about, and which of them the repository is. git's own
- * list rather than herdr's: it answers both questions at once, needs no herdr to be
- * running, and lists a checkout however it was made.
+ * Every checkout git itself knows about, and which of them the repository is: git's own
+ * list answers both questions at once and lists a checkout however it was made.
  */
+
 const gitWorktrees = Effect.fn("worktree.gitWorktrees")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
   cwd: string,
 ) {
   const listed = yield* run("git", ["worktree", "list", "--porcelain"], cwd);
   if (listed.code !== 0) return null;
-  const checkouts: Array<{ path: string; branch: string | null }> = [];
+  const checkouts: Listed[] = [];
   for (const block of Str.split(listed.stdout, /\n\s*\n/)) {
     const at = Option.getOrUndefined(
       Option.flatMap(Option.fromNullishOr(/^worktree (.+)$/m.exec(block)), (present_____) =>
@@ -883,52 +877,6 @@ const newOnOrigin = Effect.fn("worktree.newOnOrigin")(function* (branch: string,
   return url.code === 0 && Str.trim(url.stdout) !== ""
     ? withoutCredentials(Str.trim(url.stdout))
     : null;
-});
-
-/**
- * The checkout for a branch: the one it already has, or a new one. `herdr worktree
- * open` is what gives an existing checkout its workspace back, so a Run handed to a
- * live implementer and a Run started fresh on the same branch both land in one place.
- */
-export const worktreeFor = Effect.fn("worktree.worktreeFor")(function* (
-  herdr: Herdr,
-  opts: { cwd: string; branch: string; base?: string; label?: string },
-) {
-  const listing = yield* herdr.worktreeList(opts.cwd);
-  const existing = Option.getOrUndefined(
-    Arr.findFirst(listing.worktrees, (worktree) => worktree.branch === opts.branch),
-  );
-  // Every open and create is asked from the repository's own checkout, which is what
-  // `worktree list` answers with. herdr refuses both from a linked worktree —
-  // `linked_worktree_source`, "New and open worktree actions start from the repo
-  // parent workspace" — and a Run chained from one is exactly the case that matters:
-  // a fix round starts in the checkout the reviewed branch already has.
-  const repo = listing.source ?? opts.cwd;
-  // No label on `open`: it renames the workspace it opens, which would overwrite the
-  // name a human gave theirs and leave every Run that recorded the old one homeless.
-  const opened = existing
-    ? yield* herdr.worktreeOpen({ cwd: repo, path: existing.path })
-    : yield* herdr.worktreeCreate({
-        cwd: repo,
-        branch: opts.branch,
-        base: opts.base,
-        label: opts.label,
-      });
-  return {
-    workspaceLabel: opened.label,
-    worktree: {
-      path: opened.path,
-      branch: opts.branch,
-      managed_by: "herdr",
-      workspace_id: opened.workspaceId,
-      created_by_collie: !existing,
-      created_branch: false,
-      created_on: null,
-      made_at: yield* madeAt(opened.path),
-      root_tab_id: opened.rootTab?.tabId ?? null,
-      root_pane_id: opened.rootTab?.paneId ?? null,
-    } satisfies WorktreeRecord,
-  };
 });
 
 /**
@@ -1221,13 +1169,11 @@ const whyNotWorkIn = Effect.fn("worktree.whyNotWorkIn")(function* (
           name: base.ref,
         };
   if (Str.trim(head.stdout) !== wanted.at) return `it is not at ${wanted.name}`;
-  const panes = yield* Effect.result(herdr.paneList());
-  if (panes._tag === "Failure") return "herdr would not say which agents work in it";
-  for (const pane of panes.success) {
-    if (!pane.agent || pane.agentStatus === "idle" || pane.agentStatus === "done") continue;
-    for (const at of [pane.cwd, pane.foregroundCwd])
-      if (at !== null && (at === cwd || pipe_(at, Str.startsWith(`${cwd}/`))))
-        return `agent ${pane.agent} in pane ${pane.paneId} is ${pane.agentStatus ?? "unknown"} in it`;
+  const agents = yield* Effect.result(herdr.agentList());
+  if (agents._tag === "Failure") return "core would not say which agents work in it";
+  for (const agent of agents.success) {
+    if (isSettled(agent.status)) continue;
+    if (worksIn(agent, cwd)) return `agent ${agent.name} is ${agent.status} in it`;
   }
   return null;
 });
@@ -1251,8 +1197,7 @@ const withDependencies = Effect.fn("worktree.withDependencies")(function* (check
  *
  * The Run stays in its Task's workspace, and only its cwd moves: the work surrounding a
  * task is encapsulated in its workspace, and a checkout of its own is about not sharing
- * an index, not about being somewhere else in the sidebar. `separate` asks herdr for the
- * checkout instead and takes the workspace herdr opens on it.
+ * an index, not about being somewhere else in the sidebar.
  *
  * A mutating Workflow that cannot be given a worktree does not start. Falling back to
  * the directory it was launched from is what this whole mechanism exists to prevent:
@@ -1390,36 +1335,6 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     ({ ...here, refused: `no worktree for ${plan.branch}: ${why}` }) satisfies Checkout;
 
   const newOn = yield* newOnOrigin(plan.branch, opts.cwd);
-  if (opts.separate === true && (yield* terminalBackend(herdr.env.userDir)) === "herdr") {
-    // The Task's own name where the caller worked one out, so the workspace herdr opens
-    // reads like every other task workspace rather than like the branch under it.
-    const label =
-      opts.openLabel ?? tabLabel(GLYPH.running, disambiguate(opts.workflow, plan.branch));
-    const found = yield* Effect.result(
-      worktreeFor(herdr, { cwd: opts.cwd, branch: plan.branch, base: plan.base, label }),
-    );
-    if (found._tag === "Failure") return refuse(herdrFailureReason(found.failure));
-    const { workspaceLabel } = found.success;
-    const made = found.success.worktree.created_by_collie && newOn !== null;
-    const worktree = {
-      ...found.success.worktree,
-      created_branch: made,
-      created_on: made ? newOn : null,
-    };
-    return yield* withDependencies({
-      ...here,
-      cwd: worktree.path,
-      // The workspace herdr just opened on the checkout, which is the whole point of
-      // asking it: this is the one path where the Run does not stay where it started.
-      workspaceId: worktree.workspace_id,
-      // Its own name or none: the workspace the Run was launched from is a different
-      // row, and naming this one after it points at a label it does not have.
-      workspaceLabel: workspaceLabel ?? opts.openLabel ?? null,
-      worktree,
-      note: `${worktree.created_by_collie ? "created" : "opened"} worktree ${worktree.path} on ${plan.branch}`,
-    });
-  }
-
   const made = yield* gitCheckout({
     cwd: opts.cwd,
     branch: plan.branch,
@@ -1534,8 +1449,8 @@ export interface Settling {
   readonly landedOn: ReadonlyMap<string, Landed>;
   /** By `onBranch`, a branch whose merge request the merge watch last read as open. */
   readonly openOn: ReadonlyMap<string, string>;
-  /** Why a checkout's Task still holds it: its workspace is open, or herdr would not say. */
-  readonly workspaceHolds: ReadonlyMap<string, string>;
+  /** Why a checkout's Task still holds it: it is open, or still owes work. */
+  readonly taskHolds: ReadonlyMap<string, string>;
   /** Checkouts never to remove: the plugin root and any a running host serves from. */
   readonly protect: ReadonlySet<string>;
 }
@@ -1549,72 +1464,54 @@ export const NOTHING_SETTLING: Settling = {
   landedAt: new Map(),
   landedOn: new Map(),
   openOn: new Map(),
-  workspaceHolds: new Map(),
+  taskHolds: new Map(),
   protect: new Set(),
 };
 
-/**
- * What is in use, and why. A directory holds a checkout it is inside — an agent
- * working in `<worktree>/src` is working in that worktree — and a workspace holds
- * the checkout herdr opened it on, which is the only evidence there is about a pane
- * herdr reports without a directory of its own.
- */
+/** Everything holding a checkout right now, and the agents core has, which a removal ends. */
 interface InUse {
   paths: ReadonlyMap<string, string>;
-  workspaces: ReadonlyMap<string, string>;
-  /** Every pane herdr has, so a removal can tell which tabs went with the checkout. */
-  panes: ReadonlyArray<PaneInfo>;
+  agents: ReadonlyArray<AgentInfo>;
 }
 
+/** Whether this agent was started in `dir` or has moved into it since. */
+const worksIn = (agent: AgentInfo, dir: string) =>
+  inside(dir, agent.cwd) || inside(dir, agent.foregroundCwd);
+
 /**
- * Everything holding a checkout right now: the Runs and agents herdr knows about, the
- * checkout a Run is starting in, and nothing else — the Control Plane names none, so
- * removing the worktree its own board is showing is exactly what a merged branch does,
- * and herdr closes that workspace with it. Null where herdr would not say.
+ * Everything holding a checkout right now: the Runs and agents core knows about, and the
+ * checkout a Run is starting in. Null where core would not say.
  */
 const inUse = Effect.fn("worktree.inUse")(function* (
   herdr: Herdr,
-  /** The Machine's other sessions, whose agents may work in a checkout too. */
-  sessions: ReadonlyArray<Herdr>,
   opts: {
-    /** Where agents' control records are, whose servers may outlive their panes. */
+    /** Where agents' control records are, whose servers may outlive their terminals. */
     stateDir: string;
     paths: ReadonlyMap<string, string>;
     keep?: string | undefined;
-    /** The panes finished Runs' agents were left in, which hold nothing unless still working. */
+    /** The terminals finished Runs' agents were left in, which hold nothing unless still working. */
     leftovers: ReadonlySet<string>;
   },
 ) {
-  const panes = yield* Effect.result(herdr.paneList());
-  if (panes._tag === "Failure") return null;
-  const elsewhere: PaneInfo[] = [];
-  for (const session of sessions) {
-    const theirs = yield* Effect.result(session.paneList());
-    if (theirs._tag === "Failure") return null;
-    elsewhere.push(...theirs.success);
-  }
+  const agents = yield* Effect.result(herdr.agentList());
+  if (agents._tag === "Failure") return null;
   const paths = new Map(opts.paths);
-  const workspaces = new Map<string, string>();
-  for (const pane of [...panes.success, ...elsewhere]) {
-    if (!pane.agent) continue;
-    // A Run's own agent, idle in the tab it left behind, is what the removal closes —
-    // counting it as work in progress kept every finished Run's checkout forever.
-    if (opts.leftovers.has(pane.paneId) && pane.agentStatus !== "working") continue;
+  for (const agent of agents.success) {
+    // A Run's own agent, idle where it was left, is what the removal ends — counting it
+    // as work in progress kept every finished Run's checkout forever.
+    if (opts.leftovers.has(agent.paneId) && agent.status !== "working") continue;
     // Both directories: an agent started in the repository and `cd`-ed into a checkout
-    // is working in the checkout, whatever the pane was opened on.
-    for (const dir of [pane.cwd, pane.foregroundCwd]) {
+    // is working in the checkout.
+    for (const dir of [agent.cwd, agent.foregroundCwd]) {
       if (dir) paths.set(dir, "an agent is working in it");
     }
-    // A pane herdr reports without a directory still says which workspace it is in,
-    // and a worktree's workspace is its own.
-    if (pane.workspaceId) workspaces.set(pane.workspaceId, "an agent is working in it");
   }
-  const servers = yield* unlistedServers(opts.stateDir, [herdr, ...sessions]);
+  const servers = yield* unlistedServers(opts.stateDir, [herdr]);
   if (servers === null) return null;
   for (const record of servers)
     paths.set(record.cwd, `${record.agent}'s server may still be writing in it`);
   if (opts.keep && !paths.has(opts.keep)) paths.set(opts.keep, "a run is starting in it");
-  return { paths, workspaces, panes: panes.success } satisfies InUse;
+  return { paths, agents: agents.success } satisfies InUse;
 });
 
 /** Whether this directory is the checkout at `at`, or somewhere inside it. */
@@ -1622,99 +1519,68 @@ const inside = (at: string, dir: string | null | undefined) =>
   dir !== null && dir !== undefined && (dir === at || pipe_(dir, Str.startsWith(`${at}/`)));
 
 /**
- * Closes the tabs a removed checkout leaves behind: shells still sitting in a
- * directory that is gone, which nothing else would ever close. Only the tabs the
- * finished Runs of that checkout left their agents in, and only while every pane in one
- * is inside it — a tab a human has since split or reused is theirs, not a leftover.
+ * Ends the agents a removed checkout's finished Runs left in it, which nothing else would
+ * ever end. Only an agent still registered to that Run, and still in the checkout.
  *
- * Answers with how many would not close. This is the only chance: the checkout is
- * already gone from herdr's listing, so it is no longer a candidate and no later sweep
- * will come back to retry. A herdr that hiccuped here has to be reported now or the
- * dead tab is never mentioned at all.
+ * Answers with how many would not end. This is the only chance: the checkout is no longer
+ * listed, so no later sweep will come back to retry.
  */
-const closeDeadTabs = Effect.fn("worktree.closeDeadTabs")(function* (
+const endLeftovers = Effect.fn("worktree.endLeftovers")(function* (
   herdr: Herdr,
   opts: {
     at: string;
-    tabs: ReadonlySet<string>;
-    panes: ReadonlyArray<PaneInfo>;
+    leftovers: ReadonlySet<string>;
+    agents: ReadonlyArray<AgentInfo>;
     stateDir: string;
     ports: CompactionPorts;
-    /** The finished Runs' agents, by the pane each was left in. */
     registered: ReadonlyArray<AgentEntry>;
   },
 ) {
-  // Where a pane was started and where it has moved to: a shell the agent `cd`-ed is
-  // in the checkout whatever its tab was opened on.
-  const isInside = (pane: PaneInfo) =>
-    inside(opts.at, pane.cwd) || inside(opts.at, pane.foregroundCwd);
   const why = `its checkout ${opts.at} was removed`;
-  /** Whether the agent left in this pane, if any, has ended, with its end's log once the tab closes. */
-  const ends = (pane: PaneInfo, agents: ReadonlyArray<AgentInfo>) =>
-    Effect.gen(function* () {
-      const entry = Option.getOrUndefined(
-        Arr.findFirst(opts.registered, (one) => one.paneId === pane.paneId),
-      );
-      const holder = Option.getOrUndefined(
-        Arr.findFirst(agents, (one) => one.paneId === pane.paneId),
-      );
-      if (holder !== undefined && holder.name !== entry?.agent) return null;
-      if (pane.agent === null || entry === undefined) return yield* Effect.succeed(Effect.void);
-      const launched = Option.getOrUndefined(
-        Arr.findLast(yield* readLaunches(entry.runId), (one) => one.agent === entry.agent),
-      );
-      const ended = yield* endAgent(
-        {
-          herdr,
-          ports: opts.ports,
-          stateDir: opts.stateDir,
-          cwd: opts.at,
-          log: runLog(opts.stateDir, entry.runId),
-        },
-        launched ?? { agent: entry.agent },
-        why,
-        "caller",
-        agents,
-      ).pipe(Effect.orElseSucceed(() => null));
-      if (ended?._tag !== "Closed") return null;
-      return yield* Effect.succeed(
-        ended.ended
-          ? runLog(opts.stateDir, entry.runId)(endedLine(entry.agent, why)).pipe(Effect.ignore)
-          : Effect.void,
-      );
-    });
   let left = 0;
-  let agents: Option.Option<ReadonlyArray<AgentInfo>> | undefined;
-  for (const tabId of opts.tabs) {
-    const panes = Arr.filter(opts.panes, (pane) => pane.tabId === tabId);
-    // A tab herdr no longer has is nothing to close; one with a pane outside the
-    // checkout is a tab somebody has taken over.
-    const isDead = panes.length > 0 && Arr.every(panes, isInside);
-    if (!isDead) continue;
-    agents ??= yield* Effect.option(herdr.agentList());
-    if (Option.isNone(agents)) {
-      left += 1;
-      continue;
-    }
-    const listed = agents.value;
-    const ended = yield* Effect.forEach(panes, (pane) => ends(pane, listed));
-    if (ended.includes(null)) {
-      left += 1;
-      continue;
-    }
-    const closed = yield* Effect.result(herdr.tabClose(tabId));
-    if (closed._tag === "Failure") left += 1;
-    else for (const logged of ended) if (logged !== null) yield* logged;
+  for (const agent of opts.agents) {
+    if (!opts.leftovers.has(agent.paneId) || !worksIn(agent, opts.at)) continue;
+    const entry = Option.getOrUndefined(
+      Arr.findFirst(
+        opts.registered,
+        (one) => one.paneId === agent.paneId && one.agent === agent.name,
+      ),
+    );
+    if (entry === undefined) continue;
+    const launched = Option.getOrUndefined(
+      Arr.findLast(yield* readLaunches(entry.runId), (one) => one.agent === entry.agent),
+    );
+    const ended = yield* endAgent(
+      {
+        herdr,
+        ports: opts.ports,
+        stateDir: opts.stateDir,
+        log: runLog(opts.stateDir, entry.runId),
+      },
+      launched ?? { agent: entry.agent },
+      why,
+      "caller",
+      opts.agents,
+    ).pipe(Effect.orElseSucceed(() => null));
+    // Proved this Run's incarnation and quiet, but "caller" leaves its terminal to this.
+    const killed =
+      ended?._tag === "Closed" &&
+      (yield* herdr.terminalKill(agent.paneId).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      ));
+    if (!killed) left += 1;
+    else yield* runLog(opts.stateDir, entry.runId)(endedLine(entry.agent, why)).pipe(Effect.ignore);
   }
   return left;
 });
 
 /** Why this checkout is in use, or null when nothing holds it. */
-function heldBy(use: InUse, worktree: { path: string; workspaceId: string | null }): string | null {
+function heldBy(use: InUse, worktree: { path: string }): string | null {
   for (const [dir, why] of use.paths) {
     if (inside(worktree.path, dir)) return why;
   }
-  return (worktree.workspaceId && use.workspaces.get(worktree.workspaceId)) || null;
+  return null;
 }
 
 /** What to do about a checkout: keep it for this reason, or remove it for that one. */
@@ -1724,7 +1590,7 @@ const keepIt = (keep: string): Verdict => ({ keep });
 const settledBecause = (why: string): Verdict => ({ why });
 
 const settled = Effect.fn("worktree.settled")(function* (
-  worktree: WorktreeInfo & { branch: string },
+  worktree: Listed & { branch: string },
   opts: {
     /** The repository's own checkout, which outlives the removal of any other. */
     repo: string;
@@ -1760,9 +1626,9 @@ const settled = Effect.fn("worktree.settled")(function* (
   // everything it did was pushed to the Renovate branches it moved across.
   const settledBy = worktree.branch === "" ? null : yield* landedBy(worktree, landed, opts);
   if (settledBy !== null && settledBy.keep !== undefined) return settledBy;
-  // Last: a checkout is never removed from under the workspace its Task is open in.
-  const workspace = settling.workspaceHolds.get(worktree.path);
-  if (workspace !== undefined) return keepIt(workspace);
+  // Last: a checkout is never removed from under its open Task.
+  const task = settling.taskHolds.get(worktree.path);
+  if (task !== undefined) return keepIt(task);
   return settledBy ?? settledBecause("its Run is over and it holds nothing");
 });
 
@@ -1917,8 +1783,6 @@ function fromRuns(
  */
 interface PruneOptions {
   herdr: Herdr;
-  /** The Machine's other herdr sessions, whose agents may work in a checkout too. */
-  sessions?: ReadonlyArray<Herdr>;
   stateDir: string;
   /** Every Run there is, which says which checkouts Collie made and which are in use. */
   runs: ReadonlyArray<RunFacts>;
@@ -1949,7 +1813,7 @@ export interface Judged {
 const prune = Effect.fn("worktree.prune")(function* (
   opts: PruneOptions & {
     recorded: ReturnType<typeof fromRuns>;
-    listing: WorktreeListing | null;
+    listing: { worktrees: ReadonlyArray<Listed>; source: string } | null;
   },
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -1975,11 +1839,11 @@ const prune = Effect.fn("worktree.prune")(function* (
   // it: a Collie worktree removed by hand and a human's worktree later made at the
   // same path on the same branch would otherwise be the same candidate, and a
   // hand-made checkout is never touched.
-  const candidates: Array<WorktreeInfo & { branch: string }> = [];
+  const candidates: Array<Listed & { branch: string }> = [];
   for (const worktree of listing?.worktrees ?? []) {
     if (opts.only !== undefined && worktree.path !== opts.only) continue;
-    // A detached checkout has no branch, which herdr reports as null or as empty; the
-    // record of a roaming Run's checkout is empty for the same reason. Matching them
+    // A detached checkout has no branch, which git reports as null; the record of a
+    // roaming Run's checkout is empty for the same reason. Matching them
     // is what lets a Renovate Run's checkout be pruned like any other.
     const branch = worktree.branch ?? "";
     const record = mine.get(worktree.path);
@@ -2018,13 +1882,13 @@ const prune = Effect.fn("worktree.prune")(function* (
   const judged: Judged[] = [];
   if (due.length === 0) return { lines: yield* conclude(round), judged };
 
-  // A herdr that will not answer is not proof that nothing is live in these checkouts,
+  // A core that will not answer is not proof that nothing is live in these checkouts,
   // and that is the one condition nothing else can establish — so nothing is judged
   // this round rather than judged on an empty list. The board still hears about every
   // candidate being held, and nothing is written down: an unverified round is not a
   // verdict, so the next refresh asks again rather than waiting out the debounce.
   const leftovers = new Set(Arr.flatMap([...panes.values()], (left) => [...left]));
-  const use = yield* inUse(opts.herdr, opts.sessions ?? [], {
+  const use = yield* inUse(opts.herdr, {
     stateDir: opts.stateDir,
     paths,
     keep: opts.keep,
@@ -2032,7 +1896,7 @@ const prune = Effect.fn("worktree.prune")(function* (
   });
   if (!use) {
     const standing = yield* conclude(round);
-    const unknown = "could not ask herdr what is live";
+    const unknown = "could not ask core what is live";
     return {
       lines: [...standing, ...Arr.map(due, (worktree) => `kept ${nameOf(worktree)} · ${unknown}`)],
       judged: Arr.map(due, (worktree) => ({ path: worktree.path, keep: unknown, removed: false })),
@@ -2061,17 +1925,8 @@ const prune = Effect.fn("worktree.prune")(function* (
             why: verdict.why,
             repo,
             run,
-            managedBy: mine.get(worktree.path)?.managed_by ?? "herdr",
-            tabs: new Set(
-              Arr.map(
-                Arr.filter(
-                  use.panes,
-                  (pane) => panes.get(worktree.path)?.has(pane.paneId) ?? false,
-                ),
-                (pane) => pane.tabId,
-              ),
-            ),
-            panes: use.panes,
+            leftovers: panes.get(worktree.path) ?? new Set(),
+            agents: use.agents,
             stateDir: opts.stateDir,
             ports: opts.ports ?? COMPACTION_PORTS,
             registered: opts.registered,
@@ -2138,7 +1993,7 @@ interface Removal {
 /** Removes one checkout and its branch, and says what happened to each. */
 const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
   herdr: Herdr,
-  worktree: WorktreeInfo & { branch: string },
+  worktree: Listed & { branch: string },
   opts: {
     name: string;
     /** Why it was settled, which is what the removal line says. */
@@ -2146,54 +2001,24 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
     /** The repository's own checkout: this one is about to stop existing. */
     repo: string;
     run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
-    /** Who made this checkout, which is who is allowed to take it away. */
-    managedBy: "git" | "herdr";
-    /** The tabs its finished Runs' agents were left in, closed with the checkout. */
-    tabs: ReadonlySet<string>;
-    panes: ReadonlyArray<PaneInfo>;
+    /** The terminals its finished Runs' agents were left in, ended with the checkout. */
+    leftovers: ReadonlySet<string>;
+    agents: ReadonlyArray<AgentInfo>;
     stateDir: string;
     ports: CompactionPorts;
     registered: ReadonlyArray<AgentEntry>;
   },
 ) {
   const kept = (why: string): Removal => ({ line: `kept ${opts.name} · ${why}`, removed: false });
-  // herdr removes a worktree by the workspace it has open on it, so a checkout herdr
-  // has open goes through herdr whoever made it: removing one behind its back would
-  // leave it listing a checkout that is not there. Never forced either way, and never
-  // `--force`: git's own refusal is the guard.
-  // Truthiness, not `!== null`: herdr reports a checkout it has nothing open on as an
-  // empty id as well as a missing one, and both mean the same thing here.
-  const throughHerdr = Boolean(worktree.workspaceId) || opts.managedBy === "herdr";
-  if (throughHerdr) {
-    // A checkout herdr made but whose workspace a human has since closed is opened
-    // again to be removed, because the workspace is how herdr names it.
-    let workspaceId = worktree.workspaceId;
-    if (!workspaceId) {
-      const opened = yield* Effect.result(
-        herdr.worktreeOpen({ cwd: opts.repo, path: worktree.path }),
-      );
-      if (opened._tag === "Failure") return kept(herdrFailureReason(opened.failure));
-      workspaceId = opened.success.workspaceId;
-    }
-    const refused = yield* herdr.worktreeRemove(workspaceId).pipe(
-      Effect.as(null),
-      Effect.catch((cause) => Effect.succeed(herdrFailureReason(cause))),
-    );
-    if (refused !== null) return kept(refused);
-  } else {
-    const dropped = yield* opts.run("git", ["worktree", "remove", worktree.path], opts.repo);
-    if (dropped.code !== 0) return kept(whatItSaid(dropped) || "git would not remove it");
-  }
+  // Never `--force`: git's own refusal is the guard. A checkout herdr made once is a git
+  // worktree like any other.
+  const dropped = yield* opts.run("git", ["worktree", "remove", worktree.path], opts.repo);
+  if (dropped.code !== 0) return kept(whatItSaid(dropped) || "git would not remove it");
 
-  // The Run's leftover shells, now that the directory they sit in has gone — whichever
-  // manager removed it. herdr closes the workspace it had open on the checkout, but a
-  // Run's tabs are in the workspace it was activated from, which that closing knows
-  // nothing about. The pane list this reads was taken before the removal, which is why
-  // it still says where each of them was.
-  const openTabs = yield* closeDeadTabs(herdr, {
+  const running = yield* endLeftovers(herdr, {
     at: worktree.path,
-    tabs: opts.tabs,
-    panes: opts.panes,
+    leftovers: opts.leftovers,
+    agents: opts.agents,
     stateDir: opts.stateDir,
     ports: opts.ports,
     registered: opts.registered,
@@ -2214,8 +2039,8 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
   // Said on the same line, for the same reason the kept branch is: this checkout will
   // not be a candidate again, so anything that did not go with it is reported here or
   // it is never reported.
-  const tabs = openTabs === 0 ? "" : ` · ${openTabs} tab(s) left open`;
-  return { line: `♻ removed ${opts.name} · ${why}${tabs}`, removed: true } satisfies Removal;
+  const agents = running === 0 ? "" : ` · ${running} agent(s) left running`;
+  return { line: `♻ removed ${opts.name} · ${why}${agents}`, removed: true } satisfies Removal;
 });
 
 /**
@@ -2277,12 +2102,15 @@ const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
   const lines: string[] = [];
   const judged: Judged[] = [];
   const listed = new Set<string>();
-  // One `herdr worktree list` per live checkout, every sweep. Cheap while checkouts are few.
+  // One `git worktree list` per live checkout, every sweep. Cheap while checkouts are few.
   for (const cwd of new Set([opts.cwd, ...recorded.mine.keys()])) {
     const own = cwd === opts.cwd;
     // A checkout an earlier listing named is in a repository already swept.
     if (!own && (listed.has(cwd) || !(yield* fs.exists(cwd)))) continue;
-    const listing = yield* opts.herdr.worktreeList(cwd).pipe(Effect.orElseSucceed(() => null));
+    const found = yield* gitWorktrees(opts.run ?? shell, cwd).pipe(
+      Effect.orElseSucceed(() => null),
+    );
+    const listing = found === null ? null : { worktrees: found.checkouts, source: found.repo };
     if (!own && (listing === null || Arr.every(listing.worktrees, (w) => listed.has(w.path))))
       continue;
     for (const worktree of listing?.worktrees ?? []) listed.add(worktree.path);

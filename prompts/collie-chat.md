@@ -22,8 +22,7 @@ the shell. "I have no access" is never an answer here; find the way.
   label, a checkout's absolute path, or `projects-root` for the Projects root — and every
   Input the workflow declares, an optional one you leave empty as `""`. A start missing any
   of them is refused listing each one, what it means and what could fill it; pass those
-  back in one retry. `here: true` keeps the Run in that workspace instead of opening one
-  for its worktree — what "start it here" means.
+  back in one retry.
   A start never needs checks: where nothing names any, the Run's own agent names them
   before it builds. Give `verify` — a list of `{name, executable, argv, cwd}`, the commands
   whose passing on the final tree proves the work — only to hold a Run to checks you chose.

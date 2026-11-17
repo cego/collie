@@ -15,6 +15,7 @@ import {
   Cache,
   Cause,
   Clock,
+  Context,
   Data,
   Duration,
   Effect,
@@ -1215,6 +1216,12 @@ const claude: CompactionPort = {
   poll: (ctx, requestId) => claudeOutcome(ctx.dir, requestId),
 };
 
+/** Replaces a started server's own budget; a fast-forwarded test clock gives it none. */
+export const ServerStartDeadline = Context.Reference<Duration.Duration | null>(
+  "collie/ServerStartDeadline",
+  { defaultValue: () => null },
+);
+
 /**
  * A local server of this agent's own, started through a shell and waited on until it
  * says it is up. Two adapters need one — Codex's App Server, whose port is only ever on
@@ -1275,7 +1282,8 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
     }),
   );
 
-  const deadline = (yield* Clock.currentTimeMillis) + opts.startMs;
+  const budget = (yield* ServerStartDeadline) ?? Duration.millis(opts.startMs);
+  const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(budget);
   const said = yield* fs.readFileString(opts.log).pipe(
     Effect.map((log) => opts.listening.exec(log)),
     Effect.repeat({

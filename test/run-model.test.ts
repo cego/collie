@@ -54,7 +54,7 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
-        const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+        const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
         const runs = yield* Effect.forEach(Arr.range(1, RUNS), (n) =>
           Effect.gen(function* () {
             const task = `task-${n}`;

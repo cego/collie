@@ -23,8 +23,8 @@ import { whatItSaid } from "./mr";
 import { HELLE_TOKEN_STEPS, helleUrlOf } from "./helle-url";
 import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX } from "./connection-probes";
 import { connectionOnMachine } from "./connections";
-import { installation, manifestField, RELEASE_TAG, type Carried } from "./release";
-import manifest from "../herdr-plugin.toml";
+import { installation, releaseVersion, RELEASE_TAG, type Carried } from "./release";
+import manifest from "../package.json";
 
 export type StepStatus = "done" | "in_place" | "skipped" | "needs_root" | "needs_human" | "failed";
 
@@ -65,7 +65,6 @@ export interface OnboardOptions {
   readonly attended?: boolean;
 }
 
-const HERDR_INSTALL = "curl -fsSL https://herdr.dev/install.sh | sh";
 const CLAUDE_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash";
 const PROFILE_MARKER = "# added by collie onboard";
 const LINEAR_LOGIN = "claude mcp login linear-server";
@@ -147,11 +146,11 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   const localBin = `${env.home}/.local/bin`;
   const binDir = env.raw["COLLIE_BIN_DIR"] ?? localBin;
   const inherited = Arr.filter(Str.split(env.raw["PATH"] ?? "", ":"), (dir) => dir !== "");
-  // Where the installers put herdr, Claude Code and `collie`, ahead of the PATH this
+  // Where the installers put Claude Code and `collie`, ahead of the PATH this
   // process was started with, which a fresh SSH session's may not include yet.
   const search = Arr.join([...new Set([binDir, localBin, ...inherited])], ":");
   const release = `${env.collieDir}/release`;
-  // Where the plugin is prepared and doctor looks: a development checkout's own root.
+  // Where the release is prepared and doctor looks: a development checkout's own root.
   let root = release;
 
   const childEnv = { ...env.raw, PATH: search };
@@ -276,7 +275,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         } satisfies Outcome;
       }
       const clone = yield* fs.exists(`${env.collieDir}/.git`);
-      if (!clone && (yield* manifestField(release, "version")) === to) return inPlace(`at ${to}`);
+      if (!clone && (yield* releaseVersion(release)) === to) return inPlace(`at ${to}`);
       const placed = yield* upgrade(
         { ...env, pluginRoot: clone ? env.collieDir : release, raw: childEnv },
         { to, ...(options.carried !== undefined && { carried: options.carried }) },
@@ -307,7 +306,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
               );
         }),
       );
-    yield* installer("herdr", "herdr", HERDR_INSTALL, "sh");
     yield* installer("claude", "Claude Code", CLAUDE_INSTALL, "bash");
 
     yield* step(
@@ -333,8 +331,8 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     );
 
     yield* step(
-      "plugin",
-      "The plugin, the runner and the skills",
+      "prepare",
+      "The runner and the skills",
       Effect.gen(function* () {
         const prepared = yield* exec("sh", ["prepare.sh"], root);
         const steps = prepareSteps(prepared.stdout);

@@ -72,7 +72,7 @@ import * as CryptoModules from "effect/crypto";
 import * as EffectRoot from "effect";
 import * as AgentsSdk from "./agents";
 import { HOLD, STOP, controlOf, controlSet } from "./controls";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import { Agents } from "./agents";
 import * as Sdk from "./sdk";
 import {
@@ -118,7 +118,6 @@ import {
   gitlabHostOf,
   loadDefaults,
   readConfig,
-  terminalBackend,
   worktreesDirectory,
 } from "./config";
 import { controlDir, unlistedServers } from "./compaction";
@@ -320,7 +319,7 @@ import {
   type BranchAsk,
   type RecordedBy,
 } from "./worktree";
-import { Herdr, herdrFailureReason } from "./herdr";
+import { Herdr } from "./herdr";
 
 import type { PluginEnv } from "./env";
 import { connectionOnMachine } from "./connections";
@@ -1842,7 +1841,6 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** Records that the Step the work is in failed, for a Run that parks to be resumed. */
   export function stepFailed(why: string): Effect.Effect<void, never, Run | Host>;
-
 
   /** A schema that decodes an agent's Output without services of its own. */
   export type OutputContract = Schema.Codec<unknown, unknown, never, never>;
@@ -4657,20 +4655,15 @@ export const hostLayer = (options: {
       const inventoryOf = (root: string) =>
         Effect.gen(function* () {
           const walked = yield* Cache.get(walks, root);
-          const { herdr } = yield* placing;
-          const open = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
           const known = yield* publicationCheckouts(
             [],
             [
               ...new Set(
                 Arr.filter(
-                  [
-                    ...Arr.flatMap(yield* store.runs, (row) => {
-                      const placed = placedOf(row, {});
-                      return [row.project, placed.cwd, placed.worktree?.path ?? ""];
-                    }),
-                    ...Arr.flatMap(open, (workspace) => [workspace.cwd, workspace.worktree ?? ""]),
-                  ],
+                  Arr.flatMap(yield* store.runs, (row) => {
+                    const placed = placedOf(row, {});
+                    return [row.project, placed.cwd, placed.worktree?.path ?? ""];
+                  }),
                   (dir) => pipe(dir, Str.startsWith("/")),
                 ),
               ),
@@ -4941,13 +4934,6 @@ export const hostLayer = (options: {
                 return missing;
               const me = yield* forge.login(cwd, runShell, ref.project);
               const runs = yield* store.runs;
-              const { herdr } = yield* placing;
-              const workspaces = new Set(
-                Arr.map(
-                  yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => [])),
-                  (one) => one.workspaceId,
-                ),
-              );
               const tasks = new Map(
                 Arr.map(
                   yield* listTasks.pipe(Effect.orElseSucceed(() => [])),
@@ -4958,11 +4944,7 @@ export const hostLayer = (options: {
               let ownsBranch = false;
               for (const candidate of runs) {
                 const task = candidate.task === null ? undefined : tasks.get(candidate.task);
-                if (
-                  candidate.project !== row.project ||
-                  task === undefined ||
-                  !isOpen(task, workspaces)
-                )
+                if (candidate.project !== row.project || task === undefined || !isOpen(task))
                   continue;
                 const at = placedOf(candidate, {});
                 if (at.branch === panel.sourceBranch && at.branch !== null) {
@@ -7059,7 +7041,7 @@ const refuseOptions = (
 type CheckoutRequest =
   /** What the workflow declares: its own worktree where it declares one, else where it started. */
   | { readonly kind: "declared" }
-  /** A herdr worktree workspace of the Run's own. */
+  /** A worktree of the Run's own, which is what a Workflow with a checkout is given anyway. */
   | { readonly kind: "separate" }
   /** The checkout the Run starts from, by its absolute path. */
   | { readonly kind: "existing"; readonly path: string };
@@ -8436,8 +8418,6 @@ const makeRegistry: (
         stateDir: placing.env.stateDir,
         workflow: generation.id,
         checkout: generation.checkout,
-        separate: ask.request.kind === "separate",
-        openLabel: ask.taskLabel ?? null,
         branchBase: ask.branchBase,
         recordedBy: (at) =>
           Effect.gen(function* () {
@@ -8494,12 +8474,10 @@ const makeRegistry: (
           reason: `"${generation.id}" could not be given a checkout: ${checkout.refused}`,
         });
       }
-      const own = checkout.worktree?.managed_by === "herdr" ? checkout.workspaceId : null;
-      opened = own === null ? null : { id: own, label: checkout.workspaceLabel };
       placed = {
         cwd: checkout.cwd,
         branch: checkout.branch,
-        workspace: ask.taskLabel === undefined ? own : null,
+        workspace: null,
         worktree: checkout.worktree,
       };
       yield* ask.record({ checkout: { placed, opened } });
@@ -8513,32 +8491,9 @@ const makeRegistry: (
       if (joined !== null) return { placed, task: joined.id };
     }
     const label = opened?.label ?? ask.taskLabel;
-    const openWorkspace = Effect.gen(function* () {
-      if (ask.workspace === null) {
-        return yield* new PlacementUncertain({
-          reason: `a workspace "${label}" on ${placed.cwd} may have been opened for ${ask.runId} before the host stopped, and nothing records which. Close it if it is there, and start again under a new request id.`,
-        });
-      }
-      yield* ask.record({ workspace: null });
-      const made = yield* placing.herdr.workspaceCreate({ cwd: placed.cwd, label }).pipe(
-        Effect.mapError((cause) => {
-          const reason = `No workspace could be opened for this task: ${herdrFailureReason(cause)}`;
-          return cause.answered === true
-            ? new HostRefused({ reason })
-            : new PlacementUncertain({ reason });
-        }),
-      );
-      yield* ask.record({ workspace: made.workspaceId });
-      return { workspace: made.workspaceId, rootPane: made.rootTab?.paneId ?? null };
-    });
-    const { workspace, rootPane } =
-      opened !== null
-        ? { workspace: opened.id, rootPane: placed.worktree?.root_pane_id ?? null }
-        : ask.workspace !== undefined && ask.workspace !== null
-          ? { workspace: ask.workspace, rootPane: null }
-          : (yield* terminalBackend(placing.env.userDir)) === "core"
-            ? { workspace: null, rootPane: null }
-            : yield* openWorkspace;
+    // A workspace only a Herdr 1 placement recorded; core has none.
+    const workspace = opened?.id ?? ask.workspace ?? null;
+    const rootPane = opened === null ? null : (placed.worktree?.root_pane_id ?? null);
     // A workspace an earlier attempt recorded may already have its Task.
     const known =
       ask.workspace === undefined ? null : yield* taskOfWorkspace(workspace).pipe(Effect.orDie);
@@ -8559,8 +8514,8 @@ const makeRegistry: (
 
   /**
    * The Task whose work this Run is about, or null: one whose Runs opened or were given the
-   * merge request its diff target names, or, while herdr has its workspace, were placed on
-   * its branch. Where several are, the one whose matching Run came first.
+   * merge request its diff target names, or, while it is open, were placed on its branch.
+   * Where several are, the one whose matching Run came first.
    */
   const taskWorking = Effect.fn("Engine.taskWorking")(function* (
     generation: Generation,
@@ -8584,16 +8539,6 @@ const makeRegistry: (
     });
     const mr = yield* mrIdOf(pointedAt(generation, ask.input), placed.cwd);
     if (branch === null && mr === null) return null;
-    const open = new Set(
-      branch === null || (yield* terminalBackend(placing.env.userDir)) === "core"
-        ? []
-        : Arr.map(
-            yield* placing.herdr
-              .workspaceList()
-              .pipe(Effect.orElseSucceed((): ReadonlyArray<{ workspaceId: string }> => [])),
-            (one) => one.workspaceId,
-          ),
-    );
     const tasks = new Map(
       Arr.map(
         yield* listTasks.pipe(Effect.orElseSucceed(() => [])),
@@ -8616,7 +8561,7 @@ const makeRegistry: (
         );
         if (mrs.includes(mr)) return task;
       }
-      if (branch === null || !isOpen(task, open) || unplaced(row)) continue;
+      if (branch === null || !isOpen(task) || unplaced(row)) continue;
       const at = placedOf(row, {});
       if (at.branch === null) continue;
       if ((yield* about({ cwd: at.cwd, branch: at.branch, name: row.run, inputs: {} })) === branch)
@@ -9809,30 +9754,19 @@ const makeRegistry: (
   /** Why a live agent in any session works inside `dir`, or null when none does. */
   const agentIn = Effect.fn("Engine.agentIn")(function* (dir: string) {
     const real = (at: string) => fs.realPath(at).pipe(Effect.orElseSucceed(() => at));
-    // Unlike liveHerds, an unlisted session is a refusal: its agents may work in it.
-    const listed = yield* Effect.result(placing.herdr.sessionList());
-    if (listed._tag === "Failure")
-      return "herdr would not list its sessions, whose agents may work in it";
-    const sessions =
-      listed.success.length === 0
-        ? [placing.herdr]
-        : Arr.map(listed.success, (one) => placing.herdr.inSession(one.socketPath));
-    for (const herdr of sessions) {
-      const panes = yield* Effect.result(herdr.paneList());
-      if (panes._tag === "Failure") return "herdr would not say which agents work in it";
-      for (const pane of panes.success) {
-        if (!pane.agent) continue;
-        for (const at of [pane.cwd, pane.foregroundCwd]) {
-          if (at === null) continue;
-          const there = yield* real(at);
-          if (there === dir || pipe(there, Str.startsWith(`${dir}/`))) {
-            return `agent ${pane.agent} in pane ${pane.paneId} works in it`;
-          }
+    const agents = yield* Effect.result(placing.herdr.agentList());
+    if (agents._tag === "Failure") return "core would not say which agents work in it";
+    for (const agent of agents.success) {
+      for (const at of [agent.cwd, agent.foregroundCwd]) {
+        if (at === null) continue;
+        const there = yield* real(at);
+        if (there === dir || pipe(there, Str.startsWith(`${dir}/`))) {
+          return `agent ${agent.name} in terminal ${agent.paneId} works in it`;
         }
       }
     }
-    const servers = yield* unlistedServers(placing.env.stateDir, sessions);
-    if (servers === null) return "herdr would not say which agents it has";
+    const servers = yield* unlistedServers(placing.env.stateDir, [placing.herdr]);
+    if (servers === null) return "core would not say which agents it has";
     for (const record of servers) {
       const there = yield* real(record.cwd);
       if (there === dir || pipe(there, Str.startsWith(`${dir}/`)))

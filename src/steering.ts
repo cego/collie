@@ -18,7 +18,6 @@ import { readJournal, type Journal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { StoreWrites } from "./store-writes";
 import { nowIso, epochMs } from "./time";
-import { terminalBackend } from "./config";
 import { coreSocket } from "./hc";
 import { FrontDoor } from "./board-model";
 
@@ -522,19 +521,9 @@ export const herdKey = Effect.fn("Steering.herdKey")(function* <R>(
 export const herdOf = (socketPath: string | null) =>
   herdKey(socketPath, () => Effect.succeed(null));
 
-/**
- * The Herd of a Collie on this Machine: on one set to core, its core session's, keyed by
- * that session's socket; on herdr, the herdr session it runs in.
- */
-export const machineHerd = (env: {
-  readonly socketPath: string | null;
-  readonly userDir: string;
-  readonly raw: Readonly<Record<string, string | undefined>>;
-}) =>
-  Effect.gen(function* () {
-    const core = (yield* terminalBackend(env.userDir)) === "core";
-    return yield* herdOf(core ? yield* coreSocket(env.raw) : env.socketPath);
-  });
+/** The Herd of a Collie on this Machine: its core session's, keyed by that session's socket. */
+export const machineHerd = (env: { readonly raw: Readonly<Record<string, string | undefined>> }) =>
+  Effect.flatMap(coreSocket(env.raw), herdOf);
 
 export const herdDir = Effect.fn("Steering.herdDir")(function* (stateDir: string, key: string) {
   const path = yield* Path.Path;

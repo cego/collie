@@ -129,9 +129,7 @@ test(
             ["remote", "set-head", "origin", "-a"],
           ])
             yield* exec(["git", ...args], { cwd: world.project });
-          const client = yield* connect(world.state, {
-            hostEnv: { FAKE_HERDR_OUTPUTS: outputs },
-          }).pipe(Effect.orDie);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
           const started = yield* client
             .start({
               project: world.project,
@@ -158,9 +156,7 @@ test(
           yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd });
           const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
           yield* stopHost(world.state);
-          yield* connect(world.state, { hostEnv: { FAKE_HERDR_OUTPUTS: outputs } }).pipe(
-            Effect.orDie,
-          );
+          yield* connect(world.state).pipe(Effect.orDie);
           const board = yield* collie(world, ["board"]);
           const data = yield* Schema.decodeUnknownEffect(
             Schema.Struct({
@@ -190,8 +186,8 @@ test(
             )?.revision.head_sha,
           ).toBe(ended);
           const env = readEnv({
-            HERDR_PLUGIN_ROOT: world.install,
-            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_ROOT: world.install,
+            COLLIE_STATE_DIR: world.state,
             COLLIE_USER_DIR: world.config,
             HOME: world.home,
             COLLIE_CWD: world.project,
@@ -219,9 +215,7 @@ test(
             (view) => view?.status.status === "failed",
           );
           yield* stopHost(world.state);
-          current = yield* connect(world.state, { hostEnv: { FAKE_HERDR_OUTPUTS: outputs } }).pipe(
-            Effect.orDie,
-          );
+          current = yield* connect(world.state).pipe(Effect.orDie);
           const offered = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
           expect(offered[0]?.title).toContain("Checks");
           const child = yield* current
@@ -696,7 +690,7 @@ const scratch = Effect.fn("board.scratch")(function* () {
   const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
     prefix: "collie-board-",
   });
-  return { dir, env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }) };
+  return { dir, env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }) };
 });
 
 const TASK: TaskRecord = {
@@ -707,17 +701,9 @@ const TASK: TaskRecord = {
   created_at: "2026-09-14T09:00:00Z",
 };
 
-/** What herdr says about a pane, which is all the board ever knows about one. */
-function agent(name: string, status: AgentInfo["status"], title: string | null = null): AgentInfo {
-  return {
-    name,
-    paneId: "p-1",
-    workspaceId: "w1",
-    status,
-    title,
-    terminalId: "t-1",
-    agentSession: null,
-  };
+/** What core says about a terminal, which is all the board ever knows about one. */
+function agent(name: string, status: AgentInfo["status"]): AgentInfo {
+  return { name, paneId: "t-1", status, terminalId: "t-1", cwd: "/project", foregroundCwd: null };
 }
 
 /** The register's word that an agent works for a Run. */
@@ -1036,23 +1022,21 @@ test("an agent herdr reports blocked names its pane, with nothing recorded to sa
     }),
   ));
 
-test("a working agent leaves the Task working, and its pane title is not the card's text", () =>
+test("a working agent leaves the Task working, saying the step it works on", () =>
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const run = yield* madeRun(dir, { task: "task-1" });
       yield* launched(dir, run.id, ["build", "review-1"]);
 
-      for (const title of ["Claude Code", "Review-1.prompt.md", "cego.collie agent review"]) {
-        const [view] = yield* board(env, [run], {
-          alive: [agent("impl-1", "working", title)],
-          registered: [registered("impl-1", run.id)],
-        });
+      const [view] = yield* board(env, [run], {
+        alive: [agent("impl-1", "working")],
+        registered: [registered("impl-1", run.id)],
+      });
 
-        expect(sectionOf(view!)).toBe("working");
-        expect(Arr.map(view!.agents, (one) => one.name)).toEqual(["impl-1"]);
-        expect(view!.sentence).toBe("Reviewing, round 1.");
-      }
+      expect(sectionOf(view!)).toBe("working");
+      expect(Arr.map(view!.agents, (one) => one.name)).toEqual(["impl-1"]);
+      expect(view!.sentence).toBe("Reviewing, round 1.");
     }),
   ));
 
@@ -1088,7 +1072,7 @@ test("a check Collie is running outranks what an idle agent last said", () =>
       });
 
       const [view] = yield* board(env, [run], {
-        alive: [agent("impl-1", "idle", "Code review findings application")],
+        alive: [agent("impl-1", "idle")],
         registered: [registered("impl-1", run.id)],
       });
 
@@ -2911,7 +2895,7 @@ test(
           const tasks = (yield* Schema.decodeUnknownEffect(
             Schema.Struct({ tasks: Schema.Array(Schema.Struct({ name: Schema.String })) }),
           )(printed.envelope.data).pipe(Effect.orDie)).tasks;
-          expect(Arr.map(tasks, (one) => one.name)).toEqual(["Plain"]);
+          expect(Arr.map(tasks, (one) => one.name)).toEqual(["Hi"]);
         }),
       ["plain.workflow.ts"],
     ),

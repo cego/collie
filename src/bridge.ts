@@ -9,7 +9,6 @@ import { Config, Effect, Option } from "effect";
 import { BRIDGE_READY, type Declaration, type FrontDoor, type Where } from "./board-model";
 import { channelInto } from "./channel";
 import { currentEnv } from "./env";
-import { Herdr } from "./herdr";
 import { HostUnavailable, connect, peerChannel, socketOf } from "./host";
 import { ensurePaired, riding } from "./lifecycle";
 import { machineName } from "./peers";
@@ -37,25 +36,14 @@ export const bridge = Effect.fn("Bridge")(function* (
   machine: string | null = null,
 ) {
   const env = yield* currentEnv.pipe(Effect.orDie);
-  // A login over SSH is handed no herdr socket; herdr's own status says where it listens.
-  const session =
-    env.socketPath ??
-    (yield* new Herdr(env).serverInfo().pipe(
-      Effect.map((server) => (server.socket === "" ? null : server.socket)),
-      Effect.orElseSucceed(() => null),
-    ));
   // A host on another build is still one to pipe: front doors speak a protocol, not a build.
   yield* Effect.scoped(
     connect(env.stateDir, {
-      hostEnv:
-        session === null
-          ? { HERDR_PLUGIN_STATE_DIR: env.stateDir }
-          : { HERDR_PLUGIN_STATE_DIR: env.stateDir, HERDR_SOCKET_PATH: session },
+      hostEnv: { COLLIE_STATE_DIR: env.stateDir },
     }),
   ).pipe(Effect.catchTag("HostVersionMismatch", () => Effect.void));
   const from = yield* whereFrom(client);
-  const declaration: Declaration =
-    from === undefined ? { frontDoor: as, session } : { frontDoor: as, session, from };
+  const declaration: Declaration = from === undefined ? { frontDoor: as } : { frontDoor: as, from };
   const socket =
     machine === null
       ? socketOf(env.stateDir)

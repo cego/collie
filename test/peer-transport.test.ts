@@ -168,7 +168,7 @@ test("a blocked port with no connection open waits on one, having only checked f
       expect(yield* fake.calls).toEqual(["mux check mk@vm-mk"]);
 
       const unlisted = yield* Effect.scoped(reached(peerAt(blocked.port), null)).pipe(Effect.flip);
-      expect(unlisted.ssh).toBe("herdr lists no machine vm-mk");
+      expect(unlisted.ssh).toBe("core lists no machine vm-mk");
       expect(unlisted.waits).toBeUndefined();
     }),
   ));

@@ -1,5 +1,5 @@
 # Tag a version (no `v`: install.sh builds the download URL from the version in
-# herdr-plugin.toml verbatim) to publish the runner binaries install.sh fetches, and
+# package.json verbatim) to publish the runner binaries install.sh fetches, and
 # Collie Desktop at the same version: its installer, its update files and install-desktop.sh.
 name: release
 on:

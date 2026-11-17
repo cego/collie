@@ -1,13 +1,12 @@
-// Onboarding a Machine from Desktop: herdr saves it where it is new, asking its questions
-// of the human; Desktop's own version of the runner goes there only once its signature
-// verifies; and `collie onboard` runs with it, each step told as it comes.
+// Onboarding a Machine from Desktop: core saves it where it is new; Desktop's own version of
+// the runner goes there only once its signature verifies; and `collie onboard` runs with it,
+// each step told as it comes.
 
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Clock, Effect, Option, Result, Schema, Stream } from "effect";
 import { CommandLine } from "effect/process";
-import { inTerminal } from "../../../src/in-terminal";
 import { verifiedRunner as sharedVerifiedRunner } from "../../../src/releases";
 import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";
 import { collieSaid, type Route, type ShellRoute, spawned } from "./machine";
@@ -131,7 +130,7 @@ const Line = Schema.fromJsonString(
 );
 const lineOf = Schema.decodeUnknownOption(Line);
 
-export const NOT_STARTED: OnboardRun = { steps: [], asked: null, ready: null, reason: null, at: 0 };
+export const NOT_STARTED: OnboardRun = { steps: [], ready: null, reason: null, at: 0 };
 
 export const onboardingSkips = (
   before: ReadonlyArray<OnboardStep>,
@@ -172,7 +171,7 @@ export const tracked = (told: (run: OnboardRun) => Effect.Effect<void>, start = 
       }),
     end: (ready: boolean, reason: string | null) =>
       Effect.flatMap(Clock.currentTimeMillis, (at) =>
-        change((now) => ({ ...now, asked: null, ready, reason, at })),
+        change((now) => ({ ...now, ready, reason, at })),
       ),
   };
 };
@@ -372,74 +371,11 @@ export const doctorOn = (route: Pick<Route, "collie">, gitlabHost?: string) =>
               },
             ];
           });
-          return { steps, asked: null, ready: steps.length === 0, reason: null, at };
+          return { steps, ready: steps.length === 0, reason: null, at };
         }),
       ),
       Effect.option,
     );
-
-const QUESTION = /\[(y\/N|Y\/n)\]\s*$/;
-
-/**
- * A yes-or-no question `text` ends in, as a terminal shows it with its default capitalised,
- * and the lines just before it, such as a warning of what yes would stop.
- */
-const questionIn = (text: string) => {
-  const asked = QUESTION.exec(text);
-  if (asked === null) return null;
-  const lines = Str.split(pipe_(text, Str.slice(0, asked.index)), "\n");
-  const blank = Option.getOrElse(
-    Arr.findLastIndex(lines, (line, at) => at < lines.length - 1 && Str.trim(line) === ""),
-    () => -1,
-  );
-  return {
-    text: Str.trim(Arr.join(lines.slice(blank + 1), "\n")),
-    yes: asked[1] === "Y/n",
-  };
-};
-// oxlint-disable-next-line no-control-regex
-const TERMINAL_CODES = /\x1b\[[0-9;?]*[ -/]*[@-~]|\r/g;
-
-/**
- * `herdr machine add` in a terminal Desktop drives, so herdr asks as it would a human:
- * each yes-or-no question is put to `ask` with herdr's own default, and its answer typed.
- * Fails with what herdr said last where it saved nothing.
- */
-export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
-  herdr: string,
-  target: string,
-  label: string,
-  session: string,
-  ask: (text: string, yes: boolean) => Effect.Effect<boolean>,
-) {
-  const herdrAdd = yield* inTerminal(
-    [herdr, "machine", "add", "--label", label, "--remote-session", session, target],
-    { env: childEnv(), cwd: CHILD_CWD },
-    spawned,
-  );
-  let said = "";
-  let answered = 0;
-  yield* herdrAdd.output.pipe(
-    Stream.decodeText(),
-    Stream.runForEach((chunk) =>
-      Effect.gen(function* () {
-        said += pipe_(chunk, Str.replace(TERMINAL_CODES, ""));
-        // Less the terminal's echo of the last answer.
-        const asked = questionIn(pipe_(said, Str.slice(answered), Str.replace(/^\s*[yn]\n/, "")));
-        if (asked === null) return;
-        answered = said.length;
-        const yes = yield* ask(asked.text, asked.yes);
-        yield* herdrAdd.type(yes ? "y\n" : "n\n");
-      }),
-    ),
-    Effect.ignore,
-  );
-  const code = yield* herdrAdd.exitCode;
-  if (code !== 0) {
-    const last = Arr.join(Str.split(Str.trim(said), "\n").slice(-3), "\n");
-    return yield* Effect.fail(last || `herdr machine add exited ${code}`);
-  }
-}, Effect.scoped);
 
 /**
  * Adds the Machine to core with `collie machine add`, whose `via` rides the SSH connection

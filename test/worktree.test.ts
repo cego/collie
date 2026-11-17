@@ -18,7 +18,6 @@ import {
   pruneWorktrees,
   repositoryName,
   roams,
-  worktreeFor,
   type BranchAsk,
   type BranchSource,
 } from "../src/worktree";
@@ -31,7 +30,7 @@ import {
   renovateClonesSweeper,
   settlingOf,
   sweep,
-  taskWorkspacesSweeper,
+  tasksSweeper,
   worktreesSweeper,
 } from "../src/cleanup";
 import { buildBoard } from "../src/board";
@@ -44,17 +43,24 @@ import { NOTHING_SETTLING, onBranch, reviewingDir, type Settling } from "../src/
 import { encodeCheckRecord } from "../src/check-processes";
 import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { shell } from "../src/mr";
-import { Herdr } from "../src/herdr";
+import { Herdr, HerdrError } from "../src/herdr";
 import { processOf } from "../src/processes";
 import type { CompactionPorts, Stopped } from "../src/compaction";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+
+class UnreadableCore extends Herdr {
+  override agentList() {
+    return Effect.fail(new HerdrError({ message: "core unavailable", detail: "" }));
+  }
+}
 
 let rig: Rig;
 let bin: FakeBin;
 /** The Runs and registered agents this test has, which is what pruning is given. */
 let recorded: RunFacts[];
 let registered: AgentEntry[];
+let listedCheckouts: Array<{ path: string; branch: string }>;
 /** What a Run that recorded a checkout answers when asked to give it up, and how often it was. */
 let releasedAs: string | null;
 let releases: number;
@@ -86,13 +92,58 @@ const asked = Effect.fn("worktreeTest.asked")(function* () {
   return Arr.map(yield* askedIn(), (call) => call.command);
 });
 
+const killedTerminals = () =>
+  Effect.map(rig.calls(), (calls) =>
+    Arr.map(
+      Arr.filter(calls, (call) => call.cmd === "terminal.kill"),
+      (call) => call.params?.terminal,
+    ),
+  );
+
+/** A core agent, with its registered Run recording the exact terminal it owns. */
+const liveAgent = Effect.fn("worktreeTest.liveAgent")(function* (
+  previousPane: string,
+  cwd: string,
+  status = "idle",
+  foregroundCwd?: string,
+) {
+  yield* (yield* FileSystem.FileSystem).makeDirectory(cwd, { recursive: true });
+  const name = `impl-${previousPane}`;
+  const entry = Option.getOrUndefined(
+    Arr.findFirst(registered, (one) => one.paneId === previousPane),
+  );
+  const terminalId = yield* rig.addAgent(name, cwd, { run: entry?.runId ?? "other-run" });
+  const core = yield* rig.startCore();
+  yield* core.report(name, status);
+  if (foregroundCwd !== undefined) core.cd(name, foregroundCwd);
+  if (entry !== undefined) {
+    registered = Arr.map(registered, (one) =>
+      one === entry ? { ...one, paneId: terminalId } : one,
+    );
+    yield* recordLaunch({
+      agent: name,
+      output: `${rig.stateDir}/agents/${entry.runId}/${previousPane}.json`,
+      reused: false,
+      runId: entry.runId,
+      operation: previousPane,
+      role: "implementer",
+      workflow: "implement",
+      harness: "claude",
+      terminalId,
+    });
+  }
+  return terminalId;
+});
+
 beforeEach(() =>
   runOnPath(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      yield* rig.startCore();
       bin = yield* FakeBin.make(join(rig.root, "bin"));
       recorded = [];
       registered = [];
+      listedCheckouts = [];
       releasedAs = null;
       releases = 0;
       liveAs = null;
@@ -661,64 +712,7 @@ test("a Run's own plan directory typed by hand names no branch either", () =>
     }),
   ));
 
-test("a branch with a worktree is opened, and one without gets a new one", () =>
-  runOnPath(
-    Effect.gen(function* () {
-      const herdr = new Herdr(rig.pluginEnv());
-      const made = yield* worktreeFor(herdr, {
-        cwd: rig.projectDir,
-        branch: "add-picker",
-        base: "origin/master",
-        label: "⚙ implement · add-picker",
-      });
-
-      expect(made.worktree).toMatchObject({ branch: "add-picker", created_by_collie: true });
-      expect(made.worktree.path).toEndWith("/worktrees/add-picker");
-      // The workspace herdr just made has one shell tab, and the record carries it so
-      // the run can put its first agent there instead of beside it.
-      expect(made.worktree.root_tab_id).toBe("1:1");
-      expect(made.worktree.root_pane_id).toBe("1-1");
-
-      const again = yield* worktreeFor(herdr, {
-        cwd: rig.projectDir,
-        branch: "add-picker",
-        base: "origin/master",
-      });
-      expect(again.worktree).toMatchObject({
-        path: made.worktree.path,
-        created_by_collie: false,
-        // An existing checkout's workspace is not fresh; nothing in it is the run's
-        // to take over.
-        root_tab_id: null,
-        root_pane_id: null,
-      });
-      expect(yield* rig.cmds()).toEqual([
-        "worktree list",
-        "worktree create",
-        "worktree list",
-        "worktree open",
-      ]);
-      // Never a label on `open`: that renames whatever workspace it opens.
-      const opened = Option.getOrUndefined(
-        Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "worktree open"),
-      );
-      expect(opened?.argv).not.toContain("--label");
-    }),
-  ));
-
-test("two unrelated runs never share a checkout", () =>
-  runOnPath(
-    Effect.gen(function* () {
-      const herdr = new Herdr(rig.pluginEnv());
-      const one = yield* worktreeFor(herdr, { cwd: rig.projectDir, branch: "one" });
-      const two = yield* worktreeFor(herdr, { cwd: rig.projectDir, branch: "two" });
-
-      expect(one.worktree.path).not.toBe(two.worktree.path);
-      expect(one.worktree.workspace_id).not.toBe(two.worktree.workspace_id);
-    }),
-  ));
-
-/** An agent a Run was given, registered in the pane herdr opened for it. */
+/** A historical registration, updated to its actual core address when arranged. */
 const agentIn = (runId: string, paneId: string): AgentEntry => ({
   role: "implementer",
   agent: `impl-${paneId}`,
@@ -729,7 +723,7 @@ const agentIn = (runId: string, paneId: string): AgentEntry => ({
   at: "2026-09-14T10:00:00Z",
 });
 
-/** A worktree Collie made, as its run record and herdr's list would show it. */
+/** A recorded checkout and the matching git listing. */
 const collieWorktree = (
   branch: string,
   opts: {
@@ -746,10 +740,15 @@ const collieWorktree = (
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    // Not `??`: null is an answer here — a checkout herdr has no workspace open on.
+    // Historical workspace fields remain readable after the controller is removed.
     const workspaceId = opts.workspaceId === undefined ? "w7" : opts.workspaceId;
     const worktreePath = opts.at ?? join(rig.root, "worktrees", branch);
-    yield* rig.addWorktree(branch, worktreePath, workspaceId);
+    yield* fs.makeDirectory(worktreePath, { recursive: true });
+    yield* fs.writeFileString(
+      `${worktreePath}/.git`,
+      `gitdir: ${rig.projectDir}/.git/worktrees/${branch || "roaming"}\n`,
+    );
+    listedCheckouts.push({ path: worktreePath, branch });
     // What the run recorded when it made this checkout, which is how pruning knows it
     // is still the same one.
     const madeAt = yield* fs.stat(`${worktreePath}/.git`);
@@ -788,6 +787,10 @@ const settledGit = (
 ) =>
   fakeGitAnswering(
     {
+      "worktree list --porcelain": porcelain([
+        { path: rig.projectDir, branch: "master" },
+        ...listedCheckouts,
+      ]),
       "status --porcelain": "",
       "rev-parse --abbrev-ref --symbolic-full-name @{u}": "origin/wt",
       "rev-list HEAD --not": "",
@@ -832,9 +835,11 @@ test("a settled worktree is removed, and the board says why", () =>
       yield* mergedMr();
 
       expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
-      // Through herdr, so the workspace goes with the checkout, and never forced.
-      const calls = Arr.filter(yield* rig.calls(), (c) => c.cmd === "worktree remove");
-      expect(calls.at(0)?.argv).toEqual(["worktree", "remove", "--workspace", "w7"]);
+      expect(yield* askedIn()).toContainEqual({
+        cwd: rig.projectDir,
+        command: `worktree remove ${listedCheckouts[0]!.path}`,
+      });
+      expect(yield* asked()).not.toContain(`worktree remove --force ${listedCheckouts[0]!.path}`);
     }),
   ));
 
@@ -889,8 +894,8 @@ test("a failed Run's clean roaming checkout is pruned, failed Runs inside it or 
       );
       registered.push(agentIn("run-improvement", "1-6"));
       // Both Runs' agents, idle where they were left.
-      yield* rig.addPane("1-5", "1:5", at, "claude");
-      yield* rig.addPane("1-6", "1:6", at, "claude");
+      yield* liveAgent("1-5", at);
+      yield* liveAgent("1-6", at);
       yield* settledGit({ "rev-parse --abbrev-ref --symbolic-full-name @{u}": "" });
 
       expect(yield* prune()).toEqual(["♻ removed roaming · its Run is over and it holds nothing"]);
@@ -929,7 +934,7 @@ test("a failed Run's roaming checkout is kept while one of its agents still work
         state: "failed",
         panes: ["1-5"],
       });
-      yield* rig.addPane("1-5", "1:5", at, "claude", null, null, "working");
+      yield* liveAgent("1-5", at, "working");
       yield* settledGit({ "rev-parse --abbrev-ref --symbolic-full-name @{u}": "" });
 
       expect(yield* prune()).toEqual(["kept roaming · an agent is working in it"]);
@@ -978,7 +983,9 @@ test("uncommitted work keeps a worktree, and so does anything unpushed", () =>
       yield* settledGit({ "status --porcelain": " M src/main.ts" });
 
       expect(yield* prune()).toEqual(["kept wt · uncommitted changes"]);
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(false);
     }),
   ));
 
@@ -1016,13 +1023,13 @@ test("a worktree an agent is working in keeps it", () =>
       const worktreePath = yield* collieWorktree("wt");
       yield* settledGit();
       yield* mergedMr();
-      yield* rig.addPane("1-9", "1:9", worktreePath, "claude");
+      yield* liveAgent("1-9", worktreePath);
 
       expect(yield* prune()).toEqual(["kept wt · an agent is working in it"]);
     }),
   ));
 
-test("a worktree a server of an agent herdr no longer lists may write in keeps it", () =>
+test("a worktree an unlisted agent server may write in is kept", () =>
   runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
@@ -1115,12 +1122,14 @@ test("with no merge request, a branch still on the remote keeps its worktree", (
 test("a worktree Collie did not create is never touched, settled or not", () =>
   runOnPath(
     Effect.gen(function* () {
-      yield* rig.addWorktree("by-hand", join(rig.root, "elsewhere"), "w9");
+      listedCheckouts.push({ branch: "by-hand", path: join(rig.root, "elsewhere") });
       yield* settledGit();
       yield* mergedMr();
 
       expect(yield* prune()).toEqual([]);
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(false);
     }),
   ));
 
@@ -1132,15 +1141,20 @@ test("a worktree is not re-checked on every refresh", () =>
       yield* settledGit({ "status --porcelain": " M src/main.ts" });
 
       expect(yield* prune()).toEqual(["kept wt · uncommitted changes"]);
-      const before = (yield* asked()).length;
-      expect(before).toBeGreaterThan(0);
+      const before = Arr.filter(
+        yield* asked(),
+        (command) => command !== "worktree list --porcelain",
+      );
+      expect(before.length).toBeGreaterThan(0);
       // The same answer, from what the last check recorded rather than from git again.
       expect(yield* prune()).toEqual(["kept wt · uncommitted changes"]);
-      expect((yield* asked()).length).toBe(before);
+      expect(
+        Arr.filter(yield* asked(), (command) => command !== "worktree list --porcelain"),
+      ).toEqual(before);
     }),
   ));
 
-test("a settled git-managed checkout is removed with git, and its dead tabs go with it", () =>
+test("a settled git checkout ends its idle agents and leaves agents outside it alone", () =>
   runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", {
@@ -1150,8 +1164,8 @@ test("a settled git-managed checkout is removed with git, and its dead tabs go w
       });
       // The run's own shell, still sitting in a directory that is about to go, and a
       // tab a human has since reused for something outside it.
-      yield* rig.addPane("1-5", "1:5", `${worktreePath}/src`);
-      yield* rig.addPane("1-6", "1:6", rig.projectDir);
+      yield* liveAgent("1-5", `${worktreePath}/src`);
+      yield* liveAgent("1-6", rig.projectDir);
       yield* settledGit();
       yield* mergedMr();
 
@@ -1162,46 +1176,8 @@ test("a settled git-managed checkout is removed with git, and its dead tabs go w
         command: `worktree remove ${worktreePath}`,
       });
       expect(yield* asked()).toContain("branch -d wt");
-      // herdr is asked for nothing but the list and the tab it has left holding a
-      // shell in a directory that is gone.
-      const cmds = yield* rig.cmds();
-      expect(cmds).not.toContain("worktree remove");
-      expect(cmds).not.toContain("worktree open");
-      const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "tab close");
-      expect(Arr.map(closed, (call) => call.argv?.at(2))).toEqual(["1:5"]);
-    }),
-  ));
 
-test("a dead tab herdr would not close is reported, because nothing comes back for it", () =>
-  runOnPath(
-    Effect.gen(function* () {
-      const worktreePath = yield* collieWorktree("wt", {
-        managedBy: "git",
-        workspaceId: null,
-        panes: ["1-5"],
-      });
-      yield* rig.addPane("1-5", "1:5", worktreePath);
-      yield* settledGit();
-      yield* mergedMr();
-      // The checkout goes, and herdr hiccups on the tab left standing in it. The path
-      // is gone from the listing now, so no later sweep has a candidate to retry with:
-      // said here or never said.
-      const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: '{"tab close":"pane is busy"}' }));
-
-      expect(
-        yield* pruneWorktrees({
-          herdr,
-          stateDir: rig.stateDir,
-          runs: recorded,
-          registered,
-          cwd: rig.projectDir,
-          settling,
-        }),
-      ).toEqual(["♻ removed wt · merged in !14 · 1 tab(s) left open"]);
-      // The checkout itself still went: a tab that will not close is not a reason to
-      // keep a settled checkout, only a reason to say so.
-      expect(yield* asked()).toContain(`worktree remove ${worktreePath}`);
-      expect(yield* asked()).toContain("branch -d wt");
+      expect(yield* killedTerminals()).toEqual([registered[0]!.paneId]);
     }),
   ));
 
@@ -1213,7 +1189,7 @@ test("git's refusal to remove a checkout keeps it, in git's own words", () =>
         workspaceId: null,
         panes: ["1-5"],
       });
-      yield* rig.addPane("1-5", "1:5", worktreePath);
+      yield* liveAgent("1-5", worktreePath);
       yield* settledGit(
         {},
         { "worktree remove": `fatal: ${worktreePath} contains modified files` },
@@ -1223,82 +1199,49 @@ test("git's refusal to remove a checkout keeps it, in git's own words", () =>
       expect(yield* prune()).toEqual([`kept wt · fatal: ${worktreePath} contains modified files`]);
       // The checkout is still there, so neither its branch nor its tabs are touched.
       expect(yield* asked()).not.toContain("branch -d wt");
-      expect(yield* rig.cmds()).not.toContain("tab close");
+      expect(yield* rig.cmds()).not.toContain("terminal.kill");
     }),
   ));
 
-test("a git-managed checkout herdr has a workspace on is still removed through herdr", () =>
+test("a historical Herdr checkout is removed with git without reopening its old workspace", () =>
   runOnPath(
     Effect.gen(function* () {
-      const worktreePath = yield* collieWorktree("wt", {
-        managedBy: "git",
-        workspaceId: "w7",
-        panes: ["1-5"],
-      });
-      // The run's own tab, which is in the workspace the run was activated from — not
-      // in the workspace herdr opened on the checkout, so herdr's removal cannot know
-      // about it.
-      yield* rig.addPane("1-5", "1:5", worktreePath);
+      const at = yield* collieWorktree("wt", { managedBy: "herdr", workspaceId: "w7" });
       yield* settledGit();
       yield* mergedMr();
 
       expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
-      // herdr owns every worktree it has open, whoever made the checkout: removing one
-      // behind its back would leave it listing a checkout that is not there.
-      const calls = Arr.filter(yield* rig.calls(), (call) => call.cmd === "worktree remove");
-      expect(calls.at(0)?.argv).toEqual(["worktree", "remove", "--workspace", "w7"]);
-      expect(yield* asked()).not.toContain(`worktree remove ${worktreePath}`);
-      // The dead tab still goes, whichever manager removed the checkout under it.
-      const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "tab close");
-      expect(Arr.map(closed, (call) => call.argv?.at(2))).toEqual(["1:5"]);
+      expect(yield* asked()).toContain(`worktree remove ${at}`);
+      expect(yield* asked()).toContain("branch -d wt");
     }),
   ));
 
-test("a checkout herdr will not remove is kept, in the words it refused with", () =>
+test("a core terminal that cannot be killed is reported after its checkout is removed", () =>
   runOnPath(
     Effect.gen(function* () {
-      const worktreePath = yield* collieWorktree("wt", { workspaceId: "" });
+      const at = yield* collieWorktree("wt", { panes: ["1-5"] });
+      const terminalId = yield* liveAgent("1-5", at);
       yield* settledGit();
       yield* mergedMr();
-      // No workspace open on it, so it is opened again to be removed — and herdr
-      // refuses, passing on what git told it.
-      const herdr = new Herdr(
-        rig.pluginEnv({
-          FAKE_HERDR_FAIL: `{"worktree remove":"fatal: ${worktreePath} contains modified files"}`,
-        }),
-      );
-
+      class RefusingCore extends Herdr {
+        override terminalKill() {
+          return Effect.fail(new HerdrError({ message: "core unavailable", detail: "" }));
+        }
+      }
       expect(
         yield* pruneWorktrees({
-          herdr,
+          herdr: new RefusingCore(rig.pluginEnv()),
           stateDir: rig.stateDir,
           runs: recorded,
           registered,
           cwd: rig.projectDir,
           settling,
         }),
-      ).toEqual([
-        `kept wt · herdr worktree remove failed (exit 1): fatal: ${worktreePath} contains modified files`,
-      ]);
-      // Never git behind herdr's back: herdr owns every worktree's whole life.
-      expect(yield* asked()).not.toContain(`worktree remove ${worktreePath}`);
-      // And the branch is only ever deleted once the checkout has actually gone.
-      expect(yield* asked()).not.toContain("branch -d wt");
-    }),
-  ));
-
-test("a checkout whose workspace was closed is opened again to be removed", () =>
-  runOnPath(
-    Effect.gen(function* () {
-      yield* collieWorktree("wt", { workspaceId: "" });
-      yield* settledGit();
-      yield* mergedMr();
-
-      expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
-      // Opened for the removal, then removed through herdr, never around it.
+      ).toEqual(["♻ removed wt · merged in !14 · 1 agent(s) left running"]);
+      expect(yield* asked()).toContain(`worktree remove ${at}`);
       expect(
-        Arr.filter(yield* rig.cmds(), (cmd) => pipe_(cmd, Str.startsWith("worktree"))),
-      ).toEqual(["worktree list", "worktree open", "worktree remove"]);
+        Arr.map(yield* new Herdr(rig.pluginEnv()).agentList(), (agent) => agent.terminalId),
+      ).toContain(terminalId);
     }),
   ));
 
@@ -1322,7 +1265,9 @@ test("a run starting in a checkout keeps it; its own board may still remove it",
           settling,
         }),
       ).toEqual(["kept wt · a run is starting in it"]);
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(false);
 
       // The Control Plane of that same workspace holds nothing: a merged branch's
       // checkout goes, and herdr closes the workspace showing it.
@@ -1340,48 +1285,7 @@ test("a run starting in a checkout keeps it; its own board may still remove it",
     }),
   ));
 
-test("a checkout an agent in another herdr session works in is kept", () =>
-  runOnPath(
-    Effect.gen(function* () {
-      const worktreePath = yield* collieWorktree("wt");
-      yield* settledGit();
-      yield* mergedMr();
-      class OtherSession extends Herdr {
-        override paneList() {
-          return Effect.succeed([
-            {
-              paneId: "9-1",
-              tabId: "9:1",
-              label: null,
-              agent: "claude",
-              agentStatus: "working",
-              workspaceId: "w-other",
-              cwd: worktreePath,
-              foregroundCwd: null,
-              tokens: {},
-              terminalId: null,
-              agentSession: null,
-            },
-          ]);
-        }
-      }
-
-      const said = yield* pruneWorktrees({
-        herdr: new Herdr(rig.pluginEnv()),
-        sessions: [new OtherSession(rig.pluginEnv())],
-        stateDir: rig.stateDir,
-        runs: recorded,
-        registered,
-        cwd: rig.projectDir,
-        settling,
-      });
-
-      expect(said).toEqual(["kept wt · an agent is working in it"]);
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
-    }),
-  ));
-
-test("a herdr that will not list panes judges nothing, and says so", () =>
+test("a core that will not list agents judges nothing, and says so", () =>
   runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
@@ -1389,7 +1293,7 @@ test("a herdr that will not list panes judges nothing, and says so", () =>
       yield* mergedMr();
       // A live agent's pane is the one condition nothing else can establish, so a
       // herdr that cannot be asked must not have its silence read as "none".
-      const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: '{"pane list":"herdr is gone"}' }));
+      const herdr = new UnreadableCore(rig.pluginEnv());
 
       expect(
         yield* pruneWorktrees({
@@ -1400,8 +1304,10 @@ test("a herdr that will not list panes judges nothing, and says so", () =>
           cwd: rig.projectDir,
           settling,
         }),
-      ).toEqual(["kept wt · could not ask herdr what is live"]);
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+      ).toEqual(["kept wt · could not ask core what is live"]);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(false);
 
       // Nothing was written down, so the next round asks again rather than standing on
       // a verdict it never reached.
@@ -1907,7 +1813,7 @@ test("a workspace whose own directory is not a checkout still gets its run a wor
       // A workspace that is about a task rather than about a repo directory: nothing
       // here says its own directory is a checkout, and nothing needs to — `COLLIE_CWD`
       // is what names the repository, and it beats the workspace's inferred directory.
-      const env = rig.pluginEnv({ COLLIE_CWD: rig.projectDir, HERDR_WORKSPACE_ID: "wTasks" });
+      const env = rig.pluginEnv({ COLLIE_CWD: rig.projectDir });
       expect(env.cwd).toBe(rig.projectDir);
 
       const checkout = yield* checkoutFor(new Herdr(env), {
@@ -1918,7 +1824,7 @@ test("a workspace whose own directory is not a checkout still gets its run a wor
         name: "Add a picker",
         login: LOGIN,
         inputs: { plan_kind: "text" },
-        workspaceId: env.workspaceId,
+        workspaceId: "wTasks",
         workspaceLabel: "Tasks",
       });
 
@@ -1966,7 +1872,7 @@ const configured = (settings: string) =>
     yield* fs.writeFileString(join(rig.userDir, "config.json"), `{ ${settings} }`);
   });
 
-const addAPicker = (opts: { separate?: boolean } = {}) =>
+const addAPicker = () =>
   checkoutFor(new Herdr(rig.pluginEnv()), {
     stateDir: rig.stateDir,
     cwd: rig.projectDir,
@@ -1975,7 +1881,6 @@ const addAPicker = (opts: { separate?: boolean } = {}) =>
     name: "Add a picker",
     login: LOGIN,
     inputs: { plan_kind: "text" },
-    ...opts,
   });
 
 test("with no setting, a checkout goes under ~/.collie/worktrees, by repository and branch", () =>
@@ -2010,7 +1915,7 @@ test("the worktrees_directory setting says where a checkout goes, ~ being home",
     }),
   ));
 
-test("on a core Machine, a branch checked out under ~/.herdr/worktrees is reused where it is, even for a Run that asked for a workspace of its own", () =>
+test("a branch checked out under ~/.herdr/worktrees is reused in place", () =>
   runOnPath(
     Effect.gen(function* () {
       const existing = join(rig.root, ".herdr", "worktrees", "project", LOGIN, "add-a-picker");
@@ -2018,9 +1923,8 @@ test("on a core Machine, a branch checked out under ~/.herdr/worktrees is reused
         { path: rig.projectDir, branch: "master" },
         { path: existing, branch: `${LOGIN}/add-a-picker` },
       ]);
-      yield* configured(`"terminal_backend": "core"`);
 
-      const checkout = yield* addAPicker({ separate: true });
+      const checkout = yield* addAPicker();
 
       expect(checkout.refused).toBeNull();
       expect(checkout.cwd).toBe(existing);
@@ -2033,13 +1937,12 @@ test("on a core Machine, a branch checked out under ~/.herdr/worktrees is reused
     }),
   ));
 
-test("on a core Machine, a Run that asked for a workspace of its own has git make its checkout, and herdr is asked nothing", () =>
+test("a Run gets its checkout through git without calling Herdr", () =>
   runOnPath(
     Effect.gen(function* () {
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
-      yield* configured(`"terminal_backend": "core"`);
 
-      const checkout = yield* addAPicker({ separate: true });
+      const checkout = yield* addAPicker();
 
       const at = join(rig.root, ".collie", "worktrees", "project", LOGIN, "add-a-picker");
       expect(checkout.cwd).toBe(at);
@@ -2076,35 +1979,6 @@ test("the checkout a branch already has is reused, never added twice", () =>
         managed_by: "git",
       });
       expect(yield* asked()).not.toContain(`worktree add ${existing}`);
-    }),
-  ));
-
-test("a Run that asks for its own workspace has herdr make the checkout, and takes that workspace", () =>
-  runOnPath(
-    Effect.gen(function* () {
-      yield* fakeGit();
-
-      const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
-        stateDir: rig.stateDir,
-        cwd: rig.projectDir,
-        workflow: "implement",
-        checkout: "branch",
-        name: "Add a picker",
-        login: LOGIN,
-        inputs: { plan_kind: "text" },
-        separate: true,
-        workspaceId: "wTasks",
-      });
-
-      expect(checkout.worktree).toMatchObject({
-        branch: `${LOGIN}/add-a-picker`,
-        managed_by: "herdr",
-        workspace_id: "w1",
-      });
-      expect(checkout.workspaceId).toBe("w1");
-      expect(yield* rig.cmds()).toEqual(["worktree list", "worktree create"]);
-      // git is asked only about the branch, never to make the checkout.
-      expect(yield* asked()).not.toContain("worktree list --porcelain");
     }),
   ));
 
@@ -2171,9 +2045,7 @@ test("a checkout Collie cannot be given is a run that does not start", () =>
   runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
-      const herdr = new Herdr(
-        rig.pluginEnv({ FAKE_HERDR_FAIL: '{"worktree list":"unknown command"}' }),
-      );
+      const herdr = new Herdr(rig.pluginEnv());
 
       const checkout = yield* checkoutFor(herdr, {
         stateDir: rig.stateDir,
@@ -2183,7 +2055,6 @@ test("a checkout Collie cannot be given is a run that does not start", () =>
         name: "Add a picker",
         login: LOGIN,
         inputs: { plan_kind: "text" },
-        separate: true,
         workspaceId: "wT",
       });
 
@@ -3055,26 +2926,13 @@ test("an agent working in a subdirectory of a checkout keeps it", () =>
       yield* settledGit();
       yield* mergedMr();
       // Not the checkout itself: agents work in the directories under it.
-      yield* rig.addPane("1-9", "1:9", `${worktreePath}/src`, "claude");
+      yield* liveAgent("1-9", `${worktreePath}/src`);
 
       expect(yield* prune()).toEqual(["kept wt · an agent is working in it"]);
     }),
   ));
 
-test("an agent in the checkout's own workspace keeps it, directory or no directory", () =>
-  runOnPath(
-    Effect.gen(function* () {
-      yield* collieWorktree("wt", { workspaceId: "w7" });
-      yield* settledGit();
-      yield* mergedMr();
-      // herdr reports some panes without a cwd; the workspace it is in is the evidence.
-      yield* rig.addPane("1-9", "1:9", "", "claude", "w7");
-
-      expect(yield* prune()).toEqual(["kept wt · an agent is working in it"]);
-    }),
-  ));
-
-test("a finished Run's own agent, idle in the tab it left behind, does not keep its checkout", () =>
+test("a finished Run's own agent, idle in its core terminal, does not keep its checkout", () =>
   runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
@@ -3082,11 +2940,10 @@ test("a finished Run's own agent, idle in the tab it left behind, does not keep 
       yield* mergedMr();
       // The Run is done and its agent is still sitting there, idle — that is the leftover
       // the removal closes, not work in progress.
-      yield* rig.addPane("1-5", "1:5", worktreePath, "claude");
+      yield* liveAgent("1-5", worktreePath);
 
       expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
-      const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "tab close");
-      expect(Arr.map(closed, (call) => call.argv?.at(2))).toEqual(["1:5"]);
+      expect(yield* killedTerminals()).toEqual([registered[0]!.paneId]);
     }),
   ));
 
@@ -3096,7 +2953,7 @@ test("a finished Run's own agent still working in its tab keeps the checkout", (
       const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
       yield* settledGit();
       yield* mergedMr();
-      yield* rig.addPane("1-5", "1:5", worktreePath, "claude", null, null, "working");
+      yield* liveAgent("1-5", worktreePath, "working");
 
       expect(yield* prune()).toEqual(["kept wt · an agent is working in it"]);
     }),
@@ -3113,12 +2970,11 @@ test("a board outside any repository still sweeps the checkouts the Runs recorde
       // recorded checkout instead.
       const home = join(rig.root, "home");
       yield* fs.makeDirectory(home, { recursive: true });
-      const herdr = new Herdr(
-        rig.pluginEnv({
-          FAKE_HERDR_FAIL: '{"worktree list":"not a git worktree"}',
-          FAKE_HERDR_FAIL_TIMES: "1",
-        }),
-      );
+      const herdr = new Herdr(rig.pluginEnv());
+      // Git cannot list from Home, so only the recorded checkout gives the repository.
+      yield* settledGit({
+        "worktree list --porcelain": `$(if [ "$PWD" != "${home}" ]; then printf '%s' '${porcelain([{ path: rig.projectDir, branch: "master" }, ...listedCheckouts])}'; fi)`,
+      });
 
       expect(
         yield* pruneWorktrees({
@@ -3139,28 +2995,19 @@ test("a hand-made checkout at the path a Collie one used is not a candidate", ()
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
       // The Collie worktree was removed by hand and the path reused for another branch.
-      yield* rig.setWorktrees([{ branch: "by-hand", path: worktreePath, open_workspace_id: "w9" }]);
+      listedCheckouts = [{ branch: "by-hand", path: worktreePath }];
+      const fs = yield* FileSystem.FileSystem;
+      const replacedAt = DateTime.toDateUtc(
+        DateTime.makeUnsafe(recorded[0]!.worktree!.made_at! + 1000),
+      );
+      yield* fs.utimes(`${worktreePath}/.git`, replacedAt, replacedAt);
       yield* settledGit();
       yield* mergedMr();
 
       expect(yield* prune()).toEqual([]);
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
-    }),
-  ));
-
-test("a checkout made again at a path is never the one made there before, however soon after", () =>
-  runOnPath(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const at = join(rig.root, "worktrees", "again");
-      const mtimeOf = (file: string) =>
-        fs.stat(file).pipe(Effect.map((info) => Option.getOrThrow(info.mtime).getTime()));
-      for (let round = 0; round < 50; round++) {
-        yield* rig.addWorktree("wt", at, "w7");
-        const made = yield* mtimeOf(`${at}/.git`);
-        yield* rig.setWorktrees([{ branch: "by-hand", path: at, open_workspace_id: "w9" }]);
-        expect(yield* mtimeOf(`${at}/.git`)).not.toBe(made);
-      }
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(false);
     }),
   ));
 
@@ -3308,7 +3155,7 @@ test("an agent that started elsewhere and moved into a checkout keeps it", () =>
       yield* mergedMr();
       // Started in the repository, `cd`-ed into the worktree: herdr reports both, and
       // the second one is where the work is.
-      yield* rig.addPane("1-9", "1:9", rig.projectDir, "claude", "1", worktreePath);
+      yield* liveAgent("1-9", rig.projectDir, "working", worktreePath);
 
       expect(yield* prune()).toEqual(["kept wt · an agent is working in it"]);
     }),
@@ -3347,12 +3194,14 @@ test("one repository's board neither forgets nor reports another's", () =>
       // has nothing of its own to say, and it leaves the other's verdict alone.
       const elsewhere = join(rig.root, "another-repo");
       yield* fs.makeDirectory(elsewhere, { recursive: true });
-      yield* rig.setWorktrees([]);
+      yield* settledGit({
+        "worktree list --porcelain": porcelain([{ path: elsewhere, branch: "master" }]),
+      });
       expect(
         yield* pruneWorktrees({
           herdr: new Herdr(rig.pluginEnv()),
           stateDir: rig.stateDir,
-          runs: recorded,
+          runs: [],
           registered,
           cwd: elsewhere,
           settling,
@@ -3386,33 +3235,31 @@ test("a branch git will not delete is a removal that keeps saying so", () =>
     }),
   ));
 
-test("a run chained from inside a worktree still opens the branch's checkout", () =>
+test("a run chained from inside a worktree reuses its branch checkout", () =>
   runOnPath(
     Effect.gen(function* () {
-      const herdr = new Herdr(rig.pluginEnv());
-      // A fix round is started by a run whose own cwd is a worktree, and herdr refuses
-      // `worktree open` and `create` from a linked one — so both have to be asked from
-      // the repository's own checkout, which is what `worktree list` answers with.
-      const first = yield* worktreeFor(herdr, { cwd: rig.projectDir, branch: "add-picker" });
-      const chained = yield* worktreeFor(herdr, {
-        cwd: first.worktree.path,
-        branch: "add-picker",
-      });
-
-      expect(chained.worktree).toMatchObject({
-        path: first.worktree.path,
-        created_by_collie: false,
-      });
-      const opens = Arr.filter(yield* rig.calls(), (call) => call.cmd === "worktree open");
-      expect(opens.at(0)?.argv).toEqual([
-        "worktree",
-        "open",
-        "--cwd",
-        rig.projectDir,
-        "--path",
-        first.worktree.path,
-        "--no-focus",
+      const at = join(rig.root, "worktrees", "add-picker");
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(at, { recursive: true });
+      yield* fakeGitWithCheckouts([
+        { path: rig.projectDir, branch: "master" },
+        { path: at, branch: "add-picker" },
       ]);
+      const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        stateDir: rig.stateDir,
+        cwd: at,
+        workflow: "implement",
+        checkout: "branch",
+        name: "Add a picker",
+        login: LOGIN,
+        inputs: { plan_kind: "text" },
+        explicit: "add-picker",
+      });
+      expect(checkout.refused).toBeNull();
+      expect(checkout.worktree).toMatchObject({ path: at, created_by_collie: false });
+      expect(Arr.some(yield* asked(), (call) => pipe_(call, Str.startsWith("worktree add")))).toBe(
+        false,
+      );
     }),
   ));
 
@@ -3540,7 +3387,9 @@ test("a checkout made again by hand at the same path and branch is not a candida
       yield* fs.writeFileString(`${worktreePath}/.git`, `gitdir: ${worktreePath}/.gitdir\n`);
 
       expect(yield* prune()).toEqual([]);
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(false);
     }),
   ));
 
@@ -3548,7 +3397,7 @@ test("a checkout made again by hand at the same path and branch is not a candida
 const sweeper = (herdr = new Herdr(rig.pluginEnv())) =>
   worktreesSweeper({
     herdr,
-    sessions: [],
+
     stateDir: rig.stateDir,
     runs: recorded,
     registered,
@@ -3568,11 +3417,15 @@ test("cleanup lists a settled worktree as removable, and sweeping removes it", (
         { kind: "worktree", target: at, bytes: expect.any(Number), reason: "merged in !14" },
       ]);
       // Judging removes nothing.
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(false);
 
       const report = yield* sweep([sweeper()], rig.stateDir, "host");
       expect(Arr.map(report.remove, (item) => item.target)).toEqual([at]);
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(true);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(true);
     }),
   ));
 
@@ -3591,20 +3444,22 @@ test("cleanup keeps an unsettled worktree, naming the first condition it fails",
     }),
   ));
 
-test("cleanup keeps every worktree when herdr will not list panes, and says why", () =>
+test("cleanup keeps every worktree when core will not list agents, and says why", () =>
   runOnPath(
     Effect.gen(function* () {
       const at = yield* collieWorktree("wt");
       yield* settledGit();
       yield* mergedMr();
-      const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: '{"pane list":"herdr is gone"}' }));
+      const herdr = new UnreadableCore(rig.pluginEnv());
 
       const report = yield* sweep([sweeper(herdr)], rig.stateDir, "host");
       expect(report.remove).toEqual([]);
       expect(report.keep).toEqual([
-        { kind: "worktree", target: at, reason: "could not ask herdr what is live" },
+        { kind: "worktree", target: at, reason: "could not ask core what is live" },
       ]);
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(false);
     }),
   ));
 
@@ -3625,7 +3480,7 @@ test("a merge the merge watch recorded on GitHub settles a branch still on the r
         runs: recorded,
         views: [],
         tasks: [],
-        sessions: [new Herdr(rig.pluginEnv())],
+
         protect: [],
       });
 
@@ -3645,6 +3500,10 @@ test("a legacy bare mr: target is settled as the merge request of its checkout's
       recorded = Arr.map(recorded, (run) => ({ ...run, mr: "mr:42" }));
       // Before `remote`: the fake answers the first pattern a question starts with.
       yield* fakeGitAnswering({
+        "worktree list --porcelain": porcelain([
+          { path: rig.projectDir, branch: "master" },
+          ...listedCheckouts,
+        ]),
         "remote get-url origin": "git@gitlab.example.com:group/app.git",
         "status --porcelain": "",
         "rev-parse --abbrev-ref --symbolic-full-name @{u}": "origin/wt",
@@ -3664,7 +3523,7 @@ test("a legacy bare mr: target is settled as the merge request of its checkout's
         runs: recorded,
         views: [],
         tasks: [],
-        sessions: [new Herdr(rig.pluginEnv())],
+
         protect: [],
       });
 
@@ -3702,21 +3561,6 @@ test("a squash-merged branch whose head moved on since keeps its checkout", () =
     }),
   ));
 
-test("a checkout whose Task's workspace is still open is kept, as the last condition", () =>
-  runOnPath(
-    Effect.gen(function* () {
-      const at = yield* collieWorktree("wt");
-      yield* settledGit();
-      yield* mergedMr();
-      settling = {
-        ...settling,
-        workspaceHolds: new Map([[at, "its Task's workspace is still open"]]),
-      };
-
-      expect(yield* prune()).toEqual(["kept wt · its Task's workspace is still open"]);
-    }),
-  ));
-
 test("the plugin root is never removed, even where a Run recorded it", () =>
   runOnPath(
     Effect.gen(function* () {
@@ -3726,7 +3570,9 @@ test("the plugin root is never removed, even where a Run recorded it", () =>
       settling = { ...settling, protect: new Set([at]) };
 
       expect(yield* prune()).toEqual([]);
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(false);
     }),
   ));
 
@@ -3797,7 +3643,7 @@ const sharedCheckout = Effect.fn("worktreeTest.sharedCheckout")(function* (
     `{"gitlab.cego.dk/mk/support!279":{"state":"${state}","read":"2026-09-14T09:00:00Z"}}`,
   );
   const views = yield* buildBoard({
-    env: readEnv({ HERDR_PLUGIN_STATE_DIR: rig.stateDir, COLLIE_CWD: rig.projectDir }),
+    env: readEnv({ COLLIE_STATE_DIR: rig.stateDir, COLLIE_CWD: rig.projectDir }),
     runs: recorded,
     tasks: [SHARED_TASK],
     registered: [],
@@ -3810,17 +3656,12 @@ const sharedCheckout = Effect.fn("worktreeTest.sharedCheckout")(function* (
     runs: recorded,
     views,
     tasks: [],
-    sessions: [new Herdr(rig.pluginEnv())],
+
     protect: [],
   });
-  yield* rig.addWorkspace("w7", SHARED_TASK.label, at);
-  yield* rig.addPane("w7-p1", "w7-t1", at, null, "w7");
-  const workspaces = taskWorkspacesSweeper({
-    stateDir: rig.stateDir,
-    sessions: [{ herd: null, herdr: new Herdr(rig.pluginEnv()) }],
+  const workspaces = tasksSweeper({
     tasks: [SHARED_TASK],
     views,
-    runs: recorded,
     seen: new Map([[SHARED_TASK.id, (yield* Clock.currentTimeMillis) - 2 * 60 * 60_000]]),
   });
   return { at, workspaces };
@@ -3834,11 +3675,17 @@ test("a follow-up's open merge request keeps the checkout and workspace its supe
       const pruned = yield* prune();
       expect(pruned).toHaveLength(1);
       expect(pruned[0]).toStartWith("kept wt · ");
-      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
-      expect((yield* rig.cmds()).includes("branch -d")).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("branch -d"))),
+      ).toBe(false);
       const judged = yield* workspaces.judge;
       expect(judged.remove).toEqual([]);
-      expect(judged.keep).toEqual([{ kind: "workspace", target: "w7", reason: "waiting on you" }]);
+      expect(judged.keep).toEqual([
+        { kind: "workspace", target: SHARED_TASK.id, reason: "waiting on you" },
+      ]);
     }),
   ));
 
@@ -3879,7 +3726,7 @@ for (const taskless of [false, true])
               ? null
               : yield* buildBoard({
                   env: readEnv({
-                    HERDR_PLUGIN_STATE_DIR: rig.stateDir,
+                    COLLIE_STATE_DIR: rig.stateDir,
                     COLLIE_CWD: rig.projectDir,
                   }),
                   runs: recorded,
@@ -3894,13 +3741,13 @@ for (const taskless of [false, true])
             runs: recorded,
             views,
             tasks: [],
-            sessions: [],
+
             protect: [],
           });
           const lines = yield* prune();
           expect(lines).toHaveLength(1);
           expect(lines[0]).toStartWith("kept wt · ");
-          expect((yield* rig.cmds()).includes(`worktree remove ${at}`)).toBe(false);
+          expect((yield* asked()).includes(`worktree remove ${at}`)).toBe(false);
         }),
       ));
 
@@ -3912,7 +3759,7 @@ test("a Task abandoned on its leading Run gives up its checkout and, after its h
       expect(yield* prune()).toEqual(["♻ removed wt · abandoned, as recorded"]);
       const judged = yield* workspaces.judge;
       expect(judged.remove).toEqual([
-        { kind: "workspace", target: "w7", bytes: 0, reason: "Finished 120 min ago" },
+        { kind: "workspace", target: SHARED_TASK.id, bytes: 0, reason: "Finished 120 min ago" },
       ]);
     }),
   ));
@@ -3923,7 +3770,7 @@ test("a Collie checkout whose branch was switched is judged, and removed, as it 
       const fs = yield* FileSystem.FileSystem;
       const at = yield* collieWorktree("wt");
       const made = recorded[0]!.worktree!.made_at!;
-      yield* rig.setWorktrees([{ branch: "other", path: at, open_workspace_id: "w7" }]);
+      listedCheckouts = [{ branch: "other", path: at }];
       // The same checkout git wrote: only the branch in it changed.
       const when = DateTime.toDateUtc(DateTime.makeUnsafe(made));
       yield* fs.utimes(`${at}/.git`, when, when);
@@ -4074,8 +3921,7 @@ const asRecord = flow(
 const servedLeftover = (worktreePath: string, state: Stopped["state"]) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* rig.addPane("1-5", "1:5", worktreePath, "codex");
-    yield* rig.addAgent("impl-1-5", "1-5", "t-1-5");
+    const terminalId = yield* liveAgent("1-5", worktreePath);
     const agents = `${rig.stateDir}/agents/run-wt`;
     yield* fs.makeDirectory(agents, { recursive: true });
     yield* recordLaunch({
@@ -4087,7 +3933,7 @@ const servedLeftover = (worktreePath: string, state: Stopped["state"]) =>
       role: "implementer",
       workflow: "implement",
       harness: "served",
-      terminalId: "t-1-5",
+      terminalId,
     });
     const control = `${rig.stateDir}/compaction/impl-1-5`;
     yield* fs.makeDirectory(control, { recursive: true });
@@ -4119,7 +3965,7 @@ const servedLeftover = (worktreePath: string, state: Stopped["state"]) =>
             const cmds = yield* rig
               .cmds()
               .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-            stops.push({ agent: target.agent, tabClosed: cmds.includes("tab close") });
+            stops.push({ agent: target.agent, tabClosed: cmds.includes("terminal.kill") });
             return {
               state,
               turns: [{ thread: "th-1", turn: "tu-1", transcript: null }],
@@ -4131,7 +3977,7 @@ const servedLeftover = (worktreePath: string, state: Stopped["state"]) =>
           }),
       },
     };
-    return { stops, ports };
+    return { stops, ports, terminalId };
   });
 
 const pruneWith = (ports: CompactionPorts) =>
@@ -4145,7 +3991,7 @@ const pruneWith = (ports: CompactionPorts) =>
     ports,
   });
 
-test("the worktree sweep stops a finished Run's Quiet agent before it closes the agent's tab", () =>
+test("the worktree sweep stops a finished Run's Quiet agent before it kills its core terminal", () =>
   runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
@@ -4155,8 +4001,7 @@ test("the worktree sweep stops a finished Run's Quiet agent before it closes the
 
       expect(yield* pruneWith(ports)).toEqual(["♻ removed wt · merged in !14"]);
       expect(stops).toEqual([{ agent: "impl-1-5", tabClosed: false }]);
-      const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "tab close");
-      expect(Arr.map(closed, (call) => call.argv?.at(2))).toEqual(["1:5"]);
+      expect(yield* killedTerminals()).toEqual([registered[0]!.paneId]);
       const log = yield* (yield* FileSystem.FileSystem).readFileString(
         `${rig.stateDir}/agents/run-wt/agents.log`,
       );
@@ -4164,51 +4009,26 @@ test("the worktree sweep stops a finished Run's Quiet agent before it closes the
     }),
   ));
 
-test("the worktree sweep keeps the tab of an agent started again under a finished Run's agent's name", () =>
+test("the worktree sweep preserves a replacement terminal under the same agent name", () =>
   runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
       const { ports } = yield* servedLeftover(worktreePath, "quiet");
-      yield* rig.reincarnate("impl-1-5");
+      yield* rig.dropAgent("impl-1-5");
+      const before = (yield* killedTerminals()).length;
+      const replacement = yield* rig.addAgent("impl-1-5", worktreePath, { run: "other-run" });
       yield* settledGit();
       yield* mergedMr();
 
-      expect(yield* pruneWith(ports)).toEqual([
-        "♻ removed wt · merged in !14 · 1 tab(s) left open",
-      ]);
-      expect(yield* rig.cmds()).not.toContain("tab close");
+      expect(yield* pruneWith(ports)).toEqual(["kept wt · an agent is working in it"]);
+      expect((yield* killedTerminals()).slice(before)).toEqual([]);
+      expect(
+        Arr.map(yield* new Herdr(rig.pluginEnv()).agentList(), (agent) => agent.terminalId),
+      ).toContain(replacement);
     }),
   ));
 
-test("the worktree sweep keeps the tab of a finished Run's agent's pane another named agent has taken", () =>
-  runOnPath(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
-      yield* rig.addPane("1-5", "1:5", worktreePath, "claude");
-      yield* rig.addAgent("other-1", "1-5", "t-other");
-      const agents = `${rig.stateDir}/agents/run-wt`;
-      yield* fs.makeDirectory(agents, { recursive: true });
-      yield* recordLaunch({
-        agent: "impl-1-5",
-        output: `${agents}/implement.json`,
-        reused: false,
-        runId: "run-wt",
-        operation: "implement",
-        role: "implementer",
-        workflow: "implement",
-        harness: "claude",
-        terminalId: "t-1-5",
-      });
-      yield* settledGit();
-      yield* mergedMr();
-
-      expect(yield* pruneWith({})).toEqual(["♻ removed wt · merged in !14 · 1 tab(s) left open"]);
-      expect(yield* rig.cmds()).not.toContain("tab close");
-    }),
-  ));
-
-test("the worktree sweep keeps the tab of a finished Run's agent that is not Quiet", () =>
+test("the worktree sweep keeps a finished Run's agent that is not Quiet", () =>
   runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
@@ -4217,10 +4037,10 @@ test("the worktree sweep keeps the tab of a finished Run's agent that is not Qui
       yield* mergedMr();
 
       expect(yield* pruneWith(ports)).toEqual([
-        "♻ removed wt · merged in !14 · 1 tab(s) left open",
+        "♻ removed wt · merged in !14 · 1 agent(s) left running",
       ]);
       expect(Arr.map(stops, (one) => one.agent)).toEqual(["impl-1-5"]);
-      expect(yield* rig.cmds()).not.toContain("tab close");
+      expect(yield* rig.cmds()).not.toContain("terminal.kill");
     }),
   ));
 

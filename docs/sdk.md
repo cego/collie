@@ -348,14 +348,14 @@ const verdict =
   A stop while the
   rewrite is awaited parks the wait, as it does the first; the resume starts an agent that
   went with the stop again on the work.
-- **A busy pane is waited out, then parked.** Where herdr answers that the agent's pane
+- **A busy agent is waited out, then parked.** Where core answers that the agent
   cannot take a prompt yet (`agent_blocked`: a dialog is up, or a question it asked is open
   on its Run), the prompt and its repair are
   tried again, under the same delivery, for up to ten minutes. Past that the Run is
   `suspended` rather than failed, `run show` says what held and for how long, and
   `collie run resume` hands the same prompt to the same agent.
 - **The Output budget is idle time.** The agent has two hours to write its Output, counted
-  only while herdr reports it `idle`, `done` or `unknown`, or cannot say. While it is
+  only while core reports it `idle`, `done` or `unknown`, or cannot say. While it is
   `working` or `blocked` the clock stops, so a long suite is never parked for being slow.
   It stops too while a question the agent asked is open on the Run
   ([`docs/cli.md`](cli.md#answering-holding-and-steering-one)), and while a `collie verify`
@@ -364,18 +364,19 @@ const verdict =
   is launched. Past the budget the Run parks as `idle-budget`, saying how many minutes it
   sat idle, and Collie keeps collecting. An Output written later clears the park and the step
   goes on, with no resume. An agent that has gone by the end of another idle budget is
-  started again. Gone is an agent herdr no longer lists, or one it still lists but refuses
-  as not active, as it does when the agent's process died with its Machine; that one's pane is closed first, so
-  the new agent can take its name. A stop still ends the wait.
-- **A turn that ends without the Output gets a reminder at once.** Where herdr reports the
+  started again. Gone is an agent core no longer lists, or one it still lists but refuses
+  as not active, as it does when the agent's process died with its Machine; that one's terminal is closed first, so
+  the new agent can take its name. An agent started under Herdr 1 is never started again: its
+  Run parks. A stop still ends the wait.
+- **A turn that ends without the Output gets a reminder at once.** Where core reports the
   agent `working` and then `idle` or `done` while its Output is still absent, Collie sends it
   a reminder naming the Output file and saying that a chat message is not the Output. Each
   agent launch gets at most two. If the turn after the second also ends without the Output,
   the Run parks as `output-absent`, saying when both reminders went, and Collie keeps
-  collecting. An agent herdr reports `blocked` is not reminded, and neither is one whose Run
+  collecting. An agent core reports `blocked` is not reminded, and neither is one whose Run
   has an open Decision, a Hold or a Stop; once those clear, an agent still idle without its
   Output is. The Output is never taken from the agent's chat. The idle budget stays the
-  backstop for an agent whose turn's end herdr cannot report.
+  backstop for an agent whose turn's end core cannot report.
 - **`cwd` is where the host placed the Run** unless you name another checkout.
 - **`role`** defaults to the operation's name. The role is injected as a persona, and where
   `personas/<role>.md` exists in the project, on this machine or in the installation, that
@@ -437,7 +438,7 @@ in a chat.
 A restart is safe in both directions. The launch is an Activity, so a replayed collection
 reattaches rather than starting a second agent; the repair is an Activity of its own, so a
 restart does not hand out another one. None of that makes an external launch exactly once —
-an agent already there by that name is reattached to, and a herdr that cannot say what it
+an agent already there by that name is reattached to, and a core that cannot say what it
 has stops the work with that as the reason rather than starting a second agent.
 [ADR-0020](adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) is why.
 

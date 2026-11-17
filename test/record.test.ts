@@ -81,7 +81,7 @@ const sourcesOf = (
   runs: ReadonlyArray<RunFacts>,
   started: Effect.Effect<void> = Effect.void,
 ): RecordSources => ({
-  env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
+  env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }),
   model,
   related: (runId, also) => {
     const task = Arr.findFirst(runs, (one) => one.id === runId);
@@ -229,7 +229,7 @@ test(
         const held = yield* Latch.make(false);
         let boundaries = 0;
         const pass = yield* buildBoard({
-          env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
+          env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }),
           runs,
           registered: [],
           offers: () => Effect.succeed([]),
