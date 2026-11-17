@@ -277,11 +277,12 @@ test(
               (view) => asked(view).length > 0,
             );
             expect(yield* fs.readFileString(launch!.output)).toBe(encodeValue({ verdict: "done" }));
+            const written = (yield* fs.stat(launch!.output)).ino;
 
             expect((yield* submit({ verdict: "done" })).result).toMatchObject({
               content: [{ type: "text", text: "accepted" }],
             });
-            expect(asked(yield* host.run({ runId }))).toHaveLength(1);
+            expect((yield* fs.stat(launch!.output)).ino).toEqual(written);
             expect((yield* submit({ verdict: "changed" })).result).toMatchObject({
               content: [{ type: "text", text: expect.stringContaining("already collected") }],
             });
