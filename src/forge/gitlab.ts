@@ -1223,6 +1223,19 @@ function reply(
   });
 }
 
+/** A failed merge, as a merge at the same head may or may not clear it. */
+const unmerged = (
+  failed: Extract<Answered<unknown>, { ok: false }>,
+  reason: string,
+): MergeAnswer => ({
+  _tag:
+    failed.transient === true ||
+    (failed.status === 422 && Str.includes("Branch cannot be merged")(failed.reason))
+      ? "Transient"
+      : "Refused",
+  reason,
+});
+
 /**
  * GitLab's merge endpoint at `head`, never `glab mr merge`, whose `--auto-merge` defaults
  * to on. No squash is passed, so the project's own setting stands.
@@ -1248,8 +1261,8 @@ function merge(
       const merged = mr ?? Option.getOrNull(Schema.decodeUnknownOption(ReviewMr)(merging.value));
       return { _tag: "Merged", merged: merged === null ? "" : mergedSha(merged) };
     }
-    const refusal = `GitLab refused to merge ${where}: ${merging.reason}`;
-    if (mr === null) return { _tag: "Refused", reason: refusal };
+    const refusal = unmerged(merging, `GitLab refused to merge ${where}: ${merging.reason}`);
+    if (mr === null) return refusal;
     if (mr.state === "merged")
       return {
         _tag: "AlreadyMerged",
@@ -1259,7 +1272,7 @@ function merge(
         at: mr.merged_at ?? "",
       };
     if ((mr.sha ?? "") !== head) return { _tag: "HeadMoved", head: mr.sha ?? "" };
-    return { _tag: "Refused", reason: refusal };
+    return refusal;
   });
 }
 
