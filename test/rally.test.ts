@@ -11,11 +11,12 @@
 // buy: a check it says it ran is a claim, and only the verification journal — bound to the
 // tree the command ran on — turns it into proof.
 
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer } from "effect";
 import { updateApproved } from "../src/verify-spec";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { exec } from "./support/command";
 import { runEffect as runShared } from "./support/effect";
 import { overHost } from "./support/records";
@@ -36,6 +37,7 @@ beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      yield* rig.startCore();
       const fs = yield* FileSystem.FileSystem;
       dir = `${rig.root}/host`;
       yield* fs.makeDirectory(dir, { recursive: true });
@@ -61,7 +63,7 @@ afterEach(() => runEffect(rig.close()));
 const hostOf = (): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
-  herdr: new FakeHerdr(rig.pluginEnv()),
+  herdr: new Herdr(rig.pluginEnv()),
   harness: "claude",
   model: "opus",
   permissions: "auto",
@@ -127,9 +129,7 @@ test("a rally that reviews clean stops there, with no fix and no second review",
       const result = yield* rally("r-clean", 3);
       expect(said(result)).toBe("clean after 1 round(s), 0 non-blocking left");
       // One agent, one prompt: nothing reviewed again and nothing was asked to fix.
-      expect(
-        Arr.filter(yield* rig.calls(), (call) => (call.argv ?? [])[1] === "prompt"),
-      ).toHaveLength(1);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.send")).toHaveLength(1);
     }),
   ));
 

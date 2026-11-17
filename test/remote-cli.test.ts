@@ -41,12 +41,17 @@ test(
             yield* exec(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
               cwd: second.world.project,
             });
-            const outputs = `${second.world.home}/agent-outputs.json`;
+            const outputs = `${second.world.home}/outputs.json`;
             yield* fs.writeFileString(outputs, encode([{ verdict: "done" }]));
-            const launch = yield* second.cli(
-              ["run", "start", "plain", "--goal", "remote goal", "--input", "note=remote"],
-              { FAKE_HERDR_OUTPUTS: outputs },
-            );
+            const launch = yield* second.cli([
+              "run",
+              "start",
+              "plain",
+              "--goal",
+              "remote goal",
+              "--input",
+              "note=remote",
+            ]);
             expect(launch.envelope.ok).toBe(true);
             const { runId } = started(launch.envelope.data);
             const owner = yield* connect(second.world.state);
@@ -304,9 +309,8 @@ test(
               error: { code: ownerResume.error?.code, message: ownerResume.error?.message },
             });
             const built = started(
-              (yield* second.cli(["run", "start", "completed-agent", "--input", "goal=override"], {
-                FAKE_HERDR_OUTPUTS: outputs,
-              })).envelope.data,
+              (yield* second.cli(["run", "start", "completed-agent", "--input", "goal=override"]))
+                .envelope.data,
             );
             yield* until(
               () => owner.run({ runId: built.runId }),

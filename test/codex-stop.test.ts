@@ -33,11 +33,12 @@ import { Agents, agentWork, agentsLayer, type AgentHost } from "../src/agents";
 import { asRun, enveloped } from "./support/enveloped";
 import { PARKED, STOP, foundationLayer, pollStatus } from "../src/engine";
 import { compactionSweeper, sweep } from "../src/cleanup";
-import { Herdr } from "../src/herdr";
+import { Herdr, HerdrError } from "../src/herdr";
+import { isString } from "../src/schema";
 import { recordClaudeEvent } from "../src/compactors";
 import { installControls, readControl, withControlLock } from "../src/compaction";
 import { processAbsent, processOf } from "../src/processes";
-import { FakeHerdr } from "./support/recorder";
+
 import { agentName } from "../src/naming";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
 import type { StandIn } from "./support/codex-server";
@@ -52,9 +53,10 @@ let dir: string;
 let serverBinary: string;
 
 beforeEach(() =>
-  runEffect(
+  runLive(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      yield* rig.startCore();
       serverBinary = yield* fixtureBinary("codex");
       const fs = yield* FileSystem.FileSystem;
       dir = `${rig.root}/host`;
@@ -130,7 +132,7 @@ const serve = (over: Partial<StandIn> = {}) =>
 const hostOf = (over?: Partial<AgentHost>): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
-  herdr: new FakeHerdr(rig.pluginEnv()),
+  herdr: new Herdr(rig.pluginEnv()),
   harness: "codex",
   model: "default",
   permissions: "auto",
@@ -264,7 +266,7 @@ type JsonObject = Schema.JsonObject;
 const decodeObject = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.JsonObject));
 const control = () => `${rig.root}/state/compaction/${agent}/control.json`;
 const panesClosed = () =>
-  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "pane close").length));
+  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.kill").length));
 const agentsLog = () =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${dir}/agents/r1/agents.log`)),
@@ -287,13 +289,13 @@ const recorded = () =>
     Effect.orElseSucceed(() => null),
   );
 
-/** A human closing the agent's pane, which herdr then no longer lists. */
+/** A human closing the agent's terminal, which core then no longer lists. */
 const closedByHand = Effect.gen(function* () {
-  const herdr = new FakeHerdr(rig.pluginEnv());
+  const herdr = new Herdr(rig.pluginEnv());
   const one = Option.getOrUndefined(
     Arr.findFirst(yield* herdr.agentList(), (listed) => listed.name === agent),
   );
-  if (one !== undefined) yield* herdr.paneClose(one.paneId);
+  if (one !== undefined) yield* herdr.terminalKill(one.paneId);
 }).pipe(Effect.orDie);
 
 /** A Run whose Codex agent is working, with the stand-in as `over` makes it. */
@@ -527,7 +529,7 @@ test(
   30_000,
 );
 
-test("an agent whose pane herdr no longer lists still has its server stopped", () =>
+test("an agent whose terminal core no longer lists still has its server stopped", () =>
   runEffect(
     Effect.gen(function* () {
       yield* working();
@@ -754,18 +756,22 @@ const parkedWhy = () =>
     Effect.orElseSucceed(() => ""),
   );
 const agentStarts = () =>
-  rig.calls().pipe(
-    Effect.map((calls) =>
-      Arr.map(
-        Arr.filter(calls, (call) => call.cmd === "agent start"),
-        (call) =>
-          Option.getOrUndefined(
-            Arr.findFirst(call.argv ?? [], (arg) => arg === "claude" || arg === "codex"),
-          ),
+  rig
+    .calls()
+    .pipe(
+      Effect.map((calls) =>
+        Arr.filterMap(calls, (call) =>
+          call.cmd === "terminal.run" && Arr.isArray(call.params?.argv)
+            ? Result.succeed(call.params.argv[0])
+            : Result.failVoid,
+        ),
       ),
-    ),
-  );
-type Reached = Effect.Effect<boolean, never, WorkflowEngine.WorkflowEngine | FileSystem.FileSystem>;
+    );
+type Reached = Effect.Effect<
+  boolean,
+  never,
+  WorkflowEngine.WorkflowEngine | Agents | FileSystem.FileSystem
+>;
 const suspended: Reached = Effect.gen(function* () {
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const id = yield* work.executionId({ runId: "r1", input: { skip: false } });
@@ -777,7 +783,9 @@ const given = Effect.suspend(() =>
       Arr.some(
         calls,
         (call) =>
-          call.cmd === "agent prompt" && pipe_(call.argv?.[3] ?? "", Str.includes("Your task")),
+          call.cmd === "terminal.send" &&
+          isString(call.params?.text) &&
+          pipe_(call.params.text, Str.includes("Your task")),
       ),
     ),
     Effect.orElseSucceed(() => false),
@@ -828,8 +836,29 @@ test(
           Effect.map((starts) => starts.length > 1),
           Effect.orElseSucceed(() => false),
         );
+        // What the host does once core reports the terminal gone.
+        let reported = false;
+        const lossReported = Effect.suspend(() =>
+          reported
+            ? Effect.void
+            : ((reported = true),
+              Effect.flatMap(Agents, (agents) =>
+                agents.resumeLost("r1", {
+                  running: Effect.succeed(true),
+                  authority: Effect.succeed({ created: null, roaming: false, started: null }),
+                  questions: {
+                    ask: () => Effect.void,
+                    asked: Effect.succeed([]),
+                    close: () => Effect.void,
+                  },
+                }),
+              )),
+        );
         yield* until(
-          Effect.map(Effect.all([suspended, restarted]), (one) => Arr.some(one, Boolean)),
+          Effect.andThen(
+            lossReported,
+            Effect.map(Effect.all([suspended, restarted]), (one) => Arr.some(one, Boolean)),
+          ),
           { stopMs: 25_000 },
           true,
         );
@@ -929,18 +958,18 @@ test("a Codex agent that runs out and will not stop parks the work, and no succe
     }),
   ));
 
-/** herdr as a stop landing right after `after` happens. */
-class StopsAfter extends FakeHerdr {
-  constructor(private readonly after: "pane close" | "agent start") {
+/** core as a stop landing right after `after` happens. */
+class StopsAfter extends Herdr {
+  constructor(private readonly after: "kill" | "launch") {
     super(rig.pluginEnv());
   }
-  override paneClose(paneId: string) {
-    const closed = super.paneClose(paneId);
-    return this.after === "pane close" ? closed.pipe(Effect.tap(() => stopFlag(true))) : closed;
+  override terminalKill(address: string) {
+    const closed = super.terminalKill(address);
+    return this.after === "kill" ? closed.pipe(Effect.tap(() => stopFlag(true))) : closed;
   }
-  override agentStart(options: Parameters<FakeHerdr["agentStart"]>[0]) {
-    const started = super.agentStart(options);
-    return this.after === "agent start" && options.name === successor
+  override agentLaunch(options: Parameters<Herdr["agentLaunch"]>[0]) {
+    const started = super.agentLaunch(options);
+    return this.after === "launch" && options.name === successor
       ? started.pipe(Effect.tap(() => stopFlag(true)))
       : started;
   }
@@ -954,7 +983,7 @@ test("a stop between a Fallback's retirement and its launch leaves no agent runn
       yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.forkScoped(runsOut);
-          yield* until(suspended, { ...fallback, herdr: new StopsAfter("pane close") });
+          yield* until(suspended, { ...fallback, herdr: new StopsAfter("kill") });
         }),
       );
       expect(yield* agentStarts()).toEqual(["codex"]);
@@ -970,7 +999,7 @@ test("a stop just after a launch started its agent stops that agent, and a resum
       yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.forkScoped(runsOut);
-          yield* until(suspended, { ...fallback, herdr: new StopsAfter("agent start") });
+          yield* until(suspended, { ...fallback, herdr: new StopsAfter("launch") });
         }),
       );
       expect(yield* agentStarts()).toEqual(["codex", "claude"]);
@@ -992,7 +1021,7 @@ test("the sweep keeps an unlisted agent's record while its server is not Quiet, 
       yield* closedByHand;
       const sweeper = compactionSweeper(
         `${rig.root}/state`,
-        [new FakeHerdr(rig.pluginEnv())],
+        [new Herdr(rig.pluginEnv())],
         hostOf().ports,
         25_000,
       );
@@ -1059,7 +1088,7 @@ test("a sweep stops again a record whose earlier stop failed before it signalled
       yield* closedByHand;
       const sweeper = compactionSweeper(
         `${rig.root}/state`,
-        [new FakeHerdr(rig.pluginEnv())],
+        [new Herdr(rig.pluginEnv())],
         hostOf().ports,
         25_000,
       );
@@ -1128,14 +1157,26 @@ const unlistable = (over: Partial<StandIn["threads"][number]> = {}) => ({
     },
   ],
 });
-const neverAdmits = () =>
-  new FakeHerdr(
-    rig.pluginEnv({
-      FAKE_HERDR_FAIL: asJson({ "agent start": "timed out waiting for agent startup" }),
-    }),
-  );
+/** Core never starting an agent's terminal. */
+class NeverAdmits extends Herdr {
+  constructor() {
+    super(rig.pluginEnv());
+  }
+  override agentLaunch(
+    _options: Parameters<Herdr["agentLaunch"]>[0],
+  ): ReturnType<Herdr["agentLaunch"]> {
+    return Effect.fail(
+      new HerdrError({
+        message: "core terminal.run failed",
+        detail: "timed out waiting for agent startup",
+        answered: true,
+      }),
+    );
+  }
+}
+const neverAdmits = () => new NeverAdmits();
 
-test("a start herdr never admits parks naming its agent, and the next launch under that name stops its server first", () =>
+test("a start core never admits parks naming its agent, and the next launch under that name stops its server first", () =>
   runEffect(
     Effect.gen(function* () {
       yield* serve(unmaterialized());
@@ -1143,7 +1184,7 @@ test("a start herdr never admits parks naming its agent, and the next launch und
       const why = yield* parkedWhy();
       expect(why).toContain(`${agent} did not start`);
       expect(why).toContain("timed out waiting for agent startup");
-      expect(yield* rig.cmds()).not.toContain("agent prompt");
+      expect(yield* rig.cmds()).not.toContain("terminal.send");
       const stranded = yield* serverPid();
 
       const relaunched = yield* session(
@@ -1176,7 +1217,8 @@ test("a start herdr never admits parks naming its agent, and the next launch und
       expect(servers).toHaveLength(2);
       expect(signalled).toHaveLength(1);
       expect(signalled[0]).toBeLessThan(servers[1]!);
-      expect(yield* agentStarts()).toEqual(["codex", "codex"]);
+      // The refused start never reached core.
+      expect(yield* agentStarts()).toEqual(["codex"]);
       const log = yield* agentsLog();
       expect(
         Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1),
@@ -1187,14 +1229,14 @@ test("a start herdr never admits parks naming its agent, and the next launch und
     }),
   ));
 
-/** r1's start, which herdr never admits, leaving its server up with no launch recorded. */
+/** r1's start, which core never admits, leaving its server up with no launch recorded. */
 const neverAdmitted = Effect.gen(function* () {
   yield* serve(unmaterialized());
   yield* until(suspended, { herdr: neverAdmits() });
   return yield* serverPid();
 });
 
-test("the stop of a Run whose start herdr never admitted stops that start's server to quiet", () =>
+test("the stop of a Run whose start core never admitted stops that start's server to quiet", () =>
   runEffect(
     Effect.gen(function* () {
       const stranded = yield* neverAdmitted;
@@ -1206,7 +1248,7 @@ test("the stop of a Run whose start herdr never admitted stops that start's serv
     }),
   ));
 
-test("another Run's stop leaves alone a start herdr never admitted", () =>
+test("another Run's stop leaves alone a start core never admitted", () =>
   runEffect(
     Effect.gen(function* () {
       const stranded = yield* neverAdmitted;
@@ -1221,7 +1263,7 @@ test("another Run's stop leaves alone a start herdr never admitted", () =>
     }),
   ));
 
-test("a stop of a start herdr never admitted that cannot remove its record says so, and keeps it", () =>
+test("a stop of a start core never admitted that cannot remove its record says so, and keeps it", () =>
   runEffect(
     Effect.gen(function* () {
       yield* neverAdmitted;
@@ -1238,7 +1280,7 @@ test("a stop of a start herdr never admitted that cannot remove its record says 
     }),
   ));
 
-test("a stop of a start herdr never admitted whose controls are held elsewhere says it was not stopped", () =>
+test("a stop of a start core never admitted whose controls are held elsewhere says it was not stopped", () =>
   runEffect(
     Effect.gen(function* () {
       const stranded = yield* neverAdmitted;
@@ -1315,27 +1357,20 @@ for (const [what, spoil] of unreadable)
       }),
     ));
 
-/** herdr refusing a start that a Run's stop lands in, as that stop reaches the Run's agents. */
-class StoppedWhileStarting extends FakeHerdr {
+/** core refusing a start that a Run's stop lands in, as that stop reaches the Run's agents. */
+class StoppedWhileStarting extends NeverAdmits {
   halts: Array<{ readonly stopped: ReadonlyArray<string>; readonly left: ReadonlyArray<string> }> =
     [];
-  constructor() {
-    super(
-      rig.pluginEnv({
-        FAKE_HERDR_FAIL: asJson({ "agent start": "timed out waiting for agent startup" }),
-      }),
-    );
-  }
-  override agentStart(options: Parameters<FakeHerdr["agentStart"]>[0]) {
+  override agentLaunch(options: Parameters<Herdr["agentLaunch"]>[0]) {
     return stopFlag(true).pipe(
       Effect.andThen(halted({ herdr: neverAdmits() })),
       Effect.tap((halt) => Effect.sync(() => this.halts.push(halt))),
-      Effect.andThen(super.agentStart(options)),
+      Effect.andThen(super.agentLaunch(options)),
     );
   }
 }
 
-test("a stop that lands in a start herdr then refuses stops that start's server once it parks", () =>
+test("a stop that lands in a start core then refuses stops that start's server once it parks", () =>
   runEffect(
     Effect.gen(function* () {
       yield* serve(unmaterialized());

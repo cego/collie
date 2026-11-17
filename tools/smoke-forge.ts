@@ -73,8 +73,8 @@ await runEffect(
       cwd,
       env: {
         ...process.env,
-        HERDR_PLUGIN_ROOT: path.resolve(import.meta.dir, ".."),
-        HERDR_PLUGIN_STATE_DIR: `${state}/state`,
+        COLLIE_ROOT: path.resolve(import.meta.dir, ".."),
+        COLLIE_STATE_DIR: `${state}/state`,
         COLLIE_USER_DIR: `${state}/config`,
         COLLIE_CWD: cwd,
         COLLIE_FORGE_API: api,

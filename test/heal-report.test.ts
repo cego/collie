@@ -1,3 +1,4 @@
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -16,7 +17,7 @@ import {
   Result,
 } from "effect";
 import { connect } from "../src/host";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { foundationLayer, type RunView } from "../src/engine";
 import type { PlatformServices } from "../src/platform";
@@ -60,7 +61,6 @@ const healed = (world: World, output: HealOutput, github: ForgeModel) =>
     const extra = {
       PATH: `${bin.dir}:${yield* Config.String("PATH")}`,
       COLLIE_FORGE_API: yield* serveForges(forge),
-      FAKE_HERDR_OUTPUTS: outputs,
       COLLIE_RECOVERY_EVERY: "100 millis",
     };
     const said = yield* collie(
@@ -180,7 +180,7 @@ const onCollie = <A, E>(
         ...model,
       });
       const api = yield* serveForges(forge);
-      const placing = { herdr: new FakeHerdr(rig.pluginEnv()), env: rig.pluginEnv() };
+      const placing = { herdr: new Herdr(rig.pluginEnv()), env: rig.pluginEnv() };
       return yield* Effect.flatMap(Host, (host) => body(host, forge, rig)).pipe(
         Effect.provide(
           foundationLayer({ dir: rig.stateDir, userDir: rig.userDir, placing }).pipe(
@@ -393,7 +393,7 @@ test("report retries keep distinct Heals without repeating refusals while judgin
         healParks({
           env,
           host,
-          herdr: new FakeHerdr(env),
+          herdr: new Herdr(env),
           views: Effect.suspend(() =>
             snapshots++ === 0
               ? Effect.succeed([view])

@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import { Console, Effect, Layer, Schema } from "effect";
 // The manifest is the version: herdr reads it, `install.sh` builds the release URL
 // from it, and a `--version` that disagreed with either would be worse than none.
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import { CliConfig, CliError, Command, GlobalFlag } from "effect/cli";
 import { persona } from "./commands/persona";
 import { artefacts, run } from "./commands/run";

@@ -7,7 +7,7 @@ import { expect, test } from "bun:test";
 import { Clock, Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { buildView, renderWorkspace } from "../src/workspace";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 
 /** A release source whose newest release is `latest`. */
 const releasesAt = (latest: string) =>

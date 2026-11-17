@@ -57,9 +57,9 @@ const cli = Effect.fn("test.cli")(function* (
   const proc = Bun.spawn([...command, ...args], {
     cwd: root,
     env: {
-      HERDR_PLUGIN_ROOT: root,
+      COLLIE_ROOT: root,
       COLLIE_USER_DIR: join(dir, "config"),
-      HERDR_PLUGIN_STATE_DIR: join(dir, "state"),
+      COLLIE_STATE_DIR: join(dir, "state"),
       HOME: dir,
       PWD: root,
       ...suite,
@@ -259,12 +259,10 @@ test("a command group named with no subcommand is invalid input, not success", (
     }),
   ));
 
-test("discovery is global when an inherited workspace id no longer resolves", () =>
+test("discovery ignores a workspace id Herdr 1 left in the environment", () =>
   runEffect(
     Effect.gen(function* () {
-      // A script that inherited HERDR_WORKSPACE_ID from a pane whose workspace has
-      // since closed. Discovery needs no workspace, so it answers rather than failing.
-      const stale = { HERDR_WORKSPACE_ID: "gone", HERDR_BIN_PATH: "/nonexistent/herdr" };
+      const stale = { HERDR_WORKSPACE_ID: "gone" };
       const listed = yield* cli(["--json", "workflow", "list"], stale);
       expect(yield* parseEnvelope(listed.stdout)).toMatchObject({ ok: true });
       expect(listed.exit).toBe(0);
@@ -768,19 +766,19 @@ test("upgrade is a command of its own, and says what it would do", () =>
     }),
   ));
 
-test("the version the CLI reports is the one the manifest declares", () =>
+test("the version the CLI reports is the one package.json declares", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      // herdr reads the manifest, `install.sh` builds the release URL from it, and a
-      // `--version` that disagreed with either would send someone to the wrong asset.
-      const manifest = yield* fs.readFileString(join(root, "herdr-plugin.toml"));
-      const declared = /^version = "(.+)"$/m.exec(manifest)?.[1];
+      // The installer and runner must agree about which release to fetch.
+      const manifest = yield* fs.readFileString(join(root, "package.json"));
+      const declared = yield* Schema.decodeEffect(
+        Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
+      )(manifest);
 
       const shown = yield* cli(["--version"]);
 
-      expect(declared).toBeDefined();
-      expect(Str.trim(shown.stdout)).toContain(declared!);
+      expect(Str.trim(shown.stdout)).toContain(declared.version);
     }),
   ));
 
@@ -790,8 +788,8 @@ test(
     hosted("collie-intent-", ({ world }) =>
       Effect.gen(function* () {
         const shared = {
-          HERDR_PLUGIN_ROOT: world.install,
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
         };
 
@@ -857,7 +855,7 @@ test(
       Effect.gen(function* () {
         // One state directory the Run and the command both see: `cli` makes its own per
         // call, and a Run written into one of those would not be there for the next.
-        const env = { HERDR_PLUGIN_STATE_DIR: world.state };
+        const env = { COLLIE_STATE_DIR: world.state };
         const run = yield* settledRun(world, "hello", { outcome: "bug" });
 
         const empty = yield* cli(["--json", "run", "metrics", run.id], env);
@@ -899,7 +897,7 @@ test(
     hosted("collie-remember-", ({ world }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const env = { HERDR_PLUGIN_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
+        const env = { COLLIE_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
         // A checkout of its own, as a worktree is, and gone once the Run has settled.
         const worktree = join(world.home, "worktree");
         yield* fs.makeDirectory(worktree, { recursive: true });
@@ -944,7 +942,7 @@ test(
   () =>
     hosted("collie-report-", ({ world }) =>
       Effect.gen(function* () {
-        const env = { HERDR_PLUGIN_STATE_DIR: world.state };
+        const env = { COLLIE_STATE_DIR: world.state };
         yield* settledRun(world, "hello");
 
         const all = yield* cli(["--json", "run", "report"], env);
@@ -1011,7 +1009,7 @@ test(
         const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-state-" });
         yield* Effect.addFinalizer(() => Effect.ignore(stopHost(state)));
         // No PATH: this Machine has no Codex, and nothing here may reach a real endpoint.
-        const env = { CLAUDE_CONFIG_DIR: claudeDir, HERDR_PLUGIN_STATE_DIR: state };
+        const env = { CLAUDE_CONFIG_DIR: claudeDir, COLLIE_STATE_DIR: state };
 
         const read = yield* cli(["--json", "usage"], env);
         expect(read.exit).toBe(0);

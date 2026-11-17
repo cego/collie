@@ -5,7 +5,7 @@
 import { Effect, Schema } from "effect";
 import { FrontDoor } from "./board-model";
 
-/** A saved herdr machine, as `herdr machine list --json` lists it. */
+/** A Machine core keeps, as its machine list gives it. */
 export const HerdrMachine = Schema.Struct({
   id: Schema.String,
   label: Schema.String,
@@ -14,7 +14,6 @@ export const HerdrMachine = Schema.Struct({
   enabled: Schema.Boolean,
 });
 export type HerdrMachine = typeof HerdrMachine.Type;
-export const HerdrMachines = Schema.fromJsonString(Schema.Array(HerdrMachine));
 
 /** The port a Machine a peer dials listens on. */
 export const PEER_PORT = 47217;

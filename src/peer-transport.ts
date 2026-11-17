@@ -148,7 +148,7 @@ export const openPeer = (
     };
     if (way === "direct") return yield* unreachable(null);
     const ssh = yield* connection;
-    if (ssh === null) return yield* unreachable(`herdr lists no machine ${peer.name}`);
+    if (ssh === null) return yield* unreachable(`core lists no machine ${peer.name}`);
     if (!(yield* ssh.check))
       return yield* unreachable(
         `no SSH connection is open; \`collie machine connect ${peer.name}\` opens one`,

@@ -9,7 +9,7 @@
 ## Local policy retained
 
 - `.oxlintrc.json` keeps the existing plugin paths, ignores, severities, and enabled rules unchanged.
-- The locally added ignores for `tools/build.ts` and `tools/herdr-schema.ts` remain unchanged.
+- The locally added ignore for `tools/build.ts` remains unchanged.
 - Existing enabled rules remain enabled, including only `anti-slop-effect/no-service-constructor-imports` from the Effect plugin.
 
 ## Pending rule approvals

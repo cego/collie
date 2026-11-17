@@ -1,6 +1,8 @@
 # A finished Run's idle agent is closed
 
-**Status: accepted, to be built.** Amends
+**Status: accepted, to be built.** Amended by
+[ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md)
+D12: while core cannot say a terminal is unattended, every agent is kept. Amends
 [ADR-0045](0045-collie-removes-what-it-made-once-nothing-needs-it.md) D1 (how a pane is
 proved) and D6 (which processes go with what owns them). Builds on
 [ADR-0041](0041-a-finished-run-still-takes-steering.md) D4 and

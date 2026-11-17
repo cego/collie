@@ -15,9 +15,14 @@ const runIdOf = flow(
   Schema.decodeUnknownResult(Schema.Struct({ runId: Schema.String })),
   Result.getOrThrow,
 );
-const herdrCall = flow(
+const coreCall = flow(
   Schema.decodeUnknownResult(
-    Schema.fromJsonString(Schema.Struct({ cmd: Schema.String, argv: Schema.Array(Schema.String) })),
+    Schema.fromJsonString(
+      Schema.Struct({
+        cmd: Schema.String,
+        params: Schema.optionalKey(Schema.Struct({ text: Schema.optionalKey(Schema.String) })),
+      }),
+    ),
   ),
   Result.getOrThrow,
 );
@@ -43,11 +48,13 @@ test(
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
           yield* fs.writeFileString(outputs, encode([null, null]));
-          const start = yield* collie(
-            world,
-            ["run", "start", "step-ahead", "--input", "goal=pause"],
-            { FAKE_HERDR_OUTPUTS: outputs },
-          );
+          const start = yield* collie(world, [
+            "run",
+            "start",
+            "step-ahead",
+            "--input",
+            "goal=pause",
+          ]);
           expect(start.envelope.ok).toBe(true);
           const { runId } = runIdOf(start.envelope.data);
           const first = (yield* until(
@@ -116,7 +123,7 @@ test(
           )!;
           expect(
             (yield* collie(world, ["run", "hold", runId, "--before", "c"], {
-              HERDR_PANE_ID: entry.paneId,
+              COLLIE_AGENT: entry.agent,
             })).envelope.ok,
           ).toBe(true);
           expect(
@@ -195,11 +202,13 @@ test(
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
           yield* fs.writeFileString(outputs, encode([null]));
-          const start = yield* collie(
-            world,
-            ["run", "start", "step-retry-note", "--input", `gates=${world.home}`],
-            { FAKE_HERDR_OUTPUTS: outputs },
-          );
+          const start = yield* collie(world, [
+            "run",
+            "start",
+            "step-retry-note",
+            "--input",
+            `gates=${world.home}`,
+          ]);
           const { runId } = runIdOf(start.envelope.data);
           const door = yield* frontDoor(socketOf(world.state));
           const detail = () =>
@@ -238,11 +247,13 @@ test(
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
           yield* fs.writeFileString(outputs, encode([null, null]));
-          const start = yield* collie(
-            world,
-            ["run", "start", "step-ahead", "--input", "goal=notes"],
-            { FAKE_HERDR_OUTPUTS: outputs },
-          );
+          const start = yield* collie(world, [
+            "run",
+            "start",
+            "step-ahead",
+            "--input",
+            "goal=notes",
+          ]);
           const { runId } = runIdOf(start.envelope.data);
           const first = (yield* until(
             () => launchesAt(world.state, runId),
@@ -324,45 +335,47 @@ test(
   () =>
     proves(
       "collie-step-steer-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
           yield* fs.writeFileString(outputs, encode([null, null]));
-          // herdr refuses the step's first prompt as a busy pane, so it is retried later.
-          const start = yield* collie(
-            world,
-            ["run", "start", "step-ahead", "--input", "goal=steer"],
-            {
-              FAKE_HERDR_OUTPUTS: outputs,
-              FAKE_HERDR_PROMPT_ERROR: "agent_blocked",
-              FAKE_HERDR_PROMPT_ERROR_TIMES: "1",
-            },
-          );
+          // Core refuses the step's first prompt as a blocked agent's, so it is retried later.
+          core.refuse("terminal.send", "blocked", "the agent is blocked");
+          const start = yield* collie(world, [
+            "run",
+            "start",
+            "step-ahead",
+            "--input",
+            "goal=steer",
+          ]);
           const { runId } = runIdOf(start.envelope.data);
-          yield* until(
+          const deferred = yield* until(
             () => deliveredTo(world.state, runId),
             (all) => Arr.some(all, (one) => one.state === "deferred"),
           );
+          core.restore("terminal.send");
           const told = yield* collie(world, ["run", "steer", runId, "Check the race first."]);
           expect(told.envelope).toMatchObject({ ok: true });
+          yield* core.report(deferred[0]!.agent, "idle");
+          yield* until(
+            () => deliveredTo(world.state, runId),
+            (all) =>
+              Arr.some(all, (one) => one.cause.kind === "steer" && one.state === "acknowledged"),
+          );
 
-          const prompts = Arr.map(
-            Arr.filter(
-              Arr.map(
-                Str.split(Str.trim(yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!)), "\n"),
-                (line) => herdrCall(line),
-              ),
-              (call) => call.cmd === "agent prompt",
-            ),
-            (call) =>
-              Option.getOrUndefined(
-                Option.map(Option.fromNullishOr(call.argv[3]), (present________________) =>
-                  pipe_(present________________, Str.includes("Check the race first.")),
-                ),
-              )
-                ? "steer"
-                : "step",
+          const prompts = Arr.flatMap(
+            Str.split(Str.trim(yield* fs.readFileString(core.logPath)), "\n"),
+            (line) => {
+              const call = coreCall(line);
+              return call.cmd === "terminal.send"
+                ? [
+                    pipe_(call.params?.text ?? "", Str.includes("Check the race first."))
+                      ? "steer"
+                      : "step",
+                  ]
+                : [];
+            },
           );
           // The first step prompt is the one refused.
           expect(prompts).toEqual(["step", "step", "steer"]);

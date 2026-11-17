@@ -344,9 +344,9 @@ export const schedulesLayer = (options: {
         return admitted.runId;
       }, Effect.provideContext(hosted));
 
-      /** herdr answering, waited for each minute: a scheduled Run always gets its own Task. */
+      /** Core answering, waited for each minute, so a scheduled Run's agents can start. */
       const herdrAnswers = (name: string, occurrence: string) =>
-        new Herdr(env).workspaceList().pipe(
+        new Herdr(env).agentList().pipe(
           Effect.tapError(() =>
             update(name, (record) => ({
               ...record,

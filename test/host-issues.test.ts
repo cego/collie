@@ -1,9 +1,10 @@
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { beforeEach, afterEach, expect, test } from "bun:test";
 import { ConfigProvider, Duration, Effect, FileSystem, Result, Schema, flow } from "effect";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
@@ -37,7 +38,7 @@ const fakeAgents = () =>
   agentsLayer({
     dir: rig.stateDir,
     env: rig.pluginEnv({ GITLAB_HOST: FORGE_HOST.gitlab }),
-    herdr: new FakeHerdr(rig.pluginEnv()),
+    herdr: new Herdr(rig.pluginEnv()),
     harness: "claude",
     model: "opus",
     permissions: "auto",
@@ -53,7 +54,7 @@ const withMachine = <A, E, R>(
       registryLayer(rig.stateDir, {
         userDir: rig.userDir,
         placing: {
-          herdr: new FakeHerdr(rig.pluginEnv()),
+          herdr: new Herdr(rig.pluginEnv()),
           env: rig.pluginEnv({
             GITLAB_HOST: FORGE_HOST.gitlab,
             COLLIE_RELEASES: releases,
@@ -66,7 +67,7 @@ const withMachine = <A, E, R>(
             dir: rig.stateDir,
             userDir: rig.userDir,
             placing: {
-              herdr: new FakeHerdr(rig.pluginEnv()),
+              herdr: new Herdr(rig.pluginEnv()),
               env: rig.pluginEnv({
                 GITLAB_HOST: FORGE_HOST.gitlab,
                 COLLIE_RELEASES: releases,

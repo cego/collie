@@ -546,7 +546,6 @@ export interface BudgetedDeps {
  */
 export const budgetedDeps = Effect.fn("Evaluator.budgetedDeps")(function* (
   env: {
-    readonly socketPath: string | null;
     readonly userDir: string;
     readonly raw: Readonly<Record<string, string | undefined>>;
     readonly pluginRoot: string;

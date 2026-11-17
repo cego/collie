@@ -1,5 +1,5 @@
 // An agent that ends its turn on a background `collie verify` is told when it ends, by a
-// real host over a fake herdr, and nobody else is (ADR-draft-an-agent-is-told-when-its-verify-ends).
+// real host over a fake core, and nobody else is (ADR-draft-an-agent-is-told-when-its-verify-ends).
 
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -19,7 +19,12 @@ import { collie, proves } from "./support/world";
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const decodeCall = flow(
   Schema.decodeUnknownResult(
-    Schema.fromJsonString(Schema.Struct({ argv: Schema.Array(Schema.String) })),
+    Schema.fromJsonString(
+      Schema.Struct({
+        cmd: Schema.String,
+        params: Schema.optionalKey(Schema.Struct({ text: Schema.optionalKey(Schema.String) })),
+      }),
+    ),
   ),
   Result.getOrThrow,
 );
@@ -33,12 +38,14 @@ test(
   () =>
     proves(
       "collie-verify-told-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
-          const status = `${world.home}/agent-status`;
-          yield* fs.writeFileString(outputs, encode([null])).pipe(Effect.orDie);
+          // No Output, and still working after its turn, so only what the test reports moves it.
+          yield* fs
+            .writeFileString(outputs, encode([{ writes: [], output: null, then: "working" }]))
+            .pipe(Effect.orDie);
           yield* fs.writeFileString(`${world.project}/thing.txt`, "one\n").pipe(Effect.orDie);
           yield* exec(["git", "add", "-A"], { cwd: world.project });
           yield* exec(
@@ -46,9 +53,7 @@ test(
             { cwd: world.project },
           );
           const set = {
-            FAKE_HERDR_OUTPUTS: outputs,
-            FAKE_HERDR_AGENT_STATUS_FILE: status,
-            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_STATE_DIR: world.state,
             COLLIE_USER_DIR: world.config,
           };
           yield* Effect.acquireRelease(
@@ -82,7 +87,7 @@ test(
           ))!;
           const pane = Option.getOrUndefined(
             Arr.findFirst(yield* registeredAt(world.state), (entry) => entry.runId === runId),
-          )!.paneId;
+          )!.agent;
           const asked = (
             name: string,
             executable: string,
@@ -120,7 +125,7 @@ test(
                 request: `grant-${name}`,
               })
               .pipe(Effect.orDie);
-          const asAgent = { HERDR_PANE_ID: pane };
+          const asAgent = { COLLIE_AGENT: pane };
           const told = () =>
             deliveredTo(world.state, runId).pipe(
               Effect.map((all) =>
@@ -128,14 +133,14 @@ test(
               ),
             );
 
-          yield* verify("from-cli", "/bin/false", { HERDR_PANE_ID: "not-an-agent" });
-          yield* fs.writeFileString(status, "working").pipe(Effect.orDie);
+          yield* verify("from-cli", "/bin/false", { COLLIE_AGENT: "not-an-agent" });
+          yield* core.report(launched.agent, "working");
           yield* verify("while-working", "/bin/false", asAgent);
-          yield* fs.writeFileString(status, "blocked").pipe(Effect.orDie);
+          yield* core.report(launched.agent, "blocked");
           yield* verify("while-blocked", "/bin/false", asAgent);
           expect(yield* told()).toEqual([]);
 
-          yield* fs.writeFileString(status, "idle").pipe(Effect.orDie);
+          yield* core.report(launched.agent, "idle");
           const ran = yield* verify("unit", "/bin/true", asAgent);
           expect(ran.ran).toBe(true);
           const [one, ...more] = yield* told();
@@ -150,13 +155,15 @@ test(
             Arr.findFirst(
               Arr.flatMap(
                 Arr.filter(
-                  Str.split(
-                    yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orDie),
-                    "\n",
-                  ),
+                  Str.split(yield* fs.readFileString(core.logPath).pipe(Effect.orDie), "\n"),
                   (line) => line !== "",
                 ),
-                (line) => decodeCall(line).argv,
+                (line) => {
+                  const call = decodeCall(line);
+                  return call.cmd === "terminal.send" && call.params?.text !== undefined
+                    ? [call.params.text]
+                    : [];
+                },
               ),
               (words) => pipe_(words, Str.includes("Your collie verify")),
             ),
@@ -167,7 +174,7 @@ test(
           // Once it is one of the Run's Checks, it is answered from its record, never run,
           // for an agent as for a human, whatever it expects.
           yield* grant("unit", "/bin/true");
-          const asHuman = { HERDR_PANE_ID: "not-an-agent" };
+          const asHuman = { COLLIE_AGENT: "not-an-agent" };
           const again = yield* verify("unit", "/bin/true", asAgent);
           expect(again).toEqual({ ...ran, ran: false });
           for (const [extra, expecting] of [

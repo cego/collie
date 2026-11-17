@@ -48,7 +48,7 @@ const write = (file: string, text: string) => Effect.promise(() => Bun.write(fil
 const RUNNER = new TextEncoder().encode(`#!/bin/sh
 mkdir -p "$COLLIE_DIR/release"
 echo '{"version":"99.0.0","files":{}}' > "$COLLIE_DIR/release/placed.json"
-echo "$HERDR_PLUGIN_ROOT $*" > "$COLLIE_DIR/../handed-off"
+echo "$COLLIE_ROOT $*" > "$COLLIE_DIR/../handed-off"
 echo '{"ok":true,"data":{"root":"'"$COLLIE_DIR"'/release","checkout":false,"release":"99.0.0","kept":[],"steps":[{"step":"plugin-link","state":"done","detail":""}]}}'
 `);
 

@@ -110,8 +110,8 @@ const inDir = <A, E>(
         prefix: "collie-lookup-",
       });
       const env = readEnv({
-        HERDR_PLUGIN_ROOT: ROOT,
-        HERDR_PLUGIN_STATE_DIR: dir,
+        COLLIE_ROOT: ROOT,
+        COLLIE_STATE_DIR: dir,
         COLLIE_USER_DIR: `${dir}/user`,
         HOME: dir,
       });
