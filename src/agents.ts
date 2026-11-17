@@ -2193,6 +2193,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           `${about.agent}: its ${delivery.kind} ${outcome.id} did not start a turn on core, so Enter was pressed once`,
         );
       const id = outcome.id;
+      if (
+        outcome.submission === "observed" &&
+        (delivery.kind === "step" || delivery.kind === "repair")
+      )
+        turnBegun.add(about.agent);
       if (outcome.submission === "observed")
         return {
           sent: true,
@@ -2890,7 +2895,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             );
         if (atLaunch) {
           if (!replayed) yield* orderLaunch(ask);
-          givenAtLaunch.add(launched.agent);
+          turnBegun.add(launched.agent);
           yield* write(sentPath(launched, "step"), pointer);
           yield* log(
             ask.runId,
@@ -3441,8 +3446,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
         const unasked =
           asking === null ? Effect.succeed(true) : Effect.map(asking(null), (open) => !open);
-        // A turn begun with its launch may end before it is first watched.
-        let working = givenAtLaunch.delete(launched.agent);
+        let working = turnBegun.delete(launched.agent);
         for (;;) {
           const status = yield* host.herdr
             .agentStatus(launched.agent)
@@ -3454,7 +3458,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             isSettled(status) &&
             (yield* absent) &&
             (yield* unasked) &&
-            (yield* may)
+            (yield* may) &&
+            !(yield* holdsBudgetOf(launched.runId, launched.agent)) &&
+            (openQuestions.get(launched.agent)?.size ?? 0) === 0
           )
             return;
           yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
@@ -3578,8 +3584,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const comingBack = new Map<string, Deferred.Deferred<void>>();
   /** Why the host could not start a lost agent again, until its collection parks on it. */
   const refusedStarts = new Map<string, string>();
-  /** Agents whose step went in with their launch, so their turn began unwatched. */
-  const givenAtLaunch = new Set<string>();
+  /** Agents whose work was seen starting a turn, which may end before it is watched. */
+  const turnBegun = new Set<string>();
   const resuming = Semaphore.makeUnsafe(1);
 
   /**
@@ -3681,7 +3687,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         start(ask, agent, listed, atLaunch ? told : null, session),
       );
       if (incarnation === undefined) return [];
-      if (atLaunch) givenAtLaunch.add(agent);
+      if (atLaunch) turnBegun.add(agent);
       // Every record of its work names this incarnation now, so a stop and a send reach it.
       let now = latest;
       for (const one of own) {

@@ -898,6 +898,8 @@ test(
 
 const successor = agentName("r1", "build", null, 2);
 const fallback = { fallbacks: Effect.succeed(["claude"]) };
+/** A Codex step that works until it runs out, so it cannot end unwritten and be reminded first. */
+const untilRunOut = { writes: [], output: null, owed: true };
 /** Once the Codex agent has its work, its harness says it ran out. */
 const runsOut = Effect.gen(function* () {
   while (!(yield* given)) yield* TestClock.withLive(Effect.sleep("10 millis"));
@@ -917,7 +919,7 @@ test("a Codex agent that runs out is Quiet before its Claude successor starts", 
     Effect.scoped(
       Effect.gen(function* () {
         yield* serve();
-        yield* rig.queueOutputs([null, { verdict: "clean", note: "finished on claude" }]);
+        yield* rig.queueOutputs([untilRunOut, { verdict: "clean", note: "finished on claude" }]);
         yield* Effect.forkScoped(runsOut);
         const result = yield* session(
           work.execute({ runId: "r1", input: { skip: false } }).pipe(Effect.result),
@@ -941,7 +943,7 @@ test("a Codex agent that runs out and will not stop parks the work, and no succe
   runEffect(
     Effect.gen(function* () {
       yield* serve({ ignoreInterrupt: true });
-      yield* rig.queueOutputs([null, { verdict: "clean", note: "never" }]);
+      yield* rig.queueOutputs([untilRunOut, { verdict: "clean", note: "never" }]);
       yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.forkScoped(runsOut);
@@ -977,7 +979,7 @@ test("a stop between a Fallback's retirement and its launch leaves no agent runn
   runEffect(
     Effect.gen(function* () {
       yield* serve();
-      yield* rig.queueOutputs([null, { verdict: "clean", note: "never" }]);
+      yield* rig.queueOutputs([untilRunOut, { verdict: "clean", note: "never" }]);
       yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.forkScoped(runsOut);
@@ -993,7 +995,7 @@ test("a stop just after a launch started its agent stops that agent, and a resum
   runEffect(
     Effect.gen(function* () {
       yield* serve();
-      yield* rig.queueOutputs([null, null, { verdict: "clean", note: "after the stop" }]);
+      yield* rig.queueOutputs([untilRunOut, null, { verdict: "clean", note: "after the stop" }]);
       yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.forkScoped(runsOut);

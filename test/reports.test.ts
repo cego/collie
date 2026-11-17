@@ -298,7 +298,11 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           );
           let sibling: string | undefined;
           if (mode === "sibling") {
-            yield* fs.writeFileString(localOutputs, encode([null, { verdict: "done" }]));
+            // The reported Run's agent is still working; the sibling's gets "done".
+            yield* fs.writeFileString(
+              localOutputs,
+              encode([{ writes: [], output: null, owed: true }, { verdict: "done" }]),
+            );
             const started = yield* first.cli(
               [
                 "run",

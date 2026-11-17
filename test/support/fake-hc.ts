@@ -292,7 +292,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       yield* fs.writeFileString(logPath, `${entry}\n`, { flag: "a" }).pipe(Effect.orDie);
       yield* emit(terminal.address, "status", { status: { state }, records: {}, reported: true });
     });
-  /** The turn a prompt starts: working at once, then its Output written and idle again. */
+  /** The turn a prompt starts: working at once, then its Output written and idle again (an owed one once the test writes it). */
   const take = (terminal: Terminal, prompt: string) =>
     Effect.gen(function* () {
       terminal.turn += 1;
@@ -303,7 +303,16 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           Effect.andThen(answerPrompt(prompt, logPath, queuePath)),
           Effect.provideContext(services),
           Effect.orDie,
-          Effect.flatMap((then) => setStatus(terminal, then)),
+          Effect.flatMap(({ then, owed }) =>
+            Effect.gen(function* () {
+              yield* setStatus(terminal, then);
+              if (owed === undefined) return;
+              const turn = terminal.turn;
+              while (!(yield* fs.exists(owed).pipe(Effect.orElseSucceed(() => false))))
+                yield* Effect.sleep(TURN);
+              if (terminal.turn === turn) yield* setStatus(terminal, "idle");
+            }),
+          ),
         ),
         scope,
       );
