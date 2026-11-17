@@ -5,6 +5,7 @@ import { refusal, verifyRun } from "../lifecycle";
 import { FrontDoor, HostRefused } from "../board-model";
 import { type Echo } from "../verify";
 import { checkNameOf } from "../verify-spec";
+import { movedLine } from "../verify-model";
 import { printResult } from "../envelope";
 import { answering, cliDoor, root } from "./shared";
 
@@ -131,7 +132,7 @@ export const verify = Command.make(
             ok: true as const,
             data: { verification: record, ran },
             human: ran
-              ? `${record.name}: ${record.result} (exit ${record.exit})`
+              ? `${record.name}: ${record.result} (exit ${record.exit})${movedLine(record) === "" ? "" : `; moved under it: ${movedLine(record)}`}`
               : `${record.name}: ${record.result} (exit ${record.exit}), not run again: verification ${record.id} on this tree${record.log === undefined ? "" : `; its log is ${record.log}`}`,
           };
         }),

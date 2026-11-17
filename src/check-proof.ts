@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import {
+  movedLine,
   passed,
   ranCommand,
   ranOneTest,
@@ -114,12 +115,13 @@ export const owesNothingHere = (proof: CheckProof) =>
 export const owedLocally = <C extends LeftToCi>(checks: ReadonlyArray<C>): ReadonlyArray<C> =>
   Arr.filter(checks, (check) => check.ci === undefined);
 
-/** Why a check is unstable: git's first line where its latest unstable record kept why it could not measure the tree. */
+/** Why a check is unstable: git's first line where its latest unstable record could not measure the tree, else what moved. */
 export function unstableWhy(runs: ReadonlyArray<Verification>): string {
   const latest = Option.getOrUndefined(Arr.findLast(runs, (v) => v.result === "unstable"));
   const reason = latest?.end.unmeasured ?? latest?.start.unmeasured ?? "";
+  const moved = latest === undefined ? "" : movedLine(latest);
   return Option.match(Arr.findFirst(Arr.map(Str.split(reason, "\n"), Str.trim), Str.isNonEmpty), {
-    onNone: () => "ran on a tree that moved under it",
+    onNone: () => `ran on a tree that moved under it${moved === "" ? "" : `: ${moved}`}`,
     onSome: (line) => `ran on a tree git could not measure: ${line}`,
   });
 }

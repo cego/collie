@@ -32,6 +32,7 @@ import {
   ProofSchema,
   VerificationSchema,
   type FailedTest,
+  type MovedPath,
   type Snapshot,
 } from "./verify-model";
 
@@ -54,6 +55,7 @@ export const TOO_LARGE = "unstable:too-large";
 export const UNMEASURED = "unstable:unmeasured";
 
 export {
+  movedLine,
   PASSES,
   Pass,
   VerificationSchema,
@@ -355,6 +357,67 @@ export function resultOf(
   return (exit === 0) === (expect === "pass") ? "pass" : "fail";
 }
 
+const LOCKFILES: ReadonlySet<string> = new Set([
+  "bun.lock",
+  "bun.lockb",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "Cargo.lock",
+  "composer.lock",
+  "Gemfile.lock",
+  "poetry.lock",
+  "uv.lock",
+  "go.sum",
+]);
+
+const CHANGES: Record<string, MovedPath["change"]> = {
+  A: "added",
+  M: "modified",
+  D: "deleted",
+  T: "type-changed",
+};
+
+/**
+ * The paths whose content differs between two measured snapshots of `cwd`'s checkout, from
+ * the trees the fingerprints already wrote; empty where either was not measured.
+ */
+export const movedBetween = Effect.fn("Verify.movedBetween")(
+  function* (cwd: string, start: Snapshot, end: Snapshot) {
+    const [from] = Str.split(start.fingerprint, " ");
+    const [to] = Str.split(end.fingerprint, " ");
+    const measured = (tree: string | undefined): tree is string =>
+      tree !== undefined && tree !== "" && tree !== TOO_LARGE && tree !== UNMEASURED;
+    const place = yield* placeOf(cwd);
+    if (place === null || !measured(from) || !measured(to) || from === to) return [];
+    const diff = yield* git(
+      ["diff-tree", "-r", "-z", "--no-renames", "--name-status", from, to],
+      place.root,
+    );
+    if (diff.code !== 0) return [];
+    const fields = Arr.filter(Str.split(diff.stdout, "\0"), Str.isNonEmpty);
+    const changed = Arr.map(Arr.chunksOf(fields, 2), ([status, path = ""]) => ({
+      path,
+      change: CHANGES[status[0] ?? ""] ?? ("modified" as const),
+    }));
+    const listed = yield* git(
+      ["--literal-pathspecs", "ls-files", "-z", "--", ...Arr.map(changed, (one) => one.path)],
+      place.root,
+    );
+    const indexed = new Set(Str.split(listed.code === 0 ? listed.stdout : "", "\0"));
+    return Arr.map(changed, (one): MovedPath => ({
+      ...one,
+      class: LOCKFILES.has(Str.split(one.path, "/").at(-1) ?? "")
+        ? "lockfile"
+        : indexed.has(one.path)
+          ? "tracked"
+          : "untracked",
+    }));
+  },
+  Effect.orElseSucceed((): ReadonlyArray<MovedPath> => []),
+);
+
 /** What outside the tree decides how a check behaves, beside the executable itself. */
 const TOOLCHAIN_VARIABLES = ["PATH", "NODE_ENV", "NODE_OPTIONS"] as const;
 const TOOLCHAIN_RUNTIMES = ["node", "bun"] as const;
@@ -485,6 +548,8 @@ const VerifyingSchema = Schema.Struct({
   /** The default branch a `baseline` runs where the branch left; null for every other pass. */
   base: Schema.NullOr(Schema.String),
   started: Schema.String,
+  /** The checkout it collects proof on, whose agents' deliveries wait for it. */
+  checkout: Schema.optionalKey(Schema.String),
   /** Where its output is being written. */
   log: Schema.optionalKey(Schema.String),
   /** The pipeline job a `ci` pass waits on. */
@@ -762,7 +827,10 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
     by: check.by,
     ...passFields(passOf(check.pass)),
   };
-  const read: Verification = failed === null ? record : { ...record, failed };
+  const moved =
+    record.result === "unstable" ? yield* movedBetween(command.cwd, spec.start, end) : [];
+  const shifted: Verification = moved.length === 0 ? record : { ...record, moved };
+  const read: Verification = failed === null ? shifted : { ...shifted, failed };
   const tested: Verification = spec.test === undefined ? read : { ...read, test: spec.test };
   const owned: Verification = spec.own === undefined ? tested : { ...tested, own: spec.own };
   const placed: Verification =

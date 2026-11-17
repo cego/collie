@@ -163,6 +163,7 @@ import { isSuperseded, isUnanswered } from "./store";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue, type Queued } from "./delivery-queue";
+import { verifyingOf, type Verifying } from "./verify";
 import { agentName, launchedAs, legacyAgentName, reason, unsafePathComponent } from "./naming";
 import { machineName } from "./peers";
 import type { MachineCatalogue } from "./harness-choice";
@@ -2073,6 +2074,44 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     });
 
   /**
+   * The Check Collie is collecting proof with on this agent's checkout, which its deliveries
+   * wait for; null for none. An agent whose own record puts it in another checkout is not held.
+   */
+  const fenceOf = (about: Pick<Launched, "runId" | "agent">) =>
+    Effect.gen(function* () {
+      const check = yield* under(verifyingOf(about.runId));
+      if (check === null || check.pass === "ci") return null;
+      const cwd = (yield* readControl(host.env.stateDir, about.agent).pipe(
+        Effect.orElseSucceed(() => null),
+      ))?.cwd;
+      if (check.checkout === undefined || cwd === undefined) return check;
+      const within = (inner: string, outer: string) =>
+        inner === outer || pipe(inner, Str.startsWith(`${outer}/`));
+      return within(cwd, check.checkout) || within(check.checkout, cwd) ? check : null;
+    });
+
+  const heldBehind = (check: Verifying) =>
+    `Held behind the Check "${check.name}" Collie started at ${check.started} on this agent's checkout, until it ends; the host delivers it then.`;
+
+  /** Waits while a Check collects proof on the agent's checkout, saying so once. */
+  const untilUnfenced = (about: Launched, what: string) =>
+    Effect.gen(function* () {
+      let said = false;
+      for (;;) {
+        const check = yield* fenceOf(about);
+        if (check === null) return;
+        if (!said) {
+          said = true;
+          yield* log(
+            about.runId,
+            `${about.agent}: its ${what} is ${Str.uncapitalize(heldBehind(check))}`,
+          );
+        }
+        yield* Effect.sleep(host.pollMs ?? DEFAULT_POLL_MS);
+      }
+    });
+
+  /**
    * The one sender: the first prompt, a repair and a human's own words all go out here.
    * A delivery the ledger already holds under the same claim is refused rather than sent
    * a second time, which is what makes a launch that may already have happened safe to
@@ -2101,6 +2140,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   ) {
     const lost = yield* lostServer(compactionDeps(host, about.runId), about.agent);
     if (lost !== null) return { sent: false, why: lost, gone: true };
+    if (delivery.kind !== "steer") yield* untilUnfenced(about, delivery.kind);
     const through = delivery.herdr === undefined ? deps : { ...deps, herdr: delivery.herdr };
     const found = yield* entryFor(about, about.agent, null, through);
     if (found.entry === null)
@@ -4227,6 +4267,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           pending.workflowNotice = options.workflowNotice;
         if (options.actor !== undefined && queued === undefined) {
           pending.actor = Struct.omit(actorOf(options.actor, options.request), ["requestId"]);
+        }
+        // Held for humans and agents alike: a message landing mid-Check moves the tree it proves.
+        const fence = yield* fenceOf(launched);
+        if (fence !== null) {
+          yield* keepQueued(dirFor(options.runId), pending).pipe(Effect.orDie);
+          return {
+            agent: launched.agent,
+            delivered: false,
+            queued: true,
+            detail: heldBehind(fence),
+          };
         }
         if (fallback) {
           const found = yield* entryFor(launched, launched.agent, null);

@@ -4345,6 +4345,7 @@ export const hostLayer = (options: {
                     revision: head.code === 0 ? Str.trim(head.stdout) : "",
                     base,
                     started,
+                    checkout: asked.cwd,
                     log,
                   }),
                 );

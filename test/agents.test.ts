@@ -99,6 +99,8 @@ import { everyRegistered, lineageAgent, registerAgent, scopeFor } from "../src/r
 import { Herdr, HerdrError, type AgentStatus } from "../src/herdr";
 import { retitleGenericTasks } from "../src/tasknames";
 import { runFacts } from "./support/records";
+import { updateApproved } from "../src/verify-spec";
+import { VERIFYING, encodeVerifying } from "../src/verify";
 import { agentName } from "../src/naming";
 import {
   controlDir,
@@ -291,7 +293,7 @@ const session = <A, E>(
   run: Effect.Effect<
     A,
     E,
-    WorkflowEngine.WorkflowEngine | Agents | Collecting | Store | PlatformServices
+    WorkflowEngine.WorkflowEngine | Agents | Collecting | Store | Host | PlatformServices
   >,
   over?: Partial<AgentHost>,
 ) =>
@@ -6200,6 +6202,116 @@ const tendIdle = Agents.pipe(
     ),
   ),
 );
+
+/**
+ * Collie's own Check of `unit` on r1's project, forked: it waits for `go` to appear, then
+ * exits or is killed. Answers once its marker is set.
+ */
+const collieCheckRunning = (ends: "exits" | "crashes") =>
+  Effect.gen(function* () {
+    const go = `${rig.root}/go`;
+    yield* updateApproved(evidenceDir(dir, "r1"), () => [
+      {
+        name: "unit",
+        executable: "sh",
+        argv: [
+          "-c",
+          `while [ ! -f '${go}' ]; do sleep 0.05; done; ${ends === "crashes" ? "kill -KILL $$" : "true"}`,
+        ],
+        cwd: ".",
+      },
+    ]).pipe(Effect.provide(recordsAt(dir)));
+    const store = yield* Store;
+    if ((yield* store.run("r1")) === null)
+      yield* store.admit({
+        request: "req-r1",
+        run: "r1",
+        workflow: "proof",
+        project: rig.projectDir,
+        input: {},
+        provenance: {},
+        options: {},
+        generation: "proof@1",
+        execution: "execution-r1",
+        task: null,
+        parent: null,
+      });
+    const check = yield* Effect.forkChild(
+      Host.pipe(
+        Effect.flatMap((host) =>
+          host.verify({ runId: "r1", name: "unit", cwd: rig.projectDir, pass: "gate" }),
+        ),
+        Effect.result,
+      ),
+    );
+    yield* until(Effect.map(controlRead(VERIFYING, "r1"), (marker) => marker !== null));
+    return { check, end: (yield* FileSystem.FileSystem).writeFileString(go, "") };
+  });
+
+test.each(["exits", "crashes"] as const)(
+  "a message to an agent while Collie's Check collects proof on its checkout is held behind it, and sent once the Check %s",
+  (ends) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+        yield* session(started("r1"));
+        yield* session(
+          Effect.gen(function* () {
+            const running = yield* collieCheckRunning(ends);
+            const held = yield* say("r1", "stay in src", "steer-held");
+            expect(held).toMatchObject({ delivered: false, queued: true });
+            expect(held.detail).toContain('Held behind the Check "unit"');
+            expect(held.detail).toContain("until it ends");
+            yield* tendIdle;
+            expect(prompts(yield* rig.calls())).not.toContain("stay in src");
+            yield* running.end;
+            const checked = yield* Fiber.join(running.check);
+            expect(checked._tag).toBe(ends === "exits" ? "Success" : "Failure");
+            expect(yield* controlRead(VERIFYING, "r1")).toBeNull();
+            yield* tendIdle;
+          }),
+        );
+        expect(
+          Arr.filter(prompts(yield* rig.calls()), (one) => one === "stay in src"),
+        ).toHaveLength(1);
+      }),
+    ),
+  60_000,
+);
+
+test("Collie's own step to an agent waits while Collie's Check collects proof on its checkout", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* controls.setControl(
+        VERIFYING,
+        "r1",
+        encodeVerifying({
+          name: "unit",
+          executable: "true",
+          argv: [],
+          pass: "gate",
+          round: null,
+          revision: "",
+          base: null,
+          started: "2026-11-17T10:00:00.000Z",
+          checkout: rig.projectDir,
+        }),
+      );
+      const step = yield* Effect.forkChild(session(started("r1")));
+      yield* until(
+        Effect.map(
+          read(`${dir}/agents/r1/agents.log`),
+          Str.includes('held behind the Check "unit"'),
+        ),
+      );
+      yield* TestClock.withLive(Effect.sleep("300 millis"));
+      expect(sentTexts(yield* rig.calls())).toEqual([]);
+      yield* controls.setControl(VERIFYING, "r1", null);
+      const result = yield* Fiber.join(step);
+      expect(result._tag === "Success" && result.success.note).toBe("done");
+    }),
+  ));
 
 test.each([true, false])(
   "a queued retry keeps its accepted words and actor (attributed: %s)",

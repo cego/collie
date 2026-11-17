@@ -32,6 +32,16 @@ const SnapshotSchema = Schema.Struct({
 });
 export type Snapshot = typeof SnapshotSchema.Type;
 
+export const MOVED_CLASSES = ["tracked", "untracked", "lockfile"] as const;
+/** One path whose content differs between an unstable verification's start and end trees. */
+export const MovedPathSchema = Schema.Struct({
+  path: Schema.String,
+  change: Schema.Literals(["added", "modified", "deleted", "type-changed"]),
+  /** In the index when the command ended, not, or a dependency lockfile either way. */
+  class: Schema.Literals(MOVED_CLASSES),
+});
+export type MovedPath = typeof MovedPathSchema.Type;
+
 export const VerificationSchema = Schema.Struct({
   id: Schema.String,
   run: Schema.String,
@@ -56,6 +66,8 @@ export const VerificationSchema = Schema.Struct({
     Schema.withDecodingDefaultKey(Effect.succeed("pass" as const)),
   ),
   result: Schema.Literals(["pass", "fail", "unstable"]),
+  /** What moved under an `unstable` run, from the repository root; absent on older records. */
+  moved: Schema.optionalKey(Schema.Array(MovedPathSchema)),
   at: Schema.String,
   /** Who collected it. An agent may run one; only Collie may run an approved spec. */
   by: Schema.Literals(["agent", "collie"]),
@@ -94,6 +106,23 @@ export const VerificationSchema = Schema.Struct({
   ),
 });
 export type Verification = typeof VerificationSchema.Type;
+
+/** How many moved paths a line names before it gives the count left. */
+const MOVED_SHOWN = 5;
+
+/** What moved under an unstable record, capped, naming the record that lists them all; "" for none. */
+export function movedLine(record: Pick<Verification, "id" | "moved">): string {
+  const moved = record.moved ?? [];
+  if (moved.length === 0) return "";
+  const named = Arr.join(
+    Arr.map(moved.slice(0, MOVED_SHOWN), (one) => `${one.change} ${one.class} ${one.path}`),
+    ", ",
+  );
+  const rest = moved.length - MOVED_SHOWN;
+  return rest > 0
+    ? `${named} and ${rest} more (all ${moved.length} in verification ${record.id})`
+    : named;
+}
 
 const BRIEFED = ["name", "executable", "argv", "seconds", "result", "at", "by", "step"] as const;
 

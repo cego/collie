@@ -141,6 +141,7 @@ import {
   fingerprint,
   readVerifications,
   VERIFYING,
+  type Verification,
 } from "../../src/verify";
 import { inputsFor, offersFrom } from "../../src/offers";
 import { Store } from "../../src/store";
@@ -10431,6 +10432,97 @@ scenario(
         );
         expect(relied?.id).toBe(unit[1]?.id);
         expect(unit[1]?.end.fingerprint).toBe(final);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "an agent's message sent while Collie's Check collects proof on its checkout arrives after that Check's record is written",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-fenced";
+        const go = `${rig.root}/go`;
+        yield* approve(runId, ["unit"]);
+        yield* freeze(runId, [
+          {
+            name: "unit",
+            executable: "sh",
+            argv: ["-c", `while [ ! -f '${go}' ]; do sleep 0.05; done`],
+            cwd: rig.projectDir,
+          },
+        ]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        const text = "Keep the README in step.";
+        const unitRecords = readVerifications(evidenceDir(dir, runId)).pipe(
+          Effect.map(Arr.filter((one) => one.name === "unit" && one.by === "collie")),
+          Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
+        );
+        const result = yield* session(
+          Effect.gen(function* () {
+            const made = yield* loaded(shipped("implement"), runId);
+            yield* admit({
+              runId,
+              workflow: made.workflow.name,
+              input: { plan, ...FINISH },
+              options: { outcome: "feature" },
+            });
+            const running = yield* Effect.forkChild(
+              made.workflow
+                .execute({ runId, input: { plan, ...FINISH } })
+                .pipe(Effect.result, Effect.provide(made.layer)),
+            );
+            yield* until(
+              () => RunRecords.use((records) => records.control(VERIFYING, runId)),
+              (marker) => marker !== null,
+            );
+            const agents = yield* Agents;
+            const builder = Option.getOrThrow(
+              Arr.findFirst(yield* registeredAt(dir), (one) => one.runId === runId),
+            );
+            const held = yield* agents.steer({
+              runId,
+              agent: builder.agent,
+              text,
+              request: "fenced-1",
+              mode: "boundary",
+              actor: { origin: "agent", from: { run: "r-other", agent: "reviewer" } },
+            });
+            expect(held).toMatchObject({ delivered: false, queued: true });
+            expect(held.detail).toContain('Held behind the Check "unit"');
+            yield* fs.writeFileString(go, "");
+            yield* until(
+              () => unitRecords,
+              (records) => records.length > 0,
+            );
+            // The record is written; nothing has reached the agent yet.
+            expect(Arr.some(yield* prompts(), Str.includes(text))).toBe(false);
+            yield* until(
+              () => RunRecords.use((records) => records.control(VERIFYING, runId)),
+              (marker) => marker === null,
+            );
+            yield* agents.tendQuestions(
+              () => ({
+                ask: () => Effect.void,
+                asked: Effect.succeed([]),
+                close: () => Effect.void,
+              }),
+              () => Effect.succeed(new Map()),
+            );
+            return yield* Fiber.join(running);
+          }),
+        );
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(Arr.filter(yield* prompts(), Str.includes(text))).toHaveLength(1);
+        expect(Arr.map(yield* unitRecords, (one) => one.result)).toEqual(["pass"]);
       }),
     ),
   120_000,

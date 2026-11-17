@@ -333,7 +333,9 @@ corrections to it stop until an explicit `run clear-override`; nothing times it 
 **Verification** — An independently collected command result bound to the tree it ran on,
 before and after. A tree is its content: committing exactly the bytes a Verification ran on
 leaves it on the same tree, and changing any of them does not. A result whose snapshots
-differ is `unstable`, never `pass`. One recorded with `--expect fail` reproduces a failure
+differ is `unstable`, never `pass`, and names the paths that moved, each classed tracked,
+untracked or lockfile. While Collie collects one itself on a checkout, deliveries to the
+Run's agents working there are held until it ends. One recorded with `--expect fail` reproduces a failure
 and is never a pass: on the current tree it proves no Check, and on an earlier tree it is
 history, so the Check still owes a pass on the final tree. An agent's statement about tests
 is a **claim**, and is shown as one.
