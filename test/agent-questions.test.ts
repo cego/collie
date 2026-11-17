@@ -150,6 +150,7 @@ const hostedOver = Effect.fn("test.hostedOver")(function* (
   // world's state, never the operator's.
   const set = {
     FAKE_HERDR_OUTPUTS: file,
+    FAKE_HERDR_SUBMIT_HOOK: world.state,
     HERDR_PLUGIN_STATE_DIR: world.state,
     COLLIE_USER_DIR: world.config,
   };
@@ -186,13 +187,7 @@ test(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const { env, client } = yield* hostedOver(world, [null]);
-          const { runId } = yield* client
-            .start({ project: world.project, id: "told", request: "start", input: { work: "it" } })
-            .pipe(Effect.orDie);
-          const launched = (yield* until(
-            () => launchOf(world.state, runId, "build"),
-            (one) => one !== undefined,
-          ))!;
+          const { runId, launched } = yield* launchedRun(world, client);
           yield* recordClaudeEvent(yield* controlDir(world.state, launched.agent), askedTwo).pipe(
             Effect.orDie,
           );
@@ -292,13 +287,7 @@ test(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const { env, client } = yield* hostedOver(world, [null]);
-          const { runId } = yield* client
-            .start({ project: world.project, id: "told", request: "start", input: { work: "it" } })
-            .pipe(Effect.orDie);
-          const launched = (yield* until(
-            () => launchOf(world.state, runId, "build"),
-            (one) => one !== undefined,
-          ))!;
+          const { runId, launched } = yield* launchedRun(world, client);
           const control = yield* controlDir(world.state, launched.agent);
           // Two calls, as an agent that asks one question at a time makes them.
           yield* recordClaudeEvent(control, askedAlone("toolu_a", "Database")).pipe(Effect.orDie);
@@ -404,6 +393,11 @@ const launchedRun = Effect.fn("test.launchedRun")(function* (world: World, clien
     () => launchOf(world.state, runId, "build"),
     (one) => one !== undefined,
   ))!;
+  yield* until(
+    () => deliveredTo(world.state, runId),
+    (deliveries) =>
+      Arr.some(deliveries, (one) => one.cause.kind === "step" && one.state === "acknowledged"),
+  );
   return { runId, launched, dir: yield* controlDir(world.state, launched.agent) };
 });
 
@@ -566,14 +560,6 @@ test(
           const fs = yield* FileSystem.FileSystem;
           const { client: previous } = yield* hostedOver(world, [null]);
           const { runId, dir } = yield* launchedRun(world, previous);
-          yield* until(
-            () => deliveredTo(world.state, runId),
-            (deliveries) =>
-              Arr.some(
-                deliveries,
-                (one) => one.cause.kind === "step" && one.state === "acknowledged",
-              ),
-          );
           yield* stopHost(world.state);
           expect(yield* ownerOf(world.state)).toBeNull();
           const db = new Database(`${world.state}/host.db`);

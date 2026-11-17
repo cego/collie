@@ -729,6 +729,7 @@ export class Rig {
     for (const key of [
       "FAKE_HERDR_LOG",
       "FAKE_HERDR_OUTPUTS",
+      "FAKE_HERDR_SUBMIT_HOOK",
       "FAKE_HERDR_FAIL",
       "FAKE_HERDR_AGENT_STATUS",
       "FAKE_HERDR_PROMPT_ERROR",

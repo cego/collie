@@ -107,7 +107,12 @@ import {
   type CompactionOutcome,
   type CompactionPorts,
 } from "../src/compaction";
-import { COMPACTION_PORTS, questionsSince, recordClaudeEvent } from "../src/compactors";
+import {
+  COMPACTION_PORTS,
+  questionsSince,
+  recordClaudeEvent,
+  submittedDelivery,
+} from "../src/compactors";
 import { hostLockOf } from "../src/lock";
 import { claudeTrust } from "../src/trust";
 import { FALLBACK_DEFAULTS } from "../src/settings";
@@ -2863,7 +2868,12 @@ const ANSWERED = "Your questions are answered:";
 /** Once `r1`'s agent has its work, it calls `AskUserQuestion` with two questions. */
 const asksTwo = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  while (Arr.every(yield* launchesAt(dir, "r1"), (one) => one.operation !== "review"))
+  while (
+    !Arr.some(
+      yield* deliveredTo(dir, "r1"),
+      (one) => one.cause.kind === "step" && one.state === "acknowledged",
+    )
+  )
     yield* TestClock.withLive(Effect.sleep("10 millis"));
   // The host runs in this process; the hook puts a question on a Run only while one lives.
   yield* fs.writeFileString(
@@ -2933,8 +2943,23 @@ test(
             expect(delivered?.argv?.[3]).toEndWith(
               "\nYour questions are answered: Database: SQLite; Checks: lint",
             );
+            const [receipt] = Arr.filter(
+              yield* deliveredTo(dir, "r1"),
+              (one) => one.cause.kind === "steer",
+            );
+            expect(receipt?.state).toBe("acknowledged");
+            expect(
+              yield* submittedDelivery(
+                yield* controlDir(rig.stateDir, agentFor("r1")),
+                receipt?.id ?? "",
+              ),
+            ).toBe(true);
           }),
-          { collectMs: 120_000, pollMs: 1_000 },
+          {
+            herdr: new UnseenTurn(rig.pluginEnv({ FAKE_HERDR_SUBMIT_HOOK: rig.stateDir })),
+            collectMs: 120_000,
+            pollMs: 1_000,
+          },
         );
       }),
     ),
@@ -2982,8 +3007,23 @@ test(
             ).toMatch(
               /From the human, on the board, [^\n]*\nYour question Checks is answered: lint$/,
             );
+            const [first] = Arr.filter(
+              yield* deliveredTo(dir, "r1"),
+              (one) => one.cause.kind === "steer",
+            );
+            expect(first?.state).toBe("acknowledged");
+            expect(
+              yield* submittedDelivery(
+                yield* controlDir(rig.stateDir, agentFor("r1")),
+                first?.id ?? "",
+              ),
+            ).toBe(true);
           }),
-          { herdr: new FakeHerdr(rig.pluginEnv()), collectMs: 120_000, pollMs: 1_000 },
+          {
+            herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_SUBMIT_HOOK: rig.stateDir })),
+            collectMs: 120_000,
+            pollMs: 1_000,
+          },
         );
       }),
     ),
@@ -3008,7 +3048,11 @@ test(
             yield* answer("ask-review-2", "lint");
             while (!(yield* parked("r1"))) yield* TestClock.withLive(Effect.sleep("10 millis"));
           }),
-          { collectMs: 60_000, pollMs: 1_000 },
+          {
+            herdr: new UnseenTurn(rig.pluginEnv({ FAKE_HERDR_SUBMIT_HOOK: rig.stateDir })),
+            collectMs: 60_000,
+            pollMs: 1_000,
+          },
         );
         expect(yield* controlOf(PARKED, "r1")).toContain("after 1 minutes idle");
       }),
@@ -8209,7 +8253,11 @@ test("a step pointer the harness took is recorded as Collie's, with its delivery
 /** A just-started agent: herdr sees it busy booting when the prompt goes out, then idle. */
 const promptNotTaken = (lost: "enter" | "text") =>
   new FakeHerdr(
-    rig.pluginEnv({ FAKE_HERDR_PROMPT_LOST: lost, FAKE_HERDR_AGENT_STATUS: "working,idle" }),
+    rig.pluginEnv({
+      FAKE_HERDR_PROMPT_LOST: lost,
+      FAKE_HERDR_AGENT_STATUS: "working,idle",
+      FAKE_HERDR_SUBMIT_HOOK: rig.stateDir,
+    }),
   );
 
 const enters = (calls: ReadonlyArray<Call>) =>
@@ -8248,6 +8296,9 @@ test(
         const [step] = yield* steps("r1");
         expect(why).toContain(step!.id);
         expect(why).toMatch(/pane 1-\d+/);
+        expect(
+          yield* submittedDelivery(yield* controlDir(rig.stateDir, agentFor("r1")), step!.id),
+        ).toBe(false);
         const calls = yield* rig.calls();
         expect(sent(calls, "Your task for this step")).toBe(1);
         expect(enters(calls)).toBe(0);

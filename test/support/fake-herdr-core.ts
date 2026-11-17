@@ -7,6 +7,7 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";
+import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import {
   Cause,
   Clock,
@@ -24,6 +25,8 @@ import {
   Result,
 } from "effect";
 import { recordStart } from "../../src/starts";
+import { controlDir } from "../../src/compaction";
+import { recordClaudeEvent } from "../../src/compactors";
 import { exec } from "./command";
 import { forwarding } from "./forwarding";
 
@@ -620,6 +623,12 @@ function handle(
         const owed = yield* answerFrom(state, line, yield* envString("FAKE_HERDR_OUTPUTS"));
         if (owed === "") delete state.owed[argv[2] ?? ""];
         else if (owed !== null) state.owed[argv[2] ?? ""] = owed;
+        const submittedIn = yield* envString("FAKE_HERDR_SUBMIT_HOOK");
+        if (submittedIn !== "")
+          yield* recordClaudeEvent(
+            yield* controlDir(submittedIn, argv[2] ?? ""),
+            encodeJson({ session_id: "fake", hook_event_name: "UserPromptSubmit", prompt: line }),
+          ).pipe(Effect.provide(BunChildProcessSpawner.layer));
       });
 
     const tabOf = (paneId: string) =>
