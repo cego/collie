@@ -48,7 +48,7 @@ being indexed. An empty partial result does not establish that no material exist
 kept from the same earlier search show as saved and stale, with their last observation.
 Their seen controls are disabled until the host answers again.
 
-The CLI offers `collie artefacts`; native chat, Flock chat, herdr routes, and managed agents
+The CLI offers `collie artefacts`; native chat, Flock chat and managed agents
 use `collie_artefacts` with search filters. Results include installation ids, a next-page
 cursor, and per-Machine coverage. Use `<installation>:<run>` to keep an address stable
 through Machine renaming. `<machine>:<run>` also works. A bare Run id present on multiple
@@ -80,7 +80,7 @@ Preparation failures keep **Read recovery detail** available and show the failur
 Listing, prefetch, and failed loads never mark a report seen. Only the selected revision
 successfully displayed by the native reader records the existing receipt.
 
-CLI, herdr, chat, and agents read reports through the same artefact addresses and operations
+The CLI, chat and agents read reports through the same artefact addresses and operations
 as other files. A report uses role `report`, so collection filters can find it.
 
 ## Registering a file

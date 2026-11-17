@@ -2,13 +2,14 @@
 // stale answer, and stays set aside across a restart, with the Workflow still waiting
 // on it (ADR-draft-a-humans-message-supersedes-a-runs-open-question).
 
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import * as Str from "effect/String";
 import { Clock, Effect, FileSystem, Layer, Schema, type Scope } from "effect";
 import { TestClock } from "effect/testing";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { fixtures, until } from "./support/host";
@@ -45,7 +46,7 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-const env = () => rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT });
+const env = () => rig.pluginEnv({ COLLIE_ROOT: ROOT });
 const dir = () => env().stateDir;
 
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
@@ -78,13 +79,13 @@ const hosted = <A, E>(
 ) =>
   run.pipe(
     Effect.provide(
-      registryLayer(dir(), { placing: { herdr: new FakeHerdr(env()), env: env() } }).pipe(
+      registryLayer(dir(), { placing: { herdr: new Herdr(env()), env: env() } }).pipe(
         Layer.provide(readsCounted(reads)),
         Layer.provideMerge(
           agentsLayer({
             dir: dir(),
             env: env(),
-            herdr: new FakeHerdr(env()),
+            herdr: new Herdr(env()),
             harness: "claude",
             model: "opus",
             permissions: "auto",

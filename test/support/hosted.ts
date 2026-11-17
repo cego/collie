@@ -13,6 +13,7 @@ import { isSettled } from "../../src/lifecycle";
 import { stopHost, until } from "./host";
 import { overHost } from "./records";
 import { proves, type World } from "./world";
+import type { FakeHc } from "./fake-hc";
 
 /** A Run that waits to be answered, and ones that end as soon as they start. */
 export const MODULES = [
@@ -29,24 +30,24 @@ export const hosted = <A, E>(
   body: (herd: {
     world: World;
     env: PluginEnv;
+    core: FakeHc;
   }) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   modules: ReadonlyArray<string> = MODULES,
 ) =>
   proves(
     prefix,
-    (world) =>
+    (world, core) =>
       Effect.gen(function* () {
         resetExecutors();
         const env = readEnv({
-          HERDR_PLUGIN_ROOT: world.install,
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
-          HERDR_SOCKET_PATH: `${world.state}/herd.sock`,
-          HC_SOCKET: `${world.state}/hc.sock`,
+          HC_SOCKET: core.socketPath,
           HOME: world.home,
           COLLIE_CWD: world.project,
         });
-        return yield* body({ world, env }).pipe(Effect.ensuring(stopHost(world.state)));
+        return yield* body({ world, env, core }).pipe(Effect.ensuring(stopHost(world.state)));
       }),
     modules,
   );

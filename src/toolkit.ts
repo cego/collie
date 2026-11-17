@@ -41,8 +41,8 @@ export const decodeStrict = <S extends Schema.ConstraintDecoder<unknown, never>>
 export const RunInput = Schema.Struct({ run: Schema.optionalKey(Schema.String) });
 export const HoldInput = Schema.Struct({
   run: Schema.optionalKey(Schema.String.annotate({ description: "The Run to hold" })),
-  workspace: Schema.optionalKey(
-    Schema.String.annotate({ description: "Hold every unfinished Run in this workspace" }),
+  task: Schema.optionalKey(
+    Schema.String.annotate({ description: "Hold every unfinished Run of this Task" }),
   ),
   reason: Schema.optionalKey(
     Schema.String.annotate({ description: "Why, in the human's own words" }),
@@ -294,14 +294,13 @@ export const CollieTools = Toolkit.make(
     readOnly: true,
     title: "Where work can be started",
     description:
-      "The workspaces this herdr session has, with the directory each stands for, the Tasks " +
-      "whose workspace is still open, the Projects root, and each workflow that can be " +
-      "started with the Inputs it takes. Read this before proposing a launch: a Run belongs " +
-      "to the workspace whose repository it is about, and the Home is Collie's own " +
-      "namespace, not anybody's checkout. A start may also name a checkout's path — a path " +
-      "on the Machine the start goes to — or a repository's directory name under that " +
-      "Machine's Projects root: a directory none is open on gets a workspace opened on it, " +
-      "so a repository missing from this list is no reason to send the human to the board.",
+      "The open Tasks, with the directory each works in, the Projects root, and each " +
+      "workflow that can be started with the Inputs it takes. Read this before proposing a " +
+      "launch: a Run belongs to the repository it is about, and the Home is Collie's own " +
+      "namespace, not anybody's checkout. A start names a checkout's path — a path on the " +
+      "Machine the start goes to — or a repository's directory name under that Machine's " +
+      "Projects root, so a repository missing from this list is no reason to send the human " +
+      "to the board.",
     parameters: Tool.EmptyParams,
   }),
   collieTool("collie_receipts", {
@@ -402,13 +401,13 @@ export const CollieTools = Toolkit.make(
   }),
   collieTool("collie_hold", {
     readOnly: false,
-    title: "Hold a Run, or a whole workspace",
+    title: "Hold a Run, or a whole Task",
     description:
-      "Stop a Run — or every unfinished Run in a workspace — taking on new work. What is " +
+      "Stop a Run — or every unfinished Run of a Task — taking on new work. What is " +
       "already running carries on; the Run parks at its next boundary instead of starting " +
       "the next thing. Carried out at once, because it is the human's own instruction: do " +
       "not propose a hold they asked for. Name the Run by the id `collie_herd` lists, or " +
-      "the workspace by the id `collie_workspaces` lists. It is held until someone " +
+      "the Task by the id `collie_workspaces` lists. It is held until someone " +
       "releases it; nothing lifts a hold at a time.",
     parameters: HoldInput,
   }),
@@ -492,7 +491,7 @@ export const TAKES: Record<ToolName, string> = {
   collie_installation: "It takes nothing.",
   collie_models: 'It takes nothing, or {"machine": "<name>"} and {"harness": "<harness>"}.',
   collie_connections: 'It takes nothing, or {"machine": "<name>"}.',
-  collie_hold: 'It takes {"run": "..."} or {"workspace": "..."}, and optionally "reason".',
+  collie_hold: 'It takes {"run": "..."} or {"task": "..."}, and optionally "reason".',
   collie_do:
     'It takes {"actions": [...]}, and every action has to be one of the kinds in the schema. An action with no "run" acts on the board\'s selection, and the board has nothing open.',
   collie_propose:

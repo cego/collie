@@ -201,7 +201,6 @@ describe("Each setting explains itself", () => {
       "idle_close_ms",
       "agent_profile",
       "claude_subagents",
-      "terminal_backend",
     ],
     Runs: [
       "worktrees_directory",

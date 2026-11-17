@@ -1,22 +1,12 @@
 // Collie's toasts reach whichever Desktop is connected to the host, never herdr.
 
-import * as Arr from "effect/Array";
-import * as Str from "effect/String";
-import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Stream } from "effect";
+import { Effect, Fiber, Stream } from "effect";
 import { connect, type HostClient } from "../src/host";
 import { isSettled } from "../src/lifecycle";
 import { until } from "./support/host";
 import { hosted } from "./support/hosted";
 import type { World } from "./support/world";
-
-const herdrCalls = Effect.gen(function* () {
-  const log = yield* (yield* FileSystem.FileSystem)
-    .readFileString(Bun.env.FAKE_HERDR_LOG ?? "")
-    .pipe(Effect.orElseSucceed(() => ""));
-  return Arr.filter(Str.split(log, "\n"), (line) => line !== "");
-});
 
 /** A Run that finishes once answered, so a Desktop is surely listening when it does. */
 const answeredRun = (client: HostClient, world: World, request: string) =>
@@ -53,9 +43,7 @@ test(
           sound: "done",
           title: expect.stringContaining("finished"),
         });
-        expect(
-          Arr.filter(yield* herdrCalls, (line) => pipe(line, Str.includes('"notification'))),
-        ).toEqual([]);
+        // `hosted` fails if any Herdr 1 CLI or socket call reaches its tripwire.
       }).pipe(Effect.orDie),
     ),
   60_000,

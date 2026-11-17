@@ -14,14 +14,14 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Option from "effect/Option";
+import type { PlatformServices } from "./platform";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import type { PluginEnv } from "./env";
 import { askOnce, budgetedDeps, type BudgetedDeps, type TaskName } from "./evaluator";
-import { Herdr } from "./herdr";
-import { liveHerds } from "./herds";
 import { oneLine, taskWorkspaceLabel } from "./naming";
 import type { RunFacts } from "./runs";
-import { listTasks, readTask, withTaskLockIfFree, writeTask } from "./task";
+
+import { listTasks, readTask, Tasks, withTaskLockIfFree, writeTask, type TaskRecord } from "./task";
 
 /** The names this person already has, as herdr reports them. Read-only context. */
 export interface LiveNames {
@@ -298,19 +298,23 @@ export const nameTask = Effect.fn("tasknames.nameTask")(function* (
   return cleanName(answer, context, live);
 });
 
-/** Live labels are naming context; a failed read must not prevent a start. */
-const liveNames = Effect.fn("tasknames.liveNames")(function* (herdr: Herdr, everything: boolean) {
-  const workspaces = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
-  const [tabs, panes] = everything
-    ? yield* Effect.all([
-        herdr.tabList().pipe(Effect.orElseSucceed(() => [])),
-        herdr.paneList().pipe(Effect.orElseSucceed(() => [])),
-      ])
-    : [[], []];
+/**
+ * The Tasks' labels are naming context; a failed read must not prevent a start. The host
+ * reads its own; anything else asks it, and asking from inside it would start another.
+ */
+const liveNames = Effect.fn("tasknames.liveNames")(function* (
+  env: PluginEnv,
+): Effect.fn.Return<LiveNames, never, PlatformServices> {
+  const own = yield* Effect.serviceOption(Tasks);
+  // Lazily: lifecycle imports the host, which imports this.
+  const { hostTasks } = yield* Effect.promise(() => import("./lifecycle"));
+  const tasks = yield* (Option.isSome(own) ? own.value.list : hostTasks(env)).pipe(
+    Effect.orElseSucceed((): ReadonlyArray<TaskRecord> => []),
+  );
   return {
-    workspaces: Arr.map(workspaces, (workspace) => workspace.label),
-    tabs: Arr.map(tabs, (tab) => tab.label),
-    panes: Arr.flatMap(panes, (pane) => (pane.label === null ? [] : [pane.label])),
+    workspaces: Arr.map(tasks, (task) => task.label),
+    tabs: [],
+    panes: [],
   } satisfies LiveNames;
 });
 
@@ -341,7 +345,7 @@ export const freshTaskLabel = Effect.fn("tasknames.freshTaskLabel")(function* (
     goal: about.goal ?? null,
     cwd: env.cwd,
   };
-  const live = yield* liveNames(new Herdr(env), naming !== null);
+  const live = yield* liveNames(env);
   const title = oneLine(about.title ?? "");
   if (title !== "" && !isGenericTitle(title, about.workflow))
     return taskWorkspaceLabel({ project: fallbackName(context, live).project, title });
@@ -350,19 +354,12 @@ export const freshTaskLabel = Effect.fn("tasknames.freshTaskLabel")(function* (
 
 /**
  * Renames each Task whose title names only its workflow, from its first Run's Inputs and
- * without asking a model — only where the label is still the one Collie wrote: on a live
- * workspace in the Task's own Herd that still carries it, or on the record of one that
- * Herd no longer has.
+ * without asking a model — only where the label is still the one Collie wrote.
  */
 export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(function* (
-  env: PluginEnv,
-  herdr: Herdr,
   runs: ReadonlyArray<RunFacts>,
 ) {
   const tasks = yield* listTasks;
-  const herds = Arr.some(tasks, (task) => task.workspace !== null)
-    ? yield* liveHerds(herdr, env)
-    : [];
   for (const task of tasks) {
     const [, project, title] = PREFIXED.exec(task.label) ?? [];
     const first = Arr.filter(runs, (run) => run.task === task.id).sort((one, other) =>
@@ -370,14 +367,6 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
     )[0];
     if (project === undefined || title === undefined || first === undefined) continue;
     if (!isGenericTitle(title, first.workflow)) continue;
-    // Workspace ids are only unique within a session.
-    const herd =
-      task.herd === undefined
-        ? herds.length === 1
-          ? herds[0]
-          : undefined
-        : Option.getOrUndefined(Arr.findFirst(herds, (one) => one.herd === task.herd));
-    if (herd === undefined && task.workspace !== null) continue;
     const named = fallbackName(
       {
         workflow: first.workflow,
@@ -395,28 +384,7 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
       Effect.gen(function* () {
         const now = yield* readTask(task.id);
         if (now === null || now.label !== task.label) return;
-        if (now.workspace === null || herd === undefined)
-          return yield* writeTask({ ...now, label });
-        const listed = yield* herd.herdr.workspaceList().pipe(Effect.option);
-        // Unread, a workspace a human renamed is indistinguishable from one that is gone.
-        if (listed._tag === "None") return;
-        const showing = Option.getOrUndefined(
-          Arr.findFirst(listed.value, (one) => one.workspaceId === now.workspace),
-        )?.label;
-        if (showing !== undefined && showing !== now.label) return;
-        const current = yield* readTask(task.id);
-        if (current === null || current.label !== now.label || current.workspace !== now.workspace)
-          return;
-        if (showing !== undefined) {
-          const renamed = yield* herd.herdr
-            .workspaceRename(now.workspace, label)
-            .pipe(Effect.option);
-          if (renamed._tag === "None") return;
-        }
-        const latest = yield* readTask(task.id);
-        if (latest === null || latest.label !== now.label || latest.workspace !== now.workspace)
-          return;
-        yield* writeTask({ ...latest, label });
+        yield* writeTask({ ...now, label });
       }),
     );
   }

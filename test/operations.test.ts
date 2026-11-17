@@ -197,7 +197,7 @@ test("collie_run on a Task of several merge requests names each, ready at its he
         prefix: "collie-run-mrs-",
       });
       yield* Layer.build(recordsAt(dir));
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
       const run = yield* madeRun(dir, { id: "r-fan", task: "task-1", state: "succeeded" });
       const app = taskMr("app", 12, { ready: true, head: shaOf("a") });
       const api = taskMr("api", 7, { waitsOn: [app.id] });

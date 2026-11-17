@@ -33,13 +33,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcessSpawner } from "effect/process";
 import type * as Tool from "effect/ai/Tool";
 import type { PluginEnv } from "./env";
-import {
-  choiceLines,
-  inCollieState,
-  newRequestId,
-  runFacts,
-  workspaceCwdFromPanes,
-} from "./operations";
+import { choiceLines, newRequestId, runFacts } from "./operations";
 import { recordsReadLayer } from "./records";
 import { projectsRoot } from "./projects";
 import type { Action } from "./actions";
@@ -68,7 +62,6 @@ import {
   catalogueReadings,
   connectionReadings,
   type Door,
-  hostTaskOf,
   hostRunProposals,
   hostTasks,
   flockArtefacts,
@@ -81,7 +74,6 @@ import { cleanupLines } from "./cleanup";
 import { isOpen } from "./task";
 import { pendingFor } from "./proposals";
 import { statusLine } from "./disposition";
-import { Herdr } from "./herdr";
 import { ASKED_KINDS, Flow, type FLOCK_READS, type RunProgress } from "./board-model";
 import { asText as newsText, NATIVE } from "./news";
 import { reportLines } from "./report";
@@ -98,7 +90,7 @@ import { savedReaches, standingDirectionOn } from "./config";
 import { reachOf, type Reach } from "./reach";
 import { standingDirectionContext } from "./standing-direction";
 import { defaultsPath, describeDefaults, EMPTY_DEFAULTS, readDefaults } from "./intent";
-import { scopeKey } from "./registry";
+import { scopeFor, scopeKey } from "./registry";
 import { readSelection, selectionPath } from "./selection";
 import { isString, type JsonObject } from "./schema";
 import { scheduleLines } from "./schedule-model";
@@ -718,11 +710,11 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
  * A hold, carried out. The actor is `chat` all the same: attribution, never a gate.
  */
 const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof HoldInput.Type) {
-  const { workspace, reason } = input;
-  const on = input.run === undefined && workspace === undefined ? yield* selectionOf(env) : null;
+  const { task, reason } = input;
+  const on = input.run === undefined && task === undefined ? yield* selectionOf(env) : null;
   const run = input.run ?? on?.run;
-  if (run === undefined && workspace === undefined)
-    return "collie_hold needs a run or a workspace to hold, and the board has nothing open. Ask which one they meant.";
+  if (run === undefined && task === undefined)
+    return "collie_hold needs a run or a task to hold, and the board has nothing open. Ask which one they meant.";
   const why = reason ?? "asked in chat";
   const requestId = yield* (yield* SecureRandom.SecureRandom).uuidV4();
 
@@ -731,7 +723,7 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof Ho
   const oneRun: Action = { kind: "hold", run: run!, reason: why };
   const held = yield* actAsked(env, {
     door: yield* toolDoor(env),
-    actions: workspace === undefined ? [oneRun] : yield* holdsFor(env, workspace, why),
+    actions: task === undefined ? [oneRun] : yield* holdsFor(env, task, why),
     request: requestId,
   });
   const about = on === null ? "" : `On the board's selection, "${on.name}": `;
@@ -746,15 +738,13 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof Ho
   );
 });
 
-/** Every Run of the Task this workspace belongs to, as one hold each. */
+/** Every unfinished Run of a Task, as one hold each. */
 const holdsFor = Effect.fn("Tools.holdsFor")(function* (
   env: PluginEnv,
-  workspace: string,
+  task: string,
   reason: string,
 ) {
-  const task = yield* hostTaskOf(env, workspace);
-  if (task === null) return [];
-  const runs = Arr.filter((yield* runViews(env, task.id)).runs, (view) => !isSettled(view));
+  const runs = Arr.filter((yield* runViews(env, task)).runs, (view) => !isSettled(view));
   return Arr.map(runs, (view) => ({ kind: "hold" as const, run: view.runId, reason }));
 });
 
@@ -777,40 +767,20 @@ const reachLine = (
 
 /** What `collie_workspaces` answers with: where a Run could go, and what could start. */
 const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) {
-  const herdr = new Herdr(env);
-  const all = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
-  const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
   const saved = (yield* savedModules(env)).entries;
-  const lines = yield* Effect.forEach(all, (workspace) =>
-    Effect.gen(function* () {
-      const cwd =
-        workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
-      const home = cwd !== "" && (yield* inCollieState(env, cwd));
-      return `- workspace ${workspace.workspaceId} (${workspace.label}): ${cwd || "no directory"}${home ? " — the Home, Collie's own namespace, no checkout" : ""}`;
-    }),
-  );
-  // The Tasks too: a Task with no Run yet is in no Herd listing, so this is the only
-  // place a conversation can find out the work a new Run could join.
-  const open = new Set(Arr.map(all, (workspace) => workspace.workspaceId));
+  // A Task with no Run yet is in no Herd listing, so this is the only place a
+  // conversation can find out the work a new Run could join.
   const asked = yield* Effect.result(hostTasks(env));
-  const tasks = Result.isSuccess(asked)
-    ? Arr.filter(asked.success, (task) => isOpen(task, open))
-    : [];
+  const tasks = Result.isSuccess(asked) ? Arr.filter(asked.success, isOpen) : [];
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
   const reached = yield* savedReaches(env.userDir);
   return Arr.join(
     [
-      ...(lines.length > 0 ? lines : ["- (no workspaces)"]),
-      "",
-      ...Arr.map(
-        tasks,
-        (task) =>
-          `- task ${task.id} (${task.label})${task.workspace === null ? "" : ` in workspace ${task.workspace}`}`,
-      ),
+      ...Arr.map(tasks, (task) => `- task ${task.id} (${task.label}): ${task.cwd}`),
       ...(Result.isFailure(asked)
         ? [`- (the Tasks are unknown: ${asked.failure.message})`]
         : tasks.length === 0
-          ? ["- (no Tasks with an open workspace)"]
+          ? ["- (no open Tasks)"]
           : []),
       "",
       root === null
@@ -830,9 +800,8 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
       ),
       ...(saved.length === 0 ? ["- none"] : []),
       "",
-      "a start names its workspace — an id, its label, the path of a checkout on this Machine or a",
-      "repository's directory name under the Projects root (one with no workspace open on it gets",
-      "one), or projects-root — and every Input, an optional",
+      "a start names its workspace — the path of a checkout on this Machine, a repository's",
+      "directory name under the Projects root, or projects-root — and every Input, an optional",
       'one left empty as "". Nothing is inferred; a start missing any is refused with each listed.',
       "How far it goes is the human's to say: pass what they said, else what the last launch of",
       'that workflow in that project chose, else "". A start for them saves it for the next.',
@@ -860,7 +829,7 @@ const reportFacts = Effect.fn("Tools.reportFacts")(function* (
  */
 const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-  if (key === null) return "Collie cannot reach herdr, so it has nothing to report.";
+  if (key === null) return "Collie cannot reach core, so it has nothing to report.";
   const read = yield* settleNewsFor(env, {
     door: yield* toolDoor(env),
     herd: key,
@@ -1012,24 +981,18 @@ const shortened = (text: string, most: number) => {
 
 /** What `collie_installation` answers with: everything that is not about a Run. */
 const installationFacts = Effect.fn("Tools.installation")(function* (env: PluginEnv) {
-  const herdr = new Herdr(env);
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-  const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
-  const workspaces = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
   const health = yield* doctor(env).pipe(Effect.orElseSucceed(() => null));
-  // Per workspace, because that is how a Run reads them: what a new Run begins with is
-  // the file under the workspace it was started in, never under whichever one this
-  // process happens to be serving from.
-  const defaults = yield* Effect.forEach(workspaces, (workspace) =>
+  // Per directory, because that is how a Run reads them: what a new Run begins with is
+  // the file under the directory it was started in, never this process's own.
+  const tasks = yield* hostTasks(env).pipe(Effect.orElseSucceed(() => []));
+  const dirs = Arr.dedupe(Arr.map(Arr.filter(tasks, isOpen), (task) => task.cwd));
+  const defaults = yield* Effect.forEach(dirs, (cwd) =>
     Effect.gen(function* () {
-      const cwd =
-        workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
-      const scope = { session: env.socketPath, workspaceId: workspace.workspaceId, cwd };
       const found =
-        (yield* readDefaults(yield* defaultsPath(env.stateDir, scopeKey(scope)))) ?? EMPTY_DEFAULTS;
-      return `- ${workspace.workspaceId} (${workspace.label}): ${
-        pipe_(describeDefaults(found), Str.replaceAll("\n", "; ")) || "nothing"
-      }`;
+        (yield* readDefaults(yield* defaultsPath(env.stateDir, scopeKey(scopeFor(cwd))))) ??
+        EMPTY_DEFAULTS;
+      return `- ${cwd}: ${pipe_(describeDefaults(found), Str.replaceAll("\n", "; ")) || "nothing"}`;
     }),
   );
   const harness = yield* chatHarnessOf(env.userDir);
@@ -1056,8 +1019,8 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
           ? scheduleLines(scheduled.value)
           : `schedules: ${scheduled.error.message}`,
       "",
-      "every new Run begins with, by the workspace it is started in:",
-      ...(defaults.length > 0 ? defaults : ["- (no workspaces)"]),
+      "every new Run begins with, by the directory of each open Task:",
+      ...(defaults.length > 0 ? defaults : ["- (no open Tasks)"]),
       "",
       `chat: ${harness}${whyUnavailable(harness, Bun.which(harness)) ?? " installed"}, running ${chat?.harness ?? "nothing"}`,
       `delivery: ${pushable(harness).how}`,

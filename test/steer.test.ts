@@ -12,11 +12,12 @@ import { steer } from "../src/operations";
 import { DEFAULT_AUTHORITY, readIntent, type Authority } from "../src/intent";
 import { conversationPath, read as readConversation } from "../src/conversation";
 import { read as readProposals } from "../src/proposals";
-import { budgetPath, herdOf, readBudget } from "../src/steering";
+import { budgetPath, readBudget, machineHerd } from "../src/steering";
 import type { PluginEnv } from "../src/env";
 import type { PlatformError } from "effect/PlatformError";
 import { hosted, hostedRun } from "./support/hosted";
 import type { World } from "./support/world";
+import type { FakeHc } from "./support/fake-hc";
 
 // Every test here stands a host up: the Runs a steer is about are the host's.
 setDefaultTimeout(60_000);
@@ -31,6 +32,7 @@ let world: World;
 let stateDir: string;
 let env: PluginEnv;
 let herdKey: string;
+let core: FakeHc;
 
 const deps = (root: string) => ({
   herdKey: herdKey,
@@ -96,10 +98,11 @@ const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Records | Sc
       world = herd.world;
       stateDir = world.state;
       env = herd.env;
+      core = herd.core;
       originalPath = Bun.env.PATH ?? "";
       setReply = yield* fakeClaude(stateDir);
       yield* setReply("{}");
-      herdKey = yield* herdOf(env.socketPath);
+      herdKey = yield* machineHerd(env);
       return yield* body.pipe(
         Effect.provide(recordsAt(stateDir)),
         Effect.ensuring(
@@ -366,17 +369,6 @@ test("the pack names the runs and the target's own intent, and no pane text", ()
         }),
       );
 
-      // Something on screen to find, were the pack ever built from a pane read.
-      const onScreen = "PANE TEXT NOBODY SHOULD QUOTE";
-      yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          Bun.env.FAKE_HERDR_PANE_TEXT = onScreen;
-        }),
-        () =>
-          Effect.sync(() => {
-            delete Bun.env.FAKE_HERDR_PANE_TEXT;
-          }),
-      );
       yield* steer(env, deps(stateDir), {
         text: "what is this run for?",
         target: run.id,
@@ -389,9 +381,9 @@ test("the pack names the runs and the target's own intent, and no pane text", ()
       expect(pack).toContain(run.id);
       expect(pack).toContain("Goal: add a picker");
       expect(pack).toContain("Intent version: 1");
-      // What an agent is doing reaches this as herdr's own status, and no further: there
-      // is no pane read anywhere in the pack's construction.
-      expect(pack).not.toContain(onScreen);
+      // What an agent is doing reaches this as core's own status, and no further: there
+      // is no terminal read anywhere in the pack's construction.
+      expect(yield* fs.readFileString(core.logPath)).not.toContain('"cmd":"terminal.read"');
     }),
   ));
 

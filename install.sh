@@ -1,15 +1,15 @@
 #!/bin/sh
 # Puts the runner in bin/collie and a `collie` on PATH. A placed release already has its
 # runner. Otherwise it prefers the prebuilt release so consumers do not need bun — except
-# in a git checkout, which is a machine developing the plugin and whose own source is newer
+# in a git checkout, which is a machine developing Collie and whose own source is newer
 # than any release by definition.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$ROOT"
 
-VERSION=${COLLIE_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' herdr-plugin.toml)}
-if [ -n "${COLLIE_VERSION:-}" ] && ! printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+VERSION=${COLLIE_VERSION:-$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json)}
+if ! printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "not a Collie release version: $VERSION" >&2
   exit 1
 fi
@@ -43,7 +43,7 @@ quietly() {
 # not change. `find -newer` is the same question `make` asks.
 needs_build() {
   [ -f bin/collie ] || return 0
-  [ -n "$(find src package.json bun.lock herdr-plugin.toml -newer bin/collie 2>/dev/null | head -1)" ]
+  [ -n "$(find src package.json bun.lock -newer bin/collie 2>/dev/null | head -1)" ]
 }
 
 build_from_source() {
@@ -165,7 +165,7 @@ fetch_release() {
   chmod +x bin/collie
 }
 
-# A `collie` on PATH that knows which checkout it belongs to. Without the plugin root
+# A `collie` on PATH that knows which checkout it belongs to. Without the release root
 # pinned, the baseline workflows would be whichever directory you happened to be
 # standing in, so `run list` would work anywhere and `run start` would not.
 install_shim() {
@@ -177,7 +177,7 @@ install_shim() {
   cat > "$BIN_DIR/collie" <<EOF
 #!/bin/sh
 $SHIM_MARKER
-exec env HERDR_PLUGIN_ROOT="\${HERDR_PLUGIN_ROOT:-$ROOT}" "$ROOT/bin/collie" "\$@"
+exec env COLLIE_ROOT="\${COLLIE_ROOT:-$ROOT}" "$ROOT/bin/collie" "\$@"
 EOF
   chmod +x "$BIN_DIR/collie"
   case ":$PATH:" in
@@ -201,8 +201,8 @@ elif [ -e .git ] && command -v bun >/dev/null 2>&1; then
   fi
 elif fetch_release; then
   if [ -n "${COLLIE_VERSION:-}" ]; then
-    sed "s/^version = \".*\"/version = \"$VERSION\"/" herdr-plugin.toml > herdr-plugin.toml.new
-    mv herdr-plugin.toml.new herdr-plugin.toml
+    sed "s/^\([[:space:]]*\"version\"[[:space:]]*:[[:space:]]*\)\"[^\"]*\"/\1\"$VERSION\"/" package.json > package.json.new
+    mv package.json.new package.json
   fi
   echo "installed ${ASSET} from ${BASE}"
 elif [ -n "${COLLIE_VERSION:-}" ]; then
@@ -218,11 +218,7 @@ fi
 
 install_shim
 
-# The runner is one step of preparing a machine; the rest of it — the plugin link,
-# the operator skill, the skills the workflows require — is `prepare.sh`, so that a
-# plugin rebuilt through herdr's build hook is a complete installation and not just
-# a fresh binary. Skipped when this is already running inside `prepare.sh`, which is
-# what stops the two from calling each other round in a circle.
+# Finish the repeatable installation steps unless prepare.sh already called us.
 if [ "${COLLIE_PREPARING:-}" != "1" ]; then
   COLLIE_RUNNER_FRESH=$fresh sh "$ROOT/prepare.sh"
 fi

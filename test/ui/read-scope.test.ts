@@ -34,7 +34,7 @@ afterEach(() => runEffect(rig.close()));
 
 function readers(runs: ReadonlyArray<RunFacts> = [], lines: ReadonlyArray<ProposalLine> = []) {
   const env = rig.pluginEnv();
-  const reads = { runs: 0, records: 0, agents: 0, workspaces: 0, tasks: 0, usage: 0 };
+  const reads = { runs: 0, records: 0, agents: 0, tasks: 0, usage: 0 };
   const details: Array<DetailKey | null> = [];
   let tasks = [task()];
   let detail: RunDetail | null = null;
@@ -44,14 +44,9 @@ function readers(runs: ReadonlyArray<RunFacts> = [], lines: ReadonlyArray<Propos
       reads.agents++;
       return [];
     });
-  herdr.workspaceList = () =>
-    Effect.sync(() => {
-      reads.workspaces++;
-      return [];
-    });
   const session: ControlSession = {
     herdr,
-    ...scopeFor(env, env.cwd),
+    ...scopeFor(env.cwd),
     stateDir: env.stateDir,
     userDir: env.userDir,
     pluginRoot: env.pluginRoot,
@@ -118,7 +113,6 @@ test("Task, Settings and Workflows refreshes do not rebuild the workspace lists"
           runs: 0,
           records: 0,
           agents: 0,
-          workspaces: 0,
           tasks: 2,
           usage: 2,
         });
@@ -157,7 +151,7 @@ test("History alone reads the full Run list, and later reads include newly finis
       const refreshed = yield* r.app.load({ ...at, nonce: 1 });
       expect(Arr.map(refreshed.history ?? [], (row) => row.id)).toEqual(["new", "old"]);
       expect(r.reads.runs).toBe(2);
-      expect([r.reads.records, r.reads.agents, r.reads.workspaces]).toEqual([0, 0, 0]);
+      expect([r.reads.records, r.reads.agents]).toEqual([0, 0]);
     }),
   ));
 
@@ -215,8 +209,6 @@ test("opening one Run reads its own live evidence and keeps Herd proposals witho
       expect(state.live?.run).toBe(run.id);
       expect(Arr.map(state.live?.cards ?? [], (one) => one.id)).toEqual([card.id]);
       expect(Arr.map(state.live?.proposals ?? [], (one) => one.id)).toEqual(["own", "herd"]);
-      expect([r.reads.runs, r.reads.records, r.reads.agents, r.reads.workspaces]).toEqual([
-        0, 0, 0, 0,
-      ]);
+      expect([r.reads.runs, r.reads.records, r.reads.agents]).toEqual([0, 0, 0]);
     }),
   ));
