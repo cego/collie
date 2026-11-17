@@ -1247,7 +1247,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
                 name: job.name,
                 status: GITLAB_JOB[job.state],
                 web_url: `https://${mr.project}/-/jobs/${job.id}`,
-                finished_at: "finished" in job ? job.finished : null,
+                finished_at: "finished" in job && job.finished !== undefined ? job.finished : null,
               }),
             ),
           );

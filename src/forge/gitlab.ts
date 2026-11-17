@@ -896,7 +896,7 @@ function failedAttempt(
     const jobs = yield* pipelineJobs(reached, cwd, attempt.value.pipeline.id);
     if (!jobs.ok) return { url, tests: [], jobs: null };
     const self = Option.getOrUndefined(Arr.findFirst(jobs.value, (one) => String(one.id) === id));
-    const ended = (one: typeof Job.Type) => Date.parse(one.finished_at ?? "");
+    const ended = (one: typeof Job.Type) => epochMs(one.finished_at ?? "");
     const selfAttempts = pipe(
       jobs.value,
       Arr.filter(
