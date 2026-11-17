@@ -12,8 +12,18 @@ const Correlation = Schema.Union([
 const State = Schema.Struct({
   wanted: Schema.Array(Schema.String),
   message: Schema.optionalKey(Correlation),
+  trouble: Schema.optional(Schema.String),
 });
 const StateJson = Schema.fromJsonString(State);
+
+export const REVIEW_SLACK = "review-slack.json";
+
+export const reviewSlackTrouble = (file: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(file)),
+    Effect.map((text) => Option.getOrUndefined(Schema.decodeOption(StateJson)(text))?.trouble),
+    Effect.orElseSucceed(() => undefined),
+  );
 
 export const mergeRequestsInSlack = (text: string) => {
   const found = new Map<string, MrRef>();
@@ -62,7 +72,16 @@ export const reconcileReviewSlack = (options: {
         yield* fs.rename(`${options.file}.new`, options.file);
       }).pipe(Effect.orDie);
     yield* keep();
-    return yield* Effect.gen(function* () {
+    const named = (reactions: ReadonlyArray<string>) =>
+      Arr.join(
+        Arr.map(reactions, (one) => `:${one}:`),
+        " ",
+      );
+    const lacking = (missing: ReadonlyArray<string>, reason: string) => {
+      const said = `Slack missing ${named(missing)}: ${reason}; sign in again in Desktop Settings › Connections`;
+      return { said, trouble: said };
+    };
+    const outcome = yield* Effect.gen(function* () {
       const api = yield* options.api;
       if (state.message === undefined) {
         if (options.permalink) {
@@ -111,20 +130,14 @@ export const reconcileReviewSlack = (options: {
         }
         yield* keep();
       }
-      if ("why" in state.message) return state.message.why;
-      yield* api.reconcile(state.message.channel, state.message.ts, state.wanted);
-      return `Slack: ${Arr.join(
-        Arr.map(state.wanted, (one) => `:${one}:`),
-        " ",
-      )}`;
-    }).pipe(
-      Effect.catch((reason) =>
-        Effect.succeed(
-          `Slack missing ${Arr.join(
-            Arr.map(state.wanted, (one) => `:${one}:`),
-            " ",
-          )}: ${reason}; sign in again in Desktop Settings › Connections`,
-        ),
-      ),
-    );
+      if ("why" in state.message)
+        return { said: state.message.why, trouble: `No Slack reaction: ${state.message.why}` };
+      return yield* api.reconcile(state.message.channel, state.message.ts, state.wanted).pipe(
+        Effect.as({ said: `Slack: ${named(state.wanted)}`, trouble: undefined }),
+        Effect.catch(({ missing, reason }) => Effect.succeed(lacking(missing, reason))),
+      );
+    }).pipe(Effect.catch((reason) => Effect.succeed(lacking(state.wanted, reason))));
+    state.trouble = outcome.trouble;
+    yield* keep();
+    return outcome.said;
   });

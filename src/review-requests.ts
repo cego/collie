@@ -86,7 +86,7 @@ const sayOnce = (env: PluginEnv, key: string, text: string) =>
 export const startRequested = Effect.fn("ReviewRequests.start")(function* (opts: {
   readonly env: PluginEnv;
   readonly gitlabHost: string;
-  /** Each host's login, refreshed after a refused or empty listing. */
+  /** Each host's login, refreshed after a refused listing. */
   readonly logins: Map<string, string>;
   readonly requested: Requested;
 }) {
@@ -101,7 +101,6 @@ export const startRequested = Effect.fn("ReviewRequests.start")(function* (opts:
     if (listed.status === 401 || listed.status === 403) logins.delete(host);
     return;
   }
-  if (listed.value.length === 0) logins.delete(host);
   for (const { url, title, author } of listed.value) {
     const mr = mrId(url);
     const ref = mrRefOf(url);

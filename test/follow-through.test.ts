@@ -288,7 +288,7 @@ test("an unplaced or ambiguous review request says why once and starts after it 
     }),
   ));
 
-test("an empty review-request listing refreshes a changed login on the next round", () =>
+test("idle review-request rounds read the login once and only list after that", () =>
   host.runEffect(
     Effect.gen(function* () {
       yield* repository;
@@ -301,14 +301,11 @@ test("an empty review-request listing refreshes a changed login on the next roun
           yield* host.mergeWatched;
           yield* until(
             () => Effect.sync(() => listings(forge).length),
-            (count) => count > 0,
+            (count) => count >= 3,
           );
-          yield* forge.set(model(head, { login: "bob" }));
-          yield* until(
-            () => Effect.sync(() => forge.requests()),
-            (requests) =>
-              Arr.some(requests, (one) => Str.includes("reviewer_username=bob")(one.url)),
-          ).pipe(Effect.timeout("1 minute"));
+          expect(
+            Arr.filter(forge.requests(), (one) => /\/user(?:\?|$)/.test(one.url)),
+          ).toHaveLength(1);
           expect(yield* runsHere).toEqual([]);
         }),
       );
@@ -757,6 +754,9 @@ test(
             expect(log).toContain(":memo:");
             expect(log).toContain("sign in again");
             expect((yield* host.status(runId))?.status.status).toBe("suspended");
+            const sentence = yield* cardSentence(runId);
+            expect(sentence).toContain("Slack missing :eyes: :memo:");
+            expect(sentence).toContain("sign in again");
           }),
         );
       }),
@@ -764,15 +764,70 @@ test(
   180_000,
 );
 
+const cardSentence = (runId: string) =>
+  Effect.gen(function* () {
+    const { board } = yield* host.mergeWatched;
+    const { views } = yield* board;
+    return Option.getOrThrow(
+      Arr.findFirst(views, (view) => Arr.some(view.runs, (one) => one === runId)),
+    ).sentence;
+  });
+
+for (const [count, why] of [
+  [0, "no Slack message found"],
+  [2, "2 messages mention it"],
+] as const)
+  test(
+    `${count} candidate Slack messages add no reaction and the card says ${why}`,
+    () =>
+      host.runEffect(
+        Effect.gen(function* () {
+          const { forge, entry } = yield* begun("review", [review([F1])]);
+          yield* signedInToSlack(host.env(), "U456");
+          slack.messages(
+            Array.from({ length: count }, (_, index) => ({
+              channel: "C456",
+              ts: `1794474000.00000${index}`,
+              text: TARGET,
+            })),
+          );
+          yield* host.session(
+            forge,
+            Effect.gen(function* () {
+              const { runId } = yield* host.started(entry, `candidates-${count}`, {
+                target: TARGET,
+              });
+              yield* until(
+                () => host.watchOf(runId, TARGET),
+                (one) => one?.name === "follow-1",
+              );
+              expect(yield* notesOf(forge)).toHaveLength(1);
+              expect(slack.reactions()).toEqual([]);
+              expect(yield* cardSentence(runId)).toBe(
+                `Waiting for @ann to change mk/collie!7. No Slack reaction: ${why}.`,
+              );
+            }),
+          );
+        }),
+      ),
+    180_000,
+  );
+
 test(
-  "a restart after Slack accepted a reaction resumes without adding it twice",
+  "a restart during reactions, on the first round and at approval, adds each of the three once",
   () =>
     host.runEffect(
       Effect.gen(function* () {
-        const { forge, entry } = yield* begun("review", [review([F1])]);
+        const { first, forge, entry } = yield* begun("review", [
+          review([F1]),
+          review([{ ...F1, status: "fixed" }]),
+        ]);
         yield* signedInToSlack(host.env(), "U456");
         slack.messages([{ channel: "C456", ts: "1794474000.000001", text: TARGET }]);
-        slack.after((method) => (method === "reactions.add" ? Effect.never : Effect.void));
+        const hangOnReact = () =>
+          slack.after((method) => (method === "reactions.add" ? Effect.never : Effect.void));
+        const added = () => Arr.filter(slack.calls, (one) => one.method === "reactions.add");
+        hangOnReact();
         const runId = yield* host.session(
           forge,
           Effect.gen(function* () {
@@ -788,21 +843,60 @@ test(
         yield* host.session(
           forge,
           Effect.gen(function* () {
+            yield* host.mergeWatched;
             yield* until(
               () => host.watchOf(runId, TARGET),
               (one) => one?.name === "follow-1",
             );
             expect(slack.reactions()).toEqual(["eyes", "memo"]);
-            expect(Arr.filter(slack.calls, (one) => one.method === "reactions.add")).toHaveLength(
-              2,
-            );
+            expect(added()).toHaveLength(2);
             expect(yield* notesOf(forge)).toHaveLength(1);
             expect(yield* host.agentStarts).toHaveLength(1);
+
+            const second = yield* pushed("close the handle");
+            yield* forge.set(
+              model(second, {
+                ancestry: { [second]: [first] },
+                notes: (yield* forge.model()).notes,
+              }),
+            );
+            yield* until(
+              () => asked(runId),
+              (rows) => Arr.some(rows, (row) => row.decision === "approve-2"),
+            );
+            hangOnReact();
+            yield* (yield* Registry).answer({
+              runId,
+              decision: "approve-2",
+              value: "Approve",
+              request: "answer-1",
+            });
+            yield* until(
+              () => Effect.sync(() => slack.reactions()),
+              (one) => one.includes("white_check_mark"),
+            );
+          }),
+        );
+        slack.after(() => Effect.void);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            yield* until(
+              () => host.watchOf(runId, TARGET),
+              (one) => one?.name === "follow-2",
+            );
+            expect(slack.reactions()).toEqual(["eyes", "memo", "white_check_mark"]);
+            expect(added()).toHaveLength(3);
+            expect(
+              Arr.filter(forge.requests(), (one) =>
+                Str.endsWith("/merge_requests/7/approve")(one.url),
+              ),
+            ).toHaveLength(1);
           }),
         );
       }),
     ),
-  180_000,
+  300_000,
 );
 
 for (const status of [503, 429])
@@ -964,6 +1058,95 @@ test.each(["major", "minor"] as const)(
             );
             expect(handed).toHaveLength(1);
             expect(handed[0]?.argv?.[3]).toContain(`${improved.runId}/findings.json`);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "Improve's second hand-off to a live implementer waits for its own push",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        yield* repository;
+        yield* git(["checkout", "-q", "-b", "feature"]);
+        const first = yield* pushed("Task work");
+        const forge = yield* host.gitlab(model(first));
+        yield* rig.addAgent("impl-live", "9-1");
+        yield* rig.queueOutputs([
+          review([F1]),
+          review([{ ...F1, status: "fixed" }, F2]),
+          review([{ ...F1, status: "fixed" }, F2]),
+        ]);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            yield* writeTask({
+              id: "task-human",
+              workspace: null,
+              label: "The human's work",
+              cwd: rig.projectDir,
+              created_at: "2026-11-12T09:00:00Z",
+            });
+            const registry = yield* Registry;
+            const building = yield* registry.start({
+              generation: yield* registry.load(`${fixtures}/placed.workflow.ts`),
+              request: "building",
+              project: rig.projectDir,
+              input: { work: "keep feature", ending: "succeed" },
+              task: "task-human",
+              options: { branch: "feature" },
+            });
+            yield* registerAgent(scopeFor(host.env(), rig.projectDir), {
+              role: "implementer",
+              agent: "impl-live",
+              paneId: "9-1",
+              workspaceId: null,
+              runId: building.runId,
+              workflow: "placed",
+              at: "2026-11-12T09:00:00Z",
+              incarnation: { terminalId: "term-impl-live", agentSession: null },
+            });
+            yield* configured(false);
+            yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+            const parent = yield* registry.start({
+              generation: yield* registry.load(yield* entryOf("review")),
+              request: "review-task",
+              project: rig.projectDir,
+              input: { target: TARGET },
+              task: "task-human",
+            });
+            yield* until(
+              () => asked(parent.runId),
+              (rows) => rows.length > 0,
+            );
+            const improved = yield* registry.invoke({
+              runId: parent.runId,
+              offer: "improve",
+              input: {},
+              request: "improve-twice",
+            });
+            yield* until(
+              () => host.watchOf(improved.runId, TARGET),
+              (row) => row?.name === "improved-head",
+            );
+            yield* host.mergeWatched;
+            const second = yield* pushed("guard the input");
+            yield* forge.set(model(second, { ancestry: { [second]: [first] } }));
+            yield* TestClock.adjust("6 minutes");
+            const settled = yield* until(
+              () =>
+                Effect.all({
+                  watch: host.watchOf(improved.runId, TARGET),
+                  starts: host.agentStarts,
+                }),
+              (one) => one.watch?.name === "improved-head-2" || one.starts.length > 2,
+            );
+            expect(settled.watch?.name).toBe("improved-head-2");
+            expect(settled.watch?.cursor.head).toBe(second);
+            expect(settled.starts).toHaveLength(2);
           }),
         );
       }),
@@ -1806,6 +1989,8 @@ for (const id of ["review", "second-look"])
                 });
                 expect(yield* host.agentStarts).toHaveLength(1);
                 yield* forge.set(before);
+                // The fast clock outruns the host, so the outage can last long enough for
+                // rechecks to back off to their one-hour cap.
                 yield* until(
                   () => readMetrics(`${host.dir()}/evidence/${runId}`),
                   (lines) =>
@@ -1813,6 +1998,7 @@ for (const id of ["review", "second-look"])
                       lines,
                       (line) => line.action === "resumed" && line.outcome === "resumed",
                     ),
+                  2 * 3_600,
                 );
                 const recovered = yield* until(
                   () => host.status(runId),
