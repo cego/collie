@@ -755,6 +755,8 @@ collie --json run wait <run-id> --timeout "10 minutes"
 collie --json run wait <run-id> --until attention
 collie --json run wait <run-id> --until ready
 collie --json run wait <run-id> --until needs-human
+collie --json run wait <run-id> <run-id> --until attention
+collie --json run wait <run-id> <run-id> --all
 collie --json run show <run-id>
 collie --json run list --status live
 collie --json run output <run-id>
@@ -814,6 +816,15 @@ missing may still come by itself — it ends instead as `invalid_state`, naming 
 missing. `--until needs-human` returns at either: ready, or nothing will move without you.
 Both ask the host for the Run's readiness every two seconds; the envelope they return
 carries it as `data.ready`. A host that cannot say five times running, such as an older build, ends the wait as `operation_failed`. Any other value is `invalid_input`.
+
+Given several Runs, `run wait` returns when the first of them meets `--until`, with that
+Run's envelope as one Run's wait prints it: `data.run` names it and its state. With `--all`
+it returns once every one has, as `data.runs`, one `{ "run": … }` per Run in the order
+named; the first that ends as an error, such as `invalid_state` from `--until ready`, ends
+the wait with that error. Each Run is watched from the host's stream, as one is, and
+`--timeout` bounds the whole wait. There is no MCP tool that waits: a tool call blocked on a
+Run would outlast the harness's tool-call timeout, so an agent or chat waits with this
+command.
 
 Answer what the wait returned with `run answer <run-id> <option> --decision <name>` — see
 [Answer a question](#answer-a-question).
@@ -1309,7 +1320,7 @@ through a generated extension; this is the third way in.
 | `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body                                                                                                                                                                                                                 |
 | `collie_installation` | What Collie needs, the defaults                                                                                                                                                                                                                                                                       |
 | `collie_connections`  | Each Machine's service logins, accounts, absent or broken states, and fixes; `machine` keeps one Machine                                                                                                                                                                                              |
-| `collie_news`         | What this conversation has not been told; reading it settles those items for it                                                                                                                                                                                                                       |
+| `collie_news`         | What this conversation has not been told; reading it settles those items for the caller alone                                                                                                                                                                                                         |
 | `collie_hold`         | Hold a run, or every unfinished run in a workspace, until someone releases it                                                                                                                                                                                                                         |
 | `collie_do`           | Carry out, at once, a board action or decision on a named run the human asked for                                                                                                                                                                                                                     |
 | `collie_propose`      | Carry out the rest of what the human can ask for, with a request id that makes retries safe                                                                                                                                                                                                           |

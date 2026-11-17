@@ -965,10 +965,14 @@ const reportFacts = Effect.fn("Tools.reportFacts")(function* (
 const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return "Collie cannot reach herdr, so it has nothing to report.";
+  const door = yield* toolDoor(env);
   const read = yield* settleNewsFor(env, {
-    door: yield* toolDoor(env),
+    door,
     herd: key,
-    conversation: NATIVE,
+    conversation:
+      door.origin === "agent" && door.from !== undefined
+        ? `${door.from.run}/${door.from.agent}`
+        : NATIVE,
     as: "read",
     request: yield* newRequestId(),
   });

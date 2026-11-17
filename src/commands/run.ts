@@ -7,6 +7,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import {
   Cause,
+  Data,
   Duration,
   Effect,
   FileSystem,
@@ -1021,7 +1022,13 @@ function parseUntil(value: Option.Option<string>): ParsedUntil {
 const runWait = Command.make(
   "wait",
   {
-    runId: runIdArg,
+    runIds: runIdArg.pipe(Argument.variadic({ min: 1 })),
+    all: Flag.Boolean("all").pipe(
+      Flag.withDescription(
+        "With several Runs, wait until every one has met the condition, not the first",
+      ),
+      Flag.withDefault(false),
+    ),
     follow: Flag.Boolean("follow").pipe(
       Flag.withDescription(
         "Print each change while waiting: status, steps, agents, parks, the merge request and CI",
@@ -1039,16 +1046,18 @@ const runWait = Command.make(
       Flag.optional,
     ),
   },
-  ({ runId, follow, timeout, until }) =>
+  ({ runIds, all, follow, timeout, until }) =>
     Effect.gen(function* () {
       const global = yield* root;
       // `guarded`, not `attempt`: this command streams its own lines rather than
       // returning one result, but a defect must still end as one envelope like
       // everywhere else.
-      yield* guarded(waitFor(global, runId, follow, timeout, until), global.json);
+      yield* guarded(waitFor(global, runIds, follow, timeout, until, all), global.json);
     }),
 ).pipe(
-  Command.withDescription("Wait for a Run to finish, or to need attention, optionally following"),
+  Command.withDescription(
+    "Wait for Runs to finish, or to need attention: the first of them, or with --all every one",
+  ),
 );
 
 /**
@@ -1156,7 +1165,7 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
       ),
     ),
   );
-  if (failed !== null) return yield* printResult(failed, global.json);
+  if (failed !== null) return failed;
   // The status stream can end the race between two looks: what changed since is still said.
   if (asking) {
     const last = yield* runProgress(env, runId);
@@ -1165,40 +1174,31 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
   }
   const progress = yield* Ref.get(progressed);
   if ((yield* verdict) === "stuck")
-    return yield* printResult(
-      err(
-        "invalid_state",
-        `Run "${runId}" will not become ready by itself: ${Arr.join(
-          Arr.map(progress?.ready.missing ?? [], (one) => one.said),
-          "; ",
-        )}.`,
-        { run: runId },
-      ),
-      global.json,
+    return err(
+      "invalid_state",
+      `Run "${runId}" will not become ready by itself: ${Arr.join(
+        Arr.map(progress?.ready.missing ?? [], (one) => one.said),
+        "; ",
+      )}.`,
+      { run: runId },
     );
   // `--follow` has already said everything as it happened, as it does for a Run with a
   // Driver: one envelope after the stream would be the last line twice.
-  if (options.follow) return;
+  if (options.follow) return null;
   const view = yield* Ref.get(seen);
-  if (view === null)
-    return yield* printResult(
-      err("run_not_found", `Run "${runId}" was not found.`, { run: runId }),
-      global.json,
-    );
-  yield* printResult(
-    {
-      ok: true,
-      data: progress === null ? { run: view } : { run: view, ready: progress.ready },
-      human:
-        progress === null
-          ? `${view.runId}: ${statusOf(view)}`
-          : `${view.runId}: ${statusOf(view)}\n${Arr.join(
-              Arr.map(readyLines(progress.ready), (line) => `  ${line}`),
-              "\n",
-            )}`,
-    },
-    global.json,
-  );
+  if (view === null) return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
+  const waited: Result = {
+    ok: true,
+    data: progress === null ? { run: view } : { run: view, ready: progress.ready },
+    human:
+      progress === null
+        ? `${view.runId}: ${statusOf(view)}`
+        : `${view.runId}: ${statusOf(view)}\n${Arr.join(
+            Arr.map(readyLines(progress.ready), (line) => `  ${line}`),
+            "\n",
+          )}`,
+  };
+  return waited;
 });
 
 /** How often a wait asks for what the status stream does not carry. */
@@ -1207,10 +1207,11 @@ const PROGRESS_TRIES = 5;
 
 export const waitFor = Effect.fn("collie.waitFor")(function* (
   global: Global,
-  runId: string,
+  runIds: ReadonlyArray<string>,
   follow: boolean,
   timeout: Option.Option<string>,
   until: Option.Option<string> = Option.none(),
+  all = false,
 ) {
   const resolved = yield* context(global, false);
   if (resolved._tag === "ContextFailure") return yield* printResult(resolved.result, global.json);
@@ -1220,21 +1221,64 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
   const untilResult = parseUntil(until);
   if (!untilResult.ok) return yield* printResult(untilResult.error, global.json);
 
-  const shown = yield* runShown(resolved.env, runId);
-  if (!shown.ok) return yield* printResult(shown, global.json);
-  const refused = yield* outOfReach(
-    resolved.env,
-    shown.view,
-    shown.machine,
-    yield* runScope(global),
-  );
-  if (refused !== null) return yield* printResult(refused, global.json);
-  return yield* waitForRun(global, resolved.env, runId, {
-    follow,
-    ms,
-    until: untilResult.until,
-  });
+  const scope = yield* runScope(global);
+  for (const runId of runIds) {
+    const shown = yield* runShown(resolved.env, runId);
+    if (!shown.ok) return yield* printResult(shown, global.json);
+    const refused = yield* outOfReach(resolved.env, shown.view, shown.machine, scope);
+    if (refused !== null) return yield* printResult(refused, global.json);
+  }
+  const one = (runId: string, bound: number | null) =>
+    waitForRun(global, resolved.env, runId, { follow, ms: bound, until: untilResult.until });
+  const waited =
+    runIds.length === 1
+      ? yield* one(runIds[0]!, ms)
+      : yield* (
+          all
+            ? everyWaited(Arr.map(runIds, (id) => one(id, null)))
+            : Effect.raceAll(Arr.map(runIds, (id) => one(id, null)))
+        ).pipe(
+          (both) => (ms === null ? both : both.pipe(Effect.timeout(ms))),
+          Effect.catchTag("TimeoutError", () =>
+            Effect.succeed(err("timeout", `Timed out waiting for runs ${Arr.join(runIds, ", ")}.`)),
+          ),
+        );
+  if (waited !== null) yield* printResult(waited, global.json);
 });
+
+class WaitFailed extends Data.TaggedError("WaitFailed")<{ readonly result: Result }> {}
+
+/** Every Run's wait as one answer, ended by the first that fails. */
+const everyWaited = <E, R>(waits: ReadonlyArray<Effect.Effect<Result | null, E, R>>) =>
+  Effect.all(
+    Arr.map(waits, (wait) =>
+      wait.pipe(
+        Effect.filterOrFail(
+          (one) => one === null || one.ok,
+          (one) => new WaitFailed({ result: one! }),
+        ),
+      ),
+    ),
+    { concurrency: "unbounded" },
+  ).pipe(
+    Effect.map((results): Result | null => {
+      const done = Arr.flatMap(results, (one) => (one !== null && one.ok ? [one] : []));
+      return done.length === 0
+        ? null
+        : {
+            ok: true,
+            data: { runs: Arr.map(done, (one) => one.data) },
+            human: Arr.join(
+              Arr.map(done, (one) => one.human),
+              "\n",
+            ),
+          };
+    }),
+    Effect.catchIf(
+      (cause): cause is WaitFailed => cause instanceof WaitFailed,
+      (failed) => Effect.succeed(failed.result),
+    ),
+  );
 
 /**
  * One command against one Run. The host settles it, because the host is the only thing

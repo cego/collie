@@ -72,6 +72,7 @@ import { runDir, type RunView } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
 import { appendLog, MERGE_REQUEST } from "../src/oversight";
 import { RunRecords } from "../src/run-records";
+import { registerAgent } from "../src/registry";
 import { AUDIT_FILE, readAudit } from "../src/audit";
 import * as SqlClient from "effect/sql/SqlClient";
 import { storedAnswers } from "./support/forge";
@@ -1030,6 +1031,39 @@ test("what Native chat read is still news to another conversation", () =>
       expect(Arr.map(pendingNews(lines, "flock@pc").items, (item) => item.key)).toEqual([
         "r1:ended",
       ]);
+    }),
+  ));
+
+test("a Run's agent reading the news settles its own receipts and leaves Native chat's unread", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const file = yield* newsPath(stateDir, KEY);
+      yield* appendNews(file, { key: "r1:ended", run: "r1", text: "Run r1 ended done." });
+      const run = yield* aRun("read the news");
+      yield* registerAgent(
+        { session: null, workspaceId: null, cwd: project },
+        {
+          role: "implementer",
+          agent: "builder",
+          paneId: "p-1",
+          workspaceId: null,
+          runId: run.id,
+          workflow: "proof",
+          at: "2026-11-13T00:00:00.000Z",
+        },
+      );
+      const agent = {
+        ...env,
+        asker: { origin: "agent" as const, from: { run: run.id, agent: "builder" } },
+      };
+      const asAgent = () => toolNamed("collie_news")!.call(agent, {});
+
+      expect(yield* asAgent()).toContain("Run r1 ended done.");
+      expect(yield* asAgent()).toBe("Nothing has happened that you have not seen.");
+      expect(Arr.map(pendingNews(yield* readNews(file), NATIVE).items, (item) => item.key)).toEqual(
+        ["r1:ended"],
+      );
+      expect(yield* call("collie_news")).toContain("Run r1 ended done.");
     }),
   ));
 

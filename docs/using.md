@@ -2824,7 +2824,10 @@ older items it left out, and those stay waiting rather than being replaced by a 
 latest-status line. News whose cause has gone — a halted Run resumed, a question
 answered, a finished Run whose work has a disposition (merged, abandoned or superseded) — is dropped from
 the next batch rather than told late, and stays in the journal. What one conversation
-has read is still news to any other about the same Herd.
+has read is still news to any other about the same Herd. A Run's agent that calls
+`collie_news` reads as itself, its Run and agent, so it settles only its own receipts: what
+the Native chat has not read stays unread for it, and the chat reading its own news is what
+settles the chat's.
 
 **How it reaches the conversation depends on the harness, and `collie chat status` says
 which:**
