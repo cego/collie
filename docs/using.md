@@ -3365,8 +3365,8 @@ Adding a usable fallback then moves the unfinished work to it automatically. The
 `codex/default (fell back from claude/opus: session 100%, resets 15:45)`, and the Run's log
 gets a line when it happens. Before anything moves, each launch also works out, by the same
 chain, where its work would go were its Subscription spent then: a card names it under its
-sentence, `Falls back to codex/gpt-5.5 high`, and `collie usage` adds a line per unfinished
-Run's agent, `fallback <agent> of <run> is on claude/opus xhigh, falls back to codex/default`
+sentence, `Falls back to codex/gpt-5.5 high`, and `collie usage` adds a line per live agent
+of an unfinished Run, `fallback <agent> of <run> is on claude/opus xhigh, falls back to codex/default`
 (`fallbacks` under `--json`). Nowhere to go, and nothing is named. The agent that ran out is stopped first, listed by herdr or
 not, and its successor starts only once it is **Quiet**; one that will not stop parks the
 work, naming its thread, turn and server, and a resume tries again. Usage never refuses,

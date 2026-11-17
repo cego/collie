@@ -356,9 +356,10 @@ its deadline.
 the chosen agent's usage spent, as `sameUsage` judges a spent agent. Where that second
 resolution falls back, its choice is the chosen agent's `next`, carried on the ask into the
 launch record (`Launched.next`) and onto a reused agent by `choiceOf`. `fallbacksOf` in
-`src/launches.ts` reads each agent's latest launch: the board puts it on the card's agent
-(`BoardAgent.fallback`), which Desktop draws under the sentence (`fallback_line`), and the
-host's `fallbacks` call answers it for every unfinished Run, which `collie usage` prints.
+`src/launches.ts` reads the latest launch of each agent herdr still has: the board puts it on
+the card's agent (`BoardAgent.fallback`), which Desktop draws under the sentence
+(`fallback_line`), and the host's `fallbacks` call answers it for every unfinished Run, which
+`collie usage` prints. An agent that has gone has no work left to move, and is not named.
 It is worked out at launch, so it reads usage as it stood then.
 
 ## A workflow made of workflows

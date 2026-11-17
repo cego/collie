@@ -392,10 +392,13 @@ export const agentOfLaunch = (one: Launched): RunAgent => ({
   at: one.at === undefined ? null : DateTime.formatIso(DateTime.makeUnsafe(one.at)),
 });
 
-/** Each agent's latest launch that names where a Fallback would move its work. */
-export const fallbacksOf = (launches: ReadonlyArray<Launched>): ReadonlyArray<AgentFallback> => {
+/** Each live agent's latest launch that names where a Fallback would move its work. */
+export const fallbacksOf = (
+  launches: ReadonlyArray<Launched>,
+  live: ReadonlySet<string>,
+): ReadonlyArray<AgentFallback> => {
   const latest = new Map<string, Launched>();
-  for (const one of launches) latest.set(one.agent, one);
+  for (const one of launches) if (live.has(one.agent)) latest.set(one.agent, one);
   return Arr.flatMap([...latest.values()], (one) =>
     one.next === undefined
       ? []

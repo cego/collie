@@ -3045,7 +3045,8 @@ const frontDoorHandlers = (
                 (view) => !settled(factsOfView(env.stateDir, view)),
               );
               const launches = yield* launchesOf(Arr.map(unfinished, (view) => view.runId));
-              return fallbacksOf(Arr.flatten([...launches.values()]));
+              const live = new Set(Arr.map(yield* shared.alive, (agent) => agent.name));
+              return fallbacksOf(Arr.flatten([...launches.values()]), live);
             }),
           ),
         models: () => harnesses.catalogues,

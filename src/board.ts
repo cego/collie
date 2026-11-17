@@ -1280,6 +1280,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const pending = Arr.flatMap(everyRun, (run) => pendingFor(proposals, run.id, now));
         const fallbacks = fallbacksOf(
           Arr.flatten([...(yield* launchesOf(Arr.map(everyRun, (run) => run.id))).values()]),
+          new Set(live.keys()),
         );
         const cards = opts.only === undefined ? opts.cards : undefined;
         const carried: { run: RunFacts; id: string | null; mr: string | null }[] = [];
