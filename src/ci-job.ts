@@ -3,7 +3,7 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
-import { Clock, Duration, Effect } from "effect";
+import { Clock, Duration, Effect, Option } from "effect";
 import { mrRefOf } from "./board-model";
 import { checkProof } from "./check-proof";
 import { forgeOf, type FailedAttempt, type FailedJob, type JobState } from "./forge/forge";
@@ -97,6 +97,9 @@ export interface TargetFailure {
   /** The failed jobs compared, each failing there too; null where the failure is the Run's own. */
   readonly jobs: ReadonlyArray<string> | null;
 }
+
+const sameTestExactly = (one: FailedTest, other: FailedTest) =>
+  one.name === other.name && one.file === other.file;
 
 const sameTest = (one: FailedTest, other: FailedTest) =>
   one.name === other.name && (one.file === null || other.file === null || one.file === other.file);
@@ -303,6 +306,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
           return unproved(`passed, but ${cwd} has changes it never saw`);
         const attempts = Arr.dedupe([...read.retryOf, ...(retried === null ? [] : [retried])]);
         let change: BranchChange | undefined;
+        const flaked: Array<{ name: string; file: string | null; attempts: number }> = [];
         for (const attempt of attempts) {
           const failed = yield* forge.failedAttempt(ref, attempt, cwd, asked.run);
           const own =
@@ -319,11 +323,19 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
               failed.url,
               forge.jobLog(ref, attempt),
             );
+          for (const test of Arr.dedupeWith(failed.tests, sameTestExactly)) {
+            const seen = Arr.findFirst(flaked, (one) => sameTestExactly(one, test));
+            if (Option.isSome(seen)) seen.value.attempts++;
+            else flaked.push({ name: test.name, file: test.file, attempts: 1 });
+          }
         }
         const flake = attempts.length === 0 ? {} : { retried: true as const };
         if (recorded !== undefined && retried === null) return { proved: recorded, ...flake };
         const at = yield* nowIso;
-        const ran = { name: job, url: read.url };
+        const ran =
+          attempts.length === 0
+            ? { name: job, url: read.url }
+            : { name: job, url: read.url, flaked };
         const proof: Verification = {
           id: `${asked.runId}-${spec.name}-${epochMs(at)}`,
           run: asked.runId,

@@ -810,9 +810,17 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               settle: blocked?.unmoved !== true,
             });
             if ("proved" in read) {
+              const flaked = read.proved.job?.flaked ?? [];
               if (read.retried === true)
                 yield* told(
-                  `unsettled: ${spec.name}: job ${job} failed on ${pipe_(read.proved.end.head_sha, Str.slice(0, 12))}, then passed when retried — a flake, so it is not settled.`,
+                  `unsettled: ${spec.name}: job ${job} failed on ${pipe_(read.proved.end.head_sha, Str.slice(0, 12))}${
+                    flaked.length === 0
+                      ? ", naming no failed test"
+                      : ` in ${flaked.length === 1 ? "test" : "tests"} ${Arr.join(
+                          Arr.map(flaked, (one) => `"${one.name}"`),
+                          ", ",
+                        )}`
+                  }, then passed when retried — a flake, so it is not settled.`,
                 );
             } else if (read.before !== undefined)
               yield* told(
