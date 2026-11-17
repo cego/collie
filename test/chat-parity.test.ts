@@ -133,7 +133,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   // Asked for by the human, carried out; wanted by Collie, proposed. `start` is in both
   // schemas for that reason, and the row names the human's side.
   ["run start", { route: "write", tool: "collie_do" }],
-  ["run list", { route: "read", tool: "collie_herd" }],
+  ["run list", { route: "read", tool: "collie_run", input: { list: true } }],
   ["run show", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run artefacts", { route: "read", tool: "collie_artefacts", input: { run: RUN } }],
   ["run artefact show", { route: "read", tool: "collie_artefacts", input: { run: RUN, id: "a1" } }],

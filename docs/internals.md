@@ -2079,7 +2079,10 @@ its time.
   fields remain live. Each change to a Run takes the next number of the host's one sequence,
   and each board item carries the highest of its Runs' as its revision. `run_model: false`
   restores the from-disk build at the next host start; the model is then never filled. The
-  Run views `collie run list`, `run show` and the `runs` RPC answer still read from disk;
+  Run views `run show` and the `runs` RPC answer still read from disk. `collie run list`
+  asks the `runPage` RPC, which pages the Runs of the latest board built; its `cursor` is
+  the model's epoch and highest revision, and `--since` returns each Run whose facts or
+  files moved past it, so a restart's new epoch makes an older token `stale_cursor`;
   the Flow that `run show` and `collie_run` carry is the record's, below.
 - **A Run's record is read from the model** (`src/record.ts`, D3 to D5 of that ADR). It
   reads only the Runs its Task's rows name (`related` in `src/engine.ts`): the Task's, their

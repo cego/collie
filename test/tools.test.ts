@@ -265,7 +265,47 @@ test("a Herd too big for one answer says how much it left out", () =>
           concurrency: 8,
         },
       );
-      expect(yield* call("collie_herd")).toMatch(/\(\d+ more card\(s\) not listed here\)/);
+      const first = yield* call("collie_herd");
+      expect(first).toMatch(/\(\d+ more card\(s\) not listed here\) complete: false/);
+      const next = /next: "([^"]+)"/.exec(first)?.[1];
+      expect(next).toBeDefined();
+      const rest = yield* call("collie_herd", { after: next! });
+      expect(rest).toContain("- complete: true");
+      expect(rest).not.toContain("not listed here");
+    }),
+  ));
+
+const Listed = Schema.fromJsonString(
+  Schema.Struct({
+    runs: Schema.Array(Schema.Struct({ runId: Schema.String, state: Schema.String })),
+    complete: Schema.Boolean,
+    next: Schema.NullOr(Schema.String),
+  }),
+);
+
+test("the run tool lists a page that says whether it is whole, and its next reaches the end", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const made = yield* Effect.forEach(["one", "two", "three", "four", "five"], aRun, {
+        concurrency: 5,
+      });
+      const read = (input: JsonObject) =>
+        call("collie_run", input).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Listed)));
+      let page = yield* read({ list: true, limit: 2 });
+      expect(page.runs.length).toBe(2);
+      expect(page.complete).toBe(false);
+      const seen = Arr.map(page.runs, (one) => one.runId);
+      while (page.next !== null) {
+        page = yield* read({ list: true, after: page.next });
+        seen.push(...Arr.map(page.runs, (one) => one.runId));
+      }
+      expect(page.complete).toBe(true);
+      expect([...seen].sort()).toEqual(Arr.map(made, (run) => run.id).sort());
+
+      // A filter is a listing's, so given without `list` it is refused rather than ignored.
+      expect(yield* call("collie_run", { status: ["live"] })).toContain(
+        'collie_run refused the request (InvalidInput): status only filter a listing, which takes "list": true',
+      );
     }),
   ));
 

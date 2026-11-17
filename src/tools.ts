@@ -71,8 +71,10 @@ import {
   hostRunProposals,
   hostTasks,
   flockArtefacts,
+  flockRunPage,
   asksArtefactRun,
 } from "./lifecycle";
+import { listAsked } from "./run-list";
 import { modelsLines } from "./catalogue-model";
 import { connectionsLines } from "./connection-model";
 import { peersOf } from "./peers";
@@ -113,8 +115,10 @@ import {
   herdLines,
   HoldInput,
   isToolName,
+  refused,
   refusedActions,
   RunInput,
+  RunListInput,
   searchesArtefacts,
   type Settle,
   SETTLE_KINDS,
@@ -226,19 +230,39 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
         }),
       ),
     collie_herd: (input) =>
-      answer(boardFacts(input.machine === undefined ? env : { ...env, machine: input.machine })),
-    collie_run: (input) =>
       answer(
-        onSelectedRun(
-          env,
-          selected,
-          input,
-          "collie_run",
-          (run) =>
-            said(runAnswer(env, run, reads).pipe(Effect.provide(recordsReadLayer(env.stateDir)))),
-          reads?.related ?? reads?.runs,
+        boardFacts(
+          input.machine === undefined ? env : { ...env, machine: input.machine },
+          input.after,
         ),
       ),
+    collie_run: (input) =>
+      input.list === true
+        ? answer(runListFacts(env, input))
+        : LIST_FILTERS.some((key) => input[key] !== undefined)
+          ? Effect.succeed(
+              refused(
+                "collie_run",
+                `${Arr.join(
+                  Arr.filter(LIST_FILTERS, (key) => input[key] !== undefined),
+                  ", ",
+                )} only filter a listing, which takes "list": true`,
+                TAKES.collie_run,
+              ),
+            )
+          : answer(
+              onSelectedRun(
+                env,
+                selected,
+                input,
+                "collie_run",
+                (run) =>
+                  said(
+                    runAnswer(env, run, reads).pipe(Effect.provide(recordsReadLayer(env.stateDir))),
+                  ),
+                reads?.related ?? reads?.runs,
+              ),
+            ),
     collie_workspaces: () => answer(workspaceFacts(env)),
     collie_receipts: (input) =>
       answer(
@@ -600,12 +624,47 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
 });
 
 /** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */
-const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
+const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv, after?: string) {
+  const skip = after === undefined ? 0 : Number(after);
+  if (!Number.isInteger(skip) || skip < 0)
+    return refused("collie_herd", `"${after}" is not a next this tool gave`, TAKES.collie_herd);
   const read = yield* boardSnapshot(env);
   if (!read.ok) return `- (the board could not be read: ${read.error.message})`;
   const views = read.value.tasks;
   const now = yield* Clock.currentTimeMillis;
-  return herdLines(views, now);
+  return herdLines(views, now, skip);
+});
+
+const LIST_FILTERS = ["status", "limit", "fields", "after", "since"] as const;
+
+/** What `collie_run` lists with `list: true`: `collie run list`'s page, herd-wide. */
+const runListFacts = Effect.fn("Tools.runListFacts")(function* (
+  env: PluginEnv,
+  input: typeof RunListInput.Type,
+) {
+  const read = listAsked(
+    {
+      status: input.status ?? [],
+      limit: input.limit === undefined ? null : String(input.limit),
+      fields: input.fields ?? null,
+      after: input.after ?? null,
+      since: input.since ?? null,
+    },
+    null,
+  );
+  if (!read.ok) return refused("collie_run", read.message, TAKES.collie_run);
+  const listed = yield* flockRunPage(env, read.asked);
+  if (!listed.ok)
+    return `collie_run could not list (${listed.error.code}): ${listed.error.message}`;
+  return asJson({
+    runs: Arr.map(listed.runs, ({ machine, summary, view }) => ({ ...(view ?? summary), machine })),
+    complete: listed.complete,
+    next: listed.next,
+    cursor: listed.cursor,
+    omitted: listed.omitted,
+    unreadable: listed.unreadable,
+    machines: listed.machines,
+  });
 });
 
 /** What `collie_models` answers with: a Machine's Harness catalogue, as `collie models` prints it. */

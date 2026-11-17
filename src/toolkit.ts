@@ -11,6 +11,7 @@ import * as AiError from "effect/ai/AiError";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 import { ActionSchema } from "./actions";
+import { DEFAULT_LIMIT, ListState } from "./run-list";
 import { RegisterArtefact } from "./artefact-model";
 import {
   ASKED_KINDS,
@@ -39,6 +40,35 @@ export const decodeStrict = <S extends Schema.ConstraintDecoder<unknown, never>>
 };
 
 export const RunInput = Schema.Struct({ run: Schema.optionalKey(Schema.String) });
+export const RunListInput = Schema.Struct({
+  run: Schema.optionalKey(
+    Schema.String.annotate({
+      description: "The Run id, as collie_herd lists it; omit for the board's selection",
+    }),
+  ),
+  list: Schema.optionalKey(
+    Schema.Boolean.annotate({ description: "List Runs instead of answering about one" }),
+  ),
+  status: Schema.optionalKey(
+    Schema.Array(ListState).annotate({ description: "With list: only Runs in these states" }),
+  ),
+  limit: Schema.optionalKey(
+    Schema.Int.annotate({
+      description: `With list: at most this many, ${DEFAULT_LIMIT} by default`,
+    }),
+  ),
+  fields: Schema.optionalKey(
+    Schema.Literals(["summary", "full"]).annotate({
+      description: "With list: summary (the default) or each Run's whole view",
+    }),
+  ),
+  after: Schema.optionalKey(
+    Schema.String.annotate({ description: "With list: a page's `next`, given alone" }),
+  ),
+  since: Schema.optionalKey(
+    Schema.String.annotate({ description: "With list: only Runs changed after a page's `cursor`" }),
+  ),
+});
 export const HoldInput = Schema.Struct({
   run: Schema.optionalKey(Schema.String.annotate({ description: "The Run to hold" })),
   workspace: Schema.optionalKey(
@@ -264,10 +294,18 @@ export const CollieTools = Toolkit.make(
       "The board as the human sees it, card for card: its header sentence, then every " +
       "card under Needs you, Working, Waiting on you and Finished with its run id, state, " +
       "merge request or branch, agents and sentence. Herd-wide and never narrowed by what " +
-      "the board is filtered to or which card is open; where more cards exist than fit, " +
-      "the answer says how many were left out. Read this before answering anything about " +
+      "the board is filtered to or which card is open. It ends with `complete`; where more " +
+      "cards exist than fit, it says how many were left out and the `next` to give back as " +
+      "`after` for the rest. Read this before answering anything about " +
       "the flock, and again when the answer has to be current.",
-    parameters: Schema.Struct({ machine: Schema.optionalKey(Schema.String) }),
+    parameters: Schema.Struct({
+      machine: Schema.optionalKey(Schema.String),
+      after: Schema.optionalKey(
+        Schema.String.annotate({
+          description: "A previous answer's `next`, for the cards after it",
+        }),
+      ),
+    }),
   }),
   collieTool("collie_run", {
     readOnly: true,
@@ -283,12 +321,11 @@ export const CollieTools = Toolkit.make(
       "and any drift nobody has settled. Use it when a question is about a particular Run " +
       "rather than the flock. " +
       "Name the Run; with no `run` it answers about whatever the board has selected, and " +
-      "says which that was.",
-    parameters: RunInput.mapFields((fields) => ({
-      run: fields.run.annotate({
-        description: "The Run id, as collie_herd lists it; omit for the board's selection",
-      }),
-    })),
+      "says which that was. With `list: true` it lists the flock's Runs instead, as " +
+      "`collie run list` does: a page of summaries, newest first, with `complete`, `next` " +
+      "(give it back as `after` for the rest) and `cursor` (give it back as `since` for what " +
+      "changed after it).",
+    parameters: RunListInput,
   }),
   collieTool("collie_workspaces", {
     readOnly: true,
@@ -462,8 +499,8 @@ export type ToolName = keyof typeof CollieTools.tools;
 export const TAKES: Record<ToolName, string> = {
   collie_artefacts:
     'It takes {"run":"<run id>","id":"<optional artefact id>","revision":1,"offset":0,"refresh":false}, or to search {"query":"<words>","run":"<optional run>","kind":"<optional>","role":"<optional>","unseen":true,"cursor":"<optional>","limit":50}.',
-  collie_herd: 'It takes nothing, or {"machine": "<name>"}.',
-  collie_run: `It takes {"run": "<run id>"}, or nothing at all for the board's selection.`,
+  collie_herd: 'It takes nothing, or {"machine": "<name>"} and {"after": "<next>"}.',
+  collie_run: `It takes {"run": "<run id>"}, nothing at all for the board's selection, or {"list": true} with "status", "limit", "fields", "since", or "after" alone.`,
   collie_workspaces: "It takes nothing.",
   collie_receipts: `It takes {"run": "<run id>"}, or nothing at all for the board's selection.`,
   collie_report: 'It takes nothing, or {"since": "<ISO date>"}.',
@@ -512,19 +549,30 @@ function cardLine(view: TaskView): string {
   return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${shippingLabel(view)}${view.sentence}${view.drift === null ? "" : ` ${view.drift}`}${offers.length === 0 ? "" : ` Offers: ${Arr.join(offers, "; ")}.`}`;
 }
 
-/** The board as chat reads it: the header, then each section's cards in the board's order. */
-export function herdLines(views: ReadonlyArray<TaskView>, now: number): string {
+/**
+ * The board as chat reads it: the header, then each section's cards in the board's order,
+ * from the `after`th card on, ending with whether that was all and where the rest start.
+ */
+export function herdLines(views: ReadonlyArray<TaskView>, now: number, after = 0): string {
   if (views.length === 0) return "- (no Runs in this Herd)";
   const lines = [headerSentence(views, now).text];
+  let skip = after;
   let room = HERD_CARDS;
   for (const [section, title] of SECTIONS) {
     const cards = Arr.filter(views, (view) => sectionOf(view) === section);
-    if (cards.length === 0) continue;
-    lines.push("", `## ${title} · ${cards.length}`, ...Arr.map(cards.slice(0, room), cardLine));
-    room = Math.max(0, room - cards.length);
+    const shown = cards.slice(skip, skip + room);
+    skip = Math.max(0, skip - cards.length);
+    room -= shown.length;
+    if (shown.length > 0)
+      lines.push("", `## ${title} · ${cards.length}`, ...Arr.map(shown, cardLine));
   }
-  const left = views.length - HERD_CARDS;
-  if (left > 0) lines.push("", `- (${left} more card(s) not listed here)`);
+  const left = views.length - after - (HERD_CARDS - room);
+  lines.push(
+    "",
+    left > 0
+      ? `- (${left} more card(s) not listed here) complete: false, next: "${views.length - left}" — give it as "after"`
+      : "- complete: true",
+  );
   return Arr.join(lines, "\n");
 }
 

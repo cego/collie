@@ -189,9 +189,37 @@ pick one of:
 - Pass `--workspace <id>`, which re-roots the run at that workspace's directory as well as
   scoping to it.
 
-`collie run list` lists local and live peers' Runs with their `machine`. Its JSON includes
-`machines`, naming any peer that was away. A selected Task narrows local Runs to that
-Task; peer Runs stay visible. `--machine` lists only that Machine. See [Tasks](#tasks).
+`collie run list` lists local and live peers' Runs with their `machine`, newest first. Its
+JSON includes `machines`, naming any peer that was away. A selected Task narrows local Runs
+to that Task; peer Runs stay visible. `--machine` lists only that Machine. See
+[Tasks](#tasks).
+
+It answers one bounded page: the 50 newest Runs, each as a summary. A summary is the
+board's facts about the Run: `runId`, `machine`, `workflow`, `task`, `state`, `created`,
+`updated` (when its card last changed), `park` (the park cause, or null), `blocker` (the
+question it asks, or why it is parked or failed), `agent` (its agent on the board),
+`branch`, `head`, and `next` (what it waits for next: an answer, CI, a timer). The flags:
+
+- `--status <state>`, repeatable: `live`, `parked`, `needs-you`, `succeeded`, `failed` or
+  `stopped`.
+- `--limit <n>`: at most this many Runs; 50 by default.
+- `--fields summary|full`: `full` gives each Run's whole view, as `run show` reads it.
+- `--after <next>`: the page after the one that gave `next`, under the same filters. It
+  takes no other flag.
+- `--since <cursor>`: only the Runs changed after the answer that gave `cursor`.
+
+Every answer carries `complete` (true only when nothing was left out and no Machine was
+away), `omitted` (how many matching Runs it left out), `next` (the token for `--after`, or
+null on the last page) and `cursor` (the token for a later `--since`). A `cursor` given to
+`--after`, or a `next` given to `--since`, is refused with `invalid_input` naming the right
+flag. Each token carries its host's start, so one given before that host started again is
+refused with `stale_cursor`: list again from the first page or a fresh `cursor`. The text
+output ends with how many were left out and the command that continues.
+
+The whole listing of every Run, as `run list` gave it before it was bounded, is
+`collie --json run list --fields full`: `full` with no `--limit` returns every Run. Chat
+lists the same page with `collie_run` and `"list": true`, taking the same filters as
+`status`, `limit`, `fields`, `after` and `since`.
 
 ## Discover what is available
 
@@ -728,9 +756,15 @@ collie --json run wait <run-id> --until attention
 collie --json run wait <run-id> --until ready
 collie --json run wait <run-id> --until needs-human
 collie --json run show <run-id>
-collie --json run list
+collie --json run list --status live
 collie --json run output <run-id>
+collie --json run output <run-id> --full --path <path>
 ```
+
+`run output` summarises each Output the Run wrote: its `path`, `step`, `verdict`,
+`summary`, number of `findings`, and `read`, the command that prints that Output whole.
+No body or diff is in the summary. `--full` prints every Output whole, as `run output`
+did before, and `--path` narrows either to one Output.
 
 Without `--follow`, `run wait` prints one envelope when the run has ended — `complete` or
 `failed`. A stopped or held run is suspended rather than ended, so a plain wait waits
@@ -2309,6 +2343,7 @@ human line and a failure prints `error.message`.
 | `machine_unreachable` | A paired Machine did not answer within its bound; `details` name the `machine` and what was `seen`, and `waits` is `ssh_connection` where its link waits on an SSH connection. |
 | `invalid_state`       | The run, or the installation, is not in a state where that makes sense — `upgrade --to` on a development checkout.                                                             |
 | `invalid_input`       | A flag or argument was wrong.                                                                                                                                                  |
+| `stale_cursor`        | A `run list` token was given by a host that has started again since; `details.machines` name it. List again from the first page, or take a fresh `cursor`.                     |
 | `operation_failed`    | Anything else, including a caught defect.                                                                                                                                      |
 
 ## Retrying safely

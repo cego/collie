@@ -107,6 +107,8 @@ const ErrorCode = Schema.Literals([
   "definition_changed",
   "operation_failed",
   "invalid_input",
+  /** A token from before its host started again. */
+  "stale_cursor",
 ]);
 
 export const ExpectedError = Schema.Struct({

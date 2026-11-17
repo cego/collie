@@ -27,6 +27,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import { err, type Failure } from "../operations";
 import { GIVEN, INFERRED } from "../engine";
 import { textOf } from "../runs";
+import { DEFAULT_LIMIT, LIST_STATES, listAsked, outputSummary } from "../run-list";
 import {
   asksRun,
   followCheckLog,
@@ -45,7 +46,7 @@ import {
   runViews,
   flockArtefacts,
   asksArtefactRun,
-  flockRuns,
+  flockRunPage,
   isSettled,
   resumeRun,
   publishRun,
@@ -432,37 +433,94 @@ const runStart = Command.make(
   ]),
 );
 
-const runList = Command.make("list", {}, () =>
-  Effect.gen(function* () {
-    const global = yield* root;
-    yield* attempt(
-      Effect.gen(function* () {
-        const resolved = yield* context(global, false);
-        if (resolved._tag === "ContextFailure") return resolved.result;
-        // Scoped to the Task whose workspace this is, where it is one: Runs belong to
-        // Tasks now, and a workspace that is not a Task's narrows nothing.
-        const task = yield* selectedTask(global);
-        const hosted = yield* flockRuns(resolved.env, task);
-        return {
-          ok: true,
-          data: { runs: hosted.runs, unreadable: hosted.unreadable, machines: hosted.machines },
-          human:
-            Arr.join(
+const runList = Command.make(
+  "list",
+  {
+    status: Flag.String("status").pipe(
+      Flag.withDescription(`Only Runs in this state, repeatable: ${Arr.join(LIST_STATES, ", ")}`),
+      Flag.atLeast(0),
+    ),
+    limit: Flag.String("limit").pipe(
+      Flag.withDescription(`At most this many Runs, newest first; ${DEFAULT_LIMIT} by default`),
+      Flag.optional,
+    ),
+    fields: Flag.String("fields").pipe(
+      Flag.withDescription(
+        "summary (the default) or full, each Run's whole view; full with no --limit is every Run",
+      ),
+      Flag.optional,
+    ),
+    after: Flag.String("after").pipe(
+      Flag.withDescription("The next page: a listing's `next` token, given alone"),
+      Flag.optional,
+    ),
+    since: Flag.String("since").pipe(
+      Flag.withDescription("Only Runs changed after a listing's `cursor`"),
+      Flag.optional,
+    ),
+  },
+  (flags) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* context(global, false);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          // Scoped to the Task whose workspace this is, where it is one: Runs belong to
+          // Tasks now, and a workspace that is not a Task's narrows nothing.
+          const read = listAsked(
+            {
+              status: flags.status,
+              limit: Option.getOrNull(flags.limit),
+              fields: Option.getOrNull(flags.fields),
+              after: Option.getOrNull(flags.after),
+              since: Option.getOrNull(flags.since),
+            },
+            yield* selectedTask(global),
+          );
+          if (!read.ok) return err("invalid_input", read.message);
+          const listed = yield* flockRunPage(resolved.env, read.asked);
+          if (!listed.ok) return listed;
+          return {
+            ok: true,
+            data: {
+              runs: Arr.map(listed.runs, ({ machine, summary, view }) => ({
+                ...(view ?? summary),
+                machine,
+              })),
+              complete: listed.complete,
+              next: listed.next,
+              cursor: listed.cursor,
+              omitted: listed.omitted,
+              unreadable: listed.unreadable,
+              machines: listed.machines,
+            },
+            human: Arr.join(
               [
                 ...Arr.map(
-                  hosted.runs,
-                  (view) => `${view.runId}\t${view.machine}\t${statusOf(view)}\t${view.workflow}`,
+                  listed.runs,
+                  ({ machine, summary }) =>
+                    `${summary.runId}\t${machine}\t${summary.state}\t${summary.workflow}${summary.blocker === null ? "" : `\t${summary.blocker}`}`,
                 ),
-                ...(hosted.unreadable === null ? [] : [`runs: ${hosted.unreadable}`]),
+                ...(listed.runs.length === 0 ? ["No runs found."] : []),
+                ...(listed.unreadable === null ? [] : [`runs: ${listed.unreadable}`]),
+                ...Arr.map(listed.machines, (one) => `${one.machine}: away, ${one.note}`),
+                ...(listed.next === null
+                  ? []
+                  : [`${listed.omitted} more not listed: collie run list --after ${listed.next}`]),
               ],
               "\n",
-            ) || "No runs found.",
-        };
-      }),
-      global.json,
-    );
-  }),
-).pipe(Command.withDescription("List Runs in the selected workspace, or everywhere without one"));
+            ),
+          };
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "List Runs in the selected workspace, or everywhere without one: a page of summaries, newest first",
+  ),
+);
 
 /** `run show`'s line for each agent: `  review  claude/opus xhigh`. */
 export const agentLines = (agents: ReadonlyArray<RunAgent>) =>
@@ -783,8 +841,16 @@ const runOutput = Command.make(
   "output",
   {
     runId: runIdArg,
+    full: Flag.Boolean("full").pipe(
+      Flag.withDescription("Each Output whole, as the Run wrote it, diffs included"),
+      Flag.withDefault(false),
+    ),
+    path: Flag.String("path").pipe(
+      Flag.withDescription("Only the Output at this path, as the summary's `read` names it"),
+      Flag.optional,
+    ),
   },
-  ({ runId }) =>
+  ({ runId, full, path }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
@@ -795,7 +861,36 @@ const runOutput = Command.make(
             client.runOutputs({ runId }),
           );
           if (!records.ok) return records;
-          const outputs = records.value;
+          const outputs = Option.match(path, {
+            onNone: () => records.value,
+            onSome: (one) => Arr.filter(records.value, (output) => output.path === one),
+          });
+          if (Option.isSome(path) && outputs.length === 0)
+            return err("invalid_input", `Run ${runId} has no Output at ${path.value}.`, {
+              path: path.value,
+            });
+          if (!full) {
+            const summaries = Arr.map(outputs, (output) => outputSummary(runId, output));
+            return {
+              ok: true,
+              data: { runId, outputs: summaries },
+              human:
+                Arr.join(
+                  Arr.map(summaries, (one) =>
+                    Arr.join(
+                      [
+                        `${one.path}${one.verdict === null ? "" : `  ${one.verdict}`}${one.findings === null ? "" : `, ${one.findings} finding(s)`}`,
+                        ...(one.error === undefined ? [] : [`  Error: ${one.error}`]),
+                        ...(one.summary === null ? [] : [`  ${one.summary}`]),
+                        `  ${one.read}`,
+                      ],
+                      "\n",
+                    ),
+                  ),
+                  "\n\n",
+                ) || "This Run has written no Outputs.",
+            };
+          }
           return {
             ok: true,
             data: { runId, outputs },
@@ -820,7 +915,11 @@ const runOutput = Command.make(
         global.json,
       );
     }),
-).pipe(Command.withDescription("Print every Output this Run has written"));
+).pipe(
+  Command.withDescription(
+    "Summarise each Output this Run has written, with where to read it; --full prints them whole",
+  ),
+);
 
 type ParsedTimeout = { ok: true; ms: number | null } | { ok: false; error: Result };
 
