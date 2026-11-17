@@ -129,13 +129,11 @@ import {
   flockStream,
   forgetMachine,
   type HerdrMachine,
-  herdrMachines,
   localRoute,
   linkRoute,
   pairedMachines,
   type ShellRoute,
   remoteRoute,
-  removeFromHerdr,
   rosterOf,
   type RouteChange,
   syncNow,
@@ -145,16 +143,14 @@ import { givenCredentials } from "./given";
 import { slackUserSession } from "./slack-user";
 import { connectionsOn, githubLogin, readBack, reuseGitlab } from "./connection-reuse";
 import { flockInSyncSaid, inSync } from "../shared/in-sync";
-import { attachCommand, inTerminal, launched, openTerminal } from "./terminal";
+import { inTerminal, launched, openTerminal } from "./terminal";
 import {
   addToCore,
-  addToHerdr,
   doctorOn,
   NOT_STARTED,
   onboardThrough,
   onboardingSkips,
   RELEASES,
-  tracked,
 } from "./onboarding";
 import {
   claudeLoginThrough,
@@ -188,7 +184,7 @@ import {
 } from "./saved";
 import { applyAtLaunch, restartToUpdate, updatesOf } from "./updates";
 // The version Desktop keeps every Machine on: the Collie it was built from.
-import manifest from "../../../herdr-plugin.toml";
+import manifest from "../../../package.json";
 import { timingLine } from "../shared/record";
 
 /** A window on the view, and the channel its RPC rides. */
@@ -251,9 +247,6 @@ const openSlack = Effect.gen(function* () {
   const code = yield* Effect.promise(() => child.exited).pipe(Effect.timeoutOption("5 seconds"));
   if (Option.isSome(code) && code.value !== 0) yield* openUrl(SLACK_WEB);
 });
-
-/** How long herdr's question waits on the human before it takes herdr's own default. */
-const QUESTION_LIMIT = "10 minutes";
 
 /**
  * Where Desktop keeps what is its own on this computer, the Flock chat's session among it.
@@ -399,12 +392,11 @@ const main = Effect.gen(function* () {
   );
   // An older Desktop that was killed left its own masters behind.
   yield* sweepSshControls(tmpdir(), childEnv()).pipe(Effect.ignore);
-  // The Machines this computer's backend lists: core's, or herdr's while it is set to herdr.
-  const roster = yield* rosterOf(collie).pipe(Effect.option);
-  const onCore = Option.isSome(roster) && roster.value.backend === "core";
-  const listed = onCore
-    ? Result.succeed(roster.value.roster)
-    : yield* herdrMachines("herdr", manifest.min_herdr_version).pipe(Effect.result);
+  // The Machines this computer's core lists.
+  const listed = yield* rosterOf(collie).pipe(
+    Effect.map((said) => said.roster),
+    Effect.result,
+  );
   const now = yield* Clock.currentTimeMillis;
   const [enabled, unlisted] = Result.match(listed, {
     onSuccess: (machines) => [machines, []] as const,
@@ -413,7 +405,7 @@ const main = Effect.gen(function* () {
       [
         {
           _tag: "Lost",
-          machine: { profile: "herdr", name: "herdr's machines" },
+          machine: { profile: "core", name: "core's machines" },
           state: "unreachable",
           reason,
           at: now,
@@ -616,7 +608,6 @@ const main = Effect.gen(function* () {
 
   // The job onboarding each route, and its fiber, while one runs; and the question each job waits on.
   const onboarding = new Map<string, { job: string; fiber?: Fiber.Fiber<unknown, unknown> }>();
-  const answers = new Map<string, Deferred.Deferred<boolean>>();
   const tell = (job: string, machine: KnownMachine) => (run: OnboardRun) =>
     PubSub.publish(news, { _tag: "Onboarding", job, machine, run }).pipe(Effect.asVoid);
   const doctored = (route: ShellRoute) =>
@@ -723,8 +714,8 @@ const main = Effect.gen(function* () {
     );
   };
   /**
-   * On a computer set to core: opens the Machine's SSH connection, onboards it, then has core
-   * add it with a `via` riding that connection, so its one login is the only one.
+   * Opens the Machine's SSH connection, onboards it, then has core add it with a `via`
+   * riding that connection, so its one login is the only one.
    */
   const addToCoreAs = (job: string, target: string, label: string) =>
     Effect.gen(function* () {
@@ -732,54 +723,6 @@ const main = Effect.gen(function* () {
       yield* PubSub.publish(news, { _tag: "Routed", machine: route.machine });
       yield* PubSub.publish(changes, { _tag: "Add", route });
       yield* Fiber.join(yield* onboardAs(job, route, NOT_STARTED, [], undefined, target));
-    });
-  /** Saves the machine in herdr, asking herdr's questions of the human, then onboards it. */
-  const addAs = (job: string, target: string, label: string, session: string) =>
-    Effect.gen(function* () {
-      if (onCore) return yield* addToCoreAs(job, target, label);
-      const run = tracked(tell(job, { profile: `adding:${job}`, name: label, target }));
-      const saved = { step: "herdr", title: `Saved in herdr as ${label}` } as const;
-      yield* run.step(saved);
-      const ask = (text: string, yes: boolean) =>
-        Effect.gen(function* () {
-          const answer = yield* Deferred.make<boolean>();
-          answers.set(job, answer);
-          yield* run.change((now) => ({ ...now, asked: { text, yes } }));
-          // Nobody left to answer, as when the view went away, is herdr's own default.
-          const said = yield* Deferred.await(answer).pipe(
-            Effect.timeoutOption(QUESTION_LIMIT),
-            Effect.map(Option.getOrElse(() => yes)),
-          );
-          answers.delete(job);
-          yield* run.change((now) => ({ ...now, asked: null }));
-          return said;
-        });
-      const before = new Set(routes.keys());
-      const added = yield* addToHerdr("herdr", target, label, session, ask).pipe(
-        Effect.andThen(herdrMachines("herdr", manifest.min_herdr_version)),
-        Effect.flatMap((machines) => {
-          const found = Option.getOrUndefined(
-            Arr.findFirst(
-              machines,
-              (machine) =>
-                !before.has(machine.id) && machine.target === target && machine.label === label,
-            ),
-          );
-          return found === undefined
-            ? Effect.fail(`herdr lists no new machine for ${target}`)
-            : Effect.succeed(found);
-        }),
-        Effect.result,
-      );
-      if (Result.isFailure(added)) {
-        yield* run.step({ ...saved, status: "failed", detail: added.failure });
-        return yield* run.end(false, null);
-      }
-      const route = yield* open(added.success);
-      yield* PubSub.publish(news, { _tag: "Routed", machine: route.machine });
-      yield* PubSub.publish(changes, { _tag: "Add", route });
-      yield* run.step({ ...saved, status: "done", detail: `herdr machine ${added.success.id}` });
-      yield* Fiber.join(yield* onboardAs(job, route, run.current()));
     });
 
   const everyRoute = () => Arr.map([...routes.values()], ({ route }) => route);
@@ -1127,14 +1070,12 @@ const main = Effect.gen(function* () {
         yield* onboardAs(job, route, NOT_STARTED, skip);
         return job;
       }),
-    addMachine: ({ target, label, session }) =>
+    addMachine: ({ target, label }) =>
       Effect.gen(function* () {
-        if (Arr.some([target, label, session], (one) => Str.trim(one) === ""))
-          return yield* new ActionFailed({
-            reason: "a Machine needs an SSH target, a label and a session",
-          });
+        if (Arr.some([target, label], (one) => Str.trim(one) === ""))
+          return yield* new ActionFailed({ reason: "a Machine needs an SSH target and a label" });
         const job = yield* uuid;
-        yield* addAs(job, Str.trim(target), Str.trim(label), Str.trim(session)).pipe(
+        yield* addToCoreAs(job, Str.trim(target), Str.trim(label)).pipe(
           Effect.provide(BunServices.layer),
           Effect.forkIn(scope),
         );
@@ -1248,23 +1189,16 @@ const main = Effect.gen(function* () {
           ? Effect.void
           : Queue.offer(typed, Str.trim(code)).pipe(Effect.asVoid);
       }),
-    answerHerdr: ({ job, yes }) =>
-      Effect.suspend(() => {
-        const answer = answers.get(job);
-        return answer === undefined ? Effect.void : Deferred.succeed(answer, yes);
-      }),
     removeMachine: ({ profile }) =>
       Effect.gen(function* () {
         const known = routes.get(profile);
         if (known?.scope === undefined)
           return yield* new ActionFailed({
-            reason: "only a machine in herdr's list can be removed",
+            reason: "only a machine in core's list can be removed",
           });
-        yield* (
-          onCore
-            ? forgetMachine(collie, known.route.machine.name)
-            : removeFromHerdr("herdr", profile, collie)
-        ).pipe(Effect.mapError((reason) => new ActionFailed({ reason })));
+        yield* forgetMachine(collie, known.route.machine.name).pipe(
+          Effect.mapError((reason) => new ActionFailed({ reason })),
+        );
         const done = yield* Deferred.make<void>();
         yield* PubSub.publish(changes, { _tag: "Remove", profile, done });
         // Without a board open there is no stream to end.
@@ -1292,7 +1226,14 @@ const main = Effect.gen(function* () {
       Effect.gen(function* () {
         const door = yield* doorTo(doors, installation);
         const at = yield* focusOn(door, yield* uuid, runId);
-        const attach = attachCommand(door.machine.target, at.session);
+        if (at.core === undefined)
+          return yield* new ActionFailed({ reason: `${runId} has no live agent on core` });
+        // This computer's core reaches another Machine's terminals by their qualified address.
+        const attach = [
+          "hc",
+          "attach",
+          door.machine.profile === "local" ? at.core : `${door.machine.name}/${at.core}`,
+        ];
         const terminal = inTerminal(attach, process.platform, which);
         const opened = terminal !== null && (yield* launched(terminal));
         return { at, command: Result.getOrThrow(CommandLine.join(attach)), opened };

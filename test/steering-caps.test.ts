@@ -46,17 +46,16 @@ const entry: AgentEntry = {
   runId: "r1",
   workflow: "implement",
   at: "2026-09-09T09:00:00Z",
-  incarnation: { terminalId: "term-1", agentSession: null },
+  incarnation: { terminalId: "term-1", agentSession: null, backend: "core" },
 };
 
 const alive: AgentInfo = {
   name: "impl-1",
   paneId: "1-9",
-  workspaceId: "w1",
   status: "idle",
-  title: null,
   terminalId: "term-1",
-  agentSession: null,
+  cwd: "/project",
+  foregroundCwd: null,
 };
 
 function fake() {

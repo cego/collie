@@ -101,7 +101,7 @@ test(
       "collie-heal-claims-",
       (world) =>
         Effect.gen(function* () {
-          const outputs = yield* queued(world, [
+          yield* queued(world, [
             {
               diagnosis:
                 "# Diagnosis\n\nThe Run waits on a missing socket.\n\nThe restart succeeded, but the login still fails.\n\n```text\nECONNREFUSED\n```",
@@ -111,12 +111,10 @@ test(
               finding: FINDING,
             },
           ]);
-          const { runId, client } = yield* started(
-            world,
-            "parks-for",
-            { causes: "unknown", entries: `${world.home}/entries` },
-            { FAKE_HERDR_OUTPUTS: outputs },
-          );
+          const { runId, client } = yield* started(world, "parks-for", {
+            causes: "unknown",
+            entries: `${world.home}/entries`,
+          });
           const lines = yield* until(
             () => client.runMetrics({ runId }).pipe(Effect.orDie),
             (lines) =>
@@ -293,50 +291,22 @@ test(
       (world) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const status = `${world.home}/status`;
-          yield* fs.writeFileString(status, "idle").pipe(Effect.orDie);
-          const working = { writes: [{ path: status, text: "working" }], output: null };
-          const outputs = yield* queued(world, [
-            working,
-            working,
-            working,
-            working,
+          yield* queued(world, [
+            null,
+            null,
+            null,
+            { writes: [], output: null, then: "working" },
             { verdict: "clean" },
           ]);
-          const { runId, client } = yield* started(
-            world,
-            "silent-review",
-            { target: "the diff" },
-            { FAKE_HERDR_OUTPUTS: outputs, FAKE_HERDR_AGENT_STATUS_FILE: status },
-          );
-          const statusReads = fs.readFileString(`${world.state}/../herdr-calls.jsonl`).pipe(
-            Effect.map((calls) => Str.split(calls, '"cmd":"agent get"').length),
-            Effect.orElseSucceed(() => 0),
-          );
-          /** The reviewer's turn, once the host has read it working, ended. */
-          const turnEnds = Effect.gen(function* () {
-            yield* slowly(
-              () => fs.readFileString(status).pipe(Effect.orElseSucceed(() => "")),
-              (said) => Str.trim(said) === "working",
-            );
-            const from = yield* statusReads;
-            yield* slowly(
-              () => statusReads,
-              (reads) => reads >= from + 2,
-            );
-            yield* fs.writeFileString(status, "idle").pipe(Effect.orDie);
-          });
+          const { runId, client } = yield* started(world, "silent-review", { target: "the diff" });
           const reminders = (n: number) =>
             slowly(
               () => client.runMetrics({ runId }).pipe(Effect.orDie),
               (lines) => Arr.filter(lines, (line) => line.action === "reminded").length >= n,
             );
           yield* launchOf(client, runId);
-          yield* turnEnds;
           yield* reminders(1);
-          yield* turnEnds;
           yield* reminders(2);
-          yield* turnEnds;
           const heals = yield* slowly(
             () => healsOf(client, runId),
             (heals) => heals.length > 0,
@@ -345,8 +315,6 @@ test(
           const healer = { ...(yield* launchOf(client, heals[0]!.runId)), runId: heals[0]!.runId };
           const parked = yield* client.run({ runId }).pipe(Effect.orDie);
           expect(parked?.park).toMatchObject({ cause: "output-absent", healing: healer.runId });
-          // The Heal's agent is at work; the reviewer it asks is not.
-          yield* fs.writeFileString(`${status}.${reviewer.agent}`, "idle").pipe(Effect.orDie);
           expect(
             yield* asHealer(world, healer, [
               {
@@ -422,11 +390,8 @@ test(
       (world) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const status = `${world.home}/status`;
-          yield* fs.writeFileString(status, "working").pipe(Effect.orDie);
-          const outputs = yield* queued(world, [null]);
-          const extra = { FAKE_HERDR_OUTPUTS: outputs, FAKE_HERDR_AGENT_STATUS_FILE: status };
-          const other = yield* started(world, "asks", { goal: "ask" }, extra);
+          yield* queued(world, [{ writes: [], output: null, then: "working" }]);
+          const other = yield* started(world, "asks", { goal: "ask" });
           yield* until(
             () => other.client.run({ runId: other.runId }).pipe(Effect.orDie),
             (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
@@ -435,12 +400,10 @@ test(
             (yield* collie(world, ["run", "hold", other.runId, "--request-id", "held"])).envelope
               .ok,
           ).toBe(true);
-          const { runId, client } = yield* started(
-            world,
-            "parks-for",
-            { causes: "unknown", entries: `${world.home}/entries` },
-            extra,
-          );
+          const { runId, client } = yield* started(world, "parks-for", {
+            causes: "unknown",
+            entries: `${world.home}/entries`,
+          });
           const heals = yield* until(
             () => healsOf(client, runId),
             (heals) => heals.length > 0,
@@ -515,18 +478,11 @@ test(
       "collie-heal-park-",
       (world) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const status = `${world.home}/status`;
-          yield* fs.writeFileString(status, "working").pipe(Effect.orDie);
-          const { runId, client } = yield* started(
-            world,
-            "parks-for",
-            { causes: "unknown,unknown", entries: `${world.home}/entries` },
-            {
-              FAKE_HERDR_OUTPUTS: yield* queued(world, [null]),
-              FAKE_HERDR_AGENT_STATUS_FILE: status,
-            },
-          );
+          yield* queued(world, [{ writes: [], output: null, then: "working" }]);
+          const { runId, client } = yield* started(world, "parks-for", {
+            causes: "unknown,unknown",
+            entries: `${world.home}/entries`,
+          });
           const heals = yield* until(
             () => healsOf(client, runId),
             (heals) => heals.length > 0,
@@ -707,22 +663,17 @@ test(
       "collie-heal-storm-",
       (world) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const status = `${world.home}/status`;
-          yield* fs.writeFileString(status, "working").pipe(Effect.orDie);
-          const extra = {
-            FAKE_HERDR_OUTPUTS: yield* queued(world, [null, null]),
-            FAKE_HERDR_AGENT_STATUS_FILE: status,
-          };
+          yield* queued(world, [
+            { writes: [], output: null, then: "working" },
+            { writes: [], output: null, then: "working" },
+          ]);
           const parked = [];
           for (const name of ["first", "second"])
             parked.push(
-              yield* started(
-                world,
-                "parks-for",
-                { causes: "unknown", entries: `${world.home}/${name}` },
-                extra,
-              ),
+              yield* started(world, "parks-for", {
+                causes: "unknown",
+                entries: `${world.home}/${name}`,
+              }),
             );
           const { client } = parked[0]!;
           const allHeals = client.runs({ task: null }).pipe(
@@ -812,18 +763,15 @@ test(
   () =>
     proves(
       "collie-heal-failing-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
-          const socket = `${world.home}/herdr.sock`;
           const runs: Array<{ runId: string; client: Client }> = [];
           for (const name of ["first", "second", "third"])
             runs.push(
-              yield* started(
-                world,
-                "parks-for",
-                { causes: "unknown", entries: `${world.home}/${name}` },
-                { HERDR_SOCKET_PATH: socket },
-              ),
+              yield* started(world, "parks-for", {
+                causes: "unknown",
+                entries: `${world.home}/${name}`,
+              }),
             );
           const failedOf = (one: { runId: string; client: Client }) =>
             one.client.runMetrics({ runId: one.runId }).pipe(
@@ -837,7 +785,10 @@ test(
               () => failedOf(one),
               (failed) => failed,
             );
-          const file = yield* newsPath(world.state, yield* herdOf(socket).pipe(Effect.orDie));
+          const file = yield* newsPath(
+            world.state,
+            yield* herdOf(core.socketPath).pipe(Effect.orDie),
+          );
           yield* until(
             () => readNews(file),
             (news) =>
@@ -858,18 +809,12 @@ test(
       "collie-heal-crash-",
       (world) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const status = `${world.home}/status`;
-          yield* fs.writeFileString(status, "working").pipe(Effect.orDie);
-          const extra = {
-            FAKE_HERDR_OUTPUTS: yield* queued(world, [null, null]),
-            FAKE_HERDR_AGENT_STATUS_FILE: status,
-          };
+          yield* queued(world, [{ writes: [], output: null, then: "working" }]);
           const { runId } = yield* started(
             world,
             "parks-for",
             { causes: "unknown", entries: `${world.home}/entries` },
-            { ...extra, COLLIE_RECOVERY_CRASH_AT: "heal-claimed" },
+            { COLLIE_RECOVERY_CRASH_AT: "heal-claimed" },
           );
           yield* until(
             () =>
@@ -883,7 +828,6 @@ test(
           expect(
             (yield* collie(world, ["run", "show", runId], {
               COLLIE_RECOVERY_EVERY: "100 millis",
-              ...extra,
             })).envelope.ok,
           ).toBe(true);
           const again = yield* connect(world.state).pipe(Effect.orDie);

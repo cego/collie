@@ -223,7 +223,7 @@ test(
             (record) => nodeOf(record?.flow, live, "ship")?.state === "running",
           );
           const env = readEnv({
-            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_STATE_DIR: world.state,
             COLLIE_CWD: world.project,
             HOME: world.home,
           });

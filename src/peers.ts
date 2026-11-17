@@ -48,7 +48,6 @@ import {
 import { channelInto } from "./channel";
 import { openPeer, REACH_BOUND, type Way } from "./peer-transport";
 import {
-  closeConnections,
   resolvedHost,
   ride,
   SOCKET_PATH_MAX,
@@ -334,8 +333,6 @@ export interface Link {
   readonly tell: (peer: Peer) => Effect.Effect<void>;
   /** This Machine's Machines, or null where its backend could not say. */
   readonly machines: Effect.Effect<ReadonlyArray<SshMachine> | null>;
-  /** Whether a pairing `machines` leaves out is forgotten: herdr's list, not core's. */
-  readonly forgetsUnlisted: Effect.Effect<boolean>;
   /** Told each time a paired peer's link comes up. */
   readonly linked: (peer: Peer) => Effect.Effect<void>;
 }
@@ -649,7 +646,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     void runFork(
       Effect.forkIn(
         link.reconnected.pipe(
-          Effect.andThen(reconcileMachines),
           Effect.andThen(() =>
             Arr.some(peers, (one) => one.installation === peer.installation)
               ? link
@@ -683,23 +679,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     Effect.suspend(() =>
       keep(Arr.filter(peers, (peer) => peer.installation !== installation)),
     ).pipe(pairing.withPermits(1), Effect.ignore({ log: "Unhandled" }));
-  const reconcileMachines = Effect.gen(function* () {
-    if (!(yield* link.forgetsUnlisted)) return;
-    const listed = yield* link.machines;
-    if (listed !== null) {
-      const labels = new Set(Arr.map(listed, (machine) => machine.label));
-      for (const peer of Arr.filter(peers, (one) => one.dials === "out" && !labels.has(one.name))) {
-        yield* link.tell(peer);
-        yield* forget(peer.installation);
-        yield* Effect.logInfo(`forgot ${peer.name}: herdr no longer lists it`);
-      }
-      for (const path of yield* closeConnections(link.dir, listed).pipe(
-        Effect.provideContext(services),
-      ))
-        yield* Effect.logInfo(`closed the SSH connection at ${path}: herdr no longer names it`);
-    }
-  });
-
   const validateName = (name: string) =>
     Effect.gen(function* () {
       const path = relayOf(link.dir, name);
@@ -1236,8 +1215,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     scope,
   );
 
-  yield* reconcileMachines;
-
   const peersModule: Peers = {
     invite: (asker) =>
       Effect.gen(function* () {
@@ -1309,33 +1286,36 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       }).pipe(pairing.withPermits(1)),
     forget,
     live: (installation) => Effect.sync(() => standings.get(installation)?.state === "live"),
-    list: reconcileMachines.pipe(
-      Effect.andThen(pairing.withPermits(1)(settle)),
-      Effect.andThen(() =>
-        Effect.forEach(peers, (peer) =>
-          Effect.gen(function* () {
-            const standing = standings.get(peer.installation) ?? {
-              state: "connecting",
-              since: null,
-              failure: null,
-              ...NO_WAY,
-            };
-            const connection = peer.dials === "out" ? yield* connectionOf(peer) : undefined;
-            return {
-              installation: peer.installation,
-              name: peer.name,
-              dials: peer.dials,
-              url: peer.url ?? null,
-              build: builds.get(peer.installation) ?? null,
-              ...standing,
-              failure: peer.dials === "in" && listening !== null ? listening : standing.failure,
-              connection:
-                connection === undefined ? null : connection !== null && (yield* connection.check),
-            } satisfies PeerView;
-          }),
+    list: pairing
+      .withPermits(1)(settle)
+      .pipe(
+        Effect.andThen(() =>
+          Effect.forEach(peers, (peer) =>
+            Effect.gen(function* () {
+              const standing = standings.get(peer.installation) ?? {
+                state: "connecting",
+                since: null,
+                failure: null,
+                ...NO_WAY,
+              };
+              const connection = peer.dials === "out" ? yield* connectionOf(peer) : undefined;
+              return {
+                installation: peer.installation,
+                name: peer.name,
+                dials: peer.dials,
+                url: peer.url ?? null,
+                build: builds.get(peer.installation) ?? null,
+                ...standing,
+                failure: peer.dials === "in" && listening !== null ? listening : standing.failure,
+                connection:
+                  connection === undefined
+                    ? null
+                    : connection !== null && (yield* connection.check),
+              } satisfies PeerView;
+            }),
+          ),
         ),
       ),
-    ),
     unpair: (name) =>
       Effect.gen(function* () {
         for (const peer of Arr.filter(peers, (one) => one.name === name)) {

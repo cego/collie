@@ -20,7 +20,6 @@ import {
   parseShared,
   SETTINGS,
   type SettingValue,
-  type TerminalBackend,
   WORKTREES_DIRECTORY,
 } from "./settings";
 import type { SharedSetting, SharedSettings } from "./board-model";
@@ -277,13 +276,6 @@ export const takeShared = (
         });
       return yield* readShared(userDir);
     }),
-  );
-
-/** What runs this Machine's next agents, `herdr` where the setting is unset or unreadable. */
-export const terminalBackend = (userDir: string) =>
-  readConfig(userDir).pipe(
-    Effect.map((raw): TerminalBackend => (raw.terminal_backend === "core" ? "core" : "herdr")),
-    Effect.orElseSucceed((): TerminalBackend => "herdr"),
   );
 
 /** Where this Machine's new checkouts go, `~/` being `home`. */

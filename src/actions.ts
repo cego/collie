@@ -99,11 +99,6 @@ export const ActionSchema = Schema.Union([
      * Required: an agent's start is refused without one rather than rooted where it asks.
      */
     workspace: Schema.optionalKey(Schema.String),
-    /**
-     * Keep the Run in that workspace, as its Task, rather than open a workspace for its
-     * worktree: what someone asking from a workspace usually means by "start it here".
-     */
-    here: Schema.optionalKey(Schema.Boolean),
     /** What its new Task is called, where the human named it; inferred from the work otherwise. */
     title: Schema.optionalKey(Schema.String),
     /** Checks Collie may run to prove it, over the project's and the user's verify.json. */

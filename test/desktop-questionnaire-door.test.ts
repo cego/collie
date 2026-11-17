@@ -34,13 +34,12 @@ const doorOf = Effect.fn("test.doorOf")(function* (world: World, client = "mk-pc
   const desktop = yield* openBridge(bridgeCommand(command, client), {
     PATH: "/usr/bin:/bin",
     HOME: world.home,
-    HERDR_PLUGIN_ROOT: world.install,
-    HERDR_PLUGIN_STATE_DIR: world.state,
+    COLLIE_ROOT: world.install,
+    COLLIE_STATE_DIR: world.state,
     COLLIE_USER_DIR: world.config,
     COLLIE_HOST: encode(command),
     ...(yield* suiteEnv),
-    HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
-    FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
+    HC_SOCKET: Bun.env.HC_SOCKET ?? "",
   });
   return { machine: { profile: "local", name: client }, desktop };
 });

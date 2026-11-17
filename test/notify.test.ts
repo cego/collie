@@ -1,5 +1,6 @@
 // The taxonomy is the contract: what is sent, how it is titled, and how often.
 
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -18,7 +19,7 @@ import {
 import { slackApi } from "../src/slack";
 import { writeConfigValue } from "../src/config";
 import { fakeSlack, signedInToSlack } from "./support/slack";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { Agents, agentsLayer } from "../src/agents";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
@@ -109,7 +110,7 @@ const session = <A, E>(
       agentsLayer({
         dir,
         env: rig.pluginEnv(),
-        herdr: new FakeHerdr(rig.pluginEnv()),
+        herdr: new Herdr(rig.pluginEnv()),
         harness: "claude",
         model: "opus",
         permissions: "auto",
@@ -127,7 +128,7 @@ const session = <A, E>(
           foundationLayer({
             dir,
             userDir: rig.pluginEnv().userDir,
-            placing: { env: rig.pluginEnv(), herdr: new FakeHerdr(rig.pluginEnv()) },
+            placing: { env: rig.pluginEnv(), herdr: new Herdr(rig.pluginEnv()) },
             toast: (title, body, sound) =>
               Effect.sync(() => toasts.push(`${sound}|${title}|${body}`)),
             ...options,

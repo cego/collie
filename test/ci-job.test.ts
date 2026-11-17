@@ -142,7 +142,7 @@ test("a CI park rechecks jobs at its latest recorded head rather than an earlier
           park: { cause: "ci-job-absent", kind: "rechecks" },
         },
         root,
-        { agentList: () => Effect.die("CI rechecks must not ask herdr") },
+        { agentList: () => Effect.die("CI rechecks must not ask core") },
       ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
       expect(result).toMatchObject({ cleared: true, error: false });
       expect(result.note).toContain("nuxi-typecheck");
@@ -171,7 +171,7 @@ test("a CI park with no pipeline stays uncleared until the named job exists", ()
           park: { cause: "ci-job-absent", kind: "rechecks" },
         },
         root,
-        { agentList: () => Effect.die("CI rechecks must not ask herdr") },
+        { agentList: () => Effect.die("CI rechecks must not ask core") },
       ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
       expect(result).toMatchObject({ cleared: false, error: false });
     }),
@@ -206,7 +206,7 @@ test("a target-red park clears only once every recorded job passed on the target
               park: { cause: "target-red", kind: "rechecks" },
             },
             root,
-            { agentList: () => Effect.die("CI rechecks must not ask herdr") },
+            { agentList: () => Effect.die("CI rechecks must not ask core") },
           ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
         });
       for (const state of ["failed", "pending", "running"] as const)

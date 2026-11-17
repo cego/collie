@@ -154,6 +154,7 @@ beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      yield* rig.startCore();
     }),
   ),
 );
@@ -180,7 +181,7 @@ test("a gone agent's compaction controls go and its endpoint is stopped; a liste
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      yield* rig.addAgent("alive", "p1");
+      yield* rig.addAgent("alive");
       const endpoint = Bun.spawn(["sleep", "987"]);
       yield* Effect.addFinalizer(() => Effect.sync(() => endpoint.kill("SIGKILL")));
       yield* control("gone", endpoint.pid, "sleep 987");
@@ -222,11 +223,11 @@ test("a gone agent's recorded pid now running something else is not signalled", 
     }),
   ));
 
-test("cleanup keeps every compaction control when herdr will not list its agents", () =>
+test("cleanup keeps every compaction control when core will not list its agents", () =>
   runEffect(
     Effect.gen(function* () {
       yield* written(`${rig.stateDir}/compaction/gone/control.json`, "{}", 0);
-      const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: '{"agent list":"herdr is gone"}' }));
+      const herdr = new Herdr(rig.pluginEnv({ HC_SOCKET: `${rig.root}/no-core.sock` }));
 
       const judged = yield* compactionSweeper(rig.stateDir, [herdr]).judge;
       expect(judged.remove).toEqual([]);
@@ -234,7 +235,7 @@ test("cleanup keeps every compaction control when herdr will not list its agents
         {
           kind: "compaction",
           target: `${rig.stateDir}/compaction/gone`,
-          reason: "could not ask herdr what is live",
+          reason: "could not ask core what is live",
         },
       ]);
     }),

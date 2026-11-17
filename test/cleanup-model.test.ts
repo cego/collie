@@ -27,6 +27,7 @@ beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      yield* rig.startCore();
     }),
   ),
 );
@@ -47,7 +48,6 @@ test("cleanup settles hidden history without looking for an interactive host", (
         runs: [run],
         views: [],
         tasks: [],
-        sessions: [],
         protect: [],
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, {

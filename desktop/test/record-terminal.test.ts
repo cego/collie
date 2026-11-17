@@ -8,9 +8,7 @@ import {
   askedFor,
   atWork,
   offersTerminal,
-  opensHerdrForNoPane,
   shownAgent,
-  opensHerdrWithoutPane,
   deliveryChoices,
   recipients,
   switches,
@@ -20,11 +18,6 @@ test("the Terminal tab is offered on a reached Machine and kept while shown afte
   expect(offersTerminal(null, undefined)).toBe(true);
   expect(offersTerminal(1_791_000_000_000, "terminal")).toBe(true);
   expect(offersTerminal(1_791_000_000_000, "log")).toBe(false);
-});
-
-test("only Go to pane falls back to herdr's own client where there is no pane", () => {
-  expect(opensHerdrWithoutPane("terminal")).toBe(true);
-  expect(opensHerdrWithoutPane("diff")).toBe(false);
 });
 
 const live = (name: string, role: string | undefined, status = "idle", run = "run-1") => {
@@ -167,13 +160,6 @@ test("a Step's agent is asked for exactly, even if it ended before the pane open
     run: "run-1",
     state: "ended",
   });
-});
-
-test("a pane not found opens herdr's client only for Go to pane before a pick", () => {
-  const picked = agentTabs([live("impl-1", "implementer", "working")], null)[0]!;
-  expect(opensHerdrForNoPane(true, null)).toBe(true);
-  expect(opensHerdrForNoPane(true, picked)).toBe(false);
-  expect(opensHerdrForNoPane(false, null)).toBe(false);
 });
 
 test("the agent shown is the board's entry for it, kept once it leaves, and none before it arrives", () => {

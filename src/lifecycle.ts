@@ -54,7 +54,6 @@ import {
 } from "./host";
 import { Herdr, type HerdrError } from "./herdr";
 import { viaCommand } from "./ssh-argv";
-import { terminalBackend } from "./config";
 import { machineName, pairWith, peersOf } from "./peers";
 import {
   artefactOwner,
@@ -264,9 +263,9 @@ export type Door = FrontDoor | Asker;
 
 const isFrontDoor = Schema.is(FrontDoor);
 
-const declaring = (door: Door, session: string | null, stamp?: string): Declaration => {
-  if (isFrontDoor(door)) return { frontDoor: door, session };
-  let declared: Declaration = { frontDoor: door.origin, session, ...voiceOf(door) };
+const declaring = (door: Door, stamp?: string): Declaration => {
+  if (isFrontDoor(door)) return { frontDoor: door };
+  let declared: Declaration = { frontDoor: door.origin, ...voiceOf(door) };
   if (door.from !== undefined) declared = { ...declared, from: door.from };
   if (stamp !== undefined) declared = { ...declared, stamp };
   return declared;
@@ -313,7 +312,7 @@ const notListed = (name: string) =>
     reason: `${REFUSED_INPUT}: no Machine "${name}": this Machine's list names none by that name`,
   });
 
-/** This Machine's Machines, core's or herdr's as its backend says, or none where it could not say. */
+/** This Machine's Machines, as core lists them, or none where it could not say. */
 const herdrMachines = (env: PluginEnv) =>
   new Herdr(env).machineList().pipe(
     Effect.orElseSucceed((): ReadonlyArray<HerdrMachine> => []),
@@ -344,27 +343,21 @@ const openAndWake = (
   target?: string,
 ) =>
   Effect.gen(function* () {
-    const onCore = (yield* terminalBackend(env.userDir)) === "core";
     const listed = named(yield* herdrMachines(env), name);
-    // A pairing made on herdr, before this Machine was set to core.
-    const saved = onCore
-      ? named(
-          yield* new Herdr(env).herdrMachineList().pipe(
-            Effect.orElseSucceed((): ReadonlyArray<HerdrMachine> => []),
-            Effect.provide(Path.layer),
-          ),
-          name,
-        )
-      : undefined;
-    const machine = listed ?? (target === undefined ? saved : { label: name, target });
+    const paired =
+      listed === undefined && Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name);
+    // A pairing core does not keep has no saved target: ssh resolves its name.
+    const machine =
+      listed ??
+      (target !== undefined || paired ? { label: name, target: target ?? name } : undefined);
     if (machine === undefined) return yield* notListed(name);
     const opened = yield* openConnection(env.stateDir, machine, { said });
     let added = false;
-    if (onCore && listed !== undefined)
+    if (listed !== undefined)
       yield* new Herdr(env)
         .machineDial(name)
         .pipe(Effect.mapError(coreRefused(name)), Effect.provide(Path.layer));
-    else if (onCore && Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name)) {
+    else if (paired) {
       yield* addToCore(env, name, machine.target, opened.path);
       added = true;
     }
@@ -420,9 +413,7 @@ const reach = (
   machine === null
     ? connect(env.stateDir).pipe(
         Effect.tap((client) =>
-          door === undefined
-            ? Effect.void
-            : client.declare(declaring(door, env.socketPath, env.hostStamp)),
+          door === undefined ? Effect.void : client.declare(declaring(door, env.hostStamp)),
         ),
       )
     : ensurePaired(env, machine).pipe(
@@ -607,12 +598,12 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
   if (elsewhere && options.task.mode !== "new")
     return err(
       "invalid_input",
-      `A Run started on ${env.machine} opens a Task there; --task, --continue-task and --here name this Machine's.`,
+      `A Run started on ${env.machine} opens a Task there; --task names this Machine's.`,
     );
   // The defaults of the workspace this was started from, which only a front door knows.
   const defaults = elsewhere
     ? null
-    : yield* readDefaults(yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env, env.cwd)))).pipe(
+    : yield* readDefaults(yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env.cwd)))).pipe(
         Effect.orElseSucceed(() => null),
       );
   const placed = yield* taskFor(env, options.task, {
@@ -621,7 +612,6 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     goal: options.intent?.goal,
     title: options.title,
   });
-  if (placed._tag === "Rejected") return placed.result;
   // Resolved here, once: what this front door listed and offered is where the host roots it.
   const root =
     options.options?.workspace === PROJECTS_ROOT_OPTION && !elsewhere
@@ -641,7 +631,6 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
         options: options.options,
         task: placed.task?.id,
         taskLabel: placed.label ?? undefined,
-        here: placed.here ?? undefined,
         parent: options.parent ?? undefined,
         intent: defaults === null ? { ...options.intent } : { ...options.intent, defaults },
         verify: options.verify,
@@ -1571,7 +1560,7 @@ export const deliveredLine = (sent: {
 }): string =>
   sent.observed === true
     ? `Delivered to ${sent.agent} (observed: ${sent.how ?? "taken"}).`
-    : `Sent to ${sent.agent}, not observed. Go to pane: herdr agent focus ${sent.agent}${sent.pane === undefined ? "" : ` (pane ${sent.pane})`}.`;
+    : `Sent to ${sent.agent}, not observed. Go to pane: \`hc attach ${sent.pane ?? sent.agent}\`.`;
 
 /**
  * What carries a request on to a finished Run whose agent is gone: its follow-up offer
@@ -2241,7 +2230,7 @@ export const machinesListed = (env: PluginEnv) =>
   Effect.gen(function* () {
     const read = yield* asks(env, (client) => client.peers());
     if (!read.ok) return read;
-    const backend = yield* terminalBackend(env.userDir);
+    const backend = "core" as const;
     const roster = yield* herdrMachines(env);
     const listed = new Set(Arr.map(roster, (machine) => machine.label));
     return {
@@ -2251,7 +2240,7 @@ export const machinesListed = (env: PluginEnv) =>
         roster,
         peers: Arr.map(read.value, (peer) => ({
           ...peer,
-          added: backend === "core" && peer.dials === "out" ? listed.has(peer.name) : null,
+          added: peer.dials === "out" ? listed.has(peer.name) : null,
         })),
       },
     };
@@ -2290,10 +2279,6 @@ export const machineAdd = (
 ) =>
   answered(
     Effect.gen(function* () {
-      if ((yield* terminalBackend(env.userDir)) !== "core")
-        return yield* new HostRefused({
-          reason: `invalid_state: this Machine's terminal backend is herdr, which keeps its own machines: herdr machine add saves one`,
-        });
       const opened = yield* openConnection(env.stateDir, { label: name, target }, { said });
       yield* addToCore(env, name, target, opened.path);
       return { machine: name, ...opened };
@@ -2311,15 +2296,14 @@ export const machineForget = (env: PluginEnv, name: string) =>
         client.unpair({ machine: name }),
       );
       if (!unpaired.ok) return yield* new HostRefused({ reason: unpaired.error.message });
-      if ((yield* terminalBackend(env.userDir)) === "core")
-        yield* new Herdr(env).machineRemove(name).pipe(
-          Effect.catchIf(
-            (cause) => cause.code === "machine_unknown",
-            () => Effect.void,
-          ),
-          Effect.mapError(coreRefused(name)),
-          Effect.provide(Path.layer),
-        );
+      yield* new Herdr(env).machineRemove(name).pipe(
+        Effect.catchIf(
+          (cause) => cause.code === "machine_unknown",
+          () => Effect.void,
+        ),
+        Effect.mapError(coreRefused(name)),
+        Effect.provide(Path.layer),
+      );
       return { machine: name };
     }).pipe(Effect.provide(Path.layer)),
   );
@@ -2363,9 +2347,7 @@ export const verifyRun = Effect.fn("Lifecycle.verifyRun")(function* (
   return {
     ok: true as const,
     events: followVerify(env.stateDir, events, (again) =>
-      door === undefined
-        ? Effect.void
-        : again.declare(declaring(door, env.socketPath, env.hostStamp)),
+      door === undefined ? Effect.void : again.declare(declaring(door, env.hostStamp)),
     ),
   };
 });

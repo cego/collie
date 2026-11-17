@@ -57,7 +57,6 @@ import {
   runShown,
   runProgress,
   reportFor,
-  hostTaskOf,
   hostTasks,
 } from "../lifecycle";
 import { unsafePathComponent } from "../naming";
@@ -153,50 +152,25 @@ function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArra
 }
 
 /**
- * Which Task this start belongs to. Fresh unless the caller said otherwise: neither the
- * Workflow's name nor the workspace this happens to be in continues anything, because a
+ * Which Task this start belongs to: fresh unless the caller named one, because a
  * continuation that was never asked for is how two pieces of work become one. The host
  * still gives a fresh start the open Task already working its branch.
- *
- * The programmatic front door never waits for a prompt. Outside a Task's workspace,
- * `--continue-task` is missing input and says which flag would supply it.
  */
 const chosenTask = Effect.fn("collie.chosenTask")(function* (
   env: PluginEnv,
   named: Option.Option<string>,
-  current: boolean,
-  here: boolean,
 ) {
-  const refuse = (error: Result) => ({ ok: false as const, error });
   const taken = (choice: TaskChoice) => ({ ok: true as const, choice });
-  if (here && (Option.isSome(named) || current))
-    return refuse(
-      err(
-        "invalid_input",
-        "--here keeps the Run in this workspace; it takes no --task or --continue-task.",
-      ),
-    );
-  if (here) return taken({ mode: "here" });
-  if (Option.isSome(named)) {
-    const task = Option.getOrNull(
-      Arr.findFirst(yield* hostTasks(env), (one) => one.id === named.value),
-    );
-    if (!task)
-      return refuse(
-        err("task_not_found", `Task "${named.value}" was not found.`, { task: named.value }),
-      );
-    return taken({ mode: "continue", task });
-  }
-  if (!current) return taken({ mode: "new" });
-  const kept = yield* hostTaskOf(env, env.workspaceId);
-  if (!kept)
-    return refuse(
-      err(
-        "needs_input",
-        "This workspace is not a task workspace; name the Task with --task, as `task list` prints it, or keep the Run here with --here.",
-      ),
-    );
-  return taken({ mode: "continue", task: kept });
+  if (Option.isNone(named)) return taken({ mode: "new" });
+  const task = Option.getOrNull(
+    Arr.findFirst(yield* hostTasks(env), (one) => one.id === named.value),
+  );
+  if (!task)
+    return {
+      ok: false as const,
+      error: err("task_not_found", `Task "${named.value}" was not found.`, { task: named.value }),
+    };
+  return taken({ mode: "continue", task });
 });
 
 /**
@@ -269,16 +243,6 @@ const runStart = Command.make(
       Flag.withDescription("Continue this Task instead of starting a new one, by its id"),
       Flag.optional,
     ),
-    continueTask: Flag.Boolean("continue-task").pipe(
-      Flag.withDescription("Continue the Task whose workspace this is; fails outside one"),
-      Flag.withDefault(false),
-    ),
-    here: Flag.Boolean("here").pipe(
-      Flag.withDescription(
-        "Keep the Run in this herdr workspace instead of opening one for its worktree",
-      ),
-      Flag.withDefault(false),
-    ),
     verify: Flag.String("verify").pipe(
       Flag.withDescription(
         'A check Collie may run to prove this Run, repeatable: one verify.json entry, {"name","executable","argv","cwd"}',
@@ -310,8 +274,6 @@ const runStart = Command.make(
     constraint,
     severity,
     task: taskId,
-    continueTask,
-    here,
     verify,
     harness,
     model,
@@ -341,7 +303,7 @@ const runStart = Command.make(
               // Which Task, before the Workflow is prepared: inference is task-local,
               // so a continuation sees its own Task's plans and a fresh start sees only
               // the Runs recorded before Tasks existed.
-              const task = yield* chosenTask(resolved.env, taskId, continueTask, here);
+              const task = yield* chosenTask(resolved.env, taskId);
               if (!task.ok) return task.error;
               // What an id runs is the module saved for this project.
               // A Machine named with --machine has its own modules, and says what it lacks.
@@ -1447,24 +1409,20 @@ const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
   ),
 );
 
-const holdWorkspaceFlag = Flag.String("workspace").pipe(
-  Flag.withDescription("Hold every unfinished Run in this workspace instead of one Run"),
+const holdTaskFlag = Flag.String("task").pipe(
+  Flag.withDescription("Hold every unfinished Run of this Task, by its id, instead of one Run"),
   Flag.optional,
 );
 
-/**
- * Every Run of the Task this workspace belongs to, held. A workspace is where a Task is
- * worked, so "hold this workspace" is the Task's Runs and not whatever else is open in it.
- */
+/** Every unfinished Run of a Task, held. */
 const holdTask = Effect.fn("run.holdTask")(function* (
   env: PluginEnv,
-  workspace: string,
+  id: string,
   request: string,
   reason: string | undefined,
 ) {
-  const task = yield* hostTaskOf(env, workspace);
-  if (task === null)
-    return err("invalid_input", `Workspace "${workspace}" is not a Task's.`, { workspace });
+  const task = Option.getOrNull(Arr.findFirst(yield* hostTasks(env), (one) => one.id === id));
+  if (task === null) return err("task_not_found", `Task "${id}" was not found.`, { task: id });
   const runs = Arr.filter((yield* runViews(env, task.id)).runs, (view) => !isSettled(view));
   const held: string[] = [];
   const door = yield* cliDoor(env);
@@ -1481,7 +1439,7 @@ const holdTask = Effect.fn("run.holdTask")(function* (
   }
   return {
     ok: true as const,
-    data: { task: task.id, workspace, held },
+    data: { task: task.id, held },
     human: held.length === 0 ? "Nothing here is running." : `Held ${Arr.join(held, ", ")}.`,
   };
 });
@@ -1490,7 +1448,7 @@ const runHold = Command.make(
   "hold",
   {
     runId: runIdArg.pipe(Argument.optional),
-    workspace: holdWorkspaceFlag,
+    task: holdTaskFlag,
     before: Flag.String("before").pipe(Flag.optional),
     reason: Flag.String("reason").pipe(
       Flag.withDescription("Why, in your own words, which the board's drawer shows"),
@@ -1498,11 +1456,11 @@ const runHold = Command.make(
     ),
     requestId: requestIdFlag,
   },
-  ({ runId, workspace, reason, before, requestId }) =>
+  ({ runId, task, reason, before, requestId }) =>
     Effect.gen(function* () {
       const global = yield* root;
       const why = Option.getOrUndefined(reason);
-      const where = Option.getOrNull(workspace);
+      const where = Option.getOrNull(task);
       const id = Option.getOrNull(runId);
       yield* attempt(
         Effect.gen(function* () {
@@ -1511,14 +1469,14 @@ const runHold = Command.make(
           if (where !== null) {
             if (Option.isSome(before))
               return err("invalid_input", "--before names one Run's Step; give its Run id");
-            return yield* mutation(resolved.env, "run-hold-workspace", requestId, (request) =>
+            return yield* mutation(resolved.env, "run-hold-task", requestId, (request) =>
               holdTask(resolved.env, where, request, why),
             );
           }
           if (id === null) {
             return err(
               "invalid_input",
-              "`run hold` takes a Run's id, or `--workspace <id>` for every Run in one.",
+              "`run hold` takes a Run's id, or `--task <id>` for every Run of one.",
             );
           }
           return yield* mutation(resolved.env, "run-hold", requestId, (request) =>
@@ -1829,7 +1787,7 @@ const runAction = Command.make(
 
 /** Said to a human who reached for `--workspace` as though it moved the Run. */
 const RESUME_WORKSPACE =
-  "--workspace only chose where this command looked; it does not move a Run. The Run goes back to its Task's workspace, which is reopened on its checkout if herdr has closed it.";
+  "--workspace only chose where this command looked; it does not move a Run. The Run resumes in its own checkout.";
 
 const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =>
   Effect.gen(function* () {
@@ -2183,7 +2141,7 @@ const intentRemember = Command.make(
 
 /** The Session's own defaults file, which is what every Run it starts begins with. */
 const defaultsFile = Effect.fn("run.defaultsFile")(function* (env: PluginEnv) {
-  return yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env, env.cwd)));
+  return yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env.cwd)));
 });
 
 function defaultsCommand(

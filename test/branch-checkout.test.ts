@@ -1,6 +1,7 @@
 // A branch checkout whose path is already held: two clones of one remote with the same
 // name want the same directory, and neither may be handed or harmed by the other's (#220).
 
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -10,9 +11,9 @@ import { Effect, Fiber, FileSystem, Schedule } from "effect";
 import { runOnPath } from "./support/forge";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { checkoutFor, checkoutRefusal, type RecordedBy } from "../src/worktree";
-import type { PaneInfo } from "../src/herdr";
+import type { AgentInfo, AgentStatus } from "../src/herdr";
 
 const BRANCH = "mk/run-x";
 
@@ -59,7 +60,7 @@ beforeEach(() =>
 afterEach(() => runOnPath(rig.close()));
 
 const ask = (recordedBy: RecordedBy = () => Effect.succeed(null)) =>
-  checkoutFor(new FakeHerdr(rig.pluginEnv()), {
+  checkoutFor(new Herdr(rig.pluginEnv()), {
     cwd: cloneA,
     stateDir: rig.stateDir,
     name: "run-x",
@@ -441,10 +442,10 @@ test(
   60_000,
 );
 
-const herdrWith = (panes: ReadonlyArray<PaneInfo>) =>
-  new (class extends FakeHerdr {
-    override paneList() {
-      return Effect.succeed([...panes]);
+const herdrWith = (agents: ReadonlyArray<AgentInfo>) =>
+  new (class extends Herdr {
+    override agentList() {
+      return Effect.succeed([...agents]);
     }
   })(rig.pluginEnv());
 
@@ -457,8 +458,8 @@ const startedAt = (at: string) =>
     return checkout;
   });
 
-const askStarted = (checkout: string, panes: ReadonlyArray<PaneInfo> = []) =>
-  checkoutFor(herdrWith(panes), {
+const askStarted = (checkout: string, agents: ReadonlyArray<AgentInfo> = []) =>
+  checkoutFor(herdrWith(agents), {
     cwd: cloneA,
     stateDir: rig.stateDir,
     name: "run-x",
@@ -472,18 +473,17 @@ const askStarted = (checkout: string, panes: ReadonlyArray<PaneInfo> = []) =>
 const cutsOf = (repo: string) =>
   Effect.all([git(repo, "worktree", "list", "--porcelain"), git(repo, "branch", "--list")]);
 
-const agentIn = (cwd: string, agentStatus: string): PaneInfo => ({
-  paneId: "1-1",
-  tabId: "1:1",
-  label: null,
-  agent: "claude",
-  agentStatus,
-  workspaceId: null,
+const agentIn = (
+  cwd: string,
+  status: AgentStatus,
+  foregroundCwd: string | null = null,
+): AgentInfo => ({
+  name: "claude",
+  paneId: "t1",
+  status,
+  terminalId: "t1",
   cwd,
-  foregroundCwd: null,
-  tokens: {},
-  terminalId: null,
-  agentSession: null,
+  foregroundCwd,
 });
 
 test("a Stage started by a Run whose checkout is clean, at the merge request's head and idle works in it, and cuts nothing", () =>
@@ -507,22 +507,22 @@ test.each([
     held: "uncommitted changes",
     at: `origin/${BRANCH}`,
     dirty: true,
-    status: "idle",
+    status: "idle" as const,
     why: "it has uncommitted changes",
   },
   {
     held: "another commit",
     at: "origin/master",
     dirty: false,
-    status: "idle",
+    status: "idle" as const,
     why: `it is not at ${BRANCH}'s head on origin`,
   },
   {
     held: "a live agent",
     at: `origin/${BRANCH}`,
     dirty: false,
-    status: "working",
-    why: "agent claude in pane 1-1 is working in it",
+    status: "working" as const,
+    why: "agent claude is working in it",
   },
 ])("a Stage started by a Run whose checkout has $held cuts its own", ({ at, dirty, status, why }) =>
   runOnPath(
@@ -541,6 +541,20 @@ test.each([
     }),
   ),
 );
+
+test("a Stage started by a Run whose checkout a working agent changed directory into cuts its own", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const started = yield* startedAt(`origin/${BRANCH}`);
+
+      const checkout = yield* askStarted(started, [agentIn(rig.root, "working", started)]);
+
+      expect(checkout.cwd).toBe(first);
+      expect(checkout.note).toContain(
+        `not working in ${started}, Run run-implement's checkout: agent claude is working in it`,
+      );
+    }),
+  ));
 
 /** The merge request's branch moves on the remote, from a checkout the starting Run's never fetched. */
 const advancedElsewhere = () =>

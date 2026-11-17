@@ -1,6 +1,7 @@
 // Native chat: which harness opens, which session it is, and what must never happen — a
 // chat reopening into whatever conversation the harness wrote last in this directory.
 
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -28,8 +29,8 @@ import {
 import { setSetting, writeConfigValue } from "../src/config";
 import { chatContextFor } from "../src/statusline";
 import { selectionPath, writeSelection } from "../src/selection";
-import { herdOf } from "../src/steering";
-import { Rig, FakeHerdr, type Call } from "./support/recorder";
+import { machineHerd } from "../src/steering";
+import { Rig, type Call } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { TOOLS } from "../src/tools";
 import { runEffect } from "./support/effect";
@@ -137,13 +138,13 @@ test("chat keeps native tools and adds Collie's tools", () => {
 });
 
 test("both harnesses are wired to the same Collie reads", () => {
-  const config = decodeJson(mcpConfig(["/usr/local/bin/collie"], { HERDR_PLUGIN_STATE_DIR: "/s" }));
+  const config = decodeJson(mcpConfig(["/usr/local/bin/collie"], { COLLIE_STATE_DIR: "/s" }));
   expect(config).toMatchObject({
     mcpServers: {
       collie: {
         command: "/usr/local/bin/collie",
         args: ["mcp"],
-        env: { HERDR_PLUGIN_STATE_DIR: "/s" },
+        env: { COLLIE_STATE_DIR: "/s" },
       },
     },
   });
@@ -156,7 +157,7 @@ test("both harnesses are wired to the same Collie reads", () => {
       description: tool.description,
       parameters: tool.input,
     })),
-    { HERDR_PLUGIN_STATE_DIR: "/s" },
+    { COLLIE_STATE_DIR: "/s" },
     "/s/herd/abc",
     "news.jsonl",
   );
@@ -166,7 +167,7 @@ test("both harnesses are wired to the same Collie reads", () => {
   expect(extension).toContain('"tools", "call"');
   // Both adapters are told which Collie to read, rather than inheriting whatever the
   // pane happened to have: two answers about two Herds is the failure this prevents.
-  expect(extension).toContain('"HERDR_PLUGIN_STATE_DIR":"/s"');
+  expect(extension).toContain('"COLLIE_STATE_DIR":"/s"');
   expect(extension).toContain("...process.env, ...ENV");
   // The directory, not the file: there is nothing to watch before the first event, and
   // trimming the journal replaces the file by rename.
@@ -187,7 +188,7 @@ test("both harnesses are wired to the same Collie reads", () => {
   // would deliver the same item twice.
   expect(extension).toContain("String(name) === NEWS_FILE");
   expect(config).toMatchObject({
-    mcpServers: { collie: { env: { HERDR_PLUGIN_STATE_DIR: "/s" } } },
+    mcpServers: { collie: { env: { COLLIE_STATE_DIR: "/s" } } },
   });
 });
 
@@ -207,9 +208,8 @@ test("both adapters are told about the same Collie, in one place", () =>
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-chat-launch-" });
       const serverEnv = {
-        HERDR_PLUGIN_STATE_DIR: "/state",
+        COLLIE_STATE_DIR: "/state",
         COLLIE_USER_DIR: "/config",
-        HERDR_SOCKET_PATH: "/herdr.sock",
         COLLIE_CWD: "/state/herd/abc",
       };
       const files = yield* writeLaunchFiles({
@@ -402,7 +402,7 @@ const launchedChat = (opts: {
       yield* writeChat(yield* chatPath(env.stateDir, KEY), opts.recorded);
     const lines: string[] = [];
     const ensured = yield* startChat(
-      new FakeHerdr(env),
+      new Herdr(env),
       env,
       KEY,
       (line) => Effect.sync(() => lines.push(line)),
@@ -488,7 +488,7 @@ test("a Native chat's prompt context gives the Standing direction, dated, before
     Effect.gen(function* () {
       const rig = yield* Rig.scoped();
       const env = rig.pluginEnv();
-      yield* writeSelection(yield* selectionPath(env.stateDir, yield* herdOf(env.socketPath)), {
+      yield* writeSelection(yield* selectionPath(env.stateDir, yield* machineHerd(env)), {
         task: "t1",
         run: "r1",
         name: "Strapi prod seeder",

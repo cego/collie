@@ -9,8 +9,8 @@
 // the file, a process still carrying the marker is killed and fails the file, as does what
 // a `beforeAll` made and left. A test that failed or timed out is cleaned up the same way.
 //
-// No HERDR_* but the contract check's HERDR_API_SCHEMA, and none of the operator's Collie
-// directories, reach a test unless it sets them itself. HOME is the suite's own, so a suite
+// No HERDR_*, and none of the operator's Collie directories, reach a test unless it sets
+// them itself. HOME is the suite's own, so a suite
 // run from a herdr pane cannot reach the live herd.
 
 import * as Arr from "effect/Array";
@@ -68,8 +68,10 @@ process.env.COLLIE_HOST_WATCH_PID = String(process.pid);
 // so a host told to stop is gone before the check, not reported as left behind.
 process.env.COLLIE_HOST_STOP_GRACE ??= "500 millis";
 for (const key of Struct.keys(process.env))
-  if (pipe(key, Str.startsWith("HERDR_")) && key !== "HERDR_API_SCHEMA") delete process.env[key];
+  if (pipe(key, Str.startsWith("HERDR_"))) delete process.env[key];
 delete process.env.COLLIE_USER_DIR;
+delete process.env.COLLIE_STATE_DIR;
+delete process.env.COLLIE_ROOT;
 // Never the human's core: a host a test starts keeps its board and chat terminals there.
 process.env.HC_SOCKET = "/nonexistent/collie-test/hc.sock";
 delete process.env.HC_SESSION;

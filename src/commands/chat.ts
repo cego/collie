@@ -152,7 +152,7 @@ const news = Command.make(
     answering((env) =>
       Effect.gen(function* () {
         const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-        if (key === null) return err("invalid_state", "Collie cannot reach herdr.");
+        if (key === null) return err("invalid_state", "Collie cannot reach core.");
         // `sent` and `uncertain` are facts about a transport, never about a conversation.
         // Only `collie_news` being read settles an item, because only that shows it
         // arrived somewhere that could act on it.

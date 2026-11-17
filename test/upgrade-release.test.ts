@@ -16,7 +16,7 @@ import { shell, type Ran } from "../src/mr";
 import { ownPlatform } from "../src/releases";
 import { signRelease } from "../src/signing";
 import { generateKeyPairSync } from "node:crypto";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import hcPin from "../hc-pin.json";
 
 let rig: Rig;
@@ -57,7 +57,7 @@ beforeEach(() =>
       tree = `${rig.root}/carried/release`;
       runner = `${rig.root}/carried/collie`;
       prepared = [];
-      yield* write(`${tree}/herdr-plugin.toml`, `version = "${manifest.version}"\n`);
+      yield* write(`${tree}/package.json`, `{"name":"collie","version":"${manifest.version}"}\n`);
       yield* write(`${tree}/prepare.sh`, `echo "prepare: runner: already in place"\n`);
       yield* write(`${tree}/personas/planner.md`, "the shipped planner\n");
       yield* write(`${tree}/workflows/plan.workflow.ts`, "export default 1;\n");

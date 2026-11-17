@@ -46,9 +46,9 @@ struct Session {
     _frames: Box<dyn std::any::Any>,
 }
 
-/// A 20 by 5 terminal on core's raw stream (or a herdr pane), drawn at scale 1, with `bytes`
+/// A 20 by 5 terminal on core's raw stream, drawn at scale 1, with `bytes`
 /// already shown.
-fn session(on_core: bool, bytes: &[u8]) -> Session {
+fn session(bytes: &[u8]) -> Session {
     let (client, core) = core();
     let (pane, frames) = Pane::open(
         &client,
@@ -62,9 +62,8 @@ fn session(on_core: bool, bytes: &[u8]) -> Session {
     );
     let mut tab = Tab::with_look(Some(pane), "vm-mk".into(), 20, 5, Look::default());
     tab.set_scale(1.0);
-    let core_at = if on_core { json!("s1") } else { Value::Null };
     tab.shown(
-        serde_json::from_value::<TerminalEvent>(json!({"_tag": "Opened", "at": {"session": null, "workspace": "w", "tab": null, "pane": "p1", "core": core_at}}))
+        serde_json::from_value::<TerminalEvent>(json!({"_tag": "Opened", "at": {"session": null, "workspace": "w", "tab": null, "pane": "p1", "core": "s1"}}))
             .unwrap(),
     );
     show(&mut tab, bytes);
@@ -136,7 +135,7 @@ fn shift() -> Mods {
 
 #[test]
 fn every_mouse_button_reaches_a_program_that_tracks_the_mouse_as_sgr_reports() {
-    let mut s = session(true, b"\x1b[?1000h\x1b[?1006h");
+    let mut s = session(b"\x1b[?1000h\x1b[?1006h");
     click(&mut s.tab, Button::Left, (2, 1), 1);
     click(&mut s.tab, Button::Middle, (3, 1), 1);
     let (x, y) = at(4, 2);
@@ -161,37 +160,8 @@ fn every_mouse_button_reaches_a_program_that_tracks_the_mouse_as_sgr_reports() {
 }
 
 #[test]
-fn every_mouse_button_reaches_a_herdr_pane_and_the_right_one_as_a_press_and_release() {
-    let mut s = session(false, b"");
-    click(&mut s.tab, Button::Middle, (3, 1), 1);
-    let (x, y) = at(4, 2);
-    s.tab.secondary(x, y, Mods::default());
-    let mice: Vec<(String, String, i64, i64)> = sent(s)
-        .into_iter()
-        .map(|m| {
-            (
-                m["action"].as_str().unwrap().into(),
-                m["button"].as_str().unwrap().into(),
-                m["column"].as_i64().unwrap(),
-                m["row"].as_i64().unwrap(),
-            )
-        })
-        .collect();
-    let named = |a: &str, b: &str, c, r| (a.to_string(), b.to_string(), c, r);
-    assert_eq!(
-        mice,
-        [
-            named("down", "middle", 3, 1),
-            named("up", "middle", 3, 1),
-            named("down", "right", 4, 2),
-            named("up", "right", 4, 2),
-        ]
-    );
-}
-
-#[test]
 fn shift_drags_a_selection_past_a_program_that_tracks_the_mouse_and_ctrl_shift_c_copies_it() {
-    let mut s = session(true, b"\x1b[?1000h\x1b[?1006hhello world\r\nsecond line");
+    let mut s = session(b"\x1b[?1000h\x1b[?1006hhello world\r\nsecond line");
     let shifted = shift();
     s.tab
         .pointer(mouse(Phase::Down, Button::Left, at(6, 0), 1, shifted));
@@ -216,7 +186,7 @@ fn shift_drags_a_selection_past_a_program_that_tracks_the_mouse_and_ctrl_shift_c
 
 #[test]
 fn a_double_click_selects_a_word_a_triple_click_its_line_and_a_click_clears_it() {
-    let mut s = session(true, b"cargo test --all\r\nnext");
+    let mut s = session(b"cargo test --all\r\nnext");
     click(&mut s.tab, Button::Left, (7, 0), 2);
     assert_eq!(s.tab.selection_text().as_deref(), Some("test"));
     click(&mut s.tab, Button::Left, (7, 0), 3);
@@ -227,7 +197,7 @@ fn a_double_click_selects_a_word_a_triple_click_its_line_and_a_click_clears_it()
 
 #[test]
 fn a_paste_is_bracketed_for_a_program_that_asked_and_typing_clears_the_selection() {
-    let mut s = session(true, b"word\x1b[?2004h");
+    let mut s = session(b"word\x1b[?2004h");
     click(&mut s.tab, Button::Left, (1, 0), 2);
     assert_eq!(s.tab.selection_text().as_deref(), Some("word"));
     s.tab.paste("ls\n");
@@ -237,7 +207,7 @@ fn a_paste_is_bracketed_for_a_program_that_asked_and_typing_clears_the_selection
 
 #[test]
 fn a_program_that_asked_is_told_when_the_terminal_loses_and_regains_focus() {
-    let mut s = session(true, b"");
+    let mut s = session(b"");
     s.tab.focus(false);
     show(&mut s.tab, b"\x1b[?1004h");
     s.tab.focus(true);
@@ -249,7 +219,6 @@ fn a_program_that_asked_is_told_when_the_terminal_loses_and_regains_focus() {
 #[test]
 fn a_click_on_a_written_out_or_osc_8_link_opens_it_through_the_core() {
     let mut s = session(
-        true,
         b"a https://x.te/b ok\r\n\x1b]8;;https://docs.test/\x1b\\the docs\x1b]8;;\x1b\\ here",
     );
     let (x, y) = at(8, 0);
@@ -274,7 +243,7 @@ fn a_click_on_a_written_out_or_osc_8_link_opens_it_through_the_core() {
 #[test]
 fn a_wheel_notch_scrolls_three_lines_of_history_and_a_trackpad_by_its_travel() {
     let lines: String = (1..=30).map(|n| format!("line {n}\r\n")).collect();
-    let mut s = session(true, lines.as_bytes());
+    let mut s = session(lines.as_bytes());
     assert_eq!(s.tab.frame().line(0), "line 27");
     s.tab.wheel(&WheelEvent::new(0.0, 40.0).at(20.0, 20.0));
     assert_eq!(s.tab.frame().line(0), "line 24");
@@ -286,7 +255,7 @@ fn a_wheel_notch_scrolls_three_lines_of_history_and_a_trackpad_by_its_travel() {
 
 #[test]
 fn the_wheel_in_a_full_screen_program_sends_arrows_and_to_a_tracking_one_a_report_a_notch() {
-    let mut s = session(true, b"\x1b[?1049h");
+    let mut s = session(b"\x1b[?1049h");
     s.tab.wheel(&WheelEvent::new(0.0, 40.0).at(20.0, 20.0));
     show(&mut s.tab, b"\x1b[?1000h\x1b[?1006h");
     s.tab.wheel(&WheelEvent::new(0.0, -40.0).at(7.0, 13.0));

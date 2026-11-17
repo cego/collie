@@ -1,6 +1,6 @@
 // A human's message to an agent closes that agent's own open question, with no revision
 // (ADR-draft-a-humans-message-supersedes-a-runs-open-question D4). The host is a real one
-// over a fake herdr, running `reuses`: one agent given two operations in turn.
+// over a fake core, running `reuses`: one agent given two operations in turn.
 
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -49,7 +49,7 @@ test(
   () =>
     proves(
       "collie-own-question-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
@@ -57,8 +57,7 @@ test(
             .writeFileString(outputs, encode([null, { verdict: "built" }]))
             .pipe(Effect.orDie);
           const set = {
-            FAKE_HERDR_OUTPUTS: outputs,
-            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_STATE_DIR: world.state,
             COLLIE_USER_DIR: world.config,
           };
           yield* Effect.acquireRelease(
@@ -78,11 +77,12 @@ test(
           );
           resetExecutors();
           const env = readEnv({
-            HERDR_PLUGIN_ROOT: world.install,
-            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_ROOT: world.install,
+            COLLIE_STATE_DIR: world.state,
             COLLIE_USER_DIR: world.config,
             HOME: world.home,
             COLLIE_CWD: world.project,
+            HC_SOCKET: core.socketPath,
           });
           const client = yield* connect(world.state).pipe(Effect.orDie);
           const { runId } = yield* client
@@ -158,7 +158,7 @@ test(
           );
           expect(done?.status.status).toBe("complete");
           expect(Arr.filter(done?.waiting ?? [], (one) => one.revises === name)).toEqual([]);
-          const log = yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "");
+          const log = yield* fs.readFileString(core.logPath);
           expect(Str.includes("is answered")(log)).toBe(false);
         }).pipe(Effect.provide(recordsAt(world.state)), Effect.ensuring(stopHost(world.state))),
       ["reuses.workflow.ts"],
