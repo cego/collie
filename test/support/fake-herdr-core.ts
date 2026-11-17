@@ -53,6 +53,19 @@ const herdrCall = (args: string[], env: Record<string, string>) =>
     const down = env.FAKE_HERDR_DOWN;
     if (down !== undefined && workspaceList && (yield* exists(down)))
       return { code: 1, stdout: "", stderr: "herdr is not running\n" };
+    // An `agent list` fails while this file exists, as herdr does when its server is down.
+    const agentsDown = env.FAKE_HERDR_AGENTS_DOWN;
+    if (
+      agentsDown !== undefined &&
+      command === "agent" &&
+      subcommand === "list" &&
+      (yield* exists(agentsDown))
+    )
+      return {
+        code: 1,
+        stdout: "",
+        stderr: `${JSON.stringify({ error: { code: "server_not_running", message: "herdr server is not running" } })}\n`,
+      };
     // A `pane list` waits while this file exists, so a test can hold an action mid-way.
     const hold = env.FAKE_HERDR_HOLD_PANE_LIST;
     if (hold !== undefined && command === "pane" && subcommand === "list") yield* whileExists(hold);

@@ -59,7 +59,7 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
   "ci-failed": { kind: "rechecks", neverHeals: true },
   "target-red": { kind: "rechecks" },
   "forge-unavailable": { kind: "rechecks" },
-  "herdr-unavailable": { kind: "rechecks" },
+  "herdr-unavailable": { kind: "rechecks", neverHeals: true },
   "checkout-dirty-collie": { kind: "rechecks" },
   "checkout-dirty-human": {
     kind: "needs-you",
