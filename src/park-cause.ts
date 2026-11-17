@@ -111,10 +111,6 @@ export const parkText = (text: string) =>
 export const parkIdentity = (run: string, cause: ParkCause, evidence: ReadonlyArray<string>) =>
   `${cause}-${Bun.hash(Arr.join([run, cause, ...evidence], "\u0000")).toString(16)}`;
 
-/**
- * Whether a park is owed a Heal: none was claimed for it, or the last one said it could not
- * establish the cause. `ids` is the park's identity and any it had before identities were derived.
- */
 const healLines = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<Metric>) =>
   Arr.filter(
     recoveries,
