@@ -7,7 +7,7 @@ import { forgeOf } from "./forge/forge";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { projectHere, shell, whatItSaid } from "./mr";
 import type { RunView } from "./engine";
-import type { Herdr } from "./herdr";
+import { herdrFailureReason, type Herdr } from "./herdr";
 
 const CiTarget = Schema.fromJsonString(
   Schema.Struct({
@@ -159,8 +159,8 @@ export const recheckPark = (
       case "herdr-unavailable": {
         const read = yield* herdr.agentList().pipe(Effect.result);
         return read._tag === "Success"
-          ? reply(true, "core answered")
-          : reply(false, String(read.failure), true);
+          ? reply(true, "core listed its agents")
+          : reply(false, herdrFailureReason(read.failure), true);
       }
       default:
         return reply(false, "cause has no recheck");

@@ -184,16 +184,18 @@ test(
 );
 
 test(
-  "a core park is rechecked read-only and resumes once core answers",
+  "a core park stays parked while core cannot list its agents, though it answers, and resumes once it can",
   () =>
     proves(
       "collie-recovery-core-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
-          const off = yield* collie(world, ["settings", "set", "recovery.resume", "false"], {
+          const fs = yield* FileSystem.FileSystem;
+          core.refuse("terminal.list", "server_not_running", "core cannot list its terminals");
+          const on = yield* collie(world, ["settings", "set", "recovery.resume", "true"], {
             COLLIE_RECOVERY_EVERY: "100 millis",
           });
-          expect(off.envelope).toMatchObject({ ok: true });
+          expect(on.envelope).toMatchObject({ ok: true });
           const client = yield* connect(world.state).pipe(Effect.orDie);
           const { runId } = yield* client
             .start({
@@ -203,27 +205,43 @@ test(
               input: { cause: "herdr-unavailable", mr: "", file: `${world.home}/fact` },
             })
             .pipe(Effect.orDie);
-          yield* until(
+          const rechecked = <L extends { readonly action?: string }>(lines: ReadonlyArray<L>) =>
+            Arr.filter(lines, (line) => line.action === "rechecked");
+          const down5 = yield* until(
             () => client.runMetrics({ runId }).pipe(Effect.orDie),
             (lines) =>
-              Arr.some(
-                lines,
-                (line) => line.action === "rechecked" && line.note === "core answered",
-              ),
+              rechecked(lines).length >= 5 || Arr.some(lines, (line) => line.action === "resumed"),
           );
-          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.status.status).toBe(
-            "suspended",
-          );
-          yield* (yield* FileSystem.FileSystem)
-            .writeFileString(`${world.home}/fact`, "ready")
-            .pipe(Effect.orDie);
-          yield* collie(world, ["settings", "set", "recovery.resume", "true"]);
+          for (const line of rechecked(down5)) {
+            expect(line.outcome).not.toBe("cleared");
+            expect(line.note).toContain("core cannot list its terminals");
+          }
+          expect(Arr.some(down5, (line) => line.action === "resumed")).toBe(false);
+          expect(
+            Arr.filter(
+              yield* client.runs({ task: null }).pipe(Effect.orDie),
+              (view) => view.heals !== undefined,
+            ),
+          ).toEqual([]);
+          yield* fs.writeFileString(`${world.home}/fact`, "ready").pipe(Effect.orDie);
+          core.restore("terminal.list");
           yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
             (view) => view?.status.status === "complete",
           );
+          const lines = yield* until(
+            () => client.runMetrics({ runId }).pipe(Effect.orDie),
+            (lines) =>
+              Arr.some(lines, (line) => line.action === "resumed" && line.outcome === "resumed"),
+          );
+          expect(
+            Arr.map(
+              Arr.filter(lines, (line) => line.action === "resumed"),
+              (line) => line.outcome,
+            ),
+          ).toEqual(["claimed", "resumed"]);
         }),
-      ["rechecks.workflow.ts"],
+      ["rechecks.workflow.ts", "mender.workflow.ts"],
     ),
   120_000,
 );

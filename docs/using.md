@@ -699,7 +699,10 @@ section adds why a person is needed; `collie run show` gives the same as `park` 
 `cause` and `kind`. A Release whose merge-request pipeline went red and whose CI fix round
 could not move its head reads `Parked: ci-failed · Collie rechecks`. Collie rechecks the
 forge's next head or pipeline and resumes it without a Heal; once its three tries are spent it
-needs you, still without a Heal. Recheck parks stay quiet while Collie checks their facts and resumes
+needs you, still without a Heal. A Run parked `herdr-unavailable` is rechecked by asking
+core to list its agents, as a launch does, so it resumes only once a launch would start;
+once its three tries are spent it needs you without a Heal too, since a Heal launches its
+agent through core. Recheck parks stay quiet while Collie checks their facts and resumes
 those whose cause clears. After three automatic tries for the same cause, another park
 needs you and lists the tries. Before a park tells you it needs you, the host first starts
 one **Heal**, a Run of the [`heal`](workflows.md#heal) workflow whose agent may only message

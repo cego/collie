@@ -586,6 +586,26 @@ test("a ci-failed park whose three resumes ran out needs you and is still never 
   ).toBe("only what its recheck reads can clear its cause");
 });
 
+test("a herdr-unavailable park whose three resumes ran out needs you and is never healed", () => {
+  const resumed = (park: string) => ({
+    at: `2026-11-13T00:00:0${park}Z`,
+    kind: "recovery" as const,
+    subject: "r",
+    value: 0,
+    note: "",
+    cause: "herdr-unavailable" as const,
+    action: "resumed" as const,
+    outcome: "resumed" as const,
+    park,
+  });
+  const recoveries = Arr.map(["1", "2", "3"], resumed);
+  const park = parkWithRecovery({ ...parkOf("herdr-unavailable"), id: "4" }, recoveries);
+  expect(park.kind).toBe("needs-you");
+  expect(
+    passedOver({ cause: park.cause, isHeal: false, on: true, waitsOnYou: false, recoveries }),
+  ).toBe("only what its recheck reads can clear its cause");
+});
+
 test(
   "a park only a person can act on, or one raised while recovery.heal is off, needs you at once and starts no Heal",
   () =>
