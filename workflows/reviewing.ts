@@ -22,6 +22,7 @@ import {
   WorkflowError,
   agentWork,
   contentOf,
+  conflictingDispositions,
   findingKey,
   findingsIn,
   panelOf,
@@ -516,6 +517,9 @@ export const rally = (ask: {
             of: ask.resume === undefined ? ROUNDS : 1,
             disputed,
           });
+          for (const conflict of conflictingDispositions(synthesis)) {
+            yield* host.record(runId, `review ${at}: ${conflict}`);
+          }
           disputed = remainingDisputes(disputed, synthesis);
           const split = splitDisputed(synthesis.findings, disputed);
           const round = settleRound({

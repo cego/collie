@@ -1029,27 +1029,61 @@ export interface Split {
   rebutted: Finding[];
 }
 
-/** A review can confirm a fix or withdraw a disputed finding; silence leaves it unresolved. */
-export function remainingDisputes(
-  disputed: ReadonlyArray<Finding>,
-  review: {
-    readonly findings: ReadonlyArray<Finding>;
-    readonly disputed: ReadonlyArray<Finding>;
-    readonly dropped: ReadonlyArray<Finding>;
-    readonly fixed: ReadonlyArray<Fixed>;
-  },
-): Finding[] {
-  const standing = new Set(Arr.map([...review.findings, ...review.disputed], findingKey));
-  const resolved = new Set(
-    Arr.map(
-      [...review.fixed, ...Arr.filter(review.dropped, (one) => Str.trim(one.reason ?? "") !== "")],
-      findingKey,
-    ),
+type Disposed = {
+  readonly findings: ReadonlyArray<Finding>;
+  readonly disputed: ReadonlyArray<Finding>;
+  readonly dropped: ReadonlyArray<Finding>;
+  readonly fixed: ReadonlyArray<Fixed>;
+};
+
+const isOpen = (finding: Finding) =>
+  finding.status === undefined || finding.status === "open" || finding.status === "disputed";
+
+function standingIn(review: Disposed): Finding[] {
+  return [...Arr.filter(review.findings, isOpen), ...review.disputed];
+}
+
+const withdrawnIn = (review: Disposed) =>
+  Arr.filter(review.dropped, (one) => Str.trim(one.reason ?? "") !== "");
+
+function sameEvidence(left: Finding, right: Finding): boolean {
+  return (
+    findingKey(left) === findingKey(right) &&
+    left.line === right.line &&
+    Str.trim(left.detail ?? "") === Str.trim(right.detail ?? "")
   );
+}
+
+/**
+ * A review can confirm a fix or withdraw a disputed finding; silence leaves it unresolved.
+ * Raised again open with the same evidence, it stands; with new evidence it is a new finding.
+ */
+export function remainingDisputes(disputed: ReadonlyArray<Finding>, review: Disposed): Finding[] {
+  const standing = standingIn(review);
+  const resolved = new Set(Arr.map([...review.fixed, ...withdrawnIn(review)], findingKey));
   return Arr.filter(
     disputed,
-    (one) => standing.has(findingKey(one)) || !resolved.has(findingKey(one)),
+    (one) =>
+      !resolved.has(findingKey(one)) || Arr.some(standing, (echo) => sameEvidence(echo, one)),
   );
+}
+
+/** One line per finding a review both raises open and resolves, for the human to settle. */
+export function conflictingDispositions(review: Disposed): string[] {
+  const withdrawn = withdrawnIn(review);
+  const lines = Arr.flatMap(standingIn(review), (one) => {
+    const resolutions = [
+      ...(Arr.some(withdrawn, (drop) => sameEvidence(drop, one)) ? ["withdrawn"] : []),
+      ...(Arr.some(review.fixed, (fix) => findingKey(fix) === findingKey(one)) ? ["fixed"] : []),
+    ];
+    if (resolutions.length === 0) return [];
+    const raised = one.status === "disputed" || review.disputed.includes(one) ? "disputed" : "open";
+    const at = one.file ? ` (${one.file})` : "";
+    return [
+      `conflicting dispositions of [${one.severity}] ${one.title}${at}: ${Arr.join([raised, ...resolutions], " and ")}`,
+    ];
+  });
+  return [...new Set(lines)];
 }
 
 /**

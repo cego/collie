@@ -1521,9 +1521,14 @@ rally converges, stands on a dispute and runs out of rounds where these decide.
 
 - **`remainingDisputes(disputed, review)`** — keep carried disputes unless the review
   explicitly confirms them `fixed` or withdraws them under `dropped` with a reason.
-  Matching uses file and title. A finding still in the review's `findings` or `disputed`
-  stays unresolved, even if also listed as resolved. A clean verdict or omission clears
-  nothing. Assign the returned list before splitting and settling the round.
+  Matching uses file and title. An echo in `findings` marked `fixed` or `obsolete` does not
+  hold it open. Raised again open (`open`, no status, or `disputed`) with the same line and
+  detail, it stays unresolved, even if also listed as resolved; with a changed line or
+  detail it is a new finding and the dispute still resolves. A clean verdict or omission
+  clears nothing. Assign the returned list before splitting and settling the round.
+- **`conflictingDispositions(review)`** — one line per finding the review both raises open
+  and withdraws or confirms fixed. The shipped rally records each in the Run's log as
+  `review <n>: conflicting dispositions of …`; the dispute stays for the human.
 - **`splitDisputed(findings, disputed)`** — what is still the implementer's. A finding the
   implementer already rejected with a reason stops driving the loop; a reviewer who answers
   that reason with a `rebuttal` puts it back.

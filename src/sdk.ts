@@ -206,6 +206,7 @@ export {
   afterMergeAnswers,
   answerFor,
   blockingKeys,
+  conflictingDispositions,
   findingKey,
   sameFinding,
   formatFindings,

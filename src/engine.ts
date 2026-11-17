@@ -2282,6 +2282,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly fixed: ReadonlyArray<Fixed>;
     },
   ): Finding[];
+  /** One line per finding a review both raises open and resolves. */
+  export function conflictingDispositions(review: {
+    readonly findings: ReadonlyArray<Finding>;
+    readonly disputed: ReadonlyArray<Finding>;
+    readonly dropped: ReadonlyArray<Finding>;
+    readonly fixed: ReadonlyArray<Fixed>;
+  }): string[];
   /** A finding the implementer already rejected stops driving the loop. */
   export function splitDisputed(
     findings: ReadonlyArray<Finding>,

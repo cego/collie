@@ -10726,6 +10726,110 @@ scenario(
 );
 
 scenario(
+  "a blocking dispute the next review withdraws with a reason and echoes as obsolete reaches the merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-withdrawn", ["unit"]);
+        const finding = {
+          severity: "blocker",
+          title: "the guard is on the wrong side",
+          file: "src/a.ts",
+        };
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...finding, reason: "the list is never empty here" }],
+            checks: [{ name: "unit" }],
+          },
+          // As the hc cutover's review did: withdrawn, and listed again as obsolete.
+          {
+            ...CLEAN_SYNTHESIS,
+            findings: [{ ...finding, status: "obsolete" }],
+            dropped: [{ ...finding, reason: "The caller never passes an empty list." }],
+          },
+          OPENED,
+        ]);
+        const [status, why] = yield* driven(
+          { entry: shipped("implement"), runId: "r-impl-withdrawn", input: { plan, ...FINISH } },
+          (run) =>
+            until(
+              () => Effect.zip(run.status, parkedWhy("r-impl-withdrawn")),
+              ([got, parked]) =>
+                got.status === "failed" ||
+                got.status === "complete" ||
+                (got.status === "suspended" && parked !== ""),
+            ),
+        );
+        yield* bin.restore();
+
+        expect({ status: status.status, why }).toEqual({ status: "complete", why: "" });
+        expect(yield* wasAsked("r-impl-withdrawn", "mr")).toBe(true);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a review that withdraws a dispute and raises it again unchanged parks, and its log names the conflict",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-conflict", ["unit"]);
+        const finding = {
+          severity: "blocker",
+          title: "the guard is on the wrong side",
+          file: "src/a.ts",
+        };
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...finding, reason: "the list is never empty here" }],
+            checks: [{ name: "unit" }],
+          },
+          {
+            ...CLEAN_SYNTHESIS,
+            verdict: "findings",
+            findings: [finding],
+            dropped: [{ ...finding, reason: "The caller never passes an empty list." }],
+          },
+          OPENED,
+        ]);
+        yield* driven(
+          { entry: shipped("implement"), runId: "r-impl-conflict", input: { plan, ...FINISH } },
+          (run) => stepPark(run, "r-impl-conflict", "disputed blocking finding"),
+        );
+        yield* bin.restore();
+
+        expect(yield* wasAsked("r-impl-conflict", "mr")).toBe(false);
+        const log = yield* (yield* FileSystem.FileSystem).readFileString(
+          `${runDir(dir, "r-impl-conflict")}/log.txt`,
+        );
+        expect(log).toContain(
+          "review 2: conflicting dispositions of [blocker] the guard is on the wrong side (src/a.ts): open and withdrawn",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a blocking dispute the next review repeats as minor stays a blocker on the card",
   () =>
     runEffect(
