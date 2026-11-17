@@ -10725,6 +10725,62 @@ scenario(
   120_000,
 );
 
+for (const backend of ["herdr", "core"] as const)
+  scenario(
+    `a Run parked for missing Output that parks again the same way after a host restart is one park with one Heal, on ${backend}`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          if (backend === "core") {
+            yield* rig.startCore();
+            yield* fs.writeFileString(
+              `${rig.userDir}/config.json`,
+              asJson({ terminal_backend: "core" }),
+            );
+          }
+          const runId = `r-reparked-${backend}`;
+          const bin = yield* FakeBin.make(`${rig.root}/bin`);
+          yield* noGitlabMrs(bin);
+          yield* repository();
+          const plan = yield* planOf([
+            { file: "01-only.md", title: "the only one", checks: "unit" },
+          ]);
+          yield* approve(runId, ["unit"]);
+          yield* rig.queueOutputs([null, null, null, null, null, null]);
+          const options = { entry: shipped("implement"), runId, input: { plan, ...FINISH } };
+          yield* parkedOn(options);
+          const cause = yield* parkedCause(runId);
+          // As the restarted host's registration does for a Run it enters again.
+          yield* clearControl(PARKED, runId);
+          yield* driven({ ...options, restarted: true }, () =>
+            until(
+              () => parkedWhy(runId),
+              (why) => why !== "",
+            ),
+          );
+          yield* bin.restore();
+
+          const lines = yield* readMetrics(evidenceDir(dir, runId)).pipe(
+            Effect.provide(recordsAt(dir)),
+          );
+          const parks = Arr.filter(lines, (line) => line.kind === "halt");
+          expect(yield* parkedCause(runId)).toBe(cause);
+          expect(Arr.some(yield* rig.calls(), (call) => call.transport === "core")).toBe(
+            backend === "core",
+          );
+          expect(parks).toHaveLength(2);
+          expect(parks[1]!.park).toBe(parks[0]!.park);
+          expect(
+            new Set(
+              Arr.flatMap(lines, (line) => (line.action === "healed" ? [line.recoveryId] : [])),
+            ).size,
+          ).toBe(1);
+        }),
+      ),
+    120_000,
+  );
+
 scenario(
   "a blocking dispute the next review withdraws with a reason and echoes as obsolete reaches the merge request",
   () =>

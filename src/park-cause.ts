@@ -3,7 +3,7 @@
 
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import { Schema } from "effect";
+import { Schema, pipe } from "effect";
 import type { Metric } from "./metrics";
 
 export const ParkCause = Schema.Literals([
@@ -14,6 +14,7 @@ export const ParkCause = Schema.Literals([
   "target-red",
   "forge-unavailable",
   "herdr-unavailable",
+  "delivery-unsettled",
   "checkout-dirty-collie",
   "checkout-dirty-human",
   "login-missing",
@@ -60,6 +61,7 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
   "target-red": { kind: "rechecks" },
   "forge-unavailable": { kind: "rechecks" },
   "herdr-unavailable": { kind: "rechecks", neverHeals: true },
+  "delivery-unsettled": { kind: "rechecks", neverHeals: true },
   "checkout-dirty-collie": { kind: "rechecks" },
   "checkout-dirty-human": {
     kind: "needs-you",
@@ -96,6 +98,31 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
 
 export const parkOf = (cause: ParkCause): Park => ({ cause, kind: PARK_CAUSES[cause].kind });
 
+/** A park's text with the times, ids and counts that differ between two tellings removed. */
+export const parkText = (text: string) =>
+  pipe(
+    text,
+    Str.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<time>"),
+    Str.replace(/\b(?=[0-9a-f-]*\d)[0-9a-f]{7,}(?:-[0-9a-f]+)*\b/gi, "<id>"),
+    Str.replace(/\d+/g, "<n>"),
+  );
+
+/** The same Run parked for the same cause on the same evidence is the same park. */
+export const parkIdentity = (run: string, cause: ParkCause, evidence: ReadonlyArray<string>) =>
+  `${cause}-${Bun.hash(Arr.join([run, cause, ...evidence], "\u0000")).toString(16)}`;
+
+/**
+ * Whether a park is owed a Heal: none was claimed for it, or the last one said it could not
+ * establish the cause. `ids` is the park's identity and any it had before identities were derived.
+ */
+export const healOwed = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<Metric>) => {
+  const heals = Arr.filter(
+    recoveries,
+    (line) => line.action === "healed" && line.park !== undefined && ids.includes(line.park),
+  );
+  return heals.length === 0 || heals.at(-1)?.diagnosisComplete === false;
+};
+
 export const recoveryLine = (line: Metric) =>
   `${line.at}: ${line.action} ${line.outcome} — ${line.note}`;
 
@@ -106,7 +133,14 @@ export const healInFlight = (line: Metric) =>
 export const parkWithRecovery = (park: Park, actions: ReadonlyArray<Metric>): Park => {
   const same = Arr.filter(actions, (line) => line.cause === park.cause);
   const tries = Arr.filter(same, (line) => line.action === "resumed" && line.outcome !== "skipped");
-  const exhausted = tries.length >= 3 && Arr.every(tries, (line) => line.park !== park.id);
+  // Tries before this park began, which a park entered again as the same park can follow.
+  const exhausted =
+    tries.length >= 3 &&
+    Arr.every(
+      tries,
+      (line) =>
+        line.park !== park.id || (park.since !== undefined && (line.since ?? line.at) < park.since),
+    );
   const heals = Arr.filter(
     actions,
     (line) => line.action === "healed" && line.park === park.id && line.outcome !== "skipped",

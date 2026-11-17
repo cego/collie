@@ -107,7 +107,7 @@ import {
   type CompactionOutcome,
   type CompactionPorts,
 } from "../src/compaction";
-import { COMPACTION_PORTS, questionsSince, recordClaudeEvent } from "../src/compactors";
+import { COMPACTION_PORTS, questionsSince, recordClaudeEvent, writeEvent } from "../src/compactors";
 import { hostLockOf } from "../src/lock";
 import { claudeTrust } from "../src/trust";
 import { FALLBACK_DEFAULTS } from "../src/settings";
@@ -2745,6 +2745,103 @@ test(
         );
         expect(result._tag === "Success" && result.success.note).toBe("late");
         expect(yield* reminders).toHaveLength(1);
+      }),
+    ),
+  60_000,
+);
+
+/** Turns whose first reminder is reserved and never answered, as a host stopped mid-send leaves it. */
+class HeldReminder extends Turns {
+  private held = false;
+  protected override exec(args: string[]) {
+    if (
+      !this.held &&
+      args[0] === "agent" &&
+      args[1] === "prompt" &&
+      pipe(args[3] ?? "", Str.includes(REMINDER))
+    ) {
+      this.held = true;
+      return Effect.never;
+    }
+    return super.exec(args);
+  }
+}
+
+/** The first reminder's delivery, once the ledger holds it. */
+const heldReminder = (runId: string) =>
+  Effect.map(deliveredTo(dir, runId), (deliveries) =>
+    Arr.findFirst(deliveries, (one) => pipe(one.cause.ref, Str.endsWith(".remind-1"))),
+  );
+
+/** A Run stopped with its first reminder unsettled, then entered again by a host that starts. */
+const enteredBehindHeldReminder = (landed: boolean) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* rig.queueOutputs([null, null, null]);
+    yield* interrupted(
+      "r1",
+      Effect.map(heldReminder("r1"), Option.isSome).pipe(Effect.orElseSucceed(() => false)),
+      { herdr: new HeldReminder(), collectMs: 600_000 },
+    );
+    const held = Option.getOrThrow(yield* heldReminder("r1"));
+    if (landed)
+      yield* writeEvent(yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")), {
+        session: null,
+        kind: "submit",
+        reason: "collie",
+        delivery: held.id,
+      });
+    const result = yield* session(
+      Effect.raceFirst(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* TestClock.withLive(Effect.sleep("500 millis"));
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+          return yield* Fiber.join(fiber);
+        }),
+        untilParked("r1"),
+      ),
+      { herdr: new Turns(), collectMs: 600_000 },
+    );
+    const now = Option.getOrUndefined(
+      Arr.findLast(
+        yield* ledgerOf(dir, held.incarnation),
+        (line) => "id" in line && line.id === held.id,
+      ),
+    );
+    return { result, now };
+  });
+
+test(
+  "a reminder held behind an earlier copy that landed settles it and is not parked",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { result, now } = yield* enteredBehindHeldReminder(true);
+        expect(result !== "parked" && result._tag === "Success" && result.success.note).toBe(
+          "late",
+        );
+        expect(now).toMatchObject({ state: "acknowledged" });
+        expect(yield* halts("r1")).toEqual([]);
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a reminder held behind an earlier copy that never landed parks as delivery-unsettled and claims no Heal",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { result, now } = yield* enteredBehindHeldReminder(false);
+        expect(result).toBe("parked");
+        expect(now).not.toMatchObject({ state: "acknowledged" });
+        expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("delivery-unsettled");
+        const recoveries = Arr.filter(
+          yield* readMetrics(evidenceDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
+          (line) => line.kind === "recovery" && line.action === "healed",
+        );
+        expect(recoveries).toEqual([]);
       }),
     ),
   60_000,

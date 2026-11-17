@@ -104,6 +104,8 @@ export const MetricSchema = Schema.Struct({
   entries: Schema.optionalKey(Schema.Int),
   /** The Heal Run a `healed` line is about. */
   heal: Schema.optionalKey(Schema.String),
+  /** False where a judged Heal said it could not establish the cause. */
+  diagnosisComplete: Schema.optionalKey(Schema.Boolean),
   /** What a Heal found about Collie, as its Output said it. */
   finding: Schema.optionalKey(HealFinding),
   /** A `report` line's standing, and the issue it was filed as or linked to. */

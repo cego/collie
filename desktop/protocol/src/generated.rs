@@ -272,6 +272,8 @@ pub enum Cause {
     ForgeUnavailable,
     #[serde(rename = "herdr-unavailable")]
     HerdrUnavailable,
+    #[serde(rename = "delivery-unsettled")]
+    DeliveryUnsettled,
     #[serde(rename = "checkout-dirty-collie")]
     CheckoutDirtyCollie,
     #[serde(rename = "checkout-dirty-human")]

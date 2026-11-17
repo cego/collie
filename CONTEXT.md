@@ -484,8 +484,11 @@ rather than what the step was doing.
 
 **Park cause** — Why a Run parked, from one closed list: what the host may do about it.
 A cause either asks the Run's own agent something, or rechecks the fact it parked on, or
-needs you and says why. An unclassified park is `unknown`, never a guess. Counted per cause
-in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
+needs you and says why. An unclassified park is `unknown`, never a guess. A park's identity is
+derived from the Run, its cause and the evidence that cause is about, so parking again on the
+same evidence after a restart, resume or hand-over is the same park. `delivery-unsettled` is a
+reminder held behind an earlier delivery nobody can settle; it rechecks and never heals.
+Counted per cause in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
 
 **Recovery** — What the host does about a park, without being asked: an **Output reminder**
 to an agent whose turn ended without writing its Output, and a resume once a recheck shows the
@@ -496,7 +499,8 @@ fact the park waited for, never by inactivity or an acknowledgement. It never an
 **Heal** — A Run the host starts for a park its **Recovery** could not clear, before the park
 needs you: its agent may only message the parked Run's own agents and resume it. Judged by
 the parked Run's facts, never its Output, and it always records a finding for everyone who
-runs Collie. One per park, three per Run, one at a time per Machine; never for a Run with a
+runs Collie. One per park's identity, and another only when the last said its diagnosis is
+incomplete; three per Run, one at a time per Machine; never for a Run with a
 **Decision**, **Hold** or **Stop**, or for a Heal (ADR-draft-a-run-recovers-where-it-parks).
 
 **Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,

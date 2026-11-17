@@ -159,7 +159,7 @@ import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { followRequest } from "./follow-through";
 import { EngineTouches, engineTouchesLayer, touching } from "./engine-touches";
 import { ciJob, sharedFailure, takeTarget } from "./ci-job";
-import { rememberFailedCi } from "./park-recheck";
+import { parkEvidence, rememberFailedCi } from "./park-recheck";
 import { land, LandingSchema, readLanding, takeOver } from "./landing";
 import {
   carried,
@@ -207,6 +207,8 @@ import {
   healInFlight,
   parkOf,
   parkWithRecovery,
+  healOwed,
+  parkIdentity,
   recoveryLine,
 } from "./park-cause";
 import { healOn, healRequest, healerFor, passedOver } from "./heal";
@@ -5180,9 +5182,23 @@ export const hostLayer = (options: {
                   const before = Option.fromNullishOr(yield* runRecords.control(PARKED, runId));
                   const causeBefore = parkCauseOf(yield* runRecords.control(PARK_CAUSE, runId));
                   let info = yield* parkInfoOf(yield* runRecords.control(PARK_INFO, runId));
+                  // One recorded before identities were derived keeps the Heals it already had.
+                  const legacy =
+                    info?.cause === cause &&
+                    info.id !== undefined &&
+                    !Str.startsWith(`${cause}-`)(info.id)
+                      ? [info.id]
+                      : [];
                   if (Option.isNone(before) || causeBefore !== cause || info === null) {
-                    const since = yield* nowIso;
-                    info = { ...parkOf(cause), id: `${since}-${yield* Random.nextInt}`, since };
+                    const tree = yield* treeOf(yield* store.run(runId), runId, dir);
+                    const id = parkIdentity(
+                      runId,
+                      cause,
+                      yield* under(parkEvidence(dir, runId, tree.cwd, cause, why)).pipe(
+                        Effect.provideContext(bun),
+                      ),
+                    );
+                    info = { ...parkOf(cause), id, since: yield* nowIso };
                     yield* put(
                       PARK_INFO,
                       yield* Schema.encodeEffect(ParkJson)(info).pipe(Effect.orDie),
@@ -5202,10 +5218,7 @@ export const hostLayer = (options: {
                   const healing = Arr.findFirst(recoveries, healInFlight);
                   const claims =
                     park.kind !== "rechecks" &&
-                    !Arr.some(
-                      recoveries,
-                      (line) => line.action === "healed" && line.park === park.id,
-                    ) &&
+                    healOwed([park.id!, ...legacy], recoveries) &&
                     // A park its Heal caused again is that Heal's to settle.
                     !(healing._tag === "Some" && healing.value.cause === cause);
                   const passed = claims ? yield* passedOverHere(runId, cause, recoveries) : null;
@@ -5222,6 +5235,7 @@ export const hostLayer = (options: {
                         cause,
                         build: manifest.version,
                         park: info!.id,
+                        since: info!.since,
                       });
                     }),
                   );
@@ -5237,7 +5251,14 @@ export const hostLayer = (options: {
                       build: manifest.version,
                       action: "healed",
                       outcome: passed === null ? "claimed" : "skipped",
-                      recoveryId: healRequest(runId, park.id!),
+                      recoveryId: healRequest(
+                        runId,
+                        park.id!,
+                        Arr.filter(
+                          recoveries,
+                          (line) => line.action === "healed" && line.park === park.id,
+                        ).length + 1,
+                      ),
                       park: park.id,
                       since: park.since,
                     }),

@@ -231,13 +231,18 @@ import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } fro
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
+  appendLine,
   causalKey,
   deliveriesAbout,
   deliveriesOf,
+  isSettledDelivery,
   isUnobserved,
+  newestById,
+  readLedger,
   SENT_STATES,
   toldLine,
 } from "./steering";
+import { rememberUnsettled } from "./park-recheck";
 import type { Records } from "./records";
 import { RELAUNCH, RunRecords } from "./run-records";
 import { readTask, withTaskLock, writeTask } from "./task";
@@ -2192,11 +2197,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         observed: outcome.held === "acknowledged" ? "taken when it was first sent" : null,
         pane,
       };
+    const terminal = entry.incarnation?.terminalId;
     return {
       sent: false,
       why: `${outcome.reason}: ${outcome.detail}`,
       refused: outcome.reason === "exhausted",
       gone: inactive(outcome.detail),
+      blockedBy:
+        outcome.reason === "blocked" && outcome.id != null && terminal !== undefined
+          ? { terminal, delivery: outcome.id }
+          : undefined,
     };
   });
 
@@ -3554,6 +3564,32 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       }),
     );
 
+  /**
+   * Whether a delivery blocking a reminder is settled, settling it as sent where the agent's
+   * own submit record shows it landed.
+   */
+  const settledNow = (launched: Launched, held: { terminal: string; delivery: string }) =>
+    Effect.gen(function* () {
+      const lines = yield* readLedger(held.terminal);
+      const now = newestById(lines).get(held.delivery);
+      if (now === undefined || isSettledDelivery(now)) return true;
+      const dir = yield* controlDir(host.env.stateDir, launched.agent);
+      if (!(yield* submittedDelivery(dir, held.delivery).pipe(Effect.orElseSucceed(() => false))))
+        return false;
+      // As `confirmSubmitted` settles one its agent took.
+      yield* appendLine({
+        ...now,
+        at: yield* nowIso,
+        state: "acknowledged",
+        note: "taken: its submit hook recorded it",
+      });
+      yield* log(
+        launched.runId,
+        `${launched.agent}: ${held.delivery} had landed; settled it as sent`,
+      );
+      return true;
+    });
+
   const remind = (launched: Launched, ordinal: number) =>
     under(
       Effect.gen(function* () {
@@ -3561,20 +3597,40 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           kind: "repair",
           ref: `${stemOf(launched)}.remind-${ordinal}`,
         });
+        const held = sent.sent ? undefined : sent.blockedBy;
+        if (held !== undefined) {
+          const settled =
+            (yield* settledNow(launched, held)) ||
+            (yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS)).pipe(
+              Effect.andThen(settledNow(launched, held)),
+            ));
+          if (!settled) {
+            yield* rememberUnsettled(`${host.dir}/runs/${launched.runId}`, held);
+            return yield* new AgentParked({
+              operation: launched.operation,
+              reason: `${launched.agent} could not be reminded to write ${launched.operation}.json: delivery ${held.delivery} has not settled. Collie rechecks it; \`collie run deliveries ${launched.runId} --reconcile ${held.delivery} --as sent|not-sent\` settles it now.`,
+              cause: "delivery-unsettled",
+            });
+          }
+        }
+        // A reminder is held only by an earlier copy of itself, so one that landed was sent.
+        const wasSent = sent.sent || held !== undefined;
         yield* log(
           launched.runId,
-          sent.sent
+          wasSent
             ? `${launched.agent}: ended its turn without ${launched.operation}.json, so was reminded to write it (${ordinal} of ${OUTPUT_REMINDERS})`
             : `${launched.agent}: ended its turn without ${launched.operation}.json, and could not be reminded to write it (${sent.why})`,
         );
-        if (sent.sent) yield* reminded(launched, ordinal, "still-absent", 0);
-        return sent.sent ? yield* nowIso : null;
+        if (wasSent) yield* reminded(launched, ordinal, "still-absent", 0);
+        return wasSent ? yield* nowIso : null;
       }).pipe(
-        Effect.catch((cause) =>
-          log(
-            launched.runId,
-            `${launched.agent}: could not be reminded to write ${launched.operation}.json (${reason(cause)})`,
-          ).pipe(Effect.as(null)),
+        Effect.catchIf(
+          (cause) => !isParked(cause),
+          (cause) =>
+            log(
+              launched.runId,
+              `${launched.agent}: could not be reminded to write ${launched.operation}.json (${reason(cause)})`,
+            ).pipe(Effect.as(null)),
         ),
       ),
     );

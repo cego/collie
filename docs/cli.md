@@ -1038,7 +1038,11 @@ for Output. An unresolved delivery stays uncertain.
 
 A park whose cause rechecks can resume automatically. The host checks for the named CI job
 at the parked head, an answering forge, herdr listing its agents as a launch asks it to (on
-the Machine's terminal backend), or a clean Collie checkout. Rechecks start
+the Machine's terminal backend), a clean Collie checkout, or a delivery that has settled.
+`delivery-unsettled` is set when an Output reminder is held behind an earlier copy of itself
+whose fate nobody knows: the host first settles that copy as sent where the agent's own
+submit record shows it landed, and checks once more after a poll, and only then parks. It
+never gets a Heal. Rechecks start
 after one minute and double up to one hour. Host startup, a peer reconnecting, or a matching
 forge or pipeline update resets that wait to one minute. The resumed Step still runs its own gate.
 
@@ -1054,14 +1058,26 @@ rechecks are still recorded. Set it to `true` to turn it on again, its default. 
 recheck rounds in a row raise one News item, `recovery-failing:<machine>`, which clears
 after a successful round. A failed round resumes nothing.
 
+A park's identity, `<cause>-<hash>`, is derived from the Run, its cause and the evidence that
+cause is about: the head and job a CI cause rechecks, the delivery a `delivery-unsettled` park
+waits on, and for any other cause the Step it parked in, the checkout's head and its words
+with times, ids and counts left out. The park keeps it while it stays parked, however its
+words change. A Run that parks again on the same evidence, after a restart, a resume or a
+hand-over to the engine, is the same park; a changed cause or evidence is a new one. A park
+recorded before identities were derived is given one when it next parks, and keeps the
+Heals it already had.
+
 A park that would need you, a needs-you cause or a recheck cause past its three resumes,
-first gets one **Heal**: a Run of the workflow that declares `heals: true`, the shipped
-[`heal`](workflows.md#heal) unless a project forks it. The host starts it with Actor `host`,
-request id `heal:<run>:<park>` and the input `{ run, park }`, in the parked Run's Task, and
+first gets a **Heal**: a Run of the workflow that declares `heals: true`, the shipped
+[`heal`](workflows.md#heal) unless a project forks it. A park gets one when no Heal is
+recorded for its identity, or when its last Heal said `diagnosis_complete: false`; a Heal
+whose Output does not say reads as complete. The host starts it with Actor `host`, request id
+`heal:<run>:<park>` (`heal:<run>:<park>:<n>` for the park's nth) and the input
+`{ run, park }`, in the parked Run's Task, and
 its record says which Run it heals. Its agent may read everything about the parked Run, and
 may only `deliver` or `steer` to the parked Run's agents and `resume` it; the host refuses
 every other operation from it, naming the Run it heals. It never answers a Decision, lifts
-a Hold, undoes a Stop, writes code or merges. One Heal per park and three per Run; one runs
+a Hold, undoes a Stop, writes code or merges. Three per Run; one runs
 at a time on a Machine and none while it is Short of memory. No Heal starts for a Run with
 a Decision, Hold or Stop, for a cause only a person can act on (`checkout-dirty-human`,
 `login-missing`, `branch-force-pushed`), for a park of a Heal, or with

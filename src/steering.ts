@@ -464,6 +464,13 @@ export const isUnobserved = (delivery: Delivery) =>
     ),
   ) === true;
 
+/** Neither in flight nor of unknown fate: nothing about it blocks its work any more. */
+export const isSettledDelivery = (delivery: Delivery) =>
+  delivery.state !== "reserved" &&
+  delivery.state !== "deferred" &&
+  delivery.state !== "unknown" &&
+  !isUnobserved(delivery);
+
 /**
  * An explicit account of an unknown or unobserved delivery. Callers establish whether it
  * was sent; a timeout alone never supplies an answer or authorizes a resend.

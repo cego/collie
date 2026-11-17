@@ -143,7 +143,7 @@ export const recoverParks = <E, R>(opts: {
                 PARK_CAUSES[view.park.cause].kind !== "rechecks"
               )
                 return;
-              const key = `${view.runId}:${view.park.id ?? view.created}`;
+              const key = `${view.runId}:${view.park.id ?? view.created}:${view.park.since ?? ""}`;
               present.add(key);
               const now = yield* Clock.currentTimeMillis;
               const event = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
@@ -391,7 +391,10 @@ export const healParks = <E, R, E2, R2>(opts: {
           const output = Option.getOrNull(
             Schema.decodeUnknownOption(HealOutput)(heal.status.value),
           );
-          const finding = output === null ? {} : { finding: output.finding };
+          const finding = {
+            ...(output === null ? {} : { finding: output.finding }),
+            ...(output?.diagnosis_complete === false && { diagnosisComplete: false }),
+          };
           const words = said(output, heal.runId);
           let report: ReportAddress | undefined = output?.report;
           const catalogue = yield* Effect.serviceOption(Artefacts);

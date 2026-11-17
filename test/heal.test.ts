@@ -521,7 +521,7 @@ test(
           const { runId, client } = yield* started(
             world,
             "parks-for",
-            { causes: "unknown,unknown", entries: `${world.home}/entries` },
+            { causes: "unknown,step-failed", entries: `${world.home}/entries` },
             {
               FAKE_HERDR_OUTPUTS: yield* queued(world, [null]),
               FAKE_HERDR_AGENT_STATUS_FILE: status,
@@ -791,6 +791,15 @@ test(
     ),
   120_000,
 );
+
+test("a Heal's Output may say whether its diagnosis is complete, and only as a boolean", () => {
+  const resumed = { diagnosis: "It waits.", actions: [], result: "resumed", finding: FINDING };
+  const decoded = (said: object) => Schema.decodeUnknownOption(HealOutput)({ ...resumed, ...said });
+  expect(Option.getOrThrow(decoded({})).diagnosis_complete).toBeUndefined();
+  expect(Option.getOrThrow(decoded({ diagnosis_complete: true })).diagnosis_complete).toBe(true);
+  expect(Option.getOrThrow(decoded({ diagnosis_complete: false })).diagnosis_complete).toBe(false);
+  expect(Option.isNone(decoded({ diagnosis_complete: "no" }))).toBe(true);
+});
 
 test("a Heal's Output that escalates must say why a person is needed", () => {
   const escalated = {
