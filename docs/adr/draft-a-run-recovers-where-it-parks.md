@@ -92,7 +92,9 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
     clean?". `ci-failed` rechecks a red merge-request pipeline: it clears once the forge shows
     a head other than the one that failed, a pipeline at that head that is no longer failed,
     or the merge request merged or closed. A Review wait's own poll and the Run's CI fix round
-    can still clear it, so it never goes to a Heal.
+    can still clear it, so it never goes to a Heal. `herdr-unavailable` rechecks by listing
+    agents as a launch does, on whichever terminal backend the Machine is set to, so it clears
+    only when a launch's first call would succeed.
   - **`needs you`:** what the host cannot do about it alone, such as an Output still
     absent after two reminders, a failure that parks its Step for correcting (`step-failed`,
     [ADR-draft-a-fixable-failure-parks-its-step](draft-a-fixable-failure-parks-its-step.md)),
@@ -100,7 +102,9 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
   - **`never heals`:** set on a cause only a person can act on, such as a missing login, a
     force-push, a human's dirty checkout, or a Review wait held by requested changes or a
     forge that will not merge (`review-blocked`), whose own poll leaves the park once that is
-    repaired. That park goes straight to you, without a Heal (D7).
+    repaired. That park goes straight to you, without a Heal (D7). It is also set on
+    `herdr-unavailable`: a Heal launches its agent through herdr too, so it cannot run while
+    herdr cannot list agents.
 - **What it shows:** the cause, each recovery action taken, and that action's outcome. The
   Run's record shows them, and so do the card, `run show` and chat's reads.
 
@@ -189,7 +193,8 @@ red target and escalated.)
   - A cause can declare that it never heals, because only a person can act on it: a missing
     login, a force-pushed branch, a human's dirty checkout. Those go straight to you. So does
     `ci-failed` once its recheck budget is spent, since only the forge's next head or pipeline
-    clears it.
+    clears it, and so does `herdr-unavailable`, since a Heal cannot launch its agent while
+    herdr cannot list agents.
 - **What a Heal is:** a Run of a shipped workflow, a module like any other (ADR-0026). It
   runs on the parked Run's Machine and in its Task's workspace.
 - **What it may read:** the parked Run's whole record, its agents' panes and transcripts, its

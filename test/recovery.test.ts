@@ -185,17 +185,21 @@ test(
 );
 
 test(
-  "a herdr park is rechecked read-only and resumes once herdr answers",
+  "a herdr park stays parked while herdr cannot list its agents, though it lists its sessions, and resumes once it can",
   () =>
     proves(
       "collie-recovery-herdr-",
       (world) =>
         Effect.gen(function* () {
-          const off = yield* collie(world, ["settings", "set", "recovery.resume", "false"], {
+          const fs = yield* FileSystem.FileSystem;
+          const down = `${world.home}/agents-down`;
+          yield* fs.writeFileString(down, "").pipe(Effect.orDie);
+          const on = yield* collie(world, ["settings", "set", "recovery.resume", "true"], {
             COLLIE_RECOVERY_EVERY: "100 millis",
             FAKE_HERDR_SESSIONS: "[]",
+            FAKE_HERDR_AGENTS_DOWN: down,
           });
-          expect(off.envelope).toMatchObject({ ok: true });
+          expect(on.envelope).toMatchObject({ ok: true });
           const client = yield* connect(world.state).pipe(Effect.orDie);
           const { runId } = yield* client
             .start({
@@ -205,27 +209,43 @@ test(
               input: { cause: "herdr-unavailable", mr: "", file: `${world.home}/fact` },
             })
             .pipe(Effect.orDie);
-          yield* until(
+          const rechecked = <L extends { readonly action?: string }>(lines: ReadonlyArray<L>) =>
+            Arr.filter(lines, (line) => line.action === "rechecked");
+          const down5 = yield* until(
             () => client.runMetrics({ runId }).pipe(Effect.orDie),
             (lines) =>
-              Arr.some(
-                lines,
-                (line) => line.action === "rechecked" && line.note === "herdr answered",
-              ),
+              rechecked(lines).length >= 5 || Arr.some(lines, (line) => line.action === "resumed"),
           );
-          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.status.status).toBe(
-            "suspended",
-          );
-          yield* (yield* FileSystem.FileSystem)
-            .writeFileString(`${world.home}/fact`, "ready")
-            .pipe(Effect.orDie);
-          yield* collie(world, ["settings", "set", "recovery.resume", "true"]);
+          for (const line of rechecked(down5)) {
+            expect(line.outcome).not.toBe("cleared");
+            expect(line.note).toContain("server_not_running");
+          }
+          expect(Arr.some(down5, (line) => line.action === "resumed")).toBe(false);
+          expect(
+            Arr.filter(
+              yield* client.runs({ task: null }).pipe(Effect.orDie),
+              (view) => view.heals !== undefined,
+            ),
+          ).toEqual([]);
+          yield* fs.writeFileString(`${world.home}/fact`, "ready").pipe(Effect.orDie);
+          yield* fs.remove(down).pipe(Effect.orDie);
           yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
             (view) => view?.status.status === "complete",
           );
+          const lines = yield* until(
+            () => client.runMetrics({ runId }).pipe(Effect.orDie),
+            (lines) =>
+              Arr.some(lines, (line) => line.action === "resumed" && line.outcome === "resumed"),
+          );
+          expect(
+            Arr.map(
+              Arr.filter(lines, (line) => line.action === "resumed"),
+              (line) => line.outcome,
+            ),
+          ).toEqual(["claimed", "resumed"]);
         }),
-      ["rechecks.workflow.ts"],
+      ["rechecks.workflow.ts", "mender.workflow.ts"],
     ),
   120_000,
 );
@@ -1192,7 +1212,7 @@ const failedCiRecheck = (now: Partial<FakeMr>, { recorded = true, unreadable = f
           park: { cause: "ci-failed", kind: "rechecks" },
         },
         root,
-        { sessionList: () => Effect.die("CI rechecks must not ask herdr") },
+        { agentList: () => Effect.die("CI rechecks must not ask herdr") },
       ).pipe(Effect.provide(forge.layer));
     }),
   );
