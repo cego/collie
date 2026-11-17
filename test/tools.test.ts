@@ -1046,7 +1046,7 @@ test("what Native chat read is still news to another conversation", () =>
 test("a Run's agent reading the news settles its own receipts and leaves Native chat's unread", () =>
   inWorld(
     Effect.gen(function* () {
-      const file = yield* newsPath(stateDir, KEY);
+      const file = yield* newsFile();
       yield* appendNews(file, { key: "r1:ended", run: "r1", text: "Run r1 ended done." });
       const run = yield* aRun("read the news");
       yield* registerAgent(

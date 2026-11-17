@@ -1164,7 +1164,7 @@ test(
               cwd: first.world.project,
               created_at: "2026-10-23T07:00:00.000Z",
             }).pipe(Effect.provide(recordsAt(first.world.state)), Effect.orDie);
-            const inTask = yield* first.cli(["run", "list"], { HERDR_WORKSPACE_ID: "w-here" });
+            const inTask = yield* first.cli(["--workspace", "w-here", "run", "list"]);
             expect(encode(inTask.envelope.data)).toContain(other);
 
             const stopped = yield* first.cli(["run", "stop", other]);

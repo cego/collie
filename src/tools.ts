@@ -680,12 +680,11 @@ const linesAsked = (input: {
   search: input.search ?? null,
 });
 
-/** The Task and calling Run a tool's Run lookup is scoped to, as the CLI's is. */
+/** The calling Run a tool's Run lookup is scoped to; a tool selects no workspace, so no Task. */
 const toolScope = Effect.fn("Tools.scope")(function* (env: PluginEnv) {
   const door = yield* toolDoor(env);
-  const task = yield* hostTaskOf(env, env.workspaceId).pipe(Effect.orElseSucceed(() => null));
   return {
-    task: task?.id ?? null,
+    task: null,
     caller: (door.origin === "agent" ? door.from?.run : env.raw.COLLIE_RUN) || null,
   } satisfies RunScope;
 });
