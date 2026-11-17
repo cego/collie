@@ -793,6 +793,52 @@ test("a GitLab retried pass counts, for each test, the failed attempts in its pi
     }),
   ));
 
+test("a GitLab aggregate job's retried pass counts each failed suite once, for the attempt it failed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const failedAt = (id: number, minute: number, failed?: string) => ({
+        id,
+        state: "failed" as const,
+        finished: `2026-11-17T08:0${minute}:00Z`,
+        trace: failed === undefined ? "" : trace([OLD_FILE, failed]),
+      });
+      const { asked, forge } = yield* waiting(
+        "passed",
+        MR,
+        undefined,
+        {
+          jobs: [
+            {
+              name: "nuxi-typecheck",
+              state: "passed",
+              id: 101,
+              attempts: [failedAt(2, 2), failedAt(5, 6)],
+            },
+            {
+              name: "suite-t",
+              state: "passed",
+              id: 102,
+              attempts: [failedAt(1, 1, "an old thing works")],
+            },
+            {
+              name: "suite-u",
+              state: "passed",
+              id: 103,
+              attempts: [failedAt(4, 5, "it flakes once")],
+            },
+          ],
+        },
+        "gitlab",
+        BRANCH,
+      );
+      const result = yield* read(asked, forge);
+      expect("proved" in result ? result.proved.job?.flaked : undefined).toEqual([
+        { name: "it flakes once", file: OLD_FILE, attempts: 1 },
+        { name: "an old thing works", file: OLD_FILE, attempts: 1 },
+      ]);
+    }),
+  ));
+
 test("a pass with no failed attempt records no flaked tests", () =>
   runEffect(
     Effect.gen(function* () {
