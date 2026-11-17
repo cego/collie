@@ -206,6 +206,7 @@ import {
   healInFlight,
   parkOf,
   parkWithRecovery,
+  healNth,
   healOwed,
   parkIdentity,
   recoveryLine,
@@ -5234,14 +5235,7 @@ export const hostLayer = (options: {
                       build: manifest.version,
                       action: "healed",
                       outcome: passed === null ? "claimed" : "skipped",
-                      recoveryId: healRequest(
-                        runId,
-                        park.id!,
-                        Arr.filter(
-                          recoveries,
-                          (line) => line.action === "healed" && line.park === park.id,
-                        ).length + 1,
-                      ),
+                      recoveryId: healRequest(runId, park.id!, healNth(park.id!, recoveries)),
                       park: park.id,
                       since: park.since,
                     }),

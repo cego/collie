@@ -19,7 +19,7 @@ import { connect, ownerOf, frontDoor, socketOf } from "../src/host";
 import { holderLives } from "../src/lock";
 import { readAudit } from "../src/audit";
 import { HealOutput, passedOver } from "../src/heal";
-import { parkOf, parkWithRecovery } from "../src/park-cause";
+import { healOwed, healNth, parkOf, parkWithRecovery } from "../src/park-cause";
 import { herdOf } from "../src/steering";
 import { newsPath, pending, read as readNews } from "../src/news";
 import { collie, proves, type World } from "./support/world";
@@ -584,6 +584,37 @@ test("a ci-failed park whose three resumes ran out needs you and is still never 
   expect(
     passedOver({ cause: park.cause, isHeal: false, on: true, waitsOnYou: false, recoveries }),
   ).toBe("only what its recheck reads can clear its cause");
+});
+
+const healLine = (recoveryId: string, outcome: "claimed" | "started" | "skipped", at: string) => ({
+  at,
+  kind: "recovery" as const,
+  subject: "r",
+  value: 0,
+  note: "",
+  cause: "step-failed" as const,
+  action: "healed" as const,
+  outcome,
+  recoveryId,
+  park: "p",
+});
+
+test("a park whose only Heal was skipped before it started is still owed one, numbered after it", () => {
+  const recoveries = [
+    healLine("heal:r:p", "claimed", "2026-11-13T00:00:01Z"),
+    healLine("heal:r:p", "skipped", "2026-11-13T00:00:02Z"),
+  ];
+  expect(healOwed(["p"], recoveries)).toBe(true);
+  expect(healNth("p", recoveries)).toBe(2);
+});
+
+test("a park whose Heal started is not owed another, and its next one is the second", () => {
+  const recoveries = [
+    healLine("heal:r:p", "claimed", "2026-11-13T00:00:01Z"),
+    healLine("heal:r:p", "started", "2026-11-13T00:00:02Z"),
+  ];
+  expect(healOwed(["p"], recoveries)).toBe(false);
+  expect(healNth("p", recoveries)).toBe(2);
 });
 
 test("a herdr-unavailable park whose three resumes ran out needs you and is never healed", () => {

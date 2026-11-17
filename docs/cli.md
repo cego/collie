@@ -981,7 +981,8 @@ Heals it already had.
 A park that would need you, a needs-you cause or a recheck cause past its three resumes,
 first gets a **Heal**: a Run of the workflow that declares `heals: true`, the shipped
 [`heal`](workflows.md#heal) unless a project forks it. A park gets one when no Heal is
-recorded for its identity, or when its last Heal said `diagnosis_complete: false`; a Heal
+recorded for its identity, a claimed Heal that was skipped before it started not counting, or
+when its last Heal said `diagnosis_complete: false`; a Heal
 whose Output does not say reads as complete. The host starts it with Actor `host`, request id
 `heal:<run>:<park>` (`heal:<run>:<park>:<n>` for the park's nth) and the input
 `{ run, park }`, in the parked Run's Task, and

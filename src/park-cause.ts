@@ -115,10 +115,34 @@ export const parkIdentity = (run: string, cause: ParkCause, evidence: ReadonlyAr
  * Whether a park is owed a Heal: none was claimed for it, or the last one said it could not
  * establish the cause. `ids` is the park's identity and any it had before identities were derived.
  */
-export const healOwed = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<Metric>) => {
-  const heals = Arr.filter(
+const healLines = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<Metric>) =>
+  Arr.filter(
     recoveries,
     (line) => line.action === "healed" && line.park !== undefined && ids.includes(line.park),
+  );
+
+/** The nth Heal a park's next one would be: a claim and its close are one Heal. */
+export const healNth = (park: string, recoveries: ReadonlyArray<Metric>) =>
+  new Set(Arr.map(healLines([park], recoveries), (line) => line.recoveryId ?? line.at)).size + 1;
+
+/**
+ * Whether a park is owed a Heal: none that did not end skipped was claimed for it, or the last
+ * one said it could not establish the cause. `ids` is the park's identity and any it had before
+ * identities were derived.
+ */
+export const healOwed = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<Metric>) => {
+  const lines = healLines(ids, recoveries);
+  const skipped = new Set(
+    Arr.map(
+      Arr.filter(lines, (line) => line.outcome === "skipped"),
+      (line) => line.recoveryId,
+    ),
+  );
+  const heals = Arr.filter(
+    lines,
+    (line) =>
+      line.outcome !== "skipped" &&
+      (line.recoveryId === undefined || !skipped.has(line.recoveryId)),
   );
   return heals.length === 0 || heals.at(-1)?.diagnosisComplete === false;
 };
