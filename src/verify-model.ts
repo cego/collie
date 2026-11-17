@@ -107,7 +107,6 @@ export const VerificationSchema = Schema.Struct({
 });
 export type Verification = typeof VerificationSchema.Type;
 
-/** How many moved paths a line names before it gives the count left. */
 const MOVED_SHOWN = 5;
 
 /** What moved under an unstable record, capped, naming the record that lists them all; "" for none. */

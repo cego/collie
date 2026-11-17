@@ -10570,7 +10570,6 @@ scenario(
               () => unitRecords,
               (records) => records.length > 0,
             );
-            // The record is written; nothing has reached the agent yet.
             expect(Arr.some(yield* prompts(), Str.includes(text))).toBe(false);
             yield* until(
               () => RunRecords.use((records) => records.control(VERIFYING, runId)),
