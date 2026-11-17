@@ -97,6 +97,13 @@ otherwise park a Run whose agent did nothing wrong.
   is open. Once the command starts, the budget runs again: a running verify still does not
   pause it.
 
+**D8. Disk is waited for the same way.** The same starts wait while a filesystem holding the
+state directory or the Run's checkout is low by `collie doctor`'s `disk` reading: under a
+tenth or under 5 GiB free, with no setting. A compaction Collie is about to ask a reused agent
+for waits too, for disk alone, so a full disk cannot lose the record that it finished. This
+amends D3 for that one point. The card reads `Short of disk on <machine>, waiting for
+space: …`.
+
 ## Consequences
 
 - Under memory pressure Runs slow down instead of the Machine going down. A wait shows on

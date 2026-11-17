@@ -4290,6 +4290,7 @@ export const hostLayer = (options: {
                 stateDir: dir,
                 runId: asked.runId,
                 what: `${recorded.pass}: ${spec.name}`,
+                checkout: asked.cwd,
                 stopped: set(STOP, asked.runId),
               });
               if (memory === "stopped")

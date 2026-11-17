@@ -1827,6 +1827,10 @@ export const machineShell = (env: PluginEnv, script: string, request: string, do
 export const usageReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.usage(), door);
 
+/** Where a Fallback would move each unfinished Run's work now. */
+export const usageFallbacks = (env: PluginEnv, door: Door) =>
+  asks(env, (client) => client.fallbacks(), door);
+
 /** What a cleanup sweep would remove now, and what is kept and why. */
 export const cleanupListing = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.cleanup(), door);

@@ -1039,7 +1039,10 @@ for Output. An unresolved delivery stays uncertain.
 A park whose cause rechecks can resume automatically. The host checks for the named CI job
 at the parked head, an answering forge or herdr, or a clean Collie checkout. Rechecks start
 after one minute and double up to one hour. Host startup, a peer reconnecting, or a matching
-forge or pipeline update resets that wait to one minute. The resumed Step still runs its own gate.
+forge or pipeline update resets that wait to one minute. A forge that answered rate limited
+with a reset time, to a recheck or to the host's own read of the merge request, is not asked
+again until five seconds past that reset, whatever the backoff says. The resumed Step still
+runs its own gate.
 
 Automatic resumes use Actor `host` and request ids `recover:<run>:<park>:<n>`. A durable claim
 lets a restarted host finish the same request. They leave Decisions, Holds, Stops, and work

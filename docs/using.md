@@ -3360,7 +3360,11 @@ out and no fallback has room, Collie checks again each minute while waiting for 
 Adding a usable fallback then moves the unfinished work to it automatically. The Run's record and
 `collie run show` say which agent each step landed on, as in
 `codex/default (fell back from claude/opus: session 100%, resets 15:45)`, and the Run's log
-gets a line when it happens. The agent that ran out is stopped first, listed by herdr or
+gets a line when it happens. Before anything moves, each launch also works out, by the same
+chain, where its work would go were its Subscription spent then: a card names it under its
+sentence, `Falls back to codex/gpt-5.5 high`, and `collie usage` adds a line per unfinished
+Run's agent, `fallback <agent> of <run> is on claude/opus xhigh, falls back to codex/default`
+(`fallbacks` under `--json`). Nowhere to go, and nothing is named. The agent that ran out is stopped first, listed by herdr or
 not, and its successor starts only once it is **Quiet**; one that will not stop parks the
 work, naming its thread, turn and server, and a resume tries again. Usage never refuses,
 holds or delays work: only an agent that may still be writing does.
@@ -3707,8 +3711,9 @@ Two things to know about the Claude one. It borrows your status line, so it prin
 context percentage there and Claude stops showing most of its own footer hints; if that
 is not a trade you want, `"compact_at_tokens": 0`. And Claude has no documented
 compact-failed hook, so a compaction of its that fails is an unresolved outcome — the
-last row of the table above — rather than a confirmed failure. Collie will not call a
-missing `PostCompact` a failure it did not see.
+last rows of the table above — rather than a confirmed failure. Collie will not call a
+missing `PostCompact` a failure until it has read Claude's transcript, ten minutes after
+it asked.
 
 Claude's compaction also has no request id of its own, so Collie puts a token in
 `/compact`'s instructions and reads it back out of `PreCompact`, which is the only hook
@@ -3764,6 +3769,7 @@ What happens at a boundary:
 | No usable sample — the harness has not measured this context, or the read failed | Warns, sends the work, and asks for no compaction from a guess.                    |
 | The harness confirms the compaction failed                                       | Warns and sends the work anyway.                                                   |
 | Five minutes with neither a completion nor a failure                             | Keeps waiting, shows the Run needs you, and sends the work by itself once it does. |
+| Ten minutes, on Claude or Pi, with neither                                       | Reads the harness's transcript: a compaction since the ask is done, none failed.   |
 
 The last row is the one to know about. An acknowledgement, an idle pane, an unrelated
 compaction and a dropped connection all establish nothing, so Collie will not call the
@@ -3776,9 +3782,17 @@ and the work is sent, with no resume. A steer still reaches the agent while it w
 a stop ends the wait with nothing sent. Nothing will send that agent work while the attempt
 is still in the air, `collie run resume` included.
 
+Claude and Pi say a compaction finished through a hook or an extension writing to the
+agent's control directory, and that record can be lost: a full disk, a hook that never
+fired. So ten minutes after Collie asked, an attempt still unresolved on either is settled
+against the harness's own transcript, the one its status line or extension last named. A
+compaction entry stamped since the ask (Claude's `compact_boundary`, Pi's `compaction`)
+resolves it as done; none, or no transcript to read, resolves it as failed, which warns
+and sends the work. Codex and OpenCode are asked their own server already, so they are
+never reconciled.
+
 So look at the pane, and decide. If the compaction did finish and the harness simply
-never said so — Claude has no compact-failed hook, so a `PostCompact` that never arrives
-is unresolved for ever — the attempt is released by deleting that agent's control
+never said so, the attempt is released by deleting that agent's control
 directory, `<state>/compaction/<agent>/`, where `<state>` is
 `$(herdr plugin state-dir cego.collie)`. Collie reads a missing record as an agent it
 does not manage, so the next boundary measures the agent again from scratch. Killing the
@@ -4207,6 +4221,16 @@ runs the command, and its result is the command's. A `collie verify` an agent as
 that waits for memory does not spend that agent's Output budget, as an open question of
 its does not; once the command starts, the budget runs again.
 
+A Machine is **Short of disk** while a filesystem holding the state directory or the Run's
+checkout has under a tenth of its size or under 5 GiB free: the reading and threshold of
+`collie doctor`'s `disk` check, with no setting of its own. The same three starts wait for
+it, as does a compaction Collie is about to ask a reused agent for, so a full disk cannot
+eat the record that a compaction finished. A compaction waits for disk alone: it adds no
+memory. The wait reads again every 15 seconds and the card reads
+`Short of disk on vm-mk, waiting for space: / has 2.0 GiB free (2%).`; the Run's log says
+`waited 15s for disk`. Free space with `collie cleanup --apply` or by removing what fills
+the disk, and the work starts at the next read.
+
 To free memory: stop a Run you can spare, whose waits end with it and which then launches
 and runs nothing; run `collie cleanup --apply`, which closes finished Runs' idle agents;
 or take down whatever else holds it, such as a stack an agent left running in a local
@@ -4225,7 +4249,9 @@ Each Machine's host reads how much of its Claude and ChatGPT **Subscriptions** i
 session, the week, and a model's own week where the plan has one. `collie usage` prints it,
 the Control Plane's header names each Subscription's busiest window, Desktop's Usage page shows
 it across the Flock, one entry per account ([Collie Desktop](#collie-desktop)), and chat runs the command
-when you ask how much is left.
+when you ask how much is left. `collie usage` also names, for each unfinished Run's agent,
+where a Fallback would move its work, as each card does
+([`fallbacks`](#settings)).
 
 The numbers come from where the harnesses' own `/usage` and `/status` get them:
 

@@ -348,7 +348,15 @@ import {
   type RelayHeader,
 } from "./peers-model";
 import { latest, readDispositions } from "./disposition";
-import { Launched, LAUNCHES, operationsOf, readLaunches, runAgents } from "./launches";
+import {
+  fallbacksOf,
+  Launched,
+  LAUNCHES,
+  launchesOf,
+  operationsOf,
+  readLaunches,
+  runAgents,
+} from "./launches";
 import { factsOfView, newestFirst, settled, type RunFacts } from "./runs";
 import { Store } from "./store";
 import type { Woke } from "./mr-watch-model";
@@ -733,6 +741,7 @@ const HEALER_READS = new Set([
   "ownWords",
   "sharedDefinitions",
   "usage",
+  "fallbacks",
   "models",
   "connections",
   "slackChoices",
@@ -3028,6 +3037,17 @@ const frontDoorHandlers = (
               return readings;
             }),
           ),
+        fallbacks: () =>
+          plainly(
+            Effect.gen(function* () {
+              const unfinished = Arr.filter(
+                yield* registry.views(null),
+                (view) => !settled(factsOfView(env.stateDir, view)),
+              );
+              const launches = yield* launchesOf(Arr.map(unfinished, (view) => view.runId));
+              return fallbacksOf(Arr.flatten([...launches.values()]));
+            }),
+          ),
         models: () => harnesses.catalogues,
         connections: () => connectionsOnMachine(env),
         slackChoices: () => Effect.fail(new HostRefused({ reason: SLACK_BOT_RETIRED })),
@@ -3442,6 +3462,7 @@ const frontDoorHandlers = (
                       stateDir: env.stateDir,
                       runId,
                       what: `collie verify "${name}"`,
+                      checkout: where,
                       asker:
                         whoOf(client).origin === "agent" && from?.run === runId
                           ? (from.agent ?? null)

@@ -113,12 +113,8 @@ const registered = (agent: string, paneId: string, backend?: "core" | "legacy") 
     );
   });
 
-/** A `df` that says the one filesystem it is asked about is `percent` free, of 100 GiB. */
-const freeSpace = (percent: number) =>
-  bin.add(
-    "df",
-    `echo 'warning: disk probe' >&2; printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/sda1 104857600 %d %d %d%%%% /\\n' ${(100 - percent) * 1048576} ${percent * 1048576} ${100 - percent}`,
-  );
+/** The one filesystem asked about is `percent` free, of 100 GiB. */
+const freeSpace = (percent: number) => rig.disk(percent);
 
 /** A glab logged in to one GitLab host, whose token expires on `expires` (or never). */
 const gitlab = (opts: { expires: string | null }) =>

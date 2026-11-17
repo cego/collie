@@ -5,7 +5,7 @@
 // request has not been merged by anyone.
 
 import { readStageProof, type ShippingAction } from "./shipping";
-import { lastOrdered, Launches, launchesAhead } from "./launches";
+import { fallbacksOf, lastOrdered, Launches, launchesAhead, launchesOf } from "./launches";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -81,6 +81,7 @@ import {
   sectionOf,
   shippingLabel,
   sortBoard,
+  type AgentFallback,
   type BoardAgent,
   type BoardChild,
   type BoardOffer,
@@ -780,6 +781,7 @@ function agentsOf(
   runs: ReadonlyArray<RunFacts>,
   registered: ReadonlyArray<AgentEntry>,
   live: ReadonlyMap<string, AgentInfo>,
+  fallbacks: ReadonlyArray<AgentFallback>,
 ): BoardAgent[] {
   const byRun = registeredByRun(registered);
   const found = new Map<string, BoardAgent>();
@@ -787,12 +789,14 @@ function agentsOf(
     for (const entry of byRun.get(run.id) ?? []) {
       const agent = live.get(entry.agent);
       if (agent === undefined || found.has(agent.name)) continue;
+      const fallback = Arr.findFirst(fallbacks, (one) => one.agent === agent.name);
       found.set(agent.name, {
         name: agent.name,
         role: entry.role,
         status: agent.status,
         now: agent.title,
         run: run.id,
+        ...(Option.isSome(fallback) && { fallback: fallback.value.next }),
       });
     }
   }
@@ -1274,6 +1278,9 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               !(yield* fs.exists(run.worktree.path).pipe(Effect.orElseSucceed(() => true))),
           );
         const pending = Arr.flatMap(everyRun, (run) => pendingFor(proposals, run.id, now));
+        const fallbacks = fallbacksOf(
+          Arr.flatten([...(yield* launchesOf(Arr.map(everyRun, (run) => run.id))).values()]),
+        );
         const cards = opts.only === undefined ? opts.cards : undefined;
         const carried: { run: RunFacts; id: string | null; mr: string | null }[] = [];
         for (const run of everyRun) {
@@ -1297,7 +1304,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                   checked.has(run.id),
                 ]),
                 tasks.get(runs[0]!.task ?? "") ?? null,
-                agentsOf(everyRun, registered, live),
+                agentsOf(everyRun, registered, live, fallbacks),
                 pending,
                 Arr.flatMap(carried, ({ id }) =>
                   id === null ? [] : [[mrStates.get(id) ?? null, forge.get(id) ?? null]],
@@ -1470,7 +1477,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           !(yield* unseenReport(leader))
         )
           return keep(null, Infinity);
-        const agents = agentsOf(everyRun, registered, live);
+        const agents = agentsOf(everyRun, registered, live, fallbacks);
         const waits = new Map(
           yield* Effect.forEach(everyRun, (run) =>
             Effect.map(runWaits(run, proposals, agents, now), (read) => [run.id, read] as const),

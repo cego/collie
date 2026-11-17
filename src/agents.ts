@@ -148,6 +148,7 @@ import {
   sessionArgs,
   type AgentChoice,
   type HarnessAdapter,
+  type Room,
   type StartSession,
   type PermissionMode,
   type Preferences,
@@ -284,6 +285,8 @@ export interface AgentAsk {
   /** What this work fell back from, and why, where it did. */
   readonly from?: AgentChoice;
   readonly why?: string;
+  /** Where a Fallback would move this work were its usage spent now. */
+  readonly next?: AgentChoice;
   /** Which agent of this work it is: past 1, one taking over from an agent that ran out. */
   readonly sequence?: number;
   /** The Step run this work is in, where it is in one. */
@@ -299,6 +302,7 @@ export const AgentChoiceSchema = Schema.Struct({
   claudeSubagents: Schema.optionalKey(ClaudeSubagents),
   from: Schema.optionalKey(RanOn),
   why: Schema.optionalKey(Schema.String),
+  next: Schema.optionalKey(RanOn),
 });
 export type ChosenAgent = typeof AgentChoiceSchema.Type;
 
@@ -888,6 +892,7 @@ export const agentWork = <
     };
     if (choice.claudeSubagents !== undefined) ask.claudeSubagents = choice.claudeSubagents;
     fellBack(ask, choice.from, choice.why);
+    if (choice.next !== undefined) ask.next = choice.next;
     if (held !== null && held.sequence > 1) ask.sequence = held.sequence;
     const at = yield* CurrentStep;
     if (at !== null) ask.step = at;
@@ -2346,7 +2351,21 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const found = yield* entryFor(launched, launched.agent, null);
       if (found.entry === null) return { dispatch: true as const };
       const entry = found.entry;
-      const compaction = compactionDeps(host, launched.runId);
+      const compaction: CompactionDeps = {
+        ...compactionDeps(host, launched.runId),
+        room: (cwd) =>
+          under(
+            waitForMemory({
+              env: host.env,
+              stateDir: host.dir,
+              runId: launched.runId,
+              what: `${launched.agent}'s compaction`,
+              checkout: cwd,
+              memory: false,
+              stopped: stoppedRun(launched.runId),
+            }),
+          ),
+      };
       const due = yield* atBoundary(
         compaction,
         { agent: launched.agent, run: launched.runId, step: launched.operation },
@@ -2874,6 +2893,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               stateDir: host.dir,
               runId: ask.runId,
               what: `${agent}'s launch`,
+              checkout: ask.cwd,
               stopped: stoppedRun(ask.runId),
             });
         // Listed again: what herdr had before the wait may have changed during it.
@@ -2902,6 +2922,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             if (ask.step !== undefined) landed.step = ask.step;
             landed.at = yield* Clock.currentTimeMillis;
             fellBack(landed, ask.from, ask.why);
+            if (ask.next !== undefined) landed.next = ask.next;
             if (incarnation !== undefined) {
               landed.terminalId = incarnation.terminalId;
               if (incarnation.agentSession !== null) landed.agentSession = incarnation.agentSession;
@@ -4437,24 +4458,39 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           const now = yield* Clock.currentTimeMillis;
           const read = roomFor(readings, now);
           const out = Arr.map(spent, (one) => ({ ...one, on: pinned(one.on) }));
+          const fallbacks = yield* chain;
+          const catalogue = host.catalogue === undefined ? undefined : yield* host.catalogue;
+          const room: Room = (choice, upTo) => {
+            const judged = read(choice, upTo);
+            const ran = Option.getOrUndefined(
+              Arr.findFirst(
+                out,
+                (one) => sameUsage(one.on, choice) && !usageRecovered(one, readings, now),
+              ),
+            );
+            return judged.room && ran !== undefined ? { room: false, why: ran.why } : judged;
+          };
           const resolved = resolveWithRoom(
             [configured, ...layers],
-            yield* chain,
-            (choice, upTo) => {
-              const judged = read(choice, upTo);
-              const ran = Option.getOrUndefined(
-                Arr.findFirst(
-                  out,
-                  (one) => sameUsage(one.on, choice) && !usageRecovered(one, readings, now),
-                ),
-              );
-              return judged.room && ran !== undefined ? { room: false, why: ran.why } : judged;
-            },
+            fallbacks,
+            room,
             host.models,
-            host.catalogue === undefined ? undefined : yield* host.catalogue,
+            catalogue,
           );
           if (!resolved.ok) return yield* new WorkflowError({ reason: resolved.problem });
           const { choice, from, why, skipped } = resolved.chosen;
+          // The same resolution with this choice's usage spent: where a Fallback would go now.
+          const after = resolveWithRoom(
+            [configured, ...layers],
+            fallbacks,
+            (one, upTo) =>
+              sameUsage(pinned(one), pinned(choice))
+                ? { room: false, why: "spent" }
+                : room(one, upTo),
+            host.models,
+            catalogue,
+          );
+          const next = after.ok && after.chosen.from !== null ? after.chosen.choice : null;
           for (const line of skipped) yield* log(runId, `${operation}: ${line}`);
           // Chosen mid-work, the work's own line says what came of it.
           if (spent.length === 0 && from !== null) {
@@ -4467,6 +4503,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           }
           const chosen: Types.Mutable<ChosenAgent> = { ...choice };
           fellBack(chosen, from, why);
+          if (next !== null)
+            chosen.next = { harness: next.harness, model: next.model, effort: next.effort };
           return chosen;
         }),
       ),
@@ -4490,6 +4528,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           };
           if (held.claudeSubagents !== undefined) running.claudeSubagents = held.claudeSubagents;
           fellBack(running, held.from, held.why);
+          if (held.next !== undefined) running.next = held.next;
           return running;
         }),
       ),

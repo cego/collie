@@ -325,6 +325,38 @@ the wait, which reads it again as memory frees: a stop during the wait, or as it
 ends it with nothing started.
 The chats' agents start elsewhere, and never wait.
 
+The same wait holds for disk: `waitForMemory` also reads `src/disk.ts`, the `df -Pk` reading
+and threshold `collie doctor`'s `disk` check uses (under a tenth or under 5 GiB free), for
+the state directory and the `checkout` its caller names. Memory short is said first; disk
+short writes the same `memory-wait` control with a `Short of disk` sentence, so every door
+reads it the one way. A compaction waits too, through the `room` its `CompactionDeps` is
+given by a reused agent's boundary in `src/agents.ts`, before the attempt is recorded and
+asked for; it waits with `memory: false`, for disk alone. `COLLIE_DF` names a file read as
+`df`'s answer, as `COLLIE_PROC` does for memory, and the test Rig sets both.
+
+### A compaction whose completion was lost
+
+`atBoundary` in `src/compaction.ts` records when an attempt was `asked`. An attempt still
+unresolved `RECONCILE_AFTER_MS` (ten minutes) after that is settled by its port's
+`reconcile`, where the port has one, in `resolved`, so a boundary's own wait and
+`pollCompaction` past the budget both settle it. Claude's and Pi's read the transcript their
+harness last named in the agent's telemetry (`transcriptCompacted` in
+`src/compactors.ts`): a compaction line stamped since the ask is success, none is failure,
+and a transcript that cannot be read is failure too. Codex and OpenCode poll their own
+server, so they have no `reconcile`. An attempt recorded before `asked` existed counts from
+its deadline.
+
+### The next Fallback
+
+`choose` in `src/agents.ts` resolves the chain twice: once for the work, and once more with
+the chosen agent's usage spent, as `sameUsage` judges a spent agent. Where that second
+resolution falls back, its choice is the chosen agent's `next`, carried on the ask into the
+launch record (`Launched.next`) and onto a reused agent by `choiceOf`. `fallbacksOf` in
+`src/launches.ts` reads each agent's latest launch: the board puts it on the card's agent
+(`BoardAgent.fallback`), which Desktop draws under the sentence (`fallback_line`), and the
+host's `fallbacks` call answers it for every unfinished Run, which `collie usage` prints.
+It is worked out at launch, so it reads usage as it stood then.
+
 ## A workflow made of workflows
 
 `child({ runId, invocation, workflow, input })` starts another workflow as part of a Run

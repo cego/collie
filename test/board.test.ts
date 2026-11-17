@@ -1073,6 +1073,33 @@ test("a live agent is shown as the role it was registered as", () =>
     }),
   ));
 
+test("a live agent's card entry names where a Fallback would move its work", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      yield* recordLaunch({
+        agent: "impl-1",
+        output: `${dir}/agents/${run.id}/build.json`,
+        reused: false,
+        runId: run.id,
+        operation: "build",
+        role: "implementer",
+        workflow: "implement",
+        harness: "claude",
+        model: "opus",
+        next: { harness: "codex", model: "gpt-5.5", effort: "high" },
+      });
+
+      const [view] = yield* board(env, [run], {
+        alive: [agent("impl-1", "working")],
+        registered: [registered("impl-1", run.id)],
+      });
+
+      expect(view!.agents[0]?.fallback).toBe("codex/gpt-5.5 high");
+    }),
+  ));
+
 test("a check Collie is running outranks what an idle agent last said", () =>
   runEffect(
     Effect.gen(function* () {
