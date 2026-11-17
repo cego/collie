@@ -6,6 +6,8 @@ import { connect, frontDoor, ownerOf, socketOf } from "../src/host";
 import { collie, proves } from "./support/world";
 import { until } from "./support/host";
 import { readAudit } from "../src/audit";
+import { recordsReadLayer } from "../src/records";
+import { NOTIFIED, RunRecords } from "../src/run-records";
 import { FakeBin } from "./support/bin";
 import {
   FORGE_HOST,
@@ -72,7 +74,11 @@ test(
           );
           expect(done?.status.status).toBe("complete");
           const audit = yield* until(
-            () => readAudit(`${world.state}/runs/${runId}`).pipe(Effect.orDie),
+            () =>
+              readAudit(`${world.state}/runs/${runId}`).pipe(
+                Effect.provide(recordsReadLayer(world.state)),
+                Effect.orDie,
+              ),
             (lines) => Arr.some(lines, (line) => line.operation === "resume"),
           );
           const resumes = Arr.filter(audit, (line) => line.operation === "resume");
@@ -306,7 +312,10 @@ test(
             expect(Arr.every(view?.waiting ?? [], (one) => one.answer === null)).toBe(true);
             expect(
               Arr.filter(
-                yield* readAudit(`${world.state}/runs/${runId}`).pipe(Effect.orDie),
+                yield* readAudit(`${world.state}/runs/${runId}`).pipe(
+                  Effect.provide(recordsReadLayer(world.state)),
+                  Effect.orDie,
+                ),
                 (line) => line.operation === "resume" || line.operation === "answer",
               ),
             ).toEqual([]);
@@ -616,17 +625,23 @@ test(
             Arr.filter(parked?.park?.history ?? [], (line) => Str.includes("resumed")(line)),
           ).toHaveLength(3);
           const audit = Arr.filter(
-            yield* readAudit(`${world.state}/runs/${runId}`).pipe(Effect.orDie),
+            yield* readAudit(`${world.state}/runs/${runId}`).pipe(
+              Effect.provide(recordsReadLayer(world.state)),
+              Effect.orDie,
+            ),
             (line) => line.operation === "resume",
           );
           expect(audit).toHaveLength(3);
           const shown = yield* collie(world, ["board"]);
           expect(asJson(shown.envelope.data)).toContain("rechecked");
-          const notices = yield* (yield* FileSystem.FileSystem)
-            .readFileString(`${world.state}/notified.${runId}`)
-            .pipe(Effect.orDie);
+          const notices = yield* RunRecords.use((records) =>
+            records.controlsOf(NOTIFIED, runId),
+          ).pipe(Effect.provide(recordsReadLayer(world.state)), Effect.orDie);
           expect(
-            Arr.filter(Str.split(notices, "\n"), (line) => Str.includes("parked:")(line)),
+            Arr.filter(
+              Arr.map(notices, (row) => row.key),
+              (line) => Str.includes("parked:")(line),
+            ),
           ).toEqual(["needs-you:parked:checkout-dirty-collie"]);
           const report = yield* collie(world, ["run", "report"]);
           expect(report.envelope.data).toMatchObject({
@@ -731,7 +746,11 @@ for (const point of ["claimed", "recovery-park-cleared", "recovery-entered"] as 
               expect.objectContaining({ recoveryId: claims[0]?.recoveryId, outcome: "resumed" }),
             ]);
             const audit = yield* until(
-              () => readAudit(`${world.state}/runs/${runId}`).pipe(Effect.orDie),
+              () =>
+                readAudit(`${world.state}/runs/${runId}`).pipe(
+                  Effect.provide(recordsReadLayer(world.state)),
+                  Effect.orDie,
+                ),
               (lines) => Arr.filter(lines, (line) => line.operation === "resume").length === 1,
             );
             expect(Arr.filter(audit, (line) => line.operation === "resume")[0]?.request).toBe(
@@ -876,7 +895,10 @@ test(
             expect.objectContaining({ action: "resumed", outcome: "resumed" }),
           );
           const audit = Arr.filter(
-            yield* readAudit(`${world.state}/runs/${runId}`).pipe(Effect.orDie),
+            yield* readAudit(`${world.state}/runs/${runId}`).pipe(
+              Effect.provide(recordsReadLayer(world.state)),
+              Effect.orDie,
+            ),
             (line) => line.operation === "resume",
           );
           expect(audit).toHaveLength(1);
@@ -1126,7 +1148,10 @@ test(
           );
           expect(healed(metrics)).toEqual([]);
           const resumes = Arr.filter(
-            yield* readAudit(`${world.state}/runs/${runId}`).pipe(Effect.orDie),
+            yield* readAudit(`${world.state}/runs/${runId}`).pipe(
+              Effect.provide(recordsReadLayer(world.state)),
+              Effect.orDie,
+            ),
             (line) => line.operation === "resume",
           );
           expect(Arr.map(resumes, (line) => line.actor.origin)).toEqual(["host"]);

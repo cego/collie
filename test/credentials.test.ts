@@ -2,7 +2,7 @@
 // its kind before the host writes or forwards anything, and the operation still happens.
 // The values here are built at runtime, synthetic, and only shaped like credentials.
 
-import { recordsAt } from "./support/records";
+import { hostRecords, recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -84,9 +84,9 @@ test(
           })
           .pipe(Effect.orDie);
         expect(goal.redacted).toEqual(["<aws key id>"]);
-        expect((yield* readIntent(runDir(world.state, runId)))?.goal).toBe(
-          "ship it, AWS key <aws key id>",
-        );
+        expect(
+          (yield* hostRecords(world.state, readIntent(runDir(world.state, runId))))?.goal,
+        ).toBe("ship it, AWS key <aws key id>");
 
         const answered = yield* client
           .answer({ runId, decision: "decision", value: `use ${GITLAB}`, request: "answer" })
@@ -235,5 +235,5 @@ test("the CLI says what it removed from an answer, and the answer still lands", 
         ok: true,
         data: { value: "use <gitlab token>", redacted: ["<gitlab token>"] },
       });
-    }),
+    }).pipe(Effect.provide(recordsAt(world.state))),
   ));

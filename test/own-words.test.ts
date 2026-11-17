@@ -30,6 +30,21 @@ const json = (lines: ReadonlyArray<JsonFields>) =>
     "\n",
   )}\n`;
 
+const RUNS_TABLE =
+  "CREATE TABLE IF NOT EXISTS collie_runs (run TEXT PRIMARY KEY, request TEXT, placing TEXT)";
+
+/** A Run's operations trail as the host keeps it: a row per line, in order. */
+const hostTrail = (file: string, run: string, text: string) => {
+  const db = new Database(file, { create: true });
+  db.run(RUNS_TABLE);
+  db.run(
+    "CREATE TABLE IF NOT EXISTS collie_run_lines (run TEXT, journal TEXT, seq INTEGER, line TEXT, PRIMARY KEY (run, journal, seq))",
+  );
+  for (const [seq, line] of Arr.dropRight(Str.split(text, "\n"), 1).entries())
+    db.run("INSERT INTO collie_run_lines VALUES (?, 'operations.jsonl', ?, ?)", [run, seq, line]);
+  db.close();
+};
+
 /** A home and a state directory, each file written relative to its root. */
 const places = (files: Readonly<Record<string, string>>) =>
   Effect.gen(function* () {
@@ -38,6 +53,12 @@ const places = (files: Readonly<Record<string, string>>) =>
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "own-words-" });
     const at = { home: `${root}/home`, stateDir: `${root}/state` };
     for (const [relative, text] of Rec.toEntries(files)) {
+      const trail = /^state\/runs\/([^/]+)\/operations\.jsonl$/.exec(relative)?.[1];
+      if (trail !== undefined) {
+        yield* fs.makeDirectory(at.stateDir, { recursive: true });
+        hostTrail(`${at.stateDir}/host.db`, trail, text);
+        continue;
+      }
       const file = `${root}/${relative}`;
       yield* fs.makeDirectory(path.dirname(file), { recursive: true });
       yield* fs.writeFileString(file, text);
@@ -411,7 +432,7 @@ const audit = (
 /** The host's store as it keeps who started each Run, with only the columns read here. */
 const hostStore = (file: string, placings: Readonly<Record<string, Json>>) => {
   const db = new Database(file, { create: true });
-  db.run("CREATE TABLE collie_runs (run TEXT PRIMARY KEY, request TEXT, placing TEXT)");
+  db.run(RUNS_TABLE);
   for (const [run, placing] of Rec.toEntries(placings))
     db.run("INSERT INTO collie_runs VALUES (?, ?, ?)", [run, `r-${run}`, encode(placing)]);
   db.close();
@@ -796,7 +817,6 @@ test("a session file it cannot read, or whose records it does not know, is count
         "home/.codex/sessions/2026/10/03/rollout-2026-10-03T10-00-00-03c0.jsonl": json([
           { kind: "turn", said: "A format Codex might change to." },
         ]),
-        "state/runs/run-f/operations.jsonl/.keep": "",
       });
       const words = yield* readOwnWords(at, NOW);
       expect(storeOf(words, "claude-code")).toMatchObject({
@@ -806,7 +826,6 @@ test("a session file it cannot read, or whose records it does not know, is count
       });
       expect(storeOf(words, "claude-code")?.why).toContain("2f2f-changed.jsonl");
       expect(storeOf(words, "codex")).toMatchObject({ found: "read", sessions: 1, unread: 1 });
-      expect(storeOf(words, "collie")).toMatchObject({ unread: 1 });
       expect(texts(words)).toEqual(["Run the tests before you push.", "Keep pull requests small."]);
     }).pipe(Effect.scoped),
   ));

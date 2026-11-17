@@ -31,6 +31,7 @@ fn main() {
         println!("cargo:rerun-if-changed={}", src.join(path).display());
     }
     println!("cargo:rerun-if-env-changed=ZIG");
+    println!("cargo:rerun-if-env-changed=ZIG_LOCAL_CACHE_DIR");
 
     let zig = std::env::var("ZIG").unwrap_or_else(|_| "zig".into());
     let status = Command::new(&zig)
@@ -50,7 +51,11 @@ fn main() {
         .arg("--prefix")
         .arg(out.join("zig-out"))
         .arg("--cache-dir")
-        .arg(out.join("zig-cache"))
+        .arg(
+            std::env::var_os("ZIG_LOCAL_CACHE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| out.join("zig-cache")),
+        )
         .status()
         .unwrap_or_else(|e| panic!("cannot run {zig:?} (Zig 0.17 required): {e}"));
     assert!(

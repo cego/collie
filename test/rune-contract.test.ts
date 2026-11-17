@@ -1,7 +1,7 @@
 // The Rune spike's side of `DesktopRpcs`: frames encoded here through the real Schemas,
 // decoded and re-encoded by the Rust types, and decoded here again, come back equal. A field
 // the Rust types lack is dropped on the way, and that turns this red. Needs cargo, which the
-// `desktop` CI job has.
+// `desktop-checks` CI job has.
 
 import { beforeAll, describe, expect, test } from "bun:test";
 import * as Arr from "effect/Array";

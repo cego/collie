@@ -4,12 +4,13 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { Effect, FileSystem, Path } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { Host, type WorkflowError } from "../src/sdk";
 import { evidenceDir, foundationLayer } from "../src/engine";
 import { Store } from "../src/store";
-import { VerifySpecSchema } from "../src/verify-spec";
+import { updateApproved } from "../src/verify-spec";
+import { RunRecords } from "../src/run-records";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -18,11 +19,6 @@ import { Rig } from "./support/recorder";
 let rig: Rig;
 let dir: string;
 const runId = "r-flake";
-
-const asApproved = flow(
-  Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
-  Result.getOrThrow,
-);
 
 beforeEach(() =>
   runEffect(
@@ -80,23 +76,20 @@ const bunPrinted = (options: { fail?: number; error?: boolean; extra?: number } 
 
 /** Approves `unit`, a check that prints whatever `printed` holds and exits 1. */
 const approveUnit = FileSystem.FileSystem.pipe(
-  Effect.flatMap((fs) =>
-    Effect.gen(function* () {
-      yield* fs.makeDirectory(evidenceDir(dir, runId), { recursive: true });
-      yield* fs.writeFileString(
-        `${evidenceDir(dir, runId)}/approved.json`,
-        asApproved([
-          {
-            name: "unit",
-            executable: "sh",
-            argv: ["-c", `cat ${rig.root}/printed >&2; exit 1`],
-            cwd: ".",
-          },
-        ]),
-      );
-    }),
-  ),
+  Effect.flatMap((fs) => fs.makeDirectory(evidenceDir(dir, runId), { recursive: true })),
   Effect.orDie,
+  Effect.andThen(
+    Effect.suspend(() =>
+      updateApproved(evidenceDir(dir, runId), () => [
+        {
+          name: "unit",
+          executable: "sh",
+          argv: ["-c", `cat ${rig.root}/printed >&2; exit 1`],
+          cwd: ".",
+        },
+      ]),
+    ),
+  ),
 );
 
 /** The gate's check of `unit` while it prints `printed`. */
@@ -110,7 +103,11 @@ const gateOn = (host: Host["Service"], printed: string) =>
 const inHost = <A>(
   body: (
     host: Host["Service"],
-  ) => Effect.Effect<A, WorkflowError | PlatformError, FileSystem.FileSystem | Path.Path>,
+  ) => Effect.Effect<
+    A,
+    WorkflowError | PlatformError,
+    FileSystem.FileSystem | Path.Path | RunRecords
+  >,
 ) =>
   Effect.gen(function* () {
     yield* approveUnit;
@@ -439,10 +436,9 @@ test("a test asked about at the base is asked again once its check runs in anoth
             test: NESTED,
           });
           const first = yield* atBase;
-          yield* fs.writeFileString(
-            `${evidenceDir(dir, runId)}/approved.json`,
-            asApproved([{ name: "unit", executable: "bun", argv: ["test"], cwd: "package-b" }]),
-          );
+          yield* updateApproved(evidenceDir(dir, runId), () => [
+            { name: "unit", executable: "bun", argv: ["test"], cwd: "package-b" },
+          ]);
           return [first, yield* atBase] as const;
         }),
       ).pipe(Effect.ensuring(bin.restore()));

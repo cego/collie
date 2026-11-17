@@ -34,7 +34,8 @@ import { diffOf, fetchRef, keepDiffs, runDiff } from "../src/run-detail";
 import { recordFrames, type RecordSources } from "../src/record";
 import { makeRunModel } from "../src/run-model";
 import { buildRunDetail, type PlanCache } from "../src/views";
-import { madeRun } from "./support/records";
+import { madeRun, recordsAt } from "./support/records";
+import { recordsReadLayer } from "../src/records";
 import { runRowId } from "../src/ui/state";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -186,7 +187,10 @@ test(
               body: "Not changed: a map costs more here",
             },
           ];
-          for (const reply of replies) yield* recordReply(runDir(world.state, runId), reply);
+          for (const reply of replies)
+            yield* recordReply(runDir(world.state, runId), reply).pipe(
+              Effect.provide(recordsAt(world.state)),
+            );
 
           const shown = yield* collie(world, ["run", "show", runId]);
           expect(shown.envelope.data).toMatchObject({ replies });
@@ -274,7 +278,8 @@ test(
             env,
           );
           const looking = focus({ selected: runRowId(runId), tail: true });
-          expect((yield* app.load(looking)).detail?.id).toBe(runId);
+          const load = () => app.load(looking).pipe(Effect.provide(recordsReadLayer(world.state)));
+          expect((yield* load()).detail?.id).toBe(runId);
           yield* Queue.takeAll(changes);
           const before = notifications;
           yield* fs.writeFileString(`${runDir(world.state, runId)}/log.txt`, "from the host\n", {
@@ -294,7 +299,7 @@ test(
             Effect.timeout("20 seconds"),
           );
           expect(notifications).toBeGreaterThan(before);
-          const after = yield* app.load(looking);
+          const after = yield* load();
           yield* stopHost(world.state);
           expect(after.detail?.tail).toMatchObject({
             _tag: "Text",

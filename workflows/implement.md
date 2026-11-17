@@ -418,7 +418,7 @@ before it starts; deciding afterwards what would have counted is not a check.
 ## source.followup
 
 A finished run's outcome needs more work. `{{inputs.plan}}` names it as
-`followup:<run id>`; that run's `steering/drift.jsonl` open reports and the text in
+`followup:<run id>`; that run's open drift, which the `collie_run` tool shows, and the text in
 `{{run.dir}}/plan/SPEC.md` are the spec. Write one ticket per open report under
 `{{run.dir}}/plan/issues/`. This checkout is already on the branch that run built, and its
 merge request is updated rather than replaced — the parent run is finished and immutable,

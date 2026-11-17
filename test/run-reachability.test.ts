@@ -17,6 +17,7 @@ import { BUILD, socketOf } from "../src/host";
 import { relayOf } from "../src/peers";
 import { RunMetrics } from "../src/run-record";
 import { recordAudit } from "../src/audit";
+import { recordsAt } from "../src/records";
 import { TaskSchema, type TaskRecord } from "../src/task";
 import { seedIntent, writeIntent } from "../src/intent";
 import { exec } from "./support/command";
@@ -358,7 +359,7 @@ test(
         yield* writeIntent(
           `${state}/runs/run-a`,
           seedIntent("run-a", { goal: "Find out why run-c and run-f failed" }),
-        );
+        ).pipe(Effect.provide(recordsAt(state)));
         yield* recordAudit(`${state}/runs/run-a`, {
           operation: "deliver",
           request: "steer-1",
@@ -366,7 +367,7 @@ test(
           asked: { text: "Compare it with run-d", operation: null, agent: null, mode: null },
           result: Schema.Struct({}),
           value: {},
-        });
+        }).pipe(Effect.provide(recordsAt(state)));
 
         const doors = [
           ["run", "show"],
@@ -424,7 +425,8 @@ test(
     world(({ state, collie }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(`${state}/host.db`, "");
+        // A host's database, migrated as a host leaves it: run-a's trail is read from it.
+        yield* Effect.provide(Effect.void, recordsAt(state));
         yield* hostOf(
           socketOf(state),
           state,

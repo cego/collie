@@ -26,15 +26,12 @@ import type { RunFacts } from "../../src/runs";
 import { madeRun } from "../support/records";
 import { writeSettingsSet } from "../../src/config";
 import { recordLaunch } from "../../src/launches";
+import { writeCheckpoint } from "../../src/cards";
 import type { Records } from "../../src/records";
 
 let rig: Rig;
 const encodeFindings = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Array(FindingSchema))),
-  Result.getOrThrow,
-);
-const encodeJson = flow(
-  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
 /** Every Run a test has made, newest first, as the host would list them. */
@@ -488,14 +485,7 @@ const progressed = Effect.fn("viewsTest.progressed")(function* (
   ticket: string,
   status: "started" | "done",
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const dir = path.join(run.dir, "steering", "progress");
-  yield* fs.makeDirectory(dir, { recursive: true });
-  yield* fs.writeFileString(
-    path.join(dir, pipe(ticket, Str.replace(/\.md$/, ".json"))),
-    encodeJson({ ticket, status, claims: [], at: "2026-09-01T10:30:00.000Z" }),
-  );
+  yield* writeCheckpoint(run.dir, { ticket, status, claims: [], at: "2026-09-01T10:30:00.000Z" });
 });
 
 /** A step whose agent was launched, and whose Output came in at this moment. */

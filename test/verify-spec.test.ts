@@ -9,13 +9,12 @@ import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import {
   approvedFor,
-  approvedFile,
   approvedFrom,
   approvedIn,
   checkNameOf,
-  encodeApproved,
   rememberedFile,
   renderApproved,
+  updateApproved,
   PROJECT_FILE,
 } from "../src/verify-spec";
 import { DEFAULT_AUTHORITY, readIntent, seedIntent, writeIntent } from "../src/intent";
@@ -207,7 +206,7 @@ test("a check left to CI keeps its job from every Checks source, and into the Ru
       expect("ci" in project[0]!).toBe(false);
 
       const evidence = yield* fs.makeTempDirectoryScoped({ prefix: "hw-approved-frozen-" });
-      yield* fs.writeFileString(approvedFile(evidence), encodeApproved(project));
+      yield* updateApproved(evidence, () => project);
       expect(yield* approvedIn(evidence)).toEqual([TESTS, NUXI]);
     }),
   ));

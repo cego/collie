@@ -1,8 +1,8 @@
 import * as Arr from "effect/Array";
-import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { DateTime, Effect, FileSystem, Option, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { ChildProcessSpawner } from "effect/process";
 import { buildBoard, type KeptCards } from "../src/board";
 import { shareBoard } from "../src/board-stream";
 import { readEnv } from "../src/env";
@@ -11,10 +11,85 @@ import { writeTask } from "../src/task";
 import { epochMs } from "../src/time";
 import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
-import { VERIFYING_FILE } from "../src/verify";
+import { encodeVerifying, VERIFYING } from "../src/verify";
+import { RunRecords, type RunRecordsApi } from "../src/run-records";
+import { appendCard, buildCard } from "../src/cards";
+import { recordDisposition } from "../src/disposition";
 
 const RUNS = 500;
 const NOW = epochMs("2026-10-30T10:00:00Z");
+
+test.each(["merged", "abandoned"] as const)(
+  "a %s Task does not investigate its old pushed branch while drawing",
+  (kind) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped();
+        const at = "2026-10-30T10:00:00Z";
+        const mr = "https://github.com/cego/collie/pull/1";
+        const run = yield* madeRun(dir, {
+          state: "failed",
+          branch: "feature",
+          mr,
+          created: at,
+          finished: at,
+        });
+        yield* appendCard(
+          run.dir,
+          buildCard({
+            run: run.id,
+            kind: "final",
+            step: "finish",
+            iteration: 1,
+            at,
+            intentVersion: 1,
+            revision: { branch: "feature", head_sha: "abc", fingerprint: "f1", dirty: false },
+            changes: { files: [], commits: [] },
+            requested: { goal: null, constraints: [] },
+            verifications: [],
+            claims: [],
+            missing: [],
+            inspect: [],
+            links: {},
+            drift: [],
+            deliveries: [],
+            narrative: null,
+            aligned: "unverified",
+            crossRun: "none",
+            significance: {
+              readiness: "claimed",
+              mrTouched: false,
+              pendingChoice: false,
+              driftUnresolved: false,
+              pendingProposal: false,
+              correctionUnacknowledged: false,
+              blockingDrift: false,
+              correctionSent: false,
+              intentChanged: false,
+              ended: "failed",
+            },
+          }),
+        );
+        yield* recordDisposition(run.dir, { at, by: "human", kind, ref: mr, note: null });
+        const commands: string[] = [];
+        const spawner = ChildProcessSpawner.make((command) => {
+          commands.push(command._tag === "StandardCommand" ? command.command : "pipeline");
+          return Effect.die(new Error("drawing settled work must not start a command"));
+        });
+        const views = yield* buildBoard({
+          env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
+          runs: [run],
+          registered: [],
+          now: NOW,
+          offers: () => Effect.succeed([]),
+        }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+        expect(views[0]?.landed).toBe(true);
+        expect(views[0]?.drift).toBeNull();
+        expect(commands).toEqual([]);
+      }),
+    ),
+);
 
 /** Planners that ran for an hour to `finished`, their plans ready: each card asks for its offer. */
 const planners = (count: number, finished = "2026-10-27T10:00:00Z") =>
@@ -67,7 +142,7 @@ test(
           runs,
           registered: [],
           offers: (run) => Effect.sync(() => (derived.push(run), [])),
-          cards: { revision: model.inputsAt, kept, markers: new Map() },
+          cards: { revision: model.inputsAt, kept },
         }).pipe(
           Effect.provideService(FileSystem.FileSystem, model.reading),
           Effect.tap(() => Queue.offer(built, derived.length)),
@@ -109,7 +184,7 @@ test("stamping a card's age or record keeps its derivation until source facts ch
       let runs = initial;
       const model = yield* makeRunModel(dir, "installation");
       const derived: string[] = [];
-      const cards: KeptCards = { revision: model.inputsAt, kept: new Map(), markers: new Map() };
+      const cards: KeptCards = { revision: model.inputsAt, kept: new Map() };
       const build = (kept?: KeptCards) =>
         buildBoard({
           env,
@@ -153,7 +228,7 @@ test("a kept card says the time as one derived now does, hours on", () =>
       // Finished half an hour ago: shown as quiet, then gone a day after.
       const { dir, env, runs } = yield* planners(20, "2026-10-30T09:30:00Z");
       const model = yield* makeRunModel(dir, "installation");
-      const cards: KeptCards = { revision: model.inputsAt, kept: new Map(), markers: new Map() };
+      const cards: KeptCards = { revision: model.inputsAt, kept: new Map() };
       const build = (kept?: KeptCards) =>
         buildBoard({
           env,
@@ -170,39 +245,57 @@ test("a kept card says the time as one derived now does, hours on", () =>
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
-test("a build reads only the check markers of Runs that moved since the last", () =>
+test("a build reads every Run's check marker in one read, not one per Run", () =>
   runEffect(
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
       const { dir, env, runs } = yield* planners(20);
       const model = yield* makeRunModel(dir, "installation");
+      const records = yield* RunRecords;
       const read: Array<string> = [];
-      const counting: FileSystem.FileSystem = {
-        ...model.reading,
-        readFileString: (path, encoding) => {
-          if (Str.endsWith(`/${VERIFYING_FILE}`)(path)) read.push(path);
-          return model.reading.readFileString(path, encoding);
+      const counting: RunRecordsApi = {
+        ...records,
+        control: (control, run, key) => {
+          if (control === VERIFYING) read.push(run);
+          return records.control(control, run, key);
+        },
+        everyControl: (control) => {
+          if (control === VERIFYING) read.push("every");
+          return records.everyControl(control);
         },
       };
-      const cards: KeptCards = { revision: model.inputsAt, kept: new Map(), markers: new Map() };
+      const cards: KeptCards = { revision: model.inputsAt, kept: new Map() };
       const build = buildBoard({
         env,
         runs,
         registered: [],
         offers: () => Effect.succeed([]),
         cards,
-      }).pipe(Effect.provideService(FileSystem.FileSystem, counting));
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, model.reading),
+        Effect.provideService(RunRecords, counting),
+      );
       yield* build;
-      expect(read.length).toBe(runs.length);
-
-      read.length = 0;
-      yield* build;
-      expect(read).toEqual([]);
+      expect(read).toEqual(["every"]);
 
       const checking = runs[7]!;
-      yield* model.writing.writeFileString(`${checking.dir}/${VERIFYING_FILE}`, "lint\n");
+      yield* records.setControl(
+        VERIFYING,
+        checking.id,
+        encodeVerifying({
+          name: "lint",
+          executable: "bun",
+          argv: ["lint"],
+          pass: "gate",
+          round: null,
+          revision: "abc",
+          base: null,
+          started: "2026-10-30T09:59:00Z",
+        }),
+      );
+      read.length = 0;
       const board = yield* build;
-      expect(read).toEqual([`${checking.dir}/${VERIFYING_FILE}`]);
+      expect(read).toEqual(["every"]);
       expect(
         Arr.findFirst(board, (view) => view.runs.includes(checking.id)).pipe(
           Option.map((view) => view.check?.name),
@@ -221,7 +314,7 @@ test("once the model is disabled, a kept card is derived again from the disk", (
       const run = runs[1]!;
       yield* fs.remove(`${run.dir}/plan`, { recursive: true });
       const model = yield* makeRunModel(dir, "installation");
-      const cards: KeptCards = { revision: model.inputsAt, kept: new Map(), markers: new Map() };
+      const cards: KeptCards = { revision: model.inputsAt, kept: new Map() };
       const opts = { env, runs, registered: [], offers: () => Effect.succeed([]) };
       const kept = buildBoard({ ...opts, cards }).pipe(
         Effect.provideService(FileSystem.FileSystem, model.reading),

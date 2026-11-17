@@ -22,11 +22,18 @@ import { CheckProcesses, type CheckOf } from "./check-processes";
 import { logged } from "./check-supervisor";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
-import { appendJournal, readJournal } from "./journal";
+import { appendRunJournal, readBriefsOf, readRunJournal, runJournal } from "./journal";
+import { RunRecords } from "./run-records";
 import { shell, type Ran } from "./mr";
 import { nowIso, epochMs } from "./time";
 import { CurrentStep, type StepPlace } from "./steps";
-import { Pass, VerificationSchema, type FailedTest, type Snapshot } from "./verify-model";
+import {
+  Pass,
+  ProofSchema,
+  VerificationSchema,
+  type FailedTest,
+  type Snapshot,
+} from "./verify-model";
 
 /** Over this many bytes of working-tree content, the tree is not fingerprinted at all. */
 export const FINGERPRINT_MAX_BYTES = 50 * 1024 * 1024;
@@ -46,7 +53,14 @@ export const TOO_LARGE = "unstable:too-large";
 /** A repository's tree git could not write, which is never the same as another for the same reason as `TOO_LARGE`. */
 export const UNMEASURED = "unstable:unmeasured";
 
-export { PASSES, Pass, VerificationSchema, type FailedTest, type Snapshot } from "./verify-model";
+export {
+  PASSES,
+  Pass,
+  VerificationSchema,
+  type FailedTest,
+  type Proof,
+  type Snapshot,
+} from "./verify-model";
 /** A pass, and the gate fix it follows where it is a `fix`. */
 export interface CheckPass {
   readonly pass: Pass;
@@ -70,7 +84,11 @@ export const noVerdict =
       state: true,
     });
 
-type Services = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
+type Services =
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | RunRecords;
 
 const git = (args: string[], cwd: string) => shell("git", args, cwd);
 
@@ -440,23 +458,21 @@ export function staleAgainst(record: Verification, now: Snapshot): boolean {
   return !sameTree(record.end, now);
 }
 
-export const verificationsPath = Effect.fn("Verify.verificationsPath")(function* (runDir: string) {
-  const path = yield* Path.Path;
-  return path.join(runDir, "steering", "verifications.jsonl");
-});
+export const verificationsPath = (runDir: string) =>
+  runJournal(runDir, "steering/verifications.jsonl");
 
 export const appendVerification = Effect.fn("Verify.append")(function* (
   runDir: string,
   record: Verification,
 ) {
-  yield* appendJournal(yield* verificationsPath(runDir), VerificationJson, record);
+  yield* appendRunJournal(verificationsPath(runDir), VerificationJson, record);
 });
 
 /**
- * The check Collie itself is running for a Run, in its run directory while it runs. Its
+ * The control naming the check Collie itself is running for a Run, set while it runs. Its
  * agents are idle then, and without this a card reads whatever the last of them was doing.
  */
-export const VERIFYING_FILE = "verifying";
+export const VERIFYING = "verifying";
 
 const VerifyingSchema = Schema.Struct({
   name: Schema.String,
@@ -478,38 +494,35 @@ export type Verifying = typeof VerifyingSchema.Type;
 const VerifyingJson = Schema.fromJsonString(VerifyingSchema);
 export const encodeVerifying = flow(Schema.encodeResult(VerifyingJson), Result.getOrThrow);
 
-/**
- * The check running for the Run in `dir`, or null when none is. A marker in the old
- * one-line shape reads as its name alone, a plain `check` nothing else is known about.
- */
-export const verifyingIn = (
-  dir: string,
-): Effect.Effect<Verifying | null, never, FileSystem.FileSystem> =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(`${dir}/${VERIFYING_FILE}`)),
-    Effect.map((text): Verifying | null => {
-      const decoded = Schema.decodeOption(VerifyingJson)(text);
-      if (decoded._tag === "Some") return decoded.value;
-      const name = Str.trim(text);
-      return name === ""
-        ? null
-        : {
-            name,
-            executable: "",
-            argv: [],
-            pass: "check",
-            round: null,
-            revision: "",
-            base: null,
-            started: "",
-          };
-    }),
-    Effect.orElseSucceed(() => null),
+/** The check a `verifying` control's value names, or null for none. */
+export const decodeVerifying = (data: string | null): Verifying | null =>
+  data === null ? null : Option.getOrNull(Schema.decodeOption(VerifyingJson)(data));
+
+/** The check running for the Run, or null when none is. */
+export const verifyingOf = (runId: string): Effect.Effect<Verifying | null, never, RunRecords> =>
+  Effect.map(
+    RunRecords.use((records) => records.control(VERIFYING, runId)),
+    decodeVerifying,
   );
 
 export const readVerifications = Effect.fn("Verify.read")(function* (runDir: string) {
-  return yield* readJournal(yield* verificationsPath(runDir), VerificationJson);
+  return yield* readRunJournal(verificationsPath(runDir), VerificationJson);
 });
+
+/** What each verification of these Runs says across them (`ProofSchema`), in one read. */
+export const readProofsOf = Effect.fn("Verify.readProofsOf")(function* (
+  runDirs: ReadonlyArray<string>,
+) {
+  const at = Arr.map(runDirs, verificationsPath);
+  return at.length === 0
+    ? []
+    : yield* readBriefsOf(
+        Arr.map(at, (one) => one.run),
+        at[0]!.name,
+        ProofJson,
+      );
+});
+const ProofJson = Schema.fromJsonString(ProofSchema);
 
 /**
  * Whether this directory is one of the Run's own. A verification names the tree it was
@@ -760,7 +773,15 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
       ? loggedRecord
       : { ...loggedRecord, step: spec.step.step, place: spec.step.place };
   yield* appendVerification(spec.evidence, kept).pipe(
-    Effect.mapError(noVerdict(check.name, "record", "written")),
+    Effect.catchDefect((defect) =>
+      Effect.fail(
+        noVerdict(
+          check.name,
+          "record",
+          "written",
+        )(defect instanceof Error ? defect : new Error(String(defect))),
+      ),
+    ),
   );
   return kept;
 });

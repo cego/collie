@@ -42,12 +42,15 @@ import {
   importProposals,
   importRegisters,
   importTasks,
+  importRunRecords,
 } from "./records-import";
 import { StoreWrites } from "./store-writes";
+import { RUN_RECORDS_MIGRATION } from "./run-records";
 import { RequestConflict, RunReport, type Solution } from "./board-model";
 import { nowIso } from "./time";
 import { Observed, WatchCursor, Woke } from "./mr-watch-model";
 import { ShippingGo } from "./shipping";
+import { PROOF_SQL } from "./verify-model";
 
 /** A run as it was admitted: the claim, the arguments and the execution it became. */
 const Run = Schema.Struct({
@@ -406,6 +409,7 @@ type ImportError = Effect.Error<
     | typeof importProposals
     | typeof importLaunches
     | typeof importReports
+    | typeof importRunRecords
   >
 >;
 
@@ -416,6 +420,7 @@ const migrations = (imports: {
   readonly proposals: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly launches: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly reports: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly runRecords: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
 }) => ({
   "1_runs": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -643,6 +648,53 @@ const migrations = (imports: {
     `;
     yield* sql`CREATE INDEX collie_watches_mr ON collie_watches (mr)`;
   }),
+  [RUN_RECORDS_MIGRATION]: Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql.unsafe(`
+      CREATE TABLE collie_run_lines (
+        run TEXT NOT NULL,
+        journal TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        line TEXT NOT NULL,
+        kind TEXT AS (coalesce(${field("kind")}, ${field("operation")})),
+        key TEXT AS (${field("key")}),
+        brief TEXT AS (${PROOF_SQL}) STORED,
+        PRIMARY KEY (run, journal, seq)
+      ) WITHOUT ROWID
+    `);
+    yield* sql`CREATE INDEX collie_run_lines_kind ON collie_run_lines (journal, kind, run, key) WHERE kind IS NOT NULL`;
+    yield* sql`
+      CREATE TABLE collie_run_facts (
+        run TEXT NOT NULL,
+        name TEXT NOT NULL,
+        data TEXT NOT NULL,
+        PRIMARY KEY (run, name)
+      ) WITHOUT ROWID
+    `;
+    yield* sql`CREATE TABLE collie_run_activity (run TEXT PRIMARY KEY, at INTEGER NOT NULL) WITHOUT ROWID`;
+    yield* sql`
+      CREATE TABLE collie_controls (
+        control TEXT NOT NULL,
+        run TEXT NOT NULL,
+        key TEXT NOT NULL,
+        data TEXT NOT NULL,
+        PRIMARY KEY (control, run, key)
+      ) WITHOUT ROWID
+    `;
+    yield* sql`CREATE INDEX collie_controls_run ON collie_controls (run)`;
+    yield* sql`
+      CREATE TABLE collie_step_times (
+        run TEXT NOT NULL,
+        key TEXT NOT NULL,
+        workflow TEXT NOT NULL,
+        step TEXT NOT NULL,
+        at TEXT NOT NULL,
+        ms INTEGER NOT NULL,
+        PRIMARY KEY (run, key)
+      )
+    `;
+    yield* imports.runRecords;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -679,6 +731,7 @@ function makeStore(
           proposals: imported(importProposals),
           launches: imported(importLaunches),
           reports: imported(importReports),
+          runRecords: imported(importRunRecords),
         }),
       ),
       table: "collie_migrations",
@@ -1165,6 +1218,10 @@ function makeStore(
                 yield* sql`DELETE FROM collie_narratives WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_narrative_work WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_watches WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_run_lines WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_run_facts WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_run_activity WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_controls WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
                 gone.push(run);
               }

@@ -11,12 +11,16 @@ import { Buffer } from "node:buffer";
 import type { RunFacts } from "./runs";
 import type { RunningCheck } from "./board-model";
 import {
+  decodeVerifying,
+  readProofsOf,
   readVerifications,
-  verifyingIn,
+  VERIFYING,
+  verifyingOf,
   type Pass,
   type Verification,
   type Verifying,
 } from "./verify";
+import { RunRecords } from "./run-records";
 import { epochMs } from "./time";
 import type { CheckRecord } from "./check-processes";
 import { PASSES } from "./verify-model";
@@ -57,43 +61,17 @@ export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
         Effect.orElseSucceed((): ReadonlyArray<string> => []),
       );
 
-/** Each Run's marker as last read, at the revision it was read at. */
-export interface KeptMarkers {
-  readonly revision: (run: string) => number;
-  readonly markers: Map<string, { readonly revision: number; readonly marker: Verifying | null }>;
-}
-
 /**
- * Every Run's marker, read once for a whole board. A Run with none whose check still runs,
- * as an agent's own verify does, is read from that check's record.
+ * Every Run's marker, by Run, in one read for a whole board. A Run with none whose check
+ * still runs, as an agent's own verify does, is read from that check's record.
  */
 export const markersOf = Effect.fn("Checks.markersOf")(function* (
-  runs: ReadonlyArray<RunFacts>,
   records: ReadonlyArray<CheckRecord> = [],
-  kept?: KeptMarkers,
 ) {
   const found = new Map<string, Verifying>();
-  const unread: Array<RunFacts> = [];
-  for (const run of runs) {
-    const was = kept?.markers.get(run.id);
-    if (was === undefined || was.revision !== kept!.revision(run.id)) unread.push(run);
-    else if (was.marker !== null) found.set(run.id, was.marker);
-  }
-  yield* Effect.forEach(
-    unread,
-    (run) => {
-      // Taken before the read, so a write during it reads again next time.
-      const revision = kept?.revision(run.id) ?? 0;
-      return Effect.map(verifyingIn(run.dir), (marker) => {
-        kept?.markers.set(run.id, { revision, marker });
-        if (marker !== null) found.set(run.id, marker);
-      });
-    },
-    { concurrency: 8, discard: true },
-  );
-  if (kept !== undefined && unread.length > 0) {
-    const present = new Set(Arr.map(runs, (run) => run.id));
-    for (const run of kept.markers.keys()) if (!present.has(run)) kept.markers.delete(run);
+  for (const row of yield* RunRecords.use((all) => all.everyControl(VERIFYING))) {
+    const marker = decodeVerifying(row.data);
+    if (marker !== null) found.set(row.run, marker);
   }
   for (const record of records)
     if (!found.has(record.run))
@@ -123,19 +101,17 @@ const usualOf = Effect.fn("Checks.usualOf")(function* (
   runs: ReadonlyArray<RunFacts>,
   marker: Verifying,
 ) {
-  const same: Verification[] = [];
-  for (const other of runs) {
-    if (other.project !== run.project) continue;
-    for (const record of yield* readOrNone(other))
-      if (
-        record.by === "collie" &&
-        record.name === marker.name &&
-        commandOf(record.executable) === commandOf(marker.executable) &&
-        record.argv.length === marker.argv.length &&
-        Arr.every(record.argv, (word, at) => word === marker.argv[at])
-      )
-        same.push(record);
-  }
+  const same = Arr.filter(
+    yield* readProofsOf(
+      Arr.flatMap(runs, (other) => (other.project === run.project ? [other.evidence] : [])),
+    ),
+    (record) =>
+      record.by === "collie" &&
+      record.name === marker.name &&
+      commandOf(record.executable) === commandOf(marker.executable) &&
+      record.argv.length === marker.argv.length &&
+      Arr.every(record.argv, (word, at) => word === marker.argv[at]),
+  );
   const last = Arr.map(
     same.sort((a, b) => pipe_(a.at, Str.localeCompare(b.at))).slice(-USUAL_OF),
     (record) => record.seconds * 1000,
@@ -226,7 +202,7 @@ export const followLog = Effect.fn("Checks.followLog")(function* (
       pending = pending.subarray(end);
     }
   });
-  while ((yield* verifyingIn(run.dir))?.log === log) {
+  while ((yield* verifyingOf(run.id))?.log === log) {
     yield* drain;
     yield* Effect.sleep(FOLLOW_EVERY);
   }

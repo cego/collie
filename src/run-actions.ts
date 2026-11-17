@@ -57,7 +57,6 @@ import {
 } from "./operations";
 import { Herdr } from "./herdr";
 import { runDir } from "./engine";
-import { withDirLock } from "./lock";
 import {
   amend as amendIntent,
   constraintId,
@@ -69,9 +68,8 @@ import {
   readDefaults,
   readIntent,
   verificationGrant,
+  updateIntent,
   writeDefaults,
-  writeIntentHeld,
-  type Intent,
 } from "./intent";
 import { scopeKey } from "./registry";
 import { layers, loadDefinitions } from "./definitions";
@@ -247,25 +245,18 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           ? { state: "applied" as const, note: `intent v${changed.value.version}` }
           : failed(changed.error.message);
       }
-      // The version check and the write under one lock: read outside it, two
-      // confirmations both pass the check and the later rename erases the earlier.
-      const next = yield* withDirLock(
-        dir,
+      const amended = yield* updateIntent(dir, (intent) =>
         Effect.gen(function* () {
-          const intent: Intent | null = yield* readIntent(dir).pipe(
-            Effect.orElseSucceed(() => null),
-          );
           if (intent === null)
-            return { ok: false, why: `Run "${action.run}" has no Intent to amend` } as const;
+            return yield* Effect.fail(`Run "${action.run}" has no Intent to amend`);
           if (intent.version !== action.base_version)
-            return {
-              ok: false,
-              why: `the Intent is v${intent.version}, not v${action.base_version}`,
-            } as const;
+            return yield* Effect.fail(
+              `the Intent is v${intent.version}, not v${action.base_version}`,
+            );
           // A constraint is taken in the human's own words — a `semantic` one, because
           // nothing a model writes is a rule Collie can check by itself. The other two
           // amendments take the patch as the goal, and as the constraint's id.
-          const amended = amendIntent(
+          return amendIntent(
             intent,
             action.change === "set-goal"
               ? { kind: "set-goal", goal: action.patch }
@@ -285,14 +276,11 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
             yield* nowIso,
             voiceOf(by),
           );
-          yield* writeIntentHeld(dir, amended);
-          return { ok: true, amended } as const;
         }),
       );
-      if (!next.ok) return failed(next.why);
-      // Nothing is told: a Run reads its Intent at its next boundary, from the file this
-      // has just written.
-      return { state: "applied" as const, note: `intent v${next.amended.version}` };
+      // Nothing is told: a Run reads its Intent at its next boundary, from what this has
+      // just written.
+      return { state: "applied" as const, note: `intent v${amended?.version}` };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
   // Through the same host grant as `run intent verification`, and the same Intent amendment,
@@ -311,19 +299,18 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const dir = runDir(env.stateDir, action.run);
       // The grant is what the gate runs; an Intent that failed to follow it is reported,
       // not taken for the grant failing.
-      const unlisted = yield* withDirLock(
-        dir,
-        Effect.gen(function* () {
-          const intent: Intent | null = yield* readIntent(dir).pipe(
-            Effect.orElseSucceed(() => null),
-          );
-          if (intent === null) return;
-          const change = verificationGrant(intent, action.name, command);
-          yield* writeIntentHeld(
-            dir,
-            amendIntent(intent, change, actorName(by), yield* nowIso, voiceOf(by)),
-          );
-        }),
+      const unlisted = yield* updateIntent(dir, (intent) =>
+        intent === null
+          ? Effect.succeed(null)
+          : Effect.map(nowIso, (now) =>
+              amendIntent(
+                intent,
+                verificationGrant(intent, action.name, command),
+                actorName(by),
+                now,
+                voiceOf(by),
+              ),
+            ),
       ).pipe(
         Effect.as(""),
         Effect.catch((cause) => Effect.succeed(String(cause))),

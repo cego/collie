@@ -86,8 +86,12 @@ test(
           const [going] = yield* until(
             () => cards(world.state),
             (cards) =>
-              Arr.some(cards, (card) =>
-                Arr.some(offers(card), (offer) => offer.unavailable === reason),
+              Arr.some(
+                cards,
+                (card) =>
+                  // The completed carrier can still lead an intermediate board snapshot.
+                  card.run === release.runId &&
+                  Arr.some(offers(card), (offer) => offer.unavailable === reason),
               ),
           );
           expect(Option.getOrThrow(Arr.findFirst(going!.mrs!, (mr) => mr.mr === MR)).run).toBe(

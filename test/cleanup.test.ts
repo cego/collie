@@ -3,7 +3,6 @@
 
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import {
   Clock,
@@ -27,7 +26,7 @@ import {
   CHECK_ID,
   CHECK_INSTALLATION,
   hostCheckProcesses,
-  runningChecksDir,
+  runningChecks,
 } from "../src/check-processes";
 import { checksSweeper, generationsSweeper, sweepAsked, type Sweeper } from "../src/cleanup";
 import { signalProcess } from "../src/lock";
@@ -37,7 +36,7 @@ import { VerifySpecSchema } from "../src/verify-spec";
 import { exec, startDetached } from "./support/command";
 import { fastForward, runEffect } from "./support/effect";
 import { fixtures, root, until } from "./support/host";
-import { recordsAt } from "./support/records";
+import { hostRecords, recordsAt } from "./support/records";
 import { collie, proves, type World } from "./support/world";
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -649,14 +648,12 @@ test.skipIf(process.platform !== "linux")(
           );
           const check = { pid, started: (yield* startedOf(pid)) ?? "" };
           const [record] = yield* until(
-            () =>
-              fs.readDirectory(runningChecksDir(world.state)).pipe(Effect.orElseSucceed(() => [])),
-            // Not its `.new`, which the host writes first and renames.
-            (files) => files.length === 1 && pipe_(files[0]!, Str.endsWith(".json")),
+            () => hostRecords(world.state, runningChecks),
+            (records) => records.length === 1,
           );
           const kept = {
             kind: "check",
-            target: pipe_(record ?? "", Str.replace(/\.json$/, "")),
+            target: record!.id,
             reason: "this host is collecting it",
           };
 

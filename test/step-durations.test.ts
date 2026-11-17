@@ -1,48 +1,75 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Clock, Effect, FileSystem } from "effect";
-import { rememberStepDurations, usualStepTimes } from "../src/step-durations";
-import type { StepLine } from "../src/steps";
-import { runEffect } from "./support/effect";
+import { Effect } from "effect";
+import { RunRecords } from "../src/run-records";
+import { Store } from "../src/store";
+import { stepTimesByWorkflow, usualStepTimes } from "../src/step-durations";
+import { encodeStepLine, STEPS_FILE, type StepLine } from "../src/steps";
+import { memoryRecords, runEffect } from "./support/effect";
 
 const at = (minute: number) => `2026-10-01T00:${Str.padStart(2, "0")(String(minute))}:00.000Z`;
-const stepsOf = (count: number, minutes: number): ReadonlyArray<StepLine> =>
-  Arr.flatMap(Arr.range(1, count), (n) => [
-    {
-      kind: "enter" as const,
-      key: `s${n}`,
-      step: {
-        id: `s${n}`,
-        title: "",
-        description: "",
-        kind: "agent" as const,
-        role: null,
-        produces: null,
-      },
-      place: null,
-      at: at(0),
-    },
-    { kind: "leave" as const, key: `s${n}`, at: at(minutes) },
-  ]);
+const meta = (id: string) => ({
+  id,
+  title: "",
+  description: "",
+  kind: "agent" as const,
+  role: null,
+  produces: null,
+});
 
-test("a Run's steps are remembered at a storm's pace beside ten Runs of 220 steps", () =>
+/** A Run of `workflow` admitted with these Step lines. */
+const ran = (run: string, workflow: string, lines: ReadonlyArray<StepLine>) =>
+  Effect.gen(function* () {
+    yield* (yield* Store).admit({
+      request: run,
+      run,
+      workflow,
+      project: "/work",
+      input: {},
+      provenance: {},
+      options: {},
+      generation: `${workflow}@1`,
+      execution: `execution-${run}`,
+      task: null,
+      parent: null,
+    });
+    yield* (yield* RunRecords).append(run, STEPS_FILE, Arr.map(lines, encodeStepLine));
+  });
+
+const took = (step: string, from: number, to: number, key = step): ReadonlyArray<StepLine> => [
+  { kind: "enter", key, step: meta(step), place: null, at: at(from) },
+  { kind: "leave", key, at: at(to) },
+];
+
+test("a Step's usual time is the median of its latest ten runs, from first entry to last leaving", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-durations-" });
-      for (const n of Arr.range(1, 10))
-        yield* rememberStepDurations(dir, `large-${n}`, "large", stepsOf(220, n));
-      const began = yield* Clock.currentTimeMillis;
-      for (const n of Arr.range(1, 30)) {
-        yield* rememberStepDurations(dir, `small-${n}`, "small", stepsOf(6, 2));
-        yield* usualStepTimes(dir, "small");
-      }
-      const took = (yield* Clock.currentTimeMillis) - began;
+      // Re-entered after a resume: timed from its first entry to its last leaving.
+      yield* ran("r0", "implement", [
+        ...took("build", 20, 23),
+        { kind: "enter", key: "build", step: meta("build"), place: null, at: at(24) },
+        { kind: "leave", key: "build", at: at(28) },
+      ]);
+      for (const n of Arr.range(1, 11)) yield* ran(`r${n}`, "implement", took("build", 10, 10 + n));
+      yield* ran("other", "review", took("build", 0, 59));
+      yield* ran("few", "review", took("read", 0, 1));
 
-      expect((yield* usualStepTimes(dir, "large")).get("s220")).toBe(330_000);
-      expect((yield* usualStepTimes(dir, "small")).get("s6")).toBe(120_000);
-      // The quadratic upkeep it replaced took 3.6 s locally, this 0.3 s; CI runners are slower.
-      expect(took).toBeLessThan(2_500);
-    }).pipe(Effect.scoped),
+      // r1 and r2 are the oldest of twelve: r0 took 8 minutes and r3..r11 3 to 11, median 7.5.
+      expect((yield* usualStepTimes("implement")).get("build")).toBe(7.5 * 60_000);
+      // One or two samples are no usual time.
+      expect((yield* stepTimesByWorkflow).get("review")).toEqual(new Map());
+    }).pipe(Effect.provide(memoryRecords)),
+  ));
+
+test("a Step's usual time counts each run of it once, by its key", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* ran("r1", "plan", [
+        ...took("draft", 0, 2, "draft"),
+        ...took("draft", 0, 4, "draft~2"),
+      ]);
+      yield* ran("r2", "plan", took("draft", 0, 6));
+      expect((yield* usualStepTimes("plan")).get("draft")).toBe(4 * 60_000);
+    }).pipe(Effect.provide(memoryRecords)),
   ));

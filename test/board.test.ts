@@ -10,6 +10,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Clock, DateTime, Effect, Fiber, FileSystem, Path, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import {
   boardLines,
   buildBoard,
@@ -30,9 +31,9 @@ import {
   type MrState,
   type OfferView,
 } from "../src/board-model";
-import { encodeStepLine, STEPS_FILE, type StepLine, type StepMeta } from "../src/steps";
+import { appendStepLine, type StepLine, type StepMeta } from "../src/steps";
 import { machineName } from "../src/peers";
-import { nothingToLandFile } from "../src/standing";
+import { NOTHING_TO_LAND } from "../src/standing";
 import { writeStageProof } from "../src/shipping";
 import {
   Answered,
@@ -58,10 +59,13 @@ import {
   appendVerification,
   encodeVerifying,
   readVerifications,
+  VERIFYING,
+  verifyingOf,
   type Verification,
 } from "../src/verify";
 import { checkSentence, followLog } from "../src/checks";
-import { encodeCheckRecord, runningChecksDir } from "../src/check-processes";
+import { MEMORY_WAIT } from "../src/memory-wait";
+import { encodeCheckRecord } from "../src/check-processes";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
 import { appendLine, toldIn, toldLine, type Delivery } from "../src/steering";
@@ -72,14 +76,15 @@ import { factsOfView, type RunFacts } from "../src/runs";
 import type { RunView } from "../src/engine";
 import type { TaskRecord } from "../src/task";
 import { memoryRecords, runEffect } from "./support/effect";
-import { madeRun } from "./support/records";
+import { hostRecords, hostRunRecords, madeRun, recordsAt } from "./support/records";
+import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { exec } from "./support/command";
 import { collie, proves } from "./support/world";
 import { stopHost, until } from "./support/host";
 import { Launched, orderLaunch, recordLaunch } from "../src/launches";
 import { epochMs } from "../src/time";
 import { seedIntent, writeIntent } from "../src/intent";
-import { approvedFile, encodeApproved } from "../src/verify-spec";
+import { updateApproved } from "../src/verify-spec";
 import { planDirOf } from "../src/run-detail";
 import { connect } from "../src/host";
 import { readCards } from "../src/cards";
@@ -144,7 +149,7 @@ test(
           );
           expect(finished?.branch).not.toBeNull();
           const cards = yield* until(
-            () => readCards(`${world.state}/runs/${started.runId}`).pipe(Effect.orDie),
+            () => hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`)),
             (cards) => Arr.some(cards, (card) => card.kind === "final"),
           );
           const ended = cards.at(-1)!.revision.head_sha;
@@ -180,7 +185,9 @@ test(
               .pipe(Effect.orDie))?.status.status,
           ).toBe("failed");
           expect(
-            (yield* readCards(`${world.state}/runs/${started.runId}`)).at(-1)?.revision.head_sha,
+            (yield* hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`))).at(
+              -1,
+            )?.revision.head_sha,
           ).toBe(ended);
           const env = readEnv({
             HERDR_PLUGIN_ROOT: world.install,
@@ -235,13 +242,18 @@ test(
           expect(checked?.branch).toBe(finished?.branch);
           expect(checked?.cwd).toBe(cwd);
           expect(yield* current.launches({ run: child.runId }).pipe(Effect.orDie)).toHaveLength(0);
-          const records = yield* readVerifications(`${world.state}/evidence/${child.runId}`);
+          const records = yield* hostRecords(
+            world.state,
+            readVerifications(`${world.state}/evidence/${child.runId}`),
+          );
           expect(records[0]?.end.head_sha).toBe(head);
           expect(
             (yield* current.run({ runId: started.runId }).pipe(Effect.orDie))?.status.status,
           ).toBe("failed");
           expect(
-            (yield* readCards(`${world.state}/runs/${started.runId}`)).at(-1)?.revision.head_sha,
+            (yield* hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`))).at(
+              -1,
+            )?.revision.head_sha,
           ).toBe(ended);
           const listed = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
           expect(listed[0]?.title).toContain("Checks");
@@ -263,9 +275,12 @@ test(
             status: "failed",
             reason: "A review is required",
           });
-          expect(yield* readVerifications(`${world.state}/evidence/${stale.runId}`)).toHaveLength(
-            0,
-          );
+          expect(
+            yield* hostRecords(
+              world.state,
+              readVerifications(`${world.state}/evidence/${stale.runId}`),
+            ),
+          ).toHaveLength(0);
         }),
       ["recovery.workflow.ts"],
     ),
@@ -1063,15 +1078,20 @@ test("a check Collie is running outranks what an idle agent last said", () =>
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const run = yield* madeRun(dir, { task: "task-1" });
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.writeFileString(`${run.dir}/verifying`, "typecheck-spilnu");
+      yield* marking(run, {
+        name: "typecheck-spilnu",
+        executable: "",
+        argv: [],
+        pass: "check",
+        revision: "",
+        started: "",
+      });
 
       const [view] = yield* board(env, [run], {
         alive: [agent("impl-1", "idle", "Code review findings application")],
         registered: [registered("impl-1", run.id)],
       });
 
-      // A marker in the old one-line shape still reads, as a name and nothing more.
       expect(view!.sentence).toBe("Running typecheck-spilnu.");
     }),
   ));
@@ -1099,6 +1119,21 @@ const launched = Effect.fn("board.launched")(function* (
 });
 
 /** A file last written at this moment, which is what silence is measured from. */
+/** `effect` with the clock at `iso`. */
+const atTime = <A, E, R>(iso: string, effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const clock = yield* TestClock.make();
+    yield* clock.setTime(epochMs(iso));
+    return yield* effect.pipe(Effect.provideService(Clock.Clock, clock));
+  });
+
+/** The Run did work at `iso`, as accepting its agent's output records. */
+const workedAt = (runId: string, iso: string) =>
+  atTime(
+    iso,
+    RunRecords.use((records) => records.touch(runId)),
+  );
+
 const writtenAt = Effect.fn("board.writtenAt")(function* (file: string, at: string) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(
@@ -1153,12 +1188,10 @@ test("a Run is not quiet while its agent works, a check runs, or its agents writ
       const checking = yield* madeRun(dir, { id: "r-checking" });
       const writing = yield* madeRun(dir, { id: "r-writing" });
       const idle = yield* madeRun(dir, { id: "r-idle" });
-      for (const run of [working, checking, writing, idle]) {
-        yield* launched(dir, run.id, ["build"]);
-        yield* writtenAt(`${run.dir}/log`, old);
-      }
-      yield* writtenAt(`${checking.dir}/verifying`, old);
-      yield* writtenAt(`${dir}/agents/${writing.id}/build.prompt.md`, "2026-09-14T10:04:00Z");
+      for (const run of [working, checking, writing, idle])
+        yield* atTime(old, launched(dir, run.id, ["build"]));
+      yield* marking(checking, { started: old });
+      yield* workedAt(writing.id, "2026-09-14T10:04:00Z");
 
       const views = yield* board(env, [working, checking, writing, idle], {
         alive: [agent("impl-1", "working"), { ...agent("impl-2", "idle"), paneId: "p-2" }],
@@ -1181,12 +1214,11 @@ test("a stopped Run whose check still runs is working, and stopped once the chec
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
-      const fs = yield* FileSystem.FileSystem;
+      const records = yield* RunRecords;
       const run = yield* madeRun(dir, { id: "r-stopped", task: "task-1", state: "stopped" });
-      const record = `${runningChecksDir(dir)}/r-stopped@1-a.json`;
-      yield* fs.makeDirectory(runningChecksDir(dir), { recursive: true });
-      yield* fs.writeFileString(
-        record,
+      yield* records.setControl(
+        RUNNING_CHECK,
+        "",
         encodeCheckRecord({
           id: "r-stopped@1-a",
           run: run.id,
@@ -1197,6 +1229,7 @@ test("a stopped Run whose check still runs is working, and stopped once the chec
           host: { pid: 4241, started: "1" },
           started: "2026-09-14T10:03:00Z",
         }),
+        "r-stopped@1-a",
       );
 
       const [checking] = yield* board(env, [run]);
@@ -1204,7 +1237,7 @@ test("a stopped Run whose check still runs is working, and stopped once the chec
       expect(sectionOf(checking!)).toBe("working");
       expect(checking!.sentence).toBe("Running unit on the branch, 2 min.");
 
-      yield* fs.remove(record);
+      yield* records.setControl(RUNNING_CHECK, "", null, "r-stopped@1-a");
       const [stopped] = yield* board(env, [run]);
       expect(stopped!.state).toBe("stopped");
     }),
@@ -1214,7 +1247,6 @@ test("a check still running for an older Run of a Task keeps the Task working, e
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
-      const fs = yield* FileSystem.FileSystem;
       const newer = yield* madeRun(dir, {
         id: "r-newer",
         task: "task-1",
@@ -1236,9 +1268,9 @@ test("a check still running for an older Run of a Task keeps the Task working, e
         ref: "cego/collie!43",
         note: null,
       });
-      yield* fs.makeDirectory(runningChecksDir(dir), { recursive: true });
-      yield* fs.writeFileString(
-        `${runningChecksDir(dir)}/r-older@1-a.json`,
+      yield* (yield* RunRecords).setControl(
+        RUNNING_CHECK,
+        "",
         encodeCheckRecord({
           id: "r-older@1-a",
           run: older.id,
@@ -1249,6 +1281,7 @@ test("a check still running for an older Run of a Task keeps the Task working, e
           host: { pid: 4241, started: "1" },
           started: "2026-09-14T10:03:00Z",
         }),
+        "r-older@1-a",
       );
 
       const [card] = yield* board(env, [newer, older]);
@@ -1264,10 +1297,16 @@ test("what the host writes about a finished Run does not move when it ended", ()
       const { dir, env } = yield* scratch();
       const old = "2026-09-13T09:00:00Z";
       const run = yield* madeRun(dir, { state: "failed", branch: "mk/old-work" });
-      yield* writtenAt(`${run.dir}/log`, old);
+      yield* workedAt(run.id, old);
       // The diff kept for its drawer and the trail of who disposed of it.
       yield* writtenAt(`${run.dir}/diff.json`, "2026-09-14T10:04:00Z");
-      yield* writtenAt(`${run.dir}/operations.jsonl`, "2026-09-14T10:04:00Z");
+      yield* recordAudit(run.dir, {
+        operation: "disposition",
+        request: "d-1",
+        origin: "board",
+        result: Schema.String,
+        value: "abandoned",
+      });
 
       const [view] = yield* board(env, [run]);
       expect(view!.ended).toBe(epochMs(old));
@@ -1489,14 +1528,14 @@ test("a Run that ended with nothing to file is finished, not waiting", () =>
 test("a Run that recorded it had nothing to land is finished, while another Run's branch still waits", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
+      const records = yield* RunRecords;
       const { dir, env } = yield* scratch();
       const succeeded = (id: string, task: string) =>
         madeRun(dir, { id, task, state: "succeeded", branch: `mk/${id}` });
       const nothing = yield* succeeded("r-nothing", "t-nothing");
-      yield* fs.writeFileString(nothingToLandFile(nothing.dir), "nothing to land\n");
+      yield* records.put(nothing.id, NOTHING_TO_LAND, "nothing to land\n");
       const shared = yield* succeeded("r-shared", "t-shared");
-      yield* fs.writeFileString(nothingToLandFile(shared.dir), "nothing to land\n");
+      yield* records.put(shared.id, NOTHING_TO_LAND, "nothing to land\n");
       const runs = [
         nothing,
         yield* succeeded("r-something", "t-something"),
@@ -1901,7 +1940,7 @@ test("an owed Task discloses a removed checkout and refreshes when it is restore
           root_pane_id: null,
         },
       });
-      const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
+      const cards = { revision: () => 1, kept: new Map() };
       const read = () => board(env, [run], { ...unapproved(), cards });
       const [missing] = yield* read();
       expect(sectionOf(missing!)).toBe("waiting");
@@ -2094,7 +2133,7 @@ test("fresh green work preserves its declared Release title, revoked by a moved 
         expect.stringContaining("Release after review: Ready to release: mk/support!279"),
         expect.stringContaining("Release after review: Ready to release: mk/support!279"),
       ]);
-      const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
+      const cards = { revision: () => 1, kept: new Map() };
       const cached = (now: string) =>
         board(env, [second], {
           mrStates: new Map([[M_ID, "open"]]),
@@ -3252,13 +3291,12 @@ test("a merge request whose target branch is another's source branch waits on it
     }),
   ));
 
-const waitingForMemory = (runDir: string) =>
+const waitingForMemory = (runId: string) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
     const now = yield* Clock.currentTimeMillis;
-    yield* fs.makeDirectory(`${runDir}/memory-waits`, { recursive: true });
-    yield* fs.writeFileString(
-      `${runDir}/memory-waits/1-1.json`,
+    yield* (yield* RunRecords).setControl(
+      MEMORY_WAIT,
+      runId,
       yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
         what: 'collie verify "unit"',
         sentence: "waiting for memory on vm-mk: 2.1 of 62.0 GB available",
@@ -3267,6 +3305,7 @@ const waitingForMemory = (runDir: string) =>
         every: 15_000,
         asker: null,
       }).pipe(Effect.orDie),
+      "1-1.json",
     );
   }).pipe(Effect.orDie);
 
@@ -3283,7 +3322,7 @@ test("a fan-out's card says a Repo run waits for memory", () =>
         parent: "r-fan",
         repo: "web",
       });
-      yield* waitingForMemory(web.dir);
+      yield* waitingForMemory(web.id);
 
       const [view] = yield* board(env, [web, parent]);
 
@@ -3296,7 +3335,7 @@ test("a finished Run's card says a verify of it waits for memory", () =>
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const run = yield* madeRun(dir, { id: "r-done", task: "task-1", state: "succeeded" });
-      yield* waitingForMemory(run.dir);
+      yield* waitingForMemory(run.id);
 
       const [view] = yield* board(env, [run]);
 
@@ -3483,10 +3522,7 @@ test("a fan-out is not quiet while one of its Repo runs works or writes", () =>
       });
       const then = DateTime.toDateUtc(DateTime.makeUnsafe(old));
       yield* fs.utimes(`${parent.dir}/plan`, then, then);
-      for (const run of [parent, web]) {
-        yield* launched(dir, run.id, ["build"]);
-        yield* writtenAt(`${run.dir}/log`, old);
-      }
+      for (const run of [parent, web]) yield* atTime(old, launched(dir, run.id, ["build"]));
       const stateOf = (over: Partial<Parameters<typeof buildBoard>[0]>) =>
         board(env, [web, parent], over).pipe(Effect.map((views) => views[0]!.state));
 
@@ -3497,7 +3533,7 @@ test("a fan-out is not quiet while one of its Repo runs works or writes", () =>
           registered: [registered("impl-web", web.id)],
         }),
       ).toBe("active");
-      yield* writtenAt(`${dir}/agents/${web.id}/build.prompt.md`, "2026-09-14T10:04:00Z");
+      yield* workedAt(web.id, "2026-09-14T10:04:00Z");
       expect(yield* stateOf({})).toBe("active");
     }),
   ));
@@ -3959,9 +3995,9 @@ const marking = Effect.fn("board.marking")(function* (
   run: RunFacts,
   over: Partial<Parameters<typeof encodeVerifying>[0]> = {},
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.writeFileString(
-    `${run.dir}/verifying`,
+  yield* (yield* RunRecords).setControl(
+    VERIFYING,
+    run.id,
     encodeVerifying({
       name: "test",
       executable: "bun",
@@ -4092,17 +4128,14 @@ test("a Verification recorded before passes were still reads, as a plain check",
     Effect.gen(function* () {
       const { dir } = yield* scratch();
       const run = yield* madeRun(dir);
-      const fs = yield* FileSystem.FileSystem;
       const {
         pass: _pass,
         round: _round,
         ...old
       } = { ...checked("test", "abc"), pass: "gate", round: 1 };
-      yield* fs.makeDirectory(`${run.evidence}/steering`, { recursive: true });
-      yield* fs.writeFileString(
-        `${run.evidence}/steering/verifications.jsonl`,
-        `${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(old).pipe(Effect.orDie)}\n`,
-      );
+      yield* (yield* RunRecords).append(run.id, "evidence/steering/verifications.jsonl", [
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(old).pipe(Effect.orDie),
+      ]);
       const [read] = yield* readVerifications(run.evidence);
       expect(read?.name).toBe("test");
       expect(read?.pass).toBeUndefined();
@@ -4126,9 +4159,10 @@ test(
             ...checked("lint", "abc"),
             run: runId,
             pass: "gate",
-          });
-          yield* fs.writeFileString(
-            `${run.dir}/verifying`,
+          }).pipe(Effect.provide(recordsAt(world.state)));
+          yield* hostRunRecords(() => world.state).setControl(
+            VERIFYING,
+            runId,
             encodeVerifying({
               name: "test",
               executable: "bun",
@@ -4292,9 +4326,10 @@ test(
           const log = `${run.evidence}/checks/unit.log`;
           yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
           yield* fs.writeFileString(log, "compiling\n");
-          const marker = `${run.dir}/verifying`;
-          yield* fs.writeFileString(
-            marker,
+          const records = hostRunRecords(() => world.state);
+          yield* records.setControl(
+            VERIFYING,
+            runId,
             encodeVerifying({
               name: "unit",
               executable: "bun",
@@ -4329,8 +4364,8 @@ test(
             ...checked("unit", "abc"),
             run: runId,
             log,
-          });
-          yield* fs.remove(marker);
+          }).pipe(Effect.provide(recordsAt(world.state)));
+          yield* records.setControl(VERIFYING, runId, null);
           const followed = yield* Fiber.join(following);
 
           const none = yield* collie(world, ["run", "checks", runId, "--follow"]);
@@ -4421,7 +4456,7 @@ test("a Run's checks are its Intent's as they stand, each passed as the command 
       ) => ({ name, executable, argv, cwd });
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${repo}/packages/b`, { recursive: true });
-      yield* fs.writeFileString(approvedFile(run.evidence), encodeApproved([spec("test")]));
+      yield* updateApproved(run.evidence, () => [spec("test")]);
       // As Collie records it: the executable resolved, in the directory the check names.
       const ran = (name: string, result: "pass" | "fail" = "pass") => ({
         ...checked(name, head, result),
@@ -4468,10 +4503,9 @@ test("a Run whose gate relied on an agent's pass of the check's command reads as
         mr: PR,
         finished: "2026-09-14T09:30:00Z",
       });
-      yield* (yield* FileSystem.FileSystem).writeFileString(
-        approvedFile(run.evidence),
-        encodeApproved([{ name: "test", executable: "true", argv: [], cwd: "worktree" }]),
-      );
+      yield* updateApproved(run.evidence, () => [
+        { name: "test", executable: "true", argv: [], cwd: "worktree" },
+      ]);
       const agents = (name: string, argv: ReadonlyArray<string>) => ({
         ...checked(name, head),
         by: "agent" as const,
@@ -4510,9 +4544,9 @@ test("following a check hands on each line while the check is still running", ()
         () => Effect.succeed(Arr.join(said, "")),
         (text) => pipe(text, Str.includes("1 pass")),
       );
-      expect(yield* fs.exists(`${run.dir}/verifying`)).toBe(true);
+      expect(yield* verifyingOf(run.id)).not.toBeNull();
 
-      yield* fs.remove(`${run.dir}/verifying`);
+      yield* (yield* RunRecords).setControl(VERIFYING, run.id, null);
       expect(yield* Fiber.join(following)).toBeNull();
       expect(Arr.join(said, "")).toBe("1 pass\n");
     }),
@@ -4641,13 +4675,7 @@ const stepsRecorded = Effect.fn("board.stepsRecorded")(function* (
     lines.push({ kind: "enter", key: step.id, step, place: null, at: ago(since) });
     if (left) lines.push({ kind: "leave", key: step.id, at: ago(since - minutes) });
   });
-  yield* (yield* FileSystem.FileSystem).writeFileString(
-    `${run.dir}/${STEPS_FILE}`,
-    Arr.join(
-      Arr.map(lines, (line) => `${encodeStepLine(line)}\n`),
-      "",
-    ),
-  );
+  yield* Effect.forEach(lines, (line) => appendStepLine(run.dir, line));
 });
 
 /** The board built over these Runs, and each Task's whole Flow beside it. */
@@ -4869,7 +4897,7 @@ test("an attended implement answered Finish keeps named Offers as CI becomes gre
         answered: [{ name: "next", prompt: "What next?", options: [], answer: "finish" }],
       });
       yield* appendVerification(implement.evidence, checked("test", M_HEAD));
-      const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
+      const cards = { revision: () => 1, kept: new Map() };
       const read = (state: "running" | "passed") =>
         board(env, [implement], {
           cards,
@@ -4990,7 +5018,7 @@ const waitingIn = (
   ) => Effect.Effect<
     Partial<Parameters<typeof buildBoard>[0]>,
     never,
-    FileSystem.FileSystem | Path.Path
+    FileSystem.FileSystem | Path.Path | RunRecords
   >,
   over: Partial<RunFacts> = {},
 ) =>
@@ -5108,7 +5136,7 @@ test("a hold says who held it, as the card's held line does", () =>
 test("a wait for memory names the Machine short of it", () =>
   runEffect(
     Effect.gen(function* () {
-      const nodes = yield* waitingIn((run) => waitingForMemory(run.dir).pipe(Effect.as({})));
+      const nodes = yield* waitingIn((run) => waitingForMemory(run.id).pipe(Effect.as({})));
       expect(nodes[0]).toEqual({
         id: "build",
         state: "waiting",
@@ -5465,13 +5493,7 @@ test.each([false, true])("a fan-out's Repo runs appear once, by Wave (item calls
             { kind: "child", key: "fan", run: "r-a", at: "2026-09-14T10:01:10.000Z" },
             { kind: "child", key: "fan", run: "r-b", at: "2026-09-14T10:01:20.000Z" },
           ];
-      yield* fs.writeFileString(
-        `${parent.dir}/${STEPS_FILE}`,
-        Arr.join(
-          Arr.map(startedIn, (line) => `${encodeStepLine(line)}\n`),
-          "",
-        ),
-      );
+      yield* Effect.forEach(startedIn, (line) => appendStepLine(parent.dir, line));
       const repoRun = (id: string, repo: string, over: Partial<RunFacts> = {}) =>
         madeRun(dir, { id, task: "task-1", parent: "r-fan", repo, ...over });
       const runsOf = (flow: Flow) =>

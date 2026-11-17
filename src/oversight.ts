@@ -8,7 +8,8 @@ import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
 import type { PlatformServices } from "./platform";
-import { Clock, Context, Effect, FileSystem, Path, Schema } from "effect";
+import { Cause, Clock, Context, Effect, FileSystem, Path, Schema } from "effect";
+import * as MutableRef from "effect/MutableRef";
 import { appendLogLine } from "./run-log";
 import { reportFields } from "./narrative-model";
 import type { ChildProcessSpawner } from "effect/process";
@@ -59,7 +60,7 @@ import {
   followPlan,
   PLAN_AUTHOR,
   readIntent,
-  writeIntentHeld,
+  updateIntent,
   type Intent,
 } from "./intent";
 import { mrId, mrPath, parseMrUrl, type RunReply } from "./board-model";
@@ -67,11 +68,12 @@ import type { Ref } from "./evaluator";
 import { readReplies } from "./replies";
 import { reason } from "./naming";
 import { appendPendingReport } from "./live";
-import { withDirLock, withLock } from "./lock";
+import { withLock } from "./lock";
 import { shell } from "./mr";
 import { pendingFor, proposalsOf, record as recordProposal } from "./proposals";
 import { appendLine, deliveriesOf, newestById, overrideActive, readLedger } from "./steering";
 import type { Records } from "./records";
+import { RunRecords, runOfDir } from "./run-records";
 import { capabilitiesOf } from "./steering-caps";
 import { externalSubmissions } from "./compactors";
 import { controlDir } from "./compaction";
@@ -239,7 +241,12 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     narrative: what.narrative ?? null,
     ...reportFields(what),
   });
-  yield* appendCard(at.runDir, card).pipe(Effect.ignore({ log: "Unhandled" }));
+  // A card is a reading of the Run; failing to keep one must not fail the Run.
+  yield* appendCard(at.runDir, card).pipe(
+    Effect.catchDefect((defect) =>
+      Effect.logError(`${at.runId}'s card was not recorded`, Cause.die(defect)),
+    ),
+  );
   return card;
 });
 
@@ -258,12 +265,11 @@ const JudgedJson = Schema.fromJsonString(
     at: Schema.optionalKey(Schema.String),
   }),
 );
-const judgedPath = (runDir: string) => `${runDir}/steering/judged.json`;
+const JUDGED = "steering/judged.json";
 
 /** What the last judgement of this Run got to, which is what `aligned` may claim. */
 const judgedOf = (at: Watched) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(judgedPath(at.runDir))),
+  RunRecords.use((records) => records.fact(runOfDir(at.runDir), JUDGED)).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(JudgedJson)),
     Effect.orElseSucceed((): Judged => NOT_JUDGED),
   );
@@ -375,17 +381,11 @@ const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
     ),
   );
   const answeredAt = outcome.judged.semantic ? judgedAt : (yield* judgedOf(at)).at;
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.makeDirectory(`${at.runDir}/steering`, { recursive: true }).pipe(Effect.ignore);
-  yield* fs
-    .writeFileString(
-      judgedPath(at.runDir),
-      yield* Schema.encodeEffect(JudgedJson)({
-        ...outcome.judged,
-        ...(answeredAt !== undefined && { at: answeredAt }),
-      }).pipe(Effect.orDie),
-    )
-    .pipe(Effect.ignore({ log: "Unhandled" }));
+  const judged = yield* Schema.encodeEffect(JudgedJson)({
+    ...outcome.judged,
+    ...(answeredAt !== undefined && { at: answeredAt }),
+  }).pipe(Effect.orDie);
+  yield* RunRecords.use((records) => records.put(runOfDir(at.runDir), JUDGED, judged));
   const before = yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => []));
   for (const report of newReports(outcome.reports, before)) {
     yield* appendDrift(at.runDir, report).pipe(Effect.ignore({ log: "Unhandled" }));
@@ -430,15 +430,15 @@ const noticeOverride = Effect.fn("Oversight.noticeOverride")(function* (
   at: Watched,
   to: Correcting["agent"],
 ) {
-  const fs = yield* FileSystem.FileSystem;
+  const records = yield* RunRecords;
   const seen = yield* externalSubmissions(yield* controlDir(at.stateDir, to.agent)).pipe(
     Effect.orElseSucceed(() => 0),
   );
-  const file = `${at.runDir}/steering/externals.${to.agent}`;
-  const before = Number(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "0")));
+  const run = runOfDir(at.runDir);
+  const counted = `steering/externals.${to.agent}`;
+  const before = Number((yield* records.fact(run, counted)) ?? "0");
   if (seen <= before || to.terminalId === undefined) return;
-  yield* fs.makeDirectory(`${at.runDir}/steering`, { recursive: true }).pipe(Effect.ignore);
-  yield* fs.writeFileString(file, String(seen)).pipe(Effect.ignore({ log: "Unhandled" }));
+  yield* records.put(run, counted, String(seen));
   yield* appendLine({
     kind: "manual_override",
     at: yield* nowIso,
@@ -534,19 +534,19 @@ const followRunPlan = Effect.fn("Oversight.followRunPlan")(
     const fs = yield* FileSystem.FileSystem;
     const text = yield* fs.readFileString(`${at.runDir}/plan/SPEC.md`);
     const found = extractRequirements(text, "plan/SPEC.md").constraints;
-    const followed = yield* withDirLock(
-      at.runDir,
+    const followed = MutableRef.make<Intent | null>(null);
+    yield* updateIntent(at.runDir, (intent) =>
       Effect.gen(function* () {
-        const intent = yield* readIntent(at.runDir);
         if (intent === null) return null;
         const next = followPlan(intent, found, yield* nowIso);
         if (next === intent) return null;
-        yield* writeIntentHeld(at.runDir, next);
+        MutableRef.set(followed, next);
         return next;
       }),
     );
-    if (followed !== null)
-      yield* said(at, `plan/SPEC.md: ${found.length} constraints followed (v${followed.version})`);
+    const next = MutableRef.get(followed);
+    if (next !== null)
+      yield* said(at, `plan/SPEC.md: ${found.length} constraints followed (v${next.version})`);
   },
   (effect) => Effect.ignore(effect),
 );
@@ -621,8 +621,8 @@ const committedWork = Effect.fn("Oversight.committedWork")(function* (
   return { kind: "shown", blocks: splitDiff(ran.stdout) };
 });
 
-/** Where a Run keeps the merge request it opened or was given. */
-export const mergeRequestFile = (runDir: string) => `${runDir}/merge-request`;
+/** The merge request a Run opened or was given. */
+export const MERGE_REQUEST = "merge-request";
 
 const namedIn = (goal: string | null) =>
   Arr.flatMap(
@@ -653,12 +653,9 @@ export const familyOf = Effect.fn("Oversight.familyOf")(function* (
     if (row.parent !== null && (one.run === row.parent || one.parent === row.parent))
       related.add(one.run);
   }
-  const fs = yield* FileSystem.FileSystem;
+  const records = yield* RunRecords;
   const recordedBy = (runId: string) =>
-    fs.readFileString(mergeRequestFile(dirOf(runId))).pipe(
-      Effect.map((url) => mrId(url)),
-      Effect.orElseSucceed(() => null),
-    );
+    Effect.map(records.fact(runId, MERGE_REQUEST), (url) => (url === null ? null : mrId(url)));
   const namedBy = (runId: string) =>
     readIntent(dirOf(runId)).pipe(
       Effect.map((intent) => namedIn(intent?.goal ?? null)),
@@ -1008,7 +1005,7 @@ export const settleAtFinish = Effect.fn("Oversight.settleAtFinish")(function* (a
 });
 
 /** Which checkpoints have a card already, so a restart does not card them twice. */
-const cardedPath = (runDir: string) => `${runDir}/steering/carded`;
+const CARDED = "steering/carded";
 
 /**
  * A card per ticket an agent has said it finished, while its work is still going: a
@@ -1019,26 +1016,21 @@ export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* 
   at: Watched,
   step: string,
 ): Effect.fn.Return<ReadonlyArray<Card>, never, Services> {
-  const fs = yield* FileSystem.FileSystem;
+  const records = yield* RunRecords;
+  const run = runOfDir(at.runDir);
   const found = yield* readCheckpoints(at.runDir).pipe(Effect.orElseSucceed(() => []));
   const done = Arr.filter(found, (one) => one.checkpoint.status === "done");
   if (done.length === 0) return [];
-  yield* fs.makeDirectory(`${at.runDir}/steering`, { recursive: true }).pipe(Effect.ignore);
-  const carded = new Set(
-    lines(yield* fs.readFileString(cardedPath(at.runDir)).pipe(Effect.orElseSucceed(() => ""))),
-  );
+  const carded = new Set(yield* records.lines(run, CARDED));
   const written: Card[] = [];
   for (const { file, checkpoint } of done) {
     const key = `${file}@${checkpoint.at}`;
     if (carded.has(key)) continue;
     // Together: a watch interrupted between the two would leave a ticket marked but never carded.
     const card = yield* Effect.uninterruptible(
-      fs
-        .writeFileString(cardedPath(at.runDir), `${key}\n`, { flag: "a" })
-        .pipe(
-          Effect.ignore({ log: "Unhandled" }),
-          Effect.andThen(writeCard(at, { kind: "slice", step, claims: checkpoint.claims })),
-        ),
+      records
+        .append(run, CARDED, [key])
+        .pipe(Effect.andThen(writeCard(at, { kind: "slice", step, claims: checkpoint.claims }))),
     );
     written.push(card);
   }

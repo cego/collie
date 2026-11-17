@@ -27,6 +27,7 @@ import { runDir } from "../src/engine";
 import { readDispositions } from "../src/disposition";
 import { writeTask } from "../src/task";
 import { recordsAt } from "./support/records";
+import { recordsReadLayer } from "../src/records";
 import { readEnv } from "../src/env";
 import { findRun } from "../src/runs";
 import { connect, connectPeer, frontDoor, socketOf, ownerOf } from "../src/host";
@@ -379,12 +380,18 @@ test(
             ).toBeUndefined();
             expect(
               Arr.map(
-                yield* readDispositions(runDir(first.world.state, carrier)).pipe(Effect.orDie),
+                yield* readDispositions(runDir(first.world.state, carrier)).pipe(
+                  Effect.provide(recordsReadLayer(first.world.state)),
+                  Effect.orDie,
+                ),
                 (line) => line.successor?.run,
               ),
             ).toEqual([successor]);
             expect(
-              yield* readDispositions(runDir(first.world.state, helper)).pipe(Effect.orDie),
+              yield* readDispositions(runDir(first.world.state, helper)).pipe(
+                Effect.provide(recordsReadLayer(first.world.state)),
+                Effect.orDie,
+              ),
             ).toEqual([]);
             yield* until(landed, (shown) => shown === true);
           }),
@@ -469,7 +476,10 @@ test(
               ]);
             const successors = (runId: string) =>
               Effect.map(
-                readDispositions(runDir(first.world.state, runId)).pipe(Effect.orDie),
+                readDispositions(runDir(first.world.state, runId)).pipe(
+                  Effect.provide(recordsReadLayer(first.world.state)),
+                  Effect.orDie,
+                ),
                 Arr.map((line) => line.successor?.run),
               );
             expect((yield* handOff(older, "older")).envelope.error).toBeUndefined();
@@ -626,7 +636,10 @@ test(
 
             const delivered = Option.getOrUndefined(
               Arr.findFirst(
-                yield* readAudit(runDir(second.world.state, runId)).pipe(Effect.orDie),
+                yield* readAudit(runDir(second.world.state, runId)).pipe(
+                  Effect.provide(recordsReadLayer(second.world.state)),
+                  Effect.orDie,
+                ),
                 (line) => line.operation === "deliver",
               ),
             );
@@ -1016,7 +1029,10 @@ test(
                 pipe_(text, Str.includes("hello by dial-back")),
               ),
             ).toBe(true);
-            const audit = yield* readAudit(runDir(first.world.state, runId)).pipe(Effect.orDie);
+            const audit = yield* readAudit(runDir(first.world.state, runId)).pipe(
+              Effect.provide(recordsReadLayer(first.world.state)),
+              Effect.orDie,
+            );
             expect(
               Option.getOrUndefined(Arr.findFirst(audit, (line) => line.operation === "deliver"))
                 ?.actor.from?.machine?.name,
@@ -1138,14 +1154,20 @@ test(
 
             const stopped = yield* first.cli(["run", "stop", other]);
             expect(stopped.envelope.error).toBeUndefined();
-            const trail = yield* readAudit(runDir(second.world.state, other)).pipe(Effect.orDie);
+            const trail = yield* readAudit(runDir(second.world.state, other)).pipe(
+              Effect.provide(recordsReadLayer(second.world.state)),
+              Effect.orDie,
+            );
             for (const line of Arr.filter(trail, (one) =>
               ["start", "stop"].includes(one.operation),
             ))
               expect(line.actor.from?.machine?.installation).toBe(firstId);
             const answerLine = Option.getOrUndefined(
               Arr.findFirst(
-                yield* readAudit(runDir(second.world.state, runId)).pipe(Effect.orDie),
+                yield* readAudit(runDir(second.world.state, runId)).pipe(
+                  Effect.provide(recordsReadLayer(second.world.state)),
+                  Effect.orDie,
+                ),
                 (line) => line.operation === "answer",
               ),
             );

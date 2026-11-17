@@ -11,6 +11,7 @@ import * as PlatformError from "effect/PlatformError";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { madeRun, recordsAt } from "./support/records";
+import { RunRecords } from "../src/run-records";
 
 let rig: Rig;
 beforeEach(() =>
@@ -79,8 +80,8 @@ test("a retained recovery report keeps every episode and full source text withou
         state: "succeeded",
       });
       yield* appendCard(hidden.dir, legacyCard(hidden.id, "historical-finding"));
-      const original = yield* fs.readFileString(`${run.evidence}/metrics.jsonl`);
-      const cards = yield* fs.readFileString(`${run.dir}/steering/cards.jsonl`);
+      const original = yield* (yield* RunRecords).lines(run.id, "evidence/metrics.jsonl");
+      const cards = yield* (yield* RunRecords).lines(run.id, "steering/cards.jsonl");
       yield* fs.writeFileString(
         `${run.dir}/earlier-output.json`,
         '{"summary":"original Output"}\n',
@@ -104,8 +105,8 @@ test("a retained recovery report keeps every episode and full source text withou
         expect(body).toContain("Run collie doctor on the owning Machine.");
         expect(body).toContain(Str.replace("recovery:", "")(report.key));
       }
-      expect(yield* fs.readFileString(`${run.evidence}/metrics.jsonl`)).toBe(original);
-      expect(yield* fs.readFileString(`${run.dir}/steering/cards.jsonl`)).toBe(cards);
+      expect(yield* (yield* RunRecords).lines(run.id, "evidence/metrics.jsonl")).toEqual(original);
+      expect(yield* (yield* RunRecords).lines(run.id, "steering/cards.jsonl")).toEqual(cards);
       expect(yield* fs.readFileString(`${run.dir}/earlier-output.json`)).toBe(
         '{"summary":"original Output"}\n',
       );
@@ -246,7 +247,7 @@ test("a producer's unregistered report reference never replaces its full legacy 
           step: "heal",
         },
       });
-      const original = yield* fs.readFileString(`${run.evidence}/metrics.jsonl`);
+      const original = yield* (yield* RunRecords).lines(run.id, "evidence/metrics.jsonl");
       yield* catalogue.reconcile(run);
       const report = (yield* catalogue.reports(run.id))[0]!;
       expect(report).toMatchObject({
@@ -256,7 +257,7 @@ test("a producer's unregistered report reference never replaces its full legacy 
       });
       expect(report.address).toBeUndefined();
       expect(report.reason).toContain("not retained");
-      expect(yield* fs.readFileString(`${run.evidence}/metrics.jsonl`)).toBe(original);
+      expect(yield* (yield* RunRecords).lines(run.id, "evidence/metrics.jsonl")).toEqual(original);
     }).pipe(Effect.provide(recordsAt(rig.stateDir))),
   ));
 

@@ -5,12 +5,14 @@
 // noticing.
 
 import * as Arr from "effect/Array";
-import { Data, Effect, FileSystem, Option } from "effect";
+import { Data, Effect, FileSystem, Layer, Option } from "effect";
 import type { RunFacts } from "../../src/runs";
 import { readLaunches, runAgents } from "../../src/launches";
 import { recordsAt, recordsReadLayer, type Records } from "../../src/records";
 import { everyRegistered } from "../../src/registry";
 import { deliveriesOf, readLedger } from "../../src/steering";
+import { RunRecords, type RunRecordsApi } from "../../src/run-records";
+import { platformLayer } from "../../src/platform";
 
 export function runFacts(over: Partial<RunFacts> = {}): RunFacts {
   const id = over.id ?? "r1";
@@ -115,3 +117,48 @@ export const launchedAt = (stateDir: string, run: string, operation: string) =>
       Option.getOrThrow(Arr.findFirst(launches, (one) => one.operation === operation)),
     ),
   );
+
+/**
+ * A Run's records as the host on `stateDir()`, whichever directory that is when asked, keeps
+ * them: for a test whose own reads and writes must meet its host's, not `runEffect`'s empty ones.
+ */
+export const hostRunRecords = (stateDir: () => string): RunRecordsApi => {
+  const at = <A, E, R>(use: (records: RunRecordsApi) => Effect.Effect<A, E, R>) =>
+    FileSystem.FileSystem.pipe(
+      Effect.flatMap((fs) => fs.makeDirectory(stateDir(), { recursive: true })),
+      Effect.orDie,
+      Effect.andThen(
+        Effect.suspend(() =>
+          RunRecords.use(use).pipe(Effect.provide(Layer.orDie(recordsAt(stateDir())))),
+        ),
+      ),
+      Effect.provide(platformLayer),
+    );
+  return {
+    lines: (run, journal) => at((records) => records.lines(run, journal)),
+    linesOf: (runs, journal) => at((records) => records.linesOf(runs, journal)),
+    briefsOf: (runs, journal) => at((records) => records.briefsOf(runs, journal)),
+    lastOf: (runs, journal, kinds) => at((records) => records.lastOf(runs, journal, kinds)),
+    append: (run, journal, lines) => at((records) => records.append(run, journal, lines)),
+    fact: (run, name) => at((records) => records.fact(run, name)),
+    factsOf: (runs, name) => at((records) => records.factsOf(runs, name)),
+    factsUnder: (run, prefix) => at((records) => records.factsUnder(run, prefix)),
+    put: (run, name, value) => at((records) => records.put(run, name, value)),
+    update: (run, name, change) => at((records) => records.update(run, name, change)),
+    activity: (runs) => at((records) => records.activity(runs)),
+    stepSamples: at((records) => records.stepSamples),
+    touch: (run) => at((records) => records.touch(run)),
+    control: (control, run, key) => at((records) => records.control(control, run, key)),
+    controlsOf: (control, run) => at((records) => records.controlsOf(control, run)),
+    everyControl: (control) => at((records) => records.everyControl(control)),
+    controlsIn: (runs) => at((records) => records.controlsIn(runs)),
+    setControl: (control, run, data, key) =>
+      at((records) => records.setControl(control, run, data, key)),
+  };
+};
+
+/** `effect` with a Run's records read and written where the host on `stateDir()` keeps them. */
+export const overHost =
+  (stateDir: () => string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.provideService(effect, RunRecords, hostRunRecords(stateDir));

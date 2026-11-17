@@ -8,6 +8,7 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import { addressOf, RunRecords } from "./run-records";
 
 export interface Journal<A> {
   readonly lines: A[];
@@ -49,18 +50,22 @@ export const journalOf = <A>(
 export const readJournal = <A>(file: string, json: Schema.Codec<A, string, never, never>) =>
   readJournalWhole(file, json).pipe(Effect.map((journal) => journal.lines));
 
-/** The last matching record, without decoding the history before it. */
-export const findLastJournal = Effect.fn("Journal.findLast")(function* <A>(
-  file: string,
+/**
+ * The last record whose kind is one of `kinds`, or for null the last record, without reading
+ * the history before it. A line that cannot be decoded is passed over.
+ */
+export const lastRunJournal = Effect.fn("Journal.lastRun")(function* <A>(
+  at: RunJournal,
   json: Schema.Codec<A, string, never, never>,
-  matches: (record: A) => boolean,
+  kinds: ReadonlyArray<string> | null,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const lines = textsOf(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")));
+  const newest =
+    (yield* RunRecords.use((records) => records.lastOf([at.run], at.name, kinds))).get(at.run) ??
+    [];
   const decode = Schema.decodeUnknownOption(json);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const read = yield* Effect.sync(() => decode(lines[i]));
-    if (read._tag === "Some" && matches(read.value)) return read;
+  for (const line of newest) {
+    const read = decode(line);
+    if (Option.isSome(read)) return read;
   }
   return Option.none<A>();
 });
@@ -78,4 +83,70 @@ export const appendJournal = Effect.fn("Journal.append")(function* <A>(
     `${yield* Schema.encodeEffect(json)(line).pipe(Effect.orDie)}\n`,
     { flag: "a" },
   );
+});
+
+/** A Run's journal, kept in the host's database. */
+export interface RunJournal {
+  readonly run: string;
+  readonly name: string;
+}
+
+/** The journal `path` of the Run whose directory is `dir`, as an older build kept it there. */
+export const runJournal = (dir: string, path: string): RunJournal => {
+  const at = addressOf(dir);
+  return { run: at.run, name: `${at.prefix}${path}` };
+};
+
+const textsAt = (at: RunJournal) => RunRecords.use((records) => records.lines(at.run, at.name));
+
+export const readRunJournalWhole = Effect.fn("Journal.readRunWhole")(function* <A>(
+  at: RunJournal,
+  json: Schema.Codec<A, string, never, never>,
+): Effect.fn.Return<Journal<A>, never, RunRecords> {
+  const decode = Schema.decodeUnknownOption(json);
+  // A line at a time, so a long journal is read in the scheduler's turns.
+  return tally(
+    yield* Effect.forEach(yield* textsAt(at), (text) => Effect.sync(() => decode(text))),
+  );
+});
+
+export const readRunJournal = <A>(at: RunJournal, json: Schema.Codec<A, string, never, never>) =>
+  readRunJournalWhole(at, json).pipe(Effect.map((journal) => journal.lines));
+
+/** These Runs' briefs of journal `name`, in one read, decoded as `readRunJournal` decodes lines. */
+export const readBriefsOf = Effect.fn("Journal.readBriefsOf")(function* <A>(
+  runs: ReadonlyArray<string>,
+  name: string,
+  json: Schema.Codec<A, string, never, never>,
+) {
+  const decode = Schema.decodeUnknownOption(json);
+  const briefs = yield* RunRecords.use((records) => records.briefsOf(runs, name));
+  return Arr.flatMap(
+    runs,
+    (run) => tally(Arr.map(briefs.get(run) ?? [], (one) => decode(one))).lines,
+  );
+});
+
+/** The last matching record, without decoding the history before it. */
+export const findLastRunJournal = Effect.fn("Journal.findLastRun")(function* <A>(
+  at: RunJournal,
+  json: Schema.Codec<A, string, never, never>,
+  matches: (record: A) => boolean,
+) {
+  const lines = yield* textsAt(at);
+  const decode = Schema.decodeUnknownOption(json);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const read = yield* Effect.sync(() => decode(lines[i]));
+    if (read._tag === "Some" && matches(read.value)) return read;
+  }
+  return Option.none<A>();
+});
+
+export const appendRunJournal = Effect.fn("Journal.appendRun")(function* <A>(
+  at: RunJournal,
+  json: Schema.Codec<A, string, never, never>,
+  line: A,
+) {
+  const text = yield* Schema.encodeEffect(json)(line).pipe(Effect.orDie);
+  yield* RunRecords.use((records) => records.append(at.run, at.name, [text]));
 });
