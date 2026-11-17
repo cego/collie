@@ -12117,7 +12117,7 @@ const parkRecheck = (runId: string, mr: string, cwd: string) =>
     return yield* recheckPark(
       { runId, cwd, branch: "feature", mr, park: { cause, kind: PARK_CAUSES[cause].kind } },
       dir,
-      { sessionList: () => Effect.die("a park recheck here must not ask herdr") },
+      { agentList: () => Effect.die("a park recheck here must not ask herdr") },
     );
   }).pipe(
     Effect.provide(

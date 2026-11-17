@@ -7,7 +7,7 @@ import { forgeOf } from "./forge/forge";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { projectHere, shell, whatItSaid } from "./mr";
 import type { RunView } from "./engine";
-import type { Herdr } from "./herdr";
+import { herdrFailureReason, type Herdr } from "./herdr";
 
 const CiTarget = Schema.fromJsonString(
   Schema.Struct({
@@ -64,7 +64,7 @@ export const recheckPark = (
   view: Pick<RunView, "park" | "cwd" | "runId" | "mr" | "branch"> &
     Partial<Pick<RunView, "input" | "strategies">>,
   stateDir: string,
-  herdr: Pick<Herdr, "sessionList">,
+  herdr: Pick<Herdr, "agentList">,
 ) =>
   Effect.gen(function* () {
     switch (view.park?.cause) {
@@ -157,10 +157,10 @@ export const recheckPark = (
         return read.ok ? reply(true, "forge answered") : reply(false, read.reason, true);
       }
       case "herdr-unavailable": {
-        const read = yield* herdr.sessionList().pipe(Effect.result);
+        const read = yield* herdr.agentList().pipe(Effect.result);
         return read._tag === "Success"
-          ? reply(true, "herdr answered")
-          : reply(false, String(read.failure), true);
+          ? reply(true, "herdr listed its agents")
+          : reply(false, herdrFailureReason(read.failure), true);
       }
       default:
         return reply(false, "cause has no recheck");
