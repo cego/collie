@@ -777,7 +777,7 @@ export const flockRunPage = Effect.fn("Lifecycle.flockRunPage")(function* (
 ) {
   const here = env.machine ?? machineName();
   const pageAsked = (machine: string) => ({
-    task: asked.task,
+    task: machine === here ? asked.task : null,
     states: asked.states,
     limit: asked.limit,
     full: asked.full,
