@@ -8300,21 +8300,55 @@ scenario(
   120_000,
 );
 
+/**
+ * The shipped workflows as a release installs them, with `reviewing` as its rally: started
+ * again over the same path, a Run reads what is there now, as after an upgrade.
+ */
+const released = (reviewing: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const into = `${rig.root}/release/workflows`;
+    yield* fs.makeDirectory(into, { recursive: true });
+    for (const name of yield* fs.readDirectory(`${ROOT}workflows`))
+      yield* fs.copyFile(`${ROOT}workflows/${name}`, `${into}/${name}`);
+    yield* fs.copyFile(reviewing, `${into}/reviewing.ts`);
+    if (!renamed) return `${into}/implement.workflow.ts`;
+    const entry = `${into}/${idOf("implement")}.workflow.ts`;
+    yield* fs.writeFileString(
+      entry,
+      Arr.join(
+        [
+          `import shipped from "./implement.workflow.ts";`,
+          `import { defineWorkflow } from "collie";`,
+          `export default defineWorkflow({ ...shipped, id: "${idOf("implement")}" });`,
+          "",
+        ],
+        "\n",
+      ),
+    );
+    return entry;
+  }).pipe(Effect.orDie);
+
 scenario(
-  "an implement Run started before follow-up rounds were given a delta resumes mid-ticket and finishes without one",
+  "an implement Run started on the release before follow-up deltas resumes mid-ticket on this one and finishes without one",
   () =>
     runEffect(
       Effect.gen(function* () {
         const runId = "r-impl-unshaped";
         const { bin, options } = yield* fixedOnce(runId);
-        // Admitted as an earlier host admitted it, with no features record; stopped mid-ticket.
-        yield* running(options, () =>
+        const release = {
+          ...options,
+          entry: yield* released(`${ROOT}test/fixtures/reviewing.before-delta.ts.txt`),
+        };
+        // Admitted as that release's host admitted it, with no features record.
+        yield* running(release, () =>
           until(
             () => wasAsked(runId, "fix-1"),
             (asked) => asked,
           ),
         );
-        const status = yield* driven({ ...options, restarted: true }, (run) =>
+        yield* released(`${ROOT}workflows/reviewing.ts`);
+        const status = yield* driven({ ...release, restarted: true }, (run) =>
           Effect.andThen(run.resume, ended(run.status)),
         );
         yield* bin.restore();
