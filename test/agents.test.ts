@@ -37,6 +37,8 @@ import {
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, type Call } from "./support/recorder";
+import { installBaseline } from "./support/engine";
+import { mentionedSkills } from "../src/template";
 import type { FakeHc } from "./support/fake-hc";
 import { isJsonObject, isString } from "../src/schema";
 import { fastForward, runEffect as runLive } from "./support/effect";
@@ -3316,6 +3318,36 @@ test("a persona from the user Layer is followed by the every-agent text", () =>
       yield* session(started("r1"));
 
       expect(yield* personaFileText).toBe("You review closely.\n\nMake no Tautology.\n");
+    }),
+  ));
+
+test("the shipped reviewer, with no persona in the user Layer, is its own sections and both its skills", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* installBaseline(rig);
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+
+      const text = yield* personaFileText;
+      expect(text).toContain("Run both review skills over the change");
+      expect(text).toContain("Finding nothing is a real answer");
+      expect(mentionedSkills(text)).toEqual(["code-review", "code-review-and-quality"]);
+    }),
+  ));
+
+test("a user-Layer reviewer that extends reviewer-single-pass is launched as the single pass", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* installBaseline(rig);
+      yield* writePersona(rig.userDir, "reviewer", "---\nextends: reviewer-single-pass\n---\n");
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+
+      const text = yield* personaFileText;
+      expect(text).toContain("in one pass");
+      expect(text).not.toContain("Run both review skills over the change");
+      expect(text).toContain("## If the skill is missing");
+      expect(mentionedSkills(text)).toEqual(["code-review-and-quality"]);
     }),
   ));
 

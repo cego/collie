@@ -153,6 +153,22 @@ content hash at the moment of the copy — so when the original moves on the pic
 the fork `(stale — the original has changed since this copy)`. A stale fork still works;
 the mark tells you a change has passed it by.
 
+A stub with nothing under its frontmatter is launched as the persona it extends, found from
+its own Layer down. That is how a trial swaps the shipped `reviewer` for
+`reviewer-single-pass`, which reviews a change in one pass over the same seven axes with
+one skill, `code-review-and-quality`, instead of two. No setting selects it: save
+`~/.collie/user/personas/reviewer.md` as
+
+```markdown
+---
+name: reviewer
+extends: reviewer-single-pass
+---
+```
+
+and every reviewer this user's Machines launch is the single pass, until the file is
+deleted. A project's `.collie/personas/reviewer.md` does the same for one project.
+
 ## Persona frontmatter
 
 A persona is much smaller: instructions injected when an agent starts, harness-agnostic and

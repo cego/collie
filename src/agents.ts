@@ -117,7 +117,7 @@ import {
 import { autoModeBlock, autoModeFacts, type AutoModeBlock, type RunAuthority } from "./automode";
 import { shell } from "./mr";
 import type { ForgeHttp } from "./forge/http";
-import type { YamlMap } from "./yaml";
+import { parseDocument, type YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
 import { humanOf, type Asker } from "./proposals";
 import { STOP, controlSet } from "./controls";
@@ -4665,14 +4665,23 @@ const layeredPersona = Effect.fn("Agents.layeredPersona")(function* (
   env: PersonaEnv,
   role: string,
   dirs: ReadonlyArray<string>,
-) {
+  followed: ReadonlyArray<string> = [],
+): Effect.fn.Return<string | null, AgentParked, FileSystem.FileSystem | Path.Path> {
   const fs = yield* FileSystem.FileSystem;
-  for (const dir of dirs) {
+  for (const [at, dir] of dirs.entries()) {
     const file = `${dir}/personas/${role}.md`;
     if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) continue;
     const markdown = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
     const body = bodySections(pipe(markdown, Str.replace(PERSONA_FRONT_MATTER, ""))).preamble;
-    if (Str.trim(body) === "") continue;
+    if (Str.trim(body) === "") {
+      // A fork stub is the persona it extends, found from its own Layer down.
+      const parent = yield* Effect.try(() => parseDocument(markdown).data.extends).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (isString(parent) && parent !== role && !followed.includes(parent))
+        return yield* layeredPersona(env, parent, dirs.slice(at), [...followed, role]);
+      continue;
+    }
     const unfilled = personaHoles(body);
     if (unfilled.length > 0) {
       return yield* new AgentParked({

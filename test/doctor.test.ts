@@ -12,6 +12,8 @@ import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 import { installFakeSkills } from "./support/defs";
+import { layers, loadDefinitions } from "../src/definitions";
+import { skillsIn } from "../src/template";
 import { FakeBin } from "./support/bin";
 import { doctor, memoryOutcome } from "../src/doctor";
 import { withLock } from "../src/lock";
@@ -793,6 +795,18 @@ test("what is overridden here is named, never judged and never edited", () =>
       expect(yield* fs.readFileString(mine)).toBe("export const id = 1;\n");
 
       yield* fs.remove(project, { recursive: true, force: true });
+    }),
+  ));
+
+test("the shipped reviewer-single-pass loads with one skill, and doctor finds every persona valid", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      const found = yield* loadDefinitions(yield* layers(rig.pluginEnv()));
+      const variant = found.personas.get("reviewer-single-pass");
+      expect(variant?.layer).toBe("baseline");
+      expect(skillsIn(variant?.body ?? "")).toEqual(["code-review-and-quality"]);
+      expect(check(yield* report(), "personas")).toMatchObject({ ok: true, fix: "" });
     }),
   ));
 
