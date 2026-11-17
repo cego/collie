@@ -3406,6 +3406,61 @@ scenario(
 );
 
 scenario(
+  "a review Run whose next review withdraws a dispute and raises it again unchanged logs the conflict once",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* reviewedBranch();
+        const runId = "r-review-conflict";
+        const input = { target: "branch:main...feature" };
+        const finding = {
+          severity: "blocker",
+          title: "the guard is on the wrong side",
+          file: "src/a.ts",
+        };
+        yield* rig.queueOutputs([
+          { ...SYNTHESIS, findings: [finding] },
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...finding, reason: "the caller rejects empty lists before this branch" }],
+            checks: [],
+          },
+          {
+            ...SYNTHESIS,
+            findings: [finding],
+            dropped: [{ ...finding, reason: "The caller never passes an empty list." }],
+          },
+        ]);
+        yield* parked({ entry: shipped("review"), runId, input, decision: "post-1" });
+        yield* answeredThen({
+          entry: shipped("review"),
+          runId,
+          input,
+          decision: "post-1",
+          value: "Fix findings",
+          until: "post-2",
+        });
+
+        const log = yield* (yield* FileSystem.FileSystem).readFileString(
+          `${runDir(dir, runId)}/log.txt`,
+        );
+        expect(
+          Arr.filter(
+            Str.split(log, "\n"),
+            Str.endsWith(
+              "review 2: conflicting dispositions of [blocker] the guard is on the wrong side (src/a.ts): open and withdrawn",
+            ),
+          ),
+        ).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a review's fix works in the reviewed branch's own checkout, and is verified there",
   () =>
     runEffect(
