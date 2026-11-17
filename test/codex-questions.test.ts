@@ -204,7 +204,9 @@ test(
             const lastLines = Arr.map(typed(yield* rig.calls()), (one) =>
               Option.getOrElse(Arr.last(Str.split(one, "\n")), () => ""),
             );
-            expect(lastLines).toEqual([
+            // The answered turn ends without review.json, so a reminder may come before fix's prompt.
+            const reminded = `OUTPUT_PATH: ${dir}/agents/r1/review.json`;
+            expect(Arr.filter(lastLines, (line) => line !== reminded)).toEqual([
               expect.stringContaining("/review.prompt.md"),
               "Your question Which colour should the file be, red or blue? is answered: Blue",
               expect.stringContaining("/fix.prompt.md"),

@@ -1991,15 +1991,17 @@ scenario(
           criteria: [{ criterion, met: "the scenario shows it" }],
         });
         // The faster ticket's Output is written by hand, once its builder has measured.
-        yield* rig.queueOutputs([
-          GRILLED,
-          SPEC,
-          TICKETS,
-          null,
-          builtFor("search reads its own index"),
-          CLEAN_SYNTHESIS,
-          OPENED,
-        ]);
+        yield* rig.queueOutputs(
+          byHand([
+            GRILLED,
+            SPEC,
+            TICKETS,
+            null,
+            builtFor("search reads its own index"),
+            CLEAN_SYNTHESIS,
+            OPENED,
+          ]),
+        );
         yield* ran({
           entry: shipped("plan"),
           runId: "r-plan-speed",
@@ -4333,6 +4335,10 @@ const planOf = (
     return where;
   });
 
+/** Outputs where each null is a step the scenario does by hand, its agent working until then. */
+const byHand = (outputs: ReadonlyArray<Schema.Json | null>) =>
+  Arr.map(outputs, (one) => one ?? { writes: [], output: null, owed: true });
+
 const BUILT = {
   verdict: "clean",
   findings: [],
@@ -5474,7 +5480,7 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
         const runId = "r-missing-review-spec";
         yield* approve(runId, ["unit"]);
-        yield* rig.queueOutputs([null, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs(byHand([null, CLEAN_SYNTHESIS, OPENED]));
         yield* resumeImplementPark(
           { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
           `${plan}/SPEC.md cannot be read`,
@@ -6907,7 +6913,7 @@ const implementing = (
       })),
     );
     yield* approve(runId, ["unit"]);
-    yield* rig.queueOutputs(outputs);
+    yield* rig.queueOutputs(byHand(outputs));
     const running = yield* Effect.forkChild(
       ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }),
     );
@@ -7077,7 +7083,7 @@ const builtUntilParked = (
       })),
     );
     yield* approve(runId, ["unit"]);
-    yield* rig.queueOutputs(outputs);
+    yield* rig.queueOutputs(byHand(outputs));
     const running = yield* Effect.forkChild(
       ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }),
     );
@@ -12325,14 +12331,14 @@ scenario(
           yield* approve("r-impl-inv", []);
           yield* rig.queueOutputs([null]);
 
-          // Its agent writes nothing, which parks it for that; never for having no checks.
+          // Its agent ends its turn having written nothing, which parks it for that; never for having no checks.
           const why = yield* parkedOn({
             entry: shipped("implement"),
             runId: "r-impl-inv",
             input: { plan: "why is the board slow?", ...FINISH },
             options: { outcome: "investigation" },
           });
-          expect(why).toContain("has written nothing to");
+          expect(why).toContain("ended its turn without writing");
           expect(why).not.toContain("approved");
           expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
         }),

@@ -149,6 +149,8 @@ interface State {
   blocked: number;
   /** Text typed into the prompt box and never submitted: `FAKE_HERDR_PROMPT_LOST=enter`. */
   typed: string | undefined;
+  /** The Output each agent's `owed` step left to the test. */
+  owed: Record<string, string>;
   tabList: FakeTab[];
   paneList: FakePane[];
   agents: FakeAgent[];
@@ -237,6 +239,7 @@ const StateJson = Schema.fromJsonString(
     echoed: Schema.optionalKey(Schema.Finite),
     blocked: Schema.optionalKey(Schema.Finite),
     typed: Schema.optionalKey(Schema.String),
+    owed: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
     tabList: Schema.optionalKey(Schema.Array(FakeTabSchema)),
     paneList: Schema.optionalKey(Schema.Array(FakePaneSchema)),
     agents: Schema.optionalKey(Schema.Array(FakeAgentSchema)),
@@ -257,11 +260,13 @@ const QueueJson = Schema.fromJsonString(Schema.Array(QueuedOutputJson));
 /**
  * A queued entry for an agent that writes files, then runs `sh` beside the queue, before its
  * Output. `sh` is told its prompt in `PROMPT_PATH`, and may write its Output to `OUTPUT_PATH`.
+ * `owed` is a step the test does by hand: unscripted, its agent works until the Output exists.
  */
 const Scripted = Schema.Struct({
   writes: Schema.Array(Schema.Struct({ path: Schema.String, text: Schema.String })),
   sh: Schema.optionalKey(Schema.String),
   output: QueuedOutputJson,
+  owed: Schema.optionalKey(Schema.Boolean),
 });
 const JsonRecord = Schema.fromJsonString(Schema.Any);
 const encodeJson = flow(Schema.encodeResult(JsonRecord), Result.getOrThrow);
@@ -278,6 +283,7 @@ const emptyState = (): State => ({
   echoed: 0,
   blocked: 0,
   typed: undefined,
+  owed: {},
   tabList: [],
   paneList: [],
   agents: [],
@@ -299,6 +305,7 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
     echoed: state.echoed ?? 0,
     blocked: state.blocked ?? 0,
     typed: state.typed,
+    owed: { ...state.owed },
     tabList: Arr.map(state.tabList ?? [], (tab) => ({ tab_id: tab.tab_id, label: tab.label })),
     paneList: Arr.map(state.paneList ?? [], (pane) => ({
       pane_id: pane.pane_id,
@@ -352,8 +359,8 @@ const answerFrom = Effect.fn("fake.answer")(function* (
       if (ran.exitCode !== 0) return yield* Effect.die(`the agent's sh failed: ${ran.stderr}`);
     }
     const output = scripted === null ? next : scripted.output;
+    const outputPath = Str.trim(match[1]!);
     if (output !== undefined && output !== null) {
-      const outputPath = Str.trim(match[1]!);
       yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
       const plain = Schema.decodeUnknownOption(Schema.String)(output);
       yield* fs.writeFileString(
@@ -361,7 +368,9 @@ const answerFrom = Effect.fn("fake.answer")(function* (
         Option.isSome(plain) ? plain.value : encodeJson(output),
       );
     }
+    return scripted?.owed === true ? outputPath : "";
   }
+  return null;
 });
 
 const readQueue = (file: string) =>
@@ -594,7 +603,11 @@ function handle(
     }
 
     const answer = (line: string) =>
-      Effect.flatMap(envString("FAKE_HERDR_OUTPUTS"), (queue) => answerFrom(state, line, queue));
+      Effect.gen(function* () {
+        const owed = yield* answerFrom(state, line, yield* envString("FAKE_HERDR_OUTPUTS"));
+        if (owed === "") delete state.owed[argv[2] ?? ""];
+        else if (owed !== null) state.owed[argv[2] ?? ""] = owed;
+      });
 
     const tabOf = (paneId: string) =>
       Option.getOrUndefined(Arr.findFirst(state.paneList, (p) => p.pane_id === paneId))?.tab_id ??
@@ -1035,8 +1048,11 @@ function handle(
           });
         const filed =
           (yield* filedAt(`${statusFile}.${argv[2] ?? ""}`)) || (yield* filedAt(statusFile));
+        const owed = state.owed[argv[2] ?? ""];
+        // Unscripted, an agent works on its turn until the Output it was asked for is written.
+        const unscripted = owed !== undefined && !(yield* fs.exists(owed)) ? "working" : "idle";
         const scripted = Str.split(
-          filed || (yield* envString("FAKE_HERDR_AGENT_STATUS", "idle")),
+          filed || (yield* envString("FAKE_HERDR_AGENT_STATUS", unscripted)),
           ",",
         );
         let status = scripted[Math.min(state.statusReads, scripted.length - 1)] ?? "idle";

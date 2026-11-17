@@ -93,7 +93,7 @@ import type { AuditLine } from "../src/audit";
 import { listTasks, readTask, taskKeptIn, withTaskLock, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
 import { everyRegistered, lineageAgent, registerAgent, scopeFor } from "../src/registry";
-import { Herdr, HerdrError } from "../src/herdr";
+import { Herdr, HerdrError, type AgentStatus } from "../src/herdr";
 import { retitleGenericTasks } from "../src/tasknames";
 import { runFacts } from "./support/records";
 import { agentName } from "../src/naming";
@@ -1190,6 +1190,34 @@ test(
   120_000,
 );
 
+/** The prompt is acknowledged, but its turn's current state cannot be observed. */
+class UnseenTurn extends FakeHerdr {
+  private readonly submitted = new Set<string>();
+  override agentStart(...args: Parameters<FakeHerdr["agentStart"]>) {
+    return Effect.suspend(() => {
+      this.submitted.delete(args[0].name);
+      return super.agentStart(...args);
+    });
+  }
+  override agentPrompt(...args: Parameters<FakeHerdr["agentPrompt"]>) {
+    return Effect.suspend(() => {
+      this.submitted.delete(args[0]);
+      return super
+        .agentPrompt(...args)
+        .pipe(Effect.tap(() => Effect.sync(() => this.submitted.add(args[0]))));
+    });
+  }
+  override agentStatus(...args: Parameters<FakeHerdr["agentStatus"]>) {
+    return super
+      .agentStatus(...args)
+      .pipe(
+        Effect.map((status): AgentStatus =>
+          this.submitted.has(args[0]) && status === "idle" ? "unknown" : status,
+        ),
+      );
+  }
+}
+
 /** `r1`'s agent past its budget: the Run parked, and its work still out, not suspended. */
 const pastTheBudget = Effect.gen(function* () {
   yield* until(parked("r1"));
@@ -1216,7 +1244,7 @@ test(
             yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
             return yield* Fiber.join(fiber);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("late");
         expect(yield* isSet(PARKED, "r1")).toBe(false);
@@ -1233,7 +1261,7 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* rig.queueOutputs([null]);
-        const herdr = new FakeHerdr(rig.pluginEnv());
+        const herdr = new UnseenTurn(rig.pluginEnv());
         const starts = rig.cmds().pipe(
           Effect.orDie,
           Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start").length),
@@ -1271,7 +1299,7 @@ test(
 );
 
 /** herdr still listing an agent whose process has gone, once `dead`, until one is started. */
-class ListsItDead extends FakeHerdr {
+class ListsItDead extends UnseenTurn {
   dead = false;
   override agentStatus(target: string) {
     return this.dead
@@ -2261,7 +2289,7 @@ test(
             yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
             return yield* Fiber.join(fiber);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("late");
         expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
@@ -2283,7 +2311,7 @@ test(
             yield* pastTheBudget;
             expect(yield* (yield* Collecting).has("r1", agentFor("r1"))).toBe(true);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
       }),
     ),
@@ -2298,7 +2326,7 @@ test(
         const starting = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         let blocking = false;
-        class SlowStart extends FakeHerdr {
+        class SlowStart extends UnseenTurn {
           override agentStart(...args: Parameters<FakeHerdr["agentStart"]>) {
             return blocking
               ? Deferred.succeed(starting, undefined).pipe(
@@ -2387,6 +2415,7 @@ test(
               Layer.provideMerge(
                 agentsLayer({
                   ...hostOf(),
+                  herdr: new UnseenTurn(rig.pluginEnv()),
                   collectMs: 400,
                 }),
               ),
@@ -2420,7 +2449,7 @@ test(
             yield* until(suspended("r1"));
             expect(yield* (yield* Collecting).has("r1", agentFor("r1"))).toBe(false);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
       }),
     ),
@@ -4132,7 +4161,12 @@ test(
             yield* until(parkedSays("minutes idle"));
             expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
           }),
-          { ...onPi, collectMs: 60_000, pollMs: 1_000 },
+          {
+            ...onPi,
+            herdr: new UnseenTurn(rig.pluginEnv()),
+            collectMs: 60_000,
+            pollMs: 1_000,
+          },
         );
       }),
     ),

@@ -3551,7 +3551,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             .agentStatus(launched.agent)
             .pipe(Effect.orElseSucceed(() => null));
           working ||= status === "working";
-          if (working && status !== null && isSettled(status) && (yield* absent) && (yield* may))
+          if (
+            working &&
+            status !== null &&
+            isSettled(status) &&
+            (yield* absent) &&
+            (yield* may) &&
+            !(yield* holdsBudgetOf(launched.runId, launched.agent))
+          )
             return;
           yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
         }
