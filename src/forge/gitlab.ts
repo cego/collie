@@ -682,6 +682,7 @@ const Job = Schema.Struct({
   name: Schema.String,
   status: Schema.String,
   web_url: optionalText,
+  finished_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 const Jobs = Schema.Array(Job);
 const AttemptJob = Schema.Struct({
@@ -895,12 +896,29 @@ function failedAttempt(
     const jobs = yield* pipelineJobs(reached, cwd, attempt.value.pipeline.id);
     if (!jobs.ok) return { url, tests: [], jobs: null };
     const self = Option.getOrUndefined(Arr.findFirst(jobs.value, (one) => String(one.id) === id));
-    // The job's other attempts share its pipeline, and are attempts of their own.
-    const failed = Arr.filter(
+    const ended = (one: typeof Job.Type) => Date.parse(one.finished_at ?? "");
+    const selfAttempts = pipe(
       jobs.value,
-      (one) =>
-        one.status === "failed" && (self === undefined || one.name !== self.name || one === self),
+      Arr.filter(
+        (one) => one.name === self?.name && one.status === "failed" && !Number.isNaN(ended(one)),
+      ),
+      Arr.sortWith(ended, Order.Number),
     );
+    // Another failed job is the failure of the first of this job's failed attempts to end after it, else of the last.
+    const attemptOf = (one: typeof Job.Type) =>
+      pipe(
+        Arr.findFirst(selfAttempts, (attempt) => ended(attempt) >= ended(one)),
+        Option.orElse(() => Arr.last(selfAttempts)),
+        Option.getOrUndefined,
+      );
+    const failed = Arr.filter(jobs.value, (one) => {
+      if (one.status !== "failed") return false;
+      if (self === undefined) return true;
+      // The job's other attempts share its pipeline, and are attempts of their own.
+      if (one.name === self.name) return one === self;
+      if (Number.isNaN(ended(one)) || Number.isNaN(ended(self))) return true;
+      return attemptOf(one) === self;
+    });
     const traces = yield* Effect.forEach(failed, (one) =>
       requestText(reached.login, cwd, `${reached.project}/jobs/${one.id}/trace`),
     );
