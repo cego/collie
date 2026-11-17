@@ -288,7 +288,7 @@ test("an unplaced or ambiguous review request says why once and starts after it 
     }),
   ));
 
-test("idle review-request rounds read the login once and only list after that", () =>
+test("idle review-request rounds list for the account glab switched to", () =>
   host.runEffect(
     Effect.gen(function* () {
       yield* repository;
@@ -301,11 +301,19 @@ test("idle review-request rounds read the login once and only list after that", 
           yield* host.mergeWatched;
           yield* until(
             () => Effect.sync(() => listings(forge).length),
-            (count) => count >= 3,
+            (count) => count >= 1,
           );
-          expect(
-            Arr.filter(forge.requests(), (one) => /\/user(?:\?|$)/.test(one.url)),
-          ).toHaveLength(1);
+          // The old token is refused and ForgeHttp retries with the new one, so no round sees a 401.
+          yield* forge.set({ ...(yield* forge.model()), token: "ann-token", login: "ann" });
+          yield* until(
+            () =>
+              Effect.sync(() =>
+                Arr.filter(forge.requests(), (one) =>
+                  Str.includes("reviewer_username=ann")(one.url),
+                ),
+              ),
+            (listed) => listed.length > 0,
+          );
           expect(yield* runsHere).toEqual([]);
         }),
       );
