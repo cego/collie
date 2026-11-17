@@ -323,7 +323,12 @@ import type { PluginEnv } from "./env";
 import { connectionOnMachine } from "./connections";
 import { isDirectMessage, slackApi, slackText } from "./slack";
 import { slackUserToken } from "./slack-credentials";
-import { reconcileReviewSlack, targetFromSlack } from "./review-slack";
+import {
+  REVIEW_SLACK,
+  reconcileReviewSlack,
+  reviewSlackTrouble,
+  targetFromSlack,
+} from "./review-slack";
 import { slackMessageRef } from "./slack";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
@@ -5868,8 +5873,11 @@ export const hostLayer = (options: {
             yield* store.watch({ run: asked.runId, mr, name: asked.name, cursor: asked.cursor });
             // A question sharing the wake is what the card shows: it waits on whoever answers.
             if (asked.asking === true) return;
+            const slack = yield* reviewSlackTrouble(
+              `${runDir(dir, asked.runId)}/${REVIEW_SLACK}`,
+            ).pipe(Effect.provideService(FileSystem.FileSystem, fs));
             yield* waitOn(asked.runId, {
-              on: `${asked.author ?? THE_AUTHOR} to change ${mrLabel(asked.target)}${asked.approved === undefined ? "" : `, approved at ${Str.slice(0, 7)(asked.approved)}`}`,
+              on: `${asked.author ?? THE_AUTHOR} to change ${mrLabel(asked.target)}${asked.approved === undefined ? "" : `, approved at ${Str.slice(0, 7)(asked.approved)}`}${slack === undefined ? "" : `. ${slack}`}`,
               who: THE_AUTHOR,
             });
           }),
@@ -6276,7 +6284,7 @@ export const hostLayer = (options: {
                 return `no Slack reactions: merge request is ${details.state}`;
               const { env } = yield* placing;
               const slack = options.slack ?? slackApi;
-              const file = `${runDir(dir, asked.runId)}/review-slack.json`;
+              const file = `${runDir(dir, asked.runId)}/${REVIEW_SLACK}`;
               const project = ref.project;
               const created = under(
                 Effect.gen(function* () {

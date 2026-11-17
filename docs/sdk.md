@@ -1159,7 +1159,8 @@ when the wake completes or the Run is stopped. While it waits, the card says
 merge request is recorded on the Run, so no `mr-opened` notification is sent.
 
 `watch` also takes `author`, the name its card waits on instead of "the author", and
-`approved`, a head the card says was approved. `askWhileWatching(question, watching)` asks a
+`approved`, a head the card says was approved. Where the Run's last `reviewSlack` left a
+wanted reaction missing, the card says why after the wait. `askWhileWatching(question, watching)` asks a
 question and watches at once, under the watch's name: the first of the answer and the wake
 settles it, and a wake first closes the question, so a late answer is refused. It returns
 the wake, or `{ _tag: "Answered", answer }`.

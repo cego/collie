@@ -249,13 +249,17 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
   };
 };
 
-/** `read` once `done` holds, looked at each second of the fast clock for up to an hour of it. */
-export const until = <A, E, R>(read: () => Effect.Effect<A, E, R>, done: (value: A) => boolean) =>
+/** `read` once `done` holds, looked at each second of the fast clock for up to `seconds` of it. */
+export const until = <A, E, R>(
+  read: () => Effect.Effect<A, E, R>,
+  done: (value: A) => boolean,
+  seconds = 3_600,
+) =>
   Effect.suspend(read).pipe(
     Effect.repeat({
       until: done,
       schedule: Schedule.spaced("1 second"),
-      times: 3_600,
+      times: seconds,
     }),
     Effect.filterOrElse(done, () => Effect.die(new Error("it never came"))),
   );
