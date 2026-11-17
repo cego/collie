@@ -2192,6 +2192,15 @@ its time.
   names, and runs only the files holding a match through `bun run test`, with
   `--parallel=<files>`. A pattern matching no scenario runs nothing and exits non-zero. For
   more than a few other files, run `bun test --parallel=N <files>`.
+- **A prompt's golden is regenerated, never hand-edited.** The plain ticket's build prompt is
+  a contract: the "a plan chained into implement writes a speed-up" scenario compares it
+  exactly with `test/fixtures/plain-ticket-build.prompt.txt`. Where the rendered prompt
+  differs, the scenario fails naming the golden, the first line that differs, and the
+  command that regenerates it. After changing the build prompt (`workflows/implement.md`,
+  or what renders into it) on purpose, run `bun run prompt-golden:write`, which runs the
+  scenario and writes the prompt it rendered to the golden, and review the golden's diff
+  with the change. `bun run prompt-golden:check` runs the same scenario and fails on
+  drift (`tools/prompt-golden.ts`).
 - **A test is flaky.** Measure it with `bun test --rerun-each N <file>`, narrowed with
   `-t "<name>"`, run through `collie verify` under the Machine's own load. Each run of the
   file gets a fresh root, `TMPDIR`, `HOME` and marker from the preload, and is checked and
