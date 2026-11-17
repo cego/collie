@@ -356,6 +356,7 @@ const session = <A, E>(run: Effect.Effect<A, E, SessionServices>, override?: Hos
             ConfigProvider.layerAdd(
               ConfigProvider.fromUnknown({
                 COLLIE_FORGE_API: forgeApi,
+                COLLIE_ROOT: ROOT,
               }),
             ),
           ),
@@ -10903,9 +10904,15 @@ scenario(
         expect(yield* parkedCause(runId)).toBe(cause);
         expect(parks).toHaveLength(2);
         expect(parks[1]!.park).toBe(parks[0]!.park);
+        const heals = Arr.filter(lines, (line) => line.action === "healed");
+        const skipped = new Set(
+          Arr.flatMap(heals, (line) => (line.outcome === "skipped" ? [line.recoveryId] : [])),
+        );
+        // The restarted host's tender closes a claim skipped when it runs before the re-park.
         expect(
-          new Set(Arr.flatMap(lines, (line) => (line.action === "healed" ? [line.recoveryId] : [])))
-            .size,
+          new Set(
+            Arr.flatMap(heals, (line) => (skipped.has(line.recoveryId) ? [] : [line.recoveryId])),
+          ).size,
         ).toBe(1);
       }),
     ),
