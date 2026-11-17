@@ -230,6 +230,26 @@ pub fn settings() -> Vec<Setting> {
             ),
         ),
         choice(
+            "role_tools",
+            &["all", "role"],
+            "all",
+            words(
+                "Agents",
+                "Collie tools per role",
+                "Whether every agent is offered all of Collie's tools (all), or only those its role uses (role). The chat always has every tool, and the command line reaches the rest.",
+            ),
+        ),
+        choice(
+            "output_submit",
+            &["file", "tool"],
+            "file",
+            words(
+                "Agents",
+                "How agents hand in their Output",
+                "Whether an agent writes its Output to a file (file), or may also submit it with the collie_submit tool, which names every problem at once (tool).",
+            ),
+        ),
+        choice(
             "trust",
             &["auto", "never"],
             "auto",
