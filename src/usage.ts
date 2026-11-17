@@ -25,7 +25,7 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { type CodexError, withCodex } from "./codex";
 import { CONTROL_DIR, readControl } from "./compaction";
-import { newestRateLimits } from "./compactors";
+import { rateLimitsReader } from "./compactors";
 import { currentEnv, type PluginEnv } from "./env";
 import { sha256Hex } from "./attachments";
 import { reason } from "./naming";
@@ -503,7 +503,7 @@ export const liveSources = (env: PluginEnv) =>
     return {
       claude: askClaude(login).pipe(Effect.provide(FetchHttpClient.layer)),
       chatgpt: codexReading(codex),
-      statusLine: newestRateLimits(env.stateDir).pipe(
+      statusLine: (yield* rateLimitsReader(env.stateDir)).newest.pipe(
         Effect.orElseSucceed(() => null),
         Effect.provideContext(services),
       ),

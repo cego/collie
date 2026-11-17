@@ -198,7 +198,7 @@ const CODEX_HELP = "  --dangerously-bypass-hook-trust";
 const hostOf = (): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
-  herdr: new Herdr(rig.pluginEnv()),
+  herdr: new UnseenTurn(rig.pluginEnv()),
   harness: "claude",
   model: "opus",
   permissions: "auto",
@@ -1165,6 +1165,36 @@ test(
   120_000,
 );
 
+/** The prompt is acknowledged, but its turn's current state cannot be observed. */
+class UnseenTurn extends Herdr {
+  private readonly submitted = new Set<string>();
+  override agentLaunch(...args: Parameters<Herdr["agentLaunch"]>) {
+    return Effect.suspend(() => {
+      this.submitted.delete(args[0].name);
+      return super
+        .agentLaunch(...args)
+        .pipe(Effect.tap(() => Effect.sync(() => this.submitted.add(args[0].name))));
+    });
+  }
+  override agentPrompt(...args: Parameters<Herdr["agentPrompt"]>) {
+    return Effect.suspend(() => {
+      this.submitted.delete(args[0]);
+      return super
+        .agentPrompt(...args)
+        .pipe(Effect.tap(() => Effect.sync(() => this.submitted.add(args[0]))));
+    });
+  }
+  override agentStatus(...args: Parameters<Herdr["agentStatus"]>) {
+    return super
+      .agentStatus(...args)
+      .pipe(
+        Effect.map((status): AgentStatus =>
+          this.submitted.has(args[0]) && status === "idle" ? "unknown" : status,
+        ),
+      );
+  }
+}
+
 /** `r1`'s agent past its budget: the Run parked, and its work still out, not suspended. */
 const pastTheBudget = Effect.gen(function* () {
   yield* until(parked("r1"));
@@ -1198,7 +1228,7 @@ test(
             yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
             return yield* Fiber.join(fiber);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("late");
         expect(yield* isSet(PARKED, "r1")).toBe(false);
@@ -1216,7 +1246,7 @@ test(
         const fs = yield* FileSystem.FileSystem;
         core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
-        const herdr = new Herdr(rig.pluginEnv());
+        const herdr = new UnseenTurn(rig.pluginEnv());
         const starts = rig.cmds().pipe(
           Effect.orDie,
           Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length),
@@ -1300,7 +1330,7 @@ const managedCodex = Effect.gen(function* () {
   return { children, state, ports, spawnServer };
 });
 
-class StaleWorkingTerminal extends Herdr {
+class StaleWorkingTerminal extends UnseenTurn {
   stale = false;
   override agentStatus(target: string) {
     return this.stale ? Effect.succeed("working" as const) : super.agentStatus(target);
@@ -2182,7 +2212,7 @@ test(
             yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
             return yield* Fiber.join(fiber);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("late");
         expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
@@ -2205,7 +2235,7 @@ test(
             yield* pastTheBudget;
             expect(yield* (yield* Collecting).has("r1", agentFor("r1"))).toBe(true);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
       }),
     ),
@@ -2220,7 +2250,7 @@ test(
         const starting = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         let blocking = false;
-        class SlowStart extends Herdr {
+        class SlowStart extends UnseenTurn {
           override agentLaunch(...args: Parameters<Herdr["agentLaunch"]>) {
             return blocking
               ? Deferred.succeed(starting, undefined).pipe(
@@ -2315,6 +2345,7 @@ test(
               Layer.provideMerge(
                 agentsLayer({
                   ...hostOf(),
+                  herdr: new UnseenTurn(rig.pluginEnv()),
                   collectMs: 400,
                 }),
               ),
@@ -2349,7 +2380,7 @@ test(
             yield* until(suspended("r1"));
             expect(yield* (yield* Collecting).has("r1", agentFor("r1"))).toBe(false);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
       }),
     ),
@@ -2506,7 +2537,7 @@ test("a repaired Output finished between its read and the turn ending is read ag
   ));
 
 for (const [what, herdr] of [
-  ["idle", () => new Herdr(rig.pluginEnv())],
+  ["unknown", () => new UnseenTurn(rig.pluginEnv())],
   ["unreadable", () => new Unreadable(rig.pluginEnv())],
 ] as const)
   test(
@@ -2766,7 +2797,12 @@ const ANSWERED = "Your questions are answered:";
 /** Once `r1`'s agent has its work, it calls `AskUserQuestion` with two questions. */
 const asksTwo = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  while (Arr.every(yield* launchesAt(dir, "r1"), (one) => one.operation !== "review"))
+  while (
+    !Arr.some(
+      yield* deliveredTo(dir, "r1"),
+      (one) => one.cause.kind === "step" && one.state === "acknowledged",
+    )
+  )
     yield* TestClock.withLive(Effect.sleep("10 millis"));
   // The host runs in this process; the hook puts a question on a Run only while one lives.
   yield* fs.writeFileString(
@@ -2836,8 +2872,81 @@ test(
             expect(delivered).toEndWith(
               "\nYour questions are answered: Database: SQLite; Checks: lint",
             );
+            const [receipt] = Arr.filter(
+              yield* deliveredTo(dir, "r1"),
+              (one) => one.cause.kind === "steer",
+            );
+            expect(receipt?.state).toBe("acknowledged");
           }),
-          { collectMs: 120_000, pollMs: 1_000 },
+          {
+            herdr: new UnseenTurn(rig.pluginEnv()),
+            collectMs: 120_000,
+            pollMs: 1_000,
+          },
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "an answered question's pending delivery is not interrupted by an Output reminder",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null]);
+        const replying = yield* Deferred.make<void>();
+        const sawIdle = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const cancelled = yield* Deferred.make<void>();
+        let awaitingReply = false;
+        const herdr = new (class extends UnseenTurn {
+          override agentPrompt(...args: Parameters<Herdr["agentPrompt"]>) {
+            const sent = super.agentPrompt(...args);
+            if (!pipe(args[1], Str.includes(ANSWERED))) return sent;
+            return Effect.gen(function* () {
+              awaitingReply = true;
+              yield* Deferred.succeed(replying, undefined);
+              yield* Deferred.await(release);
+              return yield* sent;
+            }).pipe(
+              Effect.onInterrupt(() => Effect.asVoid(Deferred.succeed(cancelled, undefined))),
+              Effect.ensuring(Effect.sync(() => (awaitingReply = false))),
+            );
+          }
+          override agentStatus(...args: Parameters<Herdr["agentStatus"]>) {
+            return awaitingReply
+              ? Deferred.succeed(sawIdle, undefined).pipe(Effect.as("idle" as const))
+              : super.agentStatus(...args);
+          }
+        })(rig.pluginEnv());
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* asksTwo;
+            yield* questionsOf(2);
+            yield* answer("ask-review-1", "SQLite");
+            yield* answer("ask-review-2", "lint");
+            yield* Deferred.await(replying);
+            yield* Deferred.await(sawIdle);
+            yield* spend(5_000);
+            expect(yield* Deferred.isDone(cancelled)).toBe(false);
+            yield* Deferred.succeed(release, undefined);
+            yield* until(
+              deliveredTo(dir, "r1").pipe(
+                Effect.map((all) =>
+                  Arr.some(
+                    all,
+                    (one) => one.cause.kind === "steer" && one.state === "acknowledged",
+                  ),
+                ),
+                Effect.orDie,
+              ),
+            );
+            expect(sent(yield* rig.calls(), ANSWERED)).toBe(1);
+            expect(yield* reminders).toEqual([]);
+          }),
+          { herdr, collectMs: 120_000, pollMs: 1_000 },
         );
       }),
     ),
@@ -2849,7 +2958,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([null]);
+        yield* rig.queueOutputs([{ writes: [], output: null, owed: true }]);
         yield* session(
           Effect.gen(function* () {
             yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
@@ -2882,8 +2991,16 @@ test(
             ).toMatch(
               /From the human, on the board, [^\n]*\nYour question Checks is answered: lint$/,
             );
+            const [first] = Arr.filter(
+              yield* deliveredTo(dir, "r1"),
+              (one) => one.cause.kind === "steer",
+            );
+            expect(first?.state).toBe("acknowledged");
           }),
-          { collectMs: 120_000, pollMs: 1_000 },
+          {
+            collectMs: 120_000,
+            pollMs: 1_000,
+          },
         );
       }),
     ),
@@ -2909,7 +3026,11 @@ test(
             yield* answer("ask-review-2", "lint");
             while (!(yield* parked("r1"))) yield* TestClock.withLive(Effect.sleep("10 millis"));
           }),
-          { collectMs: 60_000, pollMs: 1_000 },
+          {
+            herdr: new UnseenTurn(rig.pluginEnv()),
+            collectMs: 60_000,
+            pollMs: 1_000,
+          },
         );
         expect(yield* controlOf(PARKED, "r1")).toContain("after 1 minutes idle");
       }),
@@ -4081,7 +4202,12 @@ test(
             yield* until(parkedSays("minutes idle"));
             expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
           }),
-          { ...onPi, collectMs: 60_000, pollMs: 1_000 },
+          {
+            ...onPi,
+            herdr: new UnseenTurn(rig.pluginEnv()),
+            collectMs: 60_000,
+            pollMs: 1_000,
+          },
         );
       }),
     ),
@@ -4488,7 +4614,7 @@ test("a quota incident survives a host crash before its collection result is rec
           fs.writeFileString(path, data, options).pipe(Effect.tap(() => pauseAfterWrite(path))),
         rename: (from, to) => fs.rename(from, to).pipe(Effect.tap(() => pauseAfterWrite(to))),
       };
-      const herdr = new Herdr(rig.pluginEnv());
+      const herdr = new UnseenTurn(rig.pluginEnv());
       const over = {
         herdr,
         harness: "codex",

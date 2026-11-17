@@ -785,6 +785,9 @@ export const replacedOnDisk = (
     );
   });
 
+/** How often the board asks its host for usage, however often it loads. */
+const BOARD_USAGE_EVERY = "15 seconds";
+
 /**
  * The board: the Herd's control surface, as an application in a terminal of its own. It
  * watches the run dirs and the register and renders them; the actions are its own flows,
@@ -809,6 +812,15 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   const changed = () => {
     Queue.offerUnsafe(changes, undefined);
   };
+  // The board loads again on every change, several times a second on a busy Machine, and
+  // each host usage read is audited: usage moves slowly, so it is asked at most so often.
+  const usageNow = yield* Effect.cachedWithTTL(
+    usageReadings(env, "board").pipe(
+      Effect.map((read) => (read.ok ? read.value : [])),
+      Effect.provideContext(platform),
+    ),
+    BOARD_USAGE_EVERY,
+  );
   const session: ControlSession = {
     herdr,
     ...scopeFor(env.cwd),
@@ -823,11 +835,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     compaction: { waitMs: 0 },
     tasksOf: yield* followBoard(env, changed),
     detailOf: yield* followRunDetail(env, changed),
-    usageOf: () =>
-      usageReadings(env, "board").pipe(
-        Effect.map((read) => (read.ok ? read.value : [])),
-        Effect.provideContext(platform),
-      ),
+    usageOf: () => usageNow,
   };
   // An upgrade that leaves this board drawing the old build is an upgrade the human
   // believes happened and did not, so a rebuilt binary ends it, for the host to start the

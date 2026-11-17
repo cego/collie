@@ -2,7 +2,7 @@
 // answered the way a Workflow's question is: from `collie run answer` and from the card,
 // in any words. The host here is a real one over a fake core.
 
-import { recordsAt, launchOf } from "./support/records";
+import { deliveredTo, recordsAt, launchOf } from "./support/records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -142,7 +142,12 @@ const hostedOver = Effect.fn("test.hostedOver")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const file = `${world.home}/outputs.json`;
-  yield* fs.writeFileString(file, encode(outputs)).pipe(Effect.orDie);
+  yield* fs
+    .writeFileString(
+      file,
+      encode(Arr.map(outputs, (one) => one ?? { writes: [], output: null, owed: true })),
+    )
+    .pipe(Effect.orDie);
   // The host a client spawns inherits this process's environment: it has to own this
   // world's state, never the operator's.
   const set = {
@@ -183,13 +188,7 @@ test(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const { env, client } = yield* hostedOver(world, core, [null]);
-          const { runId } = yield* client
-            .start({ project: world.project, id: "told", request: "start", input: { work: "it" } })
-            .pipe(Effect.orDie);
-          const launched = (yield* until(
-            () => launchOf(world.state, runId, "build"),
-            (one) => one !== undefined,
-          ))!;
+          const { runId, launched } = yield* launchedRun(world, client);
           yield* recordClaudeEvent(yield* controlDir(world.state, launched.agent), askedTwo).pipe(
             Effect.orDie,
           );
@@ -289,13 +288,7 @@ test(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const { env, client } = yield* hostedOver(world, core, [null]);
-          const { runId } = yield* client
-            .start({ project: world.project, id: "told", request: "start", input: { work: "it" } })
-            .pipe(Effect.orDie);
-          const launched = (yield* until(
-            () => launchOf(world.state, runId, "build"),
-            (one) => one !== undefined,
-          ))!;
+          const { runId, launched } = yield* launchedRun(world, client);
           const control = yield* controlDir(world.state, launched.agent);
           // Two calls, as an agent that asks one question at a time makes them.
           yield* recordClaudeEvent(control, askedAlone("toolu_a", "Database")).pipe(Effect.orDie);
@@ -399,6 +392,11 @@ const launchedRun = Effect.fn("test.launchedRun")(function* (world: World, clien
     () => launchOf(world.state, runId, "build"),
     (one) => one !== undefined,
   ))!;
+  yield* until(
+    () => deliveredTo(world.state, runId),
+    (deliveries) =>
+      Arr.some(deliveries, (one) => one.cause.kind === "step" && one.state === "acknowledged"),
+  );
   return { runId, launched, dir: yield* controlDir(world.state, launched.agent) };
 });
 

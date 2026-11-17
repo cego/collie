@@ -24,6 +24,12 @@ const stopCompletely = (state: string) =>
       );
   });
 
+/** Output reminders are separate deliveries; only Steps count as work being resent. */
+const stepDeliveries = (state: string, runId: string) =>
+  deliveredTo(state, runId).pipe(
+    Effect.map((deliveries) => Arr.filter(deliveries, (one) => one.cause.kind === "step")),
+  );
+
 const withLostPrompt = <A, E>(
   prefix: string,
   body: (world: World, core: FakeHc) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
@@ -84,7 +90,7 @@ const parkedAgent = Effect.fn("test.parkedAgent")(function* (world: World) {
     () => client.run({ runId }).pipe(Effect.orDie),
     (one) => one?.status.status === "suspended" && one.parked !== null,
   );
-  const found = yield* deliveredTo(world.state, runId);
+  const found = yield* stepDeliveries(world.state, runId);
   if (found.length === 0) throw new Error(`parked before delivery: ${view?.parked}`);
   const [delivery] = found;
   expect(view?.parked).toContain(delivery!.id);
@@ -166,13 +172,13 @@ test(
         expect(waiting?.status.status).toBe("pending");
         expect(waiting?.parked).toBeNull();
         const sent = yield* until(
-          () => deliveredTo(world.state, runId),
+          () => stepDeliveries(world.state, runId),
           (one) => one.length === 2,
         );
         expect(Arr.map(sent, (one) => one.attempt)).toEqual([1, 2]);
         expect(new Set(Arr.map(sent, (one) => one.id)).size).toBe(2);
         expect(yield* client.resume({ runId, request }).pipe(Effect.orDie)).toEqual(first);
-        expect(yield* deliveredTo(world.state, runId)).toHaveLength(2);
+        expect(yield* stepDeliveries(world.state, runId)).toHaveLength(2);
         const noOp = yield* client.resume({ runId, request: "resume-2" }).pipe(Effect.orDie);
         expect(noOp.applied).toBe(false);
         expect(noOp.detail).toContain("already running");
@@ -191,7 +197,7 @@ test(
         expect(finished.applied).toBe(false);
         expect(finished.detail).toContain("finished");
         expect(yield* client.resume({ runId, request }).pipe(Effect.orDie)).toEqual(first);
-        expect(yield* deliveredTo(world.state, runId)).toHaveLength(2);
+        expect(yield* stepDeliveries(world.state, runId)).toHaveLength(2);
       }),
     ),
   120_000,
@@ -211,7 +217,7 @@ test(
           (one) => one?.status.status === "suspended" && one.parked !== null,
         );
         expect(uncertain?.parked).toContain(delivery.id);
-        expect(yield* deliveredTo(world.state, runId)).toHaveLength(1);
+        expect(yield* stepDeliveries(world.state, runId)).toHaveLength(1);
         core.refuse("terminal.send", "invalid_argument", "prompt refused");
         yield* client
           .settleDelivery({
@@ -244,7 +250,7 @@ test(
 );
 
 test(
-  "sent reconciliation resumes collection without another delivery",
+  "sent reconciliation resumes collection without another Step delivery",
   () =>
     withLostPrompt("collie-resume-sent-", (world) =>
       Effect.gen(function* () {
@@ -266,7 +272,7 @@ test(
             .pipe(Effect.orDie)).applied,
         ).toBe(true);
         expect((yield* client.run({ runId }).pipe(Effect.orDie))?.parked).toBeNull();
-        expect(yield* deliveredTo(world.state, runId)).toHaveLength(1);
+        expect(yield* stepDeliveries(world.state, runId)).toHaveLength(1);
       }),
     ),
   120_000,
