@@ -2967,6 +2967,70 @@ test(
 );
 
 test(
+  "an answered question's pending delivery is not interrupted by an Output reminder",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null]);
+        const replying = yield* Deferred.make<void>();
+        const sawIdle = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const cancelled = yield* Deferred.make<void>();
+        let awaitingReply = false;
+        const herdr = new (class extends UnseenTurn {
+          override agentPrompt(...args: Parameters<FakeHerdr["agentPrompt"]>) {
+            const sent = super.agentPrompt(...args);
+            if (!pipe(args[1], Str.includes(ANSWERED))) return sent;
+            return Effect.gen(function* () {
+              awaitingReply = true;
+              yield* Deferred.succeed(replying, undefined);
+              yield* Deferred.await(release);
+              return yield* sent;
+            }).pipe(
+              Effect.onInterrupt(() => Effect.asVoid(Deferred.succeed(cancelled, undefined))),
+              Effect.ensuring(Effect.sync(() => (awaitingReply = false))),
+            );
+          }
+          override agentStatus(...args: Parameters<FakeHerdr["agentStatus"]>) {
+            return awaitingReply
+              ? Deferred.succeed(sawIdle, undefined).pipe(Effect.as("idle" as const))
+              : super.agentStatus(...args);
+          }
+        })(rig.pluginEnv({ FAKE_HERDR_SUBMIT_HOOK: rig.stateDir }));
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* asksTwo;
+            yield* questionsOf(2);
+            yield* answer("ask-review-1", "SQLite");
+            yield* answer("ask-review-2", "lint");
+            yield* Deferred.await(replying);
+            yield* Deferred.await(sawIdle);
+            yield* spend(5_000);
+            expect(yield* Deferred.isDone(cancelled)).toBe(false);
+            yield* Deferred.succeed(release, undefined);
+            yield* until(
+              deliveredTo(dir, "r1").pipe(
+                Effect.map((all) =>
+                  Arr.some(
+                    all,
+                    (one) => one.cause.kind === "steer" && one.state === "acknowledged",
+                  ),
+                ),
+                Effect.orDie,
+              ),
+            );
+            expect(sent(yield* rig.calls(), ANSWERED)).toBe(1);
+            expect(yield* reminders).toEqual([]);
+          }),
+          { herdr, collectMs: 120_000, pollMs: 1_000 },
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
   "answers from different senders each reach the agent under their own sender line",
   () =>
     runEffect(

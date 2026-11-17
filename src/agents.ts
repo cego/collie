@@ -3557,7 +3557,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             isSettled(status) &&
             (yield* absent) &&
             (yield* may) &&
-            !(yield* holdsBudgetOf(launched.runId, launched.agent))
+            !(yield* holdsBudgetOf(launched.runId, launched.agent)) &&
+            (openQuestions.get(launched.agent)?.size ?? 0) === 0
           )
             return;
           yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
