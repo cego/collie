@@ -279,6 +279,8 @@ export interface AgentAsk {
   readonly sequence?: number;
   /** The Step run this work is in, where it is in one. */
   readonly step?: At;
+  /** How it hands in its Output; left out, the `output_submit` setting decides. */
+  readonly outputSubmit?: "file" | "tool";
 }
 
 /**
@@ -442,7 +444,9 @@ export interface AgentsApi {
   readonly choiceOf: (
     runId: string,
     agent: string,
-  ) => Effect.Effect<(ChosenAgent & { readonly sequence: number }) | null>;
+  ) => Effect.Effect<
+    (ChosenAgent & { readonly sequence: number; readonly outputSubmit: "file" | "tool" }) | null
+  >;
   /**
    * Once this agent has run out — its harness said so since it was given this work, or
    * its Subscription reads Exhausted for it — why. Never succeeds otherwise.
@@ -805,6 +809,9 @@ export const agentWork = <
     // Where each skill the instructions mention lives, so a mention is the path to read
     // rather than a name the agent has to go looking for.
     const skills = yield* agents.skills(skillsIn(work.instructions));
+    const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
+    // A running agent keeps the tool server it was launched with.
+    const outputSubmit = held?.outputSubmit ?? (yield* agents.outputSubmit);
     const parts: PromptParts = {
       role,
       instructions: work.instructions,
@@ -814,7 +821,7 @@ export const agentWork = <
       output,
       contract: plain ? null : jsonSchemaFor(work.output),
       attachments: yield* agents.attachments(runId),
-      outputSubmit: yield* agents.outputSubmit,
+      outputSubmit,
     };
     const prompt = renderPrompt(parts);
     if (prompt.unfilled.length > 0) {
@@ -826,7 +833,6 @@ export const agentWork = <
     // a conversation cannot become another agent: what is asked for here has to agree with
     // it, and what only defaults below that does not apply.
     const scopes = yield* AgentScopes;
-    const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
     const requested = foldPreferences([...scopes, preferencesIn(given)]);
     if (held !== null && !agrees(held, requested)) {
       return yield* new WorkflowError({
@@ -880,6 +886,7 @@ export const agentWork = <
       effort: choice.effort,
       permissions: work.permissions ?? null,
       authority: place.authority,
+      outputSubmit,
     };
     if (choice.claudeSubagents !== undefined) ask.claudeSubagents = choice.claudeSubagents;
     fellBack(ask, choice.from, choice.why);
@@ -2502,7 +2509,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       COLLIE_AGENT: agent,
     };
     const roleEnv = roleTools === undefined ? runEnv : { ...runEnv, COLLIE_TOOLS_ROLE: ask.role };
-    const submits = config.output_submit === "tool";
+    const submits = (ask.outputSubmit ?? config.output_submit) === "tool";
     const serverEnv = submits ? { ...roleEnv, COLLIE_OUTPUT_SUBMIT: "tool" } : roleEnv;
     const configFile = `${dirFor(ask.runId)}/${stemOf(ask)}.mcp.json`;
     const extension = `${dirFor(ask.runId)}/${stemOf(ask)}.tools.ts`;
@@ -2806,6 +2813,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             if (ask.claudeSubagents !== undefined) landed.claudeSubagents = ask.claudeSubagents;
             if ((ask.sequence ?? 1) > 1) landed.sequence = ask.sequence;
             if (ask.step !== undefined) landed.step = ask.step;
+            if (ask.outputSubmit !== undefined) landed.outputSubmit = ask.outputSubmit;
             landed.at = yield* Clock.currentTimeMillis;
             fellBack(landed, ask.from, ask.why);
             if (incarnation !== undefined) {
@@ -4409,11 +4417,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             Arr.some(agents, (one) => one.name === held.agent),
           );
           if (!alive || held.model === undefined) return null;
-          const running: Types.Mutable<ChosenAgent & { sequence: number }> = {
+          const running: Types.Mutable<
+            ChosenAgent & { sequence: number; outputSubmit: "file" | "tool" }
+          > = {
             harness: held.harness,
             model: held.model,
             effort: held.effort ?? null,
             sequence: held.sequence ?? 1,
+            outputSubmit: held.outputSubmit ?? "file",
           };
           if (held.claudeSubagents !== undefined) running.claudeSubagents = held.claudeSubagents;
           fellBack(running, held.from, held.why);

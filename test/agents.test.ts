@@ -8242,6 +8242,38 @@ test("under output_submit: tool a Claude launch offers collie_submit, and its Ou
     }),
   ));
 
+test("an agent launched under output_submit: file is still told its Output's path after the setting becomes tool", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const continued = enveloped({ name: "submit-reuse", input: {}, success: Schema.String });
+      const body = continued.toLayer((payload) =>
+        Effect.gen(function* () {
+          yield* agentWork({ operation: "first", agent: "worker", instructions: "One." });
+          yield* configured(encodeJson({ output_submit: "tool" })).pipe(Effect.orDie);
+          return yield* agentWork({ operation: "second", agent: "worker", instructions: "Two." });
+        }).pipe(asRun(payload)),
+      );
+      yield* rig.queueOutputs(["first", "second"]);
+      const result = yield* continued
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.result,
+          Effect.provide(
+            body.pipe(
+              Layer.provideMerge(agentsLayer(hostOf())),
+              Layer.provideMerge(foundationLayer({ dir })),
+            ),
+          ),
+          Effect.scoped,
+        );
+      expect(result).toMatchObject({ _tag: "Success", success: "second" });
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+      const prompt = yield* read(`${dir}/agents/r1/second.prompt.md`);
+      expect(prompt).not.toContain("collie_submit");
+      expect(prompt).toContain(`${dir}/agents/r1/second`);
+    }),
+  ));
+
 test("under role_tools: role a role the table does not name keeps every tool, and its start line says so", () =>
   runEffect(
     Effect.gen(function* () {

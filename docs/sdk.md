@@ -346,7 +346,9 @@ const verdict =
   park below are the same either way, and a second submit of the same Output is collected
   once. Under `tool` the prompt names the tool instead of the file's path and keeps the
   whole contract, every field's description included; the reminders and repairs still name
-  the file, which stays valid. Pi has no Collie MCP server, so its agents reach the tool
+  the file, which stays valid. The tool is offered when an agent is launched, so an agent a
+  later step reuses is told the way it was launched with, whatever the setting is by then.
+  Pi has no Collie MCP server, so its agents reach the tool
   through `collie tools call collie_submit`. An Output that decodes is never proof of the
   work: the gate still reads the Run's journal ([proving it](#proving-it-rather-than-saying-so)).
 - **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
