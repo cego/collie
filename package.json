@@ -18,6 +18,8 @@
     "probe:hc": "bun run tools/hc-probe.ts",
     "typecheck": "tsrs --noEmit --fast",
     "rune-types:check": "bun run tools/rune-types.ts --check",
+    "prompt-golden:write": "bun run tools/prompt-golden.ts --write",
+    "prompt-golden:check": "bun run tools/prompt-golden.ts --check",
     "check:static": "bun run --parallel --no-exit-on-error format:check lint typecheck rune-types:check",
     "check": "bun run check:static && bun run test",
     "build": "bun run tools/build.ts",

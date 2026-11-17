@@ -151,6 +151,7 @@ import { BUILD } from "../../src/host";
 import { readMetrics } from "../../src/metrics";
 import { PARK_CAUSES, ParkCause } from "../../src/park-cause";
 import { recheckPark } from "../../src/park-recheck";
+import { GOLDEN, matchGolden } from "../../tools/prompt-golden";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
@@ -2068,9 +2069,8 @@ scenario(
         const plain = yield* asked(build, "02-plain.md");
         expect(plain).not.toContain("collie measure");
         // Rendered by 7d15bed3, before tickets named a benchmark plan.
-        expect(unrooted(plain)).toBe(
-          yield* readText(`${ROOT}test/fixtures/plain-ticket-build.prompt.txt`),
-        );
+        yield* matchGolden(unrooted(plain));
+        expect(unrooted(plain)).toBe(yield* readText(GOLDEN));
 
         const mr = pipe(yield* asked(build, "mr"), Str.replace(/\s+/g, " "));
         expect(verdictsOf(final)).toEqual(["bench.count gain", "bench.size no-change"]);
