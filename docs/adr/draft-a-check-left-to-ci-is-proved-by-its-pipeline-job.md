@@ -64,6 +64,12 @@ They tell a human what the job runs. Collie never runs them.
   branch adds — the job is failed: it goes to a CI fix round at implement and to a fix
   round at Release's Prove the head, and is never recorded as proof. Where they name none,
   or cannot be read, the pass stands and the Run records it as an unsettled Flake.
+  Its `unsettled:` line names the tests its failed attempts named, or says they named none,
+  and its `ci` proof counts, for each of those tests, the failed attempts that named it.
+  On GitLab, where a job's attempts share one pipeline, another failed job of that pipeline
+  belongs to the first failed attempt that ended after it, or else to the last one.
+  (Amended 2026-11-17, #507: Flakes of an aggregate `test` job were recorded by the job's
+  name alone, so the test that kept flaking could not be found from Collie's records.)
   (Amended 2026-11-11: a branch's flaky new scenario failed once, passed on retry, was
   released, and turned its target branch red for the Runs after it.)
 - A failed job is excused as failing before the Run, or as the target's, only where the base,

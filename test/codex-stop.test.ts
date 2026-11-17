@@ -841,6 +841,12 @@ test(
 
         // Its turn ends and it exits; the agent started in its place gets a server of its own.
         yield* release();
+        const old = yield* serverPid();
+        // Resumed while it is still exiting, the stop cannot prove it stopped and parks again.
+        for (let tries = 0; !(yield* processAbsent(old)); tries++) {
+          if (tries === 3_000) return yield* Effect.die(new Error(`server ${old} never exited`));
+          yield* TestClock.withLive(Effect.sleep("10 millis"));
+        }
         yield* serve({ threads: [{ id: SUB_THREAD, cwd: rig.projectDir }] });
         const result = yield* resumedToEnd();
         const atEnd = yield* sizeOf(written());
