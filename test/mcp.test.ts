@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import {
   Cause,
@@ -253,7 +254,11 @@ test(
             const submit = (output: JsonObject) =>
               server.request("tools/call", { name: "collie_submit", arguments: { output } });
 
-            const missing = yield* submit({});
+            // The launch is journaled just before its step starts waiting for the Output.
+            const missing = yield* until(
+              () => submit({}),
+              (answer) => !Str.includes("No step of")(encodeValue(answer.result)),
+            );
             expect(missing.result).toMatchObject({
               content: [
                 { type: "text", text: expect.stringContaining('Missing key\n  at ["verdict"]') },
