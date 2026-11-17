@@ -64,7 +64,7 @@ const herdrCall = (args: string[], env: Record<string, string>) =>
       return {
         code: 1,
         stdout: "",
-        stderr: `${JSON.stringify({ error: { code: "server_not_running", message: "herdr server is not running" } })}\n`,
+        stderr: `${encodeJson({ error: { code: "server_not_running", message: "herdr server is not running" } })}\n`,
       };
     // A `pane list` waits while this file exists, so a test can hold an action mid-way.
     const hold = env.FAKE_HERDR_HOLD_PANE_LIST;
