@@ -301,7 +301,7 @@ test(
             const store = yield* Store;
             yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length > 0));
             expect((yield* store.asked("r1"))[0]?.decision).toBe("ask-review-1");
-          }).pipe(Effect.timeout("60 seconds")),
+          }),
           hostOf(0),
         );
       }),
@@ -341,7 +341,7 @@ test(
             expect(yield* fs.readFileString(`${dir}/agents/r1/review.prompt.md`)).toContain(
               'end exactly one option\'s label with " (Recommended)"',
             );
-          }).pipe(Effect.timeout("60 seconds")),
+          }),
         );
       }),
     ),
@@ -390,7 +390,7 @@ test(
               ],
             ]);
             expect(yield* typedCount("at least three options")).toBe(0);
-          }).pipe(Effect.timeout("60 seconds")),
+          }),
         );
       }),
     ),
