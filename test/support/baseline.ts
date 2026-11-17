@@ -151,6 +151,7 @@ import { BUILD } from "../../src/host";
 import { readMetrics } from "../../src/metrics";
 import { PARK_CAUSES, ParkCause } from "../../src/park-cause";
 import { recheckPark } from "../../src/park-recheck";
+import { GOLDEN, matchGolden } from "../../tools/prompt-golden";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
@@ -2070,9 +2071,8 @@ scenario(
         const plain = yield* asked(build, "02-plain.md");
         expect(plain).not.toContain("collie measure");
         // Rendered by 7d15bed3, before tickets named a benchmark plan.
-        expect(unrooted(plain)).toBe(
-          yield* readText(`${ROOT}test/fixtures/plain-ticket-build.prompt.txt`),
-        );
+        yield* matchGolden(unrooted(plain));
+        expect(unrooted(plain)).toBe(yield* readText(GOLDEN));
 
         const mr = pipe(yield* asked(build, "mr"), Str.replace(/\s+/g, " "));
         expect(verdictsOf(final)).toEqual(["bench.count gain", "bench.size no-change"]);
@@ -2618,7 +2618,7 @@ for (const name of ["gitlab", "github"] as const) {
         Effect.gen(function* () {
           const { bin, forge } = yield* reviewing();
           const runId = `r-review-input-${name}`;
-          yield* rig.queueOutputs([null]);
+          yield* rig.queueOutputs(byHand([null]));
           const status = yield* driven(
             { entry: shipped("review"), runId, input: { target } },
             (run) =>
@@ -5182,7 +5182,7 @@ scenario(
         ]);
         yield* approve("r-live", ["unit"]);
         // The first ticket's Output is written by hand, once the plan has moved under it.
-        yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs(byHand([null, BUILT, CLEAN_SYNTHESIS, OPENED]));
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-live", input: { plan, ...FINISH } }),
         );
@@ -5222,7 +5222,7 @@ scenario(
           { file: "01-first.md", title: "the first one", checks: "unit" },
         ]);
         yield* approve("r-grow", ["unit"]);
-        yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs(byHand([null, BUILT, CLEAN_SYNTHESIS, OPENED]));
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-grow", input: { plan, ...FINISH } }),
         );
@@ -5576,13 +5576,15 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-amended", ["unit"]);
-        yield* rig.queueOutputs([
-          null,
-          { ...BUILT, criteria: [{ criterion: AMENDED, met: "src/audit.ts" }] },
-          BUILT,
-          CLEAN_SYNTHESIS,
-          OPENED,
-        ]);
+        yield* rig.queueOutputs(
+          byHand([
+            null,
+            { ...BUILT, criteria: [{ criterion: AMENDED, met: "src/audit.ts" }] },
+            BUILT,
+            CLEAN_SYNTHESIS,
+            OPENED,
+          ]),
+        );
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-amended", input: { plan, ...FINISH } }),
         );
@@ -5643,13 +5645,15 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-lead", ["unit"]);
-        yield* rig.queueOutputs([
-          null,
-          { ...BUILT, criteria: [{ criterion: COUNTED_AMENDED, met: "test/logged.test.ts" }] },
-          BUILT,
-          CLEAN_SYNTHESIS,
-          OPENED,
-        ]);
+        yield* rig.queueOutputs(
+          byHand([
+            null,
+            { ...BUILT, criteria: [{ criterion: COUNTED_AMENDED, met: "test/logged.test.ts" }] },
+            BUILT,
+            CLEAN_SYNTHESIS,
+            OPENED,
+          ]),
+        );
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-lead", input: { plan, ...FINISH } }),
         );
@@ -5705,14 +5709,16 @@ scenario(
         const named = "**Named.** Each one is named in the log.";
         const amended = "**Named. Each one is named in the log.** Each name is quoted.";
         yield* approve("r-lead-back", ["unit"]);
-        yield* rig.queueOutputs([
-          { ...BUILT, criteria: [{ criterion: COUNTED, met: "test/count.test.ts" }] },
-          null,
-          { ...BUILT, criteria: [{ criterion: amended, met: "test/quoted.test.ts" }] },
-          BUILT,
-          CLEAN_SYNTHESIS,
-          OPENED,
-        ]);
+        yield* rig.queueOutputs(
+          byHand([
+            { ...BUILT, criteria: [{ criterion: COUNTED, met: "test/count.test.ts" }] },
+            null,
+            { ...BUILT, criteria: [{ criterion: amended, met: "test/quoted.test.ts" }] },
+            BUILT,
+            CLEAN_SYNTHESIS,
+            OPENED,
+          ]),
+        );
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-lead-back", input: { plan, ...FINISH } }),
         );
@@ -5771,14 +5777,16 @@ scenario(
         ]);
         const amended = "**Checks.** The second is checked twice.";
         yield* approve("r-shared-lead", ["unit"]);
-        yield* rig.queueOutputs([
-          { ...BUILT, criteria: [{ criterion: "Checks.", met: "test/check.test.ts" }] },
-          null,
-          { ...BUILT, criteria: [{ criterion: amended, met: "test/twice.test.ts" }] },
-          BUILT,
-          CLEAN_SYNTHESIS,
-          OPENED,
-        ]);
+        yield* rig.queueOutputs(
+          byHand([
+            { ...BUILT, criteria: [{ criterion: "Checks.", met: "test/check.test.ts" }] },
+            null,
+            { ...BUILT, criteria: [{ criterion: amended, met: "test/twice.test.ts" }] },
+            BUILT,
+            CLEAN_SYNTHESIS,
+            OPENED,
+          ]),
+        );
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-shared-lead", input: { plan, ...FINISH } }),
         );
@@ -5825,22 +5833,24 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-old-words", ["unit"]);
-        yield* rig.queueOutputs([
-          {
-            ...BUILT,
-            criteria: [
-              {
-                criterion: "**Counted.** Every registry is counted once.",
-                met: "test/count.test.ts",
-              },
-            ],
-          },
-          null,
-          { ...BUILT, criteria: [{ criterion: AMENDED, met: "src/audit.ts" }] },
-          BUILT,
-          CLEAN_SYNTHESIS,
-          OPENED,
-        ]);
+        yield* rig.queueOutputs(
+          byHand([
+            {
+              ...BUILT,
+              criteria: [
+                {
+                  criterion: "**Counted.** Every registry is counted once.",
+                  met: "test/count.test.ts",
+                },
+              ],
+            },
+            null,
+            { ...BUILT, criteria: [{ criterion: AMENDED, met: "src/audit.ts" }] },
+            BUILT,
+            CLEAN_SYNTHESIS,
+            OPENED,
+          ]),
+        );
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-old-words", input: { plan, ...FINISH } }),
         );
@@ -6652,7 +6662,7 @@ scenario(
           incarnation: { terminalId: `term-${planner}`, agentSession: null },
         }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         yield* approve("r-planned", ["unit"]);
-        yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs(byHand([null, BUILT, CLEAN_SYNTHESIS, OPENED]));
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-planned", input: { plan, ...FINISH } }),
         );
@@ -12123,7 +12133,7 @@ const parkRecheck = (runId: string, mr: string, cwd: string) =>
     return yield* recheckPark(
       { runId, cwd, branch: "feature", mr, park: { cause, kind: PARK_CAUSES[cause].kind } },
       dir,
-      { sessionList: () => Effect.die("a park recheck here must not ask herdr") },
+      { agentList: () => Effect.die("a park recheck here must not ask herdr") },
     );
   }).pipe(
     Effect.provide(

@@ -193,7 +193,7 @@ const CODEX_HELP = "  --dangerously-bypass-hook-trust";
 const hostOf = (): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
-  herdr: new FakeHerdr(rig.pluginEnv()),
+  herdr: new UnseenTurn(rig.pluginEnv()),
   harness: "claude",
   model: "opus",
   permissions: "auto",
@@ -1404,7 +1404,7 @@ const managedCodex = Effect.gen(function* () {
   return { children, state, ports, spawnServer };
 });
 
-class StaleWorkingTerminal extends FakeHerdr {
+class StaleWorkingTerminal extends UnseenTurn {
   stale = false;
   override agentStatus(target: string) {
     return this.stale ? Effect.succeed("working" as const) : super.agentStatus(target);
@@ -2606,7 +2606,7 @@ test("a repaired Output finished between its read and the turn ending is read ag
   ));
 
 for (const [what, herdr] of [
-  ["idle", () => new FakeHerdr(rig.pluginEnv())],
+  ["unknown", () => new UnseenTurn(rig.pluginEnv())],
   ["unreadable", () => new Unreadable(rig.pluginEnv())],
 ] as const)
   test(
@@ -2946,7 +2946,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([null]);
+        yield* rig.queueOutputs([{ writes: [], output: null, owed: true }]);
         yield* session(
           Effect.gen(function* () {
             yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
@@ -2983,7 +2983,7 @@ test(
               /From the human, on the board, [^\n]*\nYour question Checks is answered: lint$/,
             );
           }),
-          { collectMs: 120_000, pollMs: 1_000 },
+          { herdr: new FakeHerdr(rig.pluginEnv()), collectMs: 120_000, pollMs: 1_000 },
         );
       }),
     ),
@@ -4373,7 +4373,7 @@ test(
             yield* Effect.forkScoped(runsOut(agentFor("r1")));
             yield* interrupted("r1", parked("r1"), {
               ...chain,
-              herdr: new FakeHerdr(
+              herdr: new UnseenTurn(
                 rig.pluginEnv({ FAKE_HERDR_FAIL: `{"pane close":"pane is busy"}` }),
               ),
             });
@@ -4576,7 +4576,7 @@ test("a quota incident survives a host crash before its collection result is rec
           fs.writeFileString(path, data, options).pipe(Effect.tap(() => pauseAfterWrite(path))),
         rename: (from, to) => fs.rename(from, to).pipe(Effect.tap(() => pauseAfterWrite(to))),
       };
-      const herdr = new FakeHerdr(rig.pluginEnv());
+      const herdr = new UnseenTurn(rig.pluginEnv());
       const over = {
         herdr,
         harness: "codex",

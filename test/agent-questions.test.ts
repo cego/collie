@@ -2,7 +2,7 @@
 // answered the way a Workflow's question is: from `collie run answer` and from the card,
 // in any words. The host here is a real one over a fake herdr.
 
-import { recordsAt, launchOf } from "./support/records";
+import { deliveredTo, recordsAt, launchOf } from "./support/records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -140,7 +140,12 @@ const hostedOver = Effect.fn("test.hostedOver")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const file = `${world.home}/outputs.json`;
-  yield* fs.writeFileString(file, encode(outputs)).pipe(Effect.orDie);
+  yield* fs
+    .writeFileString(
+      file,
+      encode(Arr.map(outputs, (one) => one ?? { writes: [], output: null, owed: true })),
+    )
+    .pipe(Effect.orDie);
   // The host a client spawns inherits this process's environment: it has to own this
   // world's state, never the operator's.
   const set = {
@@ -561,6 +566,14 @@ test(
           const fs = yield* FileSystem.FileSystem;
           const { client: previous } = yield* hostedOver(world, [null]);
           const { runId, dir } = yield* launchedRun(world, previous);
+          yield* until(
+            () => deliveredTo(world.state, runId),
+            (deliveries) =>
+              Arr.some(
+                deliveries,
+                (one) => one.cause.kind === "step" && one.state === "acknowledged",
+              ),
+          );
           yield* stopHost(world.state);
           expect(yield* ownerOf(world.state)).toBeNull();
           const db = new Database(`${world.state}/host.db`);
