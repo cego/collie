@@ -278,6 +278,11 @@ const SHARE_SETTINGS = {
 
 /** Fix rounds in a row before a failing head parks the Run, as implement's gate fixes. */
 const ROUNDS = 4;
+/** Merges a go tries at one head while the forge's failures are transient, and the wait between. */
+const MERGE_ATTEMPTS = 3;
+const MERGE_SPACING = "10 seconds";
+/** A transient merge failure whose re-read is no longer Ready. */
+const Unheld = Schema.TaggedStruct("Unheld", { standing: ReviewStandingSchema });
 
 const checkingOut = step({
   id: "checkout",
@@ -714,7 +719,9 @@ export default defineWorkflow({
       const park = (reason: string, cause: ParkCause = "release-failed") =>
         Effect.gen(function* () {
           const why =
-            cause === "target-red" ? reason : `${reason}. Repair it, then resume ${runId}.`;
+            cause === "target-red" || cause === "forge-unavailable"
+              ? reason
+              : `${reason}. Repair it, then resume ${runId}.`;
           yield* host.record(runId, why);
           yield* stepFailed(why);
           yield* host.parked(runId, why, cause);
@@ -1760,9 +1767,23 @@ export default defineWorkflow({
           const outcome = yield* merge(
             Activity.make({
               name: `merge.${gos}`,
-              success: MergeOutcomeSchema,
+              success: Schema.Union([MergeOutcomeSchema, Unheld]),
               error: WorkflowError,
-              execute: host.merge({ runId, cwd, head }),
+              // Parks inside, keeping the claim, so a resume merges afresh.
+              execute: Effect.gen(function* () {
+                for (let attempt = 1; ; attempt++) {
+                  const outcome = yield* host.merge({ runId, cwd, head });
+                  if (outcome._tag !== "Transient") return outcome;
+                  const standing = yield* host.review({ runId, cwd, proved: head, seen: [] });
+                  if (standing._tag === "Unreadable" || attempt === MERGE_ATTEMPTS)
+                    return yield* park(
+                      `The forge could not merge ${mr} at ${short(head)} after ${attempt} attempt(s): ${standing._tag === "Unreadable" ? standing.reason : outcome.reason}`,
+                      "forge-unavailable",
+                    );
+                  if (standing._tag !== "Ready") return Unheld.make({ standing });
+                  yield* Effect.sleep(MERGE_SPACING);
+                }
+              }),
             }),
             { round: gos },
           );
@@ -1771,6 +1792,13 @@ export default defineWorkflow({
             continue;
           }
           yield* giveBack;
+          if (outcome._tag === "Unheld") {
+            yield* host.record(
+              runId,
+              `go ${gos} no longer holds for ${short(head)}: ${notReady(outcome.standing)}`,
+            );
+            continue;
+          }
           if (outcome._tag === "HeadMoved") {
             yield* host.record(
               runId,

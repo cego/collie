@@ -16788,6 +16788,94 @@ for (const name of ["gitlab", "github"] as const) {
     120_000,
   );
 
+  if (name === "github")
+    for (const [failure, message] of [
+      ["502", "Server Error"],
+      ["405", "Base branch was modified. Review and try the merge again."],
+    ] as const)
+      scenario(
+        `release on ${name}: a first merge the forge answers ${failure} "${message}" at an unchanged head is merged on retry in the same go`,
+        () =>
+          runEffect(
+            Effect.gen(function* () {
+              const { bin, forge, head, merged } = yield* releasable(name);
+              const ready = yield* forge.model();
+              yield* forge.set({ ...ready, mergeFailures: [{ status: Number(failure), message }] });
+              claimed.length = 0;
+              const runId = `r-merge-retried-${failure}-${name}`;
+              yield* rig.queueOutputs([PACKAGED, TAGGED]);
+              const { status, asked } = yield* driven(
+                { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+                (run) =>
+                  Effect.gen(function* () {
+                    yield* goAsked(run.asked, "go-1");
+                    yield* run.answer("go-1", "Release");
+                    return { status: yield* ended(run.status), asked: yield* run.asked };
+                  }),
+              );
+              const model = yield* forge.model();
+              yield* bin.restore();
+              expect(outcomeText(status)).toBe(`${mr} merged at ${merged}, released as v1.2.0`);
+              expect(
+                Arr.filter(asked, (row) => pipe(row.decision, Str.startsWith("go-"))),
+              ).toHaveLength(1);
+              expect(Arr.map(model.merges ?? [], (one) => one.sha)).toEqual([head]);
+              expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+            }),
+          ),
+        120_000,
+      );
+
+  scenario(
+    `release on ${name}: a go whose every merge attempt answers 502 parks forge-unavailable holding its claim, and merges that head once resumed`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, merged, reviewed } = yield* releasable(name);
+          const ready = yield* forge.model();
+          yield* forge.set({
+            ...ready,
+            mergeFailures: Arr.replicate({ status: 502, message: "Server Error" }, 3),
+          });
+          claimed.length = 0;
+          const runId = `r-merge-unavailable-${name}`;
+          yield* rig.queueOutputs([PACKAGED, TAGGED]);
+          const { status, asked } = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Release");
+                const { cause, parked } = yield* until(
+                  () => Effect.all({ cause: parkedCause(runId), parked: run.status }),
+                  ({ cause, parked }) => cause !== "" || parked.status === "failed",
+                );
+                expect(parked.status).toBe("suspended");
+                expect(cause).toBe("forge-unavailable");
+                expect(PARK_CAUSES[cause as ParkCause].kind).toBe("rechecks");
+                const why = yield* parkedWhy(runId);
+                expect(why).toContain(pipe(head, Str.slice(0, 8)));
+                expect(why).toContain("502");
+                expect((yield* forge.model()).merges ?? []).toEqual([]);
+                expect(claimed).toEqual([`claim ${runId}`]);
+                expect(yield* parkRecheck(runId, mr, reviewed)).toMatchObject({ cleared: true });
+                yield* run.resume;
+                return { status: yield* ended(run.status), asked: yield* run.asked };
+              }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} merged at ${merged}, released as v1.2.0`);
+          expect(
+            Arr.filter(asked, (row) => pipe(row.decision, Str.startsWith("go-"))),
+          ).toHaveLength(1);
+          expect(Arr.map(model.merges ?? [], (one) => one.sha)).toEqual([head]);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
   scenario(
     `release on ${name}: an application whose assessment named no stage deploy fails before any wait or claim`,
     () =>
