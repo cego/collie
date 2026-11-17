@@ -719,6 +719,10 @@ const cacheItems = (listed: { readonly envelope: { readonly data?: unknown } }) 
   };
 };
 
+/** A listing judges the board the host built last, which may not have this Run's latest state yet. */
+const cacheListing = (world: World, judged: (items: ReturnType<typeof cacheItems>) => boolean) =>
+  until(() => Effect.map(collie(world, ["cleanup"]), cacheItems), judged);
+
 test(
   "cleanup lists the build cache of a checkout whose only Run failed, and --apply removes it alone",
   () =>
@@ -733,7 +737,7 @@ test(
             (status) => status === "failed",
           );
 
-          const listed = cacheItems(yield* collie(world, ["cleanup"]));
+          const listed = yield* cacheListing(world, (items) => items.remove.length > 0);
           expect(Arr.map(listed.remove, (item) => [item.target, item.reason])).toEqual([
             [cache, "no live Run works in this checkout"],
           ]);
@@ -770,7 +774,7 @@ test(
             (status) => status === "suspended",
           );
 
-          const listed = cacheItems(yield* collie(world, ["cleanup"]));
+          const listed = yield* cacheListing(world, (items) => items.keep.length > 0);
           expect(listed.remove).toEqual([]);
           expect(listed.keep).toEqual([
             { kind: "build-cache", target: cache, reason: `${runId} still works in this checkout` },
