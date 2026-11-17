@@ -1442,13 +1442,15 @@ export interface HostApi {
   }) => Effect.Effect<string>;
   /**
    * What changed from `previous` to `head`: a merge request's interdiff, else the checkout's
-   * commits and files since `previous`, with the command that shows their diff.
+   * commits and files since `previous`, with the command that shows their diff. A
+   * local `base`, the default branch merged in since, is left out of them.
    */
   readonly reviewChanges: (options: {
     readonly target: string;
     readonly cwd: string;
     readonly previous: string;
     readonly head: string;
+    readonly base?: string;
   }) => Effect.Effect<string, WorkflowError>;
   /** Approves once per Run and attempt; an interrupted attempt returns an uncertain outcome. */
   readonly approveReview: (options: {

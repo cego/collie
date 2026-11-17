@@ -324,7 +324,7 @@ test("a command nobody approved is refused, whatever a workflow asks the host fo
     }),
   ));
 
-const deltaRally = (runId: string, moves: boolean) =>
+const deltaRally = (runId: string, moves: boolean, upstream = false) =>
   Effect.gen(function* () {
     const base = Str.trim(
       (yield* exec(["git", "rev-parse", "HEAD"], { cwd: rig.projectDir })).stdout,
@@ -333,7 +333,7 @@ const deltaRally = (runId: string, moves: boolean) =>
     const made = entry.make(`delta-rally@${runId}`);
     // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; a failure fails the test.
     yield* made.workflow
-      .execute({ runId, input: { cwd: rig.projectDir, base, moves } })
+      .execute({ runId, input: { cwd: rig.projectDir, base, moves, upstream } })
       .pipe(Effect.provide(made.layer), Effect.orDie);
     const fs = yield* FileSystem.FileSystem;
     const prompt = (operation: string) =>
@@ -393,12 +393,27 @@ test("a round-2 reviewer is told the round-1 head, what changed since it and wha
       const ran = yield* deltaRally("r-delta", true);
       const delta = Str.split(ran.second, DELTA)[1] ?? "";
       expect(ran.second).toContain(`${DELTA} ${ran.base}`);
-      expect(delta).toContain(`git diff ${ran.base}`);
+      expect(delta).toContain(`git log -p --no-merges ${ran.base}..`);
       expect(delta).toContain("fix round 1");
       expect(delta).toContain("fixed-1.ts");
       expect(delta).toContain("[minor] naming");
       expect(delta).toContain("null input");
       expect(delta).not.toContain("empty list");
+    }),
+  ));
+
+test("a round-2 reviewer is not pointed at what the default branch brought in between rounds", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* startedWithDelta("r-upstream");
+      yield* twoRounds();
+      const ran = yield* deltaRally("r-upstream", true, true);
+      const delta = Str.split(ran.second, DELTA)[1] ?? "";
+      expect(delta).toContain("fix round 1");
+      expect(delta).toContain("fixed-1.ts");
+      expect(delta).not.toContain("upstream moved");
+      expect(delta).not.toContain("upstream.ts");
+      expect(delta).not.toContain("Merge branch");
     }),
   ));
 

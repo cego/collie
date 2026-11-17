@@ -410,6 +410,8 @@ export const followUp = (ask: {
   readonly cwd: Effect.Effect<string>;
   readonly head: string;
   readonly now: string;
+  /** The default branch merged in, whose commits are not the change's. */
+  readonly base?: string;
   readonly open: ReadonlyArray<Finding>;
 }) =>
   Effect.gen(function* () {
@@ -421,7 +423,13 @@ export const followUp = (ask: {
             name: ask.name,
             success: Schema.String,
             execute: Effect.flatMap(ask.cwd, (cwd) =>
-              host.reviewChanges({ target: ask.target, cwd, previous: ask.head, head: ask.now }),
+              host.reviewChanges({
+                target: ask.target,
+                cwd,
+                previous: ask.head,
+                head: ask.now,
+                base: ask.base,
+              }),
             ).pipe(
               Effect.orElseSucceed(
                 () =>
@@ -552,6 +560,7 @@ export const rally = (ask: {
                   cwd: Effect.succeed(ask.cwd),
                   head: prior.head,
                   now: head,
+                  base: merged.base,
                   open: prior.open,
                 });
           const synthesis = yield* reviewPass({

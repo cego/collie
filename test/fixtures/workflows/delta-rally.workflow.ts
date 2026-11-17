@@ -1,5 +1,6 @@
 // The shipped rally over a local checkout, then the final review of the integrated tree as
-// implement's delivery asks for it. A fix that `moves` commits, so the next round's head moved.
+// implement's delivery asks for it. A fix that `moves` commits, so the next round's head moved;
+// with `upstream`, the default branch moves on and is merged in before round 2.
 
 import { FixOutputSchema, Host, Run, agentWork, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
@@ -17,7 +18,12 @@ const git = (cwd: string, ...args: string[]) =>
 
 export default defineWorkflow({
   id: "delta-rally",
-  input: Schema.Struct({ cwd: Schema.String, base: Schema.String, moves: Schema.Boolean }),
+  input: Schema.Struct({
+    cwd: Schema.String,
+    base: Schema.String,
+    moves: Schema.Boolean,
+    upstream: Schema.Boolean,
+  }),
   output: Schema.String,
   hints: { cwd: "repository" },
   agents: { roles: { reviewer: REVIEWER } },
@@ -26,6 +32,7 @@ export default defineWorkflow({
       const host = yield* Host;
       const { id } = yield* Run;
       const { dir } = yield* host.place(id);
+      let base = input.base;
       const rallied = yield* rally({
         rounds: { n: 0 },
         cwd: input.cwd,
@@ -36,15 +43,28 @@ export default defineWorkflow({
         criteria: "",
         prefix: "",
         obstacle: "",
-        integrate: () =>
-          Effect.succeed({
-            status: "unchanged" as const,
-            branch: "",
-            ref: "",
-            sha: input.base,
-            files: [],
-            reason: "",
-            base: input.base,
+        integrate: (operation) =>
+          Effect.gen(function* () {
+            if (input.upstream && operation === "merge-2") {
+              yield* git(input.cwd, "checkout", "-q", "-b", "upstream", input.base);
+              yield* Effect.promise(() =>
+                Bun.write(`${input.cwd}/upstream.ts`, "export const upstream = 1;\n"),
+              );
+              yield* git(input.cwd, "add", "-A");
+              yield* git(input.cwd, "commit", "-qm", "upstream moved");
+              base = (yield* git(input.cwd, "rev-parse", "HEAD")).stdout.toString().trim();
+              yield* git(input.cwd, "checkout", "-q", "-");
+              yield* git(input.cwd, "merge", "-q", "--no-edit", "upstream");
+            }
+            return {
+              status: "unchanged" as const,
+              branch: "",
+              ref: "",
+              sha: base,
+              files: [],
+              reason: "",
+              base,
+            };
           }),
         fix: ({ operation, at }) =>
           Effect.gen(function* () {
@@ -56,7 +76,7 @@ export default defineWorkflow({
                 inputs: { target: "", target_kind: "", plan: "", outcome: "" },
                 target_repo: "",
                 mr: NO_MR,
-                base: input.base,
+                base,
                 run: { dir, id },
                 branch: "",
                 iteration: String(at),
@@ -84,7 +104,7 @@ export default defineWorkflow({
         previous: `${dir}/review.md`,
         answered: "",
         risks: "",
-        base: input.base,
+        base,
         at: ROUNDS + 1,
         of: ROUNDS + 1,
         disputed: [],
