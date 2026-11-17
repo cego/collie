@@ -534,7 +534,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** Whether a \`rerun\`'s test is the branch's own since the default branch, so never a Flake. */
     readonly own?: boolean;
     /** The pipeline job a \`ci\` pass read, and the merge commit it ran on where not the head itself. */
-    readonly job?: { readonly name: string; readonly url: string | null; readonly merge?: string };
+    readonly job?: {
+      readonly name: string;
+      readonly url: string | null;
+      readonly merge?: string;
+      /** After a failed attempt: each test the job's failed attempts named, and how many named it. */
+      readonly flaked?: ReadonlyArray<{ readonly name: string; readonly file: string | null; readonly attempts: number }>;
+    };
   }
 
   /** What the journal holds and the tree in front of you, for checks to be read against. */

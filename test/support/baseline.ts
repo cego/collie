@@ -151,6 +151,7 @@ import { BUILD } from "../../src/host";
 import { readMetrics } from "../../src/metrics";
 import { PARK_CAUSES, ParkCause } from "../../src/park-cause";
 import { recheckPark } from "../../src/park-recheck";
+import { GOLDEN, matchGolden } from "../../tools/prompt-golden";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
@@ -2068,9 +2069,8 @@ scenario(
         const plain = yield* asked(build, "02-plain.md");
         expect(plain).not.toContain("collie measure");
         // Rendered by 7d15bed3, before tickets named a benchmark plan.
-        expect(unrooted(plain)).toBe(
-          yield* readText(`${ROOT}test/fixtures/plain-ticket-build.prompt.txt`),
-        );
+        yield* matchGolden(unrooted(plain));
+        expect(unrooted(plain)).toBe(yield* readText(GOLDEN));
 
         const mr = pipe(yield* asked(build, "mr"), Str.replace(/\s+/g, " "));
         expect(verdictsOf(final)).toEqual(["bench.count gain", "bench.size no-change"]);
@@ -9421,7 +9421,7 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        const line = `nuxi: job nuxi-job failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a flake, so it is not settled.`;
+        const line = `nuxi: job nuxi-job failed on ${pipe(head, Str.slice(0, 12))}, naming no failed test, then passed when retried — a flake, so it is not settled.`;
         expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(line);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
@@ -12231,7 +12231,7 @@ const parkRecheck = (runId: string, mr: string, cwd: string) =>
     return yield* recheckPark(
       { runId, cwd, branch: "feature", mr, park: { cause, kind: PARK_CAUSES[cause].kind } },
       dir,
-      { sessionList: () => Effect.die("a park recheck here must not ask herdr") },
+      { agentList: () => Effect.die("a park recheck here must not ask herdr") },
     );
   }).pipe(
     Effect.provide(
@@ -14166,7 +14166,7 @@ scenario(
 );
 
 scenario(
-  "a Release whose check is left to CI's test job records a retried pass of a test the branch does not touch as unsettled, naming the job and the head",
+  "a Release whose check is left to CI's test job records a retried pass of a test the branch does not touch as unsettled, naming the job, the head and the failed test",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -14210,7 +14210,64 @@ scenario(
         yield* bin.restore();
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(
-          `unsettled: check: job test failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a Flake, so this Run has not settled it.`,
+          `unsettled: check: job test failed on ${pipe(head, Str.slice(0, 12))} in test "an old thing settles on its first try", then passed when retried — a Flake, so this Run has not settled it.`,
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a Release whose retried job failed in two tests the branch does not touch names both in its unsettled line",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head } = yield* releasable("gitlab", {
+          jobs: [
+            {
+              name: "test",
+              state: "passed",
+              id: 101,
+              attempts: [
+                {
+                  id: 1,
+                  state: "failed",
+                  trace: Arr.join(
+                    [
+                      failedTrace(
+                        "test/old-thing.test.ts",
+                        "an old thing settles on its first try",
+                      ),
+                      failedTrace("test/other-thing.test.ts", "another old thing settles"),
+                    ],
+                    "\r\n",
+                  ),
+                },
+              ],
+            },
+          ],
+        });
+        const runId = "r-release-flakes";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([PACKAGED]);
+        yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: RELEASING.gitlab.target },
+            host: releaseHost(),
+          },
+          (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Finish");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(
+          `unsettled: check: job test failed on ${pipe(head, Str.slice(0, 12))} in tests "an old thing settles on its first try", "another old thing settles", then passed when retried — a Flake, so this Run has not settled it.`,
         );
       }),
     ),

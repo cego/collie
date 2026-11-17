@@ -203,6 +203,13 @@ Dispatcher, and closes a `closes: "reported"` Run's own agents and eligible Task
 Repository placement is resolved by `projects.ts` and fetched by `agent-start.ts`; the
 engine carries the fetched revision through admission and placement.
 
+### Tools beside the source
+
+`../tools/prompt-golden.ts` keeps the plain ticket's build-prompt golden: `--write`
+regenerates it from the prompt its scenario renders, after the prompt changed on purpose,
+and `--check`, like the scenario itself, fails on drift, naming the golden. See
+[Keeping the suite and a start fast](../docs/internals.md#keeping-the-suite-and-a-start-fast).
+
 ### Retained material
 
 `artefact-model.ts` owns the shared catalogue and revision receipt wire values.

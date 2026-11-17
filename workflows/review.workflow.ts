@@ -971,7 +971,7 @@ export default defineWorkflow({
           yield* host.record(run.id, `${operation}: handed the findings to ${to}`);
           if (improving) {
             const changed = yield* watch({
-              name: "improved-head",
+              name: fixes === 1 ? "improved-head" : `improved-head-${fixes}`,
               target: asked.target,
               cwd: place.cwd,
               cursor: { head, seen: [], pipeline: "none", headOnly: true },
