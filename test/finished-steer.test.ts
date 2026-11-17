@@ -37,16 +37,66 @@ import { suiteEnv } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
 import { hosted, hostedRun } from "./support/hosted";
 import { collie, proves, type World } from "./support/world";
+import type { FakeHc } from "./support/fake-hc";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
-const FakeState = Schema.fromJsonString(
+const CoreCall = Schema.fromJsonString(
   Schema.Struct({
-    agents: Schema.Array(Schema.Struct({ name: Schema.String, pane_id: Schema.String })),
+    cmd: Schema.String,
+    params: Schema.optionalKey(
+      Schema.Struct({
+        terminal: Schema.optionalKey(Schema.String),
+        text: Schema.optionalKey(Schema.String),
+      }),
+    ),
   }),
 );
-const CallLine = Schema.fromJsonString(
-  Schema.Struct({ cmd: Schema.String, argv: Schema.Array(Schema.String) }),
+
+const decodeCall = flow(Schema.decodeUnknownResult(CoreCall), Result.getOrThrow);
+
+/** This world's core, which `steerable` starts. */
+let core: FakeHc;
+const coreHerdr = () => new Herdr(readEnv({ HC_SOCKET: core.socketPath }));
+
+interface Agent {
+  readonly name: string;
+  readonly address: string;
+}
+
+/** The agents core has, by name and terminal address. */
+const coreAgents = Effect.suspend(() => coreHerdr().agentList()).pipe(
+  Effect.orElseSucceed(() => []),
+  Effect.map(Arr.map((one): Agent => ({ name: one.name, address: one.paneId }))),
 );
+
+/** What core was asked to type, to which terminal, in order. */
+const typed = Effect.suspend(() =>
+  Effect.gen(function* () {
+    const log = yield* (yield* FileSystem.FileSystem)
+      .readFileString(core.logPath)
+      .pipe(Effect.orDie);
+    return Arr.flatMap(
+      Arr.filter(Str.split(log, "\n"), (line) => line !== ""),
+      (line) => {
+        const call = decodeCall(line);
+        const { terminal, text } = call.params ?? {};
+        return call.cmd === "terminal.send" && terminal !== undefined && text !== undefined
+          ? [{ to: terminal, text }]
+          : [];
+      },
+    );
+  }),
+);
+
+/** Everything typed to `agent`, in order. */
+const typedTo = (agent: Agent) =>
+  Effect.map(typed, (all) =>
+    Arr.map(
+      Arr.filter(all, (one) => one.to === agent.name || one.to === agent.address),
+      (one) => one.text,
+    ),
+  );
+const lastTypedTo = (agent: Agent) => Effect.map(typedTo(agent), (all) => all.at(-1) ?? "");
 
 /** A `told` Run that has succeeded with its agent still alive, and the env chat acts in. */
 const finishedWithAgent = Effect.fn("test.finishedWithAgent")(function* (
@@ -56,8 +106,9 @@ const finishedWithAgent = Effect.fn("test.finishedWithAgent")(function* (
 ) {
   resetExecutors();
   const env = readEnv({
-    HERDR_PLUGIN_ROOT: world.install,
-    HERDR_PLUGIN_STATE_DIR: world.state,
+    HC_SOCKET: core.socketPath,
+    COLLIE_ROOT: world.install,
+    COLLIE_STATE_DIR: world.state,
     COLLIE_USER_DIR: world.config,
     HOME: world.home,
     COLLIE_CWD: world.project,
@@ -65,7 +116,12 @@ const finishedWithAgent = Effect.fn("test.finishedWithAgent")(function* (
   const client = yield* connect(world.state).pipe(Effect.orDie);
   const request = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   const started = yield* client
-    .start({ project: world.project, id: workflow, request, input: { work: "the picker" } })
+    .start({
+      project: world.project,
+      id: workflow,
+      request,
+      input: { work: "the picker" },
+    })
     .pipe(Effect.orDie);
   const view = yield* until(
     () => client.run({ runId: started.runId }).pipe(Effect.orDie),
@@ -73,11 +129,7 @@ const finishedWithAgent = Effect.fn("test.finishedWithAgent")(function* (
       one !== null && (status === "suspended" ? one.status.status === status : isSettled(one)),
   );
   expect(view?.status).toMatchObject({ status });
-  const fs = yield* FileSystem.FileSystem;
-  const herdr = yield* Schema.decodeEffect(FakeState)(
-    yield* fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(Effect.orDie),
-  ).pipe(Effect.orDie);
-  const agent = herdr.agents[0]!;
+  const agent = (yield* coreAgents)[0]!;
   return { env, client, runId: started.runId, agent };
 });
 
@@ -99,35 +151,30 @@ test(
       (world) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const status = `${world.home}/status`;
-          yield* fs.writeFileString(status, "idle").pipe(Effect.orDie);
           yield* fs
             .writeFileString(
               `${world.config}/config.json`,
-              encode({ harness: "codex", model: "default", compact_at_tokens: 0, trust: "never" }),
+              encode({
+                harness: "codex",
+                model: "default",
+                compact_at_tokens: 0,
+                trust: "never",
+              }),
             )
             .pipe(Effect.orDie);
-          const before = Bun.env.FAKE_HERDR_AGENT_STATUS_FILE;
-          yield* Effect.acquireRelease(
-            Effect.sync(() => {
-              Bun.env.FAKE_HERDR_AGENT_STATUS_FILE = status;
-            }),
-            () =>
-              Effect.sync(() => {
-                if (before === undefined) delete Bun.env.FAKE_HERDR_AGENT_STATUS_FILE;
-                else Bun.env.FAKE_HERDR_AGENT_STATUS_FILE = before;
-              }),
-          );
           const { env, client, runId, agent } = yield* finishedWithAgent(
             world,
             "commented-plan",
             "suspended",
           );
-          yield* fs.writeFileString(status, "working").pipe(Effect.orDie);
+          yield* core.report(agent.name, "working");
           const text = "Preserve this exact comment.\n  Include the attachment.  ";
           const attachment = `${world.home}/comment.txt`;
           yield* fs.writeFileString(attachment, "evidence").pipe(Effect.orDie);
-          const request = { origin: "desktop" as const, requestId: "queue-desktop" };
+          const request = {
+            origin: "desktop" as const,
+            requestId: "queue-desktop",
+          };
           const action = {
             ...deliver(runId, agent.name, text),
             mode: "now" as const,
@@ -141,9 +188,12 @@ test(
             yield* readAudit(runDir(world.state, runId)),
             (line) => line.operation === "deliver",
           );
-          expect(records.at(-1)?.result).toMatchObject({ delivered: false, queued: true });
+          expect(records.at(-1)?.result).toMatchObject({
+            delivered: false,
+            queued: true,
+          });
           yield* carryOutAsked(env, [action], request);
-          yield* fs.writeFileString(status, "idle").pipe(Effect.orDie);
+          yield* core.report(agent.name, "idle");
           const deliveries = yield* until(
             () => client.deliveries({ runId }).pipe(Effect.orDie),
             (lines) =>
@@ -154,18 +204,7 @@ test(
           );
           expect(Arr.filter(deliveries ?? [], (one) => one.cause.kind === "steer")).toHaveLength(1);
           expect(deliveries?.at(-1)?.workflowNotice).toBeUndefined();
-          const calls = yield* Effect.forEach(
-            Arr.filter(
-              Str.split(yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie), "\n"),
-              Boolean,
-            ),
-            (line) => Schema.decodeEffect(CallLine)(line).pipe(Effect.orDie),
-          );
-          const said =
-            Arr.filter(
-              calls,
-              (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
-            ).at(-1)?.argv[3] ?? "";
+          const said = yield* lastTypedTo(agent);
           expect(said).toContain("From the human, in Desktop");
           expect(said).not.toContain("has finished");
           const kept = /Their message is in (\S+)\./.exec(said)?.[1];
@@ -190,7 +229,10 @@ test(
   120_000,
 );
 /** Chat, under a request id of each call's own: one id twice is one operation. */
-const chat = () => ({ origin: "chat" as const, requestId: `req-chat-${++asked}` });
+const chat = () => ({
+  origin: "chat" as const,
+  requestId: `req-chat-${++asked}`,
+});
 
 test(
   "historical final evidence agrees across stop, view, board and chat without inventing success",
@@ -229,7 +271,11 @@ test(
         expect(isSettled(view!)).toBe(true);
         const facts = factsOfView(world.state, view!);
         expect(facts.state).toBe("ended");
-        const [card] = yield* buildBoard({ env, runs: [facts], includeHistory: true });
+        const [card] = yield* buildBoard({
+          env,
+          runs: [facts],
+          includeHistory: true,
+        });
         expect(card?.landed).toBe(true);
         expect(sectionOf(card!)).toBe("finished");
         expect(card?.sentence).not.toContain("open");
@@ -253,16 +299,16 @@ const steerable = <A, E>(
 ) =>
   proves(
     prefix,
-    (world) =>
+    (world, worldCore) =>
       Effect.gen(function* () {
+        core = worldCore;
         const fs = yield* FileSystem.FileSystem;
         const outputs = `${world.home}/outputs.json`;
         yield* fs.writeFileString(outputs, encode(answers)).pipe(Effect.orDie);
         // The host a client spawns inherits this process's environment: it has to own this
         // world's state, never the operator's.
         const set = {
-          FAKE_HERDR_OUTPUTS: outputs,
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
         };
         yield* Effect.acquireRelease(
@@ -295,9 +341,8 @@ test(
       Effect.gen(function* () {
         const finished = yield* finishedWithAgent(world);
         const { runId, agent } = finished;
-        // Cleared here rather than by the host, so it has to reach this world's herdr.
-        const env = { ...finished.env, binPath: Bun.env.HERDR_BIN_PATH! };
-        const live = yield* new Herdr(env).agentList().pipe(Effect.orDie);
+        const env = finished.env;
+        const live = yield* coreHerdr().agentList().pipe(Effect.orDie);
         const terminal = Option.getOrUndefined(
           Arr.findFirst(live, (one) => one.name === agent.name),
         )!.terminalId!;
@@ -307,13 +352,20 @@ test(
           incarnation: terminal,
           by: "hook:UserPromptSubmit",
         });
-        const voiced = { ...chat(), conversation: "native", said: "let Collie steer it again" };
+        const voiced = {
+          ...chat(),
+          conversation: "native",
+          said: "let Collie steer it again",
+        };
         const [done] = yield* carryOutAsked(
           env,
           [{ kind: "clear_override", run: runId, agent: agent.name }],
           voiced,
         );
-        expect(done).toMatchObject({ kind: "clear_override", state: "applied" });
+        expect(done).toMatchObject({
+          kind: "clear_override",
+          state: "applied",
+        });
         expect((yield* readLedger(terminal)).at(-1)).toMatchObject({
           kind: "override_cleared",
           conversation: "native",
@@ -339,31 +391,9 @@ test(
           (one) => one.cause.kind === "steer",
         );
         expect(steered).toHaveLength(1);
-        const fs = yield* FileSystem.FileSystem;
-        const prompts = Arr.filter(
-          Arr.map(
-            Arr.filter(
-              Str.split(yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie), "\n"),
-              (line) => line !== "",
-            ),
-            (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
-          ),
-          (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
-        );
-        expect(
-          Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(prompts.at(-1)), (present) =>
-              Arr.join(present.argv, " "),
-            ),
-          ),
-        ).toContain(`${DELIVERY_TOKEN}${steered[0]!.id}`);
-        expect(
-          Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(prompts.at(-1)), (present_) =>
-              Arr.join(present_.argv, " "),
-            ),
-          ),
-        ).toContain("merge it");
+        const said = yield* lastTypedTo(agent);
+        expect(said).toContain(`${DELIVERY_TOKEN}${steered[0]!.id}`);
+        expect(said).toContain("merge it");
       }),
     ),
   120_000,
@@ -418,31 +448,34 @@ for (const [status, terminal, offer] of [
             const desktop = yield* act(
               { machine: { profile: "local", name: "mk-pc" }, desktop: client },
               "terminal-desktop",
-              { _tag: "Deliver", runId, agent: agent.name, text: "check the branch" },
+              {
+                _tag: "Deliver",
+                runId,
+                agent: agent.name,
+                text: "check the branch",
+              },
             ).pipe(Effect.orDie);
             check(desktop);
-            const deliveries = yield* client.deliveries({ runId }).pipe(Effect.orDie);
-            const steered = Arr.filter(deliveries ?? [], (one) => one.cause.kind === "steer");
+            // One sent while the agent's turn runs goes at its boundary.
+            const steered = yield* until(
+              () =>
+                client.deliveries({ runId }).pipe(
+                  Effect.orDie,
+                  Effect.map((lines) =>
+                    Arr.filter(lines ?? [], (one) => one.cause.kind === "steer"),
+                  ),
+                ),
+              (lines) => lines.length >= 3,
+            );
             expect(steered).toHaveLength(3);
             for (const one of steered) check(one.workflowNotice ?? "");
             check(yield* toolNamed("collie_receipts")!.call(env, { run: runId }));
-            const calls = Arr.map(
-              Arr.filter(
-                Str.split(
-                  yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
-                  "\n",
-                ),
-                Boolean,
-              ),
-              (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
-            );
-            const prompts = Arr.filter(
-              calls,
-              (one) => one.cmd === "agent prompt" && one.argv[2] === agent.name,
-            ).slice(-3);
+            const prompts = (yield* until(
+              () => typedTo(agent),
+              (all) => Arr.filter(all, Str.includes("collie-delivery:")).length >= 4,
+            )).slice(-3);
             expect(prompts).toHaveLength(3);
-            for (const prompt of prompts) {
-              const text = prompt.argv[3] ?? "";
+            for (const text of prompts) {
               const kept = /Their message is in (\S+)\./.exec(text)?.[1];
               const words =
                 kept === undefined
@@ -451,8 +484,16 @@ for (const [status, terminal, offer] of [
               expect(words).toContain(`${runId} has finished (${terminal})`);
               expect(words).toContain("No Step reads this turn's Output");
             }
-            expect(yield* fs.readFileString(launch!.output).pipe(Effect.orDie)).toBe(
-              encode({ verdict: "corrected" }),
+            const corrected = encode({ verdict: "corrected" });
+            expect(
+              yield* until(
+                () => fs.readFileString(launch!.output).pipe(Effect.orDie),
+                (text) => text === corrected,
+              ),
+            ).toBe(corrected);
+            yield* until(
+              () => coreHerdr().agentStatus(agent.name).pipe(Effect.orDie),
+              (now) => now === "idle",
             );
             const after = yield* client.run({ runId }).pipe(Effect.orDie);
             expect(after?.status).toEqual(before?.status);
@@ -475,29 +516,20 @@ test(
       Effect.gen(function* () {
         const { env, runId, agent } = yield* finishedWithAgent(world);
         const fs = yield* FileSystem.FileSystem;
-        const typed = Effect.map(
-          fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
-          (log) =>
-            Arr.filter(
-              Arr.map(
-                Arr.filter(Str.split(log, "\n"), (line) => line !== ""),
-                (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
-              ),
-              (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
-            ).at(-1)?.argv[3] ?? "",
-        );
+        const typedNow = lastTypedTo(agent);
         const steer = (
           text: string,
           actor: Parameters<typeof carryOutAsked>[2],
           attachments?: ReadonlyArray<string>,
         ) =>
           Effect.gen(function* () {
-            const action: ReturnType<typeof deliver> & { attachments?: ReadonlyArray<string> } =
-              deliver(runId, agent.name, text);
+            const action: ReturnType<typeof deliver> & {
+              attachments?: ReadonlyArray<string>;
+            } = deliver(runId, agent.name, text);
             if (attachments !== undefined) action.attachments = attachments;
             const [done] = yield* carryOutAsked(env, [action], actor);
             expect(done).toMatchObject({ kind: "deliver", state: "applied" });
-            const lines = Str.split(yield* typed, "\n");
+            const lines = Str.split(yield* typedNow, "\n");
             expect(lines[0]).toStartWith(`${DELIVERY_TOKEN}${runId}-${actor.requestId}`);
             expect(lines.length).toBeLessThanOrEqual(3);
             expect(Array.from(Arr.join(lines, "\n")).length).toBeLessThanOrEqual(700);
@@ -509,7 +541,10 @@ test(
               file === undefined ? null : yield* fs.readFileString(file).pipe(Effect.orDie);
             return { lines, kept, note: done?.note ?? "" };
           });
-        const board = (n: number) => ({ origin: "board" as const, requestId: `board-${n}` });
+        const board = (n: number) => ({
+          origin: "board" as const,
+          requestId: `board-${n}`,
+        });
         const AUTO_MODE =
           "Kept as a file in the Run. Auto mode reads only what is typed: ask for an action it must clear in a message of at most 3 lines and 700 characters.";
 
@@ -549,7 +584,10 @@ test(
           );
         }
 
-        const desktop = yield* steer("merge it", { origin: "desktop", requestId: "desktop-1" });
+        const desktop = yield* steer("merge it", {
+          origin: "desktop",
+          requestId: "desktop-1",
+        });
         expect(desktop.lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
         const desktopLong = yield* steer(`${pipe_("é", Str.repeat(5_000))}\n  kept as typed  `, {
           origin: "desktop",
@@ -595,18 +633,25 @@ test(
         const desktop = yield* openBridge(bridgeCommand(command, "mk-pc"), {
           PATH: "/usr/bin:/bin",
           HOME: world.home,
-          HERDR_PLUGIN_ROOT: world.install,
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
           COLLIE_HOST: encode(command),
           ...(yield* suiteEnv),
-          HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
-          FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
+          HC_SOCKET: Bun.env.HC_SOCKET ?? "",
         });
         const comments =
           "1 review comment from the human in Desktop.\n\n1. the plan's `SPEC.md`\n> the picker\n\nCall it the chooser";
-        const reached = { machine: { profile: "local", name: "mk-pc" }, desktop };
-        const comment = { _tag: "Deliver", runId, agent: agent.name, text: comments } as const;
+        const reached = {
+          machine: { profile: "local", name: "mk-pc" },
+          desktop,
+        };
+        const comment = {
+          _tag: "Deliver",
+          runId,
+          agent: agent.name,
+          text: comments,
+        } as const;
         yield* act(reached, "desktop-comments-1", comment).pipe(Effect.orDie);
         yield* act(reached, "desktop-comments-1", comment).pipe(Effect.orDie);
 
@@ -615,17 +660,8 @@ test(
           (one) => one.cause.kind === "steer",
         );
         expect(steered).toHaveLength(1);
-        const typed = Arr.filter(
-          Arr.map(
-            Arr.filter(
-              Str.split(yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie), "\n"),
-              (line) => line !== "",
-            ),
-            (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
-          ),
-          (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
-        ).at(-1)?.argv[3];
-        const lines = Str.split(typed ?? "", "\n");
+        const typedLast = yield* lastTypedTo(agent);
+        const lines = Str.split(typedLast, "\n");
         expect(lines[0]).toStartWith(`${DELIVERY_TOKEN}${steered[0]!.id}`);
         expect(lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
         const file = /^Their message is in (\S+)\./.exec(lines[2] ?? "")?.[1];
@@ -641,52 +677,12 @@ test(
     steerable("collie-finished-gone-", (world) =>
       Effect.gen(function* () {
         const { env, runId, agent } = yield* finishedWithAgent(world);
-        yield* Effect.promise(() =>
-          Bun.$`${Bun.env.HERDR_BIN_PATH!} pane close ${agent.pane_id}`.quiet(),
-        );
+        yield* coreHerdr().terminalKill(agent.address).pipe(Effect.orDie);
 
         const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "tag it")], chat());
         expect(done?.state).toBe("failed");
         expect(done?.note).toContain('follow-up offer "carry-on"');
         expect(done?.note).toContain("giving the message as its input");
-      }),
-    ),
-  120_000,
-);
-
-test(
-  "a finished Run's agent the idle close ended refuses a steer and names the follow-up offer",
-  () =>
-    steerable("collie-finished-idle-", (world) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs
-          .writeFileString(`${world.config}/config.json`, encode({ idle_close_ms: 1 }))
-          .pipe(Effect.orDie);
-        const { env, client, runId, agent } = yield* finishedWithAgent(world);
-
-        const swept = yield* until(
-          () => client.sweep({ request: `sweep-${++asked}` }).pipe(Effect.orDie),
-          (report) => Arr.some(report.remove, (item) => item.kind === "idle-agent"),
-        );
-        expect(
-          Option.getOrUndefined(
-            Option.flatMap(Option.fromNullishOr(swept), (present__) =>
-              Option.map(
-                Option.fromNullishOr(
-                  Option.getOrUndefined(
-                    Arr.findFirst(present__.remove, (item) => item.kind === "idle-agent"),
-                  ),
-                ),
-                (present___) => present___.target,
-              ),
-            ),
-          ),
-        ).toBe(`${agent.name} of ${runId}`);
-
-        const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "tag it")], chat());
-        expect(done?.state).toBe("failed");
-        expect(done?.note).toContain('follow-up offer "carry-on"');
       }),
     ),
   120_000,
@@ -702,11 +698,7 @@ test(
         const [done] = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat());
         expect(done).toMatchObject({ kind: "stop", state: "applied" });
         expect(done?.note).toContain(`Closed ${agent.name}`);
-        const fs = yield* FileSystem.FileSystem;
-        const herdr = yield* Schema.decodeEffect(FakeState)(
-          yield* fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(Effect.orDie),
-        ).pipe(Effect.orDie);
-        expect(Arr.map(herdr.agents, (one) => one.name)).not.toContain(agent.name);
+        expect(Arr.map(yield* coreAgents, (one) => one.name)).not.toContain(agent.name);
 
         const view = yield* client.run({ runId }).pipe(Effect.orDie);
         expect(view?.status.status).toBe("complete");
@@ -753,21 +745,7 @@ for (const [status, terminal] of [
             };
             check(done?.note ?? "");
             check(yield* toolNamed("collie_receipts")!.call(env, { run: runId }));
-            const calls = yield* Effect.forEach(
-              Arr.filter(
-                Str.split(
-                  yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
-                  "\n",
-                ),
-                Boolean,
-              ),
-              (line) => Schema.decodeEffect(CallLine)(line).pipe(Effect.orDie),
-            );
-            const prompt =
-              Arr.filter(
-                calls,
-                (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
-              ).at(-1)?.argv[3] ?? "";
+            const prompt = yield* lastTypedTo(agent);
             const kept = /Their message is in (\S+)\./.exec(prompt)?.[1];
             check(kept === undefined ? prompt : yield* fs.readFileString(kept).pipe(Effect.orDie));
             const restarted = yield* connect(world.state).pipe(Effect.orDie);
@@ -857,8 +835,9 @@ test(
         Effect.gen(function* () {
           resetExecutors();
           const env = readEnv({
-            HERDR_PLUGIN_ROOT: world.install,
-            HERDR_PLUGIN_STATE_DIR: world.state,
+            HC_SOCKET: core.socketPath,
+            COLLIE_ROOT: world.install,
+            COLLIE_STATE_DIR: world.state,
             COLLIE_USER_DIR: world.config,
             HOME: world.home,
             COLLIE_CWD: world.project,
@@ -866,19 +845,18 @@ test(
           const client = yield* connect(world.state).pipe(Effect.orDie);
           const request = yield* (yield* SecureRandom.SecureRandom).uuidV4();
           const { runId } = yield* client
-            .start({ project: world.project, id: "told", request, input: { work: "the picker" } })
+            .start({
+              project: world.project,
+              id: "told",
+              request,
+              input: { work: "the picker" },
+            })
             .pipe(Effect.orDie);
-          const fs = yield* FileSystem.FileSystem;
           // Its one agent is up and working, and nothing will ever come of it.
-          const herdr = yield* until(
-            () =>
-              fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(
-                Effect.map((text) => flow(Schema.decodeResult(FakeState), Result.getOrThrow)(text)),
-                Effect.orElseSucceed(() => ({ agents: [] })),
-              ),
-            (state) => state.agents.length > 0,
-          );
-          const agent = herdr.agents[0]!;
+          const agent = (yield* until(
+            () => coreAgents,
+            (agents) => agents.length > 0,
+          ))[0]!;
 
           const [stopped] = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat());
           expect(stopped?.state).toBe("applied");
@@ -921,22 +899,7 @@ test(
         expect(yield* fs.readFileString(`${dir}/my shot.png`).pipe(Effect.orDie)).toBe("png");
         const told = Option.getOrUndefined(
           Arr.findLast(
-            Arr.map(
-              Arr.filter(
-                Arr.map(
-                  Arr.filter(
-                    Str.split(
-                      yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
-                      "\n",
-                    ),
-                    (line) => line !== "",
-                  ),
-                  (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
-                ),
-                (call) => call.cmd === "agent prompt",
-              ),
-              (call) => Arr.join(call.argv, " "),
-            ),
+            Arr.map(yield* typed, (one) => one.text),
             (text) => pipe_(text, Str.includes("Their message is in")),
           ),
         );
@@ -960,9 +923,7 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { env, runId, agent } = yield* finishedWithAgent(world);
-        yield* Effect.promise(() =>
-          Bun.$`${Bun.env.HERDR_BIN_PATH!} pane close ${agent.pane_id}`.quiet(),
-        );
+        yield* coreHerdr().terminalKill(agent.address).pipe(Effect.orDie);
         yield* fs.writeFileString(`${world.project}/shot.png`, "png").pipe(Effect.orDie);
 
         const note = yield* attachFiles(env, typing(`${world.project}/shot.png`), runId);
@@ -983,7 +944,14 @@ test(
           const { env, runId } = yield* finishedWithAgent(world, "steered");
           const [done] = yield* carryOutAsked(
             env,
-            [{ kind: "deliver", run: runId, text: "merge it", mode: "boundary" }],
+            [
+              {
+                kind: "deliver",
+                run: runId,
+                text: "merge it",
+                mode: "boundary",
+              },
+            ],
             chat(),
           );
           expect(done?.state).toBe("applied");
@@ -995,7 +963,15 @@ test(
           expect(done?.note).not.toContain("resume");
           const [reviewer] = yield* carryOutAsked(
             env,
-            [{ kind: "deliver", run: runId, to: "reviewer", text: "look again", mode: "boundary" }],
+            [
+              {
+                kind: "deliver",
+                run: runId,
+                to: "reviewer",
+                text: "look again",
+                mode: "boundary",
+              },
+            ],
             chat(),
           );
           expect(reviewer?.note).toMatch(/^Delivered to run-\S+-review-r1 /);

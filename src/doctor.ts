@@ -6,10 +6,8 @@
 //
 // Two ways of asking, and the difference is deliberate: whether an executable is
 // there is answered by walking PATH, which cannot hang and needs nothing stubbed;
-// what it *says* — a version, a login — is answered by running it. herdr itself is
-// asked through `src/herdr.ts` like everything else, and at `HERDR_BIN_PATH`: inside
-// a pane that is the herdr this plugin will actually talk to, and it need not be on
-// PATH at all.
+// what it *says* — a version, a login — is answered by running it. Core itself is
+// asked through `src/herdr.ts` like everything else.
 
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -17,16 +15,16 @@ import * as Arr from "effect/Array";
 import { Clock, Effect, Option, Path, Result, Schema } from "effect";
 import { CommandLine, type ChildProcessSpawner } from "effect/process";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { loadDefaults, terminalBackend, worktreesDirectory } from "./config";
+import { loadDefaults, worktreesDirectory } from "./config";
 import { savedModules } from "./discovery";
 import { layers, loadDefinitions, skillDirs, skillFile } from "./definitions";
 import type { PluginEnv } from "./env";
 import { HARNESSES } from "./harness";
 import { Herdr } from "./herdr";
 import { shell, type Runner } from "./mr";
-import { isCheckout, manifestField } from "./release";
+import { isCheckout } from "./release";
 import { isNewer, newestRelease, releasesOf } from "./releases";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import { err } from "./operations";
 import type { ConnectionReading } from "./connection-model";
 import { connectionProbes, readConnections } from "./connections";
@@ -45,7 +43,7 @@ import {
   type Door,
 } from "./lifecycle";
 import { peersOf } from "./peers";
-import { HERDLESS, herdOfHost } from "./host";
+import { herdOfHost } from "./host";
 import { tmpdir } from "node:os";
 import { machineMemory, memorySaid, type Memory } from "./memory";
 import {
@@ -77,45 +75,6 @@ const optional = (probe: ConnectionReading): Outcome =>
     : probe.state === "absent"
       ? noted(probe.detail, probe.fix)
       : warned(probe.detail, probe.fix);
-
-const VERSION = /\d+\.\d+\.\d+/;
-const isString = Schema.is(Schema.String);
-
-/**
- * Where this herdr is, or null: an absolute `HERDR_BIN_PATH` is a file to look for,
- * a bare name is one to find on PATH.
- */
-const located = Effect.fn("Doctor.located")(function* (search: string, bin: string) {
-  if (!pipe(bin, Str.includes("/"))) return yield* onPath(search, bin);
-  return (yield* runnable(bin)) ? bin : null;
-});
-
-/**
- * From here on `herdr update` leaves a running server and its panes alone. herdr 0.9.0's
- * release note: "Servers older than endpoint generation 1 need a one-time upgrade."
- */
-const PANES_SURVIVE_UPDATE = "0.9.0";
-const BY_PACKAGE_MANAGER = "or upgrade herdr with the package manager that installed it";
-const RESTART_SERVER =
-  "restart the server (`herdr server stop`, then `herdr`) when nothing is running, to give Collie what it needs";
-const RESTART_OLD_SERVER = `${RESTART_SERVER} — ${BY_PACKAGE_MANAGER}`;
-
-/** What upgrading a herdr client at `version` to `min` does to the panes its server runs. */
-const upgradeAdvice = (version: string, min: string): string =>
-  older(version, PANES_SURVIVE_UPDATE)
-    ? `Moving from herdr ${version} to ${min} needs your running herdr server stopped once, which ends every program in its panes. Do it when nothing is running there: \`herdr update\`, then \`herdr server stop\`, then start \`herdr\`. \`herdr update --handoff\` tries to carry the panes across instead; herdr calls it experimental — ${BY_PACKAGE_MANAGER}`
-    : `\`herdr update\` installs ${min} and leaves your running server and its panes alone; ${RESTART_OLD_SERVER}`;
-
-/** `1.10.0` is newer than `1.9.0`; a string comparison would disagree. */
-function older(version: string, than: string): boolean {
-  const parts = (v: string) => Arr.map(Str.split(v, "."), (n) => Number(n) || 0);
-  const [a, b] = [parts(version), parts(than)];
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const [left, right] = [a[i] ?? 0, b[i] ?? 0];
-    if (left !== right) return left < right;
-  }
-  return false;
-}
 
 const HC_INSTALL = `curl -fsSL https://releases.herdr.dev/core/install.sh | HC_VERSION=${hcPin.version} sh`;
 
@@ -154,59 +113,25 @@ const coreAnswers = Effect.fn("Doctor.coreAnswers")(function* (env: PluginEnv) {
   });
 });
 
-const herdrPanes = (herdr: Herdr) =>
-  herdr
-    .sessionList()
-    .pipe(
-      Effect.map(Arr.map((one) => herdr.inSession(one.socketPath))),
-      Effect.flatMap(Effect.forEach((one) => one.paneList())),
-      Effect.map(Arr.flatten),
-    );
-
-/** What on this Machine still uses Herdr 1: its setting, and agents whose pane is still open. */
-const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv, herdr: Herdr | null) {
-  const set = (yield* terminalBackend(env.userDir)) === "herdr";
-  const panes = herdr === null ? Result.succeed([]) : yield* Effect.result(herdrPanes(herdr));
-  const open = new Set(
-    Arr.map(
-      Result.getOrElse(panes, () => []),
-      (pane) => pane.paneId,
-    ),
-  );
+/** Agents this Machine's host still registers on Herdr 1, which Collie no longer reaches. */
+const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv) {
   const registered = (yield* anyRuns(env))
     ? yield* Effect.result(hostRegistered(env))
     : Result.succeed([]);
-  // An entry from before incarnations has no backend either: it was on Herdr 1.
-  const live = Arr.filter(
-    Result.getOrElse(registered, () => []),
-    (entry) => entry.incarnation?.backend === undefined && open.has(entry.paneId),
+  if (Result.isFailure(registered))
+    return warned(
+      `could not ask this Machine's host which agents it registered (${registered.failure.message})`,
+      "collie host restart",
+    );
+  const left = Arr.filter(registered.success, (entry) => entry.incarnation?.backend !== "core");
+  if (left.length === 0) return passed("nothing on this Machine is registered on Herdr 1");
+  return noted(
+    `registered on Herdr 1, which Collie no longer reaches: ${Arr.join(
+      Arr.map(left, (entry) => `${entry.agent} (run ${entry.runId})`),
+      ", ",
+    )}`,
+    "collie run resume <run> starts its agents again on core",
   );
-  const found = [
-    ...(set ? ["this Machine starts its agents on Herdr 1 (terminal_backend is herdr)"] : []),
-    ...(Result.isFailure(panes)
-      ? [
-          `could not read Herdr 1's open panes, so which agents still run there is unknown (${panes.failure.message})`,
-        ]
-      : []),
-    ...(Result.isFailure(registered)
-      ? [
-          `could not ask this Machine's host which agents it registered, so which still run on Herdr 1 is unknown (${registered.failure.message})`,
-        ]
-      : []),
-    ...(live.length === 0
-      ? []
-      : [
-          `live on Herdr 1: ${Arr.join(
-            Arr.map(live, (entry) => `${entry.agent} (run ${entry.runId}, pane ${entry.paneId})`),
-            ", ",
-          )}`,
-        ]),
-  ];
-  if (found.length === 0) return passed("nothing on this Machine uses Herdr 1");
-  const fix = set ? "collie settings set terminal_backend core" : "";
-  return Result.isFailure(panes) || Result.isFailure(registered)
-    ? warned(Arr.join(found, "; "), fix)
-    : noted(Arr.join(found, "; "), fix);
 });
 
 /**
@@ -395,67 +320,11 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const search = env.raw["PATH"] ?? "";
   const checks: Check[] = [];
 
-  // What the plugin manifest says it needs of herdr.
-  const min = yield* manifestField(root, "min_herdr_version");
-  const herdrBin = yield* located(search, env.binPath);
-  // `cli` parses JSON where herdr answers with it; these two answer in plain text,
-  // and anything else is as good as no answer.
-  const text = (args: string[]) =>
-    herdr.cli(args).pipe(
-      Effect.map((answer) => (isString(answer) ? answer : "")),
-      Effect.orElseSucceed(() => ""),
-    );
-  const said = herdrBin ? yield* text(["--version"]) : "";
-  const version = VERSION.exec(said)?.[0] ?? "";
-  const stale = version !== "" && min !== "" && older(version, min);
-  checks.push({
-    name: "herdr",
-    ...(!herdrBin
-      ? failed("not installed", "install herdr — https://herdr.dev/docs/install/")
-      : stale
-        ? failed(
-            `${version} is older than the ${min} this plugin needs`,
-            upgradeAdvice(version, min),
-          )
-        : passed(version || "installed")),
-  });
-
-  // A stale client's advice already covers its server.
-  const server =
-    herdrBin && !stale
-      ? yield* herdr.serverInfo().pipe(Effect.option, Effect.map(Option.getOrNull))
-      : null;
-  if (server?.running) {
-    const serverVersion = VERSION.exec(server.version)?.[0] ?? "";
-    checks.push({
-      name: "herdr server",
-      ...(serverVersion === ""
-        ? failed("the running server is too old to say its version", RESTART_OLD_SERVER)
-        : min !== "" && older(serverVersion, min)
-          ? failed(
-              `the running server is ${serverVersion}, older than the ${min} this plugin needs`,
-              RESTART_OLD_SERVER,
-            )
-          : passed(serverVersion)),
-    });
-  }
-
   checks.push(
     { name: "hc", ...(yield* hcInstalled(env, search, run)) },
     { name: "core", ...(yield* coreAnswers(env)) },
-    { name: "herdr 1", ...(yield* onHerdrOne(env, herdrBin ? herdr : null)) },
+    { name: "herdr 1", ...(yield* onHerdrOne(env)) },
   );
-
-  const linked = herdrBin ? yield* text(["plugin", "list"]) : "";
-  checks.push({
-    name: "plugin",
-    ...(linked.includes(`[local:${root}]`)
-      ? passed(`linked from ${root}`)
-      : failed(
-          herdrBin ? `not linked from ${root}` : "herdr is not installed, so nothing can be linked",
-          `herdr plugin link ${root}`,
-        )),
-  });
 
   checks.push({
     name: "runner",
@@ -638,7 +507,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
     checks.push({
       name: "host herd",
       ...(herd === null
-        ? warned(HERDLESS, "start herdr, then run `collie host restart`")
+        ? warned("this host has no Herd: judgements will be skipped", "collie host restart")
         : passed(`the host works for the Herd at ${herd}`)),
     });
 
@@ -704,7 +573,10 @@ export const memoryOutcome = (
     closing === null
       ? ""
       : `; \`collie cleanup\` would close ${closing.length === 0 ? "no agent" : Arr.join(closing, ", ")}`;
-  return warned(`short of memory: ${memorySaid(memory)}${closes}`, "collie cleanup --apply");
+  return warned(
+    `short of memory: ${memorySaid(memory)}${closes}`,
+    closing?.length === 0 ? "" : "collie cleanup --apply",
+  );
 };
 
 const memoryCheck = Effect.fn("Doctor.memoryCheck")(function* (

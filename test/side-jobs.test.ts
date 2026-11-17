@@ -1,19 +1,18 @@
 // What the host does on its own, with no pane open: the merge watch, News and pruning.
 
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schedule, Schema, Stream, flow, Result } from "effect";
+import { Effect, FileSystem, Schedule, Schema, Stream } from "effect";
 import { readAudit } from "../src/audit";
 import { readDispositions } from "../src/disposition";
 import { recordReply } from "../src/replies";
 import { evidenceDir, runDir } from "../src/engine";
 import { factsOfView } from "../src/runs";
 import { readVerifications } from "../src/verify";
-import { currentEnv, readEnv } from "../src/env";
+import { readEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
-import { connect, frontDoor, socketOf } from "../src/host";
+import { connect } from "../src/host";
 import { shareBoard } from "../src/board-stream";
 import { sideJobs } from "../src/side-jobs";
 import type { Requested } from "../src/review-requests";
@@ -27,7 +26,6 @@ import { exec } from "./support/command";
 import { fastForward } from "./support/effect";
 import { forgeOnPath, runOnPath, serveForges } from "./support/forge";
 import { stopHost } from "./support/host";
-import { Rig } from "./support/recorder";
 import { collie, proves } from "./support/world";
 
 const MR = "mr:gitlab.example.com/mk/project!7";
@@ -45,15 +43,6 @@ const mergedForge = Effect.fn("sideJobs.mergedForge")(function* (dir: string) {
   yield* bin.restore();
   return { PATH: `${bin.dir}:/usr/bin:/bin`, COLLIE_FORGE_API };
 });
-
-const asSessions = flow(
-  Schema.encodeResult(
-    Schema.fromJsonString(
-      Schema.Array(Schema.Struct({ name: Schema.String, socket_path: Schema.String })),
-    ),
-  ),
-  Result.getOrThrow,
-);
 
 const runIdOf = (envelope: { readonly data?: unknown }) =>
   Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(envelope.data).pipe(
@@ -205,24 +194,10 @@ test(
       "collie-side-superseded-",
       (world) =>
         Effect.gen(function* () {
-          const socket = `${world.home}/desk.sock`;
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const workspace = yield* new Herdr(env)
-            .workspaceCreate({ cwd: world.project, label: "desk" })
-            .pipe(Effect.orDie);
-          const desk = {
-            HERDR_SOCKET_PATH: socket,
-            HERDR_WORKSPACE_ID: workspace.workspaceId,
-            FAKE_HERDR_SESSIONS: asSessions([{ name: "desk", socket_path: socket }]),
-          };
-          const started = yield* collie(
-            world,
-            ["run", "start", "proof", "--here", "--input", "note=hi"],
-            desk,
-          );
+          const started = yield* collie(world, ["run", "start", "proof", "--input", "note=hi"]);
           expect(started.envelope.ok).toBe(true);
           const runId = yield* runIdOf(started.envelope);
-          const file = yield* newsPath(world.state, yield* herdOf(socket));
+          const file = yield* newsPath(world.state, yield* herdOf(Bun.env.HC_SOCKET ?? null));
           // Another conversation's view, so nothing Native chat read can hide an item here.
           const keys = readNews(file).pipe(
             Effect.map((lines) => Arr.map(pending(lines, "flock@pc").items, (item) => item.key)),
@@ -230,16 +205,20 @@ test(
           const asked = `${runId}:asking:decision`;
           const ended = `${runId}:ended:succeeded`;
           yield* until(keys, (now) => now.includes(asked));
-          expect(
-            (yield* collie(world, ["run", "answer", runId, "approve"], desk)).envelope.ok,
-          ).toBe(true);
+          expect((yield* collie(world, ["run", "answer", runId, "approve"])).envelope.ok).toBe(
+            true,
+          );
           const answered = yield* until(keys, (now) => !now.includes(asked) && now.includes(ended));
           expect(answered).toEqual([ended]);
-          const disposed = yield* collie(
-            world,
-            ["run", "disposition", runId, "--as", "merged", "--ref", "mk/project!7"],
-            desk,
-          );
+          const disposed = yield* collie(world, [
+            "run",
+            "disposition",
+            runId,
+            "--as",
+            "merged",
+            "--ref",
+            "mk/project!7",
+          ]);
           expect(disposed.envelope.ok).toBe(true);
           const after = yield* until(keys, (now) => now.length === 0);
           // Two more rounds, so a retired cause said again would show.
@@ -263,65 +242,14 @@ test(
   120_000,
 );
 
-test(
-  "the host writes a Run's News to its own Herd and to no other",
-  () =>
-    proves(
-      "collie-side-news-",
-      (world) =>
-        Effect.gen(function* () {
-          const first = `${world.home}/first.sock`;
-          const second = `${world.home}/second.sock`;
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const workspace = yield* new Herdr(env)
-            .workspaceCreate({ cwd: world.project, label: "builds" })
-            .pipe(Effect.orDie);
-          const started = yield* collie(
-            world,
-            ["run", "start", "plain", "--here", "--input", "note=hi"],
-            {
-              HERDR_SOCKET_PATH: second,
-              HERDR_WORKSPACE_ID: workspace.workspaceId,
-              FAKE_HERDR_SESSIONS: asSessions([
-                { name: "desk", socket_path: first },
-                { name: "builds", socket_path: second },
-              ]),
-            },
-          );
-          expect(started.envelope.ok).toBe(true);
-          const herds = yield* Effect.scoped(
-            Effect.gen(function* () {
-              const door = yield* frontDoor(socketOf(world.state));
-              const head = yield* Stream.runHead(door.board());
-              return head._tag === "Some" && head.value._tag === "Snapshot" ? head.value.herds : [];
-            }),
-          ).pipe(Effect.orDie);
-          const newsOf = (name: string) =>
-            newsPath(
-              world.state,
-              Option.getOrUndefined(Arr.findFirst(herds, (herd) => herd.name === name))!.id,
-            ).pipe(Effect.flatMap(readNews));
-          const builds = yield* until(newsOf("builds"), (lines) => lines.length > 0);
-          const desk = yield* newsOf("desk");
-          yield* stopHost(world.state);
-          expect(Arr.map(builds, (line) => line.kind === "item" && line.run)).toEqual([
-            yield* runIdOf(started.envelope),
-          ]);
-          expect(desk).toEqual([]);
-        }),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
-
 test("News and the merge watch read the host's latest board, and list no Runs of their own", () =>
   runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-side-shared-" });
       const env = readEnv({
-        HERDR_PLUGIN_STATE_DIR: stateDir,
-        HERDR_SOCKET_PATH: `${stateDir}/none.sock`,
+        COLLIE_STATE_DIR: stateDir,
+        HC_SOCKET: `${stateDir}/none.sock`,
         COLLIE_CWD: stateDir,
       });
       let listings = 0;
@@ -353,29 +281,6 @@ test("News and the merge watch read the host's latest board, and list no Runs of
       // Two merge looks and three News looks at least, on one build.
       expect(reads).toBeGreaterThanOrEqual(5);
       expect(listings).toBe(1);
-    }),
-  ));
-
-test("News reads which herdr sessions there are as often as the host does, not on every look", () =>
-  runOnPath(
-    Effect.gen(function* () {
-      const rig = yield* Effect.acquireRelease(Rig.make(), (rig) => rig.close().pipe(Effect.orDie));
-      const env = rig.pluginEnv();
-      yield* sideJobs({
-        env,
-        herdr: new Herdr(env),
-        board: Effect.succeed({ runs: [], views: [] }),
-        panels: new Map(),
-        record: () => Effect.void,
-        stop: () => Effect.void,
-        watches: NO_WATCHES,
-        requested: NO_REQUESTS,
-        sweepers: Effect.succeed([]),
-      }).pipe(Effect.timeout("12 seconds"), Effect.ignore, fastForward);
-      // Three News looks and the Homes' first restating, within one SESSIONS_EVERY.
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "session list")).toEqual([
-        "session list",
-      ]);
     }),
   ));
 
@@ -481,29 +386,15 @@ test(
       "collie-side-seen-",
       (world) =>
         Effect.gen(function* () {
-          const socket = `${world.home}/desk.sock`;
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const workspace = yield* new Herdr(env)
-            .workspaceCreate({ cwd: world.project, label: "desk" })
-            .pipe(Effect.orDie);
-          const desk = {
-            HERDR_SOCKET_PATH: socket,
-            HERDR_WORKSPACE_ID: workspace.workspaceId,
-            FAKE_HERDR_SESSIONS: asSessions([{ name: "desk", socket_path: socket }]),
-          };
-          const started = yield* collie(
-            world,
-            ["run", "start", "plain", "--here", "--input", "note=hi"],
-            desk,
-          );
+          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
           const runId = yield* runIdOf(started.envelope);
-          const file = yield* newsPath(world.state, yield* herdOf(socket));
+          const file = yield* newsPath(world.state, yield* herdOf(Bun.env.HC_SOCKET ?? null));
           const keys = readNews(file).pipe(
             Effect.map((lines) => Arr.map(pending(lines, "flock@pc").items, (item) => item.key)),
           );
           const ended = `${runId}:ended:succeeded`;
           expect(yield* until(keys, (now) => now.includes(ended))).toEqual([ended]);
-          expect((yield* collie(world, ["run", "seen", runId], desk)).envelope.ok).toBe(true);
+          expect((yield* collie(world, ["run", "seen", runId])).envelope.ok).toBe(true);
           const after = yield* until(keys, (now) => now.length === 0);
           const lines = yield* readNews(file);
           yield* stopHost(world.state);
@@ -524,23 +415,9 @@ test(
       "collie-side-replied-",
       (world) =>
         Effect.gen(function* () {
-          const socket = `${world.home}/desk.sock`;
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const workspace = yield* new Herdr(env)
-            .workspaceCreate({ cwd: world.project, label: "desk" })
-            .pipe(Effect.orDie);
-          const desk = {
-            HERDR_SOCKET_PATH: socket,
-            HERDR_WORKSPACE_ID: workspace.workspaceId,
-            FAKE_HERDR_SESSIONS: asSessions([{ name: "desk", socket_path: socket }]),
-          };
-          const started = yield* collie(
-            world,
-            ["run", "start", "plain", "--here", "--input", "note=hi"],
-            desk,
-          );
+          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
           const runId = yield* runIdOf(started.envelope);
-          const file = yield* newsPath(world.state, yield* herdOf(socket));
+          const file = yield* newsPath(world.state, yield* herdOf(Bun.env.HC_SOCKET ?? null));
           const items = readNews(file).pipe(
             Effect.map((lines) => pending(lines, "flock@pc").items),
           );

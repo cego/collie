@@ -7,13 +7,7 @@ import { expect, test } from "bun:test";
 import { createConnection, createServer, type Server } from "node:net";
 import { Clock, Deferred, type Duration, Effect, FileSystem } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import {
-  closeConnections,
-  controlPath,
-  controlPathOf,
-  openConnection,
-  sshConnection,
-} from "../src/ssh-connection";
+import { controlPath, controlPathOf, openConnection, sshConnection } from "../src/ssh-connection";
 import { remoteCollie, riderArgv } from "../src/ssh-argv";
 import { withLock } from "../src/lock";
 import { runEffect } from "./support/effect";
@@ -314,33 +308,6 @@ test("`exit` ends an open master and its path, and only removes a path left behi
       expect(Arr.some(yield* fake.calls, (line) => pipe(line, Str.startsWith("login")))).toBe(
         false,
       );
-    }),
-  ));
-
-test("the host closes every connection under its state but those of the machines it keeps", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const { state, ssh, fake } = yield* rig;
-      const other = { label: "other", target: "mk@other" };
-      const kept = (yield* opens(state, ssh)).path;
-      const gone = yield* openConnection(state, other, {
-        ssh,
-        said: () => Effect.void,
-      });
-      yield* fs.writeFileString(`${state}/ssh/${pipe("0", Str.repeat(16))}.binding`, "");
-      const closed = yield* closeConnections(state, [vm], ssh);
-      expect(closed).toEqual([gone.path]);
-      expect(yield* fs.exists(gone.path)).toBe(false);
-      expect(yield* fs.exists(kept)).toBe(true);
-      expect(yield* fs.exists(`${state}/ssh/${pipe("0", Str.repeat(16))}.binding`)).toBe(true);
-      expect(
-        Arr.filter(
-          yield* fake.calls,
-          (line) =>
-            !pipe(line, Str.startsWith("master")) && !pipe(line, Str.startsWith("mux check")),
-        ),
-      ).toEqual(["mux exit collie"]);
     }),
   ));
 

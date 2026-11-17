@@ -20,7 +20,6 @@ use serde_json::json;
 pub struct Adding {
     pub target: TextEdit,
     pub label: TextEdit,
-    pub session: TextEdit,
     /// The core is saving it; the dialog stays until it answers.
     pub busy: bool,
     /// Why the core refused it, said in the dialog.
@@ -30,15 +29,8 @@ pub struct Adding {
 impl Adding {
     /// What Add Machine sends, trimmed, once every field is filled.
     pub fn to_add(&self) -> Option<AddMachinePayload> {
-        let [target, label, session] =
-            [&self.target, &self.label, &self.session].map(|edit| edit.text.trim().to_string());
-        (!target.is_empty() && !label.is_empty() && !session.is_empty()).then_some(
-            AddMachinePayload {
-                target,
-                label,
-                session,
-            },
-        )
+        let [target, label] = [&self.target, &self.label].map(|edit| edit.text.trim().to_string());
+        (!target.is_empty() && !label.is_empty()).then_some(AddMachinePayload { target, label })
     }
 }
 
@@ -147,15 +139,12 @@ impl App {
     }
 
     pub fn open_add_machine(&mut self) {
-        let mut adding = Adding {
-            session: TextEdit::new("default"),
-            ..Adding::default()
-        };
+        let mut adding = Adding::default();
         adding.target.focused = true;
         self.pages.machines.adding = Some(adding);
     }
 
-    /// Saves the Machine typed in herdr, then onboards it: the dialog closes on the core's
+    /// Saves the Machine typed in core, then onboards it: the dialog closes on the core's
     /// yes and shows its onboarding, or keeps what was typed and says why not.
     pub fn add_machine(&mut self) {
         let Some(adding) = self.pages.machines.adding.as_mut() else {
@@ -183,7 +172,7 @@ impl App {
         });
     }
 
-    /// Removes a route from herdr's list; nothing on its Machine is stopped or uninstalled.
+    /// Removes a route from core's list; nothing on its Machine is stopped or uninstalled.
     pub fn remove_machine(&mut self, profile: &str) {
         let Some(core) = &self.core else { return };
         core.request(
@@ -438,29 +427,12 @@ fn add_dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
             "add-target",
         ))
         .child(muted(k, "As ssh reaches it, such as mk@vm-mk.example"))
-        .child(
-            rune::row()
-                .w_full()
-                .gap(10.0)
-                .child(
-                    field(
-                        "Label",
-                        &adding.label,
-                        |app| &mut adding_of(app).label,
-                        "add-label",
-                    )
-                    .grow(1.0),
-                )
-                .child(
-                    field(
-                        "herdr session",
-                        &adding.session,
-                        |app| &mut adding_of(app).session,
-                        "add-session",
-                    )
-                    .grow(1.0),
-                ),
-        )
+        .child(field(
+            "Label",
+            &adding.label,
+            |app| &mut adding_of(app).label,
+            "add-label",
+        ))
         .children(adding.refused.as_ref().map(|why| {
             toned(k, why.clone(), Tone::Bad)
                 .key("add-refused")
@@ -482,7 +454,7 @@ fn add_dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
             ),
         );
     Dialog::new("add-machine", "Add Machine")
-        .description("Saves it in herdr, then onboards it.")
+        .description("Saves it in core, then onboards it.")
         .width(480.0)
         .fit()
         .open(true)

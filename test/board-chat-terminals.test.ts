@@ -1,16 +1,14 @@
-// The board and native chat as core terminals a host keeps on its Machine, whatever runs
-// its agents: started once when the host starts, and once more under the same name each
+// The board and native chat as core terminals a host keeps on its Machine: started once when the host starts, and once more under the same name each
 // time one ends. herdr is never asked for a tab, pane or popup for either.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Config, Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import { writeConfigValue } from "../src/config";
 import { connect } from "../src/host";
 import { isSettled } from "../src/lifecycle";
-import { serveFakeHc } from "./support/fake-hc";
+import type { FakeHc } from "./support/fake-hc";
 import { until } from "./support/host";
 import { collie, proves } from "./support/world";
 
@@ -18,18 +16,16 @@ const Logged = Schema.fromJsonString(
   Schema.Struct({
     transport: Schema.String,
     cmd: Schema.String,
-    argv: Schema.optionalKey(Schema.Array(Schema.String)),
     params: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
   }),
 );
 
-const logged = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const text = yield* fs
-    .readFileString(yield* Config.String("FAKE_HERDR_LOG"))
-    .pipe(Effect.orElseSucceed(() => ""));
-  return Arr.filterMap(Str.split(text, "\n"), (line) => Schema.decodeResult(Logged)(line));
-});
+const logged = (core: FakeHc) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const text = yield* fs.readFileString(core.logPath).pipe(Effect.orElseSucceed(() => ""));
+    return Arr.filterMap(Str.split(text, "\n"), (line) => Schema.decodeResult(Logged)(line));
+  });
 
 const runsOf = (calls: ReadonlyArray<typeof Logged.Type>, name: string) =>
   Arr.filter(calls, (call) => call.cmd === "terminal.run" && call.params?.name === name);
@@ -39,18 +35,13 @@ test(
   () =>
     proves(
       "collie-front-terminals-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
-          const core = yield* serveFakeHc(
-            `${world.home}/hc.sock`,
-            yield* Config.String("FAKE_HERDR_LOG"),
-            yield* Effect.scope,
-          );
           yield* connect(world.state, {
             hostEnv: { HC_SOCKET: core.socketPath, HERDR_SOCKET_PATH: `${world.home}/herdr.sock` },
           });
           const started = yield* until(
-            () => logged,
+            () => logged(core),
             (calls) =>
               runsOf(calls, "collie-board").length > 0 && runsOf(calls, "collie-chat").length > 0,
           );
@@ -61,13 +52,13 @@ test(
           yield* writeConfigValue(world.config, "chat_harness", "pi");
           yield* core.exit("collie-board", 0);
           const restarted = yield* until(
-            () => logged,
+            () => logged(core),
             (calls) => runsOf(calls, "collie-board").length === 2,
           );
           expect(runsOf(restarted, "collie-chat")).toHaveLength(1);
           yield* core.exit("collie-chat", 0);
           const after = yield* until(
-            () => logged,
+            () => logged(core),
             (calls) => runsOf(calls, "collie-chat").length === 2,
           );
           expect(runsOf(after, "collie-board")).toHaveLength(2);
@@ -85,36 +76,31 @@ test(
   () =>
     proves(
       "collie-chat-backoff-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
-          const core = yield* serveFakeHc(
-            `${world.home}/hc.sock`,
-            yield* Config.String("FAKE_HERDR_LOG"),
-            yield* Effect.scope,
-          );
           // As on a Machine whose core was started where the harness is not on its PATH.
           core.startable("claude", false);
           yield* connect(world.state, {
             hostEnv: { HC_SOCKET: core.socketPath, HERDR_SOCKET_PATH: `${world.home}/herdr.sock` },
           });
           yield* until(
-            () => logged,
+            () => logged(core),
             (calls) => runsOf(calls, "collie-chat").length > 0,
           );
           yield* Effect.sleep("3 seconds");
           // Each failure makes core say a terminal was removed; retried on that, it is
           // dozens of starts a second, and the host answers nothing else.
-          const failed = runsOf(yield* logged, "collie-chat").length;
+          const failed = runsOf(yield* logged(core), "collie-chat").length;
           expect(failed).toBeLessThanOrEqual(3);
 
           // Once core can start it, the next try starts it, and a started chat is left be.
           core.startable("claude", true);
           yield* until(
-            () => logged,
+            () => logged(core),
             (calls) => runsOf(calls, "collie-chat").length > failed,
           );
           yield* Effect.sleep("2 seconds");
-          expect(runsOf(yield* logged, "collie-chat")).toHaveLength(failed + 1);
+          expect(runsOf(yield* logged(core), "collie-chat")).toHaveLength(failed + 1);
         }).pipe(Effect.orDie),
       [],
     ),
@@ -126,26 +112,21 @@ test(
   () =>
     proves(
       "collie-bare-core-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
-          const core = yield* serveFakeHc(
-            `${world.home}/hc.sock`,
-            yield* Config.String("FAKE_HERDR_LOG"),
-            yield* Effect.scope,
-          );
           // As a core another Machine's SSH dial started, with no login shell's PATH.
           core.barePath();
           yield* connect(world.state, {
             hostEnv: { HC_SOCKET: core.socketPath, HERDR_SOCKET_PATH: `${world.home}/herdr.sock` },
           });
           yield* until(
-            () => logged,
+            () => logged(core),
             (calls) =>
               runsOf(calls, "collie-board").length > 0 && runsOf(calls, "collie-chat").length > 0,
           );
           yield* Effect.sleep("2 seconds");
           // Each was started at its first try: neither was refused and tried again.
-          const calls = yield* logged;
+          const calls = yield* logged(core);
           expect(runsOf(calls, "collie-board")).toHaveLength(1);
           expect(runsOf(calls, "collie-chat")).toHaveLength(1);
         }).pipe(Effect.orDie),
@@ -155,25 +136,19 @@ test(
 );
 
 test(
-  "a whole Run on a Machine set to herdr asks herdr for no board, and no Home is recorded",
+  "a whole Run uses core for its agents and Home, without a legacy layout record",
   () =>
     proves(
       "collie-no-home-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
           yield* fs.writeFileString(outputs, `[{ "verdict": "done" }]`);
-          const core = yield* serveFakeHc(
-            `${world.home}/hc.sock`,
-            yield* Config.String("FAKE_HERDR_LOG"),
-            yield* Effect.scope,
-          );
           const start = yield* collie(
             world,
             ["run", "start", "relaunched", "--input", "harnesses=claude"],
             {
-              FAKE_HERDR_OUTPUTS: outputs,
               HC_SOCKET: core.socketPath,
               HERDR_SOCKET_PATH: `${world.home}/herdr.sock`,
             },
@@ -188,16 +163,14 @@ test(
           );
           expect((yield* host.run({ runId }))?.status.status).toBe("complete");
 
-          const calls = yield* logged;
-          const onHerdr = Arr.filter(calls, (call) => call.transport !== "core");
-          expect(Arr.some(onHerdr, (call) => call.cmd === "agent start")).toBe(true);
-          const forTheBoard = Arr.filter(
-            onHerdr,
-            (call) =>
-              /plugin|popup|split|swap|resize/.test(call.cmd) ||
-              Arr.some(call.argv ?? [], (arg) => pipe(arg, Str.includes("Collie"))),
-          );
-          expect(forTheBoard).toEqual([]);
+          const calls = yield* logged(core);
+          expect(Arr.every(calls, (call) => call.transport === "core")).toBe(true);
+          expect(
+            Arr.some(
+              calls,
+              (call) => call.cmd === "terminal.run" && call.params?.name === `${runId}-claude-r1`,
+            ),
+          ).toBe(true);
           expect(runsOf(calls, "collie-board")).toHaveLength(1);
           const herds = yield* fs
             .readDirectory(`${world.state}/herd`)

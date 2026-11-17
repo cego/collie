@@ -14,8 +14,8 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `doctor.ts`            | Every prerequisite an installation needs, checked in one pass, each with its fix                                            |
 | `doctor-check.ts`      | What a doctor check is, shared by the doctor and each forge's own checks                                                    |
 | `flows.ts`             | What the board does: drawing it, and its pick, continue, resume and fork flows                                              |
-| `env.ts`               | The environment a Collie process runs in: herdr's, core's and Collie's own                                                  |
-| `herdr.ts`             | The only channel to herdr: CLI at `HERDR_BIN_PATH`, socket for the rest, and its config                                     |
+| `env.ts`               | Collie's environment, its stable state path, core settings and retired-variable removal                                     |
+| `herdr.ts`             | Collie's agent and Machine interface over herdr-core, through `hc.ts`                                                       |
 | `hc.ts`                | The client for herdr-core: its JSON-RPC and frames, a decoder per method, and the events snapshot                           |
 | `definitions.ts`       | Layers, personas, and the `extends:` override a persona fork writes                                                         |
 | `yaml.ts`              | Frontmatter split and write-back over Effect's YAML parser                                                                  |
@@ -36,7 +36,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `run-model.ts`         | The host's Run model: each Run's disk inputs and facts in memory, dirtied per Run, with Run revisions                       |
 | `record.ts`            | A Run's record read from the model: its Task's Runs only, the Flow first, each part after, a frame only when it moved       |
 | `door.ts`              | The host's door: a Worker that owns `host.sock`, reads records itself, passes the rest to the engine                        |
-| `herds.ts`             | Every running herdr session the host reads, its agents, and the events it pushes                                            |
+| `herds.ts`             | This Machine's core session, its agents, their terminal addresses and change events                                         |
 | `attention.ts`         | Why a run wants a human, and which actions are safe now                                                                     |
 | `registry.ts`          | Which long-lived agents each Session still has, as the host keeps them in `collie_agents`                                   |
 | `handoff.ts`           | Giving one Run's result to another Run's live agent                                                                         |
@@ -127,9 +127,9 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `plan.ts`              | A plan directory as repositories and waves, and the refusals that stop a fan-out                                            |
 | `lock.ts`              | The pid-lock discipline every single-owner file takes, the host's own lock among them                                       |
 | `script.ts`            | Literal shell arguments and a login under `script`'s pseudo-terminal on Linux or macOS                                      |
-| `task.ts`              | A Task, a row of the host's `collie_tasks`: the work, its herdr workspace, which Runs belong to it                          |
-| `tasknames.ts`         | What a task workspace is called, from the work and the session's own live labels                                            |
-| `naming.ts`            | herdr-legal agent names vs readable tab and pane labels, and which labels Collie still owns                                 |
+| `task.ts`              | A Task, a row of the host's `collie_tasks`: its work, label, membership and closing time                                    |
+| `tasknames.ts`         | What a Task is called, from its work and the existing Task labels                                                           |
+| `naming.ts`            | Stable agent names, readable labels and ownership of labels a person may rename                                             |
 | `keys.ts`              | Raw keypresses, for the text board a pane falls back to when the renderer will not start                                    |
 | `fork.ts`              | Take a persona into a later layer: an `extends:` stub, or a full copy                                                       |
 | `trust.ts`             | Whether a harness will work in a directory, or stop and ask first                                                           |
@@ -188,8 +188,7 @@ The Machine link is `peers.ts`: pairing, TLS channels, relay sockets, dial-back 
 keeping paired Machines level. `peer-transport.ts` is the way to a peer this Machine
 dials: direct, then through the Machine's SSH connection, with its bounds and its words.
 `ssh-connection.ts` runs every ssh command against a Machine: its control path, the one
-opener a front door runs, the host's `-O`-only handle and the sweep that closes what herdr
-no longer names, and `-G`. `ssh-argv.ts` holds the argv and bounds Desktop shares with it, core's `via` for a Machine, the rider
+opener a front door runs, the host's `-O`-only handle, connection closure and `-G`. `ssh-argv.ts` holds the argv and bounds Desktop shares with it, core's `via` for a Machine, the rider
 a session through the connection uses among them, so Desktop never loads the host's lock. `peers-model.ts` holds the peer records and states
 Desktop shares. `flock-settings.ts` holds the latest-edit rule and merge both hosts and
 Desktop use. `standing-direction.ts` words the Standing direction block every chat,
@@ -198,7 +197,7 @@ and Collie's records, for drafting it; `own-words-model.ts` is what it answers. 
 shares, keeping replaced text under `replaced/`. `channel.ts` declares and pipes the channel the bridge and peer link share.
 
 `reports.ts` sends a settled Run's result to its recorded requester once, through the
-Dispatcher, and closes a `closes: "reported"` Run's own agents and eligible Task workspace.
+Dispatcher, and closes a `closes: "reported"` Run's own agents and eligible Task record.
 Repository placement is resolved by `projects.ts` and fetched by `agent-start.ts`; the
 engine carries the fetched revision through admission and placement.
 

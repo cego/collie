@@ -1,5 +1,5 @@
-// herdr agent names must match /^[a-z][a-z0-9_-]{0,31}$/, so they cannot be the
-// readable labels. Labels go on tabs and panes; these go on agents.
+// Agent names must match /^[a-z][a-z0-9_-]{0,31}$/, so they cannot be the readable
+// labels. Labels are shown beside them; these name agents.
 
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";

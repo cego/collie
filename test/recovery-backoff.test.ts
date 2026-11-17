@@ -1,3 +1,4 @@
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, Layer } from "effect";
@@ -10,7 +11,7 @@ import { mrId } from "../src/board-model";
 import type { MrPanels } from "../src/merges";
 import { forgeHttpLayer } from "../src/forge/http";
 import { runEffect } from "./support/effect";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { until } from "./support/host";
 
 test("unchanged panel refreshes preserve backoff while changed facts reset it", () =>
@@ -58,7 +59,7 @@ test("unchanged panel refreshes preserve backoff while changed facts reset it", 
       yield* Effect.forkScoped(
         recoverParks({
           env,
-          herdr: new FakeHerdr(env),
+          herdr: new Herdr(env),
           reconnects: Effect.succeed(0),
           panels,
           views: Effect.sync(() => {
@@ -145,7 +146,7 @@ const rechecksUnderRateLimit = (cause: ParkCause) =>
     yield* Effect.forkScoped(
       recoverParks({
         env,
-        herdr: new FakeHerdr(env),
+        herdr: new Herdr(env),
         reconnects: Effect.succeed(0),
         panels,
         views: Effect.succeed([view]),

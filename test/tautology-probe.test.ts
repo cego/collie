@@ -7,7 +7,6 @@ import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
-import { readEnv } from "../src/env";
 import { journal, outsideAnyRun, readKey, scored, type KeyItem } from "../tools/tautology-probe";
 import { runEffect } from "./support/effect";
 
@@ -58,23 +57,10 @@ test("an item raised in one run out of three is not raised", () => {
   expect(scored([raisedBoth, [], []], key)).toEqual({ missed: [restated], falselyRaised: [] });
 });
 
-test("a reviewer's environment names no herdr pane, tab or workspace", () => {
-  const env = readEnv(
-    outsideAnyRun({
-      HERDR_PANE_ID: "p",
-      HERDR_ACTIVE_PANE_ID: "p",
-      HERDR_TAB_ID: "t",
-      HERDR_ACTIVE_TAB_ID: "t",
-      HERDR_WORKSPACE_ID: "w",
-      HERDR_ACTIVE_WORKSPACE_ID: "w",
-      HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({
-        workspace_id: "w",
-        tab_id: "t",
-        focused_pane_id: "p",
-      }),
-    }),
-  );
-  expect([env.paneId, env.tabId, env.workspaceId]).toEqual([null, null, null]);
+test("a reviewer's environment names no Run or agent, so its verify is recorded on none", () => {
+  expect(outsideAnyRun({ COLLIE_RUN: "run-1", COLLIE_AGENT: "build", PATH: "/bin" })).toEqual({
+    PATH: "/bin",
+  });
 });
 
 test("each honest test in the fixture has a check seen failing on an earlier tree", () =>

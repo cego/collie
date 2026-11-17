@@ -1,3 +1,4 @@
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -12,7 +13,7 @@ import { readEnv } from "../src/env";
 import { runFacts } from "./support/records";
 import { runEffect } from "./support/effect";
 import { fixtures, root, until } from "./support/host";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { agentsLayer } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { buildBoard } from "../src/board";
@@ -30,8 +31,8 @@ test(
         yield* fs.copyFile(`${fixtures}/step-times.workflow.ts`, entry);
         const clock = yield* TestClock.make();
         const env = readEnv({
-          HERDR_PLUGIN_ROOT: root,
-          HERDR_PLUGIN_STATE_DIR: dir,
+          COLLIE_ROOT: root,
+          COLLIE_STATE_DIR: dir,
           COLLIE_CWD: dir,
         });
         yield* Effect.gen(function* () {
@@ -151,7 +152,7 @@ test(
             agentsLayer({
               dir,
               env: rig.pluginEnv(),
-              herdr: new FakeHerdr(rig.pluginEnv()),
+              herdr: new Herdr(rig.pluginEnv()),
               harness: "claude",
               model: "opus",
               permissions: "auto",

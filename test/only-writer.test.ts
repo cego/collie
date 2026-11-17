@@ -98,20 +98,15 @@ test(
   () =>
     proves(
       "collie-writer-inflight-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const hold = `${world.state}/hold-pane-list`;
-          yield* fs.writeFileString(hold, "");
-          Bun.env.FAKE_HERDR_HOLD_PANE_LIST = hold;
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => delete Bun.env.FAKE_HERDR_HOLD_PANE_LIST),
-          );
+          const release = core.hold("terminal.list");
+          yield* Effect.addFinalizer(() => Effect.sync(release));
           const file = "some-herd";
           const proposal = yield* recordProposal(file, {
-            interpretation: "tidy the Home",
+            interpretation: "clean up finished work",
             targets: [],
-            actions: [{ kind: "home_cleanup" }],
+            actions: [{ kind: "cleanup" }],
             allowedNow: [],
             intentVersions: {},
             by: "evaluator:e-1",
@@ -133,11 +128,9 @@ test(
           const retried = yield* Effect.forkChild(client.confirm(yes));
           // Long enough for the retry to reach the host while the step is still held.
           yield* Effect.sleep("1 second");
-          yield* fs.remove(hold);
+          release();
           const answered = yield* Fiber.join(retried);
-          expect(answered.results).toMatchObject([
-            { index: 0, kind: "home_cleanup", state: "applied" },
-          ]);
+          expect(answered.results).toMatchObject([{ index: 0, kind: "cleanup", state: "applied" }]);
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       [],
@@ -288,10 +281,10 @@ test(
             .dispose({ ...asked, kind: "abandoned" })
             .pipe(Effect.flip);
           expect(otherwise._tag).toBe("RequestConflict");
-          // Focused on this Machine's own herdr, which here has nothing of the Run's left.
+          // This Run has no live agent on the Machine's core.
           expect(yield* client.focus({ runId, request: "fo-1" }).pipe(Effect.flip)).toMatchObject({
             _tag: "HostRefused",
-            reason: `${runId} has no pane or workspace herdr still has`,
+            reason: `${runId} has no live agent on core`,
           });
           yield* client.grant({ runId, name: "lint", command: null, request: "g-1" });
           const dir = runDir(world.state, runId);
@@ -344,7 +337,6 @@ test(
           yield* fs.makeDirectory(bin, { recursive: true });
           const env = {
             PATH: `${bin}:/usr/bin:/bin`,
-            HERDR_SOCKET_PATH: `${world.state}/herd.sock`,
           };
           const started = yield* collie(
             world,
@@ -381,13 +373,13 @@ test(
           expect(yield* client.steerAbout(again)).toEqual(first);
           const journal = yield* hostRecords(world.state, everyProposal);
           expect(answers(journal)).toMatchObject([{ kind: "confirmed" }, { kind: "confirmed" }]);
-          // A steer from another herdr session is carried out in that session.
+          // An old session in the request cannot redirect defaults from the named checkout.
           const other = `${world.state}/other.sock`;
           const defaults = pipe_(
             answer,
             Str.replace(
               '{"kind":"none","why":"it is fine"}',
-              '{"kind":"update_defaults","change":"add-constraint","workspace":"w1","text":"no rebase"}',
+              `{"kind":"update_defaults","change":"add-constraint","workspace":"${world.project}","text":"no rebase"}`,
             ),
           );
           yield* fs.writeFileString(
@@ -401,7 +393,7 @@ test(
           expect(steered.ok).toBe(true);
           const theirs = yield* defaultsPath(
             world.state,
-            scopeKey({ session: other, workspaceId: "w1", cwd: world.project }),
+            scopeKey({ session: null, workspaceId: null, cwd: world.project }),
           );
           expect(
             Option.getOrUndefined(

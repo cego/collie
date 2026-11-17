@@ -165,8 +165,8 @@ test(
           env: {
             PATH: "/usr/bin:/bin",
             HOME: world.home,
-            HERDR_PLUGIN_ROOT: world.install,
-            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_ROOT: world.install,
+            COLLIE_STATE_DIR: world.state,
             COLLIE_USER_DIR: world.config,
             ...(yield* suiteEnv),
           },

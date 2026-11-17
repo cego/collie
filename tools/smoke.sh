@@ -7,17 +7,13 @@ set -eu
 BIN="${1:-bin/collie}"
 [ -x "$BIN" ] || { echo "smoke: no executable at $BIN" >&2; exit 1; }
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-export HERDR_PLUGIN_ROOT="$ROOT"
-# Nothing here may touch the real state dir or a live herdr.
+export COLLIE_ROOT="$ROOT"
+# Nothing here may touch the real state directory or a live core.
 STATE=$(mktemp -d)
 trap 'rm -rf "$STATE"' EXIT
-export HERDR_PLUGIN_STATE_DIR="$STATE/state"
+export COLLIE_STATE_DIR="$STATE/state"
 export COLLIE_USER_DIR="$STATE/config"
-# Run as a release consumer would: no herdr, and none of the context a shell inside
-# herdr exports, or the workspace-scoped commands would try to resolve a live one.
-export HERDR_BIN_PATH="$STATE/no-herdr"
-unset HERDR_WORKSPACE_ID HERDR_ACTIVE_WORKSPACE_ID HERDR_PLUGIN_CONTEXT_JSON \
-  HERDR_SOCKET_PATH HERDR_TAB_ID HERDR_ACTIVE_TAB_ID HERDR_PANE_ID HERDR_ACTIVE_PANE_ID
+export HC_SOCKET="$STATE/no-core.sock"
 
 fail() { echo "smoke: $1" >&2; exit 1; }
 
@@ -91,17 +87,20 @@ wait
   fail "concurrent compaction helpers lost an event"
 
 # The release path: the runner places the release it carries, at its own version. A stub
-# `sh` stands in for `prepare.sh`, which links herdr and fetches skills.
+# `sh` stands in for `prepare.sh`, which links the operator skill and fetches workflow skills.
 PLACE="$STATE/place"
 own=$("$BIN" --version | sed 's/^collie v//')
 mkdir -p "$PLACE/stubs"
 printf '#!/bin/sh\necho "prepare: runner: already in place"\n' > "$PLACE/stubs/sh"
 chmod +x "$PLACE/stubs/sh"
-COLLIE_DIR="$PLACE/dir" HERDR_PLUGIN_ROOT="$PLACE/dir/release" XDG_DATA_HOME="$PLACE/data" \
+COLLIE_DIR="$PLACE/dir" COLLIE_ROOT="$PLACE/dir/release" XDG_DATA_HOME="$PLACE/data" \
   COLLIE_RELEASES="http://127.0.0.1:9" PATH="$PLACE/stubs:$PATH" \
   "$BIN" --json upgrade --to "$own" >/dev/null 2>&1 || fail "the runner did not place its release"
-placed=$(sed -n 's/^version = "\(.*\)"/\1/p' "$PLACE/dir/release/herdr-plugin.toml")
+placed=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PLACE/dir/release/package.json")
 [ "$placed" = "$own" ] || fail "the placed release is $placed, not the runner's own $own"
 [ -x "$PLACE/dir/release/bin/collie" ] || fail "the placed release has no runner"
+for legacy in herdr-plugin.toml herdr-pin.json herdr-api-schema.json bin/herdr; do
+  [ ! -e "$PLACE/dir/release/$legacy" ] || fail "the release still carries $legacy"
+done
 
 echo "smoke: $BIN answered --help, one JSON success and two typed failures, read its forge, served its own compaction helper and placed its release"

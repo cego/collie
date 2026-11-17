@@ -12,7 +12,7 @@ import { gitlabHostOf, loadDefaults } from "./config";
 import { currentReports, readDrift } from "./drift";
 import { selfCommand, type PluginEnv } from "./env";
 import { coreSocket } from "./hc";
-import { serverSocket, type Herdr } from "./herdr";
+import type { Herdr } from "./herdr";
 import { SESSIONS_EVERY, liveHerds, type LiveHerd } from "./herds";
 import { landingNow } from "./landing";
 import { settleMerges, type MrPanels } from "./merges";
@@ -193,29 +193,28 @@ export const keepTerminals = (env: PluginEnv, herdr: Herdr) =>
 /** One look at the board and chat, starting whichever is not live: whether both now are. */
 const keepRound = (env: PluginEnv, herdr: Herdr) =>
   Effect.gen(function* () {
-    const herdrSocket = env.socketPath ?? (yield* serverSocket(herdr));
-    const at = { ...env, socketPath: herdrSocket };
-    const key = yield* machineHerd(at);
+    const key = yield* machineHerd(env);
     const cwd = yield* herdDir(env.stateDir, key);
     yield* (yield* FileSystem.FileSystem).makeDirectory(cwd, { recursive: true });
-    if (!(yield* herdr.coreTerminalLive(BOARD_TERMINAL)))
+    if (!(yield* herdr.terminalLive(BOARD_TERMINAL)))
       yield* herdr.agentLaunch({
         name: BOARD_TERMINAL,
         argv: [...selfCommand(), "board", "--draw"],
         cwd,
         env: {
-          HERDR_PLUGIN_ROOT: env.pluginRoot,
+          COLLIE_ROOT: env.pluginRoot,
           COLLIE_DIR: env.collieDir,
           COLLIE_USER_DIR: env.userDir,
-          HERDR_PLUGIN_STATE_DIR: env.stateDir,
-          HERDR_SOCKET_PATH: herdrSocket ?? "",
+          COLLIE_STATE_DIR: env.stateDir,
           HC_SOCKET: yield* coreSocket(env.raw),
           COLLIE_CWD: cwd,
         },
         labels: {},
       });
-    if (!(yield* herdr.coreTerminalLive(CHAT_TERMINAL)))
-      return (yield* startChat(herdr, at, key, (line) => Effect.logInfo(line))).kind === "launched";
+    if (!(yield* herdr.terminalLive(CHAT_TERMINAL)))
+      return (
+        (yield* startChat(herdr, env, key, (line) => Effect.logInfo(line))).kind === "launched"
+      );
     return true;
   }).pipe(
     Effect.catchCause((cause) =>

@@ -43,7 +43,7 @@ fn snapshot(installation: &str, profile: &str, name: &str, build: &str) -> Flock
 }
 
 fn run(steps: Value, ready: Option<bool>, at: f64) -> Value {
-    json!({ "steps": steps, "asked": null, "ready": ready, "reason": null, "at": at })
+    json!({ "steps": steps, "ready": ready, "reason": null, "at": at })
 }
 
 fn fold(items: Vec<FlockItem>) -> Fold {
@@ -803,7 +803,7 @@ fn sync_now_remove_and_onboard_ask_the_core_for_that_machine_and_say_what_came_o
 }
 
 #[test]
-fn add_machine_sends_what_was_typed_trimmed_then_shows_its_onboarding_and_herdrs_question() {
+fn add_machine_sends_what_was_typed_trimmed_then_shows_its_onboarding() {
     let harness = Harness::<App>::new();
     let mut runtime = machines_page(&harness);
     let mut at = 400.0;
@@ -815,34 +815,25 @@ fn add_machine_sends_what_was_typed_trimmed_then_shows_its_onboarding_and_herdrs
     tap(&mut runtime, "add-submit", &mut at);
     assert_eq!(
         harness.fake.asked_of("addMachine"),
-        [json!({ "target": "mk@vm-new", "label": "vm-new", "session": "default" })]
+        [json!({ "target": "mk@vm-new", "label": "vm-new" })]
     );
     harness.fake.answer("addMachine", Ok(json!("job-1")));
     settle(&harness, &mut runtime);
     runtime.frame_at(at);
     assert!(said(&runtime, "Starting…"));
     let machine = json!({ "profile": "p-new", "name": "vm-new", "target": "mk@vm-new" });
-    let asking = item(
+    let onboarding = item(
         json!({ "_tag": "Onboarding", "job": "job-1", "machine": machine, "run": {
-        "steps": [{ "step": "herdr", "title": "Saved in herdr", "status": "running" }],
-        "asked": { "text": "Trust this host key?", "yes": false }, "ready": null, "reason": null, "at": 1 } }),
+        "steps": [{ "step": "runner", "title": "Collie's runner, signed", "status": "running" }],
+        "ready": null, "reason": null, "at": 1 } }),
     );
-    runtime.state.pages.machines.heard(&asking);
+    runtime.state.pages.machines.heard(&onboarding);
     runtime.invalidate();
     runtime.frame_at(at);
     assert!(said(&runtime, "Onboarding vm-new"));
-    assert!(said(&runtime, "Trust this host key?"));
-    tap(&mut runtime, "herdr-yes", &mut at);
-    assert_eq!(
-        harness.fake.asked_of("answerHerdr"),
-        [json!({ "job": "job-1", "yes": true })]
-    );
+    assert!(said(&runtime, "Collie's runner, signed"));
     runtime.state.close_onboarding();
-    assert_eq!(
-        harness.fake.asked_of("answerHerdr")[1],
-        json!({ "job": "job-1", "yes": false }),
-        "a question nobody can see takes herdr's own default"
-    );
+    assert_eq!(runtime.state.pages.machines.job, None);
 }
 
 #[test]
@@ -895,7 +886,7 @@ fn an_ended_onboarding_offers_retry_and_skip_on_its_unsettled_steps() {
     let ended = item(
         json!({ "_tag": "Onboarding", "job": "job-2", "machine": machine, "run": {
         "steps": [{ "step": "helle", "title": "Helle's credentials", "status": "failed", "detail": "no token" }],
-        "asked": null, "ready": false, "reason": null, "at": 9 } }),
+        "ready": false, "reason": null, "at": 9 } }),
     );
     runtime.state.pages.machines.heard(&ended);
     runtime.state.pages.machines.job = Some("job-2".into());

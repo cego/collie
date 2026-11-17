@@ -184,8 +184,8 @@ export const openHost = Effect.fn("HostTest.open")(function* (
   const env = {
     HOME: world.home,
     PATH: "/usr/bin:/bin",
-    HERDR_PLUGIN_ROOT: world.install,
-    HERDR_PLUGIN_STATE_DIR: state,
+    COLLIE_ROOT: world.install,
+    COLLIE_STATE_DIR: state,
     COLLIE_USER_DIR: world.config,
     COLLIE_CWD: world.project,
     COLLIE_HOST: asCommand(command),
@@ -636,7 +636,7 @@ class NotYet<A> {
 }
 
 const hostLogEnd = Effect.gen(function* () {
-  const log = `${yield* Config.String("HERDR_PLUGIN_STATE_DIR").pipe(Config.withDefault(""))}/host.log`;
+  const log = `${yield* Config.String("COLLIE_STATE_DIR").pipe(Config.withDefault(""))}/host.log`;
   const text = yield* Effect.tryPromise(() => Bun.file(log).text());
   return [`end of ${log}:`, ...Str.split(Str.trimEnd(text), "\n").slice(-40)];
 }).pipe(Effect.orElseSucceed((): Array<string> => []));

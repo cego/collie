@@ -3,20 +3,23 @@
 // item as `thread/items/list` read it back from codex-cli 0.166.0, live; the stand-in in
 // `support/codex-server.ts` serves it on the agent's thread.
 
+import { Herdr } from "../src/herdr";
+import { isString } from "../src/schema";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, Effect, FileSystem, Layer, Schema, flow, Result } from "effect";
+import { Clock, Effect, Fiber, FileSystem, Layer, Schema, flow, Result } from "effect";
 import { TestClock } from "effect/testing";
 import type { PlatformServices } from "../src/platform";
-import { Agents, agentWork, agentsLayer, type AgentHost } from "../src/agents";
+import { Agents, agentWork, agentsLayer, type AgentHost, type Questions } from "../src/agents";
+import type { AskedQuestion } from "../src/sdk";
 import { foundationLayer } from "../src/engine";
 import { codexPort } from "../src/compactors";
 import { agentName } from "../src/naming";
 import { Store } from "../src/store";
-import { Rig, FakeHerdr, type Call } from "./support/recorder";
+import { Rig, type Call } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { asRun, enveloped } from "./support/enveloped";
 import type { StandIn } from "./support/codex-server";
@@ -28,7 +31,7 @@ let rig: Rig;
 let dir: string;
 
 beforeEach(() =>
-  runEffect(
+  runLive(
     Effect.gen(function* () {
       rig = yield* Rig.make();
       dir = `${rig.root}/host`;
@@ -41,7 +44,7 @@ beforeEach(() =>
 const Started = Schema.fromJsonString(Schema.Struct({ pid: Schema.Finite }));
 
 afterEach(() =>
-  runEffect(
+  runLive(
     Effect.gen(function* () {
       const events = yield* (yield* FileSystem.FileSystem)
         .readFileString(`${rig.root}/codex-server.events`)
@@ -55,7 +58,14 @@ afterEach(() =>
 );
 
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
-  runLive(fastForward(effect));
+  runLive(
+    fastForward(
+      Effect.andThen(
+        Effect.suspend(() => rig.startCore()),
+        effect,
+      ),
+    ),
+  );
 
 const Verdict = Schema.Struct({ verdict: Schema.String });
 const work = enveloped({ name: "agent-work", input: { skip: Schema.Boolean }, success: Verdict });
@@ -76,7 +86,7 @@ const config = () => `${rig.root}/codex-server.json`;
 const hostOf = (compactAtTokens = 1_000_000): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
-  herdr: new FakeHerdr(rig.pluginEnv()),
+  herdr: new Herdr(rig.pluginEnv()),
   harness: "codex",
   model: "default",
   permissions: "auto",
@@ -112,9 +122,10 @@ const spend = (ms: number) =>
 
 /** The text of every prompt typed into an agent, in the order typed. */
 const typed = (calls: ReadonlyArray<Call>) =>
-  Arr.map(
-    Arr.filter(calls, (call) => call.cmd === "agent prompt"),
-    (call) => call.argv?.[3] ?? "",
+  Arr.filterMap(calls, (call) =>
+    call.cmd === "terminal.send" && isString(call.params?.text)
+      ? Result.succeed(call.params.text)
+      : Result.failVoid,
   );
 const typedCount = (about: string) =>
   rig.calls().pipe(
@@ -204,7 +215,9 @@ test(
             const lastLines = Arr.map(typed(yield* rig.calls()), (one) =>
               Option.getOrElse(Arr.last(Str.split(one, "\n")), () => ""),
             );
-            expect(lastLines).toEqual([
+            // The answered turn ends without review.json, so a reminder may come before fix's prompt.
+            const reminded = `OUTPUT_PATH: ${dir}/agents/r1/review.json`;
+            expect(Arr.filter(lastLines, (line) => line !== reminded)).toEqual([
               expect.stringContaining("/review.prompt.md"),
               "Your question Which colour should the file be, red or blue? is answered: Blue",
               expect.stringContaining("/fix.prompt.md"),
@@ -290,7 +303,7 @@ test(
             const store = yield* Store;
             yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length > 0));
             expect((yield* store.asked("r1"))[0]?.decision).toBe("ask-review-1");
-          }).pipe(Effect.timeout("60 seconds")),
+          }),
           hostOf(0),
         );
       }),
@@ -330,7 +343,7 @@ test(
             expect(yield* fs.readFileString(`${dir}/agents/r1/review.prompt.md`)).toContain(
               'end exactly one option\'s label with " (Recommended)"',
             );
-          }).pipe(Effect.timeout("60 seconds")),
+          }),
         );
       }),
     ),
@@ -379,7 +392,69 @@ test(
               ],
             ]);
             expect(yield* typedCount("at least three options")).toBe(0);
-          }).pipe(Effect.timeout("60 seconds")),
+          }),
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a Codex agent whose turn ends on its question has not ended without its Output",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const standIn: StandIn = {
+          events: `${rig.root}/codex-server.events`,
+          threads: [{ id: "thread-1", cwd: rig.projectDir, items: [standard] }],
+        };
+        yield* (yield* FileSystem.FileSystem)
+          .writeFileString(config(), asJson(standIn))
+          .pipe(Effect.orDie);
+        // Its turn ends when the test says, once the check has seen it working.
+        yield* rig.queueOutputs([{ writes: [], output: null, then: "working" }]);
+        const asked: Array<AskedQuestion> = [];
+        const questions: Questions = {
+          ask: (question) => Effect.sync(() => asked.push({ name: question.name, answer: null })),
+          asked: Effect.sync(() => [...asked]),
+          close: () => Effect.void,
+        };
+        const reported = (state: string) =>
+          Effect.map(rig.calls(), (calls) =>
+            Arr.some(calls, (one) => one.cmd === "reported" && one.params?.state === state),
+          );
+        yield* session(
+          Effect.gen(function* () {
+            const agents = yield* Agents;
+            const on = yield* agents.launch({
+              runId: "r1",
+              operation: "review",
+              role: "reviewer",
+              workflow: "agent-work",
+              task: null,
+              agent: "review",
+              cwd: rig.projectDir,
+              prompt: `Review it.\nOUTPUT_PATH: ${dir}/agents/r1/review.json`,
+              output: `${dir}/agents/r1/review.json`,
+              skill: null,
+              harness: "codex",
+              model: null,
+              effort: null,
+              permissions: null,
+            });
+            const ending = yield* Effect.forkChild(
+              agents.endedWithoutOutput(on, Effect.succeed(true), questions),
+            );
+            yield* waitFor(reported("working"));
+            yield* spend(5_000);
+            yield* (yield* rig.startCore()).report(on.agent, "idle");
+            yield* spend(5_000);
+            const ended = yield* TestClock.withLive(
+              Fiber.join(ending).pipe(Effect.timeoutOption("5 seconds")),
+            );
+            expect(Option.isNone(ended)).toBe(true);
+            expect(Arr.map(asked, (one) => one.name)).toEqual(["ask-review-1"]);
+          }),
         );
       }),
     ),

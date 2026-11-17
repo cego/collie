@@ -2,7 +2,6 @@
 // and count its cards, decide what each one offers and read what it names. No I/O and no
 // Bun-only import: a browser bundle imports this too.
 
-import * as Struct from "effect/Struct";
 import { NarrativeReport } from "./narrative-model";
 import {
   Artefact,
@@ -34,15 +33,6 @@ import { HostDefinitions, SharedDefinition } from "./definitions-model";
 import { VerifySpecSchema } from "./verify-spec";
 import { OwnInventory, OwnWords } from "./own-words-model";
 import { MERGE_POLL_MS, ShippingAction, ShippingGo } from "./shipping";
-
-/** A workspace a start keeps its Run in, as the front door it was started from saw it. */
-export const KeptHere = Schema.Struct({
-  workspace: Schema.String,
-  label: Schema.String,
-  cwd: Schema.String,
-  herd: Schema.NullOr(Schema.String),
-});
-export type KeptHere = Schema.Schema.Type<typeof KeptHere>;
 
 const STATE_ORDER = [
   "blocked",
@@ -1222,10 +1212,10 @@ export function readinessOfRun(
  */
 export const PROTOCOL = 5;
 
-/** One herdr session whose Tasks are on this board. */
+/** One core session whose Tasks are on this board. */
 export const Herd = Schema.Struct({
   id: Schema.String,
-  /** herdr's name for the session, where herdr names its sessions. */
+  /** Its name, where it has one. */
   name: Schema.optionalKey(Schema.String),
 });
 export type Herd = typeof Herd.Type;
@@ -1530,7 +1520,7 @@ export const BRIDGE_READY = "collie-bridge-ready";
 /** What a channel says it is, once. */
 export const Declaration = Schema.Struct({
   frontDoor: FrontDoor,
-  /** The herdr session socket it runs in, where what it asks names workspaces and panes. */
+  /** The Herdr 1 session socket an older channel named; core's channels leave it out. */
   session: Schema.optionalKey(Schema.NullOr(Schema.String)),
   from: Schema.optionalKey(Where),
   /** A chat's conversation, and the human's message that turn, as its tool host heard it. */
@@ -1569,9 +1559,9 @@ export const NewsBatch = Schema.Struct({
 });
 
 /**
- * Where a host focused a Run's pane. `session` is null for herdr's default; `pane` and
- * `agent` are the focused agent's pane id and herdr name, absent where only a workspace was
- * found or the host is older.
+ * Where a host found a Run's agent. On core `session` and `tab` are null, `workspace` is
+ * the agent's name, and `pane` and `core` its terminal; `pane` and `agent` are absent
+ * from an older host's answer.
  */
 export const PaneAt = Schema.Struct({
   session: Schema.NullOr(Schema.String),
@@ -1579,7 +1569,7 @@ export const PaneAt = Schema.Struct({
   tab: Schema.NullOr(Schema.String),
   pane: Schema.optionalKey(Schema.String),
   agent: Schema.optionalKey(Schema.String),
-  /** The core terminal the agent runs in; absent for one in herdr. */
+  /** The core terminal the agent runs in; absent from an older host's answer. */
   core: Schema.optionalKey(Schema.String),
 });
 export type PaneAt = typeof PaneAt.Type;
@@ -1715,8 +1705,6 @@ export const FrontDoorRpcs = RpcGroup.make(
       task: Schema.optional(Schema.String),
       /** A new Task to open for it under this label, once its checkout is known. */
       taskLabel: Schema.optional(Schema.String),
-      /** The workspace to keep it in, in the Task kept there or a new one. */
-      here: Schema.optional(KeptHere),
       parent: Schema.optional(Schema.String),
       intent: Schema.optional(IntentSeedSchema),
       /** The approved set given with the start, over the project's and the user's files. */

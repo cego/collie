@@ -9,7 +9,7 @@ test("a fake whose test process is gone fails loudly and answers nothing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const socket = `${yield* fs.makeTempDirectoryScoped({ prefix: "forwarder-" })}/nobody.sock`;
-      const ran = yield* exec([...forwarderCommand(), "herdr", "agent", "list"], {
+      const ran = yield* exec([...forwarderCommand(""), "fake"], {
         env: { ...Bun.env, COLLIE_FAKE_SOCKET: socket },
       });
       expect({ failed: ran.exitCode !== 0, stdout: ran.stdout }).toEqual({

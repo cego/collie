@@ -10,13 +10,15 @@
 // The agents are herdr's through the real dispatcher, the engine is Effect's over real
 // SQLite in a directory, and every second pass below is a second host on the same file.
 
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
+import { isString } from "../src/schema";
 import { Agents, agentsLayer, type AgentHost } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { PARKED, answerDecision, foundationLayer, loadEntry, pollStatus } from "../src/engine";
@@ -34,6 +36,7 @@ beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      yield* rig.startCore();
       const fs = yield* FileSystem.FileSystem;
       dir = `${rig.root}/host`;
       plan = `${rig.root}/plan`;
@@ -78,7 +81,7 @@ const ticket = (
 const hostOf = (): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
-  herdr: new FakeHerdr(rig.pluginEnv()),
+  herdr: new Herdr(rig.pluginEnv()),
   harness: "claude",
   model: "opus",
   permissions: "auto",
@@ -191,7 +194,13 @@ const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
   result._tag === "Success" ? String(result.success) : "";
 
 const prompts = () =>
-  rig.calls().pipe(Effect.map((calls) => Arr.filter(calls, (call) => call.cmd === "agent prompt")));
+  rig
+    .calls()
+    .pipe(
+      Effect.map((calls) =>
+        Arr.filter(calls, (call) => call.cmd === "terminal.send" && isString(call.params?.text)),
+      ),
+    );
 
 /** What an operation was actually asked, which is the file its message named. */
 const promptFile = (runId: string, operation: string) =>
@@ -201,7 +210,7 @@ const promptFile = (runId: string, operation: string) =>
   );
 
 const starts = () =>
-  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
+  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
 
 const built = (what: string, findings: ReadonlyArray<Schema.Json> = []) => ({
   verdict: findings.length === 0 ? "clean" : "findings",
@@ -330,8 +339,7 @@ test(
         // The reason is recorded, and nothing was written as though an agent had answered.
         expect(yield* events(dir, "r-skipped")).toEqual(["skipped 01-api.md: it names no checks"]);
         expect(yield* prompts()).toHaveLength(1);
-        const tabs = Arr.filter(yield* rig.cmds(), (cmd) => cmd === "tab create");
-        expect(tabs).toHaveLength(1);
+        expect(yield* starts()).toHaveLength(1);
       }),
     ),
   120_000,
