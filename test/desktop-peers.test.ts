@@ -41,11 +41,11 @@ const SECOND = {
   enabled: true,
 };
 
-/** The peer `first` holds for `second` once a board asked for there has paired them. */
-const pairedPeer = (first: Side, second: Side) =>
+/** The peer `first` holds for `second` once a board asked for there, answered as `answered`, has paired them. */
+const pairedPeer = (first: Side, second: Side, answered: object = { ok: true }) =>
   Effect.gen(function* () {
     const answer = yield* first.cli(["--machine", second.name, "board"]);
-    expect(answer.envelope).toMatchObject({ ok: true });
+    expect(answer.envelope).toMatchObject(answered);
     const peers = yield* peersOf(first.world.state);
     expect(Arr.map(peers, (peer) => peer.name)).toEqual([second.name]);
     return peers[0]!;
@@ -99,7 +99,11 @@ test(
               { mode: 0o755 },
             );
             yield* first.lists([second]);
-            const peer = yield* pairedPeer(first, second);
+            // Pairing comes before the version check, which refuses the older far host.
+            const peer = yield* pairedPeer(first, second, {
+              ok: false,
+              error: { message: `second runs collie 0.0.1 and this is ${BUILD}` },
+            });
             const fallback: ShellRoute = {
               machine: { profile: "second", name: "second", target: "mk@second" },
               open: () => Effect.die("SSH should not open"),
