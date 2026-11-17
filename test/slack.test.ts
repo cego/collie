@@ -1,8 +1,9 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Effect, Logger } from "effect";
+import { Effect, FileSystem, Logger } from "effect";
 import { inspect } from "node:util";
 import { slackApi } from "../src/slack";
+import { reconcileReviewSlack, reviewSlackTrouble } from "../src/review-slack";
 import { fakeSlack } from "./support/slack";
 import { runEffect } from "./support/effect";
 
@@ -29,6 +30,74 @@ test("reaction reconciliation adds only missing reactions and accepts already_re
       ).toEqual(["eyes", "memo", "white_check_mark"]);
       fake.refuse("already_reacted", "reactions.add");
       yield* api.reconcile("C456", "1700000000.000001", ["heart"]);
+    }),
+  ));
+
+test("a missing_scope reaction asks for a re-sign-in instead of failing the review, until one succeeds", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fake = fakeSlack();
+      const target = "https://gitlab.cego.dk/mk/collie/-/merge_requests/7";
+      fake.messages([{ channel: "C456", ts: "1794474000.000001", text: `Review ${target}` }]);
+      const file = `${yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()}/slack.json`;
+      const reconcile = reconcileReviewSlack({
+        file,
+        url: target,
+        created: Effect.succeed("2026-11-11T08:00:00Z"),
+        wanted: ["eyes"],
+        api: Effect.succeed(slackApi("xoxp-fixture", fake.client)),
+      });
+      fake.refuse("missing_scope", "reactions.add");
+      const said = yield* reconcile;
+      expect(said).toBe(
+        "Slack missing :eyes:: Slack reactions.add: missing_scope; sign in again in Desktop Settings › Connections",
+      );
+      expect(yield* reviewSlackTrouble(file)).toBe(said);
+      expect(fake.reactions()).toEqual([]);
+      fake.refuse(null);
+      expect(yield* reconcile).toBe("Slack: :eyes:");
+      expect(yield* reviewSlackTrouble(file)).toBeUndefined();
+      expect(fake.reactions()).toEqual(["eyes"]);
+    }),
+  ));
+
+test("a refused reaction names only the reactions Slack lacks, not the ones it holds", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fake = fakeSlack();
+      const target = "https://gitlab.cego.dk/mk/collie/-/merge_requests/7";
+      fake.messages([{ channel: "C456", ts: "1794474000.000001", text: `Review ${target}` }]);
+      const file = `${yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()}/slack.json`;
+      const reconcile = (wanted: ReadonlyArray<string>) =>
+        reconcileReviewSlack({
+          file,
+          url: target,
+          created: Effect.succeed("2026-11-11T08:00:00Z"),
+          wanted,
+          api: Effect.succeed(slackApi("xoxp-fixture", fake.client)),
+        });
+      yield* reconcile(["eyes"]);
+      fake.refuse("token_expired", "reactions.add");
+      expect(yield* reconcile(["memo"])).toBe(
+        "Slack missing :memo:: Slack reactions.add: token_expired; sign in again in Desktop Settings › Connections",
+      );
+      expect(fake.reactions()).toEqual(["eyes"]);
+    }),
+  ));
+
+test("a refused reaction does not name a later reaction Slack already holds", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fake = fakeSlack();
+      const ts = "1794474000.000001";
+      fake.messages([{ channel: "C456", ts, text: "Review" }]);
+      const api = slackApi("xoxp-fixture", fake.client);
+      yield* api.reconcile("C456", ts, ["eyes", "white_check_mark"]);
+      fake.refuse("token_expired", "reactions.add");
+      const refused = yield* Effect.flip(
+        api.reconcile("C456", ts, ["eyes", "memo", "white_check_mark"]),
+      );
+      expect(refused.missing).toEqual(["memo"]);
     }),
   ));
 
