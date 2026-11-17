@@ -14,7 +14,12 @@ import {
 } from "../../../workflows/reviewing.ts";
 
 const git = (cwd: string, ...args: string[]) =>
-  Effect.sync(() => Bun.spawnSync(["git", ...args], { cwd }));
+  Effect.promise(async () => {
+    const child = Bun.spawn(["git", ...args], { cwd });
+    const stdout = await new Response(child.stdout).text();
+    await child.exited;
+    return stdout;
+  });
 
 export default defineWorkflow({
   id: "delta-rally",
@@ -52,7 +57,7 @@ export default defineWorkflow({
               );
               yield* git(input.cwd, "add", "-A");
               yield* git(input.cwd, "commit", "-qm", "upstream moved");
-              base = (yield* git(input.cwd, "rev-parse", "HEAD")).stdout.toString().trim();
+              base = (yield* git(input.cwd, "rev-parse", "HEAD")).trim();
               yield* git(input.cwd, "checkout", "-q", "-");
               yield* git(input.cwd, "merge", "-q", "--no-edit", "upstream");
             }
