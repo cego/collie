@@ -11,10 +11,15 @@ import { Foreground } from "./foreground";
 /** How long a build may take before the host log says so. */
 const SLOW_BUILD_MS = 2_000;
 
+/** The longest the next build waits after one: how stale a slow host's board may grow. */
+const MAX_REST_MS = 5_000;
+
 /**
  * One board for everything that reads it: built at once and again whenever `changed` says
  * something may have moved, one build at a time, with the changes that arrive during a
- * build folded into the next. It keeps building for as long as `Scope` lasts. Its `boards`
+ * build folded into the next. Each build waits as long as the last one took, and at most
+ * 5 s, before it starts: a board that keeps moving costs at most half of the host's time,
+ * and is never more than 5 s and a build behind. It keeps building for as long as `Scope` lasts. Its `boards`
  * are the latest board that covers every change seen before it was read, then each one
  * built after it, so a reader reads its own writes. `latest` is the last board built, or
  * the first once it is, never waiting for a newer one.
@@ -34,12 +39,15 @@ export const shareBoard = <A, E, R, R2>(options: {
     const latest = yield* SubscriptionRef.make(
       Option.none<{ readonly covers: number; readonly board: A }>(),
     );
+    /** How long the build just done took, which the next one waits before it starts. */
+    let rest = 0;
     const timed = Effect.gen(function* () {
       const started = yield* Clock.currentTimeMillis;
       const built = yield* options.build;
       const took = (yield* Clock.currentTimeMillis) - started;
       if (mark !== null) yield* mark("board:built", String(took));
       if (took > SLOW_BUILD_MS) yield* Effect.logWarning(`the board took ${took} ms to build`);
+      rest = Math.min(took, MAX_REST_MS);
       return built;
     });
     const changes = options.changed.pipe(Stream.map(() => ++seen));
@@ -60,7 +68,9 @@ export const shareBoard = <A, E, R, R2>(options: {
         ),
       ),
       Stream.runForEach((built) =>
-        Option.isSome(built) ? SubscriptionRef.set(latest, built) : Effect.void,
+        (Option.isSome(built) ? SubscriptionRef.set(latest, built) : Effect.void).pipe(
+          Effect.andThen(Effect.suspend(() => (rest > 0 ? Effect.sleep(rest) : Effect.void))),
+        ),
       ),
       Effect.forkScoped,
     );
