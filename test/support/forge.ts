@@ -68,6 +68,8 @@ export const FakeJob = Schema.Struct({
         id: Schema.Finite,
         state: JobStates,
         trace: Schema.optionalKey(Schema.String),
+        /** When it ended, as GitLab's `finished_at` gives it. */
+        finished: Schema.optionalKey(Schema.String),
       }),
     ),
   ),
@@ -1245,6 +1247,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
                 name: job.name,
                 status: GITLAB_JOB[job.state],
                 web_url: `https://${mr.project}/-/jobs/${job.id}`,
+                finished_at: "finished" in job && job.finished !== undefined ? job.finished : null,
               }),
             ),
           );

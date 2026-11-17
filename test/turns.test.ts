@@ -148,6 +148,8 @@ test("verify and read answers hold background slices only until their first valu
           yield* Queue.take(passed);
           expect(boundaries).toBe(2);
           expect(verify.pollUnsafe()).toBeUndefined();
+          // The pass works a slice since it was last held, so a hold is owed again.
+          yield* clock.adjust("20 millis");
 
           const read = yield* handlers.read().pipe(Effect.forkScoped);
           yield* Deferred.await(reading);
