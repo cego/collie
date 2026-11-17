@@ -8,6 +8,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { TestClock } from "effect/testing";
+import * as PlatformError from "effect/PlatformError";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { onMachineWith } from "./support/live";
@@ -592,6 +593,47 @@ test("the status-line reader decodes again only the agents whose telemetry chang
       yield* recordClaudeEvent(build, limited(fiveHour(55)));
       expect((yield* read)?.limits).toEqual(fiveHour(55));
       expect(decoded).toEqual(["build-r1"]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("a status line the reader could not read is read again, and its last sample stands meanwhile", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stateDir = path.join(rig.root, "state");
+      const build = path.join(stateDir, "compaction", "build-r1");
+      const review = path.join(stateDir, "compaction", "review-r1");
+      yield* recordClaudeEvent(build, limited(fiveHour(31)));
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(review, limited(fiveHour(40)));
+
+      const fs = yield* FileSystem.FileSystem;
+      let failReview = true;
+      const flaky: FileSystem.FileSystem = {
+        ...fs,
+        readFileString: (file, encoding) =>
+          failReview && path.basename(path.dirname(file)) === "review-r1"
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "Busy",
+                  module: "FileSystem",
+                  method: "readFileString",
+                }),
+              )
+            : fs.readFileString(file, encoding),
+      };
+      const { newest: read } = yield* rateLimitsReader(stateDir).pipe(
+        Effect.provideService(FileSystem.FileSystem, flaky),
+      );
+      expect((yield* read)?.limits).toEqual(fiveHour(31));
+      failReview = false;
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(review, limited(fiveHour(60)));
+      failReview = true;
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+      failReview = false;
+      expect((yield* read)?.limits).toEqual(fiveHour(60));
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 

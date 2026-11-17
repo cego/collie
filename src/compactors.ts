@@ -907,11 +907,14 @@ export const rateLimitsReader = Effect.fn("Compactors.rateLimitsReader")(functio
       });
       let known = read.get(agent);
       if (known === undefined || known.size !== size || known.mtime !== mtime) {
-        const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-        known = { size, mtime, newest: newestIn(text) };
-        read.set(agent, known);
+        const text = yield* fs.readFileString(file).pipe(Effect.option);
+        // A failed read keeps the agent's last sample and is retried on the next read.
+        if (Option.isSome(text)) {
+          known = { size, mtime, newest: newestIn(text.value) };
+          read.set(agent, known);
+        }
       }
-      const sample = known.newest;
+      const sample = known?.newest ?? null;
       if (sample !== null && (newest === null || sample.at > newest.at)) newest = sample;
     }
     return newest;
