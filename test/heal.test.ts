@@ -776,7 +776,8 @@ test(
 
 test("a Heal's Output may say whether its diagnosis is complete, and only as a boolean", () => {
   const resumed = { diagnosis: "It waits.", actions: [], result: "resumed", finding: FINDING };
-  const decoded = (said: object) => Schema.decodeUnknownOption(HealOutput)({ ...resumed, ...said });
+  const decoded = (said: { diagnosis_complete?: unknown }) =>
+    Schema.decodeUnknownOption(HealOutput)({ ...resumed, ...said });
   expect(Option.getOrThrow(decoded({})).diagnosis_complete).toBeUndefined();
   expect(Option.getOrThrow(decoded({ diagnosis_complete: true })).diagnosis_complete).toBe(true);
   expect(Option.getOrThrow(decoded({ diagnosis_complete: false })).diagnosis_complete).toBe(false);

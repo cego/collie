@@ -372,11 +372,17 @@ const LOCKFILES: ReadonlySet<string> = new Set([
   "go.sum",
 ]);
 
-const CHANGES: Record<string, MovedPath["change"]> = {
-  A: "added",
-  M: "modified",
-  D: "deleted",
-  T: "type-changed",
+const changeOf = (status: string): MovedPath["change"] => {
+  switch (status[0]) {
+    case "A":
+      return "added";
+    case "D":
+      return "deleted";
+    case "T":
+      return "type-changed";
+    default:
+      return "modified";
+  }
 };
 
 /**
@@ -399,7 +405,7 @@ export const movedBetween = Effect.fn("Verify.movedBetween")(
     const fields = Arr.filter(Str.split(diff.stdout, "\0"), Str.isNonEmpty);
     const changed = Arr.map(Arr.chunksOf(fields, 2), ([status, path = ""]) => ({
       path,
-      change: CHANGES[status[0] ?? ""] ?? ("modified" as const),
+      change: changeOf(status),
     }));
     const listed = yield* git(
       ["--literal-pathspecs", "ls-files", "-z", "--", ...Arr.map(changed, (one) => one.path)],

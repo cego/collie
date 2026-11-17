@@ -430,15 +430,13 @@ test("an expected failure passes when it fails, and fails when it does not", () 
   ));
 
 const movedBy = (name: string, script: string) =>
-  Effect.gen(function* () {
-    return yield* collect(`${repo}/.git/run-moved`, {
-      run: "r1",
-      name,
-      executable: "sh",
-      argv: ["-c", script],
-      cwd: repo,
-      by: "agent",
-    });
+  collect(`${repo}/.git/run-moved`, {
+    run: "r1",
+    name,
+    executable: "sh",
+    argv: ["-c", script],
+    cwd: repo,
+    by: "agent",
   });
 
 test("a file created while the command runs makes it unstable, and its record names it added and untracked", () =>
