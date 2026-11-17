@@ -8466,34 +8466,37 @@ test("under role_tools: role a role the table does not name keeps every tool, an
     }),
   ));
 
-test("under role_tools: role a Claude launch keeps the operator's profile and no strict MCP config", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* configured(
-        encodeJson({
-          role_tools: "role",
-          agent_profile: encodeJson({
-            "*": {
-              claude: {
-                enabledPlugins: { "linear@official": true },
-                disableClaudeAiConnectors: false,
+test.each(["all", "role"])(
+  "under role_tools: %s a Claude launch keeps the operator's profile and no strict MCP config",
+  (roleTools) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* configured(
+          encodeJson({
+            role_tools: roleTools,
+            agent_profile: encodeJson({
+              "*": {
+                claude: {
+                  enabledPlugins: { "linear@official": true },
+                  disableClaudeAiConnectors: false,
+                },
               },
-            },
+            }),
           }),
-        }),
-      );
-      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
-      yield* session(started("r1"));
-      const { args, env } = yield* collieServerOf();
-      const settings = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.JsonObject))(
-        yield* settingsAt(yield* rig.calls()),
-      );
-      expect(env.COLLIE_TOOLS_ROLE).toBe("reviewer");
-      expect(args).not.toContain("--strict-mcp-config");
-      expect(settings.enabledPlugins).toEqual({ "linear@official": true });
-      expect(settings.disableClaudeAiConnectors).toBe(false);
-    }),
-  ));
+        );
+        yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+        yield* session(started("r1"));
+        const { args, env } = yield* collieServerOf();
+        const settings = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.JsonObject))(
+          yield* settingsAt(yield* rig.calls()),
+        );
+        expect(env.COLLIE_TOOLS_ROLE).toBe(roleTools === "role" ? "reviewer" : undefined);
+        expect(args).not.toContain("--strict-mcp-config");
+        expect(settings.enabledPlugins).toEqual({ "linear@official": true });
+        expect(settings.disableClaudeAiConnectors).toBe(false);
+      }),
+    ),
+);
 
 test.each([0, 1000])(
   "Claude subagent policy reaches launch settings with compaction at %s",
