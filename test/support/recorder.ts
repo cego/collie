@@ -505,11 +505,7 @@ export class Rig {
 
   /** Exactly the worktrees herdr has, replacing whatever it had before. */
   setWorktrees(
-    worktrees: ReadonlyArray<{
-      branch: string;
-      path: string;
-      open_workspace_id: string | null;
-    }>,
+    worktrees: ReadonlyArray<{ branch: string; path: string; open_workspace_id: string | null }>,
   ): Effect.Effect<void, RigError, FileSystem.FileSystem> {
     const statePath = `${this.logPath}.state.json`;
     const readJsonObject = this.readJsonObject.bind(this);
@@ -531,11 +527,7 @@ export class Rig {
       }
       yield* fs.writeFileString(
         statePath,
-        encodeJson(
-          Object.assign({}, state, {
-            worktrees: Arr.map(worktrees, (w) => ({ ...w })),
-          }),
-        ),
+        encodeJson(Object.assign({}, state, { worktrees: Arr.map(worktrees, (w) => ({ ...w })) })),
       );
     });
   }
@@ -674,11 +666,7 @@ export class Rig {
                       socket.write(
                         `${encodeJson({
                           event: "pane.agent_status_changed",
-                          data: {
-                            pane_id: "1-1",
-                            workspace_id: "w1",
-                            agent_status: "blocked",
-                          },
+                          data: { pane_id: "1-1", workspace_id: "w1", agent_status: "blocked" },
                         })}\n`,
                       );
                     }

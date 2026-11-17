@@ -770,10 +770,7 @@ export const doctorOn = Effect.fn("Doctor.doctorOn")(function* (
     "collie",
     "--json",
     "doctor",
-    ...Option.match(gitlabHost, {
-      onNone: () => [],
-      onSome: (host) => ["--gitlab-host", host],
-    }),
+    ...Option.match(gitlabHost, { onNone: () => [], onSome: (host) => ["--gitlab-host", host] }),
   ]);
   if (script._tag === "Failure")
     return err("invalid_input", `--gitlab-host cannot be passed on: ${script.failure.message}`);
