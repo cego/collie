@@ -4333,7 +4333,7 @@ const planOf = (
 
 /** Outputs where each null is a step the scenario does by hand, its agent working until then. */
 const byHand = (outputs: ReadonlyArray<Schema.Json | null>) =>
-  Arr.map(outputs, (one) => one ?? { writes: [], output: null, then: "working" });
+  Arr.map(outputs, (one) => one ?? { writes: [], output: null, owed: true });
 
 const BUILT = {
   verdict: "clean",

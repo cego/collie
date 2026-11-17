@@ -145,7 +145,7 @@ const hostedOver = Effect.fn("test.hostedOver")(function* (
   yield* fs
     .writeFileString(
       file,
-      encode(Arr.map(outputs, (one) => one ?? { writes: [], output: null, then: "working" })),
+      encode(Arr.map(outputs, (one) => one ?? { writes: [], output: null, owed: true })),
     )
     .pipe(Effect.orDie);
   // The host a client spawns inherits this process's environment: it has to own this

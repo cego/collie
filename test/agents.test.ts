@@ -2958,7 +2958,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([{ writes: [], output: null, then: "working" }]);
+        yield* rig.queueOutputs([{ writes: [], output: null, owed: true }]);
         yield* session(
           Effect.gen(function* () {
             yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
