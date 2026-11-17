@@ -76,7 +76,7 @@ import {
 } from "./lifecycle";
 import { listAsked } from "./run-list";
 import { readArtefactLines, readRunLines, type RunScope } from "./run-read";
-import { DEFAULT_LINES, patternError, type LinesAsked } from "./text-lines";
+import { DEFAULT_LINES, linesError, type LinesAsked } from "./text-lines";
 import { modelsLines } from "./catalogue-model";
 import { connectionsLines } from "./connection-model";
 import { peersOf } from "./peers";
@@ -200,7 +200,7 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
           if (input.id !== undefined && input.revision !== undefined) {
             if (input.offset === undefined) {
               const asked = linesAsked(input);
-              const badPattern = patternError(asked);
+              const badPattern = linesError(asked);
               if (badPattern !== null)
                 return refused("collie_artefacts", badPattern, TAKES.collie_artefacts);
               const lines = yield* readArtefactLines(
@@ -684,7 +684,7 @@ const linesAsked = (input: {
   readonly search?: string;
 }): LinesAsked => ({
   start: input.start ?? 1,
-  count: Math.max(1, input.count ?? DEFAULT_LINES),
+  count: input.count ?? DEFAULT_LINES,
   search: input.search ?? null,
 });
 

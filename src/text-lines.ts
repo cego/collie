@@ -17,7 +17,8 @@ export interface LinesAsked {
   readonly search: string | null;
 }
 
-export const patternError = (asked: LinesAsked) => {
+export const linesError = (asked: LinesAsked) => {
+  if (asked.count < 1) return `count takes 1 or more; not ${asked.count}.`;
   if (asked.search === null) return null;
   const valid = Result.try(() => new RegExp(asked.search!));
   return Result.isFailure(valid)

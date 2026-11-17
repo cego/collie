@@ -93,7 +93,26 @@ test(
                 next: 200,
               },
             });
+            const none = yield* collie(world, [
+              "tools",
+              "call",
+              tool,
+              "--input",
+              encode({ ...range, count: 0 }),
+            ]);
+            const told = yield* Schema.decodeUnknownEffect(ToolText)(none.envelope.data).pipe(
+              Effect.orDie,
+            );
+            expect({ tool, text: told.text }).toEqual({
+              tool,
+              text: `${tool} could not read log (invalid_input): count takes 1 or more; not 0.`,
+            });
           }
+          const refused = yield* collie(world, ["run", "read", "logged", "log", "--count", "0"]);
+          expect([refused.envelope.error?.code, refused.envelope.error?.message]).toEqual([
+            "invalid_input",
+            "count takes 1 or more; not 0.",
+          ]);
 
           const cli = yield* collie(world, [
             "run",

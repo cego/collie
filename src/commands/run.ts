@@ -954,7 +954,6 @@ const runRead = Command.make(
         Effect.gen(function* () {
           const resolved = yield* context(global, false);
           if (resolved._tag === "ContextFailure") return resolved.result;
-          if (count < 1) return err("invalid_input", `--count takes 1 or more; not ${count}.`);
           const read = yield* readRunLines(resolved.env, yield* runScope(global), runId, ref, {
             start,
             count,

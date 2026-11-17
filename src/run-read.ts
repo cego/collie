@@ -13,7 +13,7 @@ import { readAudit, type AuditLine } from "./audit";
 import { recordsReadLayer } from "./records";
 import { readIntent } from "./intent";
 import { err, type Failure } from "./operations";
-import { linesOf, patternError, wholeText, type LinesAsked } from "./text-lines";
+import { linesOf, linesError, wholeText, type LinesAsked } from "./text-lines";
 
 const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 
@@ -89,7 +89,7 @@ export const readRunLines = Effect.fn("RunRead.readRunLines")(function* (
   ref: string,
   asked: LinesAsked,
 ) {
-  const badPattern = patternError(asked);
+  const badPattern = linesError(asked);
   if (badPattern !== null) return err("invalid_input", badPattern);
   const found = yield* asksRun(env, runId, (client) => client.run({ runId }));
   if (!found.ok) return found;
