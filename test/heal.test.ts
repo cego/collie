@@ -309,20 +309,11 @@ test(
             { target: "the diff" },
             { FAKE_HERDR_OUTPUTS: outputs, FAKE_HERDR_AGENT_STATUS_FILE: status },
           );
-          const statusReads = fs.readFileString(`${world.state}/../herdr-calls.jsonl`).pipe(
-            Effect.map((calls) => Str.split(calls, '"cmd":"agent get"').length),
-            Effect.orElseSucceed(() => 0),
-          );
-          /** The reviewer's turn, once the host has read it working, ended. */
+          /** The reviewer's turn, ended as soon as its prompt started it: before any watcher polls. */
           const turnEnds = Effect.gen(function* () {
             yield* slowly(
               () => fs.readFileString(status).pipe(Effect.orElseSucceed(() => "")),
               (said) => Str.trim(said) === "working",
-            );
-            const from = yield* statusReads;
-            yield* slowly(
-              () => statusReads,
-              (reads) => reads >= from + 2,
             );
             yield* fs.writeFileString(status, "idle").pipe(Effect.orDie);
           });
