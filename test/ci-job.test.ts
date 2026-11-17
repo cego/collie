@@ -733,6 +733,122 @@ test("a retried pass whose failed attempt names only a test the branch does not 
     }),
   ));
 
+const OLD_FILE = "test/old-thing.test.ts";
+
+test("a pass on Collie's retry of a failed attempt naming a test records that test as flaked once", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, forge } = yield* waiting("failed", MR, undefined, {
+        jobs: [
+          {
+            name: "nuxi-typecheck",
+            state: "failed",
+            retried: "passed",
+            trace: trace([OLD_FILE, "an old thing works"]),
+          },
+        ],
+        base: { at: BASE, jobs: [{ name: "nuxi-typecheck", state: "passed" }] },
+      });
+      const flaked = [{ name: "an old thing works", file: OLD_FILE, attempts: 1 }];
+      expect(yield* read({ ...asked, settle: true }, forge)).toMatchObject({
+        proved: { job: { flaked } },
+        retried: true,
+      });
+      expect(yield* journalOf(asked)).toMatchObject([{ job: { flaked } }]);
+    }),
+  ));
+
+test("a GitLab retried pass counts, for each test, the failed attempts in its pipeline that named it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, forge } = yield* waiting(
+        "passed",
+        MR,
+        undefined,
+        {
+          jobs: [
+            {
+              name: "nuxi-typecheck",
+              state: "passed",
+              id: 101,
+              attempts: [
+                {
+                  id: 1,
+                  state: "failed",
+                  trace: trace([OLD_FILE, "an old thing works"], [OLD_FILE, "it flakes once"]),
+                },
+                { id: 2, state: "failed", trace: trace([OLD_FILE, "an old thing works"]) },
+              ],
+            },
+          ],
+        },
+        "gitlab",
+        BRANCH,
+      );
+      const result = yield* read(asked, forge);
+      expect("proved" in result ? result.proved.job?.flaked : undefined).toEqual([
+        { name: "an old thing works", file: OLD_FILE, attempts: 2 },
+        { name: "it flakes once", file: OLD_FILE, attempts: 1 },
+      ]);
+    }),
+  ));
+
+test("a GitLab aggregate job's retried pass counts each failed suite once, for the attempt it failed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const failedAt = (id: number, minute: number, failed?: string) => ({
+        id,
+        state: "failed" as const,
+        finished: `2026-11-17T08:0${minute}:00Z`,
+        trace: failed === undefined ? "" : trace([OLD_FILE, failed]),
+      });
+      const { asked, forge } = yield* waiting(
+        "passed",
+        MR,
+        undefined,
+        {
+          jobs: [
+            {
+              name: "nuxi-typecheck",
+              state: "passed",
+              id: 101,
+              attempts: [failedAt(2, 2), failedAt(5, 6)],
+            },
+            {
+              name: "suite-t",
+              state: "passed",
+              id: 102,
+              attempts: [failedAt(1, 1, "an old thing works")],
+            },
+            {
+              name: "suite-u",
+              state: "passed",
+              id: 103,
+              attempts: [failedAt(4, 5, "it flakes once")],
+            },
+          ],
+        },
+        "gitlab",
+        BRANCH,
+      );
+      const result = yield* read(asked, forge);
+      expect("proved" in result ? result.proved.job?.flaked : undefined).toEqual([
+        { name: "it flakes once", file: OLD_FILE, attempts: 1 },
+        { name: "an old thing works", file: OLD_FILE, attempts: 1 },
+      ]);
+    }),
+  ));
+
+test("a pass with no failed attempt records no flaked tests", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, forge } = yield* waiting("passed");
+      const result = yield* read(asked, forge);
+      expect(result).toMatchObject({ proved: { pass: "ci", job: { name: "nuxi-typecheck" } } });
+      expect("proved" in result ? result.proved.job : undefined).not.toHaveProperty("flaked");
+    }),
+  ));
+
 const PULL = `https://${PROJECT.github}/pull/31`;
 const GATE: VerifySpec = { ...NUXI, ci: "test" };
 
@@ -1263,7 +1379,7 @@ test("a GitHub job whose newest check run passed after an older one failed, in a
     }),
   ));
 
-test("a GitHub retried pass whose failed attempt's job logs cannot be read proves the check, marked retried", () =>
+test("a GitHub retried pass whose failed attempt's job logs cannot be read proves the check, marked retried with no flaked test", () =>
   runEffect(
     Effect.gen(function* () {
       const { asked, forge } = yield* waiting(
@@ -1279,7 +1395,7 @@ test("a GitHub retried pass whose failed attempt's job logs cannot be read prove
         GITHUB_BRANCH,
       );
       expect(yield* read({ ...asked, spec: GATE }, forge)).toMatchObject({
-        proved: { pass: "ci", name: "nuxi", job: { name: "test" } },
+        proved: { pass: "ci", name: "nuxi", job: { name: "test", flaked: [] } },
         retried: true,
       });
       expect(yield* journalOf(asked)).toHaveLength(1);

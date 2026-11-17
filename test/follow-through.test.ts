@@ -289,7 +289,7 @@ test("an unplaced or ambiguous review request says why once and starts after it 
     }),
   ));
 
-test("an empty review-request listing refreshes a changed login on the next round", () =>
+test("idle review-request rounds list for the account glab switched to", () =>
   host.runEffect(
     Effect.gen(function* () {
       yield* repository;
@@ -302,14 +302,19 @@ test("an empty review-request listing refreshes a changed login on the next roun
           yield* host.mergeWatched;
           yield* until(
             () => Effect.sync(() => listings(forge).length),
-            (count) => count > 0,
+            (count) => count >= 1,
           );
-          yield* forge.set(model(head, { login: "bob" }));
+          // The old token is refused and ForgeHttp retries with the new one, so no round sees a 401.
+          yield* forge.set({ ...(yield* forge.model()), token: "ann-token", login: "ann" });
           yield* until(
-            () => Effect.sync(() => forge.requests()),
-            (requests) =>
-              Arr.some(requests, (one) => Str.includes("reviewer_username=bob")(one.url)),
-          ).pipe(Effect.timeout("1 minute"));
+            () =>
+              Effect.sync(() =>
+                Arr.filter(forge.requests(), (one) =>
+                  Str.includes("reviewer_username=ann")(one.url),
+                ),
+              ),
+            (listed) => listed.length > 0,
+          );
           expect(yield* runsHere).toEqual([]);
         }),
       );
@@ -1062,6 +1067,95 @@ test.each(["major", "minor"] as const)(
                 one.params.text.includes(`${improved.runId}/findings.json`),
             );
             expect(handed).toHaveLength(1);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "Improve's second hand-off to a live implementer waits for its own push",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        yield* repository;
+        yield* git(["checkout", "-q", "-b", "feature"]);
+        const first = yield* pushed("Task work");
+        const forge = yield* host.gitlab(model(first));
+        const paneId = yield* rig.addAgent("impl-live");
+        yield* rig.queueOutputs([
+          review([F1]),
+          review([{ ...F1, status: "fixed" }, F2]),
+          review([{ ...F1, status: "fixed" }, F2]),
+        ]);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            yield* writeTask({
+              id: "task-human",
+              workspace: null,
+              label: "The human's work",
+              cwd: rig.projectDir,
+              created_at: "2026-11-12T09:00:00Z",
+            });
+            const registry = yield* Registry;
+            const building = yield* registry.start({
+              generation: yield* registry.load(`${fixtures}/placed.workflow.ts`),
+              request: "building",
+              project: rig.projectDir,
+              input: { work: "keep feature", ending: "succeed" },
+              task: "task-human",
+              options: { branch: "feature" },
+            });
+            yield* registerAgent(scopeFor(rig.projectDir), {
+              role: "implementer",
+              agent: "impl-live",
+              paneId,
+              workspaceId: null,
+              runId: building.runId,
+              workflow: "placed",
+              at: "2026-11-12T09:00:00Z",
+              incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
+            });
+            yield* configured(false);
+            yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+            const parent = yield* registry.start({
+              generation: yield* registry.load(yield* entryOf("review")),
+              request: "review-task",
+              project: rig.projectDir,
+              input: { target: TARGET },
+              task: "task-human",
+            });
+            yield* until(
+              () => asked(parent.runId),
+              (rows) => rows.length > 0,
+            );
+            const improved = yield* registry.invoke({
+              runId: parent.runId,
+              offer: "improve",
+              input: {},
+              request: "improve-twice",
+            });
+            yield* until(
+              () => host.watchOf(improved.runId, TARGET),
+              (row) => row?.name === "improved-head",
+            );
+            yield* host.mergeWatched;
+            const second = yield* pushed("guard the input");
+            yield* forge.set(model(second, { ancestry: { [second]: [first] } }));
+            yield* TestClock.adjust("6 minutes");
+            const settled = yield* until(
+              () =>
+                Effect.all({
+                  watch: host.watchOf(improved.runId, TARGET),
+                  starts: host.agentStarts,
+                }),
+              (one) => one.watch?.name === "improved-head-2" || one.starts.length > 2,
+            );
+            expect(settled.watch?.name).toBe("improved-head-2");
+            expect(settled.watch?.cursor.head).toBe(second);
+            expect(settled.starts).toHaveLength(2);
           }),
         );
       }),

@@ -40,6 +40,20 @@ const SECOND = {
   enabled: true,
 };
 
+/** The peer `first` holds for `second` once a board asked for there, answered as `answered`, has paired them. */
+const pairedPeer = (
+  first: Side,
+  second: Side,
+  answered: { readonly ok: boolean; readonly error?: { readonly message: string } } = { ok: true },
+) =>
+  Effect.gen(function* () {
+    const answer = yield* first.cli(["--machine", second.name, "board"]);
+    expect(answer.envelope).toMatchObject(answered);
+    const peers = yield* peersOf(first.world.state);
+    expect(Arr.map(peers, (peer) => peer.name)).toEqual([second.name]);
+    return peers[0]!;
+  });
+
 /** `side`'s own collie, logging each command it is given and the control path it was told. */
 const loggedCollie = (side: Side) =>
   Effect.gen(function* () {
@@ -88,8 +102,11 @@ test(
               { mode: 0o755 },
             );
             yield* first.lists([second]);
-            yield* first.cli(["--machine", "second", "board"]);
-            const [peer] = yield* peersOf(first.world.state);
+            // Pairing comes before the version check, which refuses the older far host.
+            const peer = yield* pairedPeer(first, second, {
+              ok: false,
+              error: { message: `second runs collie 0.0.1 and this is ${BUILD}` },
+            });
             const fallback: ShellRoute = {
               machine: { profile: "second", name: "second", target: "mk@second" },
               open: () => Effect.die("SSH should not open"),
@@ -99,7 +116,7 @@ test(
             };
             const route = linkRoute(
               yield* collieCommand,
-              peer!,
+              peer,
               fallback,
               "desktop-test",
               first.env,
@@ -241,8 +258,7 @@ test(
               (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
             );
             yield* first.lists([second]);
-            yield* first.cli(["--machine", "second", "board"]);
-            const [peer] = yield* peersOf(first.world.state);
+            const peer = yield* pairedPeer(first, second);
             const local = yield* loggedCollie(first);
             const ssh = yield* remoteRoute(
               `${Str.split(first.env.PATH!, ":")[0]}/ssh`,
@@ -258,7 +274,7 @@ test(
             };
             const route = linkRoute(
               yield* collieCommand,
-              peer!,
+              peer,
               fallback,
               "desktop-test",
               first.env,
@@ -349,8 +365,7 @@ test(
           Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
             yield* first.lists([second]);
-            yield* first.cli(["--machine", "second", "board"]);
-            const [peer] = yield* peersOf(first.world.state);
+            const peer = yield* pairedPeer(first, second);
             const ssh = yield* remoteRoute(
               `${Str.split(first.env.PATH!, ":")[0]}/ssh`,
               (yield* loggedCollie(first)).command,
@@ -358,7 +373,7 @@ test(
               "desktop-test",
               true,
             );
-            const route = linkRoute(yield* collieCommand, peer!, ssh, "desktop-test", first.env);
+            const route = linkRoute(yield* collieCommand, peer, ssh, "desktop-test", first.env);
             expect((yield* route.open(() => Effect.void)).machine.route).toBe("link");
             const runner = new Uint8Array([
               ...new TextEncoder().encode(
@@ -435,8 +450,7 @@ test(
         (first, second) =>
           Effect.gen(function* () {
             yield* first.lists([second]);
-            yield* first.cli(["--machine", "second", "board"]);
-            const [peer] = yield* peersOf(first.world.state);
+            const peer = yield* pairedPeer(first, second);
             yield* stopHost(second.world.state);
             const command = yield* collieCommand;
             let opened = 0;
@@ -456,7 +470,7 @@ test(
               sh: () => Effect.die("not asked"),
               forward: () => Effect.void,
             };
-            const route = linkRoute(command, peer!, fallback, "desktop-test", first.env);
+            const route = linkRoute(command, peer, fallback, "desktop-test", first.env);
             const doors = yield* route.open(() => Effect.void);
             expect(opened).toBe(1);
             expect(doors.machine.route).toBe("ssh");
