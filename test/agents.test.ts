@@ -7181,6 +7181,7 @@ class Watched extends Herdr {
   readonly seen: string[] = [];
   private reads = 0;
   private prompted = false;
+  private reused = false;
   constructor(private readonly statuses: ReadonlyArray<AgentStatus>) {
     super(rig.pluginEnv());
   }
@@ -7188,13 +7189,18 @@ class Watched extends Herdr {
     return super.agentStatus(target).pipe(
       Effect.map((actual) => {
         const status =
-          !this.prompted || actual === "working"
+          !this.reused || actual === "working"
             ? actual
             : (this.statuses[Math.min(this.reads++, this.statuses.length - 1)] ?? "idle");
         this.seen.push(status);
         return status;
       }),
     );
+  }
+  // The second launch lists first: the first item's pollers, however many reads they made, are done.
+  override agentList() {
+    this.reused ||= this.prompted;
+    return super.agentList();
   }
   override agentPrompt(target: string, text: string) {
     this.prompted = true;
@@ -7249,7 +7255,7 @@ for (const busy of ["working", "blocked"] as const)
   test(`a reused agent herdr reports ${busy} is given nothing until it is idle`, () =>
     runEffect(
       Effect.gen(function* () {
-        const { result, seen } = yield* listedWhile(["idle", busy, busy, busy, "idle"]);
+        const { result, seen } = yield* listedWhile([busy, busy, busy, "idle"]);
         expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
         const boundary = seen.slice(seen.indexOf("prompt 01-api") + 1);
         expect(boundary).toContain(busy);
