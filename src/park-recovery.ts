@@ -391,7 +391,8 @@ export const healParks = <E, R, E2, R2>(opts: {
           const output = Option.getOrNull(
             Schema.decodeUnknownOption(HealOutput)(heal.status.value),
           );
-          const finding: Pick<Metric, "finding" | "diagnosisComplete"> = {};
+          const finding: { finding?: NonNullable<Metric["finding"]>; diagnosisComplete?: false } =
+            {};
           if (output !== null) finding.finding = output.finding;
           if (output?.diagnosis_complete === false) finding.diagnosisComplete = false;
           const words = said(output, heal.runId);
