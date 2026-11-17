@@ -107,7 +107,11 @@ and errors. Idle notifications and ongoing Measurements stay background.
 A read awaiting a fresh board temporarily suspends only its own lease, so the build can
 advance. The lease is restored only while live, including after errors or cancellation.
 The answer keeps the board's read-your-writes coverage and updated readiness and merge-request facts.
-Slice boundaries hold for at most 250 ms.
+Slice boundaries hold for at most 250 ms, and for no longer than the pass worked since it was
+last held; a pass that has worked less than 10 ms is not held. Answers that never stop, as on a
+Machine with many agents asking at once, therefore leave a background pass at least half the
+time: one board build of about 400 cards there took 146 s when each boundary waited out the
+patience, and takes 12 s now.
 
 Background merge and cleanup checks read historical cards without interactive offers.
 Their settlement decisions still use the same merge states and outstanding work, but do

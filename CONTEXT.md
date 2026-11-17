@@ -872,6 +872,8 @@ adds or changes, or whose name holds a string a line the branch adds holds. One 
 a failed job: it goes to a fix round, at implement and at Release alike, and never proves the
 check (ADR-0034, amended 2026-10-15, amended 2026-11-11;
 [ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job](docs/adr/draft-a-check-left-to-ci-is-proved-by-its-pipeline-job.md)).
+Such a Flake's record names the tests its failed attempts named, and its proof counts the
+failed attempts that named each, so a test that keeps flaking can be found.
 
 **Obstacle** — What is identifiably in a Run's way, in one sentence: a command failing several times in a row the same way. It is shown to the human and given to the next prompt so the approach can change. It stops nothing.
 

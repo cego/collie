@@ -344,7 +344,8 @@ where the branch leaves it — no merge-base, no pipeline, no such job, any othe
 makes the failure the run's own. Where only some of its failed tests fail on the target's
 newest commit too, its fix round names which ones are the target's.
 That job is then retried once through the forge; a pass on the retry is a Flake, named on
-the merge request and the log, and recorded as the check's proof. Not where the failed
+the merge request and the log with the tests its failed attempts named, and recorded as the
+check's proof, which counts for each of those tests the failed attempts that named it. Not where the failed
 attempt's logs name a failed test of the branch's own — one whose file the branch adds or
 changes since its merge-base with the target branch, or whose name holds a string of 16 or
 more characters a line the branch adds holds: that job is failed, and its round's prompt
@@ -779,7 +780,8 @@ on a head with the same bytes is relied on there rather than run again. A failur
 round, `fix-<n>`, which fixes and pushes as implement's gate fixes do. A job that passed
 only when retried, by this Run or before it, is read as implement reads one: a failed test
 of the branch's own in its failed attempt's logs is a failure, never proof, and any other
-retried pass is a Flake, which the log records as `unsettled:`. Four rounds in a
+retried pass is a Flake, which the log records as `unsettled:`, naming the tests its failed
+attempts named. Four rounds in a
 row that leave a check failing, or one that changes nothing, park the Run with why;
 resuming it runs the checks again. Collie's own `check` is left to CI's `test` job, so a
 Release of Collie is proved by that job at its head, never by a local `bun run check`.
