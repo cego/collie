@@ -3068,10 +3068,10 @@ GitHub review requests do not start Runs automatically.
 You can hand in a Slack message permalink as the review target, or give `--input slack=<permalink>` beside an MR target.
 The message must link exactly that merge request. Both routes join the same Follow-through as its MR URL.
 Otherwise Collie searches your Slack for one top-level message linking the MR, from its creation onwards.
-Zero or multiple matches add no reactions; the record says why.
+Zero or multiple matches add no reactions, and the card says why: **No Slack reaction: no Slack message found**, or **No Slack reaction: 2 messages mention it**.
 The correlated message gets your `:eyes:` when review starts, `:memo:` when findings are posted,
 and `:white_check_mark:` once the forge confirms your approval. Replay adds only missing reactions.
-A broken Slack sign-in leaves the review running, names the missing reactions, and retries next round.
+A broken or under-scoped Slack sign-in leaves the review running. While it waits on the author, the card names the missing reactions and says to sign in again; the next round retries.
 
 **Improve** fixes open findings at the current head on an MR you authored or a branch of one of your Tasks.
 It runs a first fix even when only minor findings remain; subsequent rounds stop when nothing blocking remains.
