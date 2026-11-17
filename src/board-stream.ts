@@ -18,8 +18,9 @@ const MAX_REST_MS = 5_000;
  * One board for everything that reads it: built at once and again whenever `changed` says
  * something may have moved, one build at a time, with the changes that arrive during a
  * build folded into the next. Each build waits as long as the last one took, and at most
- * 5 s, before it starts: a board that keeps moving costs at most half of the host's time,
- * and is never more than 5 s and a build behind. It keeps building for as long as `Scope` lasts. Its `boards`
+ * 5 s, before it starts: a board that keeps moving takes half of the host's time while its
+ * builds take 5 s or less, more once they take longer, and is never more than 5 s and a
+ * build behind. It keeps building for as long as `Scope` lasts. Its `boards`
  * are the latest board that covers every change seen before it was read, then each one
  * built after it, so a reader reads its own writes. `latest` is the last board built, or
  * the first once it is, never waiting for a newer one.
