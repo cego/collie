@@ -1,0 +1,94 @@
+// The shipped rally over a local checkout, then the final review of the integrated tree as
+// implement's delivery asks for it. A fix that `moves` commits, so the next round's head moved.
+
+import { FixOutputSchema, Host, Run, agentWork, defineWorkflow } from "collie";
+import { Effect, Schema } from "effect";
+import {
+  FIX_PROMPT,
+  NO_MR,
+  REVIEWER,
+  ROUNDS,
+  rally,
+  reviewPass,
+} from "../../../workflows/reviewing.ts";
+
+const git = (cwd: string, ...args: string[]) =>
+  Effect.sync(() => Bun.spawnSync(["git", ...args], { cwd }));
+
+export default defineWorkflow({
+  id: "delta-rally",
+  input: Schema.Struct({ cwd: Schema.String, base: Schema.String, moves: Schema.Boolean }),
+  output: Schema.String,
+  hints: { cwd: "repository" },
+  agents: { roles: { reviewer: REVIEWER } },
+  run: ({ input }) =>
+    Effect.gen(function* () {
+      const host = yield* Host;
+      const { id } = yield* Run;
+      const { dir } = yield* host.place(id);
+      const rallied = yield* rally({
+        rounds: { n: 0 },
+        cwd: input.cwd,
+        plan: "",
+        source: null,
+        proves: Effect.succeed(""),
+        risks: "",
+        criteria: "",
+        prefix: "",
+        obstacle: "",
+        integrate: () =>
+          Effect.succeed({
+            status: "unchanged" as const,
+            branch: "",
+            ref: "",
+            sha: input.base,
+            files: [],
+            reason: "",
+            base: input.base,
+          }),
+        fix: ({ operation, at }) =>
+          Effect.gen(function* () {
+            const fixed = yield* agentWork({
+              operation,
+              role: "implementer",
+              instructions: FIX_PROMPT,
+              input: {
+                inputs: { target: "", target_kind: "", plan: "", outcome: "" },
+                target_repo: "",
+                mr: NO_MR,
+                base: input.base,
+                run: { dir, id },
+                branch: "",
+                iteration: String(at),
+                max_iterations: String(ROUNDS),
+                findings: "",
+                disputed: "",
+              },
+              output: FixOutputSchema,
+            });
+            if (input.moves) {
+              yield* Effect.promise(() =>
+                Bun.write(`${input.cwd}/fixed-${at}.ts`, `export const fixed = ${at};\n`),
+              );
+              yield* git(input.cwd, "add", "-A");
+              yield* git(input.cwd, "commit", "-qm", `fix round ${at}`);
+            }
+            return fixed;
+          }),
+      });
+      yield* reviewPass({
+        target: "",
+        plan: "",
+        source: null,
+        proves: "",
+        previous: `${dir}/review.md`,
+        answered: "",
+        risks: "",
+        base: input.base,
+        at: ROUNDS + 1,
+        of: ROUNDS + 1,
+        disputed: [],
+      });
+      return rallied.halted ?? "settled";
+    }),
+});

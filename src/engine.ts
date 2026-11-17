@@ -187,6 +187,7 @@ import { Woke, collieRunOf } from "./mr-watch-model";
 import { readingOf } from "./mr-watch";
 import {
   autoMergingHere,
+  branchTargetHead,
   whatItSaid,
   forgeHere,
   mrIdIn,
@@ -248,6 +249,7 @@ import { evaluationDeps } from "./evaluator";
 import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
 import { hostDatabase, recordsLayer, type Records } from "./records";
 import { addressOf, RunRecords } from "./run-records";
+import { featuresOf, recordFeatures } from "./run-features";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, writeCheckpoint, type Card } from "./cards";
@@ -569,6 +571,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly workspace: string | null;
     /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
     readonly lineage: ReadonlyArray<string>;
+    /** What its workflow does, fixed when it started; absent from an older host. */
+    readonly features?: { readonly review_delta?: boolean };
     /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
     readonly authority: {
       readonly created: {
@@ -1072,11 +1076,15 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     }) => Effect.Effect<Posted>;
     readonly slackTarget: (link: string, target?: string) => Effect.Effect<string, WorkflowError>;
     readonly reviewSlack: (options: { readonly runId: string; readonly target: string; readonly cwd: string; readonly permalink?: string; readonly wanted: ReadonlyArray<string> }) => Effect.Effect<string>;
-    /** Reads the target's head before review. Take it inside an Activity. */
+    /** Reads the target's head before review, else the checkout's HEAD. Take it inside an Activity. */
     readonly reviewedHead: (options: {
       readonly target: string;
       readonly cwd: string;
     }) => Effect.Effect<string>;
+    /**
+     * What changed from \`previous\` to \`head\`: a merge request's interdiff, else the checkout's
+     * commits and files since \`previous\`, with the command that shows their diff.
+     */
     readonly reviewChanges: (options: {
       readonly target: string;
       readonly cwd: string;
@@ -3950,6 +3958,41 @@ const defaultMergeBase = (cwd: string) =>
     return { found: true, branch, base: Str.trim(merged.stdout) } as const;
   });
 
+/** A local target's head: a `branch:` target's head ref, else the checkout's HEAD; "" where unreadable. */
+const localHead = (target: string, cwd: string) =>
+  runShell(
+    "git",
+    ["rev-parse", "--verify", "--quiet", `${branchTargetHead(target) ?? "HEAD"}^{commit}`],
+    cwd,
+  ).pipe(
+    Effect.map((said) => (said.code === 0 ? Str.trim(said.stdout) : "")),
+    Effect.orElseSucceed(() => ""),
+  );
+
+/** The commits and files a checkout changed from `previous` to `head`, and how to read their diff. */
+const localChanges = (cwd: string, previous: string, head: string) =>
+  Effect.gen(function* () {
+    const git = (...args: string[]) => runShell("git", args, cwd);
+    const commits = yield* git("log", "--format=- %h %s", `${previous}..${head}`);
+    const files = yield* git("diff", "--name-status", previous, head);
+    if (commits.code !== 0 || files.code !== 0)
+      return yield* new WorkflowError({
+        reason: `the changes from ${previous} to ${head} could not be read: ${Str.trim(`${commits.stderr ?? ""} ${files.stderr ?? ""}`)}`,
+      });
+    const listed = (text: string, line: (one: string) => string) =>
+      Str.trim(text) === ""
+        ? "(none)"
+        : Arr.join(Arr.map(Str.split(Str.trim(text), "\n"), line), "\n");
+    return Arr.join(
+      [
+        `Changed since it, in full with \`git diff ${previous} ${head}\`.`,
+        `Commits:\n${listed(commits.stdout, (one) => one)}`,
+        `Files:\n${listed(files.stdout, (one) => `- ${Arr.join(Str.split(one, "\t"), " ")}`)}`,
+      ],
+      "\n\n",
+    );
+  });
+
 /** Whether the branch at `cwd` adds or changes `test` since it left the default branch. */
 const branchOwns = (cwd: string, test: FailedTest) =>
   Effect.gen(function* () {
@@ -5025,8 +5068,8 @@ export const hostLayer = (options: {
                   authority: authorityOf(null, undefined),
                 })),
               ),
-              lineageOf(runId),
-              (at, lineage) => ({ ...at, lineage }),
+              Effect.zip(lineageOf(runId), featuresOf(runId)),
+              (at, [lineage, features]) => ({ ...at, lineage, features }),
             ),
           ),
         reviewScope: (runId, source, outcome, risks) =>
@@ -6337,7 +6380,7 @@ export const hostLayer = (options: {
           reviewForge(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
-              if (ref === null) return "";
+              if (ref === null) return yield* localHead(asked.target, asked.cwd);
               const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
               return details._tag === "Details" ? (details.head ?? "") : "";
             }),
@@ -6346,7 +6389,7 @@ export const hostLayer = (options: {
           reviewForge(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
-              if (ref === null) return "";
+              if (ref === null) return yield* localChanges(asked.cwd, asked.previous, asked.head);
               const changes = yield* forgeOf(ref).reviewChanges(
                 ref,
                 asked.previous,
@@ -8731,6 +8774,7 @@ const makeRegistry: (
       Effect.provideContext(bun),
       Effect.ignore({ log: "Unhandled" }),
     );
+    if (claimed.fresh) yield* recordFeatures(claimed.row.run).pipe(Effect.provideContext(bun));
     if (claimed.row.accepted === null) yield* attachInto(claimed.row);
     // The parent hands its own children over, so the receipt is written here: a host
     // sweep dispatching one would give the engine a child with no parent to wake.
@@ -10295,6 +10339,7 @@ const makeRegistry: (
       seed: options.intent,
       parent: options.parent ? yield* store.run(options.parent) : null,
     }).pipe(Effect.provideContext(bun), Effect.ignore({ log: "Unhandled" }));
+    if (claimed.fresh) yield* recordFeatures(claimed.row.run).pipe(Effect.provideContext(bun));
     // A retry of work the engine already has is nothing more to do; one that crashed
     // before it heard is handed over now, under the identity it was admitted with.
     // A caller that executes the Run itself has the receipt first, as a parent does.

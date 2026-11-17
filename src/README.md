@@ -107,6 +107,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `store-writes.ts`      | Told the Runs each write to `host.db` names, for the Run model                                                              |
 | `records.ts`           | Collie's own records in `host.db`: the host's layer, a read-only one, one at a directory                                    |
 | `run-records.ts`       | A Run's journals, facts, last activity and controls as rows in `host.db`, read for a whole board in one batch               |
+| `run-features.ts`      | What a Run's workflow does, fixed when it starts; a Run with no record keeps what its release did                           |
 | `records-import.ts`    | The record files a host's first migrations import once, and `collie host rollback` writing a Run's records back             |
 | `release.ts`           | Whether an installation is a release or a development checkout, and placing the release a runner carries                    |
 | `releases.ts`          | The newest published release, and a release's runner downloaded and verified against the release key                        |

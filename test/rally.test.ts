@@ -12,6 +12,7 @@
 // tree the command ran on — turns it into proof.
 
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer } from "effect";
 import { updateApproved } from "../src/verify-spec";
@@ -25,6 +26,7 @@ import { evidenceDir, foundationLayer, loadEntry } from "../src/engine";
 import { fixtures } from "./support/host";
 import { collect } from "../src/verify";
 import { Store } from "../src/store";
+import { RunRecords } from "../src/run-records";
 
 let rig: Rig;
 let dir: string;
@@ -319,5 +321,107 @@ test("a command nobody approved is refused, whatever a workflow asks the host fo
       expect(asked.elsewhere._tag === "Failure" && asked.elsewhere.failure.reason).toContain(
         "is not inside run r-perm",
       );
+    }),
+  ));
+
+const deltaRally = (runId: string, moves: boolean) =>
+  Effect.gen(function* () {
+    const base = Str.trim(
+      (yield* exec(["git", "rev-parse", "HEAD"], { cwd: rig.projectDir })).stdout,
+    );
+    const entry = yield* loadEntry(`${fixtures}/delta-rally.workflow.ts`);
+    const made = entry.make(`delta-rally@${runId}`);
+    // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; a failure fails the test.
+    yield* made.workflow
+      .execute({ runId, input: { cwd: rig.projectDir, base, moves } })
+      .pipe(Effect.provide(made.layer), Effect.orDie);
+    const fs = yield* FileSystem.FileSystem;
+    const prompt = (operation: string) =>
+      fs.readFileString(`${dir}/agents/${runId}/${operation}.prompt.md`);
+    return {
+      base,
+      first: yield* prompt("review-1"),
+      second: yield* prompt("review-2-1"),
+      final: yield* prompt("review-5-1"),
+    };
+  }).pipe(
+    Effect.provide(
+      agentsLayer(hostOf()).pipe(
+        Layer.provideMerge(
+          Layer.succeed(Children)(Children.of({ start: nothing, result: nothing })),
+        ),
+        Layer.provideMerge(foundationLayer({ dir, userDir: rig.userDir })),
+      ),
+    ),
+    Effect.scoped,
+    Effect.orDie,
+  );
+
+/** What a Run started on this release records beside its settings: its rounds get a delta. */
+const startedWithDelta = (runId: string) =>
+  RunRecords.use((records) => records.put(runId, "features.json", `{"review_delta":true}`));
+
+const DELTA = "Previous round's head:";
+
+/** Two blockers and a minor; the fix settles one blocker and disputes the other. */
+const twoRounds = () =>
+  rig.queueOutputs([
+    {
+      verdict: "findings",
+      summary: "two blockers",
+      findings: [
+        blocker("empty list"),
+        blocker("null input"),
+        { severity: "minor", title: "naming" },
+      ],
+    },
+    {
+      verdict: "clean",
+      fixed: [{ title: "empty list", file: "src/thing.ts" }],
+      disputed: [{ ...blocker("null input"), reason: "the caller never passes null" }],
+      checks: [],
+    },
+    { verdict: "clean", summary: "settled" },
+    { verdict: "clean", summary: "the whole change" },
+  ]);
+
+test("a round-2 reviewer is told the round-1 head, what changed since it and what is still open", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* startedWithDelta("r-delta");
+      yield* twoRounds();
+      const ran = yield* deltaRally("r-delta", true);
+      const delta = Str.split(ran.second, DELTA)[1] ?? "";
+      expect(ran.second).toContain(`${DELTA} ${ran.base}`);
+      expect(delta).toContain(`git diff ${ran.base}`);
+      expect(delta).toContain("fix round 1");
+      expect(delta).toContain("fixed-1.ts");
+      expect(delta).toContain("[minor] naming");
+      expect(delta).toContain("null input");
+      expect(delta).not.toContain("empty list");
+    }),
+  ));
+
+test("a round whose head did not move says so to its reviewer", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* startedWithDelta("r-unmoved");
+      yield* twoRounds();
+      const ran = yield* deltaRally("r-unmoved", false);
+      expect(ran.second).toContain(`${DELTA} ${ran.base}`);
+      expect(ran.second).toContain("The head has not moved since that round");
+    }),
+  ));
+
+test("round 1 and the final review of the integrated tree read the whole change against its base, with no delta", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* startedWithDelta("r-whole");
+      yield* twoRounds();
+      const ran = yield* deltaRally("r-whole", true);
+      for (const whole of [ran.first, ran.final]) {
+        expect(whole).not.toContain(DELTA);
+        expect(whole).toContain(`${ran.base}...HEAD`);
+      }
     }),
   ));

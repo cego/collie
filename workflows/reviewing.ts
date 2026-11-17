@@ -152,6 +152,8 @@ export interface ReviewAsk {
   readonly ledger?: ReadonlyArray<Finding>;
   readonly head?: string;
   readonly changes?: string;
+  /** A follow-up round's prior head, what changed since it and what is still open; see `followUp`. */
+  readonly delta?: string;
   /** Where the implementer's account of that review is; empty where nobody fixed one. */
   readonly answered: string;
   /** The extra axes a human asked for, where they asked for any. */
@@ -197,7 +199,7 @@ export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: s
     ask.ledger === undefined
       ? ""
       : `Earlier findings ledger:\n${JSON.stringify(ask.ledger, null, 2)}`,
-  changes: `${ask.head ? `Review head: ${ask.head}\n\n` : ""}${ask.changes ?? ""}`,
+  changes: `${ask.head ? `Review head: ${ask.head}\n\n` : ""}${ask.changes ?? ""}${ask.delta ?? ""}`,
   iteration: String(ask.at),
   max_iterations: String(ask.of),
   disputed: formatDisputes(ask.disputed),
@@ -398,6 +400,46 @@ export const reviewPass = (ask: ReviewAsk) =>
     return yield* record(reconciled);
   });
 
+/**
+ * What a follow-up round's reviewers are told of the round before it: its head, the change
+ * since, listed under `name`'s Activity rather than diffed, and what is still open.
+ */
+export const followUp = (ask: {
+  readonly name: string;
+  readonly target: string;
+  readonly cwd: Effect.Effect<string>;
+  readonly head: string;
+  readonly now: string;
+  readonly open: ReadonlyArray<Finding>;
+}) =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const changes =
+      ask.head === ask.now
+        ? "The head has not moved since that round: the fix committed nothing."
+        : yield* Activity.make({
+            name: ask.name,
+            success: Schema.String,
+            execute: Effect.flatMap(ask.cwd, (cwd) =>
+              host.reviewChanges({ target: ask.target, cwd, previous: ask.head, head: ask.now }),
+            ).pipe(
+              Effect.orElseSucceed(
+                () =>
+                  `The changes since it could not be listed: read \`git diff ${ask.head} ${ask.now}\`.`,
+              ),
+            ),
+          });
+    return Arr.join(
+      [
+        `Previous round's head: ${ask.head}. Review head: ${ask.now}.`,
+        changes,
+        `Still open after the previous fix, beside those disputed below:\n${formatFindings(ask.open)}`,
+        "Check each open and disputed finding against the change, and read the changed files in full. Look beyond them only where the change reaches into code it did not touch or this round's criteria require it.",
+      ],
+      "\n\n",
+    );
+  });
+
 /** At most four rounds per rally; it leaves at the first review with nothing blocking. */
 export const ROUNDS = 4;
 
@@ -457,6 +499,9 @@ export const rally = (ask: {
     const { prefix } = ask;
     let disputed: Finding[] = [];
     let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
+    const delta =
+      ask.resume === undefined && (yield* host.place(runId)).features?.review_delta === true;
+    let prior: { readonly head: string; readonly open: ReadonlyArray<Finding> } | null = null;
 
     const repair = Effect.gen(function* () {
       const resumed = ask.resume;
@@ -491,6 +536,24 @@ export const rally = (ask: {
           yield* repair;
           const merged = yield* ask.integrate(`${prefix}merge-${at}`);
           const proves = yield* ask.proves;
+          const head = delta
+            ? yield* Activity.make({
+                name: `${prefix}review-head-${at}`,
+                success: Schema.String,
+                execute: host.reviewedHead({ target: "", cwd: ask.cwd }),
+              })
+            : "";
+          const given =
+            prior === null || head === ""
+              ? ""
+              : yield* followUp({
+                  name: `${prefix}review-changes-${at}`,
+                  target: "",
+                  cwd: Effect.succeed(ask.cwd),
+                  head: prior.head,
+                  now: head,
+                  open: prior.open,
+                });
           const synthesis = yield* reviewPass({
             // The change is the work in this checkout: a Run that built it reviews what it
             // built, rather than a merge request somebody else has to be pointed at.
@@ -499,6 +562,7 @@ export const rally = (ask: {
             source: ask.source,
             proves,
             previous: "",
+            delta: given,
             // The last round's fix, which a follow-up review checks each of its findings against.
             answered:
               ask.resume !== undefined
@@ -586,6 +650,12 @@ export const rally = (ask: {
             ...Arr.filter(disputed, (one) => !settledNow.has(findingKey(one))),
             ...fixed.disputed,
           ];
+          const answered = new Set(Arr.map([...fixed.fixed, ...disputed], findingKey));
+          if (head !== "")
+            prior = {
+              head,
+              open: Arr.filter(synthesis.findings, (one) => !answered.has(findingKey(one))),
+            };
 
           if (at === ROUNDS) {
             const settled = settleFinalFix(round.live, fixed, yield* host.evidence(runId, ask.cwd));

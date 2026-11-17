@@ -1542,6 +1542,21 @@ The shipped workflows' rally is one such loop, `rally` in
 [`workflows/reviewing.ts`](../workflows/reviewing.ts): `implement` and `tune-up` both call
 it, each with its own fix. A module of your own can import it the same way.
 
+From round 2 on, `rally` tells each round's reviewers what the round before it reviewed,
+through `followUp`: that round's head, the commits and files changed since it as
+`host.reviewChanges` lists them for the checkout, with the `git diff` that shows them rather
+than the diff itself (or that the head has not moved), and the findings still open after the
+fix beside those disputed. The reviewer checks each of those findings against the change and
+reads the changed files in full, going further only where the change reaches into code it did
+not touch or the round's criteria require it. Round 1, and the review of the integrated tree
+that `implement` makes after its rallies, still read the whole change against its base. The
+review workflow's "Fix findings" on a local target is told the same; on a merge request its
+rounds are given the forge's interdiff, as before.
+
+Whether a Run's rounds are told this is fixed when the Run starts, as `Place.features`. A Run with
+no record started on an earlier release and keeps that release's rounds, so its replay meets
+no Activity it did not record.
+
 `ReviewOutputSchema`, `FixOutputSchema` and `SynthesisSchema` are the shapes those steps
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the
 shipped steps are held to, not a copy of it.
