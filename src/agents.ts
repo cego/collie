@@ -3081,6 +3081,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 
   /** Calls whose answers were sent, or refused for good, by agent and call. */
   const answeredCalls = new Set<string>();
+  /** Calls whose answers wait behind a Check, by agent and call, so that is logged once. */
+  const fencedCalls = new Set<string>();
 
   /**
    * Puts each question the agent asked since it was given this work, and before `until`,
@@ -3188,6 +3190,18 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               holds(false);
               continue;
             }
+            const fence = yield* fenceOf(launched);
+            if (fence !== null) {
+              if (!fencedCalls.has(key))
+                yield* log(
+                  launched.runId,
+                  `${launched.agent}: the answers to its question are ${Str.uncapitalize(heldBehind(fence))}`,
+                );
+              fencedCalls.add(key);
+              holds(true);
+              continue;
+            }
+            fencedCalls.delete(key);
             let sentAll = true;
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>

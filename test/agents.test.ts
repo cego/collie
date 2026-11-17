@@ -6439,6 +6439,47 @@ test("Collie's own step to an agent waits while Collie's Check collects proof on
     }),
   ));
 
+test(
+  "an answer to an agent's question waits while Collie's Check collects proof on its checkout",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ writes: [], output: null, owed: true }]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* asksTwo;
+            yield* questionsOf(2);
+            yield* controls.setControl(
+              VERIFYING,
+              "r1",
+              encodeVerifying({
+                name: "unit",
+                executable: "true",
+                argv: [],
+                pass: "gate",
+                round: null,
+                revision: "",
+                base: null,
+                started: "2026-11-17T10:00:00.000Z",
+                checkout: rig.projectDir,
+              }),
+            );
+            yield* answer("ask-review-1", "SQLite");
+            yield* answer("ask-review-2", "lint");
+            yield* TestClock.withLive(Effect.sleep("3 seconds"));
+            expect(yield* prompted("are answered")).toBe(false);
+            yield* controls.setControl(VERIFYING, "r1", null);
+            while (!(yield* prompted("are answered")))
+              yield* TestClock.withLive(Effect.sleep("10 millis"));
+          }),
+          { collectMs: 120_000, pollMs: 200 },
+        );
+      }),
+    ),
+  60_000,
+);
+
 test.each([true, false])(
   "a queued retry keeps its accepted words and actor (attributed: %s)",
   (attributed) =>

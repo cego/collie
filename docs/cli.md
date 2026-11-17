@@ -1764,7 +1764,8 @@ that lists them all, and the Run's verification metric counts them by class.
 While a Check Collie runs itself collects proof on a checkout, the host holds deliveries to
 that Run's agents working there, for the human's steer and an agent's message alike: a steer
 is queued, its receipt says it is held behind that Check until it ends, and the card says
-how many are held. Collie's own step and repair wait the same way. A CI wait holds nothing.
+how many are held. Collie's own step and repair, and the answers to an agent's question,
+wait the same way. A CI wait holds nothing.
 The hold ends with the Check, however it ends; a Check that crashes releases it.
 
 Reading the tree writes nothing in the checkout. Collie's status of a checkout runs with
