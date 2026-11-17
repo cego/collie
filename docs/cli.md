@@ -1071,7 +1071,8 @@ Delivery reconciliation remains explicit: `not-sent` permits one resend, while `
 for Output. An unresolved delivery stays uncertain.
 
 A park whose cause rechecks can resume automatically. The host checks for the named CI job
-at the parked head, an answering forge or herdr, or a clean Collie checkout. Rechecks start
+at the parked head, an answering forge, herdr listing its agents as a launch asks it to (on
+the Machine's terminal backend), or a clean Collie checkout. Rechecks start
 after one minute and double up to one hour. Host startup, a peer reconnecting, or a matching
 forge or pipeline update resets that wait to one minute. The resumed Step still runs its own gate.
 
@@ -1098,7 +1099,10 @@ a Hold, undoes a Stop, writes code or merges. One Heal per park and three per Ru
 at a time on a Machine and none while it is Short of memory. No Heal starts for a Run with
 a Decision, Hold or Stop, for a cause only a person can act on (`checkout-dirty-human`,
 `login-missing`, `branch-force-pushed`), for a park of a Heal, or with
-`collie settings set recovery.heal false`: those parks need you at once.
+`collie settings set recovery.heal false`: those parks need you at once. Nor does one start
+for `ci-failed` or `herdr-unavailable` once their three resumes are spent: only the forge
+clears the one, and a Heal's own agent launches through herdr, so they need you with their
+tries.
 
 When the Heal settles, the parked Run's facts judge it, never its Output: out of the park is
 `recovered` and raises one `run-healed`; still in it, or parked again for the same cause, is
