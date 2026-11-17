@@ -894,7 +894,7 @@ function failedAttempt(
     const url = attempt.value.web_url ?? null;
     const jobs = yield* pipelineJobs(reached, cwd, attempt.value.pipeline.id);
     if (!jobs.ok) return { url, tests: [], jobs: null };
-    const self = jobs.value.find((one) => String(one.id) === id);
+    const self = Option.getOrUndefined(Arr.findFirst(jobs.value, (one) => String(one.id) === id));
     // The job's other attempts share its pipeline, and are attempts of their own.
     const failed = Arr.filter(
       jobs.value,

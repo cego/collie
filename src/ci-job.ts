@@ -3,7 +3,7 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
-import { Clock, Duration, Effect } from "effect";
+import { Clock, Duration, Effect, Option } from "effect";
 import { mrRefOf } from "./board-model";
 import { checkProof } from "./check-proof";
 import { forgeOf, type FailedAttempt, type FailedJob, type JobState } from "./forge/forge";
@@ -98,7 +98,7 @@ export interface TargetFailure {
   readonly jobs: ReadonlyArray<string> | null;
 }
 
-const sameFile = (one: FailedTest, other: FailedTest) =>
+const sameTestExactly = (one: FailedTest, other: FailedTest) =>
   one.name === other.name && one.file === other.file;
 
 const sameTest = (one: FailedTest, other: FailedTest) =>
@@ -323,20 +323,19 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
               failed.url,
               forge.jobLog(ref, attempt),
             );
-          for (const test of Arr.dedupeWith(failed.tests, sameFile)) {
-            const seen = flaked.find((one) => sameFile(one, test));
-            if (seen === undefined) flaked.push({ name: test.name, file: test.file, attempts: 1 });
-            else seen.attempts++;
+          for (const test of Arr.dedupeWith(failed.tests, sameTestExactly)) {
+            const seen = Arr.findFirst(flaked, (one) => sameTestExactly(one, test));
+            if (Option.isSome(seen)) seen.value.attempts++;
+            else flaked.push({ name: test.name, file: test.file, attempts: 1 });
           }
         }
         const flake = attempts.length === 0 ? {} : { retried: true as const };
         if (recorded !== undefined && retried === null) return { proved: recorded, ...flake };
         const at = yield* nowIso;
-        const ran = {
-          name: job,
-          url: read.url,
-          ...(attempts.length === 0 ? {} : { flaked }),
-        };
+        const ran =
+          attempts.length === 0
+            ? { name: job, url: read.url }
+            : { name: job, url: read.url, flaked };
         const proof: Verification = {
           id: `${asked.runId}-${spec.name}-${epochMs(at)}`,
           run: asked.runId,
