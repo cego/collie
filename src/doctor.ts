@@ -593,7 +593,10 @@ export const memoryOutcome = (
     closing === null
       ? ""
       : `; \`collie cleanup\` would close ${closing.length === 0 ? "no agent" : Arr.join(closing, ", ")}`;
-  return warned(`short of memory: ${memorySaid(memory)}${closes}`, "collie cleanup --apply");
+  return warned(
+    `short of memory: ${memorySaid(memory)}${closes}`,
+    closing?.length === 0 ? "" : "collie cleanup --apply",
+  );
 };
 
 const memoryCheck = Effect.fn("Doctor.memoryCheck")(function* (

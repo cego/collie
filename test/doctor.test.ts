@@ -480,14 +480,14 @@ test("a Machine with memory to spare passes the memory check, with its reading",
     }),
   ));
 
-test("a Machine short of memory warns, with what cleanup would close and its fix", () =>
+test("a Machine short of memory whose cleanup would close no agent warns with no fix", () =>
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
       yield* rig.memory(8);
 
       const memory = check(yield* report(), "memory");
-      expect(memory).toMatchObject({ ok: true, warn: true, fix: "collie cleanup --apply" });
+      expect(memory).toMatchObject({ ok: true, warn: true, fix: "" });
       expect(memory.detail).toBe(
         `short of memory: 8.0 of 100.0 GB available (8%), pressure 0.0; \`collie cleanup\` would close no agent`,
       );

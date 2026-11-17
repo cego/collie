@@ -2813,8 +2813,8 @@ served this state directory, and `collie cleanup --apply` as the fix. It never f
 **Memory** gives this Machine's reading, as `8.1 of 62.0 GB available (13%)`, with
 `, pressure 0.0` on Linux. While the Machine is
 [Short of memory](using.md#short-of-memory) it is a `!` warning naming the agents
-[`collie cleanup`](#cleaning-up) would close, or saying there are none, with
-`collie cleanup --apply` as the fix. Memory that cannot be read is a `!` warning saying where
+[`collie cleanup`](#cleaning-up) would close, with `collie cleanup --apply` as the fix, or
+saying there are none, with no fix. Memory that cannot be read is a `!` warning saying where
 it was read from. It never fails the run.
 
 **Checks**, where a host has served this state directory: a `!` warning while

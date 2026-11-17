@@ -4117,8 +4117,8 @@ local cluster. Collie does not name what else holds the memory.
 
 `collie doctor`'s `memory` check gives the reading, as `8.1 of 62.0 GB available (13%)`,
 with `, pressure 0.0` on Linux. While the Machine is short it is a `!` warning that names
-the agents [`collie cleanup`](#cleanup) would close, or says there are none, with
-`collie cleanup --apply` as the fix. Memory that cannot be read is a `!` warning saying
+the agents [`collie cleanup`](#cleanup) would close, with `collie cleanup --apply` as the
+fix, or says there are none, with no fix. Memory that cannot be read is a `!` warning saying
 where it was read from. It never fails the run.
 
 ## Usage
