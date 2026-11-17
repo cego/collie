@@ -605,6 +605,8 @@ test("the latest board is read at once while a newer one builds, and the first i
         expect(Arr.map(yield* Fiber.join(first), (view) => view.id)).toEqual(["built-1"]);
 
         yield* Queue.offer(changed, undefined);
+        // The next build rests as long as the last one took, at most 5 s.
+        yield* TestClock.adjust("5 seconds");
         while (builds < 2) yield* Effect.yieldNow;
         const asked = yield* Clock.currentTimeMillis;
         const read = yield* Effect.forkChild(latest);
@@ -614,6 +616,48 @@ test("the latest board is read at once while a newer one builds, and the first i
         expect(Arr.map(yield* Fiber.join(read), (view) => view.id)).toEqual(["built-1"]);
         expect(yield* Clock.currentTimeMillis).toBe(asked);
         expect(builds).toBe(2);
+      }),
+    ).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("a build waits as long as the last one took, and at most 5 s, before it starts", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const changed = yield* Queue.unbounded<void>();
+        const took = ["2 seconds", "8 seconds", "1 second"] as const;
+        const starts: number[] = [];
+        const build = Effect.gen(function* () {
+          starts.push(yield* Clock.currentTimeMillis);
+          yield* Effect.sleep(took[starts.length - 1] ?? "0 millis");
+          return [one];
+        });
+        yield* shareBoard({ build, changed: Stream.fromQueue(changed) });
+        const settle = Effect.gen(function* () {
+          for (let turn = 0; turn < 100; turn++) yield* Effect.yieldNow;
+        });
+        yield* settle;
+        expect(starts).toEqual([0]);
+        // Moved during the first build, which took 2 s: the next starts 2 s after it.
+        yield* Queue.offer(changed, undefined);
+        yield* TestClock.adjust("2 seconds");
+        yield* settle;
+        yield* TestClock.adjust("1999 millis");
+        yield* settle;
+        expect(starts).toEqual([0]);
+        yield* TestClock.adjust("1 millis");
+        yield* settle;
+        expect(starts).toEqual([0, 4_000]);
+        // An 8 s build is followed by 5 s of rest, not 8.
+        yield* Queue.offer(changed, undefined);
+        yield* TestClock.adjust("8 seconds");
+        yield* settle;
+        yield* TestClock.adjust("4999 millis");
+        yield* settle;
+        expect(starts).toEqual([0, 4_000]);
+        yield* TestClock.adjust("1 millis");
+        yield* settle;
+        expect(starts).toEqual([0, 4_000, 17_000]);
       }),
     ).pipe(Effect.provide(TestClock.layer())),
   ));

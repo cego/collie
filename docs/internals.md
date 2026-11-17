@@ -111,7 +111,9 @@ Slice boundaries hold for at most 250 ms, and for no longer than the pass worked
 last held; a pass that has worked less than 10 ms is not held. Answers that never stop, as on a
 Machine with many agents asking at once, therefore leave a background pass at least half the
 time: one board build of about 400 cards there took 146 s when each boundary waited out the
-patience, and takes 12 s now.
+patience, and takes 12 s now. The board's next build waits as long as the last one took, and
+at most 5 s: a board that keeps moving costs at most half of the host's time, and is never
+more than 5 s and a build behind.
 
 Background merge and cleanup checks read historical cards without interactive offers.
 Their settlement decisions still use the same merge states and outstanding work, but do
