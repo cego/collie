@@ -13,7 +13,7 @@ import * as Arr from "effect/Array";
 
 import * as Option from "effect/Option";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
-import { withDirLock } from "./lock";
+import { RunRecords, runOfDir } from "./run-records";
 import type { Voice } from "./proposals";
 import {
   AuthoritySchema,
@@ -77,7 +77,7 @@ export type IntentSeed = typeof IntentSeedSchema.Type;
 const IntentJson = Schema.fromJsonString(IntentSchema);
 const encodeIntent = flow(Schema.encodeResult(IntentJson), Result.getOrThrow);
 
-/** An `intent.json` that exists but is not an Intent. Never a default: see §7.1. */
+/** A recorded Intent that is not an Intent. Never a default: see §7.1. */
 export class IntentUnreadable extends Data.TaggedError("IntentUnreadable")<{
   dir: string;
   cause: string;
@@ -85,39 +85,38 @@ export class IntentUnreadable extends Data.TaggedError("IntentUnreadable")<{
 
 export const INTENT_FILE = "intent.json";
 
-export const readIntent = Effect.fn("Intent.read")(function* (dir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const file = path.join(dir, INTENT_FILE);
-  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) return null;
-  const raw = yield* fs
-    .readFileString(file)
-    .pipe(Effect.mapError((cause) => new IntentUnreadable({ dir, cause: String(cause) })));
-  return yield* Schema.decodeEffect(IntentJson)(raw).pipe(
+const decodeIntent = (dir: string) => (raw: string) =>
+  Schema.decodeEffect(IntentJson)(raw).pipe(
     Effect.mapError((cause) => new IntentUnreadable({ dir, cause: String(cause) })),
   );
+
+export const readIntent = Effect.fn("Intent.read")(function* (dir: string) {
+  const raw = yield* RunRecords.use((records) => records.fact(runOfDir(dir), INTENT_FILE));
+  return raw === null ? null : yield* decodeIntent(dir)(raw);
 });
 
 /**
- * The write itself, for a caller already inside `withDirLock`. An amendment is a read,
- * a decision and a write, and only all three under one lock stop two of them reading the
- * same version and the later rename erasing the earlier.
+ * Replaces the Intent with what `change` makes of it, null keeping it as it is. The read,
+ * the decision and the write are one transaction, so two amendments never read the same
+ * version and the later erase the earlier.
  */
-export const writeIntentHeld = Effect.fn("Intent.writeHeld")(function* (
+export const updateIntent = <E, R>(
   dir: string,
-  intent: Intent,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  yield* fs.makeDirectory(dir, { recursive: true });
-  const file = path.join(dir, INTENT_FILE);
-  const tmp = `${file}.${process.pid}.tmp`;
-  yield* fs.writeFileString(tmp, `${encodeIntent(intent)}\n`);
-  yield* fs.rename(tmp, file);
-});
+  change: (intent: Intent | null) => Effect.Effect<Intent | null, E, R>,
+) =>
+  RunRecords.use((records) =>
+    records.update(runOfDir(dir), INTENT_FILE, (raw) =>
+      Effect.gen(function* () {
+        const next = yield* change(raw === null ? null : yield* decodeIntent(dir)(raw));
+        return next === null ? raw : `${encodeIntent(next)}\n`;
+      }),
+    ),
+  ).pipe(Effect.flatMap((raw) => (raw === null ? Effect.succeed(null) : decodeIntent(dir)(raw))));
 
 export const writeIntent = Effect.fn("Intent.write")(function* (dir: string, intent: Intent) {
-  yield* withDirLock(dir, writeIntentHeld(dir, intent));
+  yield* RunRecords.use((records) =>
+    records.put(runOfDir(dir), INTENT_FILE, `${encodeIntent(intent)}\n`),
+  );
 });
 
 /** A constraint is identified by what it says, so the same text is the same entry. */

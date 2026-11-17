@@ -17,7 +17,6 @@ import { agentsLayer } from "../src/agents";
 import {
   HOLD,
   Registry,
-  controlPath,
   foundationLayer,
   registryLayer,
   runDir,
@@ -28,8 +27,9 @@ import type { RunReport, RequestedBy } from "../src/board-model";
 import { Store } from "../src/store";
 import { writeTask } from "../src/task";
 import { socketOf } from "../src/host";
+import { RunRecords } from "../src/run-records";
 import { reportsLayer } from "../src/reports";
-import { DEFAULT_AUTHORITY, IntentSchema } from "../src/intent";
+import { DEFAULT_AUTHORITY, writeIntent } from "../src/intent";
 import type { Peer } from "../src/peers-model";
 
 const ROOT = new URL("../", import.meta.url).pathname;
@@ -176,7 +176,7 @@ const REPORT: RunReport = {
   closed: true,
 };
 
-test("Run listings and related views use their supplied reader for intent and displayed controls", () =>
+test("Run listings and related views given a reader still take intent and displayed controls from the Run's records", () =>
   runEffect(
     hosted(
       Effect.gen(function* () {
@@ -184,7 +184,10 @@ test("Run listings and related views use their supplied reader for intent and di
         const fs = yield* FileSystem.FileSystem;
         const run = yield* started(yield* loaded("quiet"), "reader-snapshot", {});
         yield* settled(run.runId, "complete");
-        const intent = yield* Schema.encodeEffect(Schema.fromJsonString(IntentSchema))({
+        const before = yield* registry.view(run.runId);
+        expect(before?.options.outcome).not.toBe("performance");
+        expect(before?.controls).toEqual([]);
+        yield* writeIntent(runDir(dir(), run.runId), {
           version: 1,
           run: run.runId,
           goal: "Reader snapshot",
@@ -194,23 +197,17 @@ test("Run listings and related views use their supplied reader for intent and di
           parent: null,
           history: [],
         });
-        const reader: FileSystem.FileSystem = {
-          ...fs,
-          readFileString: (path, encoding) =>
-            path === `${runDir(dir(), run.runId)}/intent.json`
-              ? Effect.succeed(intent)
-              : fs.readFileString(path, encoding),
-          exists: (path) =>
-            path === controlPath(dir(), HOLD, run.runId) ? Effect.succeed(true) : fs.exists(path),
-        };
-        const all = yield* registry.views(null, reader);
+        yield* RunRecords.use((records) =>
+          records.setControl(HOLD, run.runId, "2026-09-14T10:00:00Z"),
+        );
+        const all = yield* registry.views(null, fs);
         expect(
           Option.getOrUndefined(Arr.findFirst(all, (view) => view.runId === run.runId)),
         ).toMatchObject({
           options: { outcome: "performance" },
           controls: [HOLD],
         });
-        const related = yield* registry.related(run.runId, [], reader);
+        const related = yield* registry.related(run.runId, [], fs);
         expect(
           Option.getOrUndefined(Arr.findFirst(related, (view) => view.runId === run.runId)),
         ).toMatchObject({
@@ -218,14 +215,14 @@ test("Run listings and related views use their supplied reader for intent and di
           controls: [HOLD],
         });
         const fresh = yield* registry.view(run.runId);
-        expect(fresh?.options.outcome).not.toBe("performance");
-        expect(fresh?.controls).toEqual([]);
+        expect(fresh?.options.outcome).toBe("performance");
+        expect(fresh?.controls).toEqual([HOLD]);
       }),
     ),
   ));
 
 test(
-  "a completed Run is polled at most once across two listings, and its files are read on each",
+  "a completed Run is polled at most once across two listings, and its records are read on each",
   () =>
     runEffect(
       hosted(
@@ -243,7 +240,9 @@ test(
           expect(first?.controls).toEqual([]);
 
           yield* (yield* Store).reported(run.runId, REPORT);
-          yield* write(controlPath(dir(), HOLD, run.runId), "");
+          yield* RunRecords.use((records) =>
+            records.setControl(HOLD, run.runId, "2026-09-14T10:00:00Z"),
+          );
           const second = Option.getOrUndefined(
             Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
           );

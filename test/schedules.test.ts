@@ -11,10 +11,12 @@ import { Database } from "bun:sqlite";
 import { hostname } from "node:os";
 import { Clock, Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { readAudit } from "../src/audit";
+import { recordsReadLayer } from "../src/records";
 import { connect, ownerOf } from "../src/host";
 import { isoOf, ScheduleChanged, ScheduleListing } from "../src/schedule-model";
 import { epochMs } from "../src/time";
 import { stopHost, until } from "./support/host";
+import { memoryRecords } from "./support/effect";
 import { collie, proves, type World } from "./support/world";
 
 const FAST = { COLLIE_HOST_SCHEDULE_SECONDS: "1" };
@@ -41,7 +43,10 @@ const scheduled = (world: World, name: string) =>
     for (const run of runs) {
       const start = Option.getOrUndefined(
         Arr.findFirst(
-          yield* readAudit(`${world.state}/runs/${run}`).pipe(Effect.orElseSucceed(() => [])),
+          yield* readAudit(`${world.state}/runs/${run}`).pipe(
+            Effect.provide(recordsReadLayer(world.state)),
+            Effect.orElseSucceed(() => []),
+          ),
           (line) => line.operation === "start",
         ),
       );
@@ -528,6 +533,7 @@ test(
           const lines = yield* until(
             () =>
               readAudit(trail).pipe(
+                Effect.provide(memoryRecords),
                 // The first occurrence can fall before the checkout has gone.
                 Effect.map((all) =>
                   Arr.filter(

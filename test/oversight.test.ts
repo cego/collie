@@ -13,7 +13,8 @@ import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
-import { runEffect } from "./support/effect";
+import { runEffect as runShared } from "./support/effect";
+import { overHost } from "./support/records";
 import { Agents, agentsLayer } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { foundationLayer, loadEntry, runDir, type Herd } from "../src/engine";
@@ -21,13 +22,14 @@ import {
   Oversight,
   checkDrift,
   familyOf,
+  MERGE_REQUEST,
   ruleFacts,
   standForElection,
   writeCard,
   type Correcting,
   type Watched,
 } from "../src/oversight";
-import { readCards } from "../src/cards";
+import { readCards, writeCheckpoint } from "../src/cards";
 import {
   MAX_FILES,
   alignment,
@@ -45,7 +47,7 @@ import { recordsAt } from "../src/records";
 import { budgetPath, herdOf } from "../src/steering";
 import { serverSocket } from "../src/herdr";
 import { readVerifications } from "../src/verify";
-import { VerifySpecSchema } from "../src/verify-spec";
+import { updateApproved } from "../src/verify-spec";
 import {
   amend,
   readIntent,
@@ -55,12 +57,16 @@ import {
   type Constraint,
 } from "../src/intent";
 import { Store } from "../src/store";
+import { RunRecords } from "../src/run-records";
 import { recordReply } from "../src/replies";
 import { fixtures } from "./support/host";
 import { loggedGit } from "./support/bin";
 
 let rig: Rig;
 let dir: string;
+/** A test's effect, whose own reads of a Run's records meet its host's. */
+const runEffect = <A, E>(effect: Parameters<typeof runShared<A, E>>[0]) =>
+  runShared(effect.pipe(overHost(() => dir)));
 let toasts: string[];
 
 beforeEach(() =>
@@ -89,6 +95,7 @@ const session = <A, E>(
     | Host
     | Oversight
     | Store
+    | RunRecords
     | FileSystem.FileSystem
     | Path.Path
     | ChildProcessSpawner.ChildProcessSpawner
@@ -249,17 +256,18 @@ test("a Run whose Intent a human moved says so on its card", () =>
 test("a ticket an agent says it finished is carded once, with its own words as claims", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const progress = `${runDir(dir, "r1")}/steering/progress`;
-      yield* fs.makeDirectory(progress, { recursive: true });
-      yield* fs.writeFileString(
-        `${progress}/01-parse.json`,
-        `{"ticket":"01-parse.md","status":"done","claims":["parses the file"],"at":"2026-09-25T00:00:00Z"}`,
-      );
-      yield* fs.writeFileString(
-        `${progress}/02-print.json`,
-        `{"ticket":"02-print.md","status":"started","claims":[],"at":"2026-09-25T00:01:00Z"}`,
-      );
+      yield* writeCheckpoint(runDir(dir, "r1"), {
+        ticket: "01-parse.md",
+        status: "done",
+        claims: ["parses the file"],
+        at: "2026-09-25T00:00:00Z",
+      });
+      yield* writeCheckpoint(runDir(dir, "r1"), {
+        ticket: "02-print.md",
+        status: "started",
+        claims: [],
+        at: "2026-09-25T00:01:00Z",
+      });
       yield* session(
         Effect.gen(function* () {
           const oversight = yield* Oversight;
@@ -904,12 +912,7 @@ test("a finishing Run runs what it was granted, and offers what is still blockin
       );
       // What the Run may verify, as the host froze it when it was admitted.
       yield* fs.makeDirectory(`${dir}/evidence/r1`, { recursive: true });
-      yield* fs.writeFileString(
-        `${dir}/evidence/r1/approved.json`,
-        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([
-          tests,
-        ]).pipe(Effect.orDie),
-      );
+      yield* updateApproved(`${dir}/evidence/r1`, () => [tests]);
       const herd = { socketPath: `${rig.root}/herd.sock`, pluginRoot: rig.root };
 
       yield* executed("hello.workflow.ts", "r1", { name: "you" }, herd);
@@ -963,12 +966,7 @@ test("a host that finds its Herd while a Run finishes offers that Run's blocking
         { run_verification: [started] },
       );
       yield* fs.makeDirectory(`${dir}/evidence/r1`, { recursive: true });
-      yield* fs.writeFileString(
-        `${dir}/evidence/r1/approved.json`,
-        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([
-          started,
-        ]).pipe(Effect.orDie),
-      );
+      yield* updateApproved(`${dir}/evidence/r1`, () => [started]);
       const socketPath = `${rig.root}/herd.sock`;
       // A minute passes at each ask that finds no Herd, so the host asks again, and never
       // while a check runs on the clock that bounds it.
@@ -1449,7 +1447,8 @@ const admitted = (runId: string, goal: string | null, recorded: string | null) =
       at,
       seedIntent(runId, { goal, constraints: [{ ...SMALL, id: `${runId}-c` }] }),
     );
-    if (recorded !== null) yield* fs.writeFileString(`${at}/merge-request`, `${recorded}\n`);
+    if (recorded !== null)
+      yield* RunRecords.use((records) => records.put(runId, MERGE_REQUEST, `${recorded}\n`));
   });
 
 const familiesOf = (runIds: ReadonlyArray<string>) =>

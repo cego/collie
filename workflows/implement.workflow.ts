@@ -63,18 +63,7 @@ import {
   type Integration,
   type Slice,
 } from "collie";
-import {
-  DateTime,
-  Deferred,
-  Effect,
-  Fiber,
-  FileSystem,
-  Path,
-  Predicate,
-  Schema,
-  flow,
-  Result,
-} from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Path, Predicate, Schema } from "effect";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
@@ -685,10 +674,7 @@ export default defineWorkflow({
             execute: Effect.gen(function* () {
               const fs = yield* FileSystem.FileSystem;
               const path = yield* Path.Path;
-              const seen = new Set([runId]);
-              let from = parent;
-              while (from !== "" && !seen.has(from)) {
-                seen.add(from);
+              for (const from of recovered.lineage ?? [parent]) {
                 const files = yield* fs
                   .readDirectory(path.dirname(agents.outputFor(from, "build")))
                   .pipe(Effect.orElseSucceed(() => []));
@@ -701,9 +687,6 @@ export default defineWorkflow({
                   ...Arr.map(tickets, (name) => pipe_(name, Str.slice(0, -5))),
                 ]);
                 if (claims !== null) return claims;
-                from = yield* fs
-                  .readFileString(`${(yield* host.place(from)).dir}/recovery-parent`)
-                  .pipe(Effect.orElseSucceed(() => ""));
               }
               return null;
             }),
@@ -799,7 +782,8 @@ export default defineWorkflow({
             const item = ticket?.file ?? "build";
             const operation = attempt === 1 ? item : `${item}-${attempt}`;
             const before = (yield* host.evidence(runId, cwd)).verifications.length;
-            if (ticket !== null) yield* checkpoint(place.dir, ticket, "started", []);
+            if (ticket !== null)
+              yield* host.checkpoint(runId, { ticket: ticket.file, status: "started", claims: [] });
             const merged =
               (ticket !== null && built.size > 0) ||
               Arr.some(ticket === null ? tickets : [ticket], (one) => one.prerequisites.length > 0)
@@ -1038,7 +1022,11 @@ export default defineWorkflow({
             built.add(done.item);
             if (ticket === null) for (const one of tickets) built.add(one.file);
             if (ticket !== null)
-              yield* checkpoint(place.dir, ticket, "done", claimsOf(build, ticket));
+              yield* host.checkpoint(runId, {
+                ticket: ticket.file,
+                status: "done",
+                claims: claimsOf(build, ticket),
+              });
             return { done, blocking: Arr.filter(build.findings ?? [], isBlocking) };
           }),
           ticket === null
@@ -1096,7 +1084,7 @@ export default defineWorkflow({
           input,
           obstacle:
             recovery.entry === "Review"
-              ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe parent's original requirements and review associations are in ${parentDir}/reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
+              ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe original requirements and review associations this recovery weighed are in ${place.dir}/recovery-reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
               : "",
         });
       }
@@ -1352,40 +1340,6 @@ const claimsOf = (built: typeof Built.Type, ticket: Slice): ReadonlyArray<string
   const named = built.tickets_done ?? [];
   return named.length > 0 ? named : [ticket.title];
 };
-
-/**
- * The card a slice landing leaves, in the shape the agent writes its own and the cards
- * read. Written here so a ticket landing is visible whether or not the agent remembered.
- */
-const checkpoint = (
-  dir: string,
-  ticket: Slice,
-  status: "started" | "done",
-  claims: ReadonlyArray<string>,
-) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const at = DateTime.formatIso(yield* DateTime.now);
-    yield* fs.makeDirectory(`${dir}/steering/progress`, { recursive: true });
-    yield* fs.writeFileString(
-      `${dir}/steering/progress/${pipe_(ticket.file, Str.replace(/\.md$/, ""))}.json`,
-      asCheckpoint({ ticket: ticket.file, status, claims: [...claims], at }),
-    );
-  }).pipe(Effect.orDie);
-
-const asCheckpoint = flow(
-  Schema.encodeResult(
-    Schema.fromJsonString(
-      Schema.Struct({
-        ticket: Schema.String,
-        status: Schema.Literals(["started", "done"]),
-        claims: Schema.Array(Schema.String),
-        at: Schema.String,
-      }),
-    ),
-  ),
-  Result.getOrThrow,
-);
 
 /** A ticket's criteria as its builder is given them. */
 const renderCriteria = (criteria: ReadonlyArray<string>) =>

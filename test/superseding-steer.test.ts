@@ -6,7 +6,6 @@
 import type { Records } from "../src/records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
-import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import { Config, Effect, FileSystem, Option, Schema, type Scope, flow, Result } from "effect";
@@ -17,7 +16,8 @@ import { resetExecutors } from "../src/executors";
 import { connect } from "../src/host";
 import { carryOutAsked } from "../src/run-actions";
 import { SENT_STATES, appendLine } from "../src/steering";
-import { deliveredTo, recordsAt } from "./support/records";
+import { deliveredTo, hostRecords, recordsAt } from "./support/records";
+import { NOTIFIED, RunRecords } from "../src/run-records";
 import { TaskView } from "../src/board-model";
 import { read as readProposals, record as recordProposal, type Actor } from "../src/proposals";
 import { agentName } from "../src/naming";
@@ -190,11 +190,13 @@ const shipStarted = (at: AtQuestion) =>
   );
 
 const notified = (at: AtQuestion) =>
-  Effect.flatMap(FileSystem.FileSystem, (fs) =>
-    fs
-      .readFileString(`${at.world.state}/notified.${at.runId}`)
-      .pipe(Effect.orElseSucceed(() => "")),
-  ).pipe(Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")));
+  hostRecords(
+    at.world.state,
+    RunRecords.use((records) => records.controlsOf(NOTIFIED, at.runId)),
+  ).pipe(
+    Effect.map(Arr.map((row) => row.key)),
+    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+  );
 
 const cardOf = (at: AtQuestion) =>
   Effect.gen(function* () {

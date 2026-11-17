@@ -6,18 +6,15 @@ import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Config, ConfigProvider, Deferred, Effect, FileSystem, Option, Schedule } from "effect";
-import {
-  CHECK_ID,
-  CHECK_INSTALLATION,
-  encodeCheckRecord,
-  runningChecksDir,
-} from "../src/check-processes";
+import { CHECK_ID, CHECK_INSTALLATION, encodeCheckRecord } from "../src/check-processes";
+import { RUNNING_CHECK } from "../src/run-records";
 import { frontDoor, serve, socketOf } from "../src/host";
 import { processOf, startedOf, stillRunning } from "../src/processes";
 import { signalProcess } from "../src/lock";
 import { startDetached } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
 import { until } from "./support/host";
+import { hostRunRecords } from "./support/records";
 import { writeFakeHerdrShim } from "./support/fake-herdr-core";
 
 const held = new URL("./fixtures/checks/held.sh", import.meta.url).pathname;
@@ -128,10 +125,10 @@ test.skipIf(process.platform !== "linux")(
         ]);
         yield* Effect.addFinalizer(() => signalProcess(leader, "SIGKILL").pipe(Effect.ignore));
         const left = { pid: leader, started: (yield* startedOf(leader)) ?? "" };
-        yield* fs.makeDirectory(runningChecksDir(state));
         yield* fs.makeDirectory(`${state}/runs/run-four`, { recursive: true });
-        yield* fs.writeFileString(
-          `${runningChecksDir(state)}/run-four@1-left.json`,
+        yield* hostRunRecords(() => state).setControl(
+          RUNNING_CHECK,
+          "",
           encodeCheckRecord({
             id: "run-four@1-left",
             run: "run-four",
@@ -141,6 +138,7 @@ test.skipIf(process.platform !== "linux")(
             host: { pid: 4242, started: "2" },
             started: "2026-10-26T00:00:00.000Z",
           }),
+          "run-four@1-left",
         );
 
         yield* serving;

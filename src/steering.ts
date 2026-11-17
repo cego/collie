@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import { Context, Data, Effect, FileSystem, Layer, Path, Schema, flow, Result } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
+import { markWorked } from "./run-records";
 import { readJournal, type Journal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { StoreWrites } from "./store-writes";
@@ -174,6 +175,10 @@ export interface DeliveriesApi {
    * `unknown` still has the entry blocking that causal key.
    */
   readonly ofRun: (run: string) => Effect.Effect<ReadonlyArray<Delivery>>;
+  /** The newest line of each delivery about each of these Runs, as written, in one read. */
+  readonly newestOf: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
   /** This incarnation's deliveries of one piece of work, newest state each, in the order first written. */
   readonly about: (
     incarnation: string,
@@ -223,6 +228,8 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
         Effect.gen(function* () {
           const ledger = incarnationKey(line.incarnation);
           yield* sql`INSERT INTO collie_deliveries (ledger, line) VALUES (${ledger}, ${encodeLedgerLine(line)})`;
+          if (isDelivery(line))
+            yield* markWorked(line.run).pipe(Effect.provideService(SqlClient.SqlClient, sql));
           const runs = isDelivery(line)
             ? [line.run]
             : Arr.map(
@@ -251,6 +258,25 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
           Effect.orDie,
         ),
       ofRun: (run) => newest(run).pipe(Effect.map(deliveriesIn), Effect.orDie),
+      newestOf: (runs) =>
+        runs.length === 0
+          ? Effect.succeed(new Map())
+          : sql<{ readonly run: string; readonly line: string }>`
+              SELECT newest.run, line FROM collie_deliveries
+              JOIN (
+                SELECT run, MIN(seq) AS first, MAX(seq) AS last FROM collie_deliveries
+                WHERE run IN ${sql.in(runs)} AND id IS NOT NULL GROUP BY run, ledger, id
+              ) AS newest ON seq = newest.last
+              ORDER BY newest.run, newest.first
+            `.pipe(
+              Effect.map((rows) => {
+                const byRun = new Map<string, string[]>();
+                for (const row of rows)
+                  byRun.set(row.run, [...(byRun.get(row.run) ?? []), row.line]);
+                return byRun;
+              }),
+              Effect.orDie,
+            ),
       about: (incarnation, causalKey) =>
         sql<{ readonly line: string }>`
           SELECT line FROM collie_deliveries
@@ -319,6 +345,22 @@ export function newestById(lines: ReadonlyArray<LedgerLine>): Map<string, Delive
   for (const line of lines) if (isDelivery(line)) newest.set(line.id, line);
   return newest;
 }
+
+/** `deliveries` for one pass over these Runs, as `readAhead` reads their records. */
+export const deliveriesAhead = Effect.fn("Steering.deliveriesAhead")(function* (
+  deliveries: DeliveriesApi,
+  runs: ReadonlyArray<string>,
+) {
+  const ids = new Set(runs);
+  const all = yield* Effect.cached(deliveries.newestOf(runs));
+  return {
+    ...deliveries,
+    ofRun: (run) =>
+      ids.has(run)
+        ? Effect.map(all, (got) => deliveriesIn(Arr.map(got.get(run) ?? [], (line) => ({ line }))))
+        : deliveries.ofRun(run),
+  } satisfies DeliveriesApi;
+});
 
 export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (run: string) {
   return yield* Deliveries.use((ledgers) => ledgers.ofRun(run));

@@ -1505,6 +1505,11 @@ recorded: no agent, no tab and no Output written as though somebody had answered
 work, and findings are yours to carry — nothing here ends a list because an item found
 something.
 
+`host.checkpoint(runId, { ticket, status, claims })` records where an item stands —
+`started` as it begins, `done` with what it claims once it lands — and the host cards each
+`done` one while the Run is still working, labelled as claims. One checkpoint is kept per
+ticket; the latest replaces the one before it.
+
 [ADR-0024](adr/0024-a-list-of-work-is-known-by-its-names.md) is why an item is known by its
 name rather than its place.
 

@@ -55,7 +55,7 @@ import { fastForward, runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { task } from "./support/task";
 import { madeRun, recordsAt } from "./support/records";
-import { collie, proves } from "./support/world";
+import { collie, proves, type World } from "./support/world";
 
 const asSessions = Schemaflow(
   Schema.encodeResult(
@@ -75,8 +75,14 @@ const firstSnapshot = (state: string) =>
     }),
   ).pipe(Effect.orDie);
 
+/** What became of a Run's work, recorded through the host as a human records it. */
+const recordDisposed = (world: World, runId: string, kind: "merged" | "abandoned" | "superseded") =>
+  collie(world, ["run", "disposition", runId, "--as", kind]).pipe(
+    Effect.tap((said) => Effect.sync(() => expect(said.envelope.ok).toBe(true))),
+  );
+
 test(
-  "a client reads a snapshot, then keyed changes to files the host does not write, then a fresh snapshot",
+  "a client reads a snapshot, then keyed changes as a Run is recorded, then a fresh snapshot",
   () =>
     proves(
       "collie-board-stream-",
@@ -125,13 +131,7 @@ test(
           expect(Arr.map(snapshot.tasks, (task) => task.name)).toEqual(["Stream changes"]);
           const runId = snapshot.tasks[0]!.run;
 
-          yield* recordDisposition(`${world.state}/runs/${runId}`, {
-            kind: "merged",
-            ref: "",
-            at: "2026-10-01T12:00:00Z",
-            by: "human",
-            note: null,
-          }).pipe(Effect.orDie);
+          yield* recordDisposed(world, runId, "merged");
 
           const messages = yield* Fiber.join(reading).pipe(Effect.timeout("20 seconds"));
           expect((yield* Fiber.join(alongside).pipe(Effect.timeout("20 seconds")))._tag).toBe(
@@ -166,13 +166,7 @@ test(
             .pipe(
               Stream.tap((message) =>
                 message._tag === "Snapshot"
-                  ? recordDisposition(`${world.state}/runs/${runId}`, {
-                      kind: "abandoned",
-                      ref: "",
-                      at: "2026-10-01T13:00:00Z",
-                      by: "human",
-                      note: null,
-                    }).pipe(Effect.orDie)
+                  ? recordDisposed(world, runId, "abandoned")
                   : Effect.void,
               ),
               Stream.filter(abandoned),
@@ -294,13 +288,7 @@ const readsOnlyOnTicks = (drawer: boolean) =>
             Stream.runHead,
             Effect.forkScoped,
           );
-          yield* recordDisposition(`${world.state}/runs/${runId}`, {
-            kind,
-            ref: "",
-            at: "2026-10-01T12:00:00Z",
-            by: "human",
-            note: null,
-          }).pipe(Effect.orDie);
+          yield* recordDisposed(world, runId, kind);
           expect((yield* Fiber.join(shown).pipe(Effect.timeout("20 seconds")))._tag).toBe("Some");
         }
         const ticks = Math.ceil(((yield* Clock.currentTimeMillis) - since) / 5000);

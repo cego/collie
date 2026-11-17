@@ -6,7 +6,7 @@ import { attachmentsDir, listAttachments } from "../src/attachments";
 import { frontDoor, socketOf } from "../src/host";
 import { readAudit } from "../src/audit";
 import { registerAgent } from "../src/registry";
-import { recordsAt } from "./support/records";
+import { hostRecords, recordsAt } from "./support/records";
 import { collie, proves } from "./support/world";
 
 const encode = Schema.encodeEffect(Schema.fromJsonString(Schema.Json));
@@ -230,7 +230,10 @@ test(
               .readDirectory(`${world.state}/evidence/${runId}`, { recursive: true })
               .pipe(Effect.orElseSucceed(() => [])),
           ).toEqual(evidenceBefore);
-          const audit = yield* readAudit(runDir);
+          const audit = yield* hostRecords(
+            world.state,
+            readAudit(runDir).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
+          );
           expect(
             Arr.filter(audit, (line) => line.operation === "artefact-register").length,
           ).toBeGreaterThanOrEqual(8);

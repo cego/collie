@@ -15,11 +15,12 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { Significance, mrWords, readMrRef } from "./board-model";
 import { forgeOf } from "./forge/forge";
-import { appendJournal, findLastJournal, readJournal } from "./journal";
+import { appendRunJournal, lastRunJournal, readRunJournal, runJournal } from "./journal";
 import { redact } from "./redact";
+import { RunRecords, runOfDir } from "./run-records";
 import { sameTree, type Verification } from "./verify";
 import { ProducerReport, reportFields } from "./narrative-model";
 
@@ -85,25 +86,18 @@ export const CardSchema = Schema.Struct({
 export type Card = Schema.Schema.Type<typeof CardSchema>;
 const CardJson = Schema.fromJsonString(CardSchema);
 
-export const cardsPath = Effect.fn("Cards.path")(function* (runDir: string) {
-  const path = yield* Path.Path;
-  return path.join(runDir, "steering", "cards.jsonl");
-});
+export const cardsPath = (runDir: string) => runJournal(runDir, "steering/cards.jsonl");
 
 export const appendCard = Effect.fn("Cards.append")(function* (runDir: string, card: Card) {
-  yield* appendJournal(yield* cardsPath(runDir), CardJson, card);
+  yield* appendRunJournal(cardsPath(runDir), CardJson, card);
 });
 
 export const readCards = Effect.fn("Cards.read")(function* (runDir: string) {
-  return yield* readJournal(yield* cardsPath(runDir), CardJson);
+  return yield* readRunJournal(cardsPath(runDir), CardJson);
 });
 
 export const readFinalCard = Effect.fn("Cards.final")(function* (runDir: string) {
-  return yield* findLastJournal(
-    yield* cardsPath(runDir),
-    CardJson,
-    (card) => card.kind === "final",
-  );
+  return yield* lastRunJournal(cardsPath(runDir), CardJson, ["final"]);
 });
 
 /**
@@ -327,18 +321,32 @@ const CheckpointSchema = Schema.Struct({
 export type Checkpoint = Schema.Schema.Type<typeof CheckpointSchema>;
 const CheckpointJson = Schema.fromJsonString(CheckpointSchema);
 
+const PROGRESS = "steering/progress/";
+
 export const readCheckpoints = Effect.fn("Cards.readCheckpoints")(function* (runDir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const dir = path.join(runDir, "steering", "progress");
-  const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
-  const found: Array<{ file: string; checkpoint: Checkpoint }> = [];
-  for (const name of names) {
-    if (!pipe_(name, Str.endsWith(".json"))) continue;
-    const file = path.join(dir, name);
-    const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-    const decoded = Schema.decodeOption(CheckpointJson)(raw);
-    if (decoded._tag === "Some") found.push({ file, checkpoint: decoded.value });
-  }
-  return found;
+  const rows = yield* RunRecords.use((records) => records.factsUnder(runOfDir(runDir), PROGRESS));
+  return Arr.flatMap(rows, (row) =>
+    pipe_(
+      Schema.decodeOption(CheckpointJson)(row.data),
+      Option.match({
+        onNone: () => [],
+        onSome: (checkpoint) => [{ file: `${runDir}/${row.name}`, checkpoint }],
+      }),
+    ),
+  );
 });
+
+/** Records a checkpoint, one per ticket: the latest is the ticket's. */
+export const writeCheckpoint = (runDir: string, checkpoint: Checkpoint) =>
+  Schema.encodeEffect(CheckpointJson)(checkpoint).pipe(
+    Effect.orDie,
+    Effect.flatMap((text) =>
+      RunRecords.use((records) =>
+        records.put(
+          runOfDir(runDir),
+          `${PROGRESS}${pipe_(checkpoint.ticket, Str.replace(/\.md$/, ""))}.json`,
+          text,
+        ),
+      ),
+    ),
+  );

@@ -11,16 +11,11 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Config, Effect, FileSystem, Option, Schema } from "effect";
 import { expect, test } from "bun:test";
-import {
-  dispositionPath,
-  latest,
-  readDispositions,
-  recordDisposition,
-  statusLine,
-} from "../src/disposition";
+import { latest, readDispositions, recordDisposition, statusLine } from "../src/disposition";
 import type { Disposition } from "../src/board-model";
 import { hosted, settledRun } from "./support/hosted";
 import { runEffect, suiteEnv } from "./support/effect";
+import { hostRecords } from "./support/records";
 
 const root = new URL("../", import.meta.url).pathname;
 const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
@@ -72,7 +67,6 @@ test(
   () =>
     hosted("hw-disposition-", ({ world }) =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         const env = {
           HERDR_PLUGIN_ROOT: world.install,
           HERDR_PLUGIN_STATE_DIR: world.state,
@@ -90,7 +84,7 @@ test(
           ok: true,
           data: { status: failed, disposition: null },
         });
-        expect(yield* fs.exists(yield* dispositionPath(run.dir))).toBe(false);
+        expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
 
         const record = [
           "--json",
@@ -110,13 +104,13 @@ test(
           ok: true,
           data: { status: failed, disposition: { kind: "merged", ref: "cego/collie!43" } },
         });
-        expect((yield* readDispositions(run.dir)).length).toBe(1);
+        expect((yield* hostRecords(world.state, readDispositions(run.dir))).length).toBe(1);
 
         // A replayed request id returns the first result rather than recording twice.
         const replay = yield* cli(record, env);
         expect(replay.exit).toBe(0);
         expect(yield* parseEnvelope(replay.stdout)).toMatchObject({ ok: true });
-        expect((yield* readDispositions(run.dir)).length).toBe(1);
+        expect((yield* hostRecords(world.state, readDispositions(run.dir))).length).toBe(1);
 
         // The whole point: how the Run ended is still how it ended.
         expect(
@@ -171,13 +165,13 @@ test(
           ok: false,
           error: { code: "invalid_input" },
         });
-        expect(yield* readDispositions(run.dir)).toEqual([]);
+        expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
 
         const taken = yield* supersede("restarted clean");
         expect(taken.exit).toBe(0);
-        expect(Arr.map(yield* readDispositions(run.dir), (one) => one.ref)).toEqual([
-          "restarted clean",
-        ]);
+        expect(
+          Arr.map(yield* hostRecords(world.state, readDispositions(run.dir)), (one) => one.ref),
+        ).toEqual(["restarted clean"]);
       }),
     ),
   // Two CLI spawns of a TypeScript entrypoint.

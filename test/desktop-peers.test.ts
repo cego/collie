@@ -1,4 +1,4 @@
-import { launchesAt } from "./support/records";
+import { hostRecords, launchesAt } from "./support/records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -22,7 +22,7 @@ import { signRelease } from "../src/signing";
 import { readAudit } from "../src/audit";
 import { peersOf } from "../src/peers";
 import { exec } from "./support/command";
-import { runEffect } from "./support/effect";
+import { memoryRecords, runEffect } from "./support/effect";
 import { releaseBinary, twoMachines, type Side } from "./support/peers";
 import { freePort } from "./support/fake-ssh";
 import { collieCommand } from "./support/world";
@@ -313,8 +313,14 @@ test(
             expect(delivered[0]).toMatchObject({ state: "applied" });
             expect(
               Option.getOrUndefined(
-                Arr.findFirst(yield* readAudit(runDir(second.world.state, runId)), (line) =>
-                  pipe_(line.request, Str.startsWith("desktop-chat-delivery")),
+                Arr.findFirst(
+                  yield* hostRecords(
+                    second.world.state,
+                    readAudit(runDir(second.world.state, runId)).pipe(
+                      Effect.provideService(FileSystem.FileSystem, fs),
+                    ),
+                  ),
+                  (line) => pipe_(line.request, Str.startsWith("desktop-chat-delivery")),
                 ),
               )?.actor,
             ).toMatchObject({ origin: "chat", from: { client: "desktop-test" } });
@@ -345,7 +351,12 @@ test(
             );
             expect(yield* local.asked).toEqual([]);
             const [incoming] = yield* peersOf(second.world.state);
-            expect((yield* readAudit(`${second.world.state}/shell`))[0]?.actor).toMatchObject({
+            // The shell's trail is a file of its own, not a Run's: no host records it.
+            expect(
+              (yield* readAudit(`${second.world.state}/shell`).pipe(
+                Effect.provide(memoryRecords),
+              ))[0]?.actor,
+            ).toMatchObject({
               origin: "desktop",
               from: { machine: { installation: incoming!.installation }, client: "desktop-test" },
             });
@@ -429,7 +440,9 @@ test(
             expect(
               yield* fs.readFile(`${second.world.home}/.cache/collie/runners/collie-0.40.0`),
             ).toEqual(runner);
-            const shells = yield* readAudit(`${second.world.state}/shell`);
+            const shells = yield* readAudit(`${second.world.state}/shell`).pipe(
+              Effect.provide(memoryRecords),
+            );
             expect(shells.length).toBeGreaterThan(0);
             expect(
               Arr.filter(shells, ({ asked }) =>

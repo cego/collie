@@ -879,6 +879,15 @@ export interface HostApi {
   ) => Effect.Effect<void>;
   /** Records where the Run's work is among its Steps (ADR-draft-a-step-is-declared-where-its-work-is-written D4). */
   readonly step: (runId: string, note: StepNote) => Effect.Effect<void>;
+  /** Records what an implementer says it has done with a ticket, carded while it works. */
+  readonly checkpoint: (
+    runId: string,
+    checkpoint: {
+      readonly ticket: string;
+      readonly status: "started" | "done";
+      readonly claims: ReadonlyArray<string>;
+    },
+  ) => Effect.Effect<void>;
   /**
    * Why this Run has parked its own work and what picks it up again, shown beside its
    * status; null says it no longer has. A park naming no cause is recorded as `unknown`.

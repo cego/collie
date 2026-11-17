@@ -71,14 +71,19 @@ export const bundleLinuxMedia = Effect.fn("bundle.linuxMedia")(function* (
     ),
   );
   yield* fs.chmod(`${bundle}/libexec/gst-plugin-scanner`, 0o755);
+  // Read the package database once for the whole closure, rather than once per library.
+  const files = yield* Effect.forEach([...libraries, scanner, ...plugins], (file) =>
+    fs.realPath(file),
+  );
+  const owner = yield* run("dpkg-query", ["--search", ...files], bundle);
+  if (owner.code !== 0)
+    return yield* new Cause.UnknownError(
+      null,
+      `Could not resolve distribution copyright records: ${owner.stderr}`,
+    );
   const packages = new Set<string>();
-  for (const file of [...libraries, scanner, ...plugins]) {
-    const owner = yield* run("dpkg-query", ["--search", yield* fs.realPath(file)], bundle);
-    if (owner.code !== 0)
-      return yield* new Cause.UnknownError(null, `No distribution copyright record for ${file}`);
-    for (const line of Str.split(Str.trim(owner.stdout), "\n"))
-      packages.add(Str.split(Str.split(line, ": ")[0]!, ":")[0]!);
-  }
+  for (const line of Str.split(Str.trim(owner.stdout), "\n"))
+    packages.add(Str.split(Str.split(line, ": ")[0]!, ":")[0]!);
   yield* fs.makeDirectory(`${bundle}/Resources/media-licenses`, { recursive: true });
   for (const name of packages)
     yield* fs.copyFile(

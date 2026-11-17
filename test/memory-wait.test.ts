@@ -8,7 +8,8 @@ import { hostname } from "node:os";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { writeConfigValue } from "../src/config";
-import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
+import { holdsBudgetOf, MEMORY_WAIT, memoryWaitOf, waitForMemory } from "../src/memory-wait";
+import { RunRecords } from "../src/run-records";
 
 let rig: Rig;
 
@@ -21,8 +22,6 @@ beforeEach(() =>
 );
 
 afterEach(() => runEffect(rig.close()));
-
-const runDir = () => `${rig.stateDir}/runs/r1`;
 
 const log = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -53,7 +52,7 @@ test("a Machine with memory to spare starts at once, leaving no wait behind", ()
     onTestClock(
       Effect.gen(function* () {
         yield* waiting();
-        expect(yield* memoryWaitOf(runDir())).toBeNull();
+        expect(yield* memoryWaitOf("r1")).toBeNull();
         expect(yield* log).toBe("");
       }),
     ),
@@ -66,11 +65,11 @@ test("a short Machine holds the start, read again every 15 seconds, until it is 
         yield* rig.memory(2.1);
         const fiber = yield* Effect.forkChild(waiting("r1-build"));
         yield* settle;
-        expect((yield* memoryWaitOf(runDir()))?.sentence).toBe(
+        expect((yield* memoryWaitOf("r1"))?.sentence).toBe(
           `waiting for memory on ${hostname()}: 2.1 of 100.0 GB available`,
         );
-        expect(yield* holdsBudgetOf(rig.stateDir, "r1", "r1-build")).toBe(true);
-        expect(yield* holdsBudgetOf(rig.stateDir, "r1", "r1-review")).toBe(false);
+        expect(yield* holdsBudgetOf("r1", "r1-build")).toBe(true);
+        expect(yield* holdsBudgetOf("r1", "r1-review")).toBe(false);
         expect(yield* log).toContain(
           `build's agent: waiting for memory on ${hostname()}: 2.1 of 100.0 GB available`,
         );
@@ -83,7 +82,7 @@ test("a short Machine holds the start, read again every 15 seconds, until it is 
         yield* TestClock.adjust("1 second");
         yield* settle;
         expect(Exit.isSuccess(yield* Fiber.await(fiber))).toBe(true);
-        expect(yield* memoryWaitOf(runDir())).toBeNull();
+        expect(yield* memoryWaitOf("r1")).toBeNull();
         expect(yield* log).toContain("build's agent: waited 15s for memory");
       }),
     ),
@@ -96,7 +95,7 @@ test("pressure that holds the start is named in the sentence", () =>
         yield* rig.memory(50, 90.75);
         const fiber = yield* Effect.forkChild(waiting());
         yield* settle;
-        expect((yield* memoryWaitOf(runDir()))?.sentence).toBe(
+        expect((yield* memoryWaitOf("r1"))?.sentence).toBe(
           `waiting for memory on ${hostname()}: 50.0 of 100.0 GB available, pressure 90.8`,
         );
         yield* Fiber.interrupt(fiber);
@@ -129,7 +128,7 @@ test("a stop ends the wait, and the Run's log says it was stopped", () =>
         yield* TestClock.adjust("30 seconds");
         yield* settle;
         yield* Fiber.interrupt(fiber);
-        expect(yield* memoryWaitOf(runDir())).toBeNull();
+        expect(yield* memoryWaitOf("r1")).toBeNull();
         expect(yield* log).toContain("build's agent: stopped after waiting 30s for memory");
       }),
     ),
@@ -171,10 +170,9 @@ test("a wait whose host died, reading nothing for three of its periods, is no lo
   runEffect(
     onTestClock(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.makeDirectory(`${runDir()}/memory-waits`, { recursive: true });
-        yield* fs.writeFileString(
-          `${runDir()}/memory-waits/0-1.json`,
+        yield* (yield* RunRecords).setControl(
+          MEMORY_WAIT,
+          "r1",
           yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
             what: "build's agent",
             sentence: "waiting for memory on vm-mk: 2.0 of 100.0 GB available",
@@ -183,11 +181,12 @@ test("a wait whose host died, reading nothing for three of its periods, is no lo
             every: 15_000,
             asker: "r1-build",
           }).pipe(Effect.orDie),
+          "0-1.json",
         );
-        expect(yield* memoryWaitOf(runDir())).not.toBeNull();
+        expect(yield* memoryWaitOf("r1")).not.toBeNull();
         yield* TestClock.adjust("46 seconds");
-        expect(yield* memoryWaitOf(runDir())).toBeNull();
-        expect(yield* holdsBudgetOf(rig.stateDir, "r1", "r1-build")).toBe(false);
+        expect(yield* memoryWaitOf("r1")).toBeNull();
+        expect(yield* holdsBudgetOf("r1", "r1-build")).toBe(false);
       }),
     ),
   ));
@@ -203,7 +202,7 @@ test("a live wait reads again within its period, so it stays shown however long 
           yield* TestClock.adjust("15 seconds");
           yield* settle;
         }
-        expect(yield* memoryWaitOf(runDir())).not.toBeNull();
+        expect(yield* memoryWaitOf("r1")).not.toBeNull();
         yield* Fiber.interrupt(fiber);
       }),
     ),

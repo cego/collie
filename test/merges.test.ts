@@ -31,7 +31,7 @@ import type { Runner } from "../src/mr";
 import { readEnv } from "../src/env";
 import { madeRun } from "./support/records";
 import { task, taskMr } from "./support/task";
-import { runEffect } from "./support/effect";
+import { memoryRecords, runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
 import { readLanding, writeLanding, type Landing } from "../src/landing";
 import {
@@ -111,6 +111,44 @@ const seeded = Effect.fn("merges.seeded")(function* () {
       buildBoard({ env, runs: [run], ...over }),
   };
 });
+
+test("the merge watch settles hidden history without looking for an interactive host", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { stateDir, run } = yield* seeded();
+      let hostLookups = 0;
+      const states = new Map<string, MrState>();
+      yield* settleMerges({
+        stateDir,
+        cwd: stateDir,
+        runs: [run],
+        views: [],
+        run: gitlab("merged"),
+        record: () => Effect.die("the MR is already recorded"),
+        stop: () => Effect.die("completed work"),
+        now: epochMs("2026-09-19T10:00:00Z"),
+        checked: new Map(),
+        states,
+        panels: new Map(),
+        making: new Set(),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          exists: (path) =>
+            path === `${stateDir}/host.db`
+              ? Effect.sync(() => {
+                  hostLookups++;
+                  return false;
+                })
+              : fs.exists(path),
+        }),
+      );
+      expect(states.get(`${GITLAB}!65`)).toBe("merged");
+      expect((yield* readDispositions(run.dir)).at(-1)?.kind).toBe("merged");
+      expect(hostLookups).toBe(0);
+    }),
+  ));
 
 test("a closed forge refresh settles superseded work after its checkout disappeared", () =>
   runWithForge(
@@ -948,23 +986,31 @@ const TEN = epochMs("2026-10-15T10:00:00Z");
 
 test("a merge request opened from a Task's branch by anyone is found, recorded as its Run's, and lands it", () =>
   runWithForge(
-    Effect.gen(function* () {
-      for (const name of ["github", "gitlab"] as const) {
-        const { run, recorded, card, round } = yield* onBranch(name, [
-          fromBranch(name, { state: "merged", mergedAt: "2026-10-15T08:40:00Z", mergedSha: HEAD }),
-        ]);
-        expect((yield* card(TEN)).mr).toBeNull();
-        yield* round(TEN);
-        expect(recorded).toEqual(new Map([["r-implement", URL115[name]]]));
-        expect(
-          Arr.map(yield* readDispositions(run.dir), (line) => [line.by, line.kind, line.ref]),
-        ).toEqual([[name, "merged", ID115[name]]]);
-        const after = yield* card(TEN);
-        expect(after.mr).not.toBeNull();
-        expect(after.disposition).toBe(`merged ${LABEL[name]}`);
-        expect(after.sentence).toBe(`Merged as ${LABEL[name]}.`);
-      }
-    }),
+    Effect.forEach(
+      ["github", "gitlab"] as const,
+      (name) =>
+        Effect.gen(function* () {
+          const { run, recorded, card, round } = yield* onBranch(name, [
+            fromBranch(name, {
+              state: "merged",
+              mergedAt: "2026-10-15T08:40:00Z",
+              mergedSha: HEAD,
+            }),
+          ]);
+          expect((yield* card(TEN)).mr).toBeNull();
+          yield* round(TEN);
+          expect(recorded).toEqual(new Map([["r-implement", URL115[name]]]));
+          expect(
+            Arr.map(yield* readDispositions(run.dir), (line) => [line.by, line.kind, line.ref]),
+          ).toEqual([[name, "merged", ID115[name]]]);
+          const after = yield* card(TEN);
+          expect(after.mr).not.toBeNull();
+          expect(after.disposition).toBe(`merged ${LABEL[name]}`);
+          expect(after.sentence).toBe(`Merged as ${LABEL[name]}.`);
+          // Each forge's Run is `r-implement`, so each keeps records of its own.
+        }).pipe(Effect.provide(Layer.fresh(memoryRecords))),
+      { discard: true },
+    ),
   ));
 
 test("a merge request opened by hand from one Change run's branch is found when another Change run's is already recorded", () =>

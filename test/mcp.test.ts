@@ -19,6 +19,7 @@ import type { JsonObject } from "../src/schema";
 import { rebuiltAnswer } from "../src/mcp";
 import { connect } from "../src/host";
 import { readAudit } from "../src/audit";
+import { recordsReadLayer } from "../src/records";
 import { runDir } from "../src/engine";
 import { until } from "./support/host";
 import { twoMachines } from "./support/peers";
@@ -249,7 +250,9 @@ test(
             });
             expect(encodeValue(forged)).toContain("refus");
             const before = Arr.filter(
-              yield* readAudit(runDir(first.world.state, runId)),
+              yield* readAudit(runDir(first.world.state, runId)).pipe(
+                Effect.provide(recordsReadLayer(first.world.state)),
+              ),
               (one) => one.operation === "deliver",
             ).length;
             const answer = yield* server.request("tools/call", {
@@ -258,7 +261,9 @@ test(
             });
             expect(encodeValue(answer)).toContain("deliver: applied");
             const trail = Arr.filter(
-              yield* readAudit(runDir(first.world.state, runId)),
+              yield* readAudit(runDir(first.world.state, runId)).pipe(
+                Effect.provide(recordsReadLayer(first.world.state)),
+              ),
               (one) => one.operation === "deliver",
             );
             expect(trail).toHaveLength(before + 1);

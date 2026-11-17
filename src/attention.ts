@@ -3,6 +3,7 @@ import * as Option from "effect/Option";
 import { Effect, type FileSystem, type Path } from "effect";
 import { currentReports, openReports, readDrift } from "./drift";
 import { readCards } from "./cards";
+import type { RunRecords } from "./run-records";
 import { settled, type RunFacts } from "./runs";
 import type { Attention } from "./board-model";
 
@@ -105,9 +106,7 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: 
  * The constraint a Run drifted from and nobody settled, or null. `escalated` is what the
  * correction loop writes when it has spent its bound.
  */
-const driftUnresolved = (
-  dir: string,
-): Effect.Effect<string | null, never, FileSystem.FileSystem | Path.Path> =>
+const driftUnresolved = (dir: string): Effect.Effect<string | null, never, RunRecords> =>
   readDrift(dir).pipe(
     Effect.map(
       (lines) =>
@@ -121,14 +120,14 @@ const driftUnresolved = (
 /** Whether this Run's newest card says the Herd still owes a cross-run evaluation. */
 const crossRunPending = (
   dir: string,
-): Effect.Effect<boolean, never, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<boolean, never, FileSystem.FileSystem | Path.Path | RunRecords> =>
   readCards(dir).pipe(
     Effect.map((cards) => cards.at(-1)?.cross_run === "pending"),
     Effect.orElseSucceed(() => false),
   );
 
 /** Open drift, as an addendum rather than a category: it may still be corrected. */
-const driftNote = (dir: string): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> =>
+const driftNote = (dir: string): Effect.Effect<string, never, RunRecords> =>
   readDrift(dir).pipe(
     Effect.map((lines) => {
       const open = openReports(lines);

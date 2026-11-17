@@ -41,7 +41,8 @@ it yet — it is lost, and resuming afterwards does not bring it back. So a cont
 a run waits for the engine to stop saying it is running before it answers. That is what makes
 answering a run immediately after releasing it land on it.
 
-**D7. A control is a file the host owns, and only the host writes it.** No client writes one,
+**D7. A control is a file the host owns, and only the host writes it.** _(Superseded by the
+amendment of 2026-11-16: a control is a row, and the race is closed by ordering.)_ No client writes one,
 nothing consumes it as a command, and it is not in a run directory. It stays a file rather
 than a row because a workflow reads it at its boundaries, from the engine's own fiber:
 answering that read from this process's memory or its database settles the boundary fast
@@ -81,6 +82,20 @@ check parks the Run, so a resume runs it again, and the agent is refused with a 
 names the stop. A check that survives by any other route keeps its Run's card working and
 its worktree out of cleanup until its record is gone.
 
+**Amended 2026-11-16: a control is a row, and its wake race is closed by ordering.** A control
+is a row of `host.db`
+([ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database](draft-a-runs-own-records-are-rows-in-the-hosts-database.md),
+D6); still only the host writes it, and no client or run consumes it as a command. The race
+D7 measured is a release that lands after a boundary has read its control but before its
+run has suspended: the wake finds the run still running and resumes nothing. Now, whenever a
+boundary reads a hold or a stop as set, the host waits for that run to stop running, reads
+the control again, and wakes the run if it was cleared meanwhile. A read however fast cannot
+strand a run, so nothing depends on how long the boundary takes. One such wait is kept per
+run and control, and a read that finds the control clear ends it: the run went on past the
+read that saw it set, so a later suspension of that run is for something else and is not
+woken. `test/engine.test.ts` holds a release landing while a boundary is suspending for its
+hold, and a hold read without suspending that leaves a later question asleep.
+
 ## What this does not decide
 
 Collie's model-mediated steering — where a model proposes actions and a human confirms one by
@@ -99,4 +114,5 @@ index, `test/native-runtime.test.ts`'s two stop-and-resume cycles fail: the run 
 has re-entered, parks on its question, and the answer that follows never reaches it — the
 engine's own resume does not recover it either. With the same control read from a file the
 same test passes in three seconds. The difference is only how long the boundary takes, which
-is why this is recorded as a measurement rather than as a preference.
+is why this is recorded as a measurement rather than as a preference. The 2026-11-16
+amendment removes that dependence, so the control is now a row.
