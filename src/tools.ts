@@ -75,6 +75,8 @@ import {
   asksArtefactRun,
 } from "./lifecycle";
 import { listAsked } from "./run-list";
+import { readArtefactLines, readRunLines, type RunScope } from "./run-read";
+import { DEFAULT_LINES, patternError, type LinesAsked } from "./text-lines";
 import { modelsLines } from "./catalogue-model";
 import { connectionsLines } from "./connection-model";
 import { peersOf } from "./peers";
@@ -192,8 +194,26 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
                 : found.failure.reason;
           }
           const runId = input.run!;
+          if (input.ref !== undefined)
+            return yield* refLines(env, "collie_artefacts", runId, input.ref, input);
           const door = yield* toolDoor(env);
           if (input.id !== undefined && input.revision !== undefined) {
+            if (input.offset === undefined) {
+              const asked = linesAsked(input);
+              const badPattern = patternError(asked);
+              if (badPattern !== null)
+                return refused("collie_artefacts", badPattern, TAKES.collie_artefacts);
+              const lines = yield* readArtefactLines(
+                env,
+                runId,
+                input.id,
+                input.revision,
+                asked,
+                door,
+              );
+              if (!lines.ok) return lines.error.message;
+              if (lines.value !== null) return asJson(lines.value);
+            }
             const done = yield* asksArtefactRun(
               env,
               runId,
@@ -239,30 +259,50 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
     collie_run: (input) =>
       input.list === true
         ? answer(runListFacts(env, input))
-        : LIST_FILTERS.some((key) => input[key] !== undefined)
-          ? Effect.succeed(
-              refused(
-                "collie_run",
-                `${Arr.join(
-                  Arr.filter(LIST_FILTERS, (key) => input[key] !== undefined),
-                  ", ",
-                )} only filter a listing, which takes "list": true`,
-                TAKES.collie_run,
-              ),
-            )
-          : answer(
-              onSelectedRun(
-                env,
-                selected,
-                input,
-                "collie_run",
-                (run) =>
-                  said(
-                    runAnswer(env, run, reads).pipe(Effect.provide(recordsReadLayer(env.stateDir))),
+        : input.ref !== undefined
+          ? input.run === undefined
+            ? Effect.succeed(
+                refused(
+                  "collie_run",
+                  "ref reads one Run's reference, so it takes run",
+                  TAKES.collie_run,
+                ),
+              )
+            : answer(refLines(env, "collie_run", input.run, input.ref, input))
+          : Arr.some(LINE_FIELDS, (key) => input[key] !== undefined)
+            ? Effect.succeed(
+                refused(
+                  "collie_run",
+                  "start, count and search read a reference, which takes ref",
+                  TAKES.collie_run,
+                ),
+              )
+            : Arr.some(LIST_FILTERS, (key) => input[key] !== undefined)
+              ? Effect.succeed(
+                  refused(
+                    "collie_run",
+                    `${Arr.join(
+                      Arr.filter(LIST_FILTERS, (key) => input[key] !== undefined),
+                      ", ",
+                    )} only filter a listing, which takes "list": true`,
+                    TAKES.collie_run,
                   ),
-                reads?.related ?? reads?.runs,
-              ),
-            ),
+                )
+              : answer(
+                  onSelectedRun(
+                    env,
+                    selected,
+                    input,
+                    "collie_run",
+                    (run) =>
+                      said(
+                        runAnswer(env, run, reads).pipe(
+                          Effect.provide(recordsReadLayer(env.stateDir)),
+                        ),
+                      ),
+                    reads?.related ?? reads?.runs,
+                  ),
+                ),
     collie_workspaces: () => answer(workspaceFacts(env)),
     collie_receipts: (input) =>
       answer(
@@ -636,6 +676,40 @@ const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv, afte
 });
 
 const LIST_FILTERS = ["status", "limit", "fields", "after", "since"] as const;
+const LINE_FIELDS = ["start", "count", "search"] as const;
+
+const linesAsked = (input: {
+  readonly start?: number;
+  readonly count?: number;
+  readonly search?: string;
+}): LinesAsked => ({
+  start: input.start ?? 1,
+  count: Math.max(1, input.count ?? DEFAULT_LINES),
+  search: input.search ?? null,
+});
+
+/** The Task and calling Run a tool's Run lookup is scoped to, as the CLI's is. */
+const toolScope = Effect.fn("Tools.scope")(function* (env: PluginEnv) {
+  const door = yield* toolDoor(env);
+  const task = yield* hostTaskOf(env, env.workspaceId).pipe(Effect.orElseSucceed(() => null));
+  return {
+    task: task?.id ?? null,
+    caller: (door.origin === "agent" ? door.from?.run : env.raw.COLLIE_RUN) || null,
+  } satisfies RunScope;
+});
+
+const refLines = Effect.fn("Tools.refLines")(function* (
+  env: PluginEnv,
+  tool: ToolName,
+  run: string,
+  ref: string,
+  input: { readonly start?: number; readonly count?: number; readonly search?: string },
+) {
+  const read = yield* readRunLines(env, yield* toolScope(env), run, ref, linesAsked(input));
+  return read.ok
+    ? asJson(read.data)
+    : `${tool} could not read ${ref} (${read.error.code}): ${read.error.message}`;
+});
 
 /** What `collie_run` lists with `list: true`: `collie run list`'s page, herd-wide. */
 const runListFacts = Effect.fn("Tools.runListFacts")(function* (

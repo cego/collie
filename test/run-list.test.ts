@@ -2,8 +2,11 @@
 // whether it is the whole and how to get the rest.
 
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Result, Schema, flow } from "effect";
 import { PARKED, foundationLayer, runDir } from "../src/engine";
 import { RunRecords } from "../src/run-records";
 import { Store } from "../src/store";
@@ -20,7 +23,9 @@ const Page = Schema.Struct({
 const pageOf = (envelope: { readonly data?: unknown }) =>
   Schema.decodeUnknownEffect(Page)(envelope.data).pipe(Effect.orDie);
 
-const idOf = (n: number) => `run-${String(n).padStart(3, "0")}`;
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+
+const idOf = (n: number) => `run-${pipe(String(n), Str.padStart(3, "0"))}`;
 
 /** `count` Runs admitted oldest first, `run-000` the oldest; `parked` of them parked. */
 const recorded = (world: World, count: number, parked: ReadonlyArray<number> = []) =>
@@ -196,13 +201,13 @@ test(
             },
             "diff.json": { head: "abc", patches: { x: patch } },
           };
-          for (const [path, value] of Object.entries(written)) {
+          for (const [path, value] of Rec.toEntries(written)) {
             yield* fs.makeDirectory(`${dir}/review`, { recursive: true });
-            yield* fs.writeFileString(`${dir}/${path}`, JSON.stringify(value));
+            yield* fs.writeFileString(`${dir}/${path}`, encode(value));
           }
 
           const said = yield* collie(world, ["run", "output", idOf(0)]);
-          expect(JSON.stringify(said.envelope.data)).not.toContain("+changed");
+          expect(encode(said.envelope.data)).not.toContain("+changed");
           const summary = yield* Schema.decodeUnknownEffect(Outputs)(said.envelope.data);
           expect(summary.outputs).toEqual([
             {

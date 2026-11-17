@@ -759,12 +759,29 @@ collie --json run show <run-id>
 collie --json run list --status live
 collie --json run output <run-id>
 collie --json run output <run-id> --full --path <path>
+collie --json run read <run-id> log --start 100 --count 100
+collie --json run read <run-id> diff:src/app.ts --search 'TODO|FIXME'
 ```
 
 `run output` summarises each Output the Run wrote: its `path`, `step`, `verdict`,
 `summary`, number of `findings`, and `read`, the command that prints that Output whole.
 No body or diff is in the summary. `--full` prints every Output whole, as `run output`
 did before, and `--path` narrows either to one Output.
+
+`run read` reads one of a Run's references by line: `log`, `review`, `diff:<path>`,
+`evidence:<name>`, `plan:<file>`, `verification:<id>`, or the `log` reference
+`collie verify` answers an agent with. `--start` is the first line, counted from 1, and
+`--count` how many (200 by default). `--search <pattern>`, a regular expression, answers
+instead the matching lines from `--start` on, up to `--count` of them, each with the line
+before and after (`before`, `after`; `null` at either end). Every answer states `total`, the
+item's line count, `from` and `to`, the lines it covers, `complete`, true when nothing after
+`to` was left out, and `next`, the `--start` that reads on, or `null`. An item that is not
+text is refused as `invalid_input`; a registered artefact's bytes are read with
+`run artefact read`. A Run the caller's Task cannot reach is refused as `run_outside_task`
+by the same rule as `run show`. In chat and MCP, `collie_run` and `collie_artefacts` with
+`run` and `ref`, and `start`, `count` or `search`, answer the same; `collie_artefacts` with
+`id` and `revision` reads a text revision by line, and any other one, or one given an
+`offset`, as base64 parts as before.
 
 Without `--follow`, `run wait` prints one envelope when the run has ended — `complete` or
 `failed`. A stopped or held run is suspended rather than ended, so a plain wait waits
@@ -1951,6 +1968,24 @@ command ends, the host sends it a `boundary` delivery naming the check, its resu
 status, the commit and the log, which it keeps in the state directory's `evidence/<run>/verify/`.
 So an agent may end its turn waiting on a verify, and on nothing else in the background
 ([steering](steering.md#what-the-host-sends-on-its-own)).
+
+### What an agent gets back
+
+Run from a Run's agent pane — the pane `--run` defaults from — `collie verify` does not
+stream the command's output. It answers when the command ends with:
+
+- the result and exit status, and for an `unstable` result why: the tree it ran on moved,
+  from which fingerprint to which, or could not be measured;
+- `failed`, each failed test bun's output names as `<file> > <name>`, the first 50, and
+  `more`, how many others;
+- the record's `tail`, the last 4 KB of each stream;
+- `log`, the reference to the whole log (`evidence:verify/<file>.log`, else
+  `verification:<id>` where no log was kept);
+- `bounded`, a line saying the output was bounded and giving the `collie run read` that
+  reads the rest by range or `--search`.
+
+A failure is never left out: the result line, a non-zero exit and the failed tests always
+appear. Anywhere else, such as a human's terminal, the output streams as it runs.
 
 ### What Collie may run itself
 

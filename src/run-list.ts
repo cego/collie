@@ -4,7 +4,9 @@
 
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Option, Result, Schema, flow } from "effect";
+import * as Str from "effect/String";
+import { Option, Result, Schema, flow, pipe } from "effect";
+import { isoAt } from "./time";
 import type { TaskView } from "./board-model";
 import { ParkCause } from "./park-cause";
 import { awaitingLine } from "./awaiting";
@@ -74,7 +76,7 @@ export const summaryOf = (
     task: run.task,
     state: listStateOf(run),
     created: run.created,
-    updated: card === undefined ? run.created : new Date(card.at).toISOString(),
+    updated: card === undefined ? run.created : isoAt(card.at),
     park: run.park?.cause ?? null,
     blocker: asked?.prompt ?? run.note,
     agent:
@@ -171,9 +173,7 @@ const encodeToken = flow(
   (json: string) => Buffer.from(json).toString("base64url"),
 );
 const decodeToken = (text: string) =>
-  Schema.decodeUnknownOption(Schema.fromJsonString(Token))(
-    Buffer.from(text, "base64url").toString(),
-  );
+  Schema.decodeOption(Schema.fromJsonString(Token))(Buffer.from(text, "base64url").toString());
 
 export const pageToken = (token: Omit<PageToken, "_tag">) =>
   encodeToken({ _tag: "page", ...token });
@@ -255,10 +255,7 @@ export const listAsked = (
     const { _tag, ...token } = read.token;
     return { ok: true, asked: token };
   }
-  const states = Arr.filter(
-    flags.status,
-    (one) => !(LIST_STATES as ReadonlyArray<string>).includes(one),
-  );
+  const states = Arr.filter(flags.status, (one) => !Schema.is(ListState)(one));
   if (states.length > 0)
     return {
       ok: false,
@@ -296,27 +293,37 @@ const SUMMARY_CHARS = 360;
 const fieldOf = (value: Schema.Json, key: string) => (isJsonObject(value) ? value[key] : undefined);
 const textField = (value: Schema.Json, key: string): string | null => {
   const field = fieldOf(value, key);
-  return typeof field === "string" ? field : null;
+  return Schema.is(Schema.String)(field) ? field : null;
 };
+
+export interface OutputSummary {
+  readonly path: string;
+  readonly step: string;
+  readonly verdict: string | null;
+  readonly summary: string | null;
+  readonly findings: number | null;
+  readonly read: string;
+  readonly error?: string;
+}
 
 /** One Output as `run output` answers it by default: what it said, never its body. */
 export const outputSummary = (
   runId: string,
   output: { readonly path: string; readonly value?: Schema.Json; readonly error?: string },
-) => {
+): OutputSummary => {
   const value = output.value ?? null;
   const findings = fieldOf(value, "findings");
   const summary = textField(value, "summary") ?? textField(value, "conclusion");
-  return {
+  const said = {
     path: output.path,
-    step: output.path.replace(/\.json$/, ""),
+    step: pipe(output.path, Str.replace(/\.json$/, "")),
     verdict: textField(value, "verdict"),
     summary:
       summary === null || summary.length <= SUMMARY_CHARS
         ? summary
-        : `${summary.slice(0, SUMMARY_CHARS)}…`,
-    findings: Array.isArray(findings) ? findings.length : null,
-    ...(output.error === undefined ? {} : { error: output.error }),
+        : `${pipe(summary, Str.slice(0, SUMMARY_CHARS))}…`,
+    findings: Arr.isArray(findings) ? findings.length : null,
     read: `collie run output ${runId} --full --path ${output.path}`,
   };
+  return output.error === undefined ? said : { ...said, error: output.error };
 };

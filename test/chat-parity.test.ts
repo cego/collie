@@ -318,6 +318,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["settings list", { route: "shell" }],
   ["settings set", { route: "shell" }],
   ["run output", { route: "read", tool: "collie_run", input: { run: RUN } }],
+  ["run read", { route: "read", tool: "collie_run", input: { run: RUN, ref: "log" } }],
   ["steer", { route: "write", tool: "collie_do" }],
   ["confirm", { route: "write", tool: "collie_do" }],
   ["decline", { route: "write", tool: "collie_do" }],

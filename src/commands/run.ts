@@ -118,7 +118,6 @@ import {
   mutating,
   parseInput,
   locateRun,
-  outOfReach,
   runFacts,
   runScope,
   requestIdFlag,
@@ -128,6 +127,8 @@ import {
   selectedTask,
   type Global,
 } from "./shared";
+import { outOfReach, readRunLines } from "../run-read";
+import { DEFAULT_LINES } from "../text-lines";
 
 /**
  * What `--constraint` and `--severity` say together. Paired by position rather than by
@@ -918,6 +919,78 @@ const runOutput = Command.make(
 ).pipe(
   Command.withDescription(
     "Summarise each Output this Run has written, with where to read it; --full prints them whole",
+  ),
+);
+
+const runRead = Command.make(
+  "read",
+  {
+    runId: runIdArg,
+    ref: Argument.String("ref").pipe(
+      Argument.withDescription(
+        "What to read: log, review, diff:<path>, evidence:<name>, plan:<file>, verification:<id>, …",
+      ),
+    ),
+    start: Flag.Int("start").pipe(
+      Flag.withDescription("The first line, counted from 1; a search looks from here"),
+      Flag.withDefault(1),
+    ),
+    count: Flag.Int("count").pipe(
+      Flag.withDescription(`How many lines, or matches with --search (default ${DEFAULT_LINES})`),
+      Flag.withDefault(DEFAULT_LINES),
+    ),
+    search: Flag.String("search").pipe(
+      Flag.withDescription(
+        "A regular expression: the lines it matches, each with the line either side",
+      ),
+      Flag.optional,
+    ),
+  },
+  ({ runId, ref, start, count, search }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* context(global, false);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          if (count < 1) return err("invalid_input", `--count takes 1 or more; not ${count}.`);
+          const read = yield* readRunLines(resolved.env, yield* runScope(global), runId, ref, {
+            start,
+            count,
+            search: Option.getOrNull(search),
+          });
+          if (!read.ok) return read;
+          const page = read.data;
+          const numbered = (line: number, mark: string, text: string) =>
+            `${pipe_(String(line), Str.padStart(6))}${mark} ${text}`;
+          return {
+            ok: true,
+            data: page,
+            human: Arr.join(
+              [
+                ...Arr.flatMap(page.lines, (one) =>
+                  one.before === undefined
+                    ? [numbered(one.line, " ", one.text)]
+                    : [
+                        ...(one.before === null ? [] : [numbered(one.line - 1, "-", one.before)]),
+                        numbered(one.line, ":", one.text),
+                        ...(one.after == null ? [] : [numbered(one.line + 1, "-", one.after)]),
+                      ],
+                ),
+                page.complete
+                  ? `Lines ${page.from}-${page.to} of ${page.total}: complete.`
+                  : `Lines ${page.from}-${page.to} of ${page.total}: not complete; read on with --start ${page.next}.`,
+              ],
+              "\n",
+            ),
+          };
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "Read a Run's log, diff, review, evidence, plan or verification by line range, or search it",
   ),
 );
 
@@ -2571,6 +2644,7 @@ export const run = Command.make("run").pipe(
     runAction,
     runIntent,
     runOutput,
+    runRead,
     runArtefacts,
     runArtefact,
   ]),
