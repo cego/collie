@@ -680,12 +680,14 @@ const linesAsked = (input: {
   search: input.search ?? null,
 });
 
-/** The calling Run a tool's Run lookup is scoped to; a tool selects no workspace, so no Task. */
+/** A tool selects no workspace, so its Run lookup is scoped to the calling Run's Task. */
 const toolScope = Effect.fn("Tools.scope")(function* (env: PluginEnv) {
   const door = yield* toolDoor(env);
+  const caller = (door.origin === "agent" ? door.from?.run : env.raw.COLLIE_RUN) || null;
+  const own = caller === null ? null : yield* asks(env, (client) => client.run({ runId: caller }));
   return {
-    task: null,
-    caller: (door.origin === "agent" ? door.from?.run : env.raw.COLLIE_RUN) || null,
+    task: own?.ok ? (own.value?.task ?? null) : null,
+    caller,
   } satisfies RunScope;
 });
 

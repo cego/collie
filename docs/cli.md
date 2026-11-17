@@ -693,7 +693,8 @@ item's line count, `from` and `to`, the lines it covers, `complete`, true when n
 text is refused as `invalid_input`; a registered artefact's bytes are read with
 `run artefact read`. A Run the caller's Task cannot reach is refused as `run_outside_task`
 by the same rule as `run show`. In chat and MCP, `collie_run` and `collie_artefacts` with
-`run` and `ref`, and `start`, `count` or `search`, answer the same; `collie_artefacts` with
+`run` and `ref`, and `start`, `count` or `search`, answer the same, with the calling agent's
+Run's Task as the caller's Task; `collie_artefacts` with
 `id` and `revision` reads a text revision by line, and any other one, or one given an
 `offset`, as base64 parts as before.
 
