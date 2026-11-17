@@ -193,6 +193,7 @@ describe("Each setting explains itself", () => {
       "fallbacks",
       "permissions",
       "role_tools",
+      "output_submit",
       "trust",
       "compact_at_tokens",
       "claude_auto_compact_window",

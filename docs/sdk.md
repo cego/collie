@@ -338,6 +338,17 @@ const verdict =
   and every issue with it is reported at once. Leave `output` out and the agent answers in
   plain text, which is what you are handed; a schema is how you opt into a structured,
   validated answer.
+- **An agent hands its Output in one of two ways.** It writes the file, or, under the
+  setting `output_submit: tool` (default `file`), it may submit it with the `collie_submit`
+  Collie tool instead. Both go through one decoder: a submit is decoded exactly as the file
+  is, and is answered at once with every issue, writing nothing, or with "accepted", which
+  writes the file the step is collecting. So collection, the reminders, the repairs and the
+  park below are the same either way, and a second submit of the same Output is collected
+  once. Under `tool` the prompt names the tool instead of the file's path and keeps the
+  whole contract, every field's description included; the reminders and repairs still name
+  the file, which stays valid. Pi has no Collie MCP server, so its agents reach the tool
+  through `collie tools call collie_submit`. An Output that decodes is never proof of the
+  work: the gate still reads the Run's journal ([proving it](#proving-it-rather-than-saying-so)).
 - **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
   schema's own issues. A rewrite the schema still refuses is judged once the agent's turn
   has ended, so a file caught half rewritten is not the answer; one still unusable then parks

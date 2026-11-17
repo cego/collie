@@ -29,6 +29,7 @@ import {
   FileSystem,
   Layer,
   Path,
+  Schedule,
   Schema,
   flow,
   Result,
@@ -457,6 +458,22 @@ test("the contract an agent is held to is in the prompt it is sent, with the jud
   expect(prompt).toContain("clean only when there is nothing left for the implementer");
   expect(prompt).toContain("one sentence a human reads");
   expect(prompt).toContain("it is asking for your judgment");
+});
+
+test("under output_submit: tool the prompt names collie_submit and keeps the whole contract, with no path to write", () => {
+  const prompt = promptFor({
+    role: "reviewer",
+    instructions: "Review the diff.",
+    output: "/state/agents/r1/review.json",
+    contract: jsonSchemaFor(Verdict),
+    outputSubmit: "tool",
+  });
+  expect(prompt).toContain("collie_submit");
+  expect(prompt).toContain("clean only when there is nothing left for the implementer");
+  expect(prompt).toContain("one sentence a human reads");
+  expect(prompt).toContain("it is asking for your judgment");
+  expect(prompt).not.toContain("OUTPUT_PATH");
+  expect(prompt).not.toContain("/state/agents/r1/review.json");
 });
 
 test("self-improve's triager is shown that an Improvement's name and keys are kebab-case", () => {
@@ -8449,6 +8466,30 @@ test("under role_tools: role a reviewer's Claude launch names its role to the Co
       expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
         "Collie tools: the reviewer's 3",
       );
+    }),
+  ));
+
+test("under output_submit: tool a Claude launch offers collie_submit, and its Output file still counts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* configured(encodeJson({ output_submit: "tool" }));
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* rig.calls().pipe(
+            Effect.repeat({
+              until: (calls) => launchArgs(calls).length > 0,
+              schedule: Schedule.spaced("20 millis"),
+            }),
+          );
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"written"}`);
+          return yield* Fiber.join(fiber);
+        }),
+      );
+      expect((yield* collieServerOf()).env.COLLIE_OUTPUT_SUBMIT).toBe("tool");
+      expect(yield* read(promptPath("r1"))).toContain("collie_submit");
+      expect(result._tag === "Success" && result.success.note).toBe("written");
     }),
   ));
 

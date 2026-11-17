@@ -227,6 +227,7 @@ import {
   type RoleProfile,
 } from "./profile";
 import { isString, type JsonObject } from "./schema";
+import { awaitOutput, outputCollected } from "./output-submit";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
@@ -417,6 +418,8 @@ export interface AgentsApi {
    * path that is not there.
    */
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
+  /** How the Settings say an agent hands in its Output, read at each step. */
+  readonly outputSubmit: Effect.Effect<"file" | "tool">;
   /** What this Run's `attachments/` holds now, which its next prompt lists. */
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
   /**
@@ -820,6 +823,7 @@ export const agentWork = <
       output,
       contract: plain ? null : jsonSchemaFor(work.output),
       attachments: yield* agents.attachments(runId),
+      outputSubmit: yield* agents.outputSubmit,
     };
     const prompt = renderPrompt(parts);
     if (prompt.unfilled.length > 0) {
@@ -979,6 +983,10 @@ export const agentWork = <
         ),
       );
     const usable = (text: string) => decodeOutput(work.output, text, plain).ok;
+    const problemIn = (text: string) => {
+      const read = decodeOutput(work.output, text, plain);
+      return read.ok ? null : read.problem;
+    };
     // Uninterruptible, so a stop racing a restart waits for it and finds its agent to stop.
     const reviving = (from: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
       Effect.uninterruptible(
@@ -1022,6 +1030,7 @@ export const agentWork = <
       return !Arr.some(yield* host.asked(runId), (one) => one.answer === null);
     });
     const collecting = (on: Launched, from: AgentAsk, waiting?: string) => {
+      const awaited = awaitOutput(runId, on.agent, on.output, problemIn);
       // Collected throughout, so a verify ending between attempts is still told to it.
       const output = agents.collectedDuring(
         on,
@@ -1043,26 +1052,29 @@ export const agentWork = <
         Effect.andThen(Clock.currentTimeMillis),
         Effect.map((endedAt) => TurnEnded.make({ endedAt })),
       );
-      return stoppable(
-        parkedWhenStuck(
-          waiting === undefined
-            ? Effect.gen(function* () {
-                // Reconcile a crash before the incident was journaled, before idle reminders race it.
-                const incident = yield* agents.usageIncident(on);
-                if (incident !== null) return incident;
-                yield* reviving(from);
-                return yield* Effect.raceFirst(
-                  Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on)),
-                  recovering(on, from),
-                );
-              })
-            : output,
+      return Effect.andThen(
+        awaited,
+        stoppable(
+          parkedWhenStuck(
+            waiting === undefined
+              ? Effect.gen(function* () {
+                  // Reconcile a crash before the incident was journaled, before idle reminders race it.
+                  const incident = yield* agents.usageIncident(on);
+                  if (incident !== null) return incident;
+                  yield* reviving(from);
+                  return yield* Effect.raceFirst(
+                    Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on)),
+                    recovering(on, from),
+                  );
+                })
+              : output,
+            host,
+            work.runId,
+          ),
           host,
           work.runId,
+          agents.pollMs,
         ),
-        host,
-        work.runId,
-        agents.pollMs,
       );
     };
     let reminder: { on: Launched; ordinal: number; endedAt: number } | null = null;
@@ -1302,14 +1314,17 @@ export const agentWork = <
     }
     const read = decodeOutput(work.output, first, plain);
     if (read.ok) {
+      yield* outputCollected(runId, current.agent, first);
       yield* agents.usageWaiting(current, null);
       yield* recovered();
       return yield* carded(read.value);
     }
 
     // A harness that stopped is waited on past the budget, as its park says it is.
+    let latest = first;
     const recollecting = (unusable: string, since: number) =>
       Effect.gen(function* () {
+        yield* awaitOutput(runId, current.agent, current.output, problemIn);
         for (;;) {
           const text = yield* watching(
             agents.collect(current, unusable, questions, undefined, usable),
@@ -1375,6 +1390,7 @@ export const agentWork = <
             });
         if (again === null)
           return { ok: false as const, problem: `did not write ${output} again: ${problem}` };
+        latest = again;
         const repaired = decodeOutput(work.output, again, plain);
         return repaired.ok
           ? repaired
@@ -1395,9 +1411,11 @@ export const agentWork = <
           return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
         }),
       });
+      latest = now;
       const reread = decodeOutput(work.output, now, plain);
       repaired = reread.ok ? reread : yield* repairing(round + 1, now, reread.problem);
     }
+    yield* outputCollected(runId, current.agent, latest);
     yield* recovered();
     yield* agents.usageWaiting(current, null);
     return yield* carded(repaired.value);
@@ -1606,6 +1624,8 @@ export interface PromptParts {
   readonly attachments?: ReadonlyArray<Attachment>;
   /** What an agent taking over this work from one that ran out is told first. */
   readonly handover?: string;
+  /** Under `tool` the agent is told to hand its Output to `collie_submit`, not where to write it. */
+  readonly outputSubmit?: "file" | "tool";
 }
 
 /**
@@ -1639,7 +1659,9 @@ function renderPrompt(parts: PromptParts) {
         Str.trim(rendered.text),
         attachmentsSection(parts.attachments ?? []),
         parts.handover ?? "",
-        `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
+        parts.outputSubmit === "tool"
+          ? `When you are done, submit your result ${parts.contract === null ? "as plain text" : "as JSON"} with the collie_submit Collie tool, as its \`output\`. It answers "accepted", or with every problem it found and nothing kept: correct them and submit again.`
+          : `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
         parts.contract === null ? "" : contractSection(parts.contract),
       ],
       (part) => part !== "",
@@ -2548,7 +2570,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     const personaBody = yield* personaOf(ask.persona ?? ask.role);
     yield* write(persona, `${personaBody}\n`);
     const { mcpConfig, piExtension } = yield* Effect.promise(() => import("./chat"));
-    const { TOOLS } = yield* Effect.promise(() => import("./tools"));
+    const { SUBMIT, TOOLS } = yield* Effect.promise(() => import("./tools"));
     const { ROLE_TOOLS } = yield* Effect.promise(() => import("./toolkit"));
     const byRole = config.role_tools === "role";
     const roleTools = byRole ? ROLE_TOOLS.get(ask.role) : undefined;
@@ -2562,7 +2584,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       COLLIE_RUN: ask.runId,
       COLLIE_AGENT: agent,
     };
-    const serverEnv = roleTools === undefined ? runEnv : { ...runEnv, COLLIE_TOOLS_ROLE: ask.role };
+    const roleEnv = roleTools === undefined ? runEnv : { ...runEnv, COLLIE_TOOLS_ROLE: ask.role };
+    const submits = config.output_submit === "tool";
+    const serverEnv = submits ? { ...roleEnv, COLLIE_OUTPUT_SUBMIT: "tool" } : roleEnv;
     const configFile = `${dirFor(ask.runId)}/${stemOf(ask)}.mcp.json`;
     const extension = `${dirFor(ask.runId)}/${stemOf(ask)}.tools.ts`;
     yield* write(configFile, mcpConfig(command, serverEnv));
@@ -2572,7 +2596,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         piExtension(
           command,
           Arr.map(
-            Arr.filter(TOOLS, (tool) => roleTools?.includes(tool.name) ?? true),
+            Arr.filter(
+              submits ? [...TOOLS, SUBMIT] : TOOLS,
+              (tool) =>
+                tool === SUBMIT ||
+                roleTools === undefined ||
+                Arr.some(roleTools, (name) => name === tool.name),
+            ),
             (tool) => ({
               name: tool.name,
               label: tool.title,
@@ -4402,6 +4432,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return { typed: dispatch.marked(text, `${ask.runId}-${stemOf(ask)}-step-1`), prompt };
     },
     skills: (names) => under(skills(names)),
+    outputSubmit: under(readConfig(host.env.userDir)).pipe(
+      Effect.map((config) => (config.output_submit === "tool" ? "tool" : "file")),
+      Effect.orElseSucceed(() => "file" as const),
+    ),
     attachments: (runId) =>
       under(listAttachments(attachmentsDir(`${host.dir}/runs/${runId}`))).pipe(
         Effect.orElseSucceed(() => []),

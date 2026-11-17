@@ -1788,6 +1788,12 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: RunFile,
     error: HostRefused,
   }),
+  /** A Run agent's Output for the step it is on, handed in by `collie_submit`. */
+  Rpc.make("submitOutput", {
+    payload: { runId: Schema.String, output: Schema.Json },
+    success: Schema.String,
+    error: HostRefused,
+  }),
   Rpc.make("artefactRegister", {
     payload: { runId: Schema.String, request: Schema.String, ...RegisterArtefact.fields },
     success: ArtefactRegistered,

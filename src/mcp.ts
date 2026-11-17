@@ -7,6 +7,7 @@
 // orchestration service: the server lives as long as the chat that started it, and every
 // answer it gives is a read through the shared operations.
 
+import * as Arr from "effect/Array";
 import type { PlatformServices } from "./platform";
 import {
   Cause,
@@ -31,7 +32,7 @@ import { currentEnv } from "./env";
 import { replacedOnDisk } from "./flows";
 import { shell } from "./mr";
 import { isJsonObject, type JsonObject } from "./schema";
-import { callTool, TOOLS } from "./tools";
+import { callTool, SUBMIT, TOOLS } from "./tools";
 import { ROLE_TOOLS } from "./toolkit";
 
 /**
@@ -57,8 +58,10 @@ export const serveMcp = Effect.fn("Mcp.serve")(
     );
     // Not `McpServer.toolkit`, which answers in JSON and refuses bad input as a protocol
     // error: chat is answered in sentences, a refusal included.
-    for (const tool of TOOLS) {
-      const listed = offered?.includes(tool.name) ?? true;
+    const submits = env.raw.COLLIE_OUTPUT_SUBMIT === "tool";
+    for (const tool of submits ? [...TOOLS, SUBMIT] : TOOLS) {
+      const listed =
+        tool === SUBMIT || offered === undefined || Arr.some(offered, (name) => name === tool.name);
       const descriptor = yield* Schema.decodeUnknownEffect(McpSchema.Tool)({
         name: tool.name,
         title: tool.title,

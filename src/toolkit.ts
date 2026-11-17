@@ -458,6 +458,19 @@ export const CollieTools = Toolkit.make(
 
 export type ToolName = keyof typeof CollieTools.tools;
 
+export const SubmitInput = Schema.Struct({ output: Schema.Json });
+
+/** A Run agent's Output, offered under `output_submit: tool` and never to the chat, which has none. */
+export const SubmitTool = collieTool("collie_submit", {
+  readOnly: false,
+  title: "Hand in your Output",
+  description:
+    "Submit the Output your step's contract describes, as `output`: the same JSON you would " +
+    'write to its file. It is decoded as the file is, and answers "accepted" or every problem ' +
+    "it found, with nothing written: correct them and submit again. Writing the file still works.",
+  parameters: SubmitInput,
+});
+
 /** The tools a role is offered under `role_tools: role`. A role not here, and the chat, get every tool. */
 export const ROLE_TOOLS = new Map<string, ReadonlyArray<ToolName>>([
   ["implementer", ["collie_run", "collie_artefacts", "collie_report", "collie_do"]],

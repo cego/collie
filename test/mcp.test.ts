@@ -26,7 +26,7 @@ import { until } from "./support/host";
 import { twoMachines } from "./support/peers";
 import { TOOLS } from "../src/tools";
 import { runEffect, suiteEnv } from "./support/effect";
-import { registeredAt } from "./support/records";
+import { launchOf, registeredAt } from "./support/records";
 
 const encodeValue = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
@@ -221,6 +221,73 @@ test(
       }).pipe(Effect.scoped),
     ),
   15_000,
+);
+
+test(
+  "collie_submit decodes an agent's Output as the file does, and writes only an accepted one, once",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-mcp-submit-",
+        (first) =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const outputs = `${first.world.home}/outputs.json`;
+            yield* fs.writeFileString(outputs, encodeValue([null]));
+            const started = yield* first.cli(["run", "start", "attended", "--input", "work=MCP"], {
+              FAKE_HERDR_OUTPUTS: outputs,
+            });
+            const { runId } = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ runId: Schema.String }),
+            )(started.envelope.data).pipe(Effect.orDie);
+            const launch = yield* until(
+              () => launchOf(first.world.state, runId, "build"),
+              (one) => one !== undefined,
+            );
+            const server = yield* openServer({
+              ...first.env,
+              COLLIE_RUN: runId,
+              COLLIE_AGENT: launch!.agent,
+              COLLIE_OUTPUT_SUBMIT: "tool",
+            });
+            const submit = (output: JsonObject) =>
+              server.request("tools/call", { name: "collie_submit", arguments: { output } });
+
+            const missing = yield* submit({});
+            expect(missing.result).toMatchObject({
+              content: [
+                { type: "text", text: expect.stringContaining('Missing key\n  at ["verdict"]') },
+              ],
+            });
+            expect(yield* fs.exists(launch!.output)).toBe(false);
+
+            expect((yield* submit({ verdict: "done" })).result).toMatchObject({
+              content: [{ type: "text", text: "accepted" }],
+            });
+            const host = yield* connect(first.world.state);
+            const asked = (
+              view: { readonly waiting?: ReadonlyArray<{ answer: unknown }> } | null,
+            ) => Arr.filter(view?.waiting ?? [], (one) => one.answer === null);
+            yield* until(
+              () => host.run({ runId }),
+              (view) => asked(view).length > 0,
+            );
+            expect(yield* fs.readFileString(launch!.output)).toBe(encodeValue({ verdict: "done" }));
+
+            expect((yield* submit({ verdict: "done" })).result).toMatchObject({
+              content: [{ type: "text", text: "accepted" }],
+            });
+            expect(asked(yield* host.run({ runId }))).toHaveLength(1);
+            expect((yield* submit({ verdict: "changed" })).result).toMatchObject({
+              content: [{ type: "text", text: expect.stringContaining("already collected") }],
+            });
+            expect(yield* fs.readFileString(launch!.output)).toBe(encodeValue({ verdict: "done" }));
+            yield* server.close;
+          }),
+        ["attended.workflow.ts"],
+      ),
+    ),
+  180_000,
 );
 
 test("external interruption is not mistaken for clean MCP EOF", () =>

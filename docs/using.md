@@ -3423,6 +3423,10 @@ See [Claude subagents](#claude-subagents).
 `role_tools` says which of Collie's tools each agent is offered: `all`, the default, or
 `role`. See [Collie's tools per role](#collies-tools-per-role).
 
+`output_submit` says how an agent hands in its Output: `file`, the default, or `tool`, which
+also offers it the `collie_submit` tool. See
+[Having an agent do the work](sdk.md#having-an-agent-do-the-work).
+
 `gitlab_host` is the one GitLab this Machine works against, `gitlab.cego.dk` unless you
 change it under Settings, which refuses anything that is not a host name. `collie doctor`
 checks glab's login, the token and `git push` for that host alone, and `collie onboard` logs

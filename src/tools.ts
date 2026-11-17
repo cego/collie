@@ -31,6 +31,7 @@ import type { PlatformServices } from "./platform";
 import { Clock, Effect, Result, Schema, flow as Schemaflow } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcessSpawner } from "effect/process";
+import type * as Tool from "effect/ai/Tool";
 import type { PluginEnv } from "./env";
 import {
   choiceLines,
@@ -106,6 +107,7 @@ import { savedModules } from "./discovery";
 import {
   answerWith,
   CollieTools,
+  decodeStrict,
   decodeAsked,
   decodeLoose,
   DefinitionInput,
@@ -113,11 +115,14 @@ import {
   herdLines,
   HoldInput,
   isToolName,
+  refused,
   refusedActions,
   RunInput,
   searchesArtefacts,
   type Settle,
   SETTLE_KINDS,
+  SubmitInput,
+  SubmitTool,
   TAKES,
   type ToolName,
 } from "./toolkit";
@@ -303,26 +308,45 @@ const answered = Effect.fn("Tools.answered")(
  * refusal in the tool's own terms, and a tool this build does not have answers nothing.
  */
 export const callTool = (env: PluginEnv, name: string, input: JsonObject) =>
-  !isToolName(name)
-    ? Effect.succeed("")
-    : (name === "collie_run" || name === "collie_receipts") && isString(input.run)
-      ? Effect.gen(function* () {
-          const run = input.run;
-          if (!isString(run)) return "A Run id is required.";
-          if (
-            env.machine === undefined &&
-            ((yield* findRun(env, run)) !== null || (yield* peersOf(env.stateDir)).length === 0)
-          )
-            return yield* answered(env, name, input, true);
-          const found = yield* asksRun(
-            env,
-            run,
-            (client) => client.read({ tool: name, input }),
-            yield* toolDoor(env),
-          );
-          return found.ok ? found.value : found.error.message;
-        })
-      : answered(env, name, input, true);
+  name === SubmitTool.name
+    ? submitted(env, input)
+    : !isToolName(name)
+      ? Effect.succeed("")
+      : (name === "collie_run" || name === "collie_receipts") && isString(input.run)
+        ? Effect.gen(function* () {
+            const run = input.run;
+            if (!isString(run)) return "A Run id is required.";
+            if (
+              env.machine === undefined &&
+              ((yield* findRun(env, run)) !== null || (yield* peersOf(env.stateDir)).length === 0)
+            )
+              return yield* answered(env, name, input, true);
+            const found = yield* asksRun(
+              env,
+              run,
+              (client) => client.read({ tool: name, input }),
+              yield* toolDoor(env),
+            );
+            return found.ok ? found.value : found.error.message;
+          })
+        : answered(env, name, input, true);
+
+/** An agent's Output, decoded and written by the host running its Run, as itself. */
+const submitted = Effect.fn("Tools.submitted")(function* (env: PluginEnv, input: JsonObject) {
+  const decoded = decodeStrict(SubmitInput)(input);
+  if (Result.isFailure(decoded))
+    return refused("collie_submit", decoded.failure, 'It takes {"output": <your Output>}.');
+  const run = env.raw.COLLIE_RUN;
+  if (!run || !env.raw.COLLIE_AGENT)
+    return "collie_submit hands in a Run agent's Output, and this is no Run's agent. Nothing was written.";
+  const done = yield* asksRun(
+    env,
+    run,
+    (client) => client.submitOutput({ runId: run, output: decoded.success.output }),
+    yield* toolDoor(env),
+  );
+  return done.ok ? done.value : done.error.message;
+});
 
 /**
  * One of the reads a Flock chat has this Machine's host answer, as Native chat answers
@@ -344,8 +368,7 @@ const once = (draw: () => JsonObject) => {
   return () => (drawn ??= draw());
 };
 
-/** The Toolkit as each harness's tool interface and `collie tools` read it. */
-export const TOOLS = Arr.map(Rec.values(CollieTools.tools), (tool) => {
+const listed = (tool: Tool.Any) => {
   const { input, ...described } = describeTool(tool);
   const schema = once(input);
   return {
@@ -355,7 +378,13 @@ export const TOOLS = Arr.map(Rec.values(CollieTools.tools), (tool) => {
     },
     call: (env: PluginEnv, input: JsonObject) => callTool(env, tool.name, input),
   };
-});
+};
+
+/** The Toolkit as each harness's tool interface and `collie tools` read it. */
+export const TOOLS = Arr.map(Rec.values(CollieTools.tools), listed);
+
+/** `collie_submit`, listed for a Run agent under `output_submit: tool` and called like the rest. */
+export const SUBMIT = listed(SubmitTool);
 
 /**
  * What the board has open, or null where there is no Herd, no board and no selection.
@@ -1039,5 +1068,7 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
 });
 
 export function toolNamed(name: string) {
-  return Option.getOrUndefined(Arr.findFirst(TOOLS, (tool) => tool.name === name)) ?? null;
+  return (
+    Option.getOrUndefined(Arr.findFirst([...TOOLS, SUBMIT], (tool) => tool.name === name)) ?? null
+  );
 }

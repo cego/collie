@@ -1,4 +1,5 @@
 import { Artefacts } from "./artefacts";
+import { submitOutput } from "./output-submit";
 import { Artefact } from "./artefact-model";
 // The one local host per state directory: who owns it, how a client reaches it, and what
 // it answers.
@@ -754,6 +755,7 @@ const HEALER_READS = new Set([
   "runDispositions",
   "runOutcomes",
   "runOutputs",
+  "submitOutput",
   "runChecks",
   "checkLog",
   "deliveries",
@@ -4250,6 +4252,22 @@ const frontDoorHandlers = (
             ),
             Effect.provideContext(bun),
           ),
+        submitOutput: ({ runId, output }, { client }) => {
+          const who = whoOf(client);
+          return who.origin === "agent" && who.from?.run === runId && who.from.agent !== undefined
+            ? submitOutput(runId, who.from.agent, output).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new HostRefused({
+                      reason: `Your Output could not be written: ${cause.message}`,
+                    }),
+                ),
+                Effect.provideContext(bun),
+              )
+            : Effect.fail(
+                new HostRefused({ reason: `Only an agent of ${runId} submits its Output.` }),
+              );
+        },
         artefactRegister: ({ runId, request, ...input }, { client }) =>
           known(runId).pipe(
             Effect.flatMap((view) =>

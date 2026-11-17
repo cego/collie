@@ -128,7 +128,10 @@ const UNSET_SAID = new Map([
 /** The canvas's sub-groups within a group, by key; any other key has none. */
 const SUBS: ReadonlyArray<readonly [string, (key: string) => boolean]> = [
   ["Who does the work", (key) => ["harness", "model", "effort", "fallbacks"].includes(key)],
-  ["What agents may do", (key) => ["permissions", "trust", "role_tools"].includes(key)],
+  [
+    "What agents may do",
+    (key) => ["permissions", "trust", "role_tools", "output_submit"].includes(key),
+  ],
   [
     "Context and patience",
     (key) =>

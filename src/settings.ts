@@ -301,6 +301,12 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description:
       "Whether every agent is offered all of Collie's tools (all), or only those its role uses (role). The chat always has every tool, and the command line reaches the rest.",
   }),
+  choice("output_submit", ["file", "tool"], "file", {
+    group: "Agents",
+    label: "How agents hand in their Output",
+    description:
+      "Whether an agent writes its Output to a file (file), or may also submit it with the collie_submit tool, which names every problem at once (tool).",
+  }),
   choice("trust", ["auto", "never"], D.trust, {
     group: "Agents",
     label: "Trust new folders",
