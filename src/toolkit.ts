@@ -39,6 +39,17 @@ export const decodeStrict = <S extends Schema.ConstraintDecoder<unknown, never>>
 };
 
 export const RunInput = Schema.Struct({ run: Schema.optionalKey(Schema.String) });
+const specs = (description: string) =>
+  Schema.optionalKey(Schema.Array(Schema.String).annotate({ description }));
+/** `run metrics --compare … --against …` as `collie_run` takes it. */
+const TrialInput = Schema.Struct({
+  compare: specs(
+    "Instead of one Run, compare two sets: the first set's Runs, each <run> or <run>=<case>",
+  ),
+  against: specs("The second set's Runs, as compare takes them"),
+  audit: specs("<run>=<review-run>: the review Run of that Run's final tree"),
+  plant: specs("<case>=<file>:<line>: a regression planted in that case"),
+});
 export const HoldInput = Schema.Struct({
   run: Schema.optionalKey(Schema.String.annotate({ description: "The Run to hold" })),
   task: Schema.optionalKey(
@@ -288,6 +299,7 @@ export const CollieTools = Toolkit.make(
       run: fields.run.annotate({
         description: "The Run id, as collie_herd lists it; omit for the board's selection",
       }),
+      ...TrialInput.fields,
     })),
   }),
   collieTool("collie_workspaces", {
@@ -462,7 +474,7 @@ export const TAKES: Record<ToolName, string> = {
   collie_artefacts:
     'It takes {"run":"<run id>","id":"<optional artefact id>","revision":1,"offset":0,"refresh":false}, or to search {"query":"<words>","run":"<optional run>","kind":"<optional>","role":"<optional>","unseen":true,"cursor":"<optional>","limit":50}.',
   collie_herd: 'It takes nothing, or {"machine": "<name>"}.',
-  collie_run: `It takes {"run": "<run id>"}, or nothing at all for the board's selection.`,
+  collie_run: `It takes {"run": "<run id>"}, or nothing at all for the board's selection, or {"compare": [...], "against": [...]} with optional "audit" and "plant" to compare two sets of Runs.`,
   collie_workspaces: "It takes nothing.",
   collie_receipts: `It takes {"run": "<run id>"}, or nothing at all for the board's selection.`,
   collie_report: 'It takes nothing, or {"since": "<ISO date>"}.',

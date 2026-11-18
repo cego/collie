@@ -87,6 +87,8 @@ import { machineHerd } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, heardVoice, pushable, readChat, whyUnavailable } from "./chat";
 import { doctor } from "./doctor";
+import { compareRuns } from "./trial-compare";
+import { trialLines } from "./trial-model";
 import { savedReaches, standingDirectionOn } from "./config";
 import { reachOf, type Reach } from "./reach";
 import { standingDirectionContext } from "./standing-direction";
@@ -222,17 +224,32 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
     collie_herd: (input) =>
       answer(boardFacts(input.machine === undefined ? env : { ...env, machine: input.machine })),
     collie_run: (input) =>
-      answer(
-        onSelectedRun(
-          env,
-          selected,
-          input,
-          "collie_run",
-          (run) =>
-            said(runAnswer(env, run, reads).pipe(Effect.provide(recordsReadLayer(env.stateDir)))),
-          reads?.related ?? reads?.runs,
-        ),
-      ),
+      input.compare !== undefined || input.against !== undefined
+        ? answer(
+            compareRuns(env, {
+              compare: input.compare ?? [],
+              against: input.against ?? [],
+              audit: input.audit ?? [],
+              plant: input.plant ?? [],
+            }).pipe(
+              Effect.map((compared) =>
+                compared.ok ? Arr.join(trialLines(compared.value), "\n") : compared.error.message,
+              ),
+            ),
+          )
+        : answer(
+            onSelectedRun(
+              env,
+              selected,
+              input,
+              "collie_run",
+              (run) =>
+                said(
+                  runAnswer(env, run, reads).pipe(Effect.provide(recordsReadLayer(env.stateDir))),
+                ),
+              reads?.related ?? reads?.runs,
+            ),
+          ),
     collie_workspaces: () => answer(workspaceFacts(env)),
     collie_receipts: (input) =>
       answer(

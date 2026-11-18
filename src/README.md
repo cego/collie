@@ -171,6 +171,9 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `usage.ts`              | This Machine's Usage readings: Claude's endpoint, Codex's app server, status lines                                          |
 | `usage-ledger-model.ts` | A Run's token ledger: each harness's records read into rows, folded once per request; pure                                  |
 | `usage-ledger.ts`       | Reading an agent's new records into its Run's ledger, by step, head, model and effort                                       |
+| `trial-model.ts`        | Two sets of Runs compared per case and per accepted change, on tokens and quality; pure                                     |
+| `trial.ts`              | A Run's records a comparison reads: reviews, required Checks, interventions, its end                                        |
+| `trial-compare.ts`      | `run metrics --compare`, as the CLI and `collie_run` ask it of each Run's host                                              |
 | `catalogue-model.ts`    | A Harness catalogue: its Schemas, one decoder per harness's output, Collie's table (pure)                                   |
 | `catalogue.ts`          | This Machine's Harness catalogue: each harness read on an interval, with its timeout and back-off                           |
 | `connection-model.ts`   | Connection reading Schemas and the text the CLI and chat print (pure)                                                       |

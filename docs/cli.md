@@ -1652,6 +1652,59 @@ it does not say anything was produced. The pane clock is liveness; this is progr
 Nothing here is a limit. Counts, tokens, costs and timings are recorded and shown; none of
 them refuses anything, and there is no quota to exceed.
 
+### Comparing two sets of Runs
+
+```sh
+collie --json run metrics --compare <run>=<case> … --against <run>=<case> … \
+  [--audit <run>=<review-run> …] [--plant <case>=<file>:<line> …]
+```
+
+Two sets of Runs side by side, matched by case, so a change is judged on what it cost and
+how good its work was together. `collie_run` takes the same as `compare`, `against`,
+`audit` and `plant` lists. It reads only what the Runs' hosts recorded, so it works on
+finished Runs and after a host restart.
+
+- **Cases and repeats.** Each `--compare` and `--against` names one Run, with its case
+  after `=`. Runs of one set sharing a case are its repeats: each figure is given per Run,
+  and as the case's `median` and `range` (`min` and `max`). Runs with no case are matched
+  in the order given, as cases `#1`, `#2`, ….
+- **Audits.** `--audit <run>=<review-run>` names the independent review of that Run's
+  final tree, started after it ended: the shipped `review` workflow, with the same
+  reviewer, model and effort for every Run. Its final review's blocking findings are the
+  Run's escaped defects.
+- **Planted regressions.** `--plant <case>=<file>:<line>` names a regression planted in
+  that case. A Run caught it where one of its own reviewers raised a finding at that file
+  and line.
+
+Each Run's `figures`:
+
+| Figure                    | What it is                                                                                                                                                                                                                             |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<phase>.<category>`      | Tokens per category (`output`, `cacheRead`, `cacheCreation`, `input`, `reasoning`) for each phase: `startup` (each session's first request), `work` (the rest), `recovery` (recovery sessions, as `recovery` above) and their `total`. |
+| `sessions`, `compactions` | Agent sessions, and the compactions in them.                                                                                                                                                                                           |
+| `peakContext`             | The most any one request was sent.                                                                                                                                                                                                     |
+| `accepted`                | 1 where the Run's final review by its own reviewers carried nothing blocking and every required Check passed on its final tree; else 0. No merge request is needed, so a trial in a checkout with no forge is judged the same.         |
+| `checksPassed`            | 1 where every required Check passed on the Run's final tree, 0 where one did not, `null` where the Run never finished.                                                                                                                 |
+| `defectsFound`            | Blocking findings the Run's own reviewers raised, each counted once however many rounds it stood. Findings the builder reported are not counted.                                                                                       |
+| `escapedDefects`          | Blocking findings of the Run's audit; `null` with no audit.                                                                                                                                                                            |
+| `reopenedFindings`        | Findings a review marked fixed and a later one marked open again.                                                                                                                                                                      |
+| `plantedCaught`           | 1 or 0 where the case names a planted regression; `null` where it names none.                                                                                                                                                          |
+| `interventions`           | Answers, steers, follow-ups, deliveries, resumes and holds on the Run, from its audit trail, by anyone outside it: a human, chat, or another Run's agent such as a trial's operator. The Run's own agents and Collie's hosts are not.  |
+| `wallMs`                  | From the Run's start to its finish; `null` where it has not finished.                                                                                                                                                                  |
+
+Each set adds its Runs' figures up (`peakContext` is the largest), and gives each token
+figure per accepted change: the figure divided by the set's accepted Runs. A set with none
+says `"no accepted change"` and gives no per-change figure. A figure unavailable for any
+Run is unavailable for its case and its set, never counted as `0`.
+
+Each case's `direction` says whether the `--against` set is `"no worse"` or `"worse"` than
+the `--compare` set, on the medians, for the measures whose better direction does not
+depend on what changed: `accepted`, `checksPassed` and `plantedCaught` (more is better),
+and `escapedDefects`, `reopenedFindings` and `interventions` (fewer is better). Where
+either side is unavailable it says `"unavailable"`. `defectsFound` has no direction: fewer
+may mean a better builder or a weaker reviewer, so a decision rule that reads it names its
+direction itself. The comparison states no percentage and no verdict.
+
 **Obstacles.** Where one command fails several times in a row the same way — same exit,
 same last line — Collie says so: on the record, in `run show`, and in the next prompt, so
 the agent can change approach rather than repeat itself. It is a sentence, not a stop. A

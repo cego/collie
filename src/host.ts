@@ -130,6 +130,8 @@ import {
 } from "./run-record";
 import { REQUESTABLE } from "./outcome";
 import { OutcomeRecords, outcomeRecordsOf } from "./outcomes";
+import { trialRecordsOf } from "./trial";
+import { TrialRecords } from "./trial-model";
 import { removedNotice, scrub, scrubJson } from "./redact";
 import { readMetrics } from "./metrics";
 import { readCards } from "./cards";
@@ -540,6 +542,11 @@ export const HostRpcs = RpcGroup.make(
     success: OutcomeRecords,
     error: HostRefused,
   }),
+  Rpc.make("runTrial", {
+    payload: { runId: Schema.String },
+    success: TrialRecords,
+    error: HostRefused,
+  }),
   Rpc.make("runOutputs", {
     payload: { runId: Schema.String },
     success: RunOutputs,
@@ -751,6 +758,7 @@ const HEALER_READS = new Set([
   "runIntent",
   "runDispositions",
   "runOutcomes",
+  "runTrial",
   "runOutputs",
   "runChecks",
   "checkLog",
@@ -1051,6 +1059,7 @@ const handlers = (
         runIntent: ({ runId }) => record(runId, readIntent(runDir(dir, runId))),
         runDispositions: ({ runId }) => record(runId, readDispositions(runDir(dir, runId))),
         runOutcomes: ({ runId }) => record(runId, outcomeRecordsOf(dir, runId)),
+        runTrial: ({ runId }) => record(runId, trialRecordsOf(dir, runId)),
         runOutputs: ({ runId }) => record(runId, outputsOf(dir, runId)),
         runChecks: ({ runId }) =>
           Effect.gen(function* () {
