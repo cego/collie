@@ -759,8 +759,8 @@ only, not among the Collie tools both chats share.
 `standing_direction` is one of the Flock's settings, so its text and last edit come from
 Desktop's Flock settings on every turn. `standingDirectionContext`
 (`src/standing-direction.ts`) words the block for every chat, and an empty direction adds
-none; the Flock chat puts it in the `UserPromptSubmit` hook on Claude and in the bracketed
-note on Pi, beside the Machine rule. `collie_direction` reads it or replaces it through
+none; the Flock chat puts it in the `UserPromptSubmit` hook on Claude, in the bracketed
+note on Pi and in the context input after the human's words on Codex, beside the Machine rule. `collie_direction` reads it or replaces it through
 Settings' edit path. A host refuses an edit of it from the `agent` front door
 (`setSettings` in `src/host.ts`), and nothing that decides Authority, a Go, a Confirmation or
 admission reads it

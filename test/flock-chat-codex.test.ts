@@ -9,6 +9,10 @@ import { loopbackTools } from "../desktop/src/bun/chat-endpoint";
 import type { DriverContext } from "../desktop/src/bun/driver";
 import { type AguiEvent, ends } from "../desktop/src/shared/agui";
 import { aboutNote } from "../desktop/src/shared/chat-view";
+import { offersOf, opensOn } from "../desktop/src/bun/chat-choices";
+import { harnessLists } from "../desktop/src/bun/harness-lists";
+import { changeSettings } from "../desktop/src/bun/settings";
+import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 
 const FIXTURE = ["bun", `${import.meta.dir}/fixtures/codex-app-server.ts`];
 let answers: Readonly<Record<string, string>> | null = null;
@@ -350,5 +354,46 @@ test("Codex's model list offers its visible models with their efforts", () =>
           efforts: ["low", "high"],
         },
       ]);
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
+  ));
+
+test("Codex can be chosen for the chat, offering its own models, and opens on the model and effort chosen", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "codex-choice-" });
+      const lists = yield* harnessLists({ codex: readCodexModels(dir, FIXTURE) });
+      yield* lists.ready("codex");
+      const offers = yield* offersOf(
+        { proactive: true },
+        NO_FLOCK_SETTINGS,
+        Effect.succeed({}),
+        lists,
+      );
+      expect(offers.codex).toMatchObject({
+        from: "harness",
+        unset: { harness: "codex", model: "default", effort: null },
+        models: [{ id: "gpt-6.2-sol", efforts: ["low", "high"], unsetEffort: "medium" }],
+      });
+      const saved = changeSettings(
+        { proactive: true },
+        NO_FLOCK_SETTINGS,
+        { chatHarness: "codex", chatModel: "gpt-6.2-sol", chatEffort: "high" },
+        offers,
+      );
+      expect(saved).toEqual({
+        proactive: true,
+        chatHarness: "codex",
+        chatModel: "gpt-6.2-sol",
+        chatEffort: "high",
+      });
+      if ("refused" in saved) return;
+      expect(yield* opensOn(saved, NO_FLOCK_SETTINGS, Effect.succeed({}), lists)).toEqual({
+        ok: true,
+        choice: { harness: "codex", model: "gpt-6.2-sol", effort: "high" },
+      });
+      expect(changeSettings(saved, NO_FLOCK_SETTINGS, { chatEffort: "max" }, offers)).toMatchObject(
+        { refused: expect.stringContaining("low, high") },
+      );
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));
