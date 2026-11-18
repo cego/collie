@@ -74,6 +74,8 @@ export const Launched = Schema.Struct({
   /** The harness session herdr reported for it, which a pane herdr restores resumes. */
   agentSession: Schema.optionalKey(AgentSession),
   step: Schema.optionalKey(LaunchedIn),
+  /** How it was told to hand in its Output: its tool server is fixed at launch. */
+  outputSubmit: Schema.optionalKey(Schema.Literals(["file", "tool"])),
 });
 export type Launched = typeof Launched.Type;
 

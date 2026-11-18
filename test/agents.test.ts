@@ -29,6 +29,7 @@ import {
   FileSystem,
   Layer,
   Path,
+  Schedule,
   Schema,
   flow,
   Result,
@@ -36,6 +37,8 @@ import {
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, type Call } from "./support/recorder";
+import { installBaseline } from "./support/engine";
+import { mentionedSkills } from "../src/template";
 import type { FakeHc } from "./support/fake-hc";
 import { isJsonObject, isString } from "../src/schema";
 import { fastForward, runEffect as runLive } from "./support/effect";
@@ -46,6 +49,8 @@ import {
   agentsLayer,
   configuredAgents,
   decodeOutput,
+  everyAgentText,
+  personaText,
   promptFor,
   type AgentHost,
   type RanOut,
@@ -127,6 +132,7 @@ interface Clearing {
   readonly clears?: ReadonlyArray<string>;
   readonly skill?: string;
   readonly claudeSubagents?: ClaudeSubagents;
+  readonly role?: string;
 }
 let clearing: Clearing = {};
 
@@ -468,6 +474,22 @@ test("the contract an agent is held to is in the prompt it is sent, with the jud
   expect(prompt).toContain("clean only when there is nothing left for the implementer");
   expect(prompt).toContain("one sentence a human reads");
   expect(prompt).toContain("it is asking for your judgment");
+});
+
+test("under output_submit: tool the prompt names collie_submit and keeps the whole contract, with no path to write", () => {
+  const prompt = promptFor({
+    role: "reviewer",
+    instructions: "Review the diff.",
+    output: "/state/agents/r1/review.json",
+    contract: jsonSchemaFor(Verdict),
+    outputSubmit: "tool",
+  });
+  expect(prompt).toContain("collie_submit");
+  expect(prompt).toContain("clean only when there is nothing left for the implementer");
+  expect(prompt).toContain("one sentence a human reads");
+  expect(prompt).toContain("it is asking for your judgment");
+  expect(prompt).not.toContain("OUTPUT_PATH");
+  expect(prompt).not.toContain("/state/agents/r1/review.json");
 });
 
 test("self-improve's triager is shown that an Improvement's name and keys are kebab-case", () => {
@@ -3419,6 +3441,57 @@ test("a persona from the user Layer is followed by the every-agent text", () =>
       yield* session(started("r1"));
 
       expect(yield* personaFileText).toBe("You review closely.\n\nMake no Tautology.\n");
+    }),
+  ));
+
+test("the shipped reviewer, with no persona in the user Layer, is its own sections and both its skills", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* installBaseline(rig);
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+
+      const text = yield* personaFileText;
+      expect(text).toContain("Run both review skills over the change");
+      expect(text).toContain("Finding nothing is a real answer");
+      expect(mentionedSkills(text)).toEqual(["code-review", "code-review-and-quality"]);
+    }),
+  ));
+
+test("a user-Layer reviewer that extends reviewer-single-pass is launched as the single pass", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* installBaseline(rig);
+      yield* writePersona(rig.userDir, "reviewer", "---\nextends: reviewer-single-pass\n---\n");
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+
+      const text = yield* personaFileText;
+      expect(text).toContain("in one pass");
+      expect(text).not.toContain("Run both review skills over the change");
+      expect(text).toContain("## If the skill is missing");
+      expect(mentionedSkills(text)).toEqual(["code-review-and-quality"]);
+    }),
+  ));
+
+test("a user-Layer implementer that extends implementer-handback is the implementer, then its Delegation section", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* installBaseline(rig);
+      const env = rig.pluginEnv();
+      const every = (yield* everyAgentText(env)) ?? "no every-agent persona";
+      const shipped = yield* personaText(env, "implementer");
+      const own = Str.slice(0, shipped.length - every.length)(shipped);
+      expect(shipped).toEndWith(every);
+
+      yield* writePersona(rig.userDir, "implementer", "---\nextends: implementer-handback\n---\n");
+      const text = yield* personaText(env, "implementer");
+
+      expect(text).toStartWith(own);
+      expect(text).toEndWith(every);
+      const added = Str.slice(own.length, text.length - every.length)(text);
+      expect(added).toStartWith("## Delegation\n");
+      expect(added).toContain("A child's word is not review.");
     }),
   ));
 
@@ -8237,6 +8310,154 @@ const settingsAt = (calls: ReadonlyArray<Call>) => {
   const args = launchArgs(calls);
   return read(args[args.indexOf("--settings") + 1] ?? "");
 };
+
+const ClaudeMcpConfig = Schema.fromJsonString(
+  Schema.Struct({
+    mcpServers: Schema.Struct({
+      collie: Schema.Struct({
+        env: Schema.Record(Schema.String, Schema.String),
+      }),
+    }),
+  }),
+);
+
+const collieServerOf = Effect.fn("AgentsTest.collieServerOf")(function* () {
+  const args = launchArgs(yield* rig.calls());
+  const config = yield* Schema.decodeEffect(ClaudeMcpConfig)(
+    yield* read(args[args.indexOf("--mcp-config") + 1] ?? ""),
+  );
+  return { args, env: config.mcpServers.collie.env };
+});
+
+test("a reviewer's Claude launch under the default role_tools carries every Collie tool and no strict MCP config", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const { args, env } = yield* collieServerOf();
+      expect(args).not.toContain("--strict-mcp-config");
+      expect(env.COLLIE_RUN).toBe("r1");
+      expect(env.COLLIE_TOOLS_ROLE).toBeUndefined();
+    }),
+  ));
+
+test("under role_tools: role a reviewer's Claude launch names its role to the Collie server, with no strict MCP config", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* configured(encodeJson({ role_tools: "role" }));
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const { args, env } = yield* collieServerOf();
+      expect(args).not.toContain("--strict-mcp-config");
+      expect(env.COLLIE_TOOLS_ROLE).toBe("reviewer");
+      expect(env.COLLIE_RUN).toBe("r1");
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        "Collie tools: the reviewer's 3",
+      );
+    }),
+  ));
+
+test("under output_submit: tool a Claude launch offers collie_submit, and its Output file still counts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* configured(encodeJson({ output_submit: "tool" }));
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* rig.calls().pipe(
+            Effect.repeat({
+              until: (calls) => launchArgs(calls).length > 0,
+              schedule: Schedule.spaced("20 millis"),
+            }),
+          );
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"written"}`);
+          return yield* Fiber.join(fiber);
+        }),
+      );
+      expect((yield* collieServerOf()).env.COLLIE_OUTPUT_SUBMIT).toBe("tool");
+      expect(yield* read(promptPath("r1"))).toContain("collie_submit");
+      expect(result._tag === "Success" && result.success.note).toBe("written");
+    }),
+  ));
+
+test("an agent launched under output_submit: file is still told its Output's path after the setting becomes tool", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const continued = enveloped({ name: "submit-reuse", input: {}, success: Schema.String });
+      const body = continued.toLayer((payload) =>
+        Effect.gen(function* () {
+          yield* agentWork({ operation: "first", agent: "worker", instructions: "One." });
+          yield* configured(encodeJson({ output_submit: "tool" })).pipe(Effect.orDie);
+          return yield* agentWork({ operation: "second", agent: "worker", instructions: "Two." });
+        }).pipe(asRun(payload)),
+      );
+      yield* rig.queueOutputs(["first", "second"]);
+      const result = yield* continued
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.result,
+          Effect.provide(
+            body.pipe(
+              Layer.provideMerge(agentsLayer(hostOf())),
+              Layer.provideMerge(foundationLayer({ dir })),
+            ),
+          ),
+          Effect.scoped,
+        );
+      expect(result).toMatchObject({ _tag: "Success", success: "second" });
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+      const prompt = yield* read(`${dir}/agents/r1/second.prompt.md`);
+      expect(prompt).not.toContain("collie_submit");
+      expect(prompt).toContain(`${dir}/agents/r1/second`);
+    }),
+  ));
+
+test("under role_tools: role a role the table does not name keeps every tool, and its start line says so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      clearing = { role: "planner" };
+      yield* configured(encodeJson({ role_tools: "role" }));
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      expect((yield* collieServerOf()).env.COLLIE_TOOLS_ROLE).toBeUndefined();
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        "Collie tools: every tool, as the planner has no list",
+      );
+    }),
+  ));
+
+test.each(["all", "role"])(
+  "under role_tools: %s a Claude launch keeps the operator's profile and no strict MCP config",
+  (roleTools) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* configured(
+          encodeJson({
+            role_tools: roleTools,
+            agent_profile: encodeJson({
+              "*": {
+                claude: {
+                  enabledPlugins: { "linear@official": true },
+                  disableClaudeAiConnectors: false,
+                },
+              },
+            }),
+          }),
+        );
+        yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+        yield* session(started("r1"));
+        const { args, env } = yield* collieServerOf();
+        const settings = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.JsonObject))(
+          yield* settingsAt(yield* rig.calls()),
+        );
+        expect(env.COLLIE_TOOLS_ROLE).toBe(roleTools === "role" ? "reviewer" : undefined);
+        expect(args).not.toContain("--strict-mcp-config");
+        expect(settings.enabledPlugins).toEqual({ "linear@official": true });
+        expect(settings.disableClaudeAiConnectors).toBe(false);
+      }),
+    ),
+);
 
 test.each([0, 1000])(
   "Claude subagent policy reaches launch settings with compaction at %s",
