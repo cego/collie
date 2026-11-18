@@ -943,6 +943,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly cwd: string;
     /** The merge request pipeline job that proves it: nobody runs it locally. */
     readonly ci?: string;
+    /** Run in a detached checkout of its start tree, so edits in the Worktree cannot move it. */
+    readonly isolated?: boolean;
+    /** Run first in that checkout, recorded with the check. */
+    readonly prepare?: { readonly executable: string; readonly argv: ReadonlyArray<string> };
     /** Run on the builder's tree before a review round opens; never with \`ci\`. */
     readonly before_review?: boolean;
   }

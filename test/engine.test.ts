@@ -478,6 +478,8 @@ test(
           "offered",
           "planned",
           "measured",
+          // Reads a check's isolation, as host.approved types it.
+          "isolated",
           // A fork of a shipped workflow, which is code an author writes the same way.
           "landing",
           // The shipped seven, held to the same declarations: a workflow Collie ships is
