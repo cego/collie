@@ -41,6 +41,7 @@ import {
   sameFinding,
   forecast,
   panelOf,
+  conflictingDispositions,
   remainingDisputes,
   renderPublicReview,
   settleRound,
@@ -800,6 +801,8 @@ export default defineWorkflow({
       let postRefusal = "";
       // A dispute is carried into the next review rather than re-argued, as in implement.
       let disputed: ReadonlyArray<Finding> = [];
+      // The menu loops on one review, so each conflict is logged once.
+      const conflicts = new Set<string>();
       for (;;) {
         const resolved = Arr.filter(
           synthesis.findings,
@@ -809,6 +812,12 @@ export default defineWorkflow({
           disputed,
           (one) => !Arr.some(resolved, (old) => sameFinding(old, one)),
         );
+        for (const conflict of conflictingDispositions(synthesis)) {
+          const line = `review ${reviews}: ${conflict}`;
+          if (conflicts.has(line)) continue;
+          conflicts.add(line);
+          yield* host.record(run.id, line);
+        }
         disputed = remainingDisputes(disputed, synthesis);
         const split = splitDisputed(synthesis.findings, disputed);
         const round = settleRound({

@@ -339,8 +339,12 @@ corrections to it stop until an explicit `run clear-override`; nothing times it 
 **Verification** — An independently collected command result bound to the tree it ran on,
 before and after. A tree is its content: committing exactly the bytes a Verification ran on
 leaves it on the same tree, and changing any of them does not. A result whose snapshots
-differ is `unstable`, never `pass`. An agent's statement about tests is a **claim**, and is
-shown as one.
+differ is `unstable`, never `pass`, and names the paths that moved, each classed tracked,
+untracked or lockfile. While Collie collects one itself on a checkout, deliveries to the
+Run's agents working there are held until it ends. One recorded with `--expect fail` reproduces a failure
+and is never a pass: on the current tree it proves no Check, and on an earlier tree it is
+history, so the Check still owes a pass on the final tree. An agent's statement about tests
+is a **claim**, and is shown as one.
 
 **Measurement** — The host's comparison of a base tree and a candidate tree on one Machine.
 It is a Run's declared benchmark commands, sampled alternately on each tree for a fixed
@@ -473,8 +477,11 @@ rather than what the step was doing.
 
 **Park cause** — Why a Run parked, from one closed list: what the host may do about it.
 A cause either asks the Run's own agent something, or rechecks the fact it parked on, or
-needs you and says why. An unclassified park is `unknown`, never a guess. Counted per cause
-in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
+needs you and says why. An unclassified park is `unknown`, never a guess. A park's identity is
+derived from the Run, its cause and the evidence that cause is about, so parking again on the
+same evidence after a restart, resume or hand-over is the same park. `delivery-unsettled` is a
+reminder held behind an earlier delivery nobody can settle; it rechecks and never heals.
+Counted per cause in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
 
 **Recovery** — What the host does about a park, without being asked: an **Output reminder**
 to an agent whose turn ended without writing its Output, and a resume once a recheck shows the
@@ -485,7 +492,8 @@ fact the park waited for, never by inactivity or an acknowledgement. It never an
 **Heal** — A Run the host starts for a park its **Recovery** could not clear, before the park
 needs you: its agent may only message the parked Run's own agents and resume it. Judged by
 the parked Run's facts, never its Output, and it always records a finding for everyone who
-runs Collie. One per park, three per Run, one at a time per Machine; never for a Run with a
+runs Collie. One per park's identity, and another only when the last said its diagnosis is
+incomplete; three per Run, one at a time per Machine; never for a Run with a
 **Decision**, **Hold** or **Stop**, or for a Heal (ADR-draft-a-run-recovers-where-it-parks).
 
 **Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,
@@ -838,7 +846,8 @@ Run's branch, `rerun` of only the tests that just failed, on the same tree, to t
 **Flake**, `baseline` where the branch left the default branch, `recheck` of a whole check
 whose failures name no tests, on the same tree, `fix` after gate fix N, `finish` at the
 Run's end, `ci` for a check left to CI, read from the merge request's pipeline, or a plain
-`check`. Past that one `recheck`, a check is not run whole again on a tree it already
+`check`. A Check whose latest record is an expected-red reproduction on an earlier tree
+owes its pass here, as one that passed only earlier does; neither is a failure. Past that one `recheck`, a check is not run whole again on a tree it already
 failed on: after a gate fix that left the tree as it was, the records on that tree stand.
 A resume of a Run held unproved is the exception, because a repair can be outside the tree:
 each check still failing there runs whole once more (ADR-0034, amended 2026-10-19). The pass is the Workflow's declaration, never read off its
