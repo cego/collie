@@ -11,10 +11,8 @@ import { currentEnv, type PluginEnv } from "../env";
 import { unsafePathComponent } from "../naming";
 import { err, workspaceNamed, type Failure, type NamedDirectory } from "../operations";
 import { evidenceDir, runDir, type Given, type RunView } from "../engine";
-import { asks, asksRun, hostTaskOf, hostTasks } from "../lifecycle";
-import { readAudit, type AuditLine } from "../audit";
-import { recordsReadLayer } from "../records";
-import { readIntent } from "../intent";
+import { asksRun, hostTaskOf } from "../lifecycle";
+import { outOfReach, type RunScope } from "../run-read";
 import { FrontDoor } from "../board-model";
 import { connect } from "../host";
 import { actorName } from "../proposals";
@@ -56,9 +54,6 @@ export const selectedTask = Effect.fn("collie.selectedTask")(function* (global: 
   return (yield* hostTaskOf(env, yield* selected(global)))?.id ?? null;
 });
 
-/** Whom a Run lookup is for, built once from the command line: the Task, and the calling agent's Run. */
-export type RunScope = { readonly task: string | null; readonly caller: string | null };
-
 export const runScope = Effect.fn("collie.runScope")(function* (global: Global) {
   const env = yield* currentEnv;
   const door = yield* cliDoor(env);
@@ -67,68 +62,6 @@ export const runScope = Effect.fn("collie.runScope")(function* (global: Global) 
     caller: Schema.is(FrontDoor)(door) ? env.raw["COLLIE_RUN"] || null : door.from.run,
   } satisfies RunScope;
 });
-
-const steered = (line: AuditLine, id: string) =>
-  (line.operation === "deliver" || line.operation === "steer") &&
-  pipe_(textOf(line.asked), Str.includes(id));
-
-const textOf = (asked: Schema.Json | undefined) =>
-  Option.match(Schema.decodeUnknownOption(Schema.Struct({ text: Schema.String }))(asked), {
-    onNone: () => "",
-    onSome: (said) => said.text,
-  });
-
-/** Whether `caller`'s Run started `view`, or its goal, inputs or a steer it received name it. */
-const callerReaches = Effect.fn("collie.callerReaches")(function* (
-  env: PluginEnv,
-  view: RunView,
-  caller: string | null,
-) {
-  if (caller === null) return false;
-  if (view.parent === caller || view.requestedBy?.run === caller) return true;
-  const trail = yield* readAudit(runDir(env.stateDir, caller)).pipe(
-    Effect.provide(recordsReadLayer(env.stateDir)),
-    Effect.orElseSucceed(() => []),
-  );
-  if (Arr.some(trail, (line) => steered(line, view.runId))) return true;
-  const intent = yield* readIntent(runDir(env.stateDir, caller)).pipe(
-    Effect.provide(recordsReadLayer(env.stateDir)),
-    Effect.orElseSucceed(() => null),
-  );
-  if (pipe_(intent?.goal ?? "", Str.includes(view.runId))) return true;
-  const own = yield* asks(env, (client) => client.run({ runId: caller }));
-  if (!own.ok || own.value === null) return false;
-  const inputs = yield* Schema.encodeEffect(UnknownJson)(own.value.input).pipe(
-    Effect.orElseSucceed(() => ""),
-  );
-  return pipe_(inputs, Str.includes(view.runId));
-});
-
-/** Why `view`, on `machine` (null for this one), is out of `scope`'s reach; null where it is not. */
-export const outOfReach = Effect.fn("collie.outOfReach")(
-  function* (env: PluginEnv, view: RunView, machine: string | null, scope: RunScope) {
-    // A Task is this Machine's, so a Run on another is never outside it.
-    if (machine !== null || scope.task === null || view.task === scope.task) return null;
-    if (yield* callerReaches(env, view, scope.caller)) return null;
-    const workspace =
-      view.task === null
-        ? null
-        : (Option.getOrUndefined(
-            Arr.findFirst(yield* hostTasks(env), (task) => task.id === view.task),
-          )?.workspace ?? null);
-    const where = view.task === null ? "in no task" : `in task "${view.task}"`;
-    const reach =
-      workspace === null ? "no workspace reaches it." : `\`--workspace ${workspace}\` reaches it.`;
-    return err(
-      "run_outside_task",
-      `Run "${view.runId}" is ${where}, not task "${scope.task}": ${reach}`,
-      { run: view.runId, task: view.task, workspace },
-    );
-  },
-  Effect.catchTag("HostUnread", (unread) =>
-    Effect.succeed<Failure>({ ok: false, error: unread.error }),
-  ),
-);
 
 export type ContextResolution =
   | {

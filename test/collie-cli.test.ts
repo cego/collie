@@ -7,7 +7,8 @@ import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
 import { forgeOnPath, serveForges } from "./support/forge";
-import { stopHost } from "./support/host";
+import { stopHost, until } from "./support/host";
+import { collie, proves } from "./support/world";
 import { installFakeSkills } from "./support/defs";
 import { testBunfig } from "./support/packages";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
@@ -1055,4 +1056,50 @@ test(
       }),
     ),
   60_000,
+);
+
+test(
+  "usage names where a Fallback would move a live agent's work",
+  () =>
+    proves(
+      "collie-usage-fallbacks-",
+      (world) =>
+        Effect.gen(function* () {
+          expect(
+            (yield* collie(world, ["settings", "set", "fallbacks", "codex"])).envelope.ok,
+          ).toBe(true);
+          const herdr = { FAKE_HERDR_AGENT_STATUS: "working" };
+          const started = yield* collie(
+            world,
+            [
+              "run",
+              "start",
+              "agent",
+              "--input",
+              "target=worktree",
+              "--input",
+              `cwd=${world.project}`,
+              "--input",
+              "skip=false",
+            ],
+            herdr,
+          );
+          expect(started.envelope).toMatchObject({ ok: true });
+          const read = yield* until(
+            () => collie(world, ["usage"], herdr),
+            (one) =>
+              Option.exists(
+                Schema.decodeUnknownOption(
+                  Schema.Struct({ fallbacks: Schema.Array(Schema.Unknown) }),
+                )(one.envelope.data),
+                (data) => data.fallbacks.length === 1,
+              ),
+          );
+          expect(read.envelope.data).toMatchObject({
+            fallbacks: [{ agent: expect.stringContaining("review"), next: "codex/default" }],
+          });
+        }),
+      ["agent.workflow.ts", "notes.md"],
+    ),
+  120_000,
 );

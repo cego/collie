@@ -429,6 +429,8 @@ pub struct Agent {
     pub status: String,
     pub now: Option<String>,
     pub run: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

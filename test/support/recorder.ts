@@ -107,10 +107,12 @@ export class Rig {
   private setup(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
     const dirs = [this.stateDir, this.userDir, this.baselineDir, this.projectDir];
     const memory = this.memory(50);
+    const disk = this.disk(50);
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       for (const dir of dirs) yield* fs.makeDirectory(dir, { recursive: true });
       yield* memory;
+      yield* disk;
     });
   }
 
@@ -136,6 +138,23 @@ export class Rig {
         `some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=${pressure.toFixed(2)} avg60=0.00 avg300=0.00 total=0\n`,
       );
     });
+  }
+
+  get dfPath(): string {
+    return this.path.join(this.root, "df");
+  }
+
+  /** What `df -Pk` says from now on of every directory asked about: `percentFree` of 100 GiB on `/`. */
+  disk(
+    percentFree: number,
+  ): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+    const file = this.dfPath;
+    return Effect.flatMap(FileSystem.FileSystem, (fs) =>
+      fs.writeFileString(
+        file,
+        `Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 104857600 ${(100 - percentFree) * 1048576} ${percentFree * 1048576} ${100 - percentFree}% /\n`,
+      ),
+    );
   }
 
   /** Stands in for the agents: each queue entry is written for the next prompt. */
@@ -207,6 +226,8 @@ export class Rig {
       COLLIE_RELEASES: UNREACHABLE_RELEASES,
       // This Machine's memory as Collie reads it: never the real Machine's.
       COLLIE_PROC: this.procDir,
+      // Its free disk as Collie reads it: never the real Machine's.
+      COLLIE_DF: this.dfPath,
       // The fake core's socket once `startCore` serves it; never the human's core.
       HC_SOCKET: this.coreSocket,
       ...overrides,
