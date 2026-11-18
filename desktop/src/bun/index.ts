@@ -73,6 +73,7 @@ import { claudeCode, claudeModels } from "./claude";
 import { claudeDriver } from "./claude-driver";
 import { loopbackTools } from "./chat-endpoint";
 import { piDriver } from "./pi-driver";
+import { codexDriver, readCodexModels } from "./codex-driver";
 import { readUserMcpServers } from "./session";
 import { CHILD_CWD, childEnv, localShell, takeLoginEnv, which } from "./login-env";
 import { type ChatMachine, chatDoor } from "./flock-tools";
@@ -310,6 +311,10 @@ const main = Effect.gen(function* () {
     claude: fromMachine(
       "claude",
       Effect.suspend(() => claudeModels(SubscriptionRef.getUnsafe(flockSettings), own)),
+    ),
+    codex: fromMachine(
+      "codex",
+      Effect.suspend(() => readCodexModels(own)),
     ),
     pi: fromMachine(
       "pi",
@@ -828,6 +833,7 @@ const main = Effect.gen(function* () {
       loopbackTools(context).pipe(
         Effect.map((endpoint) => ({
           claude: claudeDriver(claudeCode, context),
+          codex: codexDriver(context, endpoint),
           pi: piDriver(context, endpoint, readUserMcpServers),
         })),
       ),
