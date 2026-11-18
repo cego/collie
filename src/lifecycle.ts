@@ -885,15 +885,42 @@ const boardStream = (env: PluginEnv) =>
     return (yield* frontDoor(socketOf(env.stateDir))).board();
   });
 
-/** The board as the host serves it now: the first message of its stream. */
+/** A board with a message applied; null until the stream's first Snapshot. */
+const applied = (board: BoardSnapshot | null, message: BoardMessage): BoardSnapshot | null => {
+  if (message._tag === "Snapshot") return message;
+  if (board === null) return null;
+  if (message._tag === "Upsert")
+    return {
+      ...board,
+      tasks: sortBoard([
+        ...Arr.filter(board.tasks, (task) => task.id !== message.task.id),
+        message.task,
+      ]),
+    };
+  if (message._tag === "Remove")
+    return { ...board, tasks: Arr.filter(board.tasks, (task) => task.id !== message.id) };
+  return board;
+};
+
+/**
+ * The board as the host serves it now. A host just started first serves the previous host's
+ * cards unconfirmed (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs D2), so a
+ * single read waits until it has confirmed each, or a reader would act on what may be stale.
+ */
 export const boardSnapshot = (
   env: PluginEnv,
 ): Effect.Effect<{ readonly ok: true; readonly value: BoardSnapshot } | Failure, never, Client> =>
   Effect.scoped(
     Effect.gen(function* () {
-      const first = yield* Stream.runHead(yield* boardStream(env));
-      if (first._tag === "Some" && first.value._tag === "Snapshot")
-        return { ok: true as const, value: first.value };
+      const settled = yield* (yield* boardStream(env)).pipe(
+        Stream.scan((): BoardSnapshot | null => null, applied),
+        Stream.filter(
+          (board): board is BoardSnapshot =>
+            board !== null && Arr.every(board.tasks, (task) => task.confirmed !== false),
+        ),
+        Stream.runHead,
+      );
+      if (settled._tag === "Some") return { ok: true as const, value: settled.value };
       return err("operation_failed", "The workflow host sent no board.");
     }).pipe(Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause)))),
   );

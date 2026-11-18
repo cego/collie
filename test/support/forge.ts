@@ -8,7 +8,7 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { type PlatformServices } from "../../src/platform";
-import { recordsAt, type Records } from "../../src/records";
+import type { Records } from "../../src/records";
 import {
   Clock,
   Config,
@@ -2803,5 +2803,4 @@ export const storedAnswers = (
         { checks: { state: "unknown" as const }, head: null, ...facts.get(id), read },
       ]),
     ),
-    // Into the database the state directory's host reads, whatever records the test holds.
-  ).pipe(Effect.provide(recordsAt(stateDir)));
+  );
