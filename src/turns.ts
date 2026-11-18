@@ -8,7 +8,7 @@ import * as Scheduler from "effect/Scheduler";
 export const TURN_MS = 8;
 
 // oxlint-disable-next-line no-restricted-globals -- A scheduler runs outside every fiber, so no Clock.
-const now = () => performance.now();
+const platformNow = () => performance.now();
 
 class TurnDispatcher implements Scheduler.SchedulerDispatcher {
   /** Tasks of fibers serving interactive work, run before any other. */
@@ -19,7 +19,10 @@ class TurnDispatcher implements Scheduler.SchedulerDispatcher {
   private at = 0;
   private running = false;
 
-  constructor(private readonly first: () => boolean) {}
+  constructor(
+    private readonly first: () => boolean,
+    private readonly now: () => number,
+  ) {}
 
   scheduleTask(task: () => void, priority: number) {
     if (this.first()) {
@@ -52,8 +55,8 @@ class TurnDispatcher implements Scheduler.SchedulerDispatcher {
     const tasks = [...this.left, ...Arr.flatMap(this.buckets, ([, tasks]) => tasks)];
     this.left = [];
     this.buckets = [];
-    const started = now();
-    const over = () => now() - started > budget;
+    const started = this.now();
+    const over = () => this.now() - started > budget;
     for (this.at = 0; ;) {
       while (this.front.length > 0 && !over()) this.front.shift()!();
       if (this.at >= tasks.length || over()) break;
@@ -73,15 +76,18 @@ export class TurnScheduler implements Scheduler.Scheduler {
   private readonly inner = new Scheduler.MixedScheduler();
   private readonly dispatcher: TurnDispatcher;
   /** `first` says whether the running fiber's tasks go before every other's. */
-  constructor(private readonly first: () => boolean = () => false) {
-    this.dispatcher = new TurnDispatcher(first);
+  constructor(
+    private readonly first: () => boolean = () => false,
+    private readonly now: () => number = platformNow,
+  ) {
+    this.dispatcher = new TurnDispatcher(first, now);
   }
   /** When the running fiber's stretch began: one fiber runs at a time. */
   private since = 0;
   /** Fibers told to yield, whose next check opens a new stretch whatever their operation count. */
   private readonly yielded = new WeakSet<object>();
   shouldYield(fiber: Parameters<Scheduler.Scheduler["shouldYield"]>[0]) {
-    if (this.yielded.delete(fiber) || fiber.currentOpCount === 1) this.since = now();
+    if (this.yielded.delete(fiber) || fiber.currentOpCount === 1) this.since = this.now();
     if (fiber.currentOpCount === 1) return false;
     const over = this.inner.shouldYield(fiber) || this.overTurn(fiber);
     if (over) this.yielded.add(fiber);
@@ -90,7 +96,7 @@ export class TurnScheduler implements Scheduler.Scheduler {
   private overTurn(fiber: Parameters<Scheduler.Scheduler["shouldYield"]>[0]) {
     if ((fiber.currentOpCount & 63) !== 0) return false;
     // Background work steps aside while a served fiber's task waits.
-    return now() - this.since > TURN_MS || (this.dispatcher.front.length > 0 && !this.first());
+    return this.now() - this.since > TURN_MS || (this.dispatcher.front.length > 0 && !this.first());
   }
   makeDispatcher(): Scheduler.SchedulerDispatcher {
     return this.dispatcher;

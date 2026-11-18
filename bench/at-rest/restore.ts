@@ -1,7 +1,7 @@
 /* oxlint-disable effecttsgo/global-console, effecttsgo/global-date, effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-schema-over-json, no-restricted-globals, no-restricted-imports -- bounded offline fixture preparation. */
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
-import type { Manifest } from "./fixture";
+import type { Manifest } from "./at-rest.fixture";
 import { relocate } from "./snapshot";
 
 const root = new URL("../../", import.meta.url).pathname;

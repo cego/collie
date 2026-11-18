@@ -1640,20 +1640,20 @@ test("a supervisor whose exit status meets a full disk leaves no .new file, writ
             ? fs.writeFileString(path, "0").pipe(Effect.andThen(Effect.fail(fullDisk)))
             : fs.writeFile(path, data, options),
       };
-      const said: string[] = [];
-      const stderr = spyOn(process.stderr, "write").mockImplementation((chunk) => {
-        said.push(Buffer.from(chunk).toString());
-        return true;
-      });
+      const stderr = spyOn(process.stderr, "write");
       yield* supervise([outputs, "full", "", "sh", "-c", "echo out; echo err >&2"]).pipe(
         Effect.provideService(FileSystem.FileSystem, full),
-        Effect.ensuring(Effect.sync(() => stderr.mockRestore())),
       );
+      const said = Arr.join(
+        Arr.map(stderr.mock.calls, ([chunk]) => Buffer.from(chunk).toString()),
+        "",
+      );
+      stderr.mockRestore();
 
       expect(Arr.filter(yield* fs.readDirectory(outputs), Str.endsWith(".new"))).toEqual([]);
       expect(yield* fs.readFileString(`${outputs}/full.stdout`)).toBe("out\n");
       expect(yield* fs.readFileString(`${outputs}/full.stderr`)).toBe("err\n");
-      expect(Arr.join(said, "")).toContain(`collie: could not write ${outputs}/full.exit:`);
+      expect(said).toContain(`collie: could not write ${outputs}/full.exit:`);
     }),
   ));
 

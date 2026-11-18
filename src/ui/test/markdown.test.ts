@@ -7,9 +7,9 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { RGBA, TextAttributes } from "@opentui/core";
-import { runEffect } from "../support/effect";
-import { ansiText, styledMarkdown } from "../../src/ui/markdown";
-import { C } from "../../src/ui/sections";
+import { runEffect } from "../../../test/support/effect";
+import { ansiText, styledMarkdown } from "../markdown";
+import { C } from "../sections";
 
 const RED = RGBA.fromHex(C.red);
 

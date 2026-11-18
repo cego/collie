@@ -1,7 +1,7 @@
 // What the human does in a pane's terminal in Desktop.
 
 import { expect, test } from "bun:test";
-import { isMouseReport, keyAction, linksIn, paneWhere } from "../src/shared/terminal-input";
+import { isMouseReport, keyAction, linksIn, paneWhere } from "../terminal-input";
 
 const key = (pressed: string, held: Partial<Record<"ctrl" | "meta" | "shift", true>> = {}) => ({
   key: pressed,

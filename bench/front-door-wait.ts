@@ -7,7 +7,7 @@ import * as Str from "effect/String";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { runEffect } from "../test/support/effect";
 import { stopHost } from "../test/support/host";
-import { prepare } from "./record-open/fixture";
+import { prepare } from "./record-open/record-open.fixture";
 import { filledSinceStart, measuring, refusal, userStateDir } from "./record-open/guards";
 import { summaryOf } from "./record-open/stats";
 import { enterWorld, live, recordMarksFile, userEnv, world } from "./record-open/world";

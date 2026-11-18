@@ -11,7 +11,7 @@ import { connect, frontDoor, type HostClient, socketOf } from "../../src/host";
 import { runEffect } from "../../test/support/effect";
 import { stopHost } from "../../test/support/host";
 import { filledSinceStart, measuring, refusal, userStateDir } from "../record-open/guards";
-import type { Manifest } from "./fixture";
+import type { Manifest } from "./at-rest.fixture";
 import { enterWorld, keptFixture, live, manifestPath, root, socket, userEnv, world } from "./world";
 import { logArrivals, viewMismatches, type ViewCheck } from "./checks";
 import { wakeDeadline, writerMarkers } from "./observations";

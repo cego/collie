@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Effect, Exit, Fiber } from "effect";
-import { closeRenderer } from "../../src/ui/bridge";
+import { closeRenderer } from "../bridge";
 
 const fakeRenderer = (closed: Promise<void>) => {
   let destroyed = false;

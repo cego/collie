@@ -10,10 +10,10 @@ import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { createSignal } from "solid-js";
 import { testRender } from "@opentui/solid";
-import { runEffect } from "../support/effect";
-import { Flow } from "../../src/ui/Flow";
-import type { Pending } from "../../src/ui/prompts";
-import { filterItems, itemHay } from "../../src/ui/state";
+import { runEffect } from "../../../test/support/effect";
+import { Flow } from "../Flow";
+import type { Pending } from "../prompts";
+import { filterItems, itemHay } from "../state";
 
 const WORKFLOWS = [
   { id: "architecture", title: "architecture — look at the whole thing", subtitle: "[baseline]" },

@@ -16,7 +16,7 @@ import {
   inHunks,
   planAnchor,
   removeDraft,
-} from "../src/shared/review-comments";
+} from "../review-comments";
 
 const plan = (id: string, file: string, quote: string, text: string): Draft => ({
   id,

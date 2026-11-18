@@ -2,7 +2,9 @@
 // as today, through the stdio stand-in's Updater, which stages the verified tar and its
 // signature where the Rune shell installs them at its next launch (desktop/update).
 
-import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { http, HttpResponse } from "msw";
+import { setupServer } from "msw/node";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Schema } from "effect";
 import { electrobunUpdater } from "../desktop/src/bun/electrobun-updater";
@@ -39,19 +41,15 @@ const responseOf = (url: URL) => {
   return new Response("not found", { status: 404 });
 };
 
-// The production policy sees real release URLs; only the network edge is replaced.
-const network = spyOn(globalThis, "fetch").mockImplementation(
-  Object.assign(
-    (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
-      const url = new URL(input instanceof Request ? input.url : input.toString());
-      expect(init?.redirect).toBe("manual");
-      if (url.origin !== "https://github.com")
-        return Promise.reject(new Error("unexpected test request"));
-      return Promise.resolve(responseOf(url));
-    },
-    { preconnect: () => {} },
-  ),
+const network = setupServer(
+  http.all("*", ({ request }) => {
+    const url = new URL(request.url);
+    expect(request.redirect).toBe("manual");
+    if (url.origin !== "https://github.com") return HttpResponse.error();
+    return responseOf(url);
+  }),
 );
+network.listen({ onUnhandledRequest: "error" });
 
 const VersionJson = Schema.fromJsonString(
   Schema.Struct({
@@ -91,7 +89,7 @@ beforeAll(() =>
 afterAll(() =>
   runEffect(
     Effect.gen(function* () {
-      network.mockRestore();
+      network.close();
       yield* (yield* FileSystem.FileSystem).remove(install, { recursive: true, force: true });
     }),
   ),

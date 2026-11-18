@@ -3,7 +3,8 @@
   "extends": [
     "./node_modules/@effect/tsgo/oxlint-presets/correctness.json",
     "./node_modules/@effect/tsgo/oxlint-presets/effect-native.json",
-    "./node_modules/@effect/tsgo/oxlint-presets/strict.json"
+    "./node_modules/@effect/tsgo/oxlint-presets/strict.json",
+    "./node_modules/@interfere/landmines/configs/recommended.json"
   ],
   "ignorePatterns": [
     // Third-party sources, pinned as submodules and never edited here.
@@ -54,6 +55,7 @@
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error",
     "anti-slop-effect/no-service-constructor-imports": "error",
+    "landmines-style/no-comments": ["error", { "publicApi": ["/src/(sdk|collie-module)\\.ts$"] }],
     "effecttsgo/any-unknown-in-error-context": "error",
     "effecttsgo/prefer-effect-array": "error",
     "effecttsgo/prefer-effect-string": "error",
@@ -122,7 +124,7 @@
         "desktop/core/record-terminal.ts",
         "bench/desktop-start/run.ts",
         "bench/desktop-start/start.ts",
-        "bench/record-open/fixture.ts",
+        "bench/record-open/record-open.fixture.ts",
         "bench/record-open/world.ts"
       ],
       "rules": {

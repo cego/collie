@@ -1,4 +1,4 @@
-//! `desktop/test/terminal-input.test.ts`, case for case, against the Rust mapping.
+//! `desktop/src/shared/test/terminal-input.test.ts`, case for case, against the Rust mapping.
 
 use collie_desktop_protocol::generated::At;
 use collie_desktop_terminal::input::{

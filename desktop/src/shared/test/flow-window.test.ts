@@ -6,7 +6,7 @@ import {
   grownWindow,
   wholeWindow,
   type StepWindow,
-} from "../src/shared/flow-window";
+} from "../flow-window";
 
 test("a Flow no larger than a first frame's Steps is drawn whole at once", () => {
   expect(firstWindow(40, 30)).toEqual({ from: 0, to: 40 });

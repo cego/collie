@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { Array as Arr, Option } from "effect";
-import type { RunDetail } from "../../src/board-model";
-import { mainFlow } from "../../test/support/flow";
-import type { KeptRecord } from "../src/shared/flock";
+import type { RunDetail } from "../../../../src/board-model";
+import { mainFlow } from "../../../../test/support/flow";
+import type { KeptRecord } from "../flock";
 import {
   CAP_BYTES,
   EMPTY_KEPT,
@@ -16,7 +16,7 @@ import {
   sized,
   type KeptSet,
   withFlowKept,
-} from "../src/shared/kept-records";
+} from "../kept-records";
 
 const openAll = (keys: ReadonlyArray<string>, from: KeptSet = EMPTY_KEPT) =>
   Arr.reduce(keys, from, (set, key) => opened(closed(set), key));

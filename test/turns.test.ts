@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import { expect, spyOn, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { Clock, Deferred, Effect, Fiber, Queue, Result, Scheduler, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { Foreground, makeForeground, servedNow } from "../src/foreground";
@@ -12,9 +12,7 @@ const timeYields = (step: (count: Effect.Effect<void>) => Effect.Effect<unknown>
   let time = 0;
   let steps = 0;
   const yielded: Array<{ steps: number; operations: number }> = [];
-  // oxlint-disable-next-line no-restricted-globals -- The scheduler reads the platform clock outside fibers.
-  const clock = spyOn(performance, "now").mockImplementation(() => time);
-  const turns = new TurnScheduler();
+  const turns = new TurnScheduler(undefined, () => time);
   const dispatcher = turns.makeDispatcher();
   const scheduler: Scheduler.Scheduler = {
     executionMode: "async",
@@ -45,12 +43,10 @@ const timeYields = (step: (count: Effect.Effect<void>) => Effect.Effect<unknown>
       Effect.provideService(Scheduler.MaxOpsBeforeYield, opsBeforeYield),
     ),
     { scheduler },
-  )
-    .then(() => {
-      expect(steps).toBe(300);
-      return yielded;
-    })
-    .finally(() => clock.mockRestore());
+  ).then(() => {
+    expect(steps).toBe(300);
+    return yielded;
+  });
 };
 
 test("an automatically resumed fiber receives a fresh turn budget", () =>

@@ -12,7 +12,7 @@ import {
   deliveryChoices,
   recipients,
   switches,
-} from "../src/shared/record-terminal";
+} from "../record-terminal";
 
 test("the Terminal tab is offered on a reached Machine and kept while shown after it drops", () => {
   expect(offersTerminal(null, undefined)).toBe(true);

@@ -3,7 +3,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { applicationMenu } from "../src/bun/menu";
+import { applicationMenu } from "../menu";
 
 const roles = (label: string) => {
   const menu = Option.getOrUndefined(

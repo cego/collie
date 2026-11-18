@@ -1,8 +1,8 @@
 import * as Cause from "effect/Cause";
 import { expect, test } from "bun:test";
 import { Effect, Fiber } from "effect";
-import { runEffect } from "../support/effect";
-import { signalPrompts } from "../../src/ui/prompts";
+import { runEffect } from "../../../test/support/effect";
+import { signalPrompts } from "../prompts";
 
 const ITEMS = [
   { id: "plan", title: "plan — grill me first" },

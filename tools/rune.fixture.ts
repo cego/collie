@@ -1,6 +1,6 @@
 // Writes what the Rune spike's cargo tests read (desktop/README.md):
 //
-//   bun run tools/rune-fixtures.ts
+//   bun run tools/rune.fixture.ts
 //
 // - `fixtures/flock.ndjson`: the test Flock, one encoded `flock` item a line;
 // - `fixtures/flows.json`: Desktop's Flow test case as it moves on, by name;
@@ -28,7 +28,7 @@ import {
 } from "../desktop/src/shared/channel";
 import { ActionFailed, DesktopRpcs, FlockItem } from "../desktop/src/shared/flock";
 import { Flow } from "../src/board-model";
-import { FLOCK } from "../test/support/rune-fixtures";
+import { FLOCK } from "../test/support/rune.fixture";
 import { mainFlow } from "../test/support/flow";
 import { publicKeyOf, signRelease } from "../src/signing";
 

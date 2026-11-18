@@ -3,9 +3,9 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { ansiLines, ansiSpans } from "../src/shared/ansi";
-import { attachmentsShown } from "../src/shared/attachments";
-import { mediaType, sortEvidence } from "../src/shared/evidence";
+import { ansiLines, ansiSpans } from "../ansi";
+import { attachmentsShown } from "../attachments";
+import { mediaType, sortEvidence } from "../evidence";
 
 test("terminal colours become styled spans, and a reset ends them", () => {
   expect(ansiSpans("ok \x1b[31;1mFAIL\x1b[0m done")).toEqual([

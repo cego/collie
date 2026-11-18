@@ -2,7 +2,7 @@
 
 import { expect, test } from "bun:test";
 import type { Node } from "comark";
-import { confined } from "../src/shared/markdown";
+import { confined } from "../markdown";
 
 const confine = (nodes: Array<Node>) => {
   const tree = { nodes, frontmatter: {}, meta: {} };

@@ -1,10 +1,10 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Exit } from "effect";
-import { actionRunner, type ActionNotice } from "../src/shared/actions";
-import { ActionFailed, type DesktopAction } from "../src/shared/flock";
-import { clearSent, type Draft, editDraft } from "../src/shared/review-comments";
-import { refusal } from "../src/shared/kept-records";
+import { actionRunner, type ActionNotice } from "../actions";
+import { ActionFailed, type DesktopAction } from "../flock";
+import { clearSent, type Draft, editDraft } from "../review-comments";
+import { refusal } from "../kept-records";
 
 test("a successful toast retry clears the original sent drafts and preserves later edits", () =>
   Effect.runPromise(

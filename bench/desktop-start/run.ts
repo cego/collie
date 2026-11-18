@@ -9,7 +9,7 @@ import { Effect } from "effect";
 import { connect } from "../../src/host";
 import { runEffect } from "../../test/support/effect";
 import { stopHost } from "../../test/support/host";
-import { COUNTS, prepare } from "../record-open/fixture";
+import { COUNTS, prepare } from "../record-open/record-open.fixture";
 import { measuring, refusal, userStateDir } from "../record-open/guards";
 import { enterWorld, live, root, socket, userEnv, world } from "../record-open/world";
 import { measureStart } from "./start";

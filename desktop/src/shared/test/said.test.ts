@@ -3,8 +3,8 @@
 import { expect, test } from "bun:test";
 import { Cause } from "effect";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
-import { ActionFailed } from "../src/shared/flock";
-import { saidOf } from "../src/shared/said";
+import { ActionFailed } from "../flock";
+import { saidOf } from "../said";
 
 const withStack = new Error("the board could not be read");
 

@@ -4,7 +4,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { mrHeading, mrTab, shortUrl, webLinks } from "../src/shared/links";
+import { mrHeading, mrTab, shortUrl, webLinks } from "../links";
 
 const mr = {
   _tag: "Details",

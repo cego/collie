@@ -11,7 +11,7 @@ import * as Rpc from "effect/rpc/Rpc";
 import { ActionFailed, DesktopRpcs, FlockItem, KeptRecord } from "../desktop/src/shared/flock";
 import { runEffect } from "./support/effect";
 import { AguiEvent } from "../desktop/src/shared/agui";
-import { FLOCK, SAID, REPORTS } from "./support/rune-fixtures";
+import { FLOCK, SAID, REPORTS } from "./support/rune.fixture";
 import { runDetail } from "./support/run-detail";
 import { exec } from "./support/command";
 

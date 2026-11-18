@@ -1,7 +1,7 @@
 // Opening a web page in the human's default browser, in a window of its own where it can.
 
 import { expect, test } from "bun:test";
-import { appWindow } from "../src/bun/browser";
+import { appWindow } from "../browser";
 
 const URL_ = "https://claude.ai/artifact/1";
 

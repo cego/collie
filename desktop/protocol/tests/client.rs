@@ -1,5 +1,5 @@
 //! The NDJSON client against transcripts of Effect's own client and server
-//! (`bun run tools/rune-fixtures.ts`): a fake core plays the core's frames and checks that the
+//! (`bun run tools/rune.fixture.ts`): a fake core plays the core's frames and checks that the
 //! shell's are the ones Effect's client sent, in order.
 
 use collie_desktop_protocol::client::{Client, RpcError};

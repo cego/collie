@@ -9,11 +9,11 @@ import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import type { JSX } from "solid-js";
 import { testRender } from "@opentui/solid";
-import { runEffect } from "../support/effect";
-import { LiveRegion, ProposalPreview } from "../../src/ui/live";
-import type { Card } from "../../src/cards";
-import type { Live } from "../../src/live";
-import type { ProposalRecord } from "../../src/proposals";
+import { runEffect } from "../../../test/support/effect";
+import { LiveRegion, ProposalPreview } from "../live";
+import type { Card } from "../../cards";
+import type { Live } from "../../live";
+import type { ProposalRecord } from "../../proposals";
 
 const REVISION = { branch: "main", head_sha: "abc1234def5678", fingerprint: "f1", dirty: false };
 

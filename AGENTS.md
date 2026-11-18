@@ -15,7 +15,7 @@ here are in [`src/README.md`](src/README.md).
 - **Workflow authoring commands** (`list`, `show`, check, `needs_input`) → [`docs/authoring.md`](docs/authoring.md),
   [`docs/sdk.md`](docs/sdk.md), `src/authoring.ts`, `src/commands/workflow.ts`.
 - **Go to pane** → [ADR-0044](docs/adr/0044-go-to-pane-opens-the-pane-in-desktop.md),
-  `desktop/src/bun/terminal.ts`, `test/desktop-terminal.test.ts`, `desktop/test/terminal-input.test.ts`.
+  `desktop/src/bun/terminal.ts`, `test/desktop-terminal.test.ts`, `desktop/src/shared/test/terminal-input.test.ts`.
 - **Placement** of a start → [ADR-0033](docs/adr/0033-a-run-started-from-the-home-is-placed-not-asked.md),
   joining a Task: [ADR-draft-a-tasks-work-is-what-its-runs-worked-on](docs/adr/draft-a-tasks-work-is-what-its-runs-worked-on.md),
   `taskWorking` in `src/engine.ts`, `test/placement.test.ts`, `src/flows.ts`, `src/route.ts`, `src/projects.ts`, `src/agent-start.ts`.
@@ -59,7 +59,7 @@ here are in [`src/README.md`](src/README.md).
   [`desktop/README.md`](desktop/README.md), [`docs/using.md`](docs/using.md#collie-desktop),
   `test/desktop-*.test.ts`, `test/flock-*.test.ts`, [cutover ADR](docs/adr/0067-collie-replaces-the-webview-desktop-in-place.md),
   `desktop/scripts/bundle.ts`, `desktop/update/`, `tools/rune-types.ts`,
-  `tools/rune-fixtures.ts`, `test/rune-types.test.ts`, `test/rune-contract.test.ts`.
+  `tools/rune.fixture.ts`, `test/rune-types.test.ts`, `test/rune-contract.test.ts`.
 - **Agent launch profile** → [ADR-0060](docs/adr/0060-a-managed-agent-runs-with-the-operators-profile.md),
   [`docs/using.md`](docs/using.md#what-collies-agents-get), `src/profile.ts`, `src/agents.ts`,
   `test/profile.test.ts`, `test/agents.test.ts`.

@@ -61,7 +61,7 @@ if (existsSync(`${root}.scratch/at-rest/fixture.json`) && readOr(stampPath) === 
   process.exit(0);
 }
 rmSync(`${root}.scratch/at-rest/fixture.json`, { force: true });
-run([process.execPath, `${base}/bench/at-rest/fixture.ts`, ...Bun.argv.slice(2)], base, {
+run([process.execPath, `${base}/bench/at-rest/at-rest.fixture.ts`, ...Bun.argv.slice(2)], base, {
   BENCH_AT_REST_TREE: root,
 });
 writeFileSync(stampPath, stamp);

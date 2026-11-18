@@ -4,7 +4,7 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
-import { escapeOn, inField, landedOn } from "../src/shared/board-clicks";
+import { escapeOn, inField, landedOn } from "../board-clicks";
 
 /** An element, by the selectors it or one of its ancestors matches; a card has key `pc:a`. */
 const element = (matches: ReadonlyArray<string>, isContentEditable = false) => ({
