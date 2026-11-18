@@ -125,7 +125,9 @@ export const applyChange = (
   };
 };
 
-export const extraModels = (flock: FlockSettings) =>
+export const extraModels: (
+  flock: FlockSettings,
+) => Readonly<Record<string, ReadonlyArray<string>>> = (flock) =>
   Rec.fromEntries(
     Arr.flatMap(Rec.toEntries(flock.settings), ([key, { value }]) =>
       pipe_(key, Str.startsWith("models.")) && Arr.isArray(value) && Arr.every(value, isString)
