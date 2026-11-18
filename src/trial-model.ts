@@ -214,6 +214,7 @@ function phasesOf(entries: ReadonlyArray<UsageEntry>) {
     Order.Number,
   );
   const opened = new Set<string>();
+  const counted = new Set<Phase>();
   const sums = new Map<Phase, Record<Category, Count>>(
     Arr.map(PHASES, (phase) => [
       phase,
@@ -226,6 +227,7 @@ function phasesOf(entries: ReadonlyArray<UsageEntry>) {
     if (one.parent === null) opened.add(owner);
     const phase: Phase =
       recovering.has(owner) || retried(one) ? "recovery" : first ? "startup" : "work";
+    counted.add(phase);
     for (const at of [phase, "total"] as const) {
       const sum = sums.get(at)!;
       for (const category of CATEGORIES) sum[category] = plus(sum[category], one[category]);
@@ -234,7 +236,10 @@ function phasesOf(entries: ReadonlyArray<UsageEntry>) {
   const figures = tabulate(
     TOKENS,
     (one) => one.measure,
-    ({ phase, category }) => (requests.length === 0 ? null : sums.get(phase)![category]),
+    ({ phase, category }) =>
+      requests.length === 0 || (!counted.has(phase) && sums.get("total")![category] === null)
+        ? null
+        : sums.get(phase)![category],
   );
   return { figures, usage };
 }

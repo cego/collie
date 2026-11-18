@@ -691,6 +691,16 @@ const ZERO: Tally = {
   reasoning: 0,
 };
 
+/** Nothing spent where `totals` knows the category, unavailable where it does not. */
+const noneOf = (totals: Tally): Tally => ({
+  requests: 0,
+  input: totals.input === null ? null : 0,
+  cacheRead: totals.cacheRead === null ? null : 0,
+  cacheCreation: totals.cacheCreation === null ? null : 0,
+  output: totals.output === null ? null : 0,
+  reasoning: totals.reasoning === null ? null : 0,
+});
+
 const tally = (rows: ReadonlyArray<Categories>): Tally =>
   rows.length === 0
     ? NOTHING
@@ -873,9 +883,10 @@ export function usageOf(
       recovering.has(sessionKey({ agent: one.agent, session: one.parent ?? one.session })) ||
       retried(one),
   );
+  const totals = tally(requests);
   return {
-    totals: tally(requests),
-    recovery: recoveries.length === 0 && requests.length > 0 ? ZERO : tally(recoveries),
+    totals,
+    recovery: recoveries.length === 0 ? noneOf(totals) : tally(recoveries),
     steps: Arr.map(
       grouped(requests, (one) => one.step),
       ([step, spent]) => ({ step, ...spent }),

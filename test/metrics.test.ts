@@ -264,19 +264,40 @@ test("a category one agent's harness does not report leaves the Run's total for 
   expect(usage.totals).toMatchObject({ requests: 2, output: 9, cacheCreation: null });
 });
 
-test("a Run that spent nothing on recovery reports its recovery as 0, and only a Run with no requests as unavailable", () => {
+test("a Run that spent nothing on recovery reports 0 for each category its total knows, and unavailable for the rest", () => {
   const usage = usageOf([
-    spent("build", "m1", { input: 1, cacheRead: 2, cacheCreation: 3, output: 4 }),
+    spent("build", "m1", { input: 1, cacheRead: 2, cacheCreation: null, output: 4 }, "codex"),
   ]);
   expect(usage.recovery).toEqual({
     requests: 0,
     input: 0,
     cacheRead: 0,
-    cacheCreation: 0,
+    cacheCreation: null,
     output: 0,
-    reasoning: 0,
+    reasoning: null,
   });
   expect(usageOf([]).recovery.output).toBeNull();
+});
+
+test("a trial phase with no requests is 0 where the Run's total knows the category, and unavailable where it does not", () => {
+  const report = compareSets({
+    compare: [
+      {
+        case: null,
+        run: trialRun("A1", {
+          usage: spentOnly({ input: 1, cacheRead: 2, cacheCreation: null, output: 3 }),
+        }),
+      },
+    ],
+    against: [],
+    planted: {},
+  });
+  expect(report.cases[0]!.compare.median).toMatchObject({
+    "recovery.output": 0,
+    "recovery.cacheCreation": null,
+    "work.output": 0,
+    "work.cacheCreation": null,
+  });
 });
 
 type Tokens = { input: number; cacheRead: number; cacheCreation: number | null; output: number };
