@@ -60,7 +60,13 @@ const SpecSchema = Schema.Struct({
   own: VerificationSchema.fields.own,
   environment: Schema.optionalKey(Schema.String),
   /** Where it runs in an isolated checkout, the directory its record names instead. */
-  isolated: Schema.optionalKey(Schema.Struct({ ...IsolatedSchema.fields, cwd: Schema.String })),
+  isolated: Schema.optionalKey(
+    Schema.Struct({
+      ...IsolatedSchema.fields,
+      cwd: Schema.String,
+      executable: Schema.optionalKey(Schema.String),
+    }),
+  ),
 });
 type CheckSpec = typeof SpecSchema.Type;
 

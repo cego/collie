@@ -719,6 +719,8 @@ interface Prepared {
 /** Where an isolated check runs, and how its prepare ended there. */
 interface Placed {
   readonly checkout: string;
+  /** What it spawns: the checkout's copy of an executable inside the repository. */
+  readonly executable: string;
   readonly prepare?: { readonly exit: number; readonly seconds: number } & Prepare;
   readonly output?: { readonly stdout: string; readonly stderr: string };
 }
@@ -742,7 +744,7 @@ const prepare = Effect.fn("Verify.prepare")(function* (
  */
 const isolate = Effect.fn("Verify.isolate")(function* (
   what: Collected & { readonly isolated: NonNullable<Collected["isolated"]> },
-  start: Snapshot,
+  { start, absolute }: Prepared,
 ): Effect.fn.Return<Placed, VerifyRefused, Services> {
   const path = yield* Path.Path;
   const refused = (why: string) =>
@@ -767,14 +769,20 @@ const isolate = Effect.fn("Verify.isolate")(function* (
   const there = yield* fingerprint(checkout);
   if (!sameTree(there, start))
     return yield* refused(`its checkout ${made} is not the tree it started on`);
+  const inRepository = path.relative(root, absolute);
+  const executable =
+    Str.startsWith("..")(inRepository) || path.isAbsolute(inRepository)
+      ? absolute
+      : path.join(made, inRepository);
   const prepare = what.isolated.prepare;
-  if (prepare === undefined) return { checkout };
+  if (prepare === undefined) return { checkout, executable };
   const began = yield* Clock.currentTimeMillis;
   // ponytail: outside CheckProcesses, so a host replaced while it runs does not take it over.
   const ran = yield* shell(prepare.executable, [...prepare.argv], checkout);
   const seconds = ((yield* Clock.currentTimeMillis) - began) / 1000;
   return {
     checkout,
+    executable,
     prepare: { ...prepare, argv: [...prepare.argv], exit: ran.code, seconds },
     output: { stdout: ran.stdout, stderr: ran.stderr ?? "" },
   };
@@ -867,7 +875,7 @@ const toRun = Effect.fn("Verify.toRun")(function* (
 ) {
   const atStep = yield* CurrentStep;
   return {
-    executable: absolute,
+    executable: placed?.executable ?? absolute,
     argv: what.argv,
     cwd: placed?.checkout ?? what.cwd,
     spec: {
@@ -884,6 +892,7 @@ const toRun = Effect.fn("Verify.toRun")(function* (
       ...(placed !== undefined && {
         isolated: {
           cwd: what.cwd,
+          executable: absolute,
           checkout: placed.checkout,
           ...(placed.prepare !== undefined && { prepare: placed.prepare }),
         },
@@ -945,7 +954,7 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
     id: `${check.run}-${check.name}-${epochMs(at)}`,
     run: check.run,
     name: check.name,
-    executable: command.executable,
+    executable: spec.isolated?.executable ?? command.executable,
     asked: spec.asked,
     argv: [...command.argv],
     cwd: spec.isolated?.cwd ?? command.cwd,
@@ -1046,7 +1055,7 @@ const collectPrepared = (
     const placed =
       what.isolated === undefined
         ? undefined
-        : yield* isolate({ ...what, isolated: what.isolated }, prepared.start);
+        : yield* isolate({ ...what, isolated: what.isolated }, prepared);
     const ready: Prepared = placed === undefined ? prepared : { ...prepared, placed };
     if (placed?.prepare !== undefined && placed.prepare.exit !== 0)
       return yield* settleCheck(
