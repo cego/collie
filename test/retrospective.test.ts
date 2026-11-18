@@ -189,6 +189,24 @@ test("Runs created after an unreleased fix that still show the failure leave it 
   expect(releasedFix(found({ key: "slow-boot", issue: 7 }), matching, runs)).toBeNull();
 });
 
+test("a finding on an issue closed since the last tag is left out even where an open issue also carries its key, so nothing is commented there", () => {
+  const { kept, leftOut } = sortOut(
+    [found({ key: "slow-boot" })],
+    WINDOW,
+    [{ number: 9, title: "Issue 9", url: "https://forge.example/issues/9", keys: ["slow-boot"] }],
+    false,
+    {
+      closed: [closedIssue(5, "slow-boot", "2026-11-17T15:00:00.000Z")],
+      releases: TAGS,
+      underway: [],
+    },
+  );
+  expect(kept).toEqual([]);
+  expect(leftOut).toEqual([
+    { what: "Project slow-boot", why: "fixed on master since 1.0.21, not yet released" },
+  ]);
+});
+
 test("a finding an active Run's goal or plan names, and one an open merge request carries, are left out naming who is fixing it", () => {
   const { kept, leftOut } = sortOut(
     [

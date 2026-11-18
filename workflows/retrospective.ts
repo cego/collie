@@ -225,7 +225,7 @@ export const sortOut = (
       leftOut.push({ what: finding.title, why: "about Collie" });
     else if (underway !== null)
       leftOut.push({ what: finding.title, why: `being fixed by ${underway.by}` });
-    else if (closed !== undefined && !released && targetOf(finding, open) === null)
+    else if (closed !== undefined && !released)
       leftOut.push({ what: finding.title, why: `fixed on master since ${last}, not yet released` });
     else if (
       finding.category !== "defect" &&
