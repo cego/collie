@@ -2,6 +2,7 @@
 
 import { Effect } from "effect";
 import { expect, test } from "bun:test";
+import { setSetting } from "../src/config";
 import { connect } from "../src/host";
 import { isSettled } from "../src/lifecycle";
 import { featuresOf } from "../src/run-features";
@@ -36,12 +37,36 @@ test(
           expect(yield* hostRecords(world.state, featuresOf(runId))).toEqual({
             review_delta: true,
             findings_ledger: true,
+            inline_plan: false,
           });
           yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
             (view) => view !== null && isSettled(view),
           );
         }
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a Run started while inline_plan is on records that it plans, and keeps it once the setting is off",
+  () =>
+    hosted("hw-features-plan-", ({ world }) =>
+      Effect.gen(function* () {
+        yield* setSetting(world.config, "inline_plan", "on", "2026-11-18T00:00:00.000Z");
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const started = yield* client
+          .start({ project: world.project, id: "hello", request: "plans", input: { name: "" } })
+          .pipe(Effect.orDie);
+        yield* setSetting(world.config, "inline_plan", "off", "2026-11-18T00:00:01.000Z");
+        expect(yield* hostRecords(world.state, featuresOf(started.runId))).toMatchObject({
+          inline_plan: true,
+        });
+        yield* until(
+          () => client.run({ runId: started.runId }).pipe(Effect.orDie),
+          (view) => view !== null && isSettled(view),
+        );
       }),
     ),
   60_000,

@@ -291,6 +291,11 @@ Where the lines above are not empty, a fix after the last review was checked by 
 tests and dispositions and not by a reviewer: say so in the description, in one sentence, and list
 what that fix changed. Where findings were left open as non-blocking, list them too.
 
+{{built}}
+
+Where the list above is not empty, this work was built as those tickets, one at a time:
+list each in the description by its title.
+
 {{ledger}}
 
 Where the list above is not empty, it is every finding the reviews raised, each with its id
@@ -383,6 +388,34 @@ repaired. The {{mr.noun}}'s ordinary state is `minor`: approvals still needed, a
 still running, failures that were there before this Run. Collie records each `minor` one
 and notes it on the {{mr.noun}}.
 
+## plan
+
+Plan this work before any of it is built. The work source above is a
+`{{inputs.plan_kind}}`:
+
+{{source}}
+
+Write what it says the spec and the tickets hold, and build nothing in this step: no code
+and no commits. `{{run.dir}}/plan/SPEC.md` is the spec, and each ticket is
+`{{run.dir}}/plan/issues/NN-<slug>.md`, numbered from 01. Each ticket carries:
+
+- a `**Repo:** .` line;
+- a `**Blocked by:**` line naming the numbers of the tickets it waits for, or `None`;
+- a `**Checks:**` line saying what proves it;
+- its acceptance criteria as a checkbox list, `- [ ] …`.
+
+Copy every checkbox in `SPEC.md`, word for word, into the ticket that answers it. The
+verifications above are the gate's and never a ticket's criterion.
+
+Work that is one piece is one ticket, which you then build in one pass. Cut more only
+where each piece can be built, reviewed and committed before the next starts: once this
+step is done, Collie hands you the tickets one at a time, in the order their `Blocked by`
+lines allow.
+
+{{refusal}}
+
+Then write your Output, with `issues_dir` set to `{{run.dir}}/plan/issues`.
+
 ## review.pipeline
 
 A pipeline on this change's final head is not yours to require: the Merge request step
@@ -411,6 +444,9 @@ under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix. A 
 disagree with is `disputed` with a reason, exactly as in a fix round — never silently
 skipped.
 
+Under the `inline_plan: on` setting, this is written by a planning step of its own before
+anything is built, and the tickets are then built one at a time, as a plan's are.
+
 ## source.linear
 
 A Linear issue id. Fetch it with the Linear MCP (`get_issue`) and treat its description as
@@ -422,6 +458,9 @@ own — a regression test, or the test files that hold its behaviour — name th
 command, and run it through `collie verify`. Clear work states its acceptance checks
 before it starts; deciding afterwards what would have counted is not a check.
 
+Under the `inline_plan: on` setting, this is written by a planning step of its own before
+anything is built, and the tickets are then built one at a time, as a plan's are.
+
 ## source.followup
 
 A finished run's outcome needs more work. `{{inputs.plan}}` names it as
@@ -430,6 +469,9 @@ A finished run's outcome needs more work. `{{inputs.plan}}` names it as
 `{{run.dir}}/plan/issues/`. This checkout is already on the branch that run built, and its
 merge request is updated rather than replaced — the parent run is finished and immutable,
 so nothing you do belongs in it.
+
+Under the `inline_plan: on` setting, this is written by a planning step of its own before
+anything is built, and the tickets are then built one at a time, as a plan's are.
 
 ## source.text
 
@@ -442,6 +484,9 @@ and run it through `collie verify`. Clear work states its acceptance checks befo
 starts; deciding afterwards what would have counted is not a check. Where the text does
 not settle something, decide it the way the text most plausibly means, and record the
 decision under `assumptions`.
+
+Under the `inline_plan: on` setting, this is written by a planning step of its own before
+anything is built, and the tickets are then built one at a time, as a plan's are.
 
 ## outcome.unspecified
 

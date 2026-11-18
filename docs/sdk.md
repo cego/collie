@@ -712,7 +712,8 @@ const place = yield * host.place((yield * Run).id);
 //                   words that started it: what a Claude agent's auto mode is told
 // place.features  — what its workflow does, fixed when it started: `review_delta` where its
 //                   follow-up review rounds are given a delta, `findings_ledger` where
-//                   implement's give findings ledger ids; absent on a Run started earlier
+//                   implement's give findings ledger ids, `inline_plan` where implement
+//                   plans a source that is not a plan; absent on a Run started earlier
 ```
 
 `place.cwd` is decided before your body runs. A workflow that
@@ -1516,6 +1517,11 @@ for (const [at, ticket] of tickets.entries()) {
   });
 }
 ```
+
+The shipped `implement` reads its tickets this way from a plan directory. Under the shared
+setting `inline_plan: on`, recorded on the Run as `place.features.inline_plan`, it first plans
+any other source into the Run's own `plan/` with one `agentWork` and checks it before reading
+it back. Where the setting is off, a source that is not a plan is one item.
 
 `orderedTickets` (and `orderedTicketsOf`) reads a plan directory as tickets in an order they
 can be built in — `Blocked by` before blocked, plan order among the rest — narrowed to one

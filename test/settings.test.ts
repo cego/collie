@@ -90,6 +90,19 @@ describe("Collie's settings", () => {
     expect(parseSetting("review.follow_through", "true")).toEqual({ value: true });
   });
 
+  test("plan a source that is not a plan before building it only once turned on", () => {
+    expect(settingOf("inline_plan")).toMatchObject({
+      kind: "choice",
+      choices: ["off", "on"],
+      fallback: "off",
+    });
+    expect(parseSetting("inline_plan", "on")).toEqual({ value: "on" });
+    expect(parseSetting("inline_plan", "off")).toEqual({ value: "off" });
+    expect(parseSetting("inline_plan", "true")).toEqual({
+      refused: 'inline_plan has to be one of off, on, not "true"',
+    });
+  });
+
   test("share a release for approval only once turned on, and in the channel named", () => {
     expect(settingOf("release.share_for_approval")).toMatchObject({
       kind: "boolean",
@@ -212,6 +225,7 @@ describe("Each setting explains itself", () => {
       "release.share_for_approval",
       "release.approval_channel",
       "review.follow_through",
+      "inline_plan",
     ],
     Board: ["scope", "density", "board_quiet_ms", "run_model"],
     Chat: ["flock_chat.proactive", "machine_rule", "standing_direction", "proactive"],

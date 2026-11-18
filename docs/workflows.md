@@ -110,6 +110,22 @@ work. What was resolved is recorded with its kind, and the build prompt reads bo
 `linear` and `text` the implementer writes the spec and a task list into the run's `plan/`
 before it builds, so every run leaves the same audit trail.
 
+Under the shared setting `inline_plan: on` (default `off`), a Run whose source is anything
+but a plan directory starts with a **Plan** step of its own. The implementer, on the `build`
+agent, writes `SPEC.md` and one ticket per piece into the Run's `plan/`, following its
+source's section, and builds nothing. The plan is then read like a plan Run's:
+
+- A plan the plan reading refuses goes back to that step once with the reason, and the Run
+  halts if it is refused again. So does a plan with no ticket, one whose tickets name another
+  repository, or one with a criterion in `SPEC.md` that no ticket carries.
+- One ticket is built in one pass on the same agent.
+- Several tickets are built one at a time, in their `Blocked by` order, as a plan's are, and
+  the merge request names each.
+
+The value is fixed on the Run when it starts. A Run started with it `off`, or before the
+setting existed, builds in one pass as before. A restarted Run builds from the plan it
+recorded and does not plan again.
+
 `repo` is one repository's share of a plan that spans several, as the tickets' `Repo:`
 line names it, and `change` is one Change of that share, as their `Change:` line names it:
 given them, the build step builds only those tickets and leaves the rest to their own run.

@@ -404,6 +404,12 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description:
       "Whether a review of a merge request posts its findings, waits for the author's changes with no agent, reviews each new head, and asks you only whether to approve. Read at each round: off, a running one asks what to do next as before.",
   }),
+  choice("inline_plan", ["off", "on"], "off", {
+    group: "Runs",
+    label: "Plan before building",
+    description:
+      "Whether an implement Run given anything but a plan first writes one into its own directory and builds its tickets one at a time (on), or builds it in one pass (off). Fixed on a Run when it starts.",
+  }),
   of("slack.notification_channel", "text", "", {
     group: "Notifications",
     label: "Post notifications to",

@@ -141,6 +141,8 @@ interface Fixing {
 }
 
 interface Opening {
+  /** The tickets built one at a time, a line each; empty where the work was built in one pass. */
+  readonly built?: string;
   /** Every finding the reviews gave a ledger id, at its latest status; empty where none did. */
   readonly ledger?: string;
   readonly evidence: string;
@@ -208,6 +210,7 @@ export interface Delivery<I extends Told, O extends Opened> {
   }>;
   readonly roots: ReadonlyArray<string>;
   readonly rallied: Reviewed;
+  readonly built?: string;
   readonly ledger?: string;
   /** What the caller leaves unsettled, listed before what delivery adds. */
   readonly unsettled: ReadonlyArray<string>;
@@ -687,6 +690,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             verify: renderApproved(spawned(checks, settledEvidence.verifications)),
             // Read after the gate settled, so the merge request cites the passing runs.
             evidence: renderEvidence(settledEvidence),
+            built: ask.built ?? "",
             ledger: ask.ledger ?? "",
             unreviewed,
             unsettled: Arr.join(

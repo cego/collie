@@ -3380,6 +3380,10 @@ See [Claude subagents](#claude-subagents).
 `role_tools` says which of Collie's tools each agent is offered: `all`, the default, or
 `role`. See [Collie's tools per role](#collies-tools-per-role).
 
+`inline_plan` says whether an implement Run given anything but a plan writes one into its
+own directory before building: `off`, the default, or `on`. A Run keeps the value it started
+with. See [`implement`](workflows.md#implement).
+
 `output_submit` says how an agent hands in its Output: `file`, the default, or `tool`, which
 also offers it the `collie_submit` tool. See
 [Having an agent do the work](sdk.md#having-an-agent-do-the-work).

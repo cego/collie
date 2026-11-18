@@ -1,3 +1,4 @@
+import { setSetting } from "../../src/config";
 import { Herdr } from "../../src/herdr";
 import { isString } from "../../src/schema";
 import { hostRecords, hostRunRecords, launchesAt, overHost } from "./records";
@@ -8524,6 +8525,351 @@ scenario(
         expect(yield* factOf(runId, "features.json")).toBeNull();
         expect(yield* asked(runId, "review-2-1")).not.toContain("Earlier findings ledger");
         expect(yield* asked(runId, "mr")).not.toContain(`${runId}-F1`);
+      }),
+    ),
+  120_000,
+);
+
+/** A Run that records it started under `inline_plan: on`, as its host would have. */
+const plansFirst = (runId: string) =>
+  putFact(
+    runId,
+    "features.json",
+    `{"review_delta":true,"findings_ledger":true,"inline_plan":true}`,
+  );
+
+/** A planning step's turn: the spec and these tickets written into the Run's plan, then its Output. */
+const plannedAs = (
+  runId: string,
+  tickets: ReadonlyArray<{ file: string; title: string; blockedBy: string }>,
+) => ({
+  writes: [
+    { path: `${runDir(dir, runId)}/plan/SPEC.md`, text: "# The spec\n" },
+    ...Arr.map(tickets, (one) => ({
+      path: `${runDir(dir, runId)}/plan/issues/${one.file}`,
+      text: `# ${one.title}\n\n**Repo:** .\n\n**Blocked by:** ${one.blockedBy}\n\n**Checks:** unit\n`,
+    })),
+  ],
+  output: { issues_dir: `${runDir(dir, runId)}/plan/issues` },
+});
+
+const THREE_PLANNED = [
+  { file: "01-first.md", title: "the first one", blockedBy: "None" },
+  { file: "02-second.md", title: "the second one", blockedBy: "03" },
+  { file: "03-third.md", title: "the third one", blockedBy: "None" },
+];
+
+const operationsOf = (runId: string) =>
+  Effect.map(launchesAt(dir, runId), (launches) => Arr.map(launches, (one) => one.operation));
+
+/** The agents a Run's implementer work ran on. */
+const implementersOf = (runId: string) =>
+  Effect.map(launchesAt(dir, runId), (launches) => [
+    ...new Set(
+      Arr.map(
+        Arr.filter(launches, (one) => one.role === "implementer"),
+        (one) => one.agent,
+      ),
+    ),
+  ]);
+
+const agentStarts = () =>
+  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length));
+
+scenario(
+  "under inline_plan: on, words are planned on build into three tickets, built as slices in their Blocked-by order",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-three";
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        yield* approve(runId, ["unit"]);
+        yield* plansFirst(runId);
+        const blocked = {
+          ...BUILT,
+          verdict: "findings",
+          findings: [
+            { severity: "blocker", title: "the guard is on the wrong side", file: "a.ts" },
+          ],
+        };
+        yield* rig.queueOutputs([
+          plannedAs(runId, THREE_PLANNED),
+          blocked,
+          CLEAN_SYNTHESIS,
+          BUILT,
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan: "Count the registries, then merge them.", ...FINISH },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* operationsOf(runId)).toEqual([
+          "plan",
+          "01-first.md",
+          "01-first.md.review-1",
+          "03-third.md",
+          "02-second.md",
+          "review-1",
+          "mr",
+        ]);
+        const planning = yield* asked(runId, "plan");
+        expect(planning).toContain("The work in the human's own words.");
+        expect(planning).toContain("build nothing in this step");
+        expect(yield* asked(runId, "01-first.md")).toContain(
+          `Work source (plan-dir): ${runDir(dir, runId)}/plan`,
+        );
+        expect(yield* asked(runId, "02-second.md")).toContain("- 03-third.md — the third one");
+        const opening = yield* asked(runId, "mr");
+        for (const one of THREE_PLANNED) expect(opening).toContain(`- ${one.file} — ${one.title}`);
+        expect(yield* implementersOf(runId)).toEqual([`${runId}-build-r1`]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "under inline_plan: on, words planned as one ticket are built in one pass by the agent that planned them",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-one";
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        yield* approve(runId, ["unit"]);
+        yield* plansFirst(runId);
+        yield* rig.queueOutputs([
+          plannedAs(runId, [{ file: "01-only.md", title: "the only one", blockedBy: "None" }]),
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan: "Count the registries.", ...FINISH },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const launches = yield* launchesAt(dir, runId);
+        expect(Arr.map(launches, (one) => one.operation)).toEqual([
+          "plan",
+          "build",
+          "review-1",
+          "mr",
+        ]);
+        expect(yield* implementersOf(runId)).toEqual([`${runId}-build-r1`]);
+        expect(yield* agentStarts()).toBe(2);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "under inline_plan: on, a review is planned as one ticket per finding and built as slices",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-review";
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const reviewed = `${rig.root}/reviewed-inline`;
+        yield* fs.makeDirectory(reviewed, { recursive: true });
+        yield* fs.writeFileString(`${reviewed}/review.md`, "# Review\n\nTwo things are wrong.\n");
+        yield* fs.writeFileString(
+          `${reviewed}/findings.json`,
+          `[{"severity":"major","title":"the guard is wrong"},{"severity":"minor","title":"a name"}]`,
+        );
+        yield* approve(runId, ["unit"]);
+        yield* plansFirst(runId);
+        yield* rig.queueOutputs([
+          plannedAs(runId, [
+            { file: "01-guard.md", title: "the guard is wrong", blockedBy: "None" },
+            { file: "02-name.md", title: "a name", blockedBy: "None" },
+          ]),
+          BUILT,
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan: reviewed, ...FINISH },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const planning = yield* asked(runId, "plan");
+        expect(planning).toContain(`Work source (review): ${reviewed}`);
+        expect(planning).toContain("one ticket per finding");
+        expect(yield* operationsOf(runId)).toEqual([
+          "plan",
+          "01-guard.md",
+          "02-name.md",
+          "review-1",
+          "mr",
+        ]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "under inline_plan: on, a plan whose tickets cannot be read goes back to planning once, and halts naming why",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-unreadable";
+        yield* repository();
+        yield* approve(runId, ["unit"]);
+        yield* plansFirst(runId);
+        const unreadable = plannedAs(runId, [
+          { file: "01-first.md", title: "the first one", blockedBy: "07" },
+        ]);
+        yield* rig.queueOutputs([unreadable, unreadable]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan: "Count the registries.", ...FINISH },
+        });
+
+        expect(result._tag).toBe("Failure");
+        const why = "01-first.md (blocked by 7)";
+        expect(yield* asked(runId, "plan-2")).toContain(why);
+        expect(reasonOf(result)).toContain(why);
+        expect(yield* operationsOf(runId)).toEqual(["plan", "plan-2"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "under inline_plan: on, a Run restarted after planning builds from the recorded plan and plans nothing again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-restart";
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        yield* approve(runId, ["unit"]);
+        yield* plansFirst(runId);
+        yield* rig.queueOutputs([
+          plannedAs(runId, [
+            { file: "01-first.md", title: "the first one", blockedBy: "None" },
+            { file: "02-second.md", title: "the second one", blockedBy: "01" },
+          ]),
+          BUILT,
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const options = {
+          entry: shipped("implement"),
+          runId,
+          input: { plan: "Count the registries, then merge them.", ...FINISH },
+        };
+        yield* running(options, () =>
+          until(
+            () => wasAsked(runId, "01-first.md"),
+            (there) => there,
+          ),
+        );
+        const status = yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.andThen(run.resume, ended(run.status)),
+        );
+        yield* bin.restore();
+
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        const operations = yield* operationsOf(runId);
+        expect(Arr.filter(operations, (one) => Str.startsWith("plan")(one))).toEqual(["plan"]);
+        expect(operations).toContain("02-second.md");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "under inline_plan: off, words are built in one pass with no planning step, as before",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-off";
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        yield* approve(runId, ["unit"]);
+        yield* putFact(runId, "features.json", `{"review_delta":true,"inline_plan":false}`);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan: "Count the registries.", ...FINISH },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* operationsOf(runId)).toEqual(["build", "review-1", "mr"]);
+        expect(yield* asked(runId, "build")).toContain("Work source (text): Count the registries.");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "an implement Run from words started on the release before inline plans resumes mid-build with inline_plan on and plans nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-inflight";
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        yield* approve(runId, ["unit"]);
+        yield* setSetting(rig.userDir, "inline_plan", "on", "2026-11-18T00:00:00.000Z");
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        const release = {
+          entry: yield* released({
+            "implement.workflow.ts": `${ROOT}test/fixtures/implement.before-ledger.ts.txt`,
+            "implement.md": `${ROOT}test/fixtures/implement.before-ledger.md.txt`,
+            "reviewing.ts": `${ROOT}test/fixtures/reviewing.before-ledger.ts.txt`,
+          }),
+          runId,
+          input: { plan: "Count the registries.", ...FINISH },
+        };
+        // Admitted as that release's host admitted it, with no features record.
+        yield* running(release, () =>
+          until(
+            () => wasAsked(runId, "build"),
+            (there) => there,
+          ),
+        );
+        yield* released();
+        const status = yield* driven({ ...release, restarted: true }, (run) =>
+          Effect.andThen(run.resume, ended(run.status)),
+        );
+        yield* bin.restore();
+
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* factOf(runId, "features.json")).toBeNull();
+        expect(yield* operationsOf(runId)).toEqual(["build", "review-1", "mr"]);
       }),
     ),
   120_000,

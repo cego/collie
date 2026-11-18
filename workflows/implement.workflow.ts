@@ -41,6 +41,7 @@ import {
   classifyWorkSource,
   contentOf,
   criteriaIn,
+  PlanOutputSchema,
   defineWorkflow,
   evidenceRoots,
   formatFindings,
@@ -101,6 +102,26 @@ const sectionOf = (section: string, input: typeof Implementing.Type) =>
     Str.replaceAll("{{run.dir}}", input.run.dir),
   );
 
+/** Why a plan the Run wrote cannot be built one ticket at a time in its checkout; null where it can. */
+const inlinePlanRefusal = (plan: string, root: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const read = yield* planReposOf(plan, root);
+    if (read.refusal !== null) return read.refusal.message;
+    const tickets = yield* orderedTicketsOf(plan);
+    if (tickets.length === 0) return `${plan}/issues/ holds no ticket`;
+    if (!isSingleRepo(read))
+      return "its tickets name more than this checkout: give every ticket **Repo:** .";
+    const owned = new Set(Arr.flatMap(tickets, (one) => one.criteria));
+    const unowned = Arr.filter(
+      criteriaIn(yield* fs.readFileString(`${plan}/SPEC.md`)),
+      (one) => !owned.has(one),
+    );
+    return unowned.length === 0
+      ? null
+      : `these criteria in SPEC.md are no ticket's: ${Arr.join(unowned, "; ")}. Copy each, word for word, into the ticket that answers it`;
+  }).pipe(Effect.catch((cause) => Effect.succeed(`${plan} cannot be read: ${cause.message}`)));
+
 const prompts = {
   build: content.template("build", {
     ...Implementing.fields,
@@ -133,8 +154,10 @@ const prompts = {
     findings: text,
   }),
   merge: content.template("merge", { ...Implementing.fields, conflict: text }),
+  plan: content.template("plan", { ...Implementing.fields, source: text, refusal: text }),
   mr: content.template("mr", {
     ...Implementing.fields,
+    built: text,
     ledger: text,
     evidence: text,
     unreviewed: text,
@@ -228,6 +251,8 @@ const Opened = Schema.Struct({
   pushed: Schema.Boolean,
 });
 
+/** How often a plan the Run wrote goes back to its planner before the Run halts. */
+const PLAN_TRIES = 2;
 /** How often a ticket's unanswered criteria go back to its builder before a reviewer sees them. */
 const CRITERIA_TRIES = 2;
 /** Hand-backs of what stopped an integration — a commit can uncover a conflict. */
@@ -251,6 +276,13 @@ const CRITERIA_OPTIONS = [
   { id: STOP, detail: "Ends the Run; no review starts." },
 ];
 
+const planning = step({
+  id: "plan",
+  title: "Plan",
+  description: "The implementer writes the work into the Run's plan before any of it is built.",
+  kind: "agent",
+  role: "implementer",
+});
 const building = step({
   id: "build",
   title: "Build",
@@ -559,18 +591,77 @@ export default defineWorkflow({
         integrate: integrated,
       };
 
+      // An agent's start gives every Input, one it leaves out as "" (docs/cli.md): an empty
+      // `recovery` is new work, as one never given is.
+      const recovers = asked.recovery === "" ? undefined : asked.recovery;
+      const recovered = yield* Activity.make({
+        name: "recovery-entry",
+        success: Recovery,
+        error: WorkflowError,
+        execute:
+          recovers === undefined
+            ? Effect.succeed({
+                implementation: false,
+                reason: "An ordinary start builds the work.",
+                previous: "",
+                commits: "",
+                review: null,
+              })
+            : host.recovery(runId, recovers, asked.plan),
+      });
+      const recovery = { ...recovered, entry: recoveryEntry(recovered) };
+      if (recovers !== undefined)
+        yield* host.record(runId, `Follow-up enters at ${recovery.entry}: ${recovery.reason}`);
+      // A source that is not a plan is planned into the Run's own plan first, where the
+      // Run started under `inline_plan: on`, and is then built as a plan Run's is.
+      const planDir = `${place.dir}/plan`;
+      const planned =
+        place.features?.inline_plan === true &&
+        source.kind !== "plan-dir" &&
+        recovery.entry === "Build";
+      if (planned)
+        yield* planning(
+          Effect.gen(function* () {
+            let refusal = "";
+            for (let attempt = 1; ; attempt++) {
+              const operation = attempt === 1 ? "plan" : `plan-${attempt}`;
+              yield* agentWork({
+                operation,
+                agent: BUILDER,
+                role: "implementer",
+                instructions: prompts.plan,
+                input: { ...input, source: sectionOf(`source.${source.kind}`, input), refusal },
+                output: PlanOutputSchema,
+              });
+              const refused = yield* Activity.make({
+                name: `${operation}.check`,
+                success: Schema.NullOr(Schema.String),
+                execute: inlinePlanRefusal(planDir, cwd),
+              });
+              if (refused === null) break;
+              if (attempt === PLAN_TRIES)
+                return yield* new WorkflowError({
+                  reason: `the plan at ${planDir} cannot be built: ${refused}`,
+                });
+              refusal = `The plan you wrote cannot be built: ${pipe_(refused, Str.replace(/\.+$/, ""))}. Correct it in place.`;
+            }
+            input = { ...input, inputs: { ...input.inputs, plan: planDir, plan_kind: "plan-dir" } };
+          }),
+        );
+      const work = planned ? { kind: "plan-dir", value: planDir } : source;
+
       // The tickets as they stand at each boundary: one added, removed or reordered while
       // another is being built is the plan from then on, and what is built stays built by
       // name. Each reading is recorded, so a replay is handed the list that was read.
       let readings = 0;
       const ticketsNow = Effect.gen(function* () {
         readings += 1;
-        if (source.kind !== "plan-dir") return [];
+        if (work.kind !== "plan-dir") return [];
         const read = yield* Activity.make({
           name: `tickets.${readings}`,
           success: Schema.Array(SliceRecord),
           execute: orderedTicketsOf(
-            source.value,
+            work.value,
             place.options.repo ?? "",
             place.options.change ?? "",
           ),
@@ -586,7 +677,7 @@ export default defineWorkflow({
       // Read only after the build, which is what writes SPEC.md for any source but a plan.
       let specReadings = 0;
       const specNow = Effect.gen(function* () {
-        const plan = source.kind === "plan-dir" ? source.value : `${place.dir}/plan`;
+        const plan = work.kind === "plan-dir" ? work.value : `${place.dir}/plan`;
         for (;;) {
           specReadings += 1;
           const readable = yield* Activity.make({
@@ -599,7 +690,7 @@ export default defineWorkflow({
             ),
           });
           if (readable) return plan;
-          if (source.kind !== "plan-dir") return "";
+          if (work.kind !== "plan-dir") return "";
           yield* building(
             unbuilt(`spec-${specReadings}`, `${plan}/SPEC.md cannot be read, so no review starts`),
           );
@@ -625,27 +716,6 @@ export default defineWorkflow({
           if (one.id !== undefined) ledger.set(one.id, one);
         return done;
       };
-      // An agent's start gives every Input, one it leaves out as "" (docs/cli.md): an empty
-      // `recovery` is new work, as one never given is.
-      const recovers = asked.recovery === "" ? undefined : asked.recovery;
-      const recovered = yield* Activity.make({
-        name: "recovery-entry",
-        success: Recovery,
-        error: WorkflowError,
-        execute:
-          recovers === undefined
-            ? Effect.succeed({
-                implementation: false,
-                reason: "An ordinary start builds the work.",
-                previous: "",
-                commits: "",
-                review: null,
-              })
-            : host.recovery(runId, recovers, asked.plan),
-      });
-      const recovery = { ...recovered, entry: recoveryEntry(recovered) };
-      if (recovers !== undefined)
-        yield* host.record(runId, `Follow-up enters at ${recovery.entry}: ${recovery.reason}`);
       let parentDir = "";
       if (recovery.entry !== "Build") {
         const parent = Str.split(recovers ?? "", "/").at(-1) ?? "";
@@ -720,7 +790,7 @@ export default defineWorkflow({
       const needing = (one: Slice) => ({
         runId,
         cwd,
-        ticket: `${source.value}/issues/${one.file}`,
+        ticket: `${work.value}/issues/${one.file}`,
       });
       let prerequisiteReads = 0;
       const landed = (one: Slice) =>
@@ -804,8 +874,8 @@ export default defineWorkflow({
             // A plan built in one pass answers every ticket's criteria, and words their own.
             const given =
               ticket?.criteria ??
-              (source.kind === "text"
-                ? criteriaIn(source.value)
+              (work.kind === "text"
+                ? criteriaIn(work.value)
                 : Arr.flatMap(tickets, (one) => one.criteria));
             yield* restateKind;
             build = yield* agentWork({
@@ -821,16 +891,16 @@ export default defineWorkflow({
                 progress: renderProgress(handed),
                 session,
                 criteria:
-                  ticket === null && source.kind === "linear"
+                  ticket === null && work.kind === "linear"
                     ? "Every checkbox in the issue's description. Copy the description into the spec word for word, its checkboxes included, and answer each one."
                     : renderCriteria(given),
                 measure:
-                  source.kind !== "plan-dir"
+                  work.kind !== "plan-dir"
                     ? measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`)
                     : ticket?.benchmark != null
-                      ? measuredBy("measure", benchmarkFile(source.value, ticket.benchmark))
+                      ? measuredBy("measure", benchmarkFile(work.value, ticket.benchmark))
                       : "",
-                source: sectionOf(`source.${source.kind}`, input),
+                source: sectionOf(`source.${work.kind}`, input),
                 proof: sectionOf(
                   content.sections.has(`outcome.${input.inputs.outcome}`)
                     ? `outcome.${input.inputs.outcome}`
@@ -848,7 +918,7 @@ export default defineWorkflow({
             let spec: ReadonlyArray<string> | null = given;
             for (let reading = 1; ; reading++) {
               spec =
-                ticket === null && source.kind === "linear"
+                ticket === null && work.kind === "linear"
                   ? yield* Activity.make({
                       name: `${operation}.criteria.spec-${reading}`,
                       success: Schema.NullOr(Schema.Array(Schema.String)),
@@ -868,7 +938,7 @@ export default defineWorkflow({
             // A plan's tickets are read again before each judgement, so an amended one is judged
             // and handed back as it reads now; one that cannot be read keeps its last reading.
             let read: ReadonlyArray<{ file: string } & typeof TicketReading.Type> =
-              source.kind === "plan-dir"
+              work.kind === "plan-dir"
                 ? Arr.map(ticket === null ? tickets : [ticket], (one) => ({
                     file: one.file,
                     criteria: one.criteria,
@@ -885,7 +955,7 @@ export default defineWorkflow({
                 execute: FileSystem.FileSystem.pipe(
                   Effect.flatMap((fs) =>
                     Effect.forEach(read, (one) =>
-                      fs.readFileString(`${source.value}/issues/${one.file}`).pipe(
+                      fs.readFileString(`${work.value}/issues/${one.file}`).pipe(
                         Effect.map((text) => ({
                           criteria: criteriaIn(text),
                           afterMerge: afterMergeIn(text),
@@ -1158,6 +1228,10 @@ export default defineWorkflow({
         tickets: Arr.map(tickets, (ticket) => ({ file: ticket.file, checks: ticket.checks })),
         roots: evidenceRoots(place.dir, cwd, source.value),
         rallied,
+        built: Arr.join(
+          Arr.flatMap(handed, (one) => (one.title === "" ? [] : [`- ${one.item} — ${one.title}`])),
+          "\n",
+        ),
         ledger: ledger.size === 0 ? "" : formatFindings([...ledger.values()]),
         unsettled: [...assumed, ...afterMerged],
         integrate: integrated,
