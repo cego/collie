@@ -40,6 +40,7 @@ import { stopHost, until } from "./support/host";
 import { hostRecords, hostRunRecords, recordsAt } from "./support/records";
 import { RUNNING_CHECK } from "../src/run-records";
 import { Rig } from "./support/recorder";
+import { stringifyJson } from "../src/json";
 
 const root = new URL("../", import.meta.url).pathname;
 const fixtures = `${root}test/fixtures/workflows`;
@@ -47,7 +48,7 @@ const fixtures = `${root}test/fixtures/workflows`;
 const starts = (command: ReadonlyArray<string>) =>
   ConfigProvider.layer(
     ConfigProvider.fromUnknown({
-      COLLIE_HOST: JSON.stringify(command),
+      COLLIE_HOST: stringifyJson(command),
       COLLIE_HOST_STOP_GRACE: Bun.env.COLLIE_HOST_STOP_GRACE,
     }),
   );

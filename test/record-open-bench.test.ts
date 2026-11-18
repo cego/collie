@@ -15,6 +15,7 @@ import { barFailures, summaryOf } from "../bench/record-open/stats";
 import { desktopSummary, nativeSummary } from "../bench/record-open/summarize";
 import { runEffect } from "./support/effect";
 import { flowNode } from "./support/flow";
+import { stringifyJson } from "../src/json";
 
 const encodeClaim = flow(
   Schema.encodeResult(
@@ -239,7 +240,7 @@ test("the benchmark waits for the fill of the host it times, not of one it stopp
 test("a native timing log is summarised click to usable, and a usable with no click is reported apart", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const mark = (name: string, at: number, card: string) => JSON.stringify({ name, at, card });
+      const mark = (name: string, at: number, card: string) => stringifyJson({ name, at, card });
       const log = Arr.join(
         [
           mark("record:usable", 900, "before-the-log"),

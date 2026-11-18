@@ -109,6 +109,7 @@ import type { ClaudeSubagents } from "../src/subagents";
 import { FakeBin } from "./support/bin";
 import { forgeHttpOnPath, forgeOnPath } from "./support/forge";
 import type { HarnessCatalogue } from "../src/catalogue-model";
+import { stringifyJson } from "../src/json";
 
 let rig: Rig;
 let dir: string;
@@ -3432,7 +3433,7 @@ const claudeJson = () => `${rig.root}/.claude.json`;
 const claudeKnows = (projects: Record<string, { readonly hasTrustDialogAccepted: boolean }>) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
-      fs.writeFileString(claudeJson(), JSON.stringify({ numStartups: 3, projects })),
+      fs.writeFileString(claudeJson(), stringifyJson({ numStartups: 3, projects })),
     ),
   );
 
@@ -5239,7 +5240,10 @@ test("an agent's later work goes to the one that took over from it, and asking f
         (call) =>
           call.cmd === "terminal.send" &&
           call.params?.terminal === successor &&
-          pipe(String(call.params?.text), Str.includes("fix.r2.prompt.md")),
+          pipe(
+            Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(call.params?.text)),
+            Str.includes("fix.r2.prompt.md"),
+          ),
       );
       expect(fixedBy).toHaveLength(1);
     }),
@@ -6238,7 +6242,10 @@ test.each([
         yield* rig.calls(),
         (call) =>
           call.cmd === "terminal.send" &&
-          pipe(String(call.params?.text), Str.includes("Only the named planner")),
+          pipe(
+            Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(call.params?.text)),
+            Str.includes("Only the named planner"),
+          ),
       );
       expect(Arr.map(comments, (call) => call.params?.terminal)).toEqual([first.agent]);
     }),
@@ -6298,10 +6305,15 @@ test("a queued operation follows a harness switch and preserves its long comment
         (call) =>
           call.cmd === "terminal.send" &&
           call.params?.terminal === next.agent &&
-          pipe(String(call.params?.text), Str.includes("Their message is in")),
+          pipe(
+            Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(call.params?.text)),
+            Str.includes("Their message is in"),
+          ),
       );
       expect(calls).toHaveLength(1);
-      const typed = String(calls[0]?.params?.text);
+      const typed = Option.getOrThrow(
+        Schema.decodeUnknownOption(Schema.String)(calls[0]?.params?.text),
+      );
       expect(typed).toContain("From the human, in Desktop");
       const file = /Their message is in (\S+)\./.exec(typed)?.[1];
       expect(file).toBeDefined();
@@ -7410,7 +7422,10 @@ const firstDone = Effect.gen(function* () {
     .writeFileString(`${dir}/agents/r1/01-api.json`, `{"verdict":"clean","note":"first"}`)
     .pipe(Effect.orDie);
   const [started] = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run");
-  yield* core.report(String(started?.params?.name), "idle");
+  yield* core.report(
+    Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(started?.params?.name)),
+    "idle",
+  );
 });
 
 test(
@@ -7420,7 +7435,7 @@ test(
       Effect.gen(function* () {
         yield* inTask("r1");
         yield* rig.queueOutputs([
-          { writes: [], output: null, then: "working" },
+          { writes: [], output: null, status: "working" },
           { verdict: "clean", note: "second" },
         ]);
         yield* stoppedAtFirst("r1");
@@ -7995,7 +8010,9 @@ test("a stop closes a Claude agent's pane even while its controls are locked, ha
 const launchEnv = (calls: ReadonlyArray<Call>) => {
   const env = Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "terminal.run"))
     ?.params?.env;
-  return Schema.is(Schema.Record(Schema.String, Schema.String))(env) ? env : {};
+  return Schema.is(Schema.Record(Schema.String, Schema.String))(env)
+    ? env
+    : Rec.empty<string, string>();
 };
 
 const withProfile = (profile: AgentProfile) =>

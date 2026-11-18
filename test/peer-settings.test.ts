@@ -19,6 +19,7 @@ import { releaseBinary, twoMachines } from "./support/peers";
 import { collieCommand } from "./support/world";
 import type { PlatformServices } from "../src/platform";
 import { TestClock } from "effect/testing";
+import { stringifyJson } from "../src/json";
 
 test(
   "a Machine's shell returns its exit and both streams, takes stdin and records its Actor",
@@ -216,7 +217,7 @@ test(
             );
             const onOlder = (args: ReadonlyArray<string>) =>
               first
-                .cli(args, { COLLIE_HOST: JSON.stringify([older]) })
+                .cli(args, { COLLIE_HOST: stringifyJson([older]) })
                 .pipe(
                   Effect.provide(
                     ConfigProvider.layerAdd(

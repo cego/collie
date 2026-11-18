@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { childEnv } from "../../desktop/src/bun/login-env";
 import type { JsonObject } from "../../src/schema";
+import { stringifyJson } from "../../src/json";
 const emit = (record: JsonObject) =>
   process.stdout.write(
     `${flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow)(record)}\n`,
@@ -172,7 +173,7 @@ for await (const chunk of Bun.stdin.stream()) {
       emit({ type: "agent_start" });
       emit({ type: "message_start", message: { role: "assistant" } });
       update("text_start");
-      update("text_delta", { delta: JSON.stringify(details) });
+      update("text_delta", { delta: stringifyJson(details) });
       update("text_end");
       emit({ type: "agent_settled", aborted: false });
       continue;

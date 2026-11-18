@@ -4,6 +4,7 @@ import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import { Data, Schema } from "effect";
 import * as Yaml from "effect/encoding/Yaml";
+import { stringifyJson } from "./json";
 
 export type YamlScalar = string | number | boolean | null;
 export type YamlValue = YamlScalar | YamlMap | ReadonlyArray<YamlValue>;
@@ -48,7 +49,7 @@ export function parseYaml(src: string) {
 const BARE = /^[A-Za-z0-9_](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
 
 export function yamlScalar(value: string) {
-  return BARE.test(value) && parseYaml(value) === value ? value : JSON.stringify(value);
+  return BARE.test(value) && parseYaml(value) === value ? value : stringifyJson(value);
 }
 
 function unquote(raw: string) {

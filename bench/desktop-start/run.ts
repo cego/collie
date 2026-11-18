@@ -9,6 +9,7 @@ import { COUNTS, prepare } from "../record-open/record-open.fixture";
 import { measuring, refusal, userStateDir } from "../record-open/guards";
 import { enterWorld, live, root, socket, userEnv, world } from "../record-open/world";
 import { measureStart } from "./start";
+import { stringifyJson } from "../../src/json";
 
 const { values: flags } = parseArgs({
   args: Bun.argv.slice(2),
@@ -53,7 +54,7 @@ const line = await runEffect(
         env: {
           ...Bun.env,
           XDG_DATA_HOME: dataHome,
-          COLLIE_DESKTOP_COLLIE: JSON.stringify([process.execPath, `${root}src/main.ts`]),
+          COLLIE_DESKTOP_COLLIE: stringifyJson([process.execPath, `${root}src/main.ts`]),
         },
         desktopState: `${world.desktop}/state`,
         idle: "60 seconds",

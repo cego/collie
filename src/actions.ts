@@ -4,6 +4,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { Effect, Predicate, Result, Schema, Struct } from "effect";
 import { VerifySpecSchema } from "./verify-spec";
 import { SavedStart } from "./schedule-model";
+import { stringifyJson } from "./json";
 
 const Attachments = Schema.Array(Schema.String).annotate({
   description:
@@ -156,7 +157,7 @@ export const refusedAction = (actions: ReadonlyArray<unknown>) => {
     const kind = Predicate.hasProperty(action, "kind") ? action.kind : null;
     return KINDS.has(kind)
       ? `actions[${at}] (kind "${String(kind)}"): ${pipe_(decoded.failure.message, Str.replace(/\s+/g, " "))}`
-      : `actions[${at}] has kind ${JSON.stringify(kind)}, which is not a kind Collie takes`;
+      : `actions[${at}] has kind ${stringifyJson(kind)}, which is not a kind Collie takes`;
   }
   return null;
 };

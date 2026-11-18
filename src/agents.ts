@@ -47,6 +47,7 @@ import {
 } from "./launches";
 import { CurrentStep, type At } from "./steps";
 import { takeStepNotes } from "./step-steering";
+import { stringifyJson } from "./json";
 export { Launched } from "./launches";
 import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
@@ -1406,7 +1407,7 @@ function contractSection(contract: Projection) {
     const returned: string = `That file is checked against a schema this build cannot draw${limits || "."}`;
     return returned;
   }
-  const returned: string = `That file must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.\n\n\`\`\`json\n${JSON.stringify(contract.document, null, 2)}\n\`\`\`${limits}`;
+  const returned: string = `That file must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.\n\n\`\`\`json\n${stringifyJson(contract.document, 2)}\n\`\`\`${limits}`;
   return returned;
 }
 

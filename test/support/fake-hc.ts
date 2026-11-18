@@ -246,9 +246,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           Effect.andThen(answerPrompt(prompt, logPath, queuePath)),
           Effect.provideContext(services),
           Effect.orDie,
-          Effect.flatMap(({ then, owed }) =>
+          Effect.flatMap(({ status, owed }) =>
             Effect.gen(function* () {
-              yield* setStatus(terminal, then);
+              yield* setStatus(terminal, status);
               if (owed === undefined) return;
               const turn = terminal.turn;
               while (!(yield* fs.exists(owed).pipe(Effect.orElseSucceed(() => false))))
@@ -298,7 +298,12 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     version: "0.1.14",
   });
   const machineView: (machine: Added) => Schema.JsonObject = (machine) => ({
-    ...profile(machine),
+    name: machine.name,
+    target: machine.target,
+    via: machine.via,
+    id: `id-${machine.name}`,
+    host: machine.name,
+    version: "0.1.14",
     state: machine.state,
     why: machine.why,
   });

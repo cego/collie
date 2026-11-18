@@ -20,6 +20,7 @@ import {
 } from "../tools/budget";
 import { runEffect } from "./support/effect";
 import { until } from "./support/host";
+import { stringifyJson } from "../src/json";
 
 const VM_MK = budgetOf(24);
 
@@ -311,7 +312,7 @@ test("a hold whose pid now belongs to a process that started later is reclaimed"
       const holdOn = (start: string | null) =>
         fs.writeFileString(
           `${dir}/budget.json`,
-          JSON.stringify({
+          stringifyJson({
             next: 1,
             entries: [
               {

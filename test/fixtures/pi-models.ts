@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import { Effect, Schema, flow, Result } from "effect";
 import { childEnv } from "../../desktop/src/bun/login-env";
 import type { JsonObject } from "../../src/schema";
+import { stringifyJson } from "../../src/json";
 
 const Command = Schema.Struct({
   id: Schema.String,
@@ -14,13 +15,13 @@ const Command = Schema.Struct({
 const mode = Bun.argv[2];
 await Bun.write(
   `${process.cwd()}/reader-start.json`,
-  JSON.stringify({
+  stringifyJson({
     args: Bun.argv.slice(3),
     agent: childEnv().PI_CODING_AGENT_DIR,
     pid: process.pid,
   }),
 );
-const emit = (record: JsonObject) => process.stdout.write(`${JSON.stringify(record)}\n`);
+const emit = (record: JsonObject) => process.stdout.write(`${stringifyJson(record)}\n`);
 const models = [
   { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
   { provider: "openai-codex", id: "gpt-6.1-sol", name: "Sol", reasoning: true },

@@ -11,6 +11,7 @@ import { CHAT_HARNESSES, DEFAULT_CHAT_HARNESS, type FlockSettings } from "../sha
 import { childEnv } from "./login-env";
 import type { HarnessList, HarnessLists } from "./harness-lists";
 import { chatChoice, extraModels } from "./settings";
+import { stringifyJson } from "../../../src/json";
 
 export const readPiConfig = Effect.fn("PiConfig.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -168,7 +169,7 @@ export const retelling = (
     Stream.drop(settings, 1),
     flock.pipe(
       Stream.map(extraModels),
-      Stream.changesWith((a, b) => JSON.stringify(a) === JSON.stringify(b)),
+      Stream.changesWith((a, b) => stringifyJson(a) === stringifyJson(b)),
       Stream.drop(1),
     ),
   );

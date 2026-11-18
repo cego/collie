@@ -10,6 +10,7 @@ import { type AutoCompactWindow, autoCompactWindowOf, PERMISSION_MODES } from ".
 import { claudeTrust, type Trust } from "./trust";
 import { DEFAULT_MODEL, HARNESS_MODELS, type HarnessModels } from "./harness-choice";
 import type { YamlValue } from "./yaml";
+import { stringifyJson } from "./json";
 
 export {
   DEFAULT_MODEL,
@@ -42,7 +43,7 @@ export function isPermissionMode(value: string | undefined): value is Permission
 
 export function permissionsAsWritten(value: YamlValue | undefined) {
   if (value === undefined) return undefined;
-  return isString(value) ? value : JSON.stringify(value);
+  return isString(value) ? value : stringifyJson(value);
 }
 
 const ManagedSettingsJson = Schema.fromJsonString(
@@ -140,19 +141,19 @@ export const HARNESSES: Harnesses = {
     kind: "codex",
     mcp: ({ command, env, effort }) => ({
       args: [
-        ...(effort == null ? [] : ["-c", `model_reasoning_effort=${JSON.stringify(effort)}`]),
+        ...(effort == null ? [] : ["-c", `model_reasoning_effort=${stringifyJson(effort)}`]),
         "-c",
-        `mcp_servers.collie.command=${JSON.stringify(command[0])}`,
+        `mcp_servers.collie.command=${stringifyJson(command[0])}`,
         "-c",
-        `mcp_servers.collie.args=${JSON.stringify([...command.slice(1), "mcp"])}`,
+        `mcp_servers.collie.args=${stringifyJson([...command.slice(1), "mcp"])}`,
         ...Arr.flatMap(Rec.toEntries(env), ([key, value]) => [
           "-c",
-          `mcp_servers.collie.env.${key}=${JSON.stringify(value)}`,
+          `mcp_servers.collie.env.${key}=${stringifyJson(value)}`,
         ]),
       ],
       env: {},
     }),
-    skillCommand: (name) => `the ${JSON.stringify(name)} skill`,
+    skillCommand: (name) => `the ${stringifyJson(name)} skill`,
     modelArgs: (model) => ["-m", model],
     permissionArgs: {
       auto: ["--approve-for-me"],
@@ -179,7 +180,7 @@ export const HARNESSES: Harnesses = {
       return {
         args: [],
         env: {
-          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          OPENCODE_CONFIG_CONTENT: stringifyJson({
             ...settings,
             mcp: {
               ...mcp,
@@ -194,7 +195,7 @@ export const HARNESSES: Harnesses = {
         },
       };
     },
-    skillCommand: (name) => `the ${JSON.stringify(name)} skill`,
+    skillCommand: (name) => `the ${stringifyJson(name)} skill`,
     modelArgs: (model) => ["--model", model],
     permissionArgs: { bypass: ["--auto"] },
     ...HARNESS_MODELS.opencode!,
@@ -207,8 +208,8 @@ export const opencodeReporter = (files: {
   session?: string;
 }) => `import { linkSync, unlinkSync, writeFileSync } from "node:fs";
 
-const tty = ${JSON.stringify(files.tty)};
-const sessionFile = ${JSON.stringify(files.sessionFile)};
+const tty = ${stringifyJson(files.tty)};
+const sessionFile = ${stringifyJson(files.sessionFile)};
 let own = null;
 
 const report = (state) => {
@@ -234,7 +235,7 @@ const record = (info) => {
   if (own === null && info && !info.parentID) keep(info.id);
 };
 
-const resumed = ${JSON.stringify(files.session ?? null)};
+const resumed = ${stringifyJson(files.session ?? null)};
 
 export const CollieStatus = async () => {
   // A resumed session says nothing of itself until it is prompted.

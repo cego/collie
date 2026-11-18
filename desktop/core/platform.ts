@@ -6,6 +6,7 @@ import type { FrameSchema } from "../../desktop/src/shared/channel";
 import { downloadRelease } from "../../desktop/src/bun/release-download";
 import { PreparedRecord, preparedRecordOf, releaseOf } from "../../src/desktop";
 import { appliedSignatureOf } from "../../src/signing";
+import { stringifyJson } from "../../src/json";
 
 type Frame = FrameSchema["messages"]["frame"];
 interface Rpc {
@@ -34,7 +35,7 @@ const listen = async () => {
 const on = (_event: string, _listener: () => void) => {};
 
 const showNotification = ({ title, body = "", silent = false }: Notification) =>
-  void process.stdout.write(`${JSON.stringify({ _tag: "Notify", title, body, silent })}\n`);
+  void process.stdout.write(`${stringifyJson({ _tag: "Notify", title, body, silent })}\n`);
 interface Notification {
   readonly title: string;
   readonly body?: string;
@@ -203,10 +204,10 @@ export const Updater = {
       await fetched(`${releaseOf((await local()).baseUrl, prepared.version)}/${named}`),
     );
     await Bun.write(`${staged}.sig`, signature);
-    await Bun.write(`${staged}.json`, JSON.stringify(prepared));
+    await Bun.write(`${staged}.json`, stringifyJson(prepared));
     await Bun.write(`${staged}.partial`, Bun.file(prepared.retained_tar_path));
     await rename(`${staged}.partial`, staged);
-    process.stdout.write(`${JSON.stringify({ _tag: "Restart" })}\n`);
+    process.stdout.write(`${stringifyJson({ _tag: "Restart" })}\n`);
     status = [
       { message: `Collie ${prepared.version} is installed as Collie restarts`, restarting: true },
     ];

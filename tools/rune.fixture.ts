@@ -20,6 +20,7 @@ import { Flow } from "../src/board-model";
 import { FLOCK } from "../test/support/rune.fixture";
 import { mainFlow } from "../test/support/flow";
 import { publicKeyOf, signRelease } from "../src/signing";
+import { stringifyJson } from "../src/json";
 
 const FIXTURES = new URL("../desktop/fixtures/", import.meta.url).pathname;
 
@@ -56,7 +57,7 @@ const recorded = (
     const toShell = heldUntilListened<ToView>();
     const core = {
       send: (frame: ToView) => {
-        lines.push(JSON.stringify({ from: "core", frame }));
+        lines.push(stringifyJson({ from: "core", frame }));
         toShell.receive(frame);
       },
       listen: toCore.listen,
@@ -88,7 +89,7 @@ const recorded = (
           RpcClient.Protocol,
           clientProtocol({
             send: (frame) => {
-              lines.push(JSON.stringify({ from: "shell", frame: untraced(frame) }));
+              lines.push(stringifyJson({ from: "shell", frame: untraced(frame) }));
               toCore.receive(frame);
             },
             listen: toShell.listen,
@@ -193,7 +194,7 @@ const written = Effect.gen(function* () {
     Bun.write(
       `${FIXTURES}flock.ndjson`,
       Arr.join(
-        Arr.map(flock, (item) => `${JSON.stringify(item)}\n`),
+        Arr.map(flock, (item) => `${stringifyJson(item)}\n`),
         "",
       ),
     ),

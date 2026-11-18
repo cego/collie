@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { type Duration, Effect, FileSystem, Option, Schedule, Schema } from "effect";
+import { stringifyJson } from "../../src/json";
 
 interface Process {
   readonly pid: number;
@@ -67,7 +68,7 @@ export const measureStart = (start: {
     const log = `${own}/record-timing.log`;
     yield* fs.makeDirectory(own, { recursive: true });
     yield* fs.remove(log, { force: true });
-    yield* fs.writeFileString(`${own}/settings.json`, JSON.stringify({ recordTiming: true }));
+    yield* fs.writeFileString(`${own}/settings.json`, stringifyJson({ recordTiming: true }));
     const launchedAt = Date.now();
     const app = yield* Effect.acquireRelease(
       Effect.sync(() =>
@@ -108,7 +109,7 @@ export const measureStart = (start: {
       }),
     );
     yield* Effect.sleep(start.idle);
-    return JSON.stringify({
+    return stringifyJson({
       board_usable_ms: Math.round(usableAt - launchedAt),
       idle_rss_mib: treeRssMib(snapshot(), app.pid),
     });

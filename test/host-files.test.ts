@@ -13,9 +13,10 @@ import { editString, globFiles, grepFiles, LINE_LIMIT, writeWhole } from "../src
 import { receive } from "../src/uploads";
 import { uploadsSweeper } from "../src/cleanup";
 import { proves } from "./support/world";
+import { stringifyJson } from "../src/json";
 
 const reasonOf = (error: { readonly _tag: string }) =>
-  Schema.is(HostRefused)(error) ? error.reason : `not a refusal: ${JSON.stringify(error)}`;
+  Schema.is(HostRefused)(error) ? error.reason : `not a refusal: ${stringifyJson(error)}`;
 
 test(
   "a chat channel reads, finds, writes and edits its Machine's files, and is refused the host's state",

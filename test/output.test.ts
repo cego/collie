@@ -22,6 +22,7 @@ import type { YamlMap } from "../src/yaml";
 import type { Verification } from "../src/verify";
 import review522 from "./fixtures/public-text/mr-522-synthesis.json";
 import { leaksIn } from "../src/public-text";
+import { stringifyJson } from "../src/json";
 
 const FINAL = { head_sha: "abc123", fingerprint: "tree-1" };
 const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
@@ -283,7 +284,7 @@ test("a clean review says so in one line, and never mentions the process", () =>
 });
 
 test("the public rendering of the !522 review keeps the repository comment rule and hides process findings", () => {
-  const synthesis = synth(JSON.stringify(review522));
+  const synthesis = synth(stringifyJson(review522));
   const rendered = renderPublicReview(synthesis);
   expect(rendered).toStartWith(review522.public_summary);
   expect(rendered).toContain("**Minor**");
@@ -298,7 +299,7 @@ test("the public rendering of the !522 review keeps the repository comment rule 
 
 test("a review with only internal findings posts a nothing-to-change note", () => {
   const synthesis = synth(
-    JSON.stringify({
+    stringifyJson({
       ...review522,
       public_summary: "Updates profile verification. No runtime regression was found.",
       findings: [review522.findings[0]],
@@ -312,7 +313,7 @@ test("a review with only internal findings posts a nothing-to-change note", () =
 
 test("fixed process findings stay in the complete review instead of returning in the public note", () => {
   const synthesis = synth(
-    JSON.stringify({
+    stringifyJson({
       verdict: "clean",
       summary: "The failing-first evidence is now recorded.",
       public_summary: "Updates profile verification. No runtime regression was found.",

@@ -2,6 +2,7 @@ import { tmpdir } from "node:os";
 import { Effect, FileSystem } from "effect";
 import { GIT_QUIET } from "../../test/support/git-quiet";
 import { testBunfig } from "../../test/support/packages";
+import { stringifyJson } from "../../src/json";
 
 export const root = new URL("../../", import.meta.url).pathname;
 const tag = Bun.hash(root).toString(16).slice(0, 8);
@@ -46,7 +47,7 @@ export const enterWorld = Effect.gen(function* () {
     COLLIE_STATE_DIR: world.state,
     COLLIE_USER_DIR: world.config,
     COLLIE_CWD: world.project,
-    COLLIE_HOST: JSON.stringify([process.execPath, `${root}src/main.ts`]),
+    COLLIE_HOST: stringifyJson([process.execPath, `${root}src/main.ts`]),
     COLLIE_HOST_WATCH_PID: String(process.pid),
     COLLIE_RECORD_MARKS: recordMarksFile,
     HC_SOCKET: `${live}/absent-core.sock`,

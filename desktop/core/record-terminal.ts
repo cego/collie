@@ -4,6 +4,7 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { openTerminal } from "../../desktop/src/bun/terminal";
 import { localRoute } from "../../desktop/src/bun/machine";
 import type { PaneAt } from "../../src/board-model";
+import { stringifyJson } from "../../src/json";
 
 const { values: flags } = parseArgs({
   args: Bun.argv.slice(2),
@@ -44,7 +45,7 @@ BunRuntime.runMain(
         Stream.runForEach(opened.events, (event) =>
           Effect.sync(() => {
             lastEvent = Date.now();
-            lines.push(JSON.stringify(event));
+            lines.push(stringifyJson(event));
           }),
         ),
       );

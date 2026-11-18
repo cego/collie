@@ -3,7 +3,7 @@
 import { Database } from "bun:sqlite";
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { Deferred, Effect, Fiber, Schedule, Stream } from "effect";
+import { Deferred, Effect, Fiber, Schedule, Stream, Schema } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { RunView } from "../../src/engine";
 import { connect, frontDoor, type HostClient, socketOf } from "../../src/host";
@@ -15,6 +15,7 @@ import { enterWorld, keptFixture, live, manifestPath, root, socket, userEnv, wor
 import { logArrivals, viewMismatches, type ViewCheck } from "./checks";
 import { wakeDeadline, writerMarkers } from "./observations";
 import { shiftDates, shiftHistory } from "./history-time";
+import { stringifyJson, parseJson } from "../../src/json";
 
 const WARM = "10 seconds";
 const WINDOW = "60 seconds";
@@ -88,7 +89,10 @@ const hostHeap = (pid: number) =>
       if (waited > 30_000) return yield* Effect.die(new Error("the host wrote no heap reading"));
       yield* Effect.sleep("100 millis");
     }
-    const read: { heap_kb: number; objects: number } = JSON.parse(readFileSync(heapFile, "utf8"));
+    const read: { heap_kb: number; objects: number } = parseJson(
+      Schema.Unknown,
+      readFileSync(heapFile, "utf8"),
+    );
     return { host_heap_kb: read.heap_kb, host_heap_objects: read.objects };
   });
 
@@ -270,7 +274,7 @@ const sample = (manifest: Manifest) =>
     for (let at = 0; at < 10; at++) {
       const began = performance.now();
       const read = yield* client.read({ tool: "collie_run", input: { run: manifest.settled[0]! } });
-      if (!JSON.stringify(read).includes(manifest.settled[0]!))
+      if (!stringifyJson(read).includes(manifest.settled[0]!))
         errors.push("agent read lost the requested Run");
       readTimes.push(performance.now() - began);
     }
@@ -313,7 +317,7 @@ const sample = (manifest: Manifest) =>
     numbers.host_hwm_kb = statusKb(host, "VmHWM");
     numbers.stream_errors = errors.length;
     for (const error of errors) yield* say(error);
-    yield* say(`sample diagnostics: ${JSON.stringify(numbers)}`);
+    yield* say(`sample diagnostics: ${stringifyJson(numbers)}`);
     for (const [name, value] of Object.entries(numbers))
       if (!Number.isFinite(value) || value < 0)
         return yield* Effect.die(new Error(`invalid metric ${name}`));
@@ -451,7 +455,7 @@ if (!existsSync(manifestPath)) {
   console.error(`no fixture at ${keptFixture}: run bench/at-rest/prepare.ts first`);
   process.exit(2);
 }
-const manifest: Manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+const manifest: Manifest = parseJson(Schema.Unknown, readFileSync(manifestPath, "utf8"));
 const numbers = await runEffect(
   measuring(
     `${userStateDir(homedir(), userEnv)}/measurements/machine.lock`,
@@ -459,18 +463,22 @@ const numbers = await runEffect(
     Effect.gen(function* () {
       rmSync(live, { recursive: true, force: true });
       cpSync(keptFixture, live, { recursive: true });
-      const source: { created: string } = JSON.parse(
+      const source: { created: string } = parseJson(
+        Schema.Unknown,
         readFileSync(`${root}bench/at-rest/history.json`, "utf8"),
       );
       const shift = Date.now() - 12 * 60 * 60 * 1000 - Date.parse(source.created);
       shiftHistory(live, shift);
-      const history: Manifest = JSON.parse(shiftDates(JSON.stringify(manifest), shift));
+      const history: Manifest = parseJson(
+        Schema.Unknown,
+        shiftDates(stringifyJson(manifest), shift),
+      );
       cpSync(
         `${root}bench/at-rest/workflows/bench-active.workflow.ts`,
         `${world.user}/bench-active.workflow.ts`,
       );
       yield* enterWorld;
-      Bun.env.COLLIE_HOST = JSON.stringify([
+      Bun.env.COLLIE_HOST = stringifyJson([
         process.execPath,
         "--preload",
         `${root}bench/at-rest/heap-preload.ts`,
@@ -486,5 +494,5 @@ const numbers = await runEffect(
     }).pipe(Effect.timeout("10 minutes"), Effect.scoped, Effect.orDie),
   ),
 );
-console.error(JSON.stringify(numbers, null, 2));
-console.log(JSON.stringify(numbers));
+console.error(stringifyJson(numbers, 2));
+console.log(stringifyJson(numbers));

@@ -20,6 +20,7 @@ import type { YamlMap } from "./yaml";
 import { herdDir, machineHerd } from "./steering";
 import { nowIso } from "./time";
 import { TOOLS } from "./tools";
+import { stringifyJson } from "./json";
 
 export const CHAT_HARNESSES = ["claude", "pi"] as const;
 export type ChatHarness = (typeof CHAT_HARNESSES)[number];
@@ -177,12 +178,12 @@ import { execFile } from "node:child_process";
 import { watch } from "node:fs";
 import { promisify } from "node:util";
 
-const COMMAND = ${JSON.stringify(command)};
-const ENV = ${JSON.stringify(env)};
-const NEWS_DIR = ${JSON.stringify(newsDir)};
-const NEWS_FILE = ${JSON.stringify(newsFile)};
-const TOOLS = ${JSON.stringify(tools, null, 2)};
-const QUESTION = ${JSON.stringify(question, null, 2)};
+const COMMAND = ${stringifyJson(command)};
+const ENV = ${stringifyJson(env)};
+const NEWS_DIR = ${stringifyJson(newsDir)};
+const NEWS_FILE = ${stringifyJson(newsFile)};
+const TOOLS = ${stringifyJson(tools, 2)};
+const QUESTION = ${stringifyJson(question, 2)};
 const NO_HOST =
   "No Collie host is running to put your question on your Run. Ask it in your pane instead, and wait for the human's answer there.";
 
@@ -295,11 +296,7 @@ export default function (pi) {
 
 export function mcpConfig(command: ReadonlyArray<string>, env: Readonly<Record<string, string>>) {
   const [bin, ...rest] = command;
-  return `${JSON.stringify(
-    { mcpServers: { collie: { command: bin ?? "collie", args: [...rest, "mcp"], env } } },
-    null,
-    2,
-  )}\n`;
+  return `${stringifyJson({ mcpServers: { collie: { command: bin ?? "collie", args: [...rest, "mcp"], env } } }, 2)}\n`;
 }
 
 export function claudeSettings(
@@ -322,7 +319,7 @@ export function claudeSettings(
     UserPromptSubmit: [{ hooks: [{ type: "command", command: run("context") }, heard] }],
     Stop: [{ hooks: [heard] }],
   };
-  return `${JSON.stringify({ hooks }, null, 2)}\n`;
+  return `${stringifyJson({ hooks }, 2)}\n`;
 }
 
 const HookInput = Schema.fromJsonString(

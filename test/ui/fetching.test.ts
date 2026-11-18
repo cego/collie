@@ -24,6 +24,7 @@ import { focus } from "../support/focus";
 import { runDetail } from "../support/run-detail";
 import { task } from "../support/task";
 import { appendDrift } from "../../src/drift";
+import { stringifyJson } from "../../src/json";
 
 let rig: Rig;
 let runs: RunFacts[] = [];
@@ -51,7 +52,7 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-const MR_JSON = JSON.stringify({
+const MR_JSON = stringifyJson({
   iid: 1,
   title: "one",
   state: "opened",

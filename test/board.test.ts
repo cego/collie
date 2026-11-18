@@ -4069,7 +4069,6 @@ test(
           const runId = (yield* Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(
             started.envelope.data,
           ).pipe(Effect.orDie)).runId;
-          const fs = yield* FileSystem.FileSystem;
           const run = yield* madeRun(world.state, { id: runId });
           yield* appendVerification(run.evidence, {
             ...checked("lint", "abc"),

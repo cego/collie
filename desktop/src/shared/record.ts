@@ -4,6 +4,7 @@ import { mrWords, readMrRef, type RecordPart, type RunDetail } from "../../../sr
 import { mrTab } from "./links";
 import type { Target } from "./board-clicks";
 import { parkLine } from "../../../src/park-cause";
+import { stringifyJson } from "../../../src/json";
 
 export const recoveryOf = (facts: Pick<RunDetail, "park" | "recovery">, limit = 20) => ({
   park: facts.park == null ? null : parkLine(facts.park),
@@ -242,7 +243,7 @@ export type DesktopMark =
 export const timingLine = (
   settings: { readonly recordTiming?: boolean | undefined },
   mark: { readonly name: string; readonly at: number; readonly card: string },
-) => (settings.recordTiming === true ? `${JSON.stringify(mark)}\n` : null);
+) => (settings.recordTiming === true ? `${stringifyJson(mark)}\n` : null);
 
 const SCROLL_SETTLED_MS = 150;
 

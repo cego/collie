@@ -24,6 +24,7 @@ import { openHost } from "./support/host";
 import { recordsAt } from "./support/records";
 import { slackApi } from "../src/slack";
 import { fakeSlack } from "./support/slack";
+import { stringifyJson } from "../src/json";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -1172,7 +1173,7 @@ test("a host started with no Herd is a warning, saying its judgements will be sk
       const hostRecord = (herd: string | null) =>
         fs.writeFileString(
           `${rig.stateDir}/host.build`,
-          JSON.stringify({ pid: process.pid, build: "0.0.0", root: rig.baselineDir, herd }),
+          stringifyJson({ pid: process.pid, build: "0.0.0", root: rig.baselineDir, herd }),
         );
       expect(Arr.map(reported(yield* report()), (c) => c.name)).not.toContain("host herd");
 

@@ -15,6 +15,7 @@ import type { Command } from "../../src/ui/state";
 import type { AppState } from "../../src/ui/state";
 import { readSelection, selectionPath, writeSelection } from "../../src/selection";
 import { epochMs } from "../../src/time";
+import { stringifyJson } from "../../src/json";
 
 const KEY = "herd-key";
 
@@ -89,7 +90,7 @@ const mount = Effect.fn("selection.mount")(function* (state: AppState) {
         ),
         () => -1,
       );
-      if (y < 0) throw new Error(`no line containing ${JSON.stringify(text)}`);
+      if (y < 0) throw new Error(`no line containing ${stringifyJson(text)}`);
       return y;
     },
     click: (x: number, y: number) =>

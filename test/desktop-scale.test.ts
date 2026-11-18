@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { type Drawn, drawnSaid, monitorOf, zoomFor } from "../desktop/src/shared/scale";
+import { stringifyJson } from "../src/json";
 
 const LAPTOP = {
   id: 0,
@@ -50,7 +51,7 @@ const client = (pid: number, monitor: number, title: string, xwayland = true) =>
   xwayland,
 });
 
-const json = <A>(value: A) => JSON.stringify(value);
+const json = <A>(value: A) => stringifyJson(value);
 
 test("on one monitor, Desktop's window is on it", () => {
   expect(monitorOf(json([client(4242, 0, "Collie")]), json([LAPTOP]), 4242, "Collie")).toEqual({

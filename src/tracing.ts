@@ -8,7 +8,7 @@ import * as OtlpTracer from "effect/observability/OtlpTracer";
 export const atLeast = (inner: Tracer.Tracer, minMs: number) => {
   const minNs = BigInt(Math.round(minMs * 1_000_000));
   return Tracer.make({
-    ...inner,
+    context: inner.context,
     span: (options) => {
       const span = inner.span(options);
       const end = span.end.bind(span);

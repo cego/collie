@@ -57,7 +57,7 @@ test(
           const outputs = `${world.home}/outputs.json`;
           yield* fs.writeFileString(
             outputs,
-            encode([{ writes: [], output: { verdict: "clean" }, then: "working" }]),
+            encode([{ writes: [], output: { verdict: "clean" }, status: "working" }]),
           );
           const client = yield* hostWith(world, {});
           const { runId } = yield* client

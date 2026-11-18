@@ -2,16 +2,17 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { beforeAll, describe, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
+import { stringifyJson, parseJson } from "../src/json";
 
 const WORKSPACE = new URL("../desktop/", import.meta.url).pathname;
 const STAND_IN = new URL("../desktop/core/platform.ts", import.meta.url).pathname;
 const cargo = Bun.which("cargo");
 
 const MAIN = `
-import { BrowserWindow, Utils } from ${JSON.stringify(STAND_IN)};
+import { BrowserWindow, Utils } from ${stringifyJson(STAND_IN)};
 new BrowserWindow({ rpc: { handlers: { messages: { frame: () => {} } } } });
 Utils.showNotification({ title: "Needs you", body: "Release 0.119.0 asks a question", silent: false });
 `;
@@ -43,7 +44,7 @@ describe.skipIf(cargo === null)("the shell's services", () => {
         expect(heard.exitCode).toBe(0);
         expect(heard.stderr).toBe("");
         const lines = pipe(heard.stdout, Str.trim, Str.split("\n"), Arr.filter(Str.isNonEmpty));
-        expect(Arr.map(lines, (line) => JSON.parse(line))).toEqual([
+        expect(Arr.map(lines, (line) => parseJson(Schema.Unknown, line))).toEqual([
           { title: "Needs you", body: "Release 0.119.0 asks a question", silent: false },
         ]);
       }),

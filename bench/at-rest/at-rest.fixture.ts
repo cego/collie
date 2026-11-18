@@ -11,6 +11,7 @@ import { runEffect } from "../../test/support/effect";
 import { stopHost } from "../../test/support/host";
 import { measuring, refusal, userStateDir } from "../record-open/guards";
 import { enterWorld, keptFixture, live, manifestPath, root, socket, userEnv, world } from "./world";
+import { stringifyJson } from "../../src/json";
 
 const SLEEP_DAYS = 30;
 
@@ -173,7 +174,7 @@ const manifest = await runEffect(
 rmSync(keptFixture, { recursive: true, force: true });
 cpSync(live, keptFixture, { recursive: true });
 rmSync(live, { recursive: true, force: true });
-writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+writeFileSync(manifestPath, `${stringifyJson(manifest)}\n`);
 console.error(
   `kept ${manifest.settled.length + Object.keys(manifest.reported).length + manifest.owing.length + manifest.asking.length + manifest.sleeping.length} Runs, ${manifest.cluster_messages} cluster messages, in ${keptFixture}`,
 );

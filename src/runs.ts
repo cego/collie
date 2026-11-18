@@ -25,6 +25,7 @@ import { awaitingLine, type Awaiting } from "./awaiting";
 import type { AskedFact, Execution, UsageWait } from "./flow";
 import type { ShippingGo } from "./shipping";
 import type { NarrativeReport } from "./narrative-model";
+import { stringifyJson } from "./json";
 
 export type RunState = "running" | "waiting" | "succeeded" | "ended" | "failed" | "stopped";
 
@@ -84,7 +85,7 @@ export interface RunFacts {
 const isText = Schema.is(Schema.String);
 
 export const textOf: (value: Schema.Json) => string = (value) =>
-  isText(value) ? value : JSON.stringify(value);
+  isText(value) ? value : stringifyJson(value);
 
 const stateOf: (view: RunView) => RunState = (view) => {
   const stopped = view.controls.includes(STOP);

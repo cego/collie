@@ -10,6 +10,7 @@ import { holderLives, type LockHolder } from "../../src/lock";
 import { collie, type World } from "./world";
 import { suiteEnv } from "./effect";
 import { testBunfig } from "./packages";
+import { stringifyJson } from "../../src/json";
 
 export const root = new URL("../../", import.meta.url).pathname;
 export const fixtures = `${root}test/fixtures/workflows`;
@@ -408,7 +409,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
       Effect.orDie,
       Effect.timeoutOrElse({
         duration: "60 seconds",
-        orElse: () => Effect.die(new Error(`no reply to ${JSON.stringify(request)}`)),
+        orElse: () => Effect.die(new Error(`no reply to ${stringifyJson(request)}`)),
       }),
     );
 

@@ -402,7 +402,7 @@ test(
         yield* (yield* FileSystem.FileSystem)
           .writeFileString(config(), asJson(standIn))
           .pipe(Effect.orDie);
-        yield* rig.queueOutputs([{ writes: [], output: null, then: "working" }]);
+        yield* rig.queueOutputs([{ writes: [], output: null, status: "working" }]);
         const asked: Array<AskedQuestion> = [];
         const questions: Questions = {
           ask: (question) => Effect.sync(() => asked.push({ name: question.name, answer: null })),

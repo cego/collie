@@ -11,6 +11,7 @@ import { runEffect } from "./support/effect";
 import { hosted, settledRun } from "./support/hosted";
 import { Rig } from "./support/recorder";
 import { collie } from "./support/world";
+import { stringifyJson } from "../src/json";
 
 const DAY_MS = 24 * 60 * 60_000;
 const Listed = flow(Schema.decodeUnknownResult(CleanupReport), Result.getOrThrow);
@@ -156,7 +157,7 @@ afterEach(() => runEffect(rig.close()));
 const control = (agent: string, pid: number | null, command: string | null) =>
   written(
     `${rig.stateDir}/compaction/${agent}/control.json`,
-    JSON.stringify({
+    stringifyJson({
       agent,
       harness: "codex",
       cwd: rig.projectDir,

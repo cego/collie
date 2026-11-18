@@ -24,6 +24,7 @@ import {
 import type { SharedSetting, SharedSettings } from "./board-model";
 import { isReachKey, REACH_SETTING, reachKey } from "./reach";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
+import { stringifyJson } from "./json";
 
 export { type Defaults, FALLBACK_DEFAULTS } from "./settings";
 
@@ -275,7 +276,7 @@ export const gitlabHostOf = Effect.fn("Config.gitlabHostOf")(function* (env: {
 
 export function autoCompactWindowAsWritten(value: YamlValue | undefined) {
   if (value === undefined) return FALLBACK_DEFAULTS.claudeAutoCompactWindow;
-  return isNumber(value) || isString(value) ? value : JSON.stringify(value);
+  return isNumber(value) || isString(value) ? value : stringifyJson(value);
 }
 
 export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir: string) {

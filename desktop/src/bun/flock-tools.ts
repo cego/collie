@@ -66,6 +66,7 @@ import { carriedPaths } from "./carried";
 import { type ActionsLog, confirmed, Outlined, reasonOf, unlogged, withheldOf } from "./sent";
 import type { Door } from "./machine";
 import type { StandingDirection } from "../../../src/standing-direction";
+import { stringifyJson } from "../../../src/json";
 
 export const chatDoor = (door: Door) => ({
   act: (asked: Parameters<Door["act"]>[0]) => door.act(asked),
@@ -1115,7 +1116,7 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
       }).pipe(
         Effect.mapError((error) => new HostRefused({ reason: error.message })),
         Effect.flatMap((asked) => door.artefactRegister({ ...asked, runId: text("run"), request })),
-        Effect.map((done) => ({ state: "applied", note: JSON.stringify(done) })),
+        Effect.map((done) => ({ state: "applied", note: stringifyJson(done) })),
       );
     case "confirm":
       return door.confirm({ proposal: text("proposal"), hash: text("hash"), request }).pipe(

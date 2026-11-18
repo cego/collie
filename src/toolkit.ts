@@ -19,6 +19,7 @@ import {
   mrNounOf,
 } from "./board-model";
 import { isString, type JsonObject } from "./schema";
+import { stringifyJson } from "./json";
 
 export const STRICT = { onExcessProperty: "error", errors: "all" } as const;
 
@@ -127,7 +128,7 @@ function wrongActions(input: JsonObject) {
   const loose = decodeLoose(input);
   if (loose._tag === "None") return [];
   return Arr.flatMap(loose.value.actions, (action, at) => {
-    const kind = isString(action["kind"]) ? action["kind"] : JSON.stringify(action["kind"] ?? null);
+    const kind = isString(action["kind"]) ? action["kind"] : stringifyJson(action["kind"] ?? null);
     const member = MEMBERS.get(kind);
     if (!member)
       return [

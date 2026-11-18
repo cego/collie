@@ -33,7 +33,7 @@ import {
   type Integration,
   type SynthesisReport,
 } from "collie";
-import { Effect, FileSystem, Option, Schema } from "effect";
+import { Effect, FileSystem, Option, Result, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import { type WorkflowEngine, type WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import markdown from "./review.md" with { type: "text" };
@@ -135,6 +135,7 @@ export interface ReviewAsk {
   readonly source?: string | null;
 }
 
+const LedgerJson = Schema.fromJsonString(Schema.Unknown, { space: 2 });
 const formatDisputes = (disputed: ReadonlyArray<Finding>) =>
   formatFindings(
     Arr.map(disputed, (finding) => {
@@ -157,7 +158,7 @@ export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: s
   ledger:
     ask.ledger === undefined
       ? ""
-      : `Earlier findings ledger:\n${JSON.stringify(ask.ledger, null, 2)}`,
+      : `Earlier findings ledger:\n${Result.getOrThrow(Schema.encodeResult(LedgerJson)(ask.ledger))}`,
   changes: `${ask.head ? `Review head: ${ask.head}\n\n` : ""}${ask.changes ?? ""}`,
   iteration: String(ask.at),
   max_iterations: String(ask.of),

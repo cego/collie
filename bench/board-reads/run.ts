@@ -5,6 +5,7 @@ import { readEnv } from "../../src/env";
 import { platformLayer } from "../../src/platform";
 import { recordsAt } from "../../src/records";
 import { factsOfView } from "../../src/runs";
+import { stringifyJson } from "../../src/json";
 
 if (Bun.argv.slice(2).some((arg) => arg !== "--open")) process.exit(2);
 Bun.env.COLLIE_HOST = "/bin/false";
@@ -46,7 +47,7 @@ const result = await runtime.runPromise(
         digest: Number(
           BigInt(
             Bun.hash(
-              JSON.stringify(
+              stringifyJson(
                 views.map((view) => [
                   view.id,
                   view.name,
@@ -67,4 +68,4 @@ const result = await runtime.runPromise(
   ),
 );
 await runtime.dispose();
-console.log(JSON.stringify(result));
+console.log(stringifyJson(result));

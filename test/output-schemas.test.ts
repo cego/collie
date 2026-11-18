@@ -19,6 +19,7 @@ import {
 } from "../src/output";
 import { YamlValueJsonSchema } from "../src/yaml";
 import { jsonSchemaFor } from "../src/sdk";
+import { stringifyJson } from "../src/json";
 
 type Readable = Schema.Codec<unknown, unknown, never, never>;
 
@@ -85,7 +86,7 @@ test("a review decodes the finding ledger and names an invalid status", () => {
   expect(Result.getOrThrow(Schema.decodeUnknownResult(ReviewOutputSchema)(output))).toMatchObject({
     findings,
   });
-  expect(parseReviewOutput(JSON.stringify(output), "review.json")).toMatchObject({
+  expect(parseReviewOutput(stringifyJson(output), "review.json")).toMatchObject({
     ok: true,
     value: { findings },
   });
@@ -93,7 +94,7 @@ test("a review decodes the finding ledger and names an invalid status", () => {
   const decoded = Schema.decodeUnknownResult(ReviewOutputSchema)(invalid);
   expect(decoded._tag).toBe("Failure");
   if (decoded._tag === "Failure") expect(String(decoded.failure)).toContain("status");
-  const parsed = parseReviewOutput(JSON.stringify(invalid), "review.json");
+  const parsed = parseReviewOutput(stringifyJson(invalid), "review.json");
   expect(parsed.ok).toBe(false);
   if (!parsed.ok) expect(parsed.error).toContain("findings[0].status");
 });
@@ -141,7 +142,7 @@ test("a synthesis keeps its public summary and the internal finding classificati
   expect(
     flow(Schema.decodeUnknownResult(SynthesisSchema), Result.getOrThrow)(output),
   ).toMatchObject(output);
-  expect(parseSynthesis(JSON.stringify(output), "synthesized.json")).toMatchObject({
+  expect(parseSynthesis(stringifyJson(output), "synthesized.json")).toMatchObject({
     ok: true,
     value: output,
   });
@@ -167,7 +168,7 @@ test("an older synthesis uses its summary and unmarked findings in the public re
     findings: [{ severity: "major", title: "Exit zero on success" }],
   };
   const decoded = flow(Schema.decodeUnknownResult(SynthesisSchema), Result.getOrThrow)(output);
-  const parsed = parseSynthesis(JSON.stringify(output), "synthesized.json");
+  const parsed = parseSynthesis(stringifyJson(output), "synthesized.json");
   if (!parsed.ok) throw new Error(parsed.error);
   expect(decoded).toEqual(parsed.value);
   expect(renderPublicReview(decoded)).toBe(

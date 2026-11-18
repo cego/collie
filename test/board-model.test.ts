@@ -25,6 +25,7 @@ import {
 import { task } from "./support/task";
 import { flowNode, mainFlow } from "./support/flow";
 import type { FlowNode, TaskMr, TaskView as Task } from "../src/board-model";
+import { stringifyJson, parseJson } from "../src/json";
 
 const acting = (node: Partial<FlowNode>, over: Partial<Task> = {}) => {
   const base = mainFlow();
@@ -311,7 +312,9 @@ test("a TaskView carries its open questions, and one from an older host without 
 
   expect(decode(older).questions).toBeUndefined();
   const newer = { ...older, questions: [question, { ...question, id: "c-2" }] };
-  expect(decode(JSON.parse(JSON.stringify(newer))).questions).toEqual(newer.questions);
+  expect(decode(parseJson(Schema.Unknown, stringifyJson(newer))).questions).toEqual(
+    newer.questions,
+  );
   expect(decode(older).unseen).toBeUndefined();
   expect(decode({ ...older, unseen: true }).unseen).toBe(true);
 });
@@ -413,7 +416,7 @@ test("a TaskView and a RunDetail survive a round trip through JSON", () => {
     Schemaflow(
       Schema.decodeUnknownResult(json),
       Result.getOrThrow,
-    )(JSON.parse(JSON.stringify(view))),
+    )(parseJson(Schema.Unknown, stringifyJson(view))),
   ).toEqual(view);
 
   const detail: RunDetail = {
@@ -467,7 +470,7 @@ test("a TaskView and a RunDetail survive a round trip through JSON", () => {
     Schemaflow(
       Schema.decodeUnknownResult(Schema.toCodecJson(RunDetail)),
       Result.getOrThrow,
-    )(JSON.parse(JSON.stringify(detail))),
+    )(parseJson(Schema.Unknown, stringifyJson(detail))),
   ).toEqual(detail);
 });
 

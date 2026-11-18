@@ -18,7 +18,7 @@ const Scripted = Schema.Struct({
   writes: Schema.Array(Schema.Struct({ path: Schema.String, text: Schema.String })),
   sh: Schema.optionalKey(Schema.String),
   output: QueuedOutputJson,
-  then: Schema.optionalKey(Schema.Literals(["idle", "working"])),
+  status: Schema.optionalKey(Schema.Literals(["idle", "working"])),
   owed: Schema.optionalKey(Schema.Boolean),
 });
 const encodeJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Any)), Result.getOrThrow);
@@ -46,7 +46,7 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
     ref && (yield* fs.exists(ref[1]!)) ? yield* fs.readFileString(ref[1]!, "utf8") : line;
   const match = /^OUTPUT_PATH: (.+)$/m.exec(text);
   const owes: string | undefined = undefined;
-  const unanswered = { answered, then: "idle", owed: owes };
+  const unanswered = { answered, status: "idle", owed: owes };
   if (!match || queuePath === "" || !(yield* fs.exists(queuePath))) return unanswered;
   const next = (yield* readQueue(queuePath))[answered];
   const scripted = Option.getOrNull(Schema.decodeUnknownOption(Scripted)(next));
@@ -70,7 +70,7 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
   }
   return {
     answered: answered + 1,
-    then: scripted?.owed === true ? "working" : (scripted?.then ?? "idle"),
+    status: scripted?.owed === true ? "working" : (scripted?.status ?? "idle"),
     owed: scripted?.owed === true ? outputPath : undefined,
   };
 });
@@ -99,7 +99,7 @@ export const answerPrompt = (text: string, log: string, queuePath: string) =>
             });
             const now = yield* answerFrom(answered, text, queuePath);
             yield* fs.writeFileString(countPath, `${encodeAnswered({ outputs: now.answered })}\n`);
-            return { then: now.then, owed: now.owed };
+            return { status: now.status, owed: now.owed };
           }),
         () => fs.remove(lock, { recursive: true }).pipe(Effect.ignore),
       );

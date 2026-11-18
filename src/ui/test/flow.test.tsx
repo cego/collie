@@ -10,6 +10,7 @@ import { runEffect } from "../../../test/support/effect";
 import { Flow } from "../Flow";
 import type { Pending } from "../prompts";
 import { filterItems, itemHay } from "../state";
+import { stringifyJson } from "../../json";
 
 const WORKFLOWS = [
   { id: "architecture", title: "architecture — look at the whole thing", subtitle: "[baseline]" },
@@ -43,7 +44,7 @@ const mount = Effect.fn("flow.mount")(function* (ask: Pending["ask"], width = 80
         ),
         () => -1,
       );
-      if (y < 0) throw new Error(`no line containing ${JSON.stringify(text)}`);
+      if (y < 0) throw new Error(`no line containing ${stringifyJson(text)}`);
       return y;
     },
   };

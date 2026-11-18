@@ -5,6 +5,7 @@ import { Schema } from "effect";
 import { isString } from "../../../src/schema";
 import type { AguiEvent } from "../shared/agui";
 import type { TurnCost } from "./driver";
+import { stringifyJson } from "../../../src/json";
 
 const Text = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 const Content = Schema.Array(Schema.Union([Text, Schema.Struct({ type: Schema.String })]));
@@ -129,7 +130,7 @@ export const piEvents = (thread: string) => {
     }
     if (args !== undefined)
       events.push(
-        { type: "TOOL_CALL_ARGS", toolCallId: id, delta: JSON.stringify(args) },
+        { type: "TOOL_CALL_ARGS", toolCallId: id, delta: stringifyJson(args) },
         { type: "TOOL_CALL_END", toolCallId: id },
       );
     return events;

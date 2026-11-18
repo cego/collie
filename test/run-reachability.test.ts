@@ -428,7 +428,6 @@ test(
   () =>
     world(({ state, collie }) =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         yield* Effect.provide(Effect.void, recordsAt(state));
         yield* hostOf(
           socketOf(state),

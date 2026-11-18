@@ -18,6 +18,7 @@ import type { RunFacts } from "../src/runs";
 import { appendStepLine, type StepLine } from "../src/steps";
 import { runEffect } from "./support/effect";
 import { madeRun, recordsAt } from "./support/records";
+import { stringifyJson } from "../src/json";
 
 const identity = { build: "test", pid: 1, dir: "/state", protocol: 1, installation: "i" };
 
@@ -412,7 +413,7 @@ const rawClient = (socket: string) =>
   });
 
 const requestLine = (id: string, tag: string) =>
-  `${JSON.stringify({ _tag: "Request", id, tag, payload: null, headers: [] })}\n`;
+  `${stringifyJson({ _tag: "Request", id, tag, payload: null, headers: [] })}\n`;
 
 test("a client that stops reading, then goes, leaves every other client answered", () =>
   runEffect(

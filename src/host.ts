@@ -347,6 +347,7 @@ import {
   withLock,
   type LockHolder,
 } from "./lock";
+import { stringifyJson, parseJson } from "./json";
 
 export const BUILD: string = Bun.env.COLLIE_TEST_BUILD ?? manifest.version;
 
@@ -1958,8 +1959,7 @@ const frontDoorHandlers = (
       type Carrying = ReturnType<typeof carryOut>;
       type Carried = Exit.Exit<Effect.Success<Carrying>, Effect.Error<Carrying>>;
       const carrying = new Map<string, Deferred.Deferred<Carried>>();
-      const carryingKey = (proposal: string, request: string) =>
-        JSON.stringify([proposal, request]);
+      const carryingKey = (proposal: string, request: string) => stringifyJson([proposal, request]);
       const carriedBy = (proposal: string, request: string) => {
         const running = carrying.get(carryingKey(proposal, request));
         return running === undefined ? null : Effect.flatten(Deferred.await(running));
@@ -2167,8 +2167,8 @@ const frontDoorHandlers = (
               act,
             ),
           ).pipe(Effect.provideContext(hosted));
-          const key = JSON.stringify([runId, request]);
-          const asked = JSON.stringify([operation, reason ?? null]);
+          const key = stringifyJson([runId, request]);
+          const asked = stringifyJson([operation, reason ?? null]);
           return Effect.suspend(() => {
             const running = controlling.get(key);
             if (running !== undefined)
@@ -4037,7 +4037,7 @@ const frontDoorHandlers = (
                     operation: "artefact-register",
                     request,
                     ...whoOf(client),
-                    asked: JSON.parse(JSON.stringify(input)),
+                    asked: parseJson(Schema.Json, stringifyJson(input)),
                     result: Artefact,
                     value: answer.item,
                   }).pipe(Effect.orDie)

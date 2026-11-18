@@ -25,6 +25,7 @@ import { writeSettingsSet } from "../../src/config";
 import { recordLaunch } from "../../src/launches";
 import { writeCheckpoint } from "../../src/cards";
 import type { Records } from "../../src/records";
+import { stringifyJson } from "../../src/json";
 
 let rig: Rig;
 const encodeFindings = flow(
@@ -164,7 +165,7 @@ effectTest("Settings shows the defaults and remembered values it can write back"
   yield* fs.makeDirectory(env.userDir, { recursive: true });
   yield* fs.writeFileString(
     path.join(env.userDir, "config.json"),
-    JSON.stringify({ model: "opus", linear: { team: "CEG" } }),
+    stringifyJson({ model: "opus", linear: { team: "CEG" } }),
   );
 
   const after = yield* buildSettings(env);

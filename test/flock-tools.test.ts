@@ -35,6 +35,7 @@ import { tableOffer } from "../desktop/src/bun/chat-choices";
 import type { ChatChoices } from "../desktop/src/shared/chat-choices";
 import { fastForward } from "./support/effect";
 import { task } from "./support/task";
+import { stringifyJson } from "../src/json";
 
 interface Asked {
   readonly machine: string;
@@ -2127,7 +2128,7 @@ test("an answer its Machine never confirms is said as not confirmed, and nothing
       );
       const acts = Arr.filter(asked, ({ op }) => op === "act");
       expect(acts).toHaveLength(3);
-      expect(new Set(Arr.map(acts, ({ payload }) => JSON.stringify(payload))).size).toBe(1);
+      expect(new Set(Arr.map(acts, ({ payload }) => stringifyJson(payload))).size).toBe(1);
     }).pipe(Effect.provide(platformLayer)),
   ));
 

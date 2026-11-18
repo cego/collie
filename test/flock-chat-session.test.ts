@@ -15,6 +15,7 @@ import { sessionOptions, userMcpServers } from "../desktop/src/bun/session";
 import { opensOn } from "../desktop/src/bun/chat-choices";
 import type { DesktopSettings } from "../desktop/src/shared/flock";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
+import { stringifyJson } from "../src/json";
 let noticed: string | undefined;
 let rule: string | undefined;
 let direction: { readonly text: string; readonly at: string } | undefined;
@@ -166,7 +167,7 @@ test("AskUserQuestion is put to the human, and goes on with their answers", () =
   ));
 
 test("the human's own servers are read from Claude Code's config, and Collie's keeps its name", () => {
-  const config = JSON.stringify({
+  const config = stringifyJson({
     projects: { "/state/collie-desktop": { mcpServers: { local: { command: "x" } } } },
     mcpServers: {
       "linear-server": { type: "http", url: "https://mcp.linear.app/mcp" },
@@ -216,7 +217,7 @@ test("a server the human configured keeps how it authenticates and its options",
     },
     local: { command: "helle-mcp", timeout: 5000, alwaysLoad: false },
   };
-  expect<unknown>(userMcpServers(JSON.stringify({ mcpServers: servers }))).toEqual(servers);
+  expect<unknown>(userMcpServers(stringifyJson({ mcpServers: servers }))).toEqual(servers);
 });
 
 test("a tool of an MCP server the human configured is allowed as it was asked", () =>

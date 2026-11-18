@@ -10,6 +10,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `collie.ts`            | CLI assembly, help behavior, and process exit handling                                                                      |
 | `commands/`            | Workflow, Persona, and Run command handlers plus their shared resolution context                                            |
 | `envelope.ts`          | CLI envelopes, stdout, exit statuses, request receipts, and mutation locks                                                  |
+| `json.ts`              | JSON text read and written through a Schema, so a malformed value fails as a typed error                                    |
 | `operations.ts`        | Workspace resolution and Run mutations shared by both front doors                                                           |
 | `doctor.ts`            | Every prerequisite an installation needs, checked in one pass, each with its fix                                            |
 | `doctor-check.ts`      | What a doctor check is, shared by the doctor and each forge's own checks                                                    |

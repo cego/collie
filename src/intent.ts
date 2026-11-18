@@ -15,6 +15,7 @@ import {
   RuleSpecSchema,
 } from "./intent-model";
 import { VerifySpecSchema, type VerifySpec } from "./verify-spec";
+import { stringifyJson } from "./json";
 
 export { VerifySpecSchema, type VerifySpec };
 
@@ -132,7 +133,7 @@ export function verificationGrant(
 function describe(change: Change) {
   switch (change.kind) {
     case "set-goal":
-      return `goal set to ${change.goal === null ? "nothing" : JSON.stringify(change.goal)}`;
+      return `goal set to ${change.goal === null ? "nothing" : stringifyJson(change.goal)}`;
     case "set-outcome":
       return change.outcome === null ? "outcome cleared" : `outcome set to ${change.outcome}`;
     case "add-constraint":
@@ -143,7 +144,7 @@ function describe(change: Change) {
       return `authority ${Arr.join(
         Arr.map(
           Arr.map(Struct.keys(change.patch), (key) => [key, change.patch[key]] as const),
-          ([k, v]) => `${k}=${JSON.stringify(v)}`,
+          ([k, v]) => `${k}=${stringifyJson(v)}`,
         ),
         ", ",
       )}`;
@@ -261,7 +262,7 @@ export function propagate(parent: Intent, child: Intent) {
   const goal = child.goal ?? parent.goal;
   if (child.goal !== null && parent.goal !== null && child.goal !== parent.goal)
     conflicts.push(
-      `goal: parent ${JSON.stringify(parent.goal)} differs from the child's ${JSON.stringify(child.goal)}`,
+      `goal: parent ${stringifyJson(parent.goal)} differs from the child's ${stringifyJson(child.goal)}`,
     );
   return {
     intent: {
@@ -389,7 +390,7 @@ export function describeDefaults(defaults: Defaults) {
       ...Arr.map(defaults.constraints, (c) => `${c.id}\t${c.severity}\t${c.kind}\t${c.text}`),
       ...Arr.map(
         Arr.map(Struct.keys(defaults.authority), (key) => [key, defaults.authority[key]] as const),
-        ([k, v]) => `authority ${k}=${JSON.stringify(v)}`,
+        ([k, v]) => `authority ${k}=${stringifyJson(v)}`,
       ),
     ],
     "\n",

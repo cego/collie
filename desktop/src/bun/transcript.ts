@@ -3,6 +3,7 @@ import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
 import { attachmentPart, fromListing } from "../shared/attachments";
 import { type About, type ChatMessage, fromAboutNote } from "../shared/chat-view";
+import { stringifyJson } from "../../../src/json";
 
 const Text = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 const Other = Schema.Struct({ type: Schema.String });
@@ -142,7 +143,7 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>) => {
                     type: "tool-call",
                     id: block.id,
                     name: block.name,
-                    arguments: JSON.stringify(block.input ?? {}),
+                    arguments: stringifyJson(block.input ?? {}),
                     state: "complete",
                   },
                 ]

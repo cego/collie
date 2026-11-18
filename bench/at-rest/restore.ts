@@ -1,8 +1,10 @@
+import { Schema } from "effect";
 /* oxlint-disable effecttsgo/global-console, effecttsgo/global-date, effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-schema-over-json, no-restricted-globals, no-restricted-imports -- bounded offline fixture preparation. */
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import type { Manifest } from "./at-rest.fixture";
 import { relocate } from "./snapshot";
+import { stringifyJson, parseJson } from "../../src/json";
 
 const root = new URL("../../", import.meta.url).pathname;
 
@@ -18,7 +20,8 @@ if (!existsSync(`${root}node_modules/effect/package.json`)) {
 }
 const Rec = await import("effect/Record");
 const { keptFixture, live, manifestPath } = await import("./world");
-const source: { base: string; live: string; root: string; sha256: string } = JSON.parse(
+const source: { base: string; live: string; root: string; sha256: string } = parseJson(
+  Schema.Unknown,
   readFileSync(`${root}bench/at-rest/history.json`, "utf8"),
 );
 if (
@@ -33,12 +36,12 @@ mkdirSync(`${root}.scratch/at-rest`, { recursive: true });
 run(["tar", "-xzf", `${root}bench/at-rest/history.tar.gz`, "-C", `${root}.scratch/at-rest`]);
 relocate(keptFixture, source.live, live);
 relocate(keptFixture, source.root, root);
-const manifest: Manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+const manifest: Manifest = parseJson(Schema.Unknown, readFileSync(manifestPath, "utf8"));
 const db = new Database(`${keptFixture}/state/host.db`, { readonly: true });
 try {
   const integrity = db.query<{ integrity_check: string }, []>("PRAGMA integrity_check").get();
   if (integrity?.integrity_check !== "ok")
-    throw new Error(`fixture integrity: ${JSON.stringify(integrity)}`);
+    throw new Error(`fixture integrity: ${stringifyJson(integrity)}`);
   const expected = [
     ...manifest.settled,
     ...Rec.keys(manifest.reported),
@@ -50,7 +53,7 @@ try {
     .query<{ run: string }, []>("SELECT run FROM collie_runs ORDER BY run")
     .all()
     .map((row) => row.run);
-  if (expected.length !== 800 || JSON.stringify(expected) !== JSON.stringify(actual))
+  if (expected.length !== 800 || stringifyJson(expected) !== stringifyJson(actual))
     throw new Error("fixture lost Runs");
   for (const table of ["cluster_messages", "cluster_replies"] as const)
     if (

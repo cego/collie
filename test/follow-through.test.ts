@@ -25,6 +25,7 @@ import { findingsIn } from "../src/output";
 import { writeTask } from "../src/task";
 import { registerAgent, scopeFor } from "../src/registry";
 import { isString } from "../src/schema";
+import { stringifyJson } from "../src/json";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
 const TARGET = `https://${PROJECT}/-/merge_requests/7`;
@@ -147,7 +148,7 @@ const configured = (on: boolean) =>
     Effect.flatMap((fs) =>
       fs.writeFileString(
         `${rig.userDir}/config.json`,
-        JSON.stringify({
+        stringifyJson({
           review: { follow_through: on },
           projects: { root: rig.root },
           gitlab_host: "gitlab.cego.dk",
@@ -1174,7 +1175,7 @@ test.each(["major", "minor"] as const)(
         const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
         yield* rig.queueOutputs([
           review([{ ...F1, severity }]),
-          { writes: [], output: null, then: "working" },
+          { writes: [], output: null, status: "working" },
           review([{ ...F1, severity, status: "fixed" }]),
         ]);
         yield* host.session(
@@ -1242,7 +1243,10 @@ test.each(["major", "minor"] as const)(
               yield* rig.calls(),
               (one) => one.cmd === "terminal.run",
             ).pipe(Option.getOrThrow);
-            yield* (yield* rig.startCore()).report(String(fixer.params?.name), "idle");
+            yield* (yield* rig.startCore()).report(
+              Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(fixer.params?.name)),
+              "idle",
+            );
             const done = yield* until(
               () => host.status(improved.runId),
               (view) => view?.status.status === "complete" || view?.status.status === "failed",

@@ -25,6 +25,7 @@ import {
 } from "./evaluator";
 import { insideKnown } from "./conversation";
 import { reserve, settle as settleBudget, type CallLimits } from "./steering";
+import { stringifyJson } from "./json";
 
 export const MAX_LINES_PER_FILE = 200;
 export const MAX_FILES = 20;
@@ -228,7 +229,7 @@ function refsOf(rule: Exclude<RuleSpec, { kind: "protected_paths" }>, facts: Rul
             {
               kind: "output",
               path: `${rule.step}.${rule.path}`,
-              excerpt: `is ${JSON.stringify(value)}`,
+              excerpt: `is ${stringifyJson(value)}`,
             },
           ];
       return returned;

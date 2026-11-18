@@ -44,6 +44,7 @@ import { TestClock } from "effect/testing";
 import { fastForward, runEffect, suiteEnv } from "./support/effect";
 import { root, stopHost } from "./support/host";
 import { proves } from "./support/world";
+import { stringifyJson } from "../src/json";
 
 const asCommand = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
@@ -660,7 +661,7 @@ test("a Machine that cannot be upgraded says why in its own words, and is shown 
           }),
         collie: () =>
           Effect.succeed({
-            out: JSON.stringify({ ok: false, error: { message: "There is no release 0.31.0." } }),
+            out: stringifyJson({ ok: false, error: { message: "There is no release 0.31.0." } }),
             err: "",
             code: 1,
           }),

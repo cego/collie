@@ -22,6 +22,7 @@ import { ActionSchema } from "../src/actions";
 import { DEFAULT_AUTHORITY, type Authority } from "../src/intent";
 import { runEffect } from "./support/effect";
 import { leaks } from "../tools/evaluator-probe";
+import { stringifyJson, parseJson } from "../src/json";
 
 const limits = {
   maxSeconds: 120,
@@ -112,21 +113,21 @@ test("a CLI whose --help fails is unavailable in its own words, not missing ever
 
 test("the payload is found by what fits the schema, not by a field name", () => {
   const judgement = { reports: [] };
-  expect(structuredFrom(JSON.stringify({ result: judgement }), JudgementSchema)).toEqual(judgement);
-  expect(structuredFrom(JSON.stringify({ data: { output: judgement } }), JudgementSchema)).toEqual(
+  expect(structuredFrom(stringifyJson({ result: judgement }), JudgementSchema)).toEqual(judgement);
+  expect(structuredFrom(stringifyJson({ data: { output: judgement } }), JudgementSchema)).toEqual(
     judgement,
   );
   expect(
-    structuredFrom(JSON.stringify({ content: JSON.stringify(judgement) }), JudgementSchema),
+    structuredFrom(stringifyJson({ content: stringifyJson(judgement) }), JudgementSchema),
   ).toEqual(judgement);
 
   expect(structuredFrom("not json at all", JudgementSchema)).toEqual({
     error: "the CLI did not print JSON",
   });
-  expect(structuredFrom(JSON.stringify({ result: "just prose" }), JudgementSchema)).toEqual({
+  expect(structuredFrom(stringifyJson({ result: "just prose" }), JudgementSchema)).toEqual({
     error: "nothing in the CLI's envelope matched the schema it was given",
   });
-  expect(structuredFrom(JSON.stringify({ result: judgement }), ProposalSchema)).toMatchObject({
+  expect(structuredFrom(stringifyJson({ result: judgement }), ProposalSchema)).toMatchObject({
     error: expect.any(String),
   });
 });
@@ -166,7 +167,7 @@ test("every action the model may propose decodes, and nothing else does", () => 
 
 test("the schema handed to the model is real JSON Schema for each kind", () => {
   for (const kind of ["judgement", "proposal"] as const) {
-    const parsed: unknown = JSON.parse(jsonSchemaFor(kind));
+    const parsed: unknown = parseJson(Schema.Unknown, jsonSchemaFor(kind));
     expect(parsed).toMatchObject({ type: "object" });
   }
   expect(jsonSchemaFor("proposal")).toContain("interpretation");
@@ -299,7 +300,7 @@ test("a proposal decodes as a whole, or not at all", () => {
 });
 
 test("the probe reads a transcript by event: the structured-output channel is not a tool leak", () => {
-  const line = (event: Record<string, Schema.Json>) => JSON.stringify(event);
+  const line = (event: Record<string, Schema.Json>) => stringifyJson(event);
   const clean = Arr.join(
     [
       line({ type: "system", subtype: "init", tools: ["StructuredOutput"], mcp_servers: [] }),
@@ -337,7 +338,7 @@ test("the probe reads a transcript by event: the structured-output channel is no
 });
 
 test("the routing answer is one, several or none, and any other shape is no answer", () => {
-  const drawn: unknown = JSON.parse(jsonSchemaFor("routing"));
+  const drawn: unknown = parseJson(Schema.Unknown, jsonSchemaFor("routing"));
   expect(drawn).toMatchObject({ type: "object" });
   expect(jsonSchemaFor("routing")).toContain("several");
 

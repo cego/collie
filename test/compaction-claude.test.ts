@@ -22,6 +22,7 @@ import {
   submittedDelivery,
   VERIFIED_VERSIONS,
 } from "../src/compactors";
+import { parseJson } from "../src/json";
 
 let rig: Rig;
 let fs: FileSystem.FileSystem;
@@ -663,7 +664,7 @@ test("a status line's full window whose reset has passed is not the agent runnin
   ));
 
 test("the StopFailure hook is installed only on a Claude known to have it, for every error", () => {
-  const [hook] = JSON.parse(claudeSettings(dir, true)).hooks.StopFailure;
+  const [hook] = parseJson(Schema.Any, claudeSettings(dir, true)).hooks.StopFailure;
   expect(hook.matcher).toBeUndefined();
   expect(hook.hooks[0].command).toContain(`herdr compaction ${dir}`);
   expect(claudeSettings(dir, false)).not.toContain("StopFailure");

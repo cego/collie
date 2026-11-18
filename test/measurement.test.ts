@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
-import { evidenceDir, runDir } from "../src/engine";
+import { evidenceDir } from "../src/engine";
 import { readMeasurements } from "../src/measurement";
 import { hostRecords } from "./support/records";
 import type { BenchmarkPlan, Measurement } from "../src/measurement-model";

@@ -1,6 +1,7 @@
 /* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/prefer-schema-over-json, no-restricted-imports -- offline preparation regression with a fake installer. */
 import { strictEqual } from "node:assert";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { stringifyJson } from "../../src/json";
 
 const root = new URL("../../", import.meta.url).pathname;
 mkdirSync(`${root}.scratch/at-rest`, { recursive: true });
@@ -12,7 +13,7 @@ try {
   for (const path of ["node_modules/effect", "fresh"]) {
     writeFileSync(
       `${directory}/${path}/package.json`,
-      JSON.stringify({ name: "effect", type: "module", exports: { "./*": "./*.js" } }),
+      stringifyJson({ name: "effect", type: "module", exports: { "./*": "./*.js" } }),
     );
     writeFileSync(
       `${directory}/${path}/Record.js`,

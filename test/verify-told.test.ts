@@ -40,7 +40,7 @@ test(
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
           yield* fs
-            .writeFileString(outputs, encode([{ writes: [], output: null, then: "working" }]))
+            .writeFileString(outputs, encode([{ writes: [], output: null, status: "working" }]))
             .pipe(Effect.orDie);
           yield* fs.writeFileString(`${world.project}/thing.txt`, "one\n").pipe(Effect.orDie);
           yield* exec(["git", "add", "-A"], { cwd: world.project });

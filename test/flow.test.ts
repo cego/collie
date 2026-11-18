@@ -27,6 +27,7 @@ import { until } from "./support/host";
 import { hostRecords, recordsAt } from "./support/records";
 import { blockedAtItsPrompt, collie, proves, type World } from "./support/world";
 import type { FakeHc } from "./support/fake-hc";
+import { stringifyJson } from "../src/json";
 
 const encode = Schemaflow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
@@ -582,7 +583,7 @@ const children = (world: World, parent: string) =>
   until(
     () => cli(world, ["run", "list"]),
     ({ envelope }) =>
-      pipe_(JSON.stringify(envelope.data ?? ""), Str.includes(`"parent":"${parent}"`)),
+      pipe_(stringifyJson(envelope.data ?? ""), Str.includes(`"parent":"${parent}"`)),
   ).pipe(
     Effect.flatMap(({ envelope }) =>
       Schema.decodeUnknownEffect(

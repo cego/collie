@@ -18,6 +18,7 @@ import { agentsLayer } from "../src/agents";
 import { WorkflowError } from "../src/sdk";
 import { RELEASES } from "../src/releases";
 import * as Layer from "effect/Layer";
+import { stringifyJson } from "../src/json";
 
 let rig: Rig;
 let forgeApi = "";
@@ -410,7 +411,7 @@ for (const state of ["bare", "unreadable"] as const) {
 
 for (const metadata of [" metadata", "metadata "]) {
   test(
-    `a real repository whose gitfile names ${JSON.stringify(metadata)} still guards its remote`,
+    `a real repository whose gitfile names ${stringifyJson(metadata)} still guards its remote`,
     () =>
       runEffect(
         Effect.gen(function* () {

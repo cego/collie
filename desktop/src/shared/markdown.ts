@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import * as Struct from "effect/Struct";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -6,6 +7,7 @@ import * as Arr from "effect/Array";
 import type { ComarkPlugin, ElementNodeAttributes, Node } from "comark";
 import security from "comark/plugins/security";
 import { shortUrl } from "./links";
+import { stringifyJson, parseJson } from "../../../src/json";
 
 const FILE_LINE = /(?<![\w/:.@-])((?:[\w@.-]+\/)*[\w@-][\w@.-]*\.[A-Za-z]\w*):(\d+)(?![\w:])/g;
 const WHOLE_FILE_LINE = new RegExp(`^${FILE_LINE.source}$`);
@@ -25,10 +27,10 @@ const referencesIn = (text: string) => {
 };
 
 const scripted = (attributes: ElementNodeAttributes, name: string) => {
-  let rendered = String(JSON.stringify(attributes[name]));
+  let rendered = String(stringifyJson(attributes[name]));
   if (pipe(name, Str.startsWith(":")))
     try {
-      rendered = JSON.stringify(JSON.parse(String(attributes[name])));
+      rendered = stringifyJson(parseJson(Schema.Unknown, String(attributes[name])));
     } catch {
       return true;
     }

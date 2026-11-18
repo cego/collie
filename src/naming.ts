@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import { DEFAULT_MODEL } from "./harness";
 import { mrWords, parseMrTarget } from "./board-model";
 import { diffTargetOf, type Settled } from "./strategies";
+import { stringifyJson } from "./json";
 
 const MAX = 32;
 const DIGEST = 6;
@@ -40,7 +41,7 @@ function nameWith(
   const whole = layout(slug, stepId, variantKey, `r${seq}`, legacy);
   if (!whole.cut) return whole.name;
   const sum = pipe(
-    Bun.hash(JSON.stringify([slug, stepId, variantKey])).toString(36),
+    Bun.hash(stringifyJson([slug, stepId, variantKey])).toString(36),
     Str.slice(-DIGEST),
   );
   return layout(slug, stepId, variantKey, `${sum}-r${seq}`, legacy).name;

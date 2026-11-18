@@ -14,6 +14,7 @@ import { deliveredTo, hostRecords, recordsAt, registeredAt } from "./support/rec
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { type Side, twoMachines } from "./support/peers";
+import { parseJson } from "../src/json";
 
 const encodeValue = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
@@ -167,7 +168,7 @@ test(
                     }),
                   ),
                   Result.getOrThrow,
-                )(JSON.parse(line)),
+                )(parseJson(Schema.Unknown, line)),
             );
             const sentWords = Arr.map(calls, (call) => call.params?.text ?? "");
             const said = Option.getOrUndefined(

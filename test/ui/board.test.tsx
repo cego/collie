@@ -34,6 +34,7 @@ import { focus } from "../support/focus";
 import { blockedAtItsPrompt, collie, proves } from "../support/world";
 import { epochMs } from "../../src/time";
 import type { UsageReading } from "../../src/usage-model";
+import { stringifyJson } from "../../src/json";
 
 const NOW = epochMs("2026-09-16T12:00:00.000Z");
 
@@ -90,7 +91,7 @@ const mount = Effect.fn("board.mount")(function* (
       };
       const text = find(t.renderer.root);
       const card = text?.parent?.parent?.parent;
-      if (!card) throw new Error(`no card containing ${JSON.stringify(name)}`);
+      if (!card) throw new Error(`no card containing ${stringifyJson(name)}`);
       return card;
     },
     acted: () => Arr.filter(commands, (c) => c._tag !== "Select"),
@@ -150,7 +151,7 @@ const mount = Effect.fn("board.mount")(function* (
           if (pipe_(span.text, Str.includes(text))) return `${span.bg.r} ${span.bg.g} ${span.bg.b}`;
         }
       }
-      throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
+      throw new Error(`nothing drawn containing ${stringifyJson(text)}`);
     },
     fgOf(text: string) {
       for (const line of t.captureSpans().lines) {
@@ -158,14 +159,14 @@ const mount = Effect.fn("board.mount")(function* (
           if (pipe_(span.text, Str.includes(text))) return `${span.fg.r} ${span.fg.g} ${span.fg.b}`;
         }
       }
-      throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
+      throw new Error(`nothing drawn containing ${stringifyJson(text)}`);
     },
     attributesOf(text: string) {
       for (const line of t.captureSpans().lines) {
         for (const span of line.spans)
           if (pipe_(span.text, Str.includes(text))) return span.attributes;
       }
-      throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
+      throw new Error(`nothing drawn containing ${stringifyJson(text)}`);
     },
     until: (text: string) =>
       flush.pipe(
@@ -190,7 +191,7 @@ const mount = Effect.fn("board.mount")(function* (
         ),
         () => -1,
       );
-      if (y < 0) throw new Error(`no line containing ${JSON.stringify(text)}`);
+      if (y < 0) throw new Error(`no line containing ${stringifyJson(text)}`);
       return y;
     },
   };
@@ -202,7 +203,7 @@ function spotOf(frame: string, text: string) {
     Arr.findFirstIndex(lines, (line) => pipe_(line, Str.includes(text))),
     () => -1,
   );
-  if (y < 0) throw new Error(`no line containing ${JSON.stringify(text)}`);
+  if (y < 0) throw new Error(`no line containing ${stringifyJson(text)}`);
   return {
     x:
       Option.getOrElse(pipe_(lines[y]!, Str.indexOf(text)), () => -1) + Math.floor(text.length / 2),

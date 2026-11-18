@@ -11,6 +11,7 @@ import { reason } from "../src/naming";
 import { atLeast, COMPACTION_PORTS, VERIFIED_VERSIONS } from "../src/compactors";
 import { boundThread, withCodex } from "../src/codex";
 import { Unsubmitted } from "../src/compaction";
+import { stringifyJson } from "../src/json";
 
 let rig: Rig;
 let fs: FileSystem.FileSystem;
@@ -60,7 +61,7 @@ function serve() {
         const { id, method, params } = decoded.value;
         fake.calls.push(method);
         const reply = (result: Answer) => {
-          ws.send(JSON.stringify({ id, result }));
+          ws.send(stringifyJson({ id, result }));
         };
         // WARNING: every method this stand-in answers takes `threadId` and nothing else, and the schema above has already parsed the frame into an object.
         const threadId = (params as { threadId?: string } | undefined)?.threadId ?? "";
@@ -82,7 +83,7 @@ function serve() {
             reply({ thread: { id: threadId } });
             if (fake.usage !== null) {
               ws.send(
-                JSON.stringify({
+                stringifyJson({
                   method: "thread/tokenUsage/updated",
                   params: {
                     threadId,

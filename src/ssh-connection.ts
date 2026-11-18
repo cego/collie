@@ -1,6 +1,5 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import * as Arr from "effect/Array";
 import { Clock, Duration, Effect, FileSystem, Option, Schema, type Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { HostRefused } from "./board-model";

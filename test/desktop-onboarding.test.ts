@@ -34,6 +34,7 @@ import {
   type OnboardRun,
   type OnboardStep,
 } from "../desktop/src/shared/flock";
+import { stringifyJson } from "../src/json";
 
 const pair = () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -609,7 +610,7 @@ test("a Machine's row says what doctor finds of it, over what its last onboardin
       const route = {
         collie: (args: ReadonlyArray<string>) =>
           Arr.join(args, " ") === "--json doctor"
-            ? Effect.succeed({ out: `${JSON.stringify(envelope)}\n`, err: "", code: 1 })
+            ? Effect.succeed({ out: `${stringifyJson(envelope)}\n`, err: "", code: 1 })
             : Effect.die(`asked ${Arr.join(args, " ")}`),
       };
       const doctored = Option.getOrThrow(yield* doctorOn(route));
@@ -644,7 +645,7 @@ test("Helle and the Linear MCP count toward onboarded though doctor passes them,
       const said = (checks: ReadonlyArray<object>) => ({
         collie: () =>
           Effect.succeed({
-            out: JSON.stringify({ ok: true, data: { ready: true, checks } }),
+            out: stringifyJson({ ok: true, data: { ready: true, checks } }),
             err: "",
             code: 0,
           }),
@@ -694,7 +695,7 @@ test("a Linear login onboarding left unfinished keeps the row short, though doct
         yield* doctorOn({
           collie: () =>
             Effect.succeed({
-              out: JSON.stringify({ ok: true, data: { checks } }),
+              out: stringifyJson({ ok: true, data: { checks } }),
               err: "",
               code: 0,
             }),
@@ -747,7 +748,7 @@ test("a failing gh check is a failed step with its fix, as a failing glab check 
         error: { code: "operation_failed", message: "", details: { checks } },
       };
       const route = {
-        collie: () => Effect.succeed({ out: JSON.stringify(envelope), err: "", code: 1 }),
+        collie: () => Effect.succeed({ out: stringifyJson(envelope), err: "", code: 1 }),
       };
       expect(Option.getOrThrow(yield* doctorOn(route)).steps).toEqual(
         Arr.map(checks, ({ name, detail, fix }) => ({

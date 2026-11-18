@@ -372,6 +372,7 @@ import {
 import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
+import { stringifyJson } from "./json";
 
 export class EntryError extends Schema.TaggedError<EntryError, { readonly brand: unique symbol }>()(
   "EntryError",
@@ -428,7 +429,7 @@ export const TOOLCHAIN = {
 
 export const SDK_DECLARATIONS = `declare module "collie" {
   export type ConnectionId = ${Arr.join(
-    Arr.map(ConnectionId.literals, (id) => JSON.stringify(id)),
+    Arr.map(ConnectionId.literals, (id) => stringifyJson(id)),
     " | ",
   )};
   export const ConnectionId: Schema.Codec<ConnectionId, unknown, never, never>;
@@ -437,7 +438,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly state: "absent" | "broken"; readonly detail: string; readonly fix: string; readonly reusable?: { readonly from: string } };
   export const ConnectionReading: Schema.Codec<ConnectionReading, unknown, never, never>;
   export type ParkCause = ${Arr.join(
-    Arr.map(ParkCause.literals, (id) => JSON.stringify(id)),
+    Arr.map(ParkCause.literals, (id) => stringifyJson(id)),
     " | ",
   )};
   export const ParkCause: Schema.Codec<ParkCause, unknown, never, never>;
@@ -9845,7 +9846,7 @@ const makeRegistry: (
         carriedWork.length > 0 &&
         Arr.every(
           carriedWork,
-          (name) => JSON.stringify(filled[name]) === JSON.stringify(startedWith[name]),
+          (name) => stringifyJson(filled[name]) === stringifyJson(startedWith[name]),
         );
       return yield* startWork({
         continues: sameWork ? yield* consumedCard(row.run, where) : undefined,

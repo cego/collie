@@ -15,6 +15,7 @@ import { stopHost, until } from "./support/host";
 import { memoryRecords } from "./support/effect";
 import { collie, proves, type World } from "./support/world";
 import { exec } from "./support/command";
+import { stringifyJson } from "../src/json";
 
 const FAST = { COLLIE_HOST_SCHEDULE_SECONDS: "1" };
 const MODULES = ["hello.workflow.ts", "proof.workflow.ts", "helper.ts", "notes.md"];
@@ -536,7 +537,7 @@ test(
                     all,
                     (line) =>
                       line.operation === "occurrence" &&
-                      pipe(JSON.stringify(line.result), Str.includes('"refused"')),
+                      pipe(stringifyJson(line.result), Str.includes('"refused"')),
                   ),
                 ),
                 Effect.orElseSucceed(() => []),

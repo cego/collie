@@ -17,6 +17,7 @@ import type { RunFacts } from "../../src/runs";
 import { openHost } from "../support/host";
 import { madeRun, recordsAt } from "../support/records";
 import { Path, FileSystem } from "effect";
+import { stringifyJson } from "../../src/json";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -232,7 +233,7 @@ effectTest("w on another workspace's run opens its merge request, not this repo'
   yield* fs.makeDirectory(checkout, { recursive: true });
   const run = yield* elsewhere({ workspaceId: "w9", target: "mr:42", cwd: checkout });
   const marker = path.join(rig.root, "glab-cwd.txt");
-  yield* bin.add("glab", `pwd > ${JSON.stringify(marker)}`);
+  yield* bin.add("glab", `pwd > ${stringifyJson(marker)}`);
 
   const note = yield* runCommand(
     session(),

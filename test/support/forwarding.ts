@@ -5,6 +5,7 @@ import * as Rec from "effect/Record";
 import { Cause, Effect, FileSystem, Result, Schema, Semaphore } from "effect";
 import { CommandLine } from "effect/process";
 import { MARKER } from "./sweep";
+import { stringifyJson } from "../../src/json";
 
 export interface Answer {
   readonly code: number;
@@ -68,7 +69,7 @@ const serve = (path: string) =>
       });
       connection.on("end", () => {
         void Effect.runPromise(answer(request)).then((reply) =>
-          connection.end(JSON.stringify(reply)),
+          connection.end(stringifyJson(reply)),
         );
       });
       connection.on("error", () => {});

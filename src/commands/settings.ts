@@ -10,6 +10,7 @@ import { mutation } from "../envelope";
 import { nowIso } from "../time";
 import { isString } from "../schema";
 import { answering, cliDoor, requestIdFlag } from "./shared";
+import { stringifyJson } from "../json";
 
 const list = Command.make("list", {}, () =>
   answering((env) =>
@@ -34,7 +35,7 @@ const list = Command.make("list", {}, () =>
                   ? `(default ${fallback || "unset"})`
                   : isString(value)
                     ? value
-                    : JSON.stringify(value),
+                    : stringifyJson(value),
               ],
               "\t",
             ),

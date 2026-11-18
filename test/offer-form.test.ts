@@ -9,7 +9,7 @@ const drawn: Schema.Json = {
   properties: {
     notify: { type: "boolean", description: "Tell the channel" },
     confirmed: { type: "boolean" },
-    then: { type: "string", enum: ["", "finish", "release"], description: "What follows" },
+    after: { type: "string", enum: ["", "finish", "release"], description: "What follows" },
     count: { type: "integer", minimum: -9007199254740991, maximum: 9007199254740991 },
     ratio: {
       anyOf: [{ type: "number" }, { type: "string", enum: ["Infinity", "-Infinity", "NaN"] }],
@@ -34,7 +34,7 @@ test("each field takes the control its schema draws, with its label, help, defau
   ).toEqual([
     ["notify", "Notify", "boolean", false, "Tell the channel", undefined],
     ["confirmed", "Confirmed", "boolean", true, null, "false"],
-    ["then", "Then", "enum", false, "What follows", undefined],
+    ["after", "After", "enum", false, "What follows", undefined],
     ["count", "Count", "integer", false, null, undefined],
     ["ratio", "Ratio", "number", false, null, undefined],
     ["reviewers", "Reviewers", "list", false, null, undefined],
@@ -51,7 +51,7 @@ test("entries are sent as their fields take them: false is false, an unset optio
     offerInput(drawn, {
       notify: "false",
       confirmed: "true",
-      then: "",
+      after: "",
       count: " 3 ",
       ratio: "0.5",
       reviewers: "alice\n\n bob \n",
@@ -63,7 +63,7 @@ test("entries are sent as their fields take them: false is false, an unset optio
     input: {
       notify: false,
       confirmed: true,
-      then: "",
+      after: "",
       count: 3,
       ratio: 0.5,
       reviewers: ["alice", "bob"],
@@ -81,7 +81,7 @@ test("an entry its field cannot take is refused with why, and nothing malformed 
   expect(
     offerInput(drawn, {
       notify: "maybe",
-      then: "later",
+      after: "later",
       count: "2.5",
       ratio: "lots",
       note: "",
@@ -92,7 +92,7 @@ test("an entry its field cannot take is refused with why, and nothing malformed 
     errors: {
       notify: "Notify must be yes or no",
       confirmed: "Confirmed needs a value",
-      then: "Then must be one of: (empty), finish, release",
+      after: "After must be one of: (empty), finish, release",
       count: "Count must be a whole number",
       ratio: "Ratio must be a number",
       note: "Note needs a value",

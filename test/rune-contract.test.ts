@@ -9,6 +9,7 @@ import { AguiEvent } from "../desktop/src/shared/agui";
 import { FLOCK, SAID, REPORTS } from "./support/rune.fixture";
 import { runDetail } from "./support/run-detail";
 import { exec } from "./support/command";
+import { stringifyJson } from "../src/json";
 
 const WORKSPACE = new URL("../desktop/", import.meta.url).pathname;
 const cargo = Bun.which("cargo");
@@ -385,7 +386,7 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
         const ran = yield* exec([roundtrip], {
           stdin: Buffer.from(
             Arr.join(
-              Arr.map(sent, (frame) => JSON.stringify(frame)),
+              Arr.map(sent, (frame) => stringifyJson(frame)),
               "\n",
             ) + "\n",
           ),
@@ -409,7 +410,7 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
         const ran = yield* exec([roundtrip], {
           stdin: Buffer.from(
             Arr.join(
-              Arr.map(sent, (frame) => `${JSON.stringify(frame)}\n`),
+              Arr.map(sent, (frame) => `${stringifyJson(frame)}\n`),
               "",
             ),
           ),

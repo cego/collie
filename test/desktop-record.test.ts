@@ -29,6 +29,7 @@ import {
   typedIn,
   videoPlays,
 } from "../desktop/src/shared/record";
+import { stringifyJson } from "../src/json";
 
 const everything: TabFacts = {
   loaded: true,
@@ -592,7 +593,7 @@ describe("timing Desktop's launch, board, terminal, chat and scrolling", () => {
         return line === null ? [] : [line];
       });
     expect(logged({ recordTiming: true })).toEqual(
-      Arr.map(every, (mark) => `${JSON.stringify(mark)}\n`),
+      Arr.map(every, (mark) => `${stringifyJson(mark)}\n`),
     );
     expect(Arr.map(every, ({ name }) => name)).toEqual([
       "launch",

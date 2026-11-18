@@ -23,6 +23,7 @@ import { fixtures } from "./support/host";
 import { stopHost, until } from "./support/host";
 import { proves } from "./support/world";
 import { connect } from "../src/host";
+import { stringifyJson, parseJson } from "../src/json";
 
 const requestable: ReadonlyArray<Outcome> = Arr.filter(REQUESTABLE, isOutcome);
 
@@ -200,7 +201,7 @@ test("an outcome is fixed or selectable, and never contradicts itself", () => {
 test("a checkout is branch or roaming, and anything else is refused at load", () => {
   expect(checkEntry(entry({ metadata: { checkout: "branch" } }))).toEqual([]);
   expect(checkEntry(entry({ metadata: { checkout: "roaming" } }))).toEqual([]);
-  const loose: WorkflowMetadata = JSON.parse('{"checkout":"worktree"}');
+  const loose: WorkflowMetadata = parseJson(Schema.Any, '{"checkout":"worktree"}');
   expect(checkEntry(entry({ metadata: loose }))).toEqual([
     'checkout "worktree" is not branch or roaming',
   ]);
@@ -387,7 +388,7 @@ test("what a card is given is ids, titles and projections — never the closures
       },
     ],
   });
-  expect(JSON.stringify(described)).not.toContain("eligible");
+  expect(stringifyJson(described)).not.toContain("eligible");
 });
 
 test("a template takes what it declares, what every agent is given, and any key of a map", () => {

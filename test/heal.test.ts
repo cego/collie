@@ -293,7 +293,7 @@ test(
             null,
             null,
             null,
-            { writes: [], output: null, then: "working" },
+            { writes: [], output: null, status: "working" },
             { verdict: "clean" },
           ]);
           const { runId, client } = yield* started(world, "silent-review", { target: "the diff" });
@@ -386,7 +386,7 @@ test(
       (world) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          yield* queued(world, [{ writes: [], output: null, then: "working" }]);
+          yield* queued(world, [{ writes: [], output: null, status: "working" }]);
           const other = yield* started(world, "asks", { goal: "ask" });
           yield* until(
             () => other.client.run({ runId: other.runId }).pipe(Effect.orDie),
@@ -473,7 +473,7 @@ test(
       "collie-heal-park-",
       (world) =>
         Effect.gen(function* () {
-          yield* queued(world, [{ writes: [], output: null, then: "working" }]);
+          yield* queued(world, [{ writes: [], output: null, status: "working" }]);
           const { runId, client } = yield* started(world, "parks-for", {
             causes: "unknown,unknown",
             entries: `${world.home}/entries`,
@@ -659,8 +659,8 @@ test(
       (world) =>
         Effect.gen(function* () {
           yield* queued(world, [
-            { writes: [], output: null, then: "working" },
-            { writes: [], output: null, then: "working" },
+            { writes: [], output: null, status: "working" },
+            { writes: [], output: null, status: "working" },
           ]);
           const parked = [];
           for (const name of ["first", "second"])
@@ -804,7 +804,7 @@ test(
       "collie-heal-crash-",
       (world) =>
         Effect.gen(function* () {
-          yield* queued(world, [{ writes: [], output: null, then: "working" }]);
+          yield* queued(world, [{ writes: [], output: null, status: "working" }]);
           const { runId } = yield* started(
             world,
             "parks-for",

@@ -8,6 +8,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Order,
   Schema,
   flow,
 } from "effect";
@@ -566,12 +567,23 @@ test(
             searched = yield* search;
           expect(searched.coverage.indexed).toBe(searched.coverage.runs);
           expect(searched.coverage.runs).toBeGreaterThanOrEqual(3);
-          expect(Arr.map(searched.items, (item) => [item.run, item.title]).sort()).toEqual(
-            [
-              [old, "old-findings.md"],
-              [active, "active-findings.md"],
-              [loose, "loose-findings.md"],
-            ].sort(),
+          const byRow = Order.mapInput(Order.String, (row: ReadonlyArray<string>) =>
+            Arr.join(row, ","),
+          );
+          expect(
+            Arr.sort(
+              Arr.map(searched.items, (item) => [item.run, item.title]),
+              byRow,
+            ),
+          ).toEqual(
+            Arr.sort(
+              [
+                [old, "old-findings.md"],
+                [active, "active-findings.md"],
+                [loose, "loose-findings.md"],
+              ],
+              byRow,
+            ),
           );
 
           const cli = yield* collie(world, ["artefacts", "--query", "findings"]);

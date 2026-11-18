@@ -21,6 +21,7 @@ import {
 import type { CheckEvidence, SynthesisSchema } from "./output";
 import type { FailedTest, Snapshot, Verification } from "./verify";
 import type { Issue, IssueRef } from "./forge/issues";
+import { stringifyJson } from "./json";
 export type { Issue, IssueRef } from "./forge/issues";
 import type { Report } from "./report";
 export type { Report } from "./report";
@@ -2182,7 +2183,7 @@ export function checkEntry(entry: WorkflowEntry) {
   problems.push(...outcomeProblems(entry.metadata?.outcome));
   const checkout: unknown = entry.metadata?.checkout;
   if (checkout !== undefined && !isDeclaredCheckout(checkout)) {
-    problems.push(`checkout ${JSON.stringify(checkout)} is not branch or roaming`);
+    problems.push(`checkout ${stringifyJson(checkout)} is not branch or roaming`);
   }
   problems.push(...offerProblems(entry.metadata, entry.id));
   for (const id of repeatedIds(entry.metadata?.path ?? []))

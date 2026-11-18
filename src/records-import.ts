@@ -405,11 +405,11 @@ export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* 
       controlPath(stateDir, { control: NOTIFIED, run, key: "" }),
       `${Arr.join(said, "\n")}\n`,
     );
-  const set = new Set([
-    ...Arr.map(controls, (row) =>
+  const set = new Set(
+    Arr.map(controls, (row) =>
       controlPath(stateDir, row.control === NOTIFIED ? { ...row, key: "" } : row),
     ),
-  ]);
+  );
   for (const { file } of yield* legacyControls(stateDir))
     if (!set.has(file)) yield* fs.remove(file).pipe(orMissing<void>(undefined));
   yield* write(

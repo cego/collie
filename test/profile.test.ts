@@ -10,6 +10,7 @@ import {
 } from "../src/profile";
 import { parseSetting } from "../src/settings";
 import { runEffect } from "./support/effect";
+import { stringifyJson } from "../src/json";
 
 const GITLAB = Arr.join(["glpat", "synthetic0000000000test"], "-");
 
@@ -20,7 +21,7 @@ test("an empty profile is no overlay", () => {
 
 test("a role without its own overlay takes *, and one with its own takes only that", () => {
   const parsed = parseProfile(
-    JSON.stringify({ "*": { env: { A: "1" } }, reviewer: { env: { B: "2" } } }),
+    stringifyJson({ "*": { env: { A: "1" } }, reviewer: { env: { B: "2" } } }),
   );
   if (!("profile" in parsed)) throw new Error(parsed.refused);
   expect(roleProfile(parsed.profile, "implementer")).toEqual({ env: { A: "1" } });
@@ -33,23 +34,23 @@ test("the setting refuses what the profile cannot be, with the reason", () => {
     return "refused" in said ? said.refused : "";
   };
   expect(refused("{not json")).toContain("is not JSON");
-  expect(refused(JSON.stringify({ "*": { claude: { disableAllHooks: true } } }))).toContain(
+  expect(refused(stringifyJson({ "*": { claude: { disableAllHooks: true } } }))).toContain(
     "disableAllHooks would switch off Collie's own hooks",
   );
-  expect(refused(JSON.stringify({ "*": { claude: { model: "opus" } } }))).toContain(
+  expect(refused(stringifyJson({ "*": { claude: { model: "opus" } } }))).toContain(
     "claude.model is not one Collie merges",
   );
   for (const key of ["autoMode", "permissions"])
-    expect(refused(JSON.stringify({ "*": { claude: { [key]: {} } } }))).toContain(
+    expect(refused(stringifyJson({ "*": { claude: { [key]: {} } } }))).toContain(
       `claude.${key} is not one Collie merges`,
     );
-  expect(refused(JSON.stringify({ "*": { env: { "BAD NAME": "x" } } }))).toContain(
+  expect(refused(stringifyJson({ "*": { env: { "BAD NAME": "x" } } }))).toContain(
     '"BAD NAME" is not an environment variable name',
   );
-  const secret = refused(JSON.stringify({ "*": { env: { DEPLOY: `use ${GITLAB}` } } }));
+  const secret = refused(stringifyJson({ "*": { env: { DEPLOY: `use ${GITLAB}` } } }));
   expect(secret).toContain("hold it in a 0600 file");
   expect(secret).not.toContain(GITLAB);
-  const text = JSON.stringify({ "*": { env: { PONYTAIL_DEFAULT_MODE: "off" } } });
+  const text = stringifyJson({ "*": { env: { PONYTAIL_DEFAULT_MODE: "off" } } });
   expect(parseSetting("agent_profile", text)).toEqual({ value: text });
 });
 

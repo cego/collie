@@ -23,6 +23,7 @@ import {
 } from "./support/forge";
 import { Rig } from "./support/recorder";
 import * as Layer from "effect/Layer";
+import { stringifyJson } from "../src/json";
 
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
 const MERGED = "35ae2cea5e5848602729dbc0e8a87ed0d9049c46";
@@ -239,7 +240,7 @@ test("a landing an older build kept is read from its Run's records", () =>
     Effect.gen(function* () {
       const kept = attempt("gitlab", { state: "landed", sha: MERGED });
       yield* RunRecords.use((records) =>
-        records.put("r-kept", "landing.json", JSON.stringify(kept)),
+        records.put("r-kept", "landing.json", stringifyJson(kept)),
       );
       expect(yield* readLanding("/state/runs/r-kept")).toEqual(kept);
     }),

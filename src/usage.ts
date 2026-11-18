@@ -41,6 +41,7 @@ import {
   type Subscription,
   type UsageReading,
 } from "./usage-model";
+import { stringifyJson } from "./json";
 
 export const USAGE_INTERVAL_MS = 5 * 60_000;
 export const USAGE_CALL_MS = 10_000;
@@ -427,7 +428,7 @@ const viaStdio: Effect.Effect<
       { jsonrpc: "2.0", id: 2, method: RATE_LIMITS, params: {} },
       { jsonrpc: "2.0", id: 3, method: ACCOUNT, params: {} },
     ],
-    (message) => `${JSON.stringify(message)}\n`,
+    (message) => `${stringifyJson(message)}\n`,
   );
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const handle = yield* spawner

@@ -9,6 +9,7 @@ import { Data, Effect, FileSystem, pipe, Schema } from "effect";
 import type * as Rpc from "effect/rpc/Rpc";
 import * as RpcSchema from "effect/rpc/RpcSchema";
 import { DesktopRpcs } from "../desktop/src/shared/flock";
+import { stringifyJson } from "../src/json";
 
 export const GENERATED = new URL("../desktop/protocol/src/generated.rs", import.meta.url).pathname;
 export const REGENERATE = "bun run tools/rune-types.ts --write";
@@ -87,11 +88,55 @@ const Document = Schema.Struct({ schema: Json, definitions: Schema.Record(Schema
 type Document = typeof Document.Type;
 
 const KEYWORDS = new Set([
-  ...["as", "async", "await", "break", "const", "continue", "dyn", "else", "enum", "extern"],
-  ...["false", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "match", "mod", "move"],
-  ...["mut", "pub", "ref", "return", "static", "struct", "trait", "true", "type", "unsafe"],
-  ...["use", "where", "while", "abstract", "become", "box", "do", "final", "macro", "override"],
-  ...["priv", "try", "typeof", "unsized", "virtual", "yield", "self"],
+  "as",
+  "async",
+  "await",
+  "break",
+  "const",
+  "continue",
+  "dyn",
+  "else",
+  "enum",
+  "extern",
+  "false",
+  "fn",
+  "for",
+  "gen",
+  "if",
+  "impl",
+  "in",
+  "let",
+  "loop",
+  "match",
+  "mod",
+  "move",
+  "mut",
+  "pub",
+  "ref",
+  "return",
+  "static",
+  "struct",
+  "trait",
+  "true",
+  "type",
+  "unsafe",
+  "use",
+  "where",
+  "while",
+  "abstract",
+  "become",
+  "box",
+  "do",
+  "final",
+  "macro",
+  "override",
+  "priv",
+  "try",
+  "typeof",
+  "unsized",
+  "virtual",
+  "yield",
+  "self",
 ]);
 const PRELUDE = new Set(["Option", "Result", "String", "Vec", "Box", "Some", "None", "Ok", "Err"]);
 
@@ -160,23 +205,23 @@ const generator = () => {
   };
 
   const literals = (schema: Json, wanted: string, within: string) =>
-    declare(JSON.stringify(schema), wanted, within, (name) => {
+    declare(stringifyJson(schema), wanted, within, (name) => {
       const variants = Arr.map(
         schema.enum ?? [],
-        (value) => `    #[serde(rename = ${JSON.stringify(value)})]\n    ${pascal(value)},\n`,
+        (value) => `    #[serde(rename = ${stringifyJson(value)})]\n    ${pascal(value)},\n`,
       );
       return `${DERIVES}\npub enum ${name} {\n${Arr.join(variants, "")}}\n`;
     });
 
   const struct = (schema: Json, wanted: string, within: string) =>
-    declare(JSON.stringify(schema), wanted, within, (name) => {
+    declare(stringifyJson(schema), wanted, within, (name) => {
       const required = new Set(schema.required ?? []);
       const fields = Arr.map(Rec.toEntries(schema.properties ?? {}), ([key, field]) => {
         const inner = typeOf(field, key === "_tag" ? `${name}Tag` : pascal(key), name);
         const rust = snake(key);
         const attrs = Arr.filter(
           [
-            pipe(rust, Str.replace(/^r#/, "")) === key ? "" : `rename = ${JSON.stringify(key)}`,
+            pipe(rust, Str.replace(/^r#/, "")) === key ? "" : `rename = ${stringifyJson(key)}`,
             ...(required.has(key)
               ? []
               : [
@@ -194,7 +239,7 @@ const generator = () => {
     });
 
   const union = (members: ReadonlyArray<Json>, wanted: string, within: string) =>
-    declare(JSON.stringify(members), wanted, within, (name) => {
+    declare(stringifyJson(members), wanted, within, (name) => {
       const variants = Arr.map(members, (member, i) => {
         const variant = Option.getOrElse(
           Option.map(discriminant(member), pascal),

@@ -14,6 +14,7 @@ import {
 } from "../src/harness";
 import { renderTemplate, skillMention, skillsIn } from "../src/template";
 import { runEffect } from "./support/effect";
+import { parseJson } from "../src/json";
 
 test("the adapter table covers claude, codex and opencode with model flags", () => {
   expect(HARNESSES.claude!.modelArgs("sonnet")).toEqual(["--model", "sonnet"]);
@@ -343,7 +344,7 @@ test("each harness wires the whole Collie Toolkit with its Run and agent environ
       expect(wired.args).toContain('mcp_servers.collie.env.COLLIE_AGENT="source-agent"');
     }
     if (id === "opencode")
-      expect(JSON.parse(wired.env.OPENCODE_CONFIG_CONTENT!).mcp.collie).toEqual({
+      expect(parseJson(Schema.Any, wired.env.OPENCODE_CONFIG_CONTENT!).mcp.collie).toEqual({
         type: "local",
         command: ["/bin/collie", "mcp"],
         environment: launch.env,

@@ -49,6 +49,7 @@ import { HARNESSES } from "./harness";
 import type { MachineOwn } from "./board-model";
 import { isReachKey } from "./reach";
 import type { Mutable } from "effect/Types";
+import { stringifyJson } from "./json";
 
 const HISTORY = 200;
 
@@ -582,7 +583,7 @@ function scalar(value: YamlValue | undefined) {
     const returned: string = "";
     return returned;
   }
-  const returned: string = isString(value) ? value : (JSON.stringify(value) ?? "");
+  const returned: string = isString(value) ? value : (stringifyJson(value) ?? "");
   return returned;
 }
 

@@ -2,12 +2,13 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import { act, actOn, type Door } from "../desktop/src/bun/machine";
 import { actionsLog, type Attempted } from "../desktop/src/bun/sent";
 import { ActionFailed, type DesktopAction } from "../desktop/src/shared/flock";
 import { HostRefused, type ActionResult } from "../src/board-model";
 import { fastForward } from "./support/effect";
+import { parseJson } from "../src/json";
 
 const machine = { profile: "vm", name: "vm-mk" };
 const answer: DesktopAction = {
@@ -154,7 +155,9 @@ test("actions.log keeps a JSON line per attempt with ids and kinds only, and sta
         log,
       );
       const kept = yield* fs.readFileString(`${dir}/actions.log`);
-      const [first, second] = Arr.map(Str.split(Str.trim(kept), "\n"), (line) => JSON.parse(line));
+      const [first, second] = Arr.map(Str.split(Str.trim(kept), "\n"), (line) =>
+        parseJson(Schema.Any, line),
+      );
       expect(first).toMatchObject({
         door: "board",
         machine: "vm-mk",

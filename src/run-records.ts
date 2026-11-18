@@ -198,7 +198,7 @@ export const readAhead: (records: RunRecordsApi, runs: ReadonlyArray<string>) =>
   const brief = once((name) => records.briefsOf(runs, name));
   const fact = once((name) => records.factsOf(runs, name));
   const last = once((key) => {
-    const [name = "", ...kinds] = Str.split(key, "\u0000");
+    const [name, ...kinds] = Str.split(key, "\u0000");
     return records.lastOf(runs, name, kinds.length === 0 ? null : kinds);
   });
   const activity = once(() => records.activity(runs));

@@ -3,6 +3,7 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Schema } from "effect";
 import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
+import { stringifyJson } from "./json";
 
 export interface Rendered {
   text: string;
@@ -70,7 +71,7 @@ export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions
       return "";
     }
     if (value === "" && pipe(path, Str.startsWith("inputs."))) return NOT_GIVEN;
-    return isText(value) ? value : JSON.stringify(value, null, 2);
+    return isText(value) ? value : stringifyJson(value, 2);
   });
   return { text: out, missing };
 }

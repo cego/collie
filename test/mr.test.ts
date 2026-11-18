@@ -31,6 +31,7 @@ import { parseMrUrl, parseMrTarget } from "../src/board-model";
 import { gitlab, gitlabForProject, hostOf, mrDetails, repoArgs } from "../src/forge/gitlab";
 import { Rig } from "./support/recorder";
 import { epochMs } from "../src/time";
+import { stringifyJson } from "../src/json";
 
 let rig: Rig;
 
@@ -364,7 +365,7 @@ const ALL_NULL = `{
   "approvals_left": null
 }`;
 
-const MR_JSON = JSON.stringify({
+const MR_JSON = stringifyJson({
   iid: 42,
   title: "Make the tab an application",
   state: "opened",

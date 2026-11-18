@@ -29,6 +29,7 @@ import { chatSelects, choiceNotices } from "../desktop/src/shared/chat-choices";
 import { callFlockTool } from "../desktop/src/bun/flock-tools";
 import type { UserMcpServers } from "../desktop/src/bun/session";
 import { PiServer, piServers } from "../desktop/src/bun/pi-servers";
+import { stringifyJson } from "../src/json";
 
 let direction: { readonly text: string; readonly at: string } | undefined;
 let userServers: UserMcpServers = {};
@@ -659,7 +660,7 @@ test("Pi reads its own session tree, preserves the card pill and files, and hide
       yield* fs.writeFileString(
         path,
         Arr.join(
-          Arr.map(entries, (entry) => JSON.stringify(entry)),
+          Arr.map(entries, (entry) => stringifyJson(entry)),
           "\n",
         ) + "\n",
       );

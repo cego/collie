@@ -717,7 +717,9 @@ const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
 const prompts = () =>
   Effect.map(
     agentPrompts(),
-    Arr.map((call) => String(call.params?.text)),
+    Arr.map((call) =>
+      Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(call.params?.text)),
+    ),
   );
 
 const clearance = (runId: string, operation: string) =>
@@ -1913,7 +1915,7 @@ scenario(
           GRILLED,
           SPEC,
           TICKETS,
-          { writes: [], output: null, then: "working" },
+          { writes: [], output: null, status: "working" },
           builtFor("search reads its own index"),
           CLEAN_SYNTHESIS,
           OPENED,

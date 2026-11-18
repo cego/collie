@@ -30,6 +30,7 @@ import {
 import { loadDefaults } from "./config";
 import { currentEnv } from "./env";
 import { reason } from "./naming";
+import { stringifyJson } from "./json";
 
 export const CATALOGUE_INTERVAL_MS = 30 * 60_000;
 export const CATALOGUE_CALL_MS = 20_000;
@@ -176,7 +177,7 @@ const exchange = <A>(
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const sent = Arr.join(
-      Arr.map(lines, (line) => `${JSON.stringify(line)}\n`),
+      Arr.map(lines, (line) => `${stringifyJson(line)}\n`),
       "",
     );
     const spawned = yield* spawner

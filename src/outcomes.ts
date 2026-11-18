@@ -15,6 +15,7 @@ import type { ParkCause } from "./park-cause";
 import { readStepLines } from "./steps";
 import { epochMs } from "./time";
 import type * as Types from "effect/Types";
+import { stringifyJson } from "./json";
 
 const STEERING = ["steer", "followup", "deliver", "correction"] as const;
 type SteeringKind = (typeof STEERING)[number];
@@ -361,7 +362,7 @@ export function measuresOf(
       let agent = 0;
       for (const one of records.verifications) {
         if (one.by === "agent") agent += 1;
-        const key = JSON.stringify([
+        const key = stringifyJson([
           one.name,
           one.executable,
           one.argv,

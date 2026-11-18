@@ -78,9 +78,11 @@ const OBSERVATION_TIMEOUT = "4 seconds";
 const KIND = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 const METADATA_BYTES = 16 * 1024;
+const hasControl = (text: string) => Arr.some(Str.split(text, ""), (char) => char < " ");
 const safeUrl = (url: string) =>
   url.length <= 8192 &&
-  !/[\s\x00-\x1f]/.test(url) &&
+  !/\s/.test(url) &&
+  !hasControl(url) &&
   URL.canParse(url) &&
   /^https?:$/.test(new URL(url).protocol) &&
   new URL(url).hostname !== "";
@@ -104,7 +106,7 @@ const invalid = (input: RegisterArtefact) => {
   if (
     Arr.some(
       [provider?.namespace, provider?.resource, provider?.version],
-      (one) => one !== undefined && (one.length > 512 || /[\x00-\x1f]/.test(one)),
+      (one) => one !== undefined && (one.length > 512 || hasControl(one)),
     )
   )
     return "A provider namespace, resource or version is up to 512 printable characters";
@@ -357,7 +359,7 @@ const make = Effect.gen(function* () {
       (!path.isAbsolute(input.path) ||
         input.path.length > 8192 ||
         Arr.contains(Str.split(input.path, /[\\/]/), "..") ||
-        /[\x00-\x1f]/.test(input.path))
+        hasControl(input.path))
     )
       return yield* refused(
         "Registration needs an absolute file path without traversal or control characters",

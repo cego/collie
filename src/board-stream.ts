@@ -3,6 +3,7 @@ import { Cause, Clock, Effect, Option, Stream, SubscriptionRef } from "effect";
 import type { BoardMessage, BoardSnapshot, TaskView } from "./board-model";
 import { recordMarks } from "./record-marks";
 import { Foreground } from "./foreground";
+import { stringifyJson } from "./json";
 
 const SLOW_BUILD_MS = 2_000;
 
@@ -93,7 +94,7 @@ export const boardMessages = <R>(options: {
             const was = told?.get(view.id);
             return [
               view.id,
-              was?.view === view ? was : { view, text: JSON.stringify(view) },
+              was?.view === view ? was : { view, text: stringifyJson(view) },
             ] as const;
           }),
         );

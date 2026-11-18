@@ -3,9 +3,10 @@ import { Effect, FileSystem } from "effect";
 import { expect, test } from "bun:test";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
+import { stringifyJson } from "../src/json";
 
 const line = (cmd: string) =>
-  `${JSON.stringify({ transport: "cli", cmd, argv: Str.split(cmd, " ") })}\n`;
+  `${stringifyJson({ transport: "cli", cmd, argv: Str.split(cmd, " ") })}\n`;
 
 test("a call the fake herdr is still writing is read once its line is whole", () =>
   runEffect(
