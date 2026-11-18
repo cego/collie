@@ -21713,6 +21713,9 @@ let windowRuns: Array<{
   questions?: ReadonlyArray<{ name: string; answer: string | null }>;
 }> = [];
 let openIssues: Issue[] = [];
+let closedIssues: Issue[] = [];
+let openRequests: Issue[] = [];
+let tags: Array<{ tag: string; at: string }> = [];
 let filed: Array<{ title: string; body: string }> = [];
 let commented: Array<{ number: number; body: string }> = [];
 let refusing = new Set<string>();
@@ -21763,7 +21766,7 @@ const improving: HostOverride = Layer.effect(Host)(
             measures: measuresOf([]),
           };
         }),
-      issues: (_, numbers) => {
+      issues: (_, which) => {
         if (forgeUnavailable)
           return Effect.fail(new WorkflowError({ reason: "no forge login on this Machine" }));
         if (unlisted && filed.length > 0)
@@ -21775,10 +21778,16 @@ const improving: HostOverride = Layer.effect(Host)(
           url: `https://forge.example/project/issues/${101 + at}`,
         }));
         const all = [...openIssues, ...filedIssues];
-        if (numbers !== undefined)
-          return Effect.succeed(Arr.filter(all, ({ number }) => numbers.includes(number)));
+        if (which !== undefined && "closedSince" in which)
+          return Effect.succeed(
+            Arr.filter(closedIssues, ({ closedAt }) => (closedAt ?? "") >= which.closedSince),
+          );
+        if (which !== undefined)
+          return Effect.succeed(Arr.filter(all, ({ number }) => which.includes(number)));
         return Effect.succeed(lagging ? openIssues : all);
       },
+      requests: () => Effect.succeed(openRequests),
+      releases: () => Effect.succeed(tags),
       fileIssue: ({ title, body }) =>
         refusing.has(title)
           ? Effect.fail(new WorkflowError({ reason: "it names another checkout" }))
@@ -21817,6 +21826,9 @@ const freshDay = () => {
     { runId: "r-b", parent: null },
   ];
   openIssues = [];
+  closedIssues = [];
+  openRequests = [];
+  tags = [];
   filed = [];
   commented = [];
   refusing = new Set();
@@ -22069,6 +22081,61 @@ scenario(
         expect(prompt).toContain("r-other");
         expect(prompt).toContain("`defect` is one more");
         expect(Arr.map(filed, ({ title }) => title)).toEqual(["Project host-crash"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "self-improve comments a released fix's before and after on its closed issue, and leaves out an unreleased fix and one an open merge request carries",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        windowRuns = [
+          { runId: "r-a", parent: null, created: hoursAgo(20) },
+          { runId: "r-b", parent: null, created: hoursAgo(2) },
+        ];
+        tags = [
+          { tag: "1.0.21", at: hoursAgo(10) },
+          { tag: "1.0.20", at: hoursAgo(24 * 30) },
+        ];
+        const closed = (number: number, key: string, closedAt: string) => ({
+          ...issueNumbered(number),
+          body: markerOf(key),
+          closedAt,
+        });
+        closedIssues = [closed(7, "slow-boot", hoursAgo(12)), closed(8, "lost-log", hoursAgo(5))];
+        openRequests = [
+          {
+            number: 3,
+            title: "Fix flaky CI",
+            body: markerOf("flaky-ci"),
+            url: "https://forge.example/project/merge_requests/3",
+          },
+        ];
+        yield* rig.queueOutputs([
+          triaged([
+            finding({ key: "slow-boot" }),
+            finding({ key: "lost-log" }),
+            finding({ key: "flaky-ci" }),
+          ]),
+        ]);
+
+        yield* improved("r-fixed", { runs: "checkout", improvements: 0 });
+
+        expect(filed).toEqual([]);
+        const line = "slow-boot: 1/1 Runs before 1.0.21, 1/1 after";
+        expect(Arr.map(commented, ({ number }) => number)).toEqual([7]);
+        expect(commented[0]?.body).toContain(line);
+        const summary = yield* readText(`${runDir(dir, "r-fixed")}/summary.md`);
+        expect(summary).toContain(`- ${line}`);
+        expect(summary).toContain(
+          "- Project lost-log: fixed on master since 1.0.21, not yet released",
+        );
+        expect(summary).toContain(
+          "- Project flaky-ci: being fixed by https://forge.example/project/merge_requests/3",
+        );
       }),
     ),
   120_000,

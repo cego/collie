@@ -666,6 +666,25 @@ const tally = (rows: ReadonlyArray<Categories>): Tally =>
     reasoning: plus(sum.reasoning, one.reasoning),
   }));
 
+const sum = (a: Tally, b: Tally): Tally => ({
+  requests: a.requests + b.requests,
+  input: plus(a.input, b.input),
+  cacheRead: plus(a.cacheRead, b.cacheRead),
+  cacheCreation: plus(a.cacheCreation, b.cacheCreation),
+  output: plus(a.output, b.output),
+  reasoning: plus(a.reasoning, b.reasoning),
+});
+
+/** A Run's usage with what its child Runs spent: each listed, and all added to its own. */
+export const withChildren = (
+  own: Usage,
+  children: ReadonlyArray<{ readonly runId: string; readonly usage: Usage }>,
+): Usage => ({
+  ...own,
+  children: Arr.map(children, ({ runId, usage }) => ({ runId, ...usage.totals })),
+  withChildren: Arr.reduce(children, own.totals, (total, { usage }) => sum(total, usage.totals)),
+});
+
 /** Each value of `by` and what its requests spent, in the order first seen. */
 const grouped = (rows: ReadonlyArray<RequestEntry>, by: (one: RequestEntry) => string) => {
   const groups = new Map<string, RequestEntry[]>();
@@ -704,6 +723,10 @@ export interface Usage {
     readonly at: string;
     readonly context: Count;
   }>;
+  /** Each Run this one started, and those started under them, by what they spent. */
+  readonly children?: ReadonlyArray<{ readonly runId: string } & Tally>;
+  /** `totals` with every child Run's added. */
+  readonly withChildren?: Tally;
 }
 
 const byTime = <A extends { readonly at: string }>(rows: ReadonlyArray<A>) =>
@@ -805,7 +828,11 @@ const startupLine = (startup: Startup) =>
 
 /** A Run's usage in the words `run metrics` and `collie_run` both print. */
 export function usageLines(usage: Usage): ReadonlyArray<string> {
-  if (usage.totals.requests === 0 && usage.sessions.length === 0)
+  if (
+    usage.totals.requests === 0 &&
+    usage.sessions.length === 0 &&
+    (usage.children ?? []).length === 0
+  )
     return [`rounds: ${usage.rounds.length}`, "tokens: nothing recorded"];
   return [
     `rounds: ${usage.rounds.length}`,
@@ -818,5 +845,9 @@ export function usageLines(usage: Usage): ReadonlyArray<string> {
       ...(one.startup === null ? [] : [`    ${startupLine(one.startup)}`]),
       ...Arr.map(one.subagents, (sub) => `    sub-agent ${sub.session}: ${tallyLine(sub)}`),
     ]),
+    ...Arr.map(usage.children ?? [], (child) => `  child Run ${child.runId}: ${tallyLine(child)}`),
+    ...(usage.withChildren === undefined || (usage.children ?? []).length === 0
+      ? []
+      : [`tokens with child Runs: ${tallyLine(usage.withChildren)}`]),
   ];
 }

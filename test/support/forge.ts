@@ -176,6 +176,7 @@ const FakeIssue = Schema.Struct({
   title: Schema.String,
   body: Schema.String,
   state: Schema.Literals(["open", "closed"]),
+  closedAt: Schema.optionalKey(Schema.String),
 });
 type FakeIssue = typeof FakeIssue.Type;
 
@@ -713,12 +714,16 @@ function issueApi(
     );
   }
   const query = new URLSearchParams(Str.split(route, "?")[1]);
+  const closed = query.get("state") === "closed";
+  // Closed issues were last updated when they closed.
+  const since = query.get(forge === "github" ? "since" : "updated_after");
   const issues: Schema.Json[] = Arr.map(
     Arr.filter(
       model.issues ?? [],
       (one) =>
         one.project === project &&
-        one.state === "open" &&
+        one.state === (closed ? "closed" : "open") &&
+        (since === null || (one.closedAt ?? "") >= since) &&
         !query.has("creator") &&
         !query.has("assignee"),
     ),
@@ -728,18 +733,20 @@ function issueApi(
             number: one.number,
             title: one.title,
             body: one.body,
-            state: "open",
+            state: one.state,
             html_url: `https://${project}/issues/${one.number}`,
+            closed_at: one.closedAt ?? null,
           }
         : {
             iid: one.number,
             title: one.title,
             description: one.body,
-            state: "opened",
+            state: one.state === "open" ? "opened" : "closed",
             web_url: `https://${project}/-/issues/${one.number}`,
+            closed_at: one.closedAt ?? null,
           },
   );
-  if (forge === "github")
+  if (forge === "github" && !closed)
     issues.push(
       ...Arr.map(
         Arr.filter(

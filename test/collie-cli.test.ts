@@ -897,7 +897,7 @@ test(
   () =>
     hosted("collie-usage-", ({ world }) =>
       Effect.gen(function* () {
-        const env = { HERDR_PLUGIN_STATE_DIR: world.state };
+        const env = { COLLIE_STATE_DIR: world.state };
         const run = yield* settledRun(world, "hello");
         yield* recordFrom(
           { dir: world.state },

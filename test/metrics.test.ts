@@ -9,6 +9,7 @@ import {
   type FailureLike,
   type Metric,
 } from "../src/metrics";
+import { usageLines, usageOf, withChildren } from "../src/usage-ledger-model";
 
 const failure = (over: Partial<FailureLike> = {}): FailureLike => ({
   name: "tests",
@@ -158,4 +159,77 @@ test("a Run that has proved nothing says so, rather than reporting a zero", () =
   expect(metrics.peakContext).toBeNull();
   expect(metrics.verifications).toEqual({ pass: 0, fail: 0, unstable: 0, byCollie: 0 });
   expect(metrics.rework).toBe(0);
+});
+
+const spent = (
+  agent: string,
+  key: string,
+  tokens: { input: number; cacheRead: number; cacheCreation: number | null; output: number },
+): Metric =>
+  line({
+    kind: "usage",
+    subject: agent,
+    usage: {
+      what: "request",
+      key,
+      at: "2026-09-11T10:00:00.000Z",
+      agent,
+      session: agent,
+      parent: null,
+      step: "triage",
+      harness: "claude",
+      model: null,
+      effort: null,
+      head: null,
+      reasoning: null,
+      ...tokens,
+    },
+  });
+
+test("a Run's cost is its own usage plus each child Run's, by category, with each child listed", () => {
+  const own = usageOf([
+    spent("triage", "m1", { input: 1, cacheRead: 10, cacheCreation: 100, output: 1000 }),
+  ]);
+  const plan = usageOf([
+    spent("plan", "m2", { input: 2, cacheRead: 20, cacheCreation: 200, output: 2000 }),
+  ]);
+  const build = usageOf([
+    spent("build", "m3", { input: 3, cacheRead: 30, cacheCreation: null, output: 3000 }),
+    spent("build", "m4", { input: 4, cacheRead: 40, cacheCreation: null, output: 4000 }),
+  ]);
+  const cost = withChildren(own, [
+    { runId: "r-plan", usage: plan },
+    { runId: "r-build", usage: build },
+  ]);
+  expect(cost.children).toEqual([
+    {
+      runId: "r-plan",
+      requests: 1,
+      input: 2,
+      cacheRead: 20,
+      cacheCreation: 200,
+      output: 2000,
+      reasoning: null,
+    },
+    {
+      runId: "r-build",
+      requests: 2,
+      input: 7,
+      cacheRead: 70,
+      cacheCreation: null,
+      output: 7000,
+      reasoning: null,
+    },
+  ]);
+  expect(cost.withChildren).toEqual({
+    requests: 4,
+    input: 10,
+    cacheRead: 100,
+    cacheCreation: 300,
+    output: 10000,
+    reasoning: null,
+  });
+  expect(usageLines(cost)).toContain(
+    "tokens with child Runs: 4 requests: output 10000 (reasoning unavailable of it), cache read 100, cache creation 300, uncached input 10",
+  );
 });

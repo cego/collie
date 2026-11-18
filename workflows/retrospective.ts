@@ -5,6 +5,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import { DateTime, Schema } from "effect";
 
 export const CATEGORIES = [
@@ -80,26 +81,158 @@ export const targetOf = (finding: Finding, open: ReadonlyArray<OpenIssue>): Open
   Option.getOrUndefined(Arr.findFirst(open, (one) => one.keys.includes(finding.key))) ??
   null;
 
+/** An issue closed on the forge, with when. */
+export interface ClosedIssue extends OpenIssue {
+  readonly closedAt: string;
+}
+
+/** A release tag of the checkout and when it was made. */
+export interface Release {
+  readonly tag: string;
+  readonly at: string;
+}
+
+/** An active Run or an open merge request, and the finding keys and issues it names. */
+export interface Underway {
+  readonly by: string;
+  readonly keys: ReadonlyArray<string>;
+  readonly issues: ReadonlyArray<number>;
+}
+
+/** What a finding is matched against besides the open issues. */
+export interface Matching {
+  readonly closed: ReadonlyArray<ClosedIssue>;
+  /** Newest first. */
+  readonly releases: ReadonlyArray<Release>;
+  readonly underway: ReadonlyArray<Underway>;
+}
+
+const NOTHING_MATCHED: Matching = { closed: [], releases: [], underway: [] };
+
+const msOf = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
+
+/** The keys a goal or plan names as a word, and the issues it names as `#n`. */
+export const namedIn = (
+  text: string,
+  keys: ReadonlyArray<string>,
+  issues: ReadonlyArray<number>,
+) => ({
+  keys: Arr.filter(keys, (key) => new RegExp(`(^|[^a-z0-9-])${key}($|[^a-z0-9-])`).test(text)),
+  issues: Arr.filter(issues, (number) => new RegExp(`#${number}(?!\\d)`).test(text)),
+});
+
+const closedFor = (finding: Finding, closed: ReadonlyArray<ClosedIssue>) =>
+  Option.getOrUndefined(Arr.findFirst(closed, (one) => one.number === finding.issue)) ??
+  Option.getOrUndefined(Arr.findFirst(closed, (one) => one.keys.includes(finding.key)));
+
+/** The first release made at or after `at`; null where none has been yet. */
+const releaseAfter = (releases: ReadonlyArray<Release>, at: string): Release | null =>
+  Option.getOrNull(Arr.findLast(releases, (one) => msOf(one.at) >= msOf(at)));
+
+const underwayFor = (finding: Finding, open: ReadonlyArray<OpenIssue>, matching: Matching) => {
+  const numbers = Arr.filter(
+    [finding.issue, targetOf(finding, open)?.number ?? null],
+    (one): one is number => one !== null,
+  );
+  return Arr.findFirst(
+    matching.underway,
+    (one) => one.keys.includes(finding.key) || Arr.some(one.issues, (n) => numbers.includes(n)),
+  ).pipe(Option.getOrNull);
+};
+
+/** A finding's occurrences per Run of the window before and after the release that fixed it. */
+export interface FixEffect {
+  readonly key: string;
+  readonly release: string;
+  readonly before: { readonly seen: number; readonly of: number };
+  readonly after: { readonly seen: number; readonly of: number };
+}
+
+/**
+ * The closed issue a finding is about, where a release has carried its fix, and what the
+ * window shows of it either side of that release; null for an open or unreleased fix.
+ */
+export const releasedFix = (
+  finding: Finding,
+  matching: Matching,
+  created: Readonly<Record<string, string>>,
+): { readonly issue: ClosedIssue; readonly effect: FixEffect } | null => {
+  const issue = closedFor(finding, matching.closed);
+  if (issue === undefined) return null;
+  const release = releaseAfter(matching.releases, issue.closedAt);
+  if (release === null) return null;
+  const runs = Rec.toEntries(created);
+  const part = (after: boolean) => {
+    const ids = new Set(
+      Arr.map(
+        Arr.filter(runs, ([, at]) => msOf(at) >= msOf(release.at) === after),
+        ([id]) => id,
+      ),
+    );
+    return { seen: Arr.filter(finding.runs, (run) => ids.has(run)).length, of: ids.size };
+  };
+  return {
+    issue,
+    effect: { key: finding.key, release: release.tag, before: part(false), after: part(true) },
+  };
+};
+
+export const effectLine = ({ key, release, before, after }: FixEffect) =>
+  `${key}: ${before.seen}/${before.of} Runs before ${release}, ${after.seen}/${after.of} after`;
+
+/** What self-improve comments on the issue a finding is seen again on. */
+export const commentOf = (options: {
+  readonly finding: Finding;
+  readonly runId: string;
+  readonly machine: string;
+  readonly effect: FixEffect | null;
+}) =>
+  Arr.join(
+    [
+      `Seen again in ${Arr.join(options.finding.runs, ", ")} on ${options.machine}, by self-improve Run ${options.runId}.`,
+      ...(options.effect === null ? [] : [effectLine(options.effect)]),
+      markerOf(options.finding.key),
+    ],
+    "\n\n",
+  );
+
 /**
  * The findings worth acting on. Recurring means two of the window's Runs, or an issue
- * already open; a `defect` needs only one Run, and is filed only where `defects` allows.
+ * already open or fixed in a release; a `defect` needs only one Run, and is filed only
+ * where `defects` allows. One an active Run or open merge request is fixing, or whose fix
+ * is on master but in no release yet, is left out.
  */
 export const sortOut = (
   findings: ReadonlyArray<Finding>,
   window: ReadonlySet<string>,
   open: ReadonlyArray<OpenIssue>,
   defects: boolean,
+  matching: Matching = NOTHING_MATCHED,
 ) => {
   const kept: Finding[] = [];
   const leftOut: LeftOut[] = [];
+  const last = matching.releases[0]?.tag ?? "";
   for (const finding of findings) {
     const runs = new Set(Arr.filter(finding.runs, (run) => window.has(run)));
+    const underway = underwayFor(finding, open, matching);
+    const closed = closedFor(finding, matching.closed);
+    const released =
+      closed !== undefined && releaseAfter(matching.releases, closed.closedAt) !== null;
     if (Arr.some(kept, (one) => one.key === finding.key))
       leftOut.push({ what: finding.title, why: `the same key as another finding, ${finding.key}` });
     else if (runs.size === 0) leftOut.push({ what: finding.title, why: "no Run of the window" });
     else if (finding.category === "defect" && !defects)
       leftOut.push({ what: finding.title, why: "about Collie" });
-    else if (finding.category !== "defect" && runs.size < 2 && targetOf(finding, open) === null)
+    else if (underway !== null)
+      leftOut.push({ what: finding.title, why: `being fixed by ${underway.by}` });
+    else if (closed !== undefined && !released && targetOf(finding, open) === null)
+      leftOut.push({ what: finding.title, why: `fixed on master since ${last}, not yet released` });
+    else if (
+      finding.category !== "defect" &&
+      runs.size < 2 &&
+      targetOf(finding, open) === null &&
+      !released
+    )
       leftOut.push({ what: finding.title, why: "seen once" });
     else kept.push({ ...finding, runs: [...runs] });
   }
@@ -334,6 +467,7 @@ export const summaryOf = (options: {
   readonly acted: ReadonlyArray<{ readonly finding: Finding; readonly outcome: Outcome }>;
   readonly improvements: ReadonlyArray<Ended>;
   readonly leftOut: ReadonlyArray<LeftOut>;
+  readonly effects?: ReadonlyArray<FixEffect>;
 }) => {
   const categories = [...new Set(Arr.map(options.acted, ({ finding }) => finding.category))];
   const line = ({ finding, outcome }: (typeof options.acted)[number]) =>
@@ -369,6 +503,15 @@ export const summaryOf = (options: {
             ),
             "\n",
           ),
+      ...(options.effects === undefined || options.effects.length === 0
+        ? []
+        : [
+            "## Released fixes",
+            Arr.join(
+              Arr.map(options.effects, (effect) => `- ${effectLine(effect)}`),
+              "\n",
+            ),
+          ]),
       "## Left out",
       options.leftOut.length === 0
         ? "None."

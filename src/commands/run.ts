@@ -83,7 +83,7 @@ import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports } from "../drift";
 import { newest } from "../cards";
 import { metricsOf } from "../metrics";
-import { usageLines, usageOf } from "../usage-ledger-model";
+import { usageLines, usageOf, withChildren } from "../usage-ledger-model";
 import { requestedByLine, ranOn, type RunAgent, type RunProgress } from "../board-model";
 import {
   followEvents,
@@ -584,7 +584,18 @@ const runMetrics = Command.make(
           );
           if (!records.ok) return records;
           const metrics = metricsOf(records.value, facts.created);
-          const usage = usageOf(records.value);
+          const views = (yield* runViews(resolved.env, null)).runs;
+          const descendants = (parent: string): ReadonlyArray<string> =>
+            Arr.flatMap(
+              Arr.filter(views, (view) => view.parent === parent),
+              (view: RunView) => [view.runId, ...descendants(view.runId)],
+            );
+          const children = yield* Effect.forEach(descendants(runId), (child) =>
+            asksRun(resolved.env, child, (client) => client.runMetrics({ runId: child })).pipe(
+              Effect.map((read) => ({ runId: child, usage: usageOf(read.ok ? read.value : []) })),
+            ),
+          );
+          const usage = withChildren(usageOf(records.value), children);
           const said = (value: number | null) =>
             value === null ? "not yet" : `${Math.round(value)}s`;
           return {
