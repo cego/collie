@@ -150,7 +150,15 @@ collie --json run release <run-id> [--request-id <id>]
 ```
 
 `run list` finds the Run when the user names it by repo, workflow or "the one from this
-morning" rather than by id. `resume` asks the host to pick a suspended Run up again: it
+morning" rather than by id. It answers a page of the 50 newest Runs as summaries (id,
+workflow, task, state, park cause, blocker, agent, head, what it waits for next). Narrow
+it with `--status live|parked|needs-you|succeeded|failed|stopped` (repeatable) and
+`--limit <n>`. `complete: false` means Runs were left out: pass the answer's `next` as
+`--after <next>` for the next page. Pass its `cursor` as `--since <cursor>` later for
+only the Runs that changed. A token refused as `stale_cursor` means the host restarted, so
+list again. `--fields full` (with no `--limit`, every Run) gives each Run's whole view.
+`run output <run-id>` likewise summarises each Output with the `read` command for the whole
+of it; `--full` prints them all. `resume` asks the host to pick a suspended Run up again: it
 re-enters the workflow's current code and reuses everything already done, so finished work
 is kept, a live agent is reattached to, one a stop closed is started again with its prompt,
 and a parked Run is handed the same prompt. `stop` parks the Run where it is and closes its
