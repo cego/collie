@@ -1,6 +1,3 @@
-// The bridge: a front door on another computer reaches this Machine's host through one
-// command's stdio, started as the front door it is, and starts that host when none runs.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -25,7 +22,6 @@ const asCommand = flow(
   Result.getOrThrow,
 );
 
-/** Everything after the ready marker, whatever a login shell printed before it. */
 const afterReady = (from: ReadableStream<Uint8Array>) => {
   const decoder = new TextDecoder();
   let seen = "";
@@ -45,7 +41,6 @@ const afterReady = (from: ReadableStream<Uint8Array>) => {
   );
 };
 
-/** A bridge started as a login shell over SSH would, and a front door over its stdio. */
 const bridged = Effect.fn("BridgeTest.bridged")(function* (
   world: World,
   args: ReadonlyArray<string>,
@@ -98,7 +93,6 @@ const bridged = Effect.fn("BridgeTest.bridged")(function* (
   return { door, child };
 });
 
-/** The environment the process owning this directory was started with. */
 const environOf = (pid: number) =>
   Effect.promise(() => Bun.file(`/proc/${pid}/environ`).text()).pipe(
     Effect.map((text) => Str.split(text, "\0")),
@@ -111,14 +105,12 @@ test(
       "collie-bridge-",
       (world) =>
         Effect.gen(function* () {
-          // A login that still carries Herdr 1's socket; the world's tripwire listens on it.
           const legacy = { HERDR_SOCKET_PATH: `${world.home}/../herdr.sock` };
           expect(yield* ownerOf(world.state)).toBeNull();
           const desktop = yield* bridged(world, ["--as", "desktop", "--client", "mk-pc"], {
             ...legacy,
             SSH_CONNECTION: "10.1.2.3 51234 10.0.0.2 22",
           });
-          // The channel is what it was started as, whatever the front door says next.
           expect(
             (yield* desktop.door.declare({ frontDoor: "board" }).pipe(Effect.flip)).reason,
           ).toBe("this channel is already desktop");
@@ -167,7 +159,6 @@ test(
           ]);
           expect(actorName({ origin: "desktop", requestId: "hold-1" })).toBe("human:hold-1");
 
-          // A front door that hangs up ends its bridge, and leaves the host it reached alone.
           void desktop.child.stdin.end();
           expect(yield* Effect.promise(() => desktop.child.exited)).toBe(0);
           expect((yield* ownerOf(world.state))?.pid).toBe(host!.pid);

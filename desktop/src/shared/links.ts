@@ -1,5 +1,3 @@
-// The web links a Run produced, as cards. No Bun-only import: the view bundles this.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -14,19 +12,16 @@ import {
 
 const capital = (text: string) => `${Str.toUpperCase(text[0]!)}${pipe(text, Str.slice(1))}`;
 
-/** What a Run's record calls its merge request's tab: `Merge request`, or `Pull request` on GitHub. */
 export const mrTab = (mr: string | null) => {
   const ref = mr === null ? null : readMrRef(mr);
   return capital(ref === null ? "merge request" : mrWords(ref).noun);
 };
 
-/** A merge request panel's title (`!42` or `#30`) and what its checks are called there. */
 export const mrHeading = (mr: MrRef) => {
   const words = mrWords(mr);
   return { title: `${words.sign}${mr.iid}`, checks: capital(words.checks) };
 };
 
-/** Where a merge request's checks are read: GitLab's pipelines, GitHub's checks tab. */
 const checksUrl = (mr: MrDetails) =>
   `${mr.url}/${mrWords(mr).checks === "checks" ? "checks" : "pipelines"}`;
 
@@ -43,7 +38,6 @@ const PIPELINE = /\/-\/pipelines\/(\d+)(?:[/?#]|$)/;
 
 const where = (url: string) => pipe(url, Str.replace(/^https?:\/\//, ""), Str.replace(/\/$/, ""));
 
-/** A URL without its scheme or trailing slash, elided in the middle past 60. */
 export const shortUrl = (url: string) => {
   const shown = where(url);
   return shown.length > 60
@@ -74,10 +68,6 @@ const cardOf: (url: string, given: string | undefined, mr: MrDetails | null) => 
   return { kind: "link", url, title: given ?? where(url) };
 };
 
-/**
- * Each link once, in the order first named, titled by the first markdown text it was given;
- * then the merge request and its pipelines, where the Run has them.
- */
 export const webLinks = ({
   texts,
   mr,

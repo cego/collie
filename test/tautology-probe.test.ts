@@ -1,6 +1,3 @@
-// The live probe's verdict is only as good as how it reads a reviewer's findings against
-// the fixture's key: these pin that reading, so the probe can be trusted when it is red.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";

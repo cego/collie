@@ -1,6 +1,3 @@
-// Each Machine's last board, saved on this computer so the next launch can show it until
-// the Machine is live again, and each route's latest onboarding.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -20,10 +17,8 @@ const OnboardingFile = Schema.fromJsonString(MachineOnboarding);
 const OwnFile = Schema.fromJsonString(MachineOwnRead);
 const fileOf = (dir: string, key: string) => `${dir}/${encodeURIComponent(key)}.json`;
 const SAVE_EVERY = "1 second";
-/** One board save or removal at a time, so a removal never runs under a save in flight. */
 const boardFiles = Semaphore.makeUnsafe(1);
 
-/** Every file in `dir` that `file` decodes; one that cannot be read is left out. */
 const savedIn = <A>(dir: string, file: Schema.Codec<A, string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -54,10 +49,8 @@ export const saveOwn = (dir: string, read: MachineOwnRead) =>
     yield* fs.rename(`${file}.new`, file);
   }).pipe(Effect.ignore);
 
-/** The latest onboarding of each route saved in `dir`. */
 export const savedOnboardings = (dir: string) => savedIn(dir, OnboardingFile);
 
-/** Keeps an onboarding that ended, as the latest of its route. */
 export const saveOnboarding = (dir: string, onboarding: MachineOnboarding) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -76,7 +69,6 @@ const dropSaved = (dir: string, key: string) =>
 export const dropOnboarding = dropSaved;
 export const dropOwn = dropSaved;
 
-/** Drops every board in `dir` saved through `profile`. */
 export const dropBoardsOf = (dir: string, profile: string) =>
   Effect.flatMap(savedBoards(dir), (saved) =>
     Effect.forEach(
@@ -86,10 +78,6 @@ export const dropBoardsOf = (dir: string, profile: string) =>
     ),
   ).pipe(boardFiles.withPermits(1));
 
-/**
- * Saves each Machine at most once a second, as it last stood, whenever what Desktop knows of
- * it changes, as of when it was live.
- */
 export const saving =
   (dir: string) =>
   <E, R>(items: Stream.Stream<FlockItem, E, R>) =>
@@ -133,7 +121,6 @@ export const saving =
             if ("_tag" in item && item._tag === "Saved") return Effect.void;
             for (const [installation, now] of flock.machines)
               if (before.get(installation) !== now) due.set(installation, now);
-            // A Machine removed from the flock is not shown at the next launch either.
             const dropped = Arr.filter([...before.keys()], (one) => !flock.machines.has(one));
             return Effect.forEach(
               dropped,

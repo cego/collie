@@ -1,7 +1,3 @@
-// The launch flow's own component, in both placements. These are the popup picker's
-// behaviours after the popup became components — the filter's ordering, cancelling at any
-// question, and a menu answered by mouse as well as by key.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -22,7 +18,6 @@ const WORKFLOWS = [
   { id: "review", title: "review — look at a change", subtitle: "[project]" },
 ];
 
-/** The Flow over one question, and every answer it gave back. */
 const mount = Effect.fn("flow.mount")(function* (ask: Pending["ask"], width = 80, height = 16) {
   const answers: Array<string | null> = [];
   const [pending] = createSignal<Pending>({ ask, answer: (value) => answers.push(value) });
@@ -65,8 +60,6 @@ function menu() {
 }
 
 test("a name prefix beats a substring, which beats characters in order", () => {
-  // The popup picker's own ranking, ported verbatim from where it was tested before the
-  // popup became components: it is the whole reason this is not a plain `includes`.
   const items = [
     {
       id: "implement",
@@ -89,8 +82,6 @@ test("a name prefix beats a substring, which beats characters in order", () => {
 test("the menu marks the row the cursor is on and shows what has been typed", () =>
   runEffect(
     Effect.gen(function* () {
-      // What `renderList` was asserted on before the popup became components: the
-      // header, the query, the marker on the cursor's row and nowhere else.
       const flow = yield* mount({
         _tag: "Menu",
         header: "Workflows",
@@ -101,7 +92,6 @@ test("the menu marks the row the cursor is on and shows what has been typed", ()
         ],
       });
 
-      // The marker is on the cursor's row and on no other.
       let lines = Str.split(flow.frame(), "\n");
       expect(lines[flow.lineOf("plan")]).toContain("❯");
       expect(lines[flow.lineOf("review")]).not.toContain("❯");
@@ -113,7 +103,6 @@ test("the menu marks the row the cursor is on and shows what has been typed", ()
       lines = Str.split(flow.frame(), "\n");
       expect(lines[0]).toContain("Workflows");
       expect(lines[1]).toContain("> re");
-      // Only "review" matches, so that is the one row and the cursor is on it.
       expect(lines[flow.lineOf("review")]).toContain("❯");
       expect(lines[flow.lineOf("review")]).toContain("[user]");
       expect(flow.frame()).not.toContain("plan");
@@ -162,8 +151,6 @@ test("the cursor moves, and follows the list when the filter shortens it", () =>
     Effect.gen(function* () {
       const flow = yield* mount(menu());
 
-      // Down to the last row, then filter to one: the cursor cannot be left pointing
-      // past the end, or Enter would choose nothing.
       for (let n = 0; n < 3; n++) flow.mockInput.pressArrow("down");
       yield* flow.flush;
       expect(Str.split(flow.frame(), "\n")[flow.lineOf("review —")]).toContain("❯");
@@ -232,8 +219,6 @@ test("Ctrl-C cancels a menu and a question alike, and answers nothing", () =>
 test("a pasted answer fills the field, and its newline does not send it", () =>
   runEffect(
     Effect.gen(function* () {
-      // The review target, typed rather than picked: the URL comes from a browser, and
-      // it used to have to be retyped because a paste is not keys.
       const url = "https://gitlab.cego.dk/cego/collie/-/merge_requests/7";
       const flow = yield* mount({
         _tag: "Question",

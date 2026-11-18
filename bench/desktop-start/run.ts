@@ -1,7 +1,3 @@
-// Desktop's start, built: exec to the board usable, and its tree's RSS a minute after
-// (desktop/README.md, Measuring Desktop's start). Prints, as its last line, one JSON object
-// of numbers for `collie measure`.
-
 import { rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { parseArgs } from "node:util";
@@ -17,7 +13,6 @@ import { measureStart } from "./start";
 const { values: flags } = parseArgs({
   args: Bun.argv.slice(2),
   options: {
-    // A bundle's launcher (desktop/README.md), which needs no install.
     rune: { type: "string" },
     home: { type: "string", default: `${root}.scratch/desktop-start/home` },
   },
@@ -51,7 +46,6 @@ const line = await runEffect(
       yield* Effect.addFinalizer(() => stopHost(world.state));
       yield* say("preparing the board: 50 Runs, one of 40 Steps");
       yield* prepare({ ...COUNTS, runs: 50, large: 1, old: 10, live: 0, largeSteps: 40 });
-      // Running before Desktop starts, so the host is not in Desktop's tree.
       yield* Effect.scoped(connect(world.state));
       yield* say(`launching ${launcher}`);
       return yield* measureStart({

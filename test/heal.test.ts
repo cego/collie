@@ -40,7 +40,6 @@ const FINDING = {
   regression: "A turn that ends without its Output gets a reminder.",
 };
 
-/** A Run started on `id` with these inputs, and a client of the host that took it. */
 const started = (world: World, id: string, inputs: Record<string, string>, extra = {}) =>
   Effect.gen(function* () {
     const said = yield* collie(
@@ -63,7 +62,6 @@ const started = (world: World, id: string, inputs: Record<string, string>, extra
 
 type Client = Effect.Success<ReturnType<typeof started>>["client"];
 
-/** The Heals started for `runId`, as the host lists them. */
 const healsOf = (client: Client, runId: string) =>
   client.runs({ task: null }).pipe(
     Effect.map((views) => Arr.filter(views, (view) => view.heals === runId)),
@@ -82,7 +80,6 @@ const notified = (world: World, runId: string) =>
     }),
   );
 
-/** Until `wanted` holds, over the minute an agent's reminders take at the host's own poll. */
 const slowly = <A, E, R>(read: () => Effect.Effect<A, E, R>, wanted: (value: A) => boolean) =>
   Effect.suspend(read).pipe(
     Effect.filterOrFail(wanted, (value) => value),
@@ -261,7 +258,6 @@ test(
   120_000,
 );
 
-/** Does what a Heal's agent asks `collie_do` for, as that agent. */
 const asHealer = (
   world: World,
   heal: { runId: string; agent: string },
@@ -279,7 +275,6 @@ const asHealer = (
     Effect.orDie,
   );
 
-/** The one launch of `runId`'s agent, once it has one. */
 const launchOf = (client: Client, runId: string) =>
   until(
     () => client.launches({ run: runId }).pipe(Effect.orDie),
@@ -373,8 +368,6 @@ test(
           const healed = `run-healed:heal:${parked?.park?.id}`;
           const told = yield* until(
             () => notified(world, runId),
-            // Completion may be announced before recovery. Wait for the event this
-            // assertion is about while retaining every earlier notification below.
             (lines) => lines.includes(healed),
           );
           expect(Arr.filter(told, (line) => Str.startsWith("needs-you")(line))).toEqual([]);
@@ -447,7 +440,6 @@ test(
             Effect.map((view) => view?.controls),
             Effect.orDie,
           );
-          // The person's Stop still closing the Run's agents while the Heal resumes it.
           const stopping = yield* Effect.forkChild(
             collie(world, ["run", "stop", runId, "--request-id", "stopped"]),
           );

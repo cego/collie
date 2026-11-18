@@ -1,5 +1,3 @@
-// The taxonomy is the contract: what is sent, how it is titled, and how often.
-
 import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -30,8 +28,6 @@ import { fixtures, until } from "./support/host";
 import { writeTask } from "../src/task";
 
 test("every kind names the repo and the run, and none of them is a bare slug", () => {
-  // One herdr session runs several checkouts, so `review-mr-123 needs you` does not
-  // say which one.
   for (const kind of NOTIFICATION_KINDS) {
     const title = notificationTitle(kind, "/home/mk/work/collie", "review-mr-2");
     expect(pipe_(title, Str.startsWith("collie · review-mr-2 "))).toBe(true);
@@ -84,7 +80,6 @@ const ownRun = Effect.flatMap(Store, (store) =>
   }),
 );
 
-/** One host's lifetime, whose toasts land in `toasts` as `sound|title|body`. */
 const session = <A, E>(
   run: Effect.Effect<
     A,
@@ -152,7 +147,6 @@ const executed = (entry: string, runId: string, input: Readonly<Record<string, S
     }),
   );
 
-/** Work that parks on its question, submitted and then waited on until it is asking. */
 const asking = (runId: string) =>
   session(
     Effect.gen(function* () {
@@ -187,7 +181,6 @@ test("a question says the Run needs you, once however often the work reaches it"
     Effect.gen(function* () {
       yield* asking("r1");
       yield* asking("r1");
-      // Parked, not finished: a suspension is not an ending.
       expect(toasts).toEqual(["request|host · r1 needs you|approach: How should we tackle this?"]);
     }),
   ));

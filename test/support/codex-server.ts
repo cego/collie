@@ -1,9 +1,3 @@
-// A stand-in `codex app-server`, run as a real process in its place: `bun codex-server.ts
-// <config.json> --listen ws://127.0.0.1:0`. It answers the protocol shapes the installed
-// release's schema declares (checked in `test/compaction-codex.test.ts`), drains on its
-// first SIGTERM the way 0.162.0 does on a websocket, and records its own argv, every request
-// and every signal it receives as a JSON line in `config.events`.
-
 import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";
@@ -28,43 +22,28 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 export interface StandIn {
-  /** Where every request and signal is recorded, one JSON object per line. */
   events: string;
   threads: ReadonlyArray<{
     id: string;
     cwd: string;
     parent?: string;
     path?: string;
-    /** A turn in progress from the start, appending to `writes` until it ends. */
     turn?: { id: string; writes?: string };
-    /** Loaded with no user message yet, which `thread/turns/list` refuses as 0.162.1 does. */
     unmaterialized?: boolean;
-    /** Loaded idle and paginated with no user message, whose turns 0.162.1 refused to list on vm-mk. */
     unlistable?: boolean;
-    /** What `thread/read` reports in place of the mode's own. */
     historyMode?: "legacy" | "paginated";
     preview?: string;
     readTurns?: ReadonlyArray<unknown>;
-    /** The status `thread/read` reports in place of the one its turns give it. */
     status?: "idle" | "active";
-    /** A refusal `thread/turns/list` answers with in place of its turns. */
     turnsRefusal?: { code: number; message: string };
-    /** What `thread/items/list` answers with, newest first. */
     items?: ReadonlyArray<unknown>;
   }>;
-  /** Answer `turn/interrupt` and keep the turn running. */
   ignoreInterrupt?: boolean;
-  /** Stay up after a drain with nothing running. */
   neverExit?: boolean;
-  /** Close the connection instead of answering this method. */
   dropOn?: string;
-  /** Start a queued turn on a thread whose turn was interrupted, unless draining. */
   continuation?: boolean;
-  /** Take a SIGTERM only once this many `turn/interrupt`s are answered, as a server that read them first does. */
   lateDrain?: number;
-  /** A process of this server's session: one that ends on SIGTERM, or one that ignores it. */
   child?: "ends" | "ignores";
-  /** Environment variables whose values it records when it starts. */
   env?: ReadonlyArray<string>;
 }
 
@@ -201,7 +180,6 @@ const main = Effect.gen(function* () {
     }
     yield* exitWhenIdle;
   });
-  // A test lets every running turn end by creating `<events>.release`.
   yield* serial
     .withPermits(1)(release)
     .pipe(Effect.repeat(Schedule.spaced(50)), Effect.delay(50), Effect.forkIn(scope));

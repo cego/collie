@@ -1,7 +1,3 @@
-// The checks Collie runs for a Run, as every door reads them (ADR-0042 D5): the card, the
-// drawer, `collie_run`, `collie_herd` and `collie run checks` all come through here, so
-// none of them can say a different thing about the same check.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -25,7 +21,6 @@ import { epochMs } from "./time";
 import type { CheckRecord } from "./check-processes";
 import { PASSES } from "./verify-model";
 
-/** One pass Collie ran and finished. */
 export interface DonePass {
   readonly name: string;
   readonly pass: Pass;
@@ -34,20 +29,15 @@ export interface DonePass {
   readonly seconds: number;
   readonly revision: string;
   readonly at: string;
-  /** Its output as it ran, up to the log's bound, or null for a record that kept none. */
   readonly log: string | null;
 }
 
-/** How many earlier runs "usually" is the median of. */
 const USUAL_OF = 5;
 
-/** How many of a running check's last lines every door shows. */
 export const LAST_LINES = 40;
 
-/** How much of a log's end is read for its last lines: never the whole bounded file. */
 const TAIL_READ = 16 * 1024;
 
-/** The last lines a check's log holds, read from its end only. */
 export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
   log === null
     ? Effect.succeed<ReadonlyArray<string>>([])
@@ -61,10 +51,6 @@ export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
         Effect.orElseSucceed(() => []),
       );
 
-/**
- * Every Run's marker, by Run, in one read for a whole board. A Run with none whose check
- * still runs, as an agent's own verify does, is read from that check's record.
- */
 export const markersOf = Effect.fn("Checks.markersOf")(function* (
   records: ReadonlyArray<CheckRecord> = [],
 ) {
@@ -92,10 +78,8 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (
 const readOrNone = (run: RunFacts) =>
   readVerifications(run.evidence).pipe(Effect.orElseSucceed(() => []));
 
-/** A record keeps the executable as PATH resolved it, an approved spec as it was written. */
 const commandOf = (executable: string) => Str.split(executable, "/").at(-1) ?? executable;
 
-/** The median time of the last few completed runs of this name and arguments in this repository. */
 const usualOf = Effect.fn("Checks.usualOf")(function* (
   run: RunFacts,
   runs: ReadonlyArray<RunFacts>,
@@ -121,10 +105,6 @@ const usualOf = Effect.fn("Checks.usualOf")(function* (
   return last.length % 2 === 1 ? last[mid]! : (last[mid - 1]! + last[mid]!) / 2;
 });
 
-/**
- * The usual time of a running check, read once per run of it: it changes only when a
- * check finishes, and every board refresh would otherwise read every journal again.
- */
 const usualRemembered = Effect.fn("Checks.usualRemembered")(function* (
   run: RunFacts,
   runs: ReadonlyArray<RunFacts>,
@@ -141,7 +121,6 @@ const usualRemembered = Effect.fn("Checks.usualRemembered")(function* (
 const USUALS_KEPT = 256;
 const usuals = new Map<string, number | null>();
 
-/** The check running for `run` now, or null where none is. */
 export const runningCheck = Effect.fn("Checks.running")(function* (
   run: RunFacts,
   runs: ReadonlyArray<RunFacts>,
@@ -171,7 +150,6 @@ export const runningCheck = Effect.fn("Checks.running")(function* (
   } satisfies RunningCheck;
 });
 
-/** How often `--follow` looks at the log again. */
 const FOLLOW_EVERY = "250 millis";
 
 const bytesFrom = (log: string, offset: number) =>
@@ -180,10 +158,6 @@ const bytesFrom = (log: string, offset: number) =>
     Effect.orElseSucceed(() => Buffer.alloc(0)),
   );
 
-/**
- * Hands a running check's output to `say` as it is written, until the Run's marker no longer
- * names this log, then says what was left. Bytes, not characters, so a cut never splits one.
- */
 export const followLog = Effect.fn("Checks.followLog")(function* (
   run: RunFacts,
   log: string,
@@ -195,7 +169,6 @@ export const followLog = Effect.fn("Checks.followLog")(function* (
     const read = yield* bytesFrom(log, offset);
     offset += read.length;
     pending = Buffer.concat([pending, read]);
-    // Up to the last newline: a line half-written is said when it is whole.
     const end = pending.lastIndexOf(10) + 1;
     if (end > 0) {
       yield* say(pending.subarray(0, end).toString("utf8"));
@@ -214,7 +187,6 @@ export const followLog = Effect.fn("Checks.followLog")(function* (
   );
 });
 
-/** Every pass Collie finished for this Run, oldest first. */
 export const donePasses = Effect.fn("Checks.done")(function* (run: RunFacts) {
   return Arr.map(
     Arr.filter(yield* readOrNone(run), (record) => record.by === "collie"),
@@ -231,7 +203,6 @@ export const donePasses = Effect.fn("Checks.done")(function* (run: RunFacts) {
   );
 });
 
-/** What the pass is for, in words. */
 function doing(
   check: Pick<RunningCheck, "name" | "pass" | "round" | "base"> &
     Partial<Pick<RunningCheck, "revision" | "job">>,
@@ -264,18 +235,15 @@ const amount = (ms: number) =>
   inMinutes(ms) ? `${Math.round(ms / 60_000)}` : `${Math.round(ms / 1000)}`;
 const unit = (ms: number) => (inMinutes(ms) ? "min" : "s");
 
-/** How long it has run, against how long it usually takes. */
 function timing(elapsed: number, usual: number | null) {
   const ran = `${amount(elapsed)} ${unit(elapsed)}`;
   if (usual === null) return ran;
-  // The usual time is bare where it shares the elapsed time's unit: "4 min of a usual 20".
   const usually = unit(usual) === unit(elapsed) ? amount(usual) : `${amount(usual)} ${unit(usual)}`;
   return elapsed > usual
     ? `${ran}, longer than the usual ${usually}`
     : `${ran} of a usual ${usually}`;
 }
 
-/** The one sentence about a running check: which, which pass and why, how long, and contention. */
 export function checkSentence(
   check: Pick<
     RunningCheck,

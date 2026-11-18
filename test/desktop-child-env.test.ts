@@ -1,12 +1,8 @@
-// Electrobun's launcher sets LD_PRELOAD and the rest for Desktop alone; what Desktop starts
-// gets the user's environment instead, or every child writes ld.so errors.
-
 import { expect, test } from "bun:test";
 import { withoutLauncher } from "../src/env";
 
 const BIN = "/home/mk/.local/share/collie-desktop/app/bin";
 
-/** What mk-laptop's Desktop was started with, as `/proc/<pid>/environ` showed it. */
 const LAUNCHED = {
   PATH: "/usr/local/bin:/usr/bin",
   HOME: "/home/mk",

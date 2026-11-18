@@ -8,7 +8,6 @@ import { isString } from "./schema";
 
 const collieConfig = (env: Pick<PluginEnv, "home" | "raw">) =>
   `${env.raw.XDG_CONFIG_HOME || `${env.home}/.config`}/collie`;
-/** An older Collie's bot token, which is never read: only its presence is. */
 const slackBotEnvPath = (env: Pick<PluginEnv, "home" | "raw">) => `${collieConfig(env)}/slack.env`;
 export const slackUserEnvPath = (env: Pick<PluginEnv, "home" | "raw">) =>
   `${collieConfig(env)}/slack-user.env`;
@@ -75,7 +74,6 @@ export const probeSlack = (env: Pick<PluginEnv, "home" | "raw">, api = slackApi)
     Effect.catch(Effect.succeed),
   );
 
-/** The human's user token, only once Slack says it is theirs; otherwise why not. */
 export const slackUserToken = (env: Pick<PluginEnv, "home" | "raw">, api = slackApi) =>
   signedInAs(env, api).pipe(
     Effect.map(({ token }) => token),

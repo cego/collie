@@ -1,10 +1,3 @@
-// Append-only JSONL, read and written the one way every journal here needs.
-//
-// A half-written *last* line is skipped rather than failing the read: an append
-// interrupted mid-write is exactly the crash these journals exist to survive. An
-// undecodable line anywhere else is not that — nothing appends into the middle of a file
-// — so it is corruption, and `corrupt` is how a caller that must fail closed finds out.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
@@ -12,7 +5,6 @@ import { addressOf, RunRecords } from "./run-records";
 
 export interface Journal<A> {
   readonly lines: A[];
-  /** Undecodable lines that were not the last: corruption, not an interrupted append. */
   readonly corrupt: number;
 }
 
@@ -35,7 +27,6 @@ export const readJournalWhole = Effect.fn("Journal.readWhole")(function* <A>(
   const fs = yield* FileSystem.FileSystem;
   const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
   const decode = Schema.decodeUnknownOption(json);
-  // A line at a time, so a long journal is read in the scheduler's turns.
   return tally(yield* Effect.forEach(textsOf(raw), (text) => Effect.sync(() => decode(text))));
 });
 
@@ -47,10 +38,6 @@ export const journalOf = <A>(raw: string, json: Schema.Codec<A, string, never, n
 export const readJournal = <A>(file: string, json: Schema.Codec<A, string, never, never>) =>
   readJournalWhole(file, json).pipe(Effect.map((journal) => journal.lines));
 
-/**
- * The last record whose kind is one of `kinds`, or for null the last record, without reading
- * the history before it. A line that cannot be decoded is passed over.
- */
 export const lastRunJournal = Effect.fn("Journal.lastRun")(function* <A>(
   at: RunJournal,
   json: Schema.Codec<A, string, never, never>,
@@ -82,13 +69,11 @@ export const appendJournal = Effect.fn("Journal.append")(function* <A>(
   );
 });
 
-/** A Run's journal, kept in the host's database. */
 export interface RunJournal {
   readonly run: string;
   readonly name: string;
 }
 
-/** The journal `path` of the Run whose directory is `dir`, as an older build kept it there. */
 export const runJournal = (dir: string, path: string) => {
   const at = addressOf(dir);
   return { run: at.run, name: `${at.prefix}${path}` };
@@ -101,7 +86,6 @@ export const readRunJournalWhole = Effect.fn("Journal.readRunWhole")(function* <
   json: Schema.Codec<A, string, never, never>,
 ) {
   const decode = Schema.decodeUnknownOption(json);
-  // A line at a time, so a long journal is read in the scheduler's turns.
   return tally(
     yield* Effect.forEach(yield* textsAt(at), (text) => Effect.sync(() => decode(text))),
   );
@@ -110,7 +94,6 @@ export const readRunJournalWhole = Effect.fn("Journal.readRunWhole")(function* <
 export const readRunJournal = <A>(at: RunJournal, json: Schema.Codec<A, string, never, never>) =>
   readRunJournalWhole(at, json).pipe(Effect.map((journal) => journal.lines));
 
-/** These Runs' briefs of journal `name`, in one read, decoded as `readRunJournal` decodes lines. */
 export const readBriefsOf = Effect.fn("Journal.readBriefsOf")(function* <A>(
   runs: ReadonlyArray<string>,
   name: string,
@@ -124,7 +107,6 @@ export const readBriefsOf = Effect.fn("Journal.readBriefsOf")(function* <A>(
   );
 });
 
-/** The last matching record, without decoding the history before it. */
 export const findLastRunJournal = Effect.fn("Journal.findLastRun")(function* <A>(
   at: RunJournal,
   json: Schema.Codec<A, string, never, never>,

@@ -55,7 +55,6 @@ const openServer = Effect.fn("McpTest.open")(function* (
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-mcp-" });
   const input = yield* Queue.unbounded<string, Cause.Done>();
-  // Exercise the same public contract against the compiled executable after a build.
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
   const command = Option.isSome(binary) ? binary.value : (Bun.argv[0] ?? "bun");
   const args = Option.isSome(binary) ? ["mcp"] : [`${root}src/main.ts`, "mcp"];

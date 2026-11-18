@@ -1,5 +1,3 @@
-// What the Flock chat's harness, model and effort run as, and what its selects show.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";

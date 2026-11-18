@@ -1,6 +1,3 @@
-// Desktop offers to help write an empty Standing direction, asks what the human's sessions
-// hold before reading a word of them, and starts the setup conversation the human chose.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -35,7 +32,6 @@ test("Desktop offers help only while the direction is empty, a Machine is connec
 
 const TYPED = "Keep pull requests small, and never force push to main.";
 
-/** A home with one Claude Code session the human typed in. */
 const home = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -55,7 +51,6 @@ const home = (dir: string) =>
     return { home: `${dir}/home`, stateDir: `${dir}/state` };
   });
 
-/** This computer, read in-process over the fixture home, counting each Read. */
 const counted = (dir: string) =>
   Effect.gen(function* () {
     const places = yield* home(dir);
@@ -96,7 +91,6 @@ test("the dialog asks only where the human's sessions are and how many; it reads
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));
 
-/** A harness that finishes each turn at once, keeping what each conversation was sent. */
 const recording = () => {
   const sent: Array<{ readonly conversation: string; readonly text: string }> = [];
   const driver: ChatDriver = {
@@ -185,7 +179,6 @@ test('"Read my messages" reads once and opens a new conversation that starts wit
     expect(reads).toBe(1);
     expect(after).not.toBe(before);
     expect(Arr.map(sent, ({ conversation }) => conversation)).toEqual([before, after]);
-    // The conversation the human was in got only their own message.
     expect(sent[0]!.text).not.toContain(PROCEDURE_LINE);
     const first = sent[1]!.text;
     expect(pipe_(first, Str.startsWith(Str.trim(procedure)))).toBe(true);

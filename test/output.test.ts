@@ -23,8 +23,6 @@ import type { Verification } from "../src/verify";
 import review522 from "./fixtures/public-text/mr-522-synthesis.json";
 import { leaksIn } from "../src/public-text";
 
-// The tree the last fix is judged on, and what the journal says about it. A check is a
-// verification name; whether it passed is read from here, never from the fix's Output.
 const FINAL = { head_sha: "abc123", fingerprint: "tree-1" };
 const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
 function record(over: Partial<Verification> & { name: string }) {
@@ -196,7 +194,6 @@ test("a synthesis is a review plus the summary and what it decided not to carry"
 });
 
 test("a synthesis must summarise, and may not drop a finding without saying why", () => {
-  // Everything the review schema rejects, a synthesis rejects too.
   expect(synthErr(`{"verdict": "ok"}`)).toBe(
     'synthesized.json: verdict must be "clean" or "findings", got "ok"',
   );
@@ -207,7 +204,6 @@ test("a synthesis must summarise, and may not drop a finding without saying why"
   expect(synthErr(`{"verdict": "clean", "summary": "s", "dropped": [{"title": "t"}]}`)).toBe(
     "synthesized.json: dropped[0]: severity is required",
   );
-  // A finding dropped without a reason is a finding lost, not one resolved.
   expect(
     synthErr(
       `{"verdict": "clean", "summary": "s", "dropped": [{"title": "t", "severity": "minor"}]}`,
@@ -388,7 +384,6 @@ test("a finding the implementer already disputed is settled, unless a reviewer a
     },
   ];
   const raised = [
-    // Same finding, re-raised verbatim except for a line that moved.
     {
       file: "cli.js",
       line: 9,
@@ -445,17 +440,13 @@ test("what the last review raised and this one cannot find is read first", () =>
     fixed: [{ file: "cli.js", title: "exit code", note: "now exits 2" }],
   });
 
-  // A clean verdict with things fixed is the good ending, and reads as one.
   const rendered = renderReview(parsed);
   expect(rendered).toContain("**Fixed since last review**");
   expect(rendered).toContain("`cli.js` — exit code");
   expect(rendered).toContain("now exits 2");
   expect(rendered).toContain("Nothing to fix.");
-  // The section is absent when there is no previous review to have fixed anything.
   expect(renderReview({ ...parsed, fixed: [] })).not.toContain("Fixed since");
 });
-
-// --- convergence: what the fix step reports, and what decides the last fix ---
 
 const BLOCKER = {
   file: "cli.js",
@@ -489,14 +480,12 @@ test("a fix Output carries what it fixed, disputed and checked, keyed like findi
     }),
     "fix.json",
   );
-  // `passed` is a claim, and is not kept: the journal says whether it passed.
   if (!parsed.ok) throw new Error(parsed.error);
   expect(parsed.value.fixed).toEqual([
     { file: "cli.js", title: "no exit code", note: "process.exit(1)" },
   ]);
   expect(Arr.map(parsed.value.disputed, (f) => f.title)).toEqual(["loose equality"]);
   expect(parsed.value.checks).toEqual([{ name: "bun test", note: "12 pass" }]);
-  // The line is not part of the key, and neither is the title's case.
   expect(findingKey(parsed.value.fixed[0]!)).toBe(findingKey(BLOCKER));
 });
 
@@ -505,7 +494,6 @@ test("a fix Output in the legacy shape or with an unusable check does not parse"
   expect(legacy.ok).toBe(false);
   const noName = parseFixOutput(fixJson({ checks: [{ passed: true }] }), "fix.json");
   expect(noName.ok ? "(no error)" : noName.error).toContain("checks[0]: name is required");
-  // Nothing reported is a valid Output; whether it is enough is the policy's call.
   const bare = parseFixOutput(fixJson({}), "fix.json");
   expect(bare.ok && bare.value).toEqual({
     verdict: "clean",
@@ -514,7 +502,6 @@ test("a fix Output in the legacy shape or with an unusable check does not parse"
     disputed: [],
     checks: [],
   });
-  // What the fix itself still reports open is read too, so the gate can count it.
   const open = parseFixOutput(fixJson({ verdict: "findings", findings: [BLOCKER] }), "fix.json");
   expect(open.ok && open.value.findings).toEqual([BLOCKER]);
   expect(parseFixOutput(fixJson({ verdict: "findings" }), "fix.json").ok).toBe(false);
@@ -547,7 +534,6 @@ test("the last fix cannot both fix and dispute a finding, and what it still repo
   expect(twice.ok ? "(ok)" : twice.reasons).toEqual([
     "duplicate disposition: cli.js::no exit code",
   ]);
-  // A fix that reports its own findings has not finished, whatever it says it fixed.
   const open = settleFinalFix(
     [BLOCKER],
     { ...good, verdict: "findings", findings: [MAJOR_NEW] },
@@ -561,7 +547,6 @@ test("the last fix cannot both fix and dispute a finding, and what it still repo
     "the fix reports 1 finding(s) of its own: [major] Rejection unhandled (cli.js)",
   ]);
   expect(open.outstanding).toEqual([BLOCKER, MAJOR_NEW]);
-  // Even under a clean verdict, a finding it lists is a finding it left.
   const listed = settleFinalFix([BLOCKER], { ...good, findings: [MAJOR_NEW] }, PASSED);
   expect(listed.ok ? "(ok)" : listed.reasons).toEqual([
     "the fix reports 1 finding(s) of its own: [major] Rejection unhandled (cli.js)",
@@ -587,7 +572,6 @@ test("the last fix settles the review when every blocking finding is fixed and t
   const settled = settleFinalFix([BLOCKER, MINOR], fix, PASSED);
   expect(settled.ok).toBe(true);
   if (!settled.ok) throw new Error("expected ok");
-  // The minor it did not touch stays visible; the blocker it fixed does not.
   expect(settled.outstanding).toEqual([MINOR]);
   expect(settled.attestation).toContain("1 blocking finding(s) reported fixed");
   expect(settled.attestation).toContain("1 check(s) verified on this tree");
@@ -613,7 +597,6 @@ test("the last fix is not enough with a missing disposition, a reworded title, a
     "no disposition for [blocker] No exit code",
   );
   expect(halt({ ...good, checks: [] })).toBe("fix_unverified: no checks reported");
-  // The Output's own word on a check is not read at all: the journal is.
   const claimed = {
     ...good,
     checks: [{ name: "bun test", note: "all green" }],
@@ -627,7 +610,6 @@ test("the last fix is not enough with a missing disposition, a reworded title, a
       final: FINAL,
     }),
   ).toBe("fix_unverified: check failed: bun test (all green)");
-  // The gate runs a check that passed only earlier on the final tree, so it does not halt here.
   expect(
     halt(claimed, {
       verifications: [record({ name: "bun test", end: EARLIER })],
@@ -640,7 +622,6 @@ test("the last fix is not enough with a missing disposition, a reworded title, a
       final: FINAL,
     }),
   ).toBe('fix_unverified: check "bun test" ran on a tree that moved under it (all green)');
-  // A later pass on this tree settles an earlier failure; the order of records is time.
   expect(
     halt(claimed, {
       verifications: [
@@ -653,7 +634,6 @@ test("the last fix is not enough with a missing disposition, a reworded title, a
   expect(halt({ ...good, verdict: "findings" })).toBe(
     'fix_unverified: the fix reports verdict "findings"',
   );
-  // A serious finding disputed at the last fix is the human's, not the loop's, and not the merge request's.
   expect(
     halt({
       ...good,
@@ -661,7 +641,6 @@ test("the last fix is not enough with a missing disposition, a reworded title, a
       disputed: [{ ...BLOCKER, detail: "out of scope" }],
     }),
   ).toBe("dispute_unresolved: disputed blocking finding: [blocker] No exit code (cli.js)");
-  // Everything wrong is listed, and a dispute plus a missing check is unverified first.
   const both = settleFinalFix(
     [BLOCKER, MINOR],
     {
@@ -693,7 +672,6 @@ test("a serious dispute the latest review left out still blocks the last fix", (
   );
   if (settled.ok) throw new Error("expected halt");
   expect(settled.outstanding).toEqual([MAJOR_NEW, { ...BLOCKER, detail: "out of scope" }]);
-  // A minor dispute outside the review is the implementer's call, as ever.
   const minor = settleFinalFix(
     [MAJOR_NEW],
     { ...fix, disputed: [{ ...MINOR, detail: "fine" }] },
@@ -716,15 +694,11 @@ test("substantiation asks a blocker where and why, and nothing of a minor", () =
   expect(substantiated(blocker({ detail: undefined }))).toBe(false);
   expect(substantiated(blocker({ file: "   " }))).toBe(false);
   expect(substantiated(blocker({ detail: " " }))).toBe(false);
-  // Anything unrecognised blocks, so it is held to a blocker's standard too.
   expect(substantiated(blocker({ severity: "critical", file: undefined }))).toBe(false);
-  // A minor drives no loop and costs no round, so it is exempt.
   expect(substantiated(blocker({ severity: "minor", file: undefined, detail: undefined }))).toBe(
     true,
   );
 
-  // A file the change never touched is substantiated: an unchanged caller this change
-  // breaks is exactly the blocker worth raising.
   expect(substantiated(blocker({ file: "src/never-touched.ts" }))).toBe(true);
 });
 
@@ -780,7 +754,6 @@ test("a last fix naming one of the Run's Checks with no record on the tree stand
   expect(settled.ok ? settled.attestation : settled.reasons).toBe(
     "last fix: 0 blocking finding(s) reported fixed, 0 check(s) verified on this tree, 1 left to the gate on the final tree (check) — implementer-reported, not re-reviewed",
   );
-  // A check that is not one of the Run's Checks is not the gate's to run.
   const other = settle([{ name: "check" }, { name: "lint" }]);
   expect(other.ok ? other.attestation : other.reasons).toEqual([
     'check "lint" has no verification record — run it through collie verify',

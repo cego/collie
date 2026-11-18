@@ -1,13 +1,9 @@
-// Whether an agent's question is to standard, what to tell it where it is not, and the
-// solutions it reaches the Run as.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import type * as Types from "effect/Types";
 import type { Solution } from "./board-model";
 import type { AgentQuestion as AskedQuestion } from "./compactors";
 
-/** Claude's own convention, which Codex and pi agents are told. */
 export const RECOMMENDED_MARKER = " (Recommended)";
 
 const isRecommended = Str.endsWith(RECOMMENDED_MARKER);
@@ -55,7 +51,6 @@ const listed = (parts: ReadonlyArray<string>) =>
 
 export const isToStandard = (question: AskedQuestion) => gapsOf(question).length === 0;
 
-/** What tells the agent how to ask its call's questions again. */
 export const questionRepair = (questions: ReadonlyArray<AskedQuestion>) =>
   Arr.join(
     [
@@ -74,7 +69,6 @@ export const questionRepair = (questions: ReadonlyArray<AskedQuestion>) =>
     " ",
   );
 
-/** The flag on a question posted short of standard, or null where it is to standard. */
 export const shortfallOf = (question: AskedQuestion) => {
   const gaps = gapsOf(question);
   if (gaps.length === 0) return null;
@@ -89,10 +83,6 @@ export const shortfallOf = (question: AskedQuestion) => {
   return `The agent gave ${count} ${count === 1 ? "option" : "options"} and ${recommendation}; Collie asked for ${listed(Arr.map(gaps, (gap) => gap.shortfall))}.`;
 };
 
-/**
- * Its options as solutions numbered from 1, the one recommended first, without the
- * marker. More or fewer than one marked, none is recommended.
- */
 export const solutionsOf = (question: AskedQuestion) => {
   const one = recommendedCount(question) === 1;
   const ordered = one

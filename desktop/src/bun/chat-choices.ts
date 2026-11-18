@@ -1,6 +1,3 @@
-// What each harness offers the Flock chat, and what its session opens on: the set choice,
-// with an unset model and effort resolved as the harness, or Pi's own configuration, has them.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
@@ -15,7 +12,6 @@ import { childEnv } from "./login-env";
 import type { HarnessList, HarnessLists } from "./harness-lists";
 import { chatChoice, extraModels } from "./settings";
 
-/** Pi's configuration as it is now; nothing where it has none or it cannot be read. */
 export const readPiConfig = Effect.fn("PiConfig.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -30,7 +26,6 @@ export const readPiConfig = Effect.fn("PiConfig.read")(function* (dir: string) {
   );
 });
 
-/** Table models plus valid Flock extras and the set model. */
 export const tableOffer: (
   harness: string,
   settings: DesktopSettings,
@@ -96,7 +91,6 @@ const withList: (
   };
 };
 
-/** What `harness` offers now, with Pi's configuration as `pi` reads it. */
 export const offerOf = <R>(
   harness: string,
   settings: DesktopSettings,
@@ -113,7 +107,6 @@ export const offerOf = <R>(
     }),
   );
 
-/** What every harness the chat has a driver for offers now. */
 export const offersOf = <R>(
   settings: DesktopSettings,
   flock: FlockSettings,
@@ -137,7 +130,6 @@ export const offersOf = <R>(
     ),
   ).pipe(Effect.map((offered) => Rec.fromEntries(offered)));
 
-/** The checked session choice, with Pi's configuration read afresh. */
 export const opensOn = <R>(
   settings: DesktopSettings,
   flock: FlockSettings,
@@ -168,7 +160,6 @@ export const opensOn = <R>(
     };
   });
 
-/** Saved settings and model changes; both inputs must emit their current value first. */
 export const retelling = (
   settings: Stream.Stream<DesktopSettings>,
   flock: Stream.Stream<FlockSettings>,

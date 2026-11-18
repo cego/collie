@@ -18,7 +18,7 @@ const identity = Schema.encodeEffect(
   ),
 );
 const rpc = <Tag extends "board" | "toasts" | "read" | "runDetail">(tag: Tag) =>
-  // SAFETY: each key selects the RPC carrying that tag.
+  // WARNING: each key selects the RPC carrying that tag.
   FrontDoorRpcs.requests.get(tag)! as Extract<
     RpcGroup.Rpcs<typeof FrontDoorRpcs>,
     { readonly _tag: Tag }
@@ -55,7 +55,6 @@ const handlers = Rpcs.toLayer({
             shutdown: { args: ["i32", "i32"], returns: "i32" },
           },
         );
-        // Bun duplicates stdout; shutdown ends the socket through both descriptors.
         libc.symbols.shutdown(1, 1);
         libc.close();
       }

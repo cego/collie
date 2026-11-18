@@ -1,7 +1,3 @@
-// Files a front door sends this Machine, so a Run here can be given them by path (ADR-0046).
-// Kept once by sha256: a digest held whole is answered at once, and a retried part is the
-// same part, so no request id is needed. Removed a week after it was last asked for.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Effect, FileSystem, Path, Result, Semaphore } from "effect";
@@ -18,17 +14,11 @@ export interface UploadPart {
   readonly size: number;
   readonly sha256: string;
   readonly offset: number;
-  /** At most 4 MiB, as base64. */
   readonly content: string;
 }
 
-// ponytail: one upload part at a time on a host; a permit per sha256 if uploads ever contend.
 const receiving = Semaphore.makeUnsafe(1);
 
-/**
- * One part of a file appended to what came before it. The last is checked against the size
- * and the digest and answers the file's path; a part before it answers null.
- */
 export const receive = (stateDir: string, part: UploadPart) =>
   receiving.withPermit(receivePart(stateDir, part));
 
@@ -51,7 +41,6 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   );
   const held = Option.getOrUndefined(Arr.findFirst(entries, (entry) => entry !== ".partial"));
   if (held !== undefined) {
-    // The same bytes asked for under another name are that name here too.
     if (!entries.includes(part.name)) yield* fs.link(path.join(dir, held), whole);
     const now = (yield* Clock.currentTimeMillis) / 1000;
     yield* fs.utimes(dir, now, now);
@@ -67,7 +56,6 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
     Effect.map((info) => Number(info.size)),
     Effect.orElseSucceed(() => 0),
   );
-  // A part sent again after it arrived is the same part.
   if (part.offset + bytes.length <= arrived && part.offset + bytes.length < part.size)
     return { path: null, complete: false };
   if (part.offset !== arrived) {

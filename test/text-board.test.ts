@@ -1,7 +1,3 @@
-// The text board's key loop, on a pane whose stdin is a terminal: what a key does and what
-// the human's terminal is left in. `bun test` has no terminal, so stdin is stubbed as one
-// and stdout, which is not one, sends the board to its text view.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -19,7 +15,6 @@ import { proves } from "./support/world";
 
 const CLEAR = "\x1b[2J\x1b[H";
 
-/** `process.stdin` as a terminal for the scope: its raw modes recorded, its keys sent by hand. */
 const terminalStdin = Effect.acquireRelease(
   Effect.sync(() => {
     const stdin = process.stdin;
@@ -81,8 +76,7 @@ const capturedStdout = Effect.acquireRelease(
   Effect.sync(() => {
     const written: string[] = [];
     const write = process.stdout.write.bind(process.stdout);
-    // SAFETY: the board writes strings and reads nothing back, so the overload that takes
-    // an encoding or a callback is never the one reached here.
+    // WARNING: the board writes strings and reads nothing back, so the overload that takes an encoding or a callback is never the one reached here.
     process.stdout.write = ((chunk: string) => {
       written.push(String(chunk));
       return true;
@@ -109,7 +103,6 @@ test(
           const env = yield* currentEnv.pipe(Effect.orDie);
           const stdin = yield* terminalStdin;
           const written = yield* capturedStdout;
-          // Every rebuild of the board reads the reported worktrees.
           const reported = `${world.state}/${PRUNE_FILE}`;
           let failing = false;
           const failingFs: FileSystem.FileSystem = {
@@ -149,7 +142,6 @@ test(
           const env = yield* currentEnv.pipe(Effect.orDie);
           const stdin = yield* terminalStdin;
           const written = yield* capturedStdout;
-          // Up on the real clock: its first board is what the board waits for before it draws.
           yield* connect(env.stateDir).pipe(Effect.orDie);
           const clock = yield* TestClock.make();
           yield* clock.setTime(yield* Clock.currentTimeMillis);

@@ -1,4 +1,3 @@
-// Slack's documented Web API envelopes; requests are recorded without their authorization header.
 import { pipe } from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
@@ -11,7 +10,6 @@ import type { SlackOAuthAnswer } from "../../src/slack";
 import { slackUserEnvPath } from "../../src/slack-credentials";
 import type { PluginEnv } from "../../src/env";
 
-/** The Machine's sign-in as the fake's user U456 in T123, expecting `user`; null removes it. */
 export const signedInToSlack = (env: Pick<PluginEnv, "home" | "raw">, user: string | null) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -25,7 +23,6 @@ export const signedInToSlack = (env: Pick<PluginEnv, "home" | "raw">, user: stri
     );
   }).pipe(Effect.orDie);
 
-/** The `slack.env` an older Collie wrote for its bot, or none for false. */
 export const botLeftOver = (env: Pick<PluginEnv, "home" | "raw">, left: boolean) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -216,9 +213,7 @@ export const fakeSlack = () => {
     after: (hook: typeof after) => {
       after = hook;
     },
-    /** Which kind of token authorized each call, in step with `calls`. */
     authorized,
-    /** Fields laid over each code exchange's answer, until replaced. */
     exchange: (fields: Partial<typeof SlackOAuthAnswer.Encoded>) => {
       exchanged = fields;
     },

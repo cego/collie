@@ -6,11 +6,6 @@ import { readCards } from "./cards";
 import { settled, type RunFacts } from "./runs";
 import type { Attention } from "./board-model";
 
-/**
- * The one classification every front door reads: chat, the board's detail and the CLI
- * render this rather than each deciding for themselves what a stopped Run means. A
- * question outranks everything, because it is the human being waited on.
- */
 export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: RunFacts) {
   const asked = run.asking[0];
   if (asked !== undefined)
@@ -20,9 +15,6 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: 
       explanation: `${run.id} is waiting on "${asked.name}": ${asked.prompt}`,
       actions: ["answer", "show"],
     } satisfies Attention;
-  // Below a question, because a question is the human being waited on and this is the
-  // human being told; above `completed`, because a Run that finished having drifted is
-  // one whose result is not what was asked for.
   const unresolved = yield* driftUnresolved(run.dir);
   if (unresolved !== null)
     return {
@@ -93,18 +85,12 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: 
         : ({
             category: "none",
             reason: "working",
-            // Open drift while a Run is still going is said out loud but is not attention:
-            // it may still be corrected.
             explanation: `${run.id} is running.${yield* driftNote(run.dir)}`,
             actions: ["show", "stop"],
           } satisfies Attention);
   }
 });
 
-/**
- * The constraint a Run drifted from and nobody settled, or null. `escalated` is what the
- * correction loop writes when it has spent its bound.
- */
 const driftUnresolved = (dir: string) =>
   readDrift(dir).pipe(
     Effect.map(
@@ -116,14 +102,12 @@ const driftUnresolved = (dir: string) =>
     Effect.orElseSucceed(() => null),
   );
 
-/** Whether this Run's newest card says the Herd still owes a cross-run evaluation. */
 const crossRunPending = (dir: string) =>
   readCards(dir).pipe(
     Effect.map((cards) => cards.at(-1)?.cross_run === "pending"),
     Effect.orElseSucceed(() => false),
   );
 
-/** Open drift, as an addendum rather than a category: it may still be corrected. */
 const driftNote = (dir: string) =>
   readDrift(dir).pipe(
     Effect.map((lines) => {

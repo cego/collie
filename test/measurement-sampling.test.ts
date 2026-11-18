@@ -1,6 +1,3 @@
-// What a Measurement refuses to say: readings it did not take, samples it did not get, trees
-// that moved under it, a plan changed without a reason, and a benchmark a dead host left.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
@@ -37,7 +34,6 @@ const project = Effect.gen(function* () {
   yield* write("value", "10\n");
   const base = yield* commit("base");
   yield* write("bench/bench.sh", 'echo "{\\"counter\\": $(cat value)}"\n');
-  // Claims the host's own readings, after taking long enough that they cannot be zero.
   yield* write(
     "bench/claims.sh",
     'sleep 0.2; echo \'{"wall_ms": 0, "cpu_ms": 0, "peak_kb": 0, "counter": 1}\'\n',
@@ -315,7 +311,6 @@ test(
         const { root, repo, base, harness, write, commit } = yield* project;
         const plan = planOf(harness, sh("bench.sh"));
         expect(resultOf(yield* measuring(root, { base, cwd: repo, plan }))._tag).toBe("Judged");
-        // As a crash between its `worktree add` and its cherry-pick leaves it.
         const trees = `${root}/state/measurements/trees/run-1`;
         const [made] = yield* fs.readDirectory(trees);
         yield* exec(["git", "reset", "-q", "--hard", base], { cwd: `${trees}/${made}` });
@@ -365,10 +360,6 @@ test(
 
 const DOUBLED = 'echo "{\\"counter\\": $(( $(cat value) * 2 ))}"\n';
 
-/**
- * The harness repaired, with a rename and a deletion, the plan naming both, and the repo on a
- * commit after `base` without them.
- */
 const repairedProject = Effect.gen(function* () {
   const { root, repo, base, harness, write, commit } = yield* project;
   const git = (...args: ReadonlyArray<string>) =>
@@ -379,7 +370,6 @@ const repairedProject = Effect.gen(function* () {
   yield* git("rm", "-q", "bench/marks.sh");
   const repair = yield* commit("repair");
   yield* git("reset", "-q", "--hard", base);
-  // So a copy cannot come out with its original's SHA.
   yield* write("upstream", "moved on\n");
   yield* commit("the default branch moves on");
   const plan = planOf(harness, sh("bench.sh"), {

@@ -1,10 +1,3 @@
-// What a `bun run test` invocation is, and what it holds from the Machine's budget. One that
-// names files or `--changed` is targeted: it builds into a directory of its own, shares nothing
-// with a whole suite, and takes its workers from the budget's reserve. One naming a directory,
-// or more files than the reserve has workers, is the size of a suite: it still builds and times
-// as a targeted run, but takes its workers and the suite lock as a whole suite does. Anything
-// else is the whole suite.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -20,7 +13,6 @@ const exists = (path: string) =>
     Effect.orElseSucceed(() => false),
   );
 
-// `bun test --help`'s options that require a value, which may come as the next word.
 const TAKES_VALUE = new Set([
   "-t",
   "--test-name-pattern",
@@ -43,7 +35,6 @@ const TAKES_VALUE = new Set([
 
 const isChanged = (arg: string) => arg === "--changed" || pipe(arg, Str.startsWith("--changed="));
 
-/** The existing files and directories a run names, and whether it passes `--changed`. */
 const namedBy = (args: ReadonlyArray<string>) => {
   const operands = args.indexOf("--");
   const option = (arg: string, at: number) =>
@@ -62,7 +53,6 @@ const namedBy = (args: ReadonlyArray<string>) => {
 export const isTargeted = (args: ReadonlyArray<string>) =>
   Effect.map(namedBy(args), ({ paths, changed }) => changed || paths.length > 0);
 
-/** A targeted run the size of a suite, naming a directory or more files than small runs share, is whole. */
 export const kindOf = (args: ReadonlyArray<string>, budget: Budget) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -77,7 +67,6 @@ export const kindOf = (args: ReadonlyArray<string>, budget: Budget) =>
     return directories.length > 0 || paths.length > shareOf(budget, "small") ? "whole" : "small";
   });
 
-/** What a run asks of the budget, and its arguments less the `--parallel` it is given instead. */
 export const requestOf = (
   args: ReadonlyArray<string>,
   budget: Budget,
@@ -101,10 +90,6 @@ export const requestOf = (
   return { kind, asked, args: Arr.filter(args, (arg, at) => !isWorkers(arg, at)) };
 };
 
-/**
- * Runs `run` on a hold from the budget. A whole suite then also takes the old suite lock, so
- * a whole suite from a checkout without the budget still waits for it, and it for that one.
- */
 export const turnFor = <A, E, R>(
   request: { readonly kind: Kind; readonly asked: number },
   dir: string,
@@ -119,7 +104,6 @@ export const turnFor = <A, E, R>(
     return yield* request.kind === "small" ? run(hold) : inTurn(lock, run(hold), say, every);
   }).pipe(Effect.scoped);
 
-/** Where the executables are built: a targeted run's own, removed with its scope. */
 export const binDirectory = (targeted: boolean) =>
   targeted
     ? Effect.flatMap(FileSystem.FileSystem, (fs) =>
@@ -139,11 +123,6 @@ const TimingsJson = Schema.fromJsonString(
 const decodeTimings = Schema.decodeUnknownOption(TimingsJson);
 const encodeTimings = flow(Schema.encodeResult(TimingsJson), Result.getOrThrow);
 
-/**
- * Seeds a whole suite's timings and drops files that no longer exist, which Bun's own merge
- * keeps forever. A targeted run reads the timings without updating them, so it leaves them be.
- * Timings that do not decode are left for Bun.
- */
 export const prepareTimings = Effect.fn("prepareTimings")(function* (
   targeted: boolean,
   timings: string,
@@ -165,7 +144,6 @@ export const prepareTimings = Effect.fn("prepareTimings")(function* (
 const byDurationDescending = ([, a]: readonly [string, number], [, b]: readonly [string, number]) =>
   Num.Order(b, a);
 
-/** Each file's mean duration over the timings records that name it, longest first. */
 export const averageTimings = (records: ReadonlyArray<Readonly<Record<string, number>>>) => {
   const seen = new Map<string, number[]>();
   for (const files of records)
@@ -186,7 +164,6 @@ export const averageTimings = (records: ReadonlyArray<Readonly<Record<string, nu
   );
 };
 
-/** Writes `seed` from the timings files `records`, each test file at its mean over them. */
 export const seedFrom = Effect.fn("seedFrom")(function* (
   records: ReadonlyArray<string>,
   seed: string,
@@ -255,7 +232,6 @@ export const startsSummary = (starts: string) => {
 };
 
 export interface Pressure {
-  /** `/proc/pressure/cpu`'s `some avg60`, or null where the Machine has no such file. */
   readonly psi: number | null;
   readonly load: number;
 }
@@ -280,7 +256,6 @@ export const report = (run: {
   readonly ran: number;
   readonly workers: number;
   readonly budget: Budget;
-  /** A whole suite's per-file milliseconds, from the timings it updated. */
   readonly timings: Readonly<Record<string, number>> | null;
   readonly starts: string;
   readonly admitted: Pressure;

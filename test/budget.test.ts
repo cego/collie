@@ -372,13 +372,8 @@ test("an interrupted waiter leaves no ticket, and an interrupted holder leaves n
 
 const SMALL_FILE = new URL("./fixtures/budget/small.ts", import.meta.url).pathname;
 const REPO = new URL("..", import.meta.url).pathname;
-/** What a bare run is told the budget is: 8, with 2 kept for small runs. */
 const EIGHT = budgetOf(1, "8");
 
-/**
- * A bare `bun test` of one small file, whose temporary directory, and so its budget's store,
- * is `tmp`. It writes `started` into `notes` and runs until `release` is there.
- */
 const bare = (tmp: string, notes: string, hold?: string) =>
   Effect.gen(function* () {
     const child = yield* Effect.acquireRelease(
@@ -386,7 +381,6 @@ const bare = (tmp: string, notes: string, hold?: string) =>
         const env: typeof process.env = {
           ...process.env,
           TMPDIR: tmp,
-          // No memory filesystem, so its root is under `tmp` too and goes with it.
           COLLIE_TEST_MEMORY: `${tmp}/none`,
           COLLIE_TEST_BUDGET: "8",
           COLLIE_BARE_NOTES: notes,
@@ -413,7 +407,6 @@ const bare = (tmp: string, notes: string, hold?: string) =>
     return { child, stderr: () => said };
   });
 
-/** A temporary directory, and the budget store a bare run with it as `TMPDIR` uses. */
 const bareStore = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const tmp = yield* store;

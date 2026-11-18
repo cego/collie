@@ -1,7 +1,3 @@
-// What the engine wrote, by execution. Every change to a workflow's state is a message or a
-// reply the engine stores, so a count that moves with each one says when a Run's engine
-// state may have moved, and a Run whose count stands needs no asking.
-
 import { Context, Effect, Layer } from "effect";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import type * as SqlClient from "effect/sql/SqlClient";
@@ -9,10 +5,8 @@ import type * as SqlClient from "effect/sql/SqlClient";
 export class EngineTouches extends Context.Service<
   EngineTouches,
   {
-    /** Moves whenever the engine stores anything for this execution, or forgets anything. */
     readonly of: (execution: string) => number;
     readonly touch: (execution: string) => void;
-    /** Moves every count: something was forgotten, of whichever execution. */
     readonly forget: () => void;
   }
 >()("collie/EngineTouches") {}
@@ -27,18 +21,15 @@ export const engineTouchesLayer = Layer.sync(EngineTouches)(() => {
   };
 });
 
-/** `inner`, telling `touches` of each write it makes, by the execution it is for. */
 export const touching: (
   inner: MessageStorage.MessageStorage["Service"],
   sql: SqlClient.SqlClient,
   touches: EngineTouches["Service"],
 ) => MessageStorage.MessageStorage["Service"] = (inner, sql, touches) => {
-  // A reply names only its request; the request named its entity when it was saved.
   const owners = new Map<string, string>();
   const ownerOf = (requestId: bigint) => {
     const known = owners.get(String(requestId));
     if (known !== undefined) return Effect.succeed(known);
-    // Saved before this host started.
     return sql<{ readonly entity_id: string }>`
       SELECT entity_id FROM cluster_messages WHERE id = ${String(requestId)}
     `.pipe(

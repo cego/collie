@@ -1,6 +1,3 @@
-// A record builds its Task's Flow on every change while it is open, so the Flow reads
-// only what its Task needs: a Run's deliveries only where it may be Reopened.
-
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Schema, Tracer } from "effect";

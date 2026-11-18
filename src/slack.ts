@@ -59,7 +59,6 @@ const Channels = Schema.Struct({
   ),
   ...Cursor,
 });
-/** A person (`U`, `W`) or a direct message (`D`): the human's sign-in cannot open or reach one. */
 export const isDirectMessage = (destination: string) => /^[DUW][A-Z0-9]+$/.test(destination);
 
 export const slackText = (text: string) =>
@@ -77,7 +76,6 @@ const OAuthTokens = {
   scope: Schema.optionalKey(Schema.String),
   token_type: Schema.optionalKey(Schema.String),
 };
-/** `oauth.v2.access`: a user's tokens under `authed_user`, or at the top for a renewal. */
 export const SlackOAuthAnswer = Schema.Struct({
   ...OAuthTokens,
   authed_user: Schema.optionalKey(Schema.Struct({ id: Schema.String, ...OAuthTokens })),
@@ -136,7 +134,6 @@ const slackCall = (token: string | null, client?: HttpClient.HttpClient) => {
   return call;
 };
 
-/** Slack's token exchange and renewal, which no token authorizes. */
 export const slackOAuth = (parameters: Record<string, string>, client?: HttpClient.HttpClient) =>
   slackCall(null, client)("oauth.v2.access", SlackOAuthAnswer, parameters);
 

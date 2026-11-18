@@ -1,8 +1,4 @@
 import * as Cause from "effect/Cause";
-// The grace before a stop: the board marks the run and holds it, and only when the five
-// seconds are up does the Driver hear anything at all. Driven through the bridge, which
-// is where the waiting happens — an undo that raced a signal already sent would not be
-// an undo.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -43,7 +39,6 @@ const EMPTY: AppState = {
   stopping: [],
 };
 
-/** Waits for something the fibers do, rather than for a duration. */
 const until = Effect.fn("stop.until")(function* (what: string, ready: () => boolean) {
   for (let tries = 0; tries < 200; tries++) {
     if (ready()) return;
@@ -52,7 +47,6 @@ const until = Effect.fn("stop.until")(function* (what: string, ready: () => bool
   return yield* new Cause.TimeoutError(`${what} never happened`);
 });
 
-/** A bridge that records what was asked of it, with a grace short enough to wait out. */
 function held(acted: Command[], graceMs = 80) {
   return {
     filter: { kind: "workspace", id: "w1" } as const,
@@ -81,7 +75,6 @@ test("a stop is marked on the board and nothing is sent until the grace is up", 
 
         yield* until("the stop to be sent", () => acted.length === 1);
         expect(acted).toEqual([{ _tag: "StopRun", runId: "run:a" }]);
-        // The mark goes when the stop does: what is on the board is what has not been sent.
         expect(driven.state().stopping).toEqual([]);
       }),
     ),
@@ -99,7 +92,6 @@ test("undo inside the grace sends nothing at all", () =>
         driven.dispatch({ _tag: "UndoStop" });
         yield* until("the mark to go", () => driven.state().stopping.length === 0);
 
-        // Well past when it would have gone, and it never did.
         yield* Effect.sleep("200 millis");
         expect(acted).toEqual([]);
       }),

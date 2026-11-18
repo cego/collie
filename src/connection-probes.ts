@@ -8,7 +8,6 @@ import type { ConnectionReading as Probe } from "./connection-model";
 
 export type { ConnectionReading as Probe } from "./connection-model";
 
-/** Long enough for a small internal service; short enough that chat's health line is not held by it. */
 const HELLE_PROBE = "5 seconds";
 
 export const helleEnvPath = (env: PluginEnv) =>

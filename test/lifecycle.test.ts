@@ -1,13 +1,3 @@
-// A Run through the doors an operator actually uses.
-//
-// Ticket 01 proved the engine survives a restart and ticket 05 proved one request is one
-// run. What is left is whether any of that is reachable: does a workflow saved as a module
-// start from the command line and from the picker, is it the same Run either way, can it be
-// shown, listed and waited on, does closing the thing watching it leave the work alone, and
-// does a host that replaces another pick up what was left.
-//
-// Real hosts, real SQLite, real processes: none of those questions has an answer in a map.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -31,13 +21,10 @@ import { hostRecords } from "./support/records";
 import { events, stopHost, until } from "./support/host";
 import { collie, proves as provesWith, save, type World } from "./support/world";
 
-/** A module, its helper and its prompt, as an author has them beside each other. */
 const MODULE = ["proof.workflow.ts", "helper.ts", "notes.md"] as const;
 
-/** A second entry, so a missing module is shown to cost only its own Runs. */
 const OTHER = ["plain.workflow.ts"] as const;
 
-/** What a `--json` envelope carries for a Run, as these tests read it. */
 const Payload = Schema.Struct({
   runId: Schema.optional(Schema.String),
   run: Schema.optional(
@@ -88,12 +75,10 @@ test(
           diagnostic: null,
         });
 
-        // The same run in the listing, and only the task's when a task is named.
         expect(
           Arr.map(yield* client.runs({ task: null }).pipe(Effect.orDie), (one) => one.runId),
         ).toEqual([started.runId]);
         expect(yield* client.runs({ task: "task-other" }).pipe(Effect.orDie)).toEqual([]);
-        // Nothing was started here: an id nobody admitted is nothing, not a failure.
         expect(yield* client.run({ runId: "run-nobody" }).pipe(Effect.orDie)).toBeNull();
         yield* stopHost(world.state);
       }),
@@ -129,15 +114,11 @@ test(
 
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const view = yield* client.run({ runId }).pipe(Effect.orDie);
-        // Pending with the file to fix, rather than gone, failed, or run on whatever
-        // code is nearest: the history is Collie's rows and they are all still here.
         expect(view?.status).toEqual({ status: "pending" });
         expect(view?.diagnostic).toContain("proof.workflow.ts");
         expect(view?.entry).toBe(`${world.user}/proof.workflow.ts`);
         expect((yield* client.runs({ task: null }).pipe(Effect.orDie))[0]?.runId).toBe(runId);
 
-        // One module missing costs its own Runs and nothing else: the entry beside it
-        // starts and finishes while the broken one waits to be repaired.
         const beside = yield* client
           .start({ project: world.project, id: "plain", request: "req-2", input: { note: "fine" } })
           .pipe(Effect.orDie);
@@ -148,8 +129,6 @@ test(
           ))?.status,
         ).toEqual({ status: "complete", value: "plain:fine" });
 
-        // Put back, and the work is picked up without a host to restart: the routing is
-        // rebuilt from the module as it is now.
         yield* save(world.user, MODULE);
         const recovered = yield* client.recover().pipe(Effect.orDie);
         expect(recovered.live).toContain("proof@1");
@@ -163,8 +142,6 @@ test(
             (view) => view?.status.status === "complete",
           ))?.status,
         ).toEqual({ status: "complete", value: "note:durable=back" });
-        // What ran before the module went is not run again: the Activity's result is
-        // durable, and recovery re-enters the code rather than starting the work over.
         expect(
           Arr.filter(yield* events(world.state, runId), (line) =>
             pipe_(line, Str.startsWith("launch")),
@@ -190,8 +167,6 @@ test(
               request: "req-1",
               input: { note: "watched" },
             });
-            // Watched until it is waiting, then this client goes — mid-run, as a board
-            // being closed or a `wait` being interrupted goes.
             yield* Stream.runHead(
               client
                 .watch({ runId: started.runId })
@@ -201,13 +176,10 @@ test(
           }),
         ).pipe(Effect.orDie);
 
-        // The work is where it was left: nothing was cancelled with the client.
         const client = yield* connect(world.state).pipe(Effect.orDie);
         yield* client
           .answer({ runId, decision: "decision", value: "again", request: "answer-again" })
           .pipe(Effect.orDie);
-        // The first thing a stream says is the current state, so a client that was not
-        // listening when it changed is not waiting for an update that has been and gone.
         const first = yield* Stream.runHead(client.watch({ runId }));
         expect(Option.isSome(first)).toBe(true);
         const seen = yield* Stream.runHead(
@@ -247,7 +219,6 @@ test(
           ),
         );
         yield* Deferred.await(subscribed);
-        // Past the host's own sweep of the suspension, so only the hold can say anything.
         yield* Effect.sleep("2 seconds");
 
         yield* client
@@ -279,8 +250,6 @@ test(
         const runId = (yield* payloadOf(started.envelope)).runId ?? "";
         expect(runId).not.toBe("");
 
-        // The same request again is the same Run: the claim is the host's, and the
-        // receipt is the CLI's, so neither of them can make a second one.
         const again = yield* collie(world, [
           "run",
           "start",
@@ -306,7 +275,6 @@ test(
           ),
         ).toEqual([runId]);
 
-        // A wait that ends on the question, and then one that ends on the answer.
         const asked = yield* collie(world, ["run", "wait", runId, "--until", "attention"]);
         expect(asked.exit).toBe(0);
         expect((yield* payloadOf(asked.envelope)).run?.status).toEqual({
@@ -346,7 +314,6 @@ test(
         const runId = (yield* payloadOf(started.envelope)).runId ?? "";
         yield* collie(world, ["run", "wait", runId, "--until", "attention"]);
 
-        // The module goes, and the host with it: what is left is Collie's rows.
         yield* stopHost(world.state);
         yield* fs.remove(`${world.user}/proof.workflow.ts`).pipe(Effect.orDie);
         const orphaned = yield* collie(world, ["run", "show", runId]);
@@ -425,7 +392,6 @@ test(
       (world) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          // The host is started by a shell with no GITTE_CWD, so its own fallback is HOME.
           const first = yield* collie(world, ["run", "start", "planned", "--input", "goal=warm"]);
           expect(first.exit).toBe(0);
 
@@ -517,12 +483,10 @@ test(
             value: "unit,lint",
           });
 
-          // Granted after it finished, so nothing races the gate.
           const grant = (...args: ReadonlyArray<string>) =>
             collie(world, ["run", "intent", "verification", runId, ...args]);
           const e2e = ["--name", "e2e", "--request-id", "g-e2e", "--", "true"];
           expect((yield* grant(...e2e)).envelope.ok).toBe(true);
-          // A retry is the same grant, recorded once under the request it was given.
           expect((yield* grant(...e2e)).envelope.ok).toBe(true);
           const grants = Arr.filter(
             yield* readAudit(runDir(world.state, runId)).pipe(
@@ -531,13 +495,10 @@ test(
             (one) => one.operation === "grant",
           );
           expect(Arr.map(grants, (one) => one.request)).toEqual(["g-e2e"]);
-          // Withdrawn by name, as a human who granted the wrong thing would.
           const withdrawn = yield* grant("--name", "lint", "--remove");
           expect(withdrawn.envelope.data).toMatchObject({
             approved: [{ name: "unit" }, { name: "e2e" }],
           });
-          // The Intent says what the host holds: an empty list here once read as nothing
-          // granted, while the host held the grant.
           const regranted = yield* collie(world, ["run", "intent", "show", runId]);
           expect(regranted.envelope.data).toMatchObject({
             intent: { authority: { run_verification: [{ name: "unit" }, { name: "e2e" }] } },
@@ -624,7 +585,6 @@ test(
   240_000,
 );
 
-/** The human at the picker, as a script: each question answered in the order it is asked. */
 const answering = (script: ReadonlyArray<string>) => {
   const answers = [...script];
   const asked: Array<string> = [];
@@ -652,15 +612,11 @@ test(
         const env = yield* currentEnv;
         const { prompts, asked } = answering(["proof", "picked"]);
         expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
-        // Offered by the picker, and the one question is what the human wants.
         expect(Arr.some(asked, (question) => pipe_(question, Str.includes("Workflows")))).toBe(
           true,
         );
         expect(asked.at(-1)).toBe("What do you want?");
 
-        // The Run it started is the host's, with this project's and this module's marks
-        // on it — the same row a `collie run start` would have made, read back through
-        // the same operations the command line reads.
         const listed = yield* runViews(env, null);
         expect(listed.runs).toHaveLength(1);
         const runId = listed.runs[0]?.runId ?? "";
@@ -682,7 +638,6 @@ test(
   240_000,
 );
 
-/** The question this run is waiting on, as the read model both doors show it. */
 const waitingOn = (view: RunView | null) =>
   Arr.map(
     Arr.filter(view?.waiting ?? [], (one) => one.answer === null),
@@ -699,14 +654,11 @@ test(
           .start({ project: world.project, id: "proof", request: "req-1", input: { note: "race" } })
           .pipe(Effect.orDie);
         const runId = started.runId;
-        // The read model says what it is waiting on before anybody answers it.
         yield* until(
           () => client.run({ runId }).pipe(Effect.orDie),
           (view) => waitingOn(view).includes("decision"),
         );
 
-        // Two answers, each with its own claim, in flight at once. The database settles
-        // which one the run gets; the other is told what landed rather than overwriting it.
         const [first, second] = yield* Effect.all(
           [
             client
@@ -734,8 +686,6 @@ test(
           ),
         ).toMatchObject({ status: { status: "complete", value: `note:race=${value}` } });
 
-        // The command line is the other door onto the same host, and a late answer there
-        // is refused with the host's own sentence rather than a second one of its own.
         const late = yield* collie(world, [
           "run",
           "answer",
@@ -771,7 +721,6 @@ test(
           .control({ runId, control: "hold", set: true, request: "hold-1" })
           .pipe(Effect.orDie);
         expect(held).toMatchObject({ applied: true, detail: "" });
-        // The control is part of what the Run is, not a fact only the host that set it has.
         expect((yield* client.run({ runId }).pipe(Effect.orDie))?.controls).toEqual(["hold"]);
         const shown = yield* collie(world, ["run", "show", runId]);
         expect(shown.envelope.ok).toBe(true);
@@ -811,7 +760,6 @@ test(
           })
           .pipe(Effect.orDie);
 
-        // The same command an implementer runs for any Run, on a Run with no steps.
         const recorded = yield* collie(world, [
           "verify",
           "--run",
@@ -829,13 +777,10 @@ test(
         ).pipe(Effect.orDie);
         expect(journal).toContain(`"name":"unit"`);
         expect(journal).toContain(`"result":"pass"`);
-        // A card counts what it counts from the metrics, whichever kind of Run it was.
         expect(
           yield* journalOf(world, started.runId, "evidence/metrics.jsonl").pipe(Effect.orDie),
         ).toContain(`"kind":"verification"`);
 
-        // What a failing command said is shown as it ran, so nobody has to run it again to
-        // learn why; under --json on stderr, beside the one envelope on stdout.
         const failing = yield* collie(world, [
           "verify",
           "--run",
@@ -849,7 +794,6 @@ test(
         expect(failing.stderr).toContain("the reason it failed");
         expect(failing.envelope.ok).toBe(true);
 
-        // Once the command runs, a wait is its own: verify says so, with the pid it runs as.
         const announced = yield* collie(world, [
           "verify",
           "--run",
@@ -877,12 +821,10 @@ test(
             .pipe(Effect.orDie),
         ).toContain(line);
 
-        // A Run nobody started is still nobody's, whichever store was asked.
         const nowhere = yield* collie(world, ["verify", "--run", "run-nobody", "--", "true"]);
         expect(nowhere.envelope.ok).toBe(false);
         expect(nowhere.envelope.error?.code).toBe("run_not_found");
 
-        // A directory that is not this Run's tree cannot carry a result about it.
         const outside = yield* collie(world, [
           "verify",
           "--run",
@@ -900,7 +842,6 @@ test(
   240_000,
 );
 
-/** A Run of `workflow` whose one check, `unit`, is `command`, finished. */
 const checkedRun = (world: World, workflow: string, command: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const started = yield* collie(world, [
@@ -923,7 +864,6 @@ const checkedRun = (world: World, workflow: string, command: ReadonlyArray<strin
     return runId;
   });
 
-/** How often a command ran, counted outside the tree so counting moves nothing it is bound to. */
 const counted = (world: World) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -937,14 +877,12 @@ const counted = (world: World) =>
     };
   });
 
-/** A Run's journal as the host on the world's state recorded it, a line each. */
 const journalOf = (world: World, runId: string, journal: string) =>
   hostRecords(
     world.state,
     RunRecords.use((records) => records.lines(runId, journal)),
   ).pipe(Effect.map((lines) => Arr.join(lines, "\n")));
 
-/** What a Run has recorded: its verifications and the logs `collie verify` wrote. */
 const recordsOf = (world: World, runId: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -994,7 +932,6 @@ test(
           });
           expect(again.stderr).toContain(`not run again: verification ${answer.verification.id}`);
 
-          // Expecting a failure is no reason to run a Check.
           const expecting = yield* verify("--expect", "fail", "--", ...command);
           expect(expecting.envelope.data).toMatchObject({
             ran: false,
@@ -1110,7 +1047,6 @@ test(
         Effect.gen(function* () {
           const { counter, runs } = yield* counted(world);
           const command = ["sh", "-c", `echo ran >> ${counter}`];
-          // `proved` reads its checks and runs none of them.
           const runId = yield* checkedRun(world, "proved", command);
 
           for (const expecting of [[], ["--expect", "fail"]]) {

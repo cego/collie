@@ -91,7 +91,6 @@ test.each(["merged", "abandoned"] as const)(
     ),
 );
 
-/** Planners that ran for an hour to `finished`, their plans ready: each card asks for its offer. */
 const planners = (count: number, finished = "2026-10-27T10:00:00Z") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -153,13 +152,11 @@ test(
           changed: Stream.fromQueue(poked),
           refresh: Stream.tick("5 seconds"),
         });
-        // The first build, then the tick's own first beat.
         yield* Effect.replicateEffect(Queue.take(built), 2);
         expect(derived.length).toBe(RUNS);
 
         const before = derived.length;
         for (const _ of Arr.range(1, 12)) {
-          // Lets the last build end, so the next tick is waiting on the clock.
           yield* TestClock.withLive(Effect.sleep("20 millis"));
           yield* TestClock.adjust("5 seconds");
           yield* Queue.take(built);
@@ -225,7 +222,6 @@ test("a kept card says the time as one derived now does, hours on", () =>
   runEffect(
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
-      // Finished half an hour ago: shown as quiet, then gone a day after.
       const { dir, env, runs } = yield* planners(20, "2026-10-30T09:30:00Z");
       const model = yield* makeRunModel(dir, "installation");
       const cards: KeptCards = { revision: model.inputsAt, kept: new Map() };
@@ -321,7 +317,6 @@ test("once the model is disabled, a kept card is derived again from the disk", (
       );
       yield* kept;
       yield* model.disable;
-      // Written past the model, as a write it can no longer watch.
       yield* fs.makeDirectory(`${run.dir}/plan/issues`, { recursive: true });
       yield* fs.writeFileString(`${run.dir}/plan/issues/01-first.md`, "# First\n");
       expect(yield* kept).toEqual(yield* buildBoard(opts));

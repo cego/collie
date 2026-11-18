@@ -15,7 +15,6 @@ export const failureOf = (cause: Cause.Cause<Failed>) => {
     : { reason: saidOf(cause), request: undefined, step: undefined, refused: undefined };
 };
 
-/** A gesture's request, sent again on every Try again. */
 export const newRequest = () => SecureRandom.uuidV4Unsafe();
 
 export interface ActionNotice {
@@ -35,11 +34,6 @@ export const actionRunner = (
   }) => Promise<Exit.Exit<string, Failed>>,
   tell: (notice: ActionNotice) => void,
 ) => {
-  /**
-   * One gesture is one request, minted here so every Try again sends it again, whatever
-   * failed: the host takes it once. `unsent` says, at each try, why not to send it;
-   * `tried` hears each try start (null) and end, and what refused it.
-   */
   const run = (
     installation: string,
     action: DesktopAction,

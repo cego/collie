@@ -1,7 +1,3 @@
-// Collie's settings: every key a human may set in config.json, what it takes, what it is
-// while unset and what is refused. The TUI's Settings and Desktop's both read this list,
-// so a setting added here is offered by both. Pure: Desktop's view bundles it.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -13,15 +9,8 @@ import { parseSubagents } from "./subagents";
 import { isString } from "./schema";
 import { isReachKey } from "./reach";
 
-/**
- * What the Control Plane's Runs view is a board of: `local` is this Session's own
- * workspace, the board as it has always been; `all` is every workspace of this herdr
- * session that Collie has work in. Here rather than in the board, because it is a
- * default a human sets and every other reader takes the type from `Defaults`.
- */
 export type Scope = "local" | "all";
 
-/** How many cards the board fits across. A Setting, and the pane's width overrules it. */
 export type Density = "comfortable" | "compact";
 export const DENSITIES: ReadonlyArray<Density> = ["comfortable", "compact"];
 export function isDensity(value: string): value is Density {
@@ -34,34 +23,19 @@ export function isScope(value: string): value is Scope {
   return Arr.some(SCOPES, (scope) => scope === value);
 }
 
-/** Left over from the Collie tab, which `focus` brought to the front; it changes nothing now. */
 export type Questions = "focus" | "notify";
 export const QUESTION_MODES: ReadonlyArray<Questions> = ["focus", "notify"];
 export function isQuestionMode(value: string): value is Questions {
   return Arr.some(QUESTION_MODES, (mode) => mode === value);
 }
 
-/**
- * Who decides whether a tool call runs: the harness's own automatic review (`auto`), no
- * one (`bypass`), or the harness's prompt in the agent's own pane (`harness`). `auto` is
- * the default because a prompt nobody is watching stops the Run instead of protecting it,
- * and the review is what stands between an agent and the checkout it works in; `bypass`
- * is an operator's to opt into.
- */
 export const PERMISSION_MODES = ["auto", "bypass", "harness"] as const;
 
-/** The harnesses `harness.ts` has an adapter for. */
 export const HARNESS_NAMES = ["claude", "codex", "opencode", "pi"] as const;
 
-/**
- * The user-wide threshold in current-context tokens, and the value that turns the
- * feature off. Absolute rather than a percentage of a window: the four harnesses
- * measure different windows, and one number is what a human can reason about.
- */
 export const COMPACT_AT_TOKENS = 150_000;
 export const COMPACTION_OFF = 0;
 
-/** Claude Code's own auto-compact window, as its `--autocompact` takes it. */
 export type AutoCompactWindow = number | "auto";
 export const AUTO_COMPACT_WINDOW = 400_000;
 const AUTO_COMPACT_LEAST = 100_000;
@@ -71,73 +45,26 @@ const STANDING_DIRECTION_MOST = 4000;
 export interface Defaults {
   harness: string;
   model: string;
-  /** Reasoning effort for every step that does not name its own; unset means the harness decides. */
   effort?: string;
   maxIterations: number;
-  /** How long a Step may wait for the human after the agent hands off. */
   handoffTimeoutMs: number;
-  /**
-   * How long an agent may produce nothing before it is nudged. Nudged again at
-   * double, given up on at triple. `0` waits for as long as it takes.
-   */
   quietMs: number;
-  /**
-   * How long a running run's directory may go unchanged before the board calls it quiet.
-   * Separate from `quietMs`, which is what the Driver holds one step's agent to: this is
-   * a whole run writing nothing, read from the outside, and the two are worth different
-   * numbers.
-   */
   boardQuietMs: number;
-  /** How long a finished Run's agent may be idle before Cleanup closes it. `0` never closes one. */
   idleCloseMs: number;
-  /** Whether the host serves the board from its Run model; off rebuilds it from disk, as before the model. */
   runModel: boolean;
-  /** The percent of total memory under which this Machine is Short of memory. `0` never is. */
   memoryHold: number;
-  /**
-   * Current-context tokens at or above which a reused agent is asked to compact before
-   * it is given its next piece of work. `0` turns the feature off. As written rather
-   * than coerced: the fallback would be the default, so a value someone meant as a
-   * lower limit would silently compact an agent they had tried to leave alone.
-   */
   compactAtTokens: number;
-  /**
-   * Claude Code's auto-compact window. As written rather than coerced, like
-   * `compactAtTokens`: a launch fails on a value Claude Code would not take.
-   */
   claudeAutoCompactWindow: number | string;
-  /** Extra models to accept per harness, for models the adapter table does not list. */
   models: Readonly<Record<string, ReadonlyArray<string>>>;
-  /** `harness` or `harness/model`, in order: where work goes once its Subscription is Exhausted. */
   fallbacks: ReadonlyArray<string>;
-  /** What to do about a directory the harness has not been trusted with yet. */
   trust: "auto" | "never";
-  /**
-   * Whether the harness reviews an agent's tool calls itself, or asks in its pane. As
-   * written, like `harness` and `model`: validation names an unknown one, and the engine
-   * starts an agent it cannot resolve in `auto`, the default.
-   */
   permissions: string;
-  /** Which scope the Control Plane opens on. `g` changes it for that tab only. */
   scope: Scope;
-  /** How many cards the board fits across, where the pane is wide enough for a choice. */
   density: Density;
-  /** `notifications.<kind>: false` turns that kind of toast off; absent means on. */
   notifications: Readonly<Record<string, boolean>>;
-  /** Whether a new question takes the human's focus, or only says so. */
   questions: Questions;
-  /**
-   * Whether Collie starts a turn of its own when something meaningful happens — a Run
-   * stopping, asking, going round, or claiming to be finished without proving it. On by
-   * default: a conversation you have to start every time is polling by hand.
-   *
-   * It changes what is *said*, never what may be *done*: a proposal from a proactive
-   * turn goes through the same authority path as one you typed.
-   */
   proactive: boolean;
-  /** The one GitLab doctor and onboard check a Machine against. */
   gitlabHost: string;
-  /** The operator's overlay for the agents Collie launches, as the JSON text written. */
   agentProfile: string;
 }
 
@@ -166,13 +93,8 @@ export const FALLBACK_DEFAULTS: Defaults = {
   agentProfile: "",
 };
 
-/**
- * How a setting is typed: one of `choices`, a whole number, free text, on or off, a
- * comma-separated list, or a JSON document kept as its text.
- */
 export type SettingKind = "choice" | "number" | "text" | "boolean" | "list" | "json";
 
-/** Where a setting is shown, in the order it is shown. */
 export const SETTING_GROUPS = [
   "Agents",
   "Runs",
@@ -183,22 +105,17 @@ export const SETTING_GROUPS = [
 ] as const;
 export type SettingGroup = (typeof SETTING_GROUPS)[number];
 
-/** What a number is shown and typed in: `minutes` of a value stored in milliseconds, or a label. */
 export type SettingUnit = "minutes" | "tokens" | "percent";
 
 export interface Setting {
-  /** As config.json holds it, dotted where it is nested. */
   readonly key: string;
   readonly kind: SettingKind;
   readonly choices: ReadonlyArray<string>;
-  /** What a Run uses while it is unset, as text; empty where the harness decides. */
   readonly fallback: string;
   readonly group: SettingGroup;
   readonly label: string;
-  /** What it changes, in a sentence or two. */
   readonly description: string;
   readonly unit?: SettingUnit;
-  /** This Machine's alone: never shared with the Flock. */
   readonly machine?: true;
 }
 
@@ -472,7 +389,6 @@ export const SETTINGS: ReadonlyArray<Setting> = [
   }),
 ];
 
-/** Why a `fallbacks` entry is refused: a harness Collie has, then optionally `/model`. */
 function fallbackProblem(entry: string) {
   const at = Option.getOrElse(pipe(entry, Str.indexOf("/")), () => -1);
   const harness = at === -1 ? entry : pipe(entry, Str.slice(0, at));
@@ -481,7 +397,6 @@ function fallbackProblem(entry: string) {
   return at === entry.length - 1 ? `"${entry}" names no model after its /` : null;
 }
 
-/** A window as Claude Code takes it, or why it would not. */
 export function autoCompactWindowOf(typed: string) {
   const said = Str.trim(typed);
   if (said === "auto") {
@@ -512,11 +427,6 @@ export const settingOf = (key: string) =>
   Option.getOrUndefined(Arr.findFirst(SETTINGS, (setting) => setting.key === key)) ??
   (isReachKey(key) ? reachSetting(key) : undefined);
 
-/**
- * What was typed, as the value written; `null` unsets it. Trimmed, and empty is unset:
- * an empty string is a configured value, and an empty `harness` fails every Run. A
- * number arrives as one, because `loadDefaults` ignores a string where it reads one.
- */
 export function parseSetting(key: string, typed: string) {
   const setting = settingOf(key);
   if (setting === undefined) return { refused: `${key} is not one of Collie's settings` };
@@ -524,7 +434,6 @@ export function parseSetting(key: string, typed: string) {
   if (said === "") return { value: null };
   switch (setting.kind) {
     case "number":
-      // Within the safe integers too: a threshold no Run can use fails every launch.
       return /^\d+$/.test(said) && Number.isSafeInteger(Number(said))
         ? { value: Number(said) }
         : { refused: `${key} has to be a whole number, not "${typed}"` };
@@ -574,13 +483,11 @@ export function parseSetting(key: string, typed: string) {
 
 const msPer = (key: string) => (settingOf(key)?.unit === "minutes" ? 60_000 : undefined);
 
-/** A stored value as typed in its unit: a duration in minutes, decimals only where needed. */
 export function settingShown(key: string, stored: string) {
   const per = msPer(key);
   return per === undefined || Str.trim(stored) === "" ? stored : String(Number(stored) / per);
 }
 
-/** A value typed in its unit as the text `parseSetting` takes: a duration in whole milliseconds. */
 export function settingStored(key: string, typed: string) {
   const per = msPer(key);
   const said = Str.trim(typed);
@@ -591,7 +498,6 @@ export function settingStored(key: string, typed: string) {
     : { refused: `${key} has to be a number of minutes, not "${typed}"` };
 }
 
-/** A setting's value as one line of text, which `parseSetting` reads back to the same value. */
 export function settingText(value: SettingValue | null) {
   if (value === null) return "";
   if (isString(value)) return value;
@@ -605,7 +511,6 @@ export function settingText(value: SettingValue | null) {
     : String(value);
 }
 
-/** A value one Machine shares for `key`, checked as an edit of it would be. */
 export function parseShared(key: string, value: Schema.Json | null) {
   const typed = Schema.decodeUnknownOption(Schema.NullOr(SettingValue))(value);
   return Option.isSome(typed)

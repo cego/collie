@@ -1,6 +1,3 @@
-// The Runs waiting on a merge request, judged on each round of the merge watch from what it
-// read, and woken by it: no read of their own.
-
 import * as Str from "effect/String";
 import { Effect } from "effect";
 import type { MrDetails } from "./board-model";
@@ -8,7 +5,6 @@ import type { MrPanels } from "./merges";
 import { judge, type MrReading, type Observed, type Woke } from "./mr-watch-model";
 import type { WatchRow } from "./store";
 
-/** What a watch round reads and writes, the host's. */
 export interface Watches {
   readonly list: (mrs: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<WatchRow>>;
   readonly observe: (run: string, name: string, observed: Observed) => Effect.Effect<void>;
@@ -16,7 +12,6 @@ export interface Watches {
   readonly unavailable: (run: string, reason: string) => Effect.Effect<void>;
 }
 
-/** What the merge watch read of a merge request, as a watch judges it. */
 export const readingOf: (panel: MrDetails) => MrReading = (panel) => {
   const state = Str.toLowerCase(panel.state);
   return {
@@ -33,14 +28,12 @@ const sameObserved = (one: Observed | null, other: Observed) =>
   one.since === other.since &&
   one.running === other.running;
 
-/** One round over the watches of the merge requests the merge watch has read. */
 export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
   readonly panels: MrPanels;
   readonly now: number;
   readonly watches: Watches;
 }) {
   for (const row of yield* opts.watches.list([...opts.panels.keys()])) {
-    // Woken by an earlier round or host whose wake may not have reached the Run.
     if (row.woke !== null) {
       yield* opts.watches.wake(row.run, row.name, row.woke);
       continue;

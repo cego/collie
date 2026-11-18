@@ -1,6 +1,3 @@
-// One day of Runs, read for what is wrong with the project it runs in (ADR-0053): filed on
-// that project's forge, and up to `improvements` of it planned and built, with nobody asked.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -72,7 +69,6 @@ const Window = Schema.Struct({
   machine: Schema.String,
   runs: Schema.Array(Schema.String),
   report: Schema.Unknown,
-  // A completed window predating these measures stays frozen when its Run resumes.
   questions: Schema.optionalKey(QuestionMeasures),
   repeated: Schema.optionalKey(Schema.Array(Finding)),
 });
@@ -154,7 +150,6 @@ export default defineWorkflow({
     ),
   }),
   hints: { improvements: "goal" },
-  // The checkout it was started in is shared and may be dirty or behind its remote.
   checkout: "roaming",
   output: Schema.String,
   agents: { harness: "claude", model: "opus", effort: "high" },
@@ -198,7 +193,6 @@ export default defineWorkflow({
               runs: [...ids],
               questions: questionMeasures(kept),
               repeated: repeatedAnswers(kept),
-              // Another project's tallies and measures are not this one's to read.
               report:
                 input.runs === "machine"
                   ? report
@@ -244,7 +238,6 @@ export default defineWorkflow({
                       Effect.map((text) =>
                         decodeKept(text).pipe(Option.map((ended) => ({ created, ended }))),
                       ),
-                      // A Run still going, or one from before Improvements were kept, has none.
                       Effect.orElseSucceed(() => Option.none()),
                     ),
                 );
@@ -421,8 +414,6 @@ export default defineWorkflow({
         ...Arr.filter(restarts, ({ name }) => !Arr.some(fresh, (one) => one.name === name)),
         ...fresh,
       ].slice(0, bound);
-      // The issues as the forge holds them, so a goal carries only what the host let out. Read
-      // by number: the forge's open listing can lag the issues this Run just filed.
       const published =
         starting.length === 0
           ? Result.succeed([])

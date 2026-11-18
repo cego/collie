@@ -1,5 +1,3 @@
-// Every end of a Run's agent, through the one module that ends one (ADR-0059 D1, D4).
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -27,7 +25,6 @@ beforeEach(() =>
 );
 afterEach(() => runEffect(rig.close()));
 
-/** A Codex-like harness whose work runs in a server, stopped to `state`. */
 const served: (state: Stopped["state"], stops: string[]) => CompactionPorts = (state, stops) => ({
   served: {
     gate: Effect.void,
@@ -51,7 +48,6 @@ const served: (state: Stopped["state"], stops: string[]) => CompactionPorts = (s
   },
 });
 
-/** The control record of a served agent, whose server is this process. */
 const serverFor = (agent: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -73,7 +69,6 @@ const serverFor = (agent: string) =>
     );
   });
 
-/** A named agent on core, whose address is the launch identity. */
 const arranged = (agent: string) =>
   new Herdr(rig.pluginEnv()).agentLaunch({
     name: agent,
@@ -252,7 +247,6 @@ test("where the caller ends the terminals, none closes while one agent of severa
       expect(busy._tag).toBe("NotQuiet");
       expect(stops).toEqual(["review"]);
       expect(yield* terminalKills).toEqual([]);
-      // Its end is the caller's to log, once its terminal has closed.
       expect(Arr.filter(lines, (line) => pipe_(line, Str.includes("ended")))).toEqual([]);
     }),
   ));

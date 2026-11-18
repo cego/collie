@@ -1,6 +1,3 @@
-// The host's door: what it answers itself while the engine answers nothing, and what it
-// passes on to the engine.
-
 import { expect, test } from "bun:test";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Arr from "effect/Array";
@@ -24,7 +21,6 @@ import { madeRun, recordsAt } from "./support/records";
 
 const identity = { build: "test", pid: 1, dir: "/state", protocol: 1, installation: "i" };
 
-/** A door over `dir` whose engine hears everything and answers nothing. */
 const silentEngine = (
   dir: string,
   socket: string,
@@ -32,7 +28,6 @@ const silentEngine = (
   offers: ReadonlyArray<readonly [string, ReadonlyArray<OfferView>]> = [],
 ) =>
   Effect.gen(function* () {
-    // The engine lists its Runs only once it has migrated `host.db`.
     yield* Layer.build(recordsAt(dir));
     const heard: Array<FromDoor> = [];
     const listening = yield* Deferred.make<void>();
@@ -92,10 +87,9 @@ test("the door answers a Run's record and the host's identity while the engine a
         .runDetail({ runId: "r1", tail: false, pages: 1, refreshMr: false, parts: true })
         .pipe(Stream.runHead, Effect.timeout("5 seconds"));
       expect(first._tag).toBe("Some");
-      // SAFETY: a record of a Run the door was told of is a record, not null or Unchanged.
+      // WARNING: a record of a Run the door was told of is a record, not null or Unchanged.
       expect((first._tag === "Some" ? (first.value as RunDetail) : null)?.id).toBe("r1");
 
-      // A Run with no merge request has nothing to ask the engine for any part.
       const whole = yield* client
         .runDetail({ runId: "r1", tail: true, pages: 1, refreshMr: false, parts: true })
         .pipe(
@@ -106,7 +100,6 @@ test("the door answers a Run's record and the host's identity while the engine a
           Effect.timeout("5 seconds"),
         );
       expect(whole._tag).toBe("Some");
-      // Its Flow shows no offer, so it asked the engine for none.
       expect(Arr.filter(heard, (one) => one._tag === "Ask")).toEqual([]);
 
       const who = yield* RpcClient.make(RpcGroup.make(IdentityRpc)).pipe(
@@ -144,7 +137,6 @@ test("the door reads a record before any client asks, and tells the engine nothi
         created: "2026-10-30T09:00:00Z",
         finished: "2026-10-30T09:30:00Z",
       });
-      // A finished Step, which an open's record would tell the engine it showed.
       const step = {
         id: "build",
         title: "Build",
@@ -261,7 +253,6 @@ const implementNow: OfferView = {
   unavailable: null,
 };
 
-/** A plan ready to implement, whose Flow shows its first offer. */
 const readyPlan = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -278,7 +269,7 @@ const readyPlan = (dir: string) =>
   });
 
 const flowIds = (shown: Option.Option<unknown>) => {
-  // SAFETY: a record of a Run the door was told of is a record, not null or Unchanged.
+  // WARNING: a record of a Run the door was told of is a record, not null or Unchanged.
   const flow = (shown._tag === "Some" ? (shown.value as RunDetail) : null)?.flow;
   return Arr.flatMap(flow?.lanes ?? [], (lane) => Arr.map(lane.nodes, (node) => node.id));
 };
@@ -328,7 +319,7 @@ test("the door shows the offers the engine's board read with its listing, and as
 
 test("the door reads the Runs of a record as the engine chooses them, and none it was not told of", () => {
   const fact = (id: string, over: Partial<RunFacts> = {}) =>
-    // SAFETY: only the fields `relatedOf` reads are given.
+    // WARNING: only the fields `relatedOf` reads are given.
     ({ id, task: null, parent: null, ...over }) as RunFacts;
   const facts = new Map(
     Arr.map(
@@ -359,7 +350,6 @@ test("the door reads the Runs of a record as the engine chooses them, and none i
   ]);
   expect(relatedOf(facts, order, "a", ["unknown"])).toBeNull();
   expect(relatedOf(facts, order, "missing", [])).toBeNull();
-  // A Run asked of the engine before any listing named it is not yet in the listing's order.
   expect(relatedOf(facts, ["b", "p"], "a", [])).toBeNull();
 });
 
@@ -377,7 +367,6 @@ test(
           finished: "2026-10-30T09:30:00Z",
         });
         const socket = `${dir}/host.sock`;
-        // Told of no Run, so the door asks the engine for the record's Runs.
         const { heard, tell } = yield* silentEngine(dir, socket, []);
         const client = yield* frontDoor(socket);
         const first = yield* client
@@ -385,7 +374,6 @@ test(
           .pipe(Stream.runHead, Effect.forkScoped);
         yield* until(() => Arr.some(heard, (one) => one._tag === "Ask"));
         const asked = Arr.findFirst(heard, (one) => one._tag === "Ask");
-        // The engine answers past the door's slow mark.
         yield* Effect.sleep("2100 millis");
         tell({
           _tag: "Answer",
@@ -407,7 +395,6 @@ test(
   15_000,
 );
 
-/** A raw client of the door's socket: what it read, and its socket to stop reading or close. */
 const rawClient = (socket: string) =>
   Effect.gen(function* () {
     let text = "";
@@ -440,7 +427,6 @@ test("a client that stops reading, then goes, leaves every other client answered
           (one) => one._tag === "Request" && one.frame._tag === "Request" && one.frame.id === id,
         );
 
-      // A asks the engine for a stream and never reads what it is sent.
       const a = yield* rawClient(socket);
       a.socket.pause();
       a.socket.write(requestLine("a", "toasts"));
@@ -452,7 +438,6 @@ test("a client that stops reading, then goes, leaves every other client answered
       const connB = Option.getOrThrow(passed("b"));
       if (connA._tag !== "Request" || connB._tag !== "Request") return;
 
-      // The engine streams to A until its socket is full, then A goes away.
       const big = pipe("x", Str.repeat(64 * 1024));
       for (let i = 0; i < 256; i++)
         tell({

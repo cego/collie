@@ -1,6 +1,3 @@
-// An agent that ends its turn on a background `collie verify` is told when it ends, by a
-// real host over a fake core, and nobody else is (ADR-draft-an-agent-is-told-when-its-verify-ends).
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -42,7 +39,6 @@ test(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
-          // No Output, and still working after its turn, so only what the test reports moves it.
           yield* fs
             .writeFileString(outputs, encode([{ writes: [], output: null, then: "working" }]))
             .pipe(Effect.orDie);
@@ -171,8 +167,6 @@ test(
           for (const part of ['"unit"', "pass (exit 0)", Str.trim(head), ran.verification.log!])
             expect(said).toContain(part);
 
-          // Once it is one of the Run's Checks, it is answered from its record, never run,
-          // for an agent as for a human, whatever it expects.
           yield* grant("unit", "/bin/true");
           const asHuman = { COLLIE_AGENT: "not-an-agent" };
           const again = yield* verify("unit", "/bin/true", asAgent);
@@ -224,7 +218,6 @@ test("the implementer, and every step prompt that has an agent use collie verify
       const flat = (text: string) => pipe_(text, Str.replace(/\s+/g, " "));
       expect(flat(yield* fs.readFileString(`${root}personas/implementer.md`))).toContain(line);
       for (const workflow of ["implement", "review"]) {
-        // A dotted section, such as `source.linear`, is spliced into a step's prompt, not one.
         const steps = Arr.filter(
           Str.split(yield* fs.readFileString(`${root}workflows/${workflow}.md`), /^## /m).slice(1),
           (step) => !/^\S+\./.test(step),

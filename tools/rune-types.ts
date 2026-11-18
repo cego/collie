@@ -1,9 +1,3 @@
-// The Rust types the Rune spike decodes `DesktopRpcs` with, generated from the JSON Schema
-// documents of every RPC in `DesktopRpcs`, so no Schema is copied by hand (desktop/README.md):
-//
-//   bun run tools/rune-types.ts --write   # regenerate desktop/protocol/src/generated.rs
-//   bun run tools/rune-types.ts --check   # fail where the checked-in file differs
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -19,7 +13,6 @@ import { DesktopRpcs } from "../desktop/src/shared/flock";
 export const GENERATED = new URL("../desktop/protocol/src/generated.rs", import.meta.url).pathname;
 export const REGENERATE = "bun run tools/rune-types.ts --write";
 
-/** Each part of an RPC the spike speaks that is not void, and its Rust name. */
 const SPOKEN = [
   ["flock", "success", "FlockItem"],
   ["syncNow", "payload", "SyncNowPayload"],
@@ -61,7 +54,6 @@ const SPOKEN = [
   ["recordMark", "payload", "RecordMarkPayload"],
 ] as const;
 
-/** The JSON Schema keywords `Schema.toJsonSchemaDocument` writes for these RPCs. */
 interface Json {
   readonly type?: string;
   readonly enum?: ReadonlyArray<string>;
@@ -94,7 +86,6 @@ const Json: Schema.Codec<Json> = Schema.Struct({
 const Document = Schema.Struct({ schema: Json, definitions: Schema.Record(Schema.String, Json) });
 type Document = typeof Document.Type;
 
-/** Rust's keywords, which a field takes raw (`r#type`). */
 const KEYWORDS = new Set([
   ...["as", "async", "await", "break", "const", "continue", "dyn", "else", "enum", "extern"],
   ...["false", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "match", "mod", "move"],
@@ -102,10 +93,8 @@ const KEYWORDS = new Set([
   ...["use", "where", "while", "abstract", "become", "box", "do", "final", "macro", "override"],
   ...["priv", "try", "typeof", "unsized", "virtual", "yield", "self"],
 ]);
-/** Names the prelude has, which a generated type must not shadow. */
 const PRELUDE = new Set(["Option", "Result", "String", "Vec", "Box", "Some", "None", "Ok", "Err"]);
 
-/** `RUN_STARTED` and `runStarted` are both `RunStarted`. */
 const pascal = (words: string) =>
   Arr.join(
     Arr.map(
@@ -124,13 +113,11 @@ const snake = (key: string) => {
 const singular = (name: string) =>
   /[^s]s$/.test(name) ? pipe(name, Str.slice(0, -1)) : `${name}Item`;
 
-/** A string enum of one value: what an untagged union's members are told apart by. */
 const literalOf = (schema: Json) =>
   schema.type === "string" && schema.enum?.length === 1
     ? Option.some(schema.enum[0]!)
     : Option.none();
 
-/** The value a union member is known by: its `_tag`, else its first one-value field. */
 const discriminant = (member: Json) => {
   const fields = Rec.toEntries(member.properties ?? {});
   return Arr.findFirst(
@@ -142,7 +129,6 @@ const discriminant = (member: Json) => {
   );
 };
 
-/** A union member with no one-value field, named for the fields it requires. */
 const UNNAMED = new Map([
   ["machine message", "MachineMessage"],
   ["_tag", "UnknownMessage"],
@@ -151,12 +137,10 @@ const UNNAMED = new Map([
 const DERIVES = "#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]";
 
 const generator = () => {
-  /** Every type in the order first met, by name, with the schema it was made from. */
   const named = new Map<string, { readonly source: string; code: string }>();
   const bySource = new Map<string, string>();
   let definitions: Document["definitions"] = {};
 
-  /** One type per schema: `wanted`, or prefixed by where it is used where that is taken. */
   const declare = (
     source: string,
     wanted: string,
@@ -262,7 +246,6 @@ const generator = () => {
     }
   };
 
-  /** The Rust type of one RPC part, or none where it is void or never. */
   const part = (document: Document, wanted: string) => {
     definitions = document.definitions;
     const { schema } = document;
@@ -281,8 +264,6 @@ const schemaOf = (rpc: Rpc.AnyWithProps, part: (typeof SPOKEN)[number][1]) => {
     : rpc.successSchema;
 };
 
-/** `generated.rs` as the generator writes it from today's Schemas. */
-/** Every RPC's parts: the spike's own names first, so they stay; the rest named by their RPC. */
 const ALL: ReadonlyArray<readonly [string, (typeof SPOKEN)[number][1], string]> = [
   ...SPOKEN,
   ...Arr.flatMap([...DesktopRpcs.requests.keys()], (tag) =>
@@ -296,7 +277,7 @@ const ALL: ReadonlyArray<readonly [string, (typeof SPOKEN)[number][1], string]> 
 export const rustTypes = Effect.gen(function* () {
   const { part, named } = generator();
   for (const [tag, which, name] of ALL) {
-    // SAFETY: every RPC of a group carries its payload, success and error schemas.
+    // WARNING: every RPC of a group carries its payload, success and error schemas.
     const rpc = DesktopRpcs.requests.get(tag) as Rpc.AnyWithProps;
     const document = yield* Schema.decodeEffect(Document)(
       Schema.toJsonSchemaDocument(schemaOf(rpc, which)),

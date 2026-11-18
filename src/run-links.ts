@@ -45,7 +45,6 @@ export const recordLinkDelivery = (runDir: string, delivery: typeof LinkDelivery
   appendRunJournal(runJournal(runDir, "link-deliveries.jsonl"), LinkDeliveryJson, delivery);
 
 const RunLinkNoticeJson = Schema.fromJsonString(RunLinkNotice);
-/** Each notice as first sent: a resend under the same request id must match it. */
 export const readSentNotices = (runDir: string) =>
   readRunJournal(runJournal(runDir, "link-notices.jsonl"), RunLinkNoticeJson);
 export const recordSentNotice = (runDir: string, notice: RunLinkNotice) =>

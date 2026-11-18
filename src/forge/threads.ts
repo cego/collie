@@ -69,7 +69,6 @@ export const listIssues = (
     return listed.ok ? { ok: true as const, issues: listed.value } : listed;
   });
 
-/** Whether a failed write may still have been applied: no answer came, or the forge failed itself. */
 const mayHaveLanded = (
   login: ForgeLogin,
   failed: { readonly reason: string; readonly status?: number },
@@ -112,7 +111,6 @@ const threadRef = (
   number,
 });
 
-/** Whether `head` descends from `previous`; a `previous` the forge no longer has does not. */
 export const descendsFrom = (
   login: ForgeLogin,
   project: string,
@@ -147,7 +145,6 @@ export const descendsFrom = (
     };
   });
 
-/** Whether `me`'s approval stands on the merge request while its head is `head`. */
 export const approvedAt = (
   login: ForgeLogin,
   project: string,
@@ -394,7 +391,6 @@ export const approveReview = (
     const pull = `repos/${path}/pulls/${ref.iid}`;
     const current = () =>
       requestAs(Schema.Struct({ head: Schema.Struct({ sha: Schema.String }) }), login, cwd, pull);
-    // shortcut: GitHub has no atomic head guard; replace these checks if it gains one.
     if (login.forge === "github") {
       const before = yield* current();
       if (!before.ok || before.value.head.sha !== head)

@@ -1,6 +1,3 @@
-// `collie cleanup`: what the host's sweep would remove now, and `--apply` to sweep now
-// (ADR-0045). No confirmation: the host does the same on its own every ten minutes.
-
 import { Effect } from "effect";
 import { Command, Flag } from "effect/cli";
 import { cleanupLines } from "../cleanup";

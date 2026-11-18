@@ -1,6 +1,3 @@
-// Cleanup judged from the host's Run model: the decisions it makes from disk, and no read of a
-// kept Run's files beyond what the board already read.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -135,7 +132,6 @@ test(
             }),
           );
         }
-        // A Run's directory no row names, quiet for two days.
         const quiet = DateTime.toDateUtc(DateTime.makeUnsafe(now - 2 * DAY_MS));
         yield* fs.makeDirectory(`${dir}/runs/ghost`);
         yield* fs.utimes(`${dir}/runs/ghost`, quiet, quiet);
@@ -162,7 +158,6 @@ test(
             stat: (path) => logged(path).pipe(Effect.andThen(fs.stat(path))),
           }),
         );
-        // The host's model holds what its board has read.
         yield* buildBoard({
           env: rig.pluginEnv(),
           runs,

@@ -1,7 +1,3 @@
-// A Run drawn as the Steps it took, built from what it recorded and what its module
-// declares (ADR-draft-a-step-is-declared-where-its-work-is-written D3–D6). Pure, so every
-// door that reads a Flow reads one set of rules.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -35,20 +31,17 @@ import type { Effect } from "effect";
 
 export type Execution = FlowLane["execution"];
 
-/** A question the Run asked, as the engine stored it. */
 export interface AskedFact {
   readonly name: string;
   readonly asked: string | null;
   readonly answered: string | null;
   readonly by: string | null;
   readonly open: boolean;
-  /** Set aside by a human's message while its work runs, and not asked again yet. */
   readonly superseded?: boolean;
   readonly text?: string;
   readonly options?: FlowQuestion["options"];
 }
 
-/** Everything one Run's row is built from. */
 export interface LaneFacts {
   readonly usual?: ReadonlyMap<string, number>;
   readonly steering?: Effect.Success<ReturnType<typeof readStepSteering>>;
@@ -60,56 +53,42 @@ export interface LaneFacts {
     readonly state: RunState;
     readonly requestedBy: RequestedBy | null;
     readonly execution: Execution;
-    /** Why it stopped going, where it failed. */
     readonly note: string | null;
   };
   readonly machine: string;
   readonly lines: ReadonlyArray<StepLine>;
-  /** Its launches in order, each with whether its Output is in. */
   readonly launches: ReadonlyArray<{
     readonly launch: Launched;
     readonly done: boolean;
   }>;
   readonly questions: ReadonlyArray<AskedFact>;
-  /** Runs it started that are not rows of its Task: a Task's own, or its Repo runs. */
   readonly children: ReadonlyArray<ChildFact>;
-  /** The repositories of Waves its fan-out has not started yet. */
   readonly toCome: ReadonlyArray<{
     readonly repo: string;
     readonly wave: number;
   }>;
-  /** What holds it up, in its card's words, other than a question or a timer. */
   readonly wait: LaneWait | null;
-  /** The offer a finished leading Run makes, which ends its row. */
   readonly offer: { readonly id: string; readonly title: string } | null;
-  /** What Ready to release says while its merge request is open, for the Step that made it. */
   readonly readiness: string | null;
-  /** When a durable timer wakes it, where it sleeps on one. */
   readonly wakes: string | null;
-  /** Who stopped it, where it was stopped. */
   readonly stoppedBy: string | null;
   readonly now: number;
 }
 
-/** A Run this one started that is drawn as a link: titled by its invocation, or its repository. */
 export interface ChildFact {
   readonly id: string;
   readonly title: string;
   readonly created: string;
   readonly link: FlowLink;
-  /** Its repository's Wave, for a Repo run. */
   readonly wave: number | null;
 }
 
-/** A wait as the card says it; the lane puts it on the Step it holds up. */
 export interface LaneWait {
   readonly wait: FlowWait;
-  /** Whether it is on the human: a proposal, or a pane that waits. */
   readonly needsYou: boolean;
   readonly said: string;
 }
 
-/** One call of a Step, as its records say. */
 interface StepRun {
   readonly key: string;
   readonly meta: StepMeta;
@@ -151,7 +130,6 @@ const agentOf = (launch: Launched) => ({
 
 const AGENT_QUESTION = /^ask-(.+)-\d+$/;
 
-/** The operation whose agent asked this question on its Run, where an agent did. */
 const askerOf = (name: string) => AGENT_QUESTION.exec(name)?.[1] ?? null;
 
 const placeSaid = (place: StepPlace | null) =>
@@ -168,7 +146,6 @@ const flowQuestion = (one: AskedFact) => ({
   by: one.by,
 });
 
-/** One Run's row of Steps. */
 export function laneOf(facts: LaneFacts) {
   const { run, now } = facts;
   const ended = !going(run.state);
@@ -224,15 +201,12 @@ export function laneOf(facts: LaneFacts) {
         break;
     }
   }
-  // An entry that went on with a Step run left part-done is another attempt at it.
   for (const one of runs.values())
     for (const entry of entries)
       if (entry.at > one.entered && (one.left === null || entry.at < one.left))
         one.attempts.push({ at: entry.at, cause: entry.cause });
 
   const declared = forecasts.length > 0 || runs.size > 0;
-  // A launch from before its Run recorded Steps names no Step: it is the Step its Run
-  // replayed under the same key.
   const stepKeyOf = (launch: Launched) =>
     launch.step?.key ?? (runs.has(launch.operation) ? launch.operation : undefined);
   const keyOfLaunch = new Map<string, string>();
@@ -359,7 +333,6 @@ export function laneOf(facts: LaneFacts) {
     };
   };
 
-  /** A Step none of whose runs is known yet, or one the Run ended without. */
   const unreached = (meta: StepMeta, id: string, title: string, place: string | null) => {
     const state: FlowState = ended ? "not-run" : "expected";
     return {
@@ -383,7 +356,6 @@ export function laneOf(facts: LaneFacts) {
     };
   };
 
-  /** Which forecast was in force at a time: the latest made before it. */
   const forecastAt = (at: string) =>
     Option.getOrUndefined(Arr.findLast(forecasts, (one) => one.at <= at)) ?? null;
   const latest = forecasts.at(-1) ?? null;
@@ -477,8 +449,6 @@ export function laneOf(facts: LaneFacts) {
     };
   };
 
-  // What happened, in the order it began: each Step by its first call, and work no Step
-  // declared by when it was started.
   const happened: Array<{ readonly at: string; readonly node: FlowNode }> = [];
   const seen = new Set<string>();
   for (const one of runs.values()) {
@@ -557,10 +527,6 @@ export function laneOf(facts: LaneFacts) {
 
 export { flowNotice } from "./flow-timing";
 
-/**
- * The path's nodes in its order, and each node off it after the one that happened before it:
- * `happened` is every node that ran, oldest first, and `path` the forecast's.
- */
 function inPathOrder(happened: ReadonlyArray<FlowNode>, path: ReadonlyArray<FlowNode>) {
   if (path.length === 0) return [...happened];
   const ordered = [...path];
@@ -575,7 +541,6 @@ function inPathOrder(happened: ReadonlyArray<FlowNode>, path: ReadonlyArray<Flow
 const sortedByItems = (items: ReadonlyArray<string>, runs: ReadonlyArray<FlowRun>) =>
   [...runs].sort((one, other) => items.indexOf(one.place ?? "") - items.indexOf(other.place ?? ""));
 
-/** Work no Step declared: Operations, questions and children, as they happened. */
 function undeclaredNodes(
   facts: LaneFacts,
   keyOfLaunch: ReadonlyMap<string, string>,
@@ -751,7 +716,6 @@ const fanState = (runs: ReadonlyArray<FlowRun>, ended: boolean) => {
   return states.includes("expected") && !ended ? "running" : "done";
 };
 
-/** Where a wait sits: the Step going, else the next the path expects, else the last that ran. */
 const heldUp = (nodes: ReadonlyArray<FlowNode>) => {
   const going = Option.getOrElse(
     Arr.findLastIndex(
@@ -776,9 +740,7 @@ function withWait(nodes: FlowNode[], wait: LaneWait | null) {
   if (wait === null) return;
   const at = heldUp(nodes);
   const node = nodes[at];
-  // A question open on it is already what it waits on.
   if (node === undefined || (node.state === "needs-you" && node.wait === null)) return;
-  // A Step that failed already says why its Run parked.
   if (wait.wait === "parked" && Arr.some(nodes, (one) => one.state === "failed")) return;
   nodes[at] = {
     ...node,
@@ -844,7 +806,6 @@ function undeclaredSaid(
   }
 }
 
-/** Where the work is: the last node of a Run still going that is not done or to come. */
 export function currentOf(lane: FlowLane) {
   if (lane.execution !== "running" && lane.execution !== "suspended") return null;
   const at = Option.getOrUndefined(
@@ -860,13 +821,11 @@ export function currentOf(lane: FlowLane) {
   return at === undefined ? null : { run: lane.run, node: at.id };
 }
 
-/** What a Run waits on for usage: whose Subscription, and when it resets. */
 export interface UsageWait {
   readonly account: string;
   readonly resetsAt: string | null;
 }
 
-/** The facts a Run's wait is said from, which are the ones its card says. */
 export interface WaitFacts {
   readonly proposals: number;
   readonly blocked: boolean;
@@ -881,14 +840,12 @@ export interface WaitFacts {
   } | null;
   readonly awaiting: boolean;
   readonly machine: string;
-  /** Whether it sleeps on a durable timer or on a child still going, which a park is not. */
   readonly sleeping: boolean;
   readonly now: number;
 }
 
 const PANE = "Waiting for you in its pane";
 
-/** The one wait that holds a Run up, other than a question or a timer, in its card's words. */
 export function laneWaitOf(facts: WaitFacts) {
   if (facts.proposals > 0) {
     const returned: LaneWait | null = {
@@ -956,7 +913,6 @@ export function laneWaitOf(facts: WaitFacts) {
   return returned;
 }
 
-/** `!12` of a merge request's label, or the label where it has no number. */
 const mrNumber = (mr: string) => {
   const label = mrLabel(mr);
   const at = Math.max(
@@ -966,7 +922,6 @@ const mrNumber = (mr: string) => {
   return at < 0 ? label : `!${pipe(label, Str.slice(at + 1))}`;
 };
 
-/** What a link says of the Run it stands for, by how far that Run has got. */
 export function linkSaid(child: {
   readonly state: RunState;
   readonly created: string;
@@ -974,7 +929,6 @@ export function linkSaid(child: {
   readonly note: string | null;
   readonly mr: string | null;
   readonly mrState: MrState | null;
-  /** Its current node's fact line, while it is going. */
   readonly current: string | null;
 }) {
   if (child.mr !== null) return `${mrNumber(child.mr)} ${child.mrState ?? "open"}`;
@@ -1029,7 +983,6 @@ const releaseNode: (
   runs: [],
 });
 
-/** The merge request's way out: CI, the merge, and the furthest tier the forge says it is live on. */
 export function releaseRow(facts: {
   readonly mrState: MrState | null;
   readonly ci: ForgeChecks | null;
@@ -1065,7 +1018,6 @@ export function releaseRow(facts: {
   ];
 }
 
-/** The strip a card draws: the leading Run's Steps, then the Release row, and where it is. */
 export function stripOf(
   flow: Flow,
   leader: string,

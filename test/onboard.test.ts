@@ -1,7 +1,3 @@
-// `collie onboard`: its step stream against scripted Machines. The release is placed from a
-// carried tree on disk; every installer and system tool that would reach the network or need
-// root is a stub on PATH.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -42,7 +38,6 @@ const git = (cwd: string, ...args: string[]) =>
     ),
   );
 
-/** The release this runner carries, whose `prepare.sh` records each time it ran. */
 const carry = Effect.fn("test.carry")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const tree = `${home}/carried/release`;
@@ -64,7 +59,6 @@ const read = (file: string) =>
     fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")),
   );
 
-/** An installer that leaves an executable named `name` in ~/.local/bin, as the real ones do. */
 const installer = (name: string, says = "") =>
   `mkdir -p "$HOME/.local/bin"
 cat > "$HOME/.local/bin/${name}" <<'END'
@@ -73,7 +67,6 @@ ${says}
 END
 chmod +x "$HOME/.local/bin/${name}"`;
 
-/** A Claude Code that is logged in. */
 const LOGGED_IN = `echo '{"loggedIn": true}'`;
 
 const READY: OpResult = { ok: true, data: { ready: true, checks: [] }, human: "ready" };
@@ -81,7 +74,6 @@ const READY: OpResult = { ok: true, data: { ready: true, checks: [] }, human: "r
 let doctorRan = 0;
 let doctoredAs: string | undefined;
 
-/** A Claude Code where its installer puts it, ahead of the stubs on PATH. */
 const claudeAt = (script: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -93,7 +85,6 @@ const claudeAt = (script: string) =>
 
 const GITLAB = "gitlab.cego.dk";
 
-/** Real glab writes auth status to stderr. */
 const glab = (status: string, rest = "") =>
   bin.add(
     "glab",
@@ -103,7 +94,6 @@ const glab = (status: string, rest = "") =>
     esac`,
   );
 
-/** onboard against this Machine, collecting what it streamed. */
 const onboarded = (overrides: Record<string, string> = {}, options: Partial<OnboardOptions> = {}) =>
   Effect.gen(function* () {
     const events: OnboardEvent[] = [];
@@ -148,9 +138,7 @@ beforeEach(() =>
           *) exit 22 ;;
         esac`,
       );
-      // No test reaches a real GitLab over SSH.
       yield* bin.add("ssh", `echo "Permission denied (publickey)." >&2; exit 255`);
-      // Logged in to GitLab, and pushing over HTTPS with that login.
       yield* glab(
         `echo "${GITLAB}"; echo "  ✓ Git operations for ${GITLAB} configured to use https protocol."`,
       );
@@ -175,7 +163,6 @@ test("a bare Machine gets Collie and Claude Code without installing Herdr", () =
       const { result, events } = yield* onboarded();
 
       expect(result).toMatchObject({ ok: true, data: { ready: true } });
-      // Every step streams a start and then its result.
       const steps = Arr.map(results(events), (event) => event.step);
       expect(steps).toEqual([
         "system",
@@ -212,7 +199,6 @@ test("a bare Machine gets Collie and Claude Code without installing Herdr", () =
       expect(yield* (yield* FileSystem.FileSystem).exists(`${root}/.git`)).toBe(false);
       expect(yield* read(`${home}/curl-calls`)).not.toContain("https://herdr.dev/install.sh");
       expect(yield* read(`${home}/curl-calls`)).toContain("https://claude.ai/install.sh");
-      // Once as the release is placed, and once more after the harness is installed.
       expect(yield* read(`${home}/prepared`)).toBe("ran\nran\n");
       expect(yield* read(`${home}/.bashrc`)).toContain(`export PATH="${home}/.local/bin:$PATH"`);
       expect(doctorRan).toBe(1);
@@ -282,7 +268,6 @@ test("missing git stops with the exact command to run as root, and changes nothi
     }),
   ));
 
-/** The system step on a Machine with `tools` on PATH and `manager` as its package manager. */
 const systemWith = Effect.fn("onboardTest.systemWith")(function* (
   tools: Record<string, string>,
   manager: string,
@@ -614,7 +599,6 @@ esac`,
       expect(yield* read(`${home}/claude-calls`)).toContain(
         "mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp",
       );
-      // In a terminal of its own: on macOS too, where `script` takes other flags.
       expect(yield* read(`${home}/claude-calls`)).toContain("mcp login linear-server\ntty\n");
       const human = Option.getOrElse(
         Arr.findFirstIndex(events, (event) => event.event === "human" && event.step === "linear"),
@@ -685,7 +669,6 @@ esac`,
   ));
 
 test("Claude Code is asked whether it is logged in with the whole environment, not only what Collie reads", () => {
-  // On macOS its Keychain lookup needs USER, which `currentEnv` does not keep.
   const user = Bun.env.USER;
   Bun.env.USER = "someone";
   return runEffect(

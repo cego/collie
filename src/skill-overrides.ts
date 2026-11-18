@@ -6,12 +6,10 @@ import { pipe } from "effect/Function";
 import { parseDocument } from "./yaml";
 import { isString } from "./schema";
 
-/** The Claude Code that first honours `skillOverrides`. */
 export const SKILL_OVERRIDES_VERSION = "2.1.129";
 export const MAIN_CHECKOUT_SKILLS_VERSION = "2.1.277";
 
 interface Where {
-  /** Claude's own config directory: `CLAUDE_CONFIG_DIR`, else `~/.claude`. */
   readonly claudeDir: string;
   readonly cwd: string;
   readonly mainCheckoutSkills?: boolean;
@@ -24,7 +22,6 @@ const Overrides = Schema.fromJsonString(
 );
 const decodeOverrides = Schema.decodeOption(Overrides);
 
-/** Shorten unnamed skills while preserving operator choices and invocation restrictions. */
 export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
   where: Where,
   kept: ReadonlyArray<string>,

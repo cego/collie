@@ -1,6 +1,3 @@
-// One Run's details as the host serves them while a drawer is open: followed as they
-// change, with large items fetched by reference.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -284,8 +281,6 @@ test(
           yield* fs.writeFileString(`${runDir(world.state, runId)}/log.txt`, "from the host\n", {
             flag: "a",
           });
-          // The host may send other parts first. Inspect its latest frame only when it
-          // notifies us, and load the app once the updated log frame has actually arrived.
           yield* Stream.fromQueue(changes).pipe(
             Stream.mapEffect(() => detailOf({ runId, tail: true, pages: 1, refreshMr: false })),
             Stream.filter(
@@ -329,7 +324,6 @@ test.skipIf(process.getuid?.() === 0)(
             const detailOf = yield* followRunDetail(env);
             const key = { runId, tail: true, pages: 1, refreshMr: false };
             expect((yield* detailOf(key))?.id).toBe(runId);
-            // Unreadable, the host cannot build the details, and its stream dies.
             yield* Effect.acquireRelease(fs.chmod(dir, 0o000), () =>
               fs.chmod(dir, 0o755).pipe(Effect.ignore),
             );
@@ -363,7 +357,6 @@ test.skipIf(process.getuid?.() === 0)(
   120_000,
 );
 
-/** A checkout with a default branch and a branch off it, as a Run's worktree has. */
 const branched = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const repo = yield* fs.makeTempDirectoryScoped({ prefix: "collie-diff-" });
@@ -403,7 +396,6 @@ test("a Run's diff is its branch against the merge base, per file, and live whil
         ]);
         expect(final?.live).toBe(false);
 
-        // Live: what the checkout holds now, committed or not.
         yield* fs.writeFileString(`${repo}/wip.txt`, "draft\n");
         const live = yield* runDiff({ cwd: repo, branch: "feature", live: true });
         expect(
@@ -446,10 +438,8 @@ test("an ended Run keeps its diff once its checkout has gone, file by file", () 
         const kept = yield* fetchRef(pruned, "diff:kept.txt");
         expect(kept.content).toContain("+three");
         expect(kept.content).not.toContain("new.txt");
-        // A name git quotes in a patch header is still found by the name it has on disk.
         expect((yield* fetchRef(pruned, "diff:tab\there.txt")).content).toContain("+odd");
 
-        // A patch read in parts is built once: the later parts are cut from the first's.
         const head = yield* fetchRef(pruned, "diff:kept.txt", { offset: 0, length: 10 });
         yield* fs.remove(`${run.dir}/diff.json`);
         const tail = yield* fetchRef(pruned, "diff:kept.txt", { offset: 10, length: 1 << 20 });
@@ -477,7 +467,6 @@ test("a kept diff is taken again once its branch has moved on", () =>
           ),
         ).not.toContain("more.txt");
 
-        // Resumed, it committed more and succeeded.
         yield* fs.writeFileString(`${repo}/more.txt`, "more\n");
         yield* git("add", "-A");
         yield* git("commit", "-qm", "more");
@@ -509,7 +498,6 @@ test("the host keeps a Run's diff each time it ends, with no drawer opened", () 
         yield* keepDiffs([stopped], kept);
         expect(yield* keptNames).toContain("new.txt");
 
-        // Resumed: going again, then ended with more committed.
         yield* keepDiffs([{ ...stopped, state: "running" }], kept);
         yield* fs.writeFileString(`${repo}/more.txt`, "more\n");
         yield* git("add", "-A");
@@ -569,7 +557,6 @@ test("a reference never follows a link out of the directory it belongs to", () =
         yield* fs.writeFileString(`${run.dir}/review.md`, "## Review\n");
         expect((yield* fetchRef(run, "review")).content).toBe("## Review\n");
 
-        // Read in parts, a text comes back as bytes, so joined it is the file again.
         yield* fs.writeFileString(`${run.dir}/plan/issues/02-b.md`, "a—b");
         const parts = [];
         for (const offset of [0, 2, 4])
@@ -798,7 +785,6 @@ test("a fan-out's record has a panel per merge request by wave, and refreshes on
           `# ${repo}\n\n**Blocked by:** ${at === 0 ? "None" : `0${at}`}\n\n**Repo:** ${repo}\n`,
         );
       }
-      // The later wave started first, so wave order is not start order.
       const children = yield* Effect.forEach(repos, ([repo, iid], at) =>
         madeRun(dir, {
           id: `r-${repo}`,

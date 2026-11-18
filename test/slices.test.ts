@@ -1,10 +1,3 @@
-// A list of work, as both a declared `each:` and a written loop take one.
-//
-// Two rules and nothing else: an item is known by an identity that survives the list
-// being reordered or edited, and what the items before it left is a few lines of fact.
-// Both are here rather than in the engine because a module writing its own loop needs
-// the same answers — and two readings of "which result is this item's" is one too many.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";

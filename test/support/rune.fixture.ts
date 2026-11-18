@@ -1,6 +1,3 @@
-// What the Rune spike is tested against: a Flock of two live Machines with five cards between
-// them, one Machine out of reach and one only saved, as `flock` streams it.
-
 import type { AguiEvent } from "../../desktop/src/shared/agui";
 import type { FlockItem } from "../../desktop/src/shared/flock";
 import { task } from "./task";
@@ -166,7 +163,6 @@ export const FLOCK: ReadonlyArray<FlockItem> = [
   },
 ];
 
-/** One turn of the Flock chat, as `say` streams it, with an event of every AG-UI kind. */
 export const SAID: ReadonlyArray<AguiEvent> = [
   { type: "RUN_STARTED", threadId: "conv-1", runId: "turn-1" },
   { type: "REASONING_START", messageId: "r1" },

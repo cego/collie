@@ -1,7 +1,3 @@
-// A credential a human or an agent pastes into a goal, a steer or an answer is replaced by
-// its kind before the host writes or forwards anything, and the operation still happens.
-// The values here are built at runtime, synthetic, and only shaped like credentials.
-
 import { hostRecords, recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -27,7 +23,6 @@ const GITLAB = Arr.join(["glpat", "synthetic0000000000test"], "-");
 const GITHUB = Arr.join(["ghp", "Synthetic0000000000000000000000000Test"], "_");
 const AWS = Arr.join(["AKIA", "SYNTHETIC0000TST"], "");
 
-/** Every file under `dir` that holds `value`. */
 const holding = (dir: string, values: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

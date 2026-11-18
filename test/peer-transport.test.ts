@@ -1,6 +1,3 @@
-// ADR-draft-a-blocked-link-rides-the-machines-ssh-connection: a TLS WebSocket server stands
-// in for the peer, a resetter for a network refusing its port.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -17,7 +14,6 @@ import { freePort, portOf, resetter, writeFakeSsh, socketDir } from "./support/f
 const vm = { label: "vm-mk", target: "mk@vm-mk" };
 const SECRET = "the-secret";
 
-/** A server on 127.0.0.1 that accepts each connection and never answers. */
 const silent = Effect.acquireRelease(
   Effect.callback<Server>((resume) => {
     const server = createServer((conn) => conn.on("error", () => {}));
@@ -26,7 +22,6 @@ const silent = Effect.acquireRelease(
   (server) => Effect.sync(() => server.close()),
 );
 
-/** A port nothing listens on, held by a resetter for the test. */
 const resetting = Effect.gen(function* () {
   const free = yield* freePort;
   const server = yield* resetter(free);
@@ -35,7 +30,6 @@ const resetting = Effect.gen(function* () {
   return { port: free, accepted: () => accepted };
 });
 
-/** A pinned TLS WebSocket server that echoes, letting in only the secret. */
 const listener = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -84,7 +78,6 @@ const rig = Effect.gen(function* () {
   return { dir, fake, far, handle, connect, peerAt };
 });
 
-/** Opens `/control` on the peer and answers the way it went and the first thing it heard. */
 const reached = (peer: Peer, connection: Effect.Success<typeof rig>["handle"] | null, way?: Way) =>
   Effect.gen(function* () {
     const opened = yield* openPeer(peer, () => "/control", Effect.succeed(connection), way);

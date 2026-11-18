@@ -1,7 +1,3 @@
-// Electrobun signs Desktop's macOS build after its release metadata is written, with the
-// identity the release gives it: a Developer ID, or `-` for ad hoc. Only a Developer ID with
-// a complete set of notarization credentials is notarized.
-
 import { expect, test } from "bun:test";
 import { macSigning } from "../desktop/scripts/mac-signing";
 

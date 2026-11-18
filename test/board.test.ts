@@ -1,8 +1,3 @@
-// The board's model: one TaskView per Task, and the one sentence a card says about it.
-//
-// The formatter is pure and table-driven, because the sentence is the whole of what a
-// human reads on a card — a form nobody has a case for is a form nobody can trust.
-
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import * as Option from "effect/Option";
@@ -439,9 +434,6 @@ test("a held Task carries its own line under the sentence", () => {
   expect(heldLine("14:00")).toBe("⏸ Held until 14:00.");
 });
 
-// The three sections the board draws, the one sentence over them, and the same thing
-// as text for a pane whose renderer will not start.
-
 function task(over: Partial<TaskView> = {}) {
   const returned: TaskView = {
     id: "t1",
@@ -464,8 +456,6 @@ function task(over: Partial<TaskView> = {}) {
     mr: null,
     branch: "mk/strapi-seed",
     disposition: null,
-    // A finished fixture has landed unless the test says otherwise: most tests are about
-    // the other sections, and an unlanded done Task is its own case.
     landed: (over.state ?? "active") === "done",
     ended: null,
     mrState: null,
@@ -546,7 +536,6 @@ test("the five sections take every Task, in the board's own order", () => {
 
   expect(Arr.map(sections.needs, (t) => t.id)).toEqual(["blocked"]);
   expect(Arr.map(sections.working, (t) => t.id)).toEqual(["working", "quiet"]);
-  // Failed work nobody disposed of is still yours; a landed done Task is finished.
   expect(Arr.map(sections.waiting, (t) => t.id)).toEqual(["failed"]);
   expect(Arr.map(sections.finished, (t) => t.id)).toEqual(["done"]);
 });
@@ -558,8 +547,6 @@ test("the header counts what is waiting on you this week, and the fold counts th
     task({ id: "recent", state: "failed", ended: now - 2 * 24 * 60 * 60 * 1000 }),
     task({ id: "old", state: "stopped", ended: now - 9 * 24 * 60 * 60 * 1000 }),
   ];
-  // Given the clock, the header counts the week's endings; the fold's own line counts the
-  // rest. Without it — a test's bare call — it counts them all.
   expect(headerSentence(views, now).text).toBe("Nothing needs you. 1 waiting on you. 1 working.");
   expect(headerSentence(views).text).toBe("Nothing needs you. 2 waiting on you. 1 working.");
   const { recent, older } = foldWaiting(sectionsOf(views, "").waiting, now);
@@ -579,7 +566,6 @@ test("a search matches the five things a human remembers about a task", () => {
     expect(matchesTask(view, query)).toBe(true);
   }
   expect(matchesTask(view, "passkey")).toBe(false);
-  // An empty query is not a filter: every Task matches it.
   expect(matchesTask(view, "  ")).toBe(true);
 });
 
@@ -603,9 +589,7 @@ test("a filter narrows the rows that are drawn and never what is supervised", ()
     task({ id: "blocked", state: "blocked", decision: QUESTION }),
     task({ id: "b", name: "Passkey bridge race", state: "done" }),
   ];
-  // The search hides the Task that needs you from what is drawn…
   expect(sectionsOf(views, "passkey").needs).toEqual([]);
-  // …and what says something is waiting on you still counts it.
   expect(headerSentence(views)).toEqual({
     text: "One task is waiting on you. 0 working.",
     urgent: true,
@@ -617,7 +601,6 @@ test("Finished is one line until it is opened", () => {
   expect(finishedLabel(finished, false)).toBe("2 finished today, 1 failed");
   expect(finishedLabel(finished, true)).toBe("Finished · 2");
   expect(finishedLabel([task({ state: "done" })], false)).toBe("1 finished today");
-  // Given the clock, a dead Run that landed weeks ago is counted as older, not as today's.
   const now = epochMs("2026-09-17T08:00:00.000Z");
   const fresh = Arr.map(finished, (view) => ({ ...view, ended: now - 60 * 60 * 1000 }));
   const old = task({ id: "t3", state: "abandoned", ended: now - 14 * 24 * 60 * 60 * 1000 });
@@ -633,10 +616,6 @@ test("where a Task is, is the step it has got to", () => {
   expect(whereItIs(task({ steps: [{ name: "mr", state: "done" }] }))).toBe("done");
   expect(whereItIs(task({ steps: [] }))).toBe("");
 });
-
-// The text board: the escape hatch a pane too dumb to render falls back to. The same
-// three sections and the same sentences, because a human on it must not be shown a
-// shorter, more reassuring version of the herd.
 
 test("the text board says the three sections and the sentence on every card", () => {
   const lines = boardLines([
@@ -684,10 +663,6 @@ test("a step nobody named a verb for says what it is doing, never its id", () =>
   expect(sentenceFor(facts({ step: { id: "cego.lint", round: null } }))).not.toContain("cego.lint");
 });
 
-// The builder, against Runs as the host reports them: what a Task is, which Runs make one
-// up, and where its pipeline has got to. No pane, no renderer, and no host either — the
-// Runs are handed in, which is what a caller drawing several views does.
-
 const scratch = Effect.fn("board.scratch")(function* () {
   const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
     prefix: "collie-board-",
@@ -703,7 +678,6 @@ const TASK: TaskRecord = {
   created_at: "2026-09-14T09:00:00Z",
 };
 
-/** What core says about a terminal, which is all the board ever knows about one. */
 function agent(name: string, status: AgentInfo["status"]) {
   const returned: AgentInfo = {
     name,
@@ -716,7 +690,6 @@ function agent(name: string, status: AgentInfo["status"]) {
   return returned;
 }
 
-/** The register's word that an agent works for a Run. */
 function registered(agent: string, runId: string) {
   const returned: AgentEntry = {
     role: "implementer",
@@ -776,7 +749,6 @@ test("a Task's Runs are one card, and a Run with no Task is its own", () =>
       expect(task.name).toBe("Control plane");
       expect(task.project).toBe("collie");
       expect(task.runs).toEqual(["r-build", "r-plan"]);
-      // The Run with no Task names itself, and its checkout is its project.
       const own = Option.getOrUndefined(Arr.findFirst(views, (view) => view.id === "r-alone"))!;
       expect(own.name).toBe("Review");
       expect(own.project).toBe("spilnu");
@@ -821,7 +793,6 @@ test("the pipeline is the Task's Runs in the order they started, each as it stan
         { name: "plan", state: "done" },
         { name: "implement", state: "active" },
       ]);
-      // The newest Run still going is the one the card speaks for.
       expect(view!.run).toBe("r-build");
     }),
   ));
@@ -844,7 +815,6 @@ test("a Task's card speaks for its newest Run, in whatever order the Runs arrive
         created: "2026-09-14T10:00:00Z",
       });
 
-      // The host's registry lists Runs in the order they were admitted.
       const [view] = yield* board(env, [plan, build]);
 
       expect(view!.run).toBe("r-impl");
@@ -919,7 +889,6 @@ test("a Task's card lists every question its Runs have open, in the order it ask
 
       const [view] = yield* board(env, [first, second]);
 
-      // Newest Run first, as the card's first question has always been chosen.
       expect(
         Option.getOrUndefined(
           Option.map(Option.fromNullishOr(view!.questions), (present) =>
@@ -1091,7 +1060,6 @@ test("a check Collie is running outranks what an idle agent last said", () =>
     }),
   ));
 
-/** The steps the Driver launched agents for, oldest first, as it records them. */
 const launched = Effect.fn("board.launched")(function* (
   stateDir: string,
   runId: string,
@@ -1113,8 +1081,6 @@ const launched = Effect.fn("board.launched")(function* (
   }
 });
 
-/** A file last written at this moment, which is what silence is measured from. */
-/** `effect` with the clock at `iso`. */
 const atTime = <A, E, R>(iso: string, effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const clock = yield* TestClock.make();
@@ -1122,7 +1088,6 @@ const atTime = <A, E, R>(iso: string, effect: Effect.Effect<A, E, R>) =>
     return yield* effect.pipe(Effect.provideService(Clock.Clock, clock));
   });
 
-/** The Run did work at `iso`, as accepting its agent's output records. */
 const workedAt = (runId: string, iso: string) =>
   atTime(
     iso,
@@ -1156,7 +1121,6 @@ test("a working card names the step the Run is on, with its round", () =>
       yield* launched(dir, fixing.id, ["build", "review-1", "fix-1"]);
       yield* launched(dir, reviewing.id, ["build", "review-1", "fix-1", "review-2-1"]);
       yield* launched(dir, ticket.id, ["01-parse.md", "02-one-launch-input-per-module.md"]);
-      // Round 1's seats carry no round: this is seat 3 of the first review.
       const seated = yield* madeRun(dir, { id: "r-seat" });
       yield* launched(dir, seated.id, ["build", "review-1", "review-2", "review-3"]);
       const named = yield* madeRun(dir, { id: "r-named" });
@@ -1199,7 +1163,6 @@ test("a Run is not quiet while its agent works, a check runs, or its agents writ
       expect(view(working.id).sentence).toBe("Building.");
       expect(view(checking.id).state).toBe("active");
       expect(view(writing.id).state).toBe("active");
-      // An idle agent and nothing written for an hour is what quiet is.
       expect(view(idle.id).state).toBe("quiet");
       expect(view(idle.id).sentence).toBe("Building, but silent for 1 hour.");
     }),
@@ -1293,7 +1256,6 @@ test("what the host writes about a finished Run does not move when it ended", ()
       const old = "2026-09-13T09:00:00Z";
       const run = yield* madeRun(dir, { state: "failed", branch: "mk/old-work" });
       yield* workedAt(run.id, old);
-      // The diff kept for its drawer and the trail of who disposed of it.
       yield* writtenAt(`${run.dir}/diff.json`, "2026-09-14T10:04:00Z");
       yield* recordAudit(run.dir, {
         operation: "disposition",
@@ -1334,7 +1296,6 @@ test("what became of the work is the disposition's answer and nobody else's", ()
 
       const now = epochMs("2026-09-14T10:00:00Z");
       const before = yield* board(env, [run], { now });
-      // A merge request nobody has said landed is not a merge, but it is news.
       expect(before[0]!.sentence).toBe("content!1 is open; nothing has checked it.");
 
       yield* recordDisposition(run.dir, {
@@ -1369,8 +1330,6 @@ test("a Run whose work shipped by hand says so, without its status being edited"
       });
 
       const [card] = yield* board(env, [run], { now: epochMs("2026-09-14T10:00:00Z") });
-      // Both facts, on the card a person is looking at: how execution ended, and what
-      // became of the work. Neither is edited to tidy the other away.
       expect(card!.state).toBe("failed");
       expect(card!.disposition).toBe("merged cego/collie!43");
       expect(card!.sentence).toBe(
@@ -1481,7 +1440,6 @@ test("a month-old Task pruned after its record was read goes to History, and a r
         [unmerged.id, "waiting"],
       ]);
 
-      // Reading each record first, as opening it or `collie run show` does, then pruning.
       for (const run of [unmerged, bare]) yield* readLogTail(run.dir, 4096);
       yield* recordDisposition(unmerged.dir, {
         kind: "abandoned",
@@ -1499,10 +1457,7 @@ test("a Run that ended with nothing to file is finished, not waiting", () =>
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
-      // Failed before it had a checkout: no branch, no merge request, nothing anyone
-      // could mark merged or abandoned. Fifty of these are not fifty obligations.
       const bare = yield* madeRun(dir, { id: "r-bare", task: "t-bare", state: "failed" });
-      // Failed with a branch: the work is somewhere, and what became of it is yours.
       const branched = yield* madeRun(dir, {
         id: "r-branch",
         task: "t-branch",
@@ -1551,7 +1506,6 @@ test("a Task's card reads its Task: a stopped child's Disposition, not its waiti
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
-      // A stop suspends the implement Run, so the plan Run waits on it forever.
       const plan = yield* madeRun(dir, {
         id: "r-plan",
         workflow: "plan",
@@ -1613,7 +1567,6 @@ test("a Task's card reads its Task: the latest Disposition on any of its Runs", 
       yield* disposed(implement, "2026-09-14T09:45:00Z", "cego/collie#116");
       const [card] = yield* board(env, [plan, implement]);
       expect(card!.disposition).toBe("merged cego/collie#116");
-      // The branch is settled by the line on the Run that carries it, not by the plan's.
       expect(card!.landed).toBe(true);
     }),
   ));
@@ -1827,10 +1780,6 @@ for (const withMr of [false, true])
       }),
     ));
 
-/**
- * The support !279 chain: a failed Run carrying M, superseded by its follow-up in the same
- * Task, which succeeded with `then=finish` carrying M too.
- */
 const supersededChain = Effect.fn("board.supersededChain")(function* (dir: string) {
   const first = yield* madeRun(dir, {
     id: "r-first",
@@ -1861,7 +1810,6 @@ const supersededChain = Effect.fn("board.supersededChain")(function* (dir: strin
   return { first, second };
 });
 
-/** The forge's word on M: `state`, green at its head, and not approved. */
 const unapproved = (state: MrState = "open") => ({
   mrStates: new Map<string, MrState>([[M_ID, state]]),
   forge: new Map([
@@ -2699,18 +2647,13 @@ test("landed is a disposition, a merge the forge reports, or work with nothing t
         madeRun(dir, { id, task: `t-${id}`, state: "succeeded", ...over });
       const runs = [
         yield* done("review", { workflow: "review" }),
-        // Tickets and nothing else: work somebody can build from, whatever wrote them.
         yield* issues(yield* done("plan", { workflow: "plan" }), 3),
-        // The same facts under a name that shares nothing with the shipped one.
         yield* issues(yield* done("renamed", { workflow: "shape-the-work" }), 2),
-        // Named `plan` and wrote none: there is nothing to build from, so nothing is owed.
         yield* done("empty", { workflow: "plan" }),
         yield* done("merged", { mr: "https://gitlab.cego.dk/mk/collie/-/merge_requests/65" }),
         yield* done("closed", { mr: "https://gitlab.cego.dk/mk/collie/-/merge_requests/66" }),
       ];
 
-      // What each module offers now: the shipped plan offers its build, the renamed one
-      // declares nothing, and the card offers exactly that.
       const implementNow = {
         id: "implement-now",
         title: "Implement now",
@@ -2731,7 +2674,6 @@ test("landed is a disposition, a merge the forge reports, or work with nothing t
         Option.getOrUndefined(Arr.findFirst(views, (view) => view.id === `t-${task}`))!;
       expect(sectionOf(by("review"))).toBe("finished");
       expect(sectionOf(by("empty"))).toBe("finished");
-      // Identical cards, under two names that share nothing.
       for (const task of ["plan", "renamed"]) {
         expect([task, sectionOf(by(task))]).toEqual([task, "waiting"]);
         expect([task, by(task).sentence]).toEqual([task, "Plan ready to implement."]);
@@ -2913,7 +2855,6 @@ test(
   60_000,
 );
 
-/** A plan of three repositories, each waiting on the one before, in a root with their checkouts. */
 const threeRepoPlan = Effect.fn("board.threeRepoPlan")(function* (runDir: string, root: string) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(`${runDir}/plan/issues`, { recursive: true });
@@ -3012,10 +2953,6 @@ const GITLAB = (repo: string, iid: number) =>
   `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`;
 const idOf = (repo: string, iid: number) => `gitlab.cego.dk/cego/${repo}!${iid}`;
 
-/**
- * A succeeded fan-out whose Repo runs each opened a merge request, one wave each in the
- * order given. A later wave's Run started earlier, so wave order is not start order.
- */
 const fannedOut = Effect.fn("board.fannedOut")(function* (
   dir: string,
   mrs: ReadonlyArray<readonly [repo: string, iid: number]>,
@@ -3399,10 +3336,6 @@ test("a child that is work of its own is its own card, and its parent's card lis
     }),
   ));
 
-/**
- * A fan-out started from a plan's end menu: its `plan` input names the plan Run's own plan,
- * with no kind recorded, over three repositories in two waves.
- */
 const startedFromPlan = Effect.fn("board.startedFromPlan")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const root = `${dir}/root`;
@@ -3455,7 +3388,6 @@ test("a fan-out started from a plan's end menu lists every repository its plan n
     }),
   ));
 
-/** The note a Run parked at the evidence gate before ADR-0055 still carries. */
 const oldGate = (run: string) =>
   "nothing is approved for Collie to run, so no command can prove this Run. " +
   `Grant it one with \`collie run intent verification ${run} --name <name> -- <command>\` ` +
@@ -3617,7 +3549,6 @@ test("a Run nothing drives and no agent works on is abandoned", () =>
 
       expect(view!.state).toBe("abandoned");
       expect(view!.sentence).toStartWith("Its Driver died ");
-      // What to repair, because fixing the file brings the Run back.
       expect(view!.sentence).toContain(broken);
     }),
   ));
@@ -3639,8 +3570,6 @@ test("a question outranks a Run nothing drives: it is still waiting on you", () 
       expect(sectionOf(view!)).toBe("needs-you");
     }),
   ));
-
-// Ready to release: a succeeded Run's open merge request, and what checked it.
 
 test("the sections come out in the board's order, and ready work has its own section", () => {
   const views = sortBoard([
@@ -3756,7 +3685,6 @@ test("the header names what is ready to release before what else waits on you", 
   expect(headerSentence([views[0]!]).text).toBe("Nothing needs you. 1 ready to ship. 0 working.");
 });
 
-/** A Collie-collected check of `name` at `head`. */
 const checked: (name: string, head: string, result?: "pass" | "fail") => Verification = (
   name,
   head,
@@ -3779,7 +3707,6 @@ const checked: (name: string, head: string, result?: "pass" | "fail") => Verific
   by: "collie",
 });
 
-/** A checkout with `branch` at a commit of its own, and that commit's sha. */
 const checkout = Effect.fn("board.checkout")(function* (branch: string) {
   const fs = yield* FileSystem.FileSystem;
   const repo = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-repo-" });
@@ -3817,7 +3744,6 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
 
       expect((yield* view).sentence).toBe("cego/collie#30 is open; nothing has checked it.");
 
-      // Green, but on a tree the branch has moved past: not evidence about this one.
       yield* appendVerification(run.evidence, checked("test", "0000000older"));
       expect((yield* view).checks).toEqual({ state: "unchecked" });
       expect((yield* view).ready).toBe(false);
@@ -3843,7 +3769,6 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
             ],
           ]),
         });
-      // Green, but nobody has asked the forge whether it can merge.
       expect(
         Option.getOrUndefined(
           Option.map(Option.fromNullishOr((yield* view).readiness), (present___) =>
@@ -3858,7 +3783,6 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
       expect(green[0]!.sentence).toBe(
         `Ready to release: cego/collie#30 is open and its checks passed at ${pipe(head, Str.slice(0, 7))}. Next: Release, or tell builder to.`,
       );
-      // The forge's approval rules are its own: green and unapproved is not ready.
       const unapproved = yield* forgeSays({ state: "blocked", said: "not approved" });
       expect(unapproved[0]!.ready).toBe(false);
       expect(unapproved[0]!.sentence).toBe(
@@ -3884,8 +3808,6 @@ test("where the branch cannot be read, the newest revision Collie checked counts
       expect(view!.sentence).toContain("passed at bbbbbbb");
     }),
   ));
-
-// A check Collie is running: which pass, why, and how long against how long it usually takes.
 
 const PASS_SENTENCES: Array<[string, Parameters<typeof checkSentence>[0], string]> = [
   [
@@ -3989,7 +3911,6 @@ for (const [form, given, expected] of PASS_SENTENCES) {
   });
 }
 
-/** A marker as the host writes one while a check runs. */
 const marking = Effect.fn("board.marking")(function* (
   run: RunFacts,
   over: Partial<Parameters<typeof encodeVerifying>[0]> = {},
@@ -4011,7 +3932,6 @@ const marking = Effect.fn("board.marking")(function* (
   );
 });
 
-/** A finished Collie run of `bun test` in `run`'s evidence that took `minutes`. */
 const took = (run: RunFacts, minutes: number, at: string) =>
   appendVerification(run.evidence, {
     ...checked("test", "abc"),
@@ -4057,7 +3977,6 @@ test("usually is the median of the last five runs of that check in the same repo
       });
       yield* marking(run);
       const at = (n: number) => `2026-09-13T1${n}:00:00Z`;
-      // Six earlier: the oldest falls out, and the last five's median is 3 minutes.
       for (const [n, minutes] of [
         [0, 90],
         [1, 1],
@@ -4067,9 +3986,7 @@ test("usually is the median of the last five runs of that check in the same repo
         [5, 5],
       ] as const)
         yield* took(before, minutes, at(n));
-      // Another repository's runs of the same command are not this one's usual.
       yield* took(elsewhere, 60, at(6));
-      // Nor are this repository's runs of it with other arguments, or of another command.
       yield* appendVerification(before.evidence, {
         ...checked("test", "abc"),
         id: "v-other-args",
@@ -4193,9 +4110,6 @@ test(
   60_000,
 );
 
-// A finished Run Reopened by a steer to its live agent (ADR-0038 D5): derived from the
-// ledger and herdr's word on the agent, never stored.
-
 const steerAt: (at: string, state?: Delivery["state"]) => Delivery = (at, state = "submitted") => ({
   id: `d-${at}`,
   at,
@@ -4212,7 +4126,6 @@ const steerAt: (at: string, state?: Delivery["state"]) => Delivery = (at, state 
   state,
 });
 
-/** A succeeded Run whose builder was told "merge and tag it", with herdr saying `status`. */
 const reopened = Effect.fn("board.reopened")(function* (
   status: AgentInfo["status"],
   steeredAt = "2026-09-14T10:02:00Z",
@@ -4253,10 +4166,8 @@ test("a succeeded Run whose agent works on what it was told after it ended is Wo
       const card = yield* reopened("working");
       expect(sectionOf(card)).toBe("working");
       expect(card.sentence).toBe("Working on what you told builder: “merge and tag it”.");
-      // The Workflow's steps are as they ended.
       expect(card.steps).toEqual([{ name: "implement", state: "done" }]);
       expect(card.reopened).toMatchObject({ agent: "builder", status: "working" });
-      // Chat reads the same card, in the same section.
       const said = herdLines([card], epochMs("2026-09-14T10:05:00Z"));
       expect(said).toContain("## Working · 1");
       expect(said).toContain(card.sentence);
@@ -4369,7 +4280,6 @@ test(
 
           const none = yield* collie(world, ["run", "checks", runId, "--follow"]);
           yield* stopHost(world.state);
-          // Under --json the output is stderr's: stdout is the one envelope.
           expect(followed.stderr).toContain("Running unit on the branch");
           expect(
             Option.getOrElse(pipe(followed.stderr, Str.indexOf("compiling")), () => -1),
@@ -4456,7 +4366,6 @@ test("a Run's checks are its Intent's as they stand, each passed as the command 
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${repo}/packages/b`, { recursive: true });
       yield* updateApproved(run.evidence, () => [spec("test")]);
-      // As Collie records it: the executable resolved, in the directory the check names.
       const ran = (name: string, result: "pass" | "fail" = "pass") => ({
         ...checked(name, head, result),
         executable: Bun.which("true")!,
@@ -4472,17 +4381,14 @@ test("a Run's checks are its Intent's as they stand, each passed as the command 
           ...intent,
           authority: { ...intent.authority, run_verification: verification },
         });
-      // A check added after the seeded one passed has not run.
       yield* amended([spec("test"), spec("typecheck", "true", "worktree", ["typecheck"])]);
       expect(yield* checks).toEqual({ state: "unchecked" });
-      // A pass of the command a check named before is not a pass of the one it names now.
       yield* amended([spec("test", "false")]);
       expect(yield* checks).toEqual({ state: "unchecked" });
       yield* amended([spec("test", "/opt/new/true")]);
       expect(yield* checks).toEqual({ state: "unchecked" });
       yield* amended([spec("test", "true", "packages/b")]);
       expect(yield* checks).toEqual({ state: "unchecked" });
-      // A check withdrawn after it failed no longer holds the Run back.
       yield* appendVerification(run.evidence, { ...ran("lint", "fail"), argv: ["lint"] });
       yield* amended([spec("test")]);
       expect(yield* checks).toEqual({ state: "passed", at: head });
@@ -4513,10 +4419,8 @@ test("a Run whose gate relied on an agent's pass of the check's command reads as
         cwd: repo,
       });
       const checks = Effect.map(board(env, [run]), (views) => views[0]!.checks);
-      // The check's name with another command is not the check.
       yield* appendVerification(run.evidence, agents("test", ["--other"]));
       expect(yield* checks).toEqual({ state: "unchecked" });
-      // Exactly its command, under a name of the agent's own.
       yield* appendVerification(run.evidence, agents("true", []));
       expect(yield* checks).toEqual({ state: "passed", at: head });
     }),
@@ -4538,7 +4442,6 @@ test("following a check hands on each line while the check is still running", ()
       );
 
       yield* fs.writeFileString(log, "1 pass\n", { flag: "a" });
-      // Said with the marker still there: the check has not ended.
       yield* until(
         () => Effect.succeed(Arr.join(said, "")),
         (text) => pipe(text, Str.includes("1 pass")),
@@ -4650,7 +4553,6 @@ test("an expected failure of a check's command is not a pass, whether it failed 
   });
 });
 
-/** A Step as a module declares it. */
 const declared: (id: string, over?: Partial<StepMeta>) => StepMeta = (id, over = {}) => ({
   id,
   title: id,
@@ -4661,7 +4563,6 @@ const declared: (id: string, over?: Partial<StepMeta>) => StepMeta = (id, over =
   ...over,
 });
 
-/** What a Run recorded of its Steps: the path, then each Step entered 4 min apart, the last 4 min ago. */
 const stepsRecorded = Effect.fn("board.stepsRecorded")(function* (
   run: RunFacts,
   path: ReadonlyArray<StepMeta>,
@@ -4681,7 +4582,6 @@ const stepsRecorded = Effect.fn("board.stepsRecorded")(function* (
   yield* Effect.forEach(lines, (line) => appendStepLine(run.dir, line));
 });
 
-/** The board built over these Runs, and each Task's whole Flow beside it. */
 const boardAndFlows = Effect.fn("board.boardAndFlows")(function* (
   env: ReturnType<typeof readEnv>,
   runs: ReadonlyArray<RunFacts>,
@@ -5013,7 +4913,6 @@ test("a launch from before a Run's Steps is drawn as the Step it was, once", () 
     }),
   ));
 
-/** A Run in its Build Step, held up by whatever `setUp` does to it. */
 const waitingIn = (
   setUp: (
     run: RunFacts,
@@ -5155,7 +5054,6 @@ test("a wait for usage says whose session resets, and when", () =>
       const nodes = yield* waitingIn(() => Effect.succeed({}), {
         usage: { account: "claude", resetsAt: "2026-09-14T15:45:00.000Z" },
       });
-      // bun runs its tests on UTC, so the reset's local time is its UTC one.
       expect(nodes[0]).toEqual({
         id: "build",
         state: "waiting",

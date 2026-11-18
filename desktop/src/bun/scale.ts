@@ -1,5 +1,3 @@
-// Draws each Desktop window at its monitor's own scale (ADR-0047).
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { type BrowserWindow, Screen } from "../../core/platform";
@@ -7,7 +5,6 @@ import { Effect, Queue, Stream } from "effect";
 import { type MonitorScale, monitorOf, zoomFor } from "../shared/scale";
 import { output } from "./machine";
 
-// ponytail: Hyprland only; GNOME and KDE are read once someone runs Desktop there (ADR-0047).
 const monitorScale: (title: string) => Effect.Effect<MonitorScale> = (title) =>
   Bun.env.HYPRLAND_INSTANCE_SIGNATURE === undefined
     ? Effect.succeed({ _tag: "Unknown", reason: "This is not a Hyprland session" })
@@ -25,7 +22,6 @@ const monitorScale: (title: string) => Effect.Effect<MonitorScale> = (title) =>
         }),
       );
 
-/** The scale Electrobun renders the window at: its display's, the one holding its centre. */
 const renderedScale = (window: BrowserWindow) => {
   const { x, y, width, height } = window.getFrame();
   const [cx, cy] = [x + width / 2, y + height / 2];
@@ -43,7 +39,6 @@ const renderedScale = (window: BrowserWindow) => {
   return (holding ?? Screen.getPrimaryDisplay()).scaleFactor || 1;
 };
 
-/** Zooms `window` for its monitor and `preference`, and says how it is now drawn. */
 export const zoomWindow = (window: BrowserWindow, title: string, preference: number) =>
   Effect.map(monitorScale(title), (monitor) => {
     const rendered = renderedScale(window);
@@ -52,10 +47,6 @@ export const zoomWindow = (window: BrowserWindow, title: string, preference: num
     return { monitor, rendered, zoom, preference };
   });
 
-/**
- * Asks for `window` to be zoomed now, and again, settled, after each move, resize or focus.
- * The returned effect asks again by hand, as a change of Zoom does.
- */
 export const followWindow = (window: BrowserWindow) =>
   Effect.gen(function* () {
     const asked = yield* Queue.sliding<void>(1);

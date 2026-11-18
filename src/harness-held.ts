@@ -3,11 +3,6 @@ import * as Str from "effect/String";
 import { Effect } from "effect";
 import { shell } from "./mr";
 
-/**
- * The harness `commits` that `at` lacks, in order: those after the longest prefix whose
- * touched files `at` holds exactly as that prefix left them. Content decides, not ancestry, so
- * copies under other SHAs count and a history whose harness was since changed or removed does not.
- */
 export const harnessLacking = (cwd: string, at: string, commits: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const git = (...args: string[]) => shell("git", args, cwd);
@@ -26,7 +21,6 @@ export const harnessLacking = (cwd: string, at: string, commits: ReadonlyArray<s
       );
       if (files.code !== 0) break;
       touched.push(...Arr.filter(Str.split(files.stdout, "\0"), Str.isNonEmpty));
-      // An empty pathspec would compare the whole tree.
       if (
         touched.length === 0 ||
         (yield* git("--literal-pathspecs", "diff", "--quiet", commit, at, "--", ...touched))

@@ -1,12 +1,8 @@
-// What `bun test` printed about its failures, and how one of them is run again alone
-// (ADR-0034, amended 2026-10-15).
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import type { FailedTest } from "./verify-model";
 
-// ponytail: more failures than this is a broken change, not flakiness; a check that names none is handled whole.
 const MAX_FAILED = 20;
 
 const FILE_HEADER = /^(\S+\.[cm]?[jt]sx?):$/;
@@ -14,15 +10,8 @@ const FAILED = /^\(fail\) (.+?)(?: \[[\d.]+m?s\])?$/;
 const LIST_HEADER = /^\d+ tests? failed:$/;
 const FAIL_COUNT = /^\s*(\d+) fail$/;
 const ERROR_COUNT = /^\s*\d+ errors?$/;
-// What bun names a failure outside any test, such as a file's afterAll.
 const HOOK = "(unnamed)";
 
-/**
- * The failed tests bun's output names, each under the file whose header is nearest above it;
- * null where the output cannot be read whole: its fail count disagrees, it reports an error
- * outside any test, a failure has no file or is a hook's, which no test run alone proves,
- * or there are over `MAX_FAILED`.
- */
 export function failedTests(output: string) {
   const lines = Str.split(output, "\n");
   const found = new Map<string, FailedTest>();
@@ -33,7 +22,6 @@ export function failedTests(output: string) {
     if (ERROR_COUNT.test(line)) return null;
     const count = FAIL_COUNT.exec(line);
     if (count !== null) failCount = Number(count[1]);
-    // The closing list repeats the names without their files.
     if (LIST_HEADER.test(line)) listed = true;
     if (listed) continue;
     const header = FILE_HEADER.exec(line);
@@ -47,22 +35,16 @@ export function failedTests(output: string) {
   return [...found.values()];
 }
 
-/**
- * A path, not a filter: bare, bun runs every file whose path contains it. `-t` matches a
- * nested name with its parts joined by one space, where bun prints ` > `.
- */
 export function rerunArgv(test: FailedTest) {
   const joined = Arr.join(Str.split(test.name, " > "), " ");
   const file = pipe(test.file, Str.startsWith("/")) ? test.file : `./${test.file}`;
   return ["test", file, "-t", `^${pipe(joined, Str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))}$`];
 }
 
-/** Whether a rerun ran exactly one test and it passed; "matched 0 tests" and two of that name do not. */
 export function ranAlone(exit: number, output: string) {
   return exit === 0 && /^\s*1 pass$/m.test(output) && /^\s*0 fail$/m.test(output);
 }
 
-/** Whether bun ran that one test in one file and named it failing: a test it did not find is not failing there. */
 export function failedAlone(exit: number, output: string, test: FailedTest) {
   return (
     exit !== 0 &&

@@ -1,8 +1,3 @@
-// Every link between the repository's own documents, walked. AGENTS.md is a navigation
-// file and the docs point at each other by heading; a renamed section leaves a link that
-// still looks right in a diff and lands nowhere, which is how `#scope-this-workspace-or-
-// the-whole-session` outlived the section it named. A rename now fails here instead.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
@@ -12,7 +7,6 @@ import { runEffect } from "./support/effect";
 
 const ROOT = `${import.meta.dir}/..`;
 
-/** Where a relative link points, from the document that wrote it. Repository-only. */
 function resolve(from: string, link: string) {
   const parts = Str.split(`${Arr.join(Str.split(from, "/").slice(0, -1), "/")}/${link}`, "/");
   const out: string[] = [];
@@ -24,7 +18,6 @@ function resolve(from: string, link: string) {
   return Arr.join(out, "/");
 }
 
-/** GitHub's heading slug, near enough for the headings this repository writes. */
 function slugs(markdown: string) {
   const found = new Set<string>();
   for (const [, heading] of pipe(markdown, Str.matchAll(/^#+ (.+)$/gm))) {
@@ -64,8 +57,6 @@ test("every link between the repository's documents resolves, anchors included",
           if (pipe(link!, Str.startsWith("http")) || pipe(link!, Str.startsWith("mailto:")))
             continue;
           const [path, anchor] = Str.split(link!, "#");
-          // A link to a directory — `docs/adr` — is a link to the listing, and has no
-          // headings of its own for an anchor to name.
           if (path !== "" && !pipe(path!, Str.endsWith(".md"))) continue;
           const target = path === "" ? file : resolve(file, path!);
           if (!files.includes(target)) {
@@ -82,8 +73,6 @@ test("every link between the repository's documents resolves, anchors included",
     }),
   ));
 
-// A plain-text ADR reference is the one a code comment makes, and the Markdown walk above
-// cannot see it: renumbered ADRs left them pointing at the wrong decision.
 test("every plain-text ADR reference names an ADR that exists", () =>
   runEffect(
     Effect.gen(function* () {

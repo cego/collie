@@ -1,6 +1,3 @@
-// A branch checkout whose path is already held: two clones of one remote with the same
-// name want the same directory, and neither may be handed or harmed by the other's (#220).
-
 import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -406,7 +403,6 @@ test(
         yield* git(seed, "commit", "-qm", "payload");
         yield* git(seed, "push", "-q", "origin", BRANCH);
         yield* git(cloneA, "fetch", "-q", "origin");
-        // The smudge filter holds the first checkout half-written until `go` is written.
         const smudging = `${rig.root}/smudging`;
         const go = `${rig.root}/go`;
         yield* exec(["mkfifo", go]);
@@ -449,7 +445,6 @@ const herdrWith = (agents: ReadonlyArray<AgentInfo>) =>
     }
   })(rig.pluginEnv());
 
-/** The starting Run's checkout: clone A's, on a branch of its own name, at `at`. */
 const startedAt = (at: string) =>
   Effect.gen(function* () {
     const checkout = `${rig.root}/.collie/worktrees/monorepo/implement`;
@@ -552,7 +547,6 @@ test("a Stage started by a Run whose checkout a working agent changed directory 
     }),
   ));
 
-/** The merge request's branch moves on the remote, from a checkout the starting Run's never fetched. */
 const advancedElsewhere = () =>
   Effect.gen(function* () {
     yield* git(cloneB, "switch", "-q", BRANCH);
@@ -601,7 +595,6 @@ test("whether a Stage's checkout would be refused asks the remote's head before 
     }),
   ));
 
-/** Clone A knows the branch only as a local branch, and fetches nothing but master. */
 const localOnly = () =>
   Effect.gen(function* () {
     yield* git(cloneA, "branch", "-q", BRANCH, `origin/${BRANCH}`);

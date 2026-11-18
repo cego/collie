@@ -6,11 +6,6 @@ import { FrontDoor, HostRefused } from "../board-model";
 import { MeasurementJson, summaryOf, type Measurement } from "../measurement-model";
 import { answering, cliDoor } from "./shared";
 
-/**
- * A Measurement of a Run's checkout against a base, which the host takes on the Run's own
- * Machine, or the one it already recorded for the same trees and plan. Not a mutation: the
- * host answers a repeat with the record, whatever request id it came with.
- */
 export const measure = Command.make(
   "measure",
   {

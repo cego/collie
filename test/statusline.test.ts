@@ -1,7 +1,3 @@
-// The line under the chat prompt, and how it gets there. Two things matter: a human's own
-// Claude Code settings survive being configured, and a status line somebody else put there
-// is reported rather than replaced — it is their editor, and Collie is a guest in it.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -91,7 +87,6 @@ test("with no settings file at all, one is written that says only what Collie ne
       yield* installStatusLine(env);
 
       expect(yield* read(file)).toContain(Arr.join(STATUS_LINE_ARGS, " "));
-      // Run again: the same machine, and nothing said twice.
       expect(yield* installStatusLine(env)).toContain("already");
     }),
   ));
@@ -125,8 +120,6 @@ test("settings Collie cannot read are refused rather than replaced", () =>
       const fs = yield* FileSystem.FileSystem;
       const file = yield* claudeSettingsPath(env);
       yield* fs.makeDirectory(`${home}/.claude`, { recursive: true });
-      // Half-edited by hand, which is a file with everything in it rather than an empty
-      // one: writing over it would take the human's own Claude Code settings with it.
       const broken = `{"theirs": "kept",\n`;
       yield* fs.writeFileString(file, broken);
 
@@ -143,7 +136,6 @@ test("the status line 0.104.0 wrote is Collie's, and is replaced rather than joi
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const file = yield* claudeSettingsPath(env);
-      // statusLineCommand(["/home/u/.collie/release/bin/collie"]) on 0.104.0.
       const written = "'/home/u/.collie/release/bin/collie' chat status-line";
       yield* fs.makeDirectory(`${home}/.claude`, { recursive: true });
       yield* fs.writeFileString(

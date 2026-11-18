@@ -1,6 +1,3 @@
-// A Machine's Harness catalogue: what each installed harness says it can run, decoded from
-// that harness's own output, and Collie's table where a harness cannot be read. No IO.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -16,7 +13,6 @@ export const CatalogueEntry = Schema.Struct({
   defaultEffort: Schema.NullOr(Schema.String),
   hidden: Schema.Boolean,
   isDefault: Schema.optionalKey(Schema.Boolean),
-  /** The harness's own report, Collie's table, or the `models.<harness>` setting. */
   from: Schema.Literals(["harness", "table", "added"]),
 });
 export type CatalogueEntry = typeof CatalogueEntry.Type;
@@ -24,7 +20,6 @@ export type CatalogueEntry = typeof CatalogueEntry.Type;
 export const HarnessCatalogue = Schema.Struct({
   harness: Schema.String,
   at: Schema.String,
-  /** Why the harness could not be read, its entries then Collie's table; null where it was. */
   table: Schema.NullOr(Schema.String),
   entries: Schema.Array(CatalogueEntry),
 });
@@ -45,7 +40,6 @@ const entry: (
   ...rest,
 });
 
-/** What Claude Code's `supportedModels()` answers. */
 export const ClaudeModels = Schema.Array(
   Schema.Struct({
     value: Schema.String,
@@ -57,7 +51,6 @@ export const ClaudeModels = Schema.Array(
 );
 export type ClaudeModels = typeof ClaudeModels.Type;
 
-/** Claude Code's models, but its `default`, which is Collie's own `default`. */
 export const claudeEntries = (models: ClaudeModels) =>
   Arr.map(
     Arr.filter(models, ({ value }) => value !== DEFAULT_MODEL),
@@ -68,7 +61,6 @@ export const claudeEntries = (models: ClaudeModels) =>
       }),
   );
 
-/** The result of Codex's app-server `model/list`, asked with `includeHidden`. */
 export const CodexModelList = Schema.Struct({
   data: Schema.Array(
     Schema.Struct({
@@ -95,7 +87,6 @@ export const codexEntries = ({ data }: CodexModelList) =>
     }),
   );
 
-/** `pi --list-models`: a table whose thinking column says only yes or no. */
 export const piEntries = (text: string) => {
   const [header, ...rows] = Arr.map(Str.split(text, "\n"), (line) =>
     Str.split(Str.trim(line), /\s+/),
@@ -112,7 +103,6 @@ export const piEntries = (text: string) => {
   );
 };
 
-/** `opencode models`: one `provider/model` a line, and nothing about effort. */
 export const opencodeEntries = (text: string) => {
   const lines = Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "");
   const ids = Arr.filter(lines, (line) => /^[^\s/]+\/\S+$/.test(line));
@@ -122,7 +112,6 @@ export const opencodeEntries = (text: string) => {
   );
 };
 
-/** Collie's own table for a harness, where the harness itself could not be read. */
 export const tableEntries = (harness: string) => {
   const table = HARNESS_MODELS[harness];
   return Arr.map(table?.models ?? [], (model) =>
@@ -130,7 +119,6 @@ export const tableEntries = (harness: string) => {
   );
 };
 
-/** Explicit additions expose hidden models and append models the harness did not list. */
 export const withAdded = (catalogue: HarnessCatalogue, added: ReadonlyArray<string>) => {
   const listed = new Set(Arr.map(catalogue.entries, (one) => one.model));
   const fresh = Arr.filter(added, (model) => !listed.has(model));
@@ -150,7 +138,6 @@ export const withAdded = (catalogue: HarnessCatalogue, added: ReadonlyArray<stri
 
 const PAD = 10;
 
-/** One line per entry, after its harness's line where that is on Collie's table; `only` keeps one. */
 export function modelsLines(catalogues: ReadonlyArray<HarnessCatalogue>, only?: string) {
   const kept = Arr.filter(catalogues, (one) => only === undefined || one.harness === only);
   if (kept.length === 0) return `${only ?? "No harness"} is not installed on this Machine.`;

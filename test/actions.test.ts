@@ -1,11 +1,3 @@
-// What a finished Run offers to do next, and what it takes to carry one out.
-//
-// The offers are the module's own declarations and the eligibility is the module's own
-// code, so this exercises the whole path a card takes: what is listed, what starts when
-// one is invoked, and every way an invocation is refused — an offer that has been edited
-// away, one whose facts no longer hold, and arguments the child will not take. None of
-// those may leave a Run behind.
-
 import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -22,7 +14,6 @@ import { factsOfView } from "../src/runs";
 import { stopHost, until } from "./support/host";
 import { collie, proves, save, type World } from "./support/world";
 
-/** The envelope's payload as text, for asking whether an offer is in it at all. */
 const asText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 const MODULES = [
@@ -40,7 +31,6 @@ const projectOf = Effect.fn("ActionsTest.project")(function* (world: World) {
   return project;
 });
 
-/** A Run of the offering module, finished, which is when its offers are on the table. */
 const finished = Effect.fn("ActionsTest.finished")(function* (client: HostClient, project: string) {
   const started = yield* client.start({
     project,
@@ -71,9 +61,7 @@ test(
             ["grade-it", true, null],
             ["look-again", false, null],
           ]);
-          // The arguments travel as a drawing, so a front door can ask for them.
           expect(offers[0]?.arguments).toMatchObject({ type: "object" });
-          // A follow-up takes what its workflow needs and the offer does not fill.
           expect(offers[1]?.arguments).toMatchObject({ required: ["note"] });
 
           const started = yield* client
@@ -88,7 +76,6 @@ test(
             () => client.run({ runId: started.runId }).pipe(Effect.orDie),
             (view) => view?.status.status === "complete",
           );
-          // Its own Run, of the workflow the offer named, belonging to the one that offered it.
           expect(done?.workflow).toBe("graded");
           expect(done?.parent).toBe(runId);
           expect(done?.status).toEqual({ status: "complete", value: "strict:the diff/pass" });
@@ -238,7 +225,6 @@ test(
             (yield* client.offers({ runId }).pipe(Effect.orDie))[0]?.unavailable,
           ).not.toBeNull();
 
-          // What the claim gate records once a Run holds the claim.
           yield* fs.makeDirectory(`${world.state}/runs/${runId}`, { recursive: true });
           yield* fs.writeFileString(
             `${world.state}/runs/${runId}/helle.json`,
@@ -335,8 +321,6 @@ test(
             Arr.map(yield* client.offers({ runId }).pipe(Effect.orDie), (one) => one.id),
           ).toEqual(["grade-it", "look-again"]);
 
-          // The author edits the module: the action is gone, and the card a moment ago
-          // is not authority for anything.
           const entry = `${project}/.collie/workflows/offered.workflow.ts`;
           const source = yield* fs.readFileString(entry);
           yield* fs.writeFileString(
@@ -351,7 +335,6 @@ test(
             .invoke({ runId, offer: "grade-it", input: {}, request: "act-1" })
             .pipe(Effect.result);
           expect(refused._tag).toBe("Failure");
-          // Nothing was started: the Run that offered it is still the only one here.
           expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
           yield* stopHost(world.state);
         }),
@@ -378,7 +361,6 @@ test(
             note: null,
           }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
 
-          // The follow-up is gone, and the action is shown as the reason it cannot be taken.
           const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
           expect(Arr.map(offers, (one) => [one.id, one.unavailable !== null])).toEqual([
             ["grade-it", true],
@@ -422,7 +404,6 @@ test(
           expect(refused._tag).toBe("Failure");
           expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
 
-          // And an offer nobody declared is refused the same way.
           const unknown = yield* client
             .invoke({ runId, offer: "make-coffee", input: {}, request: "act-2" })
             .pipe(Effect.result);
@@ -464,7 +445,6 @@ test(
           const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
           expect(Arr.map(runs, (one) => one.workflow).sort()).toEqual(["graded", "offered"]);
 
-          // And the same refusal from this door: an offer nobody declares starts nothing.
           const refused = yield* collie({ ...world, project }, [
             "run",
             "action",

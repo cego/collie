@@ -14,10 +14,8 @@ const BIN = Effect.runSync(
 const BEGIN = "<<collie-env-begin-7f3a9c>>";
 const END = "<<collie-env-end-7f3a9c>>";
 
-/** How long the shell gets to start, rc files included. */
 const LIMIT = "5 seconds";
 
-/** The variables between the markers, `env -0` output; whatever the rc files printed around them is ignored. */
 export const parseLoginEnv = (output: string) => {
   const start = Option.getOrElse(pipe_(output, Str.indexOf(BEGIN)), () => -1);
   const found = new Map<string, string>();
@@ -36,20 +34,15 @@ export const parseLoginEnv = (output: string) => {
   return found;
 };
 
-/** Where children start: Desktop's own folder goes when an update replaces it. */
 export const CHILD_CWD = homedir();
 
-/** Gives children the cleaned environment; Bun otherwise ignores changes made since it started. */
 export const childEnv = () => withoutLauncher(withoutHerdrOne(desktopEnv()), BIN);
 
-// Children inherit the process environment, not an Effect Config.
-// oxlint-disable-next-line effecttsgo/process-env
+// oxlint-disable-next-line effecttsgo/process-env -- Children inherit the process environment, not an Effect Config.
 const desktopEnv = () => process.env;
 
-/** Where a bare command is found on `childEnv`'s PATH; Bun's own lookup uses the PATH it started with. */
 export const which = (command: string) => Bun.which(command, { PATH: childEnv().PATH });
 
-/** The variables `shell -ilc` exports; empty where it fails, prints none, or outlasts `limit`. */
 export const readLoginEnv = (shell: string, limit: Duration.Input = LIMIT) =>
   Effect.gen(function* () {
     const child = Bun.spawn(
@@ -76,13 +69,10 @@ export const readLoginEnv = (shell: string, limit: Duration.Input = LIMIT) =>
     ),
   );
 
-/** What an SSH agent socket has: keys, none, no agent answering, or nothing could ask it. */
 export type AgentState = "holds" | "empty" | "gone" | "unknown";
 
-/** How long `ssh-add -l` gets to answer for one agent. */
 const AGENT_LIMIT = "2 seconds";
 
-/** What the agent at `socket` has, as `ssh-add -l` says by its exit: 0 keys, 1 none, 2 no agent. */
 export const agentState = (
   socket: string,
   sshAdd = "ssh-add",
@@ -117,12 +107,6 @@ export const agentState = (
     }),
   );
 
-/**
- * Whether the login shell's SSH agent replaces the one Desktop was started with. An rc file
- * may start an agent of its own, such as keychain's, that holds a key only once a terminal has
- * asked for its passphrase; Desktop's SSH has no terminal to ask in, so the agent that holds
- * keys wins, the login shell's first, and where neither does, one that answers.
- */
 export const takesLoginAgent = Effect.fn("Desktop.takesLoginAgent")(function* (
   session: string | undefined,
   login: string | undefined,
@@ -137,10 +121,8 @@ export const takesLoginAgent = Effect.fn("Desktop.takesLoginAgent")(function* (
   return ours !== "empty";
 });
 
-/** The variables that name an SSH agent, which are taken or kept together. */
 const AGENT_VARIABLES = ["SSH_AUTH_SOCK", "SSH_AGENT_PID"];
 
-/** Merges the interactive login environment into Desktop's; true where it was taken. */
 export const takeLoginEnv = Effect.gen(function* () {
   const shell = yield* Config.String("SHELL").pipe(
     Config.withDefault(process.platform === "darwin" ? "/bin/zsh" : "/bin/sh"),
@@ -163,7 +145,6 @@ export const takeLoginEnv = Effect.gen(function* () {
   return true;
 }).pipe(Effect.orElseSucceed(() => false));
 
-/** A plain shell preserves the resolved PATH; login profiles may reset it. */
 export const localShell = (tookLoginEnv: boolean) =>
   tookLoginEnv
     ? Config.succeed(["/bin/sh", "-c"])

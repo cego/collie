@@ -1,6 +1,3 @@
-// `collie schedule` reaching another Machine over the paired link (ADR-0052 D8, ADR-0057):
-// two real hosts, each with its own fake herdr, as `remote-cli.test.ts` drives them.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
@@ -43,7 +40,6 @@ const add = (name: string, workflow: string, ...rest: ReadonlyArray<string>) => 
   "0 7 * * *",
   ...rest,
 ];
-/** What `side`'s own host keeps. */
 const kept = (side: Side) =>
   Effect.gen(function* () {
     const own = yield* installation(side);
@@ -71,7 +67,6 @@ test(
           Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
             yield* save(second, "plain.workflow.ts");
-            // A project's Layer stays on its Machine; the user Layer is the Flock's.
             const onlyFirst = `${first.world.project}/.collie/workflows`;
             yield* fs.makeDirectory(onlyFirst, { recursive: true });
             yield* fs.copyFile(

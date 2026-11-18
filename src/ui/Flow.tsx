@@ -1,8 +1,3 @@
-// One question at a time: the launch flow, the fork form and the resume list all draw
-// through here. Two placements — a popup pane and an overlay in the tab — and one set of
-// components, because the launch flow is where a human meets the most questions and it
-// is the worst place to have a second input model.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
@@ -18,7 +13,6 @@ const ACCENT = "#7aa2f7";
 
 export interface FlowProps {
   pending: Pending;
-  /** Shown above the question: definition load errors, and what the flow last said. */
   banner?: string | null;
 }
 
@@ -50,8 +44,6 @@ function Menu(props: { pending: Pending }) {
     return filterItems(all, query(), itemHay);
   });
 
-  // Filtering moves the list under the cursor, so the cursor is clamped back into it
-  // rather than pointing past the end and choosing nothing on Enter.
   createEffect(() => {
     const last = Math.max(0, items().length - 1);
     if (at() > last) setAt(last);
@@ -69,13 +61,10 @@ function Menu(props: { pending: Pending }) {
     if (key.name === "up") return setAt((n) => Math.max(0, n - 1));
     if (key.name === "down") return setAt((n) => Math.min(items().length - 1, n + 1));
     if (key.name === "backspace") return setQuery((q) => pipe(q, Str.slice(0, -1)));
-    // Ctrl-U, which is what clears a line everywhere else a line is typed.
     if (key.ctrl && key.name === "u") return setQuery("");
     if (/^[\x20-\x7e]$/.test(key.sequence)) return setQuery((q) => q + key.sequence);
   });
 
-  // A paste arrives on its own event, never as keys: without this the field silently
-  // drops it, which is what made a pasted merge-request URL have to be retyped.
   usePasteInto(setQuery);
 
   return (

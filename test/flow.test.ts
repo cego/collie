@@ -1,7 +1,3 @@
-// A Run's Flow as the host serves it in RunDetail and `run show`: one row of the Steps a
-// module declares, or of what happened where it declares none
-// (ADR-draft-a-step-is-declared-where-its-work-is-written).
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -40,13 +36,8 @@ const encode = Schemaflow(
 const outputsOf = (world: World) => `${world.home}/outputs.json`;
 const gatesOf = (world: World) => `${world.home}/gates`;
 
-/**
- * `collie` with the fake agents' answers, so a host it starts hands them out, on this
- * process's clock zone, so a time of day it says is one this test can say too.
- */
 const cli = (world: World, args: ReadonlyArray<string>) => collie(world, args);
 
-/** A world whose fake agents answer each prompt in turn with these Outputs. */
 const flowing = <A, E>(
   prefix: string,
   body: (world: World, core: FakeHc) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
@@ -101,7 +92,6 @@ const parented = (world: World, mode: string, task?: string) =>
     Effect.orDie,
   );
 
-/** A Task a Run can be started into, as one a workspace was opened for would be recorded. */
 const recordedTask = (world: World, id: string) =>
   writeTask({
     id,
@@ -118,7 +108,6 @@ const open = (world: World, name: string) =>
       .pipe(Effect.orDie);
   });
 
-/** The Run's Flow as a drawer opening on it now is sent it. */
 const flowOf = (world: World, runId: string) =>
   Effect.gen(function* () {
     const door = yield* frontDoor(socketOf(world.state));
@@ -126,10 +115,7 @@ const flowOf = (world: World, runId: string) =>
       .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
       .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
     return Option.getOrNull(detail)?.flow ?? null;
-  }).pipe(
-    // A host between one process and the next has no socket to answer on yet.
-    Effect.orElseSucceed(() => null),
-  );
+  }).pipe(Effect.orElseSucceed(() => null));
 
 const until_ = (world: World, runId: string, wanted: (flow: Flow) => boolean) =>
   until(
@@ -161,7 +147,6 @@ test.each(["working", "blocked"])(
           ]);
           const { runId } = yield* Schema.decodeUnknownEffect(RunId)(started.envelope.data);
           if (status === "blocked") yield* blockedAtItsPrompt(core);
-          // The node names its agent before the host has polled that agent's status.
           const flow = yield* until_(
             world,
             runId,
@@ -255,14 +240,12 @@ test(
           const [question] = nodeOf(done, "decide")?.questions ?? [];
           expect(question).toMatchObject({ name: "go", by: "the CLI" });
           expect(epochMs(question!.answered!)).toBeGreaterThanOrEqual(epochMs(question!.asked!));
-          // Work no Step declared, in a declared lane, is drawn as it happened.
           expect(nodeOf(done, "tidy")).toMatchObject({
             declared: false,
             title: "tidy",
             said: "Done",
           });
 
-          // An agent reads what Desktop draws.
           const shown = yield* cli(world, ["run", "show", runId]);
           const { flow } = yield* Schema.decodeUnknownEffect(
             Schema.Struct({ flow: Schema.Unknown }),
@@ -393,7 +376,6 @@ test(
           yield* until_(world, runId, (flow) => nodeOf(flow, "build")?.state === "running");
           const owner = yield* ownerOf(world.state);
           process.kill(owner!.pid, "SIGKILL");
-          // The next command starts the next host, which recovers the Run.
           yield* cli(world, ["run", "show", runId]);
           yield* open(world, "build");
           const flow = yield* until_(world, runId, (one) => laneOf(one).execution === "completed");
@@ -512,7 +494,6 @@ test(
           );
           const nap = nodeOf(flow, "nap")!;
           expect(nap.wait).toBe("timer");
-          // The host was started on UTC, as this process is.
           const wakes = (at: number) =>
             `Wakes at ${pipe_(DateTime.formatIso(DateTime.makeUnsafe(at + 3_600_000)), Str.slice(11, 16))}`;
           const after = yield* Clock.currentTimeMillis;
@@ -646,7 +627,6 @@ test(
           ]);
           expect(flow.lanes[0]!.nodes[0]!.link).toBeUndefined();
 
-          // Either Run's details carry its Task's one Flow, and so does `run show`.
           expect(yield* flowOf(world, kid!)).toEqual(flow);
           const shown = yield* cli(world, ["run", "show", kid!]);
           const { flow: carried } = yield* Schema.decodeUnknownEffect(RunShow)(
@@ -654,7 +634,6 @@ test(
           ).pipe(Effect.orDie);
           expect(carried).toEqual(flow);
 
-          // The card's strip is the leading Run's row, as `--json board` carries it.
           const board = yield* cli(world, ["board"]);
           const { tasks } = yield* Schema.decodeUnknownEffect(
             Schema.Struct({

@@ -1,5 +1,3 @@
-// What `collie run wait` stops at, and what `--follow` prints, from two looks at a Run.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { MissingFact, RunProgress, TaskMr } from "../src/board-model";
@@ -116,9 +114,7 @@ test("follow says each operation started and finished, each agent once, a park, 
     "r1: parked: the gate's checks failed",
     "r1: merge request mr:github.com/cego/collie#30 opened",
   ]);
-  // Nothing moved: nothing to say.
   expect(followEvents(reviewed, reviewed)).toEqual([]);
-  // No pipeline at all is not news on the first look.
   expect(
     followEvents(first, { view: view(), progress: progress({ ci: { state: "none" } }) }),
   ).toEqual([]);
@@ -167,7 +163,6 @@ test("a follower hears each of a Task's merge requests as it opens, merges or cl
   ]);
   const closed = look({ ...app, state: "merged" }, { ...api, state: "closed" });
   expect(followEvents(merged, closed)).toEqual([{ type: "mr", mr: api.mr, state: "closed" }]);
-  // A deploy after the merge is not a merge again.
   expect(
     followEvents(closed, look({ ...app, state: "in-prod" }, { ...api, state: "closed" })),
   ).toEqual([]);

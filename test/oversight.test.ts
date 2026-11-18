@@ -1,6 +1,3 @@
-// What a human reads a Run's progress from while nobody is watching its panes: the cards
-// the host writes as the work reaches its moments, and the toast when one is worth it.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -64,7 +61,6 @@ import { loggedGit } from "./support/bin";
 
 let rig: Rig;
 let dir: string;
-/** A test's effect, whose own reads of a Run's records meet its host's. */
 const runEffect = <A, E>(effect: Parameters<typeof runShared<A, E>>[0]) =>
   runShared(effect.pipe(overHost(() => dir)));
 let toasts: string[];
@@ -84,7 +80,6 @@ afterEach(() => runEffect(rig.close()));
 
 const nothing = () => Effect.die("no children here");
 
-/** One host's lifetime, working for `herd` where one is named and for none otherwise. */
 const session = <A, E>(
   run: Effect.Effect<
     A,
@@ -176,8 +171,6 @@ test("a card a human could go and try says so, and a routine one does not", () =
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      // The host's own directory is where a Run nobody placed works: a change there is
-      // something to look at.
       yield* exec(["git", "init", "-q"], { cwd: dir });
       yield* session(
         Effect.gen(function* () {
@@ -275,7 +268,6 @@ test("a ticket an agent says it finished is carded once, with its own words as c
           yield* oversight.checkpoints("r1", "build");
         }),
       );
-      // A second host looks again and finds nothing new.
       yield* session(Oversight.pipe(Effect.flatMap((one) => one.checkpoints("r1", "build"))));
       const cards = yield* cardsOf("r1");
       expect(Arr.map(cards, (card) => Arr.map(card.claims, (claim) => claim.text))).toEqual([
@@ -285,7 +277,6 @@ test("a ticket an agent says it finished is carded once, with its own words as c
     }),
   ));
 
-/** A Run with an Intent holding these constraints, and nothing else about it written yet. */
 const intended = (
   runId: string,
   constraints: ReadonlyArray<Constraint>,
@@ -298,10 +289,6 @@ const intended = (
     yield* writeIntent(at, { ...seeded, authority: { ...seeded.authority, ...authority } });
   });
 
-/**
- * The host's own directory as a repository with one commit: where a Run nobody placed
- * works. The host's records are kept there too, so git is told to look only at the work.
- */
 const repository = () =>
   Effect.gen(function* () {
     for (const args of [
@@ -317,7 +304,6 @@ const repository = () =>
     );
   });
 
-/** A tracked edit left uncommitted: the base falls back to `HEAD`, so a commit would hide it. */
 const edited = () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -353,7 +339,6 @@ test("a rule the work breaks is reported where it was collected, and cleared onc
       ]);
       expect(Arr.map(found[0]!.evidence, (ref) => ref.path)).toContain("notes.txt");
 
-      // The same tree again is the same finding, not a second one.
       yield* session(checked);
       expect(currentReports(yield* readDrift(runDir(dir, "r1")))).toHaveLength(1);
 
@@ -457,7 +442,6 @@ const SMALL: Constraint = {
   since: 1,
 };
 
-/** `claude` on PATH as the evaluator: it takes every flag a judgement needs, and finds nothing. */
 const evaluatorOnPath = Effect.suspend(() =>
   evaluatorAnswering(`cat > /dev/null\necho '{"result":{"reports":[]}}'`),
 );
@@ -640,7 +624,6 @@ test("rules that passed and semantic constraints judged with nothing open are al
   expect(alignment(intent, [], judged).aligned).toBe("true");
 });
 
-/** A Run with this Intent finishing under a Herd, and how many judgements it asked for. */
 const judgementsAtFinish = (intent: { constraints: Constraint[]; goal: string }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -718,7 +701,6 @@ const SRC_ONLY: Constraint = {
   rule: { kind: "protected_paths", globs: ["src/**"] },
 };
 
-/** The Run as the host would describe it, working in the host's own directory. */
 const watchedAt: (runId: string, held?: boolean, worktree?: string | null) => Watched = (
   runId: string,
   held = false,
@@ -740,7 +722,6 @@ const watchedAt: (runId: string, held?: boolean, worktree?: string | null) => Wa
   cwdOf: () => Effect.succeed(dir),
 });
 
-/** An agent to correct, whose sender records what it was handed. */
 const recipient: (sent: string[]) => Correcting = (sent) => ({
   agent: { agent: "r1-build", harness: "claude", terminalId: "term-1" },
   send: (correction) => Effect.sync(() => sent.push(correction.text)).pipe(Effect.as(true)),
@@ -837,8 +818,6 @@ test("a held Run is not corrected, and one whose bound is spent is given up on a
       );
       expect(held).toEqual({ sent: [], escalated: [] });
 
-      // Without the human saying nobody else is steering, a harness that cannot tell
-      // Collie's submissions from theirs is not corrected at all.
       yield* intended("r2", [SRC_ONLY], { auto_correct: true });
       expect(
         yield* checkDrift(watchedAt("r2"), "build collected", "none", null, recipient(sent)),
@@ -885,7 +864,6 @@ test("a finishing Run runs what it was granted, and offers what is still blockin
         ],
         { run_verification: [tests] },
       );
-      // What the Run may verify, as the host froze it when it was admitted.
       yield* fs.makeDirectory(`${dir}/evidence/r1`, { recursive: true });
       yield* updateApproved(`${dir}/evidence/r1`, () => [tests]);
       const herd = { socketPath: `${rig.root}/herd.sock`, pluginRoot: rig.root };
@@ -909,7 +887,6 @@ test("a finishing Run runs what it was granted, and offers what is still blockin
       ).toHaveLength(1);
       const [card] = yield* cardsOf("r1");
       expect(card!.significance).toBe("decision");
-      // What the host saw is the Run's own log, the one its record shows.
       const log = yield* fs.readFileString(`${runDir(dir, "r1")}/log.txt`);
       expect(log).toContain("verification tests: pass (exit 0)");
       expect(log).toContain("aligned: false");
@@ -943,8 +920,6 @@ test("a host that finds its Herd while a Run finishes offers that Run's blocking
       yield* fs.makeDirectory(`${dir}/evidence/r1`, { recursive: true });
       yield* updateApproved(`${dir}/evidence/r1`, () => [started]);
       const socketPath = `${rig.root}/herd.sock`;
-      // A minute passes at each ask that finds no Herd, so the host asks again, and never
-      // while a check runs on the clock that bounds it.
       const clock = yield* TestClock.make();
       yield* clock.setTime(yield* Clock.currentTimeMillis);
       const locate = fs.exists(herdr).pipe(
@@ -986,25 +961,21 @@ test("a Run with relatives stands for the cross-run check, and one leaving unans
           ),
         );
       const parent = { ...watchedAt("r1"), herd: key, family: ["r1", "r2"] };
-      // Work to judge, so a check is owed for it.
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${dir}/agents/r2`, { recursive: true });
       yield* fs.writeFileString(`${dir}/agents/r2/build.json`, '{"verdict":"clean"}');
 
-      // Nobody can judge it here, and a boundary is not the moment to say it is owed.
       yield* standForElection(parent, "boundary before build", false, null);
       expect(yield* said()).toEqual(["candidate:r1"]);
 
       yield* standForElection(parent, "finish", true, null);
       expect(yield* said()).toEqual(["candidate:r1", "candidate:r1", "pending:r1,r2"]);
 
-      // Owed, so any Run stands — once — even one with no relatives of its own.
       const stranger = { ...watchedAt("r3"), herd: key, family: ["r3"] };
       yield* standForElection(stranger, "boundary before build", false, null);
       yield* standForElection(stranger, "boundary before test", false, null);
       expect((yield* said()).slice(3)).toEqual(["candidate:r3"]);
 
-      // And the relative's card says a check about it is still owed.
       const card = yield* writeCard(
         { ...watchedAt("r2"), herd: key, family: ["r1", "r2"] },
         { kind: "final", step: "finish", claims: [] },
@@ -1012,8 +983,6 @@ test("a Run with relatives stands for the cross-run check, and one leaving unans
       expect(card.cross_run).toBe("pending");
     }),
   ));
-
-// --- The cross-run judgement reads the work ------------------------------------------
 
 test("a card reads its branch, head and dirtiness from one status, asking git only where its index is", () =>
   runEffect(
@@ -1082,7 +1051,6 @@ const R1_ONLY: Constraint = { ...SMALL, id: "r1-only", text: "touch only the doc
 
 const git = (args: string[], cwd = dir) => exec(["git", ...args], { cwd });
 
-/** `files` committed on a branch of the host's repository, and a card of `runId` at it. */
 const cardedWork = (runId: string, files: Readonly<Record<string, string>>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -1096,7 +1064,6 @@ const cardedWork = (runId: string, files: Readonly<Record<string, string>>) =>
     yield* git(["checkout", "-q", "-"]);
   });
 
-/** A repository of its own at `path`, one commit of `files` past its default branch. */
 const repositoryAt = (path: string, files: Readonly<Record<string, string>>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -1122,7 +1089,6 @@ const repositoryAt = (path: string, files: Readonly<Record<string, string>>) =>
     yield* git(["commit", "-qm", "work"], path);
   });
 
-/** A judge that keeps the pack it was given and answers with `reports`. */
 const crossRunJudge = (reports: ReadonlyArray<object>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -1162,7 +1128,6 @@ const reportOn = (run: string, constraint: string, evidence: ReadonlyArray<objec
   resolution: "open",
 });
 
-/** What the pack says under one Run, up to the next. */
 const under = (pack: string, runId: string) =>
   Option.getOrUndefined(
     Arr.findFirst(Str.split(pack, /^(?=run: )/m), (section) =>
@@ -1170,7 +1135,6 @@ const under = (pack: string, runId: string) =>
     ),
   ) ?? "";
 
-/** `r1` judging `family`, each Run read in its entry of `checkouts`, else the host's directory. */
 const judgedAcross = (
   family: ReadonlyArray<string>,
   deps: JudgementDeps,
@@ -1221,7 +1185,6 @@ test("the cross-run judge reads each related Run's work, and files only what cit
         yield* fs.writeFileString(`${dir}/agents/r2/build.mcp.json`, '{"servers":"MCP-CONFIG"}');
         yield* fs.makeDirectory(`${dir}/agents/r3`, { recursive: true });
         yield* fs.writeFileString(`${dir}/agents/r3/plan.json`, '{"verdict":"planned"}');
-        // A card at a commit this repository does not have: a Run of another one.
         const elsewhere = `${rig.root}/elsewhere`;
         yield* repositoryAt(elsewhere, { "docs/r4.md": "r4's own\n" });
         yield* writeCard(
@@ -1233,12 +1196,9 @@ test("the cross-run judge reads each related Run's work, and files only what cit
         const deps = yield* crossRunJudge([
           reportOn("r2", "small", cited),
           reportOn("r2", "small", [{ kind: "output", path: "build" }]),
-          // Another Run's constraint.
           reportOn("r2", "r1-only", cited),
-          // The goal, and a commit alone.
           reportOn("r2", "small", [{ kind: "plan", excerpt: "add a picker" }]),
           reportOn("r2", "small", [{ kind: "git", sha: "abc123" }]),
-          // A file another Run changed.
           reportOn("r1", "r1-only", cited),
         ]);
         const { pack, log } = yield* judgedAcross(["r1", "r2", "r3", "r4"], deps, {
@@ -1328,7 +1288,6 @@ test("a related Run whose own checkout lacks its commit is said to be unread, in
           { ...watchedAt("r2"), cwd: other },
           { kind: "slice", step: "build", claims: [] },
         );
-        // Something to judge, so the judge is asked.
         yield* fs.makeDirectory(`${dir}/agents/r1`, { recursive: true });
         yield* fs.writeFileString(`${dir}/agents/r1/plan.json`, '{"verdict":"planned"}');
         const deps = yield* crossRunJudge([]);
@@ -1398,7 +1357,6 @@ test("a related Run's work cut to the cap is said to be, and so is what is filed
 
 const MR_223 = "https://gitlab.example.com/cego/support-backoffice/-/merge_requests/223";
 
-/** `runId` admitted in a Task and a repository of its own, its goal `goal`, and the merge request it recorded. */
 const admitted = (runId: string, goal: string | null, recorded: string | null) =>
   Effect.gen(function* () {
     const store = yield* Store;
@@ -1550,13 +1508,6 @@ test("a Run with no work yet whose goal contradicts another Run's reply on their
     ),
   ));
 
-// --- Drift during an unfinished integration -------------------------------------------
-
-/**
- * The host's repository left mid-merge: the Run changed `src/own.ts` and `src/shared.ts`,
- * the default branch changed `src/shared.ts` and `src/upstream.ts`, and `src/shared.ts`
- * conflicts. Returns where the Run left the default branch.
- */
 const midMerge = () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

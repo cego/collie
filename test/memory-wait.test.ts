@@ -1,6 +1,3 @@
-// A start that waits while its Machine is Short of memory, read again every 15 seconds
-// (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory, D2–D5).
-
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Exit, FileSystem, Fiber, Schema } from "effect";
 import { TestClock } from "effect/testing";
@@ -39,7 +36,6 @@ const waiting = (asker: string | null = null) =>
     asker,
   });
 
-/** Lets the waiting fiber do its file IO, which the test clock does not drive. */
 const settle = Effect.gen(function* () {
   for (let tries = 0; tries < 50; tries++) yield* TestClock.withLive(Effect.sleep("2 millis"));
 });
@@ -146,7 +142,6 @@ test("a stop that lands as memory frees still stops the start", () =>
             stateDir: rig.stateDir,
             runId: "r1",
             what: "build's agent",
-            // The stop lands while it is read, so memory is seen free before the stop is.
             stopped: Effect.suspend(() =>
               stop
                 ? TestClock.withLive(Effect.sleep("100 millis")).pipe(Effect.as(true))

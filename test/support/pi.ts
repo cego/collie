@@ -1,5 +1,3 @@
-// A pi extension Collie generated, loaded as pi loads one, with a pi that only collects tools.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, type Schema } from "effect";
@@ -14,7 +12,6 @@ export interface PiTool {
     ctx: { readonly sessionManager: { readonly getSessionId: () => string } },
   ) => Promise<{ readonly content: ReadonlyArray<{ readonly text: string }> }>;
 }
-/** The part of pi's extension API Collie's extension calls. */
 interface Pi {
   readonly registerTool: (tool: PiTool) => void;
   readonly sendMessage: () => void;
@@ -25,7 +22,6 @@ interface Extension {
   readonly default: (pi: Pi) => void;
 }
 
-/** The tools the extension at `file` registers. */
 export const piTools = (file: string) =>
   Effect.promise(() => {
     const returned: Promise<Extension> = import(file);
@@ -45,7 +41,6 @@ export const piTools = (file: string) =>
     }),
   );
 
-/** pi's question tool among `tools`, called as pi calls it; what it told the agent. */
 export const askWith = (
   tools: ReadonlyArray<PiTool>,
   id: string,

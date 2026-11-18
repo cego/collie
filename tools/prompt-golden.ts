@@ -1,8 +1,3 @@
-// The plain ticket's build prompt is a contract: its scenario compares it exactly with a golden.
-//
-//   bun run tools/prompt-golden.ts --write   # regenerate the golden from the rendered prompt
-//   bun run tools/prompt-golden.ts --check   # fail, naming the golden, where it differs
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -55,7 +50,6 @@ export const drift = (rendered: string, golden: string) => {
   );
 };
 
-/** Fails with `Drift` where `rendered` differs from the golden, or writes it there under `--write`. */
 export const matchGolden = Effect.fn("PromptGolden.match")(function* (rendered: string) {
   const fs = yield* FileSystem.FileSystem;
   if ((yield* Config.String(WRITE).pipe(Config.withDefault(""))) === "1")

@@ -1,9 +1,3 @@
-// `collie host`: run the local workflow host for one state directory, or replace it.
-//
-// Nobody is expected to type the bare command. A client starts it when it needs one and
-// leaves it running, and it is here as a command because that is how one program starts
-// another copy of itself. Typing it is still the way to watch a host in a terminal.
-
 import { Effect, Option } from "effect";
 import { Command, Flag } from "effect/cli";
 import { serve } from "../host";

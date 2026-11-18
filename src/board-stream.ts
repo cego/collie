@@ -1,30 +1,13 @@
-// The board as the host tells it to its clients: one board built per change and shared,
-// then told to each client as every Task once and each Task that changed, numbered so a
-// client can tell it missed nothing.
-
 import * as Arr from "effect/Array";
 import { Cause, Clock, Effect, Option, Stream, SubscriptionRef } from "effect";
 import type { BoardMessage, BoardSnapshot, TaskView } from "./board-model";
 import { recordMarks } from "./record-marks";
 import { Foreground } from "./foreground";
 
-/** How long a build may take before the host log says so. */
 const SLOW_BUILD_MS = 2_000;
 
-/** The longest the next build waits after one: how stale a slow host's board may grow. */
 const MAX_REST_MS = 5_000;
 
-/**
- * One board for everything that reads it: built at once and again whenever `changed` says
- * something may have moved, one build at a time, with the changes that arrive during a
- * build folded into the next. Each build waits as long as the last one took, and at most
- * 5 s, before it starts: a board that keeps moving takes half of the host's time while its
- * builds take 5 s or less, more once they take longer, and is never more than 5 s and a
- * build behind. It keeps building for as long as `Scope` lasts. Its `boards`
- * are the latest board that covers every change seen before it was read, then each one
- * built after it, so a reader reads its own writes. `latest` is the last board built, or
- * the first once it is, never waiting for a newer one.
- */
 export const shareBoard = <A, E, R, R2>(options: {
   readonly build: Effect.Effect<A, E, R>;
   readonly changed: Stream.Stream<unknown, never, R2>;
@@ -36,7 +19,6 @@ export const shareBoard = <A, E, R, R2>(options: {
     const latest = yield* SubscriptionRef.make(
       Option.none<{ readonly covers: number; readonly board: A }>(),
     );
-    /** How long the build just done took, which the next one waits before it starts. */
     let rest = 0;
     const timed = Effect.gen(function* () {
       const started = yield* Clock.currentTimeMillis;
@@ -51,7 +33,6 @@ export const shareBoard = <A, E, R, R2>(options: {
     const refreshes = (options.refresh ?? Stream.never).pipe(Stream.map(() => seen));
     yield* Stream.concat(Stream.make(0), Stream.merge(changes, refreshes)).pipe(
       Stream.buffer({ capacity: 1, strategy: "sliding" }),
-      // A build that fails is skipped: the last board stands until a change builds again.
       Stream.mapEffect((covers) =>
         timed.pipe(
           Effect.map((board) => Option.some({ covers, board })),
@@ -76,7 +57,6 @@ export const shareBoard = <A, E, R, R2>(options: {
         Effect.sync(() => {
           const since = seen;
           return SubscriptionRef.changes(latest).pipe(
-            // A reader that reads slowly skips to the latest board; a client is told by diff.
             Stream.buffer({ capacity: 1, strategy: "sliding" }),
             Stream.filter(Option.isSome),
             Stream.map((built) => built.value),
@@ -99,11 +79,6 @@ export const shareBoard = <A, E, R, R2>(options: {
     return { boards, latest: latestBoard };
   });
 
-/**
- * What one client is told: a snapshot of the first board, then each later board as the
- * Tasks that differ from what this client was told. Its own copy of what it was told makes
- * a reconnect a fresh snapshot by construction.
- */
 export const boardMessages = <R>(options: {
   readonly head: Omit<BoardSnapshot, "_tag" | "tasks" | "seq">;
   readonly boards: Stream.Stream<ReadonlyArray<TaskView>, never, R>;

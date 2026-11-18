@@ -1,5 +1,3 @@
-// What the Flock chat's window says of a tool call and of the card a message is about.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";

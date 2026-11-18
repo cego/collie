@@ -1,6 +1,3 @@
-// The Launch flow as a human drives it (ADR-0033): which Workflow, then one question, then
-// — only where something was inferred — one row saying where it starts and what it took.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
@@ -29,7 +26,6 @@ const MODULES = [
 
 const QUESTION = "What do you want?";
 
-/** Each menu and question in the order it came, and the rows each menu offered. */
 const answering = (script: ReadonlyArray<string>) => {
   const answers = [...script];
   const asked: Array<string> = [];
@@ -56,10 +52,8 @@ const launching = <A, E>(
   body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) => proves(prefix, (world) => body(world).pipe(Effect.ensuring(stopHost(world.state))), MODULES);
 
-/** `glab` answering with this branch's open merge request, for the flow's own inference. */
 const withMergeRequest = <A, E, R>(world: World, effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
-    // As `FakeBin` restores it, but over the real PATH: this world's Config has none to read.
     const path = Bun.env.PATH;
     const bin = yield* FakeBin.make(`${world.home}/bin`);
     Bun.env.PATH = `${bin.dir}:${path ?? ""}`;
@@ -77,7 +71,6 @@ const withMergeRequest = <A, E, R>(world: World, effect: Effect.Effect<A, E, R>)
       ],
     });
     const api = yield* serveForges(gitlab);
-    // The checkout's forge is its origin's, which is what is asked for its open merge request.
     yield* exec(["git", "remote", "add", "origin", "git@gitlab.example.com:group/app.git"], {
       cwd: world.project,
     });
@@ -101,7 +94,6 @@ const onBranch = Effect.fn("test.onBranch")(function* (world: World, branch: str
     yield* exec(["git", ...args], { cwd: world.project });
 });
 
-/** The flow drawn by the board terminal, in the Herd's own directory, which is no checkout. */
 const onTheBoard = Effect.fn("test.onTheBoard")(function* (world: World) {
   const env = yield* currentEnv;
   const cwd = yield* herdDir(world.state, yield* machineHerd(env));
@@ -158,7 +150,6 @@ test(
     launching("collie-launch-reach-", (world) =>
       Effect.gen(function* () {
         const env = yield* currentEnv;
-        // A typed start's choice is its own: it is not what the next launch offers.
         yield* collie(world, [
           "run",
           "start",
@@ -327,7 +318,6 @@ test(
   240_000,
 );
 
-/** Two checkouts under the Projects root, each pushing to a project of its own. */
 const projectsTree = Effect.fn("test.projectsTree")(function* (
   world: World,
   host = "gitlab.example.com",
@@ -342,7 +332,6 @@ const projectsTree = Effect.fn("test.projectsTree")(function* (
     });
   }
   yield* writeConfigValue(world.config, "projects.root", root);
-  // The router's frozen prompt, where an installation keeps it.
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(`${world.install}/prompts`, { recursive: true });
   yield* fs.copyFile(
@@ -355,10 +344,6 @@ const projectsTree = Effect.fn("test.projectsTree")(function* (
 const FLAGS =
   "--print --output-format --json-schema --tools --restricted --strict-mcp-config --setting-sources --no-session-persistence --append-system-prompt-file";
 
-/**
- * A `claude` on PATH that records each call's pack and answers `route`, or fails where
- * `route` is null — the evaluator the router asks, stood in at the process it runs.
- */
 const withRouter = <A, E, R>(
   world: World,
   route: { answer: string; checkouts: ReadonlyArray<string> } | null,

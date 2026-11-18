@@ -1,6 +1,3 @@
-// `bun tools/suite-bench.ts`: one whole `bun run test`, its output passed through to stderr and
-// its exit code kept, then what a Measurement judges as the last stdout line (#215).
-
 import { BunRuntime } from "@effect/platform-bun";
 import { Console, Effect, Schema } from "effect";
 
@@ -14,7 +11,6 @@ type SuiteReadings = typeof SuiteReadings.Type;
 
 const ms = (seconds: string) => Math.round(Number(seconds) * 1000);
 
-/** The runner's `test: queued …` line and Bun's summary; a missing one is an error, never a zero. */
 export const suiteReadings: (
   output: string,
 ) => { ok: true; readings: SuiteReadings } | { ok: false; error: string } = (output) => {

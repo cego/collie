@@ -1,9 +1,3 @@
-// The one place text reaches an agent. Six callers used to send independently, so a
-// hand-off and a nudge could land in one pane in either order with neither knowing. One
-// arbiter holding the agent's ledger lock while it sends buys what no single sender
-// could: a record written *before* herdr is called, and one answer to "is something
-// already in the air about this work".
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -46,13 +40,10 @@ import type { FrontDoor } from "./board-model";
 import { scrub } from "./redact";
 import { keepMessage } from "./attachments";
 
-/** How long a message may sit `reserved` before a later reader calls it `unknown`. */
 export const SUBMIT_TIMEOUT_MS = 60_000;
 
-/** How stale the agent listing a transaction holds may be before a send re-reads it. */
 const LISTING_MAX_AGE_MS = 5_000;
 
-/** A resource limit, not a style rule: one send is one message, not a transcript. */
 export const MAX_DELIVERY_BYTES = 8 * 1024;
 
 const HUMAN_DOORS: Partial<Record<FrontDoor, string>> = {
@@ -61,7 +52,6 @@ const HUMAN_DOORS: Partial<Record<FrontDoor, string>> = {
   "cli-tty": "in a terminal",
 };
 
-/** The host's local time to the minute, with its offset: `2026-10-16 14:02 +02:00`. */
 const localMinute = (at: number) => {
   const iso = DateTime.formatIsoOffset(
     DateTime.makeZonedUnsafe(at, { timeZone: DateTime.zoneMakeLocal() }),
@@ -69,10 +59,6 @@ const localMinute = (at: number) => {
   return `${pipe_(iso, Str.slice(0, 10))} ${pipe_(iso, Str.slice(11, 16))} ${pipe_(iso, Str.slice(-6))}`;
 };
 
-/**
- * Whose words a Delivery carries, or null for Collie's own. A chat's `said` of "" is one
- * kept in a file, so its line names the human without quoting them.
- */
 const senderLine = (actor: Asker | undefined, at: number) => {
   if (actor === undefined) return null;
   if (actor.origin === "agent" || actor.origin === "host") {
@@ -90,7 +76,6 @@ const senderLine = (actor: Asker | undefined, at: number) => {
   return `From chat for the human, ${when}.${quote}`;
 };
 
-/** The exact message whose size is bounded and which reaches the agent. */
 export const deliveryText = (
   words: string,
   actor: Asker | undefined,
@@ -105,11 +90,6 @@ export const deliveryText = (
   return heading === "" ? words : `${heading}\n${words}`;
 };
 
-/**
- * What Claude Code still shows its model as typed: past about 3 lines or 800 characters it
- * becomes pasted content, which agents and auto mode do not take as the user's. 700 leaves
- * room for a resend's longer token.
- */
 export const PASTE_BUDGET = { lines: 3, chars: 700 } as const;
 
 const fits = (typed: string) =>
@@ -119,11 +99,6 @@ const fits = (typed: string) =>
 export const KEPT =
   "Kept as a file in the Run. Auto mode reads only what is typed: ask for an action it must clear in a message of at most 3 lines and 700 characters.";
 
-/**
- * Someone's words as they will be typed after `token`: as given where the whole typed form
- * fits the paste budget, else kept word for word in `into` and named. Never cut, since an
- * excerpt can change what it asks.
- */
 export const fitDelivery = Effect.fn("Dispatcher.fitDelivery")(function* (
   into: string,
   token: string,
@@ -155,7 +130,6 @@ export const fitDelivery = Effect.fn("Dispatcher.fitDelivery")(function* (
 
 export interface DeliveryDraft {
   readonly run: string;
-  /** Which harness is in that pane, so `now` and `interrupt` can be gated on it. */
   readonly harness?: string;
   readonly cause: Cause;
   readonly mode: "boundary" | "now" | "interrupt";
@@ -166,19 +140,10 @@ export interface DeliveryDraft {
   readonly note?: string;
   readonly workflowNotice?: string;
   readonly idleOnly?: boolean;
-  /** Whose words it carries, where they are a human's. */
   readonly human?: HumanDoor | null;
-  /**
-   * How long a refusal herdr calls momentary may hold before this sender gives up, from
-   * the first one. Absent, it is not waited out: the refusal fails the delivery at once.
-   */
   readonly patienceMs?: number;
 }
 
-/**
- * Refusals that name a pane condition which clears by itself. By herdr's code, never its
- * prose: a message is for people and can change under a release that keeps the code.
- */
 const AGENT_BLOCKED = "agent_blocked";
 const TRANSIENT_REFUSALS: ReadonlySet<string> = new Set([AGENT_BLOCKED]);
 
@@ -191,35 +156,21 @@ type Refusal =
   | "deferred"
   | "exhausted";
 
-/**
- * What became of one send. Never a throw: every one of these is a fact the caller has to
- * record, and an exception would lose the delivery id the ledger line was written under.
- */
 export type SubmitOutcome =
   | {
       readonly ok: true;
       readonly id: string;
-      /**
-       * What herdr saw of the submission: a turn starting, or nothing it can vouch for.
-       * Absent from a channel that was not asked — a test double, a scripted reply.
-       */
       readonly submission?: Submission;
     }
   | {
       readonly ok: false;
       readonly id: string | null;
-      /**
-       * `deferred`: herdr said the pane cannot take it yet, and nothing was delivered.
-       * `exhausted`: that stayed true for the draft's whole patience.
-       */
       readonly reason: Refusal;
       readonly detail: string;
-      /** On `blocked`: the state of the delivery already about this work, where one holds it. */
       readonly held?: string;
     };
 
 export interface Channel {
-  /** The incarnation this channel is bound to, so a caller can label what it sends. */
   readonly agent: string;
   submit(
     text: string,
@@ -235,27 +186,19 @@ export interface DispatcherDeps {
   readonly stateDir: string;
   readonly herdr: Pick<Herdr, "agentPrompt" | "agentList" | "agentSendKeys"> &
     Partial<Pick<Herdr, "agentStatus">>;
-  /** The Run's audit trail, so a refusal is explained where the Run is read. */
   readonly log: (
     line: string,
   ) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path | PlatformServices>;
-  /**
-   * Why this agent cannot take Collie's own prompt yet, or null: a question it asked is
-   * still open on its Run, and the prompt would land as its answer.
-   */
   readonly asking?: (agent: string) => Effect.Effect<string | null>;
 }
 
-/** Nothing was sent, and the caller is told which of its own rules stopped it. */
 export class NotDeliverable extends Data.TaggedError("NotDeliverable")<{
   agent: string;
   reason: string;
 }> {}
 
-/** A programming error: a channel used after its transaction closed sends outside the lock that made it safe. */
 class DispatcherDefect extends Data.TaggedError("DispatcherDefect")<{ why: string }> {}
 
-/** Another caller in this process is sending to this incarnation; a second lock claim would deadlock on it. */
 class TransactionOpen extends Data.TaggedError("TransactionOpen")<{ agent: string }> {
   override get message() {
     return `a transaction for ${this.agent} is already open in this process`;
@@ -267,11 +210,6 @@ const isLedgerHeld = (cause: unknown): cause is TransactionOpen =>
 
 const open = new Set<string>();
 
-/**
- * The order several due messages go out in for one incarnation. An interrupt is the
- * human saying "now", so it outranks everything; a compaction is the least urgent thing
- * there is and only happens with nothing else in flight.
- */
 const ORDER = {
   correction: 1,
   steer: 2,
@@ -285,17 +223,12 @@ const ORDER = {
 
 const MODE_ORDER = { interrupt: 0, now: 1, boundary: 2 } satisfies Record<Delivery["mode"], number>;
 
-// Last, rather than `undefined` in the arithmetic: these are read off the inbox, whose
-// decode types both as plain strings, and a comparison against NaN leaves the whole list
-// in whatever order it arrived in.
 const LAST = Number.MAX_SAFE_INTEGER;
-// SAFETY: the index is checked by `?? LAST` — a kind or mode these tables do not name
-// reads as absent and sorts last, which is the point of the lookup.
+// WARNING: the index is checked by `?? LAST` — a kind or mode these tables do not name reads as absent and sorts last, which is the point of the lookup.
 const causeRank = (kind: string) => ORDER[kind as Cause["kind"]] ?? LAST;
-// SAFETY: as above; an unknown mode is ordered last rather than compared as NaN.
+// WARNING: as above; an unknown mode is ordered last rather than compared as NaN.
 const modeRank = (mode: string) => MODE_ORDER[mode as Delivery["mode"]] ?? LAST;
 
-/** Due messages, worst-waited first. Exported because ordering is a rule, not a detail. */
 export function dispatchOrder<
   T extends { readonly mode: string; readonly cause: { readonly kind: string } },
 >(due: ReadonlyArray<T>) {
@@ -305,13 +238,6 @@ export function dispatchOrder<
   );
 }
 
-/**
- * Everything one caller wants to send to one live agent, under that agent's ledger lock.
- *
- * The incarnation is revalidated before anything is sent: an agent name and a pane are
- * both inherited by whatever takes that role next, so "the agent that was registered" and
- * "whatever is in that pane now" are different questions.
- */
 export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, R>(
   deps: DispatcherDeps,
   entry: AgentEntry,
@@ -349,8 +275,6 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
             });
           if (Buffer.byteLength(text, "utf8") > MAX_DELIVERY_BYTES)
             return refuse(null, "too_long", `over ${MAX_DELIVERY_BYTES} bytes`);
-          // Fail closed before anything is reserved: a mode this harness has not been
-          // shown to take would produce a delivery nobody can say the fate of.
           const ungated = yield* gate(draft.harness ?? "", draft.mode).pipe(
             Effect.as(null),
             Effect.catch((cause) => Effect.succeed(cause)),
@@ -368,9 +292,6 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
             )
           )
             return refuse(null, "deferred", "agent is not idle");
-          // The listing was read when the transaction opened, and a whole compaction
-          // can happen inside one. Anything older than a few seconds is re-read before
-          // it is trusted with a send.
           if ((yield* Clock.currentTimeMillis) - listedAt > LISTING_MAX_AGE_MS) {
             listing = yield* agentsNow(deps);
             listedAt = yield* Clock.currentTimeMillis;
@@ -384,8 +305,6 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
         }).pipe(Effect.orDie),
     };
 
-    // Closed however the body ends: the transaction ends at the same moment, so a channel
-    // a failed body kept hold of would be a sender with nothing serialising it.
     const result = yield* body(channel).pipe(
       Effect.ensuring(
         Effect.sync(() => {
@@ -405,15 +324,6 @@ function refuse(id: string | null, reason: Refusal, detail: string) {
 const agentsNow = (deps: DispatcherDeps) =>
   deps.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
 
-/**
- * One message: reserved, sent, settled. The reservation is appended **before** herdr is
- * called and is never removed — a crash in the window between them is exactly the case
- * this record exists for, and a later reader settles it `unknown` rather than guessing.
- */
-/**
- * One delivery line. Every state of a delivery is this line again with its own `at` and
- * `state`, because each of those is the same fact recorded a second time.
- */
 function deliveryOf(
   entry: AgentEntry,
   terminalId: string,
@@ -456,8 +366,6 @@ const send = Effect.fn("Dispatcher.send")(function* (
 
   const key = causalKey(draft.run, draft.cause, draft.intentVersion);
   const ledger = yield* readLedgerWhole(terminalId);
-  // A line nobody can read is a delivery nobody can account for, which is what `unknown`
-  // means and why it blocks: sending again could be the second copy of this work.
   if (ledger.corrupt > 0) {
     yield* deps.log(
       `not sent to ${entry.agent}: ${ledger.corrupt} unreadable line(s) in its ledger`,
@@ -487,7 +395,6 @@ const send = Effect.fn("Dispatcher.send")(function* (
     draft.cause.kind === "step" || draft.cause.kind === "repair"
       ? yield* deps.asking?.(entry.agent) ?? Effect.succeed(null)
       : null;
-  // Refused as herdr refuses a pane in a dialog, so it is waited out the same way.
   const sent =
     asking === null
       ? yield* deps.herdr.agentPrompt(entry.agent, marked(text, id)).pipe(Effect.result)
@@ -496,8 +403,6 @@ const send = Effect.fn("Dispatcher.send")(function* (
         );
   const settledAt = yield* nowIso;
   if (Result.isSuccess(sent)) {
-    // `submitted` either way: the text and the Enter were written. What herdr could not
-    // vouch for is kept as the note, never rounded up to a delivery it saw taken.
     const line = { ...reserved, at: settledAt, state: "submitted" as const };
     yield* appendLine(
       sent.success === "observed"
@@ -508,10 +413,8 @@ const send = Effect.fn("Dispatcher.send")(function* (
       yield* appendLine({ ...line, state: "acknowledged", note: TURN_STARTED });
     return { ok: true as const, id, submission: sent.success };
   }
-  // A refusal herdr answered with is a fact; a transport that never answered is not.
   const why = herdrFailureReason(sent.failure);
   if (sent.failure.answered !== true) {
-    // Nobody can say whether it arrived, and Collie never retries out of that on its own.
     yield* appendLine({ ...reserved, at: settledAt, state: "unknown", note: why });
     return refuse(id, "unknown", why);
   }
@@ -521,8 +424,6 @@ const send = Effect.fn("Dispatcher.send")(function* (
     yield* appendLine({ ...coded, at: settledAt, state: "failed", note: why });
     return refuse(id, "failed", why);
   }
-  // Measured from the ledger rather than this process, so a sender that comes back after
-  // a restart is held to the same deadline rather than a fresh one.
   const before = deferralsOf(ledger.lines, id);
   const attempts = before.count + 1;
   const held = before.since === null ? 0 : (yield* Clock.currentTimeMillis) - epochMs(before.since);
@@ -538,21 +439,14 @@ const send = Effect.fn("Dispatcher.send")(function* (
   return refuse(id, "exhausted", gaveUp);
 });
 
-/** How soon, how often and for how long a pane that refuses for a moment is tried again. */
 export interface Patience {
   readonly firstMs: number;
   readonly maxMs: number;
-  /** From the first refusal. */
   readonly forMs: number;
 }
 
 export const PATIENCE: Patience = { firstMs: 2_000, maxMs: 30_000, forMs: 10 * 60_000 };
 
-/**
- * One delivery, tried again while herdr says the pane will clear by itself or another sender
- * holds the agent's ledger. Each try is a transaction of its own, so nothing waits holding
- * the agent's ledger lock, and the incarnation is proven again before every send.
- */
 export const submitPatiently = Effect.fn("Dispatcher.submitPatiently")(function* (
   deps: DispatcherDeps,
   entry: AgentEntry,
@@ -580,7 +474,6 @@ const UNOBSERVED = "unobserved";
 const ENTER_PRESSED = "unobserved; enter pressed";
 export const TURN_STARTED = "a turn started";
 
-/** A submission nothing confirmed: neither taken nor still waiting to be sent. */
 export class Unconfirmed extends Data.TaggedError("Unconfirmed")<{
   agent: string;
   pane: string;
@@ -592,20 +485,11 @@ export interface ConfirmDeps<R> {
   readonly stateDir: string;
   readonly herdr: Pick<Herdr, "agentStatus">;
   readonly log: DispatcherDeps["log"];
-  /** Whatever else says the agent took this delivery, as a phrase; null for nothing. */
   readonly taken: (delivery: Delivery) => Effect.Effect<string | null, never, R>;
   readonly pollMs: number;
-  /** How long a settled agent may show no turn before a human is asked. */
   readonly graceMs: number;
 }
 
-/**
- * A `submitted (unobserved)` delivery about one of these causal keys, checked until it is
- * known either way. Taken is a turn core saw start from a settled agent, or whatever
- * `taken` finds, and is recorded `acknowledged`. A settled agent that shows neither, for
- * the whole grace, fails `Unconfirmed`: nothing can prove sending it again is safe, so a
- * human is asked. Returns how it was taken, or null where nothing was left unobserved.
- */
 export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(function* <R>(
   deps: ConfirmDeps<R>,
   entry: AgentEntry,
@@ -619,7 +503,6 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
       (one) => keys.includes(one.causal_key) && isUnobserved(one),
     ).at(-1),
   );
-  /** Re-read first, so a settlement never lands on a delivery the sender moved meanwhile. */
   const settle = (id: string, note: string, state?: "acknowledged") =>
     Effect.gen(function* () {
       const now = newestById(yield* readLedger(terminalId)).get(id);
@@ -660,7 +543,6 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
   }
 });
 
-/** Losing an incarnation proves deferred work unsent, but says nothing about reservations. */
 const settlePending = Effect.fn("Dispatcher.settlePending")(function* (
   terminalId: string,
   why: string,
@@ -677,14 +559,8 @@ const settlePending = Effect.fn("Dispatcher.settlePending")(function* (
   }
 });
 
-/** What marks a prompt as Collie's own. Its absence is what attribution is looking for. */
 export const DELIVERY_TOKEN = "collie-delivery:";
 
-/**
- * The text as it is typed, with its delivery's token on a line of its own near the top:
- * herdr's view of a prompt box is its first few hundred bytes, and a slash command has to
- * keep its first line. The harness's submit hook reads the same token back.
- */
 export function marked(text: string, id: string) {
   const token = `${DELIVERY_TOKEN}${id}`;
   if (Str.split(text, "\n").includes(token)) return text;
@@ -693,22 +569,10 @@ export function marked(text: string, id: string) {
   return Arr.join([command, token, ...rest], "\n");
 }
 
-/** The delivery a submitted prompt carried: its first token, which is the one `marked` adds. */
 export function carriedDelivery(prompt: string) {
   return new RegExp(`${DELIVERY_TOKEN}(\\S+)`).exec(prompt)?.[1] ?? null;
 }
 
-/**
- * The entry for an agent this process has just started or is already working with,
- * built from what herdr says about it now. The register only holds group heads, and a
- * fan-out step's other variants are just as much live agents — so the identity is read
- * where it can be read rather than a whole variant being undeliverable for want of a
- * register row.
- *
- * The two ways this can come back empty are told apart, because they mean different
- * things to whoever is waiting: an agent herdr no longer has is over, and one herdr has
- * without a `terminal_id` is a release too old to address.
- */
 export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
   deps: DispatcherDeps,
   about: {
@@ -743,11 +607,6 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
   return { entry, reason: null, gone: false };
 });
 
-/**
- * A delivery refused by the capability gate, recorded rather than dropped. Nothing was
- * sent, so it never gets a `reserved` line — but a human asking "what happened to my
- * steer" has to find an answer somewhere, and the ledger is where they look.
- */
 const recordUngated = Effect.fn("Dispatcher.recordUngated")(function* (
   entry: AgentEntry,
   terminalId: string,
@@ -762,13 +621,6 @@ const recordUngated = Effect.fn("Dispatcher.recordUngated")(function* (
   });
 });
 
-/**
- * The interrupt: keys first, then the text. herdr answering says the keys were sent, and
- * a status that has left `working` says the harness reacted to something — neither is
- * proof it stopped, and no such proof exists at this boundary. So the log says
- * `interrupt_requested`, and the text after it is confirmed like any other delivery. The
- * word this deliberately never uses is the one a reader would most like: stopped.
- */
 export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
   deps: DispatcherDeps & {
     readonly status: (agent: string) => Effect.Effect<string, never, PlatformServices>;
@@ -779,8 +631,6 @@ export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
   draft: DeliveryDraft,
   waitMs = INTERRUPT_WAIT_MS,
 ) {
-  // Before the keys: `channel.submit` below gates the text as a `now`, which is a
-  // different permission and too late to un-press a key.
   const ungated = yield* gate(draft.harness ?? "", "interrupt").pipe(
     Effect.as(null),
     Effect.catch((cause) => Effect.succeed(cause)),
@@ -796,8 +646,6 @@ export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
   if (sent !== null) return refuse(null, "failed", `interrupt keys not sent: ${sent}`);
   yield* deps.log(`${entry.agent}: interrupt_requested`);
 
-  // Waiting is a courtesy, not a condition: whether or not the status moves, the text
-  // goes out. A harness that ignored the keys still has to be told what changed.
   const deadline = (yield* Clock.currentTimeMillis) + waitMs;
   while ((yield* Clock.currentTimeMillis) < deadline) {
     if ((yield* deps.status(entry.agent)) !== "working") break;
@@ -806,5 +654,4 @@ export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
   return yield* channel.submit(text, { ...draft, mode: "now" });
 });
 
-/** How long an interrupt waits for the agent's status to move before it sends anyway. */
 export const INTERRUPT_WAIT_MS = 10_000;

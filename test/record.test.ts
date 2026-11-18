@@ -1,6 +1,3 @@
-// A Run's record read from the host's Run model: nothing read or sent on a bare tick, and
-// nothing read of another Task's Runs.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
@@ -24,7 +21,6 @@ type Frame = RunDetail | RecordUnchanged | null;
 const isDone = (frame: Frame): frame is RunDetail =>
   frame !== null && !("_tag" in frame) && (frame.pending ?? []).length === 0;
 
-/** `count` Runs, each in a Task of its own, with files under all three of their directories. */
 const stateOf = (count: number) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -56,7 +52,6 @@ const stateOf = (count: number) =>
     return { dir, runs };
   });
 
-/** A model over `dir` whose every read of the disk beneath it is logged in `reads`. */
 const loggedModel = (dir: string, reads: Array<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -74,7 +69,6 @@ const loggedModel = (dir: string, reads: Array<string>) =>
     );
   });
 
-/** A record's sources over these Runs; each build of it says when it starts with `started`. */
 const sourcesOf: (
   dir: string,
   model: Effect.Success<ReturnType<typeof makeRunModel>>,
@@ -144,10 +138,8 @@ test("a bare tick reads none of a record's files and sends nothing; a change sen
       const run = runs[0]!;
       const poked = yield* Queue.unbounded<void>();
       const frames = yield* Queue.unbounded<Frame>();
-      // How much had been read when each build of the record began.
       const builds = yield* Queue.unbounded<number>();
       const started = Effect.suspend(() => Queue.offer(builds, reads.length));
-      // As the host's board is told: on every tick, and on every write.
       const changes = Stream.merge(Stream.fromQueue(poked), Stream.tick("5 seconds"));
       yield* recordFrames(
         sourcesOf(dir, model, runs, Effect.asVoid(started)),
@@ -160,11 +152,9 @@ test("a bare tick reads none of a record's files and sends nothing; a change sen
       let first = yield* Queue.take(frames);
       while (!isDone(first)) first = yield* Queue.take(frames);
 
-      // The first build, then the tick on subscribing, which finds what the first frame wrote.
       yield* Effect.replicateEffect(Queue.take(builds), 2);
       let quiet = 0;
       for (const tick of Arr.range(1, 12)) {
-        // Lets the last build end, so the next tick is waiting on the clock.
         yield* TestClock.withLive(Effect.sleep("20 millis"));
         yield* TestClock.adjust("5 seconds");
         const at = yield* Queue.take(builds);

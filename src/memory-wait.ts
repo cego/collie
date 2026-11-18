@@ -1,7 +1,3 @@
-// The one wait an agent's launch, a Check pass and `collie verify` make while their Machine
-// is Short of memory (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory, D2–D7).
-// Each wait is a control row over its Run, so every door reads it the one way.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -13,12 +9,10 @@ import { machineName } from "./peers";
 import { RunRecords } from "./run-records";
 import { took } from "./time";
 
-/** How often a wait reads again; a test of the shipped host names a shorter one. */
 const every = Config.Duration("COLLIE_MEMORY_EVERY").pipe(
   Config.withDefault(Duration.seconds(15)),
   Effect.orElseSucceed(() => Duration.seconds(15)),
 );
-/** A wait for memory, keyed by its start and a random number (`memory-waits/<key>`). */
 export const MEMORY_WAIT = "memory-wait";
 
 const GB = 1024 ** 3;
@@ -28,16 +22,13 @@ const MemoryWaitJson = Schema.fromJsonString(
     what: Schema.String,
     sentence: Schema.String,
     since: Schema.Finite,
-    /** When the wait last read its Machine, and how often it reads: an older read is a dead host's. */
     read: Schema.Finite,
     every: Schema.Finite,
-    /** The agent whose Output budget this wait pauses: the one that asked for it. */
     asker: Schema.NullOr(Schema.String),
   }),
 );
 export type MemoryWait = typeof MemoryWaitJson.Type;
 
-/** `waiting for memory on vm-mk: 2.1 of 62.0 GB available`, naming pressure where it is high. */
 export const memorySentence = (memory: Memory & { known: true }) =>
   `waiting for memory on ${machineName()}: ${(memory.available / GB).toFixed(1)} of ${(memory.total / GB).toFixed(1)} GB available${memory.pressure !== null && memory.pressure >= PRESSURE_SHORT ? `, pressure ${memory.pressure.toFixed(1)}` : ""}`;
 
@@ -54,24 +45,15 @@ const waitsOf = (runId: string) =>
     return waits.sort((a, b) => a.since - b.since);
   });
 
-/** A wait as every door says it: `Waiting for memory on vm-mk: 2.1 of 62.0 GB available.` */
 export const waitLine = (wait: MemoryWait) =>
   `${Str.toUpperCase(wait.sentence[0]!)}${pipe_(wait.sentence, Str.slice(1))}.`;
 
-/** What of this Run waits for memory longest, or null where nothing does. */
 export const memoryWaitOf = (runId: string) =>
   Effect.map(waitsOf(runId), (waits) => waits[0] ?? null);
 
-/** Whether a `collie verify` `agent` asked for waits for memory, which pauses its Output budget. */
 export const holdsBudgetOf = (runId: string, agent: string) =>
   Effect.map(waitsOf(runId), (waits) => Arr.some(waits, (one) => one.asker === agent));
 
-/**
- * Returns once this Machine is not short of memory, reading it and `memory_hold` again every
- * 15 seconds: `free` where it never was, `waited` where it was, and `stopped` where `stopped`
- * came true during the wait or as it ended, so nothing starts for a stopped Run. Never fails
- * and reserves nothing.
- */
 export const waitForMemory = (opts: {
   readonly env: PluginEnv;
   readonly stateDir: string;
@@ -79,7 +61,6 @@ export const waitForMemory = (opts: {
   readonly what: string;
   readonly asker?: string | null;
   readonly stopped?: Effect.Effect<boolean, never, FileSystem.FileSystem>;
-  /** Told the sentence once, as the wait begins. */
   readonly say?: (sentence: string) => Effect.Effect<void>;
 }) =>
   Effect.gen(function* () {

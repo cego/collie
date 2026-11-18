@@ -1,7 +1,3 @@
-// A start is held to the checks its base declares: `.collie/verify.json` as the ref a
-// checkout for the Run is cut from has it, whatever the checkout it was started in has
-// (ADR-draft-a-runs-checks-are-read-where-its-checkout-starts).
-
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { runDir } from "../src/engine";
@@ -20,10 +16,6 @@ const LEFT_TO_CI = [
 ];
 const REMEMBERED = [{ name: "check", executable: "bun", argv: ["run", "check"], cwd: "worktree" }];
 
-/**
- * A checkout one commit behind origin's master, which alone has `checks` as its checks
- * file, on a remote whose remembered checks leave nothing to CI.
- */
 const behind = (world: World, checks: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

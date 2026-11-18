@@ -1,7 +1,3 @@
-// The Intent is what every later comparison is made against, so the things it must
-// never do are tested first: never default a file it cannot read, never take authority
-// from text, never lose a child's own constraints when a parent propagates.
-
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
@@ -236,13 +232,10 @@ test("plan requirements become warn constraints with provenance, and never autho
   }
   expect(found.constraints[0]?.provenance?.heading).toBe("Requirements");
   expect(found.constraints[2]?.provenance?.heading).toBe("Success criteria");
-  // Nothing in a plan is a grant: `extractRequirements` returns constraints only.
   expect(Rec.keys(found)).toEqual(["goal", "constraints"]);
 });
 
 test("a numbered plan has a goal and constraints like any other", () => {
-  // This repository's own SPEC.md numbers its headings. Reading it as a document with
-  // neither goal nor requirements would seed every plan-dir Run with nothing to steer by.
   const numbered = Arr.join(
     [
       "# Spec: something",
@@ -271,7 +264,6 @@ test("a numbered plan has a goal and constraints like any other", () => {
 });
 
 test("a spec with no Objective takes its goal from its Solution, and an Objective still wins", () => {
-  // The headings to-spec writes, which is how Collie's own planner shapes a spec.
   const toSpec = Arr.join(
     [
       "# Spec: a thing",
@@ -332,7 +324,6 @@ test("a plan's out-of-scope and done-when bullets are constraints, and out of sc
 });
 
 test("a plan bullet is one constraint, its wrapped lines and nested bullets included", () => {
-  // run-6ed7b18b's Done When and Out of Scope, as its plan wrapped and nested them.
   const spec = Arr.join(
     [
       "# Spec: Roll out nuxt module 9.1.1",
@@ -391,7 +382,6 @@ test("a plan bullet is one constraint, its wrapped lines and nested bullets incl
   expect(found.constraints[3]?.id).toBe(constraintId("The suite is green."));
 });
 
-/** A constraint the Run's own planner wrote into `plan/SPEC.md`. */
 const fromOwnPlan = (text: string) => ({
   id: text,
   kind: "semantic" as const,
@@ -544,7 +534,6 @@ test(
         );
         expect(seeded?.version).toBe(1);
         expect(seeded?.goal).toBe("greet whoever asks");
-        // What was named at launch replaces the workspace's own entry with the same id.
         expect(
           Option.getOrUndefined(
             Option.map(Option.fromNullishOr(seeded), (present) =>
@@ -559,7 +548,6 @@ test(
             project: world.project,
             id: "hello",
             request: yield* uuid,
-            // No goal of its own, so the parent's is the one it works to.
             input: { name: "" },
             parent: started.runId,
           })

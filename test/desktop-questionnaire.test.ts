@@ -1,7 +1,3 @@
-// The questionnaire a card's dialog and the record's Flow decision draw: each row is a
-// question, the events Desktop feeds it, and what the human then sees and what is sent.
-// Written as tables so the Rune view's reducer can be checked against them row by row.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { describe, expect, test } from "bun:test";
@@ -74,7 +70,6 @@ const key: (name: string, mod?: boolean, where?: "group" | "steer" | "answer") =
   where,
 });
 
-/** The events in order from a freshly opened question; the last step's effect with it. */
 const run = (question: Question, events: ReadonlyArray<Event>) => {
   const opened: Stepped = { state: questionnaire(question), does: null };
   return Arr.reduce(events, opened, ({ state }, event) => stepped(state, event));

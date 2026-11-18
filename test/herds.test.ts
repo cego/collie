@@ -1,5 +1,3 @@
-// This Machine's Herd as a host reads it, and what tells it that its terminals changed.
-
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Fiber, Option, Stream } from "effect";
 import { Herdr } from "../src/herdr";

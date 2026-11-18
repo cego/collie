@@ -1,6 +1,3 @@
-// A Heal's resume is refused where the Stop is cleared, under the permit a Stop is set
-// under, so a person's Stop that lands while the resume is on its way still stands.
-
 import { Herdr } from "../src/herdr";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";

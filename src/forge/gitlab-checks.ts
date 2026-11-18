@@ -1,6 +1,3 @@
-// The doctor's GitLab checks: glab and its login, the token's expiry, and whether this
-// Machine can push to the Flock's GitLab. They run glab, so they live beside its adapter.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
@@ -61,11 +58,6 @@ export const probeGitlab = Effect.fn("Connections.probeGitlab")(function* <R>(
   } satisfies Probe;
 });
 
-/**
- * Each host `glab auth status` names (its unindented lines), and whether git reaches it
- * over HTTPS. Read whatever the exit code: one host with a bad token fails the command
- * for all of them.
- */
 export const glabHosts = (status: string) =>
   Arr.map(
     Arr.filter(Str.split(status, "\n"), (line) => /^[a-z0-9.-]+(:\d+)?$/i.test(line)),
@@ -99,10 +91,8 @@ const tokenExpiry = Effect.fn("Doctor.tokenExpiry")(function* (
   return passed(`${host}: the token expires on ${expires}`);
 });
 
-/** An agent sshd forwarded into this session, which goes when the computer it came from sleeps. */
 const FORWARDED_AGENT = /^\/tmp\/ssh-[^/]+\/agent\.\d+$/;
 
-/** Whether this Machine's own keys reach `host` over SSH, or glab's token over HTTPS. */
 export const pushCheck = Effect.fn("Doctor.pushCheck")(function* (
   host: { host: string; https: boolean },
   env: PluginEnv,
@@ -130,7 +120,6 @@ export const pushCheck = Effect.fn("Doctor.pushCheck")(function* (
   );
 });
 
-/** Every GitLab check, exactly as `collie doctor` has always made them. */
 export const gitlabChecks = Effect.fn("Doctor.gitlabChecks")(function* (
   env: PluginEnv,
   search: string,
@@ -140,7 +129,6 @@ export const gitlabChecks = Effect.fn("Doctor.gitlabChecks")(function* (
   const checks: Check[] = [];
   const glabDir = yield* onPath(search, "glab");
   const host = yield* gitlabHostOf(env);
-  // The whole status only names the other hosts: one with a bad token fails it for all.
   const [auth, everyHost] = glabDir
     ? yield* Effect.all(
         [
@@ -170,7 +158,6 @@ export const gitlabChecks = Effect.fn("Doctor.gitlabChecks")(function* (
             )),
   });
 
-  // A host glab has never heard of is the `glab` check's failure, not two more.
   const known = auth
     ? Option.getOrUndefined(Arr.findFirst(glabHosts(whatItSaid(auth)), (one) => one.host === host))
     : undefined;

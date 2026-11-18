@@ -1,9 +1,3 @@
-// `bun run tools/sign.ts <file>...`: writes `<file>.sig` (Ed25519, with COLLIE_SIGNING_KEY)
-// and `<file>.p256.sig` (P-256, with COLLIE_SIGNING_KEY_P256) beside each release asset. It
-// refuses a key that is not the one Collie checks with, so a release signed by any other key
-// fails here rather than at every install. Desktop's update archive is also signed as the tar
-// it is applied as, which is what Desktop verifies.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";

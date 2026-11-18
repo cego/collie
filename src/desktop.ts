@@ -1,9 +1,3 @@
-// Collie Desktop on this computer, brought to the version `collie upgrade` moved to. The
-// update is staged as Electrobun's own download leaves one — its tar and the prepared record
-// beside it — and only once the tar verifies against the release key. Desktop installs it
-// as it installs its own: on Restart Desktop, or as it next starts. Nothing here replaces a
-// Desktop, running or not.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -15,11 +9,9 @@ import { epochMs } from "./time";
 import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "./signing";
 
 const IDENTIFIER = "dk.cego.collie.desktop";
-/** The one platform `collie upgrade` stages a Desktop update on. */
 const RELEASED_FOR = "linux-x64";
 const PREFIX = `stable-${RELEASED_FOR}`;
 
-// ponytail: Electrobun's own files, as electrobun 2.0.2 writes and reads them; recheck on an upgrade.
 const Installed = Schema.fromJsonString(
   Schema.Struct({
     version: Schema.String,
@@ -41,7 +33,6 @@ const Manifest = Schema.fromJsonString(
     }),
   }),
 );
-/** Where Electrobun records an update it has downloaded and unpacked, waiting to install. */
 export const preparedRecordOf = (channelRoot: string) =>
   `${channelRoot}/self-extraction/.electrobun-prepared-update.json`;
 export const PreparedRecord = Schema.fromJsonString(
@@ -58,7 +49,6 @@ export const PreparedRecord = Schema.fromJsonString(
   }),
 );
 
-/** `version`'s own release, where `baseUrl` is the newest one's `latest/download`. */
 export const releaseOf = (baseUrl: string, version: string) =>
   pipe_(
     baseUrl,
@@ -66,10 +56,6 @@ export const releaseOf = (baseUrl: string, version: string) =>
     Str.replace(/\/latest\/download$/, `/download/${version}`),
   );
 
-/**
- * Where Electrobun keeps an app's data per user: `~/Library/Application Support` on macOS;
- * elsewhere `$XDG_DATA_HOME` where it is absolute, else `~/.local/share`.
- */
 export const dataHomeOf = (
   home: string,
   xdgDataHome: string | undefined,
@@ -90,9 +76,7 @@ export interface DesktopStep {
 export interface DesktopUpdateOptions {
   readonly dataHome: string;
   readonly key?: string;
-  /** `<platform>-<arch>`, as Node names them. */
   readonly platform?: string;
-  /** Whether a Desktop installed at `app` is running. */
   readonly running?: (app: string) => Effect.Effect<boolean, never, FileSystem.FileSystem>;
 }
 
@@ -113,7 +97,6 @@ const bodyOf = (url: string) =>
     ),
   );
 
-/** A signature that is not published is null, which verifying refuses as unsigned. */
 const signatureAt = (url: string) =>
   fetched(url).pipe(
     Effect.flatMap((response) =>
@@ -123,7 +106,6 @@ const signatureAt = (url: string) =>
     ),
   );
 
-/** Whether a process on this computer runs from under `app`, as `/proc` shows them. */
 export const runningFrom = (app: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -135,10 +117,6 @@ export const runningFrom = (app: string) =>
     return false;
   }).pipe(Effect.orElseSucceed(() => false));
 
-/**
- * Stages Desktop `to` where a released Desktop older than it is installed for this user, and
- * says so as one of `collie upgrade`'s steps; null where there is no such Desktop to update.
- */
 export const updateDesktop = Effect.fn("desktop.update")(function* (
   to: string,
   {
@@ -175,7 +153,6 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
   const staged = yield* fs
     .readFileString(preparedRecordOf(root))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PreparedRecord)), Effect.option);
-  // One already staged, by this or by Desktop's own download, is never replaced by an older one.
   const target = Option.match(staged, {
     onNone: () => to,
     onSome: ({ version }) => (Bun.semver.order(version, to) >= 0 ? version : to),
@@ -248,33 +225,20 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
   );
 });
 
-/** Electrobun's folder for Desktop's stable channel, which is its `userData` too. */
 export const desktopRootOf = (dataHome: string) => `${dataHome}/${IDENTIFIER}/stable`;
 
-/** What Desktop keeps of its own, and which bundle and version it runs. */
 export interface DesktopOwn {
-  /** Electrobun's channel folder: its staged updates and Desktop's runner copies. */
   readonly root: string;
-  /** Desktop's own state directory, where its usage log is. */
   readonly state: string;
-  /** The running bundle's hash, or null where that cannot be told. */
   readonly hash: string | null;
-  /** The running Desktop's version, or null where that cannot be told. */
   readonly version: string | null;
 }
 
 const USAGE_KEEP_MS = 30 * 24 * 60 * 60_000;
-/** As long as Claude Code keeps the transcripts that name a chat attachment. */
 const ATTACHMENT_KEEP_MS = 30 * 24 * 60 * 60_000;
 const PARTIAL_KEEP_MS = 24 * 60 * 60_000;
 const UsageAt = Schema.fromJsonString(Schema.Struct({ at: Schema.String }));
 
-/**
- * Which of Desktop's files may go (ADR-0045 D5): staged update tars and their rollback copies
- * but the running bundle's own and one prepared and not yet applied; runner copies but the
- * running version's and the newest; chat attachments unused for 30 days and transfers
- * abandoned for a day; and usage lines over 30 days old.
- */
 export const desktopVerdicts = Effect.fn("desktop.verdicts")(function* (own: DesktopOwn) {
   const fs = yield* FileSystem.FileSystem;
   const remove: Array<{ target: string; reason: string }> = [];
@@ -346,7 +310,6 @@ export const desktopVerdicts = Effect.fn("desktop.verdicts")(function* (own: Des
   return { remove, keep, usage };
 });
 
-/** Removes what `desktopVerdicts` says may go, and trims the usage log; what failed stays. */
 export const pruneDesktop = Effect.fn("desktop.prune")(function* (own: DesktopOwn) {
   const fs = yield* FileSystem.FileSystem;
   const verdicts = yield* desktopVerdicts(own);
@@ -356,7 +319,6 @@ export const pruneDesktop = Effect.fn("desktop.prune")(function* (own: DesktopOw
   return verdicts;
 });
 
-/** The usage log as `kept`, written beside it and renamed over it, so no reader sees half. */
 export const trimUsage = (usage: {
   readonly target: string;
   readonly kept: ReadonlyArray<string>;
@@ -374,13 +336,8 @@ export const trimUsage = (usage: {
     yield* fs.rename(tmp, usage.target);
   }).pipe(Effect.ignore);
 
-/** What Desktop's control directory is called, with the pid that owns it. */
 export const sshControlsPrefix = (pid: number) => `collie-ssh-${pid}-`;
 
-/**
- * The `ssh` control directories of Desktops that are no longer running, each master asked to
- * exit first; a live Desktop's are never touched. Answers with the directories removed.
- */
 export const sweepSshControls = Effect.fn("desktop.sweepSshControls")(function* (
   tmp: string,
   env: Readonly<Record<string, string | undefined>>,

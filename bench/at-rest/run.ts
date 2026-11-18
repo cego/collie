@@ -1,5 +1,4 @@
 /* oxlint-disable effecttsgo/async-function, effecttsgo/global-console, effecttsgo/global-console-in-effect, effecttsgo/global-date, effecttsgo/global-date-in-effect, effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-record, effecttsgo/prefer-effect-string, effecttsgo/prefer-schema-over-json, no-restricted-globals, no-restricted-properties -- the benchmark's drivers speak to processes, files and /proc on their own terms, as record-open's do. */
-// Linux /proc counts the host's work separately from this driver.
 
 import { Database } from "bun:sqlite";
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -46,9 +45,7 @@ const threadsCpu = (pid: number) => {
       if (tid === String(pid)) cpu.main += ms;
       else if (comm === "Worker") cpu.worker += ms;
       else cpu.other += ms;
-    } catch {
-      // A thread that ended takes its share with it; the process total below keeps it.
-    }
+    } catch {}
   return cpu;
 };
 const usage = (pid: number) => {
@@ -65,9 +62,7 @@ const usage = (pid: number) => {
   );
   const threads = threadsCpu(pid);
   return {
-    // utime and stime are fields 14-15, cutime and cstime 16-17, minflt and cminflt 10-11.
     cpu_ms: (Number(f[11]) + Number(f[12])) * tickMs,
-    // Mostly the git it spawns.
     children_cpu_ms: (Number(f[13]) + Number(f[14])) * tickMs,
     main_cpu_ms: threads.main,
     worker_cpu_ms: threads.worker,

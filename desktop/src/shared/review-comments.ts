@@ -1,20 +1,15 @@
-// A Run's Review comment drafts, what each is about, and the one message they are sent as
-// (ADR-0051). No Bun-only import: the view bundles this.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { pipe } from "effect/Function";
 import type { FileDiffMetadata, SelectedLineRange, SelectionSide } from "@pierre/diffs";
 
-/** A span of a plan file, by its path in the plan directory, quoted as selected. */
 export interface PlanAnchor {
   readonly _tag: "Plan";
   readonly file: string;
   readonly quote: string;
 }
 
-/** Lines of a changed file on one side: as it is now (`additions`) or as it was. */
 export interface DiffAnchor {
   readonly _tag: "Diff";
   readonly path: string;
@@ -40,18 +35,15 @@ export const editDraft = (drafts: ReadonlyArray<Draft>, id: string, text: string
 export const removeDraft = (drafts: ReadonlyArray<Draft>, id: string) =>
   Arr.filter(drafts, (draft) => draft.id !== id);
 
-/** What is left once the drafts `sent` carried have gone; one edited since is kept. */
 export const clearSent = (drafts: ReadonlyArray<Draft>, sent: ReadonlyArray<Draft>) =>
   Arr.filter(
     drafts,
     (draft) => !Arr.some(sent, (one) => one.id === draft.id && one.text === draft.text),
   );
 
-/** A selection in a plan file as an anchor; null for one with nothing but whitespace. */
 export const planAnchor = (file: string, selected: string) =>
   Str.trim(selected) === "" ? null : { _tag: "Plan", file, quote: selected };
 
-/** The hunk of `file` that shows `line` on `side`, and where its lines start. */
 const hunkAt = (file: FileDiffMetadata, line: number, side: SelectionSide) =>
   Option.getOrUndefined(
     Arr.findFirst(
@@ -76,10 +68,6 @@ const textAt = (file: FileDiffMetadata, line: number, side: SelectionSide) => {
   return text === undefined ? [] : [pipe(text, Str.replace(/\r?\n$/, ""))];
 };
 
-/**
- * The lines a selection covers on its side, the file as it is now where it names none. One
- * crossing to the other side is its first line alone, since the two sides number apart.
- */
 export const diffAnchor: (
   path: string,
   range: SelectedLineRange,
@@ -96,7 +84,6 @@ export const diffAnchor: (
 
 const QUOTE_MAX = 300;
 
-/** The quote as `>` lines, a long one kept to its start and end. */
 const quoted = (quote: string) => {
   const head = Math.ceil((QUOTE_MAX - 1) / 2);
   const cut =

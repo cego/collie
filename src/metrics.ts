@@ -1,16 +1,3 @@
-// What a Run actually did, as facts with times on them.
-//
-// Progress today is inferred from pane text: a changing tail means alive, a still one
-// means nudge. That is liveness, and liveness is not progress — an agent can be busy for
-// an hour and produce nothing, and one that is quiet for ten minutes may have just
-// finished. This journal is the other half: evidence arriving, slices landing, rounds
-// going by, context samples, and the moments a Run stopped.
-//
-// Nothing here throttles, stops or refuses anything. It is data, and the user's decision
-// is that usage is data — there is no budget in this file and no counter that becomes a
-// limit. The one judgement it makes is `repeatedFailure`, and what that produces is a
-// sentence for a human and for the next prompt, never a halt.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
@@ -39,28 +26,19 @@ export const RecoveryOutcome = Schema.Literals([
 ]);
 export type RecoveryOutcome = typeof RecoveryOutcome.Type;
 
-/** What a Heal found about Collie itself, stated for everyone who runs it. */
 export const HealFinding = Schema.Struct({
   collie_defect: Schema.Boolean,
   key: Schema.String,
   root_cause: Schema.String,
-  /** The fix, or a new Park cause with its message or recheck. */
   fix: Schema.String,
-  /** The test that would show it. */
   regression: Schema.String,
-  /** The issue on Collie's repository the healer says is about the same cause, or null. */
   issue: Schema.optionalKey(Schema.NullOr(Schema.Int)),
   title: Schema.optionalKey(Schema.String),
-  /** What happened and what should have, without the healed Run's names. */
   observed: Schema.optionalKey(Schema.String),
   expected: Schema.optionalKey(Schema.String),
 });
 export type HealFinding = typeof HealFinding.Type;
 
-/**
- * Where a Heal's finding stands on Collie's repository: `refused` sent nothing, `uncertain`
- * sent a write whose answer was lost, and both are tried again.
- */
 export const Publication = Schema.Literals([
   "filed",
   "linked",
@@ -84,15 +62,10 @@ export const MetricSchema = Schema.Struct({
     "recovery",
     "report",
   ]),
-  /** What it is about: an agent, a step, a verification name, a ticket. */
   subject: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
-  /** The number that matters for this kind: tokens, an exit code, an iteration, a count. */
   value: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
-  /** The word that matters: a result, a status, a reason. */
   note: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
-  /** A halt's or a recovery's Park cause; absent from a halt recorded before causes were. */
   cause: Schema.optionalKey(ParkCause),
-  /** The build of the host that recorded a halt or a recovery. */
   build: Schema.optionalKey(Schema.String),
   action: Schema.optionalKey(RecoveryAction),
   outcome: Schema.optionalKey(RecoveryOutcome),
@@ -100,11 +73,8 @@ export const MetricSchema = Schema.Struct({
   park: Schema.optionalKey(Schema.String),
   since: Schema.optionalKey(Schema.String),
   entries: Schema.optionalKey(Schema.Int),
-  /** The Heal Run a `healed` line is about. */
   heal: Schema.optionalKey(Schema.String),
-  /** What a Heal found about Collie, as its Output said it. */
   finding: Schema.optionalKey(HealFinding),
-  /** A `report` line's standing, and the issue it was filed as or linked to. */
   publication: Schema.optionalKey(Publication),
   issue: Schema.optionalKey(Schema.String),
 });
@@ -119,11 +89,6 @@ export const appendMetric = Effect.fn("Metrics.append")(function* (runDir: strin
   yield* appendRunJournal(metricsPath(runDir), MetricJson, line);
 });
 
-/**
- * One verification as a card reads it. Recorded where this Run's metrics are, so what a
- * card counts is the same fact whichever kind of Run collected it. It records and nothing
- * else: a command that keeps failing earns a sentence, never a limit.
- */
 export const noteVerification = (
   runDir: string,
   record: {
@@ -141,7 +106,6 @@ export const noteVerification = (
     note: record.result,
   });
 
-/** A reminder's latest outcome; elapsed time starts at the first turn ending without Output. */
 export const noteReminder = (
   runDir: string,
   line: {
@@ -166,7 +130,6 @@ export const noteReminder = (
     build: line.build,
   });
 
-/** One context sample the harness reported at a work boundary. */
 export const noteContext = (runDir: string, at: string, agent: string, tokens: number) =>
   appendMetric(runDir, { at, kind: "context", subject: agent, value: tokens, note: "" });
 
@@ -184,7 +147,6 @@ export const recoveriesIn = (lines: ReadonlyArray<Metric>) => {
   return [...latest.values()];
 };
 
-/** Enough of a verification for the detector; the real one is in `verify.ts`. */
 export interface FailureLike {
   readonly name: string;
   readonly result: string;
@@ -192,17 +154,6 @@ export interface FailureLike {
   readonly tail: { readonly stderr: string };
 }
 
-/**
- * Whether the last `n` runs of one command failed the same way. Same name, same exit, and
- * the same last line of stderr — a test that fails differently each time is a Run making
- * progress through a problem, and one that fails identically is a Run going round.
- *
- * What this produces is an obstacle: a sentence for the human and for the next prompt, so
- * the agent can change approach. It is deliberately **not** a halt. A counter reaching
- * three is not evidence that the work cannot be done, and stopping a Run over one would
- * be inventing a limit nobody asked for. What stops a false claim of success is the
- * evidence gate reading collected results, not this.
- */
 export function repeatedFailure(records: ReadonlyArray<FailureLike>, n: number) {
   if (n < 2) return null;
   const byName = new Map<string, FailureLike[]>();
@@ -224,7 +175,6 @@ export function repeatedFailure(records: ReadonlyArray<FailureLike>, n: number) 
   return null;
 }
 
-/** The last line that says anything, which is what a failure is usually recognised by. */
 function lastLine(text: string) {
   const lines = Arr.filter(
     Arr.map(Str.split(text, "\n"), (line) => Str.trim(line)),
@@ -233,7 +183,6 @@ function lastLine(text: string) {
   return lines[lines.length - 1] ?? "";
 }
 
-/** The obstacle a repeated failure is, in the words a human and an agent both get. */
 export function obstacleOf(found: { name: string; times: number; exit: number; line: string }) {
   const said = found.line === "" ? "" : `: ${found.line}`;
   return (

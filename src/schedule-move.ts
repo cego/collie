@@ -1,18 +1,12 @@
-// Moving a Schedule to another Machine (ADR-0052 D8): add it there paused, remove it here,
-// resume it there. Desktop and the CLI run this one sequence over each Machine's host.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect } from "effect";
 import type { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-model";
 
-/** A host's refusal, or a channel that broke. */
 type DoorFailure = { readonly reason: string } | { readonly message: string };
 
-/** A Machine's Schedule operations, as its host serves them. */
 export interface ScheduleDoor {
-  /** What the human calls the Machine. */
   readonly name: string;
   readonly schedules: Effect.Effect<ScheduleListing, DoorFailure>;
   readonly changeSchedule: (asked: {
@@ -35,23 +29,16 @@ export type Moved =
 
 const why = (failure: DoorFailure) => ("reason" in failure ? failure.reason : failure.message);
 
-/**
- * Moves `name` from one Machine to the other, under step request ids derived from
- * `request`, so a retried move repeats nothing. A move whose source no longer has it reads
- * it from the target, where an earlier attempt put it.
- */
 export const moveSchedule: (asked: {
   readonly from: ScheduleDoor;
   readonly to: ScheduleDoor;
   readonly name: string;
-  /** The checkout on the target, where it is not the same path as on the source. */
   readonly checkout?: string | undefined;
   readonly request: string;
 }) => Effect.Effect<Moved> = Effect.fn("ScheduleMove.move")(function* (asked: {
   readonly from: ScheduleDoor;
   readonly to: ScheduleDoor;
   readonly name: string;
-  /** The checkout on the target, where it is not the same path as on the source. */
   readonly checkout?: string | undefined;
   readonly request: string;
 }) {

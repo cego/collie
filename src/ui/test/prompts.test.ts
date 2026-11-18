@@ -9,7 +9,6 @@ const ITEMS = [
   { id: "implement", title: "implement — build it" },
 ];
 
-/** Waits for a question to be on screen, rather than for a duration. */
 const untilAsked = Effect.fn("prompts.untilAsked")(function* (asked: () => boolean) {
   for (let tries = 0; tries < 200; tries++) {
     if (asked()) return;
@@ -34,7 +33,6 @@ test("a menu parks until the answer comes back, then hands over the item", () =>
       question.answer("implement");
 
       expect(yield* Fiber.join(asking)).toEqual(ITEMS[1]!);
-      // Answered, so nothing is on screen waiting.
       expect(pending()).toBeNull();
     }),
   ));
@@ -77,8 +75,6 @@ test("an answer nobody offered is no answer, not a wrong one", () =>
 
       const menu = yield* Effect.forkChild(prompts.menu(ITEMS, { header: "pick" }));
       yield* untilAsked(() => pending() !== null);
-      // The component can only send an id it drew, but the flow settles Inputs from
-      // this and a value it never offered would be recorded as if a human chose it.
       pending()!.answer("no-such-workflow");
 
       expect(yield* Fiber.join(menu)).toBeNull();
@@ -94,7 +90,6 @@ test("a flow that is interrupted leaves no question on screen", () =>
       yield* untilAsked(() => pending() !== null);
       yield* Fiber.interrupt(menu);
 
-      // The popup closing mid-flow must not leave a menu nothing is waiting for.
       expect(pending()).toBeNull();
     }),
   ));

@@ -1,6 +1,3 @@
-// The fake herdr's call log is appended to by its CLI from another process while a test
-// reads it, so a read can land in the middle of a line.
-
 import * as Str from "effect/String";
 import { Effect, FileSystem } from "effect";
 import { expect, test } from "bun:test";

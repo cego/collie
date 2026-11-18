@@ -86,7 +86,6 @@ test("Use glab's login reads the source host and token, saves it, and hands it o
     }),
   ));
 
-/** A Machine's glab: the host it defaults to, and the token it holds for each host. */
 const glabOn: (defaultHost: string, logins: Map<string, string>) => Runner =
   (defaultHost, logins) => (_, args) =>
     Effect.sync(() => {
@@ -133,7 +132,6 @@ test("Use glab's login from the laptop reaches a VM whose glab defaults to gitla
             return { code: 0, out: "", err: "" };
           }),
       };
-      // Desktop's own GitLab host while the Flock sets none.
       const desktop = givenCredentials({
         dir,
         keyring,

@@ -1,7 +1,3 @@
-// A Run's record, read from its host's Run model
-// (ADR-draft-a-runs-record-is-read-from-its-hosts-run-model D3–D5): what its Task's Runs
-// cost to read, its Flow first, and a frame only when what it carries moved.
-
 import { RunRecords } from "./run-records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -42,14 +38,12 @@ import { buildRunDetail, tailOf, textsOf, type PlanCache } from "./views";
 export interface RecordSources {
   readonly env: PluginEnv;
   readonly model: RunModelApi;
-  /** The Runs a Run's record reads, `also` among them. */
   readonly related: (
     runId: string,
     also: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyArray<RunFacts>>;
   readonly alive: Effect.Effect<ReadonlyArray<AgentInfo>>;
   readonly offers: (runId: string) => Effect.Effect<ReadonlyArray<OfferView>>;
-  /** What the merge watch read of the Run's merge request; asked again when `fresh`. */
   readonly mr: (run: RunFacts, fresh: boolean) => Effect.Effect<MrPanel | null>;
   readonly plans: PlanCache;
 }
@@ -75,8 +69,6 @@ type Needs =
   | ChildProcessSpawner.ChildProcessSpawner
   | Launches
   | RunRecords;
-
-/** A part of the record, and the fields it fills when it comes. */
 
 const sameRevision = (one: RunRevision, other: RunRevision) =>
   one.epoch === other.epoch && one.seq === other.seq;
@@ -112,7 +104,6 @@ const recordCard = (sources: RecordSources, runId: string) =>
     return { run: run.value, runs, ids, card, flow: found === null ? null : timeless(found) };
   }).pipe(Effect.provideService(FileSystem.FileSystem, sources.model.reading));
 
-/** The record without its parts, at the revision of the Runs it read, its Flow timeless. */
 export const recordBase = (sources: RecordSources, runId: string, pages: number) =>
   Effect.gen(function* () {
     const base = yield* recordCard(sources, runId);
@@ -135,7 +126,6 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
       runs,
       ids,
       detail,
-      // A Run that owns one of them shows its own, as one that is a Task's only one does.
       shown:
         mrs.length > 1 && !Arr.some(mrs, (one) => one.run === runId)
           ? Arr.flatMap(mrs, (one) =>
@@ -158,7 +148,6 @@ export const watched = (dir: string, failed: Effect.Effect<void> = Effect.void) 
     }),
   );
 
-/** What a Run's open drawer lists and the board ignores: its handoffs' and evidence's sizes. */
 export const drawerWrites = (dir: string, runId: string) =>
   Stream.merge(
     watched(`${dir}/runs/${runId}`).pipe(
@@ -167,21 +156,14 @@ export const drawerWrites = (dir: string, runId: string) =>
     watched(`${dir}/evidence/${runId}`),
   ).pipe(Stream.debounce("200 millis"));
 
-/** A Step in these states has finished: an act shown on it before is refused. */
 export const FINISHED_STEPS = new Set(["done", "failed", "stopped", "not-run"]);
 
-/** The Run's Task's Flow as `run show` and chat's `collie_run` say it: the record's, read now. */
 export const recordFlow = (sources: RecordSources, runId: string) =>
   Effect.gen(function* () {
     const base = yield* recordCard(sources, runId);
     return base?.flow == null ? null : timedFlow(base.flow, yield* Clock.currentTimeMillis);
   });
 
-/**
- * The record's frames: with `parts`, its Flow first and each part as it comes, then the whole
- * record again each time `changes` finds it moved. `held` at the current revision is answered
- * `Unchanged`. Without `parts`, every frame is the whole record, its minutes said as of then.
- */
 export const recordFrames = (
   sources: RecordSources,
   key: RecordKey,
@@ -199,7 +181,6 @@ export const recordFrames = (
       const diffAt = (run: RunFacts) =>
         Effect.gen(function* () {
           const at = `${yield* model.checkout(run)}\0${run.state}\0${run.branch}\0${run.cwd}`;
-          // A going Run's diff includes edits no git directory records, so it is read each time.
           if (kept?.at !== at || kept.diff?.live !== false)
             kept = {
               at,
@@ -212,7 +193,6 @@ export const recordFrames = (
       const context = yield* Effect.context<
         Path.Path | ChildProcessSpawner.ChildProcessSpawner | Launches | RunRecords
       >();
-      // A part that fails ends the stream, as a whole record that failed always has.
       const part = <E>(name: RecordPart, value: Effect.Effect<Partial<RunDetail>, E, Needs>) => ({
         name,
         value: value.pipe(
@@ -287,14 +267,12 @@ export const recordFrames = (
         return true;
       };
 
-      // Heard from before the first read, so a write while it is read is sent after it.
       const heard = yield* Queue.sliding<void>(1);
       yield* changes.pipe(
         Stream.runForEach(() => Queue.offer(heard, undefined)),
         Effect.forkScoped({ startImmediately: true }),
       );
 
-      // Opening a record is interactive; a frame sent later for a change is not.
       const { serve } = yield* Foreground;
       const first = Stream.unwrap(
         Effect.gen(function* () {

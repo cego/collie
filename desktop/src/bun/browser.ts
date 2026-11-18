@@ -1,5 +1,3 @@
-// A web page opened in the human's default browser, where their sessions already are.
-
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -11,7 +9,6 @@ import { output } from "./machine";
 const CHROMIUM = /chrom|brave|(^|[.-])edge|vivaldi/i;
 const FIELD_CODE = /^(%[a-zA-Z]|@@u?)$/;
 
-/** The `[Desktop Entry]` group's own command, as the desktop entry spec quotes it. */
 const commandOf = (entry: string) => {
   let group = "";
   for (const line of Arr.map(Str.split(entry, "\n"), (one) => Str.trim(one)))
@@ -43,7 +40,6 @@ const commandOf = (entry: string) => {
   return [];
 };
 
-/** How a Chromium-based browser opens `url` in a window of its own; null for any other. */
 export const appWindow = (id: string, entry: string, url: string) => {
   const command = commandOf(entry);
   return CHROMIUM.test(id) && command.length > 0 ? [...command, `--app=${url}`] : null;
@@ -54,7 +50,6 @@ const dataDirs = () => [
   ...Str.split(Bun.env.XDG_DATA_DIRS || "/usr/local/share:/usr/share", ":"),
 ];
 
-/** How the default browser opens `url` as an app window; null where it has no such window. */
 export const appWindowFor = (url: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

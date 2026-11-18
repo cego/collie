@@ -1,5 +1,3 @@
-// One merge request taken the rest of the way on a human's go; its agent's Output is never proof.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
@@ -70,33 +68,22 @@ import onGithub from "./release.github.md" with { type: "text" };
 
 const text = Schema.String;
 
-/** What every step of a release is told, under the names its content asks for them by. */
 export const ReleaseInput = Schema.Struct({
   inputs: Schema.Struct({ mr: text }),
   run: Schema.Struct({ dir: text, id: text }),
   repository: text,
-  /** The merged commit, once there is one. */
   merged: text,
-  /** The merge request's head a step puts on stage or takes off it. */
   head: text,
-  /** What a Run recovering a release that merged is told of the Run it recovers. */
   recovery: text,
-  /** A comment round's comments, and its number. */
   comments: text,
   round: text,
-  /** This Run's checks, as a step that commits is held to them. */
   verify: text,
-  /** A fix round's number, its bound, and what failed. */
   iteration: text,
   max_iterations: text,
   findings: text,
-  /** An application's stage deploy jobs of the pipeline a step stages from, as the assessment named them. */
   stage_jobs: text,
-  /** Why stage failed, or comes off. */
   failure: text,
-  /** The production jobs a step plays. */
   jobs: text,
-  /** The Slack channel a merge request is shared in for approval. */
   channel: text,
 });
 
@@ -117,10 +104,8 @@ const stepsOf = (markdown: string) => {
   };
 };
 
-/** The shipped content per forge: the procedure differs, not only the commands (ADR-0050 D1). */
 export const RELEASE_ON = { gitlab: stepsOf(onGitlab), github: stepsOf(onGithub) };
 
-/** What each step that touches anything shared is cleared for, on the repository at `url`. */
 const pushing = (url: string) =>
   `committing to the merge request's source branch on ${url} and pushing it with a plain push, never a force push`;
 
@@ -149,7 +134,6 @@ export const RELEASE_CLEARS = {
     "creating its release there, where the package publishes from its tags",
     watching,
   ],
-  /** An application's tag step, which stages the tag too. */
   stage: (url: string) => [
     releaseCommit(url),
     "pushing an annotated version tag to origin, with no forge release",
@@ -157,7 +141,6 @@ export const RELEASE_CLEARS = {
     "rolling stage back to the newest release production carries",
     "never a production job",
   ],
-  /** An application's tag step after its merge request was tested on stage. */
   tagTested: (url: string) => [
     releaseCommit(url),
     "pushing an annotated version tag to origin, with no forge release",
@@ -233,7 +216,6 @@ export const Shared = Schema.Struct({
   }),
 });
 
-/** A CI job's failure at `head` that its target branch's newest commit, `at`, shares. */
 const TargetRed = Schema.TaggedStruct("TargetRed", {
   head: Schema.String,
   job: Schema.String,
@@ -246,7 +228,6 @@ type TargetRed = typeof TargetRed.Type;
 export const Checked = Schema.Struct({
   head: Schema.String,
   failed: Schema.Array(Schema.String),
-  // A Run journaled before 0.110.0 replays checks recorded without it.
   conflicting: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
   target: Schema.optionalKey(TargetRed),
 });
@@ -257,7 +238,6 @@ const TakeTarget = Schema.Union([
   Schema.TaggedStruct("Take", {}),
 ]);
 
-/** One agent for the whole Run, which each step continues. */
 export const RELEASER = "release";
 
 const GO = {
@@ -276,7 +256,6 @@ const SHARE_SETTINGS = {
   channel: "release.approval_channel",
 } as const;
 
-/** Fix rounds in a row before a failing head parks the Run, as implement's gate fixes. */
 const ROUNDS = 4;
 
 const checkingOut = step({
@@ -435,10 +414,6 @@ const endLine = (member: SetMember, end: SetEnd) => {
   }
 };
 
-/**
- * Each merge request of a set released by a Release Run of its own. One waiting on another
- * of the set starts only once that one's Run has merged it, and never after it failed.
- */
 const releaseEach = (members: ReadonlyArray<SetMember>) =>
   Effect.gen(function* () {
     const host = yield* Host;
@@ -489,7 +464,6 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
       Effect.gen(function* () {
         const ran = yield* runOn("release", member, "merge");
         if (!ran.ok) return { _tag: "Failed", said: ran.said } satisfies SetEnd;
-        // A Run that ended without merging, as on Finish, leaves nothing to stack on.
         const now = yield* read(`${invocationFor("release", member)}.merged`, member);
         return {
           _tag: now._tag === "Read" && now.state === "merged" ? "Released" : "LeftOpen",
@@ -591,7 +565,6 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
     return said;
   });
 
-/** What a Release Run goes on from once its merge request is merged. */
 interface Landed {
   readonly sha: string;
   readonly slugs: ReadonlyArray<string>;
@@ -599,15 +572,10 @@ interface Landed {
   readonly production: ProductionGo | null;
 }
 
-/** A front door a human types into, or chat carrying the human's own words. */
 const humanVoice = (by: { readonly origin: string; readonly said?: string }) =>
   ["board", "desktop", "cli-tty"].includes(by.origin) ||
   (by.origin === "chat" && by.said !== undefined);
 
-/**
- * Whether a human's Release started this Run: their own start of it from its parent's offer,
- * which the host records only for a human, or their answer to the parent's question.
- */
 const releasedByHuman = (place: {
   readonly lineage: ReadonlyArray<string>;
   readonly authority: { readonly started: unknown };
@@ -626,7 +594,6 @@ const releasedByHuman = (place: {
     });
   });
 
-/** Why a standing is not the ready one a go was given for. */
 const notReady = (standing: ReviewStanding) => {
   switch (standing._tag) {
     case "Waiting":
@@ -694,8 +661,6 @@ export default defineWorkflow({
     productionGo,
     playProduction,
   ],
-  // A failed release is released again: before its merge as any Run, after it by taking
-  // the landing over, and through the adopt question where it kept the claim.
   followUps: [
     {
       id: "release-again",
@@ -865,8 +830,6 @@ export default defineWorkflow({
           );
       }
 
-      // The go's options depend on this, so it comes before the checks and the wait. It
-      // reads only: no claim is held yet.
       const assessed = yield* assess(
         agentWork({
           ...as("assess"),
@@ -957,7 +920,6 @@ export default defineWorkflow({
           production: null,
         };
       } else if (recovering !== null) {
-        // That go was given and spent: no wait, no go and no merge, only what is left.
         const slugs = yield* claim(
           claimed("claim").pipe(Effect.map((held) => held?.slugs ?? null)),
         );
@@ -983,8 +945,6 @@ export default defineWorkflow({
             }),
           });
         const checksNow = Effect.map(host.approved(runId), renderApproved);
-        // `parkWith` says why another fix round would not help, so a failure parks the Run
-        // here, where a resume runs the checks again.
         const checksAt = (
           name: string,
           pass: { readonly pass: "fix"; readonly round: number } | null,
@@ -1061,7 +1021,6 @@ export default defineWorkflow({
         }));
         const Tree = Schema.Struct({ head: Schema.String, fingerprint: Schema.String });
         let fixes = 0;
-        /** One fix round on `findings`, the `round`th in a row: its number, and why it stalled, if it did. */
         const fixRound = (findings: ReadonlyArray<Finding>, round: number) =>
           Effect.gen(function* () {
             fixes += 1;
@@ -1139,7 +1098,6 @@ export default defineWorkflow({
                     returnConflicts: true,
                   });
                   let standing = yield* read;
-                  // A push can reach git before the forge's head and mergeability read.
                   for (
                     let poll = 0;
                     previous !== null &&
@@ -1153,7 +1111,6 @@ export default defineWorkflow({
                   }
                   if (standing._tag === "Held")
                     return yield* Workflow.suspend(yield* WorkflowInstance);
-                  // Leave this read unfinished when parking: resume must read the forge again.
                   if (standing._tag === "Conflicting") {
                     if (standing.head === previous)
                       return yield* park(
@@ -1209,11 +1166,6 @@ export default defineWorkflow({
             }
           });
         let targets = 0;
-        /**
-         * Parks while the target branch still shares the failure `red` saw, then takes the
-         * green target in a fix round outside the CI repair rounds: its number, or null where
-         * no round was needed.
-         */
         const targetRound = (red: TargetRed) =>
           Effect.gen(function* () {
             const took = yield* Activity.make({
@@ -1243,7 +1195,6 @@ export default defineWorkflow({
             );
             return n;
           });
-        // Local success cannot restart the repair allowance on review reentry.
         let repairs = 0;
         let ciBefore: string | null = null;
         const proving = (
@@ -1271,7 +1222,6 @@ export default defineWorkflow({
                   });
                   if (standing._tag === "Held")
                     return yield* Workflow.suspend(yield* WorkflowInstance);
-                  // An unfinished read lets resume observe external repair without repeating fixes.
                   if (standing._tag === "FailedCi") {
                     const red = yield* host.targetFailure({ runId, cwd });
                     if (red !== null)
@@ -1320,7 +1270,6 @@ export default defineWorkflow({
               }
               yield* unconflicted();
             }
-            /** The checks again until no failure is left that the target shares. */
             const takenTarget = (first: typeof Checked.Type) =>
               Effect.gen(function* () {
                 let at = first;
@@ -1406,7 +1355,6 @@ export default defineWorkflow({
         let gos = 0;
         let stagings = 0;
         let merged: Omit<Landed, "recovery"> | null = null;
-        // Journaled: a replay asks what the first pass asked, whatever the settings say now.
         const sharing = yield* Activity.make({
           name: "share-settings",
           success: Schema.Struct({ on: Schema.Boolean, channel: Schema.String }),
@@ -1427,7 +1375,6 @@ export default defineWorkflow({
         if (slack !== null && slack.state !== "ok")
           yield* host.record(runId, `not posting for approval as you: ${slack.detail}`);
         let shares = 0;
-        /** After a wait, the question comes again only at a new head. */
         let askedAt: string | null = null;
         const standingAt = (name: string) =>
           Activity.make({
@@ -1436,7 +1383,6 @@ export default defineWorkflow({
             error: WorkflowError,
             execute: host.review({ runId, cwd, proved, seen: [] }),
           });
-        /** Asks to share the merge request while it waits on a teammate's approval at `proved`. */
         const offerShare = (at: number) =>
           Effect.gen(function* () {
             if (!waitsOnApproval(yield* standingAt(`share-standing.${at}`))) return;
@@ -1468,7 +1414,6 @@ export default defineWorkflow({
               shared = true;
               return yield* host.record(runId, `shared by the operator: ${mr} in ${channel}`);
             }
-            // The answer can come long after the question, once nobody need approve it any more.
             if (!waitsOnApproval(yield* standingAt(`${nth("share", shares)}.standing`)))
               return yield* host.record(
                 runId,
@@ -1624,7 +1569,6 @@ export default defineWorkflow({
                   name: `go-${gos}.give-back`,
                   execute: Effect.asVoid(host.release(runId)),
                 });
-          // The claim can wait on Helle or a question, so the review is read once it is held.
           const still = yield* Activity.make({
             name: `go-${gos}.check`,
             success: ReviewStandingSchema,
@@ -1664,7 +1608,6 @@ export default defineWorkflow({
                   output: RolledBack,
                 }),
             });
-            /** Takes stage off `head` and gives the claim back, or fails keeping it where the forge cannot show that. */
             const unstage = (failure: string, failing: string) =>
               Effect.gen(function* () {
                 yield* mrStage.off(nth("unstage", n), failure, failing);
@@ -1738,7 +1681,6 @@ export default defineWorkflow({
                   yield* host.record(runId, `the production go: finished with ${mr} left open`);
                   return GO.finish;
                 }
-                // Nothing is merged yet, so the go holds only for the head it was given for, on stage.
                 const holds = yield* Activity.make({
                   name: `${nth("production", n)}.check`,
                   success: Schema.NullOr(Schema.String),
@@ -1790,7 +1732,6 @@ export default defineWorkflow({
             return yield* fail(
               `${mr} was merged outside this Run by ${outcome.by}, so nothing was tagged`,
             );
-          // Another merge may have landed since the go's check, leaving it in conflict.
           const refused = yield* Activity.make({
             name: `merge.${gos}.check`,
             success: ReviewStandingSchema,
@@ -1837,8 +1778,6 @@ export default defineWorkflow({
               instructions: steps.tag,
               output: Tagged,
             });
-            // A tag that is not proved leaves shared work half-done, so the claim stays with this
-            // Run for `Release again` to take over.
             const read = yield* Activity.make({
               name: "read-tag",
               success: TagReadSchema,
@@ -1860,7 +1799,6 @@ export default defineWorkflow({
         return `${released}, released as ${tagged.tag}`;
       }
 
-      // An application with no stage deploy on its tags was tested on stage before the merge.
       const tagStages = stageJobs.length > 0;
       const { staged, pipeline, read } = yield* stage(
         Effect.gen(function* () {
@@ -1905,7 +1843,6 @@ export default defineWorkflow({
               success: RollbackReadSchema,
               execute: host.readRollback({ runId, cwd, off: [landed.sha] }),
             });
-            // Only a stage the forge shows back on production's release is safe to give back.
             if (back._tag === "Unshown")
               return yield* fail(`${stageFailed}. Its rollback is not shown: ${back.why}`);
             yield* giveBack;
@@ -1921,7 +1858,6 @@ export default defineWorkflow({
         }),
       );
 
-      // Go 2 holds for this tag and these jobs: the head go 1 was given for is merged.
       const jobs = read._tag === "Proved" ? read.production : [];
       const answer =
         read._tag !== "Proved"
@@ -1981,7 +1917,6 @@ export default defineWorkflow({
                   : "somebody already started the production jobs, so nothing was played",
               );
           }
-          // The forge decides when production carries the merge, never an Output.
           for (const sha of tagOnly ? tagMerges : [landed.sha]) {
             const carried = yield* host.awaitProduction({
               runId,

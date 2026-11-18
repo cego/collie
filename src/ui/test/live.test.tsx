@@ -1,7 +1,3 @@
-// What the Live region says, and what it must never say. Evidence and narrative have to
-// look different on screen: a claim an agent wrote must not read as a pass, `missing` is
-// always drawn, and the narrative is last and dim because it is the least of it.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
@@ -59,7 +55,6 @@ function live(over: Partial<Live> = {}) {
   };
 }
 
-/** A component drawn in a pane of its own, as the one run of words it puts on screen. */
 const shown = Effect.fn("live.shown")(function* (node: () => JSX.Element, width = 90, height = 30) {
   const t = yield* Effect.promise(() => testRender(node, { width, height }));
   yield* Effect.promise(() => t.flush());
@@ -89,11 +84,9 @@ test("a card says what was asked for, what changed, and what nobody checked", ()
       expect(said).toContain("the Live region");
       expect(said).toContain("src/live.ts");
       expect(said).toContain("bun test pass");
-      // A claim is never a verification: it is prefixed as a claim wherever it is drawn.
       expect(said).toContain("claimed: the suite is green");
       expect(said).toContain("nobody ran the smoke test");
       expect(said).toContain("git show abc1234");
-      // The narrative is a model's prose and is marked as such, last.
       expect(said).toContain("Collie: This went smoothly.");
       expect(Option.getOrElse(pipe(said, Str.indexOf("Collie: This")), () => -1)).toBeGreaterThan(
         Option.getOrElse(pipe(said, Str.indexOf("bun test pass")), () => -1),
@@ -224,17 +217,13 @@ test("the board says what Collie noticed and has not told the conversation", () 
         <LiveRegion live={live({ news: { waiting: 3, uncertain: 0 } })} />
       ));
       expect(waiting).toContain("3 development(s)");
-      // Looking at the board is not the conversation having read it, so it still says so.
       expect(waiting).toContain("not yet told the conversation");
 
-      // A send nobody can account for is its own line: "we could not tell" is a different
-      // fact from "it has not gone yet", and only a human settles the first.
       const doubtful = yield* shown(() => (
         <LiveRegion live={live({ news: { waiting: 2, uncertain: 1 } })} />
       ));
       expect(doubtful).toContain("nobody can account for having sent");
 
-      // And nothing waiting says nothing at all.
       expect(yield* shown(() => <LiveRegion live={live()} />)).not.toContain("development(s)");
     }),
   ));

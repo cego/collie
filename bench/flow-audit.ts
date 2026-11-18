@@ -1,4 +1,3 @@
-// Eighty lanes with about 10 MB of operation history, matching the observed board reads.
 import { strict as assert } from "node:assert";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";

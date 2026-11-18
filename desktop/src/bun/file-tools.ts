@@ -1,5 +1,3 @@
-// Claude Code's file tools for a path on a Machine, answered by its host (ADR-0011).
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -23,7 +21,6 @@ import {
   writable,
 } from "./flock-tools";
 
-/** What a file tool hands the model: text, or an image it can see. */
 export type ToolContent =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "image"; readonly data: string; readonly mimeType: string };
@@ -135,7 +132,6 @@ export const isFileTool = (name: string) => Arr.some(FILE_TOOLS, (one) => one.na
 
 const text: (said: string) => ReadonlyArray<ToolContent> = (said) => [{ type: "text", text: said }];
 
-/** Where a `<machine>:<path>` points, or why it does not. */
 const placed = (flock: FlockChat, named: string) => {
   const colon = Option.getOrElse(pipe_(named, Str.indexOf(":")), () => -1);
   const machine = Option.getOrUndefined(
@@ -153,7 +149,6 @@ const placed = (flock: FlockChat, named: string) => {
   return Result.succeed({ machine, path: pipe_(named, Str.slice(colon + 1)) });
 };
 
-/** The Machine reached, refused where its host does not take files. */
 const takingFiles = (reaching: Effect.Effect<Reached, HostRefused>) =>
   Effect.filterOrFail(
     reaching,
@@ -167,12 +162,9 @@ const takingFiles = (reaching: Effect.Effect<Reached, HostRefused>) =>
 const readingFiles = (machine: ChatMachine) =>
   machine.board._tag === "Live" ? takingFiles(reach(machine)) : readable(machine);
 
-/** How many lines a read gives when it is not told. */
 const READ_LINES = 2000;
-/** The most of a text file a read takes, so one with no newlines is not read whole. */
 const READ_BYTES = 8 * 1024 * 1024;
 
-/** The most of one line a read shows. */
 const LINE_CHARS = 2000;
 
 const numbered = (lines: ReadonlyArray<string>, from: number) =>
@@ -194,7 +186,6 @@ const read = Effect.fn("FileTools.read")(function* (
   const from = Math.max(1, input.offset ?? 1);
   const limit = Math.max(1, input.limit ?? READ_LINES);
   const newlines = (bytes: Uint8Array) => bytes.filter((byte) => byte === 10).length;
-  // The first part says what the file is, so only what is shown is read whole.
   const head = yield* readWhole(machine, path, () => true);
   const { mediaType, size } = head.file;
   const textual = TEXTUAL.test(mediaType) && !head.bytes.subarray(0, 8192).includes(0);
@@ -224,7 +215,6 @@ const read = Effect.fn("FileTools.read")(function* (
   );
 });
 
-/** A line a host answered that starts with one of its paths, named by its Machine. */
 const onMachine = (machine: Pick<ChatMachine, "name">, line: string) =>
   pipe_(line, Str.startsWith("/")) ? `${machine.name}:${line}` : line;
 
@@ -332,7 +322,6 @@ const answer = Effect.fn("FileTools.answer")(function* (
   }
 });
 
-/** One call to a file tool, answered as content, a refusal included. */
 export const callFileTool = (flock: FlockChat, name: string, input: JsonObject) =>
   answer(flock, name, input).pipe(
     Effect.catch((error) => Effect.succeed(text(`${name}: ${reasonOf(error)}`))),

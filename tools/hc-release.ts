@@ -1,6 +1,3 @@
-// The hc a release carries: the archive `hc-pin.json` names for the runner's target, checked
-// against the pin's SHA-256 before it is bundled. A target the pin has no hc for fails.
-
 import * as Str from "effect/String";
 import { Data, Effect, FileSystem, Option, Path } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -15,16 +12,11 @@ export interface HcPin {
 
 export class HcRefused extends Data.TaggedError("HcRefused")<{ readonly message: string }> {}
 
-/** hc's name for a Bun compile target: `bun-darwin-arm64` is `macos-aarch64`. */
 export const hcTarget = (target: string) => {
   const [, platform = "", arch = ""] = Str.split(target, "-");
   return `${platform === "darwin" ? "macos" : platform}-${arch === "x64" ? "x86_64" : "aarch64"}`;
 };
 
-/**
- * Writes the pinned hc archive for `target` into `tree`, from `cache` where a copy there still
- * hashes to the pin, else from `releases`. Returns the bytes it bundled.
- */
 export const bundleHc = Effect.fn("HcRelease.bundle")(function* (
   pin: HcPin,
   target: string,

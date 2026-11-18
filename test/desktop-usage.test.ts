@@ -1,6 +1,3 @@
-// What Desktop draws of each Machine's Usage readings: the header's entry per Subscription
-// and account, and the Usage page.
-
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Config, Effect, Option, Schema, flow, Result } from "effect";
@@ -465,7 +462,6 @@ describe("the main process asks each Machine's host", () => {
             const collie = Option.isSome(binary)
               ? [binary.value]
               : [process.execPath, `${root}src/main.ts`];
-            // No Claude login under this HOME and no Codex on this PATH: nothing reaches an endpoint.
             const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
               PATH: "/usr/bin:/bin",
               HOME: world.home,
@@ -494,17 +490,16 @@ describe("the main process asks each Machine's host", () => {
     Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          // An older host: it serves operations, but not `usage`.
           const Older = RpcGroup.make(Rpc.make("ping"));
           let toClient: (response: RpcMessage.FromServer<Rpcs>) => Effect.Effect<void> = () =>
             Effect.void;
           const server = yield* RpcServer.makeNoSerialization(Older, {
-            // SAFETY: what a host answers is the same envelope whichever group it serves.
+            // WARNING: what a host answers is the same envelope whichever group it serves.
             onFromServer: (response) => toClient(response as RpcMessage.FromServer<Rpcs>),
           }).pipe(Effect.provide(Older.toLayer({ ping: () => Effect.void })));
           const client = yield* RpcClient.makeNoSerialization(FrontDoorRpcs, {
             supportsAck: true,
-            // SAFETY: the older host is handed a request it has no schema for, as over the wire.
+            // WARNING: the older host is handed a request it has no schema for, as over the wire.
             onFromClient: ({ message }) =>
               server.write(0, message as RpcMessage.FromClient<RpcGroup.Rpcs<typeof Older>>),
           });

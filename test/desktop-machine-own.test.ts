@@ -110,7 +110,7 @@ test("a host's refused read keeps the reason the operator can fix", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const read = yield* machineOwnOn(machine, {
-        // SAFETY: the reader asks for a reply, never discard mode.
+        // WARNING: the reader asks for a reply, never discard mode.
         machineOwn: (() =>
           Effect.fail(
             new HostRefused({ reason: "config.json is not readable" }),
@@ -149,7 +149,7 @@ test("a paired base host still draws its board after refusing the additive RPC",
         let toClient: (message: RpcMessage.FromServer<Rpcs>) => Effect.Effect<void> = () =>
           Effect.void;
         const server = yield* RpcServer.makeNoSerialization(Older, {
-          // SAFETY: the older server's responses use the same RPC envelopes.
+          // WARNING: the older server's responses use the same RPC envelopes.
           onFromServer: (message) => toClient(message),
         }).pipe(
           Effect.provide(
@@ -169,7 +169,7 @@ test("a paired base host still draws its board after refusing the additive RPC",
         );
         const client = yield* RpcClient.makeNoSerialization(FrontDoorRpcs, {
           supportsAck: true,
-          // SAFETY: a newer client can send a tag the older server does not know.
+          // WARNING: a newer client can send a tag the older server does not know.
           onFromClient: ({ message }) => server.write(0, message as never),
         });
         toClient = client.write;

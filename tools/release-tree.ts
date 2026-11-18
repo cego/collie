@@ -1,6 +1,3 @@
-// What an Installation reads at runtime, which the build embeds and the runner places as
-// `release/`.
-
 import { Effect, FileSystem, Path } from "effect";
 
 export const RELEASE_TREE = [
@@ -15,7 +12,6 @@ export const RELEASE_TREE = [
   "assets/brand/logos/collie-horizontal-light-512.png",
 ];
 
-/** Every file the release carries from the checkout at `root`, relative to it. */
 export const releaseFiles = Effect.fn("release.files")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

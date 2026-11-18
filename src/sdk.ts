@@ -1,20 +1,3 @@
-// What an author imports when they write a workflow: `collie`.
-//
-// A workflow module is ordinary TypeScript, and this is what Collie adds to it: the
-// payload envelope, the error contract, the metadata a card and a launch read, and the
-// schemas the shipped steps already write. `agents.ts` is served under the same specifier
-// and adds the one thing a module cannot write safely for itself — having an agent do the
-// work. Everything else an author reaches for is Effect's: `Activity`, `DurableDeferred`,
-// a Layer of their own, any operator at all.
-//
-// Two rules this file exists to keep. **Metadata is data, not control flow**: a hint, an
-// outcome and an action say what a workflow is, and nothing here decides what it does.
-// And **a conflict is refused before anything starts**: `checkEntry` runs at load, so a
-// module that contradicts itself never reaches a Run, a worktree or an agent.
-//
-// `docs/sdk.md` is the guidance; `docs/adr/0014-native-workflows-run-on-effects-own-engine.md`
-// is why the engine underneath is Effect's.
-
 import * as Struct from "effect/Struct";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -334,19 +317,16 @@ export class Template<Input> {
   constructor(readonly text: string) {}
 }
 
-/** What every agent's instructions may name without declaring it: `agentWork` gives it. */
 const GIVEN: ReadonlySet<string> = new Set(["role", "cwd", "output_path"]);
 
 const isStruct = (schema: unknown): schema is { readonly fields: Schema.Struct.Fields } =>
   Predicate.hasProperty(schema, "fields") && Predicate.isObject(schema.fields);
 
-/** Whether `path` names a declared field, or one a field that is a map may hold. */
 const declares = (fields: Schema.Struct.Fields, [head = "", ...rest]: ReadonlyArray<string>) => {
   const field = fields[head];
   if (field === undefined) return false;
   if (rest.length === 0) return true;
   if (isStruct(field)) return declares(field.fields, rest);
-  // A record's keys are its values', and nothing here can know them ahead.
   return Predicate.hasProperty(field, "key") && Predicate.hasProperty(field, "value");
 };
 
@@ -713,13 +693,6 @@ export const definitionOf = (written: WrittenDefinition) => ({
 });
 
 /**
- * What the host lends a workflow module; ticket 01's proof host provides it.
- *
- * `held` and `stopRequested` are plain Effects rather than Activities on purpose: an
- * operator sets a control between attempts, and an Activity would hand back the answer
- * from the attempt that first ran.
- */
-/**
  * What `claim` holds; `none`, why the repository has no Helle project to claim; or
  * `unresolved`, why the claims a Run needs could not be settled.
  */
@@ -743,10 +716,6 @@ const Holding = Schema.Union([
   Schema.Struct({ unresolved: Schema.String }),
 ]);
 
-/**
- * What a claim journaled before a Run could hold several: one project, or null where it
- * went on holding none, which is read as unsettled so a replay asks rather than goes on.
- */
 const SingleClaim = Schema.NullOr(Schema.Struct({ slug: Schema.String })).pipe(
   Schema.decodeTo(Holding, {
     decode: SchemaGetter.transform((one) =>
@@ -1612,7 +1581,6 @@ interface Question {
   readonly options?: ReadonlyArray<AskOption>;
 }
 
-/** Tells the host the question is open, without waiting for its answer. */
 const opened = (question: Question) =>
   Effect.gen(function* () {
     const shipping =
@@ -1715,7 +1683,6 @@ const watched = (options: Watching, asking: boolean) =>
     });
   });
 
-/** A new head, read once for whether it descends from the cursor's. */
 const withAncestry = (options: Watching, woke: Woke) =>
   Effect.gen(function* () {
     if (woke._tag === "Ended" || !woke.change.newHead) return woke;
@@ -1815,7 +1782,6 @@ export interface Step extends StepMeta {
   readonly meta: StepMeta;
 }
 
-/** Calls of each Step made without a place, per execution, so each is a run of its own. */
 const unplaced = new WeakMap<object, Map<string, number>>();
 
 const placeOf = (place: StepCall | undefined) =>
@@ -1880,7 +1846,6 @@ const Said = Schema.Union([
   Schema.Struct({ message: Schema.String }),
 ]);
 
-/** Why a Step's work failed: a `WorkflowError`'s reason, an error's message, or what it is. */
 const failureOf = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
   const said = Schema.decodeUnknownOption(Said)(error);
@@ -1899,7 +1864,6 @@ export const stepFailed = (why: string) =>
     yield* (yield* Host).step((yield* Run).id, { kind: "fail", key: at.key, why });
   });
 
-/** Calls of `forecast`, per execution, so each forecast is an Activity of its own. */
 const forecasts = new WeakMap<object, number>();
 
 /**
@@ -1981,7 +1945,6 @@ export interface WorkflowEntry {
   readonly make: (registrationName: string) => Registration;
 }
 
-/** What a workflow may declare it needs of the repository. */
 const DeclaredCheckout = Schema.Literals(["branch", "roaming"]);
 const isDeclaredCheckout = Schema.is(DeclaredCheckout);
 
@@ -2129,7 +2092,6 @@ const OfferFields = {
   confirm: Schema.optionalKey(Schema.NonEmptyString),
 };
 
-/** What metadata has to be before any of it can be read: a module is JavaScript by now. */
 const DeclaredMetadata = Schema.Struct({
   connections: Schema.optionalKey(
     Schema.Struct({
@@ -2316,7 +2278,6 @@ export function describeMetadata(metadata: WorkflowMetadata | undefined) {
         workflow: action.workflow,
         connections: [...(action.connections ?? [])],
         arguments: projected.document,
-        // What the drawing does not say. The action is offered either way.
         limits: [...projected.limits],
       };
     }),
@@ -2354,21 +2315,15 @@ export function jsonSchemaFor(schema: Schema.Constraint) {
       withPatterns(SchemaRepresentation.toRepresentation(Schema.toCodecJson(schema).ast)),
     );
     const document = asJson({ ...drawn.schema, $defs: drawn.definitions });
-    // Scanned without `$defs`, which is a container of schemas rather than one: empty
-    // there means the document needed no definitions, not that it says nothing.
     return { document, limits: unconstrained(asJson({ ...drawn.schema }), "") };
   } catch (cause) {
     return { document: null, limits: [String(cause)] };
   }
 }
 
-/**
- * Effect draws a pattern only for a RegExp with the `u` flag, which a JSON Schema pattern
- * implies; any other whose source is known to match the same strings under it is drawn too.
- */
 function withPatterns<T>(node: T) {
   if (isList(node)) {
-    // SAFETY: the same list, each element copied with its own type.
+    // WARNING: the same list, each element copied with its own type.
     const returned: T = Arr.map(node, withPatterns) as T;
     return returned;
   }
@@ -2383,7 +2338,7 @@ function withPatterns<T>(node: T) {
     ),
   );
   const annotations = isPatternCheck(node) ? drawn(node) : null;
-  // SAFETY: the same node, with at most a pattern check's annotations replaced.
+  // WARNING: the same node, with at most a pattern check's annotations replaced.
   const returned: T = (annotations === null ? copied : { ...copied, annotations }) as T;
   return returned;
 }
@@ -2406,10 +2361,6 @@ function drawn(check: typeof PatternCheck.Type) {
   return { ...check.annotations, toJsonSchema: () => ({ pattern: source }) };
 }
 
-/**
- * True for printable ASCII that compiles under `u` and has no atom matching a code unit
- * without it and a code point with it, or an escape `u` gives another meaning.
- */
 function sameUnderUnicode(source: string) {
   if (!/^[ -~]*$/.test(source)) return false;
   try {
@@ -2421,7 +2372,6 @@ function sameUnderUnicode(source: string) {
   return Arr.every(atoms, (atom) => !/^(?:\.|\[\^|\\[DPSWpu])$/.test(atom));
 }
 
-/** Where the drawn document says nothing at all, which the schema itself still does. */
 function unconstrained(node: Schema.Json, at: string) {
   if (Arr.isArray<typeof node>(node)) {
     const returned: ReadonlyArray<string> = Arr.flatMap(node, (item, index) =>

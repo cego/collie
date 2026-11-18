@@ -28,7 +28,6 @@ const Recorded = Schema.Struct({
 
 const alive = (pid: number | undefined) => signalProcess(pid ?? 0, 0);
 
-/** Runs one fixture file under the preload, in a temporary directory of its own. */
 const suite = (fixture: string, args: ReadonlyArray<string> = [], memory = false) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -255,7 +254,6 @@ describe("the start-of-suite sweep", () => {
         const live = `collie-test-${process.pid}-x`;
         yield* fs.makeDirectory(dead);
         yield* fs.makeDirectory(`${dir}/${live}`);
-        // Read-only inside, as a Go module cache is: it still goes.
         yield* fs.makeDirectory(`${dead}/cache/pkg`, { recursive: true });
         yield* fs.chmod(`${dead}/cache`, 0o555);
         const orphan = Bun.spawn(["sh", "-c", "echo up; exec sleep 63"], {
@@ -263,7 +261,6 @@ describe("the start-of-suite sweep", () => {
           stdout: "pipe",
         });
         yield* Effect.addFinalizer(() => signalProcess(orphan.pid, "SIGKILL"));
-        // Its environment is in /proc once it has started.
         yield* Effect.promise(() => orphan.stdout.getReader().read());
 
         expect(sweepDeadRoots(dir)).toEqual([dead]);
@@ -279,7 +276,6 @@ describe("the start-of-suite sweep", () => {
         const fs = yield* FileSystem.FileSystem;
         const proc = yield* fs.makeTempDirectoryScoped({ prefix: "proc-" });
         const pid = `${proc}/4242`;
-        // proc(5) fields 3 on; 51, env_end, is 0 until execve has written the environment.
         const stat = (envEnd: string) =>
           `4242 (sh) R 1 4242 4242 0 -1 4194304${pipe_(" 0", Str.repeat(41))} ${envEnd} 0\n`;
         yield* fs.makeDirectory(pid);
@@ -314,7 +310,6 @@ describe("the start-of-suite sweep", () => {
           `${pid}/stat.next`,
           `4242 (sleep) S 1 4242 4242 0 -1 4194304${pipe_(" 0", Str.repeat(41))} 140730872492009 0\n`,
         );
-        // FIFOs order the reads: environ reads empty, the exec finishes, then stat is read.
         yield* exec(["mkfifo", `${pid}/environ`, `${pid}/stat`]);
         const execs = Bun.spawn([
           "sh",

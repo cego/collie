@@ -1,7 +1,3 @@
-// One open merge request's head put on stage for testing, unmerged, until the human is done
-// with it. Nothing here waits on its review: staging ships nothing, and its rollback takes it
-// back (ADR-draft-an-open-merge-request-is-staged-by-a-run-of-its-own).
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import {
@@ -49,16 +45,12 @@ import onGithub from "./stage.github.md" with { type: "text" };
 
 const text = Schema.String;
 
-/** What every step of a Stage Run is told, under the names its content asks for them by. */
 export const StageInput = Schema.Struct({
   inputs: Schema.Struct({ mr: text }),
   run: Schema.Struct({ dir: text, id: text }),
   repository: text,
-  /** The merge request's head a step puts on stage or takes off it. */
   head: text,
-  /** The stage deploy jobs of the merge request's pipeline, as the assessment named them. */
   stage_jobs: text,
-  /** Why stage comes off. */
   failure: text,
 });
 
@@ -71,7 +63,6 @@ const stepsOf = (markdown: string) => {
   };
 };
 
-/** The shipped content per forge: the procedure differs, not only the commands (ADR-0050 D1). */
 export const STAGE_ON = { gitlab: stepsOf(onGitlab), github: stepsOf(onGithub) };
 
 const naming =
@@ -89,11 +80,9 @@ export const STAGE_CLEARS = {
   ]),
 };
 
-/** One agent for the whole Run, which each step continues. */
 export const STAGER = "stage";
 
 const STAGED = { done: "Done", again: "Stage again", leave: "Leave it on stage" } as const;
-/** Finish, answered while refreshing the claims for Stage again. */
 const FINISHED = "finished";
 const CLAIMS = { wait: "Wait for all", free: "Stage what is free", finish: "Finish" } as const;
 
@@ -111,7 +100,6 @@ const holding = (read: Read, held: ReadonlySet<string>) =>
     (one) => one.name,
   );
 
-/** Jobs without an application require every application. */
 const jobsOf = (read: Read, jobs: ReadonlyArray<string>, applications: ReadonlyArray<string>) =>
   Arr.filter(jobs, (job) => {
     const named =
@@ -285,7 +273,6 @@ export default defineWorkflow({
               Schema.Struct({ cwd: Schema.String, branch: Schema.String }),
               Schema.Struct({ refused: Schema.String }),
             ]),
-            // Stage commits and pushes nothing, so the checkout of the Run waiting on it will do.
             execute: host.checkoutReviewed(runId, { inStarter: true }),
           });
           if ("refused" in checkout)
@@ -311,7 +298,6 @@ export default defineWorkflow({
         input,
       });
 
-      // Judged against no proved head, so an open merge request answers with its head.
       const start = yield* Activity.make({
         name: "start",
         success: ReviewStandingSchema,
@@ -372,7 +358,6 @@ export default defineWorkflow({
         },
       });
 
-      // Read first so waiting on another holder needs the human's say.
       const holders = yield* Activity.make({
         name: "holders",
         success: HoldersSchema,
@@ -409,7 +394,6 @@ export default defineWorkflow({
         }),
       );
       if (first === null) return `${mr} was not staged`;
-      // An explicit waiver permits staging every application.
       if (first.left === undefined) free = false;
       const held = new Set(first.slugs);
       const take = (claim: { readonly left?: ReadonlyArray<{ slug: string; holder: string }> }) => {
@@ -463,7 +447,6 @@ export default defineWorkflow({
       for (let n = 1; ; n++) {
         const { head, read: onStage } = yield* putOnStage(
           Effect.gen(function* () {
-            // Hours may have passed since the head was read, waiting on the claims or the human.
             const now = yield* Activity.make({
               name: `head.${n}`,
               success: ReviewHeadSchema,

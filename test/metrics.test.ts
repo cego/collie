@@ -1,6 +1,3 @@
-// Progress is evidence, not activity. These are the facts a Run records about itself,
-// and the one judgement it makes from them — which produces a sentence, never a stop.
-
 import { expect, test } from "bun:test";
 import {
   metricsOf,
@@ -37,7 +34,6 @@ test("three identical failures are a Run going round; two are not", () => {
 });
 
 test("failing differently is working through a problem, not going round", () => {
-  // A different last line each time: the Run is getting somewhere.
   expect(
     repeatedFailure(
       [
@@ -48,22 +44,17 @@ test("failing differently is working through a problem, not going round", () => 
       3,
     ),
   ).toBeNull();
-  // A different exit is a different failure too.
   expect(repeatedFailure([failure(), failure(), failure({ exit: 2 })], 3)).toBeNull();
-  // A pass in the middle breaks the run of failures.
   expect(repeatedFailure([failure(), failure({ result: "pass" }), failure()], 3)).toBeNull();
 });
 
 test("the run of failures is the last n, and it is per command", () => {
-  // Two commands failing once each is not one command failing twice.
   expect(
     repeatedFailure([failure(), failure({ name: "lint" }), failure({ name: "typecheck" })], 3),
   ).toBeNull();
-  // An earlier pass does not save a command that has failed three times since.
   expect(
     repeatedFailure([failure({ result: "pass" }), failure(), failure(), failure()], 3),
   ).not.toBeNull();
-  // Interleaved commands: each is judged on its own last three.
   expect(
     repeatedFailure(
       [
@@ -83,9 +74,7 @@ test("the obstacle says what is repeating and asks for a different approach", ()
   expect(said).toContain("tests has failed 3 times in a row the same way (exit 1)");
   expect(said).toContain("at cli.test.ts:9");
   expect(said).toContain("change approach");
-  // Not a threat and not a limit: nothing here says the Run will be stopped.
   expect(said).not.toContain("stop");
-  // A failure that printed nothing still reads as a sentence.
   expect(obstacleOf({ name: "build", times: 3, exit: 2, line: "" })).toContain("(exit 2).");
 });
 
@@ -125,12 +114,9 @@ test("a Run's metrics are what it produced, and when it first produced anything"
     "2026-09-11T10:00:00.000Z",
   );
 
-  // The first collected result, not the first thing that happened: a context sample is
-  // not evidence, and a Run that has sampled context has still proved nothing.
   expect(metrics.timeToFirstEvidence).toBe(120);
   expect(metrics.verifications).toEqual({ pass: 1, fail: 1, unstable: 1, byCollie: 2 });
   expect(metrics.slices).toEqual({ done: 1, total: 2 });
-  // Fix rounds and halts both: each is the Run doing something a second time.
   expect(metrics.rework).toBe(2);
   expect(metrics.peakContext).toEqual({ agent: "impl", tokens: 340_000 });
   expect(metrics.halts).toEqual(["evidence_missing"]);
@@ -139,7 +125,6 @@ test("a Run's metrics are what it produced, and when it first produced anything"
 
 test("a Run that has proved nothing says so, rather than reporting a zero", () => {
   const metrics = metricsOf([], "2026-09-11T10:00:00.000Z");
-  // Null, not 0: "no evidence yet" and "evidence immediately" are different facts.
   expect(metrics.timeToFirstEvidence).toBeNull();
   expect(metrics.peakContext).toBeNull();
   expect(metrics.verifications).toEqual({ pass: 0, fail: 0, unstable: 0, byCollie: 0 });

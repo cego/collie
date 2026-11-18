@@ -45,7 +45,6 @@ const FINDING = {
   regression: "A retirement that times out parks for a recheck cause.",
 };
 
-/** A parked Run on a GitLab project, healed by `mender` with `output`, and GitHub's fake gh. */
 const healed = (world: World, output: HealOutput, github: ForgeModel) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -156,7 +155,6 @@ test(
   120_000,
 );
 
-/** The host's own Collie issue operations, against a fake gh holding `model`. */
 const onCollie = <A, E>(
   model: Partial<ForgeModel>,
   body: (
@@ -273,7 +271,6 @@ test("a new defect is filed once with observation apart from diagnosis; the next
       expect(filed.body).toContain("**Diagnosis**, the healer's, not yet confirmed.");
       expect(filed.body).toContain("judged the Heal `recovered`");
       expect(filed.body).not.toContain("gitlab.example.com");
-      // A second Heal reporting at once with no local record of the first.
       expect(yield* report(host, pending({}, { heal: "run-heal-2" }), new Map())).toMatchObject({
         publication: "linked",
         issue: `https://${COLLIE}/issues/1`,

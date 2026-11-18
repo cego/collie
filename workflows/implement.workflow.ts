@@ -1,19 +1,3 @@
-// Build the plan, review it, fix until nothing blocks, then open the merge request.
-//
-// One implementer for the whole Run: the tickets are a list it is handed one at a time,
-// the fixes go back to the agent that built the work, and the merge request is written by
-// the same one that knows what it did. Between them a rally — review, fix, review again —
-// that leaves at the first review with nothing blocking and is bounded rather than
-// endless. The rally and its review are `reviewing.ts`'s, shared with the other workflows.
-//
-// Nothing here is a repeat declaration or a scheduler. `splitDisputed` decides what is
-// still the implementer's, `settleRound` decides where a round goes, `settleFinalFix`
-// decides whether the last fix stands, and `evidenceGapsOf` decides whether this Run has
-// proved what it set out to prove — the same functions every workflow is held to.
-//
-// The Markdown beside this file is the content: the five kinds of work source, what a
-// slice is told, and what the merge request has to say.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -86,14 +70,12 @@ const text = Schema.String;
 const recoveryEntry = (facts: Recovery | undefined) =>
   facts?.review != null ? "Checks" : facts?.implementation === true ? "Review" : "Build";
 
-/** What every implement prompt is told: the plan, what it proves, and what may prove it. */
 const Implementing = Schema.Struct({
   inputs: Schema.Struct({ plan: text, plan_kind: text, repo: text, outcome: text }),
   run: Schema.Struct({ dir: text, id: text }),
   verify: text,
 });
 
-/** A section's text is sent as it is, so the names it carries are filled here. */
 const sectionOf = (section: string, input: typeof Implementing.Type) =>
   pipe_(
     content.sections.get(section) ?? "",
@@ -151,7 +133,6 @@ const prompts = {
   }),
 };
 
-/** What an implementer is held to when it says a ticket is built. */
 const Built = Schema.Struct({
   verdict: Schema.Literals(["clean", "findings"]),
   findings: Schema.optionalKey(Schema.Array(FindingSchema)),
@@ -167,7 +148,6 @@ const Built = Schema.Struct({
     description: "one entry per acceptance criterion you were given",
   }),
   tests: Schema.optionalKey(Schema.String),
-  /** A bug's reproduction, an investigation's answer, a docs run: whichever applies. */
   reproduced: Schema.optionalKey(Schema.String),
   conclusion: Schema.optionalKey(Schema.String),
   evidence: Schema.optionalKey(Schema.Array(Schema.String)),
@@ -178,7 +158,6 @@ const Built = Schema.Struct({
   }),
 });
 
-/** One Change a plan names, by the key its waves name it by. */
 const ChangeReading = Schema.Struct({
   key: Schema.String,
   repo: Schema.String,
@@ -186,23 +165,19 @@ const ChangeReading = Schema.Struct({
   stacked: Schema.optional(Schema.String),
 });
 
-/** Which Changes a plan names, as a reading of it records them. */
 const Reading = Schema.Struct({
   single: Schema.Boolean,
   waves: Schema.Array(Schema.Array(Schema.String)),
-  /** A reading journaled before Changes names only repositories, each its own default Change. */
   changes: Schema.optionalKey(Schema.Array(ChangeReading)),
   refusal: Schema.NullOr(Schema.String),
 });
 
-/** A ticket as a reading of the plan records it. */
 const SliceRecord = Schema.Struct({
   file: Schema.String,
   number: Schema.String,
   title: Schema.String,
   blockedBy: Schema.Array(Schema.String),
   checks: Schema.Array(Schema.String),
-  // A reading journaled before tickets carried their criteria, benchmark or prerequisites has none.
   criteria: Schema.optionalKey(Schema.Array(Schema.String)),
   benchmark: Schema.optionalKey(Schema.NullOr(Schema.String)),
   prerequisites: Schema.optionalKey(
@@ -210,29 +185,23 @@ const SliceRecord = Schema.Struct({
   ),
 });
 
-/** A ticket's criteria and after-merge outcomes as one reading of its file found them. */
 const TicketReading = Schema.Struct({
   criteria: Schema.Array(Schema.String),
   afterMerge: Schema.Array(Schema.String),
 });
 
-/** What the step that opens the merge request reports, and what it linked. */
 const Opened = Schema.Struct({
   verdict: Schema.Literals(["clean", "findings"]),
   findings: Schema.optionalKey(Schema.Array(FindingSchema)),
   mr_url: Schema.optionalKey(Schema.NullOr(Schema.String)),
   linear_issues: Schema.optionalKey(Schema.Array(Schema.String)),
   branch: Schema.optionalKey(Schema.String),
-  /** False is a real answer: auto-merge on somebody else's MR is a reason not to push. */
   pushed: Schema.Boolean,
 });
 
-/** How often a ticket's unanswered criteria go back to its builder before a reviewer sees them. */
 const CRITERIA_TRIES = 2;
-/** Hand-backs of what stopped an integration — a commit can uncover a conflict. */
 const MERGE_TRIES = 2;
 
-/** One agent for the whole Run, so its model is named once and the fixes know the build. */
 const BUILDER = "build";
 
 const RELEASE = "Release";
@@ -319,15 +288,10 @@ export default defineWorkflow({
   // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
   hints: { plan: "work-source", then: "reach" },
   path: [...delivery, next],
-  // The branch it builds, on a worktree of its own, so two Runs never share an index.
   checkout: "branch",
-  // What kind of result this Run has to prove is the human's to say, and an unclassified
-  // Run is held to its checks rather than made a feature by default.
   outcome: {
     selectable: ["feature", "bug", "refactor", "investigation", "docs", "migration"],
   },
-  // A follow-up builds on the same branch, so it is this workflow again rather than
-  // another one — and there is nothing to carry on from without a branch to carry it on.
   followUps: [
     {
       id: "release",
@@ -413,7 +377,6 @@ export default defineWorkflow({
               })),
               refusal: read.refusal?.message ?? null,
             })),
-            // A plan that cannot be read is refused by name, not a defect the Run dies of.
             Effect.catch((cause) =>
               Effect.succeed({
                 single: false,
@@ -437,7 +400,6 @@ export default defineWorkflow({
             root: cwd,
             waves: plan.waves,
             changes: plan.changes ?? [],
-            // One branch in every repository: the one asked for, or one named after this Run.
             options:
               carried.branch !== undefined || carried.task !== undefined
                 ? carried
@@ -466,23 +428,16 @@ export default defineWorkflow({
         inputs: {
           plan: source.value,
           plan_kind: source.kind,
-          // The host's own launch options, under the names the content asks for them by.
           repo: place.options.repo ?? "",
           outcome: place.options.outcome ?? "",
         },
         run: { dir: place.dir, id: runId },
         verify: yield* checksNow,
       };
-      // Where a question the plan does not cover goes: the planner's own pane while one is
-      // live, and otherwise the builder decides and records it under assumptions. Asked
-      // again for each ticket, so a planner that has gone is never described as live.
       const sessionNow = Effect.map(agents.askRoute("planner", place.lineage), (ask) => ({
         ask,
       }));
 
-      // The default branch merged in where it has moved, at each ticket boundary and before
-      // each review round, so drift is met while it is small and a reviewer sees what will
-      // merge. `base` is what a reviewer's diff is taken against.
       let integrations = 0;
       let base = "";
       const integrateNow = Effect.gen(function* () {
@@ -490,7 +445,6 @@ export default defineWorkflow({
         const done = yield* Activity.make({
           name: `integrate.${integrations}`,
           success: IntegrationSchema,
-          // Suspended inside the Activity, so a resume asks again.
           execute: Effect.gen(function* () {
             const done = yield* host.integrate(runId, cwd);
             if (done.status !== "unavailable") return done;
@@ -508,9 +462,6 @@ export default defineWorkflow({
         if (done.status === "waiting") yield* host.record(runId, `not integrated: ${done.reason}`);
         return done;
       });
-      // Work goes on only from an integrated checkout: what stopped the merge goes back to
-      // the builder, and the work stops if it still stands. Conflicts at a ticket boundary
-      // are left for that ticket's own prompt.
       const integrated = (operation: string, conflictsToTicket = false) =>
         Effect.gen(function* () {
           const settles = (done: Integration) =>
@@ -536,7 +487,6 @@ export default defineWorkflow({
             });
           return { ...merged, base };
         });
-      // The kind as it stands, which `run intent set-outcome` may change while the Run is live.
       const outcomeOf = Effect.map(host.place(runId), (now) => now.options.outcome ?? "");
       let kindReadings = 0;
       const kindNow = Effect.suspend(() => {
@@ -558,9 +508,6 @@ export default defineWorkflow({
         integrate: integrated,
       };
 
-      // The tickets as they stand at each boundary: one added, removed or reordered while
-      // another is being built is the plan from then on, and what is built stays built by
-      // name. Each reading is recorded, so a replay is handed the list that was read.
       let readings = 0;
       const ticketsNow = Effect.gen(function* () {
         readings += 1;
@@ -582,7 +529,6 @@ export default defineWorkflow({
         }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
-      // Read only after the build, which is what writes SPEC.md for any source but a plan.
       let specReadings = 0;
       const specNow = Effect.gen(function* () {
         const plan = source.kind === "plan-dir" ? source.value : `${place.dir}/plan`;
@@ -604,8 +550,6 @@ export default defineWorkflow({
           );
         }
       });
-      // One ticket is not a plan to slice: one pass builds all of it, and only tickets
-      // added after that pass are built one at a time.
       const whole = tickets.length < 2;
       const built = new Set<string>();
       const handed: Handed[] = [];
@@ -614,8 +558,6 @@ export default defineWorkflow({
       const answeredFor: Answered[] = [];
       let build: typeof Built.Type | null = null;
       let rallied: Rallied | null = null;
-      // An agent's start gives every Input, one it leaves out as "" (docs/cli.md): an empty
-      // `recovery` is new work, as one never given is.
       const recovers = asked.recovery === "" ? undefined : asked.recovery;
       const recovered = yield* Activity.make({
         name: "recovery-entry",
@@ -666,7 +608,6 @@ export default defineWorkflow({
           success: Schema.NullOr(Built),
           execute: claimsAt(parent),
         });
-        // A completed null Activity stays null on replay; ancestry gets its own reading.
         if (build === null)
           build = yield* Activity.make({
             name: "recovery-build-claims-ancestry",
@@ -730,7 +671,6 @@ export default defineWorkflow({
             name: `prerequisites-wait.${prerequisiteWaits}`,
             success: PrerequisiteStandingSchema,
             error: WorkflowError,
-            // Suspended inside the Activity, so a resume waits again.
             execute: Effect.gen(function* () {
               const standing = yield* host.awaitPrerequisites(needing(one));
               if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
@@ -767,8 +707,6 @@ export default defineWorkflow({
         }
       });
       for (; recovery.entry === "Build";) {
-        // Identities before work: two tickets nobody can tell apart would share one
-        // result, and finding that out after an agent has been paid for is too late.
         const clash = identityProblem(Arr.map(tickets, (ticket) => ticket.file));
         if (clash !== null) return yield* new WorkflowError({ reason: clash });
         const next = yield* pickable;
@@ -790,7 +728,6 @@ export default defineWorkflow({
                 ? yield* integrated(`${item}.merge`, true)
                 : null;
             const session = yield* sessionNow;
-            // A plan built in one pass answers every ticket's criteria, and words their own.
             const given =
               ticket?.criteria ??
               (source.kind === "text"
@@ -833,7 +770,6 @@ export default defineWorkflow({
               },
               output: Built,
             });
-            // A Linear issue's criteria are read from its description as the builder copied it.
             let spec: ReadonlyArray<string> | null = given;
             for (let reading = 1; ; reading++) {
               spec =
@@ -854,8 +790,6 @@ export default defineWorkflow({
                 `${item}: ${place.dir}/plan/SPEC.md cannot be read, so the issue's acceptance criteria cannot be checked and no review starts`,
               );
             }
-            // A plan's tickets are read again before each judgement, so an amended one is judged
-            // and handed back as it reads now; one that cannot be read keeps its last reading.
             let read: ReadonlyArray<{ file: string } & typeof TicketReading.Type> =
               source.kind === "plan-dir"
                 ? Arr.map(ticket === null ? tickets : [ticket], (one) => ({
@@ -888,14 +822,11 @@ export default defineWorkflow({
               read = Arr.map(read, (one, at) => (now[at] ? { file: one.file, ...now[at] } : one));
               return Arr.flatMap(read, (one) => one.criteria);
             });
-            // Each criterion answered before any reviewer is launched: one left unanswered or
-            // unmet goes back to the builder, and the Run asks if it still is.
             let answers = boundTo(spec, build.criteria ?? []);
             const assumptions = [...(build.assumptions ?? [])];
             const commits = [...(build.commits ?? [])];
             let criteria = spec;
             let unmet: ReadonlyArray<Finding> = [];
-            // Another hand-back on an unchanged tree cannot move a blocker, so a stall asks instead.
             let blockers: ReadonlyArray<Finding> = [];
             let stalls = 0;
             let unmetAsks = 0;
@@ -915,7 +846,6 @@ export default defineWorkflow({
               if (unmet.length === 0) break;
               if (blockers.length > 0) {
                 stalls += 1;
-                // Answered Hand back 18 of 19 times, so the first is taken without asking.
                 if (stalls === 1) {
                   yield* host.record(
                     runId,
@@ -1073,7 +1003,6 @@ export default defineWorkflow({
       }
       if (build === null && recovery.entry === "Build")
         return yield* new WorkflowError({ reason: "nothing was built" });
-      // The builder may have named the checks, and every prompt from here shows them.
       input = { ...input, verify: yield* checksNow };
 
       if (rallied === null || rallied.unreviewed !== "") {
@@ -1158,10 +1087,6 @@ export default defineWorkflow({
     }),
 });
 
-/**
- * What follows an open merge request: `then`, or the human's answer where nobody gave one.
- * One set to merge itself is left to do that, so nobody is asked about it.
- */
 const releasing = (delivered: {
   readonly mr: string;
   readonly cwd: string;
@@ -1176,7 +1101,6 @@ const releasing = (delivered: {
       const merging = yield* Activity.make({
         name: "auto-merging",
         success: Schema.NullOr(Schema.String),
-        // Unknown is asked about: a release refuses a merge request that merges itself.
         execute: host
           .autoMerging(delivered.cwd)
           .pipe(
@@ -1194,8 +1118,6 @@ const releasing = (delivered: {
       }
       let stageFailed = "";
       let failedStage = "";
-      // Why another Stage would still be refused at the checkout the last one was refused
-      // at, asked again when it is offered and when it is picked.
       const stageRefusal = (name: string) =>
         failedStage === ""
           ? Effect.succeed(null)
@@ -1212,7 +1134,6 @@ const releasing = (delivered: {
             prompt: `${mr} is open.${stageFailed}${
               refused === null ? "" : ` Stage is not offered: ${refused}.`
             } What next?`,
-            // A question's options are fixed once asked, so a freed path is noticed on a pick.
             options: [
               { id: RELEASE, recommended: true },
               refused === null ? STAGE : CHECK_STAGE,
@@ -1254,17 +1175,11 @@ const releasing = (delivered: {
     return `${mr}; ${String(yield* children.result(child))}`;
   });
 
-/**
- * One Run of this workflow per Change the plan names, a wave at a time: a Change starts
- * once every one its tickets wait on is built. One that fails or cannot start starts no
- * further wave; the rest of its own wave is still waited on.
- */
 const buildEach = (fan: {
   readonly plan: string;
   readonly root: string;
   readonly waves: ReadonlyArray<ReadonlyArray<string>>;
   readonly changes: ReadonlyArray<typeof ChangeReading.Type>;
-  /** The launch options every Change's Run is started with, beside its own. */
   readonly options: Readonly<Record<string, string>>;
 }) =>
   Effect.gen(function* () {
@@ -1285,8 +1200,6 @@ const buildEach = (fan: {
     const built: string[] = [];
     const keys = fan.waves.flat();
     for (const [at, wave] of fan.waves.entries()) {
-      // Each Change's Run is its Step's from its start to its end; they start in the
-      // Wave's order and are waited on together.
       const running = [];
       for (const key of wave) {
         const { repo, change, stacked } = changeOf(key);
@@ -1302,8 +1215,7 @@ const buildEach = (fan: {
             .start({
               invocation: invocation(key),
               workflow: "self",
-              // Nobody attends a Change's share, so it ends at its merge request.
-              // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
+              // oxlint-disable-next-line unicorn/no-thenable -- Nobody attends a Change's share, so it ends at its merge request. implement's Input is named `then`
               input: { plan: fan.plan, then: "finish" },
               options,
             })
@@ -1338,7 +1250,6 @@ const buildEach = (fan: {
     return `${keys.length} ${named ? "Changes" : "repositories"} built in ${fan.waves.length} wave(s): ${Arr.join(built, "; ")}`;
   });
 
-/** What the slice claims it built, or the ticket's own name where it named nothing. */
 const claimsOf: (built: typeof Built.Type, ticket: Slice) => ReadonlyArray<string> = (
   built,
   ticket,
@@ -1347,7 +1258,6 @@ const claimsOf: (built: typeof Built.Type, ticket: Slice) => ReadonlyArray<strin
   return named.length > 0 ? named : [ticket.title];
 };
 
-/** A ticket's criteria as its builder is given them. */
 const renderCriteria = (criteria: ReadonlyArray<string>) =>
   criteria.length === 0
     ? "None: this work names no checkbox criteria, so `criteria` stays empty."
@@ -1356,7 +1266,6 @@ const renderCriteria = (criteria: ReadonlyArray<string>) =>
         "\n",
       );
 
-/** Each answer as the wording it answered; one that answered none of it is dropped. */
 const boundTo: (wording: ReadonlyArray<string>, given: ReadonlyArray<Criterion>) => Criterion[] = (
   wording,
   given,
@@ -1368,7 +1277,6 @@ const boundTo: (wording: ReadonlyArray<string>, given: ReadonlyArray<Criterion>)
     return criterion === undefined ? [] : [{ ...answer, criterion }];
   });
 
-/** What a builder said of one item's criteria, and what it decided that the plan did not. */
 export interface Answered {
   readonly item: string;
   readonly criteria: ReadonlyArray<string>;
@@ -1387,7 +1295,6 @@ const reviewerCriteria = (all: ReadonlyArray<Answered>) =>
 
 const showsAnything = (one: Answered) => one.criteria.length > 0 || one.assumptions.length > 0;
 
-/** Every built item's criteria, answers and assumptions, as a reviewer is shown them. */
 export const renderAnswered = (all: ReadonlyArray<Answered>) =>
   Arr.some(all, showsAnything)
     ? Arr.join(
@@ -1412,11 +1319,9 @@ export const renderAnswered = (all: ReadonlyArray<Answered>) =>
       )
     : "";
 
-/** A merge of the default branch that stopped on conflicts, as the builder is told it. */
 const conflictOf = (merged: Integration) =>
   `Collie merged ${merged.ref} (${merged.sha}) into this branch, and the merge stopped on conflicts in: ${Arr.join(merged.files, ", ")}.`;
 
-/** What stopped an integration, as the builder is told it. */
 const stoppedBy = (merged: Integration) =>
   merged.status === "conflicted"
     ? conflictOf(merged)
@@ -1428,7 +1333,6 @@ interface PartialBuild {
   readonly findings: ReadonlyArray<Finding>;
 }
 
-/** The shared rally, with what blocks going back to the builder, told the part built so far. */
 const builderRally = (ask: {
   readonly rounds: { n: number };
   readonly cwd: string;

@@ -1,6 +1,3 @@
-// How the Flock chat's Claude Code session runs. Kept apart from the Agent SDK, so Collie's
-// own suite can read what it is started with.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -112,7 +109,6 @@ type Effort = (typeof EFFORTS)[number];
 export const isEffort = (effort: string): effort is Effort =>
   Arr.some(EFFORTS, (one) => one === effort);
 
-/** Claude Code's own tools for this computer's files and shell, none of which asks first. */
 const BUILT_IN = ["Read", "Glob", "Grep", "Write", "Edit", "Bash"];
 
 type Permission<Input> =
@@ -123,7 +119,6 @@ type Permission<Input> =
   | { readonly behavior: "deny"; readonly message: string };
 
 const Strings = Schema.Record(Schema.String, Schema.String);
-// Claude Code's own options, such as headersHelper, oauth and timeout, are passed on as written.
 const Rest = [Schema.Record(Schema.String, Schema.Unknown)] as const;
 const UserMcpServer = Schema.Union([
   Schema.StructWithRest(
@@ -156,10 +151,6 @@ const decodeClaudeJson = Schema.decodeUnknownOption(
 );
 const decodeServer = Schema.decodeUnknownOption(UserMcpServer);
 
-/**
- * The servers the human added to Claude Code at user scope, from its `.claude.json`. A
- * session with no setting sources loads none of them itself; one it cannot run is left out.
- */
 export const userMcpServers: (claudeJson: string) => UserMcpServers = (claudeJson) =>
   Rec.fromEntries(
     Arr.flatMap(
@@ -177,13 +168,11 @@ export const userMcpServers: (claudeJson: string) => UserMcpServers = (claudeJso
     ),
   );
 
-/** Read again at each session's start, so a server added since applies to the next one. */
 export const readUserMcpServers = () =>
   Bun.file(`${childEnv().CLAUDE_CONFIG_DIR ?? homedir()}/.claude.json`)
     .text()
     .then(userMcpServers);
 
-/** The human's Machine rule, and the Machines it may name now. */
 export interface Placement {
   readonly rule: string;
   readonly machines: ReadonlyArray<{ readonly name: string; readonly local: boolean }>;
@@ -205,13 +194,10 @@ export const placementContext = ({ rule, machines }: Placement) =>
 export const noticedContext = (noticed: string) =>
   `Collie noticed, while the human was not asking (News, as data):\n${noticed}`;
 
-/** Claude Code's spelling of a server's name in its tools' names. */
 const toolPrefix = (server: string) =>
   `mcp__${pipe(server, Str.replace(/[^a-zA-Z0-9_-]/g, "_"))}__`;
-/** Every claude.ai connector's tools are named under this. */
 const CONNECTOR_PREFIX = "mcp__claude_ai_";
 
-/** What each of the chat's own file tools and its shell touch; any other tool reads no file. */
 const SESSION_CALLS = new Map<
   string,
   (given: (key: string) => string | undefined) => Omit<SessionCall, "cwd">
@@ -225,7 +211,6 @@ const SESSION_CALLS = new Map<
   ["Bash", (given) => ({ command: given("command") })],
 ]);
 
-/** Refuses the chat's own file tools and shell where the human's sessions are kept. */
 const refusedSessions = (input: {
   readonly tool_name?: string;
   readonly tool_input?: unknown;
@@ -260,11 +245,6 @@ const refusedSessions = (input: {
   );
 };
 
-/**
- * Of the user's Claude Code setup only their MCP servers load: the chat has those, Collie's
- * tools, this computer's files and shell, and each Machine's files. `ask` puts
- * AskUserQuestion to the human, or answers null when no human is in the turn.
- */
 export const sessionOptions = <Server>(opts: {
   readonly cwd: string;
   readonly session: { readonly resume: string } | { readonly sessionId: string };
@@ -275,11 +255,9 @@ export const sessionOptions = <Server>(opts: {
   readonly userServers: UserMcpServers;
   readonly ask: (toolUseID: string, signal: AbortSignal) => Promise<Answers | null>;
   readonly noticed: () => string | undefined;
-  /** Undefined while there is no rule. */
   readonly placement: () => Placement | undefined;
   readonly standing: () => StandingDirection | undefined;
 }) => {
-  // An older Claude Code names no tool's MCP server, so a configured server's or connector's tools are known by name.
   const prefixes = [...Arr.map(Rec.keys(opts.userServers), toolPrefix), CONNECTOR_PREFIX];
   const ofUserServer = (name: string) =>
     Arr.some(

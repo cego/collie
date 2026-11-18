@@ -1,11 +1,3 @@
-// The local host, proven the way it will be used: several clients, real processes.
-//
-// Every client here is a real connection over a real unix socket to a host that was
-// started lazily by whoever asked first, and every host is a subprocess. The questions
-// are about lifetimes — does a second client get the first one's host, does closing a
-// client cancel the work it accepted, does a pending decision outlive the process — and
-// none of them has an answer in one process with an in-memory engine.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -52,7 +44,6 @@ import { Rig } from "./support/recorder";
 const root = new URL("../", import.meta.url).pathname;
 const fixtures = `${root}test/fixtures/workflows`;
 
-/** The command a client starts a host with, as `connect` reads it. */
 const starts = (command: ReadonlyArray<string>) =>
   ConfigProvider.layer(
     ConfigProvider.fromUnknown({
@@ -61,10 +52,6 @@ const starts = (command: ReadonlyArray<string>) =>
     }),
   );
 
-/**
- * The compiled binary when one is named, and the sources otherwise, so the host under
- * test is the one this suite was asked for rather than whatever `bun test` is running.
- */
 const collie = Effect.map(Config.option(Config.String("COLLIE_TEST_BINARY")), (binary) =>
   starts(Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`]),
 );
@@ -84,7 +71,6 @@ const proves = <A, E>(
     }),
   );
 
-/** A project with a workflow saved in it, and a state directory for the host to own. */
 const workspace = Effect.fn("HostTest.workspace")(function* (prefix: string) {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix });
@@ -134,8 +120,6 @@ test(
     proves(
       Effect.gen(function* () {
         const { state } = yield* workspace("collie-host-owner-");
-        // Four at once against a directory with no host: each finds nothing answering and
-        // starts one, and three of those lose the lock and leave.
         const identities = yield* Effect.all(
           Arr.map([1, 2, 3, 4], () =>
             Effect.scoped(
@@ -149,8 +133,6 @@ test(
         );
         expect(new Set(Arr.map(identities, (who) => who.pid)).size).toBe(1);
 
-        // The one they reached is the one that owns the directory, not merely the one
-        // that answered first.
         const owner = yield* ownerOf(state);
         expect(owner?.pid).toBe(identities[0]!.pid);
         yield* stopHost(state);
@@ -171,7 +153,6 @@ test(
         const host = Option.isSome(binary)
           ? [binary.value]
           : [process.execPath, `${root}src/main.ts`];
-        // Started in Desktop's app folder, as a bridge Desktop started there did.
         const launcher = [
           "/bin/sh",
           "-c",
@@ -179,7 +160,6 @@ test(
           "sh",
           ...host,
         ];
-        // Desktop's launcher sets it, and an older Desktop passed it on.
         yield* Effect.acquireRelease(
           Effect.sync(() => {
             const was = Bun.env.LD_PRELOAD;
@@ -253,8 +233,6 @@ test(
         const { wf, project, state } = yield* workspace("collie-host-disconnect-");
         const watching = yield* connect(state).pipe(Effect.orDie);
 
-        // Another client's whole life: it loads a module, starts a run, and goes while
-        // that run is still executing.
         const started = yield* Effect.scoped(
           Effect.gen(function* () {
             const client = yield* connect(state);
@@ -271,8 +249,6 @@ test(
         expect(started.registration).toBe("proof@1");
         const runId = started.runId;
 
-        // The client that stayed: the registration the other one made is still held, and
-        // the work it accepted is still going.
         const held = yield* watching.registrations().pipe(Effect.orDie);
         expect(held.live).toEqual(["proof@1"]);
         yield* until(
@@ -301,8 +277,6 @@ test(
         const { project, state } = yield* workspace("collie-host-request-");
         const client = yield* connect(state).pipe(Effect.orDie);
 
-        // The same claim, four times over one host: the database settles which of them
-        // made the run, and the other three are told about it.
         const admitted = yield* Effect.all(
           Arr.map([1, 2, 3, 4], () =>
             client.start({ project, id: "proof", request: "req-1", input: { note: "once" } }),
@@ -312,14 +286,12 @@ test(
         expect(new Set(Arr.map(admitted, (one) => one.runId)).size).toBe(1);
         expect(Arr.filter(admitted, (one) => one.fresh)).toHaveLength(1);
 
-        // A different claim for the same work is different work: two starts, two runs.
         const other = yield* client
           .start({ project, id: "proof", request: "req-2", input: { note: "once" } })
           .pipe(Effect.orDie);
         expect(other.runId).not.toBe(admitted[0]?.runId);
         expect(other.fresh).toBe(true);
 
-        // And the first claim, for something else, is not that claim.
         const refused = yield* client
           .start({ project, id: "proof", request: "req-1", input: { note: "changed" } })
           .pipe(Effect.flip, Effect.orDie);
@@ -357,18 +329,15 @@ test(
           }),
         ).pipe(Effect.orDie);
 
-        // The host is asked to stop, and it goes: it leaves nothing a human has to clear.
         yield* stopHost(state);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${state}/host.sock`)).toBe(false);
 
         yield* Effect.scoped(
           Effect.gen(function* () {
-            // Nothing is answering, so this client starts the host it needs.
             const client = yield* connect(state);
             const second = yield* client.identity();
             expect(second.pid).not.toBe(first.pid);
-            // Rebuilt from the module as it is now, under the name the run started on.
             expect((yield* client.registrations()).live).toEqual(["proof@1"]);
             expect((yield* client.status({ runId: first.runId })).status).toBe("suspended");
 
@@ -438,7 +407,6 @@ test(
           Effect.gen(function* () {
             const client = yield* connect(state);
             expect((yield* client.identity()).pid).toBe(restarted.after.pid);
-            // The step that was running when its host went is run again by the new one.
             yield* until(() => fs.exists(marker), Boolean);
             expect((yield* client.status({ runId: runs.pending })).status).toBe("pending");
             expect((yield* client.status({ runId: runs.parked })).status).toBe("suspended");
@@ -589,7 +557,6 @@ test(
           (alive) => !alive,
         );
         expect(yield* ownerOf(state)).toBeNull();
-        // And it said so where the next human to look will find it.
         const log = yield* fs.readFileString(`${state}/host.log`);
         expect(log).toContain("host started");
         expect(log).toContain("still stopping after");
@@ -598,10 +565,6 @@ test(
   120_000,
 );
 
-/**
- * Starts the `stubborn` step on a host watching `watch`, takes the host's end away with
- * `end`, and gives back how long the host took to be gone and what its `host.log` said.
- */
 const outlivesAStubbornStep = (
   watch: string,
   end: (state: string) => Effect.Effect<void, never, FileSystem.FileSystem>,
@@ -642,8 +605,6 @@ test(
         const { took, log, bound } = yield* outlivesAStubbornStep("", (state) =>
           Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
-            // Moved away rather than deleted, as a recursive delete races the host's writes;
-            // an empty one put back in its place is where the host's last lines land.
             yield* fs.rename(state, `${state}.gone`);
             yield* fs.makeDirectory(state);
           }).pipe(Effect.orDie),
@@ -655,10 +616,6 @@ test(
   120_000,
 );
 
-/**
- * A process for a host to watch, nobody's child so that once killed it is gone rather than a
- * zombie a signal reaches, and its kill, which first proves it was still running.
- */
 const watchable = Effect.gen(function* () {
   const pid = yield* startDetached(["sleep", "60"]);
   yield* Effect.addFinalizer(() => signalProcess(pid, "SIGKILL"));
@@ -688,22 +645,14 @@ test.skipIf(process.platform !== "linux")(
 
 const heldCheck = `${root}test/fixtures/checks/held.sh`;
 
-/** The checks the host on `state` has recorded as running; a failure before it has made host.db. */
 const checksAt = (state: string) => hostRecords(state, runningChecks);
 
-/**
- * Runs the `held` check, which ignores SIGTERM and has a `setsid` child, on a host watching
- * `watch`, then ends the host with `end`. Gives back the check's two processes, each with
- * its start token, once the host's pid is gone.
- */
-/** The check records in `state` once there are at least `least`. */
 const recordedChecks = (state: string, least: number) =>
   until(
     () => checksAt(state),
     (records) => records.length >= least,
   );
 
-/** The `held` check running for a Run on a host watching `watch`, with its two processes. */
 const runsAHeldCheck = (watch: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -745,9 +694,7 @@ const runsAHeldCheck = (watch: string) =>
     const check = yield* Effect.forEach([yield* pidIn("starts"), yield* pidIn("children")], (pid) =>
       Effect.map(startedOf(pid), (started) => ({ pid, started: started ?? "" })),
     );
-    // The host records a check only after its child has started.
     yield* recordedChecks(state, 1);
-    // Released for whatever this did not end, so nothing outlives the test.
     yield* Effect.addFinalizer(() =>
       fs.writeFileString(`${notes}/release`, "").pipe(Effect.ignore),
     );
@@ -767,17 +714,12 @@ const endsWithAHeldCheck = <R>(
       (alive) => !alive,
     );
     const running = yield* Effect.forEach(check, stillRunning);
-    // A host exits once its checks are gone, so its exit bounds theirs.
     const ended = running.includes(true)
       ? Option.none<Duration.Duration>()
       : Option.some(Duration.millis((yield* Clock.currentTimeMillis) - began));
     return { state, runId, running, ended, check, notes, project, host: who.pid };
   });
 
-/**
- * Within the stop grace, with the last look its SIGKILL may take, a second for the poll that
- * saw it, and `seen`, how long the end took to be noticed.
- */
 const withinTheGrace = (ended: Option.Option<Duration.Duration>, seen = Duration.zero) =>
   Effect.gen(function* () {
     const grace = yield* Config.Duration("COLLIE_HOST_STOP_GRACE");
@@ -929,7 +871,6 @@ test.skipIf(process.platform !== "linux")(
       Effect.gen(function* () {
         const removed = yield* endsWithAHeldCheck("", ({ state }) =>
           FileSystem.FileSystem.pipe(
-            // An empty one put back in its place is where the host's last lines land.
             Effect.flatMap((fs) =>
               fs.rename(state, `${state}.gone`).pipe(Effect.andThen(fs.makeDirectory(state))),
             ),
@@ -937,7 +878,6 @@ test.skipIf(process.platform !== "linux")(
           ),
         );
         expect(removed.running).toEqual([false, false]);
-        // A host looks for its lock each second.
         expect(yield* withinTheGrace(removed.ended, Duration.seconds(1))).toBe(true);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${removed.state}/host.log`)).toContain(
@@ -952,7 +892,6 @@ test.skipIf(process.platform !== "linux")(
   120_000,
 );
 
-/** The pids the held check noted in `file`, one per line. */
 const notedIn = (notes: string, file: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${notes}/${file}`)),
@@ -960,11 +899,9 @@ const notedIn = (notes: string, file: string) =>
     Effect.orElseSucceed(() => []),
   );
 
-/** The leader pid of each running check the host has recorded. */
 const recordedLeaders = (state: string) =>
   Effect.map(checksAt(state), (records) => Arr.map(records, (record) => record.leader.pid));
 
-/** Lets the held check end, waits for its Run to complete, and gives back its verifications. */
 const releasedOnce = (state: string, runId: string, notes: string) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1040,8 +977,6 @@ test.skipIf(process.platform !== "linux")(
           () => notedIn(notes, "starts"),
           (pids) => pids.length === 2,
         );
-        // The host records a check only once it has spawned it and read its leader, the
-        // supervisor whose group the check's command runs in.
         const group = (yield* groupOf(Number(rerun))) ?? 0;
         const leaders = yield* until(
           () => recordedLeaders(state),
@@ -1055,14 +990,9 @@ test.skipIf(process.platform !== "linux")(
   120_000,
 );
 
-/** A build older than this one, which a host started with `COLLIE_TEST_BUILD` says it is. */
 const OLDER = "0.0.1";
 const handedCheck = `${root}test/fixtures/checks/handed.sh`;
 
-/**
- * The `handed` check running for a Run on a host of an older build, with the check's
- * process, and how long that host took to start and answer.
- */
 const runsOnAnOlderHost = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const { wf, project, state } = yield* workspace("collie-host-handover-");
@@ -1111,7 +1041,6 @@ const runsOnAnOlderHost = Effect.gen(function* () {
   return { state, notes, runId, old, check, started };
 });
 
-/** What the Run recorded of the `handed` check once it was let go and its Run completed. */
 const handedRecorded = (state: string, runId: string, notes: string) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1150,7 +1079,6 @@ const takesOverTheCheck = (
 
       expect(yield* signalProcess(old.pid)).toBe(false);
       expect(yield* stillRunning(check)).toBe(true);
-      // The old host's stop, its kill ceiling and a host's start, as on a replacement before.
       expect(
         Duration.isLessThanOrEqualTo(
           took,
@@ -1190,7 +1118,6 @@ test.skipIf(process.platform !== "linux")(
   120_000,
 );
 
-/** Whether a process's status, as `/proc` gives it, has a SIGTERM waiting to be delivered. */
 const termWaits = (status: string) =>
   Arr.some(Str.split(status, "\n"), (line) => {
     const [key, mask = ""] = Str.split(line, ":\t");
@@ -1210,7 +1137,6 @@ const takesOverFromASlowHost = (
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { state, notes, runId, old, check } = yield* runsOnAnOlderHost;
-      // The host answers nobody while it is stopped, and goes on the moment it is told to end.
       yield* signalProcess(old.pid, "SIGSTOP");
       yield* Effect.forkScoped(
         until(
@@ -1349,7 +1275,6 @@ test.skipIf(process.platform !== "linux")(
         yield* Effect.addFinalizer(() =>
           fs.writeFileString(`${notes}/release`, "").pipe(Effect.ignore),
         );
-        /** Left running by nobody, with only the bindings in `env`. */
         const nobodys = (env: ReadonlyArray<string>, argv: ReadonlyArray<string>) =>
           startDetached(["env", "-u", CHECK_INSTALLATION, "-u", CHECK_ID, ...env, ...argv]);
         const sleeper = (env: ReadonlyArray<string>) =>
@@ -1413,7 +1338,6 @@ test.skipIf(process.platform !== "linux")(
           connect(state).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.orDie);
 
-        // The sweep follows the host's first answer.
         yield* until(
           () => Effect.forEach(ours, stillRunning),
           (running) => !Arr.some(running, Boolean),
@@ -1460,20 +1384,16 @@ test(
         const fs = yield* FileSystem.FileSystem;
         const { state } = yield* workspace("collie-host-stale-");
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        // Somebody else's process, which the dead host's pid now belongs to.
         const bystander = yield* spawner.spawn(
           ChildProcess.make("sleep", ["30"], { stdout: "ignore", stderr: "ignore" }),
         );
         yield* fs.writeFileString(`${state}/host.lock`, `{"pid":${bystander.pid},"start":"0"}\n`);
-        // And the socket the dead host never got to remove.
         yield* fs.writeFileString(`${state}/host.sock`, "");
 
         const who = yield* Effect.scoped(
           connect(state).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.orDie);
         expect(who.pid).not.toBe(bystander.pid);
-        // The claim is the new host's, and the process that merely inherited the pid is
-        // alive: staleness is decided from the identity in the claim, never by signalling.
         expect((yield* ownerOf(state))?.pid).toBe(who.pid);
         expect(yield* signalProcess(bystander.pid)).toBe(true);
         yield* stopHost(state);
@@ -1503,12 +1423,9 @@ test(
           client: "0.0.0-elsewhere",
           pid: who.pid,
         });
-        // A restart is the instruction, and the client is what stops: nothing here kills
-        // the host or takes its directory.
         expect(refused.restart).toContain("run `collie host restart`");
         expect((yield* ownerOf(state))?.pid).toBe(who.pid);
 
-        // The host it would not talk to is still the host every matching client gets.
         const again = yield* Effect.scoped(
           connect(state).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.orDie);
@@ -1529,8 +1446,6 @@ test(
           connect(state).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.orDie);
 
-        // This process can only start a host of its own build, so a client from the future
-        // still ends up refused — but only after the host it found was replaced.
         const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
           Effect.flip,
         );
@@ -1577,8 +1492,6 @@ test(
         const fs = yield* FileSystem.FileSystem;
         const { project, state } = yield* workspace("collie-host-wedged-");
         const marker = `${state}/started`;
-        // A host whose stop waits on its running step for as long as that takes, the way
-        // one from before the stop grace does.
         const old = yield* Effect.scoped(
           Effect.gen(function* () {
             const client = yield* connect(state, { hostEnv: { COLLIE_HOST_STOP_GRACE: "1 hour" } });
@@ -1589,7 +1502,6 @@ test(
         yield* until(() => fs.exists(marker), Boolean);
 
         const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
-          // Move the client's timers slowly enough for the real replacement to start.
           (effect) => fastForward(effect, 5),
           Effect.flip,
         );
@@ -1602,7 +1514,6 @@ test(
   120_000,
 );
 
-/** Observe the stopped process before relying on its socket staying silent. */
 const pauseHost = (state: string, pid: number) =>
   Effect.gen(function* () {
     const signalled = yield* signalProcess(pid, "SIGSTOP");
@@ -1631,7 +1542,6 @@ test(
         const who = yield* Effect.scoped(
           connect(state).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.orDie);
-        // Its socket still accepts, and nothing behind it reads.
         yield* pauseHost(state, who.pid);
         const outcome = yield* Effect.scoped(
           connect(state).pipe(
@@ -1694,7 +1604,6 @@ test(
           connect(state).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.orDie);
 
-        // A checkout under development: newer by its version, and not what this host serves.
         const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
           Effect.flip,
           Effect.provide(
@@ -1725,7 +1634,6 @@ test(
         expect(refused.reason).toContain("nothing owns the directory");
         expect(yield* ownerOf(state)).toBeNull();
       }),
-      // A command that exits at once, which is what a host too broken to start looks like.
       starts(["/bin/false"]),
     ),
   120_000,
@@ -1743,9 +1651,6 @@ test(
           ? [binary.value]
           : [process.execPath, `${root}src/main.ts`];
         const [executable = "bun", ...prefix] = command;
-        // What it lives no longer than: a process stopped at will, and nobody's child here —
-        // a child of this test would linger as a zombie once killed, which a signal still
-        // reaches, where a test process that exits is reaped by whoever started it.
         const detached = yield* exec(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"]);
         const outlived = Number(Str.trim(detached.stdout));
         const suite = yield* suiteEnv;
@@ -1770,8 +1675,6 @@ test(
             () => ownerOf(state),
             (owner) => owner !== null,
           );
-        // Its exit, as the handle sees it: a signal would still reach it as a zombie until
-        // it is reaped, which is not the host still serving.
         const gone = <A, E>(host: { readonly exitCode: Effect.Effect<A, E> }) =>
           host.exitCode.pipe(Effect.timeout("20 seconds"), Effect.orDie);
 
@@ -1785,8 +1688,6 @@ test(
         const removed = (yield* workspace("collie-host-removed-")).state;
         const orphan = yield* hostFor(removed, "");
         yield* owned(removed);
-        // Moved away rather than deleted: a recursive delete races the files the host is
-        // still writing there, where a rename takes the directory away in one step.
         yield* fs.rename(removed, `${removed}.gone`);
         yield* gone(orphan);
       }),
@@ -1794,7 +1695,6 @@ test(
   120_000,
 );
 
-/** A host started for the installation at `pluginRoot`. */
 const hostFor = (pluginRoot: string) =>
   Effect.map(Config.option(Config.String("COLLIE_TEST_BINARY")), (binary) =>
     starts([
@@ -1845,7 +1745,6 @@ test(
 
         expect(development.development).toBe(`${development.build}+${sha}`);
         expect(released.development).toBeUndefined();
-        // A front door reads the same from the board it is served.
         expect(development.board).toMatchObject({ development: development.development });
         expect(released.board && "development" in released.board).toBe(false);
       }),

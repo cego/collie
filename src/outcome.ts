@@ -1,14 +1,3 @@
-// What a Run has to prove before it may say it is done, and what counts as proof.
-//
-// One table, one pure function. The point is that "done" means something different for a
-// feature and for an investigation, and that neither is decided by an agent writing
-// `"verdict": "clean"`. Evidence here is a collected Verification (`verify.ts`) bound to
-// the tree it ran on; an Output field is a claim, and is only ever asked for where a claim
-// is the honest answer — a conclusion, a list of what was built, a reviewer's judgement.
-//
-// Nothing in here reads a file or runs a command. The caller collects the evidence and
-// this says what is missing.
-
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { pipe } from "effect/Function";
@@ -31,12 +20,6 @@ import { planRunOf } from "./strategies";
 import { isYamlMap, type YamlValue } from "./yaml";
 import { finalMeasurementLine, type Measurement } from "./measurement-model";
 
-/**
- * The kinds of result a Run can be for. `unspecified` is the default and is deliberately
- * not `feature`: a Run nobody classified must not be made to produce a feature's evidence,
- * because documentation, an investigation and a bug fix are not features and the tickets
- * they would be judged against do not exist. It proves the approved set and no more.
- */
 export const KINDS = [
   "unspecified",
   "feature",
@@ -51,7 +34,6 @@ export const KINDS = [
 ] as const;
 export type Outcome = (typeof KINDS)[number];
 
-/** The kinds a human may ask an `implement` Run for. `review`, `plan` and `performance` are fixed. */
 export const REQUESTABLE: ReadonlyArray<string> = [
   "feature",
   "bug",
@@ -62,62 +44,35 @@ export const REQUESTABLE: ReadonlyArray<string> = [
 ];
 
 export function isOutcome(value: string): value is Outcome {
-  // SAFETY: widening a readonly tuple of string literals to its element type, so that a
-  // plain string can be tested against it. Nothing is narrowed by the assertion itself.
+  // WARNING: widening a readonly tuple of string literals to its element type, so that a plain string can be tested against it. Nothing is narrowed by the assertion itself.
   const known: ReadonlyArray<string> = KINDS;
   return known.includes(value);
 }
 
-/** What the caller has collected, for the table below to judge. */
 export interface Collected {
-  /** Every verification this Run recorded, oldest first. */
   readonly verifications: ReadonlyArray<Verification>;
-  /** The tree as it is now. A result bound to any other tree is history. */
   readonly final: Snapshot;
-  /** What Collie was allowed to run itself for this Run. */
   readonly approved: ReadonlyArray<VerifySpec>;
-  /**
-   * Those checks' commands as they resolve for this Run. A record of exactly one counts for
-   * that check, whoever asked; without them, only Collie's own run under its name does.
-   */
   readonly commands?: ReadonlyArray<CheckCommand>;
-  /** Step Outputs, by step id, as they were parsed. */
   readonly outputs: ReadonlyMap<string, YamlValue>;
-  /**
-   * The step ids whose Output is a reviewer's judgement rather than the implementer's
-   * claim: the synthesis, or the one reviewer that stood alone. A field only a reviewer
-   * can honestly give is read from these and nowhere else — read from any Output, the
-   * agent that wrote the change could vouch for it, which is the thing being prevented.
-   */
   readonly reviewed: ReadonlySet<string>;
-  /** The tree each of those reviewed, where it was recorded. */
   readonly reviewedOn?: ReadonlyMap<string, Snapshot>;
-  /** The Run's Measurements, oldest first. */
   readonly measurements?: ReadonlyArray<Measurement>;
-  /** Where this checkout leaves the default branch a merge request targets; null where it has none. */
   readonly mergeBase?: string | null;
-  /** The Git tree HEAD names. */
   readonly content?: string;
-  /** Whether a reference points inside this Run's own directory or checkout. */
   readonly insideRun: (ref: string) => boolean;
-  /** The plan's tickets and the verification names each promised, for a feature. */
   readonly tickets: ReadonlyArray<{
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
   }>;
 }
 
-/**
- * Whether the latest result for this check, on the tree in front of us, passed — a pass a
- * later fail contradicts is not one — or it is left to CI.
- */
 function lastPassedAtFinal(got: Collected, name: string) {
   return owesNothingHere(checkProof(got, name));
 }
 
 const TEXT_SEARCHES = new Set(["grep", "egrep", "fgrep", "rg", "ag", "ack"]);
 
-/** Whether a command only searches text, also as a `sh -c` or `bash -c` script's first word. */
 function textSearch(executable: string, argv: ReadonlyArray<string>) {
   const program = Str.split(executable, "/").at(-1) ?? "";
   if (TEXT_SEARCHES.has(program)) return true;
@@ -130,7 +85,6 @@ function textSearch(executable: string, argv: ReadonlyArray<string>) {
   return textSearch(first, rest);
 }
 
-/** A script's words as the shell reads them, its quotes, escapes and line continuations removed. */
 function shellWords(script: string) {
   const words: string[] = [];
   let word = "";
@@ -167,10 +121,6 @@ function shellWords(script: string) {
   return words;
 }
 
-/**
- * Whether a name's latest result on this tree passed, a passing text search not counting:
- * it shows the text is there, not that anything works. A Run's Check is the project's own.
- */
 function provedAtFinal(got: Collected, name: string) {
   if (lastPassedAtFinal(withoutSearches(got, name), name)) return "passed";
   return lastPassedAtFinal(got, name) ? "searched" : "unproved";
@@ -198,13 +148,8 @@ const runAgain = (last: Verification, tree: string) =>
 type Journal = Pick<Collected, "verifications" | "final" | "commands"> &
   Partial<Pick<Collected, "approved">>;
 
-/** A check's proof, where only Collie's own runs count for a check whose command is not given. */
 const runsOf = (got: Journal, name: string) => checkProof(got, name, "collie");
 
-/**
- * The tests a check's failed run named, split by whether each has since passed a rerun alone
- * on this tree; null where the run named none (ADR-0034, amended 2026-10-15).
- */
 function rerunOf(got: Journal, last: Verification | undefined) {
   if (last === undefined || last.result !== "fail" || last.expect !== "pass") return null;
   if (last.failed === undefined || last.failed.length === 0) return null;
@@ -224,10 +169,8 @@ function rerunOf(got: Journal, last: Verification | undefined) {
       ),
     );
   const passedAlone = (test: FailedTest) => rerun(test)?.result === "pass";
-  // The branch's own test that passed alone is still the Run's to fix, and the base never had it fail.
   const ownPassedAlone = (test: FailedTest) => passedAlone(test) && rerun(test)?.own === true;
   const alone = (test: FailedTest) => passedAlone(test) && !ownPassedAlone(test);
-  // Its runs in this check's directory where the branch leaves the default branch, which fail only where bun said that test failed.
   const bases = (test: FailedTest, among: ReadonlyArray<Verification>) =>
     Arr.filter(
       among,
@@ -260,12 +203,10 @@ function rerunOf(got: Journal, last: Verification | undefined) {
   };
 }
 
-/** Whether a check's latest run on this tree failed only on Flakes and tests that fail at the base too. */
 function settledUnpassed(got: Journal, name: string) {
   return rerunOf(got, runsOf(got, name).last)?.own.length === 0;
 }
 
-/** The Run's checks settled without a pass: every test each failed on was a Flake or fails at the base too. */
 export function settledChecks(got: Journal & Pick<Collected, "approved">) {
   return Arr.map(
     Arr.filter(got.approved, (spec) => settledUnpassed(got, spec.name)),
@@ -273,10 +214,6 @@ export function settledChecks(got: Journal & Pick<Collected, "approved">) {
   );
 }
 
-/**
- * Each Flake on this tree: a failed test of one of the Run's checks that passed when run again
- * alone. Never a pass, so the merge request names them.
- */
 export function flakesOf(got: Journal & Pick<Collected, "approved">) {
   return Arr.flatMap(
     got.approved,
@@ -292,7 +229,6 @@ export function flakesOf(got: Journal & Pick<Collected, "approved">) {
   );
 }
 
-/** Each still-failing test that also fails where this branch leaves the default branch, at that revision. */
 export function baseFailuresOf(got: Journal & Pick<Collected, "approved">) {
   return Arr.flatMap(
     got.approved,
@@ -308,7 +244,6 @@ export function baseFailuresOf(got: Journal & Pick<Collected, "approved">) {
   );
 }
 
-/** Each test of a check's latest run on this tree that failed again alone, and the base has not been asked about since. */
 export function baselinesOwed(got: Journal & Pick<Collected, "approved">) {
   return Arr.flatMap(
     got.approved,
@@ -324,7 +259,6 @@ export function baselinesOwed(got: Journal & Pick<Collected, "approved">) {
   );
 }
 
-/** Each failed test of a check's latest run on this tree that has not been run again alone yet. */
 export function rerunsOwed(got: Journal & Pick<Collected, "approved">) {
   return Arr.flatMap(
     got.approved,
@@ -340,10 +274,6 @@ export function rerunsOwed(got: Journal & Pick<Collected, "approved">) {
   );
 }
 
-/**
- * The checks only a whole run can tell about: those whose latest run on this tree failed
- * without naming its tests, or with no run of their command on it, as after a re-grant.
- */
 export function wholeRunsOwed(got: Journal & Pick<Collected, "approved">) {
   return Arr.map(
     Arr.filter(got.approved, (spec) => {
@@ -354,10 +284,6 @@ export function wholeRunsOwed(got: Journal & Pick<Collected, "approved">) {
   );
 }
 
-/**
- * The checks the proof runs whole once more: those a whole run is owed by that have had no
- * `recheck` of their command on this tree (ADR-0034, amended 2026-10-19).
- */
 export function recheckOwed(got: Journal & Pick<Collected, "approved">) {
   return Arr.filter(
     wholeRunsOwed(got),
@@ -366,19 +292,13 @@ export function recheckOwed(got: Journal & Pick<Collected, "approved">) {
   );
 }
 
-/** Whether this kind of result is proved by Collie's own run of the Run's checks. */
 export function needsChecks(kind: Outcome) {
   return kind !== "investigation" && kind !== "plan" && kind !== "review";
 }
 
-/** The gap a Run with no checks has, and how its implementer closes it. */
 export const noCheckNamed =
   "no check is named for Collie to run, so nothing proves this Run: name the commands that prove work in this repository, each with `collie run intent verification <run> --name <name> [--cwd <dir>] -- <command>`";
 
-/**
- * Every check, passing, on this exact tree. An empty set is a gap rather than a pass: it
- * would make this gate say yes to anything.
- */
 function approvedSetGaps(got: Collected) {
   if (got.approved.length === 0) return [noCheckNamed];
   const gaps: string[] = [];
@@ -387,7 +307,6 @@ function approvedSetGaps(got: Collected) {
     if (state === "passed") continue;
     const reran = rerunOf(got, last);
     if (reran !== null) {
-      // Not a gap, and not a pass either: every test it failed on passed alone or fails at the base too.
       if (reran.own.length === 0) continue;
       gaps.push(
         `${spec.name} failed: ${Arr.join(
@@ -409,7 +328,6 @@ function approvedSetGaps(got: Collected) {
   return gaps;
 }
 
-/** The first Output that has this key at all, so a caller need not know which step wrote it. */
 function anyField(got: Collected, key: string) {
   for (const output of got.outputs.values()) {
     if (isYamlMap(output) && key in output) return output[key];
@@ -417,7 +335,6 @@ function anyField(got: Collected, key: string) {
   return undefined;
 }
 
-/** The same, restricted to the Outputs a reviewer wrote. */
 function reviewerField(got: Collected, key: string) {
   for (const [id, output] of got.outputs) {
     if (!got.reviewed.has(id)) continue;
@@ -431,12 +348,10 @@ function reviewerSays(got: Collected, key: string) {
   return isBoolean(value) && value;
 }
 
-/** Whether a verification ran on a tree other than the one in front of us. */
 function earlierTree(v: Verification, final: Snapshot) {
   return !sameTree(v.end, final);
 }
 
-/** A command whole, so two that differ never read the same. */
 const shown = (v: Verification) => {
   const executable = CommandLine.display([v.executable]);
   const program =
@@ -453,21 +368,12 @@ function names(value: YamlValue | undefined) {
   return Arr.isArray(value) ? Arr.filter(value, isString) : [];
 }
 
-/**
- * The directories a reference a Run's Outputs give may point inside: its own, its
- * checkout, and, where it builds another Run's plan, that Run's.
- */
 export function evidenceRoots(own: string, cwd: string, workSource: string) {
   const planned =
     planRunOf(workSource) === null ? [] : [pipe(workSource, Str.replace(/\/plan\/?$/, ""))];
   return [own, cwd, ...planned];
 }
 
-/**
- * Whether a reference an Output gives points inside the work this Run owns. A relative
- * one does by construction; an absolute one has to be under a root the Run holds, and a
- * `..` in either is a path nobody can answer for.
- */
 export function refInside(roots: ReadonlyArray<string>, ref: string) {
   const value = Str.trim(ref);
   if (value === "" || pipe(value, Str.includes(".."))) return false;
@@ -478,18 +384,10 @@ export function refInside(roots: ReadonlyArray<string>, ref: string) {
   );
 }
 
-/**
- * What is missing before this Run can claim its outcome. Empty means the evidence is
- * there; every entry is one sentence a human can act on.
- */
 export function evidenceGaps(kind: Outcome, got: Collected) {
   return Arr.map(gapsOf(kind, got), (gap) => gap.text);
 }
 
-/**
- * The gaps a verification on this tree could close: what a fix may be handed. The rest
- * are a reviewer's judgement or an Output's claim, and no command moves them.
- */
 export function checkGaps(kind: Outcome, got: Collected) {
   return Arr.map(
     Arr.filter(gapsOf(kind, got), (gap) => gap.by === "check"),
@@ -497,7 +395,6 @@ export function checkGaps(kind: Outcome, got: Collected) {
   );
 }
 
-/** The gaps a fresh review could close: a reviewer's judgement the Outputs do not report. */
 export function reviewGaps(kind: Outcome, got: Collected) {
   return Arr.map(
     Arr.filter(gapsOf(kind, got), (gap) => gap.by === "review"),
@@ -505,7 +402,6 @@ export function reviewGaps(kind: Outcome, got: Collected) {
   );
 }
 
-/** Who can close a gap: a verification, a reviewer, a new Measurement, or nobody short of new work. */
 type GapCloser = "check" | "review" | "measure" | "claim";
 
 function gapsOf(kind: Outcome, got: Collected) {
@@ -524,8 +420,6 @@ function gapsOf(kind: Outcome, got: Collected) {
       const done = names(anyField(got, "tickets_done"));
       if (done.length === 0) claim("no ticket is reported built (tickets_done is empty)");
       judged("scope_met", "the review did not report scope_met: true for the agreed scope");
-      // What each ticket said would prove it, before it was built. An agent may have
-      // collected these itself; what matters is a pass on the tree in front of us.
       for (const ticket of got.tickets) {
         for (const name of ticket.checks) {
           const proof = provedAtFinal(got, name);
@@ -541,8 +435,6 @@ function gapsOf(kind: Outcome, got: Collected) {
       break;
     }
     case "bug": {
-      // Fail then pass, on two different trees: a reproduction that never failed proves
-      // nothing was reproduced, and one that never passed proves nothing was fixed.
       const regression = Arr.filter(got.verifications, (v) => v.name === "regression");
       const reproduced = Arr.filter(regression, (v) => v.expect === "fail" && v.result === "pass");
       const before = Arr.filter(reproduced, (v) => earlierTree(v, got.final));
@@ -606,8 +498,6 @@ function gapsOf(kind: Outcome, got: Collected) {
     }
     case "migration": {
       for (const name of ["migrate-up", "migrate-down"]) {
-        // `rollback` is the same thing under another name, and a project that calls it
-        // that has still proved it can go back.
         const proofs = Arr.map(name === "migrate-down" ? [name, "rollback"] : [name], (one) => ({
           one,
           proof: provedAtFinal(got, one),
@@ -703,11 +593,6 @@ function finalMeasurementGaps(got: Collected) {
   return gaps;
 }
 
-/**
- * Whether the Run is finished without a patch, which is a real outcome and not a failure.
- * An investigation says so beside a conclusion and references that hold it up; a
- * performance Run is so when its tree is its latest base tree again, whatever it says.
- */
 export function endsWithoutPatch(kind: Outcome, got: Collected) {
   if (kind === "investigation") return anyField(got, "patch") === false;
   if (kind !== "performance") return false;
@@ -720,7 +605,6 @@ export function endsWithoutPatch(kind: Outcome, got: Collected) {
   );
 }
 
-/** Recorded evidence for prompts, or repository commands and results for public text. */
 export function renderEvidence(
   got: Pick<Collected, "verifications" | "final" | "measurements">,
   audience: "internal" | "public" = "internal",
@@ -740,18 +624,12 @@ export function renderEvidence(
   return lines.length === 0 ? "(nothing was verified)" : Arr.join(lines, "\n");
 }
 
-/** A check left to CI as a reviewer is told of it, with its job's state where the Run has a merge request. */
 export interface LeftToCiState {
   readonly name: string;
   readonly job: string;
   readonly state: string | null;
 }
 
-/**
- * Every check this Run's journal holds, latest of each, for a reviewer to read rather than run
- * again: who ran it, whether on the tree in front of it, when, whether the same command was seen
- * failing on an earlier tree, and the baseline where there is one. Then each check left to CI, which no reviewer runs.
- */
 export function renderRecordedChecks(
   got: Pick<Collected, "verifications" | "final">,
   leftToCi: ReadonlyArray<LeftToCiState> = [],

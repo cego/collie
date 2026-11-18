@@ -1,7 +1,3 @@
-// Collie's settings as a Machine's host shares them: each with when it was last set, and
-// written by the host for a front door with the edit's own time, so the latest edit of a
-// key wins wherever it was made.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
@@ -29,10 +25,8 @@ test(
       "collie-shared-settings-",
       (world) =>
         Effect.gen(function* () {
-          // Set before anything recorded when: the file's own time stands in for it.
           yield* writeConfigValue(world.config, "scope", "all");
           yield* setSetting(world.config, "model", "sonnet", "2026-10-07T10:00:00.000Z");
-          // A remembered answer is this Machine's own and is never shared.
           yield* writeConfigValue(world.config, "linear.team", "CEG");
           const client = yield* connect(world.state);
           yield* client.declare({ frontDoor: "desktop" });
@@ -50,15 +44,12 @@ test(
           const dated = Option.getOrUndefined(
             Arr.findFirst(shared.settings, ({ key }) => key === "scope"),
           )!.at;
-          // Dated once, so a later write to the file cannot make the old value newer.
           expect((yield* readSettingsSet(world.config)).set.scope).toBe(dated);
 
           const after = yield* client.setSettings({
             request: "s-1",
             settings: [
-              // Later than the clock, so these outlast the scope dated as it was read.
               { key: "proactive", value: false, at: "2099-10-07T11:00:00.000Z" },
-              // Older than this Machine's own edit, so the Machine's stands.
               { key: "model", value: "haiku", at: "2026-10-07T09:00:00.000Z" },
               { key: "scope", value: null, at: "2099-10-07T11:00:00.000Z" },
             ],
@@ -96,11 +87,9 @@ test(
             .pipe(Effect.flip);
           expect(notOne).toMatchObject({ _tag: "HostRefused" });
 
-          // An agent sets one as a human would, through the host.
           const said = yield* collie(world, ["settings", "set", "max_iterations", "9"]);
           expect(said.envelope).toMatchObject({ ok: true });
           expect((yield* loadDefaults(world.config)).maxIterations).toBe(9);
-          // Only a Desktop marks the settings shared with the Flock.
           expect((yield* readSettingsSet(world.config)).flock).toEqual(after.flock!);
           const nine = yield* collie(world, ["settings", "set", "max_iterations", "nine"]);
           expect(nine.envelope).toMatchObject({ ok: false });

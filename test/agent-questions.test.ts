@@ -1,7 +1,3 @@
-// A Claude agent's `AskUserQuestion`, put on its Run by the hook Collie installs, is
-// answered the way a Workflow's question is: from `collie run answer` and from the card,
-// in any words. The host here is a real one over a fake core.
-
 import { deliveredTo, recordsAt, launchOf } from "./support/records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -131,10 +127,6 @@ const boardQuestions = (world: World, runId: string) =>
 const SHORT_TWICE =
   "The agent gave 2 options and no recommendation; Collie asked for at least three options and exactly one recommended option.";
 
-/**
- * A host for this world over a fake core whose agent answers its prompts with `outputs`,
- * and the env the board's actions are carried out in.
- */
 const hostedOver = Effect.fn("test.hostedOver")(function* (
   world: World,
   core: FakeHc,
@@ -148,8 +140,6 @@ const hostedOver = Effect.fn("test.hostedOver")(function* (
       encode(Arr.map(outputs, (one) => one ?? { writes: [], output: null, owed: true })),
     )
     .pipe(Effect.orDie);
-  // The host a client spawns inherits this process's environment: it has to own this
-  // world's state, never the operator's.
   const set = {
     COLLIE_STATE_DIR: world.state,
     COLLIE_USER_DIR: world.config,
@@ -290,7 +280,6 @@ test(
           const { env, client } = yield* hostedOver(world, core, [null]);
           const { runId, launched } = yield* launchedRun(world, client);
           const control = yield* controlDir(world.state, launched.agent);
-          // Two calls, as an agent that asks one question at a time makes them.
           yield* recordClaudeEvent(control, askedAlone("toolu_a", "Database")).pipe(Effect.orDie);
           yield* recordClaudeEvent(control, askedAlone("toolu_b", "Checks")).pipe(Effect.orDie);
           yield* until(
@@ -308,7 +297,6 @@ test(
             () => fs.readFileString(core.logPath).pipe(Effect.orElseSucceed(() => "")),
             (all) => pipe_(all, Str.includes("Your question Database is answered: first")),
           );
-          // A question asked after the relay is recorded on a later pass than the one that sent it.
           yield* recordClaudeEvent(control, askedAlone("toolu_c", "Region")).pipe(Effect.orDie);
           const view = yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
@@ -461,7 +449,6 @@ test(
             },
           ]);
           expect(open[0]?.options[1]?.recommended).toBeUndefined();
-          // herdr's live agents are read again at the board's next tick.
           const steering = yield* until(
             () => boardQuestions(world, runId),
             (questions) => questions[0]?.steer?.agent != null,

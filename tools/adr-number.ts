@@ -1,9 +1,3 @@
-// `bun run tools/adr-number.ts [--base <ref>]`: numbers this branch's draft ADRs before it
-// lands. A draft is `docs/adr/draft-<slug>.md`, named in text as `ADR-draft-<slug>`. Each
-// takes the next number above the highest on the default branch and on this branch, in slug
-// order, and every reference to it in the repository is rewritten. Nothing is committed.
-// Numbers the default branch already has twice are reported and left as they are.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";

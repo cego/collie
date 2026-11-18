@@ -1,5 +1,3 @@
-// Chat defaults and the account each window renders beside its message box.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -12,7 +10,6 @@ import { About, harnessName } from "./chat-view";
 import type { DesktopSettings } from "./flock";
 import { DEFAULT_CHAT_HARNESS } from "./flock-settings";
 
-/** A harness, model and effort as a session is opened on them; `default` is the harness's own model. */
 export const Resolved = Schema.Struct({
   harness: Schema.String,
   model: Schema.String,
@@ -20,7 +17,6 @@ export const Resolved = Schema.Struct({
 });
 export type Resolved = typeof Resolved.Type;
 
-/** A model a harness offers, with the efforts it lists and the one an unset effort runs at. */
 export const Offered = Schema.Struct({
   id: Schema.String,
   label: Schema.String,
@@ -30,24 +26,18 @@ export const Offered = Schema.Struct({
 });
 export type Offered = typeof Offered.Type;
 
-/** What a harness offers, and what its unset model and effort run as. */
 export const Offer = Schema.Struct({
   from: Schema.Literals(["harness", "table"]),
   why: Schema.optionalKey(Schema.String),
   unset: Resolved,
-  /** The set model's defaults when it is absent from the harness list. */
   typed: Schema.optionalKey(Resolved),
   models: Schema.Array(Offered),
 });
 export type Offer = typeof Offer.Type;
 
-/** The account of the chat every window is pushed. */
 export const ChatChoices = Schema.Struct({
-  /** The harness the current conversation is held on. */
   heldOn: Schema.String,
-  /** What the warm session was opened on; null while none is warm. */
   runsOn: Schema.NullOr(Resolved),
-  /** A turn is under way, the human's or Desktop's own. */
   turning: Schema.Boolean,
   harnesses: Schema.Array(
     Schema.Struct({
@@ -60,7 +50,6 @@ export const ChatChoices = Schema.Struct({
 });
 export type ChatChoices = typeof ChatChoices.Type;
 
-/** Pi's model and effort defaults. */
 export const PiConfig = Schema.Struct({
   defaultProvider: Schema.optionalKey(Schema.String),
   defaultModel: Schema.optionalKey(Schema.String),
@@ -69,14 +58,12 @@ export const PiConfig = Schema.Struct({
 });
 export type PiConfig = typeof PiConfig.Type;
 
-/** The chat's choice as set, each part unset where it is undefined. */
 export interface SetChoice {
   readonly harness: string;
   readonly model?: string | undefined;
   readonly effort?: string | undefined;
 }
 
-/** The efforts `model` lists: its offered entry's, else the table's for its harness. */
 export const effortsOf = (
   harness: string,
   model: string,
@@ -106,7 +93,6 @@ const piLevel = (configured: string, available: ReadonlyArray<string>) => {
   );
 };
 
-/** What a choice runs as: an unset model and effort as its harness, or Pi's configuration, has them. */
 export const runsAs = (
   set: SetChoice,
   offered: ReadonlyArray<Pick<Offered, "id" | "efforts">>,
@@ -131,7 +117,6 @@ export const runsAs = (
   };
 };
 
-/** What a set choice runs as, by the resolver's answers in what its harness offers. */
 export const runsAsOffered = (set: SetChoice, offer: Offer) => {
   const model =
     set.model === undefined || set.model === DEFAULT_MODEL ? offer.unset.model : set.model;
@@ -150,24 +135,18 @@ export const runsAsOffered = (set: SetChoice, offer: Offer) => {
   };
 };
 
-/** One entry of a select; a disabled one says why in its description. */
 export interface ChoiceOption {
-  /** Empty is the select's default, which unsets it. */
   readonly value: string;
   readonly label: string;
   readonly description?: string;
   readonly disabled?: true;
 }
 
-/** A select beside the message box, as its trigger and menu show it. */
 export interface ChoiceSelect {
   readonly value: string;
-  /** The trigger's text. */
   readonly label: string;
-  /** The trigger's accessible name, carrying its value. */
   readonly name: string;
   readonly options: ReadonlyArray<ChoiceOption>;
-  /** The menu's last line; null where it has none. */
   readonly note: string | null;
   readonly reading?: true;
   readonly warning?: string;
@@ -187,7 +166,6 @@ const select = (
   note: string | null,
 ) => ({ value, label, name: `${name}: ${label}`, options, note, disabled: false });
 
-/** The harness, model and effort selects, as the settings and the chat's account have them. */
 export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | null) => {
   const harness = settings.chatHarness ?? DEFAULT_CHAT_HARNESS;
   const entry = Option.getOrUndefined(
@@ -303,7 +281,6 @@ export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | nu
   };
 };
 
-/** A typed id offered to save, where it is not already an option. */
 export const typedEntry = (search: string, model: ChoiceSelect) => {
   const id = Str.trim(search);
   return id === "" || Arr.some(model.options, ({ value }) => value === id)
@@ -326,7 +303,6 @@ export const modelMenu = (search: string, model: ChoiceSelect) => {
   };
 };
 
-/** A refused choice, as the alert above the message box says it. */
 export const refusalSaid = (reason: string) =>
   `${pipe(reason, Str.replace(/\.$/, ""))}. Nothing was saved.`;
 
@@ -336,7 +312,6 @@ const setChoice = (settings: DesktopSettings) => ({
   effort: settings.chatEffort,
 });
 
-/** The last choice this window saw set on the conversation's harness. */
 export const rememberChoice = (
   remembered: SetChoice | null,
   settings: DesktopSettings,
@@ -351,7 +326,6 @@ export const rememberChoice = (
       : null;
 };
 
-/** The ordinary settings change Stay sends through the choice check. */
 export const stayOn = (choices: ChatChoices, remembered: SetChoice | null) => ({
   chatHarness: choices.heldOn,
   ...(remembered?.harness === choices.heldOn && {
@@ -377,7 +351,6 @@ const resolvedLabel = (runs: Resolved, choices: ChatChoices) => {
   return runs.effort === null ? model : `${model} · ${effortLabel(runs.effort)}`;
 };
 
-/** What a choice will do before the next message. */
 export const choiceNotices = (settings: DesktopSettings, choices: ChatChoices | null) => {
   const set = setChoice(settings);
   const waiting =
@@ -422,7 +395,6 @@ export const choiceNotices = (settings: DesktopSettings, choices: ChatChoices | 
   };
 };
 
-/** Errors leave Send available; only the human's active reply offers Stop. */
 export const replyButton = (status: string, desktopSpeaking = false) =>
   !desktopSpeaking && (status === "submitted" || status === "streaming")
     ? { status, name: "Stop the reply" }
@@ -433,7 +405,6 @@ export interface ChatStatus {
   readonly notices: ReadonlyArray<string>;
 }
 
-/** A status change spoken once, without a completion message over the finished reply. */
 export const chatAnnouncement = (before: ChatStatus | null, after: ChatStatus, stopped = false) =>
   Arr.join(
     [
@@ -451,7 +422,6 @@ export interface ChatDraft {
 
 const decodeAbout = Schema.decodeUnknownOption(About);
 
-/** What Stop recovers before the chat client discards its queue. */
 export const stopDraft = (
   queue: ReadonlyArray<Pick<QueuedMessage, "content">>,
   draft: ChatDraft,

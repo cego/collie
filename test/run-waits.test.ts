@@ -1,5 +1,3 @@
-// What holds one Run up, read for that Run alone.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Schema } from "effect";

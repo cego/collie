@@ -1,25 +1,3 @@
-// What native chat may ask Collie, and nothing else.
-//
-// These are the model's whole reach. There is no "run this command" here and no route to
-// a record: a conversation held in Claude or Pi reads the Herd through the same shared
-// operations the board draws itself from, so the two cannot tell different stories — and
-// a model that decided to be creative has nowhere to put it.
-//
-// Most of them only read. The rest write, and say so with `Tool.Readonly` rather than
-// letting a client assume. Every write here carries out what the human asked for in this
-// conversation, at once — chat may do what they could do on the board themselves, because
-// sending them to the UI for it is chat obstructing the person it serves (ADR-0011).
-// `collie_hold` holds; `collie_do` takes the board's own actions and decisions, with the
-// open card standing in for a Run nobody named; `collie_propose` takes the whole closed
-// action set — Intent amendments, forks, defaults, upgrades — with a request id that makes
-// a retry return the first receipt. The evaluator's proposals wait on the board for
-// whoever settles them, and what no tool here does, chat runs through the CLI as the
-// human would (AGENTS.md, invariant 1).
-//
-// The bridge's actor is stamped by this entrypoint rather than worked out from the process
-// — a model inside a harness's pane inherits that pane's terminal, and the CLI's "a TTY
-// means a person" shortcut would read it as human. Attribution, never a gate.
-
 import * as Rec from "effect/Record";
 import { withArtefacts } from "./artefact-client";
 import * as Arr from "effect/Array";
@@ -114,11 +92,6 @@ import {
   type ToolName,
 } from "./toolkit";
 
-/**
- * One tool call, which cannot fail into the conversation: an unreadable record is a
- * sentence the model can act on, and a thrown error would be a chat that dies because a
- * file was half-written.
- */
 type ToolAnswer = Effect.Effect<
   string,
   never,
@@ -150,7 +123,6 @@ const toolDoor = Effect.fn("Tools.door")(function* (env: PluginEnv) {
 
 const handlersFor = Effect.fn("Tools.handlers")(function* (
   env: PluginEnv,
-  /** Whether the board's selection may stand in for a Run nobody named. */
   selected: boolean,
   reads?: RunAnswerReads,
 ) {
@@ -273,7 +245,6 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
   });
 });
 
-/** One call to the Toolkit, with or without the board's selection standing in for a Run. */
 const answered = Effect.fn("Tools.answered")(
   function* (
     env: PluginEnv,
@@ -290,10 +261,6 @@ const answered = Effect.fn("Tools.answered")(
   Effect.catch((cause) => Effect.succeed(`Collie could not answer: ${String(cause)}`)),
 );
 
-/**
- * One call to a Collie tool, decoded strictly by the Toolkit. Input it will not take is a
- * refusal in the tool's own terms, and a tool this build does not have answers nothing.
- */
 export const callTool = (env: PluginEnv, name: string, input: JsonObject) =>
   !isToolName(name)
     ? Effect.succeed("")
@@ -316,10 +283,6 @@ export const callTool = (env: PluginEnv, name: string, input: JsonObject) =>
         })
       : answered(env, name, input, true);
 
-/**
- * One of the reads a Flock chat has this Machine's host answer, as Native chat answers
- * it, except that the Home board's selection never stands in for a Run (ADR-0012).
- */
 export const answerRead = (
   env: PluginEnv,
   name: (typeof FLOCK_READS)[number],
@@ -327,16 +290,11 @@ export const answerRead = (
   reads?: RunAnswerReads,
 ) => answered(env, name, input, false, reads);
 
-/**
- * Drawn the first time a tool list is read rather than when this file loads: every
- * command the binary runs imports it, and few of them ever describe a tool.
- */
 const once = (draw: () => JsonObject) => {
   let drawn: JsonObject | undefined;
   return () => (drawn ??= draw());
 };
 
-/** The Toolkit as each harness's tool interface and `collie tools` read it. */
 export const TOOLS = Arr.map(Rec.values(CollieTools.tools), (tool) => {
   const { input, ...described } = describeTool(tool);
   const schema = once(input);
@@ -349,10 +307,6 @@ export const TOOLS = Arr.map(Rec.values(CollieTools.tools), (tool) => {
   };
 });
 
-/**
- * What the board has open, or null where there is no Herd, no board and no selection.
- * Every caller treats those three the same way: nothing is selected.
- */
 const selectionOf = Effect.fn("Tools.selection")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return null;
@@ -364,7 +318,6 @@ const selectionOf = Effect.fn("Tools.selection")(function* (env: PluginEnv) {
 const isSettle = (action: Action | Settle): action is Settle =>
   Arr.some(SETTLE_KINDS, (kind) => kind === action.kind);
 
-/** The human's own instruction, carried out and reported a line per action. */
 const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: JsonObject) {
   const selected = yield* onSelection(env, input);
   const decoded = decodeAsked(selected.input);
@@ -390,13 +343,11 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
           Effect.map((results) => results[0]!),
         );
     said.push(`${done.kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
-    // What follows a failure was asked for on the assumption that it did not happen.
     if (done.state === "failed") break;
   }
   return Arr.join(said, "\n");
 });
 
-/** A decision of the board's, taken where the human said it, by the host. */
 const settle = Effect.fn("Tools.settle")(function* (
   env: PluginEnv,
   door: Door,
@@ -493,16 +444,11 @@ const settle = Effect.fn("Tools.settle")(function* (
           hash: action.hash,
           request,
         });
-  // A confirmation whose actions did not all apply is a failure, with each one's result in it.
   return done.ok
     ? { kind: action.kind, state: "applied", note: done.human }
     : { kind: action.kind, state: "failed", note: done.error.message };
 });
 
-/**
- * What `collie_run` leads with while something of the Run waits for memory or Collie runs a
- * check for it: the card's sentence, then the last lines the check has written.
- */
 export const checkLines = Effect.fn("Tools.checkLines")(function* (
   run: RunFacts,
   runs: ReadonlyArray<RunFacts>,
@@ -524,7 +470,6 @@ export const checkLines = Effect.fn("Tools.checkLines")(function* (
   ];
 });
 
-/** One Run in detail, led by the check Collie is running for it, then where each finished one's output is. */
 const encodeFlow = Schemaflow(Schema.encodeResult(Schema.fromJsonString(Flow)), Result.getOrThrow);
 
 const runAnswer = Effect.fn("Tools.runAnswer")(function* (
@@ -564,7 +509,6 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
     reads === undefined
       ? yield* runShown(env, run.id)
       : { ok: true as const, flow: yield* reads.flow(run.id) };
-  // The value Desktop draws and `run show --json` carries, so an answer and a picture agree.
   const flow =
     !shown.ok || shown.flow == null
       ? []
@@ -591,7 +535,6 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
   );
 });
 
-/** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */
 const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
   const read = yield* boardSnapshot(env);
   if (!read.ok) return `- (the board could not be read: ${read.error.message})`;
@@ -600,7 +543,6 @@ const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
   return herdLines(views, now);
 });
 
-/** What `collie_models` answers with: a Machine's Harness catalogue, as `collie models` prints it. */
 const modelsFacts = Effect.fn("Tools.modelsFacts")(function* (
   env: PluginEnv,
   harness: string | undefined,
@@ -617,7 +559,6 @@ const connectionFacts = Effect.fn("Tools.connectionFacts")(function* (env: Plugi
     : `- (the Connections could not be read: ${read.error.message})`;
 });
 
-/** The action kinds that are not about one Run, so the selection never stands in for theirs. */
 const UNSCOPED_KINDS: ReadonlyArray<string> = ["start", "confirm", "decline"];
 
 const wantsRun = (action: JsonObject) => {
@@ -625,10 +566,6 @@ const wantsRun = (action: JsonObject) => {
   return action["run"] === undefined && isString(kind) && !UNSCOPED_KINDS.includes(kind);
 };
 
-/**
- * `collie_do`'s input with the board's selection standing in for every run-scoped action
- * that named no Run, and which selection that was — so the answer can say so (ADR-0012).
- */
 const onSelection = Effect.fn("Tools.onSelection")(function* (env: PluginEnv, input: JsonObject) {
   const loose = decodeLoose(input);
   if (loose._tag === "None" || !Arr.some(loose.value.actions, wantsRun)) return { input, on: null };
@@ -640,13 +577,6 @@ const onSelection = Effect.fn("Tools.onSelection")(function* (env: PluginEnv, in
   return { input: { ...input, actions: filled }, on };
 });
 
-/**
- * A read about one Run, which the board's selection may stand in for.
- *
- * The selection is taken only when the caller named no Run, and the answer says which
- * Run it was: an answer about work nobody named, that does not say which work, is how
- * "how is it going?" gets answered confidently about the wrong thing.
- */
 const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   env: PluginEnv,
   selected: boolean,
@@ -656,8 +586,6 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   runs?: Effect.Effect<ReadonlyArray<RunFacts>>,
 ) {
   const named = input.run ?? null;
-  // Non-null exactly when the selection was what this answer is about, which is what the
-  // sentences below turn on.
   const on = named === null && selected ? yield* selectionOf(env) : null;
   const id = named ?? on?.run ?? null;
   if (id === null && !selected) return `${tool} takes {"run": "<run id>"}.`;
@@ -677,9 +605,6 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
     : `About "${on.name}" (${on.run}), which the board has selected.\n\n${text}`;
 });
 
-/**
- * A hold, carried out. The actor is `chat` all the same: attribution, never a gate.
- */
 const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof HoldInput.Type) {
   const { task, reason } = input;
   const on = input.run === undefined && task === undefined ? yield* selectionOf(env) : null;
@@ -689,8 +614,6 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof Ho
   const why = reason ?? "asked in chat";
   const requestId = yield* (yield* SecureRandom.SecureRandom).uuidV4();
 
-  // One channel for every control, so what chat can do to a Run is exactly what the
-  // board and the CLI can do to it — including which Runs there are to do it to.
   const oneRun: Action = { kind: "hold", run: run!, reason: why };
   const held = yield* actAsked(env, {
     door: yield* toolDoor(env),
@@ -709,7 +632,6 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof Ho
   );
 });
 
-/** Every unfinished Run of a Task, as one hold each. */
 const holdsFor = Effect.fn("Tools.holdsFor")(function* (
   env: PluginEnv,
   task: string,
@@ -736,11 +658,8 @@ const reachLine = (
   return [`  ${reach.name}, how far it goes: ${Arr.join([choices, ...last], "; ")}`];
 };
 
-/** What `collie_workspaces` answers with: where a Run could go, and what could start. */
 const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) {
   const saved = (yield* savedModules(env)).entries;
-  // A Task with no Run yet is in no Herd listing, so this is the only place a
-  // conversation can find out the work a new Run could join.
   const asked = yield* Effect.result(hostTasks(env));
   const tasks = Result.isSuccess(asked) ? Arr.filter(asked.success, isOpen) : [];
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
@@ -781,7 +700,6 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
   );
 });
 
-/** What `collie_report` answers with: `run report`'s own words. */
 const reportFacts = Effect.fn("Tools.reportFacts")(function* (
   env: PluginEnv,
   since: string | null,
@@ -791,13 +709,6 @@ const reportFacts = Effect.fn("Tools.reportFacts")(function* (
   return done.ok ? reportLines(done.report, done.unreadable) : done.error.message;
 });
 
-/**
- * What `collie_news` answers with, and the receipt for it.
- *
- * Reading is what settles an item, and nothing else does: a transport that accepted a
- * message has not shown that a conversation received it. Marked read here because this is
- * the moment it demonstrably reached the model — it is in the answer.
- */
 const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return "Collie cannot reach core, so it has nothing to report.";
@@ -811,15 +722,12 @@ const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
   return read.ok ? newsText(read.value) : `Collie could not read the news: ${read.error.message}`;
 });
 
-/** What `collie_receipts` answers with: what is waiting, and what each send actually reached. */
 const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run: string) {
   const found = yield* findRun(env, run);
   if (found === null) return `No Run "${run}".`;
   const now = yield* Clock.currentTimeMillis;
   const proposals = pendingFor(yield* hostRunProposals(env, run), run, now);
   const asked = yield* asks(env, (client) => client.deliveries({ runId: run }));
-  // Every delivery is on the ledger now: the one sender writes there before it sends,
-  // so there is no second place a steer can be sitting unrecorded.
   const deliveries = asked.ok ? (asked.value ?? []) : [];
   const unread = asked.ok ? [] : [`- the ledger could not be read: ${asked.error.message}`];
   const waiting = [
@@ -852,7 +760,6 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
   );
 });
 
-/** What `collie_definitions` answers with: what can be run, resolved rather than as authored. */
 const definitionFacts = Effect.fn("Tools.definitions")(function* (
   env: PluginEnv,
   asked: typeof DefinitionInput.Type,
@@ -866,8 +773,6 @@ const definitionFacts = Effect.fn("Tools.definitions")(function* (
       : `${found.name} (${found.layer})\n${found.description}\n\n${found.body}`;
   }
   if (asked.workflow !== undefined) {
-    // A module is what its id runs, so it is what this answers with — the same reading
-    // `workflow show` gives, and the same schemas a refusal asks an input for.
     const module = Option.getOrUndefined(
       Arr.findFirst(saved.entries, (one) => one.id === asked.workflow),
     );
@@ -906,7 +811,6 @@ const asJson = Schemaflow(
   Result.getOrThrow,
 );
 
-/** One module as the tool says it: what it takes, what it gives back, and what is wrong. */
 const moduleFacts: (one: Described, checked: ModuleCheck) => string = (one, checked) =>
   Arr.join(
     [
@@ -939,10 +843,8 @@ const moduleFacts: (one: Described, checked: ModuleCheck) => string = (one, chec
     "\n",
   );
 
-/** How much of the cleanup listing chat is given; the CLI has the rest. */
 const CLEANUP_LINES = 60;
 
-/** The first `most` lines of `text`, and how many more there are. */
 const shortened = (text: string, most: number) => {
   const lines = Str.split(text, "\n");
   return lines.length <= most
@@ -950,12 +852,9 @@ const shortened = (text: string, most: number) => {
     : Arr.join([...lines.slice(0, most), `(${lines.length - most} more lines)`], "\n");
 };
 
-/** What `collie_installation` answers with: everything that is not about a Run. */
 const installationFacts = Effect.fn("Tools.installation")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const health = yield* doctor(env).pipe(Effect.orElseSucceed(() => null));
-  // Per directory, because that is how a Run reads them: what a new Run begins with is
-  // the file under the directory it was started in, never this process's own.
   const tasks = yield* hostTasks(env).pipe(Effect.orElseSucceed(() => []));
   const dirs = Arr.dedupe(Arr.map(Arr.filter(tasks, isOpen), (task) => task.cwd));
   const defaults = yield* Effect.forEach(dirs, (cwd) =>
@@ -968,7 +867,6 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
   );
   const harness = yield* chatHarnessOf(env.userDir);
   const chat = key === null ? null : yield* readChat(yield* chatPath(env.stateDir, key));
-  // Only where a host has served this directory: reading is no reason to start one.
   const served = yield* anyRuns(env);
   const sweepable = served ? yield* cleanupListing(env, "chat") : null;
   const scheduled = served ? yield* scheduleListing(env, "chat") : null;

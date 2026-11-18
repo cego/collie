@@ -1,5 +1,3 @@
-// ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -26,46 +24,28 @@ import {
 import type { VerifySpec } from "./verify-spec";
 import type { Control } from "./controls";
 
-/** How often a job still pending or running is read again. */
 export const CI_POLL = Duration.seconds(30);
-/** How long a Run waits on one, matching the default Output budget. */
 export const CI_BOUND = Duration.hours(2);
 
-/** What became of a check left to CI: its recorded pass, or why it is unproved. */
 export type CiJob =
   | {
       readonly proved: Verification;
-      /** It failed in no test of the branch's own, and passed when retried: a Flake. */
       readonly retried?: true;
     }
   | {
       readonly unproved: string;
-      /** The job's state where the forge said one, else null. */
       readonly state: JobState | null;
       readonly url: string | null;
-      /** The command that prints its log, where there is such a job. */
       readonly log: string | null;
-      /**
-       * It failed where the branch leaves its target too, or with `branch` on that target
-       * branch's newest commit: not this Run's to fix.
-       */
       readonly before?: {
         readonly at: string;
         readonly url: string | null;
         readonly branch?: string;
-        /** The failed jobs compared, each failing there too. */
         readonly jobs: ReadonlyArray<string>;
       };
-      /** Missing because the merge request conflicts with its target branch. */
       readonly conflicts?: true;
     };
 
-/**
- * The failed jobs a head attempt of `job` shares with its attempt `base` on the target, or null where the
- * failure is the Run's own: each failed there too, naming failed tests that failed in a
- * shared job there, whose log was read; only `job` itself may name none, and only beside
- * others (#460).
- */
 const sharedJobs = (job: string, head: FailedAttempt, base: FailedAttempt) => {
   const here = head.jobs;
   if (here === null || base.jobs === null || here.length === 0) return null;
@@ -87,14 +67,12 @@ const sharedJobs = (job: string, head: FailedAttempt, base: FailedAttempt) => {
   return others.length === 0 ? [job] : Arr.map(others, (one) => one.name);
 };
 
-/** The same job failed on the target branch's newest commit, and which of `failed`'s tests failed there too. */
 export interface TargetFailure {
   readonly job: string;
   readonly branch: string;
   readonly at: string;
   readonly url: string | null;
   readonly tests: ReadonlyArray<FailedTest>;
-  /** The failed jobs compared, each failing there too; null where the failure is the Run's own. */
   readonly jobs: ReadonlyArray<string> | null;
 }
 
@@ -104,7 +82,6 @@ const sameTestExactly = (one: FailedTest, other: FailedTest) =>
 const sameTest = (one: FailedTest, other: FailedTest) =>
   one.name === other.name && (one.file === null || other.file === null || one.file === other.file);
 
-/** Job `job`, failed in attempt `failed`, compared with the target's newest commit; null where it did not fail there. */
 export const targetFailure = Effect.fn("CiJob.targetFailure")(function* <R>(
   ref: MrRef,
   job: string,
@@ -128,10 +105,6 @@ export const targetFailure = Effect.fn("CiJob.targetFailure")(function* <R>(
   } satisfies TargetFailure;
 });
 
-/**
- * The failure of `jobs` on the merge request's head, where every one of them that failed there
- * failed on the target branch's newest commit too, test by test; else null.
- */
 export const sharedFailure = Effect.fn("CiJob.sharedFailure")(function* <R>(
   ref: MrRef,
   jobs: ReadonlyArray<string>,
@@ -151,14 +124,11 @@ export const sharedFailure = Effect.fn("CiJob.sharedFailure")(function* <R>(
   return shared;
 });
 
-/** What a Release parked on a failure its target shared does once that target passes. */
 export type TakeTarget =
   | { readonly _tag: "Moved"; readonly head: string }
-  /** The source branch has the target's newest commit already, so its failed jobs were retried. */
   | { readonly _tag: "Retried" }
   | { readonly _tag: "Take" };
 
-/** `head`, where the failure was the target's: moved since, or the target to take, or retried where taken. */
 export const takeTarget = Effect.fn("CiJob.takeTarget")(function* <R>(
   ref: MrRef,
   jobs: ReadonlyArray<string>,
@@ -197,22 +167,14 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   readonly cwd: string;
   readonly spec: VerifySpec;
   readonly command: CheckCommand;
-  /** The merge request the Run recorded, however it was found. */
   readonly mr: string | null;
-  /** Read again while the job is pending or running, up to `CI_BOUND`. */
   readonly wait: boolean;
-  /**
-   * A failed job is read where the branch leaves its target, and retried once and waited on
-   * where its failed jobs and tests did not fail there too (ADR-0034).
-   */
   readonly settle?: boolean;
-  /** The Run's `verifying` control, which names the job while it is waited on. */
   readonly verifying: Control;
   readonly run: Runner<R>;
 }) {
   const { spec, cwd } = asked;
   const job = spec.ci ?? "";
-  // The tree a pass is bound to, read again before it is recorded.
   const tree = yield* fingerprint(cwd);
   const head = tree.head_sha;
   yield* rememberCiTarget(asked.runDir, { head, job, mr: asked.mr, cwd }).pipe(Effect.orDie);
@@ -254,7 +216,6 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
     for (;;) {
       const read = yield* forge.job(ref, job, cwd, asked.run);
       if (!read.ok) return unproved(`could not be read: ${read.reason}`);
-      // The forge has not seen the push or the retry yet, or the merge request moved on without this checkout.
       let state =
         read.head !== head ||
         (retried !== null && read.state === "missing") ||
@@ -363,7 +324,6 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
         ).pipe(Effect.ignore);
         return { proved: proof, ...flake };
       }
-      // A forge with no pipeline for the head says pending, without a job.
       const absent =
         state === "missing" ||
         (state === "pending" && read.head === head && read.id === null && read.url === null);
@@ -378,7 +338,6 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
             log,
             conflicts: true,
           } satisfies CiJob;
-        // The forge runs no pipeline until it has said whether it can merge.
         if (mergeable?.state === "unknown") state = "pending";
       }
       if (state !== "pending" && state !== "running")

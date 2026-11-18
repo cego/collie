@@ -1,13 +1,8 @@
-// Raw keypresses, for the one screen that still draws itself: the text board a pane
-// falls back to when the renderer will not start. Everything else goes through OpenTUI,
-// which owns raw mode for as long as its renderer is alive.
-
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { pipe as pipe_ } from "effect/Function";
 import { Effect, Queue } from "effect";
 
-/** One chunk of stdin can carry several keypresses; split them apart. */
 export function tokenizeKeys(chunk: string) {
   const out: string[] = [];
   let i = 0;
@@ -34,11 +29,6 @@ export function tokenizeKeys(chunk: string) {
   return out;
 }
 
-// Raw terminal input, which Stdio does not model: it offers stdin as a byte stream and
-// can say whether it is a terminal, but not raw mode, and a picker needs keypresses
-// unbuffered and unechoed. The stream would also compete with this reader for the same
-// fd. Output goes through Bun.write for the same reason — it is interleaved with the
-// escape sequences this file writes to move the cursor.
 interface KeyboardInput {
   readonly isTTY?: boolean;
   setRawMode?(enabled: boolean): void;
@@ -48,11 +38,6 @@ interface KeyboardInput {
   off(event: "data", listener: (buffer: Buffer) => void): void;
 }
 
-/**
- * The keys pressed while the scope is open, with raw mode on until it closes, however it
- * closes. `process.stdin` is read only when a key is first wanted: reading it sets the
- * stream up, and most commands never take a key.
- */
 export const keyboard = (input: KeyboardInput = process.stdin) =>
   Effect.acquireRelease(
     Effect.gen(function* () {

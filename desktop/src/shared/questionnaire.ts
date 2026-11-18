@@ -1,14 +1,9 @@
-// One question as a questionnaire: what is checked, what Submit and the steering entry
-// send, and the status line. The dialog and the Flow decision only draw it; no Bun-only
-// import, as the view bundles this.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import type { Question } from "../../../src/board-model";
 import type { DesktopAction } from "./flock";
 
-/** The row id of Hold the Run, which no host option can take. */
 export const HOLD = "\u0000hold";
 
 type Status =
@@ -23,16 +18,13 @@ export interface Questionnaire {
   readonly question: Question;
   readonly checked: string | null;
   readonly focus: number;
-  /** A value input's words. */
   readonly typed: string;
   readonly draft: string;
-  /** What is in flight, or was and may be tried again: one request until the host settles it. */
   readonly pending: {
     readonly request: string;
     readonly sends: string;
     readonly answer: string | null;
   } | null;
-  /** What this questionnaire's own sends came to; the board leaving it changes none of it. */
   readonly status: Status;
   readonly onBoard: boolean;
 }
@@ -43,7 +35,6 @@ export type Event =
   | {
       readonly kind: "key";
       readonly key: string;
-      /** Ctrl, or Cmd on a Mac. */
       readonly mod: boolean;
       readonly where: "group" | "steer" | "answer";
     }
@@ -51,7 +42,6 @@ export type Event =
   | { readonly kind: "draft"; readonly text: string }
   | { readonly kind: "submit"; readonly request: string }
   | { readonly kind: "steer"; readonly request: string }
-  /** A try of `request` starting, as Try again starts one. */
   | { readonly kind: "trying"; readonly request: string }
   | {
       readonly kind: "replied";
@@ -63,21 +53,17 @@ export type Event =
       readonly kind: "replied";
       readonly request: string;
       readonly ok: false;
-      /** The host said no, so the same request would be refused again. */
       readonly refused: boolean;
       readonly reason: string;
     };
 
 export type Effect =
   | { readonly kind: "send"; readonly request: string; readonly action: DesktopAction }
-  /** A key asking for Submit or Send, which then takes a request. */
   | { readonly kind: "submit" }
   | { readonly kind: "steer" }
   | { readonly kind: "close" }
-  /** A key that must do nothing, not even its default. */
   | { readonly kind: "swallow" };
 
-/** A questionnaire after one event, and what that event asks Desktop to do. */
 export interface Stepped {
   readonly state: Questionnaire;
   readonly does: Effect | null;
@@ -370,7 +356,6 @@ export const questionnaireView = (state: Questionnaire) => {
   return {
     text: state.question.text,
     shortfall: state.question.shortfall ?? null,
-    /** A value input: a text answer instead of rows. */
     words: state.question.options.length === 0,
     rows: Arr.map(rowsOf(state.question), (row) => ({ ...row, checked: row.id === state.checked })),
     focus: state.focus,
@@ -385,7 +370,6 @@ export const questionnaireView = (state: Questionnaire) => {
     },
     status: statusSaid(state),
     sending: inFlight(state),
-    /** Answered, or gone from the board: nothing more to send. */
     settled: settled(state) && !inFlight(state),
   };
 };

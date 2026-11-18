@@ -1,7 +1,3 @@
-// A yes or a no to a proposal, what became of a Run's work, a steer and a follow-up are
-// each the host's operations, under the front door that asked, and the same request twice
-// is one operation.
-
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -30,7 +26,6 @@ import { stopHost, until } from "./support/host";
 import { hostRecords, recordsAt } from "./support/records";
 import { collie, proves } from "./support/world";
 
-/** A trail as the host on `state` keeps it: a Run's in its `host.db`, any other a file. */
 const auditAt = (state: string, dir: string) =>
   readAudit(dir).pipe(Effect.provide(recordsReadLayer(state)));
 
@@ -112,7 +107,6 @@ test(
             by: "evaluator:e-1",
           }).pipe(Effect.provide(recordsAt(world.state)));
           const yes = { proposal: proposal.id, hash: proposal.content_hash, request: "r-1" };
-          // The first asker hangs up once its step has started.
           const first = yield* Effect.forkChild(
             Effect.scoped(Effect.flatMap(connect(world.state), (client) => client.confirm(yes))),
           );
@@ -121,12 +115,10 @@ test(
             (lines) => Arr.some(lines, (line) => line.kind === "step" && line.state === "started"),
           );
           yield* Fiber.interrupt(first);
-          // A confirm under another request is refused, and leaves the running one alone.
           const client = yield* connect(world.state);
           const other = yield* client.confirm({ ...yes, request: "r-2" }).pipe(Effect.flip);
           expect(other).toMatchObject({ _tag: "ProposalRefused", refused: "not_pending" });
           const retried = yield* Effect.forkChild(client.confirm(yes));
-          // Long enough for the retry to reach the host while the step is still held.
           yield* Effect.sleep("1 second");
           release();
           const answered = yield* Fiber.join(retried);
@@ -198,10 +190,8 @@ test(
             .reconcile({ proposal: "p-none", index: 0, as: "applied", request: "q-4" })
             .pipe(Effect.flip);
           expect(nobody).toMatchObject({ _tag: "ProposalRefused", refused: "not_found" });
-          // The same request asking for something else is refused, not answered with the first.
           const other = yield* client.propose({ ...asked, interpretation: "something else" });
           expect(other).toMatchObject({ ok: false, code: "invalid_input" });
-          // What Collie would want of its own accord is a proposal, never an act.
           const unasked = yield* client
             .act({ actions: [{ kind: "home_cleanup" }], request: "q-5" })
             .pipe(Effect.flip);
@@ -235,7 +225,6 @@ test(
             (view) => view?.status.status === "complete",
           );
 
-          // A retried act is one operation per step: one follow-up, however often it is sent.
           const followUp = {
             actions: [{ kind: "followup", run: runId, text: "more" }],
             request: "a-1",
@@ -247,7 +236,6 @@ test(
             (one) => one.parent === runId,
           );
           expect(children).toHaveLength(1);
-          // A propose cut off before its answer was kept is carried out again as the same steps.
           const proposed = {
             ...followUp,
             herd: "some-herd",
@@ -281,7 +269,6 @@ test(
             .dispose({ ...asked, kind: "abandoned" })
             .pipe(Effect.flip);
           expect(otherwise._tag).toBe("RequestConflict");
-          // This Run has no live agent on the Machine's core.
           expect(yield* client.focus({ runId, request: "fo-1" }).pipe(Effect.flip)).toMatchObject({
             _tag: "HostRefused",
             reason: `${runId} has no live agent on core`,
@@ -364,7 +351,6 @@ test(
             "steer",
             "cli",
           ]);
-          // The same request again is the same steer: nobody is asked twice.
           const client = yield* connect(world.state);
           const again = { runId, text: "and now?", from: null, dryRun: false, request: "st-1" };
           const first = yield* client.steerAbout(again);
@@ -373,7 +359,6 @@ test(
           expect(yield* client.steerAbout(again)).toEqual(first);
           const journal = yield* hostRecords(world.state, everyProposal);
           expect(answers(journal)).toMatchObject([{ kind: "confirmed" }, { kind: "confirmed" }]);
-          // An old session in the request cannot redirect defaults from the named checkout.
           const other = `${world.state}/other.sock`;
           const defaults = pipe_(
             answer,
@@ -526,7 +511,6 @@ test(
           };
           const first = yield* client.news(asked);
           expect(Arr.map(first.items, (item) => item.key)).toEqual(["r1:ended:failed"]);
-          // The same request is the same batch, not the nothing a second read would find.
           expect(yield* client.news(asked)).toEqual(first);
           expect((yield* client.news({ ...asked, request: "n-2" })).items).toEqual([]);
           const sent = yield* client.news({ ...asked, as: "sent" }).pipe(Effect.flip);
@@ -539,7 +523,6 @@ test(
             ["news", "chat", "n-1"],
             ["news", "chat", "n-2"],
           ]);
-          // Read every turn, so its trail is bounded and the Herd's own audit takes none of it.
           for (let n = 0; n < NEWS_TRAIL + 5; n++)
             yield* client.news({ ...asked, request: `more-${n}` });
           const kept = yield* auditAt(world.state, trail);

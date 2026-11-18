@@ -1,6 +1,3 @@
-// A conversation already had, read back from the transcript Claude Code keeps of it. Decoded
-// rather than typed against the SDK, like the live stream; anything unknown is skipped.
-
 import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
@@ -57,7 +54,6 @@ const decodeEntry = Schema.decodeUnknownOption(Entry);
 
 type Part = ChatMessage["parts"][number];
 
-/** What Claude Code writes as a user message when a turn is interrupted. */
 const INTERRUPTED = /^\[Request interrupted by user/;
 
 const textOf = (
@@ -70,10 +66,6 @@ const textOf = (
         "\n",
       );
 
-/**
- * The human's words, then the files Desktop listed after them, and the card Desktop noted
- * the message was about; the images and documents the model was handed are not the view's.
- */
 const humanMessage = (content: Parameters<typeof textOf>[0]) => {
   if (isString(content)) {
     const parts: Part[] = content === "" ? [] : [{ type: "text", content }];
@@ -101,7 +93,6 @@ const humanMessage = (content: Parameters<typeof textOf>[0]) => {
   return { parts, about };
 };
 
-/** The human's messages and the answers, each answer one message however many model turns it took. */
 export const transcriptOf = (entries: ReadonlyArray<unknown>) => {
   const messages: Array<{
     id: string;

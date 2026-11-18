@@ -1,5 +1,3 @@
-// Where work starts when its preferred agent's Subscription is spent (ADR-0049 D7, D10).
-
 import { describe, expect, test } from "bun:test";
 import { Schema, flow, Result } from "effect";
 import { AgentChoiceSchema } from "../src/agents";
@@ -140,11 +138,9 @@ describe("resolveWithRoom", () => {
     const chosen = resolved(layers, ["codex"], busy);
     expect(on(chosen)).toBe("claude/opus medium");
     expect(chosen.why).toMatch(/^session 85%, over its 80%, resets/);
-    // Below the ceiling, the primary.
     expect(on(resolved(layers, ["codex"], [reading("claude", [window(79)])]))).toBe(
       "claude/opus xhigh",
     );
-    // An otherwise entry keeps its own ceiling, then the chain.
     const twice = [{ ...opus, upTo: 80, otherwise: [{ effort: "medium", upTo: 84 }] }];
     expect(on(resolved(twice, ["codex"], busy))).toBe("codex/default");
   });

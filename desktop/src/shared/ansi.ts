@@ -1,6 +1,3 @@
-// Terminal output as styled spans: SGR colours and weights kept, every other escape dropped.
-// No Bun-only import: the view bundles this.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
@@ -12,7 +9,6 @@ export interface AnsiSpan {
 
 const CUBE = [0, 95, 135, 175, 215, 255];
 
-/** A 256-colour code as CSS: the first sixteen are the theme's, the rest fixed. */
 const colour256 = (n: number) => {
   if (n < 16) return `var(--ansi-${n})`;
   if (n >= 232) {
@@ -25,11 +21,9 @@ const colour256 = (n: number) => {
 
 // oxlint-disable-next-line no-control-regex -- Terminal CSI sequences begin with the ESC control byte.
 const ESCAPE = /\x1b\[([\d;?]*)([A-Za-z])/g;
-/** Operating-system commands, such as a link's, and character-set choices. */
 // oxlint-disable-next-line no-control-regex -- Terminal OSC sequences use ESC and BEL as protocol delimiters.
 const OTHER = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][\w]/g;
 
-/** What each plain SGR code sets, or which keys it clears. */
 const SETS = new Map<number, readonly [string, string]>([
   [1, ["fontWeight", "bold"]],
   [2, ["opacity", "0.7"]],
@@ -86,7 +80,6 @@ export const ansiSpans = (output: string) => {
   return spans;
 };
 
-/** The spans of each line, with a colour still on carried to the lines after it. */
 export const ansiLines = (text: string) => {
   const lines: AnsiSpan[][] = [[]];
   for (const span of ansiSpans(text))

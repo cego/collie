@@ -1,6 +1,3 @@
-// A Subscription's Usage reading and every judgement made from it (ADR-0049). Pure, so
-// Desktop's view and a workflow module reach the same rules as the host.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -14,27 +11,21 @@ export type Subscription = (typeof SUBSCRIPTIONS)[number];
 export const UsageWindow = Schema.Struct({
   kind: Schema.Literals(["session", "weekly", "weekly-model", "other"]),
   label: Schema.String,
-  /** The model a `weekly-model` window applies to. */
   model: Schema.NullOr(Schema.String),
-  /** 0–100. */
   usedPercent: Schema.Finite,
   resetsAt: Schema.NullOr(Schema.String),
-  /** The source said this window is reached, whatever its percent. */
   reached: Schema.Boolean,
 });
 export type UsageWindow = typeof UsageWindow.Type;
 
 export const UsageReading = Schema.Struct({
   subscription: Schema.Literals(SUBSCRIPTIONS),
-  /** The account's stable id; never an email, which can hold a personal plan and a team seat. */
   account: Schema.NullOr(Schema.String),
   accountLabel: Schema.NullOr(Schema.String),
   plan: Schema.NullOr(Schema.String),
   windows: Schema.Array(UsageWindow),
-  /** When these numbers were true. */
   at: Schema.String,
   source: Schema.Literals(["claude-usage", "claude-status-line", "codex-app-server"]),
-  /** Why there is no fresh reading, as a sentence a human can act on. */
   problem: Schema.NullOr(Schema.String),
 });
 export type UsageReading = typeof UsageReading.Type;
@@ -49,7 +40,6 @@ const PROVIDERS = new Map<string, Subscription>([
   ["openai-codex", "chatgpt"],
 ]);
 
-/** The Subscription a choice draws on, or null where Collie reads none for it. */
 export function subscriptionOf(choice: ChoiceLike) {
   if (choice.harness === "claude") {
     const returned: Subscription | null = "claude";
@@ -70,11 +60,6 @@ export function subscriptionOf(choice: ChoiceLike) {
 
 const squeezed = (text: string) => pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]/g, ""));
 
-/**
- * A model window applies to a model that names the window's model, in any case and
- * spelling: `opus` and `claude-opus-4-1` an "Opus" window, `sonnet` a "Sonnet 4.5" one. A
- * choice left at `default` is resolved by its caller; unresolved, it names no model.
- */
 export function appliesTo(window: UsageWindow, model: string | null) {
   if (window.model === null) {
     const returned: boolean = true;
@@ -91,7 +76,6 @@ export function appliesTo(window: UsageWindow, model: string | null) {
   return returned;
 }
 
-/** A window as it stands at `now`: once its reset has passed it is unused, whatever was read. */
 export function current(window: UsageWindow, now: number) {
   if (window.resetsAt === null || epochMs(window.resetsAt) > now) {
     const returned: UsageWindow = window;
@@ -110,7 +94,6 @@ export interface Used {
   readonly exhausted: boolean;
 }
 
-/** The busiest of these windows, counting a full one as busier than any that is not. */
 function busiest(windows: ReadonlyArray<UsageWindow>) {
   let found: UsageWindow | null = null;
   const weight = (window: UsageWindow) => (isFull(window) ? 101 : window.usedPercent);
@@ -129,10 +112,6 @@ function busiest(windows: ReadonlyArray<UsageWindow>) {
   return returned;
 }
 
-/**
- * How much of the busiest window that applies to this choice is used, and whether its
- * Subscription is Exhausted for it. Null where nothing is read for it.
- */
 export function usedFor(readings: ReadonlyArray<UsageReading>, choice: ChoiceLike, now: number) {
   const subscription = subscriptionOf(choice);
   const model = choice.model;
@@ -148,29 +127,24 @@ export function usedFor(readings: ReadonlyArray<UsageReading>, choice: ChoiceLik
   return returned;
 }
 
-/** At or above this, a door warns. */
 export const WARN_PERCENT = 90;
 
 export interface UsagePhrase {
-  /** For example `claude 31% · chatgpt out`; empty where nothing is read. */
   readonly text: string;
   readonly warn: boolean;
 }
 
-/** A reading's busiest window at `now`. */
 export function busiestWindow(reading: UsageReading, now: number) {
   const returned: Used | null = busiest(Arr.map(reading.windows, (window) => current(window, now)));
   return returned;
 }
 
-/** `31%`, `out`, or `Opus out` where a model's own window is the busiest. */
 export function usedPhrase(used: Used) {
   const amount = used.exhausted ? "out" : `${Math.round(used.usedPercent)}%`;
   const returned: string = used.window.model === null ? amount : `${used.window.model} ${amount}`;
   return returned;
 }
 
-/** Each Subscription's busiest window, in a few characters. */
 export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number) {
   const parts: string[] = [];
   let warn = false;
@@ -183,8 +157,6 @@ export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number) 
   const returned: UsagePhrase = { text: Arr.join(parts, " · "), warn };
   return returned;
 }
-
-// The sources, as they answer. Every field optional: two of the three are undocumented.
 
 const ClaudeRow = Schema.Struct({
   utilization: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
@@ -212,7 +184,6 @@ export const ClaudeUsage = Schema.Struct({
 });
 export type ClaudeUsage = typeof ClaudeUsage.Type;
 
-/** The account a reading belongs to, as its login says. */
 export interface Login {
   readonly account: string | null;
   readonly accountLabel: string | null;
@@ -231,7 +202,6 @@ function claudeWindow(
     model,
     usedPercent: row.percent ?? row.utilization ?? 0,
     resetsAt: row.resets_at ?? null,
-    // A severity is a display level only; credits beyond the plan mark nothing.
     reached: (row.locked_reason ?? null) !== null,
   };
   return returned;
@@ -262,7 +232,6 @@ function claudeLimit(row: ClaudeRow) {
   }
 }
 
-/** `GET /api/oauth/usage`'s answer as windows: by `limits[].kind`, else the older two rows. */
 export function claudeWindows(usage: ClaudeUsage) {
   if (usage.limits) {
     const returned: ReadonlyArray<UsageWindow> = Arr.map(usage.limits, claudeLimit);
@@ -290,7 +259,6 @@ export const ClaudeJson = Schema.Struct({
 export type ClaudeJson = typeof ClaudeJson.Type;
 const TEAM_PLANS = new Set(["team", "enterprise"]);
 
-/** Claude Code's `~/.claude.json` account, with the plan its login says. */
 export function claudeLogin(claudeJson: ClaudeJson | null, plan: string | null) {
   const found = claudeJson?.oauthAccount ?? null;
   const ids = Arr.filter([found?.organizationUuid, found?.accountUuid], (id) => id != null);
@@ -306,7 +274,6 @@ export function claudeLogin(claudeJson: ClaudeJson | null, plan: string | null) 
 
 const StatusWindow = Schema.Struct({
   used_percentage: Schema.Finite,
-  /** Epoch seconds. */
   resets_at: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
 });
 export const StatusLineLimits = Schema.Struct({
@@ -315,7 +282,6 @@ export const StatusLineLimits = Schema.Struct({
 });
 export type StatusLineLimits = typeof StatusLineLimits.Type;
 
-/** The newest Claude status line's limits on a Machine, and when it reported them. */
 export interface StatusSample {
   readonly at: number;
   readonly limits: StatusLineLimits;
@@ -324,7 +290,6 @@ export interface StatusSample {
 const isoOfSeconds = (seconds: number | null | undefined) =>
   seconds == null ? null : DateTime.formatIso(DateTime.makeUnsafe(seconds * 1000));
 
-/** A Claude status line's `rate_limits`, as the session and weekly windows it measures. */
 export function statusLineWindows(limits: StatusLineLimits) {
   const window: (
     row: typeof StatusWindow.Type | null | undefined,
@@ -353,7 +318,6 @@ export function statusLineWindows(limits: StatusLineLimits) {
 const CodexWindow = Schema.Struct({
   usedPercent: Schema.Finite,
   windowDurationMins: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
-  /** Epoch seconds. */
   resetsAt: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
 });
 const CodexLimit = Schema.Struct({
@@ -389,7 +353,6 @@ export const CodexAccount = Schema.Struct({
 });
 export type CodexAccount = typeof CodexAccount.Type;
 
-/** `account/read`'s result as the account a ChatGPT reading belongs to. */
 export function codexLogin(found: CodexAccount) {
   const returned: Login = {
     account: found?.workspaceRouting?.chatgptAccountId ?? null,
@@ -402,10 +365,6 @@ export function codexLogin(found: CodexAccount) {
 const kindOfLength = (length: number | null) =>
   length === 300 ? "session" : length === 10080 ? "weekly" : "other";
 
-/**
- * One limit's windows. A limit its source says is reached marks its full window
- * reached, or every window of it when none is full.
- */
 function codexWindows(limit: CodexLimit, model: string | null, blocked: boolean) {
   const rows = Arr.filter([limit.primary, limit.secondary], (row) => row != null);
   const reached =
@@ -428,11 +387,6 @@ function codexWindows(limit: CodexLimit, model: string | null, blocked: boolean)
   return returned;
 }
 
-/**
- * `account/rateLimits/read`'s result as windows and a plan, classified by each window's
- * length because `primary` is the weekly window on some plans. Every limit other than
- * `codex` is a model's own.
- */
 export function codexUsage(usage: CodexRateLimits) {
   return {
     windows: [
@@ -446,7 +400,6 @@ export function codexUsage(usage: CodexRateLimits) {
   };
 }
 
-/** How long until a reset, in its two largest units: `in 2h 3m`, `in 1d 4h`, `in 12m`. */
 export function resetIn(resetsAt: string, now: number) {
   const minutes = Math.max(0, Math.ceil((epochMs(resetsAt) - now) / 60_000));
   const days = Math.floor(minutes / 1440);
@@ -472,16 +425,11 @@ const resetClock = (iso: string, now: number) => {
     : `${DateTime.formatLocal(at, { weekday: "short", locale: "en-GB" })} ${time}`;
 };
 
-/** A reset as a local clock time and how long until it: `resets 14:00 (in 2h 3m)`. */
 export function resetPhrase(resetsAt: string, now: number) {
   const returned: string = `resets ${resetClock(resetsAt, now)} (${resetIn(resetsAt, now)})`;
   return returned;
 }
 
-/**
- * Whether a choice has room: its Subscription is not Exhausted for it, and its busiest
- * window is below `upTo`. A Subscription with nothing read has room.
- */
 export function roomFor(readings: ReadonlyArray<UsageReading>, now: number) {
   return (choice: ChoiceLike, upTo: number | undefined) => {
     const used = usedFor(readings, choice, now);

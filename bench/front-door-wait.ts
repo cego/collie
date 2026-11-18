@@ -1,5 +1,3 @@
-// A front door's wait while the fixture's live Runs keep the host building its board.
-
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- Shares record-open's isolated host world.
 import { homedir } from "node:os";
 import { Clock, Console, Effect, FileSystem, Schedule, Schema, Stream } from "effect";

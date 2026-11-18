@@ -1,6 +1,3 @@
-// Desktop keeps only what it uses: the running bundle's update tar, the running and newest
-// runner copies, 30 days of usage, and no dead Desktop's ssh control directory (ADR-0045 D5).
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
@@ -21,7 +18,6 @@ import { collie, proves } from "./support/world";
 
 const DAY_MS = 24 * 60 * 60_000;
 
-/** Desktop's channel folder under `dir`, running `running` at 0.36.0, with three tars. */
 const installed = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

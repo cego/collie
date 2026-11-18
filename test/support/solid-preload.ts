@@ -1,5 +1,3 @@
-// Defer Babel's per-file startup cost until a file loads JSX or Solid.
-
 import { plugin, type OnLoadCallback, type PluginBuilder } from "bun";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -19,7 +17,7 @@ const solid = () =>
         return recorder;
       },
     };
-    // SAFETY: this plugin's setup only calls onLoad.
+    // WARNING: this plugin's setup only calls onLoad.
     void real.setup(recorder as PluginBuilder);
     return found;
   }));

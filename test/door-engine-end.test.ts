@@ -1,6 +1,3 @@
-// The engine's end of the door: every client's frames reach the engine's RPC server through
-// one loop, so no one client's frame may end that loop for the others.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Layer, Schema, Stream } from "effect";
@@ -25,7 +22,6 @@ const until = (done: () => boolean) =>
     while (!done()) yield* Effect.sleep("10 millis");
   }).pipe(Effect.timeout("2 seconds"));
 
-/** The engine's end, serving `Group`, as the door would drive it. */
 const served = Effect.gen(function* () {
   const told: Array<ToDoor> = [];
   let receive: (message: FromDoor) => void = () => {};
@@ -63,8 +59,6 @@ test("a client that half-closed and still writes leaves every other client answe
       request(1, "a", "ping");
       yield* until(() => answered(1, "a"));
 
-      // Conn 2 holds a stream open, half-closes as a CLI does on its way out, and a late
-      // frame of its own arrives after: the server refuses that frame for conn 2 alone.
       request(2, "s", "ticks");
       frame(2, { _tag: "Eof" });
       frame(2, { _tag: "Ack", requestId: "gone" });

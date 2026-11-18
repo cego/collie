@@ -1,9 +1,3 @@
-// A Run's stop of a Codex agent, and everything that would take over its work, at the
-// Agents service. The agent's work runs in the App Server Collie started for it, so the
-// server here is a real process — the stand-in in `support/codex-server.ts` — and what
-// is asserted is what a human could see: whether its checkout stops changing, what the
-// stop says, what it was sent, and whether anything started beside it.
-
 import { hostRecords, hostRunRecords, recordsAt } from "./support/records";
 import { RunRecords } from "../src/run-records";
 import { nowIso } from "../src/time";
@@ -69,7 +63,6 @@ beforeEach(() =>
 afterEach(() =>
   runEffect(
     Effect.gen(function* () {
-      // Whatever a test left of the stand-in, so one failure does not outlive its test.
       for (const event of yield* events())
         for (const pid of [event.pid, event.child]) if (pid !== undefined) kill(pid);
       yield* rig.close();
@@ -106,7 +99,6 @@ const written = () => `${rig.projectDir}/written.txt`;
 const THREAD = "01a134f2-e3e2-7242-9620-c2121348e1b8";
 const TURN = "01a134f4-044f-7053-93f6-1db57d18653a";
 
-/** The stand-in's behaviour for this test: one thread in the checkout, its turn writing. */
 const serve = (over: Partial<StandIn> = {}) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -213,14 +205,11 @@ const sizeOf = (file: string) =>
     Effect.map((info) => Number(info.size)),
     Effect.orElseSucceed(() => 0),
   );
-/** Long enough, on the fast clock, for the stand-in's turn to have written a few times more. */
 const aWhile = Effect.sleep(Duration.seconds(8));
 const kill = (pid: number) => {
   try {
     process.kill(pid, "SIGKILL");
-  } catch {
-    // Already gone.
-  }
+  } catch {}
 };
 const alive = (pid: number) => {
   try {
@@ -289,7 +278,6 @@ const recorded = () =>
     Effect.orElseSucceed(() => null),
   );
 
-/** A human closing the agent's terminal, which core then no longer lists. */
 const closedByHand = Effect.gen(function* () {
   const herdr = new Herdr(rig.pluginEnv());
   const one = Option.getOrUndefined(
@@ -298,7 +286,6 @@ const closedByHand = Effect.gen(function* () {
   if (one !== undefined) yield* herdr.terminalKill(one.paneId);
 }).pipe(Effect.orDie);
 
-/** A Run whose Codex agent is working, with the stand-in as `over` makes it. */
 const working = (over: Partial<StandIn> = {}) =>
   Effect.gen(function* () {
     yield* serve(over);
@@ -441,14 +428,12 @@ test.each([true, false])(
         const control = (yield* readControl(`${rig.root}/state`, agent))!;
         const pid = control.pid!;
         const fs = yield* FileSystem.FileSystem;
-        // Reaped, not only a zombie: the stop proves its server's absence by ESRCH.
         const loseServer = Effect.gen(function* () {
           kill(pid);
           while (!(yield* processAbsent(pid))) yield* TestClock.withLive(Effect.sleep("10 millis"));
         }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
         if (alreadyGone) yield* loseServer;
         let reads = 0;
-        // This platform can inspect live processes, but cannot find a dead parent's session.
         const withoutSessions = {
           ...fs,
           exists: (path: string) => {
@@ -492,7 +477,6 @@ test("a process the first stop noted is still the server's after the server has 
       )!.child!;
       expect((yield* halted({ stopMs: 300 })).left).toHaveLength(1);
 
-      // Its turn ends and it exits, leaving the process it started.
       yield* release();
       const pid = yield* serverPid();
       while (alive(pid)) yield* TestClock.withLive(Effect.sleep("20 millis"));
@@ -512,7 +496,6 @@ test(
         const child = Option.getOrUndefined(
           Arr.findFirst(yield* events(), (one) => one.child !== undefined),
         )!.child!;
-        // Live: the server's exit and its survivors' grace are real time, not the fast clock's.
         const halt = yield* TestClock.withLive(halted({ stopMs: 5_000 }));
         expect(halt.stopped).toEqual([]);
         expect(Arr.join(halt.left, "\n")).toContain(`pid ${child}`);
@@ -525,7 +508,6 @@ test(
         expect(yield* panesClosed()).toBe(0);
       }),
     ),
-  // The stop waits out its 5s budget on the survivor, which a bare `bun test` times out at.
   30_000,
 );
 
@@ -666,7 +648,6 @@ for (const [what, over, edit, why] of [
         expect(halt.stopped).toEqual([]);
         expect(Arr.join(halt.left, "\n")).toMatch(/is not stopped: failed/);
         expect(Arr.join(halt.left, "\n")).toMatch(why);
-        // Refused before it looked, so it says nothing of the turns it never read.
         expect(Arr.join(halt.left, "\n")).toContain("its turns were never read");
         expect(yield* signals()).toEqual([]);
         expect(yield* panesClosed()).toBe(0);
@@ -737,8 +718,6 @@ test("the agents log has each state reached with the full ids, and only a quiet 
     }),
   ));
 
-// Nothing takes over beside an agent that is not Quiet.
-
 const release = () =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.writeFileString(`${eventsFile()}.release`, "")),
@@ -791,7 +770,6 @@ const given = Effect.suspend(() =>
     Effect.orElseSucceed(() => false),
   ),
 );
-/** Starts or resumes the work and lets the host go once it has got as far as `reached`. */
 const until = (reached: Reached, over?: Partial<AgentHost>, resume = false) =>
   session(
     Effect.gen(function* () {
@@ -826,7 +804,6 @@ test(
         yield* rig.queueOutputs([null, { verdict: "clean", note: "restarted" }]);
         yield* until(given);
 
-        // Stopped while its turn will not end, and its pane then closed by hand.
         yield* stopFlag(true);
         expect((yield* halted({ stopMs: 25_000 })).left).toHaveLength(1);
         yield* closedByHand;
@@ -836,7 +813,6 @@ test(
           Effect.map((starts) => starts.length > 1),
           Effect.orElseSucceed(() => false),
         );
-        // What the host does once core reports the terminal gone.
         let reported = false;
         const lossReported = Effect.suspend(() =>
           reported
@@ -868,10 +844,8 @@ test(
           expect(why).toContain(fact);
         expect(yield* recorded()).not.toBeNull();
 
-        // Its turn ends and it exits; the agent started in its place gets a server of its own.
         yield* release();
         const old = yield* serverPid();
-        // Resumed while it is still exiting, the stop cannot prove it stopped and parks again.
         for (let tries = 0; !(yield* processAbsent(old)); tries++) {
           if (tries === 3_000) return yield* Effect.die(new Error(`server ${old} never exited`));
           yield* TestClock.withLive(Effect.sleep("10 millis"));
@@ -898,9 +872,7 @@ test(
 
 const successor = agentName("r1", "build", null, 2);
 const fallback = { fallbacks: Effect.succeed(["claude"]) };
-/** A Codex step that works until it runs out, so it cannot end unwritten and be reminded first. */
 const untilRunOut = { writes: [], output: null, owed: true };
-/** Once the Codex agent has its work, its harness says it ran out. */
 const runsOut = Effect.gen(function* () {
   while (!(yield* given)) yield* TestClock.withLive(Effect.sleep("10 millis"));
   yield* recordClaudeEvent(
@@ -958,7 +930,6 @@ test("a Codex agent that runs out and will not stop parks the work, and no succe
     }),
   ));
 
-/** core as a stop landing right after `after` happens. */
 class StopsAfter extends Herdr {
   constructor(private readonly after: "kill" | "launch") {
     super(rig.pluginEnv());
@@ -1036,7 +1007,6 @@ test("the sweep keeps an unlisted agent's record while its server is not Quiet, 
         ),
       ).toContain(`its Codex turn has not stopped: ${agent} is not stopped: acknowledged`);
       expect(yield* recorded()).not.toBeNull();
-      // What `collie cleanup` lists says the same, and a second sweep sends no second signal.
       const listed = yield* sweeper.judge;
       expect(listed.remove).toEqual([]);
       expect(
@@ -1051,7 +1021,6 @@ test("the sweep keeps an unlisted agent's record while its server is not Quiet, 
         );
       const asked = yield* interrupts();
       yield* sweep([sweeper], `${rig.root}/state`, "host");
-      // Stopped again: interrupted again, and signalled once.
       expect(yield* interrupts()).toBeGreaterThan(asked);
       expect(Arr.filter(yield* events(), (one) => one.signal === "SIGTERM")).toHaveLength(1);
 
@@ -1063,7 +1032,6 @@ test("the sweep keeps an unlisted agent's record while its server is not Quiet, 
         `${rig.root}/state/compaction/${agent}`,
       ]);
       expect(yield* recorded()).toBeNull();
-      // Told to the Run that launched it, with the turn it stopped.
       expect(yield* agentsLog()).toContain(`${agent}: quiet — thread ${THREAD} turn ${TURN}`);
     }).pipe(Effect.provide(recordsAt(`${rig.root}/state`))),
   ));
@@ -1100,7 +1068,6 @@ test("a sweep stops again a record whose earlier stop failed before it signalled
           "\n",
         ),
       ).toContain("the connection was lost");
-      // Live: the server's exit after its signal is real time, not the fast clock's.
       const swept = yield* TestClock.withLive(sweep([sweeper], `${rig.root}/state`, "host"));
       expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
       expect(Arr.map(swept.remove, (one) => one.target)).toEqual([
@@ -1159,7 +1126,6 @@ const unlistable = (over: Partial<StandIn["threads"][number]> = {}) => ({
     },
   ],
 });
-/** Core never starting an agent's terminal. */
 class NeverAdmits extends Herdr {
   constructor() {
     super(rig.pluginEnv());
@@ -1218,7 +1184,6 @@ test("a start core never admits parks naming its agent, and the next launch unde
       expect(servers).toHaveLength(2);
       expect(signalled).toHaveLength(1);
       expect(signalled[0]).toBeLessThan(servers[1]!);
-      // The refused start never reached core.
       expect(yield* agentStarts()).toEqual(["codex"]);
       const log = yield* agentsLog();
       expect(
@@ -1230,7 +1195,6 @@ test("a start core never admits parks naming its agent, and the next launch unde
     }),
   ));
 
-/** r1's start, which core never admits, leaving its server up with no launch recorded. */
 const neverAdmitted = Effect.gen(function* () {
   yield* serve(unmaterialized());
   yield* until(suspended, { herdr: neverAdmits() });
@@ -1358,7 +1322,6 @@ for (const [what, spoil] of unreadable)
       }),
     ));
 
-/** core refusing a start that a Run's stop lands in, as that stop reaches the Run's agents. */
 class StoppedWhileStarting extends NeverAdmits {
   halts: Array<{ readonly stopped: ReadonlyArray<string>; readonly left: ReadonlyArray<string> }> =
     [];

@@ -1,7 +1,3 @@
-// The rules that keep the merge-request panel from ruining the app: the app fetches
-// nothing at all, and the host's merge watch reads one merge request once per poll, again
-// only when asked to.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -30,7 +26,6 @@ import { task } from "../support/task";
 import { appendDrift } from "../../src/drift";
 
 let rig: Rig;
-/** The Runs the host would list, newest first. */
 let runs: RunFacts[] = [];
 
 function effectTest(
@@ -63,7 +58,6 @@ const MR_JSON = JSON.stringify({
   updated_at: "2026-09-02T11:00:00.000Z",
 });
 
-/** A glab that answers about any merge request, and counts the reads of one it was asked. */
 function glab() {
   const calls: string[][] = [];
   const run = (cmd: string, args: string[]) => {
@@ -101,10 +95,8 @@ function session() {
   return returned;
 }
 
-/** The board's reads, over the Runs this test made rather than a host's. */
 const app = () => appState(session(), rig.pluginEnv());
 
-/** What the merge watch reads for this Run's drawer, through a glab that counts. */
 const watched = (
   run: RunFacts,
   asked: ReturnType<typeof glab>,
@@ -124,7 +116,6 @@ const watched = (
       }).pipe(Effect.provide(forgeHttpOver(asked.run)));
 };
 
-/** A Run of this workspace, remembered as the newest the host would list. */
 const made = Effect.fn("fetching.made")(function* (over: Partial<RunFacts>) {
   const env = rig.pluginEnv();
   const at = `2026-09-02T10:${pipe_(String(runs.length), Str.padStart(2, "0"))}:00.000Z`;
@@ -140,7 +131,6 @@ const made = Effect.fn("fetching.made")(function* (over: Partial<RunFacts>) {
   return run;
 });
 
-/** Forty finished Runs, every one of them over a merge request. */
 const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
   const env = rig.pluginEnv();
   const ids: string[] = [];
@@ -154,8 +144,6 @@ const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
         strategies: { target: "diff-target" },
       },
     });
-    // Disposed of, so the background merge watch has nothing to ask GitLab about and
-    // every `glab` call counted below is the selection's own.
     yield* recordDisposition(run.dir, {
       at: run.created,
       by: "test",
@@ -165,8 +153,6 @@ const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
     });
     ids.push(run.id);
   }
-  // And in production, as far as a merge can go: the watch that follows a merged card to
-  // its deploy jobs has nothing left to ask about these either.
   yield* storedAnswers(
     env.stateDir,
     new Map(Arr.map(ids, (_, at) => [`g/p!${at + 1}`, "in-prod"])),
@@ -178,8 +164,6 @@ effectTest("a History of forty merge-request runs draws with no glab call at all
   yield* seedMany(40);
   const state = yield* app().load(focus({ view: "history", shown: ["runs", "history"] }));
 
-  // Every row could show a badge; none of them is worth forty subprocesses to draw, and
-  // the app asks GitLab nothing: the drawer's panel is the host's.
   expect(state.history).toHaveLength(40);
 });
 
@@ -195,15 +179,12 @@ effectTest(
     yield* watched(runOf(first!), asked, { panels });
     expect(asked.views()).toHaveLength(1);
 
-    // The same merge request, inside the poll: what the watch read answers.
     yield* watched(runOf(first!), asked, { panels, now: MERGE_POLL_MS - 1 });
     expect(asked.views()).toHaveLength(1);
 
-    // A different one is a different ref, so it is read.
     yield* watched(runOf(second!), asked, { panels });
     expect(asked.views()).toHaveLength(2);
 
-    // And a re-read can be asked for, which is what `R` in the drawer does.
     yield* watched(runOf(second!), asked, { panels, fresh: true });
     expect(asked.views()).toHaveLength(3);
   },
@@ -225,8 +206,6 @@ effectTest("a view nobody has opened is not read at all", function* () {
 
   const state = yield* app().load(focus());
 
-  // The laziness is in the state: History, Workflows and Settings cost nothing until
-  // they are shown, which is what keeps opening the tab cheap.
   expect(state.history).toBeNull();
   expect(state.definitions).toBeNull();
   expect(state.settings).toBeNull();
@@ -258,8 +237,6 @@ effectTest("a glab that writes a notice to stderr is still read as a merge reque
 });
 
 effectTest("a card outside the legacy lists still fills its own record", function* () {
-  // The board's five finished rows are not what a Task is: a card can name a Run neither
-  // list holds, and its record used to come back as the whole Herd's evidence.
   const ids = yield* seedMany(8);
   const oldest = ids[0]!;
   const run = Option.getOrThrow(Arr.findFirst(runs, (one) => one.id === oldest));
@@ -294,7 +271,6 @@ effectTest("the merge request a Run opened is the one its record details", funct
   });
   const asked = glab();
 
-  // An implement Run's merge request is what it produced, not what it was pointed at.
   expect((yield* watched(run, asked))?._tag).toBe("Details");
   expect(asked.views()).toHaveLength(1);
 });

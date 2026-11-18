@@ -56,7 +56,6 @@ const decodeJson = Schema.decodeUnknownOption(JsonLine);
 const decodeHeader = Schema.decodeUnknownOption(Header);
 const decodeEntry = Schema.decodeUnknownOption(Entry);
 
-/** The human's message when it is one of Pi's own `/mcp` commands, which Pi takes as written. */
 export const piCommand = (content: string | Array<ContentBlock>) => {
   const first = isString(content)
     ? content

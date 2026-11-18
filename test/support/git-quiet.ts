@@ -1,4 +1,3 @@
-/** No git a test starts collects garbage or runs maintenance in a repository the test removes. */
 export const GIT_QUIET = {
   GIT_CONFIG_COUNT: "2",
   GIT_CONFIG_KEY_0: "gc.auto",

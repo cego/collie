@@ -1,5 +1,3 @@
-// The macOS app's icon set, made from the brand tile with sips, for `scripts/bundle.ts`.
-
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Cause, Config, Console, Effect, FileSystem, Stream } from "effect";

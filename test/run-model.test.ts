@@ -18,7 +18,6 @@ import { madeRun, recordsAt, runFacts } from "./support/records";
 
 const RUNS = 500;
 
-/** A card as the board draws one, for what the model stamps on it. */
 const card: (over?: Partial<TaskView>) => TaskView = (over = {}) => ({
   id: "t1",
   name: "Work",
@@ -234,7 +233,6 @@ test("revisions grow within an epoch, per Run, and a Task's is the highest of it
       expect(seqOf("b")).toBeGreaterThan(afterA);
       expect([seqOf("a"), seqOf("c")]).toEqual([afterA, first.c]);
 
-      // Seen again unchanged, nothing moves.
       const settled = { a: seqOf("a"), b: seqOf("b"), c: seqOf("c") };
       yield* model.observe([a, { ...b, state: "succeeded" }, c]);
       expect({ a: seqOf("a"), b: seqOf("b"), c: seqOf("c") }).toEqual(settled);
@@ -244,7 +242,6 @@ test("revisions grow within an epoch, per Run, and a Task's is the highest of it
         epoch: model.epoch,
         seq: Math.max(settled.a, settled.b),
       });
-      // A card that moved with no Run's revision moving still says so.
       const [moved] = model.stamp([card({ sentence: "Quiet for 6 minutes." })]);
       expect(moved!.revision!.seq).toBeGreaterThan(stamped!.revision!.seq);
       expect(seqOf("c")).toBe(first.c);
@@ -355,7 +352,6 @@ test("two models of one state directory number their Runs as one, each told what
       expect(reader.factsAt("r1")).toBe(writer.factsAt("r1"));
       expect(yield* reader.reading.readFileString(log)).toBe("two\n");
 
-      // A record that moved while none of its Runs did moves its Run for both.
       reader.stampRecord("key", "r1", ["r1"], "first");
       const moved = reader.stampRecord("key", "r1", ["r1"], "second");
       yield* deliver;
@@ -452,7 +448,6 @@ for (const late of [false, true])
         );
         const run = runFacts({ id: "r1", cwd: repo, branch: "mk/ship" });
         yield* model.observe([run]);
-        // Pull now: acquiring the pull alone does not subscribe to the model's events.
         const listen = Stream.toPull(model.moved).pipe(
           Effect.flatMap((pull) => Effect.forkChild(pull, { startImmediately: true })),
         );
@@ -470,7 +465,6 @@ for (const late of [false, true])
         );
 
         const notification = listening ?? (yield* listen);
-        // No head read or filesystem change prompts the board to notice the registration gap.
         expect(
           Option.isSome(yield* Fiber.join(notification).pipe(Effect.timeoutOption("1 second"))),
         ).toBe(true);
@@ -491,10 +485,8 @@ test("a branch head read while its checkout moves is not kept, so the move reach
       yield* fs.makeDirectory(repo, { recursive: true });
       yield* git("init", "-q", "-b", "mk/ship");
       yield* git("commit", "-q", "--allow-empty", "-m", "one");
-      // The checkout's watches say it moved when the test does, and never by themselves.
       const moves = yield* Queue.unbounded<FileSystem.WatchEvent>();
       let installed = 0;
-      // One read of the head has git's answer and is held before the model takes it.
       const gate = {
         armed: false,
         answered: yield* Deferred.make<void>(),

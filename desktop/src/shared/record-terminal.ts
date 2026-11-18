@@ -1,33 +1,21 @@
-// What a card's record decides about its Terminal tab.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import type { BoardAgent } from "../../../src/board-model";
 import { ROLES } from "../../../src/steer-target";
 
-/**
- * Offered while the Run's Machine is reached, and kept while it is the tab shown, so a
- * dropped connection says why and offers Reattach rather than taking the pane away.
- */
 export const offersTerminal = (asOf: number | null, chosen: string | undefined) =>
   asOf === null || chosen === "terminal";
 
-/** One live agent of the Task, as the Terminal tab's switcher offers it. */
 export interface AgentTab {
   readonly name: string;
   readonly run: string;
   readonly label: string;
-  /** Core's status, or `ended` for the agent shown once the board no longer lists it. */
   readonly state: string;
   readonly now: string | null;
   readonly shown: boolean;
 }
 
-/**
- * The card's live agents, and the one `shown` kept while it is shown though it has ended.
- * Each is its role, numbered where several share one; its agent name where it has none.
- */
 export const agentTabs = (agents: ReadonlyArray<BoardAgent>, shown: BoardAgent | null) => {
   const ended = shown !== null && !Arr.some(agents, (one) => one.name === shown.name);
   const listed = ended ? [...agents, shown] : agents;
@@ -49,7 +37,6 @@ export const agentTabs = (agents: ReadonlyArray<BoardAgent>, shown: BoardAgent |
   });
 };
 
-/** Only the Run's own live launches, newest last even when reused under another Run. */
 export const recipients = (
   launches: ReadonlyArray<{ readonly agent: string }> | undefined,
   live: ReadonlyArray<BoardAgent>,
@@ -60,7 +47,6 @@ export const recipients = (
   return Arr.flatMap(latest, (name) => Arr.ensure(tabs.get(name) ?? []));
 };
 
-/** Where a delivery goes: the agent at work, a role, or one agent by name. */
 export interface DeliveryChoice {
   readonly key: string;
   readonly label: string;
@@ -68,13 +54,11 @@ export interface DeliveryChoice {
   readonly agent?: string;
 }
 
-/** Who a delivery names: one agent, or the role `to` names; neither is the agent at work. */
 export interface Address {
   agent?: string;
   to?: string;
 }
 
-/** A delivery's addressee, with only the fields it names. */
 export const addressOf = (who: Readonly<Address>) => {
   const address: Address = {};
   if (who.agent !== undefined) address.agent = who.agent;
@@ -82,13 +66,8 @@ export const addressOf = (who: Readonly<Address>) => {
   return address;
 };
 
-/** The first board protocol whose hosts take a delivery to a role or to no agent: both shipped together. */
 export const ADDRESSED_DELIVERY = 4;
 
-/**
- * Addressed hosts offer roles and agents; older hosts offer agents only.
- * A live preferred role goes first; otherwise the default is the agent at work, or newest.
- */
 export const deliveryChoices = (
   launches: ReadonlyArray<{ readonly agent: string }> | undefined,
   live: ReadonlyArray<BoardAgent>,
@@ -137,10 +116,6 @@ export const deliveryChoices = (
   return first === undefined ? offered : [first, ...Arr.filter(offered, (one) => one !== first)];
 };
 
-/**
- * The agent `focused` names, as the board lists it, or as it was last listed once the board
- * no longer does; null until the board has listed it at all.
- */
 export const shownAgent = (
   agents: ReadonlyArray<BoardAgent>,
   focused: string | undefined,
@@ -149,10 +124,6 @@ export const shownAgent = (
   Option.getOrUndefined(Arr.findFirst(agents, (one) => one.name === focused)) ??
   (before?.name === focused ? before : null);
 
-/**
- * The agent the tab opens on: one `blocked`, else one `working`, of the card's own Run first
- * and then the last listed; null where none is either.
- */
 export const atWork = (agents: ReadonlyArray<BoardAgent>, run: string) => {
   const blocked = Arr.filter(agents, (one) => one.status === "blocked");
   const candidates =
@@ -161,7 +132,6 @@ export const atWork = (agents: ReadonlyArray<BoardAgent>, run: string) => {
   return (own.length > 0 ? own : candidates).at(-1) ?? null;
 };
 
-/** The agent the tab asks for: the one picked, else the agent at work; null for the Run's newest. */
 export const askedFor = (
   agents: ReadonlyArray<BoardAgent>,
   run: string,
@@ -190,10 +160,6 @@ export const askedFor = (
   );
 };
 
-/**
- * The Terminal tab's switches between panes, each started once `release` has let the pane
- * before it go. Only the newest switch still waiting opens; a stop cancels any that wait.
- */
 export const switches = (release: () => Promise<void>) => {
   let newest = 0;
   let released = Promise.resolve();

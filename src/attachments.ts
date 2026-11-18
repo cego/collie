@@ -1,17 +1,12 @@
-// What a Run was given beside its words: files the host copies into the Run's own
-// directory, and every prompt of the Run lists (ADR-0046).
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path } from "effect";
 
-/** The most a host takes of one file. */
 export const ATTACHMENT_BYTES = 100 * 1024 * 1024;
 
 export const attachmentsDir = (runDir: string) => `${runDir}/attachments`;
 
-/** A file in a Run's `attachments/`, as a prompt lists it. */
 export interface Attachment {
   readonly name: string;
   readonly mediaType: string;
@@ -19,13 +14,11 @@ export interface Attachment {
   readonly path: string;
 }
 
-/** What the request named, and the name the Run keeps it under. */
 export type Attached = {
   readonly name: string;
   readonly from: string;
 };
 
-/** Why the first of these paths cannot be attached, naming it; null where all can. */
 export const attachmentRefusal = Effect.fn("attachments.refusal")(function* (
   paths: ReadonlyArray<string>,
 ) {
@@ -47,11 +40,6 @@ export const sha256Hex = (data: Uint8Array | string) =>
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(b);
 
-/**
- * The name each source takes in `dir`, or in an empty directory where that is null: its
- * own, unless that name holds other content, then under a short sha256 prefix. Nothing is
- * written.
- */
 export const namesIn = Effect.fn("attachments.namesIn")(function* (
   dir: string | null,
   sources: ReadonlyArray<string>,
@@ -78,7 +66,6 @@ export const namesIn = Effect.fn("attachments.namesIn")(function* (
   return named;
 });
 
-/** Copies each source into `dir`, never a link, and answers the name each is kept under. */
 export const copyInto = Effect.fn("attachments.copyInto")(function* (
   dir: string,
   sources: ReadonlyArray<string>,
@@ -92,7 +79,6 @@ export const copyInto = Effect.fn("attachments.copyInto")(function* (
   return Arr.map(named, ({ name, from }) => ({ name, from }));
 });
 
-/** Keeps words too long to type as a file in `dir`, named by digest so a retry keeps one. */
 export const keepMessage = Effect.fn("attachments.keepMessage")(function* (
   dir: string,
   words: string,
@@ -115,7 +101,6 @@ export const keepMessage = Effect.fn("attachments.keepMessage")(function* (
   }
 });
 
-/** Every file in `dir`, by name; none where there is no such directory. */
 export const listAttachments = Effect.fn("attachments.list")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -137,10 +122,8 @@ export const listAttachments = Effect.fn("attachments.list")(function* (dir: str
 export const mediaTypeOf = (file: string) =>
   Str.split(Bun.file(file).type, ";")[0] || "application/octet-stream";
 
-/** The line a steer's text gains for each file it brought. */
 export const attachedLine = (path: string) => `Attached: ${path}`;
 
-/** Paths as typed at a prompt: separated by spaces, with shell-style quotes and `\` escapes. */
 export const typedPaths = (typed: string) => {
   const paths: string[] = [];
   let word: string | null = null;

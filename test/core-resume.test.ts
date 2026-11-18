@@ -1,8 +1,3 @@
-// A Run's agents on core brought back after a full stop: the fake core loses every
-// terminal, and the host starts each agent of a Run still running again under its name, in
-// its checkout, with its harness's resume of the session recorded at launch. The host is
-// the real registry, engine and agents; the Codex agent's App Server is the stand-in.
-
 import { Herdr } from "../src/herdr";
 import { launchesAt } from "./support/records";
 import * as Arr from "effect/Array";
@@ -67,7 +62,6 @@ beforeEach(() =>
   ),
 );
 
-/** Every stand-in App Server a launch started, which nothing else stops once the test ends. */
 const Started = Schema.fromJsonString(
   Schema.Struct({ pid: Schema.Finite, argv: Schema.Array(Schema.String) }),
 );
@@ -91,7 +85,6 @@ afterEach(() =>
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(fastForward(effect));
 
-/** Reads until `wanted` holds, paced on the wall clock the fake core's turns take. */
 const until = <A, E, R>(read: () => Effect.Effect<A, E, R>, wanted: (value: A) => boolean) =>
   Effect.gen(function* () {
     for (let tries = 0; ; tries++) {
@@ -103,7 +96,6 @@ const until = <A, E, R>(read: () => Effect.Effect<A, E, R>, wanted: (value: A) =
     }
   });
 
-/** Until an agent that ended its turn without its Output has been reminded and left it unwritten. */
 const remindersSpent = (runId: string) =>
   until(
     () =>
@@ -140,14 +132,12 @@ const hostOf: () => AgentHost = () => ({
     opencode: {
       ...COMPACTION_PORTS.opencode!,
       gate: Effect.void,
-      // Never a real `opencode serve` to make a first session on.
       install: (ctx) =>
         COMPACTION_PORTS.opencode!.install({ ...ctx, session: ctx.session ?? "ses_notes" }),
     },
   },
 });
 
-/** One host's lifetime over the state directory: a second one is what a restart is. */
 const hosted = <A, E>(
   run: Effect.Effect<
     A,
@@ -207,7 +197,6 @@ const finished = (runId: string) =>
 const coreCalls = (calls: ReadonlyArray<Call>) =>
   Arr.filter(calls, (call) => call.transport === "core");
 
-/** Where core has the agent idle again after it was given its step, its Output still out. */
 const idleAfterItsStep = (agent: string, given: "sent" | "at launch" = "sent") =>
   until(
     () => Effect.map(rig.calls(), coreCalls),
@@ -228,7 +217,6 @@ const idleAfterItsStep = (agent: string, given: "sent" | "at launch" = "sent") =
     },
   );
 
-/** The session an agent's launch recorded, once it has: the launch is written before it. */
 const recordedSession = (runId: string, operation: string) =>
   until(
     () =>
@@ -248,7 +236,6 @@ const Launch = Schema.Struct({
   cwd: Schema.String,
   argv: Schema.Array(Schema.String),
 });
-/** The `terminal.run` calls from `from` on, by agent. */
 const launchesSince = (calls: ReadonlyArray<Call>, from: number) =>
   Effect.forEach(
     Arr.filter(coreCalls(calls).slice(from), (call) => call.cmd === "terminal.run"),
@@ -282,7 +269,6 @@ test(
             return super.terminalKill(address).pipe(
               Effect.tap(() => {
                 if (agents === undefined || recovering === null) return Effect.void;
-                // Detached: recovery interrupts the fiber closing the pane, and a child would end with it.
                 return Effect.forkDetach(agents.resumeLost(recovering, runningNow)).pipe(
                   Effect.tap((fiber) => Effect.sync(() => competitions.push(fiber))),
                   Effect.asVoid,
@@ -466,7 +452,6 @@ test(
           Effect.gen(function* () {
             const runId = yield* started("claude,codex,pi,opencode", "r1");
             const named = (operation: string) => agentName(runId, operation, null, 1);
-            // OpenCode's reporter writes the session it opened, as the plugin would.
             yield* until(
               () => fs.exists(`${dir()}/agents/${runId}/opencode.status.js`),
               (there) => there,
@@ -486,7 +471,6 @@ test(
             const view = yield* finished(runId);
             return { runId, named, sessions, before, view };
           }),
-          // Compaction's controls are what give OpenCode a server to be prompted on.
           { ...hostOf(), compactAtTokens: COMPACT_AT_TOKENS },
         );
         const { runId, named, sessions, before, view } = result;
@@ -508,14 +492,11 @@ test(
         expect(after(of("claude").argv, "--resume")).toBe(sessions.claude.value);
         expect(of("claude").argv).not.toContain("--session-id");
         expect(of("codex").argv.slice(0, 3)).toEqual(["codex", "resume", THREAD]);
-        // Codex refuses permission overrides on a remote resume; the thread keeps its own.
         expect(of("codex").argv).not.toContain("--approve-for-me");
         expect(after(of("opencode").argv, "--session")).toBe("ses_notes");
-        // OpenCode ignores a --prompt given with a session that has a conversation.
         expect(of("opencode").argv).not.toContain("--prompt");
         expect(after(of("pi").argv, "--session-id")).toBe(sessions.pi.value);
 
-        // OpenCode takes no keys until its TUI is drawn, so its server is prompted instead.
         expect(sendsSince(calls, before)).toEqual([]);
         const posted = sendsSince(calls, before, "prompt_async");
         expect(Arr.map(posted, (send) => send.terminal)).toEqual([named("opencode")]);
@@ -674,7 +655,6 @@ test(
   120_000,
 );
 
-/** A running Run's recovery, as the host gives it, with nobody to ask. */
 const runningNow: RunNow = {
   running: Effect.succeed(true),
   authority: Effect.succeed({ created: null, roaming: false, started: null }),
@@ -728,8 +708,6 @@ for (const [hasSession, sessionOnlyAnchor, outcome] of [
             expect(reused.reused).toBe(true);
             expect(reused.terminalId).toBe(latest.terminalId);
 
-            // Older naming truncated the generation suffix. Keep those persisted names
-            // literal so this recovery fixture also works after naming is corrected.
             const collided = "w01-public-text-is-chec-5hhdvh-r";
             const historical = { ...earlier, agent: collided };
             yield* recordLaunch(historical);
@@ -748,8 +726,6 @@ for (const [hasSession, sessionOnlyAnchor, outcome] of [
               });
             }
             const runRecords = yield* RunRecords;
-            // The original start was saved before its terminal could be recorded. Later
-            // work established the terminal of that same session, without another start.
             if (sessionOnlyAnchor)
               yield* runRecords.setControl(
                 RELAUNCH,
@@ -846,8 +822,6 @@ test("quota incident publication waits for an admitted core recovery", () =>
         );
         const recovery = yield* Effect.forkChild(agents.resumeLost(runId, runningNow));
         yield* Deferred.await(launching);
-        // Run to the first suspension: publication must wait at recovery admission,
-        // before it can enter the real filesystem write observed above.
         const publishing = yield* Effect.forkChild(
           agents.usageWaiting(launched, {
             _tag: "RanOut",
@@ -955,8 +929,6 @@ test("core recovery resumes each agent only after its own quota wait clears", ()
           return runId;
         }),
       );
-      // The prior host has stopped; call the recovery boundary without another engine
-      // concurrently resuming the workflow and changing its usage wait.
       yield* Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const agents = yield* Agents;
@@ -1027,7 +999,6 @@ test(
             return { runId, agent };
           }),
         );
-        // What a Herdr 1 start left: a register row with no backend, and no start record.
         yield* registerAgent(scopeFor(rig.projectDir), {
           role: "pi",
           agent,
@@ -1073,7 +1044,6 @@ test(
             return { runId, agent };
           }),
         );
-        // Herdr 1 kept its row in a register named by its socket and workspace.
         yield* registerAgent(
           { session: `${rig.root}/herdr.sock`, workspaceId: "w1", cwd: rig.projectDir },
           {
@@ -1121,8 +1091,6 @@ test(
             return { runId, launched };
           }),
         );
-        // Stop the workflow host before testing recovery's race with endAgent. Its
-        // still-active Output collection would otherwise be another recovery caller.
         const { ended, left } = yield* Effect.gen(function* () {
           const agents = yield* Agents;
           const recoveries: Array<Fiber.Fiber<void>> = [];
@@ -1205,7 +1173,6 @@ test(
                 "close",
               ),
             );
-            // Room for an end that does not wait on the recovery to finish before it.
             yield* TestClock.withLive(Effect.sleep("500 millis"));
             yield* Deferred.succeed(go, undefined);
             const ended = yield* Fiber.join(ending);

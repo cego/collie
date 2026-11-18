@@ -1,6 +1,3 @@
-// How to start each supported agent CLI, pass it a model, and inject a Persona.
-// Personas are injected, never installed as harness-native config (CONTEXT.md, Persona).
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -43,13 +40,6 @@ export function isPermissionMode(value: string | undefined): value is Permission
   return value !== undefined && PERMISSION_MODE_SET.has(value);
 }
 
-/**
- * A `permissions` value from a config file or a definition's frontmatter, as written —
- * kept even when it is not a string. Every neighbouring key drops a non-string and falls
- * back, which is harmless when the fallback is the default harness or model. Here the
- * fallback is `auto`, so a dropped `permissions: false` would start an agent that
- * approves its own calls; kept as text, validation names it instead.
- */
 export function permissionsAsWritten(value: YamlValue | undefined) {
   if (value === undefined) return undefined;
   return isString(value) ? value : JSON.stringify(value);
@@ -63,10 +53,6 @@ const ManagedSettingsJson = Schema.fromJsonString(
   }),
 );
 
-/**
- * Whether Claude Code's managed settings — an organisation's, which no flag overrides —
- * disable its bypass mode, in the file itself or any file in its drop-in directory.
- */
 export const claudeForbidsBypass = Effect.fn("Harness.claudeForbidsBypass")(function* (
   dir: string,
 ) {
@@ -104,51 +90,23 @@ export interface McpLaunch {
 
 export interface HarnessAdapter extends HarnessModels {
   id: string;
-  /** herdr agent kind, i.e. the canonical executable. */
   kind: string;
   modelArgs(model: string): string[];
-  /**
-   * Present when the harness takes a persona file as a flag. herdr rejects agent
-   * arguments it cannot encode for the shell, so this takes a path, not the text.
-   */
   personaArgs?(personaFile: string): string[];
-  /** Present when the harness can be given a directory beyond the one it starts in. */
   dirArgs?(dir: string): string[];
-  /** Present when the harness lets a Step ask for a reasoning effort level. */
   effortArgs?(effort: string): string[];
-  /**
-   * How this harness is told to review its own tool calls rather than ask (`auto`), or to
-   * run them unasked (`bypass`). A mode left out starts it as `harness` does.
-   */
   permissionArgs?: {
     readonly auto?: ReadonlyArray<string>;
     readonly bypass?: ReadonlyArray<string>;
   };
-  /**
-   * Present where an organisation's managed settings can forbid the bypass switch, which
-   * no flag overrides. A bypass they forbid is started in auto mode instead.
-   */
   bypassForbidden?(env: PluginEnv): Effect.Effect<boolean, never, FileSystem.FileSystem>;
-  /** Present when the harness takes an auto-compact window: this flag, then the window. */
   autoCompactFlag?: string;
-  /** Present when the harness asks before it will work in a directory. */
   trust?(home: string, backupDir: string): Trust;
   mcp(launch: McpLaunch): {
     readonly args: string[];
     readonly env: Readonly<Record<string, string>>;
   };
-  /**
-   * What the human channel types to *start* a skill in this harness. The skills
-   * themselves are shared — `~/.agents/skills`, installed by skills.sh — so only the
-   * syntax differs, and a harness with no slash form is asked for it in words. This
-   * is not for mentioning a skill inside a prompt: nothing expands a slash command in
-   * a file a model is handed. `skillMention` is the mention.
-   */
   skillCommand(name: string): string;
-  /**
-   * What to check first when this harness stops producing output. Unset where nobody
-   * has seen one hang: an invented hint is worse than none.
-   */
   stuckHint?: string;
 }
 
@@ -208,11 +166,8 @@ export const HARNESSES: Harnesses = {
     mcp: ({ extension }) => ({ args: ["-e", extension], env: {} }),
     skillCommand: (name) => `/skill:${name}`,
     modelArgs: (model) => ["--model", model],
-    // pi reads a path here as file contents, so the persona file can be passed directly.
     personaArgs: (file) => ["--append-system-prompt", file],
     effortArgs: (effort) => ["--thinking", effort],
-    // No permissionArgs: pi has no tool-approval prompt, and its `--approve` only
-    // trusts project-local files (`pi --help`, checked 2026-09-03).
     ...HARNESS_MODELS.pi!,
   },
   opencode: {
@@ -241,21 +196,14 @@ export const HARNESSES: Harnesses = {
     },
     skillCommand: (name) => `the ${JSON.stringify(name)} skill`,
     modelArgs: (model) => ["--model", model],
-    // No auto mode: its `--auto` approves every call rather than reviewing it.
     permissionArgs: { bypass: ["--auto"] },
     ...HARNESS_MODELS.opencode!,
   },
 };
 
-/**
- * The OpenCode plugin that gives an agent on core its status, which OpenCode does not
- * report itself: OSC 7501 to `tty` from its own session's events. It also writes that
- * session's id to `sessionFile`, once, for the agent to be resumed in.
- */
 export const opencodeReporter = (files: {
   sessionFile: string;
   tty: string;
-  /** The session an agent started again resumes. */
   session?: string;
 }) => `import { linkSync, unlinkSync, writeFileSync } from "node:fs";
 
@@ -325,7 +273,6 @@ export const CollieStatus = async () => {
 };
 `;
 
-/** The harness argv an agent is started with in its core terminal. */
 export function startArgs(
   harness: HarnessAdapter,
   model: string,
@@ -346,10 +293,8 @@ export function startArgs(
   ];
 }
 
-/** Asked once per harness per process, as its version is: the binary does not change under a host. */
 const helps = new Map<string, string>();
 
-/** A harness's `--help` as installed; empty, and asked again, where it cannot be run. */
 export const installedHelp = Effect.fn("Harness.installedHelp")(function* (kind: string) {
   const known = helps.get(kind);
   if (known !== undefined) return known;
@@ -361,10 +306,6 @@ export const installedHelp = Effect.fn("Harness.installedHelp")(function* (kind:
   return help;
 });
 
-/**
- * The auto-compact window a harness is started with: the configured one as written, left
- * off where its `--help` does not list the flag, and refused where it would not take it.
- */
 export const autoCompactWindowFor = Effect.fn("Harness.autoCompactWindowFor")(function* (
   harness: HarnessAdapter,
   written: number | string,
@@ -379,24 +320,20 @@ export const autoCompactWindowFor = Effect.fn("Harness.autoCompactWindowFor")(fu
     : { passed: null, leftOff: `${harness.kind} --help does not list ${flag}` };
 });
 
-/** Persona text to prepend to the first prompt when the harness has no flag for it. */
 export function personaPrefix(harness: HarnessAdapter, persona: string) {
   return harness.personaArgs ? "" : persona;
 }
 
-/** A harness session at a start: one Collie chose for it, or the one it had. */
 export interface StartSession {
   readonly id: string;
   readonly resumed: boolean;
 }
 
-/** A harness's arguments for its session: before its other arguments, and after them. */
 export interface SessionArgs {
   readonly lead: ReadonlyArray<string>;
   readonly tail: ReadonlyArray<string>;
 }
 
-/** How each harness is started in `session`. */
 export const sessionArgs = (harness: string, session: StartSession) => {
   const { id } = session;
   if (!session.resumed) return { lead: [], tail: ["--session-id", id] };

@@ -1,5 +1,3 @@
-// What a Measurement of the base against itself says about proving anything with its plan.
-
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema } from "effect";

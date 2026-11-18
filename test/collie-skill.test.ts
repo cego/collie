@@ -1,6 +1,3 @@
-// What the operator skill teaches an agent about the CLI has to be what the CLI does, and
-// must not teach a command substitution a security scanner flags.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";

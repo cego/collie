@@ -1,6 +1,3 @@
-// A question whose options are solutions: every front door reads them recommended first,
-// an answer names one by id or title, and a row an older host wrote reads as it always did.
-
 import * as Arr from "effect/Array";
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";

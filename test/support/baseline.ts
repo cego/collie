@@ -1,16 +1,6 @@
 import { Herdr } from "../../src/herdr";
 import { isString } from "../../src/schema";
 import { hostRecords, hostRunRecords, launchesAt, overHost } from "./records";
-// The shipped workflows as modules, run the way a user's own module is run.
-//
-// Nothing here is special-cased for being shipped, and every scenario runs twice: as
-// shipped, and saved as a user's entry under an id that shares nothing with it. The same
-// assertions have to hold both times. The entries are loaded from
-// `workflows/` through the public contract, the agents are herdr's through the real
-// dispatcher with a stand-in harness at the far end, and the engine is Effect's over real
-// SQLite. What is proved is that the Markdown supplies the content — the persona, the
-// prompts, the skill each step is started with — while the module decides everything that
-// happens: what is asked of whom, in what order, and what the answer starts next.
 
 import * as Arr from "effect/Array";
 import { RunRecords } from "../../src/run-records";
@@ -176,7 +166,6 @@ type Shipped = keyof typeof UNRELATED;
 let rig: Rig;
 let dir: string;
 
-/** A scenario's effect, reading and writing a Run's records where the host it drives does. */
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>) =>
   runShared(effect.pipe(overHost(() => dir)));
 
@@ -199,11 +188,9 @@ const noGitlabMrs = (bin: FakeBin) =>
     mrs: [],
   });
 let started: ChildAsk[] = [];
-/** The invocations whose child ends in failure. */
 let failing = new Set<string>();
 let childWaits = new Map<string, Deferred.Deferred<void>>();
 let admittedChildren = new Set<string>();
-/** A held invocation, and the invocation whose start it waits for. */
 let startsAfter = new Map<string, string>();
 let startSignals = new Map<string, Deferred.Deferred<void>>();
 const startSignal = (invocation: string) => {
@@ -211,26 +198,21 @@ const startSignal = (invocation: string) => {
   startSignals.set(invocation, signal);
   return signal;
 };
-/** The session a scenario runs its children in, as Runs of their parent's module; null records them. */
 let runningChildren: {
   readonly context: Context.Context<SessionServices>;
-  /** Where each child's workflow stays registered for as long as its parent is driven. */
   readonly scope: Scope.Closeable;
   readonly tagsOnly: boolean;
 } | null = null;
-/** Each child run for real, by invocation. */
 let childRuns = new Map<string, ChildRunning>();
 let renamed = false;
 let slack = fakeSlack();
 
-/** The public id a shipped workflow is run under in this pass. */
 const idOf = (name: Shipped) => (renamed ? UNRELATED[name] : name);
 const shipped = (name: Shipped) =>
   renamed
     ? `${rig.root}/user/workflows/${idOf(name)}.workflow.ts`
     : `${ROOT}workflows/${name}.workflow.ts`;
 
-/** A scenario, run once as shipped and once under the unrelated ids: see `register`. */
 const scenarios: Array<{
   readonly name: string;
   readonly body: () => Promise<void>;
@@ -240,13 +222,11 @@ const scenario = (name: string, body: () => Promise<void>, timeout?: number) => 
   scenarios.push({ name, body, timeout });
 };
 
-/** A test about the shipped modules themselves, which has one pass. */
 const shippedOnly: Array<() => void> = [];
 const once = (name: string, body: () => Promise<void>, timeout?: number) => {
   shippedOnly.push(() => test(name, () => withForges(body), timeout));
 };
 
-/** The installation is this checkout, so the shipped personas are the ones found. */
 const hostOf: () => AgentHost = () => ({
   dir,
   env: rig.pluginEnv({ COLLIE_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab }),
@@ -259,7 +239,6 @@ const hostOf: () => AgentHost = () => ({
   collectMs: 1000,
 });
 
-/** Children as the host admits them, recorded rather than run: this suite is the parent. */
 const children = Layer.succeed(Children)(
   Children.of({
     start: (ask) =>
@@ -304,10 +283,8 @@ const children = Layer.succeed(Children)(
   }),
 );
 
-/** A host layer a test may wrap, for the one capability it has no service to answer with. */
 type HostOverride = Layer.Layer<Host, never, Host | PlatformServices | ForgeHttp | RunRecords>;
 
-/** The host's own layers, placing checkouts through the rig's herdr. */
 const foundation = () => ({
   dir,
   userDir: rig.userDir,
@@ -317,7 +294,6 @@ const foundation = () => ({
   slack: (token: string) => slackApi(token, slack.client),
 });
 
-/** How often production is read; a scenario that must not wait on it sets it long. */
 let productionPoll: Duration.Input = "20 millis";
 const reviewPoll: Duration.Input = "20 millis";
 
@@ -333,7 +309,6 @@ type SessionServices =
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner;
 
-/** Forgets a journal of these Runs, as a host that never wrote it would have none. */
 const forgetJournal = (runs: ReadonlyArray<string>, journal: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -361,14 +336,12 @@ const session = <A, E>(run: Effect.Effect<A, E, SessionServices>, override?: Hos
         ),
       ),
       Effect.scoped,
-      // The Run keeps the scenario's clock; the hang guard is real time.
       Effect.provideService(Clock.Clock, clock),
       Effect.timeout("60 seconds"),
       Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
     ),
   ).pipe(Effect.orDie);
 
-/** Each Run's module, by the entry it was loaded from. */
 let modules = new Map<string, string>();
 
 const loaded = (entry: string, runId: string) =>
@@ -388,7 +361,6 @@ interface ChildRunning {
   readonly id: string;
 }
 
-/** A child admitted as a Run of its parent's module, in the parent's session. */
 const runChild = (
   running: NonNullable<typeof runningChildren>,
   ask: ChildAsk,
@@ -410,10 +382,6 @@ const runChild = (
     childRuns.set(ask.invocation, { made, registered, runId, input: ask.input, id });
   }).pipe(Effect.orDie, Effect.provideContext(running.context));
 
-/**
- * A child run for real to its end, on its parent's fiber as the host runs one, so the engine
- * links the two: its result, or its failure as the parent hears it.
- */
 const childEnd = (running: NonNullable<typeof runningChildren>, child: ChildRunning) =>
   // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- A loaded module's erased error, translated to WorkflowError below, as the host translates it.
   child.made.workflow.execute({ runId: child.runId, input: child.input }).pipe(
@@ -425,7 +393,6 @@ const childEnd = (running: NonNullable<typeof runningChildren>, child: ChildRunn
     Effect.provideContext(running.context),
   );
 
-/** A child run for real, once it has started: what it asks, and an answer given as a door gives one. */
 const childDriven = (invocation: string, parent?: Effect.Effect<typeof RunStatus.Type>) =>
   Effect.gen(function* () {
     const { context } = runningChildren!;
@@ -470,7 +437,6 @@ const EXECUTION = {
   stopped: "stopped",
 } as const;
 
-/** A Run's row of its Flow, built as RunDetail builds it from what the Run recorded and was asked. */
 const laneIn = (runId: string, state: RunState = "running") =>
   Effect.gen(function* () {
     const asked = yield* (yield* Store).asked(runId);
@@ -497,17 +463,14 @@ const laneIn = (runId: string, state: RunState = "running") =>
 
 const laneNow = (runId: string, state?: RunState) => session(laneIn(runId, state));
 
-/** A lane read from the Store alone, with no engine to pick the Run's messages up again. */
 const laneRead = (runId: string) =>
   laneIn(runId).pipe(Effect.provide(recordsAt(dir)), Effect.scoped);
 
 const nodeIn = (lane: FlowLane, id: string) =>
   Option.getOrUndefined(Arr.findFirst(lane.nodes, (node) => node.id === id));
 
-/** Each node of a lane as its id and state, in the lane's order. */
 const statesOf = (lane: FlowLane) => Arr.map(lane.nodes, (node) => [node.id, node.state]);
 
-/** A Run's lane once `ready` holds of it, while the Run goes on in the background. */
 const laneWhen = (options: {
   readonly entry: string;
   readonly runId: string;
@@ -515,11 +478,6 @@ const laneWhen = (options: {
   readonly options?: Readonly<Record<string, string>>;
   readonly ready: (lane: FlowLane) => boolean;
   readonly host?: HostOverride;
-  /**
-   * The agent working when it is read, given its Output by hand, and the Outputs after it
-   * that take the Run to where it stops: left running, the engine would wait out its
-   * termination timeout for it.
-   */
   readonly outputs: ReadonlyArray<Schema.Json>;
   readonly working: { readonly operation: string; readonly output: unknown };
   readonly rest: ReadonlyArray<Schema.Json>;
@@ -548,7 +506,6 @@ const laneWhen = (options: {
           ...options.working,
           rest: options.rest,
         };
-        // The fake reads its queue by position, so what was taken stays where it was.
         yield* rig.queueOutputs([...options.outputs, null, ...completing.rest]).pipe(Effect.orDie);
         yield* (yield* FileSystem.FileSystem)
           .writeFileString(
@@ -608,11 +565,6 @@ const undeclaredWork = () =>
     return loose;
   });
 
-/**
- * The row a host admits before it hands work over. Seeded here because `place` reads it:
- * a Run works in the checkout it was started for, which is a fact about the Run and not
- * something a module is told.
- */
 const admit = (options: {
   readonly runId: string;
   readonly workflow: string;
@@ -640,15 +592,12 @@ const admit = (options: {
     Effect.orDie,
   );
 
-/** A Run of a shipped module, parked on the question it asks. */
 const parked = (options: {
   readonly entry: string;
   readonly runId: string;
   readonly input: Readonly<Record<string, Schema.Json>>;
-  /** The host's own launch options, as a front door settles them apart from the input. */
   readonly options?: Readonly<Record<string, string>>;
   readonly decision: string;
-  /** The Run this one was started from. */
   readonly parent?: string;
   readonly task?: string;
 }) =>
@@ -677,7 +626,6 @@ const parked = (options: {
     }),
   );
 
-/** The human answers, in a host that never saw the attempt that asked. */
 const answered = (options: {
   readonly entry: string;
   readonly runId: string;
@@ -695,14 +643,12 @@ const answered = (options: {
           executionId: yield* made.workflow.executionId(payload),
           value: options.value,
         }).pipe(Effect.orDie);
-        // Authored modules expose Schema.Unknown failures; this test records their actual result.
-        // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context
+        // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Authored modules expose Schema.Unknown failures; this test records their actual result.
         return yield* made.workflow.execute(payload).pipe(Effect.result);
       }).pipe(Effect.provide(made.layer));
     }),
   );
 
-/** The human answers, and the Run goes on until it is waiting on the next question. */
 const answeredThen = (options: {
   readonly entry: string;
   readonly runId: string;
@@ -742,14 +688,12 @@ const solutionsOf = (
     Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === decision))?.options ?? "[]",
   );
 
-/** The ids a question takes, as the store keeps them: the options are JSON on the row. */
 const optionsOf: (
   rows: ReadonlyArray<{ readonly decision: string; readonly options: string }>,
   decision: string,
 ) => ReadonlyArray<string> = (rows, decision) =>
   Arr.map(solutionsOf(rows, decision), (one) => one.id);
 
-/** The id a question recommends, and what keeps it short of standard; null for none. */
 const recommendedOf = (
   rows: ReadonlyArray<{
     readonly decision: string;
@@ -770,14 +714,12 @@ const recommendedOf = (
 const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
   result._tag === "Success" ? String(result.success) : "";
 
-/** Every message core was asked to type into an agent, in order; each names its work. */
 const prompts = () =>
   Effect.map(
     agentPrompts(),
     Arr.map((call) => String(call.params?.text)),
   );
 
-/** The Clearance line typed with an operation's step message, or "" for none. */
 const clearance = (runId: string, operation: string) =>
   prompts().pipe(
     Effect.map(
@@ -802,7 +744,6 @@ const clearance = (runId: string, operation: string) =>
     ),
   );
 
-/** The branch of the checkout an operation was told it works in. */
 const checkoutBranch = (runId: string, operation = "mr") =>
   Effect.gen(function* () {
     const root = /^Project root: (.+)$/m.exec(yield* asked(runId, operation))?.[1];
@@ -811,14 +752,12 @@ const checkoutBranch = (runId: string, operation = "mr") =>
     );
   });
 
-/** What an operation was actually asked, which is the file its message named. */
 const asked = (runId: string, operation: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${dir}/agents/${runId}/${operation}.prompt.md`)),
     Effect.orDie,
   );
 
-/** Whether an operation was asked anything at all. */
 const wasAsked = (runId: string, operation: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.exists(`${dir}/agents/${runId}/${operation}.prompt.md`)),
@@ -881,7 +820,6 @@ scenario(
           decision: "next",
         });
 
-        // A skill that refuses a model's own invocation is started as a human starts one.
         expect(
           Option.getOrUndefined(
             Option.map(Option.fromNullishOr((yield* prompts())[0]), (present________________) =>
@@ -889,12 +827,10 @@ scenario(
             ),
           ),
         ).toBe(true);
-        // The content is the Markdown's, with this Run's own directory rendered into it.
         const work = yield* asked("r-arch", "architecture");
         expect(work).toContain(`Report: ${runDir(dir, "r-arch")}/plan/ARCHITECTURE.md`);
         expect(work).toContain(`Project root: ${rig.projectDir}`);
         expect(work).toContain("why are there two registries");
-        // And the persona is the Markdown persona, with its skills as paths to read.
         const body = yield* persona("r-arch", "architecture");
         expect(body).toContain("You are an architect");
         expect(body).toContain("improve-codebase-architecture/SKILL.md");
@@ -904,7 +840,6 @@ scenario(
   120_000,
 );
 
-/** What a planner or architect rooted at the Projects root is told about it. */
 const ROOTED = "it is not a repository: find the\nrepositories under it";
 
 scenario(
@@ -961,7 +896,6 @@ scenario(
         expect(started).toHaveLength(1);
         expect(started[0]?.workflow).toBe("implement");
         expect(started[0]?.input).toEqual({ plan: `${runDir(dir, "r-arch-go")}/plan` });
-        // What the work is called and what it proves; where it works is the child's own.
         expect(started[0]?.options).toEqual({ task: "one-registry", outcome: "refactor" });
       }),
     ),
@@ -1006,7 +940,6 @@ const GRILLED = {
 const SPEC = { verdict: "clean", findings: [], spec: "plan/SPEC.md" };
 const TICKETS = { verdict: "clean", findings: [], issues_dir: "plan/issues", tickets: 3 };
 const GOAL = { goal: "make the registries one" };
-/** What a start passes for implement to end at its merge request without asking. */
 // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
 const FINISH = { then: "finish" } as const;
 
@@ -1100,8 +1033,6 @@ scenario(
           decision: "next-1",
         });
 
-        // One agent for the whole plan: the interview is still in the agent that writes
-        // the spec, which is why the spec needs no second telling of what was decided.
         const starts = yield* rig
           .cmds()
           .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
@@ -1113,8 +1044,6 @@ scenario(
         expect(interview).toContain("make the registries one");
         expect(interview).not.toContain(ROOTED);
         expect(interview).toContain(`collie run answer r-plan "Implement now"`);
-        // The two skills that write the plan are started, not merely mentioned: both
-        // refuse an agent that invokes them itself.
         expect(
           Option.getOrUndefined(
             Option.map(Option.fromNullishOr(sent[1]), (present_________________) =>
@@ -1135,7 +1064,6 @@ scenario(
         for (const operation of ["grill", "spec", "tickets"])
           expect(yield* asked("r-plan", operation)).not.toContain(UNATTENDED);
         expect(yield* persona("r-plan", "grill")).toContain("You are a planner");
-        // A changelog is for a rewrite, which none of the first three steps is.
         for (const step of ["grill", "spec", "tickets"])
           expect([step, pipe(yield* asked("r-plan", step), Str.includes("changelog"))]).toEqual([
             step,
@@ -1223,7 +1151,6 @@ scenario(
         expect(started).toHaveLength(1);
         expect(started[0]?.workflow).toBe("implement");
         expect(started[0]?.input).toEqual({ plan: `${runDir(dir, "r-plan-go")}/plan` });
-        // What the work is called and what it proves; where it works is the child's own.
         expect(started[0]?.options).toEqual({ task: "one-registry", outcome: "feature" });
       }),
     ),
@@ -1259,7 +1186,6 @@ scenario(
   120_000,
 );
 
-/** Checkouts under the project, and a plan in the Run's own directory whose tickets name them. */
 const repositories = (
   runId: string,
   tickets: ReadonlyArray<{
@@ -1370,7 +1296,6 @@ scenario(
         });
 
         expect(said(result)).toContain("3 repositories built in 2 wave(s)");
-        // The repositories nothing waits on first, then the one waiting on the api.
         expect(Arr.map(started, (one) => [one.invocation, one.workflow, one.options])).toEqual(
           Arr.map(["api", "docs", "web"], (repo) => [
             `implement-${repo}`,
@@ -1383,11 +1308,9 @@ scenario(
             },
           ]),
         );
-        // Nobody attends a repository's share, so each ends at its merge request.
         expect(Arr.map(started, (one) => one.input)).toEqual(
           Arr.map(["api", "docs", "web"], () => ({ plan, ...FINISH })),
         );
-        // The parent builds nothing itself, and asks nothing.
         expect(yield* questions("r-impl-fan")).toEqual([]);
         expect(yield* prompts()).toEqual([]);
       }),
@@ -1471,7 +1394,6 @@ scenario(
           "implement-docs",
         ]);
         expect(reasonOf(result)).toContain("api did not build. Not run: web, waiting on api.");
-        // Named for nothing, every repository's branch is named after the Run that fanned out.
         expect(new Set(Arr.map(started, (one) => one.options?.task))).toEqual(
           new Set(["r-impl-stop"]),
         );
@@ -1694,7 +1616,6 @@ scenario(
           blocking("third"),
           fixed("third"),
           blocking("fourth"),
-          // Not one of the Run's Checks and never run, so the last fix's word for it buys nothing.
           fixed("fourth", [{ name: "lint" }]),
           fixed("fourth"),
           CLEAN_SYNTHESIS,
@@ -1916,7 +1837,6 @@ scenario(
   120_000,
 );
 
-/** A ticket the planner wrote, and the benchmark plan beside it where it names one. */
 const ticketed = (
   runId: string,
   file: string,
@@ -1950,7 +1870,6 @@ const ticketed = (
     return `${issues}/${named}`;
   }).pipe(Effect.orDie);
 
-/** A benchmark plan as a planner writes one: the harness's paths, and no commits yet. */
 const speedUp: (metrics: typeof BenchmarkPlan.Encoded.metrics) => typeof BenchmarkPlan.Encoded = (
   metrics,
 ) => ({
@@ -1962,7 +1881,6 @@ const speedUp: (metrics: typeof BenchmarkPlan.Encoded.metrics) => typeof Benchma
   samples: 4,
 });
 
-/** A step's own text, from its work source on, with this rig's directories named the same in every rig. */
 const unrooted = (prompt: string) =>
   pipe(
     prompt,
@@ -1991,7 +1909,6 @@ scenario(
           ...BUILT,
           criteria: [{ criterion, met: "the scenario shows it" }],
         });
-        // The faster ticket's builder works on while it measures; its Output is written by hand.
         yield* rig.queueOutputs([
           GRILLED,
           SPEC,
@@ -2038,7 +1955,6 @@ scenario(
             new RegExp(`collie measure --base \\S+ --plan ${benchmark} --pass ${pass}`),
           );
 
-        // The builder: the harness's commit added to the plan, then both passes measured.
         const plan = { ...speedUp([STEADY_PRIMARY, SIZE_GUARDRAIL]) };
         yield* fs.writeFileString(
           benchmark,
@@ -2069,7 +1985,6 @@ scenario(
 
         const plain = yield* asked(build, "02-plain.md");
         expect(plain).not.toContain("collie measure");
-        // Rendered by 7d15bed3, before tickets named a benchmark plan.
         yield* matchGolden(unrooted(plain));
         expect(unrooted(plain)).toBe(yield* readText(GOLDEN));
 
@@ -2147,8 +2062,6 @@ scenario(
           until: "next-2",
         });
 
-        // A reviewer of its own — the planner that wrote the plan cannot second-guess it —
-        // and then the planner, told what was found rather than sent to read it.
         const starts = yield* rig
           .cmds()
           .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
@@ -2163,10 +2076,6 @@ scenario(
   120_000,
 );
 
-/**
- * A fork of a shipped workflow as a person keeps one: it spreads the original and changes
- * only which agent does which work, so every other part of it follows the original.
- */
 const fork = (name: Shipped, id: string, agents: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -2239,7 +2148,6 @@ once(
           expect(one.args).toContain("--model openai-codex/gpt-6-astra --thinking max");
         }
         expect(yield* launched()).toHaveLength(1);
-        // What the reviewers are told is still the shipped review's.
         expect(yield* asked("r-review-pi", "review-1")).toContain(
           "Review target: branch:main...HEAD",
         );
@@ -2341,16 +2249,13 @@ scenario(
         expect(yield* prompts()).toHaveLength(1);
         const first = yield* asked("r-review", "review-1");
         expect(first).toContain("Review target: branch:main...HEAD");
-        // The axes a human asked for are on top of the complete review, said once.
         expect(first).toContain("Additional axes requested for this change: security");
         expect(first).toContain("Iteration 1 of at most 1");
-        // One seat is one review: there is nothing for a synthesis to reconcile.
         expect(first).toContain("You may be the only reviewer of this change");
 
         const fs = yield* FileSystem.FileSystem;
         const where = runDir(dir, "r-review");
         expect(yield* fs.readFileString(`${where}/review.md`)).toContain("It moves the guard.");
-        // Beside it, what a card counts: the prose is for the human, this is for the card.
         expect(yield* fs.readFileString(`${where}/findings.json`)).toContain(
           "the guard is on the wrong side",
         );
@@ -2438,7 +2343,6 @@ scenario(
           decision: "post-1",
         });
 
-        // A branch is nothing to post a note on, so posting is not among the answers.
         expect(optionsOf(rows, "post-1")).toEqual([
           "Fix findings",
           "Fix findings in a full implement run",
@@ -2457,7 +2361,6 @@ scenario(
           value: "Don't post",
         });
         expect(said(result)).toBe("1 finding(s), not posted");
-        // Asking whether the branch can be fixed cuts no checkout of it.
         expect(yield* worktrees()).toBe(before);
       }),
     ),
@@ -2519,7 +2422,6 @@ scenario(
           until: "post-2",
         });
 
-        // The fix is reviewed again at once: a round of the rally, not a fix taken on its word.
         expect(yield* prompts()).toHaveLength(3);
         expect(yield* asked("r-review-mr", "review-2-1")).toContain("Iteration 2");
         const fix = yield* asked("r-review-mr", "fix");
@@ -2532,7 +2434,6 @@ scenario(
         expect(fix).toContain("never the whole suite");
         expect(fix).not.toContain("Run the project's checks");
         expect(yield* persona("r-review-mr", "fix")).toContain("You are an implementer");
-        // Nothing is left to fix after a clean review, so fixing is not offered again.
         const rows2 = yield* parked({
           entry: shipped("review"),
           runId: "r-review-mr",
@@ -2563,7 +2464,6 @@ const REVIEW_HEAD = "1234567890abcdef1234567890abcdef12345678";
 for (const name of ["gitlab", "github"] as const) {
   const noun = name === "gitlab" ? "merge request" : "pull request";
   const target = mrTarget(PROJECT[name], "30");
-  /** The forge on PATH, holding the one merge request this review is of. */
   const reviewing = () =>
     Effect.gen(function* () {
       const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -3331,9 +3231,7 @@ scenario(
           value: "Fix findings",
           until: "post-2",
         });
-        // Review, fix, review, fix, review: the second fix nobody was asked about.
         expect(yield* prompts()).toHaveLength(5);
-        // Pointed at the review it follows, which is where the second round's finding is.
         expect(yield* asked("r-rally", "fix-2")).toContain(`${runDir(dir, "r-rally")}/review.md`);
         expect(yield* asked("r-rally", "fix")).toContain(`Project root: ${reviewed}`);
         expect(yield* asked("r-rally", "fix-2")).toContain(`Project root: ${reviewed}`);
@@ -3343,7 +3241,6 @@ scenario(
         expect(
           Option.getOrNull(pipe(listed.stdout, Str.match(/^branch refs\/heads\/feature$/gm))),
         ).toHaveLength(1);
-        // A clean review still asks, so a merge request review can still be posted.
         expect(optionsOf(rows, "post-2")).not.toContain("Fix findings");
       }),
     ),
@@ -3581,7 +3478,6 @@ scenario(
         yield* rig.queueOutputs([SYNTHESIS]);
         const target = "branch:main...HEAD";
         const review = { entry: shipped("review"), runId: "r-fix-refused", input: { target } };
-        // A parent nobody is implementing for: the hand-off finds no one to take it.
         const first = yield* parked({ ...review, decision: "post-1", parent: "r-gone" });
         expect(optionsOf(first, "post-1")).toContain("Fix findings");
         expect(optionsOf(first, "post-1")).not.toContain("Fix findings in a full implement run");
@@ -3638,7 +3534,6 @@ scenario(
           value: "Fix findings",
           until: "post-2",
         });
-        // Four fixes, each reviewed, and then the human: not the Run ending on its own.
         expect(yield* prompts()).toHaveLength(9);
         expect(optionsOf(rows, "post-2")).toContain("Fix findings");
         expect(optionsOf(rows, "post-2")).toContain("Don't post");
@@ -3656,7 +3551,6 @@ scenario(
         const fixed = { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] };
         yield* reviewedBranch();
         const target = "branch:main...feature";
-        // The same finding back after a fix is a round that changed nothing: the human decides.
         yield* rig.queueOutputs([SYNTHESIS, fixed, SYNTHESIS]);
         yield* parked({
           entry: shipped("review"),
@@ -3673,7 +3567,6 @@ scenario(
           until: "post-2",
         });
         expect(optionsOf(stuck, "post-2")).toContain("Fix findings");
-        // Review, fix, review, and then the question: no fix nobody asked for.
         expect(yield* prompts()).toHaveLength(3);
       }),
     ),
@@ -3686,7 +3579,6 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([SYNTHESIS, SYNTHESIS]);
-        // The implementer of the Run this review was started from, live and registered as it.
         const paneId = yield* rig.addAgent("impl-live").pipe(Effect.orDie);
         yield* registerAgent(scopeFor(rig.projectDir), {
           role: "implementer",
@@ -3720,11 +3612,8 @@ scenario(
         );
         expect(handed).toHaveLength(1);
         expect(handed[0]).toContain(`${runDir(dir, "r-review-live")}/review.md`);
-        // One agent, the lone reviewer; the fix went to the one already here.
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
 
-        // Collie cannot see that agent finish, so the human says when to look again, and
-        // the next review is a follow-up of this one rather than a fresh start.
         const rows = yield* parked({
           entry: shipped("review"),
           runId: "r-review-live",
@@ -3854,7 +3743,6 @@ scenario("what a finished Run of each shipped module offers is the module's own 
           Effect.orDie,
         );
 
-      // The entry this pass loads is the id it claims to be.
       expect(
         yield* loadEntry(shipped("review")).pipe(
           Effect.map((described) => described.id),
@@ -3862,8 +3750,6 @@ scenario("what a finished Run of each shipped module offers is the module's own 
         ),
       ).toBe(idOf("review"));
 
-      // A review with findings has something to fix; one that came back clean has not,
-      // and neither answer comes from the workflow being called "review".
       const review = yield* declaredIn(shipped("review"));
       expect(
         Arr.map(
@@ -3910,21 +3796,16 @@ scenario("what a finished Run of each shipped module offers is the module's own 
         Arr.map(offersFrom(implement, { ...delivered, succeeded: false }), (o) => o.id),
       ).toEqual(["follow-up"]);
 
-      // A plan offers what it wrote, and only once it has written something.
       const plan = yield* declaredIn(shipped("plan"));
       expect(
         Arr.map(offersFrom(plan, facts({ outcome: "plan", planIssues: 3 })), (o) => o.id),
       ).toEqual(["implement-now"]);
-      // A follow-up is hidden once somebody has said what became of the work.
       expect(offersFrom(plan, facts({ outcome: "plan", planIssues: 3, disposed: true }))).toEqual(
         [],
       );
 
-      // The architect's report is read by a human; nothing is offered off the back of it.
       expect(yield* declaredIn(shipped("architecture"))).toEqual([]);
 
-      // A renovation that failed holding the claim offers to recover it, on the repository
-      // it was started on; one that failed holding nothing offers to renovate it again.
       const renovate = yield* declaredIn(shipped("renovate"));
       const failed = facts({ succeeded: false, claim: "project" });
       const recovery = offersFrom(renovate, failed, { self: idOf("renovate") });
@@ -3968,8 +3849,6 @@ once(
           decision: "next",
         });
 
-        // The same question, the same persona, the same report — the module decides all
-        // of it, and none of it came from where the file was saved.
         expect(
           Option.getOrUndefined(
             Option.map(Option.fromNullishOr((yield* prompts())[0]), (present___________________) =>
@@ -3995,7 +3874,6 @@ once(
   120_000,
 );
 
-/** A Run of a shipped module that asks nothing, run to the end it reaches on its own. */
 const ran = (options: {
   readonly entry: string;
   readonly runId: string;
@@ -4015,8 +3893,7 @@ const ran = (options: {
         task: options.task,
       });
       const payload = { runId: options.runId, input: options.input };
-      // Authored modules expose Schema.Unknown failures; this test records their actual result.
-      // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context
+      // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Authored modules expose Schema.Unknown failures; this test records their actual result.
       return yield* made.workflow.execute(payload).pipe(Effect.result, Effect.provide(made.layer));
     }),
     options.host,
@@ -4163,19 +4040,15 @@ const asJson = flow(
   Result.getOrThrow,
 );
 
-/** A Run's fact, as its host keeps it; null where it has none. */
 const factOf = (runId: string, name: string) =>
   RunRecords.use((records) => records.fact(runId, name));
 const putFact = (runId: string, name: string, value: string) =>
   RunRecords.use((records) => records.put(runId, name, value));
 
-/** Where a Run's checks are frozen, by its id. */
 const APPROVED = "evidence/approved.json";
-/** These checks, frozen for the Run where a start would freeze them. */
 const freeze = (runId: string, specs: Parameters<typeof asApproved>[0]) =>
   putFact(runId, APPROVED, asApproved(specs));
 
-/** A program that sets a Run's fact in a host's database to a file's text, from outside the host. */
 const PUT_FACT = `import { Database } from "bun:sqlite";
 const [db, run, name, from] = Bun.argv.slice(2);
 const open = new Database(db);
@@ -4185,7 +4058,6 @@ open
   .run(run, name, await Bun.file(from).text());
 `;
 
-/** A program that prints a control over a Run in a host's database, from outside the host. */
 const GET_CONTROL = `import { Database } from "bun:sqlite";
 const [db, control, run] = Bun.argv.slice(2);
 const open = new Database(db);
@@ -4194,10 +4066,6 @@ const row = open.query("SELECT data FROM collie_controls WHERE control = ? AND r
 process.stdout.write(row?.data ?? "");
 `;
 
-/**
- * What an agent's turn writes and runs to set a Run's fact to `text`, as a process apart
- * from the host does: the value and the program that records it, then the program run.
- */
 const factSet = (runId: string, name: string, text: string) => {
   const value = `${rig.root}/facts/${runId}/${name}`;
   return {
@@ -4211,7 +4079,6 @@ const factSet = (runId: string, name: string, text: string) => {
 const factSetSh = (runId: string, name: string, from: string) =>
   `'${process.execPath}' '${rig.root}/put-fact.ts' '${dir}/host.db' '${runId}' '${name}' '${from}'`;
 
-/** What a human approved Collie to run for this Run, frozen where a start would freeze it. */
 const approve = (runId: string, names: ReadonlyArray<string>) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -4232,10 +4099,6 @@ const approve = (runId: string, names: ReadonlyArray<string>) =>
     Effect.orDie,
   );
 
-/**
- * A glab that finds no merge request from the branch: a push is only known not to be a
- * merge once the forge has said so.
- */
 const noMergeRequests = Effect.acquireRelease(
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -4245,15 +4108,10 @@ const noMergeRequests = Effect.acquireRelease(
   (bin) => bin.restore(),
 );
 
-/**
- * A real repository with a GitLab remote, level with its default branch. What binds a
- * verification is the tree it ran on, and a directory git knows nothing about has no tree to move.
- */
 const levelRepository = () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const made = yield* preparedRepository;
-    // Fetched from a bare repository beside it, and known to the forge by `upstream`.
     const origin = `${rig.root}/project-origin.git`;
     yield* fs.copy(`${made}/origin.git`, origin);
     yield* fs.copy(`${made}/project`, rig.projectDir);
@@ -4262,17 +4120,14 @@ const levelRepository = () =>
     yield* fs.writeFileString(config, pipe(text, Str.replace(`${made}/origin.git`, origin)));
   }).pipe(Effect.orDie);
 
-// Per home: a `--rerun-each` run removes the last run's.
 let prepared: { readonly home: string; readonly made: string } | undefined;
 
 const preparedRepository = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  // The default provider holds the environment the file started with, and its home.
   const home = yield* Config.String("HOME").pipe(
     Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
   );
   if (prepared?.home === home) return prepared.made;
-  // Under the suite's home: what a test makes beside it is reported as left behind.
   const made = yield* fs.makeTempDirectory({ directory: home, prefix: "baseline-repository-" });
   const origin = `${made}/origin.git`;
   const project = `${made}/project`;
@@ -4293,10 +4148,6 @@ const preparedRepository = Effect.gen(function* () {
   return made;
 }).pipe(Effect.orDie);
 
-/**
- * That repository with a commit the default branch does not have, so its base is another
- * tree and a Run on it has work to land.
- */
 const repository = () =>
   levelRepository().pipe(
     Effect.andThen(
@@ -4305,7 +4156,6 @@ const repository = () =>
   );
 const ahead = repository;
 
-/** A real repository whose `feature` branch has a checkout of its own, as a reviewed branch does. */
 const reviewedBranch = () =>
   Effect.gen(function* () {
     yield* repository();
@@ -4316,7 +4166,6 @@ const reviewedBranch = () =>
     return checkout;
   });
 
-/** A plan of tickets on disk, which is the only thing that makes a build a list. */
 const planOf = (
   tickets: ReadonlyArray<{ file: string; title: string; checks: string; body?: string }>,
   where = `${rig.root}/plan`,
@@ -4334,7 +4183,6 @@ const planOf = (
     return where;
   });
 
-/** Outputs where each null is a step the scenario does by hand, its agent working until then. */
 const byHand = (outputs: ReadonlyArray<Schema.Json | null>) =>
   Arr.map(outputs, (one) => one ?? { writes: [], output: null, owed: true });
 
@@ -5076,8 +4924,6 @@ scenario(
         yield* approve("r-empty-recovery", ["unit"]);
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
 
-        // An agent's start gives every Input, one it leaves out as "" (docs/cli.md), and the
-        // branch of new work was never pushed, so there is nothing to recover from.
         const result = yield* ran({
           entry: shipped("implement"),
           runId: "r-empty-recovery",
@@ -5120,24 +4966,18 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
-        // One implementer for the build, the fixes and the merge request; the reviewer is
-        // its own, because it may not vouch for the change.
         const starts = yield* rig
           .cmds()
           .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
         expect(starts).toHaveLength(2);
-        // The second ticket is handed what the first left, not the whole transcript.
         const second = yield* asked("r-impl", "02-second.md");
         expect(second).toContain("Ticket: 02-second.md — the second one");
         expect(second).toContain("- 01-first.md — the first one");
         expect(second).toContain("made the registry one");
-        // What this Run will be held to, named before it starts rather than guessed at.
         expect(second).toContain(`- unit: true (in ${rig.projectDir})`);
-        // And the card a slice landing leaves, whether or not the agent wrote its own.
         expect(yield* factOf("r-impl", "steering/progress/01-first.json")).toContain(
           `"status":"done"`,
         );
-        // Collie keeps progress, so the card has one entry per ticket and no second slug.
         expect(
           Arr.sortWith(
             Arr.map(yield* readCheckpoints(runDir(dir, "r-impl")), ({ checkpoint }) => [
@@ -5170,7 +5010,6 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-live", ["unit"]);
-        // The first ticket's Output is written by hand, once the plan has moved under it.
         yield* rig.queueOutputs(byHand([null, BUILT, CLEAN_SYNTHESIS, OPENED]));
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-live", input: { plan, ...FINISH } }),
@@ -5305,7 +5144,6 @@ scenario(
         );
         expect(review).toContain("- **Named.** Each one is named in the log.\n  → src/log.ts");
         expect(review).toContain("- assumed: a registry nobody reads is still counted");
-        // A ticket with no checkboxes has nothing to answer, and goes nowhere twice.
         expect(yield* asked("r-criteria", "02-second.md")).toContain(
           "None: this work names no checkbox criteria",
         );
@@ -5427,7 +5265,6 @@ scenario(
         yield* approve(runId, ["unit"]);
         yield* rig.queueOutputs([
           BUILT,
-          // The first stall is handed back without asking; the second is asked about.
           { ...BUILT, findings: [{ severity: "blocker", title: "dependency unavailable" }] },
           { ...BUILT, findings: [{ severity: "blocker", title: "dependency unavailable" }] },
           {
@@ -5934,8 +5771,6 @@ scenario(
   120_000,
 );
 
-/** implement delivering a ticket with an after-merge outcome, to park on its merge request: `gh` is missing. */
-/** A git whose origin, a GitLab URL no test can reach, answers that it has no such branch. */
 const branchlessOrigin = (bin: FakeBin) =>
   bin.add("git", `[ "$1" = ls-remote ] && exit 2\nexec "${Bun.which("git")}" "$@"`);
 
@@ -6016,7 +5851,6 @@ scenario(
         const runId = "r-unsettled-recovered";
         const { bin, repaired, options } = yield* afterMergeParking(runId);
         yield* parkedOn(options);
-        // The journal origin/master's build leaves: the line in log.txt, no Activity for it.
         const forgotten = yield* session(
           Effect.gen(function* () {
             const sql = yield* SqlClient.SqlClient;
@@ -6236,7 +6070,6 @@ const BLOCKED = {
   commits: [],
 };
 
-/** The stall question under `name` once it is open, or none if the Run ended first. */
 const stallAsked = (
   run: {
     readonly status: Effect.Effect<typeof RunStatus.Type>;
@@ -6628,7 +6461,6 @@ scenario(
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* noGitlabMrs(bin);
         yield* repository();
-        // The plan is a planner Run's own, so that Run is in this one's lineage.
         const plan = yield* planOf(
           [
             { file: "01-first.md", title: "the first one", checks: "unit" },
@@ -6676,10 +6508,6 @@ scenario(
   120_000,
 );
 
-/**
- * A real repository on `master` whose origin is a bare repository beside it, so the default
- * branch can move under a Run as another clone pushes to it.
- */
 const withOrigin = () =>
   Effect.gen(function* () {
     const git = (cwd: string, ...args: string[]) =>
@@ -6714,9 +6542,7 @@ const withOrigin = () =>
     yield* git(upstream, "config", "user.name", "u");
     return {
       git,
-      /** A commit on the Run's own checkout, as its builder would leave one. */
       commitHere: (file: string, body: string) => commit(rig.projectDir, file, body),
-      /** Master moved by somebody else, answering with where it is now. */
       moveMaster: (file: string, body: string) =>
         commit(upstream, file, body).pipe(
           Effect.tap(() => git(upstream, "push", "-q", "origin", "master")),
@@ -6891,10 +6717,6 @@ scenario(
   120_000,
 );
 
-/**
- * Implement started over a plan of tickets with these bodies. Each agent is answered from
- * `outputs`, where null is one the scenario answers with `answer` once it has looked.
- */
 const implementing = (
   runId: string,
   tickets: ReadonlyArray<{ readonly file: string; readonly body: string }>,
@@ -6928,7 +6750,6 @@ const implementing = (
         ),
       answer: (operation: string) =>
         fs.writeFileString(`${agents}/${operation}.json`, asJson(BUILT)),
-      /** Waits until it parks on opening its merge request, as it does with no forge at origin. */
       untilParked: Effect.gen(function* () {
         yield* until(logged, (said) => pipe(said, Str.includes("Cannot open the merge request")));
         yield* Fiber.interrupt(running);
@@ -7058,11 +6879,6 @@ scenario(
 
 type Step = Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner>;
 
-/**
- * Runs implement over the tickets until it ends or parks on its merge request (the origin is
- * no forge). Each hand is a step done by hand, as its agent would, before its Output is
- * written; `outputs` answers every step in order, with null for each one done by hand.
- */
 const builtUntilParked = (
   runId: string,
   tickets: ReadonlyArray<string>,
@@ -7133,7 +6949,6 @@ scenario(
         );
 
         expect(log).toContain(`integrated master@${moved}`);
-        // A merge commit on the branch, never a rebase: what was built is still its parent.
         const parents = Str.split(
           yield* git(rig.projectDir, "rev-list", "--parents", "-n", "1", "HEAD"),
           " ",
@@ -7166,7 +6981,6 @@ scenario(
                 moved = yield* moveMaster("shared.txt", "theirs\n");
               }),
             },
-            // The next ticket's builder finishes the merge first.
             { operation: "02-second.md", step: Effect.asVoid(commitHere("shared.txt", "both\n")) },
           ],
         );
@@ -7365,14 +7179,12 @@ scenario(
 
         const opening = yield* asked("r-impl-mr", "mr");
         expect(opening).toContain("- Assignee: `someone-else`");
-        // The checkout's branch, never the one the build's Output named.
         const cleared = yield* clearance("r-impl-mr", "mr");
         expect(cleared).toBe(
           `Cleared for this step: pushing ${yield* checkoutBranch("r-impl-mr")} to origin (https://gitlab.example.com/group/project); opening or updating its merge request there.`,
         );
         expect(cleared).not.toContain("mk/one-registry");
         expect(cleared).not.toContain("merging");
-        // What was collected, by whom — Collie ran it, so it is not the agent's claim.
         expect(opening).toContain("unit");
         expect(opening).toContain("by collie");
       }),
@@ -7380,7 +7192,6 @@ scenario(
   120_000,
 );
 
-/** The host, with the Run's checkout on `branch`, as placement leaves a Change run's. */
 const placedOn: (branch: string) => HostOverride = (branch) =>
   Layer.effect(Host)(
     Effect.gen(function* () {
@@ -7392,7 +7203,6 @@ const placedOn: (branch: string) => HostOverride = (branch) =>
     }),
   );
 
-/** The command a Change run's merge request is opened with, as its prompt gives it. */
 const changeRunOpening = (runId: string, options: Readonly<Record<string, string>>) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -7447,7 +7257,6 @@ scenario(
   120_000,
 );
 
-/** One ticket built, reviewed clean and delivered on a forge where nothing merges itself. */
 const delivering = (runId: string) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -7459,7 +7268,6 @@ const delivering = (runId: string) =>
     return { bin, plan };
   });
 
-/** implement parked on what next, once its merge request is open. */
 const deliveredAsking = (runId: string) =>
   Effect.gen(function* () {
     const { bin, plan } = yield* delivering(runId);
@@ -7663,7 +7471,6 @@ scenario(
         yield* approve(runId, ["unit"]);
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
         failing = new Set(["stage-1"]);
-        // What the host records where Stage's checkout is refused.
         const stage = runDir(dir, `${runId}-stage-1`);
         yield* fs.makeDirectory(stage, { recursive: true });
         yield* fs.writeFileString(checkoutRefusedFile(stage), "every slot is held\n");
@@ -7727,7 +7534,6 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(`${OPENED.mr_url}; done`);
-        // No placement of its own: it works in implement's checkout, on the branch.
         expect(started).toEqual([RELEASE_STARTED]);
       }),
     ),
@@ -7922,7 +7728,6 @@ scenario(
         });
         yield* bin.restore();
 
-        // No fix round for a minor finding, by design; but not silently either.
         expect(yield* prompts()).toHaveLength(3);
         const log = yield* (yield* FileSystem.FileSystem).readFileString(
           `${runDir(dir, "r-impl-minor")}/log.txt`,
@@ -8170,9 +7975,6 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
-        // The fix is told what was found and where the round stands, and the second review
-        // is a fresh reviewer rather than the one that wrote the first.
-        // How to build is the step's to say, the review is Collie's, and so is progress.
         const builder = yield* persona("r-impl-fix", "build");
         for (const prompt of [
           yield* asked("r-impl-fix", "build"),
@@ -8208,7 +8010,6 @@ scenario(
         expect(fixing).toContain("Iteration 1 of at most 4");
         const followUp = yield* asked("r-impl-fix", "review-2-1");
         expect(followUp).toContain("Iteration 2 of at most 4");
-        // Where the implementer's account of the first round really is.
         expect(followUp).toContain(`${dir}/agents/r-impl-fix/fix-1.json`);
       }),
     ),
@@ -8236,8 +8037,6 @@ scenario(
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* noGitlabMrs(bin);
         yield* repository();
-        // What a review module leaves behind: the prose a human reads and the findings a
-        // card counts. There is no engine run record beside it, and there never will be.
         const fs = yield* FileSystem.FileSystem;
         const reviewed = `${rig.root}/reviewed`;
         yield* fs.makeDirectory(reviewed, { recursive: true });
@@ -8270,8 +8069,6 @@ scenario(
         yield* noGitlabMrs(bin);
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-        // Approved, and it fails until repaired: an Output that says the tests pass is a claim,
-        // and the journal is what the gate reads.
         const count = `${rig.root}/runs`;
         yield* approve("r-impl-gate", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
@@ -8319,7 +8116,6 @@ scenario(
         yield* fs.writeFileString(`${rig.root}/repaired`, "fixed\n");
         const completed = yield* resumed(options);
         expect(said(completed)).toBe(OPENED.mr_url);
-        // The latest record on this tree failed, so the resume runs the check again.
         expect(yield* runsOf(count)).toBeGreaterThan(failedRuns);
         expect(yield* parkedWhy("r-impl-gate")).toBe("");
         expect(
@@ -8399,7 +8195,6 @@ scenario(
   120_000,
 );
 
-/** The Intent `run intent set-outcome` leaves. */
 const outcomeSet = (runId: string, outcome: string) =>
   amend(
     seedIntent(runId, {}),
@@ -8407,7 +8202,6 @@ const outcomeSet = (runId: string, outcome: string) =>
     "human:kind",
     "2026-10-26T00:00:00Z",
   );
-/** That Intent, recorded as an agent answers. */
 const outcomeSetBy = (runId: string, outcome: string) =>
   factSet(
     runId,
@@ -8521,7 +8315,6 @@ scenario(
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* noGitlabMrs(bin);
         yield* repository();
-        // The second ticket's criteria are left unanswered, so the Run stops after its build.
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit" },
           { file: "02-second.md", title: "the second one", checks: "unit", body: CRITERIA },
@@ -8630,7 +8423,6 @@ scenario(
         yield* noGitlabMrs(bin);
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-        // Fails at the gate and on its recheck, then passes once the fix has run.
         const count = `${rig.root}/runs`;
         yield* approve("r-gate-fix", ["unit"]);
         yield* freeze("r-gate-fix", [
@@ -8685,8 +8477,6 @@ scenario(
           {
             name: "unit",
             executable: "sh",
-            // What the marker says while it runs, then: red at the gate and on the recheck,
-            // green after the fix.
             argv: [
               "-c",
               `'${process.execPath}' '${reader}' '${dir}/host.db' ${VERIFYING} r-passes >> ${seen}; echo >> ${seen}; echo >> ${count}; wc -l < ${count} | { read n; [ $n -ge 3 ]; }`,
@@ -8731,7 +8521,6 @@ scenario(
           ["recheck", undefined],
           ["fix", 1],
         ]);
-        // Gone once nothing is running.
         expect(
           yield* RunRecords.use((records) => records.control(VERIFYING, "r-passes")),
         ).toBeNull();
@@ -8740,7 +8529,6 @@ scenario(
   120_000,
 );
 
-/** A Run's checks: `unit` run here, and each of `jobs` left to CI under its own name, counting any local run. */
 const leftToCi = (runId: string, jobs: ReadonlyArray<string>) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -8803,7 +8591,6 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        // Nobody ran it: not the gate, not the proof's rely.
         expect(yield* runsOf(`${rig.root}/nuxi-runs`)).toBe(0);
         for (const operation of ["build", "mr"])
           expect(yield* asked(runId, operation)).toContain(
@@ -8969,7 +8756,6 @@ scenario(
 const CI_BASE = pipe("b", Str.repeat(40));
 const CI_LOG = (id: number) => `glab ci trace ${id} --repo ${PROJECT.gitlab}`;
 
-/** The merge request on `head` into `target`, its `nuxi-job` as given, and that job at the base as given. */
 const ciOn: (head: string, job: FakeJob, base?: FakeJob["state"], target?: string) => ForgeModel = (
   head: string,
   job: FakeJob,
@@ -8993,7 +8779,6 @@ const ciOn: (head: string, job: FakeJob, base?: FakeJob["state"], target?: strin
 });
 const ciFailing: FakeJob = { name: "nuxi-job", state: "failed", retried: "failed" };
 
-/** A GitLab trace in which bun failed `name` in `file`, its section markers and colours left in. */
 const failedTrace = (file: string, name: string) =>
   Arr.join(
     [
@@ -9008,7 +8793,6 @@ const failedTrace = (file: string, name: string) =>
 const OWN_TEST = "a new thing settles on its first try";
 const OWN_FILE = "test/new-thing.test.ts";
 
-/** A commit in `cwd` adding a test of the branch's own, and its sha. */
 const ownTestCommitted = (cwd: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -9021,7 +8805,6 @@ const ownTestCommitted = (cwd: string) =>
     return yield* revParse("HEAD", cwd);
   });
 
-/** A commit on top of HEAD with the same tree, and the write that makes it HEAD, as a fix's push would. */
 const ciFixCommit = (parent = "HEAD") =>
   Effect.gen(function* () {
     const sha = Str.trim(
@@ -9095,7 +8878,6 @@ scenario(
         expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(
           "ci fix 1 landed after the last review and was not re-reviewed",
         );
-        // The merge request is updated by the push, never opened again.
         const fs = yield* FileSystem.FileSystem;
         expect(
           Arr.filter(
@@ -9328,7 +9110,6 @@ scenario(
       Effect.gen(function* () {
         const { bin } = yield* deliveringOn("gitlab");
         yield* ownTestCommitted(rig.projectDir);
-        // The merge request targets the branch origin has, where this one leaves it.
         const target = Str.trim(
           (yield* exec(["git", "symbolic-ref", "--short", "HEAD"], { cwd: rig.projectDir })).stdout,
         );
@@ -9489,7 +9270,6 @@ scenario(
   120_000,
 );
 
-/** A check that counts its runs in `counter`, `$n` being this one, and passes while `holds` does. */
 const counting = (name: string, counter: string, holds = "true") => ({
   name,
   executable: "sh",
@@ -9504,7 +9284,6 @@ const runsOf = (counter: string) =>
     Effect.orElseSucceed(() => 0),
   );
 
-/** Each check the proof relied on, by name, and the verification it named. */
 const reliedOn = (runId: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${runDir(dir, runId)}/log.txt`)),
@@ -9521,7 +9300,6 @@ const reliedOn = (runId: string) =>
 
 const GATE_FIX = { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] };
 
-/** A gate fix that moves the tree, so the gate runs its checks again on it. */
 const moving = <A>(output: A, n = 1) => ({
   writes: [{ path: `${rig.projectDir}/fixed-${n}`, text: "fixed\n" }],
   output,
@@ -9581,7 +9359,6 @@ scenario(
         const runId = "r-gate-fix-reruns";
         yield* approve(runId, ["unit", "lint"]);
         yield* freeze(runId, [
-          // Red at the gate and on the recheck, until the fix re-grants it.
           counting("unit", `${rig.root}/unit-runs`, "false"),
           counting("lint", `${rig.root}/lint-runs`),
         ]);
@@ -9606,7 +9383,6 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
-        // The fix left the tree as it was, so lint's pass at the gate still answers.
         expect(yield* runsOf(`${rig.root}/lint-runs`)).toBe(1);
         expect(yield* runsOf(`${rig.root}/unit-runs`)).toBe(2);
         const records = yield* readVerifications(evidenceDir(dir, runId));
@@ -9623,7 +9399,6 @@ scenario(
   120_000,
 );
 
-/** bun's output for a run whose one failure is `the flaky one` in test/one.test.ts. */
 const FLAKY_OUTPUT = Arr.join(
   [
     "test/one.test.ts:",
@@ -9641,15 +9416,8 @@ const FLAKY_OUTPUT = Arr.join(
 
 const ONE_PASSES = `printf ' 1 pass\\n 0 fail\\n' >&2`;
 const ONE_FAILS = `printf ' 0 pass\\n 1 fail\\n' >&2; exit 1`;
-/** bun at the base, naming the test `-t` asked for as the one that failed. */
 const FAILS_AT_BASE = `n="\${4#^}"; printf '(fail) %s\\n 0 pass\\n 1 fail\\nRan 1 test across 1 file.\\n' "\${n%$}" >&2; exit 1`;
 
-/**
- * `unit` counts its runs in `counter` and, while `fails` holds for run `$n`, prints
- * `printed` and exits 1; a `bun` on PATH stands in for each of its tests run alone: `rerun`
- * on the branch, and `atBase` (passing, unless given) where it leaves the default branch,
- * counted in `base-runs`.
- */
 const failingThen = (
   runId: string,
   options: {
@@ -9721,7 +9489,6 @@ scenario(
           "- unit: the flaky one (test/one.test.ts) failed, then passed when run again alone on the same tree — a Flake, so this Run has not settled it.",
         );
         expect(yield* gateFixed(runId)).toBe(false);
-        // Neither the recheck nor the proof runs the whole check again.
         expect(yield* passesOf(runId)).toEqual(["gate", "rerun"]);
       }),
     ),
@@ -9736,7 +9503,6 @@ scenario(
         const runId = "r-flake-not";
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-        // Red at the gate, green at the base and after the fix.
         const bin = yield* failingThen(runId, {
           fails: "[ $n -eq 1 ]",
           printed: FLAKY_OUTPUT,
@@ -9830,7 +9596,6 @@ scenario(
   120_000,
 );
 
-/** The commit where this branch leaves the default branch, as the merge request shortens it. */
 const baseSha = () =>
   exec(["git", "rev-parse", "--short=12", "HEAD~1"], { cwd: rig.projectDir }).pipe(
     Effect.map((done) => Str.trim(done.stdout)),
@@ -9990,7 +9755,6 @@ scenario(
           printed: FLAKY_OUTPUT,
           rerun: ONE_PASSES,
         });
-        // Names nothing at the gate, then the flaky one on its recheck.
         yield* freeze(runId, [
           counting(
             "unit",
@@ -10097,7 +9861,6 @@ scenario(
         expect(mr).toContain(
           "- unit: the flaky one (test/one.test.ts) failed, then passed when run again alone on the same tree",
         );
-        // The check's own command, not a run of one of its tests.
         expect(mr).not.toContain("-t ^the new one$");
         expect(mr).toMatch(
           /- unit: the old one \(test\/one\.test\.ts\) also fails at [0-9a-f]{12}, where this branch leaves the default branch/,
@@ -10107,7 +9870,6 @@ scenario(
   120_000,
 );
 
-/** Checks red until `${rig.root}/repaired` exists. */
 const stuck = (runId: string, names: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -10131,7 +9893,6 @@ const disputing = (titles: ReadonlyArray<string>) => ({
   })),
 });
 
-/** A fix that repairs the checks and moves the tree, so the gate runs them again. */
 const repairing = () => ({
   writes: [
     { path: `${rig.root}/repaired`, text: "fixed\n" },
@@ -10172,7 +9933,6 @@ scenario(
         expect(
           Option.getOrUndefined(Arr.findLast(records, (one) => one.name === "unit"))?.result,
         ).toBe("fail");
-        // Nothing runs again on the tree the fix left as it was, not even the proof's recheck.
         expect(yield* passesOf(runId)).toEqual(["gate", "recheck"]);
       }),
     ),
@@ -10204,7 +9964,6 @@ scenario(
         expect(said(result)).toBe(OPENED.mr_url);
         expect(yield* asked(runId, "gate-fix-2")).toContain("unit failed");
         expect(yield* asked(runId, "mr")).not.toContain("disputed it and changed nothing");
-        // Each fix moved the tree, so each is followed by the check run whole.
         expect(yield* passesOf(runId)).toEqual(["gate", "recheck", "fix", "fix"]);
       }),
     ),
@@ -10240,7 +9999,6 @@ scenario(
         expect(second).toContain("unit failed");
         expect(second).toContain("lint failed");
         expect(yield* asked(runId, "mr")).not.toContain("disputed it and changed nothing");
-        // Gate fix 1 left the tree as it was, so nothing ran between the two fixes.
         expect(yield* passesOf(runId)).toEqual([
           "gate",
           "gate",
@@ -10281,7 +10039,6 @@ scenario(
   120_000,
 );
 
-/** A Run whose lint fails until `${rig.root}/repaired` exists, parked once its four gate fixes run out. */
 const heldUnproved = (runId: string) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -10328,9 +10085,7 @@ scenario(
         const runId = "r-gate-resumed";
         const { bin, options } = yield* heldUnproved(runId);
         const suspended = yield* runsOf(`${rig.root}/unit-runs`);
-        // The gate's pass answered each fix, which left the tree as it was.
         expect(suspended).toBe(1);
-        // Its gate run and one recheck.
         expect(yield* runsOf(`${rig.root}/lint-runs`)).toBe(2);
 
         const fs = yield* FileSystem.FileSystem;
@@ -10383,7 +10138,6 @@ scenario(
         yield* fs.chmod(tool, 0o755);
         yield* freeze(runId, [
           { name: "unit", executable: tool, argv: [], cwd: rig.projectDir },
-          // Upgrades unit's tool once, after unit has passed with the old one.
           counting(
             "lint",
             `${rig.root}/lint-runs`,
@@ -10420,7 +10174,6 @@ scenario(
         yield* approve(runId, ["unit", "lint"]);
         yield* freeze(runId, [
           counting("unit", `${rig.root}/unit-runs`),
-          // Leaves a file in the tree the first time, after unit has passed on the tree before it.
           counting("lint", `${rig.root}/lint-runs`, `[ -f generated ] || echo > generated`),
         ]);
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, GATE_FIX, OPENED]);
@@ -10436,7 +10189,6 @@ scenario(
         const records = yield* readVerifications(evidenceDir(dir, runId));
         const unit = Arr.filter(records, (one) => one.name === "unit");
         const final = (yield* fingerprint(rig.projectDir)).fingerprint;
-        // Passed at the gate on the tree before lint's file, so run again after the fix.
         expect(Arr.map(unit, (one) => [one.pass, one.result])).toEqual([
           ["gate", "pass"],
           ["fix", "pass"],
@@ -10546,7 +10298,6 @@ scenario(
         expect(yield* asked("r-impl-own-red", "gate-fix-1")).toContain("unit failed");
         expect(yield* parkedWhy("r-impl-own-red")).toContain("unit failed");
         expect(yield* fs.exists(`${dir}/agents/r-impl-own-red/mr.prompt.md`)).toBe(false);
-        // Its output names no tests, so nothing is run at the base.
         expect(yield* git("rev-parse", "--abbrev-ref", "HEAD")).toBe("feature");
         const journal = yield* session(
           RunRecords.use((records) =>
@@ -10692,7 +10443,6 @@ scenario(
           file: "src/a.ts",
         };
         yield* rig.queueOutputs([
-          // An assumption the spec did not settle travels the same way.
           { ...BUILT, assumptions: ["callers never pass an empty list"] },
           { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
           {
@@ -10702,7 +10452,6 @@ scenario(
             disputed: [{ ...finding, reason: "the list is never empty here" }],
             checks: [{ name: "unit" }],
           },
-          // The next review neither raises it again nor answers the reason.
           { ...CLEAN_SYNTHESIS },
           OPENED,
         ]);
@@ -10719,7 +10468,6 @@ scenario(
         expect(yield* asked("r-impl-dispute", "review-1")).toContain(
           "- assumed: callers never pass an empty list",
         );
-        // Still the human's, so the card counts it whatever the last review wrote.
         expect(
           Arr.map(yield* findingsIn(runDir(dir, "r-impl-dispute")), (one) => one.title),
         ).toContain("the guard is on the wrong side");
@@ -10824,7 +10572,6 @@ scenario(
           },
           ...round("two"),
           ...round("three"),
-          // B again, answered: the dispute that follows is the one the human settles.
           {
             ...CLEAN_SYNTHESIS,
             verdict: "findings",
@@ -10891,7 +10638,6 @@ scenario(
         };
         yield* rig.queueOutputs([
           BUILT,
-          // A dispute from an early round that nobody answers is still the human's to settle.
           { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [found("one"), found("X")] },
           {
             verdict: "clean",
@@ -10951,7 +10697,6 @@ scenario(
             { name: "unit", executable: "true", argv: ["regranted"], cwd: rig.projectDir },
           ]),
         );
-        // Its first run re-grants it, as a set_verification made meanwhile would, and fails.
         yield* freeze("r-late-grant", [
           {
             name: "unit",
@@ -11055,7 +10800,6 @@ scenario(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* noGitlabMrs(bin);
-        // The HTTP login works, but the CLI needed to deliver is missing.
         yield* bin.add(
           "gh",
           `case "$1 $2" in
@@ -11122,7 +10866,6 @@ const DELIVERY = {
   github: { origin: "git@github.com:owner/repo.git", other: "glab" },
 } as const;
 
-/** A checkout on `name`'s forge, its fake on PATH, and the other forge's CLI there to be unasked. */
 const deliveringOn = (name: MrForge, mrs: ForgeModel["mrs"] = []) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -11142,7 +10885,6 @@ const deliveringOn = (name: MrForge, mrs: ForgeModel["mrs"] = []) =>
     yield* exec(["git", "remote", "set-url", "upstream", DELIVERY[name].origin], {
       cwd: rig.projectDir,
     });
-    // An old GitLab remote beside origin does not make the checkout GitLab's.
     yield* exec(["git", "remote", "add", "gitlab", "git@gitlab.example.com:old/app.git"], {
       cwd: rig.projectDir,
     });
@@ -11200,7 +10942,6 @@ for (const name of ["gitlab", "github"] as const) {
           expect(prompt).toContain("- Assignee: `tester`");
           expect(prompt).not.toMatch(/glab mr create|gh pr create/);
           expect(prompt).not.toMatch(new RegExp(`\\b${DELIVERY[name].other}\\b`));
-          // Branch naming and readiness asked this forge alone.
           expect(yield* other.calls()).toEqual([]);
         }),
       ),
@@ -11212,7 +10953,6 @@ for (const name of ["gitlab", "github"] as const) {
     () =>
       runEffect(
         Effect.gen(function* () {
-          // The fake checkout stands on master, which is the branch the step reads.
           const { bin } = yield* deliveringOn(name, [
             { project: PROJECT[name], iid: "31", state: "open", sourceBranch: "master" },
           ]);
@@ -11275,7 +11015,6 @@ for (const name of ["gitlab", "github"] as const) {
             notPushed,
           );
 
-          // The human turns auto-merge off and resumes: the build starts, and the Run delivers.
           yield* forge.set({
             ...(yield* forge.model()),
             mrs: autoMerging(false),
@@ -11300,7 +11039,6 @@ for (const name of ["gitlab", "github"] as const) {
           ]);
           const runId = `r-impl-${name}-merges-itself`;
           yield* approve(runId, ["unit"]);
-          // Set to merge itself as it is opened.
           const on = forge.holding({ ...(yield* forge.model()), mrs: autoMerging(true) });
           yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, { writes: [on], output: OPENED }]);
 
@@ -11358,7 +11096,6 @@ for (const name of ["gitlab", "github"] as const) {
             title: "the guard is on the wrong side",
             file: "src/a.ts",
           };
-          // Somebody turns auto-merge on while the build is under way.
           const on = forge.holding({ ...(yield* forge.model()), mrs: autoMerging(true) });
           yield* rig.queueOutputs([
             { writes: [on], output: BUILT },
@@ -11368,7 +11105,6 @@ for (const name of ["gitlab", "github"] as const) {
             yield* stalled({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }),
           ).toBe("suspended");
           yield* bin.restore();
-          // The build and the review, and no fix.
           expect(yield* prompts()).toHaveLength(2);
           expect(yield* parkedWhy(runId)).toStartWith(notPushed);
         }),
@@ -11377,7 +11113,6 @@ for (const name of ["gitlab", "github"] as const) {
   );
 }
 
-/** The human answers, and the Run goes on until it parks itself. */
 const answeredUntilParked = (options: {
   readonly entry: string;
   readonly runId: string;
@@ -11444,7 +11179,6 @@ for (const name of ["gitlab", "github"] as const) {
                 : "https://github.com/owner/repo/pull/31"
             }`,
           );
-          // The review, and no fix.
           expect(yield* prompts()).toHaveLength(1);
         }),
       ),
@@ -11604,7 +11338,6 @@ scenario(
               );
               expect(first[1]).toContain("push denied");
               yield* run.resume;
-              // Answering replays the Run past its delivery.
               yield* goAsked(run.asked, "next");
               yield* run.answer("next", "Finish");
               return yield* ended(run.status);
@@ -11658,11 +11391,6 @@ scenario(
   120_000,
 );
 
-/**
- * A GitLab delivery from a branch of its own, open as merge request !31, whose head's only
- * pipeline was skipped. The build's push carried that head to origin; where `pushed` is
- * false, a commit after it has not been pushed yet, as the mr agent's push would carry it.
- */
 const skippedHead = (pushed: boolean, over: Partial<ForgeModel> = {}) =>
   Effect.gen(function* () {
     const { bin } = yield* deliveringOn("gitlab");
@@ -11766,7 +11494,6 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        // Only the remote head read before the agent tells this from a push that sent nothing.
         expect(yield* started).toEqual([]);
       }),
     ),
@@ -11832,7 +11559,6 @@ scenario(
         yield* bin.restore();
         expect(status.status).toBe("complete");
         expect(yield* started).toHaveLength(1);
-        // The mr agent was asked once: the resume tried the start again, not delivery.
         expect(yield* prompts()).toHaveLength(3);
       }),
     ),
@@ -11896,7 +11622,6 @@ scenario(
         yield* bin.restore();
         expect(said(result)).toStartWith("nothing to land: no commits over ");
         expect(yield* runLog(runId)).toContain(said(result));
-        // The build and its review, and no merge request.
         expect(yield* prompts()).toHaveLength(2);
         const declared = yield* loadEntry(shipped("implement")).pipe(
           Effect.map((described) => declaredByModule(described.metadata)),
@@ -11927,7 +11652,6 @@ scenario(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* levelRepository();
-        // The fake agent commits nothing, so its push sends nothing: the head's pipeline is read.
         const head = yield* headOf();
         yield* forgeOnPath(bin, "gitlab", {
           installed: true,
@@ -11939,7 +11663,6 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-impl-uncommitted";
         yield* approve(runId, ["unit"]);
-        // Left by the review, after the last merge of the default branch would have refused it.
         yield* rig.queueOutputs([
           { ...BUILT, commits: [] },
           {
@@ -11970,7 +11693,6 @@ scenario(
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* noGitlabMrs(bin);
         yield* branchlessOrigin(bin);
-        // The HTTP login works, but the CLI needed to deliver is missing.
         yield* bin.add(
           "gh",
           `case "$1 $2" in
@@ -12014,7 +11736,6 @@ exit 127`,
   120_000,
 );
 
-/** A Run of a shipped module started, and `waiting` until it has stopped by itself. */
 const running = <A, E>(
   options: ShippedRun,
   waiting: (status: Effect.Effect<string>) => Effect.Effect<A, E, FileSystem.FileSystem>,
@@ -12041,7 +11762,6 @@ const running = <A, E>(
     options.host,
   );
 
-/** A Run of a shipped module that stops by itself, waited on until it has. */
 const stalled = (options: ShippedRun) =>
   running(options, (status) =>
     until(
@@ -12050,10 +11770,6 @@ const stalled = (options: ShippedRun) =>
     ),
   );
 
-/**
- * A Run of a shipped module that parks inside an agent's wait, which the engine does not
- * report as suspended: waited on, with no deadline of its own, until it says why.
- */
 const parkedOn = (options: ShippedRun) =>
   running(options, () =>
     parkedWhy(options.runId).pipe(
@@ -12062,7 +11778,6 @@ const parkedOn = (options: ShippedRun) =>
     ),
   );
 
-/** A Run run until it awaits something that ends by itself, and what. */
 const awaitingIn = (options: ShippedRun) =>
   running(options, () =>
     awaitingOn(options.runId).pipe(
@@ -12071,7 +11786,6 @@ const awaitingIn = (options: ShippedRun) =>
     ),
   );
 
-/** A stopped Run picked up again, as `collie run resume` does it, and run to its end. */
 const resumed = (options: {
   readonly entry: string;
   readonly runId: string;
@@ -12085,28 +11799,20 @@ const resumed = (options: {
       const payload = { runId: options.runId, input: options.input };
       return yield* Effect.gen(function* () {
         yield* engine.resume(made.workflow, yield* made.workflow.executionId(payload));
-        // Authored modules expose Schema.Unknown failures; this test records their actual result.
-        // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context
+        // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Authored modules expose Schema.Unknown failures; this test records their actual result.
         return yield* made.workflow.execute(payload).pipe(Effect.result);
       }).pipe(Effect.provide(made.layer));
     }),
     options.host,
   );
 
-/** The controls over a Run, where the host on `dir` keeps them. */
 const controls = hostRunRecords(() => dir);
 
-/** A control set over the Run, as an operator sets one. */
 const setControl = (control: string, runId: string) =>
   Effect.flatMap(nowIso, (at) => controls.setControl(control, runId, at));
 
 const clearControl = (control: string, runId: string) => controls.setControl(control, runId, null);
 
-/**
- * A control's value over the Run, or "" while it is not set or the host has yet to make its
- * database. Read as the door reads: a poll that opened the database to migrate it would
- * contend with the host it watches.
- */
 const controlText = (control: string, runId: string) =>
   hostRecords(
     dir,
@@ -12145,7 +11851,6 @@ const halts = (runId: string) =>
     Arr.filter(lines, (line) => line.kind === "halt"),
   );
 
-/** What a Run awaits that ends by itself, or "" while it awaits nothing. */
 const awaitingOn = (runId: string) =>
   controlText(AWAITING, runId).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
@@ -12160,7 +11865,6 @@ const awaitedLine = (runId: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
-/** A Run resumed whose park was cleared, waited on until it parks again, and why. */
 const resumedUntilParked = (options: ShippedRun) =>
   session(
     Effect.gen(function* () {
@@ -12178,7 +11882,6 @@ const resumedUntilParked = (options: ShippedRun) =>
     }),
   );
 
-/** What `collie run intent verification` leaves for a Run: its checks, as the host keeps them. */
 const naming = (runId: string, names: ReadonlyArray<string>) =>
   factSet(
     runId,
@@ -12269,7 +11972,6 @@ scenario(
         expect(said(result)).toBe(OPENED.mr_url);
         expect(yield* parkedWhy("r-impl-named")).toBe("");
         const opening = yield* asked("r-impl-named", "mr");
-        // Listed with the command Collie spawned for it, and its run by Collie.
         expect(opening).toMatch(/- unit: \S*true \(in /);
         expect(opening).toContain("- unit: pass (by collie)");
         expect(
@@ -12326,7 +12028,6 @@ scenario(
   "a Run whose outcome needs no evidence is not stopped for having no checks",
   () =>
     runEffect(
-      // Its agent never answers, so what it waits on is the clock.
       fastForward(
         Effect.gen(function* () {
           yield* noMergeRequests;
@@ -12334,7 +12035,6 @@ scenario(
           yield* approve("r-impl-inv", []);
           yield* rig.queueOutputs([null]);
 
-          // Its agent ends its turn having written nothing, which parks it for that; never for having no checks.
           const why = yield* parkedOn({
             entry: shipped("implement"),
             runId: "r-impl-inv",
@@ -12350,7 +12050,6 @@ scenario(
   30_000,
 );
 
-/** What a shipped Run's build is asked, read once it is written; the Run goes no further. */
 const buildAsked = (options: ShippedRun) =>
   running(options, () =>
     until(
@@ -12420,11 +12119,6 @@ scenario(
   60_000,
 );
 
-/**
- * A host with no Helle to ask. The claim is a service this machine has no credentials
- * for; what the workflow does with it — take it before anything shared, give it back once
- * the work is done — is what these tests are about.
- */
 const claimed: string[] = [];
 const helleAnswers: (claim: "held" | "none", production: "deployed" | "read") => HostOverride = (
   claim,
@@ -12457,10 +12151,8 @@ const helleAnswers: (claim: "held" | "none", production: "deployed" | "read") =>
     }),
   );
 const withoutHelle = helleAnswers("held", "deployed");
-/** A claim held, and production read from the forge on PATH. */
 const holdingClaim = helleAnswers("held", "read");
 
-/** Everything a renovation needs from the machine: glab, a GitLab remote, a config. */
 const renovatable = () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -12474,7 +12166,6 @@ const renovatable = () =>
     );
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
     yield* noGitlabMrs(bin);
-    // A renovation works on the default branch itself.
     yield* levelRepository();
     return bin;
   });
@@ -12738,8 +12429,6 @@ scenario(
         const track = yield* asked("r-pkg", "track");
         expect(track).toMatch(/^Linear team \(not given means .*\): not given$/m);
         expect(track).toContain("Linear Renovate issue (not given means find it): not given");
-        // Five pieces of work, not eight: the three an application needs were not asked
-        // for, so nothing wrote `"skipped": "package"` to say it had nothing to do.
         expect(yield* prompts()).toHaveLength(5);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${dir}/agents/r-pkg/batch.prompt.md`)).toBe(false);
@@ -12774,8 +12463,6 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe("REN-1: up to date");
-        // A repository with nothing to land takes nobody's turn: the claim is the
-        // expensive prerequisite, and eligibility was decided before it.
         expect(claimed).toEqual([]);
         expect(yield* prompts()).toHaveLength(4);
       }),
@@ -12811,11 +12498,7 @@ scenario(
 
         expect(said(result)).toBe("REN-1: renovated 1.2.0; production carries it");
         expect(yield* prompts()).toHaveLength(8);
-        // Taken before the first thing that touches anything shared, given back after the
-        // last one — and not before, so nobody deploys on a half-finished renovation.
         expect(claimed).toEqual(["claim r-app", "release r-app"]);
-        // Nothing personal and nothing company-specific in the content: who the batch is
-        // assigned to and where the logs are are this installation's own configuration.
         const batching = yield* asked("r-app", "batch");
         expect(batching).toContain("glab mr create --assignee whoever-is-configured");
         expect(yield* asked("r-app", "stage")).toContain("logs.example.invalid");
@@ -12849,7 +12532,6 @@ scenario(
 
         expect(reasonOf(result)).toContain("stage was not verified");
         expect(yield* prompts()).toHaveLength(4);
-        // Nothing says stage is back on its stable release, so the claim stays with the Run.
         expect(claimed).toEqual(["claim r-stage"]);
       }),
     ),
@@ -12941,7 +12623,6 @@ scenario(
   120_000,
 );
 
-/** An application's Outputs up to the release, which each scenario below says itself. */
 const APPLICATION: ReadonlyArray<Schema.Json> = [
   TRACKED,
   { verdict: "clean", up_to_date: false, is_package: false, merge_requests: BUMPS },
@@ -12953,7 +12634,6 @@ const APPLICATION: ReadonlyArray<Schema.Json> = [
 const OLDER = pipe("1", Str.repeat(40));
 const LATER = pipe("2", Str.repeat(40));
 
-/** A renovatable checkout on `name`'s forge, whose environments are `environments`. */
 const deploying = (name: MrForge, environments: ForgeModel["environments"]) =>
   Effect.gen(function* () {
     const bin = yield* renovatable();
@@ -12965,7 +12645,6 @@ const deploying = (name: MrForge, environments: ForgeModel["environments"]) =>
       environments,
     };
     const forge = yield* forgeOnPath(bin, name, model);
-    // origin stays the bare repository, whose default branch the Run reads.
     yield* exec(["git", "remote", "set-url", "upstream", RENOVATING[name].origin], {
       cwd: rig.projectDir,
     });
@@ -13050,7 +12729,6 @@ for (const name of ["gitlab", "github"] as const) {
               );
             });
 
-          // No production job named: the forge still decides.
           yield* deployed(OLDER);
           yield* rig.queueOutputs([
             ...APPLICATION,
@@ -13094,7 +12772,6 @@ for (const name of ["gitlab", "github"] as const) {
           expect(omitted).toBe("complete");
           expect(claimed.at(-1)).toBe(`release r-omit-${name}`);
 
-          // An empty list is no different.
           yield* deployed(OLDER);
           const empty = yield* running(
             { entry, runId: `r-empty-jobs-${name}`, input: {}, host: holdingClaim },
@@ -13290,8 +12967,6 @@ scenario(
         }
         yield* fs.copyFile(`${fixtures}/landing.workflow.ts`, `${fork}/landing.workflow.ts`);
         const bin = yield* renovatable();
-        // The shipped workflow first, then the fork, out of one queue: both are packages
-        // with the same batch, so the only thing that can differ is the workflow itself.
         yield* rig.queueOutputs([
           TRACKED,
           PACKAGE,
@@ -13320,14 +12995,9 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe("REN-1: renovated deploy-7; production carries it");
-        // Under an unrelated name, from another directory: everything up to the landing is
-        // word for word what the shipped workflow asked, and only the Run it is about
-        // differs. A fork that had copied the orchestration would drift from this.
         for (const step of ["track", "assess"]) {
           expect(byRun(yield* asked("r-fork", step))).toBe(byRun(yield* asked("r-shipped", step)));
         }
-        // And the landing is the fork's own: the shipped rules for what may be merged,
-        // with its own way of merging, and a deploy where the baseline tags.
         const merging = yield* asked("r-fork", "merge");
         expect(merging).toContain("Every relevant merge request ends with exactly one outcome");
         expect(merging).toContain("merge fast-forward only");
@@ -13338,10 +13008,8 @@ scenario(
   120_000,
 );
 
-/** A prompt with the Run it is about taken out, so two Runs' prompts can be compared. */
 const byRun = (prompt: string) => pipe(prompt, Str.replaceAll(/r-(fork|shipped)/g, "<run>"));
 
-/** Each forge's merge request a Release Run is started on, and its repository. */
 const RELEASING = {
   gitlab: {
     remote: "git@gitlab.example.com:group/app.git",
@@ -13371,7 +13039,6 @@ const PACKAGED = {
 };
 const TAGGED = { verdict: "clean", tag: "v1.2.0", version: "1.2.0" };
 
-/** The merge request as a forge reads it approved by alice, green and mergeable at `head`. */
 const readyMr: (name: MrForge, head: string, merged: string, over?: Partial<FakeMr>) => FakeMr = (
   name,
   head,
@@ -13394,7 +13061,6 @@ const readyMr: (name: MrForge, head: string, merged: string, over?: Partial<Fake
   ...over,
 });
 
-/** The merge request's pipeline still running at its head, as GitLab says "ci still running". */
 const STILL_RUNNING = {
   checks: [{ name: "build", state: "running" }],
   mergeable: "running",
@@ -13407,7 +13073,6 @@ const PIPELINE_PASSED = {
 const revParse = (ref: string, cwd = rig.projectDir) =>
   exec(["git", "rev-parse", ref], { cwd }).pipe(Effect.map((ran) => Str.trim(ran.stdout)));
 
-/** A commit on `parent` that changes a byte, made without a checkout and pushed to origin's `feature`. */
 const pushedBySomebody = (parent: string, force = false) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -13434,7 +13099,6 @@ const pushedBySomebody = (parent: string, force = false) =>
     return sha;
   });
 
-/** What the forge says the tag's pipeline ran for: the tag, on the merged commit it tags. */
 const tagRun = (merged: string) => ({ ref: "v1.2.0", sha: merged });
 
 const tagOnOrigin = (sha: string) =>
@@ -13443,11 +13107,6 @@ const tagOnOrigin = (sha: string) =>
     yield* exec(["git", "push", "-q", "origin", "v1.2.0"], { cwd: rig.projectDir });
   });
 
-/**
- * A merge request from `feature`, whose checkout git already has, ready on `name`'s forge.
- * What its merge makes is already on origin's default branch, and tagged unless `tagged` is
- * false: the agent that would push the tag is a stand-in.
- */
 const releasable = (name: MrForge, over: Partial<FakeMr> = {}, tagged = true) =>
   Effect.gen(function* () {
     const reviewed = yield* reviewedBranch();
@@ -13477,7 +13136,6 @@ const releasable = (name: MrForge, over: Partial<FakeMr> = {}, tagged = true) =>
       reviewsRequired: { classic: name === "github" ? 1 : 0 },
     };
     const forge = yield* forgeOnPath(bin, name, model);
-    /** The merge request changed on the forge, as a reviewer or a push changes it. */
     const changed = (over: Partial<FakeMr>) =>
       Effect.gen(function* () {
         const now = yield* forge.model();
@@ -13486,7 +13144,6 @@ const releasable = (name: MrForge, over: Partial<FakeMr> = {}, tagged = true) =>
     return { bin, forge, head, base, merged, reviewed, changed };
   });
 
-/** A host whose merge happens just after `before` changes the forge, as a merge landing elsewhere first. */
 const mergingAfter: <E>(before: Effect.Effect<void, E, FileSystem.FileSystem>) => HostOverride = <
   E,
 >(
@@ -13508,28 +13165,17 @@ const mergingAfter: <E>(before: Effect.Effect<void, E, FileSystem.FileSystem>) =
     }),
   );
 
-/** How each Run a takeover may weigh ended, as this test says; null still runs. */
 type Ends = Readonly<Record<string, { succeeded: boolean; failure: string } | null>>;
 
-/** What Helle answers a release's claim, with the lines it says and what it waits on first. */
 interface HelleSays {
   readonly said?: ReadonlyArray<string>;
   readonly waits?: Effect.Effect<void>;
-  /** The claim is already the operator's own: it is taken only once they adopt it. */
   readonly adopts?: true;
   readonly held: Claimed;
 }
-/** What each release's claim was asked to cover, in order. */
 const claimedFor: Array<{ applications: ReadonlyArray<string>; jobs: ReadonlyArray<string> }> = [];
-/** What Helle refuses to take back, a release at a time; it takes everything after. */
 const refusedBack: Array<ReadonlyArray<string>> = [];
 
-/**
- * Helle answered here, and the Runs' ends a landing takeover weighs given: what decides is
- * `takeOver`'s, from the landing records on disk and the forge. `whileClaiming` is what
- * happens elsewhere while the claim is taken, and the host stops for good once it has
- * posted `stallAfterReplies` replies. `helle` answers each claim, where the test says.
- */
 const releaseHost = <E = never>(
   ends: Ends = {},
   whileClaiming: Effect.Effect<void, E, FileSystem.FileSystem> = Effect.void,
@@ -13543,13 +13189,11 @@ const releaseHost = <E = never>(
       let replies = 0;
       return Host.of({
         ...host,
-        // A host that stops after posting a reply, before its Activity is journaled.
         reply: (asked) =>
           host
             .reply(asked)
             .pipe(Effect.tap(() => (++replies >= stallAfterReplies ? Effect.never : Effect.void))),
         holders: () => Effect.succeed({ _tag: "Read", projects: [], applications: [], jobs: [] }),
-        // As the host's own claim, one a replay takes again is the one the Run already holds.
         claim: (options) =>
           helle !== undefined
             ? Effect.gen(function* () {
@@ -13603,17 +13247,10 @@ const releaseHost = <E = never>(
     }),
   );
 
-/**
- * A Run of a shipped module, driven from outside while it runs: its status, what it asks,
- * and an answer given as a door gives one. Answers with what `drive` does. A `restarted` Run
- * was admitted by an earlier host, which this one takes over from. `reached` is completed
- * once an answer has reached the engine.
- */
 const driven = <A, E>(
   options: ShippedRun & {
     readonly restarted?: boolean;
     readonly reached?: Deferred.Deferred<void>;
-    /** Its children are run as Runs of its module, rather than recorded. */
     readonly runsChildren?: boolean | "tags";
   },
   drive: (run: {
@@ -13628,7 +13265,6 @@ const driven = <A, E>(
       }>
     >;
     readonly answer: (decision: string, value: string) => Effect.Effect<void>;
-    /** Whether the engine has done with the answer to `decision`, waking the Run included. */
     readonly taken: (decision: string) => Effect.Effect<boolean>;
     readonly resume: Effect.Effect<void>;
   }) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Records>,
@@ -13692,11 +13328,6 @@ const driven = <A, E>(
     options.host,
   );
 
-/**
- * `over`, with the Run held between asking `question` and awaiting it until `reached`: an
- * answer given the moment the question shows, before the Run waits on it. `held` is
- * completed once the Run is held.
- */
 const answeredEarly = (question: string, over: HostOverride) => {
   const held = Deferred.makeUnsafe<void>();
   const reached = Deferred.makeUnsafe<void>();
@@ -13721,7 +13352,6 @@ const answeredEarly = (question: string, over: HostOverride) => {
   return { host, held, reached };
 };
 
-/** The go asked under `name`, once it is open. */
 const goAsked = (
   asked: Effect.Effect<
     ReadonlyArray<{
@@ -13743,7 +13373,6 @@ const goAsked = (
     ),
   );
 
-/** The questions open once one other than those `answered` is. */
 const openAfter = (
   asked: Effect.Effect<ReadonlyArray<{ decision: string; answer: string | null }>>,
   ...answered: ReadonlyArray<string>
@@ -13771,7 +13400,6 @@ const runLog = (runId: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
-/** One check of this Run's, `true` unless said, run in the Run's own checkout. */
 const checkedBy = (runId: string, name: string, executable = "true", argv: string[] = []) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -13782,7 +13410,6 @@ const checkedBy = (runId: string, name: string, executable = "true", argv: strin
     Effect.orDie,
   );
 
-/** What a Run came to, once it has. */
 const ended = (status: Effect.Effect<typeof RunStatus.Type>) =>
   until(
     () => status,
@@ -13796,21 +13423,15 @@ const outcomeText = (status: typeof RunStatus.Type) =>
       ? status.reason
       : status.status;
 
-/** A comment's web address, as each forge gives one that is not in a thread. */
 const commentUrl = (name: MrForge, id: number) =>
   `${RELEASING[name].mr}#${name === "gitlab" ? "note_" : "issuecomment-"}${id}`;
 
-/** What each forge reads as approved by nobody yet, and as approved by `who`. */
 const UNAPPROVED = { gitlab: { approvers: [], required: 1 }, github: { reviews: [] } } as const;
 const approvedBy: (name: MrForge, who: string) => Partial<FakeMr> = (name, who) =>
   name === "gitlab"
     ? { approvers: [who], required: 1 }
     : { reviews: [{ id: 2, author: who, state: "APPROVED", at: "2026-10-20T12:10:00Z" }] };
 
-/**
- * What an agent's push of a commit on `parent` leaves: the commit on origin's `feature`, and
- * the writes its step makes to put the Run's checkout and the forge's head on it.
- */
 const agentPush = (
   forge: { readonly holding: (next: ForgeModel) => { path: string; text: string } },
   model: ForgeModel,
@@ -13826,7 +13447,6 @@ const agentPush = (
         { path: `${rig.root}/reviewed/pushed.txt`, text: `${parent}\n` },
         forge.holding(moved),
       ],
-      // A commit leaves the index at what it committed, so the checkout reads clean.
       sh: `git -C '${rig.root}/reviewed' read-tree ${sha}`,
     };
   });
@@ -13881,10 +13501,6 @@ const conflictRepair = (
   };
 };
 
-/**
- * Sharing for approval turned on as `collie settings set` writes it, in `channel` unless null,
- * with an older Collie's bot token left over and the human signed in to Slack.
- */
 const sharingIn = (channel: string | null) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -13905,12 +13521,10 @@ const sharingIn = (channel: string | null) =>
 
 const POSTED = { posted: true, link: "https://example.slack.com/archives/D123/p1503435956000247" };
 
-/** The replies Collie posted on the merge request, in order. */
 const repliesOf = (model: ForgeModel) => Rec.values(model.replies ?? {}).flat();
 
 const signed = (runId: string) => `\n\n<!-- collie:${runId} -->`;
 
-/** A bun run's log, as both forges give a job's, failing `failed` in one file. */
 const failingIn = (...failed: ReadonlyArray<string>) =>
   Arr.join(["test/a.test.ts:", ...Arr.map(failed, (one) => `(fail) ${one} [1.00ms]`)], "\n");
 
@@ -13918,7 +13532,6 @@ const targetTest = (at: string, state: "failed" | "passed", ...failed: ReadonlyA
   target: { at, jobs: [{ name: "test", state, trace: failingIn(...failed) }] },
 });
 
-/** Where each forge says the target branch's `test` job ran. */
 const TARGET_JOB = {
   gitlab: "https://gitlab.example.com/group/app/-/jobs/2001",
   github: "https://github.com/owner/repo/actions/runs/6030/job/2001",
@@ -13929,7 +13542,6 @@ const recoveriesHealed = (runId: string) =>
     Arr.filter(lines, (line) => line.action === "healed"),
   );
 
-/** The fixer taking the target: `main` merged into the source branch and plain-pushed, leaving `over`. */
 const targetTaken = (
   forge: { readonly holding: (next: ForgeModel) => { path: string; text: string } },
   model: ForgeModel,
@@ -13947,7 +13559,6 @@ const targetTaken = (
   };
 };
 
-/** Collie's own Checks: `check`, left to CI's `test` job, counting any local run. */
 const ownCheck = (runId: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -14018,7 +13629,6 @@ scenario(
             },
           ],
         });
-        // The branch adds a test, and its target has not taken the branch yet.
         const head = yield* ownTestCommitted(reviewed);
         yield* exec(["git", "push", "-q", "origin", "feature"], { cwd: reviewed });
         yield* exec(["git", "push", "-qf", "origin", `${base}:refs/heads/main`], {
@@ -14180,7 +13790,6 @@ scenario(
   120_000,
 );
 
-/** One merge request of a set: where it is on GitLab, and the branches it merges. */
 const member = (path: string, iid: string, source: string, target = "main") => {
   const project = `${FORGE_HOST.gitlab}/group/${path}`;
   return {
@@ -14200,7 +13809,6 @@ const member = (path: string, iid: string, source: string, target = "main") => {
 };
 type Member = ReturnType<typeof member>;
 
-/** A set's merge requests open on GitLab, each approved and green; `merged` merges one there. */
 const setOnForge = (mrs: ReadonlyArray<Member>) =>
   Effect.gen(function* () {
     yield* repository();
@@ -14695,7 +14303,6 @@ scenario(
                 input: { mr: diffTarget },
               }),
           );
-        // The set's own Run never offers the set again; the failed one's Release Run offers it alone.
         expect(again(set, false)).toEqual([]);
         expect(again(app.ref, false)).toEqual([{ mr: app.ref }]);
         expect(again(web.ref, true)).toEqual([]);
@@ -14860,7 +14467,6 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
-        // The Release reads the job again on a fast clock; the test waits on the wall's.
         const wall = yield* Clock.Clock;
         const onWall = <A, E, R>(wait: Effect.Effect<A, E, R>) =>
           Effect.provideService(wait, Clock.Clock, wall);
@@ -14985,11 +14591,6 @@ const refusingCheckout: (refused: string) => HostOverride = (refused) =>
     }),
   );
 
-/**
- * A host that says who gave this Release Run its go: a human's own start of it from an offer,
- * or its parent implement Run's **Release**, answered at `answered`'s door. `afterStart`
- * happens once the Run has read the merge request at its start, as a push landing then.
- */
 const goGiven: (
   given: { readonly started?: "board"; readonly answered?: "board" | "agent" },
   afterStart?: Effect.Effect<void, never, FileSystem.FileSystem>,
@@ -15179,7 +14780,6 @@ scenario(
           expect(Arr.flatMap(lines, (line) => (line.kind === "enter" ? [line.key] : []))).toEqual([
             "checkout",
           ]);
-          // Not toMatchObject: Bun writes its matchers into the cached lines it is given.
           expect(
             Option.getOrUndefined(Arr.findFirst(lines, (line) => line.kind === "fail")),
           ).toEqual(
@@ -15226,7 +14826,6 @@ for (const name of ["gitlab", "github"] as const) {
                   recommended: "Release",
                   shortfall: null,
                 });
-                // Nothing shared is touched before the go.
                 expect(claimed).toEqual([]);
                 yield* run.answer("go-1", "Release");
                 const end = yield* ended(run.status);
@@ -15268,7 +14867,6 @@ for (const name of ["gitlab", "github"] as const) {
           const { bin, forge, head, merged } = yield* releasable(name);
           claimed.length = 0;
           const runId = `r-merge-${name}`;
-          // An application with no stage deploy on its tags, which a set's child could not merge.
           yield* rig.queueOutputs([
             { ...APP_ASSESSED, stage_jobs: { merge_request: ["deploy-stage"], tag: [] } },
           ]);
@@ -18139,8 +17737,6 @@ for (const name of ["gitlab", "github"] as const) {
                 );
                 moved = yield* pushedBySomebody(head);
                 yield* changed({ head: moved });
-                // Approved only once the Run waits at the new head: a read of the forge is
-                // several requests, and one spanning both changes would see the old head approved.
                 yield* until(
                   () => Effect.all([revParse("refs/heads/feature"), awaitingOn(runId)]),
                   ([at, on]) => at === moved && pipe(on, Str.includes("approval")),
@@ -18363,7 +17959,6 @@ for (const name of ["gitlab", "github"] as const) {
     120_000,
   );
 
-  /** Signed in as `user`, the manual share is asked with `said` in it, then go 1 finishes. */
   const sharedByHand = (runId: string, user: string | null, said: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
@@ -18685,8 +18280,6 @@ for (const name of ["gitlab", "github"] as const) {
   );
 }
 
-/** Whether a failed Release Run on `target` offers Release again. */
-/** Whether a failed Run of `name` on `target` is offered its followUp `id`. */
 const followUpOffered = (name: Shipped, id: string, target: string) =>
   Effect.gen(function* () {
     const declared = yield* loadEntry(shipped(name)).pipe(
@@ -18709,11 +18302,9 @@ const followUpOffered = (name: Shipped, id: string, target: string) =>
 
 const releaseAgainOffered = (target: string) => followUpOffered("release", "release-again", target);
 
-/** The jobs of an application's tag pipeline, in the order each forge's job read numbers them. */
 const TAG_JOBS = ["build", "deploy-stage", "e2e-stage", "deploy-production"] as const;
 type TagJob = (typeof TAG_JOBS)[number];
 
-/** A job of the tag's pipeline or Actions run, as the forge links it. */
 const tagJob = (name: MrForge, job: TagJob) => {
   const id = TAG_JOBS.indexOf(job) + 1;
   return name === "gitlab"
@@ -18721,7 +18312,6 @@ const tagJob = (name: MrForge, job: TagJob) => {
     : `https://github.com/owner/repo/actions/runs/7/job/${id}`;
 };
 
-/** What the tag step of an application says it did, which nothing takes for proof. */
 const stagedTag = (name: MrForge) => ({
   ...TAGGED,
   pipeline_url: PIPELINE_OF[name],
@@ -18729,18 +18319,11 @@ const stagedTag = (name: MrForge) => ({
   production_jobs: [{ name: "deploy-production", url: `${RELEASING[name].url}/said-by-the-agent` }],
 });
 
-/** Where stage and production are, by the commit each one's newest successful deployment has. */
 const deploys = (stage: string, production: string) => [
   { name: "stage", tier: "staging", deployed: stage, job: "deploy-stage" },
   { name: "production", tier: "production", deployed: production },
 ];
 
-/**
- * An application's merge request, ready, whose tag pipeline put the merge on stage and is
- * held by a blocking production job nobody has started: GitLab's pipeline is `manual`, and
- * GitHub's run waits on its environment's approval. Production carries the commit the merge
- * is made on.
- */
 const stageable = (
   name: MrForge,
   states: Partial<Record<TagJob, "passed" | "failed" | "manual" | "running">> = {},
@@ -18766,16 +18349,13 @@ const stageable = (
       },
     };
     yield* made.forge.set(model);
-    /** The forge as it is now, with `over` changed: someone deployed or played a job. */
     const now = (over: Partial<ForgeModel>) =>
       Effect.map(made.forge.model(), (current) => ({ ...current, ...over }));
     return { ...made, model, now };
   });
 
-/** The production job left waiting on the tag's pipeline, as the forge links it. */
 const waiting = (name: MrForge) => `\`deploy-production\` at ${tagJob(name, "deploy-production")}`;
 
-/** A Clearance names the job by its path under the repository it names once. */
 const clearedJob = (name: MrForge) =>
   `\`deploy-production\` at ${name === "gitlab" ? "/-/jobs/4" : "/actions/runs/7/job/4"}`;
 
@@ -18789,7 +18369,6 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
     input: { mr: target },
     host: releaseHost({}, Effect.void, Infinity, helle),
   });
-  /** Production taken to carry the merge, once the Run waits for it. */
   const carried = (
     run: { readonly answer: (decision: string, value: string) => Effect.Effect<void> },
     forge: Effect.Success<ReturnType<typeof stageable>>["forge"],
@@ -18886,7 +18465,6 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
           const model = yield* forge.model();
           expect(model.merges ?? []).toEqual([]);
           expect(model.mrs[0]?.state).toBe("open");
-          // Anything a failed claim took is given back.
           expect(claimed).toEqual([`release ${runId}`]);
         }),
       ),
@@ -18997,7 +18575,6 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
                 const merged = forge
                   .model()
                   .pipe(Effect.map((model) => (model.merges ?? []).length > 0));
-                // A Run that went past its park merges before the engine is done with the answer.
                 yield* until(
                   () => Effect.all([run.taken("go-1.claim.unclaimed"), merged]),
                   ([taken, merged]) => taken || merged,
@@ -19051,7 +18628,6 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
             ),
           ).toEqual([head]);
           expect(claimed).toEqual([`release ${runId}`]);
-          // The Run replays at its production question; the line is still written once.
           expect(
             occurrences(
               yield* runLog(runId),
@@ -19152,7 +18728,6 @@ for (const name of ["gitlab", "github"] as const) {
     input: { mr: target },
     host: releaseHost(ends),
   });
-  /** Go 1 answered, and the go to production once it is asked. */
   const staged = (run: {
     readonly asked: Parameters<typeof goAsked>[0];
     readonly answer: (decision: string, value: string) => Effect.Effect<void>;
@@ -19577,14 +19152,12 @@ for (const name of ["gitlab", "github"] as const) {
   );
 }
 
-/** An application's assessment, naming the stage deploys of a merge request's pipeline and a tag's. */
 const assessedWith = (mergeRequest: ReadonlyArray<string>, tag: ReadonlyArray<string>) => ({
   ...APP_ASSESSED,
   stage_jobs: { merge_request: [...mergeRequest], tag: [...tag] },
 });
 const MR_STAGED = assessedWith(["deploy-stage"], []);
 
-/** The jobs of the merge request's own pipeline, numbered as each forge's job read numbers them. */
 const MR_JOBS = ["build", "deploy-stage", "e2e-stage"] as const;
 type MrJob = (typeof MR_JOBS)[number];
 
@@ -19595,10 +19168,8 @@ const mrJob = (name: MrForge, job: MrJob) => {
     : `https://github.com/owner/repo/actions/runs/4030/job/${id}`;
 };
 
-/** What the stage step says it played and checked, which nothing takes for proof. */
 const STAGED_MR = { verdict: "clean", stage_jobs: ["deploy-stage", "e2e-stage"] };
 
-/** What the tag step of an application tested on stage says it did. */
 const testedTag = (name: MrForge) => ({
   ...TAGGED,
   pipeline_url: PIPELINE_OF[name],
@@ -19617,12 +19188,6 @@ for (const name of ["gitlab", "github"] as const) {
     host: releaseHost(ends),
   });
 
-  /**
-   * An application whose merge request's pipeline stages it, ready: its stage jobs at
-   * `states`, its tag pipeline held by a production job nobody started, and stage and
-   * production on the commit the merge is made on. `staging` is the stage step's stand-in,
-   * which leaves stage on the merge request's head.
-   */
   const testable = (states: Partial<Record<MrJob, "passed" | "failed" | "skipped">> = {}) =>
     Effect.gen(function* () {
       const made = yield* stageable(name);
@@ -19647,7 +19212,6 @@ for (const name of ["gitlab", "github"] as const) {
       return { ...made, model, onStage, staging, unstaging };
     });
 
-  /** Go 1 answered with staging, and the production go once it is asked. */
   const tested = (run: {
     readonly asked: Parameters<typeof goAsked>[0];
     readonly answer: (decision: string, value: string) => Effect.Effect<void>;
@@ -20086,13 +19650,6 @@ for (const name of ["gitlab", "github"] as const) {
   };
   const live = (sha: string) => ({ sha, status: "success" as const });
 
-  /**
-   * A monorepo's merge request, ready, whose pipeline deploys `stage-spilnu` and
-   * `stage-happytiger`, both on the commit production carries. `stage-web`, which its pipeline
-   * never deploys to, is on a commit of its own and is listed first, as the newest deployment.
-   * `onStage` is the forge once the stage step deployed the head to both and `happytiger`'s
-   * deployments followed.
-   */
   const perEnvironment = Effect.gen(function* () {
     const made = yield* stageable(name);
     type Deployments = ReadonlyArray<{
@@ -20354,7 +19911,6 @@ for (const name of ["gitlab", "github"] as const) {
   );
 }
 
-/** The tags on origin, which a Stage Run never pushes. */
 const originTags = () =>
   exec(["git", "ls-remote", "--tags", "origin"], { cwd: rig.projectDir }).pipe(
     Effect.map((ran) => Str.trim(ran.stdout)),
@@ -20379,12 +19935,6 @@ for (const name of ["gitlab", "github"] as const) {
     line: 3,
   };
 
-  /**
-   * An application's open merge request, approved by nobody, with an unresolved thread and
-   * its stage check at `e2e`, its head untagged, and stage and production on the commit the
-   * merge request starts from. `staging` is the stage step's stand-in, which leaves stage on
-   * `head` with every stage job passed; `unstaging` puts stage back.
-   */
   const stageOn = (e2e: "running" | "failed" = "running", over: Partial<FakeMr> = {}) =>
     Effect.gen(function* () {
       const made = yield* releasable(
@@ -20412,7 +19962,6 @@ for (const name of ["gitlab", "github"] as const) {
         environments: deploys(made.base, made.base),
       };
       yield* made.forge.set(model);
-      /** The forge once the stage step put `head` on stage, its stage check at `e2eNow`. */
       const onStage = (head = made.head, e2eNow: "failed" | "passed" = "passed") => ({
         ...withJobs(model, head, e2eNow),
         environments: deploys(head, made.base),
@@ -20421,12 +19970,10 @@ for (const name of ["gitlab", "github"] as const) {
         writes: [made.forge.holding(onStage(head, e2eNow))],
         output: STAGED_MR,
       });
-      /** The stage step put `head` on stage while the merge request's head moved to `later`. */
       const moving = (head: string, later: string) => ({
         writes: [made.forge.holding({ ...onStage(head), mrs: onStage(later).mrs })],
         output: STAGED_MR,
       });
-      /** Stage back on what production carries, the merge request at `head`. */
       const unstaging = (head = made.head) => ({
         writes: [
           made.forge.holding({ ...onStage(head), environments: deploys(made.base, made.base) }),
@@ -20436,7 +19983,6 @@ for (const name of ["gitlab", "github"] as const) {
       return { ...made, model, onStage, staging, moving, unstaging };
     });
 
-  /** Nothing a Stage Run must never do happened on the forge or origin. */
   const touchedNothing = (model: ForgeModel) =>
     Effect.gen(function* () {
       expect(model.merges ?? []).toEqual([]);
@@ -21025,7 +20571,6 @@ for (const name of ["gitlab", "github"] as const) {
     applications: [...APPS],
     stage_jobs: { merge_request: Arr.map(APPS, appJob), tag: [] },
   };
-  // An unknown commit makes a teammate's deployment incomparable with this checkout.
   const TEAMMATE = pipe("7ea3a7e0", Str.repeat(5));
 
   interface BusyHelle {
@@ -21639,7 +21184,6 @@ scenario("a general Run declares no checkout, no gate, no outcome and offers not
   ),
 );
 
-/** The window a `self-improve` Run reads, and what its forge was asked, as a scenario sets them. */
 let windowRuns: Array<{
   runId: string;
   parent: string | null;
@@ -21660,7 +21204,6 @@ let unlisted = false;
 let lagging = false;
 let forgeUnavailable = false;
 
-/** The Machine's report and this checkout's forge, as `self-improve` reads and writes them. */
 const improving: HostOverride = Layer.effect(Host)(
   Effect.gen(function* () {
     const host = yield* Host;
@@ -21732,7 +21275,6 @@ const improving: HostOverride = Layer.effect(Host)(
   }),
 );
 
-/** A `self-improve` Run, executed to its end. */
 const improved = (
   runId: string,
   input: Readonly<Record<string, Schema.Json>>,
@@ -21742,8 +21284,7 @@ const improved = (
     Effect.gen(function* () {
       const made = yield* loaded(shipped("self-improve"), runId);
       yield* admit({ runId, workflow: made.workflow.name, input });
-      // Authored modules expose Schema.Unknown failures; this test records their actual result.
-      // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context
+      // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Authored modules expose Schema.Unknown failures; this test records their actual result.
       return yield* made.workflow
         .execute({ runId, input })
         .pipe(Effect.result, Effect.provide(made.layer));
@@ -21855,7 +21396,6 @@ scenario(
 );
 
 const DefaultOf = Schema.Struct({ default: Schema.Json });
-/** The default a drawn input schema declares, or null for none. */
 const schemaDefault = (drawn: Schema.Json | null) =>
   Option.getOrNull(Schema.decodeUnknownOption(DefaultOf)(drawn))?.default ?? null;
 
@@ -22081,9 +21621,6 @@ scenario(
         expect(before.filed).toHaveLength(3);
         expect(promptsBefore).toHaveLength(1);
 
-        // The window saved before 4c574c7d had no question measures or repeated findings,
-        // and its report's Runs had no questions or merge-request fields. Only this
-        // isolated test host's completed Activity reply is changed; its effects stay.
         const saved = yield* session(
           Effect.gen(function* () {
             const sql = yield* SqlClient.SqlClient;
@@ -22530,7 +22067,6 @@ scenario(
   120_000,
 );
 
-/** One harness commit of `files` over what origin has, as Harness leaves the branch; its sha. */
 const harnessCommit = (files: Readonly<Record<string, string>>) =>
   Effect.gen(function* () {
     yield* levelRepository();
@@ -22554,7 +22090,6 @@ const harnessCommit = (files: Readonly<Record<string, string>>) =>
     return yield* headOf();
   }).pipe(Effect.orDie);
 
-/** A steady `count` of 7, and a `value` of 5 or 15 by how often it has run. */
 const NOISY_BENCH = Arr.join(
   [
     'echo x >> "$1"',
@@ -22632,7 +22167,6 @@ const repaired = (plan: Readonly<Record<string, Schema.Json>>, reason: string) =
 
 type Driving = Parameters<Parameters<typeof driven>[1]>[0];
 
-/** Each progress question answered as it opens, with the next of `answers` and then Yes, until the Run ends. */
 const answeringProgress = (run: Driving, answers: ReadonlyArray<string> = []) =>
   Effect.gen(function* () {
     const given: string[] = [];
@@ -22669,7 +22203,6 @@ const answeringProgress = (run: Driving, answers: ReadonlyArray<string> = []) =>
     }
   });
 
-/** A tune-up run to its end, each progress question answered with the next of `answers`, then Yes. */
 const tunedUp = (
   runId: string,
   input: Readonly<Record<string, Schema.Json>> = {},
@@ -22681,7 +22214,6 @@ const calibrations = (runId: string) =>
     Arr.filter(all, (one) => one.pass === "calibration"),
   );
 
-/** How a start of `id` with these words is refused, checked as a front door checks one. */
 const refusedAtStart = (id: Shipped, text: Readonly<Record<string, string>>) =>
   session(
     Effect.gen(function* () {
@@ -22765,12 +22297,10 @@ scenario(
         expect(log).toContain("proof unavailable: bench.value is inconclusive");
         expect(log).toContain("repair 1 of 2");
         expect(log).toContain("benchmark plan 3: repair 2: more samples again");
-        // Every telemetry source Discover could not use, with why.
         expect(log).toContain("telemetry APM: unavailable: no APM access from this Machine");
         expect(log).toContain("telemetry Kibana logs: unavailable: no Kibana credentials here");
         expect(yield* wasAsked(runId, "mr")).toBe(false);
         const measured = yield* calibrations(runId);
-        // Base against base: the base tree is the merge base with the harness on it.
         expect(measured[0]!.candidate.content).toBe(measured[0]!.base.content);
         expect(measured[0]!.base.commit).toBe(yield* revParse(`${commit}~1`));
         expect(Arr.map(measured, (one) => one.plan.samples)).toEqual([10, 12, 14]);
@@ -22981,7 +22511,6 @@ for (const [what, unusable] of [
             "research https://gitlab.example.com/group/project/-/issues/7 ruled out an index on name",
           );
           const report = yield* readText(Str.split(reasonOf(result), ": ")[0]!);
-          // Each source on the line under the opportunity it changed.
           const lines = Str.split(report, "\n");
           const under = (opportunity: string) =>
             lines[
@@ -23115,7 +22644,6 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
-        // The later Runs' one prompt each is their Cycle's: they are handed the last of these.
         yield* rig.queueOutputs([
           TUNE_DISCOVERED,
           tunePlan(commit, [STEADY_PRIMARY]),
@@ -23124,7 +22652,6 @@ scenario(
           EXHAUSTED,
         ]);
         expect((yield* tunedUp("r-tune-first"))._tag).toBe("Success");
-        // The later Runs' checkouts hold none of the harness: it lives on the first's branch.
         yield* exec(["git", "reset", "-q", "--hard", `${commit}~1`], { cwd: rig.projectDir });
         const runId = "r-tune-carried";
         const result = yield* tunedUp(runId, { from: "r-tune-first" });
@@ -23146,7 +22673,6 @@ scenario(
         );
         expect(onBranch.stdout).toBe(NOISY_BENCH);
 
-        // This checkout holds the harness commit in its history, and a later removal of it.
         yield* exec(["git", "reset", "-q", "--hard", commit], { cwd: rig.projectDir });
         yield* exec(["git", "rm", "-rq", "bench"], { cwd: rig.projectDir });
         yield* exec(["git", "commit", "-qm", "cleanup"], { cwd: rig.projectDir });
@@ -23328,10 +22854,6 @@ scenario(
   120_000,
 );
 
-/**
- * `count` and `size` read from files a Cycle may commit; `count` is 3 wherever the default
- * branch brought `fixed`, and `size` swings while `jitter` is there.
- */
 const CYCLE_BENCH = Arr.join(
   [
     "count=7; [ -f count ] && count=$(cat count)",
@@ -23346,7 +22868,6 @@ const CYCLE_BENCH = Arr.join(
 
 const SIZE_GUARDRAIL = { name: "bench.size", direction: "lower", role: "guardrail" } as const;
 
-/** `script` run in the Run's checkout, as the tuner runs it. */
 const inCheckout = (script: string) => `cd '${rig.projectDir}' && ${script}`;
 
 const tried = (script: string) => ({
@@ -23367,7 +22888,6 @@ const FASTER_BUT_BROKEN = () => tried("echo 3 > count && touch broken && git add
 const RESET = () => asTold("true", "reset");
 const EXHAUSTED = { result: "exhausted", why: "every ranked opportunity has been tried" };
 
-/** A tune-up that calibrates, then answers each Cycle's prompt with the next of `turns`. */
 const cycling = (
   runId: string,
   turns: ReadonlyArray<Schema.Json>,
@@ -23377,7 +22897,6 @@ const cycling = (
   Effect.gen(function* () {
     const commit = yield* harnessCommit({ "bench/bench.sh": CYCLE_BENCH });
     yield* checkedBy(runId, "unit", "sh", ["-c", "test ! -e broken"]);
-    // The project the fake forge knows, for a Run that gets as far as its merge request.
     yield* exec(["git", "remote", "set-url", "upstream", DELIVERY.gitlab.origin], {
       cwd: rig.projectDir,
     }).pipe(Effect.orDie);
@@ -23389,7 +22908,6 @@ const cycling = (
     return commit;
   });
 
-/** Each Cycle's tree where the log says it started, and where it says it was reverted to. */
 const cycleTrees = (runId: string) =>
   Effect.map(runLog(runId), (log) => {
     const trees = (said: string) =>
@@ -23412,7 +22930,6 @@ const cyclesMeasured = (runId: string) =>
     Arr.filter(all, (one) => pipe(one.pass, Str.startsWith("cycle "))),
   );
 
-/** The tree the Run's checkout holds now, read by the test rather than the Run. */
 const checkoutNow = (runId: string) =>
   Effect.gen(function* () {
     const [first] = yield* cyclesMeasured(runId);
@@ -23554,11 +23071,9 @@ scenario(
           ...tunePlan(first, [STEADY_PRIMARY, SIZE_GUARDRAIL]),
           harness: { commits: [first, second], paths: ["bench"] },
         };
-        // One list for both Runs: the later one's Cycle and reset take the last two.
         yield* rig.queueOutputs([TUNE_DISCOVERED, plan, EXHAUSTED, NO_CHANGE(), RESET()]);
         expect((yield* tunedUp("r-tune-multi-first"))._tag).toBe("Success");
         yield* exec(["git", "reset", "-q", "--hard", `${first}~1`], { cwd: rig.projectDir });
-        // So the carried copies cannot come out with their originals' SHAs.
         yield* exec(["git", "commit", "-q", "--allow-empty", "-m", "the default branch moves on"], {
           cwd: rig.projectDir,
         });
@@ -23626,7 +23141,6 @@ scenario(
   120_000,
 );
 
-/** After `before`, what the fenced `sh` block of the agent's own prompt says, run in the checkout; it answers whatever that did. */
 const asTold = (before: string, output: Schema.Json) => ({
   writes: [],
   sh: inCheckout(
@@ -23804,7 +23318,6 @@ scenario(
             (asked) => asked,
           ),
         );
-        // As 7d15bed3 recorded a Cycle's start: the tree, beside whether the wall time was spent.
         yield* session(
           Effect.gen(function* () {
             const sql = yield* SqlClient.SqlClient;
@@ -23831,7 +23344,6 @@ scenario(
   120_000,
 );
 
-/** A clock two hours ahead once `marker` holds anything, as a Cycle that ran long would leave it. */
 const lateOnce = (marker: string) =>
   Effect.map(Clock.Clock, (clock) => {
     const ahead = () => (Bun.file(marker).size > 0 ? 2 * 60 * 60 * 1000 : 0);
@@ -23908,7 +23420,6 @@ scenario("tune-up refuses a wall time that is not a duration at the front door",
 
 const fasterTo = (count: number) => tried(`echo ${count} > count && git add count`);
 
-/** The default branch moved by somebody else while a Cycle runs: `file` pushed to origin. */
 const upstreamPushes = (file: string) =>
   `(git clone -q '${rig.root}/project-origin.git' '${rig.root}/upstream' && cd '${rig.root}/upstream' && echo theirs > ${file} && git add ${file} && git -c user.email=u@example.com -c user.name=u commit -qm upstream && git push -q origin HEAD)`;
 const fasterWhileUpstreamPushes = (count: number, file: string) => {
@@ -23926,7 +23437,6 @@ const TUNE_REVIEWED = {
   measurement_valid: true,
 };
 
-/** The fake glab and gh on PATH, with no merge request yet. */
 const tuneForge = Effect.gen(function* () {
   const bin = yield* FakeBin.make(`${rig.root}/bin`);
   const forge = yield* forgeOnPath(bin, "gitlab", {
@@ -24137,7 +23647,6 @@ scenario(
   120_000,
 );
 
-/** The archive holds `final`, raw and with its intervals, though the change was dropped. */
 const archivedFinal = (runId: string, final: Measurement) =>
   Effect.gen(function* () {
     const archive = `${runDir(dir, runId)}/archive`;
@@ -24173,7 +23682,6 @@ scenario(
   120_000,
 );
 
-/** The merge request opened on the checkout's head, its CI job failing there and green at the base. */
 const openedFailing = (forge: {
   readonly holding: (next: ForgeModel) => { path: string; text: string };
 }) => {
@@ -24185,7 +23693,6 @@ const openedFailing = (forge: {
   };
 };
 
-/** A CI fix that commits `count` and whose new head's job passes. */
 const ciFixedTo = (
   forge: { readonly holding: (next: ForgeModel) => { path: string; text: string } },
   count: number,
@@ -24228,7 +23735,6 @@ scenario(
         expect(verdictsOf(measured[1]!)).toEqual(["bench.count gain", "bench.size no-change"]);
         expect(yield* wasAsked(runId, "ci-fix-1.review-1")).toBe(true);
         expect(yield* runLog(runId)).toContain(`performance proved on ${head}`);
-        // The merge request is told the whole replacement evidence, not only its table.
         const noted = Arr.join(yield* ciNotes(forge), "\n");
         expect(noted).toContain("Samples of the final benchmark");
         expect(noted).toContain("- bench.count, candidate: 2, 2, 2, 2");
@@ -24431,7 +23937,6 @@ scenario(
   120_000,
 );
 
-/** The tuner's cleanup: the harness taken off the branch, then `more`, in one commit. */
 const cleanedUp = (more = "true") => ({
   writes: [],
   sh: inCheckout(`git rm -rq bench && ${more} && git commit -qm cleanup`),
@@ -24763,7 +24268,6 @@ const KNOWN = {
   existing: "https://linear.app/acme/issue/PERF-9",
 };
 
-/** A Claude Code with a Linear MCP server, as the rig's home tells it, while `body` runs. */
 const withLinear = <A, E, R>(body: Effect.Effect<A, E, R>) =>
   Effect.acquireUseRelease(
     FileSystem.FileSystem.pipe(
@@ -24783,7 +24287,6 @@ const withLinear = <A, E, R>(body: Effect.Effect<A, E, R>) =>
       ),
   );
 
-/** The fake Linear: one line per issue, its URL then the marker it carries. */
 const tracker = () => `${rig.root}/tracker`;
 const emptyTracker = () =>
   FileSystem.FileSystem.pipe(
@@ -24796,14 +24299,12 @@ const trackerLines = () =>
   );
 const MARKED =
   'marker=$(grep -o \'collie:external-[0-9a-f]*\' "$PROMPT_PATH" | head -n 1); [ -n "$marker" ]';
-/** A search of the fake tracker for the marker its prompt carries. */
 const SEARCHED = () => ({
   writes: [],
   sh: `${MARKED} && url=$(grep -F "$marker" '${tracker()}' | cut -d ' ' -f 1) && if [ -n "$url" ]; then printf '{"marked": "%s", "matching": []}' "$url"; else printf '{"marked": null, "matching": []}'; fi > "$OUTPUT_PATH"`,
   output: null,
 });
 const ISSUE = "https://linear.app/acme/issue/PERF-1";
-/** One issue filed in the fake tracker, carrying the marker its prompt gave. */
 const FILED = () => ({
   writes: [],
   sh: `marker=$(grep -o '<!-- collie:external-[0-9a-f]* -->' "$PROMPT_PATH" | head -n 1); [ -n "$marker" ] && echo "${ISSUE} $marker" >> '${tracker()}'`,
@@ -24815,7 +24316,6 @@ const withExternal: (
   external: ReadonlyArray<Schema.Json>,
 ) => Schema.Json = (turn, external) => ({ ...turn, output: { ...turn.output, external } });
 
-/** Each search, create and recheck an external finding's Post asked for, in order. */
 const externalPrompts = (runId: string) =>
   Effect.map(prompts(), (all) =>
     Arr.flatMap(all, (one) => {
@@ -24827,7 +24327,6 @@ const externalPrompts = (runId: string) =>
   );
 
 type Asked = { decision: string; prompt: string; options: string; answer: string | null };
-/** The first open question that is none of `seen`. */
 const nextAsked = (asked: Effect.Effect<ReadonlyArray<Asked>>, seen: ReadonlyArray<string>) =>
   until(
     () => asked,
@@ -24944,7 +24443,6 @@ scenario(
   120_000,
 );
 
-/** A tune-up that fails on its noisy calibration, with Discover's `external` findings. */
 const noisyWith = (external: ReadonlyArray<Schema.Json>, turns: ReadonlyArray<Schema.Json> = []) =>
   Effect.gen(function* () {
     const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
@@ -25140,15 +24638,6 @@ once("tune-up declares every input with its default, and its path", () =>
   ),
 );
 
-/**
- * Registers one pass in the test file that calls it: every scenario as shipped, with the
- * tests about the shipped modules themselves, or every scenario under ids that share
- * nothing with them. Two files, so the two passes run on two workers at once.
- */
-/**
- * Every prompt and persona a scenario sent substitutes no command: no `$(`, and no backtick
- * inside a fenced block, where a backtick is shell rather than Markdown.
- */
 const noCommandSubstitution = () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -25348,10 +24837,8 @@ const withForges = (body: () => Promise<void>) =>
     }),
   );
 
-/** How many test files each pass is split into, so that no one file holds a whole pass. */
 export const SHARES = 12;
 
-/** Splits names into `of` shares by a hash of each name, so that adding one moves no other. */
 export const split = (names: ReadonlyArray<string>, of: number) => {
   const shares = Array.from({ length: of }, () => {
     const returned: string[] = [];
@@ -25385,8 +24872,6 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
         startSignals = new Map();
         yield* fs.makeDirectory(dir, { recursive: true });
         yield* fs.makeDirectory(rig.projectDir, { recursive: true });
-        // The skills the shipped personas and steps name, installed where this machine
-        // keeps them: a mention resolves to a path, and a step that starts one can.
         yield* installFakeSkills(rig.root);
         yield* fs.makeDirectory(`${rig.root}/user/workflows`, { recursive: true });
         for (const [name, id] of Rec.toEntries(UNRELATED)) {

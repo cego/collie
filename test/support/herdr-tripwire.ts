@@ -1,17 +1,11 @@
-// Herdr 1 is gone from Collie. A rig keeps a `herdr` on its PATH and a listener where a
-// process may still inherit `HERDR_SOCKET_PATH`, and each records what reached it, so a
-// test whose code still calls Herdr 1 fails, naming the call.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem } from "effect";
 
 export interface Tripwire {
-  /** Put first on the rig's PATH: it holds the `herdr` that records its call and fails. */
   readonly binDir: string;
   readonly bin: string;
   readonly socketPath: string;
-  /** Every herdr call and socket use seen so far. */
   readonly tripped: Effect.Effect<ReadonlyArray<string>, never, FileSystem.FileSystem>;
   readonly stop: Effect.Effect<void>;
 }
@@ -52,7 +46,6 @@ export const armTripwire = Effect.fn("Tripwire.arm")(function* (dir: string) {
   } satisfies Tripwire;
 });
 
-/** Dies naming every Herdr 1 use the tripwire saw. */
 export const untripped = (tripwire: Tripwire) =>
   Effect.flatMap(tripwire.tripped, (calls) =>
     calls.length === 0

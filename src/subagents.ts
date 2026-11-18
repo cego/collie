@@ -1,5 +1,3 @@
-// Claude's native delegation controls, scoped to one managed agent's launch.
-
 import * as Rec from "effect/Record";
 import { Schema, flow, Result } from "effect";
 

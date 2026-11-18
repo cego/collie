@@ -1,5 +1,3 @@
-// Harness, model and effort choices shared by the host and Desktop, without host IO.
-
 import * as Struct from "effect/Struct";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -10,14 +8,9 @@ import { Effect } from "effect";
 import type { CatalogueEntry } from "./catalogue-model";
 import { decodeSubagents, readSubagents, type ClaudeSubagents } from "./subagents";
 
-/**
- * The harness adapter's pinned default model. Adapters without one still omit the flag.
- */
 export const DEFAULT_MODEL = "default";
 
-/** The models and efforts a harness accepts, and its pinned default where it has one. */
 export interface HarnessModels {
-  /** Pinned model used for `default`; absent keeps the harness's native default. */
   defaultModel?: string;
   models: string[];
   modelPattern?: RegExp;
@@ -28,7 +21,6 @@ interface ModelCatalogue {
   readonly [name: string]: HarnessModels;
 }
 
-/** The fallback when a harness's own catalogue cannot be read. */
 export const HARNESS_MODELS: ModelCatalogue = {
   claude: {
     defaultModel: "opus",
@@ -41,7 +33,6 @@ export const HARNESS_MODELS: ModelCatalogue = {
     modelPattern: /^(?:gpt-?|o)[0-9][a-z0-9.-]*$/,
   },
   pi: {
-    // Provider qualification identifies the Subscription as well as the model.
     models: [],
     modelPattern: /^[a-z0-9-]+\/[A-Za-z0-9._:-]+$/,
     efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
@@ -74,19 +65,15 @@ export function modelHint(harness: HarnessModels, extra: ReadonlyArray<string> =
   return Arr.join(parts, " ");
 }
 
-/** What a layer of configuration or code says about the agent; each field it leaves out is inherited. */
 export interface Preferences {
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
   readonly claudeSubagents?: ClaudeSubagents;
-  /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
   readonly upTo?: number;
-  /** What to try past `upTo` or once Exhausted, in order, before the human's chain. */
   readonly otherwise?: ReadonlyArray<Preferences>;
 }
 
-/** The harness, model and effort a set of options names, and nothing else of it. */
 export const preferencesIn = (options: {
   readonly harness?: string | undefined;
   readonly model?: string | undefined;
@@ -105,7 +92,6 @@ export const preferencesIn = (options: {
     ),
   );
 
-/** Agent preferences carried across a child Run's serialized options. */
 export const preferencesFromOptions = Effect.fn("Harness.preferencesFromOptions")(function* (
   options: Readonly<Record<string, string>>,
 ) {
@@ -116,7 +102,6 @@ export const preferencesFromOptions = Effect.fn("Harness.preferencesFromOptions"
   return preferencesIn({ ...options, claudeSubagents });
 });
 
-/** A preference as code gives it: `preferencesIn`'s fields, with its ceiling where it has one. */
 export const ceilingIn = (options: Preferences) => {
   const ceiling: { -readonly [K in keyof Preferences]: Preferences[K] } = preferencesIn(options);
   if (options.upTo !== undefined) ceiling.upTo = options.upTo;
@@ -124,10 +109,8 @@ export const ceilingIn = (options: Preferences) => {
   return ceiling;
 };
 
-/** The agent a piece of work is given, decided before anything starts it. */
 export interface AgentChoice {
   readonly harness: string;
-  /** `default` is the harness's own pinned or native default. */
   readonly model: string;
   readonly effort: string | null;
   readonly claudeSubagents?: ClaudeSubagents;
@@ -142,10 +125,6 @@ export interface MachineCatalogue {
   }>;
 }
 
-/**
- * Layers of preferences as one, lowest first. A layer that switches harness keeps nothing
- * chosen below it: a model and an effort are for the harness they were chosen with.
- */
 export function foldPreferences(layers: ReadonlyArray<Preferences | undefined>) {
   let harness: string | undefined;
   let model: string | undefined;
@@ -183,11 +162,6 @@ export function foldPreferences(layers: ReadonlyArray<Preferences | undefined>) 
   return returned;
 }
 
-/**
- * Harness, model and effort decided together, lowest layer first, and checked as one.
- * What is left open is the harness's own default; a combination the harness does not take
- * is refused with what it would take, never quietly replaced.
- */
 export function resolveChoice(
   layers: ReadonlyArray<Preferences | undefined>,
   extraModels: Readonly<Record<string, ReadonlyArray<string>>> = {},
@@ -353,10 +327,6 @@ export function resolveChoice(
   return returned;
 }
 
-/**
- * The ceiling layers set, lowest first: the nearest layer that names `upTo` or `otherwise`
- * sets both, and a layer that switches harness clears both.
- */
 export function foldCeiling(layers: ReadonlyArray<Preferences | undefined>) {
   let harness: string | undefined;
   let ceiling: Preferences = {};
@@ -379,7 +349,6 @@ export function foldCeiling(layers: ReadonlyArray<Preferences | undefined>) {
   return ceiling;
 }
 
-/** A `fallbacks` entry: `harness`, or `harness/model` split at the first `/`. */
 export function chainEntry(text: string) {
   const at = Option.getOrElse(pipe(text, Str.indexOf("/")), () => -1);
   return at === -1
@@ -387,7 +356,6 @@ export function chainEntry(text: string) {
     : { harness: pipe(text, Str.slice(0, at)), model: pipe(text, Str.slice(at + 1)) };
 }
 
-/** Whether a choice has room under a ceiling, and why not where it has none. */
 export type Room = (
   choice: AgentChoice,
   upTo: number | undefined,
@@ -398,18 +366,11 @@ export const said = (choice: AgentChoice) =>
 
 export interface Chosen {
   readonly choice: AgentChoice;
-  /** The folded choice this fell back from, where it did. */
   readonly from: AgentChoice | null;
   readonly why: string | null;
-  /** Chain entries that do not resolve, each with why. */
   readonly skipped: ReadonlyArray<string>;
 }
 
-/**
- * The folded choice, else the first of its `otherwise` entries, else the first of the
- * chain, that has room (ADR-0049 D7). A bad folded or `otherwise` choice is refused; a bad
- * chain entry is skipped. Where nothing has room, the folded choice, saying why.
- */
 export function resolveWithRoom(
   layers: ReadonlyArray<Preferences | undefined>,
   chain: ReadonlyArray<string>,
@@ -535,7 +496,6 @@ export function resolveWithRoom(
   return returned;
 }
 
-/** The model a choice runs, so `default` is judged as the model it pins. */
 export const pinned = (choice: AgentChoice) =>
   choice.model === DEFAULT_MODEL
     ? { ...choice, model: HARNESS_MODELS[choice.harness]?.defaultModel ?? DEFAULT_MODEL }

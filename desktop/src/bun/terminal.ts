@@ -1,6 +1,3 @@
-// Go to pane attaches to a core terminal through this computer's core.
-// Remote terminals use their Machine-qualified address; no legacy controller is started.
-
 import * as Str from "effect/String";
 import * as Socket from "effect/socket/Socket";
 import * as Base64 from "effect/encoding/Base64";
@@ -13,12 +10,9 @@ import { ActionFailed, type TerminalCommand, type TerminalEvent } from "../share
 import { localRoute, type ShellRoute, spawned, stderrTail } from "./machine";
 import { CHILD_CWD, childEnv } from "./login-env";
 
-/** ssh's own status when the connection, not the command, failed. */
 const SSH_FAILED = 255;
 
-/** Core sends a viewer no more than this many bytes ahead of its CREDIT. */
 const CORE_WINDOW = 256 * 1024;
-/** The scrollback lines a core terminal's first paint brings. */
 const HISTORY = 1000;
 
 const CoreClosed = Schema.fromJsonString(
@@ -48,11 +42,6 @@ interface Shown {
   readonly bytes: number;
 }
 
-/**
- * Core's attach to `terminal`, through `command`, which speaks core's API on its stdin and
- * stdout as `herdr-core connect` does. Each DATA is credited once it is drawn, and a terminal
- * a whole window behind is attached again for a fresh paint rather than drawing core's backlog.
- */
 export const attachCore = Effect.fn("Desktop.attachCore")(function* (
   command: ReadonlyArray<string>,
   machine: string,
@@ -170,7 +159,6 @@ export const attachCore = Effect.fn("Desktop.attachCore")(function* (
   };
 });
 
-/** Attaches to the live core terminal the host names, through this computer's core. */
 export const openTerminal = Effect.fn("Desktop.openTerminal")(function* (
   focused: Effect.Effect<PaneAt, ActionFailed>,
   route: Pick<ShellRoute, "machine" | "sh">,
@@ -200,7 +188,6 @@ export const openTerminal = Effect.fn("Desktop.openTerminal")(function* (
   };
 });
 
-/** In the order this computer's default terminal is looked for, with how each is told what to run. */
 const TERMINALS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ["x-terminal-emulator", ["-e"]],
   ["gnome-terminal", ["--"]],
@@ -213,7 +200,6 @@ const TERMINALS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
 const appleString = (text: string) =>
   `"${pipe_(text, Str.replaceAll("\\", "\\\\"), Str.replaceAll('"', '\\"'))}"`;
 
-/** `command` in this computer's default terminal, or null where none is found. */
 export const inTerminal = (
   command: ReadonlyArray<string>,
   platform: NodeJS.Platform,
@@ -234,7 +220,6 @@ export const inTerminal = (
   return null;
 };
 
-/** Whether `command` started and had not failed a second later. */
 export const launched = (command: ReadonlyArray<string>) =>
   Effect.try(() =>
     Bun.spawn([...command], {

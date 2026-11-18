@@ -1,5 +1,3 @@
-// Electrobun's updater, as `updates.ts` asks it: the one place Desktop's own updates touch it.
-
 import { Effect, FileSystem, Option, Schema } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { PreparedRecord, preparedRecordOf, releaseOf } from "../../../src/desktop";
@@ -23,14 +21,12 @@ const Checked = Schema.Struct({
 type Checked = typeof Checked.Type;
 const Downloaded = Schema.Struct({ error: Schema.String });
 type Downloaded = typeof Downloaded.Type;
-/** `restarting` says the restart is under way, so the apply that returned succeeded. */
 const Status = Schema.Struct({
   message: Schema.String,
   restarting: Schema.optional(Schema.Boolean),
 });
 type Status = typeof Status.Type;
 
-/** The upstream operations used here; their JavaScript results are checked before use. */
 export interface ElectrobunUpdaterApi {
   readonly getLocalInfo: () => Promise<LocalInfo>;
   readonly appDataFolder: () => Promise<string>;

@@ -119,15 +119,10 @@ test("pi takes a provider-qualified model, a thinking level and the persona file
 });
 
 test("a skill is started in each harness's own syntax", () => {
-  // The skills are shared — one ~/.agents/skills for every harness — so only the
-  // way the human channel starts one differs.
   expect(HARNESSES.claude!.skillCommand("code-review")).toBe("/code-review");
   expect(HARNESSES.pi!.skillCommand("code-review")).toBe("/skill:code-review");
-  // No slash form at all: these surface skills to the model by description, so a
-  // slash would be sent as literal text and do nothing.
   expect(HARNESSES.codex!.skillCommand("code-review")).toBe('the "code-review" skill');
   expect(HARNESSES.opencode!.skillCommand("code-review")).toBe('the "code-review" skill');
-  // Every harness in the table answers, so a definition can never name one that cannot.
   for (const adapter of Rec.values(HARNESSES)) {
     expect(adapter.skillCommand("tdd")).toContain("tdd");
   }
@@ -137,8 +132,6 @@ test("a body names a skill and every harness is pointed at the same file", () =>
   const body = "Run {{skill:code-review}} then {{skill:tdd}}, and {{skill:code-review}} again.";
 
   expect(skillsIn(body)).toEqual(["code-review", "tdd"]);
-  // A mention is what the agent reads, and a path is not harness-specific: nothing
-  // expands a slash command inside a file a model is handed.
   const mention = skillMention(new Map([["code-review", "/skills/code-review/SKILL.md"]]));
   expect(renderTemplate(body, {}, { skill: mention }).text).toBe(
     "Run the `code-review` skill (read `/skills/code-review/SKILL.md` and follow it) then " +
@@ -146,14 +139,12 @@ test("a body names a skill and every harness is pointed at the same file", () =>
       "(read `/skills/code-review/SKILL.md` and follow it) again.",
   );
 
-  // A skill reference is not a missing variable, and is left alone with no renderer.
   const plain = renderTemplate("{{skill:tdd}} and {{inputs.goal}}", { inputs: { goal: "g" } });
   expect(plain.missing).toEqual([]);
   expect(plain.text).toBe("{{skill:tdd}} and g");
 });
 
 test("every harness starts in its auto mode, and past its prompts only when bypass is asked for", () => {
-  // The permission switch comes last, after everything `harness` passes too.
   const permissionsOf = (adapter: string, model: string, mode?: "auto" | "bypass") => {
     const plain = startArgs(HARNESSES[adapter]!, model, "/p/i.md", undefined, "harness");
     return startArgs(HARNESSES[adapter]!, model, "/p/i.md", undefined, mode).slice(plain.length);
@@ -168,14 +159,11 @@ test("every harness starts in its auto mode, and past its prompts only when bypa
   expect(permissionsOf("codex", "gpt-5", "bypass")).toEqual([
     "--dangerously-bypass-approvals-and-sandbox",
   ]);
-  // opencode's `--auto` approves every call rather than reviewing it, so it has no auto mode.
   expect(permissionsOf("opencode", "anthropic/claude-sonnet-4")).toEqual([]);
   expect(permissionsOf("opencode", "anthropic/claude-sonnet-4", "bypass")).toEqual(["--auto"]);
-  // pi has no tool-approval prompt, so every mode is the same start.
   for (const mode of ["auto", "bypass"] as const)
     expect(permissionsOf("pi", "openai-codex/gpt-5.6-sol", mode)).toEqual([]);
 
-  // `harness` passes no switch at all, whichever harness a step names.
   for (const adapter of Rec.values(HARNESSES)) {
     const asked = startArgs(adapter, DEFAULT_MODEL, "/p/i.md", undefined, "harness");
     for (const flag of [
@@ -259,7 +247,6 @@ test("the agent is decided layer over layer, and the nearest one that names a fi
 });
 
 test("switching harness keeps nothing chosen for the one below, and falls back to its default", () => {
-  // Opus and a high effort were Claude's; codex takes neither, so neither comes along.
   expect(resolveChoice([configured, { harness: "codex" }])).toEqual({
     ok: true,
     choice: { harness: "codex", model: "default", effort: null },
@@ -268,7 +255,6 @@ test("switching harness keeps nothing chosen for the one below, and falls back t
     ok: true,
     choice: { harness: "codex", model: "gpt-5", effort: null },
   });
-  // Naming the harness already in force is not a switch.
   expect(resolveChoice([configured, { harness: "claude" }])).toEqual({
     ok: true,
     choice: { harness: "claude", model: "opus", effort: "high" },
@@ -324,7 +310,6 @@ test("a combination no harness takes is refused with what would be taken instead
   const harness = resolveChoice([configured, { harness: "gemini" }]);
   expect(!harness.ok && harness.problem).toContain('no harness called "gemini"');
 
-  // A model the operator added for a harness is one it takes.
   expect(
     resolveChoice([configured, { model: "claude-next" }], { claude: ["claude-next"] }).ok,
   ).toBe(true);

@@ -137,7 +137,6 @@ export type FlowEntry = {
   readonly wave?: number;
 };
 const formats = new Map<string | undefined, Intl.DateTimeFormat>();
-/** One formatter per zone: building one costs more than a record's whole Flow of instants. */
 const formatIn = (timeZone: string | undefined) => {
   let format = formats.get(timeZone);
   if (format === undefined) {
@@ -159,7 +158,6 @@ const dateParts = (ms: number, timeZone: string | undefined) =>
     Arr.map(formatIn(timeZone).formatToParts(ms), (part) => [part.type, part.value] as const),
   );
 
-/** An instant on this Machine's clock: `11:22` today, `24 Oct, 11:22` on another day. */
 export const whenOf = (iso: string, now: number, timeZone?: string) => {
   const ms = epochMs(iso);
   if (Number.isNaN(ms)) return iso;
@@ -175,7 +173,6 @@ export interface StepFact {
   readonly value: string;
 }
 const DURATION = /^(under a minute|\d+ min|\d+ h( \d+ min)?)$/;
-/** The host's words for a Step, less what its timing and warning already say. */
 const statusOf = (node: FlowRun, timing: string | null) =>
   Arr.join(
     [
@@ -333,10 +330,6 @@ const sameRuns = Arr.makeEquivalence<string>((one, other) => one === other);
 const sameCard = (one: FlowCard, other: FlowCard) =>
   one.key === other.key && one.machine === other.machine && sameRuns(one.runs, other.runs);
 
-/**
- * The cards a Flow's links, nested links and Runs' origins can open, in the board's order. While they show what `before`
- * shows they are `before`, so a change to a Task the Flow does not link to draws nothing.
- */
 export const linkedCards = (
   flow: Flow,
   placed: ReadonlyArray<{
@@ -432,10 +425,6 @@ export const selectNode = (
     : { kind: "inspect", run: owningRun(flow, spot), selection: { ...spot, item: null } };
 };
 
-/**
- * `next`, with each lane and Step equal to the one already drawn being that one, so a Flow sent
- * or timed again draws only what changed.
- */
 export const keepFlow = (next: Flow, before: Flow | null) => {
   if (before === null) return next;
   const lanes = keepList(next.lanes, before.lanes, (lane, was) => {

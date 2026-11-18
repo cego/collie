@@ -1,13 +1,9 @@
-// A subscription that outlives its failures, ending only when the view lets go.
-// No Bun-only import: the view bundles this.
-
 import { Cause, Clock, Deferred, Effect, Exit, Option, Stream } from "effect";
 import { backoff } from "../../../src/peers-model";
 import { saidOf } from "./said";
 
 export { backoff };
 
-/** What went wrong, which try comes next, and when (epoch ms). */
 export interface Trouble {
   readonly said: string;
   readonly attempt: number;
@@ -18,7 +14,6 @@ export type Retried<A> =
   | { readonly _tag: "Value"; readonly value: A }
   | ({ readonly _tag: "Retrying" } & Trouble);
 
-/** Retry now: `wake` ends whichever wait is under way. */
 export const retryWake = () => {
   let next = Deferred.makeUnsafe<void>();
   return {
@@ -37,7 +32,6 @@ export const retrying: <A, E extends Error, R>(
   source: Stream.Stream<A, E, R>,
   waited: Effect.Effect<void>,
 ) => {
-  /** `failures` said in a row, and `renewals` taken quietly in a row, since the last value. */
   const after: (failures: number, renewals: number) => Stream.Stream<Retried<A>, never, R> = (
     failures,
     renewals,
@@ -51,11 +45,9 @@ export const retrying: <A, E extends Error, R>(
           return returned;
         }),
         Stream.tap(() => Effect.sync(() => void (reached = true))),
-        // A subscription that ends was cut off, as one interrupted was.
         Stream.concat(Stream.failCause(Cause.interrupt())),
         Stream.catchCause((cause) => {
           const [failed, renewed] = reached ? [0, 0] : [failures, renewals];
-          // A renewed connection is no trouble: taken again at once, and quietly after that.
           if (Cause.hasInterruptsOnly(cause))
             return renewed === 0
               ? after(failed, 1)
@@ -82,16 +74,11 @@ export const retrying: <A, E extends Error, R>(
   return after(0, 0);
 };
 
-/** What a page holds: its last value, kept through trouble, and the trouble while there is one. */
 export interface Held<A> {
   readonly value: Option.Option<A>;
   readonly trouble: Trouble | null;
 }
 
-/**
- * A subscription's values folded by `step` across its retries, so what a page holds is never
- * started again from nothing.
- */
 export const foldedOf: <A, S, E extends Error, R>(
   source: Stream.Stream<A, E, R>,
   waited: Effect.Effect<void>,
@@ -123,7 +110,6 @@ export const foldedOf: <A, S, E extends Error, R>(
     ),
   );
 
-/** A subscription's latest value, kept through its retries. */
 export const heldOf = <A, E extends Error, R>(
   source: Stream.Stream<A, E, R>,
   waited: Effect.Effect<void>,

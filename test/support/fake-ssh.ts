@@ -1,7 +1,3 @@
-// The fake `ssh` every test shares (`fake-ssh-main.ts`), and the network fault a blocked
-// port is: a resetter that drops each connection at its first bytes, as Cloudflare WARP
-// resets the TLS ClientHello on a peer's port.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
@@ -12,10 +8,6 @@ import { fixtureBinary } from "./bin";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
-/**
- * A directory for the scope, short enough for a control socket under it to bind: macOS's
- * `TMPDIR` alone is 49 bytes. Named as the suite's roots are, so a killed suite's is swept.
- */
 export const socketDir = (prefix: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -27,33 +19,23 @@ export const socketDir = (prefix: string) =>
     Effect.orDie,
   );
 
-/** A fake `ssh` written to `bin`, and what a test does to it. */
 export interface FakeSsh {
-  /** Every call, one line each: `master`, `mux <verb>`, `ride` or `login`. */
   readonly log: string;
-  /** The log's lines now. */
   readonly calls: Effect.Effect<ReadonlyArray<string>>;
-  /** Where a forward to the far `127.0.0.1:<far>` really goes. */
   readonly maps: (ports: Readonly<Record<number, number>>) => Effect.Effect<void>;
-  /** Whether a master the fake opens waits forever on its login. */
   readonly hangs: (hanging: boolean) => Effect.Effect<void>;
-  /** Ends every master, as a sleep or a dropped network does, logging nothing. */
   readonly drop: Effect.Effect<void>;
-  /** Whether a master ends just before a session rides it. */
   readonly dropsBeforeRide: (dropping: boolean) => Effect.Effect<void>;
-  /** Whether SSH config adds a remote forward already held by another connection. */
   readonly configuredForwards: (configured: boolean) => Effect.Effect<void>;
 }
 
 const Bound = Schema.Struct({ port: Schema.Finite });
 
-/** The port a server listens on. */
 export const portOf = (server: Server) => {
   const address = server.address();
   return Schema.is(Bound)(address) ? address.port : 0;
 };
 
-/** A port of 127.0.0.1 nothing listens on now. */
 export const freePort = Effect.callback<number>((resume) => {
   const server = createServer();
   server.listen(0, "127.0.0.1", () => {
@@ -62,7 +44,6 @@ export const freePort = Effect.callback<number>((resume) => {
   });
 });
 
-/** A request on a master's control path, as `fake-ssh-main.ts` reads one. */
 const tell = (path: string, op: string) =>
   Effect.callback<void>((resume) => {
     const conn = createConnection(path);
@@ -72,10 +53,6 @@ const tell = (path: string, op: string) =>
     conn.once("close", () => resume(Effect.void));
   });
 
-/**
- * Writes `bin` as a fake `ssh` keeping its state in `dir`. A session runs with `env` where
- * one is given, as a login on the far Machine would.
- */
 export const writeFakeSsh = Effect.fn("FakeSsh.write")(function* (
   bin: string,
   dir: string,
@@ -122,14 +99,11 @@ export const writeFakeSsh = Effect.fn("FakeSsh.write")(function* (
   return fake;
 });
 
-/** A TCP server on `port` of 127.0.0.1 that destroys each connection at its first bytes. */
 export const resetter = (port: number) => blocker(onLoopback(port), true);
 
-/** A master's control socket at `path` that takes each request and never answers it. */
 export const silentMaster = (path: string) =>
   blocker((server, listening) => server.listen(path, listening), false);
 
-/** A TCP server on `port` of 127.0.0.1 that takes each connection and never answers. */
 export const blackhole = (port: number) => blocker(onLoopback(port), false);
 
 const onLoopback = (port: number) => (server: Server, listening: () => void) =>

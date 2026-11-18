@@ -1,6 +1,3 @@
-// The doctor's GitHub checks: gh and its login to github.com, asked only of a Machine where
-// some checkout under the Projects root is on GitHub (ADR-0050 D8).
-
 import { Effect } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { gitlabHostOf } from "../config";
@@ -18,7 +15,6 @@ export const githubChecks = Effect.fn("Doctor.githubChecks")(function* (
 ) {
   const gitlabHost = yield* gitlabHostOf(env);
   let used = 0;
-  // ponytail: two git calls per checkout; a Projects root of thousands would want .git/config read directly.
   for (const checkout of yield* checkoutsUnder((yield* projectsRoot(env)).path)) {
     const here = yield* forgeHere(checkout, run, gitlabHost);
     if (here.ok && here.forge.name === "github") used += 1;

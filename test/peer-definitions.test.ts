@@ -1,6 +1,3 @@
-// Paired hosts keep the user Layer level without Desktop: each file is its latest edit,
-// a removal included, and the text that lost is kept where it lost.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
@@ -25,7 +22,6 @@ test(
             const file = (side: Side, path: string) => `${side.world.config}/${path}`;
             const text = (side: Side, path: string) =>
               fs.readFileString(file(side, path)).pipe(Effect.orElseSucceed(() => null));
-            /** Written whole, with its edit's time, the way an editor saves it. */
             const save = (side: Side, path: string, saved: string, at: string) =>
               Effect.gen(function* () {
                 const staged = `${side.world.home}/staged`;
@@ -47,8 +43,6 @@ test(
               (has) => has === "forked\n",
             );
 
-            // A directory replaced by hand is watched again, and a save made while its catch-up waits
-            // on the other host reaches it without another save.
             yield* fs.writeFileString(file(first, "personas/kept.md"), "kept\n");
             yield* until(
               () => text(second, "personas/kept.md"),
@@ -105,7 +99,6 @@ test(
                 `{ "name": "${side.name}" }\n`,
               );
 
-            // Once the last round has finished, a sync's own writes start no more.
             const shares = Effect.all(
               Arr.map([first, second], (side) =>
                 readAudit(`${side.world.state}/definitions`).pipe(
@@ -138,7 +131,6 @@ test(
           const fs = yield* FileSystem.FileSystem;
           yield* connect(world.state);
           yield* fs.remove(world.config, { recursive: true });
-          // Past the 10 seconds a failed watch waits before it tries again.
           yield* Effect.sleep("12 seconds");
           expect(yield* fs.exists(world.config)).toBe(false);
         }),

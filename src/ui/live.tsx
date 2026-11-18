@@ -1,18 +1,3 @@
-// The Live region and the proposal preview: what the Home board says has been happening,
-// and what a human is asked to confirm. Talking back is native chat's pane, beside this
-// one — there is no composer here, and no mode to enter before typing.
-//
-// The whole discipline of this file is that evidence and narrative must not look alike.
-// A verification is what somebody ran and bound to a tree; a claim is what an agent
-// wrote, and it is prefixed `claimed:` wherever it appears so it can never be read as a
-// pass. `missing` is always drawn, including when there is nothing in it, because "what
-// nobody checked" silently absent is exactly the reassurance a card exists to withhold.
-// The narrative is last and dim: it is prose a model wrote about its own work.
-//
-// Nothing here focuses anything. A card, a correction and a proposal all arrive without
-// moving a human off what they are doing — only a pending question does that, and that
-// is the engine's call, not the board's (ADR-0008).
-
 import { For } from "solid-js";
 import { TextAttributes } from "@opentui/core";
 import type { Live } from "../live";
@@ -33,12 +18,6 @@ const DIM = "#8a8a8a";
 const ACCENT = "#7aa2f7";
 const BAD = "#f7768e";
 
-/**
- * One line of the region. The tone comes with the line — `src/lines.ts` decides what a
- * card says and how much emphasis each part of it asks for — so this only maps that to a
- * colour and an indent. Colour is never the only carrier: every line reads correctly
- * without it, which is what the one-screen text view proves.
- */
 function Drawn(props: { line: Line }) {
   const colour = () => TONES[props.line.tone];
   return (
@@ -59,7 +38,6 @@ const TONES = {
   accent: ACCENT,
 } satisfies Record<Tone, string | undefined>;
 
-/** Several lines, in the order they were produced. */
 function Lines(props: { lines: ReadonlyArray<Line> }) {
   return <For each={props.lines}>{(entry) => <Drawn line={entry} />}</For>;
 }
@@ -68,8 +46,6 @@ export function LiveRegion(props: { live: Live }) {
   const live = () => props.live;
   return (
     <box style={{ flexDirection: "column" }}>
-      {/* What Collie noticed and the conversation has not been told. Drawn, never
-          delivered: looking at the board is not a chat having read it. */}
       <Lines lines={newsLines(live().news)} />
       <For each={live().cards}>{(card) => <Lines lines={cardLines(card)} />}</For>
       <For each={live().drift}>{(report) => <Lines lines={driftLines(report)} />}</For>
@@ -79,7 +55,6 @@ export function LiveRegion(props: { live: Live }) {
   );
 }
 
-/** One line of chrome: a note, a field, a key line. Not a card's own evidence. */
 function Note(props: { text: string; tone?: Tone }) {
   return (
     <text style={{ height: 1 }} fg={TONES[props.tone ?? "dim"]}>
@@ -88,11 +63,6 @@ function Note(props: { text: string; tone?: Tone }) {
   );
 }
 
-/**
- * What a confirmation is consent to. Every action, whether the target's own authority
- * already grants it, and the id and hash the confirmation names — so a yes is a yes to
- * this payload rather than to a summary of it.
- */
 export function ProposalPreview(props: { proposal: ProposalRecord }) {
   const proposal = () => props.proposal;
   const allowed = () => new Set(proposal().allowed_now);

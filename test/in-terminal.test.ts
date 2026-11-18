@@ -1,5 +1,3 @@
-// A command in a terminal of its own: what it prints, what is typed at it, how it exits.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";

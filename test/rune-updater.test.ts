@@ -1,7 +1,3 @@
-// The Rune spike's updates: Desktop's own `updates.ts` checks, downloads and verifies a release
-// as today, through the stdio stand-in's Updater, which stages the verified tar and its
-// signature where the Rune shell installs them at its next launch (desktop/update).
-
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";

@@ -1,7 +1,3 @@
-// A file given to a pane is placed on the pane's Machine (ADR-0065):
-// Desktop's copy is uploaded through the host's `upload` in parts, once per content, and its
-// path there is answered; a file that cannot be placed names itself and places nothing more.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -29,7 +25,6 @@ const inDir = <A, E>(body: (dir: string) => Effect.Effect<A, E, FileSystem.FileS
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   );
 
-/** A Machine whose host keeps what it is sent, under its own uploads directory. */
 const machine = (files = true, refuse?: string) => {
   const sent: Uploaded[] = [];
   return {
@@ -74,7 +69,6 @@ test("a staged file is uploaded to the pane's Machine once and answered with its
         { name: "notes.txt", offset: 0, size: 5 },
       ]);
 
-      // Placed again the same day, nothing is sent again.
       expect(yield* placeStaged(held, vm.machine, `${dir}/own`, [shot])).toEqual(paths.slice(0, 1));
       expect(vm.sent).toHaveLength(2);
     }),

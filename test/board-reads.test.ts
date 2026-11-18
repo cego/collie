@@ -1,5 +1,3 @@
-// A board build reads its Runs' records in a fixed number of reads, however many Runs it
-// draws, and none of them from files (ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database, D6).
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { buildBoard } from "../src/board";
@@ -24,7 +22,6 @@ import { appendVerification, readProofsOf, verificationsPath } from "../src/veri
 import { madeRun } from "./support/records";
 import { runEffect } from "./support/effect";
 
-/** `records` with every read of it counted. */
 const counted: (records: RunRecordsApi, calls: { n: number }) => RunRecordsApi = (
   records,
   calls,
@@ -129,7 +126,6 @@ test("a board build reads its Runs' records in as many reads for five Runs as fo
     }),
   ));
 
-/** Where an older build kept `run`'s records, each by its exact path or, ending `/`, under it. */
 const recordPlaces = (dir: string, run: string) => [
   `${dir}/runs/${run}`,
   `${dir}/evidence/${run}`,

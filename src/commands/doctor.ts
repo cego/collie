@@ -9,9 +9,6 @@ export const doctor = Command.make("doctor", { gitlabHost: gitlabHostFlag }, ({ 
     const global = yield* root;
     yield* attempt(
       Effect.gen(function* () {
-        // No workspace, for the same reason `upgrade` needs none: these are checks on
-        // this installation, and they have to work from a plain shell as much as from
-        // inside herdr — a machine where nothing is set up yet is the point.
         const resolved = yield* context(global, false);
         if (resolved._tag === "ContextFailure") return resolved.result;
         const env = withGitlabHost(resolved.env, gitlabHost);

@@ -1,8 +1,3 @@
-// `collie onboard`: takes a Machine from bare to a working Collie host, one step at a
-// time, each streamed as it starts and as it ends. Every step looks before it acts, so
-// running it again is how a half-onboarded Machine is repaired. Nothing here runs sudo:
-// a step that needs root stops with the command to run.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -31,15 +26,12 @@ export type StepStatus = "done" | "in_place" | "skipped" | "needs_root" | "needs
 export interface Outcome {
   readonly status: StepStatus;
   readonly detail: string;
-  /** What to run by hand: the root command, or the one that retries this step. */
   readonly command?: string;
-  /** Where the human has to go for this step. */
   readonly url?: string;
 }
 
 export type OnboardEvent =
   | { readonly event: "start"; readonly step: string; readonly title: string }
-  /** Mid-step: where the human has to go, and the local port its redirect comes back to. */
   | {
       readonly event: "human";
       readonly step: string;
@@ -49,19 +41,14 @@ export type OnboardEvent =
     }
   | ({ readonly event: "result"; readonly step: string } & Outcome);
 
-/** The steps a Machine may go without and still be onboarded. */
 export type Skippable = "helle" | "linear";
 
 export interface OnboardOptions {
   readonly to: string;
-  /** The release this runner carries; the compiled runner's own unless a test says. */
   readonly carried?: Carried | null;
   readonly skip?: ReadonlyArray<Skippable>;
-  /** Credentials from stdin, never an argument. */
   readonly secrets?: Readonly<Record<string, string>>;
-  /** stdin is a terminal the human can paste into. */
   readonly terminal?: boolean;
-  /** Someone sees the stream, so a login that needs the human may be started. Default true. */
   readonly attended?: boolean;
 }
 
@@ -70,10 +57,8 @@ const PROFILE_MARKER = "# added by collie onboard";
 const LINEAR_LOGIN = "claude mcp login linear-server";
 const CLAUDE_LOGIN = "claude auth login";
 const LOGIN_LIMIT = "10 minutes";
-/** Long enough for an installer or a download; a network that never answers still ends. */
 const COMMAND_LIMIT = "15 minutes";
 const SETTLED: ReadonlyArray<StepStatus> = ["done", "in_place", "skipped"];
-/** A URL's own characters (RFC 3986), so the terminal escapes around it are not part of it. */
 const URL_IN = /https:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+/;
 
 const done: (detail: string) => Outcome = (detail) => ({ status: "done", detail });
@@ -93,7 +78,6 @@ const PACKAGE_MANAGERS: ReadonlyArray<readonly [string, string]> = [
   ["brew", "brew install"],
 ];
 
-/** The one command that installs `packages` with this Machine's package manager. */
 const rootCommand = Effect.fn("Onboard.rootCommand")(function* (
   search: string,
   packages: ReadonlyArray<string>,
@@ -147,11 +131,8 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   const localBin = `${env.home}/.local/bin`;
   const binDir = env.raw["COLLIE_BIN_DIR"] ?? localBin;
   const inherited = Arr.filter(Str.split(env.raw["PATH"] ?? "", ":"), (dir) => dir !== "");
-  // Where the installers put Claude Code and `collie`, ahead of the PATH this
-  // process was started with, which a fresh SSH session's may not include yet.
   const search = Arr.join([...new Set([binDir, localBin, ...inherited])], ":");
   const release = `${env.collieDir}/release`;
-  // Where the release is prepared and doctor looks: a development checkout's own root.
   let root = release;
 
   const childEnv = { ...env.raw, PATH: search };
@@ -167,8 +148,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         ChildProcess.make(cmd, [...args], {
           cwd,
           env: { ...childEnv, ...extra },
-          // extendEnv, so a tool still has what `env.raw` leaves out: USER, which Claude
-          // Code's Keychain lookup on macOS needs to say it is logged in.
           extendEnv: true,
           stdin: input === null ? "ignore" : Stream.make(new TextEncoder().encode(input)),
           stdout: "pipe",
@@ -356,7 +335,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   }
 
   const host = yield* gitlabHostOf({ raw: childEnv, userDir: env.userDir });
-  // Named to doctor, so it checks the host this run logged in to.
   const here: PluginEnv = {
     ...env,
     pluginRoot: root,
@@ -412,7 +390,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       const status = yield* exec("glab", ["auth", "status", "--hostname", host], root);
       const token = secrets["GITLAB_TOKEN"];
       if (status.code === 0) {
-        // A token given is the Flock's, so one glab holds from before is replaced by it.
         const held =
           token === undefined
             ? null
@@ -453,7 +430,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         https: false,
       };
       if (ssh && !known.https) {
-        // Trusts GitLab's host key on first use, as doctor's own fix does; a changed key is still refused.
         yield* exec(
           "ssh",
           [
@@ -526,7 +502,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
               command: "collie onboard --secrets-stdin",
             } satisfies Outcome);
       }
-      // Other Helle clients read the URL from this file.
       const text = `HELLE_API_URL=${helleUrlOf(here.raw)}\nHELLE_API_TOKEN=${token}\n`;
       const current = there ? yield* fs.readFileString(file) : "";
       yield* fs.makeDirectory(
@@ -539,7 +514,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         ),
         { recursive: true },
       );
-      // Before the write: a file from before may be readable by others, and `mode` only applies to a new one.
       if (there) yield* fs.chmod(file, 0o600);
       if (current !== text) yield* fs.writeFileString(file, text, { mode: 0o600 });
       return current === text ? inPlace(`credentials at ${file}`) : done(`wrote ${file}`);
@@ -557,10 +531,8 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       }),
     );
 
-  /** `claude mcp login` under a terminal of its own, streaming its URL as it is printed. */
   const linearLogin = (claude: string) =>
     Effect.gen(function* () {
-      // A URL is told once it is printed, and again when one with a callback port comes.
       let told: string | null = null;
       const tell = (url: string) => {
         const port = /localhost:(\d+)/.exec(decodeURIComponent(url))?.[1];
@@ -574,8 +546,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           ...(port && { port: Number(port) }),
         });
       };
-      // Claude Code may print only a paste-code URL and hand the one with its callback port
-      // to $BROWSER, which this shim writes down instead.
       const shims = yield* fs.makeTempDirectoryScoped({ prefix: "collie-login-" });
       const handed = `${shims}/url`;
       yield* fs.writeFileString(`${shims}/browser`, `#!/bin/sh\necho "$1" > '${handed}'\n`);
@@ -584,7 +554,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         cwd: env.home,
         env: { ...Bun.env, ...childEnv, BROWSER: `${shims}/browser` },
       });
-      // It waits for a pasted redirect, which only a human at a terminal can type.
       const pasted = options.terminal
         ? Stream.fromReadableStream({ evaluate: () => Bun.stdin.stream(), onError: String }).pipe(
             Stream.decodeText(),

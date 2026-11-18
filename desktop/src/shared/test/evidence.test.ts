@@ -1,6 +1,3 @@
-// What the record makes of a Run's evidence: terminal colours, and its files sorted into
-// a gallery of before/after pairs, videos, reports and logs.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { ansiLines, ansiSpans } from "../ansi";
@@ -73,12 +70,7 @@ test("a half of a pair with no other half, or a second shot of one side, stands 
   );
   expect(
     Arr.map(gallery, (item) => item.alone?.name ?? `${item.before?.name}|${item.after?.name}`),
-  ).toEqual([
-    // The first by name takes the side; the second is a shot of its own.
-    "home.before.png",
-    "home-before.png|home.after.png",
-    "login_before.png",
-  ]);
+  ).toEqual(["home.before.png", "home-before.png|home.after.png", "login_before.png"]);
 });
 
 test("videos, HTML reports, and every other file are kept apart", () => {

@@ -1,13 +1,3 @@
-// A Run from both front doors: start it, watch it, and pick it up again.
-//
-// The CLI and the picker do the same things to a workflow saved as a module, so they do
-// them here rather than each their own way: which id is a module's, the claim that makes a
-// retry one Run, and the read model show, list and wait are drawn from. Execution belongs
-// to the host — this is the client side of it, and it holds no state of its own.
-//
-// What a Run is and what became of it stays Collie's; what a workflow has done stays
-// Effect's. Nothing here copies the second into the first.
-
 import type { Launched } from "./launches";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -125,11 +115,6 @@ import type { ScheduleDoor } from "./schedule-move";
 
 export { savedModules } from "./discovery";
 
-/**
- * The inputs this module needs that nobody gave it, as the refusal an agent can fill in
- * and retry with the same request id. Each carries what it will take, so a caller that
- * has never seen the module can still answer it.
- */
 export const neededInputs: (entry: Found, given: Given) => Failure | null = (entry, given) => {
   const missing = Arr.filter(
     entry.inputs,
@@ -147,8 +132,6 @@ export const neededInputs: (entry: Found, given: Given) => Failure | null = (ent
     )}.`,
     {
       workflow: entry.id,
-      // The file this is about, so a caller told to fill something in can read what it
-      // is filling in for — the same path `workflow show` and the definitions tool name.
       path: entry.path,
       inputs: Arr.map(missing, (field) => ({
         name: field.name,
@@ -160,11 +143,6 @@ export const neededInputs: (entry: Found, given: Given) => Failure | null = (ent
   );
 };
 
-/**
- * The saved module this id names: the entry where one loads, the fault where the file
- * will not, and null where no module claims it. A broken module is a file to fix rather
- * than nothing.
- */
 export const moduleFor: (
   env: PluginEnv,
   id: string,
@@ -178,15 +156,6 @@ export const moduleFor: (
     ),
   );
 
-/**
- * Whether anything has ever run in this state directory. A machine that has never
- * started a module does not start a host to be told it has none.
- */
-/**
- * Whether this installation has any Runs the host is holding. The database is the whole
- * of it: no rows, no host worth starting, and a caller that asked is told so rather than
- * waiting on one that has nothing to say.
- */
 export const anyRuns: (env: PluginEnv) => Effect.Effect<boolean, never, FileSystem.FileSystem> = (
   env,
 ) =>
@@ -207,7 +176,6 @@ type HostFailure =
 
 type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
 
-/** A refusal as the front doors say one, with the host's own sentence inside it. */
 export const refusal: (cause: HostFailure) => Failure = (cause) => {
   const failure = refused(cause);
   return cause._tag === "HostUnavailable" ||
@@ -220,7 +188,6 @@ export const refusal: (cause: HostFailure) => Failure = (cause) => {
 const refused: (cause: HostFailure) => Failure = (cause) => {
   switch (cause._tag) {
     case "HostRefused":
-      // The host says so first where the input is why, and that is exit 2, not exit 1.
       if (pipe_(cause.reason, Str.startsWith(`${REFUSED_INPUT}:`)))
         return err(
           "invalid_input",
@@ -257,7 +224,6 @@ const refused: (cause: HostFailure) => Failure = (cause) => {
   }
 };
 
-/** Who is asking: a front door, or an Actor whose voice a nested operation carries on. */
 export type Door = FrontDoor | Asker;
 
 const isFrontDoor = Schema.is(FrontDoor);
@@ -270,14 +236,8 @@ const declaring: (door: Door, stamp?: string) => Declaration = (door, stamp?) =>
   return declared;
 };
 
-/** What ssh says while a front door opens a connection: to the person who answers its login. */
 const toStderr = (text: string) => Effect.sync(() => void process.stderr.write(text));
 
-/**
- * A paired Machine by its name in this Machine's list: kept as it is, or paired now through
- * its SSH connection, opened by a front door that can show its login. A host's own jobs never
- * pair.
- */
 export const ensurePaired = Effect.fn("Lifecycle.ensurePaired")(function* (
   env: PluginEnv,
   name: string,
@@ -311,7 +271,6 @@ const notListed = (name: string) =>
     reason: `${REFUSED_INPUT}: no Machine "${name}": this Machine's list names none by that name`,
   });
 
-/** This Machine's Machines, as core lists them, or none where it could not say. */
 const herdrMachines = (env: PluginEnv) =>
   new Herdr(env).machineList().pipe(
     Effect.orElseSucceed(() => {
@@ -327,17 +286,11 @@ const named = (machines: ReadonlyArray<HerdrMachine>, name: string) =>
 const coreRefused = (name: string) => (cause: HerdrError) =>
   new HostRefused({ reason: `core did not take ${name}: ${cause.detail || cause.message}` });
 
-/** Has core keep `name`, reached through the SSH connection at `path`. */
 const addToCore = (env: PluginEnv, name: string, target: string, path: string) =>
   new Herdr(env)
     .machineAdd(name, viaCommand(path, target))
     .pipe(Effect.mapError(coreRefused(name)), Effect.provide(Path.layer));
 
-/**
- * Opens this computer's SSH connection to the Machine `name`, where none is open, and wakes
- * this host's link to it. On a Machine set to core, core is told to dial it now, or, for a
- * paired Machine core does not keep yet, to add it. `target` reaches a Machine no list names.
- */
 const openAndWake = (
   env: PluginEnv,
   name: string,
@@ -348,7 +301,6 @@ const openAndWake = (
     const listed = named(yield* herdrMachines(env), name);
     const paired =
       listed === undefined && Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name);
-    // A pairing core does not keep has no saved target: ssh resolves its name.
     const machine =
       listed ??
       (target !== undefined || paired ? { label: name, target: target ?? name } : undefined);
@@ -367,10 +319,6 @@ const openAndWake = (
     return { ...opened, added };
   }).pipe(Effect.provide(Path.layer));
 
-/**
- * `reaching` the Machine `name`, and where its link waits on an SSH connection, the same
- * once more after opening one: only for a front door that can show its login.
- */
 export const riding: <A, E, R>(
   env: PluginEnv,
   name: string,
@@ -390,7 +338,6 @@ export const riding: <A, E, R>(
     ),
   );
 
-/** The front door a relay header names, for a door a channel would declare. */
 const relayHeader: (door: Door | undefined, stamp?: string) => RelayHeader = (door, stamp?) => {
   let header: RelayHeader = {
     as: door === undefined ? "cli" : isFrontDoor(door) ? door : door.origin,
@@ -407,10 +354,6 @@ const relayHeader: (door: Door | undefined, stamp?: string) => RelayHeader = (do
   return header;
 };
 
-/**
- * This Machine's host, or the named peer's over its relay, opened as `door`: a relay's
- * header names it, so nothing is declared over one.
- */
 const reach: (
   env: PluginEnv,
   machine: string | null,
@@ -432,14 +375,8 @@ const reach: (
         ),
       );
 
-/** An answer, and the Machine it came from: null for this one. */
 type Answered<A> = { readonly ok: true; readonly value: A; readonly machine: string | null };
 
-/**
- * One question to the host this command reaches — this Machine's, or the one `--machine`
- * names — asked on its own connection. An operation names the front door asking, which the
- * channel declares before anything else.
- */
 export const asks: <A>(
   env: PluginEnv,
   question: (client: HostClient) => Effect.Effect<A, HostFailure>,
@@ -472,40 +409,34 @@ const hostRead: <A>(
     ),
   );
 
-/** This Machine's Tasks, newest first, as its host keeps them. */
 export const hostTasks: (
   env: PluginEnv,
 ) => Effect.Effect<ReadonlyArray<TaskRecord>, HostUnread, Client> = (env) =>
   hostRead(env, (client) => client.tasks());
 
-/** Every agent this Machine's host has registered. */
 export const hostRegistered: (
   env: PluginEnv,
 ) => Effect.Effect<ReadonlyArray<AgentEntry>, HostUnread, Client> = (env) =>
   hostRead(env, (client) => client.registered());
 
-/** A Run's launches, as this Machine's host keeps them. */
 export const hostLaunches: (
   env: PluginEnv,
   run: string,
 ) => Effect.Effect<ReadonlyArray<Launched>, HostUnread, Client> = (env, run) =>
   hostRead(env, (client) => client.launches({ run }));
 
-/** A Herd's proposals journal, as this Machine's host keeps it. */
 export const hostProposals: (
   env: PluginEnv,
   herd: string,
 ) => Effect.Effect<ReadonlyArray<ProposalLine>, HostUnread, Client> = (env, herd) =>
   hostRead(env, (client) => client.proposals({ herd }));
 
-/** Every line about a proposal that names this Run, as this Machine's host keeps them. */
 export const hostRunProposals: (
   env: PluginEnv,
   run: string,
 ) => Effect.Effect<ReadonlyArray<ProposalLine>, HostUnread, Client> = (env, run) =>
   hostRead(env, (client) => client.runProposals({ run }));
 
-/** The Task this Machine's host keeps in that workspace, which is what "the current Task" means. */
 export const hostTaskOf = (env: PluginEnv, workspace: string | null) =>
   workspace === null
     ? Effect.succeed(null)
@@ -513,11 +444,6 @@ export const hostTaskOf = (env: PluginEnv, workspace: string | null) =>
         Option.getOrNull(Arr.findFirst(tasks, (task) => task.workspace === workspace)),
       );
 
-/**
- * One question about a Run, asked of the Machine that has it: this host first, then each
- * peer, then each machine herdr lists that is not paired yet, paired on the way. A Run id
- * names one Run, so where it is is never asked of the caller.
- */
 export const asksRun: <A>(
   env: PluginEnv,
   runId: string,
@@ -533,7 +459,6 @@ export const asksRun: <A>(
     if (env.machine !== undefined) return yield* asks(env, question, door);
     const asked: Array<string> = [];
     const away: Array<string> = [];
-    /** The answer from `machine` where it has the Run; null where it has none. */
     const tryOn = (machine: string | null) =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -575,50 +500,32 @@ export const asksRun: <A>(
     );
   });
 
-/**
- * Starts the module this id names, under the caller's own claim on the work. The same
- * request twice is the same Run — which is what makes a retried command, a re-clicked
- * row and a replayed receipt one piece of work rather than three.
- *
- * The Task is chosen first, so the Run's agents open in its workspace rather than in
- * whichever one the host happened to be started from. A fresh one is only named here:
- * the host opens it once it knows the checkout it is rooted at.
- */
 export const startRun = Effect.fn("Lifecycle.startRun")(function* (
   env: PluginEnv,
   options: {
     readonly door: Door;
     readonly id: string;
     readonly request: string;
-    /** What the caller said, in the two halves the author's schemas settle differently. */
     readonly input: Given;
-    /** The host's own launch options, kept out of the author's payload. */
     readonly options?: Readonly<Record<string, string>>;
     readonly task: TaskChoice;
     readonly parent?: string | null;
-    /** The goal and constraints named at launch, beside the workspace's own defaults. */
     readonly intent?: Pick<IntentSeed, "goal" | "constraints">;
-    /** What a fresh Task is to be called, where the human said. */
     readonly title?: string | undefined;
-    /** The checks given with the start, over the project's and the user's files. */
     readonly verify?: ReadonlyArray<VerifySpec> | undefined;
-    /** Paths on this Machine, which the host copies into the Run. */
     readonly attachments?: ReadonlyArray<string> | undefined;
   },
 ) {
-  // Refused before a Task is opened for it, as the host would refuse it before the claim.
   const unattachable = yield* attachmentRefusal(options.attachments ?? []).pipe(
     Effect.orElseSucceed(() => null),
   );
   if (unattachable !== null) return err("invalid_input", unattachable);
-  // A Task and a workspace's defaults are this Machine's, and a start on another opens its own.
   const elsewhere = env.machine !== undefined;
   if (elsewhere && options.task.mode !== "new")
     return err(
       "invalid_input",
       `A Run started on ${env.machine} opens a Task there; --task names this Machine's.`,
     );
-  // The defaults of the workspace this was started from, which only a front door knows.
   const defaults = elsewhere
     ? null
     : yield* readDefaults(yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env.cwd)))).pipe(
@@ -630,7 +537,6 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     goal: options.intent?.goal,
     title: options.title,
   });
-  // Resolved here, once: what this front door listed and offered is where the host roots it.
   const root =
     options.options?.workspace === PROJECTS_ROOT_OPTION && !elsewhere
       ? (yield* projectsRoot(env)).path
@@ -674,7 +580,6 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
   return started;
 });
 
-/** The project a launch's reach is remembered for: `projects-root` for a start rooted there, else its remote, else its directory. */
 export const launchProject = (cwd: string, workspace: string | undefined) =>
   workspace === PROJECTS_ROOT_OPTION
     ? Effect.succeed(PROJECTS_ROOT_OPTION)
@@ -683,7 +588,6 @@ export const launchProject = (cwd: string, workspace: string | undefined) =>
         Effect.orElseSucceed(() => cwd),
       );
 
-/** A launch door's choice of how far the Run goes, saved as what its next launch offers first. */
 const rememberReach = Effect.fn("Lifecycle.rememberReach")(function* (
   env: PluginEnv,
   door: Door,
@@ -706,13 +610,11 @@ const rememberReach = Effect.fn("Lifecycle.rememberReach")(function* (
   });
 });
 
-/** Every Run a listing can show, and why the rest could not be read. */
 export interface RunListing {
   readonly runs: ReadonlyArray<RunView>;
   readonly unreadable: string | null;
 }
 
-/** One Run as a front door shows it, or null where the host has none by that id. */
 export const runView: (
   env: PluginEnv,
   runId: string,
@@ -727,7 +629,6 @@ export const runView: (
     ),
   );
 
-/** What `run show` prints of a Run, from the Machine that has it, and which one that is. */
 export const runShown = (env: PluginEnv, runId: string) =>
   asksRun(env, runId, (client) => client.shown({ runId })).pipe(
     Effect.map((answered) =>
@@ -739,22 +640,11 @@ export const runShown = (env: PluginEnv, runId: string) =>
     ),
   );
 
-/** Where a Run has got to: Ready to release, its steps and its CI, from the host that has it. */
 export const runProgress = (env: PluginEnv, runId: string) =>
   asksRun(env, runId, (client) => client.progress({ runId }));
 
-/**
- * The checkout a Run's verifications are about: the one the host placed it on. A
- * verification collected anywhere else would bind a real result to a tree nobody is
- * looking at.
- */
 export const treeOf: (view: RunView) => string = (view) => view.cwd;
 
-/**
- * Every Run this state directory has rows for, and why they could not be read
- * where they could not be: a host that will not start costs the caller those Runs,
- * never the listing it asked for.
- */
 export const runViews: (
   env: PluginEnv,
   task: string | null,
@@ -807,10 +697,6 @@ export const flockRuns = Effect.fn("Lifecycle.flockRuns")(function* (
   return { ...local, runs, machines };
 });
 
-/**
- * Retained material across this Machine and its configured routes, or `--machine`'s alone; a
- * Machine that cannot be searched is named in the answer instead of failing it.
- */
 export const flockArtefacts = (env: PluginEnv, asked: FlockSearch) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -866,12 +752,6 @@ export const asksArtefactRun = <A>(
     ),
   );
 
-/**
- * Every state this Run reaches, until `each` says the caller has what it came for. The
- * first one is where the work is now rather than what changed, so a client that has been
- * away — a board that was closed, a wait that was interrupted — reads the truth instead
- * of waiting for an update that has already been and gone.
- */
 export const watchRun: <R>(
   env: PluginEnv,
   runId: string,
@@ -882,7 +762,6 @@ export const watchRun: <R>(
   each: (view: RunView) => Effect.Effect<boolean, never, R>,
 ) =>
   Effect.gen(function* () {
-    // Where the Run is, which a Run on no Machine leaves here, to be said not found.
     const found = yield* asksRun(env, runId, () => Effect.void);
     const opened = yield* reach(env, found.ok ? found.machine : (env.machine ?? null)).pipe(
       Effect.result,
@@ -890,7 +769,6 @@ export const watchRun: <R>(
     if (opened._tag === "Failure") return refusal(opened.failure);
     let known = false;
     return yield* Stream.runForEachWhile(opened.success.watch({ runId }), (view) => {
-      // Nothing was admitted under that id, so there is nothing to wait for.
       if (view === null) return Effect.succeed(false);
       known = true;
       return each(view).pipe(Effect.map((enough) => !enough));
@@ -902,7 +780,6 @@ export const watchRun: <R>(
     );
   });
 
-/** The host's board stream, from a host started here if none is running, or `--machine`'s. */
 const boardStream = (env: PluginEnv) =>
   Effect.gen(function* () {
     if (env.machine !== undefined) return (yield* reach(env, env.machine)).board();
@@ -910,7 +787,6 @@ const boardStream = (env: PluginEnv) =>
     return (yield* frontDoor(socketOf(env.stateDir))).board();
   });
 
-/** The board as the host serves it now: the first message of its stream. */
 export const boardSnapshot: (
   env: PluginEnv,
 ) => Effect.Effect<
@@ -927,28 +803,20 @@ export const boardSnapshot: (
     }).pipe(Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause)))),
   );
 
-/** The board's Tasks, and why there are none where the host could not be read. */
 export interface BoardRead {
   readonly tasks: ReadonlyArray<TaskView>;
   readonly unreadable: string | null;
 }
 
-/** How long the first read waits for the host's board; later reads take what there is. */
 const FIRST_BOARD_WAIT = "10 seconds";
 
-/**
- * The board the host serves, followed for as long as the caller's scope: each read is the
- * latest the stream has said. A dropped stream reconnects and starts from a fresh snapshot.
- */
 export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (
   env: PluginEnv,
-  /** The latest read changed, including connection state. Does not perform a read. */
   changed?: () => void,
 ) {
   const tasks = new Map<string, TaskView>();
   const first = yield* Deferred.make<void>();
   let waited = false;
-  /** False between a dropped stream and the fresh snapshot after it. */
   let live = false;
   let lost: string | null = null;
   const notice = Effect.sync(() => changed?.());
@@ -1016,16 +884,13 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (
   };
 });
 
-/** Which of a Run's details a drawer is showing. */
 export interface DetailKey {
   readonly runId: string;
   readonly tail: boolean;
   readonly pages: number;
-  /** Ask the host's merge watch again rather than take what it last read. */
   readonly refreshMr: boolean;
 }
 
-/** One Run's details from the host, from a host started here if none is running. */
 const detailStream = (env: PluginEnv, key: DetailKey) =>
   Effect.gen(function* () {
     if (env.machine !== undefined)
@@ -1036,7 +901,6 @@ const detailStream = (env: PluginEnv, key: DetailKey) =>
       .pipe(Stream.map(recordIn));
   });
 
-/** A Run's details as the host has them now, for a caller that follows nothing. */
 export const runDetailNow: (
   env: PluginEnv,
   key: DetailKey,
@@ -1048,16 +912,10 @@ export const runDetailNow: (
     ),
   );
 
-/** How long a newly opened drawer waits for its first details; later reads take what there is. */
 const FIRST_DETAIL_WAIT = "5 seconds";
 
-/**
- * The open drawer's details, followed for as long as the caller's scope. A read for
- * another Run, or the same one shown differently, follows that instead.
- */
 export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* (
   env: PluginEnv,
-  /** A frame for the selected Run arrived; the reader now has that frame. */
   changed?: () => void,
 ) {
   const scope = yield* Effect.scope;
@@ -1095,7 +953,6 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
               ),
           ),
         ).pipe(
-          // A host going away ends the stream interrupted, which the retry answers.
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.logError(cause),
           ),
@@ -1112,11 +969,6 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
   };
 });
 
-/**
- * Registers what the modules as they are now allow and hands over what is outstanding,
- * then says where this Run is. A file that was missing and has been put back is picked up
- * by this rather than by restarting the host.
- */
 export const recoverRun: (
   env: PluginEnv,
   runId: string,
@@ -1147,11 +999,6 @@ const shown =
     return returned;
   };
 
-/**
- * Settles the question a Run is waiting on. The decision is named where the caller
- * knows which one, and null where it means "the one it is waiting on" — the host refuses
- * that where it is not exactly one, rather than choosing for anybody.
- */
 export const answerRun: (
   env: PluginEnv,
   options: {
@@ -1190,11 +1037,6 @@ export const answerRun: (
     ),
   );
 
-/**
- * Sets or clears one control over one Run. A control the host recorded but could
- * not apply says so: work no host is running is held in intent, and calling that done
- * would be a confirmation nobody can stand behind.
- */
 export const controlRun: (
   env: PluginEnv,
   options: {
@@ -1222,7 +1064,6 @@ export const controlRun: (
     options.door,
   ).pipe(Effect.map(controlled));
 
-/** What a control's answer is, at the CLI, in chat and on the TUI board. */
 export const controlled: (
   answered: { readonly ok: true; readonly value: typeof Controlled.Type } | Failure,
 ) => OpResult = (answered) => {
@@ -1291,7 +1132,6 @@ export const publishRun = (
     }),
   );
 
-/** Picks a Run up again from any door: recovered first, then its stop cleared, so what wakes can run. */
 export const resumeRun: (
   env: PluginEnv,
   options: { readonly door: Door; readonly runId: string; readonly request: string },
@@ -1308,7 +1148,6 @@ export const resumeRun: (
     options.door,
   ).pipe(Effect.map(shown(options.runId)));
 
-/** Amends a Run's Intent through the host, which refuses a change the Run cannot be held to. */
 export const changeIntentRun = (
   env: PluginEnv,
   options: {
@@ -1316,7 +1155,6 @@ export const changeIntentRun = (
     readonly change: Change;
     readonly request: string;
     readonly door: Door;
-    /** The Intent version the change was made on; the host refuses it on any other. */
     readonly expected?: number;
   },
 ) =>
@@ -1334,7 +1172,6 @@ export const changeIntentRun = (
     options.door,
   );
 
-/** Names one of a Run's checks, or withdraws it, through the host. */
 export const grantRun: (
   env: PluginEnv,
   options: {
@@ -1368,15 +1205,10 @@ export const grantRun: (
     ),
   );
 
-/**
- * Saves a Run's checks as its repository's own, by its checkout's remote, so
- * every Run started there later begins with them. The CLI and chat both come here.
- */
 export const rememberChecks = Effect.fn("lifecycle.rememberChecks")(function* (
   env: PluginEnv,
   options: {
     readonly runId: string;
-    /** Its worktree, then the checkout it was started for: a settled Run's worktree is gone. */
     readonly checkouts: ReadonlyArray<string>;
     readonly replace: boolean;
   },
@@ -1443,7 +1275,6 @@ export const withdrawNoteRun: (
     ),
   );
 
-/** Says something of a human's to the agent a Run has, through the host. */
 export const steerRun: (
   env: PluginEnv,
   options: {
@@ -1475,8 +1306,6 @@ export const steerRun: (
           mode: options.mode,
           attachments: options.attachments,
         });
-        // Only an agent that is gone is carried on elsewhere: a refused send to a live one may
-        // still be working the text, and a follow-up beside it would be a second copy.
         const route =
           sent.gone === true && sent.finished === true
             ? yield* followUpRoute(client, options)
@@ -1512,7 +1341,6 @@ export const steerRun: (
             sent.redacted,
           ),
         };
-      // A receipt that read as delivered when nothing was sent is the failure ADR-0041 ends.
       const why = Arr.join(
         Arr.filter(
           [`Nothing was delivered: ${sent.detail || "no agent to tell"}.`, sent.workflowNotice],
@@ -1528,10 +1356,6 @@ export const steerRun: (
     }),
   );
 
-/**
- * A delivery as a front door says it: observed and how, or sent and not seen taken, with
- * where to look. Never "told" on the strength of a send alone.
- */
 export const deliveredLine: (sent: {
   readonly agent: string;
   readonly observed?: boolean;
@@ -1542,10 +1366,6 @@ export const deliveredLine: (sent: {
     ? `Delivered to ${sent.agent} (observed: ${sent.how ?? "taken"}).`
     : `Sent to ${sent.agent}, not observed. Go to pane: \`hc attach ${sent.pane ?? sent.agent}\`.`;
 
-/**
- * What carries a request on to a finished Run whose agent is gone: its follow-up offer
- * with the message as its input, else a new Run on its branch. Collie starts neither.
- */
 const followUpRoute: (
   client: HostClient,
   options: { readonly runId: string; readonly text: string },
@@ -1567,7 +1387,6 @@ const followUpRoute: (
     return `${options.runId} has finished and its agent is gone, and it offers no follow-up: start a new Run on ${view.branch === null ? "its branch" : `its branch ${view.branch}`}.`;
   }).pipe(Effect.orElseSucceed(() => null));
 
-/** A carried-out proposal as a front door prints it: one line per action, failing on the first that did not apply. */
 export const carriedResult: ({ proposal, results }: ProposalCarried) => OpResult = ({
   proposal,
   results,
@@ -1578,7 +1397,6 @@ export const carriedResult: ({ proposal, results }: ProposalCarried) => OpResult
   );
   if (Arr.some(results, (r) => r.state !== "applied")) {
     const changed = Arr.some(results, (r) => r.state === "applied" && r.kind !== "none");
-    // needs_input is retryable without a receipt only when nothing has happened yet.
     const code =
       results.at(-1)?.kind === "ask_human" && !changed ? "needs_input" : "operation_failed";
     return err(code, message, { proposal, results: Arr.map(results, (r) => ({ ...r })) });
@@ -1589,7 +1407,6 @@ export const carriedResult: ({ proposal, results }: ProposalCarried) => OpResult
 const capitalised = (text: string) =>
   Str.toUpperCase(Option.getOrElse(Str.charAt(text, 0), () => "")) + pipe_(text, Str.slice(1));
 
-/** A Run as a human reads one: what it is, where its module is, and what is wrong. */
 export const describeRun: (view: RunView) => ReadonlyArray<string> = (view) => [
   `${view.runId}\t${statusOf(view)}\t${view.workflow}`,
   view.entry,
@@ -1602,7 +1419,6 @@ export const describeRun: (view: RunView) => ReadonlyArray<string> = (view) => [
   ...(view.awaiting === null ? [] : [awaitingLine(view.awaiting)]),
 ];
 
-/** The questions a Run is still waiting on, with what each will take and why. */
 export const describeWaiting: (view: RunView) => ReadonlyArray<string> = (view) =>
   Arr.flatMap(Arr.filter(view.waiting, isUnanswered), (one: OpenDecision) => {
     const hold = holdPath(one, view.controls.includes(HOLD));
@@ -1622,11 +1438,9 @@ export const describeWaiting: (view: RunView) => ReadonlyArray<string> = (view) 
     ];
   });
 
-/** The question an answer would settle next: the oldest still open. */
 export const nextAction: (view: RunView) => string | null = (view) =>
   Option.getOrNull(Arr.findFirst(view.waiting, isUnanswered))?.name ?? null;
 
-/** The one word a listing gives a Run, and the sentence behind it where there is one. */
 export const statusOf: (view: RunView) => string = (view) => {
   switch (view.status.status) {
     case "ended":
@@ -1642,14 +1456,8 @@ export const statusOf: (view: RunView) => string = (view) => {
 
 export { resultText } from "./report";
 
-/** Whether the engine can still change this Run's state. */
 export const isSettled: (view: RunView) => boolean = (view) => terminalStatus(view.status);
 
-/**
- * What a Run offers to do next. The host answers, because only it holds the module
- * that declared them: an offer is the author's own eligibility asked of the facts as they
- * are now, and a Run whose module has gone is readable with its offers refused by name.
- */
 export const showOffers: (
   env: PluginEnv,
   runId: string,
@@ -1667,7 +1475,6 @@ export const showOffers: (
     ),
   );
 
-/** The offers themselves, for a caller that has to choose one rather than print them. */
 export const offersOf: (
   env: PluginEnv,
   runId: string,
@@ -1686,7 +1493,6 @@ export const describeOffers: (offers: ReadonlyArray<OfferView>) => string = (off
     "\n",
   );
 
-/** Carries out one of them, under the caller's own claim so a retry is one Run. */
 export const invokeOffer: (
   env: PluginEnv,
   options: {
@@ -1730,7 +1536,6 @@ export const invokeOffer: (
     ),
   );
 
-/** An offer taken with its arguments as text, each read as the offer declares it. */
 export const invokeTypedOffer: (
   env: PluginEnv,
   options: Omit<Parameters<typeof invokeOffer>[1], "input"> & {
@@ -1750,7 +1555,6 @@ export const invokeTypedOffer: (
     });
   });
 
-/** A yes to a proposal, carried out by the host under the front door asking. */
 export const confirmProposed: (
   env: PluginEnv,
   options: {
@@ -1797,7 +1601,6 @@ export const declineProposed: (
     ),
   );
 
-/** What became of a Run's work, written by the host; the line it wrote, or why not. */
 export const disposeRun: (
   env: PluginEnv,
   options: {
@@ -1826,7 +1629,6 @@ export const disposeRun: (
     options.door,
   );
 
-/** A finished Run opened or acknowledged, recorded once by its host; the first line, or why not. */
 export const seeRun: (
   env: PluginEnv,
   options: { readonly door: Door; readonly runId: string; readonly request: string },
@@ -1841,7 +1643,6 @@ export const seeRun: (
     options.door,
   );
 
-/** One of Collie's settings, set on this Machine through its host as an edit made now. */
 export const setSharedSetting = (
   env: PluginEnv,
   options: {
@@ -1862,33 +1663,24 @@ export const setSharedSetting = (
     options.door,
   );
 
-/** A Machine's Harness catalogue, as its host last read it. */
 export const catalogueReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.models(), door);
 
 export const connectionReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.connections(), door);
 
-/** `script`, run by the host of the Machine `--machine` names. */
 export const machineShell = (env: PluginEnv, script: string, request: string, door: Door) =>
   asks(env, (client) => client.shell({ script, request }), door);
 
-/** This Machine's Usage readings, as its host last read them. */
 export const usageReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.usage(), door);
 
-/** What a cleanup sweep would remove now, and what is kept and why. */
 export const cleanupListing = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.cleanup(), door);
 
-/** This Machine's Schedules, as its host keeps them. */
 export const scheduleListing = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.schedules(), door);
 
-/**
- * The Schedules of the Machine `--machine` names, or of this Machine and every paired one,
- * with each peer that did not answer named as away, as `flockRuns` lists Runs.
- */
 export const flockSchedules = Effect.fn("Lifecycle.flockSchedules")(function* (
   env: PluginEnv,
   door: Door,
@@ -1920,11 +1712,6 @@ export const flockSchedules = Effect.fn("Lifecycle.flockSchedules")(function* (
   return { ok: true as const, value: { machine: local.value.machine, schedules, machines } };
 });
 
-/**
- * One Machine's Schedule operations for the shared move sequence: this Machine's host
- * where `machine` is null, a peer's through its relay otherwise. Each refusal is also
- * handed to `refused`, so the caller can say it as the front doors do.
- */
 export const scheduleDoorOn = Effect.fn("Lifecycle.scheduleDoorOn")(function* (
   env: PluginEnv,
   machine: string | null,
@@ -1948,7 +1735,6 @@ export const scheduleDoorOn = Effect.fn("Lifecycle.scheduleDoorOn")(function* (
   return returned;
 });
 
-/** Adds, pauses, resumes or removes one of this Machine's Schedules, under the caller's request. */
 export const changeSchedule = (
   env: PluginEnv,
   options: { readonly door: Door; readonly change: ScheduleChange; readonly request: string },
@@ -1959,13 +1745,11 @@ export const changeSchedule = (
     options.door,
   );
 
-/** Sweeps now, through the host, under the caller's request. */
 export const sweepNow = (
   env: PluginEnv,
   options: { readonly door: Door; readonly request: string },
 ) => asks(env, (client) => client.sweep({ request: options.request }), options.door);
 
-/** Free words about one Run, which the host has the evaluator turn into what to do. */
 export const steerAbout: (
   env: PluginEnv,
   options: {
@@ -1991,7 +1775,6 @@ export const steerAbout: (
     options.door,
   ).pipe(Effect.map((answered) => (answered.ok ? opResultOf(answered.value) : answered)));
 
-/** An outcome the host sent back, as the result every front door prints. */
 const opResultOf: (said: SteerOutcome) => OpResult = (said) => {
   if (said.ok)
     return {
@@ -2009,7 +1792,6 @@ const opResultOf: (said: SteerOutcome) => OpResult = (said) => {
     : err("operation_failed", said.human);
 };
 
-/** Actions chat was asked for, which the host records as a proposal and carries out. */
 export const proposeActions: (
   env: PluginEnv,
   options: {
@@ -2032,7 +1814,6 @@ export const proposeActions: (
     options.door,
   ).pipe(Effect.map((answered) => (answered.ok ? opResultOf(answered.value) : answered)));
 
-/** A conversation's pending News, settled for it by the host. */
 export const settleNewsFor = (
   env: PluginEnv,
   options: {
@@ -2055,7 +1836,6 @@ export const settleNewsFor = (
     options.door,
   );
 
-/** The board's own actions, asked for by name and carried out by the host. */
 export const actAsked: (
   env: PluginEnv,
   options: {
@@ -2096,7 +1876,6 @@ export const actAsked: (
     ),
   );
 
-/** A proposal step nobody can account for, settled as what actually happened. */
 export const reconcileProposed: (
   env: PluginEnv,
   options: {
@@ -2130,7 +1909,6 @@ export const reconcileProposed: (
     }),
   );
 
-/** A message nobody knows reached its agent, settled as what actually happened. */
 export const reconcileDelivered: (
   env: PluginEnv,
   options: {
@@ -2165,7 +1943,6 @@ export const reconcileDelivered: (
     }),
   );
 
-/** A child Run on a finished one, carrying on with what is left in these words. */
 export const followUpRun: (
   env: PluginEnv,
   options: {
@@ -2206,7 +1983,6 @@ export const followUpRun: (
     ),
   );
 
-/** Replaces the host that owns `dir` with this install's, as `collie host restart` and the herdr action do. */
 export const restartHostAt: (dir: string) => Effect.Effect<OpResult, never, Client> = (dir) =>
   restartHost(dir).pipe(
     Effect.map((restarted) => {
@@ -2220,13 +1996,8 @@ export const restartHostAt: (dir: string) => Effect.Effect<OpResult, never, Clie
     Effect.catch((cause) => Effect.succeed(refusal(cause))),
   );
 
-/** This Machine's peers, with the standings its host keeps. */
 export const machineList = (env: PluginEnv) => asks(env, (client) => client.peers());
 
-/**
- * The Machines paired with this one, each saying whether core keeps it where this Machine is
- * set to core, with this Machine's backend and the Machines its backend lists.
- */
 export const machinesListed = (env: PluginEnv) =>
   Effect.gen(function* () {
     const read = yield* asks(env, (client) => client.peers());
@@ -2256,11 +2027,6 @@ const answered = <A>(effect: Effect.Effect<A, HostFailure, Client | FileSystem.F
     Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause))),
   );
 
-/**
- * Opens this computer's SSH connection to the Machine `name`, where none is open, and wakes
- * this host's link to it. What ssh says goes to `said`, where the person who has to answer a
- * login is.
- */
 export const machineConnect = (
   env: PluginEnv,
   name: string,
@@ -2271,10 +2037,6 @@ export const machineConnect = (
     Effect.map(openAndWake(env, name, said, target), (opened) => ({ machine: name, ...opened })),
   );
 
-/**
- * Adds the Machine `name` to core, on a Machine set to core: its `via` rides this computer's
- * SSH connection to `target`, opened here where none is, so core never logs in by itself.
- */
 export const machineAdd = (
   env: PluginEnv,
   name: string,
@@ -2289,10 +2051,6 @@ export const machineAdd = (
     }).pipe(Effect.provide(Path.layer)),
   );
 
-/**
- * Forgets the Machine `name`: this host and the Machine unpair, the SSH connection to it ends,
- * and on a Machine set to core, core forgets it too. Nothing on it is stopped.
- */
 export const machineForget = (env: PluginEnv, name: string) =>
   answered(
     Effect.gen(function* () {
@@ -2312,7 +2070,6 @@ export const machineForget = (env: PluginEnv, name: string) =>
     }).pipe(Effect.provide(Path.layer)),
   );
 
-/** Pairs this Machine with the installation asking, which `pairWith` runs over SSH. */
 export const inviteFrom = (
   env: PluginEnv,
   asker: { readonly installation: string; readonly name: string; readonly address: string | null },
@@ -2356,7 +2113,6 @@ export const verifyRun = Effect.fn("Lifecycle.verifyRun")(function* (
   };
 });
 
-/** A Measurement of the Run's checkout, asked of the host on the Run's own Machine. */
 export const measureRun = Effect.fn("Lifecycle.measureRun")(function* (
   env: PluginEnv,
   request: {
@@ -2375,11 +2131,6 @@ export const measureRun = Effect.fn("Lifecycle.measureRun")(function* (
   return { ok: true as const, events: client.measure(request) };
 });
 
-/**
- * The report over every Run this Machine's host has, for whichever door asks: a Run
- * whose metrics cannot be read fails it, and one whose records cannot be read is
- * measured without them.
- */
 export const reportFor = Effect.fn("Report.for")(function* (env: PluginEnv, since: string | null) {
   const hosted = yield* runViews(env, null);
   const metrics = new Map<string, Metrics>();

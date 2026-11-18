@@ -1,7 +1,3 @@
-// Frontmatter YAML for definition files. Parsing is Effect's YAML 1.2 config parser;
-// what lives here is the frontmatter split, the value schemas, and the write-back used
-// when forking a definition.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -38,18 +34,10 @@ export function isYamlMap(value: YamlValue | undefined): value is YamlMap {
 
 const KEY = /^("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_][A-Za-z0-9_./-]*)\s*:(?:[ \t]+(.*))?$/;
 
-/**
- * Parses one YAML document. An empty document is null, as YAML defines it.
- *
- * Close to YAML 1.2's core schema rather than conformant to it: `.inf` and `.nan` come
- * back as null, and `1_000` as 1000, which core does not do. Frontmatter uses none of
- * those, and this is the parser's behaviour rather than a promise we make.
- */
 export function parseYaml(src: string) {
   let parsed: YamlValue;
   try {
-    // SAFETY: the parser yields nulls, booleans, numbers and strings in maps and
-    // sequences, which is exactly YamlValue.
+    // WARNING: the parser yields nulls, booleans, numbers and strings in maps and sequences, which is exactly YamlValue.
     parsed = Yaml.parse(src) as YamlValue;
   } catch (cause) {
     throw new YamlError({ message: cause instanceof Error ? cause.message : String(cause) });
@@ -59,11 +47,6 @@ export function parseYaml(src: string) {
 
 const BARE = /^[A-Za-z0-9_](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
 
-/**
- * A string written back into frontmatter: bare where it reads back unchanged, quoted
- * otherwise. BARE rules out the punctuation that changes the line's meaning; the round
- * trip through the parser rules out the words that are not strings (`true`, `5`, `~`).
- */
 export function yamlScalar(value: string) {
   return BARE.test(value) && parseYaml(value) === value ? value : JSON.stringify(value);
 }
@@ -77,17 +60,6 @@ function unquote(raw: string) {
   return raw;
 }
 
-/**
- * Writes `key: value` into the document's frontmatter: over the line that already sets that
- * key, or at the top of the block, or into a new block when the document has none. The
- * value goes in as a scalar the parser reads back unchanged — a definition edited this way
- * is one the loader still agrees with.
- *
- * It finds the block by scanning lines rather than by parsing, because a fork has to keep
- * the file's own formatting and comments. FENCE is what keeps that second reading honest:
- * a line only closes the block where `parseDocument` would also end it, so a `---` inside
- * a block scalar cannot hide an existing key and get a duplicate written above it.
- */
 export function setFrontmatterKey(text: string, key: string, value: string) {
   const lines = Str.split(text, "\n");
   const written = `${key}: ${yamlScalar(value)}`;
@@ -106,7 +78,6 @@ export function setFrontmatterKey(text: string, key: string, value: string) {
   return Arr.join(lines, "\n");
 }
 
-/** The key a frontmatter line sets, or null for anything nested or not a mapping. */
 function topLevelKey(line: string) {
   if (/^\s/.test(line)) return null;
   const m = KEY.exec(Str.trim(line));
@@ -118,24 +89,17 @@ export interface Document {
   body: string;
 }
 
-/**
- * The `---` fence, as `parseDocument` reads it: column 0, blanks allowed after it. Shared
- * with `setFrontmatterKey` so the two agree on where a document's frontmatter ends.
- */
 const FENCE = /^---[ \t]*\r?$/;
 
 function withoutBom(line: string) {
   return pipe(line, Str.replace(/^﻿/, ""));
 }
 
-/** Splits `---` frontmatter from the markdown body. */
 export function parseDocument(text: string) {
   const normalised = withoutBom(text);
   const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(normalised);
   if (!m) return { data: {}, body: Str.trim(normalised) };
   const parsed = parseYaml(m[1]!);
-  // A block that is empty or nothing but comments parses to null. For a document that is
-  // frontmatter setting no keys, not frontmatter that failed to be a mapping.
   const data = parsed === null ? {} : parsed;
   if (!isYamlMap(data)) throw new YamlError({ message: "frontmatter must be a mapping" });
   return {

@@ -1,13 +1,3 @@
-// An agent saying "the tests pass" is a claim. This is the other thing: a command whose
-// exit Collie watched, bound to the exact tree it ran on.
-//
-// The binding is what makes it worth anything. A pass on a tree that changed while the
-// command ran says nothing about either tree, so a verification whose start and end
-// snapshots differ is `unstable` — never `pass`, and never quietly re-run.
-//
-// Nothing here goes through a shell. The command is an executable and an argument list,
-// resolved once and recorded as an absolute path, so the check named is what ran.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
@@ -35,22 +25,14 @@ import {
   type Snapshot,
 } from "./verify-model";
 
-/** Over this many bytes of working-tree content, the tree is not fingerprinted at all. */
 export const FINGERPRINT_MAX_BYTES = 50 * 1024 * 1024;
 
-/** How much of each stream is kept: enough to see what failed, not a transcript. */
 const TAIL_BYTES = 4 * 1024;
 
 export { LOG_BYTES } from "./check-supervisor";
 
-/**
- * A tree too large to fingerprint. Two of these are **not** equality: they say the same
- * thing about two trees nobody looked at, and treating them as equal would turn every
- * verification on a big repository into a `pass`.
- */
 export const TOO_LARGE = "unstable:too-large";
 
-/** A repository's tree git could not write, which is never the same as another for the same reason as `TOO_LARGE`. */
 export const UNMEASURED = "unstable:unmeasured";
 
 export {
@@ -61,7 +43,6 @@ export {
   type Proof,
   type Snapshot,
 } from "./verify-model";
-/** A pass, and the gate fix it follows where it is a `fix`. */
 export interface CheckPass {
   readonly pass: Pass;
   readonly round?: number;
@@ -71,11 +52,9 @@ const VerificationJson = Schema.fromJsonString(VerificationSchema);
 
 export class VerifyRefused extends Data.TaggedError("VerifyRefused")<{
   why: string;
-  /** Where the refusal is about the Run's state rather than what was asked. */
   state?: true;
 }> {}
 
-/** Neither pass nor fail: what a check ended with could not be kept. */
 export const noVerdict =
   (name: string, what: "exit status" | "output" | "record", how: "read" | "written") =>
   (error: Error) =>
@@ -92,26 +71,16 @@ type Services =
 
 const git = (args: string[], cwd: string) => shell("git", args, cwd);
 
-/**
- * What this working tree is, right now: the commit it is on, and the Git tree it would
- * commit as, untracked files git is not ignoring included. The same bytes are the same
- * tree at any commit, staged or not.
- *
- * Untracked content is included deliberately. A test run that passed because of a file
- * nobody committed passed on a tree that is not the one anybody will get.
- */
 export const fingerprint = (cwd: string) =>
   Effect.map(treeOf(cwd), ({ head_sha, fingerprint, unmeasured }) =>
     unmeasured === undefined ? { head_sha, fingerprint } : { head_sha, fingerprint, unmeasured },
   );
 
-/** The Git tree HEAD names: the same files at two commits are the same content. Empty before a first commit. */
 export const contentOf = (cwd: string) =>
   Effect.map(git(["rev-parse", "HEAD^{tree}"], cwd), (got) =>
     got.code === 0 ? Str.trim(got.stdout) : "",
   );
 
-/** `git status --porcelain=v2 --branch -z`'s headers, and the entries after them. */
 const statusParts = (stdout: string) => {
   const headers = new Map<string, string>();
   let rest = stdout;
@@ -124,10 +93,6 @@ const statusParts = (stdout: string) => {
   return { headers, entries: rest };
 };
 
-/**
- * The fingerprint, with the branch HEAD names (`HEAD` when detached, null before a first
- * commit) and whether anything is uncommitted, all from one status.
- */
 export const treeOf: (cwd: string) => Effect.Effect<
   {
     head_sha: string;
@@ -167,7 +132,6 @@ export const treeOf: (cwd: string) => Effect.Effect<
   const branch = !born || named === undefined ? null : named === "(detached)" ? "HEAD" : named;
   const dirty = entries !== "";
 
-  // Status names paths from the repository root, not from cwd.
   const root = place?.root ?? cwd;
   let bytes = 0;
   for (const relative of unstagedPaths(entries)) {
@@ -177,7 +141,6 @@ export const treeOf: (cwd: string) => Effect.Effect<
     );
     if (bytes > FINGERPRINT_MAX_BYTES) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
   }
-  // Outside a repository there is no tree to move, as there never was.
   const { tree, unmeasured } = place === null ? { tree: "" } : yield* workingTree(cwd, place.index);
   if (unmeasured !== undefined)
     return { head_sha, fingerprint: UNMEASURED, unmeasured, branch, dirty };
@@ -194,15 +157,10 @@ export const treeOf: (cwd: string) => Effect.Effect<
   return { head_sha, fingerprint: Arr.join(parts, " "), branch, dirty };
 });
 
-/**
- * The submodules whose checkout has edits or untracked files: the superproject's tree
- * records only a submodule's commit, so their content is fingerprinted on its own.
- */
 const changedSubmodules = (entries: string) => {
   const found: string[] = [];
   let original = false;
   for (const record of Str.split(entries, "\0")) {
-    // A rename's original path is the record after it.
     if (original) {
       original = false;
       continue;
@@ -220,7 +178,6 @@ const changedSubmodules = (entries: string) => {
   return found;
 };
 
-/** Paths whose working-tree file differs from the index, and untracked ones, from the repository root. */
 const unstagedPaths = (entries: string) => {
   const found: string[] = [];
   let original = false;
@@ -239,16 +196,11 @@ const unstagedPaths = (entries: string) => {
   return found;
 };
 
-/**
- * Each checkout root's index, kept while the root's `.git` stays what it was; a subdirectory
- * is asked each time, since it can become a repository of its own.
- */
 const places = new Map<
   string,
   { readonly index: string; readonly root: string; readonly dotGit: string }
 >();
 
-/** A `.git` directory's index is always its own; a `.git` file's is the gitdir it names. */
 const dotGitOf = Effect.fn("Verify.dotGitOf")(
   function* (root: string) {
     const fs = yield* FileSystem.FileSystem;
@@ -273,7 +225,6 @@ const placeOf = Effect.fn("Verify.placeOf")(function* (cwd: string) {
   return place;
 });
 
-/** A written tree, or why git could not write one. */
 type Measured = { readonly tree: string; readonly unmeasured?: string };
 
 const unmeasuredBy: (verb: string, ran: Ran) => Measured = (verb, ran) => ({
@@ -281,7 +232,6 @@ const unmeasuredBy: (verb: string, ran: Ran) => Measured = (verb, ran) => ({
   unmeasured: tail(Str.trim(ran.stderr ?? "")) || `git ${verb} exited ${ran.code}`,
 });
 
-/** The tree `git add -A` would stage, written through a scratch copy so the checkout's own index is left as it was. */
 const stageAndWrite = Effect.fn("Verify.stageAndWrite")(
   function* (cwd: string, index: string) {
     const fs = yield* FileSystem.FileSystem;
@@ -291,15 +241,9 @@ const stageAndWrite = Effect.fn("Verify.stageAndWrite")(
       (scratch) =>
         Effect.gen(function* () {
           const env = { GIT_INDEX_FILE: path.join(scratch, "index") };
-          // A repository nothing was ever staged in has no index yet.
           if (yield* fs.exists(index)) {
-            // Read before the copy, so an index written meanwhile is never dated later than it was.
             const written = (yield* fs.stat(index)).mtime;
             yield* fs.copyFile(index, env.GIT_INDEX_FILE);
-            // Git takes a file whose size and times match its entry as unchanged, unless the
-            // index is no newer than the file. A copy dated now would be newer than every
-            // file, and an edit of the same size in the second its file was staged would
-            // stage nothing. So the copy keeps the index's own time, to the second below it.
             if (Option.isSome(written)) {
               const at = Math.floor(written.value.getTime() / 1000);
               yield* fs.utimes(env.GIT_INDEX_FILE, at, at);
@@ -320,7 +264,6 @@ const stageAndWrite = Effect.fn("Verify.stageAndWrite")(
   ),
 );
 
-/** Tried once more, with a fresh scratch index, before the tree is called unmeasured. */
 const workingTree = (cwd: string, index: string) =>
   stageAndWrite(cwd, index).pipe(
     Effect.filterOrElse(
@@ -329,7 +272,6 @@ const workingTree = (cwd: string, index: string) =>
     ),
   );
 
-/** Whether two snapshots are the same bytes, whatever commit each was on. A tree nobody measured is never the same as another. */
 export const sameTree = (
   one: Pick<Snapshot, "fingerprint">,
   other: Pick<Snapshot, "fingerprint">,
@@ -338,11 +280,6 @@ export const sameTree = (
   one.fingerprint !== UNMEASURED &&
   one.fingerprint === other.fingerprint;
 
-/**
- * Whether the tree was the same at both ends, and so whether the exit code says anything
- * about it. The sentinel is the case worth spelling out: two unmeasured trees are not one
- * tree, so a repository over the cap can never produce a `pass`.
- */
 export function resultOf(
   start: Snapshot,
   end: Snapshot,
@@ -350,23 +287,18 @@ export function resultOf(
   expect: Verification["expect"] = "pass",
 ) {
   if (!sameTree(start, end)) return "unstable";
-  // Never `(exit === 0) === wanted` on its own: an unstable tree says nothing about
-  // either expectation, and the rule above has to come first for both.
   return (exit === 0) === (expect === "pass") ? "pass" : "fail";
 }
 
-/** What outside the tree decides how a check behaves, beside the executable itself. */
 const TOOLCHAIN_VARIABLES = ["PATH", "NODE_ENV", "NODE_OPTIONS"] as const;
 const TOOLCHAIN_RUNTIMES = ["node", "bun"] as const;
 
-/** Content digests by file identity and change time, so a 100MB runtime is read once. */
 const digests = new Map<string, string>();
 
 const identityOf = (executable: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const real = yield* fs.realPath(executable);
-    // ctime, which no extractor can set back the way npm fixes an mtime.
     const info = yield* Effect.tryPromise(() => Bun.file(real).stat());
     const key = Arr.join(
       Arr.map([real, info.dev, info.ino, info.size, info.ctimeMs, info.mtimeMs], (part) =>
@@ -381,7 +313,6 @@ const identityOf = (executable: string) =>
     return `${real}@${digest}`;
   });
 
-/** The checkout's package roots: each directory holding a tracked `package.json`, or `cwd` outside git. */
 const packageRoots = Effect.fn("Verify.packageRoots")(function* (cwd: string) {
   const path = yield* Path.Path;
   const top = yield* git(["rev-parse", "--show-toplevel"], cwd);
@@ -402,11 +333,6 @@ const identityLine = (name: string, at: string) =>
     }),
   );
 
-/**
- * What is installed under a package root, by entry name and file identity, never read.
- * Dot-entries but `.bin` are caches tools write while a check runs.
- */
-// ponytail: a file rewritten in place inside a package goes unseen; content digests if that bites.
 const installedAt = Effect.fn("Verify.installedAt")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -430,11 +356,6 @@ const installedAt = Effect.fn("Verify.installedAt")(function* (root: string) {
   return Arr.join(lines, "\n");
 });
 
-/**
- * The environment a check runs in: the executable's real path and content, the runtimes
- * on PATH, `TOOLCHAIN_VARIABLES`, and the dependencies installed in `cwd`'s checkout. Null
- * where any of them cannot be read, which no record can be reused under.
- */
 export const environmentOf = Effect.fn("Verify.environmentOf")(
   function* (absolute: string, cwd: string) {
     const parts = [yield* identityOf(absolute)];
@@ -449,11 +370,6 @@ export const environmentOf = Effect.fn("Verify.environmentOf")(
   Effect.orElseSucceed(() => null),
 );
 
-/**
- * Whether this verification still says anything about the tree in front of us. A result
- * is bound to the tree it ran on, so any byte changed since makes it history — no time
- * component, because a verification does not go off, it is superseded.
- */
 export function staleAgainst(record: Verification, now: Snapshot) {
   return !sameTree(record.end, now);
 }
@@ -468,10 +384,6 @@ export const appendVerification = Effect.fn("Verify.append")(function* (
   yield* appendRunJournal(verificationsPath(runDir), VerificationJson, record);
 });
 
-/**
- * The control naming the check Collie itself is running for a Run, set while it runs. Its
- * agents are idle then, and without this a card reads whatever the last of them was doing.
- */
 export const VERIFYING = "verifying";
 
 const VerifyingSchema = Schema.Struct({
@@ -480,25 +392,19 @@ const VerifyingSchema = Schema.Struct({
   argv: Schema.Array(Schema.String),
   pass: Pass,
   round: Schema.NullOr(Schema.Int),
-  /** The commit it runs at, which for `baseline` is where the branch left the default one. */
   revision: Schema.String,
-  /** The default branch a `baseline` runs where the branch left; null for every other pass. */
   base: Schema.NullOr(Schema.String),
   started: Schema.String,
-  /** Where its output is being written. */
   log: Schema.optionalKey(Schema.String),
-  /** The pipeline job a `ci` pass waits on. */
   job: Schema.optionalKey(Schema.String),
 });
 export type Verifying = typeof VerifyingSchema.Type;
 const VerifyingJson = Schema.fromJsonString(VerifyingSchema);
 export const encodeVerifying = flow(Schema.encodeResult(VerifyingJson), Result.getOrThrow);
 
-/** The check a `verifying` control's value names, or null for none. */
 export const decodeVerifying = (data: string | null) =>
   data === null ? null : Option.getOrNull(Schema.decodeOption(VerifyingJson)(data));
 
-/** The check running for the Run, or null when none is. */
 export const verifyingOf = (runId: string) =>
   Effect.map(
     RunRecords.use((records) => records.control(VERIFYING, runId)),
@@ -509,7 +415,6 @@ export const readVerifications = Effect.fn("Verify.read")(function* (runDir: str
   return yield* readRunJournal(verificationsPath(runDir), VerificationJson);
 });
 
-/** What each verification of these Runs says across them (`ProofSchema`), in one read. */
 export const readProofsOf = Effect.fn("Verify.readProofsOf")(function* (
   runDirs: ReadonlyArray<string>,
 ) {
@@ -524,11 +429,6 @@ export const readProofsOf = Effect.fn("Verify.readProofsOf")(function* (
 });
 const ProofJson = Schema.fromJsonString(ProofSchema);
 
-/**
- * Whether this directory is one of the Run's own. A verification names the tree it was
- * collected on, so a command run somewhere else would attach a real result to the wrong
- * tree — which is worse than no result.
- */
 export const insideRun = Effect.fn("Verify.insideRun")(function* (
   cwd: string,
   run: { readonly cwd: string; readonly worktree: string | null },
@@ -546,15 +446,12 @@ export const insideRun = Effect.fn("Verify.insideRun")(function* (
   return false;
 });
 
-/** The executable as PATH resolves it now, recorded absolute so the record says what ran. */
 export const resolveExecutable = Effect.fn("Verify.resolveExecutable")(function* (
   executable: string,
   cwd: string,
 ) {
   const path = yield* Path.Path;
   if (pipe(executable, Str.includes(path.sep))) return path.resolve(cwd, executable);
-  // `Bun.which` and not a `command -v` subprocess: `command` is a shell builtin, and
-  // reaching for a shell to find out what to run without a shell is the wrong shape.
   return Bun.which(executable, { PATH: Bun.env.PATH ?? "" });
 });
 
@@ -562,13 +459,10 @@ function tail(text: string) {
   return text.length <= TAIL_BYTES ? text : pipe(text, Str.slice(-TAIL_BYTES));
 }
 
-/** Where a command's two streams are shown while it runs. */
 export interface Echo {
   readonly stdout: (text: string) => Effect.Effect<void>;
   readonly stderr: (text: string) => Effect.Effect<void>;
-  /** A line of verify's own about what it waits on, for its client and the Run's log. */
   readonly said?: (line: string) => Effect.Effect<void>;
-  /** The check's id once it runs, which a host that takes it over knows it by. */
   readonly started?: (check: string) => Effect.Effect<void>;
 }
 
@@ -583,30 +477,19 @@ export interface Collected {
   readonly by: "agent" | "collie";
   readonly expect?: "pass" | "fail";
   readonly pass?: CheckPass;
-  /** Where both streams are appended as they arrive, so the output can be read while it runs. */
   readonly log?: string;
-  /**
-   * The one failed test this runs alone. A `rerun` passes only where it ran alone and passed; at
-   * the `baseline` it fails only where bun reported it failing, so a test the base lacks passes.
-   */
   readonly test?: FailedTest;
   readonly own?: boolean;
 }
 
-/** A check `startCheck` started, finished by `finishCheck` once `exit` is known. */
 export interface StartedCheck {
   readonly id: string;
   readonly exit: Effect.Effect<number, VerifyRefused>;
 }
 
-/**
- * Starts it in the caller's Scope, with what finishing it needs in its record, its output
- * written to its log and shown as it arrives. Never succeeds where the host would not start it.
- */
 export const startCheck = Effect.fn("Verify.startCheck")(function* (
   runDir: string,
   what: Collected,
-  /** Where each stream is shown as it arrives, for a caller watching the command run. */
   echo?: Echo,
 ) {
   const absolute = yield* resolveExecutable(what.executable, what.cwd);
@@ -621,10 +504,8 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   let already = 0;
   if (what.log !== undefined) {
     yield* fs.makeDirectory(path.dirname(what.log), { recursive: true }).pipe(Effect.orDie);
-    // Never emptied: a check taken over from another host may already have written to it.
     yield* fs.writeFileString(what.log, "", { flag: "a" }).pipe(Effect.orDie);
   }
-  /** One chunk into the log, in the order the two streams delivered them. */
   const toLog = (chunk: string) => {
     if (what.log === undefined || handle.logged) return Effect.void;
     const next = logged(chunk, already);
@@ -636,8 +517,6 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   const atStep = yield* CurrentStep;
   const step = what.step === undefined ? atStep : { step: what.step, place: what.place ?? null };
   const checks = yield* CheckProcesses;
-  // No shell, and the argument list whole: a verification's value is that what ran is
-  // what was written down, and a shell string is a second language in between.
   const handle = yield* checks
     .run(
       { run: what.run, name: what.name, by: what.by, ...(what.pass && { pass: what.pass }) },
@@ -678,8 +557,6 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
     const pid = yield* handle.pid;
     if (pid !== null) yield* echo.said(`"${what.name}" started, pid ${pid}`);
   }
-  // Never folded whole: only each stream's end is kept, and a verification that prints for
-  // an hour must not allocate for an hour to say so.
   const drain = (stream: typeof handle.stdout, shown?: (text: string) => Effect.Effect<void>) =>
     stream.pipe(
       Stream.decodeText(),
@@ -704,14 +581,9 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   };
 });
 
-/**
- * The Verification of a check that exited with `exit`, from its record and output alone, so
- * any host on its state directory can finish it; appended to its Run's evidence.
- */
 export const finishCheck = (id: string, name: string, exit: number) =>
   Effect.flatMap(readCheck(id, name), (read) => settleCheck(read, exit));
 
-/** What a check is finished from, read while its record and output are still there. */
 const readCheck = Effect.fn("Verify.readCheck")(function* (id: string, name: string) {
   const found = yield* (yield* CheckProcesses)
     .finished(id)
@@ -786,30 +658,18 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
   return kept;
 });
 
-/**
- * Run it, watch it, and record what the tree was at both ends. The exit status is passed
- * back to the caller unchanged: `collie verify -- bun test` has to behave like `bun test`
- * for anything wrapping it, whatever the tree did.
- */
-export const collect = (
-  runDir: string,
-  what: Collected,
-  /** Where each stream is shown as it arrives, for a caller watching the command run. */
-  echo?: Echo,
-) =>
+export const collect = (runDir: string, what: Collected, echo?: Echo) =>
   startCheck(runDir, what, echo).pipe(
     Effect.flatMap((started) =>
       Effect.flatMap(started.exit, (exit) =>
         Effect.map(readCheck(started.id, what.name), (read) => [read, exit] as const),
       ),
     ),
-    // Its Scope ends what is left of it before the tree is looked at again.
     Effect.scoped,
     Effect.flatMap(([read, exit]) => settleCheck(read, exit)),
     Effect.withSpan("Verify.collect"),
   );
 
-/** A record's pass, where it is one a Verification keeps. */
 function passOf(given: CheckOf["pass"]) {
   if (given === undefined || !Schema.is(Pass)(given.pass)) return undefined;
   return given.round === undefined
@@ -817,7 +677,6 @@ function passOf(given: CheckOf["pass"]) {
     : { pass: given.pass, round: given.round };
 }
 
-/** The pass and round a record keeps, with nothing where no pass was given. */
 function passFields(given: CheckPass | undefined) {
   if (given === undefined) return {};
   if (given.round === undefined) return { pass: given.pass };
@@ -830,13 +689,6 @@ export type CheckRun = {
   readonly worktree: string | null;
 };
 
-/**
- * A verification Collie runs itself, which it does only for one of the Run's checks —
- * exactly, argument by argument. The wrapper is part of the check: `npm test` and
- * `npm test -- --bail` are not the same one. Anyone names them (verify.json, `--verify`,
- * `run intent verification`, chat's `set_verification`), with no yes (ADR-0055). It runs
- * here, outside any agent's permission rules.
- */
 export const runApproved = Effect.fn("Verify.runApproved")(function* (
   runDir: string,
   run: CheckRun,
@@ -869,11 +721,6 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
   });
 });
 
-/**
- * One failed test of a check run alone, from the sources, in the check's directory and under
- * its name: again on the same tree, whether it was a Flake, or at the base, whether it failed
- * there too (ADR-0034).
- */
 export const rerunTest = Effect.fn("Verify.rerunTest")(function* (
   runDir: string,
   run: CheckRun,
@@ -914,35 +761,23 @@ export const sameCommand = (one: Command, other: Command) =>
   one.argv.length === other.argv.length &&
   Arr.every(one.argv, (word, at) => word === other.argv[at]);
 
-/**
- * Whether two records ran the same command as it was asked, so a fail and a pass through
- * different installs of one tool are one command; by resolved path where either does not say.
- */
 export const sameAsked = (one: Verification, other: Verification) =>
   one.asked === undefined || other.asked === undefined
     ? sameCommand(one, other)
     : sameCommand({ ...one, executable: one.asked }, { ...other, executable: other.asked });
 
-/** A check's command resolved for its Run; one whose executable is not found matches no record. */
 export type CheckCommand = Pick<Verification, "name" | "argv" | "cwd"> & {
   readonly executable: string | null;
   readonly ci?: string;
 };
 
-/** Whether this record ran exactly that check's command. */
 export const ranCommand = (record: Command, check: CheckCommand) =>
   check.executable !== null && sameCommand(record, { ...check, executable: check.executable });
 
-/** A run of one failed test, again or at the base, is recorded under its check's name, and is never the check's own run. */
 export const ranOneTest = (v: Pick<Verification, "test">) => v.test !== undefined;
 
-/** A pass that expected one: a reproduced failure is not. */
 export const passed = (v: Verification) => v.result === "pass" && v.expect === "pass";
 
-/**
- * The latest record of exactly this command on this tree, where it was collected in this
- * environment since `since`. Whoever asked for it does not matter: the host ran it.
- */
 function latestRecord(
   records: ReadonlyArray<Verification>,
   wanted: Pick<Verification, "executable" | "argv" | "cwd"> & {
@@ -959,7 +794,6 @@ function latestRecord(
   return holds ? latest : null;
 }
 
-/** A check's command as Collie runs it for this Run; its executable is null where none is found. */
 export const commandOf = Effect.fn("Verify.commandOf")(function* (run: CheckRun, spec: VerifySpec) {
   const cwd = yield* checkCwd(run, spec);
   const executable = yield* resolveExecutable(spec.executable, cwd);
@@ -967,7 +801,6 @@ export const commandOf = Effect.fn("Verify.commandOf")(function* (run: CheckRun,
   return spec.ci === undefined ? command : { ...command, ci: spec.ci };
 });
 
-/** `latestRecord` for one of a Run's checks, read from its journal against its tree now. */
 export const recordFor = Effect.fn("Verify.recordFor")(function* (
   runDir: string,
   run: CheckRun,
@@ -1002,7 +835,6 @@ export const recordedFor = Effect.fn("Verify.recordedFor")(function* (
   return latest === null || latest.result === "unstable" || ranOneTest(latest) ? null : latest;
 });
 
-/** `recordFor`, where it is a pass. */
 export const reliedFor = (...args: Parameters<typeof recordFor>) =>
   recordFor(...args).pipe(
     Effect.map((latest) => (latest !== null && passed(latest) ? latest : null)),

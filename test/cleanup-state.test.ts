@@ -1,6 +1,3 @@
-// What cleanup removes from the state directory, the compaction controls and the runner
-// cache: only what no Run, agent or running build needs (ADR-0045).
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
@@ -18,7 +15,6 @@ import { collie } from "./support/world";
 const DAY_MS = 24 * 60 * 60_000;
 const Listed = flow(Schema.decodeUnknownResult(CleanupReport), Result.getOrThrow);
 
-/** `path`, and everything directly in it, last changed `days` ago. */
 const aged = (path: string, days: number) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -30,7 +26,6 @@ const aged = (path: string, days: number) =>
     yield* fs.utimes(path, at, at);
   });
 
-/** A file at `path` with `text`, last changed `days` ago. */
 const written = (path: string, text: string, days: number) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -116,7 +111,6 @@ test(
           "notes.txt",
           "runs/new-x",
           `stop.${real.id}`,
-          // Imported into host.db and left for a host of an older build.
           "agents/abc123",
           "agents/def456",
           "requests/run-start/new.json",
@@ -125,7 +119,6 @@ test(
           "host.db",
         ])
           expect([kept, yield* fs.exists(`${state}/${kept}`)]).toEqual([kept, true]);
-        // The Run whose row is kept still reads as it did.
         const shown = yield* collie(world, ["run", "show", real.id]);
         expect(shown.envelope).toMatchObject({ ok: true });
       }),
@@ -160,7 +153,6 @@ beforeEach(() =>
 );
 afterEach(() => runEffect(rig.close()));
 
-/** A compaction control record for `agent`, naming its endpoint's pid and command. */
 const control = (agent: string, pid: number | null, command: string | null) =>
   written(
     `${rig.stateDir}/compaction/${agent}/control.json`,
@@ -216,7 +208,6 @@ test("a gone agent's recorded pid now running something else is not signalled", 
         "host",
       );
       expect(yield* fs.exists(`${rig.stateDir}/compaction/gone`)).toBe(false);
-      // Still up for this test to put down: a SIGTERM from the sweep would have come first.
       other.kill("SIGKILL");
       yield* Effect.promise(() => other.exited);
       expect(other.signalCode).toBe("SIGKILL");

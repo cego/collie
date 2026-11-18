@@ -1,5 +1,4 @@
 /* oxlint-disable effecttsgo/async-function, effecttsgo/global-console, effecttsgo/global-console-in-effect, effecttsgo/global-date, effecttsgo/global-date-in-effect, effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-record, effecttsgo/prefer-effect-string, effecttsgo/prefer-schema-over-json, no-restricted-globals, no-restricted-properties -- the benchmark's drivers speak to processes, files and /proc on their own terms, as record-open's do. */
-// host.db keeps absolute paths; base and candidate builders must use their sample's paths.
 
 import { tmpdir } from "node:os";
 import { Effect, FileSystem } from "effect";
@@ -8,7 +7,6 @@ import { testBunfig } from "../../test/support/packages";
 
 export const root = new URL("../../", import.meta.url).pathname;
 export const tree = Bun.env.BENCH_AT_REST_TREE ?? root;
-/** The host's socket is in its state directory, so it needs a short path. */
 export const live = `${tmpdir()}/car-${Bun.hash(tree).toString(16).slice(0, 8)}`;
 export const keptFixture = `${tree}.scratch/at-rest/fixture`;
 export const manifestPath = `${tree}.scratch/at-rest/fixture.json`;
@@ -30,7 +28,6 @@ export const enterWorld = Effect.gen(function* () {
   for (const dir of [world.user, world.state, world.home, world.project, world.bin])
     yield* fs.makeDirectory(dir, { recursive: true });
   yield* fs.writeFileString(`${world.home}/.bunfig.toml`, testBunfig);
-  // Never the user's claude.
   yield* fs.writeFileString(
     `${world.bin}/claude`,
     `#!/bin/sh\n[ "$1" = --help ] && echo "  --autocompact <auto|tokens>" && exit 0\nexit 1\n`,

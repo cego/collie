@@ -1,6 +1,3 @@
-// What an agent on core is told it is: `collie` run in its terminal, with nothing but the
-// environment it was launched with, finds that agent and its Run, with no herdr pane to ask.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -53,14 +50,12 @@ test(
               Arr.filterMap(Str.split(yield* fs.readFileString(log), "\n"), (line) =>
                 Schema.decodeResult(Logged)(line),
               ),
-              // The host's board and chat are core terminals too, with no Run.
               (call) => call.cmd === "terminal.run" && call.params?.labels?.run === runId,
             ),
           );
           const agent = launch.params?.name ?? "";
           const launchEnv = launch.params?.env ?? {};
 
-          // The terminal's environment: core's own, which gives PATH and HOME, and the launch's.
           const command = yield* collieCommand;
           const child = Bun.spawn(
             [

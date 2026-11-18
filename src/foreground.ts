@@ -1,26 +1,15 @@
-// Interactive reads come first (ADR-draft-a-runs-record-is-read-from-its-hosts-run-model, D6):
-// a background pass waits at each slice boundary while a front-door answer is being served,
-// for no longer than it has worked since it was last held, so answers that never stop
-// still leave background passes at least half of the time.
-
 import { Channel, Clock, Context, Effect, Fiber, FileSystem, Latch, Layer, Stream } from "effect";
 
-/** The longest a slice boundary or a stream's first value holds a pass. */
 export const PATIENCE = "250 millis";
 const PATIENCE_MS = 250;
-/** How long a pass works before a boundary holds it, so a hold is never only a timer's cost. */
 const SLICE_MS = 10;
 
 export interface ForegroundApi {
-  /** `effect`, holding background slices except while it awaits physical I/O or a dependency. */
   readonly serve: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  /** Awaits a dependency without holding this request's lease, restoring it only while live. */
   readonly wait: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  /** Where a background pass lets the event loop and any interactive work go first. */
   readonly boundary: Effect.Effect<void>;
 }
 
-/** Outside a host, nothing is held: a boundary only yields. */
 export const Foreground = Context.Reference<ForegroundApi>("collie/Foreground", {
   defaultValue: () => ({
     serve: (effect) => effect,
@@ -37,24 +26,20 @@ interface ServingLease extends ForegroundApi {
   readonly io: ForegroundApi["wait"];
 }
 
-// A captured host context must not replace a live lease.
 const Serving = Context.Reference<ServingLease | null>("collie/ForegroundLease", {
   defaultValue: () => null,
 });
 
-/** Whether the running fiber is serving interactive work. */
 export const servedNow = () => {
   const foreground = Fiber.getCurrent()?.getRef(Serving);
   return foreground ? active.has(foreground) : false;
 };
 
-/** Release only the requesting hold during physical I/O, retaining its priority and deadline. */
 export const waitingForIO: ForegroundApi["wait"] = (effect) =>
   Effect.flatMap(Serving, (lease) =>
     lease !== null && live.has(lease) ? lease.io(effect) : effect,
   );
 
-/** Wrap the physical service before host components capture it. */
 export const foregroundFileSystem = (fs: FileSystem.FileSystem) => {
   const operation =
     <Self, Args extends unknown[], A, E, R>(
@@ -121,7 +106,6 @@ export const foregroundFileSystem = (fs: FileSystem.FileSystem) => {
 export const makeForeground = Effect.gen(function* () {
   const idle = yield* Latch.make(true);
   let serving = 0;
-  /** When a boundary last stopped holding background work; never, at first. */
   let resumed = -Infinity;
   const hold = (lease: ForegroundApi) => {
     if (!live.has(lease) || held.has(lease)) return Effect.void;
@@ -188,8 +172,6 @@ export const makeForeground = Effect.gen(function* () {
       Effect.flatMap(Serving, (lease) =>
         lease !== null && live.has(lease) ? lease.wait(effect) : effect,
       ),
-    // Held at most as long as background work ran since its last hold: one answer gets the
-    // full patience, and answers that never stop cannot starve a pass of more than half.
     boundary: Effect.suspend(() => {
       if (servedNow()) return Effect.void;
       if (serving === 0) return Effect.yieldNow;
@@ -213,5 +195,4 @@ export const makeForeground = Effect.gen(function* () {
   return foreground;
 });
 
-/** Every pass in scope holds for the interactive work served in it. */
 export const foregroundLayer = Layer.effect(Foreground, makeForeground);

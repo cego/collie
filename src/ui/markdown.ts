@@ -1,6 +1,3 @@
-// Agent-written markdown as styled terminal text: Comark parses and renders it to ANSI,
-// and its SGR codes become OpenTUI chunks, because a <text> draws escapes literally.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { renderAnsi } from "@comark/ansi";
@@ -10,12 +7,10 @@ import { C } from "./sections";
 
 const SANITISED = [security({ blockedTags: ["script", "style", "iframe", "object", "embed"] })];
 
-/** SGR's black, red, green, yellow, blue, magenta, cyan and white, in the board's palette. */
 const COLOURS = Arr.map([C.dim, C.red, C.green, C.amber, C.blue, C.purple, C.blue, C.text], (hex) =>
   RGBA.fromHex(hex),
 );
 
-/** How many arguments an extended colour code's mode (`5` or `2`) takes. */
 const EXTENDED = new Map([
   [5, 1],
   [2, 3],
@@ -36,11 +31,6 @@ const CLEARS = new Map([
   [29, TextAttributes.STRIKETHROUGH],
 ]);
 
-/**
- * ANSI text as chunks; a chunk with no colour takes the text's own.
- * ponytail: 256- and true-colour codes are skipped, so highlighted code stays uncoloured
- * until a plugin such as Shiki is added and they are mapped.
- */
 export function ansiText(ansi: string) {
   const chunks: TextChunk[] = [];
   let fg: RGBA | undefined;
@@ -66,6 +56,5 @@ export function ansiText(ansi: string) {
   return new StyledText(chunks);
 }
 
-/** Markdown drawn `width` columns wide; `null` when Comark could not render it. */
 export const styledMarkdown = (markdown: string, width: number) =>
   renderAnsi(markdown, { plugins: SANITISED, width, colors: true }).then(ansiText, () => null);

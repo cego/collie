@@ -1,6 +1,3 @@
-// A workflow is one default-exported definition: what it is, what it takes and gives,
-// and what it does. These read it the ways a front door does — found, described and run.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
@@ -42,7 +39,6 @@ test(
               ),
             ),
           ).toEqual([["name", true]]);
-          // Nothing but an id and what it does: the title is the id, and it takes nothing.
           expect(byId.get("quiet")?.title).toBe("quiet");
           expect(byId.get("quiet")?.description).toBe("");
           expect(byId.get("quiet")?.inputs).toEqual([]);

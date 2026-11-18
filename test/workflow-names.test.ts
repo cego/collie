@@ -1,9 +1,3 @@
-// No shipped workflow is privileged: the generic runtime and the board never decide what
-// to do by a workflow's name. A module composes by id — plan starts `implement`, a review
-// offers it — and that is ordinary; `src/` choosing a checkout, a card or a tab because a
-// Run is called `plan` or `renovate` is what this refuses. The renamed baselines prove the
-// behaviour; this reads the source, so a reintroduction fails before anything runs it.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -14,15 +8,12 @@ import { runEffect } from "./support/effect";
 const srcDir = new URL("../src/", import.meta.url).pathname;
 
 const SHIPPED = "plan|implement|review|architecture|renovate|release|general";
-/** `plan` and `review` are also outcome kinds and board tabs; these are only ids. */
 const ONLY_IDS = new Set(["implement", "architecture", "renovate", "release", "general"]);
-/** An expression that names a workflow rather than an outcome, a tab or a need. */
 const IDENTITY = /(workflow|definition|entry|module)\w*|\.(id|name)\b/i;
 
 const withoutComments = (text: string) =>
   pipe(text, Str.replaceAll(/\/\*[\s\S]*?\*\//g, ""), Str.replaceAll(/(^|[^:])\/\/.*$/gm, "$1"));
 
-/** Every place in one source file that decides by a shipped workflow's name. */
 function nameDispatch(source: string) {
   const text = withoutComments(source);
   const found: string[] = [];
@@ -102,7 +93,6 @@ test("the guard catches the name-based plan and renovate classification Collie u
       expect(nameDispatch(board)).toEqual([]);
       expect(nameDispatch(worktree)).toEqual([]);
 
-      // Each of these once decided a card or a checkout, planted back into the file it lived in.
       const planted = [
         [board, `const planReady = status === "succeeded" && record.workflow === "plan";`],
         [board, `const PRODUCES_WORK: ReadonlySet<string> = new Set(["implement", "plan"]);`],

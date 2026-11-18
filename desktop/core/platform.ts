@@ -1,7 +1,3 @@
-// Native shell port for the desktop core. Effect RPC frames travel as NDJSON on stdio;
-// platform actions are handled by the Rune shell. The window-shaped core interfaces
-// remain private adapters and do not create a webview.
-
 import { Effect, Schema } from "effect";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -17,14 +13,12 @@ interface Rpc {
   send: { frame: (frame: Frame) => void };
 }
 
-// stdout carries frames alone, so whatever Desktop logs goes to stderr.
 console.log = console.error;
 console.info = console.error;
 console.debug = console.error;
 
 const ndjson = RpcSerialization.ndjson.makeUnsafe();
 const userData = Bun.env.COLLIE_RUNE_USER_DATA ?? "";
-// Do not retry an archive the shell already refused at this launch.
 if (Bun.env.COLLIE_RUNE_UPDATE_REFUSED === "1")
   await rm(preparedRecordOf(userData), { force: true });
 let shell: Rpc | undefined;
@@ -32,15 +26,13 @@ let shell: Rpc | undefined;
 const listen = async () => {
   for await (const bytes of Bun.stdin.stream())
     for (const frame of ndjson.decode(bytes))
-      // SAFETY: the shell writes only Effect RPC frames, one a line.
+      // WARNING: the shell writes only Effect RPC frames, one a line.
       shell?.handlers.messages.frame(frame as Frame);
-  // The shell has gone: nothing is left to serve.
   process.exit(0);
 };
 
 const on = (_event: string, _listener: () => void) => {};
 
-/** Asks the shell to post it: a line of its own beside Effect's frames. */
 const showNotification = ({ title, body = "", silent = false }: Notification) =>
   void process.stdout.write(`${JSON.stringify({ _tag: "Notify", title, body, silent })}\n`);
 interface Notification {
@@ -68,7 +60,6 @@ export class BrowserWindow {
     renderer?: string;
     frame?: BrowserWindow["frame"];
   }) {
-    // The board's window is the first; any other, the popped-out chat, has no shell yet.
     if (shell === undefined) {
       shell = rpc;
       rpc.send = { frame: (frame) => void process.stdout.write(ndjson.encode(frame) ?? "") };
@@ -100,7 +91,6 @@ export const Utils = {
     Promise.resolve([]),
 };
 
-/** A bundle's own version.json, as `desktop/scripts/bundle.ts` writes it. */
 const Local = Schema.fromJsonString(
   Schema.Struct({
     version: Schema.String,
@@ -117,7 +107,6 @@ const UpdateManifest = Schema.fromJsonString(
     platform: Schema.Literal(process.platform === "darwin" ? "macos" : "linux"),
     arch: Schema.Literal(process.arch),
     version: Schema.String,
-    // Both name files on disk, so neither may name a path.
     hash: Schema.String.check(Schema.isPattern(/^[a-z0-9]{1,13}$/)),
     artifact: Schema.Struct({
       file: Schema.String.check(Schema.isPattern(/^stable-[\w.-]+\.tar\.zst$/)),
@@ -125,7 +114,6 @@ const UpdateManifest = Schema.fromJsonString(
   }),
 );
 
-/** Run from a checkout, the core never updates itself. */
 const local = async () =>
   Bun.env.COLLIE_RUNE_VERSION === undefined
     ? { version: "0.0.0", channel: "dev", hash: "rune-spike", baseUrl: "" }
@@ -135,7 +123,6 @@ const local = async () =>
 
 const PLATFORM = `${process.platform === "darwin" ? "macos" : "linux"}-${process.arch}`;
 
-/** A release asset, given up, and its request ended, after `within`. */
 const fetched = (url: string, within: `${number} minute${"" | "s"}` = "1 minute") =>
   Effect.runPromise(
     downloadRelease(url).pipe(
@@ -160,11 +147,6 @@ const latest = async () =>
 let downloadFailed = "";
 let status: ReadonlyArray<{ message: string; restarting?: boolean }> = [];
 
-/**
- * Electrobun's Updater as Desktop's `electrobun-updater.ts` asks it. Checking, downloading and
- * verifying stay Desktop's; installing is the Rune shell's, at its next launch, from the tar
- * and signature staged at `COLLIE_RUNE_STAGED`.
- */
 export const Updater = {
   getLocalInfo: local,
   appDataFolder: () => Promise.resolve(userData),
@@ -207,7 +189,6 @@ export const Updater = {
     }
   },
   updateInfo: () => ({ error: downloadFailed }),
-  // Desktop verified the tar before it asked; the shell verifies it again before installing.
   applyUpdate: async () => {
     const staged = Bun.env.COLLIE_RUNE_STAGED;
     if (staged === undefined) {

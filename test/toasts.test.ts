@@ -1,5 +1,3 @@
-// Collie's toasts reach whichever Desktop is connected to the host, never herdr.
-
 import { expect, test } from "bun:test";
 import { Effect, Fiber, Stream } from "effect";
 import { connect, type HostClient } from "../src/host";
@@ -8,7 +6,6 @@ import { until } from "./support/host";
 import { hosted } from "./support/hosted";
 import type { World } from "./support/world";
 
-/** A Run that finishes once answered, so a Desktop is surely listening when it does. */
 const answeredRun = (client: HostClient, world: World, request: string) =>
   Effect.gen(function* () {
     const { runId } = yield* client.start({
@@ -43,7 +40,6 @@ test(
           sound: "done",
           title: expect.stringContaining("finished"),
         });
-        // `hosted` fails if any Herdr 1 CLI or socket call reaches its tripwire.
       }).pipe(Effect.orDie),
     ),
   60_000,

@@ -1,6 +1,3 @@
-// The Rune spike's Rust types are generated from today's Schemas; a Schema changed without
-// regenerating them turns this red.
-
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { GENERATED, REGENERATE, rustTypes } from "../tools/rune-types";

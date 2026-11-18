@@ -1,7 +1,3 @@
-// This Machine's Harness catalogue, read from each installed harness and kept on the host
-// beside Usage (ADR-0049): each harness read at most once per interval, with a timeout per
-// read and a back-off after a failure, which leaves Collie's table in its place.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import {
@@ -35,17 +31,12 @@ import { loadDefaults } from "./config";
 import { currentEnv } from "./env";
 import { reason } from "./naming";
 
-/** How long a harness's reading stands before it is read again. */
 export const CATALOGUE_INTERVAL_MS = 30 * 60_000;
-/** How long one read may take before the harness is said not to answer. */
 export const CATALOGUE_CALL_MS = 20_000;
-/** The wait after a failed read, doubled for each failure after it, up to the interval. */
 export const CATALOGUE_RETRY_MS = 60_000;
 
-/** A harness's entries, null where it is not installed, or why it could not be read. */
 export type HarnessSource = Effect.Effect<ReadonlyArray<CatalogueEntry> | null, string>;
 
-/** What each harness answers, decoded where it is JSON; null where it is not installed. */
 export interface HarnessAdapters {
   readonly claude: Effect.Effect<ClaudeModels | null, string>;
   readonly codex: Effect.Effect<CodexModelList | null, string>;
@@ -71,7 +62,6 @@ const SOURCE = {
 
 const firstLine = (text: string) => Str.split(Str.trim(text), "\n")[0] ?? "";
 
-/** A harness that prints a list: its entries, or what it said instead of one. */
 const listed = (
   harness: Harness,
   printed: Effect.Effect<string | null, string>,
@@ -94,7 +84,6 @@ export const sourcesOf = (adapters: HarnessAdapters) => ({
 
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
-/** One harness behind its interval, its back-off after a failure, and its timeout. */
 const paced = Effect.fn("Catalogue.paced")((harness: Harness, source: HarnessSource) =>
   Semaphore.make(1).pipe(
     Effect.map((single) => {
@@ -136,7 +125,6 @@ const paced = Effect.fn("Catalogue.paced")((harness: Harness, source: HarnessSou
 
 export const makeCatalogue = Effect.fn("Catalogue.make")(function* (
   sources: CatalogueSources,
-  /** The `models.<harness>` setting, read each time. */
   added: Effect.Effect<Readonly<Record<string, ReadonlyArray<string>>>>,
 ) {
   const readers = yield* Effect.forEach(HARNESSES, (harness) => paced(harness, sources[harness]));
@@ -152,7 +140,6 @@ export const makeCatalogue = Effect.fn("Catalogue.make")(function* (
   });
 });
 
-/** A harness's command run to its end: what it printed, or null where it is not installed. */
 const printed = (command: string, args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -179,10 +166,6 @@ const printed = (command: string, args: ReadonlyArray<string>) =>
     return out;
   }).pipe(Effect.scoped);
 
-/**
- * One exchange with a harness that speaks JSON lines on stdio: `lines` sent, stdin held
- * open, and the first line `reply` answers taken; null where it is not installed.
- */
 const exchange = <A>(
   command: string,
   args: ReadonlyArray<string>,
@@ -200,7 +183,6 @@ const exchange = <A>(
       .spawn(
         ChildProcess.make(command, args, {
           cwd,
-          // Held open: a closed stdin is the cue to stop before answering.
           stdin: Stream.concat(Stream.make(new TextEncoder().encode(sent)), Stream.never),
           stdout: "pipe",
           stderr: "ignore",
@@ -247,7 +229,6 @@ const decodeCodexModels = Schema.decodeUnknownOption(CodexModelList);
 const undecodable = (harness: Harness) =>
   Result.fail(`${SOURCE[harness]} answered in a shape Collie does not read`);
 
-/** What the Agent SDK's `supportedModels()` asks: Claude Code's `initialize` over stream-json. */
 const claudeModels = (cwd: string) =>
   exchange(
     "claude",
@@ -292,7 +273,6 @@ const codexModels = (cwd: string) =>
         params: { clientInfo: { name: "collie", version: "0" } },
       },
       { jsonrpc: "2.0", method: "initialized" },
-      // ponytail: one page; follow `nextCursor` if a Codex ever lists more than a page.
       { jsonrpc: "2.0", id: 2, method: "model/list", params: { includeHidden: true } },
     ],
     (line) => {
@@ -314,7 +294,6 @@ export const liveAdapters = (cwd: string) =>
     opencode: Effect.provideContext(printed("opencode", ["models"]), services),
   }));
 
-/** This Machine's one reader of its harnesses, on the environment this process runs in. */
 export const catalogueLayer = (cwd: string) =>
   Layer.effect(
     HarnessCatalogues,

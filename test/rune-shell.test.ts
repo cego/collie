@@ -1,6 +1,3 @@
-// The Rune spike's shell services: a notification the main process asks the stdio stand-in for
-// reaches the Rust side as one request. Needs cargo, which the `desktop-checks` CI job has.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -13,7 +10,6 @@ const WORKSPACE = new URL("../desktop/", import.meta.url).pathname;
 const STAND_IN = new URL("../desktop/core/platform.ts", import.meta.url).pathname;
 const cargo = Bun.which("cargo");
 
-// The main process's side: the board's window takes the stand-in's stdout, then a Run asks.
 const MAIN = `
 import { BrowserWindow, Utils } from ${JSON.stringify(STAND_IN)};
 new BrowserWindow({ rpc: { handlers: { messages: { frame: () => {} } } } });

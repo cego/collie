@@ -1,9 +1,3 @@
-// The board's own model: one TaskView per Task, and one per Run belonging to no Task.
-//
-// Read-only and derived: nothing here writes or infers what the files do not say. What
-// became of a Run's work is the disposition's answer alone — a finished Run with a merge
-// request has not been merged by anyone.
-
 import { readStageProof, type ShippingAction } from "./shipping";
 import { lastOrdered, Launches, launchesAhead } from "./launches";
 import * as Arr from "effect/Array";
@@ -95,7 +89,6 @@ import {
   type TaskView,
 } from "./board-model";
 
-/** The character each state is drawn as, wherever it is drawn. The colour is the pane's. */
 export const GLYPH_FOR: Readonly<Record<TaskState, string>> = {
   blocked: "◆",
   active: "●",
@@ -114,9 +107,6 @@ export const STEP_GLYPH_FOR: Readonly<Record<StepState, string>> = {
   todo: "○",
 };
 
-/**
- * A question put to the human: the menu of a Choice or the free text of an ask.
- */
 export interface PendingChoice {
   id: string;
   kind: "menu" | "ask";
@@ -130,14 +120,12 @@ export interface PendingChoice {
 export const LANDED_STATES: ReadonlySet<MrState> = new Set(["merged", "on-stage", "in-prod"]);
 const DEPLOYED = { "on-stage": " On stage.", "in-prod": " In production." } as const;
 
-/** When a Run ended: its own record, else the final card its finish wrote. Null for neither. */
 const finishedAt = Effect.fn("Board.finishedAt")(function* (run: RunFacts) {
   if (run.finished !== null) return epochMs(run.finished);
   const at = yield* finishedOnRecord(run.dir);
   return at === null ? null : epochMs(at);
 });
 
-/** The first line the Run's log recorded telling `agent` something, the newest such. */
 const toldBy = Effect.fn("Board.toldBy")(function* (
   stateDir: string,
   runId: string,
@@ -150,10 +138,6 @@ const toldBy = Effect.fn("Board.toldBy")(function* (
   return toldIn(log, agent);
 });
 
-/**
- * A finished Run is Reopened by a steer Delivery to one of its agents, dated after it
- * ended and taken by herdr. Derived, never stored: the ledger says what was sent and when.
- */
 const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
   stateDir: string,
   run: RunFacts,
@@ -176,10 +160,6 @@ const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
   } satisfies Reopened;
 });
 
-/**
- * The agent a human messaged while its Run's question is set aside, and what it was told:
- * one still at work where any is, else the last messaged.
- */
 const supersedingOf = Effect.fn("Board.supersedingOf")(function* (
   stateDir: string,
   run: RunFacts,
@@ -201,24 +181,17 @@ const supersedingOf = Effect.fn("Board.supersedingOf")(function* (
 
 export type { ForgeChecks } from "./board-model";
 
-/** The forge's word on a merge request's checks, and the head revision it said it of. */
 export interface ForgeFacts {
   readonly checks: ForgeChecks;
   readonly head: string | null;
   readonly draft?: boolean;
   readonly mergeable?: Mergeability;
-  /** Its source and target branches, where the forge named them. */
   readonly source?: string;
   readonly target?: string;
-  /** When the forge gave this answer, and when the watch last asked it. */
   readonly read?: string;
   readonly asked?: string;
 }
 
-/**
- * Collie's own checks and the forge's, as one: any failure fails, anything running is
- * running, and passed needs every source that said anything to have passed.
- */
 export function withForge(collie: Checks, forge: ForgeFacts | null) {
   const said = forge?.checks ?? { state: "unknown" };
   const at = forge?.head ?? ("at" in collie ? collie.at : "");
@@ -242,27 +215,17 @@ export function withForge(collie: Checks, forge: ForgeFacts | null) {
   return returned;
 }
 
-/** Everything the sentence is made of, apart from the TaskView so the formatter is pure. */
 export interface Sentence {
   state: TaskState;
   decision: Decision | null;
-  /** The step the work is on, and which round of the loop it is in. */
   step: { id: string; round: { at: number; of: number | null } | null } | null;
-  /** The step's own verb, where the definition gives one. */
   verb: string | null;
-  /** What a check Collie is running says about itself, which outranks the step. */
   checking: string | null;
-  /** What of its Runs waits for memory, which outranks all but a decision. */
   memory?: string | null;
-  /** What a Run of it waits for that ends without anyone repairing anything. */
   awaiting?: string | null;
-  /** A Reopened Run's agent at work on what it was told after the Run ended. */
   reopened: Pick<Reopened, "agent" | "told"> | null;
-  /** How long it has written nothing, where it has gone quiet. */
   silent: string | null;
-  /** How long ago its Driver died, for a Run nothing drives and no agent works on. */
   abandoned: string | null;
-  /** A plan that finished and has not been implemented: work waiting to be started. */
   planReady: boolean;
   mrState: MrState | null;
   wave: {
@@ -270,44 +233,27 @@ export interface Sentence {
     of: number;
     landed: ReadonlyArray<string>;
     building: ReadonlyArray<string>;
-    /** A repository whose Run stopped the waves, which is not "next" and not building. */
     stopped: ReadonlyArray<string>;
     next: ReadonlyArray<string>;
   } | null;
-  /** The verification that stopped it, and how many times in a row it failed. */
   failure: { name: string; times: number } | null;
-  /** Why it stopped, where no verification says. */
   note: string | null;
-  /** The answer the work carried on with. */
   resumed: string | null;
   disposition: { kind: string; ref: string; ago: string; by: string } | null;
-  /** The merge request the work opened or was pointed at, where there is one. */
   mr: string | null;
-  /** Each of the Task's merge requests, where it has several. */
   mrs?: ReadonlyArray<SaidMr> | undefined;
-  /** What the finished Run returned: its own account, never evidence. */
   summary: string | null;
-  /** What checked that merge request, where it is open; null reads as unchecked. */
   checks: Checks | null;
-  /** Whether it is mergeable now; absent reads checks that passed as ready. */
   readiness?: ReadyToRelease | null;
-  /** A live agent of the Run's, which the next move can be handed to. */
   agent: string | null;
-  /** When the forge last answered about what is owed, once that is old or its last ask failed. */
   answered?: {
     readonly forge: string;
     readonly ago: string | null;
     readonly failed: boolean;
   } | null;
-  /**
-   * Where a human is being waited for, when no Decision says: the pane of the agent
-   * herdr will not prompt, or the step the Driver recorded itself waiting on. Null
-   * when nothing is waiting — or when nothing named which pane it is in.
-   */
   stalled: string | null;
 }
 
-/** What a step is doing, for every step whose definition names no `summary` of its own. */
 const VERBS = new Map<string, string>(
   Rec.toEntries({
     grill: "Working out what you want",
@@ -333,18 +279,15 @@ const VERBS = new Map<string, string>(
   }),
 );
 
-/** One of a Task's several merge requests, as its sentence says it. */
 export interface SaidMr {
   readonly short: string;
   readonly state: MrState | null;
   readonly merged: boolean;
   readonly disposed: Disposition["kind"] | null;
   readonly ready: boolean;
-  /** The short names of what it waits on. */
   readonly waitsOn: ReadonlyArray<string>;
 }
 
-/** `1 of 3 merged; app!12 ready to release; api!7 waits on app!12.` */
 function severalSentence(mrs: ReadonlyArray<SaidMr>, historical = false) {
   const each = Arr.flatMap(mrs, (one) =>
     one.merged
@@ -363,13 +306,11 @@ function severalSentence(mrs: ReadonlyArray<SaidMr>, historical = false) {
   return `${Arr.join([merged, ...each], "; ")}.`;
 }
 
-/** An embedded workflow's step is that workflow's: `review.synthesize` is a synthesis. */
 function verbOf(facts: Sentence) {
   if (facts.verb !== null) return facts.verb;
   if (facts.step === null) return "Starting";
   const id = facts.step.id;
   const kind = pipe(id, Str.slice(Option.getOrElse(pipe(id, Str.lastIndexOf(".")), () => -1) + 1));
-  // Never the step id: a card says what is happening in words.
   return VERBS.get(kind) ?? VERBS.get(Str.split(kind, "-")[0]!) ?? "Working on it";
 }
 
@@ -379,15 +320,9 @@ function roundOf(step: Sentence["step"]) {
   return of === null ? `, round ${at}` : `, round ${at} of ${of}`;
 }
 
-/**
- * The step an operation is, as the shipped workflows name them: `fix-1` is round 1 of
- * fixing, `review-2-1` the first seat of round 2's review, `review-2` the second seat of
- * round 1's (`reviewing.ts` numbers only later rounds), and `02-parse.md` a ticket.
- */
 export function stepOfOperation(operation: string) {
   const ticket = /^(\d+)-.*\.md$/.exec(operation);
   if (ticket) return { step: { id: "build", round: null }, verb: `Building ticket ${ticket[1]}` };
-  // A review seat's name is free text (`gpt-5`): only a leading number is its round.
   const seat = /^review-(?:(\d+)-.)?/.exec(operation);
   if (seat) {
     return {
@@ -403,7 +338,6 @@ export function stepOfOperation(operation: string) {
   };
 }
 
-/** `2 times` reads as a count; twice reads as a sentence. */
 function times(n: number) {
   return n === 1 ? "once" : n === 2 ? "twice" : `${n} times`;
 }
@@ -435,7 +369,6 @@ function decisionSentence(decision: Decision) {
 
 const short = (sha: string) => pipe(sha, Str.slice(0, 7));
 
-/** An open merge request: whether it is ready, and the human's next move. */
 function openSentence(
   mr: string,
   checks: Checks | null,
@@ -498,7 +431,6 @@ function doneSentence(
   switch (disposition.kind) {
     case "merged": {
       const deployed = mrState === "on-stage" || mrState === "in-prod" ? DEPLOYED[mrState] : "";
-      // The forge's word carries no time of its own: the stamp is when Collie asked.
       if (disposition.by === "gitlab" || disposition.by === "github")
         return (disposition.ref === "" ? "Merged." : `Merged as ${disposition.ref}.`) + deployed;
       return (
@@ -520,10 +452,6 @@ function failedSentence(facts: Sentence) {
   return facts.note === null ? "Stopped without finishing." : `Stopped: ${facts.note}.`;
 }
 
-/**
- * A Task waiting on a human with nothing on the card to answer: the answer is in the
- * agent's own pane. Named, because "needs you" over four cards is four panes to find.
- */
 function stalledSentence(facts: Sentence) {
   return `Waiting for you in ${facts.stalled ?? "its pane"}.`;
 }
@@ -544,11 +472,6 @@ function workingSentence(facts: Sentence) {
   return facts.silent === null ? `${doing}.` : `${doing}, but silent for ${facts.silent}.`;
 }
 
-/**
- * One plain sentence about a Task: no step names or glyph codes, only round counts and
- * merge-request references. A pending decision outranks every other state, because it is
- * the one where nothing moves until someone answers.
- */
 export function sentenceFor(facts: Sentence) {
   if (
     (facts.state === "failed" || facts.state === "stopped" || facts.state === "abandoned") &&
@@ -584,7 +507,6 @@ export function sentenceFor(facts: Sentence) {
         `Its Driver died ${facts.abandoned ?? "a while ago"}${facts.note === null ? "" : `: ${facts.note}`}.`,
         facts.disposition,
       );
-    // Only reachable with no Decision: one above would have answered already.
     case "blocked":
       return stalledSentence(facts);
     default:
@@ -601,16 +523,10 @@ function answeredLine(answered: Sentence["answered"]) {
     : ` ${answered.forge} last answered ${answered.ago}.`;
 }
 
-/**
- * What became of the work, after how the Run ended. Both, because a disposition is
- * recorded beside a status and never over it: a Run that failed and whose branch someone
- * merged by hand did both, and a card that said only the first would be hiding the second.
- */
 function alsoBecame(sentence: string, disposition: Sentence["disposition"]) {
   return disposition === null ? sentence : `${sentence} ${doneSentence(disposition)}`;
 }
 
-/** The second line a held Task carries, under its sentence. */
 export function heldLine(until: string | null) {
   return until === null ? "⏸ Held." : `⏸ Held until ${until}.`;
 }
@@ -624,7 +540,6 @@ const STEP_STATE: Readonly<Record<RunState, StepState>> = {
   stopped: "failed",
 };
 
-/** The Task's pipeline: its Runs in the order they started, each as it now stands. */
 function glyphsOf(runs: ReadonlyArray<RunFacts>) {
   return Arr.map([...runs].reverse(), (run) => ({
     name: run.workflow,
@@ -632,14 +547,11 @@ function glyphsOf(runs: ReadonlyArray<RunFacts>) {
   }));
 }
 
-/** What a Run is, in the board's words. A decision outranks whatever it was doing. */
 function stateOf(
   status: RunState,
   silent: boolean,
   decision: Decision | null,
-  /** Something is waiting for the human in a pane, with no Decision to say so. */
   stalled: boolean,
-  /** A check of it is still running, which outlives even its ending. */
   checking: boolean,
 ) {
   if (decision !== null) return "blocked";
@@ -647,17 +559,10 @@ function stateOf(
   if (status === "stopped") return "stopped";
   if (status === "failed") return "failed";
   if (status === "succeeded" || status === "ended") return "done";
-  // Under the endings, because only a Run still going can be waiting for anyone: a Run
-  // someone stopped while its agent sat at a prompt was stopped, and says so.
   if (stalled) return "blocked";
   return silent ? "quiet" : "active";
 }
 
-/**
- * The verification that stopped a Run, and how many times in a row it failed. The trailing
- * run of failures of the newest failing check: a check that failed, was fixed and failed
- * again is not failing "three times in a row".
- */
 export function lastFailure(records: ReadonlyArray<Pick<Verification, "name" | "result">>) {
   const last = records.at(-1);
   if (last === undefined || last.result !== "fail") return null;
@@ -670,15 +575,9 @@ export function lastFailure(records: ReadonlyArray<Pick<Verification, "name" | "
   return { name: last.name, times };
 }
 
-/**
- * What a Run's checks say at one revision: the branch's head where it could be read, else
- * the newest revision checked. A record counts for the check whose command it ran exactly,
- * whoever asked; with no checks named, only what Collie ran counts.
- */
 export function checksAt(
   records: ReadonlyArray<Verification>,
   head: string | null,
-  /** The Run's checks as they stand, each of which must have passed at that revision. */
   granted: ReadonlyArray<CheckCommand> = [],
 ) {
   const approved = owedLocally(granted);
@@ -715,7 +614,6 @@ export function checksAt(
   return returned;
 }
 
-/** The commit the Run's branch is at now in its checkout, or null where that cannot be read. */
 export const readBranchHead = Effect.fn("Board.readBranchHead")(function* (run: RunFacts) {
   if (run.branch === null) return null;
   const read = yield* shell(
@@ -727,7 +625,6 @@ export const readBranchHead = Effect.fn("Board.readBranchHead")(function* (run: 
   return read.code === 0 && sha !== "" ? sha : null;
 });
 
-/** `readBranchHead`, read again only once `HEAD_FOR_MS` has passed. */
 const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
   if (run.branch === null) return null;
   const key = `${run.cwd}\0${run.branch}`;
@@ -738,12 +635,9 @@ const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: 
   return head;
 });
 
-/** How long a branch head read stands, so a board refresh does not spawn git per card. */
 const HEAD_FOR_MS = 60_000;
-// ponytail: one entry per checkout and branch for the process's life; prune if that grows.
 const heads = new Map<string, { readonly at: number; readonly sha: string | null }>();
 
-/** An absolute path, wherever one sits in a name, read as what it points at. */
 function withoutPaths(text: string) {
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
   return text.replace(/(?:^|\s)\/(?:[^\s/]+\/)+([^\s/]+)/g, (whole, last: string) =>
@@ -751,18 +645,14 @@ function withoutPaths(text: string) {
   );
 }
 
-/** The status glyph a Herdr 1 workspace label led with, which older Task labels keep. */
 const LEADING_GLYPH = /^[^\p{L}\p{N}\s]+\s+/u;
 
-/** What the Task is called, and whose project it is: the workspace label's two halves. */
 function namesOf(label: string, run: RunFacts) {
   const clean = withoutPaths(Str.trim(pipe(label, Str.replace(LEADING_GLYPH, ""))));
   const at = Option.getOrElse(pipe(clean, Str.indexOf(" | ")), () => -1);
   if (at >= 0)
     return { project: pipe(clean, Str.slice(0, at)), name: pipe(clean, Str.slice(at + 3)) };
   const name = runTitle(run);
-  // A label that names the Run says nothing the card does not: the checkout names the
-  // project then, and a project the name already says is said once.
   const named = clean === "" || clean === name;
   const project = named ? basename(run.project) : pipe(name, Str.includes(clean)) ? "" : clean;
   return { project, name };
@@ -772,7 +662,6 @@ function basename(path: string) {
   return Str.split(pipe(path, Str.replace(/\/+$/, "")), "/").at(-1) ?? path;
 }
 
-/** Each Run's registered agents, grouped once for every card a build asks about. */
 const groupedRegistered = new WeakMap<ReadonlyArray<AgentEntry>, Map<string, AgentEntry[]>>();
 const registeredByRun = (registered: ReadonlyArray<AgentEntry>) => {
   const kept = groupedRegistered.get(registered);
@@ -787,10 +676,6 @@ const registeredByRun = (registered: ReadonlyArray<AgentEntry>) => {
   return byRun;
 };
 
-/**
- * The Task's agents herdr still has. One entry per live agent, however many Runs it
- * worked for: a card counts agents, not the work they took.
- */
 function agentsOf(
   runs: ReadonlyArray<RunFacts>,
   registered: ReadonlyArray<AgentEntry>,
@@ -814,7 +699,6 @@ function agentsOf(
   return [...found.values()];
 }
 
-/** Who set the hold that stands, and why, as the Run's audit trail recorded it. */
 const holderOf = Effect.fn("Board.holderOf")(function* (run: RunFacts) {
   const last = Option.getOrUndefined(
     yield* lastAudit(run.dir, ["hold", "unhold"]).pipe(Effect.orElseSucceed(() => Option.none())),
@@ -822,7 +706,6 @@ const holderOf = Effect.fn("Board.holderOf")(function* (run: RunFacts) {
   return last?.operation === "hold" ? { by: last.actor.origin, reason: last.reason ?? "" } : null;
 });
 
-/** The answer a Run carried on with, while nothing has been launched since it was given. */
 const resumedWith = Effect.fn("Board.resumedWith")(function* (run: RunFacts) {
   const last = Option.getOrUndefined(
     yield* lastAudit(run.dir, null).pipe(Effect.orElseSucceed(() => Option.none())),
@@ -833,10 +716,6 @@ const resumedWith = Effect.fn("Board.resumedWith")(function* (run: RunFacts) {
   return Option.isSome(answered) ? answered.value.value : null;
 });
 
-/**
- * A fan-out's Repo runs as a card lists them, every repository its plan names, and the
- * wave it has got to. Without a readable plan, the Repo runs it has are the one wave.
- */
 const fanOf = Effect.fn("Board.fanOf")(function* (
   parent: RunFacts,
   children: ReadonlyArray<RunFacts>,
@@ -846,7 +725,6 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
     planDir === null
       ? null
       : yield* planReposOf(planDir, parent.cwd).pipe(Effect.orElseSucceed(() => null));
-  // Newest first, so a Change retried is shown by its newest Run.
   const started = new Map<string, RunFacts>();
   for (const child of children) {
     const key = changeKey({ path: child.repo ?? "", change: child.change ?? undefined });
@@ -895,11 +773,6 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
   };
 });
 
-/**
- * Whether a Run's work is over: it ended, or it waits only on children of its own on the
- * card that are over, one of them stopped. A stop suspends a Run, so its parent waits on
- * it forever; a child that finished hands the parent back its own work.
- */
 const over: (run: RunFacts, runs: ReadonlyArray<RunFacts>) => boolean = (run, runs) => {
   if (ended(run)) return true;
   if (run.asking.length > 0 || run.parked !== null) return false;
@@ -910,19 +783,16 @@ const over: (run: RunFacts, runs: ReadonlyArray<RunFacts>) => boolean = (run, ru
   );
 };
 
-/** Who made a Run's latest stop, from its audit trail (ADR-0039). */
 const lastStopBy = (run: RunFacts) =>
   lastAudit(run.dir, ["stop"]).pipe(
     Effect.map((last) => Option.getOrUndefined(last)?.actor.origin),
     Effect.orElseSucceed(() => undefined),
   );
 
-/** The Run a card is about: the newest still going, else the newest. */
 function leaderOf(runs: ReadonlyArray<RunFacts>) {
   return Option.getOrUndefined(Arr.findFirst(runs, (run) => !over(run, runs))) ?? runs[0]!;
 }
 
-/** What became of a Task's work: the latest Disposition on any of its Runs. */
 const dispositionOf = Effect.fn("Board.dispositionOf")(function* (runs: ReadonlyArray<RunFacts>) {
   let newest: Disposition | null = null;
   for (const run of runs) {
@@ -932,28 +802,19 @@ const dispositionOf = Effect.fn("Board.dispositionOf")(function* (runs: Readonly
   return newest;
 });
 
-/** How long finished work stays on the board. A day, so an evening's work is still there
-    in the morning — midnight is not when a human stops calling it today. */
 const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
 
-/** The MR id of `mrOf(run)`, a legacy bare or hostless one read in the Run's checkout. */
 const mrIdOf = (run: RunFacts) => {
   const mr = mrOf(run);
   return mr === null ? Effect.succeed(null) : mrIdIn(mr, run.cwd, shell);
 };
 
-/** A merge request of a Task, as its Runs carry it. */
 interface Carried {
   readonly id: string | null;
   readonly mr: string;
-  /** The Run that opened it, else the newest given it. */
   readonly owner: RunFacts;
 }
 
-/**
- * A Task's merge requests, one per MR id its Runs carry, by wave and then by when a Run
- * first carried it. `carried` is newest first, so each is written as its newest Run wrote it.
- */
 function mrsOf(
   carried: ReadonlyArray<{ readonly run: RunFacts; readonly mr: string; readonly id: string }>,
   waves: ReadonlyArray<{ readonly run: string | null; readonly wave: number }>,
@@ -982,7 +843,6 @@ function mrsOf(
   );
 }
 
-/** A Task's merge requests by MR id, each in the forge's words and with the Run that owns it. */
 export const ownedMrs = Effect.fn("Board.ownedMrs")(function* (runs: ReadonlyArray<RunFacts>) {
   const carried = yield* Effect.forEach(newestFirst(runs), (run) =>
     Effect.map(mrIdOf(run), (id) => ({ run, id, mr: mrOf(run) })),
@@ -1000,10 +860,6 @@ export const ownedMrs = Effect.fn("Board.ownedMrs")(function* (runs: ReadonlyArr
   }));
 });
 
-/**
- * A Run's Dispositions, each with the MR id it names as read in that Run's checkout, and
- * whether it names a Run whose card is not `card`, as `cardOf` says each Run's card is.
- */
 const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
   run: RunFacts,
   card: string,
@@ -1057,7 +913,6 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
   );
 });
 
-/** A merge request's latest Disposition: one naming it on any Run, or naming none on its owner. */
 function dispositionFor(
   entry: Carried & { readonly id: string },
   ledgers: ReadonlyMap<string, ReadonlyArray<Recorded>>,
@@ -1070,7 +925,6 @@ function dispositionFor(
   return named.sort((a, b) => epochMs(a.at) - epochMs(b.at)).at(-1) ?? null;
 }
 
-/** The forge's words for an MR id, in `said`'s own case where it names that one. */
 function wordsOf(id: string, said: string) {
   const own = readMrRef(said);
   return mrWords(own !== null && mrId(mrWords(own).target) === id ? own : readMrRef(`mr:${id}`)!);
@@ -1079,14 +933,12 @@ function wordsOf(id: string, said: string) {
 const dispositionLine = (line: Disposition) =>
   line.ref === "" ? line.kind : `${line.kind} ${mrLabel(line.ref)}`;
 
-/** The branch a Run left to land: none where it recorded it had nothing to land. */
 const branchOwed = Effect.fn("Board.branchOwed")(function* (run: RunFacts) {
   if (run.branch === null) return null;
   const nothing = yield* RunRecords.use((records) => records.fact(run.id, NOTHING_TO_LAND));
   return nothing !== null ? null : run.branch;
 });
 
-/** Whether none of these Runs left anything anyone has to file. */
 const nothingToFile = Effect.fn("Board.nothingToFile")(function* (runs: ReadonlyArray<RunFacts>) {
   for (const run of runs)
     if (
@@ -1114,24 +966,16 @@ function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>) {
   return returned;
 }
 
-/** Every Herd's proposals: the host serves every Herd on its Machine, not the one it came from. */
-
-/** How many Tasks a build reads at once. */
 const READS_AT_ONCE = 8;
 
-/** How long a Run has been going by default before silence is worth saying. */
 const DEFAULT_QUIET_MS = 5 * 60_000;
 
-/** How often a going card is derived again with nothing of it written: the host's tick. */
 const GOING_EVERY_MS = 5_000;
 
-/** A Task's card as a build derived it, kept until what it was derived from moves. */
 export interface KeptCard {
   readonly key: string;
-  /** When time alone next changes what the card says. */
   readonly due: number;
   readonly view: TaskView | null;
-  /** The card said again at a later time, where only its ages move; null once it leaves the board. */
   readonly retimed?: ((now: number) => Retimed | null) | undefined;
 }
 
@@ -1140,7 +984,6 @@ interface Retimed {
   readonly due: number;
 }
 
-/** Cards kept from one build to the next, and the revision a set of Runs is at. */
 export interface KeptCards {
   readonly revision: (runs: ReadonlyArray<string>) => number;
   readonly kept: Map<string, KeptCard>;
@@ -1148,7 +991,6 @@ export interface KeptCards {
 
 const cardKey = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
-/** When an age measured from `then` next reads differently: each second, minute, hour or day. */
 const nextChange = (then: number, now: number) => {
   if (!(then > 0)) return Infinity;
   if (now < then) return then;
@@ -1159,12 +1001,6 @@ const nextChange = (then: number, now: number) => {
   return then + (Math.floor((now - then) / size) + 1) * size;
 };
 
-/**
- * Every Task on the Herd's board, Herd-wide, in the order the board draws them.
- *
- * Herd-wide on purpose: the board is one board per Herd (ADR-0009), and a workspace is a
- * filter over it rather than a board of its own.
- */
 export const buildBoard = Effect.fn("Board.build")(function* (opts: BoardOptions) {
   const runs = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const records = yield* RunRecords;
@@ -1181,31 +1017,20 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: BoardOptions
 
 interface BoardOptions {
   env: PluginEnv;
-  /** What herdr says is alive, so a card can say who is on it. */
   alive?: ReadonlyArray<AgentInfo>;
-  /** The Runs and Tasks already read, so a caller drawing two views reads them once. */
   runs?: ReadonlyArray<RunFacts>;
   tasks?: ReadonlyArray<TaskRecord>;
   registered?: ReadonlyArray<AgentEntry>;
   proposals?: ReadonlyArray<ProposalLine>;
   now?: number;
-  /** How long a Run may write nothing before its card says it has gone quiet. */
   quietMs?: number;
-  /** What the forge last said about each merge request, by MR id. */
   mrStates?: ReadonlyMap<string, MrState>;
-  /** What the forge last said about each merge request's checks, by MR id. */
   forge?: ReadonlyMap<string, ForgeFacts>;
-  /** What a Run offers now; the host is asked where this is not given. */
   offers?: (runId: string) => Effect.Effect<ReadonlyArray<OfferView>>;
-  /** Only the Task this Run belongs to, however long ago it finished. */
   only?: string;
-  /** Include landed Tasks that the visible board folds into History. */
   includeHistory?: boolean;
-  /** Where each Task's whole Flow is put, by the Task's id. */
   flows?: Map<string, Flow>;
-  /** The commit a Run's branch is at; read through a minute's cache where not given. */
   head?: (run: RunFacts) => Effect.Effect<string | null>;
-  /** Cards from the last build, reused where nothing they were derived from moved. */
   cards?: KeptCards;
 }
 
@@ -1242,7 +1067,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         Effect.orElseSucceed(() => []),
       ));
 
-  // A Repo run is its fan-out's card's child rather than a card of its own.
   const present = new Map(Arr.map(all, (run) => [run.id, run.task]));
   const runsById = new Map(Arr.map(all, (run) => [run.id, run]));
   const repoRunsOf = new Map<string, RunFacts[]>();
@@ -1262,7 +1086,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
       for (const one of [run, ...(repoRunsOf.get(run.id) ?? [])]) cardOf.set(one.id, key);
 
   const flowInputs = yield* flowInputsFor(opts.env, all);
-  // A card asks what its leader ordered last, and an ended leader's deliveries.
   const leaders = Arr.map([...groups.values()], leaderOf);
   const launches = yield* launchesAhead(
     yield* Launches,
@@ -1278,7 +1101,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
     ([id, runs]) =>
       Effect.gen(function* () {
         const children = Arr.flatMap(runs, (run) => repoRunsOf.get(run.id) ?? []);
-        // What a card answers for and who works on it includes its Repo runs'.
         const everyRun = [...runs, ...children];
         if (opts.only !== undefined && !Arr.some(everyRun, (run) => run.id === opts.only))
           return null;
@@ -1340,8 +1162,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const touched = yield* RunRecords.use((records) =>
           records.activity(Arr.map(everyRun, (run) => run.id)),
         );
-        // A Run records no end of its own: its last activity is when it ended, and a Run
-        // that wrote nothing ended no later than it began.
         const endedAt = (run: RunFacts) =>
           run.finished === null
             ? touched.get(run.id) || epochMs(run.created)
@@ -1356,7 +1176,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           fan?.waves ?? [],
         );
         const several = entries.length > 1;
-        // Where no MR id can be told, the reference as its newest Run recorded it.
         const lead: Carried | undefined =
           entries[0] ??
           Option.getOrUndefined(
@@ -1365,15 +1184,11 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               ({ run, mr }) => ({ id: null, mr: mr!, owner: run }),
             ),
           );
-        // A card whose one merge request is a Repo run's reads it in that Repo run.
         const repoRun =
           !several && lead !== undefined && children.includes(lead.owner) ? lead.owner : undefined;
-        // Read whatever the state: a merge GitLab reported lands the work even while the Run
-        // is still going, and the card must say so.
         const disposition = yield* dispositionOf(repoRun === undefined ? runs : [...runs, repoRun]);
         const checking = Arr.filter(everyRun, (run) => checked.has(run.id));
         const leader = leaderOf(runs);
-        // What the Task left behind: the tickets are whichever of its Runs wrote any.
         let issues = 0;
         for (const run of runs) issues = Math.max(issues, yield* planIssuesIn(run.dir));
         let owed: string | null = null;
@@ -1441,7 +1256,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const owing =
           Arr.some(settlements, (one) => one.by === null) ||
           !Arr.every(everyRun, (run) => over(run, everyRun));
-        // The line that settled the work, never one that settled nothing.
         const told =
           settlements.length === 0
             ? disposition
@@ -1462,9 +1276,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 (lines) => lines.length === 0,
               )
             : Effect.succeed(false);
-        // Finished work older than a day is History's, behind `older…` — landed work only:
-        // an unmerged branch from last week is still waiting on you, however old, and so is
-        // a report nobody has seen.
         if (
           opts.only === undefined &&
           !opts.includeHistory &&
@@ -1498,7 +1309,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const decision: Decision | null = proposed ? asProposal(proposed) : (questions[0] ?? null);
 
         const status = leader.state;
-        // A fan-out waiting on its Repo runs writes nothing itself: their work is its work.
         const working = [leader, ...children];
         const ownsAgent = (agent: { readonly run: string }) =>
           Arr.some(working, (run) => run.id === agent.run);
@@ -1517,8 +1327,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               (one) => one !== null,
             ),
           ) ?? null;
-        // An agent mid-turn, a check Collie is running or a wait for memory or anything else
-        // that ends by itself is work, however little it writes.
         const busy =
           check !== null ||
           memory !== null ||
@@ -1526,14 +1334,10 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           Arr.some(agents, (agent) => ownsAgent(agent) && agent.status === "working");
         const going = !ended(leader);
         const silentFor = going && !busy && at > 0 ? now - at : 0;
-        // Under a minute has no span to name, and is not silence worth a card saying.
         const span = silentFor > quietMs ? spanned(silentFor) : "";
         const silent = span === "" ? null : span;
         const operation = (yield* lastOrdered(leader.id))?.stem ?? null;
         const doing = operation === null ? null : stepOfOperation(operation);
-        // Stopped for a human with no Decision to answer: herdr reports `blocked` for an agent
-        // sitting at its harness's own dialog, and a Run parks where its pane will not take a
-        // prompt. herdr's name for the pane first: it is the one a human has to go to.
         const blocked = Option.getOrUndefined(
           Arr.findFirst(
             Arr.map(everyRun, (run) => waitsOf(run).blocked),
@@ -1543,13 +1347,10 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const stalled =
           (blocked ? `${blocked.name}'s pane` : null) ??
           (waitsOf(leader).parked !== null ? "its pane" : null);
-        // Nothing drives it and nobody works on it: the host could not take it up again. A
-        // Decision outranks it, because answering is still what moves the work.
         const abandoned =
           decision === null && going && leader.undriven && !Arr.some(agents, ownsAgent);
         const reopened = ended(leader) ? yield* reopenedOf(stateDir, leader, live) : null;
         const toldNow = reopened ?? (going ? yield* supersedingOf(stateDir, leader, live) : null);
-        // A Reopened Run is the work its agent is doing now, while it does it; then its facts.
         const state = abandoned
           ? "abandoned"
           : decision === null && toldNow?.status === "working"
@@ -1570,7 +1371,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           Arr.map(runs, (run) => epochMs(run.created)),
           Number.isFinite,
         );
-        // A Task is as old as its first Run; a Run with no readable stamp has no age.
         const first = started.length === 0 ? 0 : Math.min(...started);
 
         const mr = lead?.mr ?? null;
@@ -1595,7 +1395,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           asking: decision !== null,
         });
         const movement = landed ? null : yield* branchMovement(leader);
-        /** A merge request's checks and readiness, read in the Run `merging`. */
         const judged = Effect.fnUntraced(function* (
           id: string | null,
           mr: string | null,
@@ -1604,10 +1403,8 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           awaiting: boolean,
         ) {
           const forged = id === null ? null : (forge.get(id) ?? null);
-          // Collie's own evidence counts at the head the forge reported, where it reported one.
           const verified = awaiting
             ? {
-                // One Run's whole records, which the read-ahead would read for every Run.
                 records: yield* readVerifications(merging.evidence).pipe(
                   Effect.provideService(RunRecords, whole),
                   Effect.orElseSucceed(() => []),
@@ -1828,7 +1625,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 check: running,
                 awaiting: waits.awaiting !== null,
                 machine,
-                // A check's minutes are counted on the clock its Flow is said by.
                 now: wall,
                 sleeping:
                   (run.engine?.wakes ?? null) !== null ||
@@ -1861,7 +1657,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           },
           flowInputs,
         );
-        // A stop the host made for a merge is the merge, never the human's stop.
         const said =
           state === "stopped" &&
           disposition?.kind === "merged" &&
@@ -1869,9 +1664,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             ? ("done" as const)
             : state;
         const resumed = going ? yield* resumedWith(leader) : null;
-        // "Superseded by" is said only by the Run whose line it is, and never as the Task's outcome.
         const spoken = landed ? told : null;
-        // The answer the card dates: a failed ask first, else the oldest of what is still owed.
         const dated = Arr.flatMap(fates, (one) => {
           const facts = forge.get(one.id);
           const ref = readMrRef(one.mr);
@@ -1936,7 +1729,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 abandoned: abandoned && at > 0 ? agoMs(at, now) : null,
                 decision,
                 step: doing?.step ?? null,
-                // Never the pane's title: a terminal names its harness or file, not the work.
                 verb: doing?.verb ?? null,
                 checking: check?.sentence ?? null,
                 memory: memory === null ? null : waitLine(memory),
@@ -1953,7 +1745,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                     ? null
                     : {
                         kind: spoken.kind,
-                        // Recorded refs vary in shape; the card reads them all the one way.
                         ref: spoken.ref === "" ? "" : mrLabel(spoken.ref),
                         ago: ago(spoken.at, now),
                         by: spoken.by,
@@ -1974,8 +1765,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           steps: glyphsOf(runs),
           sentence: sentenceAt(now),
           age: agoShort(first, now),
-          // The leading Run's own open drift: what an earlier Run of this Task drifted from
-          // was judged against a tree that has moved since.
           drift:
             movement ??
             (open.length === 0
@@ -2035,8 +1824,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           ),
         );
         const shown = task?.herd ? { ...view, herd: task.herd } : view;
-        // Going, a card is read again at the tick's pace; settled, its only clock is its ages,
-        // said again without reading anything until it leaves the board.
         const quiet =
           settledNow && check === null && decision === null && !busy && pending.length === 0;
         if (!quiet || mr !== null) {
@@ -2064,7 +1851,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               };
         return keep(shown, retimed(now)?.due ?? Infinity, retimed);
       }),
-    // The host's own build goes one Task at a time, so the loop stays free between them.
     { concurrency: opts.cards === undefined ? READS_AT_ONCE : 1 },
   ).pipe(Effect.provideService(Launches, launches), Effect.provideService(Deliveries, deliveries));
   if (opts.only === undefined && opts.cards !== undefined)
@@ -2072,7 +1858,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
   return sortBoard(Arr.filter(views, (view) => view !== null));
 });
 
-/** The card of the Task a Run belongs to, and its whole Flow, built as the board builds it. */
 export const taskCardOf = Effect.fn("Board.taskCard")(function* (
   opts: Omit<Parameters<typeof buildBoard>[0], "only" | "flows">,
   runId: string,
@@ -2082,13 +1867,11 @@ export const taskCardOf = Effect.fn("Board.taskCard")(function* (
   return view === undefined ? null : { view, flow: flows.get(view.id) ?? null };
 });
 
-/** The whole Flow of the Task a Run belongs to, built as its card is. */
 export const taskFlowOf = (
   opts: Omit<Parameters<typeof buildBoard>[0], "only" | "flows">,
   runId: string,
 ) => Effect.map(taskCardOf(opts, runId), (card) => card?.flow ?? null);
 
-/** Each Ready to release card's Run, with the revision its checks passed at and its sentence. */
 export function readyRuns(views: ReadonlyArray<TaskView>) {
   return new Map(
     Arr.flatMap(views, (view) =>
@@ -2099,7 +1882,6 @@ export function readyRuns(views: ReadonlyArray<TaskView>) {
   );
 }
 
-/** What ships a ready merge request: an offer that releases, else one that merges, else `release`. */
 const shippingOffer = (offers: ReadonlyArray<OfferView>) => {
   const ready = Arr.filter(offers, (one) => one.unavailable === null);
   const declared = Arr.findFirst(ready, (one) => one.ships === "release").pipe(
@@ -2133,17 +1915,7 @@ export function workingLabel(working: ReadonlyArray<TaskView>) {
   return `Working · ${working.length}`;
 }
 
-/**
- * Finished, as one line until it is opened. Closed it says what the day came to; open it
- * is a section label like the other two.
- */
-export function finishedLabel(
-  finished: ReadonlyArray<TaskView>,
-  open: boolean,
-  /** Given the clock, "today" is the day's endings and the rest are counted as older. */
-  now?: number,
-) {
-  // Nothing finished today, but this checkout's earlier runs are still behind this line.
+export function finishedLabel(finished: ReadonlyArray<TaskView>, open: boolean, now?: number) {
   if (finished.length === 0) return "Earlier work";
   if (open) return `Finished · ${finished.length}`;
   const today =
@@ -2155,7 +1927,6 @@ export function finishedLabel(
   return `${today.length} finished today${failed === 0 ? "" : `, ${failed} failed`}${older === 0 ? "" : `, ${older} older`}`;
 }
 
-/** The step a Task has got to, in one word, or `done` where it is past the last of them. */
 export function whereItIs(view: TaskView) {
   if (view.steps.length === 0) return "";
   return (
@@ -2164,23 +1935,13 @@ export function whereItIs(view: TaskView) {
   );
 }
 
-/** How many agents are on it, or nothing where herdr has none left. */
 export function agentCount(view: TaskView) {
   const n = view.agents.length;
   return n === 0 ? "" : `${n} ${n === 1 ? "agent" : "agents"}`;
 }
 
-/**
- * The same three sections as text, for a pane whose renderer will not start. One line per
- * Task, its sentence included: a human on the escape hatch must not be shown a shorter,
- * more reassuring version of the herd than the board shows.
- *
- * Finished is printed only when there is any — closed, it is the one line the board folds
- * it into, and a section that says "(nothing)" every day is noise on every refresh.
- */
 export function boardLines(
   views: ReadonlyArray<TaskView>,
-  /** Lines to put under one Task's own: the question a dumb terminal answers in place. */
   under: { run: string; lines: ReadonlyArray<string> } | null = null,
 ) {
   const label: Record<Section, (rows: ReadonlyArray<TaskView>) => string> = {

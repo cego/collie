@@ -1,7 +1,4 @@
 import * as Cause from "effect/Cause";
-// The user Layer's files as a Flock shares them: each decided by its latest edit, a removal
-// included, with what an edit replaced kept under `replaced/`
-// (ADR-0061).
 
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -16,7 +13,6 @@ import { ensureLockDir, withLock } from "./lock";
 
 const KINDS = ["workflows", "personas"] as const;
 
-/** What this Machine last saw of each shared definition, so a removal is noticed. */
 const Seen = Schema.fromJsonString(
   Schema.Record(Schema.String, Schema.Struct({ at: Schema.String, removed: Schema.Boolean })),
 );
@@ -25,10 +21,6 @@ const SEEN_FILE = "definitions-set.json";
 
 export const byPath = (definition: { readonly path: string }) => definition.path;
 
-/**
- * A path a shared definition may have: a file directly in one of the two directories, and
- * neither the toolchain's nor a hidden or backup file an editor leaves beside one.
- */
 const shareable = (path: string) => {
   const [kind, name, ...deeper] = Str.split(path, "/");
   return (
@@ -47,7 +39,6 @@ const isLink = Effect.fn("SharedDefinitions.isLink")(function* (file: string) {
   return yield* Effect.isSuccess(fs.readLink(file));
 });
 
-/** Whether a part of `path` in the user directory is a link, which could reach outside it. */
 const throughLink = Effect.fn("SharedDefinitions.throughLink")(function* (
   userDir: string,
   path: string,
@@ -61,7 +52,6 @@ const throughLink = Effect.fn("SharedDefinitions.throughLink")(function* (
 const base64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
 const isBase64 = (text: string) => base64(Buffer.from(text, "base64")) === text;
 
-/** When the file at `file` was last modified; null where there is none. */
 const modifiedAt = Effect.fn("SharedDefinitions.modifiedAt")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.stat(file).pipe(
@@ -119,7 +109,6 @@ const locked = <A, E, R>(userDir: string, effect: Effect.Effect<A, E, R>) =>
     );
   });
 
-/** What is on disk now, and each file seen before and gone since, removed when first missed. */
 const readShared = Effect.fn("SharedDefinitions.read")(function* (userDir: string, now: string) {
   const present = yield* onDisk(userDir);
   const seen = yield* readSeen(userDir);
@@ -142,21 +131,13 @@ const readShared = Effect.fn("SharedDefinitions.read")(function* (userDir: strin
   return [...present, ...gone].sort((a, b) => pipe_(a.path, Str.localeCompare(b.path)));
 });
 
-/** This Machine's shared definitions, each with when it was last edited. */
 export const sharedDefinitions = (userDir: string, now: string) =>
   locked(userDir, readShared(userDir, now));
 
-/** A shared definition given at a path that is not one, which nothing is written for. */
 export class DefinitionRefused extends Data.TaggedError("DefinitionRefused")<{
   readonly reason: string;
 }> {}
 
-/**
- * The Flock's edits, each written where it is later than this Machine's, with the edit's
- * own time. The file a write replaces or removes is kept under `replaced/` first, and an
- * edit is left unwritten where that or its own path is through a link. Refused whole where
- * any path is not a shared definition's, or any time or content is malformed.
- */
 export const takeDefinitions = (
   userDir: string,
   given: ReadonlyArray<SharedDefinition>,
@@ -189,7 +170,6 @@ export const takeDefinitions = (
         const had = Option.getOrUndefined(Arr.findFirst(held, (one) => one.path === edit.path));
         const content = had?.base64 ?? null;
         if (yield* throughLink(userDir, edit.path)) continue;
-        // Saved by hand since it was read: left alone.
         if ((yield* modifiedAt(file)) !== (content === null ? null : had?.at)) continue;
         if (had !== undefined && content !== null && content !== edit.base64) {
           const replaced = `replaced/${had.at}/${edit.path}`;
@@ -232,7 +212,6 @@ export const takeDefinitions = (
     }),
   );
 
-/** The edits of `given` that `held` now has, which a write leaves out where it was later. */
 export const landed = (
   given: ReadonlyArray<SharedDefinition>,
   held: ReadonlyArray<SharedDefinition>,

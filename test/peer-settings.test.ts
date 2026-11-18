@@ -72,8 +72,6 @@ test(
             yield* first.lists([second]);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
             const [laptop] = yield* peersOf(second.world.state);
-            // The timestamp and sender are separate writes. Wait for the whole update,
-            // and assert that snapshot rather than reading during the next write.
             const received = yield* until(
               () => readSettingsSet(second.world.config),
               (has) =>
@@ -231,8 +229,6 @@ test(
             const before = yield* ownerOf(first.world.state);
             yield* first.lists([second]);
             yield* onOlder(["--machine", "second", "board"]);
-            // Opening the shell's append redirection creates an empty file before echo
-            // writes. Observe the completed line, and assert that same snapshot.
             const upgraded = yield* until(
               () =>
                 fs

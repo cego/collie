@@ -1,15 +1,3 @@
-// Where a workflow module lives, and which of them a run gets.
-//
-// An author saves a file and new work uses it: no registration list to edit, no rebuild,
-// no restart. The three places a module may be saved and the order they are read in are
-// this module, and so is what is said about one that cannot be read.
-//
-// Only entry files take part. A helper or a Markdown prompt beside one is reached because
-// the entry imports it, never because it was found here.
-//
-// `docs/adr/0016-a-workflow-module-is-found-where-it-was-saved.md` is why each of these
-// is the way it is.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
@@ -29,12 +17,6 @@ export interface Root {
   readonly dir: string;
 }
 
-/**
- * The three directories, nearest first: what this project says, then what this machine's
- * author has written, then what Collie ships. The author's own is beside the installation
- * rather than inside its shipped assets, because those are a git checkout an upgrade
- * fast-forwards and a file in it would be somebody else's to move.
- */
 export const searchPath: (where: {
   readonly pluginRoot: string;
   readonly userDir: string;
@@ -45,7 +27,6 @@ export const searchPath: (where: {
   { layer: "shipped", dir: `${where.pluginRoot}/workflows` },
 ];
 
-/** Where this project looks: its own workflows, then this machine's, then the shipped. */
 export const savedModules = (where: {
   readonly pluginRoot: string;
   readonly userDir: string;
@@ -55,31 +36,24 @@ export const savedModules = (where: {
     searchPath({ pluginRoot: where.pluginRoot, userDir: where.userDir, project: where.cwd }),
   );
 
-/** An entry a caller may run, said as a consumer needs it: what, where, and from which layer. */
 export const Resolved = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   description: Schema.String,
   layer: Schema.Literals(LAYERS),
   path: Schema.String,
-  /** What the module declares it takes, so a front door can ask for it. */
   inputs: Schema.Array(Declared),
-  /** The outcome the module fixes, or null where it fixes none. */
   outcome: Schema.NullOr(Schema.String),
-  /** Present where it declares itself the healer. */
   heals: Schema.optionalKey(Schema.Literal(true)),
 });
 
-/** Everything the search path holds, as a client may see it. */
 export const Catalogue = Schema.Struct({
   entries: Schema.Array(Resolved),
   problems: Schema.Array(Fault),
 });
 
-/** A resolved entry and the revision of the directory a generation of it is staged from. */
 export type Found = typeof Resolved.Type & {
   readonly revision: string;
-  /** The setting it follows merge requests under, where it declares one. */
   readonly follows?: string;
 };
 
@@ -88,12 +62,6 @@ export interface Catalogued {
   readonly problems: ReadonlyArray<Fault>;
 }
 
-/**
- * Every id the search path offers, and every id it refuses. A layer that claims an id
- * settles it: the one below is not consulted, whether the claim loaded or not. An
- * override that does not compile is a file to fix, and running the module it was written
- * to replace would be a silent answer to a question the author did not ask.
- */
 export const discover: (
   roots: ReadonlyArray<Root>,
 ) => Effect.Effect<Catalogued, never, FileSystem.FileSystem> = Effect.fn("Discovery.discover")(
@@ -119,7 +87,6 @@ export const discover: (
   },
 );
 
-/** What one file in one layer says it is, or why it could not say. */
 type Claim =
   | { readonly kind: "entry"; readonly id: string; readonly path: string; readonly found: Found }
   | {
@@ -129,11 +96,6 @@ type Claim =
       readonly message: string;
     };
 
-/**
- * Every entry file in a layer, read. A file that cannot be imported claims the id its name
- * says it is: an author who saved `review.workflow.ts` is overriding `review`, and a typo
- * inside it does not turn that into a request for somebody else's `review`.
- */
 const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
   const revision = yield* revisionOf(root.dir);
   const claims: Array<Claim> = [];
@@ -166,7 +128,6 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
   return claims;
 });
 
-/** What one module declares it takes, in the order a front door should ask for it. */
 export const declaredBy = (entry: WorkflowEntry) =>
   Arr.map(Rec.toEntries(entry.input), ([name, field]) => {
     const drawn = jsonSchemaFor(field);
@@ -185,7 +146,6 @@ const byId = (claims: ReadonlyArray<Claim>) => {
   return grouped;
 };
 
-/** Two files, one id: each is told about the other rather than one of them being picked. */
 const ambiguous = (id: string, layer: EntryLayer, claimants: ReadonlyArray<Claim>) =>
   Arr.map(claimants, (claim) => ({
     id,
@@ -209,7 +169,6 @@ const entryFiles = Effect.fn("Discovery.entryFiles")(function* (dir: string) {
   );
 });
 
-/** The id a file claims by its name, which is what an entry that will not load is known by. */
 export const stem = (path: string) =>
   pipe_(
     path,

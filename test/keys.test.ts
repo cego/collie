@@ -1,7 +1,3 @@
-// The raw keypress reader, which is now only the text board's: a pane whose renderer
-// would not start still draws itself and still reads keys. OpenTUI owns raw mode
-// everywhere else. Both behaviours here were `src/picker.ts`'s and outlived it.
-
 import { expect, test } from "bun:test";
 import { Effect, Queue } from "effect";
 import { keyboard, tokenizeKeys } from "../src/keys";

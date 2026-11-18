@@ -1,14 +1,3 @@
-// What a new Task's workspace is called: `<Project or theme> | <what this work is>`.
-//
-// The name is inferred rather than asked for, from the work itself and from the names the
-// person already has on their own workspaces, tabs and panes — so a second Collie task
-// reads as a sibling of the first, and somebody else's projects read as theirs. Nothing
-// is remembered between sessions: the live labels are the vocabulary, read each time.
-//
-// Every one of those labels is data. They are quoted into the pack as data, the model
-// answers in a two-string schema with nothing in it that acts, and what comes back is a
-// display label — never a path component, an agent name or a command.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -23,44 +12,30 @@ import type { RunFacts } from "./runs";
 
 import { listTasks, readTask, Tasks, withTaskLockIfFree, writeTask } from "./task";
 
-/** The names this person already has, as herdr reports them. Read-only context. */
 export interface LiveNames {
   readonly workspaces: ReadonlyArray<string>;
   readonly tabs: ReadonlyArray<string>;
   readonly panes: ReadonlyArray<string>;
 }
 
-/** The work being started, in the words it was started with. */
 export interface TaskContext {
   readonly workflow: string;
-  /** What the Run is named after, whole — the plan directory, the issue, the goal. */
   readonly named: string;
-  /** The short form of that, where the Input offered one. */
   readonly short: string;
-  /** What the human said the Run is for, where they said anything. */
   readonly goal: string | null;
-  /** The directory the work is rooted in; its last component is the repository. */
   readonly cwd: string;
 }
 
-/** A label of the form `<project> | <rest>`, which is what a reused prefix looks like. */
 const PREFIXED = /^(.+?)\s\|\s(.+)$/;
 
-/** Letters and digits only, for judging whether two names are the same word. */
 function normal(text: string) {
   return pipe_(Str.toLowerCase(text), Str.replace(/[^a-z0-9]+/g, ""));
 }
 
-/** The repository this work is in, which is the last component of its directory. */
 export function repositoryOf(cwd: string) {
   return Arr.filter(Str.split(cwd, "/"), (part) => part !== "").at(-1) ?? "";
 }
 
-/**
- * The project prefix this person already uses for this repository, where they use one:
- * the `<project> |` half of a live workspace label whose project names the same thing the
- * repository does. Spelled exactly as they spell it, because the point is recognition.
- */
 export function establishedProject(live: LiveNames, repo: string) {
   const wanted = normal(repo);
   if (wanted === "") return null;
@@ -68,7 +43,6 @@ export function establishedProject(live: LiveNames, repo: string) {
   return null;
 }
 
-/** Every `<project> |` prefix on the person's live workspaces, as they spelled it. */
 function prefixesIn(live: LiveNames) {
   return Arr.flatMap(live.workspaces, (label) => {
     const prefix = Option.getOrUndefined(
@@ -80,18 +54,11 @@ function prefixesIn(live: LiveNames) {
   });
 }
 
-/** Whether a normalised project names the same thing as a normalised repository. */
 const names = (project: string, repo: string) =>
   project === repo || pipe_(project, Str.includes(repo)) || pipe_(repo, Str.includes(project));
 
-/**
- * How much of a mechanical title is worth putting on a sidebar row. Not a rule anybody
- * agreed to and not a limit on what the model may answer: it bounds only the stand-in
- * below, which is built from a path or a slug and has no idea where the meaning stops.
- */
 const FALLBACK_WORDS = 6;
 
-/** Words a title may end on only by having been cut off. */
 const DANGLING = new Set([
   "a",
   "an",
@@ -109,14 +76,6 @@ const DANGLING = new Set([
   "with",
 ]);
 
-/**
- * A name without asking anybody: the project this person already uses for this
- * repository, else the repository itself, and the work's own short name as the title.
- *
- * Mechanical, and it is the stand-in rather than the mechanism — what a Task is called
- * when there is no evaluator to ask, or when it answered with nothing usable. A start
- * never fails because a name could not be inferred.
- */
 export function fallbackName(context: TaskContext, live: LiveNames) {
   const repo = repositoryOf(context.cwd);
   const from = oneLine(context.short || context.goal || context.named || context.workflow);
@@ -134,7 +93,6 @@ export function fallbackName(context: TaskContext, live: LiveNames) {
   };
 }
 
-/** Words that say a piece of work exists without saying which. */
 const FILLER = new Set([
   ...DANGLING,
   "new",
@@ -155,10 +113,6 @@ const FILLER = new Set([
   "this",
 ]);
 
-/**
- * Whether a title names only the workflow it runs and words like "new work": `Plan new
- * work` and `Implement plan` say nothing two Tasks of one workflow do not both say.
- */
 export function isGenericTitle(title: string, workflow: string) {
   const said = (word: string) => FILLER.has(word) || own.has(word);
   const own = new Set(Str.split(Str.toLowerCase(workflow), /[^\p{L}\p{N}]+/u));
@@ -170,7 +124,6 @@ export function isGenericTitle(title: string, workflow: string) {
 
 const isText = Schema.is(Schema.String);
 
-/** The most descriptive Input a start was given, whatever it is called or where it came. */
 export function workNamedIn(inputs: Readonly<Record<string, Schema.Json>>) {
   return Arr.reduce(
     Arr.flatMap(Rec.values(inputs), (value) => (isText(value) ? [Str.trim(value)] : [])),
@@ -179,13 +132,8 @@ export function workNamedIn(inputs: Readonly<Record<string, Schema.Json>>) {
   );
 }
 
-/** A spec's own label, which says what the file is rather than what the work is. */
 const SPEC_LABEL = /^(spec|work source)\b[^:]*(:\s*|$)/i;
 
-/**
- * What a plan handed over by its path, absolute or from `cwd`, is about: the first heading
- * or Work source line of its spec, or of a Markdown file. Anything else is returned as given.
- */
 export const objectiveOf = Effect.fn("tasknames.objectiveOf")(function* (
   named: string,
   cwd: string,
@@ -214,12 +162,10 @@ export const objectiveOf = Effect.fn("tasknames.objectiveOf")(function* (
   return named;
 });
 
-/** A slug read as a phrase: what a person would have written, capitalised once. */
 function sentence(text: string) {
   return text === "" ? "" : `${Str.toUpperCase(text[0]!)}${pipe_(text, Str.slice(1))}`;
 }
 
-/** One list of the person's own names, quoted so a label cannot end the block. */
 function listed(heading: string, names: ReadonlyArray<string>) {
   const lines = [...new Set(Arr.filter(Arr.map(names, oneLine), (name) => name !== ""))];
   return Arr.join(
@@ -228,7 +174,6 @@ function listed(heading: string, names: ReadonlyArray<string>) {
   );
 }
 
-/** Everything the namer is shown, and it is all data. */
 export function namePack(context: TaskContext, live: LiveNames) {
   return Arr.join(
     [
@@ -253,16 +198,8 @@ export function namePack(context: TaskContext, live: LiveNames) {
   );
 }
 
-/**
- * The model's answer as a label may carry it: one line each, and an empty field replaced
- * by what the stand-in would have said. A model that answered with nothing has not named
- * the Task, and the stand-in is what a Task with no name would have been called anyway.
- */
 export function cleanName(answer: TaskName, context: TaskContext, live: LiveNames) {
   const otherwise = fallbackName(context, live);
-  // A prefix the person already uses belongs to the repository it names: borrowed for
-  // another one, it files this work under somebody else's project on the board.
-  // Any part of the path counts, since a worktree's last part is its branch's folder.
   const project = oneLine(answer.project);
   const parts = Arr.filter(
     Arr.map(Str.split(context.cwd, "/"), normal),
@@ -282,11 +219,6 @@ export function cleanName(answer: TaskName, context: TaskContext, live: LiveName
 
 export type NamingDeps = BudgetedDeps;
 
-/**
- * What to call this Task. Asked of the one place a model is asked anything, and answered
- * by the stand-in wherever that is unavailable, slow, or unusable — naming is the last
- * thing that should stop a person starting work.
- */
 export const nameTask = Effect.fn("tasknames.nameTask")(function* (
   deps: NamingDeps | null,
   context: TaskContext,
@@ -298,15 +230,10 @@ export const nameTask = Effect.fn("tasknames.nameTask")(function* (
   return cleanName(answer, context, live);
 });
 
-/**
- * The Tasks' labels are naming context; a failed read must not prevent a start. The host
- * reads its own; anything else asks it, and asking from inside it would start another.
- */
 const liveNames: (env: PluginEnv) => Effect.Effect<LiveNames, never, PlatformServices> = Effect.fn(
   "tasknames.liveNames",
 )(function* (env: PluginEnv) {
   const own = yield* Effect.serviceOption(Tasks);
-  // Lazily: lifecycle imports the host, which imports this.
   const { hostTasks } = yield* Effect.promise(() => import("./lifecycle"));
   const tasks = yield* (Option.isSome(own) ? own.value.list : hostTasks(env)).pipe(
     Effect.orElseSucceed(() => []),
@@ -318,18 +245,13 @@ const liveNames: (env: PluginEnv) => Effect.Effect<LiveNames, never, PlatformSer
   };
 });
 
-/** What a start is about, as its caller gave it. */
 export interface StartAbout {
   readonly workflow: string;
-  /** Every Input the start was given, by name. */
   readonly inputs: Readonly<Record<string, Schema.Json>>;
-  /** What the human said it is for, where they said anything. */
   readonly goal?: string | null | undefined;
-  /** What the human called it, which names it unless it says nothing. */
   readonly title?: string | undefined;
 }
 
-/** Infer a fresh Task's label from its work; `asking: false` uses the stand-in. */
 export const freshTaskLabel = Effect.fn("tasknames.freshTaskLabel")(function* (
   env: PluginEnv,
   about: StartAbout,
@@ -352,10 +274,6 @@ export const freshTaskLabel = Effect.fn("tasknames.freshTaskLabel")(function* (
   return taskWorkspaceLabel(yield* nameTask(naming, context, live));
 });
 
-/**
- * Renames each Task whose title names only its workflow, from its first Run's Inputs and
- * without asking a model — only where the label is still the one Collie wrote.
- */
 export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(function* (
   runs: ReadonlyArray<RunFacts>,
 ) {

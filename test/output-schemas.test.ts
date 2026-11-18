@@ -1,12 +1,3 @@
-// The shared Output schemas and the parsers beside them, case for case.
-//
-// An author declaring a review step gets `ReviewOutputSchema` through the SDK; the engine
-// still reads `review.json` with `parseReviewOutput`, which writes the messages a repair
-// round is given. Two readings of one file is a bug waiting to be found in production, so
-// every case the parsers are held to is run through the schema here as well — including
-// the optional judgement fields and the free-text severity, which are exactly what a
-// schema is tempted to narrow.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Schema, flow, Result } from "effect";
@@ -52,7 +43,6 @@ test("a reassessment accepts only one status per supplied id and no other output
     expect(decode(output)._tag).toBe("Failure");
 });
 
-/** Both readings of one document agree on whether it is one. */
 const agree = <T>(
   schema: Readable,
   parse: (text: string) => Parsed<T>,
@@ -68,11 +58,9 @@ const REVIEWS = [
   `{"verdict": "clean", "findings": [], "disputed": []}`,
   `{"verdict": "clean", "findings": null, "disputed": null}`,
   `{"verdict": "findings", "findings": [{"file": "a.ts", "line": 3, "severity": "major", "title": "leak", "detail": "d"}]}`,
-  // A fork's own severity is a judgement, not an error.
   `{"verdict": "findings", "findings": [{"severity": "nit", "title": "vocabulary"}]}`,
   `{"verdict": "findings", "findings": [{"severity": "major", "title": "t", "rebuttal": "answered"}]}`,
   `{"verdict": "clean", "disputed": [{"severity": "minor", "title": "t", "reason": "why"}]}`,
-  // A review may say more than a gate reads.
   `{"verdict": "clean", "summary": "extra keys are not an error"}`,
   `{"verdict": "ok"}`,
   `{"verdict": "findings", "findings": []}`,
@@ -248,8 +236,6 @@ test("the merge request and plan steps carry what a card reads, and no more", ()
       Result.getOrThrow,
     )({ pushed: true, mr_url: "https://example/mr/1" }),
   ).toEqual({ pushed: true, mr_url: "https://example/mr/1" });
-  // `pushed` is the one thing that is never absent: a step that says nothing about it has
-  // not reported whether somebody else's pipeline was started.
   expect(Schema.decodeUnknownExit(MrOutputSchema)({ mr_url: "u" })._tag).toBe("Failure");
 
   expect(
@@ -281,7 +267,6 @@ test("each criterion is answered with how it is met, and one unanswered or unmet
     "**C.** It does c.",
   ];
   const unmet = unmetCriteria("05-x.md", criteria, [
-    // Copied with its formatting dropped, it is still the same criterion.
     { criterion: "A. It does a, with one entry per thing", met: "test/a.test.ts" },
     { criterion: "**B.** It does b.", met: "Not met: b needs a service nobody has" },
   ]);

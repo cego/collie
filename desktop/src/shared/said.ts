@@ -1,6 +1,3 @@
-// A failure as the window says it: a sentence about the work, never a fiber or a stack.
-// No Bun-only import: the view bundles this.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Cause, Predicate, Schema } from "effect";
@@ -9,7 +6,6 @@ import { ActionFailed } from "./flock";
 
 const RENEWED = "the connection was renewed before this finished";
 
-/** An `ActionFailed`'s reason, another error's message, or that its connection was renewed. */
 export const saidOf = (cause: Cause.Cause<Error | string>) => {
   const failed = Option.getOrUndefined(Arr.findFirst(cause.reasons, Cause.isFailReason));
   if (failed !== undefined) {

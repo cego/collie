@@ -25,7 +25,6 @@ const SESSION = {
   cwd: "/work/app",
 };
 
-/** The Run made `branch` in the session's checkout, on the forge's origin. */
 const made = (forge: MrForge, branch: string) => ({
   created: { branch, checkout: SESSION.cwd, origin: ORIGIN[forge] },
 });

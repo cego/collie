@@ -87,7 +87,6 @@ test("world cleanup waits for a host to exit after it gives back its lock", () =
     }).pipe(Effect.scoped),
   ));
 
-// The preload's process markers use Linux /proc; the rest of the world proofs are portable.
 test.skipIf(process.platform !== "linux")(
   "world cleanup waits for its surviving command before removing the directory",
   () => {

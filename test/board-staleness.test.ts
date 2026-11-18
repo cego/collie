@@ -1,6 +1,3 @@
-// The board's line about a newer release, for an installation that is a release: read in the
-// background at most every few minutes, and never waited on while the board draws.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
@@ -9,7 +6,6 @@ import { runEffect } from "./support/effect";
 import { buildView, renderWorkspace } from "../src/workspace";
 import manifest from "../package.json";
 
-/** A release source whose newest release is `latest`. */
 const releasesAt = (latest: string) =>
   Effect.acquireRelease(
     Effect.sync(() =>
@@ -21,13 +17,11 @@ const releasesAt = (latest: string) =>
     (server) => Effect.promise(() => server.stop(true)),
   ).pipe(Effect.map((server) => `http://127.0.0.1:${server.port}`));
 
-/** A release source that takes the connection and never answers. */
 const silent = Effect.acquireRelease(
   Effect.sync(() => Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data: () => {} } })),
   (listener) => Effect.sync(() => listener.stop(true)),
 ).pipe(Effect.map((listener) => `http://127.0.0.1:${listener.port}`));
 
-/** The board's text, built for a release at `root` against `releases`. */
 const board = (root: string, releases: string) =>
   Effect.gen(function* () {
     const view = yield* buildView({
@@ -46,7 +40,6 @@ const board = (root: string, releases: string) =>
     return renderWorkspace(view);
   });
 
-/** The board once the read it started has landed, or what it says after a second. */
 const settled = (root: string, releases: string) =>
   Effect.gen(function* () {
     for (let tries = 0; tries < 20; tries++) {

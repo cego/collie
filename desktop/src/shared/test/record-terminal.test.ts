@@ -1,5 +1,3 @@
-// What a card's record decides about its Terminal tab.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";

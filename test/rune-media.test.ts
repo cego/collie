@@ -48,7 +48,6 @@ test.skipIf(process.platform !== "linux")(
           3,
         );
 
-        // dpkg-query returns partial stdout when just one path has no owner: refuse it all.
         const unowned = `${dir}/unowned-library.so`;
         yield* fs.writeFileString(unowned, "unowned");
         const missing: typeof shell = (command, args, cwd, env) =>

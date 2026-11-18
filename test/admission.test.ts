@@ -1,13 +1,3 @@
-// One request is one run, through the two windows where a host can die.
-//
-// A start is two things that cannot be one: a row that says this work was accepted, and an
-// engine that has been told about it. Whichever order they are done in, a crash can land
-// between them — so the proof is a host that really dies there, killed at a named point by
-// the host itself, and a second host that has to end with one run either way.
-//
-// Real processes and a real database, because a gap between two writes is not something a
-// map can have.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -21,7 +11,6 @@ import { events, fixtures, openHost, runDirOf, until, workspace, type Host } fro
 const suspended = (reply: { readonly status?: string }) => reply.status === "suspended";
 const complete = (reply: { readonly status?: string }) => reply.status === "complete";
 
-/** How many times the run's one launch Activity actually ran. */
 const launches = (log: ReadonlyArray<string>) =>
   Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch"))).length;
 
@@ -36,12 +25,10 @@ test(
         const { wf, state } = yield* workspace("collie-admission-gap-");
         const dying = yield* openHost(state, { crashAt: "admitted" });
         yield* dying.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        // No reply is coming: the host kills itself between the row and the engine.
         yield* dying.tell({ op: "start", id: "proof", runId: "r1", input: { note: "gap" } });
         yield* dying.child.exitCode.pipe(Effect.ignore);
         expect(yield* events(state, "r1")).toEqual([]);
 
-        // The next host finds work it never accepted and hands it over.
         const next = yield* openHost(state);
         yield* next.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
         yield* next.ask({
@@ -72,8 +59,6 @@ test(
         yield* dying.tell({ op: "start", id: "proof", runId: "r1", input: { note: "receipt" } });
         yield* dying.child.exitCode.pipe(Effect.ignore);
 
-        // The row still says nobody has accepted it, so the next host offers it again —
-        // under the identity it was admitted with, which is what makes that a no-op.
         const next = yield* openHost(state);
         yield* next.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
         yield* next.ask({
@@ -142,15 +127,12 @@ test(
         expect([first.ok, retry.ok]).toEqual([true, true]);
         expect(retry.registration).toBe(first.registration);
         yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        // Twice asked, once started: the second claim found the first one's run.
         expect(launches(yield* events(state, "r1"))).toBe(1);
 
-        // The same claim for something else is not that claim.
         const changed = yield* started(host, "r1", "something else");
         expect(changed.ok).toBe(false);
         expect(changed.detail).toContain("r1");
 
-        // What it claimed is untouched by the refusal.
         yield* host.ask({
           op: "answer",
           id: "proof",
@@ -176,7 +158,6 @@ test(
         const host = yield* openHost(state);
         yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
 
-        // Identical in every way but the claim, which is what says they are two.
         for (const runId of ["r1", "r2"]) {
           const reply = yield* started(host, runId, "same");
           expect(reply.ok).toBe(true);
@@ -203,7 +184,6 @@ test(
         yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
         yield* host.stop;
 
-        // Nothing of this was in memory: the next host answers from what was committed.
         const next = yield* openHost(state);
         expect((yield* next.ask({ op: "poll", id: "proof", runId: "r1" })).status).toBe(
           "suspended",
@@ -319,10 +299,6 @@ for (const { target, stopped } of [
   );
 }
 
-/**
- * Runs left mid-work on held-wake by a host that died, and a host that started without the
- * module, which is then put back. Each of `unaccepted` reached the engine and not the row.
- */
 const stranded = (
   prefix: string,
   accepted: ReadonlyArray<string>,
@@ -354,7 +330,6 @@ const stranded = (
     yield* fs.remove(gate).pipe(Effect.orDie);
     const host = yield* openHost(state);
     yield* fs.copyFile(`${fixtures}/held-wake.workflow.ts`, module).pipe(Effect.orDie);
-    // Names the Runs their dying host never answered for.
     for (const runId of unaccepted) yield* host.ask({ op: "poll", id: "held-wake", runId });
     const client = yield* connect(state).pipe(Effect.orDie);
     const idOf = (name: string) =>
@@ -450,7 +425,6 @@ test(
         );
         yield* client.resume({ runId: yield* idOf("first"), request: "resume-first" });
         yield* waiting("first");
-        // Shut while the resume is asked, so it has to wait for the Run to go on to its question.
         yield* fs.writeFileString(gate, "").pipe(Effect.orDie);
         yield* Effect.forkScoped(fs.remove(gate).pipe(Effect.orDie, Effect.delay("500 millis")));
         const runId = yield* idOf("held");

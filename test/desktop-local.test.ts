@@ -1,6 +1,3 @@
-// Desktop reaches Local's host the way it reaches any Machine's: through a bridge it starts
-// as `desktop`, never through Collie's own host client.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -83,7 +80,6 @@ test(
           const first = yield* board;
           const snapshot = first[0].message;
           expect(snapshot._tag).toBe("Snapshot");
-          // The Machine is its installation, which every later message carries too.
           const installation = snapshot._tag === "Snapshot" ? snapshot.installation : "";
           expect(installation).not.toBe("");
           expect(first[0].machine).toEqual({ installation, profile: "local", name: "mk-pc" });
@@ -111,7 +107,6 @@ test(
               set: true,
             }),
           ).not.toBe("");
-          // Tried again under the same request, it is the one hold.
           yield* act(reached, "hold-1", {
             _tag: "Control",
             runId,
@@ -170,7 +165,6 @@ test("Desktop's main process never reaches Collie's own host client", () =>
         Bun.build({
           entrypoints: [`${root}desktop/src/bun/index.ts`],
           target: "bun",
-          // Desktop's own dependencies, which the root suite does not install.
           external: [
             "electrobun",
             "electrobun/*",
@@ -412,7 +406,6 @@ test("a Machine reached by two routes is shown through the first, and the other'
       yield* until(() => told.length === 2 && closed.includes("other"));
       expect(told).toEqual(["other Snapshot", "preferred Snapshot"]);
       expect(closed).toEqual(["other"]);
-      // Actions on the Machine go through the route it is shown through.
       expect(doors.get("vm")?.name).toBe("preferred");
     }).pipe(Effect.scoped),
   ));
@@ -505,7 +498,6 @@ test("a bridge waiting on an SSO login is not held to the readiness deadline, an
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const go = `${yield* fs.makeTempDirectoryScoped({ prefix: "collie-sso-" })}/go`;
-      // The deadline starts at a moment the test cannot see, so the clock passes it again and again.
       const pastDeadline = TestClock.adjust("121 seconds").pipe(
         Effect.andThen(TestClock.withLive(Effect.sleep("25 millis"))),
       );
@@ -600,7 +592,6 @@ test("an older release is upgraded once through its route while its board stays 
         Stream.runForEach((item) => Effect.sync(() => told.push(toldWithNotices(item)))),
         Effect.forkScoped,
       );
-      // A change on the board reaches it while the upgrade is still running.
       yield* until(() => told.length === 2);
       yield* Deferred.succeed(upgradeMayFinish, undefined);
       yield* until(() => told.length >= 5);
@@ -823,7 +814,6 @@ test("an upgrade cut off by its connection dropping is tried again when the Mach
               ),
             };
           }),
-        // Never answers: the connection drops first.
         collie: () => Effect.sync(() => void asked++).pipe(Effect.andThen(Effect.never)),
       };
       yield* flockStream([dropping], new Map(), "0.31.0").pipe(Stream.runDrain, Effect.forkScoped);
@@ -879,7 +869,6 @@ test("Sync now on a Machine behind on its version reopens its route, which asks 
         failed: false,
       });
       yield* until(() => connections === 2 && asked === 2);
-      // Reopened, not lost: what it showed is dated until it connects again.
       expect(Arr.filter(told, (one) => pipe_(one, Str.endsWith("Lost")))).toEqual([]);
       yield* until(() => Arr.filter(told, (one) => one === "Snapshot 0.30.2").length === 2);
       const reconnecting = told.indexOf("vm Reconnecting");
@@ -925,7 +914,6 @@ test("Sync now while a Machine's upgrade runs leaves the upgrade to finish", () 
       );
       yield* until(() => asked === 1);
       yield* Queue.offer(changes, { _tag: "Reopen", profile: "p-vm" });
-      // Long enough for a reopen that was not refused to reconnect.
       yield* Effect.sleep("100 millis");
       expect([connections, asked]).toEqual([1, 1]);
       yield* Deferred.succeed(upgraded, undefined);

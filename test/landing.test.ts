@@ -1,6 +1,3 @@
-// The host's merge: the landing attempt written before the forge is asked, its outcome after,
-// and an attempt an earlier host left settled on the forge's word.
-
 import { Herdr } from "../src/herdr";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -55,7 +52,6 @@ const model: (forge: "gitlab" | "github", over?: Partial<FakeMr>) => ForgeModel 
   ],
 });
 
-/** A Run's directory, and a forge whose merge also reads what the Run had recorded by then. */
 const landing = Effect.fn("landing.landing")(function* (
   forge: "gitlab" | "github",
   over: Partial<FakeMr> = {},
@@ -264,7 +260,6 @@ test("a Run that recorded no merge request is refused, and the forge is not aske
     }),
   ));
 
-/** A Run on this host that landed `forge`'s merge request at MERGED, and how it ended. */
 const lander = (
   forge: "gitlab" | "github",
   runId: string,
@@ -321,7 +316,6 @@ for (const forge of ["gitlab", "github"] as const) {
         expect(yield* fs.readFileString(`${runDir}/log.txt`)).toBe(
           `landing: took over the merge of ${URL_OF[forge]} at ${HEAD} as ${MERGED} from r-failed\n`,
         );
-        // Asked again, as a replay would: the same answer from what it recorded.
         expect(
           yield* takeOver({ runDir, mr: URL_OF[forge], runs, cwd: "/w", run: fake.run }).pipe(
             Effect.provide(fake.layer),

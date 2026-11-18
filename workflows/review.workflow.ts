@@ -1,13 +1,3 @@
-// One complete review of a target, and then what to do about it.
-//
-// The pass itself is `reviewing.ts`, shared with the workflow that builds: the same
-// reviewers, the same synthesis, the same review left behind. What is here is what a
-// standalone review adds — the menu after it, which comes back until something terminal
-// happens, because a note that did not land is not an answer.
-//
-// The Markdown beside this file is the content: how to read each kind of target, what a
-// reviewer is asked for, and what the fix is told about where it stands.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import {
@@ -81,7 +71,6 @@ const Posted = Schema.Struct({
   signature: Schema.optionalKey(Schema.String),
 });
 
-/** How many fix rounds one "Fix findings" may run before the human is asked again. */
 const ROUNDS = 4;
 
 const ReviewedCheckout = Schema.Union([
@@ -138,7 +127,6 @@ export default defineWorkflow({
         description: "The spec the change is held to; empty where there is none",
       }),
     ),
-    // Not `outcome`: that is what this Run proves, and a review always proves a review.
     proves: Schema.optionalKey(
       Schema.String.annotate({
         description:
@@ -151,10 +139,7 @@ export default defineWorkflow({
   path: [reviewRound, menu],
   hints: { target: "diff-target", slack: "internal", improving: "internal" },
   follows: FOLLOW,
-  // A review proves it wrote a review a human can read; nobody chooses that.
   outcome: { fixed: "review" },
-  // What a finished review offers to do next. Declared here because it is this workflow
-  // that knows a review can be fixed and re-run — Collie only carries the offer.
   actions: [
     {
       id: "improve",
@@ -212,9 +197,6 @@ export default defineWorkflow({
         });
       let head = kind === "mr" ? yield* headAt(1) : "";
 
-      // The extra axes and the earlier review are the host's own — a caller attaches them
-      // to the work rather than declaring them here, and `previous` names the Run whose
-      // review this one is a follow-up to.
       const previous = place.options.previous ?? "";
       const earlierPlace = previous === "" ? null : yield* host.place(previous);
       const before =
@@ -278,7 +260,6 @@ export default defineWorkflow({
                 head,
               }),
             });
-      // Journaled, so a replay takes the road the round took whatever the setting says now.
       const following = (round: number) =>
         kind !== "mr"
           ? Effect.succeed(false)
@@ -289,7 +270,6 @@ export default defineWorkflow({
             });
       const fact = (name: string, line: string) =>
         Activity.make({ name, execute: host.record(run.id, line) });
-      // Null where the head moved under it and `carry` keeps the findings for the next round.
       const roundAt = (
         round: number,
         changes: string,
@@ -629,7 +609,6 @@ export default defineWorkflow({
         }
       });
 
-      // The first review; "Fix findings" below rallies from it.
       const followed =
         !improving && (yield* following(1))
           ? yield* followThrough.pipe(
@@ -696,9 +675,6 @@ export default defineWorkflow({
       };
 
       const agents = yield* Agents;
-      // The fix and the review after it are one round of a rally, as in implement: a fix
-      // Collie ran is reviewed again at once, and one handed to an agent Collie does not
-      // watch waits for the human to say it is ready to look at.
       const reviewedAgain = (at: number, answered: string) =>
         Effect.gen(function* () {
           ledger = synthesis.findings;
@@ -721,7 +697,6 @@ export default defineWorkflow({
               answered,
               risks: place.options.risks ?? "",
               at,
-              // This review, and one for every fix round the rally may still run after it.
               of: at + (fixing ? ROUNDS - rallied : 0),
               disputed: [...disputed],
             }),
@@ -729,7 +704,6 @@ export default defineWorkflow({
           );
         });
 
-      // Why no fix can run here, recorded inside its Activity so a replay logs it once.
       const fixable = yield* Activity.make({
         name: "fixable",
         success: ReviewedBranch,
@@ -750,22 +724,17 @@ export default defineWorkflow({
         : "refused" in fixable
           ? fixable.refused
           : "";
-      // A hand-off needs no checkout, so a live implementer in the lineage may still take one.
       let handOff = owned && place.lineage.length > 1;
 
       let handed = false;
-      // Reviews are numbered by how many there have been, not by how often the menu came.
       let reviews = followed?.at ?? 1;
       let fixes = 0;
       let asks = 0;
-      // Set by the human's "Fix findings": the rally then goes on by itself, through the
-      // same `settleRound` implement's does, and asks again once it settles or runs out.
       let fixing = improving;
       let rallied = 0;
       let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
       let settled = "";
       let postRefusal = "";
-      // A dispute is carried into the next review rather than re-argued, as in implement.
       let disputed: ReadonlyArray<Finding> = [];
       for (;;) {
         const resolved = Arr.filter(
@@ -807,8 +776,6 @@ export default defineWorkflow({
             if (improving) return settled;
           }
         }
-        // Posting is offered for a merge request and nothing else; whether this is one to
-        // post to is decided when it is invoked, by whoever can actually see GitLab.
         if (!fixing) {
           const fixOffered = unfixable === "" || handOff;
           const offered = [
@@ -848,7 +815,6 @@ export default defineWorkflow({
             seen = null;
           }
         }
-        // What this fix is for, so a review that raises the same blockers again halts.
         if (chosen === FIX && round.go === "fix") seen = { at: reviews, keys: round.keys };
         if (chosen === DONE) return `${synthesis.findings.length} finding(s), not posted`;
 
@@ -905,7 +871,6 @@ export default defineWorkflow({
         }
 
         if (chosen === IMPLEMENT) {
-          // This review is the work source; the branch it reviewed is read from it.
           const child = yield* children.start({
             invocation: "implement",
             workflow: "implement",
@@ -921,10 +886,6 @@ export default defineWorkflow({
           continue;
         }
 
-        // The live implementer of the Run this review came from is building this work, so
-        // it is the one to fix it: a second agent on the same checkout would be two hands
-        // on one index.
-        // Recorded, so a replay takes the same road rather than asking again.
         fixes += 1;
         rallied += 1;
         const operation = fixes === 1 ? "fix" : `fix-${fixes}`;
@@ -954,7 +915,6 @@ export default defineWorkflow({
           fixing = false;
           continue;
         }
-        // The fixer works in the reviewed branch's checkout, which is the Run's from now on.
         const reviewed = yield* Activity.make({
           name: `${operation}-checkout`,
           success: ReviewedCheckout,
@@ -990,7 +950,6 @@ export default defineWorkflow({
               branch: reviewed.branch,
               iteration: String(rallied),
               max_iterations: String(ROUNDS),
-              // What the rally is fixing: a dispute raised again with no rebuttal is not work.
               findings: formatFindings(split.live),
               disputed: formatFindings(disputed),
             },
@@ -1055,7 +1014,6 @@ const reviewNote = (
   );
 };
 
-/** What the live implementer is told: where the review is, and that this is a fix round. */
 const handOffText = (dir: string) =>
   Arr.join(
     [

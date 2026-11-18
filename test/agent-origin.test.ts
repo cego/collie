@@ -20,7 +20,6 @@ const encodeValue = flow(
   Result.getOrThrow,
 );
 
-/** The Run's audit trail, as its host on `state` recorded it. */
 const trailOf = (state: string, runId: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     hostRecords(
@@ -29,7 +28,6 @@ const trailOf = (state: string, runId: string) =>
     ),
   );
 
-/** An attended Run held at its question, and the agent its build step left in a pane. */
 const attendedAgent = Effect.fn("attendedAgent")(function* (side: Side) {
   const fs = yield* FileSystem.FileSystem;
   const outputs = `${side.world.home}/outputs.json`;
@@ -405,7 +403,6 @@ test(
             expect(away.envelope.data).toMatchObject({
               machines: [expect.objectContaining({ machine: "second", state: "away" })],
             });
-            // The host only asks whether an SSH connection is open; it never logs in.
             expect(
               Arr.filter(
                 Str.split(

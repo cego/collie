@@ -1,8 +1,4 @@
 import * as Cause from "effect/Cause";
-// What starting, answering, stopping and resuming a Run actually does. Both the CLI
-// and the Herdr adapters call these; neither owns the behaviour, so a pane and a
-// command cannot drift apart. What stays with each of them is presentation: picking,
-// prompting, rendering, and turning a result into text or JSON.
 
 import * as Struct from "effect/Struct";
 import { parkLine } from "./park-cause";
@@ -98,10 +94,8 @@ const ErrorCode = Schema.Literals([
   "target_exists",
   "needs_input",
   "timeout",
-  /** A paired Machine did not answer within its bound. */
   "machine_unreachable",
   "invalid_state",
-  /** The workflow a Run recorded is not the workflow its layers resolve to now. */
   "definition_changed",
   "operation_failed",
   "invalid_input",
@@ -117,11 +111,9 @@ export interface ExpectedError extends Schema.Schema.Type<typeof ExpectedError> 
 export type Failure = {
   ok: false;
   error: ExpectedError;
-  /** The Machine or its host was not reached, so nothing it would say is known. */
   readonly unreached?: true;
 };
 
-/** This Machine's host could not be asked, which is not the same as it having nothing. */
 export class HostUnread extends Data.TaggedError("HostUnread")<{
   readonly error: ExpectedError;
   readonly message: string;
@@ -149,16 +141,10 @@ const ok: <A extends object>(data: A, human: string) => OpResult = <A extends ob
   human,
 });
 
-/** A fresh id for a mutation whose caller supplied none. Reusing one replays it. */
 export const newRequestId = Effect.fn("operations.newRequestId")(function* () {
   return yield* (yield* SecureRandom.SecureRandom).uuidV4();
 });
 
-/**
- * The directory a request named, by path, by repository or by checkout under the Projects
- * root. `null` is a request that named none. An error is a name that matches nothing or
- * more than one thing: a launch aimed at a guess is a Run in a repository nobody asked for.
- */
 export const workspaceNamed: (
   env: PluginEnv,
   named: string | undefined,
@@ -189,7 +175,6 @@ export const workspaceNamed: (
   );
 });
 
-/** Whether `cwd` is in Collie's state directory, the Home's among it: no checkout (ADR-0033). */
 export const inCollieState = Effect.fn("operations.inCollieState")(function* (
   env: PluginEnv,
   cwd: string,
@@ -200,7 +185,6 @@ export const inCollieState = Effect.fn("operations.inCollieState")(function* (
   return dir === state || pipe(dir, Str.startsWith(`${state}${path.sep}`));
 });
 
-/** Why a start may not be rooted in `cwd`, or null where it may. */
 export const collieOwnRefusal = Effect.fn("operations.collieOwnRefusal")(function* (
   env: PluginEnv,
   named: string,
@@ -210,16 +194,11 @@ export const collieOwnRefusal = Effect.fn("operations.collieOwnRefusal")(functio
   return `"${named}" is ${cwd}, Collie's own namespace, not a checkout; ${yield* howToName(env)}, or projects-root`;
 });
 
-/** How a checkout is named instead, on this Machine. */
 const howToName = Effect.fn("operations.howToName")(function* (env: PluginEnv) {
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
   return `name a checkout by its workspace, its path on this Machine${root === null ? "" : ` or its directory name under the Projects root ${root.path}`}`;
 });
 
-/**
- * The checkouts under the Projects root a repository name names, so a start says "monorepo"
- * from any chat, wherever that chat runs, as it would from the Home.
- */
 const checkoutsNamed = Effect.fn("operations.checkoutsNamed")(function* (
   env: PluginEnv,
   name: string,
@@ -235,11 +214,6 @@ const checkoutsNamed = Effect.fn("operations.checkoutsNamed")(function* (
   return { root: root.path, paths };
 });
 
-/**
- * A name that is a directory, as the workspace standing for it: the one already on that
- * checkout, or a new one opened there. `null` is a name that is not a directory at all,
- * which is the caller's "matches nothing".
- */
 const workspaceForDirectory: (
   env: PluginEnv,
   named: string,
@@ -265,23 +239,14 @@ export interface NamedDirectory {
   readonly cwd: string;
 }
 
-/** A directory a request named: the one it is, why it is not one, or none named. */
 export type WorkspaceNamed = { found: NamedDirectory } | { error: string } | null;
 
-/**
- * Brings this installation up to date. A release is replaced by the target release's, which
- * this runner places itself or hands to that release's runner. A development checkout is
- * pulled. A clone at the Collie directory has a release placed inside it, and is removed
- * where nothing in it is the human's.
- */
 export const upgrade = Effect.fn("operations.upgrade")(function* (
   env: PluginEnv,
   options: {
     readonly to?: string;
     readonly carried?: Carried | null;
-    /** The key a downloaded runner must verify against; Collie's own unless a test says. */
     readonly key?: string;
-    /** Where live Runs work, or null where that cannot be asked; the host's answer by default. */
     readonly liveCheckouts?: Effect.Effect<ReadonlyArray<string> | null, never, PlatformServices>;
   } = {},
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
@@ -323,10 +288,7 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
   }
   const head = () => run("git", ["rev-parse", "--short", "HEAD"], root).pipe(Effect.map(short));
   const before = yield* head();
-  // `--ff-only`: an upgrade that quietly merged or rebased someone's local work would be a
-  // surprise nobody asked this command for. Uncommitted work rides through the pull.
   const pulled = yield* run("git", ["pull", "--ff-only", "--autostash"], root);
-  // A conflicting autostash still exits 0, leaving the work unmerged.
   const unmerged = Str.trim((yield* run("git", ["ls-files", "--unmerged"], root)).stdout);
   if (pulled.code !== 0 || unmerged !== "") {
     return err("operation_failed", `Could not update ${root}.`, {
@@ -353,7 +315,6 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
   };
 });
 
-/** Places a release inside a clone install, and removes the clone where nothing in it is the human's. */
 const migrate = Effect.fn("operations.migrate")(function* (
   env: PluginEnv,
   to: string | undefined,
@@ -388,7 +349,6 @@ const migrate = Effect.fn("operations.migrate")(function* (
       { root, source },
     );
   }
-  // Always the release's own runner: one built from this clone would place the clone's source.
   const placed = yield* handOff(env, target, source, key, run, path.join(env.collieDir, "release"));
   if (!placed.ok) return placed;
 
@@ -424,10 +384,8 @@ const migrate = Effect.fn("operations.migrate")(function* (
 
 const MIGRATION_EXCLUDES = ["/release/", "/kept/"];
 const COLLIE_DIR_ENTRIES = ["release", "user", "kept"];
-/** What an install leaves ignored in its clone that is Collie's, or `user/`. */
 const INSTALL_IGNORED = ["bin/", "node_modules/", "user/", "release/", "kept/"];
 
-/** What in a clone is the human's, one line per kind; empty where nothing is. */
 const humansIn = Effect.fn("operations.humansIn")(function* (
   root: string,
   live: Effect.Effect<ReadonlyArray<string> | null, never, PlatformServices>,
@@ -471,10 +429,8 @@ const humansIn = Effect.fn("operations.humansIn")(function* (
   return found;
 });
 
-/** Long enough for another placement to finish; claims are 25ms apart. */
 const PLACING_CLAIMS = 2_400;
 
-/** `placeRelease`, one placement at a time per Collie directory. */
 export const placeLocked = Effect.fn("operations.placeLocked")(function* (
   carried: Carried,
   collieDir: string,
@@ -490,7 +446,6 @@ export const placeLocked = Effect.fn("operations.placeLocked")(function* (
   );
 });
 
-/** Places the release this runner carries, then prepares it. */
 const placeOwn = Effect.fn("operations.placeOwn")(function* (
   env: PluginEnv,
   carried: Carried | null,
@@ -536,7 +491,6 @@ const Placed = Schema.Struct({
   ),
 });
 
-/** What placing a release did, as a human reads it. */
 const placedReport = (env: PluginEnv, placed: typeof Placed.Type) =>
   Arr.join(
     [
@@ -560,17 +514,12 @@ const HandedOff = Schema.fromJsonString(
   ]),
 );
 
-/**
- * Hands the upgrade to `target`'s runner, once it verifies, and reports what it did as this
- * upgrade's own. Nothing is replaced unless that runner runs.
- */
 const handOff = Effect.fn("operations.handOff")(function* (
   env: PluginEnv,
   target: string,
   source: string,
   key: string | undefined,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
-  /** The installation the release's runner upgrades, where it is not this one. */
   pluginRoot: string = env.pluginRoot,
 ) {
   const got = yield* Effect.result(
@@ -615,7 +564,6 @@ const handOff = Effect.fn("operations.handOff")(function* (
   return { ok: true as const, data, human: placedReport(env, data) };
 });
 
-/** What each preparation step did, rather than the install's own output. */
 const stepLines = (steps: ReadonlyArray<{ step: string; state: string; detail: string }>) =>
   Arr.map(
     steps,
@@ -623,7 +571,6 @@ const stepLines = (steps: ReadonlyArray<{ step: string; state: string; detail: s
       `  ${pipe(step.step, Str.padEnd(16))}${step.state}${step.detail ? ` — ${step.detail}` : ""}`,
   );
 
-/** `prepare.sh` in `root`, then the Desktop step, as report lines. */
 const prepareAndDesktop = Effect.fn("operations.prepareAndDesktop")(function* (
   env: PluginEnv,
   root: string,
@@ -637,7 +584,6 @@ const prepareAndDesktop = Effect.fn("operations.prepareAndDesktop")(function* (
       output: whatItSaid(installed),
     });
   }
-  // Loaded here: of every front door, only an upgrade reaches Desktop.
   const { dataHomeOf, updateDesktop } = yield* Effect.promise(() => import("./desktop"));
   const desktop = yield* updateDesktop(to ?? (yield* releaseVersion(root)), {
     dataHome: dataHomeOf(env.home, env.raw.XDG_DATA_HOME),
@@ -646,15 +592,6 @@ const prepareAndDesktop = Effect.fn("operations.prepareAndDesktop")(function* (
   return { ok: true as const, steps };
 });
 
-/**
- * What `prepare.sh` reported, one line per step. Anything else it printed — the
- * install's own output, a stack of npm notices — is not part of the answer.
- *
- * This is one half of a contract whose other half is a `printf` in a shell script,
- * so it is exported for the test that runs the real script and reads its output back
- * through here: a step line reworded on one side and not the other would otherwise
- * empty this report with nothing failing.
- */
 const PREPARE_LINE = /^prepare: ([a-z-]+): (done|already in place|skipped|failed)(?: — (.*))?$/;
 
 export function prepareSteps(output: string) {
@@ -668,18 +605,11 @@ export function prepareSteps(output: string) {
   return returned;
 }
 
-/** `git rev-parse` prints one line; anything else means it did not answer. */
 function short(result: { code: number; stdout: string }) {
   const returned: string = result.code === 0 ? Str.trim(result.stdout) : "";
   return returned;
 }
 
-/**
- * The Task a start belongs to. A fresh start is only named here: the host opens its Task
- * at admission, on the checkout the Run is given. A continuation is given its Task:
- * membership is the record, never the label, since two Tasks may be called much the same
- * thing.
- */
 export const taskFor = Effect.fn("operations.taskFor")(function* (
   env: PluginEnv,
   choice: TaskChoice,
@@ -688,7 +618,6 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
   const kept = (task: TaskRecord | null, label: string | null = null) => ({
     _tag: "Ok" as const,
     task,
-    /** What a fresh Task's workspace is to be called, where this start opens one. */
     label,
   });
   if (choice.mode === "continue") return kept(choice.task);
@@ -700,7 +629,6 @@ export const clearOverride = Effect.fn("operations.clearOverride")(function* (
   herdr: Herdr,
   runId: string,
   agent: string,
-  /** Who is lifting it, as `actorName` writes it. Derived at the front door, never here. */
   by: string,
   voice: Voice = {},
 ) {
@@ -721,35 +649,12 @@ export const clearOverride = Effect.fn("operations.clearOverride")(function* (
   return ok({ runId, agent }, `Cleared the manual override on ${agent}.`);
 });
 
-/**
- * Carrying out a Confirmation: the one place a proposal's actions run, whichever front
- * door said yes. The front door derives who is asking and renders what came back; it does
- * not decide what is checked first, because a second copy of this loop is a second policy
- * on what a confirmed action is still allowed to assume.
- */
-/**
- * Which live process each agent a delivery names is now. Recorded with the proposal so a
- * confirmation can refuse rather than deliver to whatever took that agent's name since.
- */
-/**
- * A structured request from native chat, validated and executed in the same call.
- *
- * This is the whole of what chat may *do*, and it is deliberately the same path a steer
- * takes from the point the actions exist: the closed `ActionSchema`, `validate`, and the
- * proposals journal. What it does not do is ask a second model what the first one meant —
- * the native agent already expressed this structurally, and paying a model to re-read it
- * would be two interpretations of one request.
- *
- * The journal and stale-target checks are shared with optional proposals. Attribution
- * stays with the chat request; no terminal or second human confirmation is required.
- */
 export const request = Effect.fn("operations.request")(function* (
   env: PluginEnv,
   herdKey: string,
   options: {
     readonly interpretation: string;
     readonly actions: ReadonlyArray<Action>;
-    /** Who asked. Stamped by the entrypoint, never read out of the request. */
     readonly actor: Actor;
   },
 ) {
@@ -760,8 +665,6 @@ export const request = Effect.fn("operations.request")(function* (
   const runs = new Map<string, RunFacts>();
   for (const id of named) {
     const run = Option.getOrUndefined(Arr.findFirst(known, (one) => one.id === id)) ?? null;
-    // Refused, not retargeted. A Run nobody has is a request about nothing, and guessing
-    // which one was meant is how an action lands on somebody else's work.
     if (run === null) return err("run_not_found", `No Run "${id}".`, { run: id });
     runs.set(id, run);
   }
@@ -831,17 +734,11 @@ const incarnationsFor = Effect.fn("operations.incarnationsFor")(function* (
   return found;
 });
 
-/** The tree a card was written against, as the one string a confirmation compares. */
 function revisionOf(revision: { readonly head_sha: string; readonly fingerprint: string }) {
   const returned: string = `${revision.head_sha}:${revision.fingerprint}`;
   return returned;
 }
 
-/**
- * The card a steer named, with the revision it was written against — or null when none was
- * named or no card has that id. Binding it is what lets a confirmation say `revision_moved`
- * instead of applying a decision about one tree to a different one (SPEC §7.6).
- */
 const cardRevision = Effect.fn("operations.cardRevision")(function* (
   run: RunFacts,
   id: string | null,
@@ -849,17 +746,9 @@ const cardRevision = Effect.fn("operations.cardRevision")(function* (
   if (id === null) return null;
   const cards = yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []));
   const card = Option.getOrUndefined(Arr.findFirst(cards, (entry) => entry.id === id));
-  // A card nobody has is not an unbound proposal: the human asked about a specific piece
-  // of work, and answering about the tree in general is answering a different question.
   return card === undefined ? "unknown" : { id, revision: revisionOf(card.revision) };
 });
 
-/**
- * What one evaluation is allowed to cost, and what it is asked with. Conservative: the
- * Herd's cap and the Run's own cap bound this again, and a front door never chooses its
- * own budget — a board and a terminal that disagreed about what Collie may spend would be
- * two policies wearing one name.
- */
 export const steer = Effect.fn("operations.steer")(function* (
   env: PluginEnv,
   deps: {
@@ -869,18 +758,11 @@ export const steer = Effect.fn("operations.steer")(function* (
   },
   options: {
     readonly text: string;
-    /** The Run this is about. Required for anything that would change something. */
     readonly target?: string | null;
     readonly from?: string | null;
     readonly dryRun?: boolean;
     readonly requestId: string;
-    /** The front door that asked, which the proposal is carried out as. */
     readonly origin?: FrontDoor;
-    /**
-     * Who is asking. `event` is the board speaking first about something that changed;
-     * the question is journaled as that, never as the human's words. It changes what the
-     * conversation shows. Unsolicited event suggestions stay proposals.
-     */
     readonly asked?: "human" | "event";
   },
 ) {
@@ -890,15 +772,11 @@ export const steer = Effect.fn("operations.steer")(function* (
     target === null
       ? null
       : (Option.getOrUndefined(Arr.findFirst(known, (one) => one.id === target)) ?? null);
-  // A steer is about one Run. A question about the flock is native chat's, which reads
-  // the Herd rather than having a model asked one here — and a Run is never guessed at
-  // from the words, so there is nothing to fall back to.
   if (target === null)
     return err("invalid_input", "Name the Run this is about with --target.", {
       code: "target_required",
     });
   if (run === null) return err("run_not_found", `No Run "${target}".`, { run: target });
-  // A retry asks nobody again: a second answer could order the same actions differently.
   if (options.dryRun !== true && options.asked !== "event") {
     const before = yield* carriedBefore(deps.herdKey, options.requestId);
     if (before !== null) return before;
@@ -912,23 +790,15 @@ export const steer = Effect.fn("operations.steer")(function* (
   const from = options.from ?? null;
   const pack = yield* evidencePack(env, options.text, run, from, journal);
 
-  // An Intent nobody can decode is not a Run with no constraints. Recorded as `{}`, the
-  // proposal would skip the version gate at every later confirmation (SPEC §7.1). Read
-  // before the call rather than after it: a Run whose Intent cannot be read is one no
-  // proposal can be made about, and finding that out afterwards spends the money first.
   const intent = yield* readIntent(run.dir).pipe(Effect.orElseSucceed(() => "unreadable" as const));
   if (intent === "unreadable")
     return err("invalid_state", `${run.id}'s Intent cannot be read; nothing was proposed.`);
 
-  // Written down as usage — the Herd's, and the Run's where there is one — before the
-  // call and after it. Never refused over a count: usage is data, not a quota.
   const budget = yield* budgetPath(env.stateDir, deps.herdKey);
   const callId = yield* newRequestId();
   yield* reserve(budget, { id: callId, run: run.id }, deps.limits);
 
   const asked = yield* evaluate(deps.evaluator, "proposal", pack);
-  // What the call did: a timeout and an output cap are their own facts, and this is the
-  // only place either is written down. An unusable answer is `failed` — the call was not ok.
   yield* settleBudget(budget, callId, {
     outcome: asked.spent.outcome === "ok" && asked.error !== null ? "failed" : asked.spent.outcome,
     usd: asked.spent.usd,
@@ -969,7 +839,6 @@ export const steer = Effect.fn("operations.steer")(function* (
     interpretation: proposed.interpretation,
     targets: [{ run: run.id }],
     actions: Arr.map(checked, (entry) => entry.action),
-    // A requested action is separate from the Driver's standing authority.
     allowedNow: [],
     intentVersions: intent === null ? {} : { [run.id]: intent.version },
     by: `evaluator:${callId}`,
@@ -1032,41 +901,10 @@ function previewOf(interpretation: string, checked: ReadonlyArray<Validated>) {
   return returned;
 }
 
-/**
- * What the evaluator is shown. Compact Herd facts, then the target's own record — and
- * never a worker's terminal transcript: what an agent is doing reaches this as herdr's
- * own status and title, and no further.
- */
-/**
- * How much of the Herd and of the conversation one question carries. Both are caps on a
- * prompt, not policy: a Herd with two hundred Runs must not produce a two-hundred-Run
- * prompt, and a conversation that has run all week must not be re-sent whole.
- */
 const HERD_LINES = 40;
 const TURNS_IN_CONTEXT = 20;
-/** How many of a Run's newest cards a detail read carries. */
 const CARDS_IN_CONTEXT = 3;
 
-/**
- * Every Run in the Herd, bounded, with what was left out named.
- *
- * The Herd's, never a workspace's and never the Selection's: a board filter is what a
- * human is looking at, and a filter that decided what could be *read* would hide work by
- * hiding a row. Bounded and saying so, because a model told about forty of two hundred
- * Runs and not told so answers "that is all of them" in good faith.
- *
- * Shared: the evidence pack below and the tools native chat calls both read this, so
- * Collie and the row a human is looking at cannot tell different stories about one Run.
- */
-
-/**
- * What the human said, and what Collie makes of it — as a proposal nobody has acted on.
- *
- * A steer is a question, never a command. Even where a Run has granted Collie authority
- * to correct its own drift, a proposal that came out of a conversation is `pending`: the
- * grant was for the Driver's own checks, and "the human was talking about it" is not the
- * same as "the human asked for it". That is what `allowedNow: []` below is.
- */
 export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: PluginEnv) {
   const runs = yield* listRuns(env);
   const registered = yield* everyRegistered;
@@ -1082,8 +920,6 @@ export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: Plugi
     if (attention.category !== "none") said.push(attention.explanation);
     lines.push(Arr.join(said, ", "));
   }
-  // An empty answer is not an answer: a Herd with no Runs says so, rather than handing
-  // the model nothing to read.
   if (lines.length === 0) return "- (no Runs in this Herd)";
   return Arr.join(
     [
@@ -1096,7 +932,6 @@ export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: Plugi
   );
 });
 
-/** The agents registered for one Run, by name. */
 const agentsOf: (registered: ReadonlyArray<AgentEntry>, run: string) => Set<string> = (
   registered,
   run,
@@ -1108,7 +943,6 @@ const agentsOf: (registered: ReadonlyArray<AgentEntry>, run: string) => Set<stri
     ),
   );
 
-/** How much of a Run's own record one detail read carries. */
 const ANSWERS_IN_CONTEXT = 5;
 const FINDINGS_IN_CONTEXT = 10;
 const LOG_LINES_IN_CONTEXT = 5;
@@ -1120,14 +954,12 @@ const actionText = flow(
   Result.getOrThrow,
 );
 
-/** The `collie_do` action that answers `choiceId` on `run`. */
 export const answerAction: (run: string, choiceId: string, answer: string) => string = (
   run,
   choiceId,
   answer,
 ) => actionText({ kind: "answer", run, choiceId, answer });
 
-/** The Choice a Run is waiting on, every option, and the `collie_do` action that answers it. */
 export const choiceLines: (run: string, asked: Asked) => string[] = (run, asked) => [
   `Waiting on the Choice "${asked.name}": ${asked.prompt}`,
   asked.options.length === 0
@@ -1145,7 +977,6 @@ export const choiceLines: (run: string, asked: Asked) => string[] = (run, asked)
 
 const decodeAnswered = Schema.decodeUnknownOption(Answered);
 
-/** Who an answer came from, in the words a human uses for the place they answered. */
 const answererOf: (actor: AuditLine["actor"]) => string = (actor) => {
   const { origin, from, conversation } = actor;
   const door = (() => {
@@ -1163,7 +994,6 @@ const answererOf: (actor: AuditLine["actor"]) => string = (actor) => {
   return from?.machine === undefined ? door : `${door} from ${from.machine.name}`;
 };
 
-/** Each answered Choice, newest first, with who answered it and when as the audit trail has it. */
 const answeredLines = Effect.fn("operations.answeredLines")(function* (run: RunFacts) {
   if (run.answered.length === 0) return [];
   const trail = yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []));
@@ -1184,7 +1014,6 @@ const answeredLines = Effect.fn("operations.answeredLines")(function* (run: RunF
   ];
 });
 
-/** Its merge request with what the host's merge watch last recorded of it, and its branch. */
 const mergeLines = Effect.fn("operations.mergeLines")(function* (env: PluginEnv, run: RunFacts) {
   const lines = run.branch === null ? [] : [`Branch: ${run.branch}`];
   if (run.mr === null) return lines;
@@ -1196,7 +1025,6 @@ const mergeLines = Effect.fn("operations.mergeLines")(function* (env: PluginEnv,
   ];
 });
 
-/** What the host's merge watch last recorded of a merge request, by its MR id. */
 const watchedOf = Effect.fn("operations.watchedOf")(function* (env: PluginEnv) {
   const states = yield* readMrStates(env.stateDir);
   const forge = yield* readForge(env.stateDir);
@@ -1210,7 +1038,6 @@ const watchedOf = Effect.fn("operations.watchedOf")(function* (env: PluginEnv) {
     });
 });
 
-/** The Run's own plan directory and how many tickets it holds. */
 const planLines = Effect.fn("operations.planLines")(function* (run: RunFacts) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1223,7 +1050,6 @@ const planLines = Effect.fn("operations.planLines")(function* (run: RunFacts) {
   return [`Plan: ${dir} (${tickets} ticket${tickets === 1 ? "" : "s"})`];
 });
 
-/** What the review found, what became of the work and what the Run has to prove. */
 const verdictLines = Effect.fn("operations.verdictLines")(function* (run: RunFacts) {
   const findings = yield* findingsIn(run.dir);
   const disposition = latest(yield* readDispositions(run.dir));
@@ -1251,7 +1077,6 @@ const verdictLines = Effect.fn("operations.verdictLines")(function* (run: RunFac
   ];
 });
 
-/** The last lines its log recorded, each cut short, leaving out one that only repeats the result. */
 const logLines = Effect.fn("operations.logLines")(function* (run: RunFacts) {
   const log = yield* tailed(`${run.dir}/log.txt`, LOG_TAIL_BYTES);
   const kept = Arr.filter(
@@ -1276,11 +1101,6 @@ const logLines = Effect.fn("operations.logLines")(function* (run: RunFacts) {
   ];
 });
 
-/**
- * One Run in the detail a next action turns on: what it is for, what bounds it, what it
- * is asking, what it has produced and where it has drifted. The same read the evidence
- * pack embeds, so a detail asked for in chat is the detail a proposal was made from.
- */
 export const runFacts = Effect.fn("operations.runFacts")(function* (
   env: PluginEnv,
   run: RunFacts,
@@ -1383,10 +1203,6 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
     yield* herdFacts(env),
   ];
 
-  // Everything said in this Herd, whatever it was about. Without this an untargeted
-  // question is asked with no memory of the conversation it belongs to, so a follow-up
-  // like "what about the second one" has nothing to resolve — which is why the global
-  // Collie could not hold a conversation at all.
   const said = yield* tail(journal, TURNS_IN_CONTEXT);
   if (said.length > 0) {
     lines.push(

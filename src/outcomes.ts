@@ -1,7 +1,3 @@
-// What `run report` measures beyond where Runs ended: review rounds, dispositions,
-// steering, verifications, parks and context. Each measure is counted from what a Run
-// recorded and names the Runs it counts. Data only: nothing here is a threshold.
-
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -23,9 +19,7 @@ import type * as Types from "effect/Types";
 const STEERING = ["steer", "followup", "deliver", "correction"] as const;
 type SteeringKind = (typeof STEERING)[number];
 
-/** One Run's records the measures are counted from, as its host reads them. */
 export const OutcomeRecords = Schema.Struct({
-  /** Each review step's round, and the most its rally allowed, as its prompt said. */
   rounds: Schema.Array(Schema.Struct({ round: Schema.Int, of: Schema.Int })),
   disposition: Schema.NullOr(Schema.Literals(["merged", "abandoned", "superseded"])),
   steering: Schema.Array(Schema.Struct({ kind: Schema.Literals(STEERING), origin: Schema.String })),
@@ -40,16 +34,13 @@ export const OutcomeRecords = Schema.Struct({
       by: Schema.String,
     }),
   ),
-  /** When it entered or left a Step; absent from an older host. */
   moved: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** Each resume asked of it, and by which front door; absent from an older host. */
   resumes: Schema.optionalKey(
     Schema.Array(Schema.Struct({ at: Schema.String, origin: Schema.String })),
   ),
 });
 export type OutcomeRecords = typeof OutcomeRecords.Type;
 
-/** Each resume a Run's trail records, timed from when it was asked, and the front door that asked. */
 export const resumesIn = (trail: ReadonlyArray<AuditLine>) =>
   Arr.flatMap(trail, (line) =>
     line.operation === "resume"
@@ -108,7 +99,6 @@ export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
   return returned;
 });
 
-/** The Runs a measure counts, so an issue can cite them. */
 export interface Counted {
   readonly count: number;
   readonly runs: ReadonlyArray<string>;
@@ -117,7 +107,6 @@ export interface Counted {
 export const ORIGINS = ["human", "chat", "agent", "host"] as const;
 export type Origin = (typeof ORIGINS)[number];
 
-/** Which kind of asker a front door is: a person at it, chat, an agent's CLI, or Collie. */
 export const originOf = (door: string) => {
   switch (door) {
     case "cli-tty":
@@ -136,7 +125,6 @@ export const originOf = (door: string) => {
 
 export interface Measures {
   readonly rounds: {
-    /** Runs with a review rally, the round each reached and the most it allowed. */
     readonly runs: ReadonlyArray<{ runId: string; reached: number; cap: number }>;
     readonly median: number | null;
     readonly atCap: Counted;
@@ -155,44 +143,33 @@ export interface Measures {
     readonly total: number;
     readonly runs: ReadonlyArray<{ runId: string; total: number; agent: number; collie: number }>;
     readonly byCollector: { readonly agent: number; readonly collie: number };
-    /** Same Run, spec, start tree, result and collector as one recorded before it. */
     readonly repeated: Counted;
-    /** Named only by the executable that ran it, such as "bun". */
     readonly executableOnly: Counted;
   };
   readonly parks: {
     readonly byCause: ReadonlyArray<
       Counted & {
         readonly cause: ParkCause;
-        /** From each park to the Run's next Step, in ms; null where none has moved on yet. */
         readonly toNextStep: { readonly median: number; readonly max: number } | null;
-        /** Resumes a person asked for while the Run was parked for it. */
         readonly humanResumes: number;
       }
     >;
     readonly byReason: ReadonlyArray<Counted & { readonly reason: string }>;
-    /** An agent's collect budget ran out before it wrote its Output. */
     readonly collectExpiries: Counted;
   };
   readonly recoveries: {
-    /** Counts actions using each recovery's latest outcome. */
     readonly byCause: ReadonlyArray<
       Counted & {
         readonly cause: ParkCause;
         readonly action: RecoveryAction;
-        /** Actions followed by decoded Output or progress past the park. */
         readonly recovered: number;
-        /** Median ms to recovery, from the missing Output's turn end or the park; null where none. */
         readonly toRecover: number | null;
         readonly falseRecoveries?: number;
-        /** Heals that ended with the park sent to a person. */
         readonly escalations?: number;
-        /** How long its Heals ran, in ms, all told: their usage, recorded and never enforced. */
         readonly healMs?: number;
       }
     >;
   };
-  /** The largest context sampled at a work boundary; not tokens consumed. */
   readonly peakContext: ReadonlyArray<{
     runId: string;
     tokens: number | null;
@@ -218,7 +195,6 @@ const median = (values: ReadonlyArray<number>) => {
 
 const COLLECT_EXPIRY = "has written nothing";
 
-/** A park's reason without what names one Run, pane, path or command, so like counts with like. */
 export const reasonOf = (note: string) =>
   pipe(
     note,

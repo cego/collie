@@ -1519,7 +1519,7 @@ releases signed with the old key stop verifying.
 ### Numbering a branch's ADRs
 
 A new ADR on a branch has no number: it is `docs/adr/draft-<slug>.md`, and text names it
-`ADR-draft-<slug>`, whether a document, a code comment or a test. Two branches open at once
+`ADR-draft-<slug>`, whether a document or a test. Two branches open at once
 would otherwise both take the next number, and whichever lands second renumbers its ADR and
 every reference to it by hand.
 

@@ -1,6 +1,3 @@
-// The `autoMode` block a Claude agent's settings carry: what its Run authorises, as facts
-// Collie holds and the human's own words (ADR-draft-what-a-run-authorises-reaches-auto-mode, D3).
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -10,7 +7,6 @@ import { FORGES, forgeOfHost } from "./forge/forge";
 import { projectFromRemote, type Runner } from "./mr";
 import { redact, scrub } from "./redact";
 
-/** The door a human started a Run through, and their words. */
 export const StartedSchema = Schema.Struct({
   door: Schema.Literals(["board", "desktop", "cli-tty", "chat"]),
   words: Schema.String,
@@ -20,10 +16,6 @@ export type Started = typeof StartedSchema.Type;
 const isHumanDoor = Schema.is(StartedSchema.fields.door);
 const isText = Schema.is(Schema.String);
 
-/**
- * Who started a Run, where a human did: through a human door, the start's input as given;
- * through chat, the human's own words that turn, never chat's input.
- */
 export function startedOf(
   origin: string,
   said: string | undefined,
@@ -44,14 +36,12 @@ export function startedOf(
   return returned;
 }
 
-/** A branch a Run made: in which checkout, and on which origin, credentials removed. */
 export interface CreatedBranch {
   readonly branch: string;
   readonly checkout: string;
   readonly origin: string;
 }
 
-/** What a Run's own record says: the branch it created, whether it roams, and who started it. */
 export interface RunAuthority {
   readonly created: CreatedBranch | null;
   readonly roaming: boolean;
@@ -72,7 +62,6 @@ export interface AutoModeFacts extends Session {
   readonly branch: string | null;
   readonly roaming: boolean;
   readonly created: boolean;
-  /** Read only for a branch the Run created; null where the forge cannot say. */
   readonly protected: boolean | null;
   readonly started: Started | null;
 }
@@ -91,7 +80,6 @@ const DOOR: Readonly<Record<Started["door"], string>> = {
   chat: "from chat",
 };
 
-/** The checkout's remote, branch and protection, read when the agent is launched. */
 export const autoModeFacts = <R>(
   session: Session,
   own: RunAuthority,

@@ -1,23 +1,4 @@
 #!/usr/bin/env bun
-// Whether the evaluator is actually tool-less, actually isolated, and actually bounded —
-// against the installed CLI, not against its help text.
-//
-//   bun run tools/evaluator-probe.ts [--calls 10] [--transcript <file>]
-//
-// It costs real money (a handful of small calls) and needs a working `claude`, so it is
-// never part of `bun test`. It is the regression test for the one claim the design cannot
-// verify any other way: that a model given `--tools ""` has no tools.
-//
-// Four things, in order:
-//   1. one call, whose raw envelope is saved to test/fixtures/claude-print-envelope.json
-//   2. N judgement calls, every one of which must decode against the schema it was given
-//   3. one call from a scratch directory that declares a hook and an MCP server, with a
-//      stream-json transcript asserted to contain no tool_use, hook or MCP event
-//   4. p95 latency and what it cost
-//
-// Threat boundary, stated: these flags defend against model-initiated tool use and
-// against inherited user or project configuration reaching the evaluator. They are not
-// an OS sandbox against a malicious process running as the same user.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -74,11 +55,6 @@ const PACK = Arr.join(
   "\n",
 );
 
-/**
- * What a call printed, or what was left of it at the probe's own ceiling. A probe that
- * waits for ever is not a bounded experiment: past the ceiling the process is killed and
- * its output so far is what there is.
- */
 const drained = Effect.fn("probe.drained")(function* (
   proc: Bun.Subprocess<"pipe", "pipe", "pipe">,
 ) {
@@ -95,7 +71,6 @@ const drained = Effect.fn("probe.drained")(function* (
   return { stdout: got.value[0], stderr: got.value[1] };
 });
 
-/** One call, returning what it printed and how long it took. */
 const one = Effect.fn("probe.one")(function* (schema: string, extra: string[] = []) {
   const started = yield* Clock.currentTimeMillis;
   const argv = [...argvFor(LIMITS, schema, `${repo}prompts/steward.md`), ...extra];
@@ -124,15 +99,8 @@ const Event = Schema.Struct({
 });
 const asEvent = Schema.decodeUnknownOption(Event);
 
-/**
- * The one "tool" a `--json-schema` call is given: the CLI's own channel for the
- * structured answer. It reaches nothing outside the model's reply — its input *is* the
- * answer — so a transcript with it and nothing else is a tool-less call. Recorded by
- * name so a release that adds a second one is a failure, not a surprise.
- */
 const STRUCTURED_OUTPUT = "StructuredOutput";
 
-/** What in a stream-json transcript says the isolation failed, by event, not by word. */
 export function leaks(transcript: string) {
   const found: string[] = [];
   for (const line of Str.split(transcript, "\n")) {
@@ -167,14 +135,12 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
 
   const schema = jsonSchemaFor("judgement");
 
-  // (1) The envelope, saved whole so the decoder has something real to be tested against.
   const first = yield* one(schema);
   const fixture = path.join(repo, "test", "fixtures", "claude-print-envelope.json");
   yield* fs.makeDirectory(path.dirname(fixture), { recursive: true });
   yield* fs.writeFileString(fixture, `${Str.trim(first.stdout)}\n`);
   yield* Effect.log(`saved the envelope to ${fixture}`);
 
-  // (2) Every call has to answer in the schema it was given.
   const decoded = (raw: string) => !("error" in structuredFrom(raw, JudgementSchema));
   const latencies: number[] = [first.ms];
   let good = decoded(first.stdout) ? 1 : 0;
@@ -184,8 +150,6 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
     if (decoded(next.stdout)) good += 1;
   }
 
-  // (3) A directory that tries to give the model a hook and an MCP server. Nothing in the
-  // transcript may show either, or a tool call of any kind.
   const hostile = yield* fs.makeTempDirectoryScoped({ prefix: "collie-probe-hostile-" });
   yield* fs.makeDirectory(path.join(hostile, ".claude"), { recursive: true });
   yield* fs.writeFileString(
@@ -208,9 +172,6 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
   void isolated.stdin.write(PACK);
   void isolated.stdin.end();
   const transcript = (yield* drained(isolated)).stdout;
-  // Read as events, not as text: the CLI's own `system` line says `mcp_servers: []` and
-  // names its tool list, so the words appear in a clean transcript too. What must not is
-  // a tool call the model made, a hook that ran, or an MCP server that was connected.
   const leaked = leaks(transcript);
   const keepAt = Bun.argv.indexOf("--transcript");
   if (keepAt > 0 && Bun.argv[keepAt + 1]) {
@@ -250,7 +211,6 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
   return good === calls && leaked.length === 0 ? 0 : 1;
 });
 
-// Only as a command. Imported — the transcript reader has a unit test — this makes no call.
 if (import.meta.main) {
   const at = Bun.argv.indexOf("--calls");
   const calls = at > 0 ? Number(Bun.argv[at + 1]) : 10;

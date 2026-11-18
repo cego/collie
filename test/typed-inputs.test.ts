@@ -1,14 +1,3 @@
-// What a caller types, and what the workflow is handed.
-//
-// A module declares its inputs as schemas, so `--input count=3` is a number by the time
-// the workflow reads it and `--input count=many` is a refusal before anything exists. The
-// rules are the spec's: text is tried as text first and as JSON only where the schema
-// will not take the text, `--inputs-json` is typed and settles a tie, missing is absent
-// rather than empty, and false, zero, an empty list and null all survive.
-//
-// Driven through the host, because the schema that settles a value is the author's and
-// lives where their module was loaded.
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
@@ -41,11 +30,9 @@ const Envelope = Schema.fromJsonString(
 );
 const asEnvelope = Schema.decodeUnknownEffect(Envelope);
 
-/** `--input k=v` for each, which is the only shape a command line has for a value. */
 const asInputs = (given: Readonly<Record<string, string>>) =>
   Arr.flatMap(Rec.toEntries(given), ([name, value]) => ["--input", `${name}=${value}`]);
 
-/** The command itself, run as an operator runs it: another process, one JSON envelope. */
 const collie = Effect.fn("TypedTest.collie")(function* (world: World, args: ReadonlyArray<string>) {
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
   const command = Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`];
@@ -88,7 +75,6 @@ interface World {
   readonly project: string;
 }
 
-/** An installation with the typed module saved in it, and a host for the project. */
 const proves = <A, E>(
   prefix: string,
   body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
@@ -106,7 +92,6 @@ const proves = <A, E>(
       for (const made of [world.user, `${world.install}/workflows`, world.state, world.project]) {
         yield* fs.makeDirectory(made, { recursive: true }).pipe(Effect.orDie);
       }
-      // A project is a checkout, which is what an agent's start from inside it names.
       yield* exec(["git", "init", "-q"], { cwd: world.project });
       for (const name of MODULE) {
         yield* fs.copyFile(`${fixtures}/${name}`, `${world.user}/${name}`).pipe(Effect.orDie);
@@ -132,7 +117,6 @@ const proves = <A, E>(
     }).pipe(Effect.scoped),
   );
 
-/** Everything a caller may say, with the halves a front door keeps apart. */
 const said = (
   given: {
     readonly text?: Readonly<Record<string, string>>;
@@ -150,7 +134,6 @@ test(
         const started = yield* client
           .start({
             project: world.project,
-            // Every one of these is text a human typed; none of them is a string.
             ...said({
               text: {
                 note: "hello",
@@ -171,11 +154,6 @@ test(
         );
         expect(done).toEqual({
           status: "complete",
-          // `count` and `draft` are what the text spells, because a number and a boolean
-          // will not take text. `labels` is the JSON the text spells, for the same reason.
-          // `ref` is a string-or-number union and `ticket` a nullable string, and both are
-          // text, because text is tried first — `--inputs-json` is how a caller says
-          // otherwise, which the next case does.
           value:
             "count=number:3 draft=boolean:false labels=2:[one|two] ticket=string:null " +
             "mode=thorough ref=string:12 spec=absent",
@@ -203,7 +181,6 @@ test(
                 labels: [],
                 ticket: null,
                 mode: "fast",
-                // The same text as the other case, typed: a number, not the string.
                 ref: 12,
               },
             }),
@@ -242,7 +219,6 @@ test(
         expect(refused._tag).toBe("HostRefused");
         expect(refused.reason).toStartWith("invalid_input:");
         expect(refused.reason).toContain("count");
-        // Nothing was admitted, so there is no run to clean up.
         expect(yield* client.runs({ task: null }).pipe(Effect.orDie)).toEqual([]);
         yield* stopHost(world.state);
       }),
@@ -270,10 +246,8 @@ test(
           () => client.status({ runId: started.runId }),
           (status) => status.status === "complete" || status.status === "failed",
         );
-        // The shape every reader after this decides from; a raw URL was read as `worktree`.
         expect(done).toEqual({ status: "complete", value: "mr:gitlab.example.com/acme/app!42" });
 
-        // Not a checkout, so a bare word has no base to diff against and names nothing.
         const refused = yield* client
           .start({
             project: world.project,
@@ -348,7 +322,6 @@ test(
           .pipe(Effect.orDie);
 
         const view = yield* client.run({ runId: started.runId }).pipe(Effect.orDie);
-        // Encoded, not the text: `7` is a number in the row as it is in the workflow.
         expect(view?.input).toEqual({
           note: "kept",
           count: 7,
@@ -418,7 +391,6 @@ test(
             Option.getOrUndefined(Arr.findFirst(present_.inputs, (field) => field.name === "mode")),
           ),
         );
-        // A closed set draws as one, which is what lets a picker offer a menu for it.
         expect(mode?.schema).toMatchObject({ enum: ["fast", "thorough"] });
         expect(mode?.required).toBe(true);
         expect(
@@ -439,7 +411,6 @@ test(
   120_000,
 );
 
-/** The human at the picker, as a script: each question answered in the order it is asked. */
 const answering = (script: ReadonlyArray<string>) => {
   const answers = [...script];
   const asked: Array<string> = [];
@@ -465,8 +436,6 @@ test(
     proves("collie-typed-doors-", (world) =>
       Effect.gen(function* () {
         const env = yield* currentEnv;
-        // The command line, with a value the schema will not take: exit 2, the field
-        // named, and no Run behind it.
         const bad = yield* collie(world, [
           "run",
           "start",
@@ -487,8 +456,6 @@ test(
         expect(bad.envelope.error?.message).toContain("count");
         expect((yield* runViews(env, null)).runs).toEqual([]);
 
-        // The same launch, corrected. Every value is text on the command line, and the
-        // module is handed the types it declared.
         const started = yield* collie(world, [
           "run",
           "start",
@@ -506,8 +473,6 @@ test(
         ]);
         expect(started.exit).toBe(0);
 
-        // The picker asks only for the launch Input and infers the rest, so a required
-        // Input nothing can infer is refused with its name rather than asked for.
         const { prompts, asked } = answering(["typed", "the spec"]);
         expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
         expect(asked.slice(1, 2)).toEqual(["What do you want?"]);
@@ -531,8 +496,6 @@ test(
 
         expect(asked.exit).toBe(2);
         expect(asked.envelope.error?.code).toBe("needs_input");
-        // Every one it is missing, with what each will take, so a caller that has never
-        // seen the module can fill them in and retry under the same request id.
         expect(asked.envelope.error?.message).toContain("count");
         expect((yield* runViews(yield* currentEnv, null)).runs).toEqual([]);
         yield* stopHost(world.state);

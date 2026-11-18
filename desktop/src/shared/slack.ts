@@ -1,9 +1,7 @@
 import * as Arr from "effect/Array";
 import { isDirectMessage, type SlackChannel } from "../../../src/slack";
 
-/** The shared Collie app's public client ID; a PKCE sign-in needs no secret. */
 export const SLACK_CLIENT_ID = "2673706937.12461393591409";
-/** Where Slack sends a human back after they sign in; the app's settings name it. */
 export const SLACK_CALLBACK_PORT = 47328;
 export const SLACK_CALLBACK_PATH = "/slack/callback";
 export const SLACK_REDIRECT_URL = `http://localhost:${SLACK_CALLBACK_PORT}${SLACK_CALLBACK_PATH}`;
@@ -13,7 +11,6 @@ type Channels = ReadonlyArray<typeof SlackChannel.Type>;
 
 export const SIGN_IN_TO_PICK = "Sign in to Slack under Connections to pick a channel you're in";
 
-/** Both rows offer the channels the human is in, since everything is posted as them. */
 export const slackDestinationRow = (key: string, value: string, yours: Channels | null) => {
   const options = [
     {

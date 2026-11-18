@@ -43,7 +43,6 @@ export const rememberFailedCi = (dir: string, target: typeof FailedCi.Type) =>
 
 const reply = (cleared: boolean, note: string, error = false) => ({ cleared, note, error });
 
-/** The CI jobs the Run last recorded, by name, at the head it recorded last. */
 const lastCiTargets = (stateDir: string, runId: string) =>
   Effect.map(
     readRunJournal(runJournal(`${stateDir}/runs/${runId}`, "ci-rechecks.jsonl"), CiTarget).pipe(

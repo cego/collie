@@ -1,6 +1,3 @@
-// How the Workflows page draws a module a host read: its offers and its files.
-// No Bun-only import: the view bundles this.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -33,7 +30,6 @@ export interface Offer {
   readonly when: string;
 }
 
-/** The follow-ups and card actions a module's metadata declares; none where it says none. */
 export const offersOf = (metadata: Described["metadata"]) =>
   Option.match(Schema.decodeUnknownOption(Offers)(metadata), {
     onNone: () => [],
@@ -53,5 +49,4 @@ export const offersOf = (metadata: Described["metadata"]) =>
     ],
   });
 
-/** A module's Markdown is read rendered; anything else is code. */
 export const shownAs = (path: string) => (pipe(path, Str.endsWith(".md")) ? "markdown" : "code");

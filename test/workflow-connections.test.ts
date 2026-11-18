@@ -274,7 +274,6 @@ test(
             "self-improve": { needs: [], uses: ["gitlab", "github"] },
           };
           for (const [id, entries] of Rec.toEntries(declared)) {
-            // Bun's matcher mutates the Connection descriptions shared by these modules.
             expect(
               structuredClone(
                 Option.getOrUndefined(Arr.findFirst(view.workflows, (one) => one.id === id))

@@ -1,6 +1,3 @@
-// Whether this Machine is Short of memory, read from its own sources
-// (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory, D1).
-
 import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";

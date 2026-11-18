@@ -1,5 +1,3 @@
-// The menu a Mac routes its key equivalents through, and no menu anywhere else.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";

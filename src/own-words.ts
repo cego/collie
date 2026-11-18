@@ -1,7 +1,3 @@
-// What the human typed, read from each harness's sessions and Collie's records on this
-// computer, for a chat to draft their Standing direction from. Never a tool: the host answers
-// a Read only on Desktop's own door, after the human's click there.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
@@ -28,7 +24,6 @@ export interface OwnPlaces {
   readonly stateDir: string;
 }
 
-/** Where harnesses keep the human's sessions, under their home: only Read opens them. */
 export const SESSION_STORES = [
   ".claude/projects",
   ".claude/history.jsonl",
@@ -38,11 +33,9 @@ export const SESSION_STORES = [
   ".local/share/opencode",
 ];
 
-/** Why a chat's file tool may not go there. */
 export const SESSIONS_CLOSED =
   "holds the human's sessions, which only their click on Desktop's \"Read my messages\" reads";
 
-/** What a chat's file tool or shell touches: a file or folder, a folder searched, or a command. */
 export interface SessionCall {
   readonly cwd: string;
   readonly path?: string | undefined;
@@ -50,10 +43,6 @@ export interface SessionCall {
   readonly command?: string | undefined;
 }
 
-/**
- * The session store `call` reaches, past `~`, dot segments and links. Pi's extension carries
- * this function's source, so it uses nothing around it.
- */
 /* oxlint-disable effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-string -- Pi runs this source without Effect. */
 export function sessionStoreReached(
   stores: ReadonlyArray<string>,
@@ -66,7 +55,6 @@ export function sessionStoreReached(
 ) {
   const full = (path: string) =>
     io.resolve(call.cwd, path === "~" || path.startsWith("~/") ? home + path.slice(1) : path);
-  // A path not there yet is where the nearest one that is leads.
   const real = (path: string) => {
     const tail: Array<string> = [];
     for (let at = path; at.length > 1; at = io.resolve(at, "..")) {
@@ -102,7 +90,6 @@ interface Said {
   readonly text: string;
 }
 
-/** One session as its store has it: the human's candidate messages, and whether Collie sent any. */
 interface Session {
   readonly ids: ReadonlyArray<string>;
   readonly cwd: string | null;
@@ -111,7 +98,6 @@ interface Session {
 }
 
 const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
-/** Each line's record, or why the file is not one the reader knows; an unended last line is still being written. */
 const recordsOf = (text: string, types?: ReadonlySet<string>) => {
   const records: Array<JsonObject> = [];
   const lines = Str.split(text, "\n");
@@ -128,7 +114,6 @@ const recordsOf = (text: string, types?: ReadonlySet<string>) => {
   return records;
 };
 
-/** The record types each harness writes to a session, as of the versions read here. */
 const CLAUDE_TYPES = new Set([
   "user",
   "assistant",
@@ -204,7 +189,6 @@ const stringAt = (value: Json | undefined, key: string) => {
   return isString(found) ? found : undefined;
 };
 
-/** Text the harness or a hook put where the human types. */
 const injected = (text: string) =>
   /^<[a-z][\w-]*>/.test(text) ||
   pipe(text, Str.startsWith("Caveat: ")) ||
@@ -214,7 +198,6 @@ const injected = (text: string) =>
 const withoutReminders = (text: string) =>
   Str.trim(pipe(text, Str.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")));
 
-/** The text of a turn of text and images: a list with anything else in it is a tool's. */
 const typedText = (content: Json | undefined, kind: string) => {
   if (isString(content)) return content;
   if (!isJsonArray(content)) return undefined;
@@ -264,7 +247,6 @@ const codexSession = (records: ReadonlyArray<JsonObject>) => {
     if (line["type"] === "session_meta") {
       ids = Arr.filter([stringAt(payload, "id"), stringAt(payload, "session_id")], isString);
       cwd = stringAt(payload, "cwd") ?? cwd;
-      // A subagent's user turns are its parent model's words.
       spawned = objectAt(payload, "source")?.["subagent"] !== undefined;
       continue;
     }
@@ -335,7 +317,6 @@ const decodeCount = flow(
   Result.getOrThrow,
 );
 
-/** OpenCode's SQLite store, read-only; any table or column it lacks makes it unreadable. */
 const openCodeStore = (file: string, since: number | null) =>
   Effect.try({
     try: () => {
@@ -343,7 +324,6 @@ const openCodeStore = (file: string, since: number | null) =>
       try {
         const count = decodeCount(db.query("SELECT count(*) AS n FROM session").get()).n;
         if (since === null) return { count, sessions: [] };
-        // A token marks the whole session, however old the message that carries it.
         const collies = new Set(
           Arr.map(
             decodeSessions(
@@ -381,7 +361,6 @@ const openCodeStore = (file: string, since: number | null) =>
             if (typed !== "" && !injected(typed)) said.push({ at: isoAt(row.at), text: typed });
           }
           const first = parts[0]!;
-          // A child session's user turns are the model's own.
           return {
             ids: [first.session],
             cwd: first.directory,
@@ -397,7 +376,6 @@ const openCodeStore = (file: string, since: number | null) =>
     catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
   });
 
-/** A harness's session files, and how each is read. */
 interface FileStore {
   readonly source: OwnSource;
   readonly root: string;
@@ -410,7 +388,6 @@ const fileStores: (home: string) => ReadonlyArray<FileStore> = (home) => [
   {
     source: "claude-code",
     root: `${home}/.claude/projects`,
-    // A session's own subagents are kept in a folder beside it, as sidechains.
     isSession: (relative) => /^[^/]+\/[^/]+\.jsonl$/.test(relative),
     types: CLAUDE_TYPES,
     read: (records, relative) =>
@@ -437,7 +414,6 @@ const fileStores: (home: string) => ReadonlyArray<FileStore> = (home) => [
 
 const openCodeFile = (home: string) => `${home}/.local/share/opencode/opencode.db`;
 
-/** Every session the state directory's host recorded launching a Run's agent in, by id or path. */
 const recordedAgentSessions = Effect.fn("OwnWords.recordedAgentSessions")(function* (
   stateDir: string,
 ) {
@@ -467,14 +443,12 @@ const recordedAgentSessions = Effect.fn("OwnWords.recordedAgentSessions")(functi
 
 const HUMAN_DOORS = new Set(["desktop", "cli-tty", "board"]);
 
-/** A human's entry: through a human door, or a chat's carrying the words they said. */
 const isHuman = (line: JsonObject) => {
   const actor = objectAt(line, "actor");
   const origin = stringAt(actor, "origin");
   return origin === "chat" ? stringAt(actor, "said") !== undefined : HUMAN_DOORS.has(origin ?? "");
 };
 
-/** The words each Run was started with through a human door, as the host's store keeps them. */
 const startedWords = Effect.fn("OwnWords.startedWords")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const file = `${stateDir}/host.db`;
@@ -501,7 +475,6 @@ const startedWords = Effect.fn("OwnWords.startedWords")(function* (stateDir: str
   });
 });
 
-/** What a human's entry says they typed, where it holds their words. */
 const typedIn = (line: JsonObject, started: ReadonlyMap<string, string>, run: string) => {
   const asked = objectAt(line, "asked");
   return (
@@ -514,7 +487,6 @@ const typedIn = (line: JsonObject, started: ReadonlyMap<string, string>, run: st
   );
 };
 
-/** The sessions of a store it could not read, and why the first could not. */
 class Unread {
   private count = 0;
   private first: string | undefined;
@@ -527,10 +499,6 @@ class Unread {
   }
 }
 
-/**
- * How many human entries Collie's records hold, and, when `reading`, the words they hold, each
- * under the Run it was said to.
- */
 const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, reading: boolean) {
   const trails = yield* Effect.try({
     try: () => {
@@ -595,7 +563,6 @@ const notThere: (source: OwnSource, where: string) => OwnStore = (source, where)
   sessions: 0,
 });
 
-/** Each store, read for messages said `since` where it is given, or only counted where not. */
 const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since: number | null) {
   const fs = yield* FileSystem.FileSystem;
   const recorded =
@@ -631,7 +598,6 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
     const unread = new Unread();
     for (const relative of since === null ? [] : files) {
       const path = `${store.root}/${relative}`;
-      // ponytail: a whole file is read at once; stream it if sessions outgrow memory.
       const modified = yield* fs.stat(path).pipe(
         Effect.map((info) => Option.getOrUndefined(info.mtime)),
         Effect.orElseSucceed(() => undefined),
@@ -705,18 +671,12 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
   return returned;
 });
 
-/** Where the human's words are and how many sessions hold them; no text. */
 export const ownInventory = Effect.fn("OwnWords.inventory")(function* (places: OwnPlaces) {
   const { stores } = yield* gather(places, null);
   return { stores };
 });
 
-/** The human's typed messages, newest first, within the caps, saying what was left out. */
-export const readOwnWords = Effect.fn("OwnWords.read")(function* (
-  places: OwnPlaces,
-  /** Epoch milliseconds. */
-  now: number,
-) {
+export const readOwnWords = Effect.fn("OwnWords.read")(function* (places: OwnPlaces, now: number) {
   const since = now - DAYS * 24 * 60 * 60 * 1000;
   const gathered = yield* gather(places, since);
   const cutOnes = new Set<OwnMessage>();

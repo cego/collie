@@ -4,17 +4,13 @@ import { AuditLine } from "./audit";
 export const Steered = Schema.Struct({
   note: Schema.optional(Schema.String),
   agent: Schema.String,
-  /** Submission to the harness, never acceptance by this queue. */
   delivered: Schema.Boolean,
-  /** The Delivery that carried it, where one was submitted. */
   delivery: Schema.optionalKey(Schema.String),
   detail: Schema.String,
-  /** Durably kept until a supported submission is possible; nothing has been sent. */
   queued: Schema.optionalKey(Schema.Boolean),
   gone: Schema.optionalKey(Schema.Boolean),
   finished: Schema.optionalKey(Schema.Boolean),
   workflowNotice: Schema.optionalKey(Schema.String),
-  /** Whether the harness was seen to take the submission, and how. */
   observed: Schema.optionalKey(Schema.Boolean),
   how: Schema.optionalKey(Schema.String),
   pane: Schema.optionalKey(Schema.String),

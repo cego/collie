@@ -1,8 +1,3 @@
-// A human's message to a Run's agent supersedes the Workflow's open question, and the
-// question is asked again once that work ends, if it still holds the Run
-// (ADR-draft-a-humans-message-supersedes-a-runs-open-question D1, D3, D6–D8). The host is a
-// real one over a fake herdr, running `stepped`: an agent, a question, then an agent.
-
 import type { Records } from "../src/records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -33,11 +28,9 @@ import type { FakeHc } from "./support/fake-hc";
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
 
-/** An agent question's options, to standard so it is posted as asked. */
 const PICKS = [{ label: "Postgres (Recommended)" }, { label: "SQLite" }, { label: "JSONL" }];
 
 const GRACE_MS = 3_000;
-/** Past the grace and two of the host's board ticks: long enough for a revision to have opened. */
 const SETTLED = "14 seconds";
 
 type Client = Effect.Success<ReturnType<typeof connect>>;
@@ -48,23 +41,17 @@ interface AtQuestion {
   readonly client: Client;
   readonly runId: string;
   readonly agent: string;
-  /** Every agent the Run started before its question, oldest first. */
   readonly agents: ReadonlyArray<string>;
-  /** Sets what the fake core says of `agent`, or of every agent: `working` or `idle`. */
   readonly status: (status: string, agent?: string) => Effect.Effect<void>;
 }
 
 interface Setup {
-  /** `pair` has two agents work before the question. */
   readonly mode: "declared" | "pair" | "moves";
   readonly task?: string;
 }
 
-/** The Run's host, started from this process with this world's fake herdr and grace period. */
 const startHost = (world: World) => connect(world.state).pipe(Effect.orDie);
 
-/** A `stepped` Run started under `request`, once it waits on `go`, and its idle agents. */
-/** This world's core, which `atQuestion` starts. */
 let core: FakeHc;
 
 const waitingRun = Effect.fn("test.waitingRun")(function* (
@@ -98,7 +85,6 @@ const waitingRun = Effect.fn("test.waitingRun")(function* (
   return { runId, agent: agents.at(-1)!, agents };
 });
 
-/** A `stepped` Run waiting on `go` after its first agent's step, and its idle agent. */
 const atQuestion = <A, E>(
   prefix: string,
   body: (at: AtQuestion) => Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>,
@@ -145,7 +131,6 @@ const atQuestion = <A, E>(
         });
         const client = yield* startHost(world);
         const { runId, agent, agents } = yield* waitingRun(world, client, "start", setup);
-        // A message starts no turn of the fake's own: each test reports what its agent does.
         core.reportedOnly(agents);
         const status = (said: string, one?: string) =>
           Effect.forEach(one === undefined ? agents : [one], (name) => core.report(name, said), {
@@ -176,7 +161,6 @@ const waitingOf = (at: AtQuestion, client: Client = at.client) =>
 const rowOf = (waiting: Effect.Success<ReturnType<typeof waitingOf>>, name: string) =>
   Option.getOrUndefined(Arr.findFirst(waiting, (one) => one.name === name));
 
-/** The question asked again in `of`'s place, once one is open. */
 const revisionOf = (waiting: Effect.Success<ReturnType<typeof waitingOf>>, of = "go") =>
   Option.getOrUndefined(Arr.findFirst(waiting, (one) => one.revises === of));
 
@@ -274,7 +258,6 @@ test(
           HC_SOCKET: Bun.env.HC_SOCKET ?? "",
         });
         const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: bridge };
-        // herdr's live agents are read again at the board's next tick.
         const card = yield* until(
           () => cardOf(at),
           (task) => task?.questions?.[0]?.steer?.agent != null,
@@ -428,7 +411,6 @@ test(
         expect(rowOf(yield* waitingOf(at), "go")?.superseded ?? null).not.toBeNull();
 
         const before = yield* notified(at);
-        // As `plan.md` tells a planner: the human said go, so it answers the menu itself.
         const itself = yield* collie(at.world, ["run", "answer", at.runId, "yes"], {
           COLLIE_RUN: at.runId,
           COLLIE_AGENT: at.agent,
@@ -656,7 +638,6 @@ test(
   180_000,
 );
 
-/** The revision opened in `of`'s place, once the host has opened one. */
 const revised = (at: AtQuestion, of = "go") =>
   Effect.map(
     until(
@@ -875,7 +856,6 @@ test(
   180_000,
 );
 
-/** A turn submitted in the agent's Claude pane, as its `UserPromptSubmit` hook records it. */
 const typedIn = (at: AtQuestion, prompt: string, agent = at.agent) =>
   Effect.gen(function* () {
     yield* recordClaudeEvent(
@@ -971,7 +951,6 @@ test(
   () =>
     atQuestion("collie-steer-entry-", (at) =>
       Effect.gen(function* () {
-        // herdr's live agents are read again at the board's next tick.
         const card = yield* until(
           () => cardOf(at),
           (one) => one?.questions?.[0]?.steer?.agent != null,

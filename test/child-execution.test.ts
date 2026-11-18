@@ -1,11 +1,3 @@
-// A child Run is reached under the execution it was recorded with, not one derived again.
-//
-// A release that derives a workflow's execution id differently from its payload (Effect
-// 4.0.1 does) must not run a finished child a second time, or orphan a running one, when it
-// resumes a parent an earlier release started. Each test leaves the children as such a
-// release would have: with the host stopped, every child's row names an execution the
-// payload no longer derives.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -21,7 +13,6 @@ import { proves, type World } from "./support/world";
 
 const MODULES = ["resumes.workflow.ts", "paced.workflow.ts"] as const;
 
-/** The host's database, written with the host stopped. */
 const offline = <A>(world: World, write: Effect.Effect<A, SqlError, SqlClient.SqlClient>) =>
   stopHost(world.state).pipe(
     Effect.andThen(write),
@@ -33,7 +24,6 @@ const offline = <A>(world: World, write: Effect.Effect<A, SqlError, SqlClient.Sq
     Effect.orDie,
   );
 
-/** Every child of `parent` admitted under an execution its payload no longer derives. */
 const recordedAsBefore = (world: World, parent: string) =>
   offline(
     world,
@@ -43,7 +33,6 @@ const recordedAsBefore = (world: World, parent: string) =>
     ),
   );
 
-/** The same, and not yet handed over, so the next host starts each child under it. */
 const handedOverAsBefore = (world: World, parent: string) =>
   offline(
     world,
@@ -54,7 +43,6 @@ const handedOverAsBefore = (world: World, parent: string) =>
     ),
   );
 
-/** Every execution the engine was asked to run for `runId`, read with the host stopped. */
 const executionsOf = (world: World, runId: string) =>
   offline(
     world,
@@ -67,7 +55,6 @@ const executionsOf = (world: World, runId: string) =>
     ),
   ).pipe(Effect.map((rows) => Arr.map(rows, (row) => row.entity_id)));
 
-/** What a paced child recorded doing its work, apart from oversight's lines. */
 const ran = (world: World, runId: string) =>
   events(world.state, runId).pipe(
     Effect.map((lines) => Arr.filter(lines, (line) => pipe_(line, Str.startsWith("ran ")))),
@@ -119,7 +106,6 @@ test(
           const child = `${parent}.pace-one`;
           yield* handedOverAsBefore(world, parent);
           yield* status(world, child, "complete");
-          // A host of the new release, which derives another id from the same payload.
           yield* stopHost(world.state);
 
           yield* answer(world, parent, "go");
@@ -143,8 +129,6 @@ test(
           const parent = yield* parked(world, { notes: "one", waits: "one" });
           const child = `${parent}.pace-one`;
           yield* recordedAsBefore(world, parent);
-          // The parent reaches its child, which parks on its own question and the parent
-          // with it, as both would have under the earlier release.
           yield* answer(world, parent, "go");
           yield* until(
             () =>

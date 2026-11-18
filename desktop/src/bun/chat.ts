@@ -1,5 +1,3 @@
-// The Flock chat resumes one warm session on the harness named in Desktop's Settings.
-
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -63,7 +61,6 @@ import {
 } from "./flock-tools";
 import { actionsLog } from "./sent";
 
-/** The current conversation and the harness it is held on; a file without one is claude's. */
 const SessionFile = Schema.fromJsonString(
   Schema.Struct({
     session: Schema.String,
@@ -71,7 +68,6 @@ const SessionFile = Schema.fromJsonString(
   }),
 );
 
-/** The Flock chat's harness and model, as Settings has them. */
 export interface ChatHarnessSet {
   readonly harness: string;
   readonly model: string | undefined;
@@ -79,38 +75,24 @@ export interface ChatHarnessSet {
 }
 
 export interface FlockConversation {
-  /**
-   * One message from the human, about a card or none, and the events of the turn it starts:
-   * after the turn under way, or `now`, interrupting it.
-   */
   readonly send: (
     text: string,
     about: About | null,
     now: boolean,
-    /** Desktop's copies the message carries, by id. */
     attachments?: ReadonlyArray<string>,
   ) => Stream.Stream<AguiEvent>;
-  /** Answers the question the chat asked in that tool call, if it is still asking. */
   readonly answer: (toolCallId: string, answers: Answers) => Effect.Effect<void>;
   readonly transcript: Effect.Effect<ReadonlyArray<ChatMessage>>;
   readonly conversations: Effect.Effect<Conversations>;
-  /**
-   * Ends the current session and makes that conversation current, moving the chat to its
-   * harness; or a fresh one on the set harness. Why not, where that harness is refused.
-   */
   readonly reopen: (conversation: HeldConversation | null) => Effect.Effect<string | null>;
-  /** Something changed on a board: News may be waiting, worth a turn of Desktop's own. */
   readonly nudge: Effect.Effect<void>;
-  /** When a turn of Desktop's own starts and ends. */
   readonly desktopTurns: Stream.Stream<DesktopTurn>;
   readonly changed: Stream.Stream<string>;
-  /** The account of what the chat holds, runs on and is offered: now, and after each change. */
   readonly choices: Stream.Stream<ChatChoices>;
 }
 
 type Held = Pick<ChatChoices, "heldOn" | "runsOn" | "turning">;
 
-/** A turn of Desktop's own, recorded as usage on this computer: data, never a limit. */
 const UsageLine = Schema.fromJsonString(
   Schema.Struct({
     at: Schema.String,
@@ -122,21 +104,16 @@ const UsageLine = Schema.fromJsonString(
   }),
 );
 
-/** Who a turn speaks for: the human's words and card, and the News it carries. */
 interface Voice {
   said?: string;
-  /** Desktop's copies of the files the human's message carried. */
   files?: ReadonlyArray<Staged>;
   news?: FlockBatch;
 }
 
-/** How long after a board change Desktop looks for News, so the host has written it. */
 const SETTLE = "3 seconds";
 
-/** How often Desktop looks for News no board change pointed to. */
 const LOOK_AGAIN = "2 minutes";
 
-/** How many earlier conversations the history offers. */
 const HISTORY = 10;
 
 export const refusal: (message: string) => AguiEvent = (message) => ({
@@ -145,11 +122,9 @@ export const refusal: (message: string) => AguiEvent = (message) => ({
   message,
 });
 
-/** The largest PDF handed over as a document, and text as text; anything larger goes by name. */
 const PDF_BYTES = 4 * 1024 * 1024;
 const TEXT_BYTES = 100 * 1024;
 const strictly = new TextDecoder("utf-8", { fatal: true });
-/** The file as text, or null where it is not UTF-8 or holds a NUL. */
 const utf8 = (bytes: Uint8Array) => {
   if (bytes.includes(0)) return null;
   try {
@@ -159,11 +134,6 @@ const utf8 = (bytes: Uint8Array) => {
   }
 };
 
-/**
- * The human's message as the model is handed it: their words, Desktop's notes of the card
- * it is about and of the files apart from them, and what of each file fits as an image,
- * document or text. Why not, where a file is gone.
- */
 const contentOf = Effect.fnUntraced(function* (
   dir: string,
   text: string,
@@ -182,7 +152,6 @@ const contentOf = Effect.fnUntraced(function* (
   const documents: ContentBlock[] = [];
   const texts: ContentBlock[] = [];
   let budget = INLINE_BUDGET;
-  // What does not fit goes by its listed path alone.
   const fits = (data: string) => {
     if (data.length > budget) return false;
     budget -= data.length;
@@ -223,15 +192,9 @@ const contentOf = Effect.fnUntraced(function* (
   return { blocks, files };
 });
 
-/** `start` kept once it succeeds, and tried again on the next ask until it does. */
 export const untilStarted = <A, E, R>(start: Effect.Effect<A, E, R>) =>
   Effect.cachedWithTTL(start, (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero));
 
-/**
- * The current conversation's session, started by its first message and warm from then
- * until the scope closes, and never more than one. A message after the chat's model changed
- * ends the warm session and resumes the same conversation on the new model.
- */
 export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   readonly drivers: (
     context: DriverContext,
@@ -245,7 +208,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   readonly dir: string;
   readonly conversation: string;
   readonly machines: FlockChat["machines"];
-  /** Whether Desktop may start a turn about News nobody asked for. */
   readonly proactive: () => boolean;
   readonly machineRule: FlockChat["machineRule"];
   readonly setMachineRule: FlockChat["setMachineRule"];
@@ -254,14 +216,12 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   readonly inSync: FlockChat["inSync"];
   readonly searchArtefacts?: FlockChat["searchArtefacts"];
   readonly helle?: FlockChat["helle"];
-  /** What the chat's session opens on, as Settings have it now, or why it cannot run. */
   readonly choice: () => Effect.Effect<
     | { readonly ok: true; readonly choice: Resolved }
     | { readonly ok: false; readonly problem: string },
     never,
     FileSystem.FileSystem | Path.Path
   >;
-  /** What a harness offers now. */
   readonly offered: (
     harness: string,
   ) => Effect.Effect<
@@ -269,7 +229,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     never,
     FileSystem.FileSystem | Path.Path
   >;
-  /** Saved settings or Flock model changes that require a fresh account. */
   readonly retold: Stream.Stream<unknown>;
   readonly readModels?: (harness: string) => Effect.Effect<void>;
   readonly modelsChanged?: Stream.Stream<unknown>;
@@ -294,11 +253,9 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     SecureRandom.SecureRandom | FileSystem.FileSystem | Path.Path
   >();
   const run = Effect.runPromiseWith(services);
-  /** The session warm now, if one is. */
   let live:
     | { readonly running: Live; readonly scope: Scope.Closeable; readonly choice: Resolved }
     | undefined;
-  /** The session a turn is under way on, if one is. */
   let turning: Live | undefined;
   const flock: FlockChat = {
     machines: opts.machines,
@@ -325,12 +282,9 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   };
   const usage = (yield* Path.Path).join(opts.dir, "flock-usage.jsonl");
   const desktopTurns = yield* SubscriptionRef.make<DesktopTurn>("ended");
-  // ponytail: grows by one key per item Desktop spoke about, for as long as Desktop runs.
-  /** News a turn of Desktop's has been about, so an item a host failed to settle never wakes it twice. */
   const spoken = new Set<string>();
   let resting = false;
   const ask = (toolUseID: string, signal: AbortSignal) => {
-    // A turn of Desktop's own has nobody to click an answer.
     if (said === undefined) return Promise.resolve(null);
     const early = clicked.get(toolUseID);
     if (early !== undefined) {
@@ -370,11 +324,9 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   const drivers = Effect.isEffect(provided) ? yield* provided : provided;
   const readModels = (harness: string) => opts.readModels?.(harness) ?? Effect.void;
 
-  /** One session, live until its scope closes. */
   const start = Effect.fnUntraced(function* (driver: ChatDriver, id: string, choice: Resolved) {
     const session = yield* driver.open(id, choice.model, choice.effort);
     const events = yield* PubSub.unbounded<AguiEvent>();
-    /** Why the session ended, once it has: every turn after it is told at once. */
     let ended: string | null = null;
     const endWith = (why: string) =>
       Effect.suspend(() => {
@@ -389,7 +341,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       }),
       Effect.forkScoped,
     );
-    // Added after the reader, so it runs first and the reader's pending message ends.
     yield* Effect.addFinalizer(() => session.close);
     return { session, events, ended: () => ended };
   });
@@ -415,10 +366,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       .pipe(Effect.andThen(SubscriptionRef.set(changed, id)), Effect.andThen(tell)),
   );
   if (Option.isNone(saved)) yield* remember;
-  /**
-   * The session on what Settings name now, started again where the last one ended, as one
-   * that failed to start has; or why there is none.
-   */
   const warm = Effect.gen(function* () {
     const resolved = yield* opts.choice().pipe(Effect.provideContext(services));
     if (!resolved.ok) return resolved.problem;
@@ -461,7 +408,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       yield* remember;
     }).pipe(Effect.orDie);
 
-  // A throttle: the first board change in a while has Desktop look for News once things settle.
   let nudged = false;
   const nudge: Effect.Effect<void> = Effect.suspend(() => {
     if (nudged) return Effect.void;
@@ -478,12 +424,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     );
   });
 
-  /**
-   * A message on the session and the events of the turn it starts, in the words of whoever
-   * said it, with the News it carries settled once the model has it. A turn its reader
-   * dropped is interrupted and seen out, so the next starts clean; any turn's end may leave
-   * News that waited for it.
-   */
   const turnOn = Effect.fnUntraced(function* (
     running: Live,
     content: string | Array<ContentBlock>,
@@ -517,7 +457,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     );
     said = voice.said;
     carried = voice.files;
-    // A turn of Desktop's carries its News in its message; the human's carries it as context.
     noticed = voice.said === undefined ? undefined : voice.news;
     turning = running;
     yield* tell;
@@ -530,12 +469,10 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
           if (event.type === "TOOL_CALL_START" && event.toolCallName === "AskUserQuestion")
             questions.add(event.toolCallId);
           if (ends(event)) finished = true;
-          // The model saying anything is what shows it has the message, and its News.
           if (news === undefined || event.type === "RUN_STARTED" || ends(event)) return Effect.void;
           const settled = news;
           news = undefined;
           for (const placed of settled.items) spoken.add(newsKey(placed));
-          // In this turn's voice, which has ended by the time a quick reply's settling runs.
           return delivered(
             { ...flock, said: () => voice.said, attachments: () => voice.files },
             settled,
@@ -551,7 +488,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     Effect.orElseSucceed(() => flockBatch([])),
   );
 
-  /** A turn of Desktop's own about News that matters, when the chat is idle and may speak first. */
   const speakFirst: Effect.Effect<void> = Effect.gen(function* () {
     if (!opts.proactive() || resting) return;
     const fresh = worthSpeaking(yield* waiting, spoken);
@@ -566,7 +502,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       Effect.scoped,
       Effect.ensuring(SubscriptionRef.set(desktopTurns, "ended")),
     );
-    // A turn that failed before the model had its News waits for the next look, not the next nudge.
     resting = Arr.every(fresh.items, (placed) => !spoken.has(newsKey(placed)));
     const result = running.session.lastTurn();
     if (result !== undefined && result !== before)
@@ -581,7 +516,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       });
   }).pipe(turns.withPermitsIfAvailable(1), Effect.provideContext(services), Effect.ignore);
 
-  // ponytail: a fixed look-again for News written after its board change settled; a host push would replace it.
   yield* Effect.sync(() => {
     resting = false;
   }).pipe(Effect.andThen(nudge), Effect.repeat(Schedule.spaced(LOOK_AGAIN)), Effect.forkIn(scope));
@@ -659,7 +593,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
         })),
       ),
     ),
-    // A turn under way is interrupted, and the session it ran on ends before the next starts.
     reopen: (conversation) =>
       Effect.gen(function* () {
         if (turning !== undefined) yield* turning.session.interrupt;

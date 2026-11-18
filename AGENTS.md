@@ -217,9 +217,17 @@ While you iterate, run what covers what you touched, each through `collie verify
   Checks, `collie verify` runs nothing: it answers with that Check's latest record on the
   tree, or refuses with `invalid_state` and names the gate.
 
-Tests are unit tests only: they call the code through its own interface, with fakes at
-its edges. No Playwright and no test that drives a built app or a browser — a behaviour
-of the view is covered by testing the logic it renders.
+Tests are unit tests only: they call the code through its own interface, with stand-in
+processes and servers at its edges and MSW for HTTP, never a mock, a stubbed global or a
+spy that changes behaviour. No Playwright and no test that drives a built app or a browser — a
+behaviour of the view is covered by testing the logic it renders.
+
+`bun run lint` holds the code to [landmines](https://github.com/interfere-inc/landmines):
+no prose comments (only directives, a one-line `// WARNING:` for a recurring footgun, which
+is also how a type assertion states its invariant, and TSDoc on the SDK in `src/sdk.ts`);
+no explicit return types, with `satisfies` at the return where a contract matters; a test
+beside the module it owns or in that directory's `test/`; and `.fixture.ts` or
+`.test-utils.ts` for test data and helpers. Rationale goes in the ADRs and docs.
 
 For native UI inspection, operate Rune headlessly with its built-in CLI: `--snap out.png`
 captures a screen, `--tree out.json` includes the accessibility tree, and `--script input.json`

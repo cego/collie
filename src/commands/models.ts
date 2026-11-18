@@ -1,6 +1,3 @@
-// `collie models`: which models and efforts each harness on a Machine offers, as its host
-// last read them (the Harness catalogue).
-
 import * as Arr from "effect/Array";
 import { Effect, Option } from "effect";
 import { Command, Flag } from "effect/cli";

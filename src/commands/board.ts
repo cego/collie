@@ -1,7 +1,3 @@
-// The board as JSON: the first snapshot of the board the host serves (ADR-0038). Herd-wide,
-// like the board it prints: a workspace is a filter over one board, not a board of its own
-// (ADR-0009). With `--draw`, the board itself, as the host's board terminal runs it.
-
 import * as Arr from "effect/Array";
 import { Console, Effect } from "effect";
 import { Command, Flag } from "effect/cli";
@@ -17,7 +13,6 @@ function line(view: TaskView) {
   return returned;
 }
 
-/** The renderer arrives through dynamic imports, so the rest of the CLI never loads it. */
 const draw = Effect.gen(function* () {
   const [{ currentEnv }, { Herdr, herdrFailureReason }, { workspaceFlow }, { recordsReadLayer }] =
     yield* Effect.promise(() =>

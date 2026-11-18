@@ -1,13 +1,7 @@
-// What a test file's root leaves behind, and how a killed suite's roots are removed.
-//
-// Every process a test starts carries `COLLIE_TEST_ROOT` naming its file's root, which is
-// how a leftover is proved to be the suite's. Read from /proc, so Linux only.
-
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-// Called by a process exit listener; Effect FileSystem cannot finish asynchronous cleanup there.
 import {
   accessSync,
   chmodSync,
@@ -23,18 +17,14 @@ import * as Rec from "effect/Record";
 const { join } = Effect.runSync(Path.Path.pipe(Effect.provide(Path.layer)));
 
 export const MARKER = "COLLIE_TEST_ROOT";
-/** Where a fixture whose control socket must bind keeps its directory, whatever `TMPDIR` says. */
 export const SOCKET_BASE = "/tmp";
 
-/** A memory filesystem, where a test's database commits and git writes never wait on a disk. */
 export const MEMORY_BASE = Effect.runSync(
   Config.String("COLLIE_TEST_MEMORY").pipe(
     Config.withDefault("/dev/shm"),
-    // The preload has not set the test environment yet; leave Effect's default provider uninitialized.
     Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
   ),
 );
-/** What a memory filesystem must have free to hold a test file's root. */
 export const MEMORY_FREE_BYTES = 2 * 1024 ** 3;
 
 const freeBytes = (dir: string) => {
@@ -63,17 +53,11 @@ export const alive = (pid: number) => {
 export const kill = (pid: number) => {
   try {
     process.kill(pid, "SIGKILL");
-  } catch {
-    // Gone already, which is what this is for.
-  }
+  } catch {}
 };
 
 const PF_KTHREAD = 0x200000;
 
-/**
- * Between execve's switch to the new program's memory and its writing the environment there:
- * environ reads empty, and proc(5)'s field 51, env_end, is 0 as for no memory at all.
- */
 const execing = (stat: string) => {
   const fields = Str.split(
     pipe(stat, Str.slice(Option.getOrElse(pipe(stat, Str.lastIndexOf(")")), () => -1) + 2)),
@@ -82,7 +66,6 @@ const execing = (stat: string) => {
   return fields[0] !== "Z" && (Number(fields[6]) & PF_KTHREAD) === 0 && fields[48] === "0";
 };
 
-/** Every live process whose marker is `root` and whose environment has the given bindings. */
 export const marked = (
   root: string,
   bindings: Readonly<Record<string, string>> = {},
@@ -94,8 +77,6 @@ export const marked = (
   } catch {
     return [];
   }
-  // Match whole NUL-delimited bindings without allocating every unrelated process's
-  // environment fields on every fixture cleanup.
   const want = [
     `\0${MARKER}=${root}\0`,
     ...Arr.map(Rec.toEntries(bindings), ([key, value]) => `\0${key}=${value}\0`),
@@ -107,12 +88,10 @@ export const marked = (
       const environ = () => readFileSync(`${proc}/${name}/environ`, "utf8");
       let read = environ();
       while (read === "" && execing(readFileSync(`${proc}/${name}/stat`, "utf8"))) {
-        // The exit listener must wait for execve synchronously before it can identify a leftover.
-        // oxlint-disable-next-line no-restricted-properties
+        // oxlint-disable-next-line no-restricted-properties -- The exit listener must wait for execve synchronously before it can identify a leftover.
         Bun.sleepSync(1);
         read = environ();
       }
-      // The exec may have finished between the empty read and the stat read.
       if (read === "") read = environ();
       const env = `\0${read}\0`;
       if (!Arr.every(want, (binding) => pipe(env, Str.includes(binding)))) return [];
@@ -131,10 +110,6 @@ export const marked = (
   });
 };
 
-/**
- * Removes every `collie-test-<pid>-*` root in `dir` whose pid is dead, and kills what still
- * carries its marker. A live pid's root is another suite's and is left alone.
- */
 export const sweepDeadRoots = (dir: string) =>
   Arr.flatMap(readdirSync(dir), (name) => {
     const pid = Number(
@@ -157,20 +132,12 @@ export const sweepEveryBase = (memory = MEMORY_BASE) =>
     }
   });
 
-/**
- * Removes `root`, giving its owner back write access first where a test took it away (a Go
- * module cache is read-only). A root that still will not go is reported, never thrown: one
- * leftover is no reason not to run the suite.
- */
-/** `dir` and every directory under it, writable by its owner again. */
 const writable = (dir: string) => {
   try {
     chmodSync(dir, 0o700);
     for (const entry of readdirSync(dir, { withFileTypes: true }))
       if (entry.isDirectory()) writable(join(dir, entry.name));
-  } catch {
-    // What cannot be reached stays, and the removal says so.
-  }
+  } catch {}
 };
 
 const removed = (root: string) => {

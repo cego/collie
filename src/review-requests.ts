@@ -1,6 +1,3 @@
-// A GitLab review request starts its Follow-through: each merge-watch round with the
-// setting on lists the login's review requests and starts the one workflow following each.
-
 import * as Arr from "effect/Array";
 import { Effect, type Context } from "effect";
 import { recordAudit, readAudit } from "./audit";
@@ -19,11 +16,8 @@ import { freshTaskLabel } from "./tasknames";
 
 export const FOLLOW_SETTING = "review.follow_through";
 
-/** What a round asks of the host. */
 export interface Requested {
-  /** Whether a Run already holds a claim whose request ends in `suffix`. */
   readonly claimed: (suffix: string) => Effect.Effect<boolean>;
-  /** Starts workflow `id`, saved in `project`, on `target`, in a Task called after `title`. */
   readonly start: (
     project: string,
     id: string,
@@ -32,7 +26,6 @@ export interface Requested {
   ) => Effect.Effect<void, never, PlatformServices>;
 }
 
-/** The host's `Requested`, over its store's claims and its registry. */
 export const requestedOver: (
   claimed: Requested["claimed"],
   registry: RegistryApi,
@@ -74,7 +67,6 @@ export const requestedOver: (
     ),
 });
 
-/** One News line under `key`, once ever: a round that finds the same thing again says nothing. */
 const sayOnce = (env: PluginEnv, key: string, text: string) =>
   Effect.gen(function* () {
     const file = yield* newsPath(env.stateDir, yield* machineHerd(env));
@@ -82,11 +74,9 @@ const sayOnce = (env: PluginEnv, key: string, text: string) =>
     if (!said) yield* appendNews(file, { key, run: "", text });
   }).pipe(Effect.ignore({ log: "Warn" }));
 
-/** One round: one listing per GitLab login with the setting on, and a start for each new request. */
 export const startRequested = Effect.fn("ReviewRequests.start")(function* (opts: {
   readonly env: PluginEnv;
   readonly gitlabHost: string;
-  /** Each host's login, refreshed after a refused or empty listing. */
   readonly logins: Map<string, string>;
   readonly requested: Requested;
 }) {

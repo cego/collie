@@ -1,6 +1,3 @@
-// The GitLab adapter: everything Collie asks GitLab, through `glab` or over HTTP with
-// glab's token.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -75,15 +72,12 @@ import { judgeComments, type ForgeComment, type MergeAnswer, type ReviewRead } f
 export const MR_TEMPLATE = ".gitlab/merge_request_templates/default.md";
 export const GLAB_RELOGIN = "glab auth login";
 
-/** The glab arguments that point a command at a project rather than at the cwd. */
 export function repoArgs(project: string | null) {
   return project ? ["--repo", project] : [];
 }
 
-/** `group/project!42`, with its host, as a note's message names it. */
 const whereOf = (ref: MrRef) => (ref.project ? `${ref.project}!${ref.iid}` : `!${ref.iid}`);
 
-/** The host part of `host/group/project`, which is what glab authenticates against. */
 export function hostOf(project: string | null) {
   const host = Option.getOrUndefined(
     Option.map(Option.fromNullishOr(project), (present) => Str.split(present, "/")[0]),
@@ -91,14 +85,6 @@ export function hostOf(project: string | null) {
   return host && pipe(host, Str.includes(".")) ? host : null;
 }
 
-/**
- * Absent and `null` are the same answer here, and GitLab gives both: a merge request with
- * no second pipeline sends `"pipeline": null`, not a missing key. A schema that allowed
- * the key to be omitted but not null rejected real merge requests outright, and the panel
- * reported one it had just read successfully as "not a merge request" — then cached that
- * for the whole TTL. Every field a GitLab version or a token might not answer is optional
- * *and* nullable for that reason.
- */
 const optionalText = Schema.optionalKey(Schema.NullOr(Schema.String));
 const optionalFlag = Schema.optionalKey(Schema.NullOr(Schema.Boolean));
 const optionalCount = Schema.optionalKey(Schema.NullOr(Schema.Finite));
@@ -154,7 +140,6 @@ const Discussion = Schema.Struct({
   ),
 });
 
-/** What GitLab says while it is still working out whether it can merge. */
 const SETTLING_MERGE = new Set([
   "checking",
   "unchecked",
@@ -163,10 +148,6 @@ const SETTLING_MERGE = new Set([
   "cannot_be_merged_recheck",
 ]);
 
-/**
- * GitLab's own answer to "can this merge now", which carries its approval rules: the
- * detailed status where this GitLab has one, else the older `merge_status`.
- */
 function mergeabilityOf(detailed: string | null | undefined, legacy: string | null | undefined) {
   const said = detailed ?? (legacy === "can_be_merged" ? "mergeable" : legacy);
   if (said === undefined || said === null || said === "") {
@@ -185,16 +166,9 @@ function mergeabilityOf(detailed: string | null | undefined, legacy: string | nu
   return returned;
 }
 
-/**
- * One merge request: the merge request, its approvals and its discussions, asked together.
- *
- * Never called from a render path and never for a list: the app fetches this when a Run
- * with a merge-request target becomes the Selection, and caches it per ref.
- */
 export function mrDetails<R>(ref: MrRef, cwd: string, run: Runner<R>) {
   const returned: Effect.Effect<MrPanel, never, R | ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
-    // A bare `!42` is the checkout's own, as glab read it from the remote.
     const named = ref.project ?? (yield* projectHere(cwd, run));
     const reached = projectRest({ ...ref, project: named }, cwd);
     if (!reached.ok) return { _tag: "Unavailable", reason: reached.reason } satisfies MrUnavailable;
@@ -274,16 +248,11 @@ export function mrDetails<R>(ref: MrRef, cwd: string, run: Runner<R>) {
   return returned;
 }
 
-/** A merge request's approvals; one that requires none and has none says nothing. */
 const approvalsOf = (approvals: typeof Approvals.Type) =>
   approvals.approvals_required === 0 && (approvals.approved_by ?? []).length === 0
     ? ""
     : approvalsLine(approvals.approvals_required, approvals.approvals_left);
 
-/**
- * Approvals are not on the merge-request object on every GitLab; where neither field is
- * answered the panel says nothing about them rather than guessing at zero.
- */
 function approvalsLine(
   requiredOrNull: number | null | undefined,
   leftOrNull: number | null | undefined,
@@ -293,13 +262,10 @@ function approvalsLine(
   if (required === undefined && left === undefined) return "";
   if (left === 0) return "approved";
   if (required === undefined) return `${left} still needed`;
-  // How many are still needed is the fact this GitLab did not answer, and standing the
-  // requirement in for it would claim nobody has approved yet.
   if (left === undefined) return `${required} approval(s) required`;
   return `${left} of ${required} still needed`;
 }
 
-/** A pipeline counts for the head it ran on; its own head pipeline need not say which. */
 function headChecks(
   pipeline: {
     readonly status?: string | null;
@@ -320,7 +286,6 @@ function headChecks(
   return returned;
 }
 
-/** GitLab's head pipeline status, as the card reads it. */
 export function pipelineChecks(status: string) {
   if (status === "") {
     const returned: ForgeChecks = { state: "none" };
@@ -346,11 +311,6 @@ export function pipelineChecks(status: string) {
   return returned;
 }
 
-/**
- * What a step pointed at a merge request needs: glab, and glab logged in to that host.
- * The cwd's remotes are none of its business — which forge a checkout is on is decided
- * before an adapter is asked.
- */
 export function gitlabForProject<R>(project: string | null, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
     const glab = yield* run("glab", ["--version"], cwd);
@@ -362,11 +322,6 @@ export function gitlabForProject<R>(project: string | null, cwd: string, run: Ru
   });
 }
 
-/**
- * Whoever glab is logged in as for this checkout's host, and null where it will not
- * say. The authenticated user, not a configured assignee: a branch belongs to whoever
- * is pushing it, and the two are different people whenever an assignee is set at all.
- */
 export function glabLogin<R>(cwd: string, run: Runner<R>, project: string | null = null) {
   return Effect.gen(function* () {
     const named = project ?? (yield* projectHere(cwd, run));
@@ -409,13 +364,6 @@ const Deployments = Schema.Array(
 );
 const MergeBase = Schema.Struct({ id: optionalText });
 
-/**
- * The furthest a merged commit has got: live in production, live on staging, or neither.
- * "Live" is what the newest successful deployment of each environment has on it, which is
- * the commit itself or one descending from it — GitLab's merge-base says which. A project
- * with no staging or production environment answers null, and so does GitLab not
- * answering: the board then says "merged", which is true, rather than guessing further.
- */
 export function liveTier(ref: MrRef, mergedSha: string, cwd: string) {
   return Effect.gen(function* () {
     if (mergedSha === "") return null;
@@ -433,7 +381,6 @@ export function liveTier(ref: MrRef, mergedSha: string, cwd: string) {
       "deployments?status=success&order_by=created_at&sort=desc&per_page=50",
     );
     if (!deployments.ok) return null;
-    // Newest first, so the first deployment seen per environment is what is live there.
     const live = new Map<string, string>();
     for (const deployment of deployments.value) {
       if (tiers.has(deployment.environment.name) && !live.has(deployment.environment.name))
@@ -457,7 +404,6 @@ export function liveTier(ref: MrRef, mergedSha: string, cwd: string) {
   });
 }
 
-/** The commit the newest successful deployment to an environment of `tier` has. */
 function deployed(ref: MrRef, tier: DeployTier, cwd: string) {
   const returned: Effect.Effect<DeployedRead, never, ForgeHttp> = Effect.gen(function* () {
     const reached = projectRest(ref, cwd);
@@ -574,7 +520,6 @@ const BranchMr = Schema.Struct({
   closed_at: optionalText,
 });
 
-/** The merge requests from `branch` into `project`, `opened` or in any state, every page of them. */
 const mrsFrom: (
   project: string,
   branch: string,
@@ -601,7 +546,6 @@ const mrsFrom: (
   );
 };
 
-/** The open merge request from `branch`; a failed read is not "none". */
 function forBranch(project: string, branch: string, cwd: string) {
   const returned: Effect.Effect<ForBranch, never, ForgeHttp> = Effect.map(
     mrsFrom(project, branch, "opened", cwd),
@@ -630,13 +574,11 @@ const DefaultBranch = Schema.Struct({ default_branch: Schema.String });
 const ProtectedBranch = Schema.Struct({ name: Schema.String });
 const PAGE = 100;
 
-/** GitLab's `*` stands for any run of characters, `/` included. */
 const wildcard = (pattern: string) =>
   new RegExp(
     `^${pipe(pattern, Str.replace(/[.+?^${}()|[\]\\]/g, "\\$&"), Str.replaceAll("*", ".*"))}$`,
   );
 
-/** The default branch, or a protected branch as listed, wildcards matched; null where either is unread. */
 function protects(project: string, branch: string, cwd: string) {
   return Effect.gen(function* () {
     const host = hostOf(project);
@@ -652,7 +594,6 @@ function protects(project: string, branch: string, cwd: string) {
   });
 }
 
-/** Every merge request from `branch`, whatever its state; a failed read is not "none". */
 function fromBranch(project: string, branch: string, cwd: string) {
   const returned: Effect.Effect<FromBranchList, never, ForgeHttp> = Effect.map(
     mrsFrom(project, branch, "all", cwd),
@@ -708,15 +649,10 @@ const JOB_STATES = new Map<string, JobState>([
   ["canceled", "cancelled"],
   ["canceling", "cancelled"],
   ["skipped", "skipped"],
-  // Nobody started it, so nothing it would prove ran.
   ["manual", "skipped"],
   ["running", "running"],
 ]);
 
-/**
- * The job on the merge request's head pipeline. A merged-results pipeline runs on a merge
- * commit, which counts for the head only where GitLab shows that commit's parent is it.
- */
 function job(ref: MrRef, name: string, cwd: string) {
   const returned: Effect.Effect<JobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
@@ -747,7 +683,6 @@ function job(ref: MrRef, name: string, cwd: string) {
           ok: false,
           reason: `GitLab would not say which head ${where}'s pipeline ${pipeline.id} at ${pipeline.sha} was built from: ${commit.reason}`,
         };
-      // An older head's: this head's pipeline has not started.
       if (!commit.value.parent_ids.includes(head)) return waiting;
       merge = pipeline.sha;
     }
@@ -762,9 +697,7 @@ function job(ref: MrRef, name: string, cwd: string) {
   return returned;
 }
 
-/** glab's login to `host`, which ForgeHttp asks GitLab with. */
 export function glabLoginTo(host: string, stored = false) {
-  // glab answers a token in its environment for any host; a stored login is the host's own.
   const glab = <R>(args: ReadonlyArray<string>, run: Runner<R>, cwd: string) =>
     stored
       ? run(
@@ -785,14 +718,12 @@ export function glabLoginTo(host: string, stored = false) {
     cli: "glab",
     notReady: `glab is not logged in to ${host}`,
     relogin: `${GLAB_RELOGIN} --hostname ${host}`,
-    // Empty for a personal access token, which does not expire.
     expiry: (run, cwd) =>
       Effect.map(value("oauth2_expiry_date", run, cwd), (said) =>
         said === "" ? null : glabExpiry(said),
       ),
     token: (run, cwd) =>
       Effect.map(value("token", run, cwd), (said) => (said === "" ? null : said)),
-    // glab refreshes an expired OAuth token only when it builds an API client, as this does.
     refresh: (run, cwd) =>
       Effect.map(run("glab", ["auth", "status", "--hostname", host], cwd), (ran) => ran.code === 0),
   };
@@ -814,10 +745,6 @@ export const MONTHS = [
   "Dec",
 ];
 
-/**
- * When an OAuth token glab stored expires: Go's RFC 822, `02 Jan 06 15:04 MST`, written in
- * the Machine's own zone, so a zone named by its abbreviation is this Machine's.
- */
 export function glabExpiry(said: string) {
   const m = /^(\d{2}) (\w{3}) (\d{2}) (\d{2}):(\d{2}) (\S+)$/.exec(Str.trim(said));
   if (m === null) return null;
@@ -842,13 +769,11 @@ export function glabExpiry(said: string) {
   return MONTHS.includes(month!) ? Option.getOrNull(Option.map(at, DateTime.toEpochMillis)) : null;
 }
 
-/** A GET of a route under one project, its body read as `schema`. */
 type Rest = <S extends Schema.Decoder<unknown>>(
   schema: S,
   route: string,
 ) => Effect.Effect<Answered<S["Type"]>, never, ForgeHttp>;
 
-/** Requests to the merge request's project, as its host's glab login, or why there are none. */
 const projectRest = (ref: MrRef, cwd: string) => {
   const host = hostOf(ref.project);
   if (host === null || ref.project === null)
@@ -861,11 +786,9 @@ const projectRest = (ref: MrRef, cwd: string) => {
 
 type Reached = Extract<ReturnType<typeof projectRest>, { ok: true }>;
 
-/** Every job of pipeline `id`, the attempts a retry left behind too. */
 const pipelineJobs = (reached: Reached, cwd: string, id: number) =>
   pagesAs(Job, reached.login, cwd, `${reached.project}/pipelines/${id}/jobs?include_retried=true`);
 
-/** The job named `name` in pipeline `id`, and the failed attempt it retried, if it did. */
 const jobIn = (reached: Reached, cwd: string, id: number, name: string) =>
   Effect.map(pipelineJobs(reached, cwd, id), (listed) => {
     if (!listed.ok) return listed;
@@ -882,14 +805,12 @@ const jobIn = (reached: Reached, cwd: string, id: number, name: string) =>
     } as const;
   });
 
-/** A trace as bun printed it: GitLab's section markers, colours and carriage returns gone. */
 const plainTrace = (trace: string) =>
   pipe(
     stripVTControlCharacters(pipe(trace, Str.replace(/section_(?:start|end):\d+:[^\r\n]*\r/g, ""))),
     Str.replaceAll("\r", ""),
   );
 
-/** Job `id`'s failed attempt, with the failed tests its pipeline's failed jobs' traces name. */
 function failedAttempt(ref: MrRef, id: string, cwd: string) {
   return Effect.gen(function* () {
     const unread: FailedAttempt = { url: null, tests: [], jobs: null };
@@ -909,7 +830,6 @@ function failedAttempt(ref: MrRef, id: string, cwd: string) {
       ),
       Arr.sortWith(ended, Order.Number),
     );
-    // Another failed job is the failure of the first of this job's failed attempts to end after it, else of the last.
     const attemptOf = (one: typeof Job.Type) =>
       pipe(
         Arr.findFirst(selfAttempts, (attempt) => ended(attempt) >= ended(one)),
@@ -919,7 +839,6 @@ function failedAttempt(ref: MrRef, id: string, cwd: string) {
     const failed = Arr.filter(jobs.value, (one) => {
       if (one.status !== "failed") return false;
       if (self === undefined) return true;
-      // The job's other attempts share its pipeline, and are attempts of their own.
       if (one.name === self.name) return one === self;
       if (Number.isNaN(ended(one)) || Number.isNaN(ended(self))) return true;
       return attemptOf(one) === self;
@@ -931,7 +850,6 @@ function failedAttempt(ref: MrRef, id: string, cwd: string) {
       trace.ok ? failedTestsIn(plainTrace(trace.value)) : null,
     );
     const tests = Arr.flatMap(named, (one) => one ?? []);
-    // A retried job is its newest attempt.
     const newest = pipe(
       jobs.value,
       Arr.sortWith((one) => -one.id, Order.Number),
@@ -948,7 +866,6 @@ function failedAttempt(ref: MrRef, id: string, cwd: string) {
   });
 }
 
-/** The job at the merge request's merge-base pipeline, else on its target branch's latest. */
 function baseJob(ref: MrRef, name: string, cwd: string) {
   const returned: Effect.Effect<BaseJobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
@@ -1003,7 +920,6 @@ function baseJob(ref: MrRef, name: string, cwd: string) {
   return returned;
 }
 
-/** The job named `name` in the newest pipeline on the merge request's target branch. */
 function targetJob(ref: MrRef, name: string, cwd: string) {
   const returned: Effect.Effect<TargetJobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
@@ -1090,10 +1006,8 @@ const Discussions = Schema.Array(
   }),
 );
 
-/** A project or group access token's user. */
 const TOKEN_BOT = /^(project|group)_\d+_bot(_\w+)?$/;
 
-/** Each rule's requirement, counted again without `login`'s approval. */
 function approvalOf(
   rules: ReadonlyArray<{
     readonly name: string;
@@ -1118,10 +1032,6 @@ function approvalOf(
   );
 }
 
-/**
- * The merge request, its approvals (rule by rule where this GitLab has approval state) and
- * every page of its discussions.
- */
 function readReview(ref: MrRef, cwd: string) {
   const returned: Effect.Effect<ReviewRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
@@ -1136,7 +1046,6 @@ function readReview(ref: MrRef, cwd: string) {
     const approved = yield* rest(ReviewApprovals, `${route}/approvals`);
     if (!approved.ok) return approved;
     const listed = Arr.map(approved.value.approved_by ?? [], (one) => one.user.username);
-    // Approval state is Premium's and Ultimate's; elsewhere the approvals read is one rule.
     const state = yield* rest(ApprovalState, `${route}/approval_state`);
     const rules = !state.ok
       ? [
@@ -1151,7 +1060,6 @@ function readReview(ref: MrRef, cwd: string) {
           required: rule.approvals_required,
           by: Arr.map(rule.approved_by ?? [], (one) => one.username),
         }));
-    // Names bound to a release go must come from the same snapshot as its required approvals.
     const approvers =
       state.ok && rules.length > 0 ? Arr.dedupe(Arr.flatMap(rules, (rule) => rule.by)) : listed;
     const comments: ForgeComment[] = [];
@@ -1224,7 +1132,6 @@ function readReview(ref: MrRef, cwd: string) {
   return returned;
 }
 
-/** A note in the comment's discussion, or a note of its own on the merge request. */
 function reply(ref: MrRef, to: Pick<ForgeComment, "thread">, body: string, cwd: string) {
   return Effect.gen(function* () {
     const reached = projectRest(ref, cwd);
@@ -1245,10 +1152,6 @@ function reply(ref: MrRef, to: Pick<ForgeComment, "thread">, body: string, cwd: 
   });
 }
 
-/**
- * GitLab's merge endpoint at `head`, never `glab mr merge`, whose `--auto-merge` defaults
- * to on. No squash is passed, so the project's own setting stands.
- */
 function merge(ref: MrRef, head: string, cwd: string) {
   const returned: Effect.Effect<MergeAnswer, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
@@ -1301,10 +1204,6 @@ const StartedPipeline = Schema.Struct({
   ref: optionalText,
 });
 
-/**
- * The merge request's pipeline on `head`, else its source branch's where GitLab refuses that
- * with 400, unless `head` has one that was not skipped.
- */
 function startPipeline(ref: MrRef, head: string, cwd: string) {
   const returned: Effect.Effect<PipelineStart, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
@@ -1316,7 +1215,6 @@ function startPipeline(ref: MrRef, head: string, cwd: string) {
       return { _tag: "Failed", reason: `could not list the pipelines on ${head}: ${on.reason}` };
     const running = Arr.findFirst(on.value, (one) => one.status !== "skipped");
     if (Option.isSome(running)) return { _tag: "Has", url: running.value.web_url ?? "" };
-    // GitLab builds the ref's head at the time, which a later push may have moved past `head`.
     const started = (answer: Answered<unknown>) =>
       Effect.gen(function* () {
         if (!answer.ok)
@@ -1330,7 +1228,6 @@ function startPipeline(ref: MrRef, head: string, cwd: string) {
         const url = pipeline?.web_url ?? "";
         const sha = pipeline?.sha ?? "";
         if (sha === head) return { _tag: "Started", url } as const;
-        // A merged-results pipeline runs on a merge of the target (first parent) and the head.
         const merged =
           pipeline?.ref === `refs/merge-requests/${ref.iid}/merge`
             ? yield* rest(Commit, `repository/commits/${sha}`)
@@ -1381,13 +1278,11 @@ function template(cwd: string) {
 
 const PipelineState = Schema.Struct({ status: Schema.String });
 
-/** `https://host/group/project/-/pipelines/7`'s status, or null where GitLab does not say. */
 function pipelineStatus(url: string, cwd: string) {
   return Effect.gen(function* () {
     const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(Str.trim(url));
     if (!m) return null;
     const [, host, project, id] = m;
-    // The address is agent text: only a host the human signed glab in to is asked.
     const said = yield* requestAs(
       PipelineState,
       glabLoginTo(host!, true),
@@ -1404,7 +1299,6 @@ const PipelineIdentity = Schema.Struct({
   sha: Schema.String,
 });
 
-/** The newest pipeline of `tag` in `ref`'s project. */
 function tagPipeline(ref: MrRef, tag: string, cwd: string) {
   const returned: Effect.Effect<TagPipelineRead, never, ForgeHttp> = Effect.gen(function* () {
     const reached = projectRest(ref, cwd);
@@ -1423,7 +1317,6 @@ function tagPipeline(ref: MrRef, tag: string, cwd: string) {
   return returned;
 }
 
-/** `https://host/group/project/-/pipelines/7` and its jobs, a manual one as waiting by hand. */
 function pipeline(url: string, cwd: string) {
   const returned: Effect.Effect<PipelineRead, never, ForgeHttp> = Effect.gen(function* () {
     const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(Str.trim(url));
@@ -1456,7 +1349,6 @@ function pipeline(url: string, cwd: string) {
   return returned;
 }
 
-/** A clone with glab's token for the host as git's auth header, so no credential is stored. */
 function clone<R>(project: string, into: string, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
     const host = hostOf(project) ?? Str.split(project, "/")[0]!;

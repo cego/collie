@@ -55,7 +55,7 @@ const change = <A>(
         }),
       ),
     );
-    // SAFETY: `update` ran `edit`, which set it.
+    // WARNING: `update` ran `edit`, which set it.
     return value as A;
   });
 

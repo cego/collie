@@ -1,5 +1,3 @@
-// The web links a Run produced, as the record's cards show them.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";

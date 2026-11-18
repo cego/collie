@@ -1,6 +1,3 @@
-// A listing or sweep slower than the host's slow-call threshold says how long gathering its
-// sweepers and judging each kind took, so its host log shows where the time went.
-
 import { expect, test } from "bun:test";
 import { Duration, Effect, Fiber, FileSystem, Logger } from "effect";
 import { TestClock } from "effect/testing";

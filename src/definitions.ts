@@ -1,6 +1,4 @@
 import * as Cause from "effect/Cause";
-// Persona definitions across the three Layers: baseline (this repo), the user's plugin
-// config dir, and the project's .collie/. Later wins by name.
 
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -29,39 +27,19 @@ export const INPUT_STRATEGIES = [
   "reach",
   "internal",
   "repository",
-  // What `repository` was called; still read, as `repository` (ADR-0050 D9).
   "gitlab-repository",
 ] as const;
 
-/**
- * Which inference settles an Input. Open rather than a closed union: an author may
- * declare one Collie does not know, and what a Workflow calls its work source is its
- * own business — `strategies.ts` is what decides what each one means.
- */
 export type InputStrategy = string;
 
 export interface Provenance {
   path: string;
   layer: LayerName;
-  /** The definition this one changes only part of, resolved through the layers below. */
   extends?: string;
-  /** For a full copy: the parent's content hash when the copy was taken. */
   forkedFromHash?: string;
-  /** The parent's content hash now, so a stale full copy can be spotted. */
   parentHash?: string;
 }
 
-/**
- * What a Workflow needs of the repository, and so which checkout a Run of it gets.
- * Declared as its definition's `checkout` rather than inferred from its name, so a fork
- * is whatever it says it is and inherits this like everything else it does not restate.
- *
- * - `none` reads a diff or the caller's own tree, and works where it was started.
- * - `branch` owns the checkout of the branch it builds, so two Runs never share an
- *   index or a stash stack.
- * - `roaming` is detached at the default branch and moves across the branches it
- *   merges, binding none of them to itself.
- */
 export type CheckoutKind = "none" | "branch" | "roaming";
 
 export interface PersonaDef extends Provenance {
@@ -81,7 +59,6 @@ export function personaData(persona: PersonaDef) {
   };
 }
 
-/** A full copy whose parent has changed since: what it copied is no longer what it forked. */
 export function isStale(def: Provenance) {
   return Boolean(def.forkedFromHash && def.parentHash && def.forkedFromHash !== def.parentHash);
 }
@@ -94,17 +71,11 @@ export const contentHash = Effect.fn("Definitions.contentHash")(function* (text:
   );
 });
 
-/** What the layers hold. Workflows are modules now, and are found by `discovery`. */
 export interface Definitions {
   personas: Map<string, PersonaDef>;
   errors: string[];
 }
 
-/**
- * Where the skills themselves live. They are shared across harnesses and installed
- * by skills.sh, so a missing one is a missing prerequisite — like the harness binary
- * — not a definition error to work around.
- */
 export const skillDirs = Effect.fn("Definitions.skillDirs")(function* (env: {
   home: string;
   cwd: string;
@@ -139,7 +110,6 @@ function str(value: YamlValue | undefined, fallback = "") {
   return value !== undefined && isString(value) ? value : fallback;
 }
 
-/** One persona file, refused when its body names anything but a skill. */
 const parsePersona = Effect.fn("Definitions.parsePersona")(function* (
   file: string,
   layer: LayerName,
@@ -170,7 +140,6 @@ const parsePersona = Effect.fn("Definitions.parsePersona")(function* (
   return persona;
 });
 
-/** Every expression in a persona that nothing fills: all of them but a skill. */
 export const personaHoles = (body: string) => [
   ...Arr.map(expressionsIn(body), (name) => `{{${name}}}`),
   ...malformedIn(body),
@@ -189,11 +158,6 @@ export const loadDefinitions = Effect.fn("Definitions.loadDefinitions")(function
   return { personas, errors };
 });
 
-/**
- * One layer of one kind. A file that names no parent replaces what the layers below
- * had; a file with `extends:` changes only what it names, and is resolved in
- * dependency order so a parent in the same layer is merged before its child.
- */
 const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
   T extends Provenance & { name: string },
 >(
@@ -237,8 +201,6 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
       if (!def) return;
       settled.add(name);
 
-      // What this file is built on, before it goes in: the same name from a lower
-      // layer is the usual case, and another name in this layer is resolved first.
       const parentName = def.extends;
       if (!parentName) {
         into.set(name, yield* withParentHash(def, into));
@@ -261,10 +223,6 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
   for (const name of parsed.keys()) yield* resolve(name, []);
 });
 
-/**
- * The hash of the file this definition shadows, so a full copy whose original has
- * moved on can be spotted. Only a full copy carries a hash to compare against.
- */
 const withParentHash = Effect.fn("Definitions.withParentHash")(function* <
   T extends Provenance & { name: string },
 >(def: T, into: Map<string, T>) {
@@ -280,7 +238,6 @@ const readHash = Effect.fn("Definitions.readHash")(function* (path: string) {
   return text === undefined ? undefined : yield* contentHash(text);
 });
 
-/** The parent with the child's frontmatter and sections laid over it. */
 function mergePersona(parent: PersonaDef, child: PersonaDef) {
   return {
     ...parent,
@@ -296,12 +253,6 @@ function pick<T, K extends keyof T>(from: T, keys: K[]) {
   return out;
 }
 
-/**
- * Section by section: a child's `## <name>` replaces the parent's of the same name,
- * new ones are appended, and the preamble is replaced only when the child has one.
- * The result is rebuilt rather than spliced, so the merged body is normalised —
- * which is what every reader of it already assumes.
- */
 function mergeBody(parent: string, child: string) {
   const a = bodySections(parent);
   const b = bodySections(child);
@@ -317,7 +268,6 @@ function mergeBody(parent: string, child: string) {
   )}\n`;
 }
 
-/** Body split into a shared preamble plus one section per `## <step-id>` heading. */
 export interface BodySections {
   preamble: string;
   sections: Map<string, string>;

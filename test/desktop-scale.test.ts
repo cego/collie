@@ -1,10 +1,6 @@
-// Desktop draws at its monitor's own scale (ADR-0047): which monitor holds its window, read
-// from Hyprland, the zoom that corrects the scale it is rendered at, and how Settings says it.
-
 import { expect, test } from "bun:test";
 import { type Drawn, drawnSaid, monitorOf, zoomFor } from "../desktop/src/shared/scale";
 
-// As `hyprctl -j monitors` prints them, trimmed to what is read.
 const LAPTOP = {
   id: 0,
   name: "eDP-1",
@@ -39,7 +35,6 @@ const QHD = {
   focused: false,
 };
 
-// As `hyprctl -j clients` prints them: Desktop is an XWayland client, one per window.
 const client = (pid: number, monitor: number, title: string, xwayland = true) => ({
   address: `0x${pid.toString(16)}${monitor}`,
   mapped: true,

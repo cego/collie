@@ -1,6 +1,3 @@
-// What the Flock chat's composer decides about a file before it is sent: whether it fits,
-// how far an image is scaled, and which pasted data becomes an attachment.
-
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";

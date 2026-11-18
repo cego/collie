@@ -1,13 +1,8 @@
-// What a click, a double-click, a name, a page's back and Escape do to the selected card and
-// the open page. No Bun-only import: the view bundles this.
-
-/** What is selected, by card key, and the page open: a card's key for its record, else the page's name. */
 export interface BoardState {
   readonly selected: string | null;
   readonly page: string | null;
 }
 
-/** Where a click or double-click landed. */
 export type Landed =
   | { readonly on: "card"; readonly card: string; readonly asOf: boolean }
   | { readonly on: "control" }
@@ -28,7 +23,6 @@ export const afterGesture = (state: BoardState, gesture: Gesture) => {
       if (landed.on === "control") return state;
       if (landed.on === "background")
         return state.page === null ? { ...state, selected: null } : state;
-      // A card whose Machine dropped has nobody to read its record from.
       const opens = gesture.kind === "double-click" && !landed.asOf;
       return { selected: landed.card, page: opens ? landed.card : state.page };
     }
@@ -47,13 +41,11 @@ export interface SeenCard {
   readonly task: { readonly run: string; readonly unseen?: boolean };
 }
 
-/** The `seen` a card's Machine is sent, where what its Run reported is still unseen. */
 export const seenBy = (card: SeenCard | undefined) =>
   card?.task.unseen === true
     ? [{ installation: card.installation, action: { _tag: "Seen", runId: card.task.run } as const }]
     : [];
 
-/** Opening a record is seeing it; a record already open, or any other page, sends nothing. */
 export const seenOnOpening = (
   before: BoardState,
   after: BoardState,
@@ -65,7 +57,6 @@ interface Found {
   readonly hasAttribute: (name: string) => boolean;
 }
 
-/** Where a click or a key landed: an element, or nothing that is one. */
 export type Target = {
   readonly closest: (selectors: string) => Found | null;
   readonly isContentEditable?: boolean;
@@ -80,7 +71,6 @@ const FIELD = "input, textarea, select";
 const OVERLAY =
   '[data-state="open"]:is([role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"])';
 
-/** A control does only what it does; a card's body is the card's; the rest is the board's own. */
 export const landedOn = (target: Target) => {
   if (target === null) return { on: "background" };
   if (target.closest(CONTROL) !== null) return { on: "control" };
@@ -99,7 +89,6 @@ export const overlayOpen = (page: Page) => page.querySelector(OVERLAY) !== null;
 export const inField = (target: Target) =>
   target !== null && (target.isContentEditable === true || target.closest(FIELD) !== null);
 
-/** Escape as the board reads it: whether an overlay is open, and whether focus is in a field. */
 export const escapeOn = (target: Target, page: Page) => ({
   kind: "escape",
   overlay: overlayOpen(page) || (target?.closest("[data-escape-scope]") ?? null) !== null,

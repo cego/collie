@@ -58,7 +58,6 @@ describe("a harness that cannot be read", () => {
         yield* TestClock.adjust(1);
         yield* catalogue.catalogues;
         expect(claude.calls.count).toBe(2);
-        // A second failure waits twice as long.
         yield* TestClock.adjust(2 * CATALOGUE_RETRY_MS - 1);
         yield* catalogue.catalogues;
         expect(claude.calls.count).toBe(2);

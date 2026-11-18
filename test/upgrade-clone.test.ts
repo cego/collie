@@ -1,7 +1,3 @@
-// `collie upgrade` on a legacy clone at the Collie directory: the target release's runner
-// places the release inside it, and the clone is deleted only when nothing in it is the
-// human's. Real git, because that is git's answer.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -44,7 +40,6 @@ const git = (cwd: string, ...args: string[]) =>
 
 const write = (file: string, text: string) => Effect.promise(() => Bun.write(file, text));
 
-/** The release's runner: it places a stand-in release and answers as an upgrade. */
 const RUNNER = new TextEncoder().encode(`#!/bin/sh
 mkdir -p "$COLLIE_DIR/release"
 echo '{"version":"99.0.0","files":{}}' > "$COLLIE_DIR/release/placed.json"
@@ -65,7 +60,6 @@ beforeEach(() =>
       yield* git(origin, "add", ".");
       yield* git(origin, "commit", "--quiet", "-m", "0.1.0");
       yield* git(rig.root, "clone", "--quiet", origin, clone);
-      // What an install already holds that is Collie's or the human's by design.
       yield* write(`${clone}/bin/collie`, "the runner built here\n");
       yield* write(`${clone}/user/config.json`, `{"mine":true}\n`);
       served = Bun.serve({
@@ -111,7 +105,6 @@ const migrate = (live: ReadonlyArray<string> | null = []) => {
   );
 };
 
-/** Every file in the clone but `.git`, `release/` and `kept/`, with its content. */
 const files = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const all = yield* fs.readDirectory(clone, { recursive: true });
@@ -124,7 +117,6 @@ const files = Effect.gen(function* () {
   return kept;
 });
 
-/** What git says of the clone, without the two entries a migration adds to its excludes. */
 const status = Effect.gen(function* () {
   const said = yield* git(clone, "status", "--porcelain", "--ignored");
   return Arr.join(
@@ -158,7 +150,6 @@ test("a pristine clone is replaced by the release, and the human's user/ stays",
       expect(migrated).toMatchObject({ ok: true, data: { release: "99.0.0", clone: "removed" } });
       expect((yield* fs.readDirectory(clone)).sort()).toEqual(["release", "user"]);
       expect(yield* fs.readFileString(`${clone}/user/config.json`)).toBe(`{"mine":true}\n`);
-      // The release's own runner did the placing, pointed at the release rather than the clone.
       expect(yield* fs.readFileString(`${rig.root}/handed-off`)).toBe(
         `${clone}/release --json upgrade --to 99.0.0\n`,
       );

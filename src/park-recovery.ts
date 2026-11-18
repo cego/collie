@@ -46,7 +46,6 @@ export const canRecover = (view: RunView) =>
       (one.asker != null && one.answer === null),
   );
 
-/** Raises, or clears, the one News item saying recovery keeps failing on this Machine. */
 export const recoveryFailing = (
   env: PluginEnv,
   herdr: Herdr,
@@ -257,7 +256,6 @@ export const recoverParks = <E, R>(opts: {
     );
   });
 
-/** Whether a park, as its Run reads now, is still the one a Heal was asked about. */
 const stillParked = (view: RunView, claim: Metric) =>
   view.status.status !== "complete" &&
   view.status.status !== "ended" &&
@@ -290,7 +288,6 @@ export const healParks = <E, R, E2, R2>(opts: {
   readonly env: PluginEnv;
   readonly herdr: Herdr;
   readonly views: Effect.Effect<ReadonlyArray<RunView>, E, R>;
-  /** Starts the healer for a park under its claim; the Heal's Run id. */
   readonly start: (
     view: RunView,
     healer: string,
@@ -303,7 +300,6 @@ export const healParks = <E, R, E2, R2>(opts: {
     body: string,
     key: string,
   ) => Effect.Effect<void>;
-  /** Files a judged Heal's Collie defect on Collie's repository. */
   readonly host: HostApi;
 }) =>
   Effect.gen(function* () {
@@ -318,7 +314,6 @@ export const healParks = <E, R, E2, R2>(opts: {
         yield* appendMetric(evidence(view.runId), closed);
         return closed;
       });
-    /** Three judged Heals in a row that failed say so once, until one does not. */
     const noteFailures = (judged: ReadonlyArray<Metric>) =>
       Effect.gen(function* () {
         const ended = Arr.filter(
@@ -340,7 +335,6 @@ export const healParks = <E, R, E2, R2>(opts: {
               : null,
           );
       });
-    // Each Run's Heal and report lines as the judging round last read them.
     const healLines = new Map<string, ReadonlyArray<Metric>>();
     const judging = Effect.gen(function* () {
       const views = yield* opts.views;
@@ -348,7 +342,6 @@ export const healParks = <E, R, E2, R2>(opts: {
       const claims: Array<{ view: RunView; claim: Metric }> = [];
       const all: Array<Metric> = [];
       let judged = false;
-      // Only a Heal its claim names: one started before a crash recorded it is taken up again.
       let flying = false;
       for (const view of views) {
         const read = yield* readMetrics(evidence(view.runId));
@@ -442,7 +435,6 @@ export const healParks = <E, R, E2, R2>(opts: {
       }
       if (judged) yield* noteFailures(recoveriesIn(all));
       if (flying || claims.length === 0 || (yield* machineMemory(opts.env)).short) return;
-      // Read after the claims, so a claim's park, written before it, is in what is read.
       const now = new Map(Arr.map(yield* opts.views, (view) => [view.runId, view] as const));
       for (const { view, claim } of claims.sort((a, b) =>
         Str.localeCompare(b.claim.at)(a.claim.at),
@@ -503,7 +495,6 @@ export const healParks = <E, R, E2, R2>(opts: {
             (line) => line.kind === "report" && line.heal === item.heal,
           ),
         );
-        // A retry that changes nothing is not recorded again, so a lasting refusal is one line.
         if (last?.publication !== reported.publication || last.note !== reported.note)
           yield* appendMetric(evidence(item.run), {
             at: yield* nowIso,

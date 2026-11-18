@@ -1,6 +1,3 @@
-// What a checkout runs to bring its installed dependencies to its head's lockfile, as the
-// project declares in `.collie/dependencies.json` (ADR-0031).
-
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { Command } from "./measurement-model";
@@ -8,7 +5,6 @@ import { whatItSaid, type Runner } from "./mr";
 
 const decodeCommand = Schema.decodeUnknownEffect(Schema.fromJsonString(Command));
 
-/** The command it ran, null where nothing is declared, or why the dependencies are not in place. */
 export type Installed =
   | { readonly ran: string | null; readonly refused?: undefined }
   | { readonly refused: string };
@@ -19,7 +15,6 @@ export const installDependencies = Effect.fn("dependencies.installDependencies")
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  // From this head, not the base `verify.json` is read from: its lockfile is the one to satisfy.
   const file = path.join(checkout, ".collie", "dependencies.json");
   if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) {
     return { ran: null };

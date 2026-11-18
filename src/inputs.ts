@@ -1,6 +1,3 @@
-// Input inference: branch, cwd, earlier Runs and the open MR. The human is asked
-// only when inference fails (CONTEXT.md, Input).
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
@@ -20,41 +17,28 @@ import type { Forge } from "./forge/forge";
 import type { ForgeHttp } from "./forge/http";
 import { mrRefsIn, mrWords, readMrRef } from "./board-model";
 
-/**
- * One thing a human may pick, whoever is drawing the list: a workflow, a candidate for
- * an Input, an option in a Choice. Here rather than with a renderer because both
- * `InputPrompts` and the Run directory's pending Choice are written in it.
- */
 export interface PickItem {
   id: string;
   title: string;
   subtitle?: string;
 }
 
-/** Where the work to be done was described. */
 export type WorkSourceKind = "plan-dir" | "linear" | "text" | "review" | "followup";
 
 export { targetKind, type TargetKind };
 
 export type CandidateKind = WorkSourceKind | TargetKind;
 
-/** One thing the human may pick for an Input, whatever the Input is. */
 export interface Candidate {
   kind: CandidateKind;
   value: string;
   source: string;
   label?: string;
-  /**
-   * Offer it, but never let inference alone land on it. An unrelated merge request
-   * of mine is a reasonable thing to pick from a menu and never a reasonable thing
-   * to review unasked.
-   */
   menuOnly?: boolean;
 }
 
 export type WorkSourceCandidate = Candidate;
 
-/** How a work-source reaches the human; the picker and the runner pane both supply it. */
 export interface InputPrompts<E = never, R = never> {
   menu(
     items: PickItem[],
@@ -63,9 +47,7 @@ export interface InputPrompts<E = never, R = never> {
   ask(question: string): Effect.Effect<string | null, E, R>;
 }
 
-/** More than this and the oldest plans would bury the branch's own ticket. */
 const PLAN_DIR_CANDIDATES = 3;
-// Beyond five, the remembered targets bury the branch's own MR, which is the common case.
 const REVIEWED_TARGETS = 5;
 const WORK_SOURCE_QUESTION = "What should be built?";
 const TARGET_QUESTION = "Review what?";
@@ -76,37 +58,23 @@ export interface Resolution {
   strategy: InputStrategy;
   value: string;
   source: string;
-  /** True when nothing could be inferred and the human must supply it. */
   needsAsking: boolean;
   question: string;
-  /** A short name for this value, when the value itself would name the Run badly. */
   label?: string;
-  /** Which sort of thing the value is, for an Input that has kinds. */
   kind?: CandidateKind;
-  /** What the human may pick from. */
   candidates?: Candidate[];
-  /** The default branch a bare ref is compared against, for a `diff-target`. */
   base?: string;
-  /** The GitLab project this directory pushes to, for a bare MR iid. */
   project?: string;
 }
 
 export interface InferContext<R = ChildProcessSpawner.ChildProcessSpawner> {
   cwd: string;
-  /** The Runs there are, so earlier ones can be searched for a plan or a review. */
   runs?: ReadonlyArray<RunFacts>;
-  /**
-   * The Task this inference is for. Only that Task's own finished Runs are offered:
-   * a repository match alone must not hand one Task another's plan or review. Absent
-   * — a fresh start — is a Task with nothing behind it yet, so nothing is inferred.
-   */
   task?: string | null;
   run?: Runner<R>;
-  /** The Flock's GitLab, which a checkout's remote is on whatever its name. */
   gitlabHost?: string | undefined;
 }
 
-/** The one place a subprocess is started for inference; the MR step borrows it too. */
 export const shell = shellRun;
 
 export function inferInput(name: string, strategy: InputStrategy, ctx: InferContext) {
@@ -144,14 +112,9 @@ export function inferInput(name: string, strategy: InputStrategy, ctx: InferCont
 
       case "diff-target": {
         const candidates = yield* targetCandidates(ctx);
-        // Inference still picks the value; the menu only lets the human override it,
-        // and the head of the list is what inference alone would have chosen.
         const baseRef = (yield* defaultBase(run, ctx.cwd)) ?? "";
         const project = (yield* projectHere(ctx.cwd, run)) ?? undefined;
         const common = { ...base, candidates, base: baseRef, project };
-        // A directory that is not a checkout offers nothing to infer from, and a
-        // list of only menu-only entries is the same answer: ask rather than review
-        // whichever unrelated merge request happens to sort first.
         const inferred = Option.getOrUndefined(Arr.findFirst(candidates, (c) => !c.menuOnly));
         if (!inferred) {
           return {
@@ -167,7 +130,6 @@ export function inferInput(name: string, strategy: InputStrategy, ctx: InferCont
 
       case "work-source": {
         const candidates = yield* workSourceCandidates(ctx);
-        // One candidate is an answer; none or several are a question for the human.
         if (candidates.length === 1) return { ...base, ...candidates[0]! };
         return {
           ...base,
@@ -182,10 +144,7 @@ export function inferInput(name: string, strategy: InputStrategy, ctx: InferCont
       case "flag":
         return { ...base, value: "false", source: "default" };
 
-      // Declared so the placeholder resolves, empty until a workflow embedding this
-      // one passes a value of its own. Never asked for.
       case "optional":
-      // A launch's own choice, which no start infers.
       case "reach":
       case "internal":
         return { ...base, value: "", source: "default" };
@@ -242,11 +201,6 @@ export function defaultBase(run: NonNullable<InferContext["run"]>, cwd: string) 
   return returned;
 }
 
-/**
- * This repo's succeeded Runs, newest first — what every "has this been done here before?"
- * question reads. A fresh start asks about no Task and so sees the Runs recorded before
- * Tasks existed: an upgraded installation's earlier plans stay findable.
- */
 function finishedHere(runs: ReadonlyArray<RunFacts>, cwd: string, task?: string | null) {
   return Arr.filter(
     runs,
@@ -254,11 +208,6 @@ function finishedHere(runs: ReadonlyArray<RunFacts>, cwd: string, task?: string 
   );
 }
 
-/**
- * The newest finished Runs for this repo that wrote a plan, newest first. Any
- * workflow may write one (`plan`, `architecture`), so having `plan/SPEC.md` is the
- * test, not the workflow's name (ADR-0002).
- */
 export function planDirs(
   runs: ReadonlyArray<RunFacts>,
   cwd: string,
@@ -289,10 +238,6 @@ export function planDirs(
   return returned;
 }
 
-/**
- * Targets this repo's finished Runs have reviewed, newest first, deduplicated.
- * Reviewing is a rally, and the second review should not need the link pasted again.
- */
 export function reviewedTargets(
   runs: ReadonlyArray<RunFacts>,
   cwd: string,
@@ -325,7 +270,6 @@ export function reviewedTargets(
   return returned;
 }
 
-/** Everything that could describe the work here: the recent plans, then the branch's ticket. */
 export function workSourceCandidates(ctx: InferContext) {
   const returned: Effect.Effect<
     WorkSourceCandidate[],
@@ -342,11 +286,6 @@ export function workSourceCandidates(ctx: InferContext) {
   return returned;
 }
 
-/**
- * Everything this repo could sensibly have a review pointed at, in the order plain
- * inference would have picked them: the branch's own MR (else mine), the branch
- * against its base, then the working tree.
- */
 export function targetCandidates(ctx: InferContext) {
   const returned: Effect.Effect<
     Candidate[],
@@ -355,8 +294,6 @@ export function targetCandidates(ctx: InferContext) {
   > = Effect.gen(function* () {
     const run = ctx.run ?? shell;
     const out: Candidate[] = [];
-    // Whether this directory is a checkout at all decides which candidates exist:
-    // a group folder has no branch and no working tree to review.
     const inRepo = (yield* run("git", ["rev-parse", "--git-dir"], ctx.cwd)).code === 0;
     const project = inRepo ? yield* projectHere(ctx.cwd, run) : null;
 
@@ -379,7 +316,6 @@ export function targetCandidates(ctx: InferContext) {
         label: `${words.sign}${open.iid}`,
       });
     } else if (forge !== null) {
-      // This branch has none, so offer the ones I would otherwise go looking for.
       for (const mine of yield* myOpenMrs(forge, run, ctx.cwd, project)) out.push(mine);
     }
 
@@ -395,9 +331,6 @@ export function targetCandidates(ctx: InferContext) {
       }
 
       const dirty = Str.trim((yield* run("git", ["status", "--porcelain"], ctx.cwd)).stdout) !== "";
-      // Last, and always there when nothing else is: the working tree is the one
-      // target every checkout has, and inference already fell back to it. Menu-only
-      // entries do not count, or inference would have nothing left to land on.
       if (dirty || Arr.every(out, (c) => Boolean(c.menuOnly))) {
         out.push({
           kind: "worktree",
@@ -407,8 +340,6 @@ export function targetCandidates(ctx: InferContext) {
         });
       }
     }
-    // After inference, so "launch and take the default" is unchanged: what this repo
-    // has reviewed before, for the second review of the same thing.
     if (ctx.runs) {
       const offered = new Set(Arr.map(out, (c) => c.value));
       for (const remembered of yield* reviewedTargets(
@@ -425,7 +356,6 @@ export function targetCandidates(ctx: InferContext) {
   return returned;
 }
 
-/** Open merge requests I am on either side of, in iid order. */
 function myOpenMrs(
   forge: Forge,
   run: NonNullable<InferContext["run"]>,
@@ -460,10 +390,6 @@ function myOpenMrs(
   return answer;
 }
 
-/**
- * What the human typed for a review target: an MR iid or URL, a `base...head`
- * range, the working tree, or a bare ref meaning that ref against the base.
- */
 export function classifyTarget(typed: string, baseRef: string, project: string | null = null) {
   const text = Str.trim(typed);
   if (text === "") {
@@ -472,8 +398,6 @@ export function classifyTarget(typed: string, baseRef: string, project: string |
   }
   const source = "typed";
 
-  // A URL names its own project, which is the whole point of pasting one; a bare iid means
-  // one in the project this directory belongs to.
   const mr = readMrRef(text, { project });
   if (mr) {
     const words = mrWords(mr);
@@ -519,32 +443,19 @@ export function classifyTarget(typed: string, baseRef: string, project: string |
   return returned;
 }
 
-/**
- * A `diff-target` given on the command line gets the same normalisation a typed one
- * gets from the menu, so a pasted merge-request URL becomes `mr:<project>!<iid>`
- * rather than falling through to `worktree` on its shape alone.
- */
 export function classifyGivenTarget(typed: string, ctx: InferContext) {
   const returned: Effect.Effect<Candidate | null, never, ChildProcessSpawner.ChildProcessSpawner> =
     Effect.gen(function* () {
-      // An already-normalised target — from a chained Run, a resume, or a careful
-      // human — is passed through: classifying it again would nest its prefix.
       const kind = targetKind(Str.trim(typed));
       if (kind !== "") return { kind, value: Str.trim(typed), source: "typed" };
       const run = ctx.run ?? shell;
       const baseRef = (yield* defaultBase(run, ctx.cwd)) ?? "";
       const project = yield* projectHere(ctx.cwd, run);
-      // Null for a shape nothing here recognises: the caller refuses it rather than guess.
       return classifyTarget(typed, baseRef, project);
     });
   return returned;
 }
 
-/**
- * A `diff-target` naming several merge requests, as `release` and `stage` take a set: each
- * normalised as one given alone is, joined by a space, or `unresolved`, the first that is no
- * merge request. Null where it names one, or none of its words is a merge request.
- */
 export function classifyGivenSet(typed: string, ctx: InferContext) {
   const returned: Effect.Effect<
     { readonly value: string } | { readonly unresolved: string } | null,
@@ -567,7 +478,6 @@ export function classifyGivenSet(typed: string, ctx: InferContext) {
   return returned;
 }
 
-/** The Linear issue a typed work source names, by its URL or bare id, and null for anything else. */
 export function linearIssueOf(typed: string) {
   const text = Str.trim(typed);
   const url = /linear\.app\/[^/\s]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/.exec(text);
@@ -581,7 +491,6 @@ export function linearIssueOf(typed: string) {
   return returned;
 }
 
-/** What the human typed: a plan directory, a Linear issue, or the work in their own words. */
 export function classifyWorkSource(typed: string) {
   const returned: Effect.Effect<
     WorkSourceCandidate,
@@ -592,9 +501,6 @@ export function classifyWorkSource(typed: string) {
     const text = Str.trim(typed);
     const source = "typed";
 
-    // A finished Run whose outcome needs more work. Named rather than inferred: a
-    // follow-up reuses that Run's branch and updates its merge request, and neither of
-    // those is something to guess at from a path.
     if (pipe(text, Str.startsWith("followup:")))
       return {
         kind: "followup",
@@ -606,8 +512,6 @@ export function classifyWorkSource(typed: string) {
     const issue = linearIssueOf(text);
     if (issue !== null) return { kind: "linear", value: issue, source };
 
-    // A review run's own dir: the findings are the spec, and the reviewed target is
-    // what the work happens on.
     if (yield* isReviewRun(text))
       return { kind: "review", value: text, source, label: textLabel(path.basename(text)) };
 
@@ -619,14 +523,11 @@ export function classifyWorkSource(typed: string) {
   return returned;
 }
 
-/** A run dir that produced a review, which is a thing `implement` can be pointed at. */
 function isReviewRun(dir: string) {
   const returned: Effect.Effect<boolean, PlatformError, FileSystem.FileSystem | Path.Path> =
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      // The review a human reads, and the findings beside it a card counts: a Run's
-      // directory, not a plan's.
       return (
         dir !== "" &&
         (yield* fs.exists(path.join(dir, REVIEW_FILE))) &&
@@ -636,7 +537,6 @@ function isReviewRun(dir: string) {
   return returned;
 }
 
-/** What one Input's menu says, so the two of them share the machinery below. */
 interface MenuSpec {
   header: string;
   hint: string;
@@ -661,10 +561,6 @@ const TARGET_MENU: MenuSpec = {
   classify: (typed, r) => Effect.succeed(classifyTarget(typed, r.base ?? "", r.project ?? null)),
 };
 
-/**
- * Settles an Input the human chooses from: its candidates as a menu, plus
- * "Type it…" for anything not listed. False when they backed out.
- */
 function resolveFromMenu<E, R>(r: Resolution, prompts: InputPrompts<E, R>, spec: MenuSpec) {
   const returned: Effect.Effect<boolean, PlatformError | E, FileSystem.FileSystem | Path.Path | R> =
     Effect.gen(function* () {
@@ -699,7 +595,6 @@ function resolveFromMenu<E, R>(r: Resolution, prompts: InputPrompts<E, R>, spec:
   return returned;
 }
 
-/** The menu an Input needs, whichever Input it is. */
 export function resolveCandidates<E, R>(r: Resolution, prompts: InputPrompts<E, R>) {
   const returned: Effect.Effect<boolean, PlatformError | E, FileSystem.FileSystem | Path.Path | R> =
     resolveFromMenu(r, prompts, r.strategy === "diff-target" ? TARGET_MENU : WORK_SOURCE_MENU);
@@ -734,7 +629,6 @@ function isPlanDir(dir: string) {
   return returned;
 }
 
-/** A few words, enough to name the Run after work that has no shorter name. */
 function textLabel(text: string) {
   const words = Arr.filter(
     Str.split(pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]+/g, " ")), " "),
@@ -750,7 +644,6 @@ function textLabel(text: string) {
   return returned;
 }
 
-/** Inputs as the prompts see them: a work-source also exposes `<name>_kind`. */
 export function inputValues(resolutions: Resolution[]) {
   const values: Record<string, string> = {};
   for (const r of resolutions) {
@@ -763,11 +656,9 @@ export function inputValues(resolutions: Resolution[]) {
 export function confirmLine(
   workflow: string,
   resolutions: Resolution[],
-  /** The branch a mutating Run was given, and where it came from. */
   branch?: { name: string | null; source: string | null } | null,
 ) {
   const parts = Arr.map(resolutions, (r) => {
-    // A target's value already says its kind (`mr:42`), so only name it when it adds something.
     const where =
       r.kind && !pipe(r.value, Str.startsWith(r.kind)) ? `${r.kind} · ${r.source}` : r.source;
     return `${r.name}=${abbreviate(r.value) || "(empty)"} [${where}]`;
@@ -777,7 +668,6 @@ export function confirmLine(
   return returned;
 }
 
-/** Free text is a whole sentence; the confirm line only has room for the start of it. */
 function abbreviate(value: string) {
   const returned: string = value.length > 60 ? `${pipe(value, Str.slice(0, 57))}...` : value;
   return returned;

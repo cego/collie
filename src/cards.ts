@@ -1,16 +1,3 @@
-// One slice of work, as a human would want it handed to them: what was asked for, what
-// changed, what backs that up, and what nobody checked.
-//
-// The discipline is in `readiness` and `significance`. Readiness says how far the evidence
-// goes — an agent's claim, a change you could look at, or a verification bound to this
-// exact tree — and never further than it goes. Significance says whether this is worth
-// interrupting a human for, and it is decided by **rules over facts**: a card is not more
-// important because the narrative sounds urgent, and there is no path here by which a
-// model raises its own priority.
-//
-// Nothing in this file focuses anything. A card arriving must never move a human off what
-// they are doing; the only thing that still takes focus is a pending question.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -63,9 +50,7 @@ export const CardSchema = Schema.Struct({
       ref: Schema.String,
     }),
   ),
-  /** What an agent said. Always here, never among the verifications. */
   claims: Schema.Array(Schema.Struct({ text: Schema.String, ref: Schema.String })),
-  /** What nobody checked. The half of a card that is usually missing from a report. */
   missing: Schema.Array(Schema.String),
   inspect: Schema.Array(
     Schema.Struct({ what: Schema.String, how: Schema.String, note: Schema.String }),
@@ -100,48 +85,28 @@ export const readFinalCard = Effect.fn("Cards.final")(function* (runDir: string)
   return yield* lastRunJournal(cardsPath(runDir), CardJson, ["final"]);
 });
 
-/**
- * When the Run last finished, from the final card its finish writes: the one ending the
- * host records without the Run's module. Null where it never finished, or was stopped.
- */
 export const finishedOnRecord = Effect.fn("Cards.finishedOnRecord")(function* (runDir: string) {
   return Option.getOrUndefined(yield* readFinalCard(runDir))?.at ?? null;
 });
 
-/** The newest card per slice of work: a re-written card replaces the one it re-writes. */
 export function newest(cards: ReadonlyArray<Card>) {
   const latest = new Map<string, Card>();
   for (const card of cards) latest.set(`${card.step}#${card.iteration}#${card.kind}`, card);
   return [...latest.values()];
 }
 
-/**
- * The role whose work is a review. A workflow declares its steps' roles, and that is the
- * domain fact a card is built from: a step called anything at all is a review when a
- * reviewer did it, and one called `review-the-docs` done by an implementer is not.
- */
 export const REVIEW_ROLE = "reviewer";
 
-/** Which card the work of this role writes. */
 export function kindForRole(role: string | null | undefined) {
   return role === REVIEW_ROLE ? "review" : "slice";
 }
 
 export interface ReadinessFacts {
-  /** An agent said something is done: a progress checkpoint, or an Output claim. */
   readonly claimed: boolean;
-  /** There is something to look at, at the revision this card records. */
   readonly changed: boolean;
-  /** A passing verification whose end snapshot is this card's revision. */
   readonly verifiedHere: boolean;
 }
 
-/**
- * How far the evidence goes, and no further. `claimed` is an agent's word for it;
- * `inspect-ready` means there is something a human could look at; `verified` means a
- * command Collie watched passed on *this* tree. A verification from a different revision
- * does not make this card verified — that is what `stale` is for.
- */
 export function readiness(facts: ReadinessFacts) {
   if (facts.verifiedHere && facts.changed) return "verified";
   if (facts.changed && facts.claimed) return "inspect-ready";
@@ -161,14 +126,6 @@ export interface SignificanceFacts {
   readonly ended: "failed" | "stopped" | null;
 }
 
-/**
- * Whether this is worth a human's attention, decided by rules over facts. There is no
- * input here a model writes: a narrative that sounds urgent changes nothing, which is the
- * point — significance is what decides whether something interrupts somebody.
- *
- * `decision` outranks `consequential` because a decision is the human being *waited on*,
- * and `consequential` is the human being told.
- */
 export function significance(facts: SignificanceFacts) {
   if (
     facts.pendingChoice ||
@@ -183,7 +140,6 @@ export function significance(facts: SignificanceFacts) {
   return "routine";
 }
 
-/** How a verification stands against *this* card's revision. */
 export function verificationOn(
   verification: Verification,
   revision: { readonly head_sha: string; readonly fingerprint: string },
@@ -198,11 +154,6 @@ export function verificationOn(
   return returned;
 }
 
-/**
- * What to look at, and how — as text, never as something Collie will run. An `inspect`
- * entry is a suggestion for a human's own shell; a card that executed its own suggestions
- * would be a card that changed what it was describing.
- */
 export function inspectFor(options: {
   readonly worktree: string | null;
   readonly base: string;
@@ -225,7 +176,6 @@ export function inspectFor(options: {
   return entries;
 }
 
-/** A card's own text, with anything credential-shaped taken out before it is written. */
 export function clean(card: Card) {
   return {
     ...card,
@@ -235,11 +185,6 @@ export function clean(card: Card) {
   };
 }
 
-/**
- * The facts a card is built from, gathered from the Run's own records and its tree.
- * Everything here is something already written down: a card is a view of the evidence, so
- * anything it says that nothing else recorded would be a claim nobody can check.
- */
 export interface CardSources {
   readonly summary?: string;
   readonly blocker?: string;
@@ -267,11 +212,6 @@ export interface CardSources {
   readonly narrative: string | null;
 }
 
-/**
- * One card. Assembled rather than described: `readiness` and `significance` are computed
- * from the facts above, so a caller cannot hand in a card that says it is verified when
- * nothing verified it.
- */
 export function buildCard(sources: CardSources) {
   const verifications = Arr.map(sources.verifications, (entry) =>
     verificationOn(entry, sources.revision),
@@ -308,11 +248,6 @@ export function buildCard(sources: CardSources) {
   });
 }
 
-/**
- * What an implementer says it has done, mid-step. Its own claims, labelled as claims: the
- * point of a checkpoint is that a human sees a slice land before the whole step is over,
- * and the point of the label is that seeing it is not the same as it being true.
- */
 const CheckpointSchema = Schema.Struct({
   ticket: Schema.String,
   status: Schema.Literals(["started", "done"]),
@@ -337,7 +272,6 @@ export const readCheckpoints = Effect.fn("Cards.readCheckpoints")(function* (run
   );
 });
 
-/** Records a checkpoint, one per ticket: the latest is the ticket's. */
 export const writeCheckpoint = (runDir: string, checkpoint: Checkpoint) =>
   Schema.encodeEffect(CheckpointJson)(checkpoint).pipe(
     Effect.orDie,

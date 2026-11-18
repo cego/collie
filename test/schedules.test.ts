@@ -1,7 +1,3 @@
-// A Schedule fired by the host Collie ships: `collie schedule` adds it, and the engine's
-// own persisted clock wakes each occurrence. The host is told seconds are allowed
-// (`COLLIE_HOST_SCHEDULE_SECONDS`), so an occurrence is seconds away rather than a minute.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -23,7 +19,6 @@ import { exec } from "./support/command";
 const FAST = { COLLIE_HOST_SCHEDULE_SECONDS: "1" };
 const MODULES = ["hello.workflow.ts", "proof.workflow.ts", "helper.ts", "notes.md"];
 
-/** `collie schedule …` against a host that takes seconds, which the first command starts. */
 const schedule = (world: World, args: ReadonlyArray<string>) =>
   collie(world, ["schedule", ...args], FAST);
 
@@ -33,7 +28,6 @@ const listed = (world: World) =>
     Effect.orDie,
   );
 
-/** Each Run the Schedule started, by the occurrence its start request names. */
 const scheduled = (world: World, name: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -58,7 +52,6 @@ const scheduled = (world: World, name: string) =>
     return found.sort((one, other) => pipe(one.occurrence, Str.localeCompare(other.occurrence)));
   });
 
-/** Waits until the wall clock is past `ms`: what an occurrence that must not fire is given. */
 const past = (ms: number) =>
   until(
     () => Clock.currentTimeMillis,
@@ -103,12 +96,10 @@ test(
           const runs = yield* scheduled(world, "hello-often");
           expect(new Set(Arr.map(runs, (one) => one.occurrence)).size).toBe(runs.length);
 
-          // A listing says `run` only once that Run has ended; until then, `waiting-for-run`.
           const list = yield* until(
             () => listed(world),
             (now) => ["run", "refused"].includes(now.schedules[0]?.last?.outcome.kind ?? ""),
           );
-          // An occurrence that came due while the pause was written is refused, and is the last.
           const last = list.schedules[0]?.last?.outcome;
           if (last?.kind === "refused") expect(last.reason).toBe("the Schedule was paused");
           else expect(last).toMatchObject({ kind: "run", status: "complete" });
@@ -143,7 +134,6 @@ test(
   120_000,
 );
 
-/** The label a Run's start chose for the Task it opens, as the host recorded it. */
 const taskLabelOf = (world: World, runId: string) => {
   const db = new Database(`${world.state}/host.db`, { readonly: true });
   try {
@@ -192,7 +182,6 @@ test(
   120_000,
 );
 
-/** A Run's status and the questions it is waiting on, from the host the CLI started. */
 const viewed = (world: World, runId: string) =>
   Effect.scoped(
     connect(world.state).pipe(
@@ -232,7 +221,6 @@ test(
       (world) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          // Naming reads this Markdown inside admission, while the Schedule's lock is held.
           const source = `${world.project}/admission.md`;
           const entered = `${world.home}/admitting`;
           const hold = `${world.home}/hold-admission`;
@@ -289,7 +277,6 @@ test(
   90_000,
 );
 
-/** The window: the host wrote which Schedule it was removing, then stopped. */
 const markRemoving = (world: World, name: string, request: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -398,7 +385,6 @@ test(
             (runs) => runs.length === 1,
           );
           yield* asking(world, first!.run);
-          // The next occurrence falls while it asks, and starts no Run.
           const fell = epochMs(first!.occurrence) + 10_000;
           yield* past(fell + 1_000);
           expect(yield* scheduled(world, "asks")).toHaveLength(1);
@@ -413,7 +399,6 @@ test(
             (all) => all.length === 2,
           );
           const second = runs[1]!;
-          // The occurrence that fell while it was going, at once, rather than the one after.
           expect(second.occurrence).toBe(isoOf(fell));
           yield* asking(world, second.run);
 
@@ -461,7 +446,6 @@ test(
               }),
             (alive) => !alive,
           );
-          // Any command starts the next host.
           yield* listed(world);
           yield* past(epochMs(first!.occurrence) + 5_000);
           expect(yield* scheduled(world, "kept")).toHaveLength(1);
@@ -486,7 +470,6 @@ test(
       "collie-schedule-missed-",
       (world) =>
         Effect.gen(function* () {
-          // Its first occurrence falls after the host is stopped, which under load takes seconds.
           const second = Math.floor((yield* Clock.currentTimeMillis) / 1000);
           const seconds = Array.from({ length: 26 }, (_, at) => (second + 8 + 2 * at) % 60);
           const added = yield* addAsking(
@@ -503,7 +486,6 @@ test(
           const pending = (yield* Schema.decodeUnknownEffect(ScheduleChanged)(
             added.envelope.data,
           ).pipe(Effect.orDie)).schedule?.next;
-          // Three occurrences fall with no host to fire them.
           yield* past(epochMs(pending!) + 6_000);
           const restarted = yield* Clock.currentTimeMillis;
           yield* listed(world);
@@ -549,7 +531,6 @@ test(
             () =>
               readAudit(trail).pipe(
                 Effect.provide(memoryRecords),
-                // The first occurrence can fall before the checkout has gone.
                 Effect.map((all) =>
                   Arr.filter(
                     all,
@@ -631,7 +612,6 @@ test(
           const fs = yield* FileSystem.FileSystem;
           yield* addAsking(world, "lost", "*/2 * * * * *");
           yield* stopHost(world.state);
-          // An occurrence that fired before the stop lost its Run's execution with the engine.
           const before = new Set(Arr.map(yield* scheduled(world, "lost"), (one) => one.run));
           for (const name of yield* fs.readDirectory(world.state))
             if (pipe(name, Str.startsWith("host.db"))) yield* fs.remove(`${world.state}/${name}`);

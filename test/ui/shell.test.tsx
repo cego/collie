@@ -1,6 +1,3 @@
-// What the tab is around the board: the boundary that catches a render, the screen it
-// falls back to, and the one overlay the board puts up by itself.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
@@ -75,9 +72,6 @@ test("the render-error screen can do the one thing it offers, and gives the mous
       yield* Effect.promise(() => t.flush());
 
       expect(t.captureCharFrame()).toContain("Collie stopped drawing");
-      // `App`'s handler is gone by the time this is on screen — `useKeyboard` removes it
-      // in `onCleanup` — so a `q` that only App implemented left the pane stuck until it
-      // was killed from outside. This screen registers its own.
       t.mockInput.pressKey("q");
       yield* Effect.promise(() => t.flush());
       expect(quits).toHaveLength(1);
@@ -86,8 +80,6 @@ test("the render-error screen can do the one thing it offers, and gives the mous
       yield* Effect.promise(() => t.flush());
       expect(quits).toHaveLength(2);
 
-      // And `App`'s `onBlur` went with it, which left the mouse captured and took
-      // copy-and-paste out of every other herdr pane.
       expect(t.renderer.useMouse).toBe(false);
     }),
   ));
@@ -132,8 +124,6 @@ test("a proposal that has appeared is drawn, and Enter confirms exactly what is 
       };
       const app = yield* mount(appState({ live }));
 
-      // Drawn without being asked for: a proposal waiting on an answer is the board
-      // telling the human it is waiting, and it takes no pane focus to do it.
       expect(app.acted()).toEqual([{ _tag: "Preview", id: "p1" }]);
       yield* app.setState(appState({ live, previewing: "p1" }));
       expect(app.frame()).toContain("You want the implementer to slow down.");

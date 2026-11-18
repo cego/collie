@@ -1,7 +1,3 @@
-// Onboarding a Machine from Desktop: core saves it where it is new; Desktop's own version of
-// the runner goes there only once its signature verifies; and `collie onboard` runs with it,
-// each step told as it comes.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -25,18 +21,15 @@ const ARCH = new Map([
   ["arm64", "arm64"],
 ]);
 
-/** The release asset's platform for what `uname -sm` printed, or null where there is none. */
 export const platformOf = (uname: string) => {
   const [os, arch = ""] = Str.split(Str.trim(uname), /\s+/);
   const [named, cpu] = [OS.get(os), ARCH.get(arch)];
   return named !== undefined && cpu !== undefined ? `${named}-${cpu}` : null;
 };
 
-/** The shared download, refusing with the reason Desktop shows. */
 export const verifiedRunner = (...args: Parameters<typeof sharedVerifiedRunner>) =>
   sharedVerifiedRunner(...args).pipe(Effect.mapError((refused) => refused.reason));
 
-/** What a command said and how it exited, `stdin` given to it whole. */
 export const ranWith = (command: ReadonlyArray<string>, stdin?: Uint8Array) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -64,18 +57,15 @@ export const shOn = (route: ShellRoute, script: string, stdin?: Uint8Array) =>
   route.execute?.(script, stdin) ??
   Effect.flatMap(route.sh(script), (command) => ranWith(command, stdin));
 
-/** SHA-256 of stdin, as Linux and macOS each have it. */
 const SHA256 = "{ sha256sum 2>/dev/null || shasum -a 256; }";
 
 const placedAt = (version: string) => `"$HOME/.cache/collie/runners/collie-${version}"`;
 
-/** Puts the runner on the Machine unless it is there already, and checks what arrived. */
 const place = (route: ShellRoute, version: string, runner: { bytes: Uint8Array; sha256: string }) =>
   Effect.gen(function* () {
     const file = placedAt(version);
     const there = yield* shOn(route, `${SHA256} < ${file} 2>/dev/null`);
     if (pipe_(there.out, Str.slice(0, 64)) === runner.sha256) return;
-    // Not `shOn`: a link carries stdin as text, which would change a binary's bytes.
     const upload = yield* route.sh(
       Arr.join(
         [
@@ -102,7 +92,6 @@ const Ended = Schema.Literals([
   "failed",
 ]);
 
-/** A line of `collie --json onboard`: an event, then the envelope. */
 const Line = Schema.fromJsonString(
   Schema.Union([
     Schema.Struct({ event: Schema.Literal("start"), step: Schema.String, title: Schema.String }),
@@ -145,7 +134,6 @@ export const onboardingSkips = (
         Arr.some(before, (one) => one.step === step && one.status === "skipped")),
   );
 
-/** Each change to a run, told as it is made; the run as it stands is the last one told. */
 export const tracked = (told: (run: OnboardRun) => Effect.Effect<void>, start = NOT_STARTED) => {
   let run = start;
   const change = (to: (now: OnboardRun) => OnboardRun) =>
@@ -156,7 +144,6 @@ export const tracked = (told: (run: OnboardRun) => Effect.Effect<void>, start = 
   return {
     current: () => run,
     change,
-    /** A new step, or what changed about one already told. */
     step: (step: Pick<OnboardStep, "step"> & Partial<OnboardStep>) =>
       change((now) => {
         const at = Option.getOrElse(
@@ -178,24 +165,15 @@ export const tracked = (told: (run: OnboardRun) => Effect.Effect<void>, start = 
 
 export interface OnboardWith {
   readonly version: string;
-  /** Where releases are downloaded from, each under its version. */
   readonly releases: string;
-  /** Where the runners downloaded are kept on this computer. */
   readonly runners: string;
   readonly key?: string;
-  /** `KEY=value` lines `collie onboard` reads on stdin; none where empty. */
   readonly secrets?: string;
-  /** Opens a login a step streams in this computer's browser. */
   readonly open?: (url: string) => Effect.Effect<void>;
   readonly skip?: ReadonlyArray<Skippable>;
-  /** The GitLab the Machine is onboarded against. */
   readonly gitlabHost?: string;
 }
 
-/**
- * Onboards the Machine a route reaches with Desktop's own version: its runner first, then
- * `collie onboard`'s steps as it streams them. Answers with how the run ended.
- */
 export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
   route: ShellRoute,
   {
@@ -267,7 +245,6 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
       }),
     );
     const said = new Response(child.stderr).text();
-    // One forward per port: cancelling a second would drop the first.
     const forwarded = new Set<number>();
     yield* Stream.fromReadableStream({ evaluate: () => child.stdout, onError: String }).pipe(
       Stream.decodeText(),
@@ -283,18 +260,19 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
             if (line.event === "start")
               return run.step({ step: line.step, title: line.title, status: "running" });
             if (line.event === "human")
-              return run.step({ step: line.step, detail: line.detail, url: line.url }).pipe(
-                // Its redirect comes back to the Machine's port, now this computer's too.
-                Effect.andThen(
-                  line.port === undefined || forwarded.has(line.port)
-                    ? Effect.void
-                    : route
-                        .forward(line.port)
-                        .pipe(Effect.andThen(Effect.sync(() => void forwarded.add(line.port!)))),
-                ),
-                Effect.ignore,
-                Effect.andThen(open(line.url)),
-              );
+              return run
+                .step({ step: line.step, detail: line.detail, url: line.url })
+                .pipe(
+                  Effect.andThen(
+                    line.port === undefined || forwarded.has(line.port)
+                      ? Effect.void
+                      : route
+                          .forward(line.port)
+                          .pipe(Effect.andThen(Effect.sync(() => void forwarded.add(line.port!)))),
+                  ),
+                  Effect.ignore,
+                  Effect.andThen(open(line.url)),
+                );
             const { event: _, ...result } = line;
             return run.step(result);
           },
@@ -331,17 +309,11 @@ const DoctorSaid = Schema.fromJsonString(
   ]),
 );
 
-/** Doctor's optional checks for what onboarding sets up by default, by onboarding's step. */
 const DEFAULT_STEPS = new Map([
   ["helle", "helle"],
   ["linear mcp", "linear"],
 ]);
 
-/**
- * How `collie doctor` finds the Machine, as an onboarding lists what is left: each failed
- * check, and each default step doctor finds not working though it counts it ok. None where
- * doctor did not answer.
- */
 export const doctorOn = (route: Pick<Route, "collie">, gitlabHost?: string) =>
   route
     .collie([
@@ -383,9 +355,5 @@ export const doctorOn = (route: Pick<Route, "collie">, gitlabHost?: string) =>
       Effect.option,
     );
 
-/**
- * Adds the Machine to core with `collie machine add`, whose `via` rides the SSH connection
- * onboarding opened, once the release it placed there carries `hc`.
- */
 export const addToCore = (collie: ReadonlyArray<string>, label: string, target: string) =>
   collieSaid(collie, ["machine", "add", label, "--target", target]).pipe(Effect.asVoid);

@@ -1,5 +1,3 @@
-// What a cell's samples come to, and whether it meets the bar.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 
@@ -8,7 +6,6 @@ export interface CellSummary {
   readonly p95: number;
   readonly max: number;
   readonly n: number;
-  /** Samples that painted a Flow other than the host's. */
   readonly failed: number;
 }
 
@@ -26,7 +23,6 @@ export const summaryOf = (samples: ReadonlyArray<number>, failed: number) => {
   };
 };
 
-/** Why each cell misses the bar: a p95 or a max at or over it, or a wrong Flow. */
 export const barFailures = (cells: Readonly<Record<string, CellSummary>>, bar: number) =>
   Arr.flatMap(Rec.toEntries(cells), ([name, cell]) => [
     ...(cell.n === 0 ? [`${name}: no samples`] : []),

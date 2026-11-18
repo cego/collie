@@ -1,6 +1,3 @@
-// What the host does on its own, whether or not anyone is looking: the merge watch, each
-// Herd's News, the cleanup sweep, and the board and chat terminals kept running.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -31,7 +28,6 @@ import { sweep, sweeping, type Sweeper } from "./cleanup";
 import { keepDiffs } from "./run-detail";
 import { Artefacts } from "./artefacts";
 
-/** The Runs still going whose drift was escalated to the human, by constraint. */
 const escalatedDrift = Effect.fn("SideJobs.escalatedDrift")(function* (
   runs: ReadonlyArray<RunFacts>,
 ) {
@@ -47,16 +43,11 @@ const escalatedDrift = Effect.fn("SideJobs.escalatedDrift")(function* (
   return drifting;
 });
 
-/**
- * What happened to one Herd's Runs, written down for its conversation to pick up. No
- * model is called: an unchanged Herd finds no events and writes nothing.
- */
 const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
   stateDir: string,
   key: string,
   runs: ReadonlyArray<RunFacts>,
   views: ReadonlyArray<TaskView>,
-  /** Reopened Runs whose agent has finished what it was told, by Run. */
   done: ReadonlyMap<string, Reopened>,
 ) {
   const dir = yield* herdDir(stateDir, key);
@@ -70,7 +61,6 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
   for (const event of disputes) held.add(event.key);
   for (const event of [...eventsIn(runs, drifting, ready, done), ...disputes]) {
     if (!held.has(event.key) || (said.has(event.key) && !gone.has(event.key))) continue;
-    // Remembered only once it is in the journal, so a failed write is retried next round.
     const queued = yield* appendNews(file, {
       key: event.key,
       run: event.run,
@@ -85,7 +75,6 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
   );
 });
 
-/** The finished Runs whose work has a disposition, or that someone has seen. */
 const disposed = Effect.fn("SideJobs.disposed")(function* (runs: ReadonlyArray<RunFacts>) {
   const out = new Set<string>();
   for (const run of runs) {
@@ -97,7 +86,6 @@ const disposed = Effect.fn("SideJobs.disposed")(function* (runs: ReadonlyArray<R
   return out;
 });
 
-/** Each Herd's News from its own Runs; a Run whose Task records no Herd is the host's own Herd's. */
 const news = Effect.fn("SideJobs.news")(function* (
   env: PluginEnv,
   sessions: ReadonlyArray<LiveHerd>,
@@ -106,7 +94,6 @@ const news = Effect.fn("SideJobs.news")(function* (
   done: ReadonlyMap<string, Reopened>,
 ) {
   if (!(yield* loadDefaults(env.userDir)).proactive) return;
-  // Unread Tasks would put every Run in the host's own Herd and retire the rest's News.
   const herdOfTask = new Map(Arr.map(yield* listTasks, (task) => [task.id, task.herd ?? null]));
   const own = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   for (const { herd } of sessions) {
@@ -119,7 +106,6 @@ const news = Effect.fn("SideJobs.news")(function* (
   }
 });
 
-/** One job, again and again for as long as the host runs; a round that fails is skipped. */
 const every = <E, R>(spaced: Duration.Input, round: Effect.Effect<unknown, E, R>) =>
   round.pipe(
     Effect.catchCause((cause) => Effect.logWarning("a side job's round failed", cause)),
@@ -127,14 +113,10 @@ const every = <E, R>(spaced: Duration.Input, round: Effect.Effect<unknown, E, R>
     Effect.asVoid,
   );
 
-/** How often News looks again, and the diffs of Runs that just ended are kept. */
 const LOOK_EVERY = "5 seconds";
-/** How often the merge watch looks; a forge is asked about a merge request every 5 minutes whatever this is. */
 const MERGES_EVERY = "10 seconds";
-/** How long after one cleanup sweep ends the next begins (ADR-0045). */
 const SWEEP_EVERY = "10 minutes";
 
-/** The host's own cleanup sweep, ten minutes after it starts and after each one ends. */
 export const sweepEvery = <E, R>(
   stateDir: string,
   sweepers: Effect.Effect<ReadonlyArray<Sweeper>, E, R>,
@@ -143,28 +125,13 @@ export const sweepEvery = <E, R>(
     Effect.andThen(every(SWEEP_EVERY, sweeping.withPermit(sweep(sweepers, stateDir, "host")))),
   );
 
-/** The core terminal this Machine's board runs in, and what `hc attach` reaches it by. */
 export const BOARD_TERMINAL = "collie-board";
 
-/**
- * How long after a round that left the board or chat unstarted the next may begin: a
- * second, doubling with each round that fails again, up to five minutes.
- */
 export const keepAgainAfter = (failures: number) =>
   Math.min(1_000 * 2 ** Math.max(failures - 1, 0), 5 * 60_000);
 
-/** How often a round that is waiting to be tried again looks whether its wait is over. */
 const KEEP_RETRY_TICK = "1 second";
 
-/**
- * The board and chat, each a core terminal of its own on this Machine whatever runs its
- * agents: started when core is first followed, and again whenever either has ended.
- *
- * A start core refuses is tried again after `keepAgainAfter`, never on the next tick:
- * core says a terminal it could not start was removed, so retrying on that tick starts
- * again at once, forever, and the host does nothing else
- * ([Agents on core](../docs/internals.md#agents-on-core)).
- */
 export const keepTerminals = (env: PluginEnv, herdr: Herdr) =>
   Effect.gen(function* () {
     let failures = 0;
@@ -176,7 +143,6 @@ export const keepTerminals = (env: PluginEnv, herdr: Herdr) =>
     yield* Stream.runForEach(ticks, (tick) =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
-        // Healthy, the timer asks nothing of core; after a failure, nothing does until the wait ends.
         if (tick === "waited" && failures === 0) return;
         if (now < notBefore) return;
         if (yield* keepRound(env, herdr)) {
@@ -190,7 +156,6 @@ export const keepTerminals = (env: PluginEnv, herdr: Herdr) =>
     );
   });
 
-/** One look at the board and chat, starting whichever is not live: whether both now are. */
 const keepRound = (env: PluginEnv, herdr: Herdr) =>
   Effect.gen(function* () {
     const key = yield* machineHerd(env);
@@ -224,10 +189,6 @@ const keepRound = (env: PluginEnv, herdr: Herdr) =>
     ),
   );
 
-/**
- * The merge watch, every `MERGES_EVERY` until the host stops: each Task's merge request is
- * read when its answer is due, and the Runs watching one are judged on what was read.
- */
 export const mergeWatch = <E, R>(opts: {
   readonly env: PluginEnv;
   readonly board: Effect.Effect<
@@ -281,20 +242,16 @@ export const mergeWatch = <E, R>(opts: {
   );
 };
 
-/** Every side job, run until the host stops. */
 export const sideJobs = <E, R>(opts: {
   readonly env: PluginEnv;
   readonly herdr: Herdr;
-  /** The host's latest board, and the Runs it was built from. */
   readonly board: Effect.Effect<
     { readonly runs: ReadonlyArray<RunFacts>; readonly views: ReadonlyArray<TaskView> },
     E,
     R
   >;
   readonly panels: MrPanels;
-  /** Records a merge request the watch found from a branch as that Run's own. */
   readonly record: (runId: string, url: string) => Effect.Effect<void>;
-  /** The host's audited stop, for what a merge settled. */
   readonly stop: (runId: string, reason: string) => Effect.Effect<void>;
   readonly watches: Watches;
   readonly requested: Requested;
@@ -302,9 +259,7 @@ export const sideJobs = <E, R>(opts: {
 }) => {
   const { env, herdr } = opts;
   const kept = new Set<string>();
-  /** Steers to Reopened Runs seen being worked on. */
   const workedOn = new Set<string>();
-  /** Reopened Runs whose agent has since finished; the said journal keeps each to one item. */
   const finishedTold = new Map<string, Reopened>();
   return Effect.flatMap(Effect.cachedWithTTL(liveHerds(herdr, env), SESSIONS_EVERY), (herds) =>
     Effect.all(

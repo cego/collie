@@ -1,7 +1,3 @@
-// A verification is only worth something because of what it refuses to say. These are
-// the refusals: a tree that moved under the command, a tree too big to have been looked
-// at, a directory that is not the Run's, and a command that is not the approved one.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -100,7 +96,6 @@ test("the fingerprint moves for anything that changes what a command would see",
       expect(clean.fingerprint).not.toBe(TOO_LARGE);
       expect((yield* fingerprint(repo)).fingerprint).toBe(clean.fingerprint);
 
-      // Unstaged.
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "two\n");
       const unstaged = yield* fingerprint(repo);
       expect(unstaged.fingerprint).not.toBe(clean.fingerprint);
@@ -108,8 +103,6 @@ test("the fingerprint moves for anything that changes what a command would see",
       yield* git(["add", "-A"]);
       expect((yield* fingerprint(repo)).fingerprint).toBe(unstaged.fingerprint);
 
-      // Untracked content counts: a test that passed because of an uncommitted file
-      // passed on a tree nobody else will get.
       yield* git(["checkout", "-q", "--", "."]);
       yield* git(["reset", "-q"]);
       const back = yield* fingerprint(repo);
@@ -120,7 +113,6 @@ test("the fingerprint moves for anything that changes what a command would see",
       const changed = yield* fingerprint(repo);
       expect(changed.fingerprint).not.toBe(withUntracked.fingerprint);
 
-      // Ignored files are not part of what a command sees under version control.
       yield* fs.makeDirectory(path.join(repo, "ignored"), { recursive: true });
       yield* fs.writeFileString(path.join(repo, "ignored", "big"), "noise\n");
       expect((yield* fingerprint(repo)).fingerprint).toBe(changed.fingerprint);
@@ -173,7 +165,6 @@ test("a command that leaves the tree alone passes; one that changes it is unstab
       });
       expect(failed.result).toBe("fail");
 
-      // Writes a file while it runs, which is exactly the case a snapshot pair catches.
       const changed = yield* collect(runDir, {
         run: "r1",
         name: "dirty",
@@ -197,7 +188,6 @@ test("a command that leaves the tree alone passes; one that changes it is unstab
 
 const GIT_REFUSED = "fatal: Unable to create index.lock: File exists.";
 
-/** A git that refuses `add` while the marker it returns exists, removing it on the first refusal where `once`. */
 const addRefusedWhileMarked = (once: boolean) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -253,7 +243,6 @@ test("the argument list is the command; nothing is handed to a shell", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const runDir = path.join(repo, ".run");
-      // A shell would treat this as two commands; a spawn treats it as one argument.
       const record = yield* collect(runDir, {
         run: "r1",
         name: "echo",
@@ -280,7 +269,6 @@ test("a directory outside the Run is refused, and one inside it is not", () =>
       expect(yield* insideRun(path.join(repo, "src"), run)).toBe(true);
       const elsewhere = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-other-" });
       expect(yield* insideRun(elsewhere, run)).toBe(false);
-      // A sibling whose path merely starts with the Run's is not inside it.
       expect(yield* insideRun(`${repo}-next-door`, run)).toBe(false);
     }),
   ));
@@ -302,7 +290,6 @@ test("Collie runs only the command the human approved, argument for argument", (
       expect(ran.result).toBe("pass");
       expect(ran.by).toBe("collie");
 
-      // The wrapper is part of what was approved: one extra word is a different command.
       const near = yield* runApproved(runDir, run, [approved], {
         ...approved,
         argv: ["--bail", "--watch"],
@@ -385,7 +372,6 @@ test("an expected failure passes when it fails, and fails when it does not", () 
       const path = yield* Path.Path;
       const runDir = path.join(repo, ".run-expect");
 
-      // A reproduction: the point of it is the non-zero exit, so that is its pass.
       const reproduced = yield* collect(runDir, {
         run: "r1",
         name: "regression",
@@ -399,8 +385,6 @@ test("an expected failure passes when it fails, and fails when it does not", () 
       expect(reproduced.exit).toBe(1);
       expect(reproduced.expect).toBe("fail");
 
-      // The same command succeeding is the bug not reproducing, which is a failure of
-      // the reproduction — not evidence that anything was fixed.
       const didNot = yield* collect(runDir, {
         run: "r1",
         name: "regression",
@@ -413,8 +397,6 @@ test("an expected failure passes when it fails, and fails when it does not", () 
       expect(didNot.result).toBe("fail");
       expect(didNot.exit).toBe(0);
 
-      // Unstable beats the expectation both ways: a tree that moved says nothing about
-      // either, and an expected failure on a moving tree is not a reproduction.
       const moved = yield* collect(runDir, {
         run: "r1",
         name: "regression",
@@ -436,7 +418,6 @@ test("expectation is applied only after the stability rules", () => {
   expect(resultOf(same, same, 0, "pass")).toBe("pass");
   expect(resultOf(same, other, 1, "fail")).toBe("unstable");
   expect(resultOf({ head_sha: "a", fingerprint: TOO_LARGE }, same, 1, "fail")).toBe("unstable");
-  // The default is what every record written before `--expect` existed meant.
   expect(resultOf(same, same, 0)).toBe("pass");
 });
 
@@ -445,8 +426,6 @@ test("a verification is stale the moment the tree it ran on moves", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      // Outside the repository, as a real run directory is: a journal written inside the
-      // tree would move the fingerprint of the very tree it is recording.
       const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });
       const record = yield* collect(runDir, {
         run: "r1",
@@ -462,7 +441,6 @@ test("a verification is stale the moment the tree it ran on moves", () =>
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "two\n");
       expect(staleAgainst(record, yield* fingerprint(repo))).toBe(true);
 
-      // A tree nobody could measure is never a tree a result still speaks for.
       expect(staleAgainst(record, { head_sha: record.end.head_sha, fingerprint: TOO_LARGE })).toBe(
         true,
       );
@@ -567,7 +545,6 @@ test("a fingerprint writes nothing to the checkout's index, so it holds no lock 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      // A file touched and not edited: a status of git's own would write its new time to the index.
       const touched = fileTime("2026-01-01T00:00:00Z");
       yield* fs.utimes(path.join(repo, "tracked.txt"), touched, touched);
       const index = path.join(repo, ".git", "index");
@@ -584,8 +561,6 @@ test("an edit of the same size, in the second its file was staged, moves the tre
       const path = yield* Path.Path;
       const file = path.join(repo, "tracked.txt");
       const index = path.join(repo, ".git", "index");
-      // One second holds the staging, the index and the edit. A file's change time cannot be
-      // set, so the repository is one that does not read it.
       const second = fileTime("2026-01-01T00:00:00Z");
       yield* git(["config", "core.trustctime", "false"]);
       yield* fs.utimes(file, second, second);
@@ -768,7 +743,6 @@ test("both streams go to the log as they arrive, readable while the command runs
           log,
         }),
       );
-      // Before it ends: what it has said so far, in the order it said it.
       const early = yield* until(
         () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
         (text) => pipe_(text, Str.includes("three")),
@@ -810,7 +784,6 @@ test("a log past its bound is cut, and says it was", () =>
     }),
   ));
 
-/** Sets NODE_OPTIONS for this process, and returns what puts it back. */
 function nodeOptions(value: string) {
   const before = Bun.env.NODE_OPTIONS;
   Bun.env.NODE_OPTIONS = value;
@@ -820,7 +793,6 @@ function nodeOptions(value: string) {
   };
 }
 
-/** A tool of the test's own, outside the tree, whose content is what it is. */
 const tool = (dir: string, body: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -864,7 +836,6 @@ test("a pass is relied on only while its tree, its command and its environment a
       const relied = () => reliedFor(runDir, run, spec, since);
 
       expect(yield* relied()).toBeNull();
-      // An agent's pass of exactly the check's command, under a name of its own.
       const agents = yield* collect(runDir, {
         run: "r1",
         name: "test",
@@ -877,10 +848,8 @@ test("a pass is relied on only while its tree, its command and its environment a
       const collies = yield* runApproved(runDir, run, [spec], spec);
       expect((yield* relied())?.id).toBe(collies.id);
 
-      // Another command under the same name.
       expect(yield* reliedFor(runDir, run, { ...spec, argv: ["--bail"] }, since)).toBeNull();
 
-      // The tree moved.
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "two\n");
       expect(yield* relied()).toBeNull();
       yield* git(["checkout", "-q", "--", "."]);
@@ -891,7 +860,6 @@ test("a pass is relied on only while its tree, its command and its environment a
       yield* git(["commit", "-qam", "the verified bytes"]);
       expect((yield* relied())?.id).toBe(dirty.id);
 
-      // The tool changed.
       yield* tool(runDir, "exit 0 # upgraded");
       expect(yield* relied()).toBeNull();
     }),
@@ -942,7 +910,6 @@ test("the latest record of that command on the tree decides, whoever asked", () 
       const since = "2000-01-01T00:00:00.000Z";
       const passed = yield* runApproved(runDir, run, [spec], spec);
 
-      // An agent's later failure of the same command on this tree.
       yield* fs.writeFileString(flag, "");
       yield* collect(runDir, {
         run: "r1",
@@ -955,7 +922,6 @@ test("the latest record of that command on the tree decides, whoever asked", () 
       yield* fs.remove(flag);
       expect(yield* reliedFor(runDir, run, spec, since)).toBeNull();
 
-      // Expecting a failure is never a pass of the check.
       yield* collect(runDir, {
         run: "r1",
         name: "t",
@@ -969,7 +935,6 @@ test("the latest record of that command on the tree decides, whoever asked", () 
 
       yield* appendVerification(runDir, { ...passed, id: "again" });
       expect((yield* reliedFor(runDir, run, spec, since))?.id).toBe("again");
-      // Collected before this host started.
       expect(yield* reliedFor(runDir, run, spec, "2999-01-01T00:00:00.000Z")).toBeNull();
 
       const { environment: _, ...older } = passed;

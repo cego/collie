@@ -1,6 +1,3 @@
-// What a sweep would remove on each Machine, read by Desktop's main process and drawn by the
-// Cleanup dialog (ADR-0045).
-
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Deferred, Effect, Fiber } from "effect";
@@ -30,14 +27,12 @@ const report = (bytes: number) => ({
   bytes,
 });
 
-/** The `cleanup` call alone, as a host serves it; an older host serves neither it nor `sweep`. */
 const Cleanup = RpcGroup.make(
-  // SAFETY: the group's own `cleanup`, which its map types as any of its Rpcs.
+  // WARNING: the group's own `cleanup`, which its map types as any of its Rpcs.
   FrontDoorRpcs.requests.get("cleanup") as Extract<Rpcs, { readonly _tag: "cleanup" }>,
 );
 const Older = RpcGroup.make(Rpc.make("ping"));
 
-/** A host answering `cleanup` with `answer`, or too old for it; every request it is sent is kept. */
 const fakeHost = (answer: Effect.Effect<CleanupReport, HostRefused> | "older") =>
   Effect.gen(function* () {
     const asked: Array<string> = [];
@@ -46,7 +41,7 @@ const fakeHost = (answer: Effect.Effect<CleanupReport, HostRefused> | "older") =
     const server =
       answer === "older"
         ? yield* RpcServer.makeNoSerialization(Older, {
-            // SAFETY: what a host answers is the same envelope whichever group it serves.
+            // WARNING: what a host answers is the same envelope whichever group it serves.
             onFromServer: (response) => toClient(response as RpcMessage.FromServer<Rpcs>),
           }).pipe(Effect.provide(Older.toLayer({ ping: () => Effect.void })))
         : yield* RpcServer.makeNoSerialization(Cleanup, {
@@ -56,7 +51,7 @@ const fakeHost = (answer: Effect.Effect<CleanupReport, HostRefused> | "older") =
       supportsAck: true,
       onFromClient: ({ message }) => {
         if (message._tag === "Request") asked.push(message.tag);
-        // SAFETY: the host is handed a request it may have no schema for, as over the wire.
+        // WARNING: the host is handed a request it may have no schema for, as over the wire.
         return server.write(0, message as never);
       },
     });
@@ -67,13 +62,12 @@ const fakeHost = (answer: Effect.Effect<CleanupReport, HostRefused> | "older") =
 const vm = { profile: "p-vm", name: "vm" };
 const reachedOver = (desktop: Partial<Door>) => ({
   machine: vm,
-  // SAFETY: each test calls only what its door answers.
+  // WARNING: each test calls only what its door answers.
   desktop: desktop as Door,
 });
-/** A door whose call is cut off once `closed` is done: interrupted as a closing door is, or broken. */
 const cutOff = (closed: Deferred.Deferred<void>, how: "closed" | "broken") =>
   reachedOver({
-    // SAFETY: answered as the client answers a call not asked to discard its reply.
+    // WARNING: answered as the client answers a call not asked to discard its reply.
     cleanup: (() =>
       Deferred.await(closed).pipe(
         Effect.andThen(

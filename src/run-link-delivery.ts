@@ -107,7 +107,6 @@ export const notifyRunLink = Effect.fn("RunLinks.notify")(function* (
   yield* send(env, dir, peer, notice);
 });
 
-/** `view`'s notices to `peer` not yet delivered. */
 export const owedRunLinks = Effect.fn("RunLinks.owed")(function* (
   env: PluginEnv,
   view: RunView,

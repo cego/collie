@@ -1,5 +1,3 @@
-// Where Runs end, counted across all of them. Data only: nothing here is a threshold.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { runEffect } from "./support/effect";
@@ -322,7 +320,6 @@ test("every measure is counted from the Runs' records, and names the Runs it cou
     ]),
   );
   const { rounds, dispositions, steering, verifications, parks, peakContext } = report.measures;
-  // A lone review allows one round, so it is no rally and is not counted as one.
   expect(rounds.runs).toEqual([
     { runId: "a", reached: 4, cap: 4 },
     { runId: "b", reached: 2, cap: 4 },
@@ -355,7 +352,6 @@ test("every measure is counted from the Runs' records, and names the Runs it cou
   expect(verifications.total).toBe(4);
   expect(verifications.runs).toEqual([{ runId: "a", total: 4, agent: 1, collie: 3 }]);
   expect(verifications.byCollector).toEqual({ agent: 1, collie: 3 });
-  // The second identical pass repeats the first; the failure on the same tree does not.
   expect(verifications.repeated).toEqual({ count: 1, runs: ["a"] });
   expect(verifications.executableOnly).toEqual({ count: 0, runs: [] });
   expect(parks.collectExpiries).toEqual({ count: 1, runs: ["a"] });
@@ -447,7 +443,6 @@ test("parks are counted per cause, with their time to the next step and the huma
       ],
     ]),
   );
-  // c's ci-job-absent park has not moved on, so it is counted and never timed.
   expect(report.measures.parks.byCause).toEqual([
     {
       cause: "ci-job-absent",

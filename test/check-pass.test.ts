@@ -35,7 +35,6 @@ beforeEach(() =>
       yield* fs.writeFileString(`${rig.projectDir}/thing.ts`, "export const one = 1;\n");
       yield* exec(["git", "add", "-A"], { cwd: rig.projectDir });
       yield* exec(["git", "commit", "-qm", "first"], { cwd: rig.projectDir });
-      // Outside the tree, so running it moves nothing; red while the flag file is there.
       tool = `${rig.root}/unit`;
       yield* fs.writeFileString(tool, `#!/bin/sh\n[ ! -f ${rig.root}/red ]\n`);
       yield* fs.chmod(tool, 0o755);
@@ -49,7 +48,6 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-/** An agent's `collie verify`, as the host collects it. */
 const agentRan = (argv: ReadonlyArray<string> = [], expect: "pass" | "fail" = "pass") =>
   collect(evidenceDir(dir, runId), {
     run: runId,
@@ -64,7 +62,6 @@ const agentRan = (argv: ReadonlyArray<string> = [], expect: "pass" | "fail" = "p
 const journal = () =>
   readVerifications(evidenceDir(dir, runId)).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
 
-/** The host's check of `unit`, for the gate unless asked otherwise, once `before` has run inside that host. */
 const gate = <A>(
   before: Effect.Effect<
     A,
@@ -178,7 +175,6 @@ test("where the latest record of that command on this tree failed, the gate runs
     }),
   ));
 
-/** The host's check, on a Machine whose memory is read from this rig and again every 50 ms. */
 const gateOnRig = <A>(
   before: Parameters<typeof gate<A>>[0],
   asked?: Parameters<typeof gate<A>>[1],

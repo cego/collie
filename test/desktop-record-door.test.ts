@@ -1,6 +1,3 @@
-// A record reaches Desktop over a door of its own, so a board stream nobody reads cannot hold
-// it back.
-
 import { expect, test } from "bun:test";
 import { Array as Arr, Effect, Option, Stream } from "effect";
 import { DoorMap, openDoors, recordEvents, type Doors } from "../desktop/src/bun/machine";
@@ -35,7 +32,7 @@ test(
 test("a record's later frames reach the view without a Flow it already has", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      // SAFETY: the test reads only a frame's title and Flow.
+      // WARNING: the test reads only a frame's title and Flow.
       const bare = (title: string) => ({ title }) as RunDetail;
       const sent = (title: string, said: string) => ({
         ...bare(title),
@@ -51,7 +48,7 @@ test("a record's later frames reach the view without a Flow it already has", () 
       ];
       const doors = new DoorMap<Pick<Doors, "record">>();
       doors.set("i-1", {
-        // SAFETY: the test calls only `runDetail`, which answers with the frames above.
+        // WARNING: the test calls only `runDetail`, which answers with the frames above.
         record: {
           runDetail: (() => Stream.fromIterable(frames)) as Doors["record"]["runDetail"],
         } as Doors["record"],

@@ -1,6 +1,3 @@
-// Desktop's view hears the Flock from its main process over Effect RPC on a channel that
-// carries JSON values, as Electrobun's does, and decodes it with the board's own Schemas.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
@@ -60,10 +57,9 @@ const fromJson = flow(
   Result.getOrThrow,
 );
 
-// SAFETY: what went in is what comes out; the JSON round trip only proves it survives one.
+// WARNING: what went in is what comes out; the JSON round trip only proves it survives one.
 const copy = <A>(frame: A) => fromJson(asJson(frame)) as A;
 
-/** Both ends of a channel that copies every frame through JSON, as Electrobun's does. */
 const channels = () => {
   let toView: (frame: ToView) => void = () => {};
   let toMain: (frame: ToMain) => void = () => {};
@@ -240,7 +236,6 @@ test("a view that asks before its main process serves is answered once it does",
           Effect.provide(Layer.effect(RpcClient.Protocol, clientProtocol(view))),
         ),
       );
-      // The view's Hello and its ask are sent while the main process is still starting.
       yield* Effect.sleep("20 millis");
       yield* Layer.build(served(main));
       const answered = yield* Fiber.join(heard).pipe(Effect.timeout("2 seconds"));
@@ -440,7 +435,6 @@ test("a Machine that drops keeps its cards as of when, off the machines a run ca
     ["t-work", 5],
   ]);
   expect(Arr.map(flockCards(dropped).machines, (one) => one.name)).toEqual(["mk-pc"]);
-  // Still out of reach later, it is as of when it dropped.
   expect(asOf(applyItem(dropped, lostVm("sso", 9)))).toEqual([
     ["t-ask", null],
     ["t-work", 5],
@@ -472,7 +466,6 @@ test("a Machine without Collie is known by its herdr profile until its host name
   const installed = applyItem(bare, snapshot(vm, [working]));
   expect([...installed.lost]).toEqual([]);
   expect([...installed.machines.keys()]).toEqual(["inst-pc", "inst-vm"]);
-  // One that reaches a Machine already shown merges into it.
   const merged = applyItem(bare, {
     _tag: "Merged",
     machine: { profile: "p-vm", name: "vm-mk" },
@@ -503,7 +496,6 @@ const routed: (machine: Machine) => FlockItem = (machine) => ({
   machine: { profile: machine.profile, name: machine.name, target: machine.target },
 });
 
-/** `vm`'s paired link, as `collie machine list` says it, with only the fields given. */
 const linked: (fields: Partial<typeof PeerView.Encoded>) => FlockItem = (fields) => ({
   _tag: "Linked",
   machine: { profile: vm.profile, name: vm.name, target: vm.target },
@@ -571,11 +563,9 @@ test("the chat reads each Machine the window shows: a live one's board and proto
   expect(boards([routed(vm)], new Map([["p-vm", 1_000]]))).toEqual([
     ["vm-mk", { _tag: "Connecting", since: 1_000 }],
   ]);
-  // A saved board standing in while its route connects is still connecting.
   expect(boards([routed(vm), savedOld], new Map([["p-vm", 1_000]]))).toEqual([
     ["vm-mk", { _tag: "Connecting", since: 1_000 }],
   ]);
-  // Its route now reaches another installation, so nothing will make that board live again.
   expect(Arr.map(boards([routed(vm), snapshot(vm, []), savedOld]), ([, board]) => board)).toEqual([
     { _tag: "Live", herds: [{ id: "default" }], tasks: [], protocol: 1, files: false },
     { _tag: "Saved", at: 7 },
@@ -831,12 +821,10 @@ test("a Machine lacking a credential Desktop holds is behind on it, naming it an
       { part: "credentials", said: "Lacks Helle's token", steps: [] },
     ],
   });
-  // A credential Desktop doesn't hold is never a Machine's to lack.
   expect(inSync(lacking, { ...DESKTOP, credentials: [] }).state).toBe("in-sync");
   expect(inSync(row({ credentials: { gitlab: { given: true, failed: null } } }), holds).state).toBe(
     "in-sync",
   );
-  // Not told yet is not behind.
   expect(inSync(row({ credentials: {} }), holds).state).toBe("in-sync");
 });
 
@@ -952,7 +940,6 @@ test("opening an Unseen Run's record sends its Machine one seen, and opening any
   expect(opening("inst-vm:t-unseen", "name")).toEqual(seen);
   expect(opening("inst-pc:t-seen", "double-click")).toEqual([]);
   expect(opening("inst-pc:t-seen", "name")).toEqual([]);
-  // A click selects without opening, and a record already open is not opened again.
   const selected = afterGesture(none, { kind: "click", landed: card("inst-vm:t-unseen") });
   expect(seenOnOpening(none, selected, cardOf)).toEqual([]);
   const open = { selected: "inst-vm:t-unseen", page: "inst-vm:t-unseen" };

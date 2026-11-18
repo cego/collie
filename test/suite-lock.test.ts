@@ -21,7 +21,6 @@ import {
 import { until } from "./support/host";
 import { runEffect } from "./support/effect";
 
-/** A claim as `src/lock.ts` writes one. */
 const asClaim = flow(
   Schema.encodeResult(
     Schema.fromJsonString(Schema.Struct({ pid: Schema.Int, start: Schema.NullOr(Schema.String) })),
@@ -57,14 +56,12 @@ test("a held lock names its holder once, then the wait as it grows, and falls qu
       yield* fs.writeFileString(lock, `${asClaim({ pid: holder.pid, start })}\n`);
 
       const said: string[] = [];
-      // The holder's suite ends once the waiter has said twice how long it has waited.
       const say = (line: string) =>
         Effect.gen(function* () {
           said.push(line);
           if (Arr.filter(said, (one) => STILL.test(one)).length === 2) yield* fs.remove(lock);
         }).pipe(Effect.orDie);
       let atStart = -1;
-      // A suite that runs for several intervals, as a real one does for minutes.
       const suite = Effect.sync(() => (atStart = said.length)).pipe(
         Effect.andThen(Effect.sleep("500 millis")),
         Effect.as("ran"),

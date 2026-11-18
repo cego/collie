@@ -1,6 +1,3 @@
-// Desktop's Flock chat calls the same Collie tools Native chat does, answered by each
-// Machine's host over its `chat` channel, with everything named `<machine>:<id>`.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -45,7 +42,6 @@ interface Asked {
   readonly payload: unknown;
 }
 
-/** A Machine whose board Desktop follows live, and whose host writes down every operation it is asked. */
 const machine = (
   name: string,
   tasks: ReadonlyArray<TaskView>,
@@ -55,7 +51,6 @@ const machine = (
 ) => {
   const note = <P>(op: string, payload: P) => asked.push({ machine: name, op, payload });
   const door: ChatDoor & { readonly board: () => Stream.Stream<never> } = {
-    // The chat reads the board Desktop follows, never one of its own.
     board: () => Stream.die("the chat subscribed to a host's board"),
     artefactSeen: (payload) =>
       Effect.sync(() => {
@@ -313,11 +308,8 @@ const machine = (
   return returned;
 };
 
-/** A Machine the window shows with no live board, and no channel to reach it by. */
 const unread = (name: string, board: ChatBoard) => ({ name, board });
 
-/** What a fake Machine's files hold: a media type and the bytes. */
-/** A PNG's header, as a string of bytes, for an image of that size. */
 const png = (width: number, height: number) => {
   const header = Buffer.alloc(24);
   Buffer.from("\x89PNG\r\n\x1a\n\0\0\0\rIHDR", "latin1").copy(header);
@@ -390,7 +382,6 @@ const flockOf = (asked: Asked[]) => ({
       },
     ],
   })),
-  // Saved as Desktop saves it, with Settings' checks.
   setChatHarness: ({
     harness,
     model,
@@ -1216,7 +1207,6 @@ test("a live Machine is read from the board Desktop follows, with no board of it
     }),
   ));
 
-/** What a file tool said in words, its images left out. */
 const textOf = (content: ReadonlyArray<ToolContent>) =>
   Arr.join(
     Arr.map(content, (one) => (one.type === "text" ? one.text : "")),
@@ -1301,7 +1291,6 @@ test("collie_read takes 8 MB of a text file with no newlines, and shows 2000 cha
       const asked: Asked[] = [];
       const read = yield* callFile(asked, "collie_read", { file_path: "vm-mk:/tmp/bundle.js" });
       expect(textOf(read).length).toBeLessThan(2100);
-      // One part to say what it is, then 8 MB of its 20.
       expect(Arr.filter(asked, ({ op }) => op === "readFile")).toHaveLength(3);
     }),
   ));
@@ -1384,7 +1373,6 @@ test("a bare id only one Machine has is read there", () =>
         { machine: "vm-mk", payload: { tool: "collie_receipts", input: { run: "r-2" } } },
       ]);
       expect(said).toStartWith("## vm-mk");
-      // Ambiguous still refuses, asking nothing.
       const both: Asked[] = [];
       expect(yield* call(both, "collie_run", { run: "r-1" })).toContain(
         "is on more than one Machine",
@@ -1704,7 +1692,6 @@ test("a start that names no Machine while several are reachable is still refused
     }),
   ));
 
-/** A Flock whose human message this turn carried `shot.png`, a file on this computer. */
 const carrying = (asked: Asked[], dir: string, files: { readonly vm?: boolean } = {}) => ({
   ...flockOf(asked),
   machines: () => [
@@ -1779,7 +1766,6 @@ test("a start carries the turn's files, uploaded to its Machine once and handed 
       yield* callFlockTool(flock, "collie_do", start()).pipe(Effect.provide(platformLayer));
       expect(Arr.filter(asked, ({ op }) => op === "upload")).toHaveLength(1);
 
-      // A day on, the host may have pruned it, so it is uploaded again.
       const held = flock.uploaded.get("vm-mk")!.get(shotSha)!;
       flock.uploaded.get("vm-mk")!.set(shotSha, { ...held, at: held.at - 2 * 24 * 60 * 60 * 1000 });
       yield* callFlockTool(flock, "collie_do", start()).pipe(Effect.provide(platformLayer));
@@ -1967,7 +1953,6 @@ test("the Flock chat moves a Schedule between two Machines through the shared se
         ["vm-mk", { change: { change: "remove", name: "daily" } }],
         ["mk-pc", { change: { change: "resume", name: "daily" } }],
       ]);
-      // Each Machine records the human's words with what it was asked.
       for (const on of ["mk-pc", "vm-mk"])
         expect(Arr.some(asked, ({ machine, op }) => machine === on && op === "declare")).toBe(true);
     }),
@@ -2019,7 +2004,6 @@ test("a deliver to a Machine whose board speaks an older protocol is refused bef
     }).pipe(Effect.provide(platformLayer)),
   ));
 
-/** A Machine whose host has `runs` though its board lists none of them, or whose `progress` is `answer`. */
 const holding = (
   name: string,
   asked: Asked[],

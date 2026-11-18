@@ -1,9 +1,3 @@
-// Records what Desktop's `terminal` stream sends for a pane, as NDJSON `TerminalEvent`s: the
-// events `openTerminal` makes once the core terminal is attached, while typing each `--type`
-// once the terminal is idle.
-//
-//   bun desktop/core/record-terminal.ts --core <core terminal> --out <file>
-
 import { parseArgs } from "node:util";
 import { Effect, Stream } from "effect";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
@@ -29,12 +23,10 @@ if (flags.out === undefined || flags.core === undefined) {
 const out = flags.out;
 const idle = Number(flags.idle);
 const place = { session: null, workspace: "recording", tab: null };
-// A core terminal is addressed by its core id in both fields.
 const at: PaneAt = { ...place, pane: flags.core, core: flags.core };
 
 let lastEvent = Date.now();
 const lines: Array<string> = [];
-/** Until nothing has come for `idle` ms. */
 const settled = Effect.promise(async () => {
   while (Date.now() - lastEvent < idle) await Bun.sleep(50);
 });

@@ -1,6 +1,3 @@
-// Desktop counts a write done only on its host's reply: it waits 30 s an attempt, sends the
-// same request again up to 3 times, and keeps a line per attempt in `actions.log`.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
@@ -27,19 +24,17 @@ const logged = () => {
   return { lines, log: (line: Attempted) => Effect.sync(() => void lines.push(line)) };
 };
 
-/** A door whose `answer` replies with each of `replies` in turn, and never after them. */
 const answering = (replies: ReadonlyArray<ReturnType<Door["answer"]>>) => {
   const requests: string[] = [];
   const fake: Partial<Door> = {
-    // Sent each time it is run, as the client's call is.
-    // SAFETY: an Answer never asks to discard the reply.
+    // WARNING: an Answer never asks to discard the reply.
     answer: ((payload: Parameters<Door["answer"]>[0]) =>
       Effect.suspend(() => {
         requests.push(payload.request);
         return replies[requests.length - 1] ?? Effect.never;
       })) as Door["answer"],
   };
-  // SAFETY: an Answer calls only `answer`.
+  // WARNING: an Answer calls only `answer`.
   return { requests, reached: { machine, desktop: fake as Door } };
 };
 
@@ -134,10 +129,10 @@ test("a card action Desktop does not send says why, and is logged as not sent", 
 const delivering = () => {
   const fake: Partial<Door> = {
     act: () =>
-      // SAFETY: `Deliver` never asks to discard the reply, so it is the results.
+      // WARNING: `Deliver` never asks to discard the reply, so it is the results.
       Effect.succeed([{ kind: "deliver", state: "applied", note: "" } as ActionResult] as never),
   };
-  // SAFETY: a Deliver calls only `act`.
+  // WARNING: a Deliver calls only `act`.
   return fake as Door;
 };
 

@@ -1,5 +1,3 @@
-// ADR-draft-a-blocked-link-rides-the-machines-ssh-connection, against the fake ssh.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -16,7 +14,6 @@ import { root } from "./support/host";
 
 const vm = { label: "vm-mk", target: "mk@vm-mk" };
 
-/** A fake ssh in a directory of its own, and a state directory beside it. */
 const rig = Effect.gen(function* () {
   const dir = yield* socketDir("ssh-");
   const ssh = `${dir}/ssh`;
@@ -35,7 +32,6 @@ const opens = (state: string, ssh: string, bound: Duration.Input = "2 minutes") 
     return { ...opened, stderr: Arr.join(stderr, "") };
   });
 
-/** Runs an argv to its end, answering its exit code. */
 const run = (argv: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -100,7 +96,6 @@ test(
         const fs = yield* FileSystem.FileSystem;
         const { dir, state, ssh, fake } = yield* rig;
         const opener = `${dir}/opener.ts`;
-        // Outside the repository, a bare import would be auto-installed at another version.
         yield* fs.writeFileString(
           opener,
           `import * as BunServices from "${Bun.resolveSync("@effect/platform-bun/BunServices", root)}";
@@ -116,7 +111,6 @@ const { opened } = await Effect.runPromise(
 await Bun.write(out!, String(opened));
 `,
         );
-        // Its answer goes to a file: the master it starts keeps a stdout pipe open.
         const codes = yield* Effect.all(
           Arr.map([0, 1], (one) =>
             Effect.promise(

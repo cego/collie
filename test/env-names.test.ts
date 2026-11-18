@@ -1,6 +1,3 @@
-// Collie's processes find each other by `COLLIE_*` names alone: a front door names the
-// state directory, and the host it starts is there. Herdr 1's names are not read.
-
 import { expect, test } from "bun:test";
 import { Config, Effect, FileSystem } from "effect";
 import { socketOf } from "../src/host";
@@ -12,7 +9,6 @@ import { collieCommand } from "./support/world";
 const ROOT = new URL("../", import.meta.url).pathname;
 const DEFAULT = ".local/state/herdr/plugins/cego.collie";
 
-/** Where a front door given only `names` found its host: each directory that has one. */
 const hostedAt = (names: (dir: string) => Record<string, string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

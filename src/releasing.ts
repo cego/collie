@@ -1,5 +1,3 @@
-// A Release Run's checkout and its tag, stage and production, read from git and the forge.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -12,22 +10,12 @@ import { appendLog } from "./oversight";
 
 const short = (sha: string) => pipe(sha, Str.slice(0, 8));
 
-/** Where a fast-forward left the checkout, or why it left it alone. */
 export const FastForwardSchema = Schema.Union([
   Schema.TaggedStruct("At", { head: Schema.String, from: Schema.String }),
   Schema.TaggedStruct("Refused", { why: Schema.String }),
 ]);
 export type FastForward = typeof FastForwardSchema.Type;
 
-/**
- * Fetches origin and fast-forwards the checkout at `cwd` to `head`, recording the move in
- * the Run's log. Uncommitted changes, or a head the checkout neither is at nor sits behind,
- * are refused: nothing is reset or discarded. The one refusal it does not make is a plain
- * push that moved the branch past a `head` the Run had journaled while it parked: where the
- * checkout already carries `head` and sits at origin's branch tip, it answers `At` on what
- * it actually holds, so a resumed Run re-proves the real head instead of parking on the
- * stale one.
- */
 export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts: {
   readonly runDir: string;
   readonly cwd: string;
@@ -57,12 +45,6 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   if ((yield* git(["cat-file", "-e", `${opts.head}^{commit}`])).code !== 0)
     return refused(`origin does not have ${short(opts.head)}`);
   if ((yield* git(["merge-base", "--is-ancestor", from, opts.head])).code !== 0) {
-    // The checkout is not behind `head`. Before refusing as a force push, tell
-    // apart a plain push that moved the branch past `head` while the Run parked
-    // from a true rewrite: where `head` is an ancestor of the checkout and the
-    // checkout sits exactly at origin's branch tip, the Run's journal simply
-    // holds a stale head, so answer `At` and let the next read see the real
-    // head instead of parking on the same journaled head forever.
     const carries = (yield* git(["merge-base", "--is-ancestor", opts.head, from])).code === 0;
     const branch = Str.trim((yield* git(["rev-parse", "--abbrev-ref", "HEAD"])).stdout);
     const atOrigin =
@@ -88,7 +70,6 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   return { _tag: "At", head: opts.head, from } satisfies FastForward;
 });
 
-/** Which of `commits` `head` carries, once origin is fetched. */
 export const carried = Effect.fn("Releasing.carried")(function* <R>(opts: {
   readonly cwd: string;
   readonly head: string;
@@ -104,24 +85,14 @@ export const carried = Effect.fn("Releasing.carried")(function* <R>(opts: {
   return carries;
 });
 
-/**
- * What a tag must be shown to be: `finished` is a package's, its pipeline succeeded;
- * `staged` is an application's, on stage and ready for production.
- */
 export const TagProofSchema = Schema.Literals(["finished", "staged"]);
 
-/** A job of a tag's pipeline, at the address the forge gives it. */
 export const JobLinkSchema = Schema.Struct({ name: Schema.String, url: Schema.String });
 export type JobLink = typeof JobLinkSchema.Type;
 
-/**
- * A tag proved, with the production jobs waiting on it; already in production; failed on
- * stage after the merge; or what it lacks.
- */
 export const TagReadSchema = Schema.Union([
   Schema.TaggedStruct("Proved", {
     production: Schema.Array(JobLinkSchema),
-    /** The tag's object on origin, which a later read must find unchanged. */
     at: Schema.String,
   }),
   Schema.TaggedStruct("InProduction", {}),
@@ -130,7 +101,6 @@ export const TagReadSchema = Schema.Union([
 ]);
 export type TagRead = typeof TagReadSchema.Type;
 
-/** Production already carries the merge, the jobs still to play, or why none may be. */
 export const ProductionReadSchema = Schema.Union([
   Schema.TaggedStruct("Carried", {}),
   Schema.TaggedStruct("Play", { jobs: Schema.Array(JobLinkSchema) }),
@@ -138,11 +108,6 @@ export const ProductionReadSchema = Schema.Union([
 ]);
 export type ProductionRead = typeof ProductionReadSchema.Type;
 
-/**
- * A merge request's head proved on stage, with its stage jobs and the stage environments it
- * proved; its head moved; or why not, with the stage environments its pipeline reached where
- * they could be read.
- */
 export const StageReadSchema = Schema.Union([
   Schema.TaggedStruct("Staged", {
     jobs: Schema.Array(JobLinkSchema),
@@ -159,21 +124,15 @@ export const StageReadSchema = Schema.Union([
 ]);
 export type StageRead = typeof StageReadSchema.Type;
 
-/** Stage shown back on what production carries, or why not. */
 export const RollbackReadSchema = Schema.Union([
   Schema.TaggedStruct("Shown", {}),
   Schema.TaggedStruct("Unshown", { why: Schema.String }),
 ]);
 export type RollbackRead = typeof RollbackReadSchema.Type;
 
-/** Where a Change run's merge request falls in its fan-out's plan: that Run, and the wave. */
 const PlanWaveSchema = Schema.Struct({ plan: Schema.String, at: Schema.Finite });
 type PlanWave = typeof PlanWaveSchema.Type;
 
-/**
- * A merge request as its forge reads it now: its state and the branches it merges, and its
- * plan's wave where a fan-out's Change run opened it.
- */
 export const MergeRequestReadSchema = Schema.Union([
   Schema.TaggedStruct("Read", {
     state: Schema.String,
@@ -207,11 +166,6 @@ export const readMergeRequest = Effect.fn("Releasing.readMergeRequest")(function
   return returned;
 });
 
-/**
- * A set's merge requests, blockers first, each with those of the set it waits on: one whose
- * target branch is another's source branch, and those of its plan's earlier waves. A `Cycle`
- * names those that wait on each other.
- */
 export function stackOrder(
   mrs: ReadonlyArray<{
     readonly id: string;
@@ -282,7 +236,6 @@ export function stackOrder(
 const failing = new Set(["failed", "cancelled"]);
 const unfinished = new Set(["pending", "running"]);
 
-/** Why a pipeline's jobs other than `production` have not all run and passed, or null. */
 const unsettled = (
   jobs: ReadonlyArray<{ readonly name: string; readonly state: string }>,
   production: ReadonlyArray<string>,
@@ -309,7 +262,6 @@ const gitOf =
   (args: string[]) =>
     opts.run("git", args, opts.cwd);
 
-/** Whether `sha` carries `ancestor`, or null where git does not have one of them. */
 const carries = <R>(
   git: (args: string[]) => Effect.Effect<Ran, never, R>,
   sha: string,
@@ -321,7 +273,6 @@ const carries = <R>(
     return (yield* git(["merge-base", "--is-ancestor", ancestor, sha])).code === 0;
   });
 
-/** `tag` on origin carrying `merged`, with its object there and the commit it tags; or why not. */
 const tagOn = <R>(
   git: (args: string[]) => Effect.Effect<Ran, never, R>,
   tag: string,
@@ -342,7 +293,6 @@ const tagOn = <R>(
     return { ok: true, at, commit } as const;
   });
 
-/** The pipeline at `url`, where the forge shows it ran for `tag` at `commit` in `ref`'s project. */
 const tagsPipeline = <R>(opts: {
   readonly url: string;
   readonly ref: MrRef;
@@ -365,11 +315,9 @@ const tagsPipeline = <R>(opts: {
     return { ok: true, read } as const;
   });
 
-/** What `tier` runs, by the commit its newest successful deployment has, or why not. */
 const deployedOn = <R>(ref: MrRef, tier: DeployTier, cwd: string, run: Runner<R>) =>
   forgeOf(ref).deployed(ref, tier, cwd, run);
 
-/** Whether production carries `merged`; null where the forge or git cannot say. */
 const inProduction = <R>(opts: {
   readonly cwd: string;
   readonly ref: MrRef;
@@ -382,16 +330,6 @@ const inProduction = <R>(opts: {
     return (yield* carries(gitOf(opts), read.sha, opts.merged)) === true;
   });
 
-/**
- * Reads `tag` back: on origin and carrying `merged`, then against what it `proves`, on a
- * pipeline the forge shows ran for `tag` at its commit in `ref`'s project.
- * `finished`: `pipeline`, else the newest the tag started, if any, finished and succeeded by
- * the forge's word, and a job waiting to be started by hand has not finished. `staged`: production carrying `merged`
- * already is `InProduction`; otherwise, where `stage` names jobs, each passed and stage carries
- * `merged`, or else it is `StageFailed`; every other job passed and none is still running or waiting to run; and each
- * `production` job, at least one, waits on the pipeline to be started by hand. The
- * pipeline's own state is not read.
- */
 export const readTag = Effect.fn("Releasing.readTag")(function* <R>(opts: {
   readonly cwd: string;
   readonly tag: string;
@@ -489,17 +427,10 @@ export const readTag = Effect.fn("Releasing.readTag")(function* <R>(opts: {
   return { _tag: "Proved", production, at: tagged.at } satisfies TagRead;
 });
 
-/**
- * Reads, before production jobs are played, what is left to play: nothing where production
- * already carries `merged`, the `jobs` still waiting to be started by hand, and none at all
- * where the tag on origin is no longer `at` or no longer carries `merged`, a job is gone or failed, or any other job failed or
- * is still running or waiting to run.
- */
 export const readProduction = Effect.fn("Releasing.readProduction")(function* <R>(opts: {
   readonly cwd: string;
   readonly ref: MrRef;
   readonly tag: string;
-  /** The tag's object on origin when it was proved. */
   readonly at: string;
   readonly merged: string;
   readonly pipeline: string;
@@ -536,11 +467,6 @@ const named = (names: ReadonlyArray<string>) =>
     ", ",
   );
 
-/**
- * A merge request's head on stage: each of `jobs`, one at least, passed on the pipeline of its
- * head, and that head is `head`; at least one stage environment was deployed by those jobs
- * at that pipeline's commit; and every such environment's newest successful deployment carries `head`.
- */
 export const readStage = Effect.fn("Releasing.readStage")(function* <R>(opts: {
   readonly cwd: string;
   readonly ref: MrRef;
@@ -607,11 +533,6 @@ export const readStage = Effect.fn("Releasing.readStage")(function* <R>(opts: {
   return { _tag: "Staged", jobs, environments } satisfies StageRead;
 });
 
-/**
- * Whether stage is shown back on what production carries, and off each of `off`: in each of
- * `environments` by its newest successful deployment, or, where none are named, by stage's
- * newest successful deployment.
- */
 export const readRollback = Effect.fn("Releasing.readRollback")(function* <R>(opts: {
   readonly cwd: string;
   readonly ref: MrRef;

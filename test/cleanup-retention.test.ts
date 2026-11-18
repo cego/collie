@@ -1,6 +1,3 @@
-// A Task and every one of its Runs are forgotten together 30 days after its last Run ended,
-// and only once nothing could still need them (ADR-0045 D5).
-
 import { recordLaunch } from "../src/launches";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -37,7 +34,6 @@ const record: TaskRecord = {
   created_at: "2026-09-01T00:00:00.000Z",
 };
 
-/** The Task's one Run, with its files and markers, its view ended `days` ago. */
 const arranged = (days: number) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -100,7 +96,6 @@ test("a Task whose last Run ended 31 days ago is forgotten: its rows, then its f
       expect(forgotten).toEqual([["r1"]]);
       for (const gone of ["runs/r1", "agents/r1", "evidence/r1", "stop.r1"])
         expect([gone, yield* fs.exists(`${rig.stateDir}/${gone}`)]).toEqual([gone, false]);
-      // Imported into host.db and left for a host of an older build.
       expect(yield* fs.exists(`${rig.stateDir}/agents/abc/deliveries.jsonl`)).toBe(true);
       expect(yield* readTask("task-1")).toBeNull();
     }),

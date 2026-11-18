@@ -1,5 +1,3 @@
-// How far a launch went, as Settings shows it: nowhere, since the launch itself is where it is chosen.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";

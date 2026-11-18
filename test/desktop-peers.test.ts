@@ -40,7 +40,6 @@ const SECOND = {
   enabled: true,
 };
 
-/** The peer `first` holds for `second` once a board asked for there, answered as `answered`, has paired them. */
 const pairedPeer = (
   first: Side,
   second: Side,
@@ -54,7 +53,6 @@ const pairedPeer = (
     return peers[0]!;
   });
 
-/** `side`'s own collie, logging each command it is given and the control path it was told. */
 const loggedCollie = (side: Side) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -102,7 +100,6 @@ test(
               { mode: 0o755 },
             );
             yield* first.lists([second]);
-            // Pairing comes before the version check, which refuses the older far host.
             const peer = yield* pairedPeer(first, second, {
               ok: false,
               error: { message: `second runs collie 0.0.1 and this is ${BUILD}` },
@@ -335,7 +332,6 @@ test(
             );
             expect(yield* local.asked).toEqual([]);
             const [incoming] = yield* peersOf(second.world.state);
-            // The shell's trail is a file of its own, not a Run's: no host records it.
             expect(
               (yield* readAudit(`${second.world.state}/shell`).pipe(
                 Effect.provide(memoryRecords),

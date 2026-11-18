@@ -1,11 +1,3 @@
-// A Run's Intent: what the human wants, what bounds it, and what Collie may do about
-// it. Everything downstream — drift, corrections, cards — compares work against this,
-// so it is versioned, seeded once at the start, and amended by a human or by the Run's own
-// plan as its constraints change.
-//
-// Authority is never read from text. Plan bullets and repository files are evidence:
-// `extractRequirements` returns constraints and a goal and has no way to return a grant.
-
 import * as Struct from "effect/Struct";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -30,10 +22,6 @@ export type RuleSpec = Schema.Schema.Type<typeof RuleSpecSchema>;
 export type Constraint = Schema.Schema.Type<typeof ConstraintSchema>;
 export type Authority = Schema.Schema.Type<typeof AuthoritySchema>;
 
-/**
- * The one grant on by default is correcting drift at a work boundary, within the bound.
- * Every other grant is off.
- */
 export const DEFAULT_AUTHORITY: Authority = {
   auto_correct: true,
   max_corrections_per_constraint: 2,
@@ -48,7 +36,6 @@ export const IntentSchema = Schema.Struct({
   version: Schema.Int,
   run: Schema.String,
   goal: Schema.NullOr(Schema.String),
-  /** The outcome kind the Run is held to, where it was changed after admission; null clears it. */
   outcome: Schema.optionalKey(Schema.NullOr(Schema.String)),
   constraints: Schema.Array(ConstraintSchema),
   authority: AuthoritySchema,
@@ -77,7 +64,6 @@ export type IntentSeed = typeof IntentSeedSchema.Type;
 const IntentJson = Schema.fromJsonString(IntentSchema);
 const encodeIntent = flow(Schema.encodeResult(IntentJson), Result.getOrThrow);
 
-/** A recorded Intent that is not an Intent. Never a default: see §7.1. */
 export class IntentUnreadable extends Data.TaggedError("IntentUnreadable")<{
   dir: string;
   cause: string;
@@ -95,11 +81,6 @@ export const readIntent = Effect.fn("Intent.read")(function* (dir: string) {
   return raw === null ? null : yield* decodeIntent(dir)(raw);
 });
 
-/**
- * Replaces the Intent with what `change` makes of it, null keeping it as it is. The read,
- * the decision and the write are one transaction, so two amendments never read the same
- * version and the later erase the earlier.
- */
 export const updateIntent = <E, R>(
   dir: string,
   change: (intent: Intent | null) => Effect.Effect<Intent | null, E, R>,
@@ -119,7 +100,6 @@ export const writeIntent = Effect.fn("Intent.write")(function* (dir: string, int
   );
 });
 
-/** A constraint is identified by what it says, so the same text is the same entry. */
 export function constraintId(text: string) {
   return pipe(Bun.hash(text).toString(16), Str.slice(0, 8));
 }
@@ -131,13 +111,11 @@ export type Change =
   | { readonly kind: "remove-constraint"; readonly id: string }
   | { readonly kind: "authority"; readonly patch: Partial<Authority> };
 
-/** The outcome change a front door's word asks for: `unspecified` clears the kind. */
 export function outcomeChange(word: string) {
   const returned: Change = { kind: "set-outcome", outcome: word === "unspecified" ? null : word };
   return returned;
 }
 
-/** The authority change granting `name` this command, or withdrawing it where there is none. */
 export function verificationGrant(
   intent: Intent,
   name: string,
@@ -192,11 +170,6 @@ function applied(intent: Intent, change: Change, version: number) {
   }
 }
 
-/**
- * The amended Intent, one version on, or the same one where the change is a no-op — a
- * version bump that changed nothing is a history entry nobody can act on, and every
- * later comparison keys off the version.
- */
 export function amend(intent: Intent, change: Change, by: string, at: string, voice: Voice = {}) {
   const version = intent.version + 1;
   const next = applied(intent, change, version);
@@ -208,21 +181,14 @@ export function amend(intent: Intent, change: Change, by: string, at: string, vo
   };
 }
 
-/** A Run's launch options, with the outcome kind its Intent was last set to where it was. */
 export function withOutcome(options: Readonly<Record<string, string>>, intent: Intent | null) {
   if (intent?.outcome === undefined) return options;
   const { outcome: _admitted, ...rest } = options;
   return intent.outcome === null ? rest : { ...rest, outcome: intent.outcome };
 }
 
-/** Who an amendment from the Run's own plan is by; every other author's removal stands. */
 export const PLAN_AUTHOR = "plan:plan/SPEC.md";
 
-/**
- * The Intent with the Run's own plan's constraints as the plan now says them: new ones
- * added, ones the plan dropped removed. A constraint anyone else removed is never put back,
- * and nothing from anyone else is touched.
- */
 export function followPlan(
   intent: Intent,
   found: ReadonlyArray<Omit<Constraint, "since">>,
@@ -257,21 +223,10 @@ export function followPlan(
 export interface SeedOptions {
   readonly defaults?: Defaults | null;
   readonly goal?: string | null;
-  /** What the human typed, and what the work source's own text asked for. */
   readonly constraints?: ReadonlyArray<Omit<Constraint, "since"> & { since?: number }>;
-  /**
-   * The approved set the Run was started with — `.collie/verify.json` as read at start.
-   * Written into `run_verification` so the Intent *is* the set from version 1, and `run
-   * intent verification` amends one list rather than a list that shadows another.
-   */
   readonly runVerification?: ReadonlyArray<VerifySpec>;
 }
 
-/**
- * Version 1: workspace defaults, then what was named at launch. Named entries replace
- * a default with the same id, so a human who typed a stricter version of a default
- * gets one constraint and not two that disagree.
- */
 export function seedIntent(run: string, options: SeedOptions) {
   const byId = new Map<string, Constraint>();
   for (const constraint of options.defaults?.constraints ?? []) byId.set(constraint.id, constraint);
@@ -293,12 +248,6 @@ export function seedIntent(run: string, options: SeedOptions) {
   };
 }
 
-/**
- * The child's Intent after its parent's current one is applied to it: parent-sourced
- * entries are replaced wholesale, the child's own are kept, and anything the two
- * disagree about is returned rather than resolved. Pure, so that the caller can see what
- * it decided without having to run it again to find out.
- */
 export function propagate(parent: Intent, child: Intent) {
   const own = Arr.filter(child.constraints, (c) => c.source !== "parent");
   const ownIds = new Set(Arr.map(own, (c) => c.id));
@@ -325,9 +274,7 @@ export function propagate(parent: Intent, child: Intent) {
   };
 }
 
-// `## 1. Objective` is a heading: a numbered plan is not one with no goal.
 const NUMBER = String.raw`(?:\d+(?:\.\d+)*[.)]?\s+)?`;
-// `Out of scope` and `Done when` are what Collie's own planners write.
 const REQUIREMENT_HEADING = new RegExp(
   String.raw`^#+\s*${NUMBER}(Requirements|Success criteria|Boundaries|Constraints|Out of scope|Done when)\b`,
   "i",
@@ -338,14 +285,6 @@ const HEADING = /^#+\s/;
 const BULLET = /^(\s*)[-*]\s+(.*\S)\s*$/;
 const NUMBERED = /^(\s*)\d+[.)]\s+(.*\S)\s*$/;
 
-/**
- * What a plan asks for, read deterministically: bullets under a heading whose text
- * matches, wrapped and nested lines included, and the first paragraph under `## Objective`
- * as the goal, else under `## Solution`, the heading to-spec writes. Heading match
- * only — no model, no inference — because this is evidence a human can check against
- * the file, and because a plan may not grant authority (SPEC §5). The return type is
- * how that is enforced: there is nowhere here to put a grant.
- */
 export function extractRequirements(text: string, file: string) {
   const lines = Str.split(text, "\n");
   const constraints: Array<Omit<Constraint, "since">> = [];
@@ -386,7 +325,6 @@ export function extractRequirements(text: string, file: string) {
       continue;
     }
     flush();
-    // A numbered item ends a bullet but is not one.
     if (item !== null) bullet = { indent, parts: [item[2]!], line: index + 1 };
   }
   flush();
@@ -409,7 +347,6 @@ function firstParagraphUnder(lines: ReadonlyArray<string>, heading: RegExp) {
   return paragraph.length > 0 ? Arr.join(paragraph, " ") : null;
 }
 
-/** Where a workspace keeps what every Run it starts begins with. */
 export const defaultsPath = Effect.fn("Intent.defaultsPath")(function* (
   stateDir: string,
   key: string,
@@ -446,7 +383,6 @@ export const writeDefaults = Effect.fn("Intent.writeDefaults")(function* (
 
 export const EMPTY_DEFAULTS: Defaults = { constraints: [], authority: DEFAULT_AUTHORITY };
 
-/** The defaults as a human reads them: what every Run started here begins with. */
 export function describeDefaults(defaults: Defaults) {
   return Arr.join(
     [
@@ -460,12 +396,6 @@ export function describeDefaults(defaults: Defaults) {
   );
 }
 
-/**
- * What the work source itself asks for. A `plan-dir` is read: its `SPEC.md` headings
- * are matched literally by `extractRequirements`, so the constraints are evidence a
- * human can check line by line. Every other kind names one thing to do, and that text
- * is the goal — never a grant, and never a constraint inferred from prose.
- */
 export const fromWorkSource = Effect.fn("Intent.fromWorkSource")(function* (
   kind: string | null,
   value: string,
@@ -481,12 +411,6 @@ export const fromWorkSource = Effect.fn("Intent.fromWorkSource")(function* (
   return extractRequirements(text, "SPEC.md");
 });
 
-/**
- * A constraint as the CLI spells it. `rule:<kind>:<args>` is a rule the Driver can
- * check itself; anything else is semantic and is judged. The spelling is exact and
- * positional on purpose — a constraint the human cannot predict the meaning of is
- * worse than one they have to look up.
- */
 export function parseConstraint(text: string, severity: "block" | "warn") {
   const base = {
     id: constraintId(text),
@@ -532,7 +456,6 @@ function parseRule(kind: string, args: string[]) {
   }
 }
 
-/** The grants that are a yes or a no, and the ones that are a count. */
 const BOOLEAN_AUTHORITIES = new Set<string>([
   "auto_correct",
   "now_allowed",
@@ -542,12 +465,6 @@ const BOOLEAN_AUTHORITIES = new Set<string>([
 ]);
 const COUNT_AUTHORITIES = new Set<string>(["max_corrections_per_constraint"]);
 
-/**
- * `k=v` pairs as an authority patch. Every grant is named here rather than merged from
- * whatever the caller wrote: authority decides what Collie may do without asking, so a
- * key nobody validated would be a grant nobody made. `run_verification` is deliberately
- * absent — a bound command is not a command-line word (SPEC §7.7).
- */
 export function authorityPatch(pairs: ReadonlyArray<string>) {
   const patch: {
     -readonly [K in keyof Authority]?: Authority[K];
@@ -559,15 +476,14 @@ export function authorityPatch(pairs: ReadonlyArray<string>) {
     const value = pipe(pair, Str.slice(at + 1));
     if (BOOLEAN_AUTHORITIES.has(key)) {
       if (value !== "true" && value !== "false") return { error: `"${key}" is true or false.` };
-      // SAFETY: `key` is in BOOLEAN_AUTHORITIES, so it names one of the boolean grants;
-      // they all take the same value type, and the literal picks one of them to say so.
+      // WARNING: `key` is in BOOLEAN_AUTHORITIES, so it names one of the boolean grants; they all take the same value type, and the literal picks one of them to say so.
       patch[key as "auto_correct"] = value === "true";
       continue;
     }
     if (COUNT_AUTHORITIES.has(key)) {
       const count = Number(value);
       if (!Number.isInteger(count) || count < 0) return { error: `"${key}" is a whole number.` };
-      // SAFETY: `key` is in COUNT_AUTHORITIES, so it names one of the numeric grants.
+      // WARNING: `key` is in COUNT_AUTHORITIES, so it names one of the numeric grants.
       patch[key as "max_corrections_per_constraint"] = count;
       continue;
     }

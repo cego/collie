@@ -1,7 +1,3 @@
-// What a rule check must never do is pass on an absence. Everything here is a way of
-// having no evidence — no verification ran, no Output was written, no merge request
-// exists — and the check saying so rather than saying nothing is wrong.
-
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -57,7 +53,6 @@ test("a glob matches the way a human writing one would expect", () => {
   expect(matchesGlob("src/**", "src/a/b.ts")).toBe(true);
   expect(matchesGlob("src/**", "src/a.ts")).toBe(true);
   expect(matchesGlob("src/*.ts", "src/a.ts")).toBe(true);
-  // One star does not cross a directory: that is what two are for.
   expect(matchesGlob("src/*.ts", "src/a/b.ts")).toBe(false);
   expect(matchesGlob("src/**", "test/a.ts")).toBe(false);
   expect(matchesGlob("*.md", "README.md")).toBe(true);
@@ -109,7 +104,6 @@ test("a branch and a merge request are checked against what is recorded", () => 
 
   const target = { kind: "mr_target" as const, project: "acme/app", iid: "42" };
   expect(checkRules(intentWith(target), facts(), "t")).toEqual([]);
-  // No merge request at all is a breach, not a pass: there is nothing that targets it.
   expect(
     checkRules(intentWith(target), facts({ mrTarget: null }), "t")[0]?.evidence[0]?.excerpt,
   ).toContain("no merge request");
@@ -132,11 +126,9 @@ test("an Output field is compared as the human wrote it", () => {
     checkRules(intentWith({ ...rule, value: "findings" }), facts({ outputs }), "t")[0]?.evidence[0]
       ?.excerpt,
   ).toContain('"clean"');
-  // Nested fields are addressable, which is what the dotted path is for.
   expect(
     checkRules(intentWith({ ...rule, path: "tests.ran", value: "all" }), facts({ outputs }), "t"),
   ).toEqual([]);
-  // A step that wrote nothing has not passed.
   expect(
     checkRules(intentWith(rule), facts({ outputs: {} }), "t")[0]?.evidence[0]?.excerpt,
   ).toContain("no Output recorded");
@@ -154,7 +146,6 @@ test("a verification nobody ran is a breach, because it is not a pass", () => {
       "t",
     )[0]?.evidence[0]?.excerpt,
   ).toContain("exited 1");
-  // The one that matters: no verification of that name at all.
   const [missing] = checkRules(intentWith(rule), facts(), "t");
   expect(missing?.evidence[0]?.excerpt).toBe("no verification of that name");
 });
@@ -197,7 +188,6 @@ test("a diff is split per file, capped, and secret files are named rather than q
       Option.map(Option.fromNullishOr(blocks[0]), (present_) => Str.split(present_.diff, "\n")),
     ),
   ).toHaveLength(MAX_LINES_PER_FILE);
-  // The name is the evidence; the contents are not something to hand a model.
   expect(blocks[1]?.diff).toBe("<redacted>");
   expect(blocks[1]?.diff).not.toContain("hunter2");
   expect(blocks[2]?.truncated).toBe(false);
@@ -213,14 +203,11 @@ test("the same finding in the same place is not a second finding", () => {
   const found = checkRules(intent, facts({ changedFiles: ["docs/using.md"] }), "t");
   expect(found).toHaveLength(1);
 
-  // Checked again against the same diff: nothing new to say.
   expect(newReports(found, found)).toEqual([]);
-  // A different file is a different finding.
   const other = checkRules(intent, facts({ changedFiles: ["README.md"] }), "t");
   expect(newReports(other, found)).toHaveLength(1);
   expect(findingKey("c1", found[0]!.evidence)).not.toBe(findingKey("c1", other[0]!.evidence));
 
-  // And a report that has been settled stops suppressing new ones.
   const settled = Arr.map(found, (report) => ({ ...report, resolution: "verified" as const }));
   expect(newReports(found, settled)).toHaveLength(1);
 });
@@ -304,11 +291,8 @@ test("an amended Intent supersedes what it moved past, and nothing else", () => 
     ...over,
   });
 
-  // Current version, constraint still there: nothing has moved past it.
   expect(supersededBy([open({})], at)).toEqual([]);
-  // Judged against an older Intent.
   expect(Arr.map(supersededBy([open({ intent_version: 2 })], at), (r) => r.id)).toEqual(["d1"]);
-  // The constraint itself was removed, so the report is about something nobody asks for.
   expect(Arr.map(supersededBy([open({ constraint: "gone" })], at), (r) => r.id)).toEqual(["d1"]);
 });
 
@@ -325,11 +309,9 @@ test("the journal is append-only, so the newest line is the state", () =>
 
       yield* appendDrift(dir, { ...report!, resolution: "verified" });
       expect(openReports(yield* readDrift(dir))).toHaveLength(0);
-      // Both lines are still there: what Collie thought and when survives being wrong.
       expect(yield* readDrift(dir)).toHaveLength(2);
       expect(currentReports(yield* readDrift(dir))[0]?.resolution).toBe("verified");
 
-      // A judgement nobody could make is recorded, so a card can say why it says nothing.
       yield* recordSkipped(dir, "r1", "budget_exhausted");
       const lines = yield* readDrift(dir);
       expect(lines.at(-1)).toMatchObject({ kind: "skipped", reason: "budget_exhausted" });
@@ -361,9 +343,6 @@ test("evidence is the actual diff, from the actual tree", () =>
     }),
   ));
 
-// --- The judgement -------------------------------------------------------------------
-
-/** The evaluator, as a `claude` on PATH that prints whatever the test put in `reply`. */
 const fakeEvaluator = Effect.fn("test.fakeEvaluator")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -386,7 +365,6 @@ const fakeEvaluator = Effect.fn("test.fakeEvaluator")(function* (dir: string) {
   };
 });
 
-/** The evaluator's own envelope, encoded the way every boundary here encodes JSON. */
 const envelope = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
@@ -408,7 +386,6 @@ const FLAGS = Arr.join(
   " ",
 );
 
-/** A checkout with one commit, which is what a judgement reads its diff from. */
 const checkout = Effect.fn("DriftTest.checkout")(function* (prefix: string) {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix });
@@ -430,7 +407,6 @@ const checkout = Effect.fn("DriftTest.checkout")(function* (prefix: string) {
   return dir;
 });
 
-/** Commits `files` on top of the checkout's first commit, and returns that first commit. */
 const committed = Effect.fn("DriftTest.committed")(function* (
   dir: string,
   files: Readonly<Record<string, string>>,
@@ -477,8 +453,6 @@ test("nothing to judge is never a judgement that happened", () =>
   runEffect(
     Effect.gen(function* () {
       const dir = yield* checkout("hw-judge-");
-      // A goal alone: only a semantic constraint can be reported against, so a call would
-      // buy nothing but its own cost.
       const bare = seedIntent("r1", { goal: "ship it" });
       const out = yield* judge(judgementDeps(dir), bare, {
         runDir: dir,
@@ -504,7 +478,6 @@ test("a judgement with no evaluator is skipped, and skipped is not passed", () =
       });
       expect(out.judged.semantic).toBe(false);
 
-      // Recorded, so `alignment` says `unverified` with the reason rather than `true`.
       const lines = yield* readDrift(dir);
       expect(Arr.map(lines, (line) => (line.kind === "skipped" ? line.reason : ""))).toEqual([
         expect.stringContaining("the evaluator is missing"),
@@ -553,7 +526,6 @@ test("a judgement whose diff git cannot read is skipped in git's words, never ju
     }),
   ));
 
-/** A Run in `worktree` whose one Output is `build`, judged with a model that cites it. */
 const judgedOnOutput = Effect.fn("DriftTest.judgedOnOutput")(function* (
   dir: string,
   worktree: string,
@@ -682,9 +654,6 @@ test("what the model returns is filed against this Run, at this version, and now
       const dir = yield* checkout("hw-judge-");
       const base = yield* committed(dir, { "a.ts": "export const a = 1;\n" });
       const evaluator = yield* fakeEvaluator(dir);
-      // The model is asked which constraint and how bad. It does not get to say which
-      // Run, which Intent version, when, or whether the thing is still open — a report
-      // claiming another Run would be a Driver writing somebody else's journal.
       yield* evaluator.reply(
         envelope({
           result: {
@@ -704,7 +673,6 @@ test("what the model returns is filed against this Run, at this version, and now
                 evidence_truncated: false,
                 resolution: "verified",
               },
-              // A constraint this Intent does not have: a model inventing a rule.
               {
                 id: "made-up",
                 at: "t",
@@ -738,7 +706,6 @@ test("what the model returns is filed against this Run, at this version, and now
       expect(report.at).toBe("2026-09-10T12:00:00Z");
       expect(report.kind).toBe("semantic");
       expect(report.resolution).toBe("open");
-      // A ref outside the Run is dropped rather than rendered for a human to chase.
       expect(report.evidence).toEqual([{ kind: "diff", path: "a.ts" }]);
     }),
   ));
@@ -802,7 +769,6 @@ test("a Run's own report is filed only when it cites a file whose diff the pack 
         at: "t0",
       });
       evaluator.restore();
-      // Only the one citing the change, and its file as the pack named it.
       expect(Arr.map(out.reports, (report) => report.evidence)).toEqual([
         [{ kind: "diff", path: "a.ts", line: 1 }],
       ]);
@@ -817,8 +783,6 @@ test("every judgement is made and recorded; none is refused over how many came b
       const evaluator = yield* fakeEvaluator(dir);
       yield* evaluator.reply(envelope({ result: { reports: [] }, total_cost_usd: 0.02 }));
 
-      // Usage is data, not a quota: the second judgement is made like the first, and both
-      // are in the record with what they cost.
       const deps = judgementDeps(dir, FLAGS);
       const first = yield* judge(deps, semanticIntent(), {
         runDir: dir,
@@ -851,13 +815,9 @@ test("every judgement is made and recorded; none is refused over how many came b
 
 test("a card says a cross-run check happened, and stops saying so when it goes stale", () => {
   const at = "2026-09-10T12:00:00Z";
-  // `none` means "there was nothing to check". A Judgement that was made has to be
-  // distinguishable from one that never was, or the final card is silent about it.
   expect(evaluatedFor([], "r1")).toBe(false);
   expect(evaluatedFor([{ kind: "evaluated", at, by: "r1", runs: ["r1", "r2"] }], "r1")).toBe(true);
-  // About the other side of the relationship, not this one.
   expect(evaluatedFor([{ kind: "evaluated", at, by: "r2", runs: ["r2"] }], "r1")).toBe(false);
-  // Something moved after the answer, so the answer is behind.
   expect(
     evaluatedFor(
       [

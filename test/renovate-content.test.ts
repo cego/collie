@@ -8,9 +8,6 @@ import { contentOf } from "../src/sdk";
 import onGitlab from "../workflows/renovate.gitlab.md" with { type: "text" };
 import onGithub from "../workflows/renovate.github.md" with { type: "text" };
 
-// renovate keeps a content file per forge (ADR-0050 D1, as amended): the procedure differs,
-// so each says it its forge's way, and what is Linear's is said the same in both.
-
 const gitlab = contentOf(onGitlab);
 const github = contentOf(onGithub);
 
@@ -26,7 +23,6 @@ test("both forges' renovate content has the same steps, and every step fills fro
     "release",
     "record",
   ]);
-  // A template naming anything RenovateInput does not give is refused as it is made.
   expect(Rec.keys(RENOVATE_ON.github)).toEqual(Rec.keys(RENOVATE_ON.gitlab));
 });
 

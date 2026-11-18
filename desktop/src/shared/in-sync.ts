@@ -1,5 +1,3 @@
-// Whether each Machine is In sync with Desktop (CONTEXT.md), and the Flock's line about it.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -12,7 +10,6 @@ import {
   SETTLED,
 } from "./flock";
 
-/** What a Machine lags on, in words, with the steps that fix onboarding. */
 export interface Lag {
   readonly part: "version" | "settings" | "definitions" | "credentials" | "onboarding";
   readonly said: string;
@@ -24,7 +21,6 @@ export interface InSync {
   readonly behind: ReadonlyArray<Lag>;
 }
 
-/** What Desktop gives its Flock; a version that isn't a release asks nothing of one. */
 export interface DesktopHolds {
   readonly version: string;
   readonly credentials: ReadonlyArray<Credential>;
@@ -127,18 +123,15 @@ const lags = (row: MachineRow, desktop: DesktopHolds) => {
   return [...version, ...settings, ...definitions, ...credentials, ...onboarding];
 };
 
-/** A part not known yet is not behind. */
 export const inSync: (row: MachineRow, desktop: DesktopHolds) => InSync = (row, desktop) => {
   if (row.state !== "live") return { state: row.state, behind: [] };
   const behind = lags(row, desktop);
   return { state: behind.length === 0 ? "in-sync" : "behind", behind };
 };
 
-/** Whether Sync now is offered: onboarding has its own steps. */
 export const syncable = (verdict: InSync) =>
   Arr.some(verdict.behind, ({ part }) => part !== "onboarding");
 
-/** The Collie a Machine's row says it runs. */
 export const buildOf = ({ build, development }: Pick<MachineRow, "build" | "development">) =>
   development !== null
     ? `development build ${development}`
@@ -146,7 +139,6 @@ export const buildOf = ({ build, development }: Pick<MachineRow, "build" | "deve
       ? `Collie ${build}`
       : "Build not known yet";
 
-/** The Machines page's top line, then why each Machine is behind, as the Flock chat reads it. */
 export const flockInSyncSaid = (rows: ReadonlyArray<MachineRow>, desktop: DesktopHolds) =>
   Arr.join(
     [
@@ -166,7 +158,6 @@ export const flockInSyncSaid = (rows: ReadonlyArray<MachineRow>, desktop: Deskto
     ". ",
   );
 
-/** The Machines page's top line, and how many Machines aren't in sync, connecting ones aside. */
 export const flockInSync = (rows: ReadonlyArray<MachineRow>, desktop: DesktopHolds) => {
   const lagging = Arr.flatMap(rows, (row) => {
     const { state, behind } = inSync(row, desktop);

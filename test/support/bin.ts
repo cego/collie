@@ -4,7 +4,6 @@ import { Cause, Config, ConfigProvider, Effect, FileSystem, Path, Semaphore } fr
 
 const buildingFixture = Semaphore.makeUnsafe(1);
 
-/** Repeated protocol clients must start within the same budget as the native executables. */
 export const fixtureBinary = (kind: "ssh" | "codex") =>
   Effect.suspend(() =>
     buildingFixture.withPermits(1)(
@@ -39,16 +38,10 @@ export const fixtureBinary = (kind: "ssh" | "codex") =>
     ),
   );
 
-/**
- * The `case` arms a fake git needs before a mutating run can be given a checkout:
- * `worktree list --porcelain` names the repository, and `worktree add` really makes the
- * directory and the `.git` file git writes there — which is a checkout's identity.
- */
 export const gitWorktreeCases = (repo: string) =>
   `  "worktree list --porcelain") printf 'worktree %s\\nbranch refs/heads/master\\n' "${repo}" ;;
   "worktree add"*) mkdir -p "$3" && printf 'gitdir: %s/.gitdir\\n' "$3" > "$3/.git" ;;`;
 
-/** A git in `dir`, first on PATH while the scope lasts, that logs each start's arguments. */
 export const loggedGit = (dir: string, log: string) =>
   Effect.gen(function* () {
     const real = Bun.which("git");
@@ -62,7 +55,6 @@ export const loggedGit = (dir: string, log: string) =>
     );
   });
 
-/** A dir of fake executables put in front of PATH for the current test. */
 export class FakeBin {
   private constructor(
     readonly dir: string,
@@ -79,14 +71,6 @@ export class FakeBin {
     });
   }
 
-  /**
-   * `script` is sh; exit code and stdout are what the runner sees.
-   *
-   * Written to a fresh file and renamed over the old one, never written in place: Linux
-   * refuses to open a running executable for writing, so a test that replaced a stub
-   * while a previous copy of it was still executing failed with ETXTBSY. A rename
-   * replaces the name without touching the file the running process holds open.
-   */
   add(name: string, script: string) {
     return Effect.gen(
       function* (this: FakeBin) {
@@ -101,7 +85,6 @@ export class FakeBin {
     );
   }
 
-  /** Makes each staged name its own, so two writes in one process cannot collide. */
   private writes = 0;
 
   restore() {

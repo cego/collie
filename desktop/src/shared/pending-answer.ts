@@ -1,23 +1,16 @@
-// A card's questions and answers in flight; no Bun-only import, as the view bundles this.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import type { Decision, Question, TaskView } from "../../../src/board-model";
 
 export interface InFlight {
-  /** The option's title or the typed value. */
   readonly shown: string;
   readonly machine: string;
-  /** Whether the host has replied that it took it. */
   readonly confirmed: boolean;
-  /** Which send this is, so a try of one a newer answer replaced changes nothing. */
   readonly send: number;
 }
 
-/** View-wide, keyed by `answerKey`; nothing here is written to a host. */
 export interface Answering {
   readonly answers: ReadonlyMap<string, InFlight>;
-  /** The newest send per question. */
   readonly latest: ReadonlyMap<string, number>;
 }
 
@@ -37,14 +30,12 @@ const without = <A>(map: ReadonlyMap<string, A>, key: string) => {
 const withOne = <A>(map: ReadonlyMap<string, A>, key: string, value: A) =>
   new Map(map).set(key, value);
 
-/** A new answer to a question, sending, which replaces any earlier one to it. */
 export const answerSent = (state: Answering, key: string, sent: Omit<InFlight, "confirmed">) => ({
   ...state,
   answers: withOne(state.answers, key, { ...sent, confirmed: false }),
   latest: withOne(state.latest, key, sent.send),
 });
 
-/** A try of `sent` starting (null), confirmed, or failed. */
 export const answerTried = (
   state: Answering,
   key: string,
@@ -59,7 +50,6 @@ export const answerTried = (
   };
 };
 
-/** Drops what is held for each question no Task on the Flock's board has open. */
 export const answersSettled = (
   state: Answering,
   board: ReadonlyArray<{ readonly installation: string; readonly task: QuestionsOf }>,
@@ -81,7 +71,6 @@ export const answersSettled = (
 
 type QuestionsOf = Pick<TaskView, "decision"> & { readonly questions?: ReadonlyArray<Question> };
 
-/** A card's open questions; an older host lists none, so its question decision stands alone. */
 export const openQuestions = (task: QuestionsOf) =>
   task.questions ?? (task.decision?.kind === "question" ? [task.decision] : []);
 
@@ -90,10 +79,6 @@ const sendingSaid = (answer: InFlight) =>
     ? `Answered ${answer.shown}; waiting for ${answer.machine}'s board`
     : `Sending ${answer.shown} to ${answer.machine}…`;
 
-/**
- * The card's question block: the text, and the Answer button's label or, with every open
- * question's answer in flight, the pending line. Null where its decision is no question.
- */
 export const cardQuestion = (
   task: { readonly decision: Decision | null; readonly questions?: ReadonlyArray<Question> },
   installation: string,
@@ -131,20 +116,16 @@ export type Condition =
   | { readonly kind: "gone" };
 
 export interface SittingEntry {
-  /** As last seen on the board, so it is still drawn after it leaves. */
   readonly question: Question;
-  /** The last answer the sitting saw in flight for it. */
   readonly seen: Pick<InFlight, "shown" | "machine" | "confirmed"> | null;
   readonly was: Condition["kind"];
 }
 
-/** One opening of the dialog: its questions, which never leave it, and where it is. */
 export interface Sitting {
   readonly entries: ReadonlyArray<SittingEntry>;
   readonly cursor: number;
 }
 
-/** The board and the answers as they stand. */
 export interface Now {
   readonly installation: string;
   readonly open: ReadonlyArray<Question>;
@@ -167,7 +148,6 @@ const conditionOf: (entry: SittingEntry, now: Now) => Condition = (entry, now) =
     : { kind: "answered", said: `Answered ${entry.seen.shown}`, sending: false };
 };
 
-/** Each entry as the board and answers have it now, and the questions new to the board. */
 const refreshed = (entries: ReadonlyArray<SittingEntry>, now: Now) =>
   Arr.map(
     [
@@ -205,7 +185,6 @@ const refreshed = (entries: ReadonlyArray<SittingEntry>, now: Now) =>
 const settledWas = (entries: ReadonlyArray<SittingEntry>, now: Now) =>
   Arr.map(entries, (entry) => ({ ...entry, was: conditionOf(entry, now).kind }));
 
-/** The card's open questions, on the first that is unanswered. */
 export const sittingStarts: (now: Now) => Sitting = (now) => {
   const entries = settledWas(refreshed([], now), now);
   return {
@@ -220,10 +199,6 @@ export const sittingStarts: (now: Now) => Sitting = (now) => {
   };
 };
 
-/**
- * The board or the answers changed: arrivals join, and from a question it cannot answer the
- * dialog moves to the first that has just become answerable.
- */
 export const sittingSees = (sitting: Sitting, now: Now) => {
   const entries = refreshed(sitting.entries, now);
   const current = entries[sitting.cursor];
@@ -236,7 +211,6 @@ export const sittingSees = (sitting: Sitting, now: Now) => {
   return { entries: settledWas(entries, now), cursor: moveTo === -1 ? sitting.cursor : moveTo };
 };
 
-/** The question at the cursor was just answered: on to the next unanswered, wrapping round. */
 export const sittingAnswered = (sitting: Sitting, now: Now) => {
   const entries = settledWas(refreshed(sitting.entries, now), now);
   const order = Arr.map(entries, (_, at) => (sitting.cursor + 1 + at) % entries.length);
@@ -246,13 +220,11 @@ export const sittingAnswered = (sitting: Sitting, now: Now) => {
   return { entries, cursor: next ?? sitting.cursor };
 };
 
-/** Back (-1) or Next (1), which never wrap. */
 export const sittingMoved = (sitting: Sitting, by: number) => ({
   ...sitting,
   cursor: Math.min(Math.max(sitting.cursor + by, 0), Math.max(sitting.entries.length - 1, 0)),
 });
 
-/** What the dialog draws: "Question k of N", the question, its condition, and whether it is done. */
 export const sittingView = (sitting: Sitting, now: Now) => {
   const entry = sitting.entries[sitting.cursor];
   const conditions = Arr.map(sitting.entries, (one) => conditionOf(one, now));

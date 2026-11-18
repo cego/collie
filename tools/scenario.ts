@@ -1,6 +1,3 @@
-// `bun run scenario "<pattern>"`: runs the baseline scenarios whose names match the pattern, as
-// `-t` matches it, through `bun run test` with only the shard files that hold them.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";

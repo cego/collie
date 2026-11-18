@@ -71,7 +71,6 @@ export const bundleLinuxMedia = Effect.fn("bundle.linuxMedia")(function* (
     ),
   );
   yield* fs.chmod(`${bundle}/libexec/gst-plugin-scanner`, 0o755);
-  // Read the package database once for the whole closure, rather than once per library.
   const files = yield* Effect.forEach([...libraries, scanner, ...plugins], (file) =>
     fs.realPath(file),
   );

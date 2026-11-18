@@ -1,8 +1,3 @@
-// On a Machine set to core, Collie's Machines are core's (ticket 11): a VM is added with a
-// `via` that rides this computer's SSH master, so core never logs in by itself; forgetting
-// one removes it from core and from Pairing; and a pairing core does not list yet is kept.
-// Two real hosts, the fake `ssh`, and a fake core that dials each `via` as core does.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -22,7 +17,6 @@ const Logged = Schema.fromJsonString(
 );
 const Params = Schema.Record(Schema.String, Schema.Json);
 
-/** What `side`'s core was asked, in order, with what it was given. */
 const coreCalls = (side: Side) =>
   Effect.gen(function* () {
     const text = yield* (yield* FileSystem.FileSystem).readFileString(side.coreLog);
@@ -43,7 +37,6 @@ const sshSaid = (side: Side, mode: string) =>
     Arr.filter(calls, (line) => pipe_(line, Str.startsWith(`${mode} `))),
   );
 
-/** The first's `collie` as Desktop runs it, with that Machine's environment. */
 const desktopCollie = (side: Side) =>
   Effect.map(collieCommand, (command) => [
     "env",
@@ -91,7 +84,6 @@ test(
             expect(via).toContain(`-S ${master} `);
             expect(via).toContain("ProxyCommand=false");
             expect(via).toEndWith(" mk@second");
-            // Core's dial rode the master: no login of its own.
             expect(yield* sshSaid(first, "ride")).toContain("ride mk@second true");
             expect(yield* sshSaid(first, "login")).toEqual([]);
 

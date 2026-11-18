@@ -1,11 +1,3 @@
-// The one thing this record must never do is edit history. A Run that failed and whose
-// work a human then merged by hand has two facts about it, and the temptation in both
-// directions — leave the row red, or tidy the status — loses one of them.
-//
-// The nonmutation claim is worth nothing asserted over an object the code never saw, so
-// it is made against a real Run, through the CLI a person actually types: its status
-// before and after, a repeated request id, and a read that reads.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -29,7 +21,6 @@ const Envelope = Schema.fromJsonString(
 );
 const parseEnvelope = Schema.decodeUnknownEffect(Envelope);
 
-/** The CLI as a person runs it, against a state directory that survives between calls. */
 const cli = Effect.fn("test.cli")(function* (args: string[], env: Record<string, string>) {
   const suite = yield* suiteEnv;
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
@@ -73,11 +64,9 @@ test(
           COLLIE_USER_DIR: world.config,
           HOME: world.home,
         };
-        // A Run that failed, which is the case this exists for.
         const run = yield* settledRun(world, "retains");
         const failed = "failed: merge: picker";
 
-        // Reading before anything is recorded reads, and writes nothing.
         const empty = yield* cli(["--json", "run", "disposition", run.id], env);
         expect(empty.exit).toBe(0);
         expect(yield* parseEnvelope(empty.stdout)).toMatchObject({
@@ -106,24 +95,20 @@ test(
         });
         expect((yield* hostRecords(world.state, readDispositions(run.dir))).length).toBe(1);
 
-        // A replayed request id returns the first result rather than recording twice.
         const replay = yield* cli(record, env);
         expect(replay.exit).toBe(0);
         expect(yield* parseEnvelope(replay.stdout)).toMatchObject({ ok: true });
         expect((yield* hostRecords(world.state, readDispositions(run.dir))).length).toBe(1);
 
-        // The whole point: how the Run ended is still how it ended.
         expect(
           yield* parseEnvelope((yield* cli(["--json", "run", "disposition", run.id], env)).stdout),
         ).toMatchObject({ ok: true, data: { status: failed } });
 
-        // And `run show` says both facts.
         const shown = yield* cli(["run", "show", run.id], env);
         expect(shown.exit).toBe(0);
         expect(shown.stdout).toContain(`${failed} · merged cego/collie!43`);
       }),
     ),
-  // Five CLI spawns of a TypeScript entrypoint; the default 5s is not enough.
   60_000,
 );
 
@@ -139,7 +124,6 @@ test("a correction is a new line, so what people believed before is still there"
       const lines = yield* readDispositions(dir);
       expect(Arr.map(lines, (l) => l.kind)).toEqual(["abandoned", "merged"]);
       expect(latest(lines)?.ref).toBe("cego/collie!43");
-      // An abandoned Run with nothing to point at still reads without a dangling space.
       expect(statusLine("failed", lines[0]!)).toBe("failed · abandoned by mk");
     }),
   ));
@@ -174,7 +158,6 @@ test(
         ).toEqual(["restarted clean"]);
       }),
     ),
-  // Two CLI spawns of a TypeScript entrypoint.
   60_000,
 );
 

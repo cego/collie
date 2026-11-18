@@ -1,15 +1,9 @@
-// Which of a Flow's Steps, in the order it draws them, are drawn yet: a large Run's 220 Steps
-// cost a record's first frame several times its budget, and a view shows about 50 of them.
-
-/** Steps drawn from `from` up to, not including, `to`. */
 export interface StepWindow {
   readonly from: number;
   readonly to: number;
 }
 
-/** Steps drawn with a Flow's first frame: more than a record's view shows. */
 export const FIRST_STEPS = 64;
-/** Steps drawn on each frame after, until every Step is. */
 export const LATER_STEPS = 24;
 
 export const firstWindow = (count: number, anchor: number) => {
@@ -20,7 +14,6 @@ export const firstWindow = (count: number, anchor: number) => {
 export const wholeWindow = (window: StepWindow, count: number) =>
   window.from === 0 && window.to >= count;
 
-/** One frame's more Steps, split between both sides while both have Steps left. */
 export const grownWindow = (window: StepWindow, count: number) => {
   const to = Math.min(window.to, count);
   const from = Math.min(window.from, to);

@@ -1,11 +1,3 @@
-// Builds Collie for this computer, with the stable update archive, manifest and installer (desktop/README.md):
-//
-//   bun run desktop/scripts/bundle.ts [out]   # out defaults to desktop/dist
-//
-// On macOS it signs with ELECTROBUN_DEVELOPER_ID (ad hoc without one) and notarises with the
-// release's Apple secrets, as Desktop's build does. The release signs the archive with
-// tools/sign.ts, as it signs Desktop's.
-
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Arr from "effect/Array";
@@ -30,13 +22,11 @@ const ROOT = new URL("../../", import.meta.url).pathname;
 const IDENTIFIER = "dk.cego.collie.desktop";
 const CHANNEL = "stable";
 const BASE_URL = "https://github.com/cego/collie/releases/latest/download";
-// USTAR cannot hold directory-service UIDs; archives belong to no build account.
 const TAR_OWNER =
   process.platform === "darwin" ? ["--uid=0", "--gid=0"] : ["--owner=0", "--group=0"];
 
 export const bundleNameOf = (os: Os) => (os === "macos" ? "collie-desktop.app" : "collie-desktop");
 
-/** Where each part sits inside the bundle. */
 const layoutOf = (os: Os) =>
   os === "macos"
     ? {
@@ -52,7 +42,6 @@ const layoutOf = (os: Os) =>
         version: "Resources/version.json",
       };
 
-/** Preserve the update filenames already installed apps request. */
 const prefixOf = (os: Os, arch: string) => `${CHANNEL}-${os}-${arch}`;
 
 const run = Effect.fn("bundle.run")(function* (
@@ -78,7 +67,6 @@ const run = Effect.fn("bundle.run")(function* (
     return yield* new Cause.UnknownError(exitCode, `${command} failed: ${stderr}`);
 }, Effect.scoped);
 
-/** Desktop's native core, compiled so it needs no installed Bun. */
 export const compileCore = (outfile: string) =>
   run(
     process.execPath,
@@ -117,7 +105,6 @@ ${pipe(
 </dict></plist>
 `;
 
-// install-desktop.sh writes the absolute Exec and Icon when it installs the entry.
 const DESKTOP_ENTRY = `[Desktop Entry]
 Type=Application
 Name=Collie
@@ -138,10 +125,8 @@ ${pipe(
 </dict></plist>
 `;
 
-/** codesign's arguments for each part of the app, inside out. */
 export const macSignings = (env: Env, entitlements: string, app: string) => {
   const identity = macSigning(env).codesign ? (env.ELECTROBUN_DEVELOPER_ID ?? "-") : "-";
-  // Apple's timestamp server serves a real identity only.
   const timestamp = identity === "-" ? [] : ["--timestamp"];
   return Arr.map(
     [`${app}/Contents/MacOS/collie-core`, `${app}/Contents/MacOS/launcher`, app],
@@ -159,7 +144,6 @@ export const macSignings = (env: Env, entitlements: string, app: string) => {
   );
 };
 
-/** `xcrun`'s arguments to notarise `zip`, or null where Desktop's build would not. */
 export const notarizeArgs = (env: Env, zip: string) => {
   if (!macSigning(env).notarize) return null;
   const submit = ["notarytool", "submit", zip, "--wait"];
@@ -188,7 +172,6 @@ export const notarizeArgs = (env: Env, zip: string) => {
       ];
 };
 
-/** Signs `app` inside out, then notarises and staples it where the secrets are set. */
 const signMac = (env: Env, work: string) => (app: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -210,11 +193,9 @@ export interface AssembleOptions {
   readonly shell: string;
   readonly core: string;
   readonly icon: string;
-  /** Retained only for the old updater's bundle validation and uninstall contract. */
   readonly manager: string;
   readonly version: string;
   readonly baseUrl: string;
-  /** Runs on the finished bundle before it is archived, as signing does. */
   readonly prepare?: (
     bundle: string,
   ) => Effect.Effect<
@@ -248,10 +229,6 @@ const Manifest = Schema.fromJsonString(
   }),
 );
 
-/**
- * Lays the bundle out under `out/build/<os>-<arch>/`, and its update archive and manifest
- * under `out/artifacts/`, as Electrobun lays Desktop's out for `tools/verify-mac-app.sh`.
- */
 export const assemble = Effect.fn("bundle.assemble")(function* (options: AssembleOptions) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -315,7 +292,6 @@ export const assemble = Effect.fn("bundle.assemble")(function* (options: Assembl
   );
 });
 
-/** The installed v2 updater requires its native manager in every replacement bundle. */
 const compatibilityManager = (os: Os, arch: string, work: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -347,7 +323,6 @@ const compatibilityManager = (os: Os, arch: string, work: string) =>
     return `${source}/${member}`;
   }).pipe(Effect.provide(FetchHttpClient.layer));
 
-/** Keep the existing one-line installer's signed asset names. */
 export const packageInstaller = (out: string, os: Os, arch: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -380,7 +355,6 @@ export const packageInstaller = (out: string, os: Os, arch: string) =>
     }
   });
 
-/** The macOS icon, from the brand tile. */
 const macIcon = (work: string) =>
   Effect.gen(function* () {
     yield* run(process.execPath, [`${ROOT}desktop/scripts/bun/mac-icons.ts`], {

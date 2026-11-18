@@ -1,6 +1,3 @@
-// The Projects root and the checkouts under it: where a Run started from the Home is
-// rooted, and the one listing the router and an agent's refusal choose from.
-
 import { Herdr } from "../src/herdr";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";

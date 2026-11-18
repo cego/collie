@@ -1,18 +1,3 @@
-// Native chat, the Herd's core terminal beside the board: which harness Collie opens with,
-// which native session that conversation is, and how it is started.
-//
-// Collie does not own the conversation. The harness owns the editor, the streaming, the
-// history and the compaction; Collie owns which harness, which session, and what the
-// model is allowed to reach. That division is the whole point of this file: everything
-// here is about *identity and reach*, and nothing about what was said.
-//
-// Two rules the rest of it falls out of. A changed preference is a **next launch**, never
-// a swap: a human who picks Pi while Claude is mid-answer keeps that answer, and Pi is
-// what opens next time there is a launch to do. And a conversation is bound to the Herd,
-// the harness and a session id Collie mints — never to whichever session the harness
-// happened to write last in this directory, which is how a chat reopens into somebody
-// else's conversation.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
@@ -36,33 +21,22 @@ import { herdDir, machineHerd } from "./steering";
 import { nowIso } from "./time";
 import { TOOLS } from "./tools";
 
-/**
- * The harnesses a human may hold this conversation in. Deliberately shorter than
- * `HARNESSES`: chat needs a native editor, a resumable session named by id, and a
- * documented way to add Collie's tools to its native environment. Workers' harnesses are
- * unaffected by anything here.
- */
 export const CHAT_HARNESSES = ["claude", "pi"] as const;
 export type ChatHarness = (typeof CHAT_HARNESSES)[number];
 
-/** What opens when nobody has chosen, on a new installation and an old one alike. */
 export const DEFAULT_CHAT_HARNESS: ChatHarness = "claude";
 
-/** Where the preference is kept. Read with the same fallback everywhere. */
 export const CHAT_HARNESS_KEY = "chat_harness";
 
 export function isChatHarness(value: string | undefined): value is ChatHarness {
   return Arr.some(CHAT_HARNESSES, (harness) => harness === value);
 }
 
-/** The core terminal this Machine's chat runs in, and what `hc attach` reaches it by. */
 export const CHAT_TERMINAL = "collie-chat";
 
 const RecordSchema = Schema.Struct({
-  /** The harness actually running, which is not necessarily the one now preferred. */
   harness: Schema.Literals(CHAT_HARNESSES),
   agent: Schema.String,
-  /** The native session id the running chat was started with, under its harness. */
   sessions: Schema.Record(Schema.String, Schema.String),
   startedAt: Schema.String,
 });
@@ -92,38 +66,22 @@ export const writeChat = Effect.fn("Chat.write")(function* (file: string, record
   yield* fs.rename(tmp, file);
 });
 
-/** Where a launch's generated tool wiring is written. One directory per Herd, rewritten each launch. */
 export const chatDir = Effect.fn("Chat.dir")(function* (stateDir: string, key: string) {
   const path = yield* Path.Path;
   return path.join(yield* herdDir(stateDir, key), "chat");
 });
 
 export interface LaunchFiles {
-  /** The Collie role, appended to the harness's own system prompt. Never installed as config. */
   readonly systemPrompt: string;
-  /** Claude's MCP server list, for `--mcp-config`. */
   readonly mcpConfig: string;
-  /** Pi's extension, for `-e`. */
   readonly extension: string;
-  /** Claude's additional settings, for `--settings`: the hook that attaches the selection. */
   readonly settings: string;
 }
 
-/**
- * What the harness is started with, after its own name.
- *
- * Every flag is this launch only. Nothing here rewrites `~/.claude` or `~/.pi`, and
- * nothing pins a spend: native authentication is the human's, and a chat that silently
- * overrode it would be a different product wearing the harness's name. Claude runs on the
- * latest Opus at medium effort (ADR-0032).
- *
- * Both harnesses keep their native tools and configuration alongside Collie's tools.
- */
 export function chatArgs(
   harness: ChatHarness,
   sessionId: string,
   files: LaunchFiles,
-  /** Null where the harness is started without one. */
   autoCompactWindow: AutoCompactWindow | null,
 ) {
   const flag = HARNESSES[harness]?.autoCompactFlag;
@@ -131,15 +89,12 @@ export function chatArgs(
     flag === undefined || autoCompactWindow === null ? [] : [flag, String(autoCompactWindow)];
   return harness === "claude"
     ? [
-        // Never `--continue`: "the most recent conversation in this directory" is how a
-        // chat reopens into somebody else's.
         "--session-id",
         sessionId,
         "--append-system-prompt-file",
         files.systemPrompt,
         "--mcp-config",
         files.mcpConfig,
-        // Additional settings, never a rewrite of the human's own.
         "--settings",
         files.settings,
         "--model",
@@ -151,33 +106,14 @@ export function chatArgs(
     : [
         "--session-id",
         sessionId,
-        // pi reads a path here as file contents.
         "--append-system-prompt",
         files.systemPrompt,
         "-e",
         files.extension,
-        // The role is the appended prompt above, not whatever repository the terminal's
-        // directory happens to be.
         "--no-context-files",
       ];
 }
 
-/**
- * Whether this harness can be **pushed** to, which is a different question from whether
- * it can be started, and is reported separately for that reason.
- *
- * Pi documents an extension interface for it: a custom message, queued, delivered when
- * the agent is between turns. Collie's extension uses that and nothing else — never
- * `sendUserMessage`, which is the one that appears as if the human typed it.
- *
- * Claude has no such interface on this installation, and that is a recorded observation
- * rather than a reading of its help page: `tools/chat-live.ts` writes news while the pane
- * sits idle and watches the pane, and nothing arrives until the human speaks. Custom
- * channels are a research-preview opt-in an organization enables, and neither
- * auto-confirming that consent nor emulating push by typing into the editor is something
- * Collie will do. So Claude is told **on its next turn**, through `collie_news` — which is
- * a real answer to "what happened", just not an interruption.
- */
 export function pushable(harness: ChatHarness) {
   return harness === "pi"
     ? {
@@ -192,18 +128,12 @@ export function pushable(harness: ChatHarness) {
       };
 }
 
-/**
- * Whether this harness can be started at all, as a sentence or null. The board and the
- * Runs stay usable either way — a chat that will not open is a missing conversation, not
- * a missing control plane — so this is reported rather than thrown.
- */
 export function whyUnavailable(harness: ChatHarness, found: string | null) {
   return found === null
     ? `${harness} is not installed or not on PATH; the board and existing Runs are unaffected`
     : null;
 }
 
-/** A record for a launch that has just happened. */
 export function started(opts: {
   readonly harness: ChatHarness;
   readonly agent: string;
@@ -218,16 +148,10 @@ export function started(opts: {
   };
 }
 
-/** The preference as configuration has it, coerced: chat has to open in one of the two. */
 export function preferredHarness(value: string | undefined) {
   return isChatHarness(value) ? value : DEFAULT_CHAT_HARNESS;
 }
 
-/**
- * Which harness the next launch uses, read from the human's config. Independent of the
- * worker harness default: a Herd whose Runs are on Codex still talks in Claude Code
- * unless somebody said otherwise, on an existing installation as much as a new one.
- */
 export const chatHarnessOf = Effect.fn("Chat.harnessOf")(function* (userDir: string) {
   const raw = yield* readConfig(userDir);
   const value = raw[CHAT_HARNESS_KEY];
@@ -240,33 +164,12 @@ export const startedNow = Effect.fn("Chat.startedNow")(function* (
   return started({ ...opts, at: yield* nowIso });
 });
 
-// ---------------------------------------------------------------------------
-// Launching it
-// ---------------------------------------------------------------------------
-
-/**
- * The Pi extension one chat launch is loaded with, generated with this binary's own path
- * in it, so the tools a launch offers are the tools the binary that launched it has.
- *
- * `-e` rather than a discovered location, for the same reason compaction's extension is:
- * one written into `~/.pi` would be a persistent settings change, and would load into
- * every Pi the human ever starts.
- */
 export function piExtension(
   command: ReadonlyArray<string>,
   tools: ReadonlyArray<PiTool>,
-  /**
-   * Which Collie the tools read, named rather than inherited. Pi's own process env is the
-   * pane's, which is usually right and was not the Herd at all under a probe — and
-   * "usually right" is not something a control plane should rest on. Claude's server is
-   * pinned the same way, so both adapters answer about one Collie.
-   */
   env: Readonly<Record<string, string>>,
-  /** Where this Herd's news journal is, and what it is called: the extension watches the
-   * directory, because the file is replaced by rename whenever the journal is trimmed. */
   newsDir: string,
   newsFile: string,
-  /** A Run's agent asks the human with this; chat's pi has none, the human is in its pane. */
   question: (PiTool & { readonly helper: ReadonlyArray<string> }) | null = null,
 ) {
   return `// Generated by Collie for one chat launch. Do not edit: it is rewritten at launch.
@@ -390,11 +293,6 @@ export default function (pi) {
 `;
 }
 
-/**
- * The `--mcp-config` document a Claude launch is given: this binary, serving these tools
- * over stdio. Here rather than beside the server, so the board does not carry the MCP
- * SDK to draw a pane.
- */
 export function mcpConfig(command: ReadonlyArray<string>, env: Readonly<Record<string, string>>) {
   const [bin, ...rest] = command;
   return `${JSON.stringify(
@@ -404,11 +302,6 @@ export function mcpConfig(command: ReadonlyArray<string>, env: Readonly<Record<s
   )}\n`;
 }
 
-/**
- * The `--settings` document a Claude launch is given: prompt hooks that attach the board's
- * selection as context and hand the prompt to the tool host. Pi has no such hook, so its
- * conversation asks with a run-scoped tool given no run.
- */
 export function claudeSettings(
   command: ReadonlyArray<string>,
   env: Readonly<Record<string, string>>,
@@ -427,13 +320,11 @@ export function claudeSettings(
   const heard = { type: "command", command: run("heard") };
   const hooks = {
     UserPromptSubmit: [{ hooks: [{ type: "command", command: run("context") }, heard] }],
-    // A turn's words end with it, so a turn nobody prompted carries none.
     Stop: [{ hooks: [heard] }],
   };
   return `${JSON.stringify({ hooks }, null, 2)}\n`;
 }
 
-/** What Claude's hooks are given, as far as Collie reads it: only `UserPromptSubmit` has a prompt. */
 const HookInput = Schema.fromJsonString(
   Schema.Struct({ session_id: Schema.String, prompt: Schema.optionalKey(Schema.String) }),
 );
@@ -441,7 +332,6 @@ const HookInput = Schema.fromJsonString(
 const HeardSchema = Schema.Struct({ session: Schema.String, said: Schema.String });
 const HeardJson = Schema.fromJsonString(HeardSchema);
 
-/** The most of a prompt kept: it is copied into every record of its turn. */
 export const HEARD_MAX = 2000;
 
 const heardOf = (prompt: string) => {
@@ -454,10 +344,6 @@ const heardPath = Effect.fn("Chat.heardPath")(function* (stateDir: string, key: 
   return path.join(yield* chatDir(stateDir, key), "heard.json");
 });
 
-/**
- * The human's prompt this turn, kept for the tool host, and forgotten when that session's
- * turn ends. Input that is not a hook's is ignored.
- */
 export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: string) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const given = Schema.decodeOption(HookInput)(input);
@@ -485,10 +371,6 @@ export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: str
   yield* fs.rename(tmp, file);
 });
 
-/**
- * Who a chat's operation is recorded as speaking for: Native chat and, where
- * the running chat's own session last said something, those words.
- */
 export const heardVoice = Effect.fn("Chat.heardVoice")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return {};
@@ -511,24 +393,16 @@ export interface PiTool {
   readonly parameters: JsonObject;
 }
 
-/**
- * The files one launch is wired with, written fresh each time into this Herd's own
- * chat directory. Nothing is written to `~/.claude` or `~/.pi`: a conversation Collie
- * opened must not change the harness the human uses for everything else.
- */
 export const writeLaunchFiles = Effect.fn("Chat.writeLaunchFiles")(function* (opts: {
   readonly dir: string;
   readonly pluginRoot: string;
   readonly userDir: string;
   readonly home: string;
-  /** How this binary re-invokes itself, which is what both adapters shell back into. */
   readonly self: ReadonlyArray<string>;
   readonly serverEnv: Readonly<Record<string, string>>;
   readonly tools: ReadonlyArray<PiTool>;
-  /** This Herd's news journal, for the harness that can be pushed to. */
   readonly news: string;
   readonly mcpConfig: string;
-  /** Given once at launch, to a harness with no prompt hook to give it with each message. */
   readonly atLaunch?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -580,36 +454,18 @@ export const writeLaunchFiles = Effect.fn("Chat.writeLaunchFiles")(function* (op
 });
 
 export type Started =
-  /** One was just started, on a new conversation. */
   | { readonly kind: "launched"; readonly record: ChatRecord }
-  /** There is no conversation, and why. The board and every Run are unaffected. */
   | { readonly kind: "unavailable"; readonly harness: ChatHarness; readonly why: string };
 
-/**
- * The Herd's conversation, started as this Machine's chat terminal on core in the
- * preferred harness, on a new conversation: a resumed one would carry its whole history
- * into every turn, and the model it began on (ADR-0032). A harness that will not start is
- * a missing conversation reported as one — never a reason for the board or a Run to be
- * unavailable, and never a reason to quietly open the other harness instead.
- */
 export const startChat = Effect.fn("Chat.start")(function* (
   herdr: Herdr,
   env: PluginEnv,
-  /** Which Herd this conversation belongs to; the caller resolves it once. */
   key: string,
   log: (line: string) => Effect.Effect<void, never, never>,
-  /**
-   * How the launch re-invokes Collie — the MCP server Claude starts, and the command Pi's
-   * extension shells back into. The compiled binary by default, which is what an install
-   * has; a probe running from source passes its own entrypoint, because `selfCommand`
-   * would otherwise name the probe rather than Collie.
-   */
   self: ReadonlyArray<string> = selfCommand(),
-  /** A harness's `--help`, by its kind; the installed one's where left out. */
   help: typeof installedHelp = installedHelp,
 ) {
   const harness = yield* chatHarnessOf(env.userDir);
-  // The PATH as it is now, which is what the launch's own processes are given.
   const unavailable = whyUnavailable(harness, Bun.which(harness, { PATH: Bun.env.PATH ?? "" }));
   if (unavailable !== null) {
     yield* log(`chat: ${unavailable}`);
@@ -643,10 +499,6 @@ export const startChat = Effect.fn("Chat.start")(function* (
     yield* log(`chat: started without an auto-compact window: ${window.leftOff}`);
 
   const cwd = yield* herdDir(env.stateDir, key);
-  // Which Collie both adapters read. One object, given to both: Claude's server and
-  // Pi's extension are fresh processes, and giving them different answers here is two
-  // conversations about two different Herds — Pi read the human's real state directory
-  // that way, and said so confidently. An empty value reads as unset.
   const serverEnv = {
     COLLIE_STATE_DIR: env.stateDir,
     COLLIE_USER_DIR: env.userDir,

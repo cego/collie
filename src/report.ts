@@ -1,6 +1,3 @@
-// Where Runs end, across all of them: the numbers a change to Collie is judged by.
-// Data only: nothing here is a threshold, and nothing refuses anything.
-
 import * as Num from "effect/Number";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -26,9 +23,7 @@ export interface WorkflowTally {
   readonly failed: number;
   readonly suspended: number;
   readonly pending: number;
-  /** Carries a `stop` control: a human stopped it. */
   readonly stopped: number;
-  /** Recorded a merge request (`RunView.mr`). */
   readonly withMr: number;
   readonly answered: number;
   readonly open: number;
@@ -50,12 +45,9 @@ export interface Report {
     readonly project: string;
     readonly created: string;
     readonly status: RunView["status"]["status"];
-    /** The issues its input says `Closes #n` for. */
     readonly closes: ReadonlyArray<number>;
     readonly mr: string | null;
-    /** Its merge request's disposition was recorded as merged. */
     readonly merged: boolean;
-    /** The questions it asked that were not set aside, with what answered each. */
     readonly questions: ReadonlyArray<{ readonly name: string; readonly answer: string | null }>;
   }>;
   readonly workflows: ReadonlyArray<WorkflowTally>;
@@ -70,7 +62,6 @@ export interface Report {
   readonly measures: Measures;
 }
 
-/** What one Run recorded, for the measures; null records where its host could not read them. */
 export interface Recorded {
   readonly records: OutcomeRecords | null;
   readonly metrics: ReadonlyArray<Metric>;
@@ -188,7 +179,6 @@ const capped = (lines: ReadonlyArray<string>, cap = 20) =>
 
 const percent = (share: number | null) => (share === null ? "" : ` (${Math.round(share * 100)}%)`);
 
-/** What a recovery's time to recover is measured over. */
 const RECOVERED_FROM: Readonly<Record<RecoveryAction, string>> = {
   reminded: "turn end to Output",
   rechecked: "park to next step",
@@ -196,13 +186,11 @@ const RECOVERED_FROM: Readonly<Record<RecoveryAction, string>> = {
   healed: "Heal start to its judgement",
 };
 
-/** The Runs a measure counts, as far as the text has room for. */
 const citing = (runs: ReadonlyArray<string>, cap = 10) =>
   runs.length === 0
     ? ""
     : `: ${Arr.join(runs.slice(0, cap), ", ")}${runs.length > cap ? ` …and ${runs.length - cap} more` : ""}`;
 
-/** The measures, as `run report` prints them under the tallies. */
 const measureLines = (measures: Measures) => {
   const { rounds, dispositions, steering, verifications, parks, recoveries, peakContext } =
     measures;
@@ -267,7 +255,6 @@ const measureLines = (measures: Measures) => {
   ];
 };
 
-/** `run report` in words, which chat reads too. */
 export const reportLines = (report: Report, unreadable: string | null) => {
   const unread = unreadable === null ? [] : [`runs: ${unreadable}`];
   if (report.total === 0) return Arr.join([...unread, "No runs found."], "\n");

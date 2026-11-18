@@ -1,6 +1,3 @@
-// Summarises the record timing logs a human made on native Desktop, one log per cell:
-// `bun bench/record-open/summarize.ts first.log repeat.log large.log` (desktop/README.md).
-
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Arr from "effect/Array";
@@ -25,7 +22,6 @@ const cell = (samples: ReadonlyArray<number>) => {
   return { p50, p95, max, n };
 };
 
-/** Each open's click to usable; a usable whose click is not the last one logged is `unmatched`. */
 export const nativeSummary = (log: string) =>
   Effect.gen(function* () {
     const samples: Array<number> = [];
@@ -41,7 +37,6 @@ export const nativeSummary = (log: string) =>
     return { ...cell(samples), unmatched };
   });
 
-/** Each start to its card's next end; a start never ended, or an end never started, is `unmatched`. */
 const spans = (marks: ReadonlyArray<Mark>, start: string, end: string) => {
   const started = new Map<string, number>();
   const samples: Array<number> = [];
@@ -60,7 +55,6 @@ const spans = (marks: ReadonlyArray<Mark>, start: string, end: string) => {
   return { ...cell(samples), unmatched: unmatched + started.size };
 };
 
-/** The time between each frame and the one before it in the same scroll. */
 const frameIntervals = (marks: ReadonlyArray<Mark>) => {
   const last = new Map<string, number>();
   const samples: Array<number> = [];
@@ -73,7 +67,6 @@ const frameIntervals = (marks: ReadonlyArray<Mark>) => {
   return cell(samples);
 };
 
-/** Launch to the board usable, key to echo, chat chunk to drawn, and each scroll's frames. */
 export const desktopSummary = (log: string) =>
   Effect.map(marksIn(log), (marks) => ({
     launch_to_board_usable: spans(marks, "launch", "board-usable"),

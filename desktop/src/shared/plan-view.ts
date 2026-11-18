@@ -1,5 +1,3 @@
-// The Plan tab's logic: how far the plan is, and the spec's headings.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -14,7 +12,6 @@ export const planProgress = (tickets: ReadonlyArray<{ readonly done: boolean }>)
 export interface SpecHeading {
   readonly level: number;
   readonly text: string;
-  /** Its index among all the spec's headings, which is how its rendered heading is found. */
   readonly position: number;
 }
 
@@ -26,7 +23,6 @@ const textOf: (node: Node) => string = (node) => {
   return tag === null ? "" : Arr.join(Arr.map(children, textOf), "");
 };
 
-/** Trimmed and parsed as it is drawn, so each heading's position is the one the drawn page has. */
 export const specHeadings = (spec: string) =>
   parseMarkdown(Str.trim(spec), { plugins: SAFE_PLUGINS }).then(({ nodes }) => {
     const found: Array<{ level: number; text: string }> = [];

@@ -1,7 +1,3 @@
-// A plan directory read as Changes and waves: which repo and Change each ticket is in, which
-// Change run can start when, and the reasons a plan cannot be fanned out at all
-// (CONTEXT.md, Change, Change run and Wave).
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -16,22 +12,15 @@ const NEEDS_LINE = /^[ \t]*\*\*Needs merged:\*\*[ \t]*(.*?)[ \t]*$/m;
 const CHECKS_LINE = /^\s*\*\*Checks:\*\*\s*(.*?)\s*$/m;
 const BENCHMARK_LINE = /^\s*\*\*Benchmark:\*\*\s*(.*?)\s*$/m;
 
-/** The benchmark plan a ticket's `**Benchmark:**` line names, beside the ticket; null where it names none. */
 export function benchmarkIn(text: string) {
   const named = Str.trim(BENCHMARK_LINE.exec(text)?.[1] ?? "");
   const returned: string | null = named === "" ? null : named;
   return returned;
 }
 
-/** Where a ticket's benchmark plan is: in the plan's `issues/`, beside the ticket. */
 export const benchmarkFile = (planDir: string, benchmark: string) =>
   `${planDir}/issues/${benchmark}`;
 
-/**
- * The verification names a ticket's `**Checks:**` line promises, `[]` where it has none
- * or says `None`. Written as names — `tests, typecheck` — or as the commands in backticks;
- * either way what is kept is the name a `collie verify` record carries.
- */
 export function checksIn(text: string) {
   const line =
     Option.getOrUndefined(
@@ -58,7 +47,6 @@ const HEADING = /^#+\s/;
 const CHECKBOX = /^[-*]\s+\[[ xX]\]\s+(.*)$/;
 const LIST_ITEM = /^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/;
 
-/** The lines under the first heading `heading` matches, up to the next heading; null where it has none. */
 function sectionOf(lines: ReadonlyArray<string>, heading: RegExp) {
   const at = Option.getOrElse(
     Arr.findFirstIndex(lines, (line) => heading.test(line)),
@@ -77,7 +65,6 @@ function sectionOf(lines: ReadonlyArray<string>, heading: RegExp) {
   return returned;
 }
 
-/** Each top-level item `item` matches, with its wrapped lines. A nested list and fenced code are not. */
 function itemsIn(lines: ReadonlyArray<string>, item: RegExp) {
   const items: string[][] = [];
   let open: string[] | null = null;
@@ -101,11 +88,6 @@ function itemsIn(lines: ReadonlyArray<string>, item: RegExp) {
   return returned;
 }
 
-/**
- * A ticket's acceptance criteria: each checkbox item with its wrapped lines, under its
- * Acceptance criteria heading where it has one, and never under `## After merge`. A nested
- * list and fenced code are not.
- */
 export function criteriaIn(text: string) {
   const lines = Str.split(text, "\n");
   const section = sectionOf(lines, ACCEPTANCE);
@@ -129,7 +111,6 @@ export function criteriaIn(text: string) {
   return returned;
 }
 
-/** What only CI, a merge or a deploy can show: the items under a ticket's `## After merge`. */
 export function afterMergeIn(text: string) {
   const returned: string[] = itemsIn(
     sectionOf(Str.split(text, "\n"), AFTER_MERGE) ?? [],
@@ -138,10 +119,6 @@ export function afterMergeIn(text: string) {
   return returned;
 }
 
-/**
- * How many tickets a Run wrote. The plan a Run was *given* is somebody else's work, so
- * only its own directory is counted: writing tickets is what leaves a plan to build from.
- */
 export const planIssuesIn = Effect.fn("Plan.planIssuesIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -151,32 +128,22 @@ export const planIssuesIn = Effect.fn("Plan.planIssuesIn")(function* (dir: strin
   return Arr.filter(names, (name) => pipe_(name, Str.endsWith(".md"))).length;
 });
 
-/** One Change of the plan: its repository, its name, and its tickets in plan order. */
 export interface PlanRepo {
   path: string;
-  /** Absent for the repository's default Change. */
   change?: string;
-  /** The key of the Change in the same repository this one is cut from. */
   stacked?: string;
   tickets: ReadonlyArray<string>;
 }
 
-/** How a Change is named in waves, refusals and invocations: `api`, or `api--schema`. */
 export const changeKey = (one: { readonly path: string; readonly change?: string | undefined }) =>
   one.change ? `${one.path}--${one.change}` : one.path;
 
-/** A Change's branch: the plan's own for the default Change, else it with `--<name>` appended. */
 export const changeBranch = (plan: string, change: string | undefined) =>
   change ? `${plan}--${change}` : plan;
 
-/** The name of the Change a key names in `repo`: "" for its default Change. */
 export const changeOfKey = (repo: string, key: string) =>
   key === repo ? "" : pipe_(key, Str.slice(repo.length + 2));
 
-/**
- * The branch a stacked Change run builds on and opens its merge request against, named
- * from its own branch; null where its own is not the one its Change is given.
- */
 export function stackedBranch(
   own: string,
   run: { readonly repo: string; readonly change?: string; readonly stacked: string },
@@ -195,13 +162,11 @@ export function stackedBranch(
 
 const changeLineOf: (text: string) => string | null = (text) => CHANGE_LINE.exec(text)?.[1] ?? null;
 
-/** Whether git refuses this inside a branch name, by `git check-ref-format`'s rules. */
 const refusedInBranch = (name: string) =>
   name === "" ||
   name === "@" ||
   /[\p{Cc} ~^:?*[\\]|\.\.|@\{|\/\/|^[/.]|\/\.|[/.]$|\.lock(\/|$)/u.test(name);
 
-/** Another Run's Change a ticket needs merged first; `change` is null for that Run's default Change. */
 export interface Prerequisite {
   run: string;
   change: string | null;
@@ -209,7 +174,6 @@ export interface Prerequisite {
 
 const needsLineOf: (text: string) => string = (text) => NEEDS_LINE.exec(text)?.[1] ?? "";
 
-/** The Prerequisites a ticket's `**Needs merged:**` line names, or null where it cannot be read. */
 export const prerequisitesOf = (text: string) => prerequisitesIn(needsLineOf(text));
 
 function prerequisitesIn(said: string) {
@@ -233,7 +197,6 @@ function prerequisitesIn(said: string) {
   return returned;
 }
 
-/** Why this plan cannot be fanned out. The message is what the human is shown. */
 export interface PlanRefusal {
   kind:
     | "cycle"
@@ -249,35 +212,16 @@ export interface PlanRefusal {
 
 export interface PlanRepos {
   repos: ReadonlyArray<PlanRepo>;
-  /** Change keys in the order their runs may start; each wave waits on the one before. */
   waves: ReadonlyArray<ReadonlyArray<string>>;
   refusal: PlanRefusal | null;
 }
 
-/**
- * A ticket's own name in a "Blocked by" line, as one number however it was padded: the
- * skill that writes those lines holds "the numbers of the tickets", and a plan saying
- * `Blocked by: 2` for a file called `02-api.md` means the ticket it obviously means.
- */
 function ticketId(raw: string) {
   const digits = /^0*(\d+)/.exec(raw)?.[1];
   const returned: string = digits ?? raw;
   return returned;
 }
 
-/**
- * The tickets a "Blocked by" line names, `[]` where it names none, and `null` where it
- * says something that is not ticket numbers at all. That third answer is the point: a
- * line nobody can read is a refusal rather than an absence, and deciding it here is what
- * keeps every rule after this from asking again what an empty list meant.
- *
- * A ticket number is a word that is nothing but digits, not any digits anywhere in the
- * line: the prompt lets a planner write `01, before the v2 rollout`, and scraping every
- * run of digits out of that read the `2` in "v2" as a blocker on ticket 02 — an edge no
- * ticket states, ordering two repository runs for a reason nobody can see. "None" is
- * consulted only where no number was named, because `01 (none of the others block it)`
- * names one.
- */
 function blockersIn(said: string) {
   const ids = Arr.filter(
     Arr.map(Str.split(said, /[\s,;]+/), (word) =>
@@ -293,37 +237,19 @@ function blockersIn(said: string) {
   return returned;
 }
 
-/** A ticket as the reading needs it: what it changes, and what it waits for. */
 interface Ticket {
   file: string;
-  /** Its own name in a "Blocked by" line: the number its file is prefixed with. */
   id: string;
-  /** The `Repo:` line as the ticket wrote it, which is what a refusal quotes back. */
   written: string;
-  /** That value as a path under the root, and null where it is not one. */
   repo: string | null;
-  /** The "Blocked by" line as the ticket wrote it, for the same reason. */
   blockedText: string;
   blockedBy: ReadonlyArray<string> | null;
   change: string | null;
   needsText: string;
 }
 
-/** A ticket past the missing-`Repo:` guard, which every rule after it can rely on. */
 type Placed = Ticket & { repo: string };
 
-/**
- * The repository a ticket names, as a path under the plan run's root: `.` for the root
- * itself, and otherwise its segments with nothing empty and no `.` among them, so that
- * `cego/api`, `cego/api/` and `./cego/api` are the one repository they mean rather than
- * three entries that would each be given a run.
- *
- * `null` for a value that is not plainly under the root — an absolute path, or one with
- * a `..` in it at all, which is stricter than resolving them because a planner writing
- * these has no reason to. A ticket is prose an agent wrote, and this value becomes the
- * directory a Run is rooted at and a branch is cut in: `../other-project` would have
- * Collie open a merge request in a repository the operator never named.
- */
 function repoUnderRoot(raw: string) {
   const value = Str.trim(raw);
   if (value === "" || pipe_(value, Str.startsWith("/")) || pipe_(value, Str.startsWith("~"))) {
@@ -347,37 +273,18 @@ function refuse(kind: PlanRefusal["kind"], message: string) {
   return returned;
 }
 
-/** Adds a ticket to the list at that key, starting one where there is none yet. */
 function indexBy(index: Map<string, string[]>, key: string, file: string) {
   const files = index.get(key);
   if (files) files.push(file);
   else index.set(key, [file]);
 }
 
-/**
- * Whether this plan is one repository and that repository is the run's own root — every
- * ticket saying `.` or saying nothing. Those are the plans a Choice chains exactly as it
- * always did, rooted where the parent is.
- *
- * A plan whose tickets all name the same repository *by path* is not one of them: its
- * repository is somewhere under the root, so it needs a run rooted there with that
- * `repo` — a wave of one. Rooting it at the parent's own directory is the failure the
- * fan-out exists to fix, and a folder of checkouts touching one of them is exactly the
- * shape that produces it.
- */
 export function isSingleRepo(plan: PlanRepos) {
   const returned: boolean =
     plan.refusal === null && plan.repos.length === 1 && plan.repos[0]!.path === ".";
   return returned;
 }
 
-/**
- * What the fan-out would do with a plan: the tickets' text as they are on disk, and the
- * checkouts that exist under the plan run's root, in — repos, waves and a refusal out.
- *
- * Pure, because every rule in it is a claim about a set of tickets and nothing else: a
- * refusal has to be decidable before anything is started.
- */
 export function readPlanRepos(
   tickets: ReadonlyArray<{ file: string; text: string }>,
   checkouts: ReadonlySet<string>,
@@ -401,7 +308,6 @@ export function readPlanRepos(
       file: ticket.file,
       id: ticketId(ticket.file),
       written,
-      // Normalised the once, here, because everything after this treats it as a path.
       repo: repoUnderRoot(written),
       blockedText,
       blockedBy: blockersIn(blockedText),
@@ -410,8 +316,6 @@ export function readPlanRepos(
     };
   });
 
-  // Said something that is not a path under the root, as against having said nothing:
-  // both leave `repo` null, and `written` is what tells the two apart.
   const escaping = Arr.filter(parsed, (ticket) => ticket.written !== "" && ticket.repo === null);
   if (escaping.length > 0) {
     const named = Arr.map(escaping, (ticket) => `${ticket.file} (${ticket.written})`);
@@ -452,11 +356,6 @@ export function readPlanRepos(
     return outcome;
   }
 
-  // Two rules about the tickets themselves, before anything about repositories: a number
-  // claimed twice and a "Blocked by" line naming something that is not a ticket here are
-  // wrong however many repositories the plan spans. They used to be checked only past the
-  // single-repository shortcut below, so the same plan was judged one way as one repo and
-  // another as two — and the order those lines describe is what a build is sliced along.
   const claiming = new Map<string, string[]>();
   for (const ticket of parsed) indexBy(claiming, ticket.id, ticket.file);
   const twice = Arr.filter([...claiming.values()], (files) => files.length > 1);
@@ -488,7 +387,6 @@ export function readPlanRepos(
     return outcome;
   }
 
-  // Edges inside one Change; a cycle between Changes is refused below, naming them.
   const changeOfId = new Map(
     Arr.map(parsed, (ticket) => [ticket.id, `${ticket.repo ?? "."}\0${ticket.change ?? ""}`]),
   );
@@ -521,9 +419,6 @@ export function readPlanRepos(
     return outcome;
   }
 
-  // Every ticket in one repository, whether it says so or not: today's plans, and the
-  // ones written inside a repo, where `.` is the only answer there is. One Change of it
-  // is today's single run; several fan out like several repositories.
   const atRoot = Arr.every(parsed, (ticket) => ticket.repo === null || ticket.repo === ".");
   if (atRoot && new Set(Arr.map(parsed, (ticket) => ticket.change ?? "")).size <= 1) {
     const outcome: PlanRepos = {
@@ -550,7 +445,6 @@ export function readPlanRepos(
     return outcome;
   }
 
-  // In the order the Changes first appear, which a Map keeps.
   const keyOf = (ticket: Placed) =>
     changeKey({ path: ticket.repo, change: ticket.change ?? undefined });
   const named = (ticket: Placed) =>
@@ -585,13 +479,10 @@ export function readPlanRepos(
   }
   const keys = [...ticketsOf.keys()];
 
-  // Edges between Changes only: an edge inside one orders that run's tickets, which is the
-  // implementer's business rather than the fan-out's.
   const blockers = new Map<string, Set<string>>(Arr.map(keys, (key) => [key, new Set<string>()]));
   const interleaving = new Map<string, string[]>();
   for (const ticket of placed) {
     const key = keyOf(ticket);
-    // Never null past the guard above, which refuses a line it could not read.
     for (const id of ticket.blockedBy ?? []) {
       const from = keyOfId.get(id)!;
       if (from === key) continue;
@@ -610,10 +501,6 @@ export function readPlanRepos(
       Arr.every([...blockers.get(key)!], (from) => settled.has(from)),
     );
     if (wave.length === 0) {
-      // Only the Changes on the cycle, not everything downstream of it: a Change nothing
-      // else waits for is stuck because the cycle is, and telling the planner to move its
-      // tickets too would be telling it to move the wrong ones. Trimmed by dropping
-      // whatever has no dependent left, until only what waits on itself remains.
       let cyclic = left;
       for (;;) {
         const waited = Arr.filter(cyclic, (key) =>
@@ -646,8 +533,6 @@ export function readPlanRepos(
     return outcome;
   }
 
-  // Stacked on the same repository's blocker that starts last, which holds the others it
-  // waits on wherever they are stacked on each other.
   const waveOf = new Map(
     Arr.flatMap(waves, (wave, at) => Arr.map(wave, (key) => [key, at] as const)),
   );
@@ -669,11 +554,6 @@ export function readPlanRepos(
   return outcome;
 }
 
-/**
- * The same reading, against a plan directory on disk and the checkouts under the plan
- * run's root. The only I/O the fan-out needs before it decides: the tickets, and whether
- * each repository they name is somewhere to work.
- */
 export const planReposOf = Effect.fn("Plan.planReposOf")(function* (planDir: string, root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -691,15 +571,11 @@ export const planReposOf = Effect.fn("Plan.planReposOf")(function* (planDir: str
     tickets.push({ file, text });
   }
 
-  // Through the same normalisation the reading uses, so the probe below asks about the
-  // repository the reading will name rather than about the text as it was typed.
   const named = new Set<string>(["."]);
   for (const ticket of tickets) {
     const repo = repoUnderRoot(REPO_LINE.exec(ticket.text)?.[1] ?? "");
     if (repo !== null) named.add(repo);
   }
-  // A `.git` that is there at all: git writes a directory for a clone and a file for a
-  // worktree, and either is a checkout to root a run at.
   const checkouts = new Set<string>();
   for (const repo of named) {
     if (yield* fs.exists(path.join(root, repo, ".git"))) checkouts.add(repo);
@@ -708,23 +584,17 @@ export const planReposOf = Effect.fn("Plan.planReposOf")(function* (planDir: str
   return readPlanRepos(tickets, checkouts);
 });
 
-/** One ticket as a build slice needs it: where it is, what it is called, what it waits for. */
 export interface Slice {
   file: string;
-  /** The number its file is prefixed with, which a "Blocked by" line names it by. */
   number: string;
   title: string;
   blockedBy: ReadonlyArray<string>;
-  /** The verification names its `**Checks:**` line promised will prove it. */
   checks: ReadonlyArray<string>;
-  /** Its acceptance criteria, which the builder answers one by one. */
   criteria: ReadonlyArray<string>;
-  /** The benchmark plan its speed-up criterion is measured by, as `benchmarkIn` reads it. */
   benchmark: string | null;
   prerequisites: ReadonlyArray<Prerequisite>;
 }
 
-/** The first heading, else the file name without its number — what a hand-off calls it. */
 function titleOf(file: string, text: string) {
   const heading = /^#+\s+(.+?)\s*$/m.exec(text)?.[1];
   if (heading) {
@@ -740,18 +610,6 @@ function titleOf(file: string, text: string) {
   return returned;
 }
 
-/**
- * The plan's tickets in an order they can actually be built in: `Blocked by` before
- * blocked, and plan order among tickets that do not wait for each other. This is the
- * intra-repository ordering `readPlanRepos` deliberately leaves alone — it orders
- * *repositories*, and says an edge inside one is the implementer's business. Slicing a
- * build is that business.
- *
- * Refuses nothing on its own: `readPlanRepos` has already refused a plan with a cycle, a
- * number claimed twice or an edge pointing at nothing, and a second opinion here that
- * disagreed with it would be worse than none. A cycle that reached this anyway keeps plan
- * order for whatever is left, so a caller still gets every ticket exactly once.
- */
 export function orderedTickets(
   tickets: ReadonlyArray<{ file: string; text: string }>,
   repo?: string,
@@ -790,12 +648,9 @@ export function orderedTickets(
   const out: Slice[] = [];
   let left = slices;
   while (left.length > 0) {
-    // Plan order among the ready ones: the planner numbered them for a reason, and two
-    // tickets that wait for nothing should build in the order they were written.
     const ready = Arr.filter(left, (slice) =>
       Arr.every(slice.blockedBy, (id) => !here.has(id) || done.has(id)),
     );
-    // A cycle nothing refused: take what is left in plan order rather than lose it.
     const taking = ready.length > 0 ? ready : left;
     for (const slice of taking) {
       out.push(slice);
@@ -807,7 +662,6 @@ export function orderedTickets(
   return returned;
 }
 
-/** The same, against a plan directory on disk. */
 export const orderedTicketsOf = Effect.fn("Plan.orderedTicketsOf")(function* (
   planDir: string,
   repo?: string,
@@ -830,10 +684,6 @@ export const orderedTicketsOf = Effect.fn("Plan.orderedTicketsOf")(function* (
   return orderedTickets(tickets, repo, change);
 });
 
-/**
- * Why a ticket's benchmark plan is not one `collie measure` takes, naming the ticket and the
- * file; null where every ticket's is, or none names one.
- */
 export const benchmarkRefusalOf = Effect.fn("Plan.benchmarkRefusalOf")(function* (planDir: string) {
   const fs = yield* FileSystem.FileSystem;
   for (const ticket of yield* orderedTicketsOf(planDir)) {

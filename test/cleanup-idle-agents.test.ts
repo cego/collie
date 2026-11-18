@@ -1,7 +1,3 @@
-// A finished Run's agent closes once core has reported it idle for `idle_close_ms` since
-// the Run finished, unless something still needs it
-// (ADR-draft-a-finished-runs-idle-agent-is-closed).
-
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Clock, DateTime, Effect, FileSystem, Schema, flow, Result, type Types } from "effect";
@@ -39,19 +35,16 @@ afterEach(() => runEffect(rig.close()));
 
 const MIN_MS = 60_000;
 const HOUR_MS = 60 * MIN_MS;
-// Core's address for the first terminal it runs, which is the agent's.
 const TERMINAL = "t1";
 const TARGET = "impl of r1";
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
-/** The agent `runId` launched, live on core. */
 const arranged = (opts: { harness?: string; runId?: string } = {}) =>
   Effect.gen(function* () {
     expect(yield* rig.addAgent("impl")).toBe(TERMINAL);
     yield* launched("impl", opts.runId ?? "r1", TERMINAL, opts.harness);
   });
 
-/** What the agent's harness reports of itself from now on. */
 const reports = (status: string) =>
   Effect.flatMap(rig.startCore(), (core) => core.report("impl", status));
 
@@ -93,7 +86,6 @@ const sweeper = (
     idleCloseMs?: number;
     ports?: CompactionPorts;
     finishedSince?: FinishedSince;
-    /** Proved unattended unless a test says otherwise, so what else keeps an agent shows. */
     unattended?: () => Effect.Effect<boolean>;
   } = {},
 ) =>
@@ -225,7 +217,6 @@ test("a builder idle while its Run's review and gate ran has the whole hour afte
       );
       expect(just.keep).toEqual(kept("idle 0 of 60 min"));
 
-      // 37 minutes on it is still there for a steer.
       const later = yield* sweep(
         [sweeper([yield* finished(37 * MIN_MS)], yield* idleFor(112 * MIN_MS))],
         rig.stateDir,

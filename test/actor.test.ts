@@ -1,6 +1,3 @@
-// Who is acting: every operation on a Run is recorded with the front door its channel
-// declared, and a request id sent again is the same operation, not a second one.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
@@ -19,13 +16,11 @@ import { hostRecords, registeredAt } from "./support/records";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
-/** Who the Run's agents are told started it, read once its host has stopped. */
 const startedOf = (state: string, runId: string) =>
   Effect.gen(function* () {
     return (yield* (yield* Host).place(runId)).authority.started;
   }).pipe(Effect.provide(foundationLayer({ dir: state })), Effect.scoped);
 
-/** The Run's audit trail, as its host on `state` recorded it. */
 const trailOf = (state: string, runId: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     hostRecords(
@@ -34,7 +29,6 @@ const trailOf = (state: string, runId: string) =>
     ),
   );
 
-/** What the Run's audit trail says was done, by whom, under which request. */
 const audited = (state: string, runId: string) =>
   trailOf(state, runId).pipe(
     Effect.map((lines) =>
@@ -53,7 +47,6 @@ test(
           const host = yield* connect(world.state);
           const door = yield* frontDoor(socketOf(world.state));
           yield* door.declare({ frontDoor: "board" });
-          // A channel is the front door it first said it was.
           expect((yield* door.declare({ frontDoor: "cli-tty" }).pipe(Effect.flip)).reason).toBe(
             "this channel is already board",
           );
@@ -79,7 +72,6 @@ test(
 
           yield* door.control({ runId, control: "hold", set: true, request: "hold-1" });
           yield* door.control({ runId, control: "hold", set: false, request: "unhold-1" });
-          // The first hold, sent again: the Run stays released.
           yield* door.control({ runId, control: "hold", set: true, request: "hold-1" });
           expect((yield* host.run({ runId }))?.controls).toEqual([]);
 
@@ -97,7 +89,6 @@ test(
             ["answer", "board", "answer-1"],
           ]);
           expect(yield* trailOf(world.state, runId)).not.toEqual([]);
-          // A Run nobody has is refused, and nothing is audited for it, inside or outside.
           for (const unknown of ["r-nobody", "../../escaped"]) {
             const refused = yield* door
               .control({ runId: unknown, control: "hold", set: true, request: "hold-x" })
@@ -335,7 +326,6 @@ test(
             ["hold", "hold it"],
           ]);
           yield* stopHost(world.state);
-          // The human's own words that turn, never chat's input.
           expect(yield* startedOf(world.state, runId)).toEqual({
             door: "chat",
             words: "start the proof",
@@ -405,7 +395,6 @@ test(
           const byAgent = (yield* Schema.decodeUnknownEffect(
             Schema.Struct({ runId: Schema.String }),
           )(attended.envelope.data).pipe(Effect.orDie)).runId;
-          // Connected after the start, so the host is the one the CLI spawned with the Outputs.
           const host = yield* connect(world.state);
           yield* until(
             () => host.run({ runId: byAgent }),

@@ -1,5 +1,3 @@
-// What the human does in a pane's terminal in Desktop.
-
 import { expect, test } from "bun:test";
 import { isMouseReport, keyAction, linksIn, paneWhere } from "../terminal-input";
 

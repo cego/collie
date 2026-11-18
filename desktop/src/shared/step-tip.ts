@@ -1,17 +1,10 @@
-// When a Flow's one shared tooltip shows which Step's text, by the rules each Step's own tooltip
-// followed: shown after a hover's delay, at once on a keyboard focus or straight from another
-// tip, and closed by leaving, blurring, pressing or Escape.
-
-/** How long a hover waits before the tip shows. */
 export const DELAY_MS = 300;
-/** How long after a tip closes the next hover shows its tip at once. */
 export const SKIP_MS = 300;
 
 export interface StepTip {
   readonly open: string | null;
   readonly waiting: string | null;
   readonly instantUntil: number;
-  /** A press focuses its Step without that being a reason to show it. */
   readonly pressed: boolean;
 }
 export const CLOSED: StepTip = {
@@ -36,7 +29,6 @@ const closed = (tip: StepTip, at: number) => ({
   instantUntil: tip.open === null ? tip.instantUntil : at + SKIP_MS,
 });
 
-/** A tip, and how long to wait before sending `due` for the Step it waits on. */
 export interface TipNext {
   readonly tip: StepTip;
   readonly wait: number | null;

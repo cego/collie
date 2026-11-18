@@ -24,7 +24,6 @@ const stopCompletely = (state: string) =>
       );
   });
 
-/** Output reminders are separate deliveries; only Steps count as work being resent. */
 const stepDeliveries = (state: string, runId: string) =>
   deliveredTo(state, runId).pipe(
     Effect.map((deliveries) => Arr.filter(deliveries, (one) => one.cause.kind === "step")),
@@ -416,8 +415,6 @@ test(
           yield* Effect.scoped(
             Effect.gen(function* () {
               const client = yield* connect(world.state).pipe(Effect.orDie);
-              // Each costs a herd-wide resume a 2 s wake window: its answer to q1 is handed
-              // again and it does not enter, being suspended on q2.
               const others = yield* Effect.forEach(["a", "b", "c", "d", "e", "f"], (name) =>
                 Effect.gen(function* () {
                   const { runId } = yield* client

@@ -1,5 +1,3 @@
-// What self-improve measures of the questions its window's Runs asked.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import {

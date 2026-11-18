@@ -1,7 +1,3 @@
-// Pi's official compaction interface, as Collie's adapter reads and writes it: the
-// telemetry contract, the session binding, and what may and may not complete an
-// attempt. Checked against the installed Pi where the check is about Pi itself.
-
 import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path, Schedule, Schema, flow, Result } from "effect";
@@ -24,7 +20,6 @@ let dir: string;
 
 const pi = COMPACTION_PORTS.pi!;
 
-/** No prompt is sent in these checks; a boundary that reached for one would say so. */
 const prompted: string[] = [];
 const ctx = () => ({
   agent: "reuse-run-two-r1",
@@ -36,7 +31,6 @@ const ctx = () => ({
   channel: fakeChannel(prompted),
 });
 
-/** One line of what a control appends, exactly as the extension writes it. */
 interface Line {
   at: number;
   session: string;
@@ -116,7 +110,6 @@ test("a second Pi session in the same pane makes the earlier session's samples s
     Effect.gen(function* () {
       yield* event({ at: 1, session: "s1", kind: "session" });
       yield* event({ at: 2, session: "s1", kind: "usage", tokens: 400_000 });
-      // The human typed /new: the context those 400k described is gone.
       yield* event({ at: 3, session: "s2", kind: "session" });
 
       expect(yield* pi.usage(ctx())).toBeNull();
@@ -142,8 +135,6 @@ test("an unresolved request has no outcome, however much else has happened", () 
     Effect.gen(function* () {
       yield* event({ at: 1, session: "s1", kind: "session" });
       yield* event({ at: 2, session: "s1", kind: "start", request: "req-1" });
-      // Pi's own threshold compaction, another request's completion, and an old idle
-      // sample. None of them belong to req-1.
       yield* event({ at: 3, session: "s1", kind: "auto", reason: "threshold" });
       yield* event({ at: 4, session: "s1", kind: "done", request: "req-0" });
       yield* event({ at: 5, session: "s1", kind: "usage", tokens: 12 });
@@ -158,7 +149,6 @@ test("the request's own completion callback is what establishes success", () =>
       yield* event({ at: 1, session: "s1", kind: "session" });
       yield* event({ at: 2, session: "s1", kind: "start", request: "req-1" });
       yield* event({ at: 3, session: "s1", kind: "done", request: "req-1" });
-      // A duplicate cannot make it anything else.
       yield* event({ at: 4, session: "s1", kind: "done", request: "req-1" });
 
       expect(yield* pi.poll(ctx(), "req-1")).toEqual({ kind: "success" });
@@ -217,8 +207,6 @@ test("install writes the extension and passes it with Pi's own launch flag", () 
 
       expect(args.args).toEqual(["-e", path.join(dir, "collie.ts")]);
       const source = yield* fs.readFileString(path.join(dir, "collie.ts"));
-      // The three official surfaces the adapter depends on, and the telemetry path
-      // baked in so nothing has to reach an environment variable herdr cannot set.
       expect(source).toContain("ctx.getContextUsage()");
       expect(source).toContain("ctx.compact({");
       expect(source).toContain(`registerCommand("collie-compact"`);
@@ -226,7 +214,6 @@ test("install writes the extension and passes it with Pi's own launch flag", () 
     }),
   ));
 
-/** The parts of Pi's own surface the extension Collie generates registers against. */
 interface PiEvent {
   reason?: string;
   aborted?: boolean;
@@ -251,8 +238,6 @@ test("the extension it installs keeps the identity and the outcome past its own 
       yield* pi.install({ agent: "reuse-run-two-r1", harness: "pi", cwd: rig.projectDir, dir });
       const handlers = new Map<string, (event: PiEvent, ctx: PiContext) => void>();
       const commands = new Map<string, { handler: (args: string, ctx: PiContext) => void }>();
-      // The generated extension itself, run: a template nothing loads is a template
-      // nothing has checked.
       const extension: { default: (host: PiHost) => void } = yield* Effect.promise(
         () => import(path.join(dir, "collie.ts")),
       );
@@ -276,7 +261,6 @@ test("the extension it installs keeps the identity and the outcome past its own 
       handlers.get("session_start")!({}, piCtx);
       turns(200);
       commands.get("collie-compact")!.handler("req-1", piCtx);
-      // The pane goes on working: hundreds of samples after the compaction it asked for.
       turns(300);
 
       expect(yield* pi.poll(ctx(), "req-1")).toEqual({ kind: "success" });
@@ -284,8 +268,6 @@ test("the extension it installs keeps the identity and the outcome past its own 
     }),
   ));
 
-// Not mocks: whether the interface Collie installs is the one this machine's Pi has
-// is exactly the question a mock cannot answer. Pi takes seconds to answer either.
 onMachineWith("pi")(
   "the installed Pi is at least the release these controls were verified against",
   () =>
@@ -294,7 +276,6 @@ onMachineWith("pi")(
         const wanted = VERIFIED_VERSIONS.get("pi") ?? "";
         yield* removesCache("node-compile-cache");
         const installed = Str.trim(yield* Effect.promise(() => Bun.$`pi --version`.text()));
-        // A floor, as the name says: the gate below is what checks the interface still holds.
         expect([installed, atLeast(installed, wanted)]).toEqual([installed, true]);
         yield* pi.gate;
       }),
@@ -308,7 +289,6 @@ onMachineWith("pi")(
     runEffect(
       Effect.gen(function* () {
         yield* removesCache("node-compile-cache");
-        // The flag the adapter launches with, from the adapter, so the two cannot drift.
         const [flag = ""] = (yield* pi.install({
           agent: "r1",
           harness: "pi",
@@ -322,7 +302,6 @@ onMachineWith("pi")(
   { timeout: 30_000 },
 );
 
-/** One command on Pi's RPC stdin. */
 const asRpc = flow(
   Schema.encodeResult(
     Schema.fromJsonString(Schema.Struct({ type: Schema.String, message: Schema.String })),
@@ -343,7 +322,6 @@ onMachineWith("pi")(
           cwd: rig.projectDir,
           dir,
         });
-        // Offline, in an agent directory of its own: no provider call, and no ~/.pi.
         const child = Bun.spawn(["pi", "--mode", "rpc", "--offline", ...args], {
           cwd: rig.projectDir,
           env: { ...process.env, PI_CODING_AGENT_DIR: path.join(rig.root, "pi-agent") },
@@ -369,8 +347,6 @@ onMachineWith("pi")(
           ),
         );
 
-        // A fresh session has nothing to compact, and Pi says so through this request's
-        // own error callback; before any response its context estimate is unavailable.
         expect(outcome?.kind).toBe("failure");
         expect(yield* pi.usage(ctx())).toBeNull();
       }),
@@ -447,7 +423,6 @@ test("an error turn pi settles on is its harness stopping, with pi's message and
     Effect.gen(function* () {
       const driven = yield* loadedPi;
       driven.turn({ stopReason: "error", errorMessage: EXPIRED });
-      // pi may still retry it until it settles.
       expect(yield* stoppedSince(dir, 0)).toBeNull();
       driven.settle(false);
       expect(yield* stoppedSince(dir, 0)).toEqual({ why: EXPIRED, transcript: PI_SESSION });

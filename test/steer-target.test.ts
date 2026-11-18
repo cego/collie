@@ -1,5 +1,3 @@
-// Which of a Run's agents a steer reaches when nobody names one, and when someone names a role.
-
 import { expect, test } from "bun:test";
 import { agentName, launchedAs } from "../src/naming";
 import { steerTarget } from "../src/steer-target";

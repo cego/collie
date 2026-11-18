@@ -1,6 +1,3 @@
-// A host served in this process, through a FileSystem whose /proc is the test's to hold:
-// what it answers before its start-up sweep of the checks an earlier host left.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -18,7 +15,6 @@ import { hostRunRecords } from "./support/records";
 
 const held = new URL("./fixtures/checks/held.sh", import.meta.url).pathname;
 
-/** A state directory, and serving it here through `fileSystem` until the test's scope closes. */
 const hostThrough = (
   fileSystem: (fs: FileSystem.FileSystem) => FileSystem.FileSystem,
   installation?: string,
@@ -40,7 +36,6 @@ const hostThrough = (
       COLLIE_RELEASES: "http://127.0.0.1:9",
       COLLIE_PROC,
     };
-    // A host moves into its state directory.
     const cwd = process.cwd();
     yield* Effect.addFinalizer(() => Effect.sync(() => process.chdir(cwd)));
     const serving = Effect.forkScoped(
@@ -53,7 +48,6 @@ const hostThrough = (
     return { root, state, serving };
   });
 
-/** Its front door's answer to a declaration, once one comes. */
 const answered = (state: string) =>
   Effect.scoped(
     frontDoor(socketOf(state)).pipe(Effect.flatMap((door) => door.declare({ frontDoor: "cli" }))),
@@ -63,7 +57,6 @@ const answered = (state: string) =>
     Effect.map(Option.isSome),
   );
 
-/** A filesystem whose listing of /proc waits for `open`, and tells `listed` it was asked. */
 const holdingProc =
   (open: Deferred.Deferred<void>, listed: Deferred.Deferred<void>) =>
   (fs: FileSystem.FileSystem) => {
@@ -95,7 +88,6 @@ test.skipIf(process.platform !== "linux")(
         );
         const notes = `${root}/notes`;
         yield* fs.makeDirectory(notes);
-        // Before the directory goes, so the check's child sees it and exits.
         yield* Effect.addFinalizer(() =>
           fs.writeFileString(`${notes}/release`, "").pipe(
             Effect.andThen(
@@ -183,7 +175,6 @@ test.skipIf(process.platform !== "linux")(
         yield* serving;
         expect(yield* answered(state)).toBe(true);
         expect(Str.trim(yield* fs.readFileString(`${state}/installation`))).not.toBe("");
-        // A sweep starts as the host answers, and lists /proc within a few reads.
         expect(
           Option.isNone(yield* Deferred.await(listed).pipe(Effect.timeoutOption("1 second"))),
         ).toBe(true);

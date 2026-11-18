@@ -1,5 +1,3 @@
-// The rig's agents taking a prompt: the Output their contract names, from the rig's queue.
-
 import * as Str from "effect/String";
 import {
   Effect,
@@ -16,12 +14,6 @@ import { exec } from "./command";
 
 const QueuedOutputJson = Schema.Union([Schema.String, Schema.Null, Schema.JsonObject]);
 const QueueJson = Schema.fromJsonString(Schema.Array(QueuedOutputJson));
-/**
- * A queued entry for an agent that writes files, then runs `sh` beside the queue, before its
- * Output. `sh` is told its prompt in `PROMPT_PATH`, and may write its Output to `OUTPUT_PATH`.
- * `then` is the status it reports once its Output is written: `idle` unless it says so.
- * `owed` is a step the test does by hand: its agent works until the Output exists.
- */
 const Scripted = Schema.Struct({
   writes: Schema.Array(Schema.Struct({ path: Schema.String, text: Schema.String })),
   sh: Schema.optionalKey(Schema.String),
@@ -49,7 +41,6 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  // The step's prompt file, or another agent's message ("Their message is in <file>.md. Read it").
   const ref = /is in (\S+\.md)(?: |\. )/.exec(line);
   const text =
     ref && (yield* fs.exists(ref[1]!)) ? yield* fs.readFileString(ref[1]!, "utf8") : line;
@@ -58,7 +49,6 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
   const unanswered = { answered, then: "idle", owed: owes };
   if (!match || queuePath === "" || !(yield* fs.exists(queuePath))) return unanswered;
   const next = (yield* readQueue(queuePath))[answered];
-  // An agent that acts before it answers: what it writes, then its Output.
   const scripted = Option.getOrNull(Schema.decodeUnknownOption(Scripted)(next));
   for (const one of scripted?.writes ?? []) {
     yield* fs.makeDirectory(path.dirname(one.path), { recursive: true });
@@ -85,13 +75,8 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
   };
 });
 
-/** Agents answer one prompt at a time, so two never take the same queue entry. */
 const turn = Semaphore.makeUnsafe(1);
 
-/**
- * One prompt taken, its Output the next of the queue at `queuePath`, counted beside `log`;
- * the status the agent reports after it, and the Output it owes before it goes idle.
- */
 export const answerPrompt = (text: string, log: string, queuePath: string) =>
   turn.withPermits(1)(
     Effect.gen(function* () {

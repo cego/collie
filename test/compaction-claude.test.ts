@@ -1,8 +1,3 @@
-// Claude Code's official compaction interface, as Collie's adapter installs and reads
-// it: the status-line accounting, the manual-versus-automatic hook lifecycle, and what
-// may not complete an attempt. The payloads are the documented ones; the version and
-// launch-flag checks run against the installed harness.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -46,11 +41,6 @@ const ctx = () => ({
   channel: fakeChannel(prompted),
 });
 
-/**
- * A status-line payload, as `docs/en/statusline` documents it. `current_usage` present
- * means the window has been measured; the combined totals already fold the cache
- * components into `total_input_tokens`.
- */
 const StatusLine = Schema.Struct({
   session_id: Schema.String,
   context_window: Schema.NullOr(
@@ -75,13 +65,6 @@ const encodeStatusLine = flow(
   Result.getOrThrow,
 );
 
-/**
- * The two hook payloads as the installed release builds them:
- * `hook_event_name:"PreCompact",trigger,custom_instructions` and
- * `hook_event_name:"PostCompact",trigger,compact_summary`. The instructions reach
- * `PreCompact` only — a `PostCompact` has no field carrying Collie's marker, which is
- * why a completion is correlated by position rather than by token.
- */
 const Pre = Schema.Struct({
   session_id: Schema.String,
   hook_event_name: Schema.tag("PreCompact"),
@@ -97,7 +80,6 @@ const Post = Schema.Struct({
 const encodePre = flow(Schema.encodeResult(Schema.fromJsonString(Pre)), Result.getOrThrow);
 const encodePost = flow(Schema.encodeResult(Schema.fromJsonString(Post)), Result.getOrThrow);
 
-/** One compaction's pair of hooks, as Claude fires them. */
 const pre = (session: string, trigger: string, instructions: string | null) =>
   encodePre({
     session_id: session,
@@ -113,7 +95,6 @@ const post = (session: string, trigger: string) =>
     compact_summary: "what the agent was doing, condensed",
   });
 
-/** A submitted turn, as the installed release builds it; the prompt is all Collie reads. */
 const Submit = Schema.Struct({
   session_id: Schema.String,
   hook_event_name: Schema.tag("UserPromptSubmit"),
@@ -137,12 +118,9 @@ const measured = (session: string, input: number, output: number, percent: numbe
         cache_read_input_tokens: 2_000,
       },
     },
-    // A cumulative billing total sits in the same payload. Reading it would be the
-    // mistake this accounting exists to avoid.
     cost: { total_cost_usd: 12.5 },
   });
 
-/** Before the first API call, and again after a compaction: nothing is measured. */
 const unmeasured = (session: string) =>
   encodeStatusLine({
     session_id: session,
@@ -172,11 +150,9 @@ afterEach(() => runEffect(rig.close()));
 test("the sample is input plus output, with the cache folded in exactly once", () =>
   runEffect(
     Effect.gen(function* () {
-      // 15,500 already contains the 5,000 written to cache and the 2,000 read from it.
       const line = yield* recordClaudeEvent(dir, measured("s-1", 15_500, 1_200, 8));
 
       expect(yield* claude.usage(ctx())).toBe(16_700);
-      // The status line Collie borrowed still says something to the human.
       expect(line).toBe("context: 8%");
     }),
   ));
@@ -211,9 +187,6 @@ test("the marked PreCompact is the start, and the PostCompact after it the succe
       expect(prompted[0]).toStartWith("/compact ");
       expect(instructions).toContain("(collie:req-1)");
 
-      // `PreCompact` gives the instructions back, which is what says this compaction
-      // is Collie's. Its `PostCompact` carries no such field, so what completes the
-      // attempt is the next manual completion on this session.
       yield* recordClaudeEvent(dir, pre("s-1", "manual", instructions));
       expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
@@ -224,8 +197,6 @@ test("the marked PreCompact is the start, and the PostCompact after it the succe
 test("a completion before Collie asked is not the answer to what it asked", () =>
   runEffect(
     Effect.gen(function* () {
-      // A compaction that finished before the request was submitted — a human's, or
-      // one from an earlier attempt — is already in the file when Collie asks.
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
       yield* claude.request(ctx(), "req-1");
       yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
@@ -251,8 +222,6 @@ test("a human typing /compact in the pane cannot complete it either", () =>
     Effect.gen(function* () {
       yield* claude.request(ctx(), "req-1");
       yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
-      // Their own `/compact`, with instructions of their own: the completion that
-      // follows is theirs, and Collie's attempt stays unresolved rather than taking it.
       yield* recordClaudeEvent(dir, pre("s-1", "manual", "just tidy it up please"));
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
 
@@ -268,8 +237,6 @@ test("another session's hooks cannot complete it, and rebind what is current", (
       yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
       yield* recordClaudeEvent(dir, post("s-2", "manual"));
 
-      // The newest identity is s-2, so s-1's 400k no longer describes this agent — and
-      // s-2's completion is not the attempt Collie made on s-1.
       expect(yield* claude.usage(ctx())).toBeNull();
       expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
     }),
@@ -301,7 +268,6 @@ test("a background task finishing is Claude's own turn, not a person typing", ()
         submit('<agent-message from="reviewer">\nthe review is done\n</agent-message>'),
       );
 
-      // A task's output can quote a delivery token; that does not make the turn Collie's.
       yield* recordClaudeEvent(
         dir,
         submit("<task-notification>\n<summary>grep collie-delivery:run-1-steer-1</summary>"),
@@ -342,7 +308,6 @@ const decodeJsonText = flow(
   Result.getOrThrow,
 );
 
-/** An `AskUserQuestion` call as `PreToolUse` hands it to the hook. */
 const asking = (tool: string, questions: Schema.Json) =>
   encodeJsonText({
     session_id: "s-1",
@@ -375,7 +340,6 @@ const TWO = [
   },
 ];
 
-/** This process as the live host of the state directory `dir` is the control directory of. */
 const hostLive = Effect.suspend(() =>
   fs.writeFileString(
     path.join(rig.root, "host.lock"),
@@ -432,8 +396,6 @@ test("the helpers record identity, usage and outcome — never conversation cont
     Effect.gen(function* () {
       yield* recordClaudeEvent(
         dir,
-        // A real payload carries a transcript path and, on PostCompact, the summary
-        // the compaction produced.
         `{"session_id":"s-1","transcript_path":"/home/mk/.claude/x.jsonl","hook_event_name":"PostCompact","trigger":"manual","compact_summary":"The user asked about their salary."}`,
       );
 
@@ -457,22 +419,16 @@ test("install writes run-scoped settings and passes them with Claude's own flag"
       const settings = path.join(dir, "settings.json");
       expect(args.args).toEqual(["--settings", settings]);
       const written = yield* fs.readFileString(settings);
-      // The status line is the official current-context contract; the two hooks are
-      // the official lifecycle, matched on both triggers so an automatic compaction
-      // is seen too. Everything points at the runner that installed them.
       expect(written).toContain(`"statusLine"`);
       expect(written).toContain(`"PreCompact"`);
       expect(written).toContain(`"PostCompact"`);
       expect(written).toContain(`"manual|auto"`);
       expect(written).toContain(`herdr compaction ${dir}`);
-      // An agent's question goes to its Run, through the same helper.
       expect(written).toContain(`"PreToolUse"`);
       expect(written).toContain(`"AskUserQuestion"`);
     }),
   ));
 
-// Not mocks: whether the interface Collie installs is the one this machine's Claude has
-// is exactly the question a mock cannot answer.
 onMachineWith("claude")(
   "the installed Claude is at least the release these controls were verified against",
   () =>
@@ -480,10 +436,6 @@ onMachineWith("claude")(
       Effect.gen(function* () {
         const wanted = VERIFIED_VERSIONS.get("claude") ?? "";
         const installed = yield* Effect.promise(() => Bun.$`claude --version`.text());
-        // A floor, as the name says, not an equality: the pin records the release the
-        // controls were traced in, and every release after it is covered by the gate.
-        // Asserting the exact version made this test fail on the day Claude updated,
-        // which says nothing about whether the interface still holds.
         expect([Str.trim(installed), atLeast(installed, wanted)]).toEqual([
           Str.trim(installed),
           true,
@@ -499,7 +451,6 @@ onMachineWith("claude")(
   () =>
     runEffect(
       Effect.gen(function* () {
-        // The flag the adapter launches with, from the adapter, so the two cannot drift.
         const [flag = ""] = (yield* claude.install({
           agent: "r1",
           harness: "claude",
@@ -513,7 +464,6 @@ onMachineWith("claude")(
   { timeout: 30_000 },
 );
 
-/** A measured status line that also carries `rate_limits`, as it may be malformed. */
 const encodeLimited = flow(
   Schema.encodeResult(
     Schema.fromJsonString(Schema.Struct({ ...StatusLine.fields, rate_limits: Schema.Json })),

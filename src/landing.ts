@@ -1,6 +1,3 @@
-// A Run's landing of the merge request it recorded: an attempt written before the forge is
-// asked, then landed or withdrawn. The merge watch reads it to leave the lander running.
-
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
 import { DateTime, Effect, Option, Schema } from "effect";
@@ -17,18 +14,13 @@ export const LandingSchema = Schema.Struct({
   state: Schema.Literals(["attempt", "landed", "withdrawn"]),
   mr: Schema.String,
   head: Schema.String,
-  /** When the attempt was written. */
   at: Schema.String,
-  /** The merged commit, once landed. */
   sha: Schema.optionalKey(Schema.String),
-  /** Why it was withdrawn. */
   why: Schema.optionalKey(Schema.String),
-  /** The Run whose landing this one took over to finish its release. */
   from: Schema.optionalKey(Schema.String),
 });
 export type Landing = typeof LandingSchema.Type;
 
-/** What a merge call came to. `MergedOutside` is a merge this Run did not make. */
 export const MergeOutcomeSchema = Schema.Union([
   Schema.TaggedStruct("Merged", { sha: Schema.String }),
   Schema.TaggedStruct("HeadMoved", { head: Schema.String }),
@@ -44,10 +36,8 @@ export type MergeOutcome = typeof MergeOutcomeSchema.Type;
 const LandingJson = Schema.fromJsonString(LandingSchema);
 const LANDING = "landing.json";
 
-/** The Runs, by directory, whose attempt this host process is making now. */
 export const landingNow = new Set<string>();
 
-/** A Run's landing record, or null where it has none. */
 export const readLanding = Effect.fn("Landing.read")(function* (runDir: string) {
   const text = yield* RunRecords.use((records) => records.fact(runOfDir(runDir), LANDING));
   return text === null ? null : Option.getOrNull(Schema.decodeOption(LandingJson)(text));
@@ -62,14 +52,12 @@ const lineOf = (record: Landing) => {
   return `landing: withdrew the merge of ${at}: ${record.why ?? ""}`;
 };
 
-/** Writes the record and logs it, both in the Run's own directory. */
 export const writeLanding = Effect.fn("Landing.write")(function* (runDir: string, record: Landing) {
   const text = yield* Schema.encodeEffect(LandingJson)(record).pipe(Effect.orDie);
   yield* RunRecords.use((records) => records.put(runOfDir(runDir), LANDING, text));
   yield* appendLog(runDir, lineOf(record));
 });
 
-/** How far the forge's clock may run behind the host's. */
 const CLOCK_SKEW_MS = 60_000;
 
 export type Settled =
@@ -77,11 +65,6 @@ export type Settled =
   | { readonly _tag: "Landed"; readonly sha: string }
   | { readonly _tag: "Outside"; readonly sha: string; readonly by: string; readonly at: string };
 
-/**
- * An attempt with no outcome, on the forge's word: merged by Collie's login, or by GitHub's
- * merge queue it was added to, at its head no earlier than it was written is the merge it made; any
- * other merge is someone else's.
- */
 export function settleAttempt(attempt: Landing, read: Extract<ReviewRead, { readonly ok: true }>) {
   if (read.state !== "merged" || read.merged === null) {
     const returned: Settled = { _tag: "Unmerged" };
@@ -99,7 +82,6 @@ export function settleAttempt(attempt: Landing, read: Extract<ReviewRead, { read
   return returned;
 }
 
-/** Settles an attempt an earlier process left, and records what the forge's word made it. */
 export const settleLeft = Effect.fn("Landing.settleLeft")(function* (
   runDir: string,
   left: Landing,
@@ -115,7 +97,6 @@ export const settleLeft = Effect.fn("Landing.settleLeft")(function* (
 
 const outside = (by: string) => `merged outside this Run by ${by}`;
 
-/** Whether two references name one merge request, a legacy one read in the checkout at `cwd`. */
 const sameMr = <R>(
   one: string,
   other: string,
@@ -126,11 +107,6 @@ const sameMr = <R>(
     return id !== null && id === (yield* mrIdIn(other, at.cwd, at.run));
   });
 
-/**
- * Merges the merge request a Run recorded at `head`, writing the attempt first and its
- * outcome after. A landing already recorded at `head` is answered from its record, and an
- * attempt an earlier process left is settled by `settleAttempt` first.
- */
 export const land = Effect.fn("Landing.land")(function* <R>(opts: {
   readonly runDir: string;
   readonly mr: string | null;
@@ -208,31 +184,23 @@ export const land = Effect.fn("Landing.land")(function* <R>(opts: {
   }).pipe(Effect.ensuring(Effect.sync(() => landingNow.delete(opts.runDir))));
 });
 
-/** What a takeover came to: the landing taken over, or why there was none to take. */
 export const TakeoverSchema = Schema.Union([
   Schema.TaggedStruct("TakenOver", {
     from: Schema.String,
     sha: Schema.String,
     head: Schema.String,
-    /** Why the Run it came from failed. */
     failure: Schema.String,
   }),
   Schema.TaggedStruct("Refused", { why: Schema.String }),
 ]);
 export type Takeover = typeof TakeoverSchema.Type;
 
-/** A Run on this host as a takeover weighs it: null `ended` is one still running. */
 export interface Lander {
   readonly runId: string;
   readonly landing: Landing | null;
   readonly ended: { readonly succeeded: boolean; readonly failure: string } | null;
 }
 
-/**
- * The landing of a merged merge request, taken over from the newest Run that landed it,
- * only where that Run ended without succeeding at the merged commit the forge reports.
- * Recorded on this Run, naming that one, so a later recovery finds this one.
- */
 export const takeOver = Effect.fn("Landing.takeOver")(function* <R>(opts: {
   readonly runDir: string;
   readonly mr: string | null;

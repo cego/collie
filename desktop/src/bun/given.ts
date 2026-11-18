@@ -1,6 +1,3 @@
-// Which credentials Desktop gave each Machine, kept as fingerprints of what it gave and
-// never the secrets, so a Machine that lacks the current one is given it when it connects.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -24,10 +21,6 @@ const ENTRY = {
 
 const Fingerprints = Schema.Record(Schema.String, Schema.String);
 
-/**
- * Each Machine's fingerprints, by herdr profile and then credential. The sign-in's are kept
- * under an older Desktop's `slack-user`, whose `slack` was its bot.
- */
 const GivenFile = Schema.fromJsonString(
   Schema.Record(
     Schema.String,
@@ -47,7 +40,6 @@ const FILE = "given.json";
 
 export const fingerprint = (text: string) => pipe_(sha256Hex(text), Str.slice(0, 16));
 
-/** Gives one Machine a credential's text, and answers why it failed, or null. */
 export type Give = (route: ShellRoute, text: string) => Effect.Effect<string | null>;
 
 export const givenCredentials = Effect.fn("Given.open")(function* (options: {
@@ -55,7 +47,6 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
   readonly keyring: Keyring;
   readonly give: Record<Credential, Give>;
   readonly tell: (item: MachineGiven) => Effect.Effect<void>;
-  /** The steps a Machine's saved onboarding skipped: their credentials aren't Desktop's to give it. */
   readonly skipped: (profile: string) => Effect.Effect<ReadonlyArray<string>>;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -67,7 +58,6 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
       return returned;
     }),
   );
-  /** Why the last give of a fingerprint failed, by profile and credential; this run's only. */
   const failures = new Map<string, { readonly print: string; readonly reason: string }>();
   const lock = yield* Semaphore.make(1);
   const save = fs.makeDirectory(options.dir, { recursive: true }).pipe(
@@ -83,7 +73,6 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
     Effect.catch((error) => Effect.logWarning(`Could not save ${file}`, error)),
   );
 
-  /** What Desktop holds now, by credential. */
   const current = (credential: Credential) =>
     options.keyring.lookup(ENTRY[credential]).pipe(Effect.orElseSucceed(() => null));
   const held = Effect.gen(function* () {
@@ -94,7 +83,6 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
     }
     return texts;
   });
-  /** What Desktop holds that is its to give `machine`. */
   const heldFor = (machine: KnownMachine) =>
     Effect.zipWith(held, options.skipped(machine.profile), (texts, skipped) =>
       Arr.flatMap(CREDENTIALS, (credential) => {
@@ -140,9 +128,7 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
         yield* options.tell(stateOf(machine, credential, text));
       }),
     );
-  /** One give at a time per Machine and credential, so the last given is the last recorded. */
   const giving = new Map<string, Semaphore.Semaphore>();
-  /** `text` is read once the give's turn comes, and null gives nothing. */
   const giveOne = (route: ShellRoute, credential: Credential, text: Effect.Effect<string | null>) =>
     Effect.suspend(() => {
       const key = `${route.machine.profile} ${credential}`;
@@ -161,7 +147,6 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
 
   return {
     held,
-    /** Gives `text` to every route, and says how each went. */
     giveEvery: (routes: ReadonlyArray<ShellRoute>, credential: Credential, text: string) =>
       Effect.forEach(
         routes,
@@ -171,10 +156,6 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
           ),
         { concurrency: "unbounded" },
       ),
-    /**
-     * Gives the route each credential Desktop holds whose current one it was not given, read
-     * again at its turn so a give queued behind a newer one never undoes it.
-     */
     giveLacking: (route: ShellRoute) =>
       Effect.flatMap(heldFor(route.machine), (texts) =>
         Effect.forEach(
@@ -192,7 +173,6 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
             ).pipe(Effect.map((failed) => ({ credential, failed }))),
         ),
       ),
-    /** Counts as given what an onboarding that ended ready was handed and set up. */
     handed: (
       machine: KnownMachine,
       texts: Partial<Record<Credential, string>>,
@@ -211,7 +191,6 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
         ([credential, text]) => recorded(machine, credential, text, null),
         { discard: true },
       ),
-    /** Each Machine's standing on every credential Desktop holds and is its to give. */
     states: (machines: ReadonlyArray<KnownMachine>) =>
       Effect.map(
         Effect.forEach(machines, (machine) =>

@@ -1,6 +1,3 @@
-// pi's question tool, which Collie's per-launch extension registers: loaded as pi loads it,
-// called as pi calls it, and handing its questions to the real `collie` helper.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
@@ -37,7 +34,6 @@ const TWO = [
   },
 ];
 
-/** A Run agent's extension, written into `state`, with its question tool handing to `agent`'s control directory. */
 const agentTools = Effect.fn("test.agentTools")(function* (state: string, agent: string) {
   const fs = yield* FileSystem.FileSystem;
   const control = yield* controlDir(state, agent);

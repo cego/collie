@@ -33,19 +33,16 @@ export const flowNotice = (flow: Flow, now: number) => {
 const MARK = "";
 const MARKED = new RegExp(`${MARK}(-?[\\d.]+)${MARK}`);
 
-/** Minutes since `at` in a fact line while it is built; `settleFlow` turns it into a clock. */
 export const since = (at: number) => `${MARK}${at}${MARK}`;
 
 export const saidAt = (clock: FlowClock, now: number) =>
   `${clock.before}${minutes(now - clock.from)}${clock.after}`;
 
-/** A fact line, and the clock it is said from where it counts minutes. */
 export interface Said {
   readonly said: string | null;
   readonly clock?: FlowClock;
 }
 
-/** A fact line said at `now`, with the clock it is said from where it counts minutes. */
 export const settledSaid = (said: string | null, now: number) => {
   const found = said === null ? null : MARKED.exec(said);
   if (said === null || found === null) return { said };
@@ -77,19 +74,16 @@ const eachSaid = (flow: Flow, run: <A extends Said>(one: A) => A) => {
   return { ...each, releases };
 };
 
-/** The Flow as built, its minutes said at `now` and each one's clock kept beside it. */
 export const settleFlow = (flow: Flow, now: number) => {
   const settled = eachSaid(flow, (one) => ({ ...one, ...settledSaid(one.said, now) }));
   return { ...settled, notice: flowNotice(settled, now) };
 };
 
-/** The Flow with nothing said that only time moves: a record's, to send once per change. */
 export const timeless = (flow: Flow) => ({
   ...eachSaid(flow, (one) => (one.clock === undefined ? one : { ...one, said: null })),
   notice: null,
 });
 
-/** The Flow as it reads at `now`: what a front door draws from a timeless one. */
 export const timedFlow = (flow: Flow, now: number) => {
   const timed = eachSaid(flow, (one) => {
     const said = one.clock === undefined ? one.said : saidAt(one.clock, now);

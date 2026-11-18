@@ -1,6 +1,3 @@
-// `collie schedule`: a Machine's Schedules, added, listed, paused, resumed, removed and moved
-// through its host (ADR-0052). Every line names the Machine it is about.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -28,11 +25,6 @@ import { answering, cliDoor, parseInput, requestIdFlag, root } from "./shared";
 
 const SCHEDULE_CHECKOUT_FIX = `Name the checkout with --workspace <absolute path>, a workspace's id or label, or ${SCHEDULE_PROJECTS_ROOT}.`;
 
-/**
- * The checkout a Schedule's start names, as a path or `projects-root`: given, or the
- * checkout the command runs in. A workspace's id or label is its checkout's path, since
- * the workspace may be gone by the time the Schedule fires.
- */
 type CheckoutOf = { readonly path: string | null } | { readonly error: OpResult };
 
 const checkoutOf: (
@@ -62,7 +54,6 @@ const nameArg = Argument.String("name").pipe(
   ),
 );
 
-/** A change through the host, with its receipt. */
 const changing = (
   operation: string,
   requestId: Option.Option<string>,
@@ -140,7 +131,6 @@ const scheduleAdd = Command.make(
               ([key, value]) => [key, asOptionText(value)] as const,
             ),
           ]);
-          // The shared `--workspace` names the checkout: a path, a workspace, or the Projects root.
           const where = Option.getOrUndefined(global.workspace) ?? given.workspace ?? "";
           const inputs = Rec.fromEntries(
             Arr.filter(Rec.toEntries(given), ([key]) => key !== "workspace"),
@@ -155,7 +145,6 @@ const scheduleAdd = Command.make(
             start: { workflow, inputs, workspace, verify: checks.specs },
             ...Option.match(tz, { onNone: () => ({}), onSome: (zone) => ({ tz: zone }) }),
           });
-          // Another Machine's host checks the start against its own modules and checkout.
           if (env.machine !== undefined) return scheduled(Str.trim(where));
           const checkout = yield* checkoutOf(env, where);
           if ("error" in checkout) return refused(checkout.error);
@@ -259,7 +248,6 @@ const scheduleMove = Command.make(
             });
             if (moved.ok) return { ok: true as const, data: moved.moved, human: moved.said };
             const first = refusals[0];
-            // A Machine that could not be reached is refused as every --machine is.
             if (moved.code === "machine_unreachable" && first !== undefined) return first;
             return err(MOVE_CODES[moved.code], moved.message, { step: moved.code });
           }),

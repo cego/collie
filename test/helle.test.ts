@@ -1,8 +1,3 @@
-// Helle as Collie's own client, and the gate a Step declares with `waits: helle`.
-// Everything runs against a stand-in server this test controls, because the states
-// that matter — someone else holding the project, a queue that moves, a 500 — are
-// exactly the ones a real Helle will not produce on demand.
-
 import * as Arr from "effect/Array";
 import { PROTOCOL } from "../src/board-model";
 import * as Option from "effect/Option";
@@ -45,7 +40,6 @@ import { ClaimedSchema } from "../src/sdk";
 const ME = "6b9ba520-user";
 const OTHER = "2dd236ac-other";
 
-/** One project as Helle reports it, holder and queue included. */
 interface Fake {
   projects: {
     slug: string;
@@ -54,10 +48,8 @@ interface Fake {
     holder?: { user_id: string; display_name: string };
     queue: { user_id: string }[];
   }[];
-  /** Status to answer `GET /projects` with, for the failures that are refusals. */
   listStatus: number;
   meStatus: number;
-  /** What a claim answers, in the order claims arrive; `taken` is who got there first. */
   claims: {
     position: number;
     already_queued: boolean;
@@ -117,7 +109,6 @@ beforeEach(() => {
 });
 afterEach(() => server.stop());
 
-/** An env file in the shape the MCP wrapper's own one has. */
 const envFile = Effect.fn("test.envFile")(function* (token = "token-abc") {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -224,7 +215,6 @@ test("several matches are ambiguous, and name them", () => {
   });
 });
 
-/** Helle's projects in the monorepo's own group, and one elsewhere named like an app. */
 const FRONTEND = [
   project("spilnu", "spilnu/frontend"),
   project("happytiger", "spilnu/frontend"),
@@ -267,7 +257,6 @@ test("a project of a group the repository's group merely ends with is not the re
   expect(resolved._tag).toBe("Unresolved");
 });
 
-/** The shape of Helle's own list on 2026-10-29: no `monorepo`, and the backoffice filed apart from the brands. */
 const HELLE = [
   project("support-backoffice", "spilnu/backoffices", ["sbo"]),
   project("happytiger", "spilnu/frontend"),
@@ -419,7 +408,6 @@ test("a rejected token is a refusal", () =>
     }),
   ));
 
-/** The gate as a Step declares it, with everything the runner would supply scripted. */
 function gate(opts: {
   file: string;
   repositoryPath?: string | null;
@@ -521,14 +509,11 @@ test("the gate claims, reports the queue as it moves, and returns once it is the
           gate({ file: yield* envFile(), lines, recorded, queued, ended }),
         );
 
-        // The queue moves up once the gate has said where it stands, and then the project
-        // becomes this token's own: moved on what the gate has seen, not on the clock.
         const saidSoFar = (text: string) =>
           Effect.sync(() => Arr.some(lines, (line) => pipe_(line, Str.includes(text)))).pipe(
             Effect.repeat({ until: (seen) => seen, schedule: Schedule.spaced("5 millis") }),
           );
         yield* saidSoFar("position 2");
-        // Told again on every read, so a wait that has stopped moving is still seen to age.
         yield* Effect.sync(() => queued.length).pipe(
           Effect.repeat({ until: (told) => told >= 3, schedule: Schedule.spaced("5 millis") }),
         );
@@ -928,7 +913,6 @@ test("a claim lost while the gate waited for the next gives the later ones back 
     ),
   ));
 
-/** Helle as several users see it: a token is the user, and a release passes the project on. */
 const sharedHelle = Effect.fn("test.sharedHelle")(function* (
   projects: { slug: string; holder?: { user_id: string }; queue: { user_id: string }[] }[],
 ) {
@@ -1268,7 +1252,6 @@ test("adopting a claim stops the Run that held it and its children, waits them o
           );
       const held = (runId: string) =>
         fs.exists(`${dir}/runs/${runId}/helle.json`).pipe(Effect.orElseSucceed(() => false));
-      /** What the host did, in order, and the record's presence each time it looked. */
       const said: string[] = [];
       const host = (over: {
         readonly children?: ReadonlyArray<string>;
@@ -1310,9 +1293,6 @@ test("adopting a claim stops the Run that held it and its children, waits them o
         ...host({ children: ["r-child"], stopsAfter: 2 }),
       });
       expect(handed).toEqual(["r-old"]);
-      // The Run and its child are stopped as an operator's stop does, both are waited out,
-      // and every agent they have is closed again before the record goes: one started
-      // after the stop would otherwise go on working on what the claim guards.
       expect(said).toEqual([
         "stop r-old",
         "looked at r-old",
@@ -1325,7 +1305,6 @@ test("adopting a claim stops the Run that held it and its children, waits them o
       expect(yield* held("r-old")).toBe(false);
       expect(yield* held("r-elsewhere")).toBe(true);
 
-      // An agent the stop could not close could still change what the claim guards.
       yield* hold("r-old", "project");
       const stuck = yield* handOverClaim({
         dir,
@@ -1337,7 +1316,6 @@ test("adopting a claim stops the Run that held it and its children, waits them o
       expect(stuck.message).toContain("impl-1's pane would not close");
       expect(yield* held("r-old")).toBe(true);
 
-      // Nor one that started before the Run stopped and will not close now.
       const late = yield* handOverClaim({
         dir,
         slug: "project",
@@ -1348,7 +1326,6 @@ test("adopting a claim stops the Run that held it and its children, waits them o
       expect(late.message).toContain("impl-2's pane would not close");
       expect(yield* held("r-old")).toBe(true);
 
-      // A Run that does not stop keeps the claim, and the adoption says why.
       const running = yield* handOverClaim({
         dir,
         slug: "project",
@@ -1379,7 +1356,6 @@ test("two Runs taking over different claims of one Run both remove theirs from i
           to,
           runs: ["r-old"],
           stop: (runId) => Effect.succeed({ runs: [runId], left: [] }),
-          // Both have read the record before either is done waiting.
           stopped: () => Effect.sleep(20).pipe(Effect.as(true)),
           halt: () => Effect.succeed({ stopped: [], left: [] }),
           patience: { everyMs: 5, forMs: 5_000 },
@@ -1395,10 +1371,6 @@ test("two Runs taking over different claims of one Run both remove theirs from i
 const RECORDED = `[{"slug":"happytiger","claim":"mine"},{"slug":"spilnu","claim":"mine"}]`;
 const SAID = "claim happytiger for the monorepo release";
 
-/**
- * A stopped Run that recorded `happytiger` and `spilnu`, and `slug` claimed for the human
- * through Desktop's Helle tool, its one Machine being this host.
- */
 const claimedThroughDesktop = Effect.fn("test.claimedThroughDesktop")(function* (
   prefix: string,
   slug: string,
@@ -1458,7 +1430,6 @@ const claimedThroughDesktop = Effect.fn("test.claimedThroughDesktop")(function* 
   return { state, dir, runId: Str.split(dir, "/").pop()!, said };
 });
 
-/** The Run's give-back, as its workflow asks it, against the stand-in Helle. */
 const giveBack = (state: string, runId: string) =>
   Effect.gen(function* () {
     const env = yield* envFile();

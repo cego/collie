@@ -260,8 +260,6 @@ test(
           ]);
 
           yield* stopHost(world.state);
-          // A first host that reached the watch's round asked the absent forge, and that ask
-          // holds a restarted host off for five minutes; this proves the read that follows.
           yield* (yield* FileSystem.FileSystem).remove(`${world.state}/${MR_STATES_FILE}`, {
             force: true,
           });

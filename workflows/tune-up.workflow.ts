@@ -1,7 +1,3 @@
-// Make a repository measurably faster, proved by the host's Measurement rather than by an
-// agent's timings (ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement). What only
-// another repository could change is put to the human and never counts toward the outcome.
-
 import * as Num from "effect/Number";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -64,7 +60,6 @@ const text = Schema.String;
 
 const DEFAULTS = { cycles: 5, threshold: 5, tolerance: 2, samples: 10, external: "ask" } as const;
 
-/** A whole number, as a front door's words or as JSON. */
 const Whole = Schema.Union([Schema.Int, Schema.NumberFromString.check(Schema.isInt())]);
 const Percent = Schema.Union([
   Schema.Finite,
@@ -82,7 +77,6 @@ const Told = {
   run: Schema.Struct({ dir: text, id: text }),
 };
 
-/** What every prompt from the final proof on is told, as delivery tells its own. */
 const Delivering = {
   inputs: Schema.Struct({ focus: text, outcome: text }),
   run: Told.run,
@@ -172,7 +166,6 @@ const prompts = {
   }),
 };
 
-/** What a reviewer of a Tune-up judges, beside what every review is told. */
 const REVIEWING = content.sections.get("review") ?? "";
 
 const Research = Schema.Union([
@@ -206,7 +199,6 @@ const Opportunity = Schema.Struct({
   }),
 });
 
-/** An improvement only another repository can make, handed on and never assumed done. */
 const External = Schema.Struct({
   title: text,
   repository: text.annotate({ description: "the repository that would change" }),
@@ -234,7 +226,6 @@ const Handed = {
   ),
 };
 
-/** What Discover is held to: nothing ranked without a source behind it. */
 const Discovered = Schema.Struct({
   stack: Schema.NonEmptyArray(text),
   skills: Schema.Array(text).annotate({ description: "the installed skills you loaded, by name" }),
@@ -267,7 +258,6 @@ const Harness = Schema.Struct({
   paths: Schema.NonEmptyArray(text),
 });
 
-/** The plan Harness writes, before the Run's own budget is put on it. */
 const Harnessed = Schema.Struct({
   journeys: Schema.NonEmptyArray(text),
   cases: Schema.Array(text),
@@ -322,15 +312,12 @@ const Repaired = Schema.Struct({
   }),
 });
 
-/** A benchmark plan as the host measures by it, and why it is the plan now. */
 const Planned = Schema.Struct({
-  // measure judges the plan, so warmup stays as Harness wrote it.
   plan: BenchmarkPlan.mapFields((fields) => ({ ...fields, harness: Harness, warmup: Schema.Int })),
   reason: text,
 });
 type Plan = typeof Planned.Type.plan;
 
-/** What a Cycle's tuner did: one change, or why it made none. */
 const Tried = Schema.Union([
   Schema.Struct({
     result: Schema.Literal("changed"),
@@ -351,7 +338,6 @@ const Tried = Schema.Union([
   }),
 ]);
 
-/** What a search of Linear for an external finding found. */
 const Searched = Schema.Struct({
   marked: Schema.NullOr(text).annotate({
     description: "the issue carrying the marker, by URL, or null",
@@ -378,11 +364,9 @@ interface Cycled {
   readonly kept: boolean;
   readonly why: string;
   readonly measurement: string | null;
-  /** Each metric's verdict, ratio and interval, as the host judged them. */
   readonly measured: string | null;
 }
 
-/** What the tuner took off the branch once the human was happy with the progress. */
 const Cleaned = Schema.Struct({
   removed: Schema.Array(text).annotate({
     description: "the harness, instrumentation, counters and run-specific setup you removed",
@@ -412,7 +396,6 @@ const ANSWERS = Arr.join(
   "\n",
 );
 
-/** Yes or No, and the words after it; null where the answer starts with neither. */
 const readAnswer = (said: string) => {
   const read = ANSWER.exec(said);
   if (read === null) return null;
@@ -493,7 +476,6 @@ const externalReport = step({
 type Judged = Extract<Measurement["result"], { readonly _tag: "Judged" }>;
 type Unjudged = Exclude<Measurement["result"], Judged>;
 
-/** How a Measurement ended without a verdict, naming the tree it ended on. */
 const unjudged = (measured: Measurement, result: Unjudged) => {
   const tree = (side: "base" | "candidate") =>
     side === "base"
@@ -511,7 +493,6 @@ const unjudged = (measured: Measurement, result: Unjudged) => {
   }
 };
 
-/** Why a Cycle is not kept, or null: its checks pass, its primary gains and every guardrail holds. */
 const notKept = (
   plan: { readonly metrics: ReadonlyArray<Plan["metrics"][number]> },
   failed: ReadonlyArray<string>,
@@ -534,7 +515,6 @@ const notKept = (
   return whys.length === 0 ? null : Arr.join(whys, "; ");
 };
 
-/** What stopped an integration, as the tuner is told it. */
 const stoppedBy = (merged: Integration) =>
   merged.status === "conflicted"
     ? `Collie merged ${merged.ref} (${merged.sha}) into this branch, and the merge stopped on conflicts in: ${Arr.join(merged.files, ", ")}.`
@@ -555,7 +535,6 @@ const researchLine = (one: Discovered["research"][number]) =>
     ? `research: nothing found; searched ${one.searched}`
     : `research ${one.link} ${one.effect} ${one.opportunity}`;
 
-/** Each metric's verdict with its ratio and 95% interval, or how the Measurement ended without one. */
 const intervalsLine = (measured: Measurement) =>
   measured.result._tag === "Judged"
     ? Arr.join(
@@ -582,7 +561,6 @@ const verdictsLine = (measured: Measurement) =>
       )
     : unjudged(measured, measured.result);
 
-/** The findings as the human reads them, every statement marked by what it rests on. */
 const reportOf = (options: {
   readonly runId: string;
   readonly ending: string;
@@ -662,12 +640,10 @@ const reportOf = (options: {
   );
 };
 
-/** Stable across Runs, so a later Run's search finds the issue an earlier one filed. */
 const keyOf = (one: External) =>
   `external-${pipe((Hash.string(`${one.repository}\n${one.change}`) >>> 0).toString(16), Str.padStart(8, "0"))}`;
 const markerOf = (key: string) => `collie:${key}`;
 
-/** One external finding as the human reads it, in the report and in its question. */
 const previewOf = (one: External) =>
   redact(
     Arr.join(
@@ -699,7 +675,6 @@ const median = (values: ReadonlyArray<number>) => {
   return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
 };
 
-/** One side's judged samples of one metric, in the order they were taken. */
 const readingsOf = (measured: Measurement, metric: string, side: "base" | "candidate") =>
   Arr.flatMap(measured.samples, (one) => {
     const value = one.readings[metric];
@@ -733,10 +708,6 @@ const tableOf = (measured: Measurement) => [
   }),
 ];
 
-/**
- * The merge request's description, written from the host's Measurements rather than from
- * an agent's numbers, with every credential-shaped value taken out.
- */
 const bodyOf = (got: {
   readonly final: Measurement;
   readonly original: Measurement | null;
@@ -940,7 +911,6 @@ interface Archived {
 const unarchived = (cause: { readonly message: string }) =>
   new WorkflowError({ reason: `the archive could not be written: ${cause.message}` });
 
-/** The harness commits as patches in the Run's benchmark archive, read before cleanup takes them off. */
 const archivedHarness = ({ cwd, archive, plan }: Archived) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -966,11 +936,6 @@ const archivedHarness = ({ cwd, archive, plan }: Archived) =>
       );
   }).pipe(Effect.mapError(unarchived));
 
-/**
- * The rest of the Run's benchmark archive: the plan, every Measurement raw, and a README of
- * each one's intervals and revisions and how to reproduce them. Written again whole, so a
- * later Measurement joins it.
- */
 const archivedResults = (got: Archived) =>
   Effect.gen(function* () {
     const host = yield* Host;
@@ -1160,7 +1125,6 @@ export default defineWorkflow({
 
       const from = input.from ?? "";
       const agents = yield* Agents;
-      /** The earlier Run's Output of the first of `operations` it has, decoded as `schema`. */
       const carried = <S extends Schema.Codec<unknown, unknown>>(
         name: string,
         operations: ReadonlyArray<string>,
@@ -1188,7 +1152,6 @@ export default defineWorkflow({
             const read = yield* Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
               Effect.mapError(unreadable),
             );
-            // Kept as this Run's own, so a later `from` naming this Run finds it.
             const own = agents.outputFor(runId, name);
             yield* fs
               .makeDirectory((yield* Path.Path).dirname(own), { recursive: true })
@@ -1491,7 +1454,6 @@ export default defineWorkflow({
       const handed: External[] = [...found.external];
       const recorded = (name: string, line: string) =>
         Activity.make({ name, success: Schema.Void, execute: host.record(runId, line) });
-      /** One finding settled: recorded as existing, ignored, or posted once to Linear. */
       const settle = (key: string, one: External) =>
         Effect.gen(function* () {
           const decided = `${key}.decided`;
@@ -1546,8 +1508,6 @@ export default defineWorkflow({
             const known = foundIn(yield* search(named(`${key}-search`)), false);
             if (known !== null) return yield* recorded(decided, known);
             const creating = named(`${key}-create`);
-            // Read on every replay: a create launched whose Output was never collected is
-            // never collected now, since a new agent given its prompt could file twice.
             const state = yield* FileSystem.FileSystem.pipe(
               Effect.flatMap((fs) => fs.readFileString(`${launches}/${creating}`)),
               Effect.orElseSucceed(() => ""),
@@ -1575,7 +1535,6 @@ export default defineWorkflow({
             again = true;
           }
         });
-      /** The Run's end, after what only another repository could change is handed on. */
       const handOn = (ending: string) =>
         Effect.gen(function* () {
           const named = Arr.map(handed, (one) => ({ key: keyOf(one), one }));
@@ -1659,7 +1618,6 @@ export default defineWorkflow({
         head: final.head_sha,
         fingerprint: final.fingerprint,
       }));
-      // Checks left to CI are proved by its pipeline, not here.
       const failingChecks = (name: string) =>
         Activity.make({
           name,
@@ -1701,11 +1659,8 @@ export default defineWorkflow({
             measured: intervalsLine(measured),
           };
         });
-      /** One Cycle. An `automatic` one does not start once the wall time is spent, and says so as `spent`. */
       const cycle = (n: number, automatic: boolean) =>
         Effect.gen(function* () {
-          // The shape a Run recorded before this build, so one it started still recovers. That
-          // start may have recorded the wall time spent, so a Cycle a No asks for has its own.
           const begun = yield* Activity.make({
             name: automatic ? `cycle-${n}.start` : `cycle-${n}.start-after-no`,
             success: Schema.Struct({ spent: Schema.NullOr(text), tree: Tree }),
@@ -1857,7 +1812,6 @@ export default defineWorkflow({
           ],
           "\n",
         );
-      /** The human's answer to the `asked`th question, asked again until it starts with Yes or No. */
       const answered = (asked: number, why: string) =>
         Effect.gen(function* () {
           const prompt = progressOf(why);
@@ -2048,7 +2002,6 @@ export default defineWorkflow({
           });
           return { reviewed: synthesis, on };
         });
-      // An accepted tradeoff keeps a lost guardrail from dropping the change; the gate still judges it.
       const judgedBy =
         tradeoff === null
           ? plan
@@ -2227,7 +2180,6 @@ export default defineWorkflow({
       });
       yield* writeBody;
 
-      // Taken inside delivery's proof Activity, which a replay skips, so it is kept to be read back.
       const proofReview = `${place.dir}/proof-review.json`;
       const ProofReview = Schema.fromJsonString(
         Schema.Struct({ reviewed: SynthesisSchema, on: Snapshot }),
@@ -2271,9 +2223,7 @@ export default defineWorkflow({
           Effect.gen(function* () {
             const fix = `${pass}-fix-${round}`;
             if (pass === "ci") ciMoved = true;
-            // The gate runs its own checks again after its fix; a CI fix's tree has none yet.
             if (pass === "ci") yield* failingChecks(`${fix}.checks`);
-            // A gate fix's review is already the gate's work; a CI fix's is a review round of its own.
             const again = reviewOf(`${fix}.`, agents.outputFor(runId, fix));
             latest = yield* pass === "ci" ? reviewRound(again) : again;
             const body = yield* writeBody;

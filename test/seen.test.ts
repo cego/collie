@@ -1,6 +1,3 @@
-// A finished Run's report is seen once for the Flock, by whoever opens or acknowledges it,
-// and never by someone reading it (ADR-draft-a-finished-run-is-seen-once-for-the-flock).
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";

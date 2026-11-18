@@ -9,7 +9,6 @@ import { attempt, mutation } from "../envelope";
 import { context, definitions, discoveryContext, forkFlags, layerDir, root } from "./shared";
 import { personaData } from "../definitions";
 
-/** The Persona a `persona` subcommand acts on. */
 const personaArg = Argument.String("persona").pipe(
   Argument.withDescription("Which Persona, as `persona list` names it"),
 );
@@ -82,8 +81,6 @@ const personaFork = Command.make(
           if (base._tag === "ContextFailure") return base.result;
           return yield* mutation(base.env, "persona-fork", request, (_id) =>
             Effect.gen(function* () {
-              // Resolved inside the mutation, so a replayed request id returns its
-              // recorded result whether or not that workspace is still open.
               const resolved = yield* context(global, layer === "project", layer === "project");
               if (resolved._tag === "ContextFailure") return resolved.result;
               const found = (yield* definitions(resolved.env)).personas.get(persona);

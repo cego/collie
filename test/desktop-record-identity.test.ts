@@ -1,6 +1,3 @@
-// What an open record is drawn from keeps its identity while the board changes elsewhere, so
-// Vue draws the record again only for a change to its own Task.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { Flow, TaskView } from "../src/board-model";
@@ -43,7 +40,6 @@ const linked = {
   runs: ["r-l"],
 };
 const other = task({ id: "t-other", name: "Other", state: "active", at: 3 });
-/** A Flow whose one Step links to the Run of `linked`. */
 const flow: Flow = {
   lanes: [
     {

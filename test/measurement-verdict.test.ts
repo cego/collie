@@ -1,5 +1,3 @@
-// A Measurement's verdict per metric, from hand-picked samples with known answers.
-
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema, flow, Result } from "effect";
@@ -151,7 +149,6 @@ describe("a metric's verdict", () => {
 });
 
 describe("a replay", () => {
-  // Many distinct values, so the interval's bounds depend on which resamples are drawn.
   const spread = (centre: number) =>
     Array.from({ length: 30 }, (_, i) => centre + ((i * 7) % 30) * 1.37 + i * 0.013);
   const noisy = latency(spread(100), spread(98));

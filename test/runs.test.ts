@@ -34,7 +34,6 @@ const view: (over?: Partial<RunView>) => RunView = (over = {}) => ({
 test("a Run the host suspended on a stop is stopped, not working", () => {
   const stopped = view({ status: { status: "suspended" }, controls: ["stop"] });
   expect(factsOfView("/state", stopped).state).toBe("stopped");
-  // Still going, with the stop not yet reached, is the stop's too.
   expect(factsOfView("/state", view({ controls: ["stop"] })).state).toBe("stopped");
   expect(factsOfView("/state", view({ status: { status: "suspended" } })).state).toBe("running");
 });

@@ -1,6 +1,3 @@
-// `collie cleanup` lists what the host's sweep would remove and keep, and `--apply`
-// sweeps now; the host also sweeps on its own (ADR-0045).
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
@@ -50,7 +47,6 @@ const parsed = flow(
 );
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
-/** A staged generation last used `days` ago, holding one file of `bytes`. */
 const generation = (world: World, name: string, days: number, bytes = 8192) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -64,7 +60,6 @@ const generation = (world: World, name: string, days: number, bytes = 8192) =>
     return dir;
   });
 
-/** A `sleep` left running by nobody, carrying only the bindings in `env`. */
 const leftRunning = (env: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const pid = yield* startDetached([
@@ -83,7 +78,6 @@ const leftRunning = (env: ReadonlyArray<string>) =>
 
 const RUNNING_FOR_MS = (2 * 60 + 10) * 60_000;
 
-/** A check of `run-left` started 2h10m ago, marked for `installation` and left by its host. */
 const leftCheck = (installation: string) =>
   Effect.gen(function* () {
     const id = `run-left@${(yield* Clock.currentTimeMillis) - RUNNING_FOR_MS - 30_000}-left`;
@@ -91,7 +85,6 @@ const leftCheck = (installation: string) =>
     return { id, ...left };
   });
 
-/** This world's installation id, which its host writes as it starts. */
 const installationIn = (world: World) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     fs.readFileString(`${world.state}/installation`),
@@ -139,7 +132,6 @@ test(
             reason: "used 1 day(s) ago",
           });
           expect(report.bytes).toBe(Arr.reduce(report.remove, 0, (sum, item) => sum + item.bytes));
-          // A listing removes nothing.
           expect(yield* (yield* FileSystem.FileSystem).exists(stale)).toBe(true);
         }),
       [],
@@ -175,7 +167,6 @@ test(
             reason: "unused for 8 days",
           });
 
-          // The same request again is the same sweep, not another.
           const again = yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
           expect(Arr.map(Listed(again.envelope.data).remove, (item) => item.target)).toEqual([
             stale,
@@ -370,7 +361,6 @@ test(
             intentVersions: {},
             by: "evaluator:e-1",
           }).pipe(Effect.provide(recordsAt(world.state)));
-          // Started as an operator's would be, with the world's home and so its cache.
           yield* collie(world, ["cleanup"]);
           const client = yield* connect(world.state);
           yield* client.declare({ frontDoor: "chat" });
@@ -401,7 +391,6 @@ test(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           yield* generation(world, "stale", 8, 64 * 1024);
-          // The host has served this state directory, so doctor may ask it.
           yield* collie(world, ["cleanup"]);
           const bin = `${world.home}/bin`;
           yield* fs.makeDirectory(bin);
@@ -719,7 +708,6 @@ const cacheItems = (listed: { readonly envelope: { readonly data?: unknown } }) 
   };
 };
 
-/** A listing judges the board the host built last, which may not have this Run's latest state yet. */
 const cacheListing = (world: World, judged: (items: ReturnType<typeof cacheItems>) => boolean) =>
   until(() => Effect.map(collie(world, ["cleanup"]), cacheItems), judged);
 

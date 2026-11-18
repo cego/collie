@@ -1,6 +1,3 @@
-// What a Run's agents were launched on, as each launch recorded it. Apart from the agents
-// layer so the board and the CLI can read it without loading it.
-
 import * as Arr from "effect/Array";
 import {
   Clock,
@@ -24,7 +21,6 @@ import { ClaudeSubagents } from "./subagents";
 import { StoreWrites } from "./store-writes";
 import { markWorked } from "./run-records";
 
-/** The Step run an agent's work was given in. */
 export const LaunchedIn = Schema.Struct({
   step: Schema.String,
   place: Schema.NullOr(StepPlace),
@@ -38,20 +34,10 @@ export const sameSession = (
   other: AgentSession | null | undefined,
 ) => one != null && other != null && one.kind === other.kind && one.value === other.value;
 
-/**
- * The agent this work is on. Recorded by the launch Activity, so every later attempt
- * reattaches to this agent rather than starting another.
- */
 export const Launched = Schema.Struct({
   agent: Schema.String,
   output: Schema.String,
-  /** True where the agent was already there and this launch reconciled onto it. */
   reused: Schema.Boolean,
-  /**
-   * What a repair needs to reach this same agent about this same work. Kept here because
-   * this is the durable record: a host that restarts between the collection and the
-   * repair reads the agent and the operation back rather than deriving them again.
-   */
   runId: Schema.String,
   operation: Schema.String,
   role: Schema.String,
@@ -60,26 +46,16 @@ export const Launched = Schema.Struct({
   model: Schema.optionalKey(Schema.String),
   effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
   claudeSubagents: Schema.optionalKey(ClaudeSubagents),
-  /** When it was given this work, on the clock its harness's telemetry is stamped with. */
   at: Schema.optionalKey(Schema.Finite),
-  /** Which agent of this work it is: past 1, one that took over from an agent that ran out. */
   sequence: Schema.optionalKey(Schema.Finite),
-  /** What this work fell back from, and why, where it did. */
   from: Schema.optionalKey(RanOn),
   why: Schema.optionalKey(Schema.String),
-  /** herdr's id for the process given this work: the name alone is reused by the next one. */
   terminalId: Schema.optionalKey(Schema.String),
-  /** The harness session herdr reported for it, which a pane herdr restores resumes. */
   agentSession: Schema.optionalKey(AgentSession),
   step: Schema.optionalKey(LaunchedIn),
 });
 export type Launched = typeof Launched.Type;
 
-/**
- * What an agent on core was started with, for the host to start it again once core has
- * lost it. Nothing here is a credential: the profile's environment and the Run's authority
- * are read again when it is.
- */
 export const StartedWith = Schema.Struct({
   runId: Schema.String,
   operation: Schema.String,
@@ -99,16 +75,10 @@ export const StartedWith = Schema.Struct({
   sequence: Schema.optionalKey(Schema.Finite),
 });
 
-/** Where a Run's agents on core keep what they were started with, until one is ended. */
 export const startedDir = (stateDir: string, runId: string) => `${stateDir}/relaunch/${runId}`;
 
-/** Longer than an end's stop and close, or a start on core, each of which it may wait out. */
 const RELAUNCH_LOCK_BUDGET = Duration.minutes(2);
 
-/**
- * Held to start one of the Run's agents again after core lost it, and to end one: an end
- * then sees the agent recovery started, and recovery never starts one an end has retired.
- */
 export const withRelaunchLock = <A, E, R, A2, E2, R2>(
   stateDir: string,
   runId: string,
@@ -122,54 +92,38 @@ export const withRelaunchLock = <A, E, R, A2, E2, R2>(
   });
 
 export const LAUNCH_SUFFIX = ".launch.json";
-/** One operation a line, in the order its agent was launched. */
 export const LAUNCH_ORDER = "launches";
 
-/** What a launch's files are named by: its operation, and its sequence past the first. */
 export const stemOf = (one: { readonly operation: string; readonly sequence?: number }) =>
   (one.sequence ?? 1) > 1 ? `${one.operation}.r${one.sequence}` : one.operation;
 
-/** Where a Run's agents keep their launch records, prompts and outputs. */
 export const launchDir = (stateDir: string, runId: string) => `${stateDir}/agents/${runId}`;
 
 const LaunchedJson = Schema.fromJsonString(Launched);
 const decodeLaunched = Schema.decodeOption(LaunchedJson);
 const encodeLaunched = flow(Schema.encodeResult(LaunchedJson), Result.getOrThrow);
-/** A launch file as an older build wrote it, for the import. */
 export const decodeLaunchOption = decodeLaunched;
 
-/** What a write to the launch records invalidates. */
 export const LAUNCHES = "collie/launches";
 
-/** The launch records, in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database). */
 export interface LaunchesApi {
-  /** Each of these Runs' launches, oldest first; a Run with none is absent. */
   readonly of: (
     runs: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<Launched>>>;
-  /** Each of these Runs' launch records as written, oldest first; a Run with none is absent. */
   readonly recordsOf: (
     runs: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
-  /** Every launch of these agents, whichever Run. */
   readonly byAgent: (agents: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<Launched>>;
-  /** Every harness session a launch recorded. */
   readonly sessions: Effect.Effect<ReadonlyArray<AgentSession>>;
-  /** Records the launch, in place of the one with its operation and sequence. */
   readonly record: (launched: Launched) => Effect.Effect<void>;
-  /** Puts the launch last in its Run's order: its agent was given the work. */
   readonly order: (launched: Launch) => Effect.Effect<void>;
-  /** The launch each of these Runs ordered last, and when, in one read; a Run with none is absent. */
   readonly lastOrderedOf: (
     runs: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyMap<string, { readonly stem: string; readonly at: number }>>;
-  /** The launch its Run ordered last, and when. */
   readonly lastOrdered: (
     run: string,
   ) => Effect.Effect<{ readonly stem: string; readonly at: number } | null>;
-  /** Whether the launch is in its Run's order: this same work, replayed. */
   readonly ordered: (launched: Launch) => Effect.Effect<boolean>;
-  /** The session herdr reports, recorded while the launch is still on the terminal it names. */
   readonly session: (launched: Launched, session: AgentSession) => Effect.Effect<void>;
 }
 
@@ -190,7 +144,6 @@ export const launchesLayer = Layer.effect(Launches)(
         Effect.sync(() => told?.([run])),
         reactivity.invalidate([LAUNCHES]),
       );
-    // An unordered launch, one from before the order was kept, sorts first, by its old file's name.
     const inOrder = sql`ORDER BY run, ordered, stem || '.launch.json'`;
     return {
       of: (runs) =>
@@ -316,10 +269,6 @@ export const launchesLayer = Layer.effect(Launches)(
   }),
 );
 
-/**
- * `launches` for one pass over these Runs, as `readAhead` reads their records; what was
- * ordered last is read ahead for the Runs in `ordering` alone.
- */
 export const launchesAhead = Effect.fn("Launches.ahead")(function* (
   launches: LaunchesApi,
   runs: ReadonlyArray<string>,
@@ -351,12 +300,10 @@ export const launchesAhead = Effect.fn("Launches.ahead")(function* (
   } satisfies LaunchesApi;
 });
 
-/** Every agent this Run has launched, oldest first, in the order they were launched. */
 export const readLaunches = Effect.fn("Launches.read")(function* (runId: string) {
   return (yield* (yield* Launches).of([runId])).get(runId) ?? [];
 });
 
-/** Each of these Runs' launches, in one read. */
 export const launchesOf = (runs: ReadonlyArray<string>) =>
   Launches.use((launches) => launches.of(runs));
 
@@ -369,7 +316,6 @@ export const recordLaunch = (launched: Launched) =>
 export const orderLaunch = (launched: Launch) =>
   Launches.use((launches) => launches.order(launched));
 
-/** The launch the Run ordered last, and when; null before any. */
 export const lastOrdered = (run: string) => Launches.use((launches) => launches.lastOrdered(run));
 
 export const wasOrdered = (launched: Launch) =>
@@ -378,7 +324,6 @@ export const wasOrdered = (launched: Launch) =>
 export const recordSession = (launched: Launched, session: AgentSession) =>
   Launches.use((launches) => launches.session(launched, session));
 
-/** A Run's agent as its launch recorded it, with what it ran on. */
 export const agentOfLaunch = (one: Launched) => ({
   operation: one.operation,
   agent: one.agent,
@@ -390,11 +335,9 @@ export const agentOfLaunch = (one: Launched) => ({
   at: one.at === undefined ? null : DateTime.formatIso(DateTime.makeUnsafe(one.at)),
 });
 
-/** A Run's agents in launch order, with what each ran on. */
 export const runAgents = (runId: string) =>
   readLaunches(runId).pipe(Effect.map(Arr.map(agentOfLaunch)));
 
-/** Each operation the Run launched, in launch order, with its latest agent and whether its Output is in. */
 export const operationsOf = Effect.fn("Launches.operations")(function* (runId: string) {
   const fs = yield* FileSystem.FileSystem;
   const steps = new Map<string, RunStep>();

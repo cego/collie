@@ -1,7 +1,3 @@
-// A fake of each forge, from one model: a Runner answering the argv its adapter uses, and
-// a FakeBin executable answering from the same model for host-driven tests. Both log
-// every call they get.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -43,7 +39,6 @@ export const Check = Schema.Struct({
 });
 export type Check = typeof Check.Type;
 
-/** A pipeline job on a merge request's head, in the words a check left to CI is read in. */
 const JobStates = Schema.Literals([
   "passed",
   "pending",
@@ -55,20 +50,15 @@ const JobStates = Schema.Literals([
 export const FakeJob = Schema.Struct({
   name: Schema.String,
   state: JobStates,
-  /** What a retry leaves it in; unchanged where unsaid. */
   retried: Schema.optionalKey(JobStates),
-  /** Its id once retried, as the forge gives a retry a job of its own. */
   id: Schema.optionalKey(Schema.Finite),
-  /** Its log, as GitLab's trace or GitHub's job log answers it. */
   trace: Schema.optionalKey(Schema.String),
-  /** The attempts a retry left behind it, oldest first: GitLab's `include_retried`, GitHub's `filter=all`. */
   attempts: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
         id: Schema.Finite,
         state: JobStates,
         trace: Schema.optionalKey(Schema.String),
-        /** When it ended, as GitLab's `finished_at` gives it. */
         finished: Schema.optionalKey(Schema.String),
       }),
     ),
@@ -76,22 +66,18 @@ export const FakeJob = Schema.Struct({
 });
 export type FakeJob = typeof FakeJob.Type;
 
-/** A comment on a merge request; on GitHub one with a thread is a review comment. */
 export const FakeComment = Schema.Struct({
   id: Schema.Finite,
   author: Schema.String,
-  /** A person where unsaid; `system` is a GitLab system note. */
   kind: Schema.optionalKey(Schema.Literals(["person", "bot", "system"])),
   at: Schema.String,
   body: Schema.String,
-  /** GitLab's discussion id, or the id of a GitHub review thread's first comment. */
   thread: Schema.optionalKey(Schema.String),
   file: Schema.optionalKey(Schema.String),
   line: Schema.optionalKey(Schema.Finite),
 });
 export type FakeComment = typeof FakeComment.Type;
 
-/** A GitHub review, with the body it was submitted with. */
 export const FakeReview = Schema.Struct({
   id: Schema.Finite,
   author: Schema.String,
@@ -102,7 +88,6 @@ export const FakeReview = Schema.Struct({
 });
 export type FakeReview = typeof FakeReview.Type;
 
-/** A GitLab approval rule, with who approved for it. */
 const FakeRule = Schema.Struct({
   name: Schema.String,
   required: Schema.Finite,
@@ -110,7 +95,6 @@ const FakeRule = Schema.Struct({
 });
 
 export const FakeMr = Schema.Struct({
-  /** `host/path`, as an `MrRef`'s project. */
   project: Schema.String,
   iid: Schema.String,
   state: Schema.Literals(["open", "merged", "closed"]),
@@ -119,23 +103,18 @@ export const FakeMr = Schema.Struct({
   body: Schema.optionalKey(Schema.String),
   author: Schema.optionalKey(Schema.String),
   assignees: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** The logins its review is requested of. */
   reviewers: Schema.optionalKey(Schema.Array(Schema.String)),
   head: Schema.optionalKey(Schema.String),
   diff: Schema.optionalKey(Schema.String),
   interdiff: Schema.optionalKey(Schema.String),
-  /** The revision its pipeline ran on, where that is not its head. */
   pipelineAt: Schema.optionalKey(Schema.String),
   checksUrl: Schema.optionalKey(Schema.String),
   mergedSha: Schema.optionalKey(Schema.String),
   checks: Schema.optionalKey(Schema.Array(Check)),
-  /** Its head pipeline's jobs, the nth with id n; on GitLab its pipeline ran at `pipelineAt`. */
   jobs: Schema.optionalKey(Schema.Array(FakeJob)),
-  /** Where its head leaves its target branch, and that commit's pipeline jobs, if it has a pipeline. */
   base: Schema.optionalKey(
     Schema.Struct({ at: Schema.String, jobs: Schema.optionalKey(Schema.Array(FakeJob)) }),
   ),
-  /** Its target branch's latest pipeline: the commit it ran on, and its jobs. */
   target: Schema.optionalKey(Schema.Struct({ at: Schema.String, jobs: Schema.Array(FakeJob) })),
   sourceBranch: Schema.optionalKey(Schema.String),
   fork: Schema.optionalKey(Schema.Boolean),
@@ -146,26 +125,18 @@ export const FakeMr = Schema.Struct({
   createdAt: Schema.optionalKey(Schema.String),
   mergedAt: Schema.optionalKey(Schema.String),
   closedAt: Schema.optionalKey(Schema.String),
-  /** Whether the forge would merge it now; mergeable where unsaid. */
   mergeable: Schema.optionalKey(
     Schema.Literals(["yes", "conflict", "unapproved", "checking", "running"]),
   ),
   mergedBy: Schema.optionalKey(Schema.String),
   comments: Schema.optionalKey(Schema.Array(FakeComment)),
-  /** Threads resolved, by their id. */
   resolved: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** GitHub's reviews. */
   reviews: Schema.optionalKey(Schema.Array(FakeReview)),
-  /** GitLab: who approved it, and how many approvals it requires. */
   approvers: Schema.optionalKey(Schema.Array(Schema.String)),
   required: Schema.optionalKey(Schema.Finite),
-  /** GitLab's approval rules; one rule of `required` and `approvers` where unsaid. */
   rules: Schema.optionalKey(Schema.Array(FakeRule)),
-  /** GitLab's merge status says changes were requested. */
   changesRequested: Schema.optionalKey(Schema.Boolean),
-  /** GitHub: the head its merge queue entry is at. */
   queued: Schema.optionalKey(Schema.String),
-  /** GitHub: the reason of its latest removal from the merge queue. */
   dequeuedFor: Schema.optionalKey(Schema.String),
 });
 export type FakeMr = typeof FakeMr.Type;
@@ -197,18 +168,12 @@ const GITHUB_MERGE_STATE = {
 
 export const ForgeModel = Schema.Struct({
   installed: Schema.Boolean,
-  /** Hosts the CLI is logged in to. */
   loggedIn: Schema.Array(Schema.String),
   login: Schema.NullOr(Schema.String),
-  /** The token the CLI hands out for its host, where a test changes it. */
   token: Schema.optionalKey(Schema.String),
-  /** glab's OAuth login: its token and its expiry as glab stores it (RFC 822). */
   oauth: Schema.optionalKey(Schema.Struct({ token: Schema.String, expiry: Schema.String })),
-  /** A token in glab's environment, which a plain `glab config get token` gives for any host. */
   envToken: Schema.optionalKey(Schema.String),
-  /** The forge refuses every token, though the CLI still hands its own out. */
   revoked: Schema.optionalKey(Schema.Boolean),
-  /** What the HTTP face answers every request with instead of the model. */
   httpFault: Schema.optionalKey(
     Schema.Union([
       Schema.Struct({
@@ -223,11 +188,9 @@ export const ForgeModel = Schema.Struct({
   checksAt: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(FakeJob))),
   issues: Schema.optionalKey(Schema.Array(FakeIssue)),
   issueNotes: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
-  /** The checkout's `origin` and `upstream` remote URLs, and the branch it is on. */
   origin: Schema.optionalKey(Schema.String),
   upstream: Schema.optionalKey(Schema.String),
   branch: Schema.optionalKey(Schema.String),
-  /** Each environment, and the sha its newest successful deployment has. */
   environments: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -235,10 +198,8 @@ export const ForgeModel = Schema.Struct({
         tier: Schema.String,
         project: Schema.optionalKey(Schema.String),
         deployed: Schema.optionalKey(Schema.String),
-        /** A newer deployment there that failed, which is not what is live. */
         failed: Schema.optionalKey(Schema.String),
         job: Schema.optionalKey(Schema.String),
-        /** Every deployment there, newest first; `deployed` and `failed` are not read where set. */
         deployments: Schema.optionalKey(
           Schema.Array(
             Schema.Struct({
@@ -256,17 +217,14 @@ export const ForgeModel = Schema.Struct({
       }),
     ),
   ),
-  /** Pipelines and Actions runs, by id, with their jobs where a test names them. */
   runs: Schema.optionalKey(
     Schema.Record(
       Schema.String,
       Schema.Struct({
         status: Schema.String,
         conclusion: Schema.optionalKey(Schema.String),
-        /** The branch or tag it ran for, and its commit. */
         ref: Schema.optionalKey(Schema.String),
         sha: Schema.optionalKey(Schema.String),
-        /** The GitHub event that started it, `push` where not said. */
         event: Schema.optionalKey(Schema.String),
         jobs: Schema.optionalKey(
           Schema.Array(
@@ -279,7 +237,6 @@ export const ForgeModel = Schema.Struct({
       }),
     ),
   ),
-  /** GitLab's pipelines on each sha beside the ones `mrs` describe, and those started on it. */
   pipelinesOn: Schema.optionalKey(
     Schema.Record(
       Schema.String,
@@ -287,57 +244,38 @@ export const ForgeModel = Schema.Struct({
         Schema.Struct({
           id: Schema.Finite,
           status: Schema.String,
-          /** GitLab's `merge_request_event` or `api`, where it was started. */
           source: Schema.optionalKey(Schema.String),
           ref: Schema.optionalKey(Schema.String),
         }),
       ),
     ),
   ),
-  /** The status GitLab refuses to start a merge request's pipeline, or a branch's, with. */
   refusesPipeline: Schema.optionalKey(
     Schema.Struct({
       mr: Schema.optionalKey(Schema.Finite),
       branch: Schema.optionalKey(Schema.Finite),
     }),
   ),
-  /** The status GitLab refuses a note on a merge request with. */
   refusesNote: Schema.optionalKey(Schema.Finite),
-  /** The status the forge refuses a new issue or an issue comment with. */
   refusesIssueWrite: Schema.optionalKey(Schema.Finite),
-  /** The shas each sha descends from. */
   ancestry: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
-  /** Commits the forge no longer has, as after a force push and garbage collection. */
   gone: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** Repositories gh cannot read, by `owner/repo`. */
   unreadable: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** The deploy API does not answer. */
   deploysDown: Schema.optionalKey(Schema.Boolean),
-  /** Notes posted, by `project!iid` or `project#iid`. */
   notes: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
-  /** What was cloned, as `<host/path> <directory>`. */
   cloned: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** Merge requests approved, by the same key. */
   approved: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** The forge refuses an approval, as it does one by the author. */
   refusesApproval: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.String])),
-  /** The forge refuses a merge, whatever it says of the merge request. */
   refusesMerge: Schema.optionalKey(Schema.Boolean),
-  /** `main` where unsaid. */
   defaultBranch: Schema.optionalKey(Schema.String),
-  /** GitLab's protected branches, or GitHub's classic protection rules, by pattern. */
   protectedBranches: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({ name: Schema.String, allowForcePush: Schema.optionalKey(Schema.Boolean) }),
     ),
   ),
-  /** GitHub's rulesets, by the branch pattern each includes. */
   rulesets: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** Neither the repository nor its protection can be read. */
   protectionDown: Schema.optionalKey(Schema.Boolean),
-  /** GitLab without merge requests' approval state, as on Free. */
   free: Schema.optionalKey(Schema.Boolean),
-  /** GitHub's required approving reviews: branch protection's, each ruleset's, and code owners'. */
   reviewsRequired: Schema.optionalKey(
     Schema.Struct({
       classic: Schema.optionalKey(Schema.Finite),
@@ -345,26 +283,19 @@ export const ForgeModel = Schema.Struct({
       codeOwners: Schema.optionalKey(Schema.Boolean),
     }),
   ),
-  /** GitHub: the base branches whose merge queue is required. */
   mergeQueues: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** GitHub: pull requests enqueued, by key, at the `expectedHeadOid` asked. */
   enqueued: Schema.optionalKey(
     Schema.Array(Schema.Struct({ key: Schema.String, head: Schema.String })),
   ),
-  /** GitHub: pull requests dequeued, by key. */
   dequeued: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** GitHub refuses to take a pull request out of its merge queue. */
   refusesDequeue: Schema.optionalKey(Schema.Boolean),
-  /** GitHub's `viewerDefaultMergeMethod`; `MERGE` where unsaid. */
   mergeMethod: Schema.optionalKey(Schema.Literals(["MERGE", "SQUASH", "REBASE"])),
-  /** Replies posted, by `project!iid` or `project#iid`: the thread, null for none, and the body. */
   replies: Schema.optionalKey(
     Schema.Record(
       Schema.String,
       Schema.Array(Schema.Struct({ thread: Schema.NullOr(Schema.String), body: Schema.String })),
     ),
   ),
-  /** Merges made: the merge request's key, the head, the method, every field, who and when. */
   merges: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -387,7 +318,6 @@ export const ForgeModel = Schema.Struct({
       }),
     ),
   ),
-  /** What the forge stamps a reply or a merge with. */
   now: Schema.optionalKey(Schema.String),
 });
 export type ForgeModel = typeof ForgeModel.Type;
@@ -401,7 +331,6 @@ export const PROJECT = {
 
 export const CLI = { gitlab: "glab", github: "gh" } as const;
 
-/** One answer, and the note it posted where it posted one. */
 interface Answer {
   readonly ran: Ran;
   readonly filedIssue?: FakeIssue;
@@ -442,7 +371,6 @@ const flag = (args: ReadonlyArray<string>, name: string) => {
   return at === -1 ? undefined : args[at + 1];
 };
 
-/** Every `-f name=value` an API call carries, or each `-F` one. */
 const fieldsOf = (args: ReadonlyArray<string>, kind = "-f") =>
   Arr.flatMap(args, (arg, at) => (args[at - 1] === kind ? [arg] : []));
 const field = (args: ReadonlyArray<string>, name: string, kind = "-f") =>
@@ -457,14 +385,12 @@ const field = (args: ReadonlyArray<string>, name: string, kind = "-f") =>
     ),
   );
 
-/** A refusal, with what the CLI says of it. */
 const refused: (said: string) => Answer = (said) => ({
   ran: { code: 1, stdout: "", stderr: said },
 });
 
 const NOW = "2026-10-20T12:00:00Z";
 
-/** The commit a merge of `mr` makes, where the test did not name one. */
 export const mergeCommitOf = (mr: FakeMr) => mr.mergedSha ?? `merge-of-${mr.head ?? ""}`;
 
 const NOT_MERGEABLE = {
@@ -476,7 +402,6 @@ const HEAD_MOVED = {
   github: "Head branch was modified. Review and try the merge again. (HTTP 409)",
 } as const;
 
-/** The forge's merge of `mr` at the head `sha` asks for, refused as each forge refuses it. */
 function mergeAnswer(forge: MrForge, mr: FakeMr, args: ReadonlyArray<string>) {
   const sha = field(args, "sha") ?? "";
   if (mr.state !== "open") {
@@ -502,7 +427,6 @@ function mergeAnswer(forge: MrForge, mr: FakeMr, args: ReadonlyArray<string>) {
   return returned;
 }
 
-/** GitLab's discussions of `mr`: one per thread, and one of its own for each other note. */
 function discussionsOf(mr: FakeMr) {
   const threads = new Map<string, FakeComment[]>();
   for (const comment of mr.comments ?? []) {
@@ -533,14 +457,12 @@ function discussionsOf(mr: FakeMr) {
   }));
 }
 
-/** GitLab's approval rules of `mr`: its own, or one rule of what it requires. */
 const rulesOf = (mr: FakeMr) =>
   mr.rules ??
   (mr.required === undefined && mr.approvers === undefined
     ? []
     : [{ name: "All Members", required: mr.required ?? 0, approvers: mr.approvers ?? [] }]);
 
-/** Each reviewer's standing review: their latest that is not only a comment. */
 const standingOf = (reviews: ReadonlyArray<FakeReview>) => {
   const standing = new Map<string, FakeReview>();
   for (const review of reviews)
@@ -548,7 +470,6 @@ const standingOf = (reviews: ReadonlyArray<FakeReview>) => {
   return [...standing.values()];
 };
 
-/** GitHub's review decision: none where the base branch requires no review. */
 function decisionOf(model: ForgeModel, pull: FakeMr) {
   if (pull.approved === true) {
     const returned: string | null = "APPROVED";
@@ -577,7 +498,6 @@ const userOf = (login: string, bot: boolean | undefined) => ({
   type: bot === true ? "Bot" : "User",
 });
 
-/** `gh api --paginate --slurp`'s pages of `items`. */
 const pagesOf: (items: ReadonlyArray<Schema.Json>, args: ReadonlyArray<string>) => Answer = (
   items,
   args,
@@ -830,7 +750,6 @@ function issueApi(forge: MrForge, model: ForgeModel, route: string, args: Readon
 const keyOf = (forge: MrForge, mr: FakeMr) =>
   `${mr.project}${forge === "github" ? "#" : "!"}${mr.iid}`;
 
-/** Open merge requests the logged-in user is assigned to (`--assignee`) or wrote (`--author`). */
 const mine = (model: ForgeModel, who: string | undefined) =>
   Arr.filter(
     model.mrs,
@@ -879,14 +798,12 @@ const GITHUB_RUN = {
   cancelled: { status: "completed", conclusion: "cancelled" },
 } as const;
 
-/** The pipelines or Actions runs for `ref`, newest first. */
 const runsFor = (model: ForgeModel, ref: string) => {
   const entries = Rec.toEntries(model.runs ?? {});
   const runs = Arr.filter(entries, ([, one]) => one.ref === ref);
   return Arr.sortWith(runs, ([id]) => Number(id), Order.flip(Order.Number));
 };
 
-/** The page a GitLab list route asks for, 20 to a page where it does not say. */
 function pageOf<T>(route: string, all: ReadonlyArray<T>) {
   const page = Number(/[?&]page=(\d+)/.exec(route)?.[1] ?? "1");
   const size = Number(/[?&]per_page=(\d+)/.exec(route)?.[1] ?? "20");
@@ -894,14 +811,11 @@ function pageOf<T>(route: string, all: ReadonlyArray<T>) {
   return returned;
 }
 
-/** The id a merge request's head pipeline has; its base's is one more, its target's two. */
 const pipelineIdOf = (mr: FakeMr) => Number(mr.iid) * 100;
 
-/** A job as a forge lists it: the head pipeline's nth has id n, its base's 1000 + n, its target's 2000 + n. */
 const jobsOf = (jobs: ReadonlyArray<FakeJob>, from: number) =>
   Arr.map(jobs, (job, at) => ({ ...job, id: job.id ?? from + at + 1 }));
 
-/** The job a retry leaves: a job of its own, the attempt it retried listed behind it. */
 const retriedJob: ({ trace, ...job }: FakeJob, n: number) => FakeJob = ({ trace, ...job }, n) => {
   const id = job.id ?? n + 1;
   const attempt = trace === undefined ? { id, state: job.state } : { id, state: job.state, trace };
@@ -913,7 +827,6 @@ const retriedJob: ({ trace, ...job }: FakeJob, n: number) => FakeJob = ({ trace,
   };
 };
 
-/** A pull request's Actions run: its head's, its base's 1000 on, its target's 2000 on. */
 const actionsRun = (mr: FakeMr | undefined, from = 0) => 4000 + from + Number(mr?.iid ?? 0);
 
 const actionsAttempts = (mr: FakeMr) =>
@@ -935,7 +848,6 @@ const actionsAttempts = (mr: FakeMr) =>
       ]),
   );
 
-/** The merge request a project's job `id` is on its head pipeline of. */
 const headJobAt = (model: ForgeModel, project: (mr: FakeMr) => boolean, id: number) => {
   for (const mr of Arr.filter(model.mrs, project)) {
     const at = Option.getOrElse(
@@ -947,7 +859,6 @@ const headJobAt = (model: ForgeModel, project: (mr: FakeMr) => boolean, id: numb
   return undefined;
 };
 
-/** A GitLab merge request as `glab mr view` and its API answer it. */
 function glabMrJson(mr: FakeMr) {
   const pipeline = pipelineOf(mr.checks);
   return {
@@ -986,19 +897,16 @@ function glabMrJson(mr: FakeMr) {
   };
 }
 
-/** What a CLI is run under: the clock, and whether it sees a token in its environment. */
 interface Under {
   readonly now: number;
   readonly environment: boolean;
 }
 
-/** The token the forge accepts, as its CLI hands it out. */
 export const tokenOf = (forge: MrForge, model: ForgeModel) =>
   forge === "gitlab"
     ? (model.oauth?.token ?? model.token ?? "glpat-fake")
     : (model.token ?? "gho-fake");
 
-/** A time as glab stores an OAuth token's expiry: Go's RFC 822, in UTC. */
 export const rfc822 = (ms: number) => {
   const at = DateTime.toPartsUtc(DateTime.makeUnsafe(ms));
   const two = (n: number) => pipe(String(n), Str.padStart(2, "0"));
@@ -1027,7 +935,6 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under) {
     }
     const login = model.oauth;
     const expires = login === undefined ? null : glabExpiry(login.expiry);
-    // Building its API client refreshes an expired OAuth token, as glab 1.53.0 does.
     const returned: Answer =
       login !== undefined && expires !== null && expires <= under.now
         ? {
@@ -1462,7 +1369,6 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under) {
   return returned;
 }
 
-/** A pipeline started on `mr`'s head, or GitLab's refusal with `refusing`'s status. */
 function pipelineStart(
   model: ForgeModel,
   mr: FakeMr,
@@ -1499,7 +1405,6 @@ function pipelineStart(
   return returned;
 }
 
-/** `glab api` on one merge request: its approvals, its discussions, a reply and the merge. */
 function glabOnMr(model: ForgeModel, mr: FakeMr, rest: string, args: ReadonlyArray<string>) {
   const method = flag(args, "-X") ?? "GET";
   if (pipe(rest, Str.startsWith("diffs?")) && method === "GET") {
@@ -1603,7 +1508,6 @@ function glabOnMr(model: ForgeModel, mr: FakeMr, rest: string, args: ReadonlyArr
   return returned;
 }
 
-/** `gh api` on one pull request: its comments and reviews, a reply and the merge. */
 function ghOnPull(
   model: ForgeModel,
   pull: FakeMr,
@@ -1695,7 +1599,6 @@ function ghOnPull(
   return returned;
 }
 
-/** A pull request's reviews, with the login's own approval once the fake approved it. */
 const approvedAs: (model: ForgeModel, pull: FakeMr) => ReadonlyArray<FakeReview> = (model, pull) =>
   (model.approved ?? []).includes(keyOf("github", pull))
     ? [
@@ -1704,7 +1607,6 @@ const approvedAs: (model: ForgeModel, pull: FakeMr) => ReadonlyArray<FakeReview>
       ]
     : (pull.reviews ?? []);
 
-/** A pull request as GitHub's GraphQL answers the panel's query. */
 const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
   id: `PR_${pull.iid}`,
   mergeQueueEntry: pull.queued === undefined ? null : { headCommit: { oid: pull.queued } },
@@ -1766,7 +1668,6 @@ const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
   },
 });
 
-/** `gh api graphql`: a pull request's panel or review threads, or a branch's protection for the viewer. */
 function ghGraphql(model: ForgeModel, args: ReadonlyArray<string>) {
   const query = field(args, "query") ?? "";
   const typed = (name: string) => field(args, name, "-F");
@@ -1908,7 +1809,6 @@ function ghGraphql(model: ForgeModel, args: ReadonlyArray<string>) {
   return returned;
 }
 
-/** Each environment's deployments, newest first: by default a failed newer one, then what is live. */
 const deploymentsOf = (model: ForgeModel) =>
   Arr.flatMap(model.environments ?? [], (env, at) =>
     Arr.map(
@@ -1937,7 +1837,6 @@ const deploymentsOf = (model: ForgeModel) =>
     ),
   );
 
-/** The deployments a deployment list route asks for, by its `environment`, `sha` and `status`. */
 const deploymentsAsked = (model: ForgeModel, route: string) => {
   const query = new URLSearchParams(Str.split(route, "?")[1] ?? "");
   const environment = query.get("environment");
@@ -1952,7 +1851,6 @@ const deploymentsAsked = (model: ForgeModel, route: string) => {
   );
 };
 
-/** `gh api repos/<o>/<r>/…`, for deployments, compare and Actions runs. */
 function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>) {
   const issue = issueApi("github", model, route, args);
   if (issue !== null) {
@@ -2052,7 +1950,6 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>) {
             state: one.state === "open" ? "open" : "closed",
             created_at: one.createdAt ?? "",
             merged_at: one.mergedAt ?? null,
-            // GitHub stamps a merged pull request closed too.
             closed_at: one.closedAt ?? one.mergedAt ?? null,
             auto_merge:
               one.autoMerge === true
@@ -2559,7 +2456,6 @@ function gh(model: ForgeModel, args: ReadonlyArray<string>) {
           state: Str.toUpperCase(one.state),
           createdAt: one.createdAt ?? "",
           mergedAt: one.mergedAt ?? null,
-          // GitHub stamps a merged pull request closed too.
           closedAt: one.closedAt ?? one.mergedAt ?? null,
         }),
       ),
@@ -2587,10 +2483,6 @@ interface Answered {
   readonly model: ForgeModel;
 }
 
-/**
- * What the fake forge answers to one command, and the model after it; git answers the
- * checkout's remotes.
- */
 export function answer(
   forge: MrForge,
   model: ForgeModel,
@@ -2598,7 +2490,6 @@ export function answer(
   args: ReadonlyArray<string>,
   under: Under,
 ) {
-  // `env -u NAME… <cmd> <args…>`: the command, without those variables.
   if (cmd === "env" && args[0] === "-u") {
     let at = 0;
     while (args[at] === "-u") at += 2;
@@ -2608,7 +2499,6 @@ export function answer(
     });
     return returned;
   }
-  // GitLab's clone is git's own, with glab's token as its header.
   const cloning =
     cmd === "git" && args[0] === "clone" ? /^https:\/\/(.+)\.git$/.exec(args.at(-2) ?? "") : null;
   if (cloning) {
@@ -2772,7 +2662,6 @@ export function answer(
   return returned;
 }
 
-/** One request the HTTP face got, with the token it carried. */
 export interface FakeRequest {
   readonly method: string;
   readonly url: string;
@@ -2793,7 +2682,6 @@ const GraphqlBody = Schema.fromJsonString(
   }),
 );
 
-/** A GraphQL request's query and variables, as `gh api graphql -f query=… -F name=…` carries them. */
 const graphqlFields = (body: RequestInit["body"]) => {
   const sent = Schema.decodeUnknownOption(GraphqlBody)(body);
   if (Option.isNone(sent)) return [];
@@ -2822,15 +2710,8 @@ const bodyFields = (body: RequestInit["body"]) => {
       );
 };
 
-/** An error body as the forges write one. */
 const Said = Schema.fromJsonString(Schema.Struct({ message: Schema.String }));
 
-/**
- * The HTTP face: a `fetch` answering the routes the adapters request from the same model,
- * as `<cli> api` would. It accepts only the token the CLI hands out for a host it is
- * logged in to, and logs every request to `requests`; one it holds open and sees aborted
- * goes to `aborted` too.
- */
 export function httpFace(
   forge: MrForge,
   state: {
@@ -2922,10 +2803,6 @@ export function httpFace(
   return (input: string, init: RequestInit = {}) => Effect.runPromise(respond(input, init));
 }
 
-/**
- * A `fetch` answering each request as `<cli> api` answers its route through `run`: the HTTP
- * face of a CLI fake that only knows commands.
- */
 export const cliFetch =
   (run: Runner) =>
   (input: string, init: RequestInit = {}) => {
@@ -2966,25 +2843,18 @@ export const cliFetch =
     return returned;
   };
 
-/** ForgeHttp over a CLI fake: its credential reads and its requests both through `run`. */
 export const forgeHttpOver = (run: Runner) => forgeHttpTest(run, cliFetch(run));
 
-/** ForgeHttp over the CLIs on PATH, each request answered as their `api` answers it. */
 export const forgeHttpOnPath = Layer.unwrap(
   Effect.map(Effect.context<ChildProcessSpawner.ChildProcessSpawner>(), (spawner) =>
     forgeHttpOver((cmd, args, cwd) => shell(cmd, args, cwd).pipe(Effect.provideContext(spawner))),
   ),
 );
 
-/** `runEffect`, with a ForgeHttp of its own asking the forge CLIs on PATH. */
 export const runOnPath = <A, E>(
   effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | PlatformServices | Records>,
 ) => runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttpOnPath))));
 
-/**
- * The Runner face, which logs `cmd args…` to `calls` and its env to `environments`, and the HTTP face, which logs to
- * `requests`, answering from one model; `layer` is ForgeHttp reaching the forge through both.
- */
 export function fakeForge(forge: MrForge, start: ForgeModel) {
   const calls: string[] = [];
   const environments: Array<RunnerEnv | undefined> = [];
@@ -3026,14 +2896,12 @@ export function fakeForge(forge: MrForge, start: ForgeModel) {
   };
 }
 
-/** Whether glab sees a token in its own environment, as it would answer one for any host. */
 const glabEnvironment = Effect.gen(function* () {
   for (const name of ["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN"])
     if ((yield* Config.String(name).pipe(Config.withDefault(""))) !== "") return true;
   return false;
 }).pipe(Effect.orElseSucceed(() => false));
 
-// Readers in the host and CLI must see a complete model while another face replaces it.
 let modelWrites = 0;
 const writeModel = (file: string, model: ForgeModel) =>
   Effect.gen(function* () {
@@ -3047,7 +2915,6 @@ const writeModel = (file: string, model: ForgeModel) =>
       );
   });
 
-/** The FakeBin face: what one start of the forge's CLI on PATH answers. */
 export const forgeBin = Effect.fn("forge.bin")(function* (
   forge: MrForge,
   file: string,
@@ -3064,15 +2931,10 @@ export const forgeBin = Effect.fn("forge.bin")(function* (
     now: yield* Clock.currentTimeMillis,
     environment: yield* glabEnvironment,
   });
-  // Writing back an unchanged model would undo a test's write that landed since the read.
   if (said.model !== model) yield* writeModel(file, said.model);
   return said.ran;
 });
 
-/**
- * The forge's CLI on PATH, answering from `model` as kept beside it. The model is read back
- * with `model()`, so a note posted through the host can be seen.
- */
 export const forgeOnPath = Effect.fn("forge.onPath")(function* (
   bin: FakeBin,
   forge: MrForge,
@@ -3111,10 +2973,8 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
   );
   return {
     forge,
-    /** The HTTP face over the same model file; `serveForges` serves it. */
     face,
     requests: () => [...requests],
-    /** The model file holding `next`, as an agent's scripted write would leave it. */
     holding: (next: ForgeModel) => ({
       path: file,
       text: flow(Schema.encodeResult(ModelJson), Result.getOrThrow)(next),
@@ -3130,10 +2990,6 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
   };
 });
 
-/**
- * The HTTP faces of forges on PATH on one loopback port, until the scope closes: what
- * `COLLIE_FORGE_API` points a host at, each forge host's API under `/<its API host>`.
- */
 export const serveForges = (
   ...onPath: ReadonlyArray<{
     readonly forge: MrForge;
@@ -3171,7 +3027,6 @@ export const serveForges = (
     (server) => `http://127.0.0.1:${server.port}`,
   );
 
-/** What a merge watch that asked at `read` stored: each state, with the facts given or none. */
 export const storedAnswers = (
   stateDir: string,
   states: ReadonlyMap<string, MrState>,

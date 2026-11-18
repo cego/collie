@@ -1,5 +1,3 @@
-// A card's merge requests, each with its own Open, and across the Flock each shown once.
-
 import * as Arr from "effect/Array";
 import {
   mrId,
@@ -17,7 +15,6 @@ export interface CardMr {
   readonly open: { readonly label: string; readonly url: string } | null;
 }
 
-/** A Machine's Task holding a merge request, which a link opens. */
 export interface MrLink {
   readonly key: string;
   readonly machine: string;
@@ -28,7 +25,6 @@ export interface FlockMr extends CardMr {
   readonly links: ReadonlyArray<MrLink>;
 }
 
-/** An older host's single merge request, as the list would have named it. */
 const scalarOf = (task: TaskView) => {
   const ref = task.mr === null ? null : readMrRef(task.mr);
   if (ref === null || task.mr === null) return [];
@@ -68,11 +64,6 @@ export const cardMrs = (task: TaskView) => {
   });
 };
 
-/**
- * The merge requests each card draws, by card key. One that several Machines' Tasks hold is
- * drawn once, on the first of their cards in board order, with a link to each; a card draws
- * its own only where it has several or another Machine holds one too.
- */
 export const flockMrs = (cards: FlockCards) => {
   const shown = new Map<string, { readonly mr: CardMr; readonly links: Array<MrLink> }>();
   const firstOn = new Map<string, Array<string>>();
@@ -93,7 +84,7 @@ export const flockMrs = (cards: FlockCards) => {
   const drawn = new Map<string, ReadonlyArray<FlockMr>>();
   for (const [key, ids] of firstOn) {
     const rows = Arr.map(ids, (id) => {
-      // SAFETY: every id in `firstOn` was put in `shown` with it.
+      // WARNING: every id in `firstOn` was put in `shown` with it.
       const { mr, links } = shown.get(id)!;
       return { ...mr, links };
     });

@@ -1,5 +1,3 @@
-// What the human set in Desktop, kept on this computer beside the Flock chat's session.
-
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -21,7 +19,6 @@ import { readFlockSettings, writeFlockSettings } from "./flock-settings";
 const SettingsFile = Schema.fromJsonString(DesktopSettings);
 const FILE = "settings.json";
 
-/** The saved settings, or the defaults where nothing is saved or it cannot be read. */
 export const readSettings = Effect.fn("Settings.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.readFileString((yield* Path.Path).join(dir, FILE)).pipe(
@@ -42,10 +39,6 @@ export const writeSettings = Effect.fn("Settings.write")(function* (
   );
 });
 
-/**
- * Carries the Machine rule and a quiet Flock chat an earlier Desktop kept as its own into the
- * Flock's settings, as Desktop's edits at `now`, then drops Desktop's copy so it happens once.
- */
 export const carryIntoFlock = Effect.fn("Settings.carryIntoFlock")(function* (
   dir: string,
   now: string,
@@ -70,7 +63,6 @@ export const carryIntoFlock = Effect.fn("Settings.carryIntoFlock")(function* (
   return carried;
 });
 
-/** What each harness offers, by harness. */
 export type Offers = Readonly<Record<string, Offer>>;
 
 const modelOf = (settings: DesktopSettings, offers: Offers) => {
@@ -101,10 +93,6 @@ const modelOf = (settings: DesktopSettings, offers: Offers) => {
   };
 };
 
-/**
- * `change` over `settings`. Another harness unsets a model and an effort chosen for the one
- * before; another model keeps the effort only where it lists it.
- */
 export const applyChange = (
   settings: DesktopSettings,
   change: DesktopSettingsChange,
@@ -137,7 +125,6 @@ export const applyChange = (
   };
 };
 
-/** Extra models per harness, from the Flock's `models.<harness>`. */
 export const extraModels = (flock: FlockSettings) =>
   Rec.fromEntries(
     Arr.flatMap(Rec.toEntries(flock.settings), ([key, { value }]) =>
@@ -147,7 +134,6 @@ export const extraModels = (flock: FlockSettings) =>
     ),
   );
 
-/** The harness, model and effort the Flock chat is set to, checked as a Run's are. */
 export const chatChoice = (
   settings: DesktopSettings,
   flock: FlockSettings,
@@ -195,10 +181,6 @@ export const chatChoice = (
   return resolved;
 };
 
-/**
- * The settings `change` makes, or why it is refused; a change that leaves the chat alone is
- * not checked. An effort is checked against the efforts its model lists in `offers`.
- */
 export const changeSettings = (
   settings: DesktopSettings,
   flock: FlockSettings,
@@ -216,7 +198,6 @@ export const changeSettings = (
   return checked.ok ? changed : { refused: checked.problem };
 };
 
-/** Desktop's settings, saved one change at a time through the check and told to whoever follows them. */
 export const heldSettings = Effect.fn("Settings.held")(function* (
   dir: string,
   flock: () => FlockSettings,
@@ -229,9 +210,7 @@ export const heldSettings = Effect.fn("Settings.held")(function* (
   const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   return {
     now: () => SubscriptionRef.getUnsafe(held),
-    /** The settings now, then each saved change. */
     changes: SubscriptionRef.changes(held),
-    /** What was saved, or why the change was refused and nothing kept. */
     save: (change: DesktopSettingsChange) =>
       Effect.gen(function* () {
         const now = SubscriptionRef.getUnsafe(held);

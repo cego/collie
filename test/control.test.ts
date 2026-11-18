@@ -1,14 +1,3 @@
-// Answering, holding and stopping one Run — and leaving everything else alone.
-//
-// These are the things an operator does to work that is already running, so none of them
-// is asked of a map: every host here is a subprocess, every database is a file, and a
-// restart is a second host over the first one's directory.
-//
-// What is being proved is narrow and specific. An answer settles the question a run is
-// actually asking, once, whoever sends it and however often. A control reaches the run it
-// names and no other, is still there after a restart, and is honest about whether it got
-// anywhere. None of it is a file a client writes and something else consumes.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -50,8 +39,6 @@ test(
         });
         expect(first.ok).toBe(true);
 
-        // A second answer is not a correction. The run has the first one and is acting on
-        // it; changing it here would be changing work that has already started.
         const again = yield* host.ask({
           op: "answer",
           id: "proof",
@@ -63,7 +50,6 @@ test(
         expect(again.ok).toBe(false);
         expect(again.detail).toContain("already answered");
 
-        // The same claim again is the same answer, not a second one.
         const retried = yield* host.ask({
           op: "answer",
           id: "proof",
@@ -76,7 +62,6 @@ test(
 
         const done = yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete);
         expect(done.value).toBe("note:once=go");
-        // One launch, whatever the answers did: nothing here started the work again.
         expect(
           Arr.filter(yield* events(state, "r1"), (line) => pipe_(line, Str.startsWith("launch"))),
         ).toHaveLength(1);
@@ -147,8 +132,6 @@ test(
         expect(hidden.ok).toBe(false);
         expect(hidden.detail).toContain(`not waiting on a decision called "discard"`);
 
-        // The question declares what it takes, so an answer outside that is refused
-        // before the run is told anything.
         const invalid = yield* host.ask({
           op: "answer",
           id: "echo",
@@ -190,7 +173,6 @@ test(
           request: "req-1",
         });
         expect(shouted).toMatchObject({ ok: true, value: "yes" });
-        // The same answer in another case is the same answer, not a second one.
         const again = yield* host.ask({
           op: "answer",
           id: "echo",
@@ -236,8 +218,6 @@ test(
         expect((yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value).toBe(
           "note:sole=go",
         );
-        // With its question answered there is nothing to land on, and nothing is guessed at.
-        // Checked here rather than before it asks, which races the run.
         const after = yield* host.ask({
           op: "answer",
           id: "proof",
@@ -266,7 +246,6 @@ test(
         yield* first.stop;
 
         const second = yield* openHost(state);
-        // The question is still open in the host that came after, with what it takes.
         const open = yield* second.ask({ op: "waiting", runId: "r1" });
         expect(open.diagnostics).toEqual(["decision"]);
 
@@ -322,16 +301,12 @@ test(
         );
         yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
 
-        // The sibling is a run of its own on the same engine and the same database, and
-        // the hold is not about it.
         yield* first.ask({ op: "start", id: "plain", runId: "r2", input: { note: "free" } });
         expect((yield* first.until({ op: "poll", id: "plain", runId: "r2" }, complete)).value).toBe(
           "plain:free",
         );
         yield* first.stop;
 
-        // A control an operator set is still set for the host that comes after: it is
-        // durable state about the run, not something the process that took it remembers.
         const second = yield* openHost(state);
         yield* second.ask({ op: "start", id: "proof", runId: "r1", input: { note: "held" } });
         expect((yield* second.ask({ op: "poll", id: "proof", runId: "r1" })).status).toBe(
@@ -367,13 +342,10 @@ test(
         yield* fs.remove(`${wf}/proof.workflow.ts`);
         const second = yield* openHost(state);
         const stopped = yield* second.ask({ op: "stop", id: "proof", runId: "r1" });
-        // Recorded, because the intent is the operator's and it outlives the missing
-        // file — and reported as not having reached the run, naming what to repair.
         expect(stopped.ok).toBe(true);
         expect(stopped.detail).toContain("proof.workflow.ts");
         yield* second.stop;
 
-        // Put the module back, and the same control now reaches the run and says nothing.
         yield* fs.copyFile(`${fixtures}/proof.workflow.ts`, `${wf}/proof.workflow.ts`);
         const third = yield* openHost(state);
         const reached = yield* third.ask({ op: "stop", id: "proof", runId: "r1" });
@@ -403,7 +375,6 @@ test(
 const MR = "https://gitlab.example.com/group/project/-/merge_requests/7";
 const CLAIM = `[{"slug":"project","claim":"mine"}]`;
 
-/** A Run about `MR`, stopped while it waits, with a Helle claim and the forge's word on `MR`. */
 const stoppedOn = Effect.fn("test.stoppedOn")(function* (prefix: string, mr: MrState) {
   const fs = yield* FileSystem.FileSystem;
   const { state } = yield* workspace(prefix);
@@ -466,7 +437,6 @@ test(
   180_000,
 );
 
-/** A Run waiting on its decision whose next entry is held, while `gate` exists, until it is gone. */
 const heldAtNextEntry = Effect.fn("test.heldAtNextEntry")(function* (prefix: string) {
   const fs = yield* FileSystem.FileSystem;
   const { dir, wf, state } = yield* workspace(prefix);

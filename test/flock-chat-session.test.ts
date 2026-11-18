@@ -77,7 +77,7 @@ const openedOn = (
       server: () => "collie",
       userServers: () => Promise.resolve({}),
     };
-    // SAFETY: opening a session reaches none of the context but its directory.
+    // WARNING: opening a session reaches none of the context but its directory.
     yield* open(claudeDriver(claude, { dir: "/state/collie-desktop" } as DriverContext));
     return opened;
   }).pipe(Effect.scoped);
@@ -127,7 +127,6 @@ test("this computer's file tools and Bash are on and allowed, no setting source 
     "mcp__collie__collie_helle",
   ])
     expect(options.allowedTools).toContain(name);
-  // Allowed outright, it would never be put to the human.
   expect(options.allowedTools).not.toContain("AskUserQuestion");
   expect(options.systemPrompt).not.toContain("no shell and no file access");
   expect(options.systemPrompt).toContain("<machine>:<path>");
@@ -336,7 +335,6 @@ test("the Machine rule goes with every message, in the human's words, beside the
         "The human's Machine rule, in their own words from Desktop's Settings:\nFrontend work is on the laptop machine and everything else is on the vm",
       );
       expect(first).toContain("mk-pc (this computer, where Desktop runs), vm-mk");
-      // Edited between two turns, the second has the new words.
       rule = "Everything is on the vm";
       const second = (yield* submitted()).hookSpecificOutput?.additionalContext ?? "";
       expect(second).toContain("Everything is on the vm");

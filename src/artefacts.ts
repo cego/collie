@@ -54,7 +54,6 @@ const ASKED = Schema.fromJsonString(RegisterArtefact);
 const JSON_TEXT = Schema.fromJsonString(Schema.Json);
 const blob = (run: RunFacts, digest: string) => `${run.dir}/.artefacts/${digest}`;
 
-/** A verified provider read refused; each state stays distinct from the others and from "untracked". */
 export class ObservationFailed extends Data.TaggedError("ObservationFailed")<{
   readonly state: "unsupported" | "auth-expired" | "denied" | "missing";
   readonly reason: string;
@@ -70,7 +69,6 @@ export type ProviderReader = (resource: {
   readonly resource: string | null;
   readonly url: string | null;
 }) => Effect.Effect<ProviderRead, ObservationFailed>;
-/** Verified readers by provider name. None ships: without one a provider's updates are untracked. */
 export class ProviderReaders extends Context.Service<
   ProviderReaders,
   ReadonlyMap<string, ProviderReader>
@@ -88,7 +86,6 @@ const safeUrl = (url: string) =>
   new URL(url).hostname !== "";
 const sourceDate = (at: string | undefined) =>
   at === undefined || !ISO.test(at) || Number.isNaN(epochMs(at)) ? undefined : isoAt(epochMs(at));
-/** Why `input` cannot be registered, checked before anything is read or written. */
 const invalid = (input: RegisterArtefact) => {
   const provider = input.provider;
   if (
@@ -129,7 +126,6 @@ const reported = (at: string | undefined) => {
   return iso === undefined ? undefined : { at: iso, provenance: "caller-reported" };
 };
 type SourceDate = Artefact["created"];
-/** A verified date stays; a report never stands in for one. */
 const dated = (prior: SourceDate, next: SourceDate) =>
   prior?.provenance === "provider-verified" ? prior : (next ?? prior ?? null);
 const isExternal = (item: Artefact) => item.url !== undefined || item.provider !== undefined;
@@ -200,7 +196,6 @@ const retain = Effect.fn("Artefacts.retain")(function* (
   };
 });
 
-/** A stable copy of `source`, retried while it changes under the copy, within a bound. */
 const copied = Effect.fn("Artefacts.copied")(function* (run: RunFacts, source: string) {
   const path = yield* Path.Path;
   return yield* retain(run, source, path.dirname(source)).pipe(
@@ -242,7 +237,6 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.orDie);
-  /** An external entry's export failing leaves its hosted source's state alone. */
   const failed = (prior: Artefact, error: CopyFailure) =>
     Effect.gen(function* () {
       const reason = reasonOf(error);
@@ -289,7 +283,6 @@ const make = Effect.gen(function* () {
       yield* notify(run.id);
     return next;
   });
-  /** What a verified reader says of a provider resource; without a reader nothing is claimed. */
   const observe = Effect.fn("Artefacts.observe")(function* (prior: Artefact) {
     const provider = prior.provider;
     const reader =
@@ -387,7 +380,6 @@ const make = Effect.gen(function* () {
     const items = yield* list(run.id);
     const named = Option.getOrUndefined(Arr.findFirst(items, (one) => one.id === input.id));
     if (input.id !== undefined && named === undefined) return yield* refused("No such artefact");
-    // An update by id keeps each locator it does not replace.
     const given = input.path ?? named?.export?.source;
     const file = given ?? (named === undefined || isExternal(named) ? undefined : named.source);
     const source = file === undefined ? undefined : path.normalize(file);
@@ -586,7 +578,6 @@ const make = Effect.gen(function* () {
       }>`SELECT cursor FROM collie_artefact_index WHERE run = ${run.id}`.pipe(Effect.orDie))[0]
         ?.cursor ?? "";
     for (const [prefix, root, role] of [
-      // Sorted by prefix: the cursor compares whole refs.
       ["attachment", `${run.dir}/attachments`, "input"],
       ["evidence", run.evidence, "evidence"],
       ["handoff", `${run.dir}/handoffs`, "handoff"],
@@ -789,7 +780,6 @@ const make = Effect.gen(function* () {
   const pass = (runs: ReadonlyArray<RunFacts>) =>
     jobsFor(runs).pipe(Effect.flatMap(refreshing.pass));
   const schedule = (run: RunFacts) => jobsFor([run]).pipe(Effect.flatMap(refreshing.schedule));
-  /** A page of this host's catalogue, from its metadata alone; no file is read. */
   const search = Effect.fn("Artefacts.search")(function* (
     asked: ArtefactSearch,
     eligible: ReadonlyArray<string>,
@@ -953,7 +943,6 @@ const make = Effect.gen(function* () {
   });
   let indexing = false;
   let indexedThrough = "";
-  /** Reaches a few Runs the catalogue has not yet, at most one round at a time. */
   const index = (runs: ReadonlyArray<RunFacts>) =>
     Effect.suspend(() => {
       if (indexing) return Effect.void;

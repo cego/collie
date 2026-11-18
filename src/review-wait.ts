@@ -1,6 +1,3 @@
-// A merge request's review as a Release Run waits on it: one read of the forge, judged
-// against the head the Run's Checks were proved on.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -9,7 +6,6 @@ import { Schema } from "effect";
 import { mrLabel, type Mergeability } from "./board-model";
 import type { ReviewRead } from "./forge/review";
 
-/** An external comment nobody has answered yet. */
 export const OpenCommentSchema = Schema.Struct({
   id: Schema.String,
   url: Schema.String,
@@ -22,10 +18,6 @@ export const OpenCommentSchema = Schema.Struct({
 });
 export type OpenComment = typeof OpenCommentSchema.Type;
 
-/**
- * Where the review stands. A wait returns every one but `Waiting` and `Unreadable`, which it
- * waits through; `Held` is a Hold or a Stop that ended the wait.
- */
 export const ReviewStandingSchema = Schema.Union([
   Schema.TaggedStruct("Ready", { head: Schema.String, approvers: Schema.Array(Schema.String) }),
   Schema.TaggedStruct("Unanswered", {
@@ -55,16 +47,10 @@ const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "
 
 const UNAPPROVED = "the approval";
 
-/** Whether a standing is still waiting on a teammate's approval, among whatever else. */
 export const waitsOnApproval = (standing: ReviewStanding) =>
   standing._tag === "Waiting" &&
   Arr.some(standing.why, (one) => pipe(one, Str.startsWith(`${UNAPPROVED} (`)));
 
-/**
- * Ready means approved, nothing external unanswered, the pipeline passed, mergeable, all at
- * `proved`. A moved head is checked first, so a new head that is ready still moved; a
- * comment already in `seen` keeps the wait waiting rather than returning it again.
- */
 export function standingOf(
   read: ReviewRead,
   against: {
@@ -151,7 +137,6 @@ export function standingOf(
   return returned;
 }
 
-/** The merge request's head, which of a round's commits it carries, and its open external comments. */
 export const ReviewHeadSchema = Schema.Struct({
   head: Schema.String,
   carries: Schema.Array(Schema.String),
@@ -159,7 +144,6 @@ export const ReviewHeadSchema = Schema.Struct({
 });
 export type ReviewHead = typeof ReviewHeadSchema.Type;
 
-/** One comment a comment round answered: `fixed` in `commit`, or `disputed`. */
 export const AnswerSchema = Schema.Struct({
   id: Schema.String.annotate({ description: "the comment's id, as given" }),
   answer: Schema.Literals(["fixed", "disputed"]),
@@ -172,12 +156,10 @@ export const AnswerSchema = Schema.Struct({
 });
 export type Answer = typeof AnswerSchema.Type;
 
-/** The replies a round's answers earn, and the comments handed to the next round. */
 export const SettledAnswersSchema = Schema.Struct({
   replies: Schema.Array(
     Schema.Struct({
       id: Schema.String,
-      /** Absent from a round settled before replies were recorded. */
       kind: Schema.optionalKey(Schema.Literals(["fixed", "disputed"])),
       body: Schema.String,
     }),
@@ -186,11 +168,6 @@ export const SettledAnswersSchema = Schema.Struct({
 });
 export type SettledAnswers = typeof SettledAnswersSchema.Type;
 
-/**
- * A `fixed` answer counts only where its commit is in `onHead`, the commits the merge
- * request's head carries by the forge's word; a comment no longer in `open` was answered on
- * the forge meanwhile. Everything else given is carried.
- */
 export function settleAnswers(round: {
   readonly given: ReadonlyArray<OpenComment>;
   readonly answers: ReadonlyArray<Answer>;
@@ -220,7 +197,6 @@ export function settleAnswers(round: {
   return { replies, carried };
 }
 
-/** A review not yet ready: `Awaiting` what ends by itself, `Blocked` what needs a repair. */
 export type ReviewWait =
   | { readonly _tag: "Awaiting"; readonly on: string; readonly who: string | null }
   | {
@@ -234,7 +210,6 @@ const CI = "CI";
 const APPROVAL = "a teammate's approval";
 const THREADS = "the review threads to be resolved";
 
-/** The forge's words for a merge it holds back until something already awaited comes; `blocked` is GitHub's. */
 const HELD_FOR = new Map<string, string | null>([
   ["ci still running", CI],
   ["ci must pass", CI],
@@ -243,7 +218,6 @@ const HELD_FOR = new Map<string, string | null>([
   ["blocked", null],
 ]);
 
-/** The forge's words for a merge request whose branch conflicts with its target branch. */
 const CONFLICTING = new Set(["conflicting", "dirty", "conflict", "cannot be merged"]);
 
 export const conflictsWithTarget = (mergeable: Mergeability | null | undefined) =>
@@ -302,6 +276,5 @@ export function reviewWaitOf(mr: string, read: ReviewRead) {
   return returned;
 }
 
-/** The card's line while a person has to repair what holds the release back. */
 export const blockedLine = (mr: string, why: ReadonlyArray<string>) =>
   `${mrLabel(mr)} cannot be released: ${Arr.join(why, "; ")}. The Run goes on once that is repaired.`;

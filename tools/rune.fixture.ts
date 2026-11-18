@@ -1,14 +1,3 @@
-// Writes what the Rune spike's cargo tests read (desktop/README.md):
-//
-//   bun run tools/rune.fixture.ts
-//
-// - `fixtures/flock.ndjson`: the test Flock, one encoded `flock` item a line;
-// - `fixtures/flows.json`: Desktop's Flow test case as it moves on, by name;
-// - `fixtures/update/`: a bundle's tar, and one cut off halfway, each signed as `src/signing.ts`
-//   signs a release, by a test key;
-// - `fixtures/transcripts/*.ndjson`: Effect's own RPC client and server speaking over
-//   Desktop's channel, every frame each way as `{"from":"shell"|"core","frame":…}`.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
@@ -36,7 +25,7 @@ const FIXTURES = new URL("../desktop/fixtures/", import.meta.url).pathname;
 
 type Unspoken = Exclude<RpcGroup.Rpcs<typeof DesktopRpcs>["_tag"], "flock" | "syncNow">;
 const Spoken = DesktopRpcs.omit(
-  // SAFETY: every key of `requests` is one of DesktopRpcs' tags.
+  // WARNING: every key of `requests` is one of DesktopRpcs' tags.
   ...(Arr.filter(
     [...DesktopRpcs.requests.keys()],
     (tag) => tag !== "flock" && tag !== "syncNow",
@@ -44,7 +33,6 @@ const Spoken = DesktopRpcs.omit(
 );
 type Client = RpcClient.FromGroup<typeof Spoken, RpcClientError>;
 
-/** The test Flock in three chunks: what the core sends while the shell acks each one. */
 const CHUNKS = [FLOCK.slice(0, 3), FLOCK.slice(3, 6), FLOCK.slice(6)];
 const chunks = (count: number) =>
   Stream.concat(
@@ -52,7 +40,6 @@ const chunks = (count: number) =>
     count < CHUNKS.length ? Stream.never : Stream.empty,
   );
 
-/** Trace ids are random, and the shell sends none. */
 const untraced = (frame: ToMain) => {
   if (frame._tag !== "Request") return frame;
   const { traceId: _, spanId: __, sampled: ___, ...kept } = frame;
@@ -89,12 +76,11 @@ const recorded = (
     ).pipe(Effect.forkScoped);
     yield* Effect.gen(function* () {
       let next = 0;
-      // SAFETY: a request id is a number the client counts; each transcript counts from 0.
+      // WARNING: a request id is a number the client counts; each transcript counts from 0.
       const client = yield* RpcClient.make(Spoken, {
         generateRequestId: () => next++ as RequestId,
       });
       yield* Effect.exit(shell(client));
-      // What the core says after the shell is done, such as the exit an interrupt brings.
       yield* Effect.sleep("100 millis");
     }).pipe(
       Effect.provide(
@@ -114,18 +100,14 @@ const recorded = (
   }).pipe(Effect.scoped);
 
 const TRANSCRIPTS = {
-  // A request answered, then one refused.
   answered: recorded(Stream.empty, (client) =>
     Effect.andThen(
       client.syncNow({ profile: "build" }),
       Effect.exit(client.syncNow({ profile: "gone" })),
     ),
   ),
-  // Every chunk, each acked, then the stream's end.
   stream: recorded(chunks(3), (client) => Stream.runCollect(client.flock())),
-  // One chunk taken, and the stream interrupted by the shell.
   interrupt: recorded(chunks(1), (client) => Stream.runCollect(Stream.take(client.flock(), 3))),
-  // Two chunks, each acked, and the core gone before its next.
   "core-gone": Effect.map(
     recorded(chunks(2), (client) =>
       Effect.timeoutOption(Stream.runCollect(client.flock()), "100 millis"),
@@ -141,7 +123,6 @@ const TRANSCRIPTS = {
   ),
 };
 
-/** `test/desktop-flow.test.ts`'s Flow: as it starts, once Review is current, once it asks. */
 const before = mainFlow();
 const after: Flow = { ...before, current: { run: "build-run", node: "review" } };
 const asking: Flow = {
@@ -159,13 +140,11 @@ const FLOWS = { before, after, asking };
 
 const Flows = Schema.Struct({ before: Flow, after: Flow, asking: Flow });
 
-/** Ed25519 from a fixed seed, so its signatures, like the tars, are the same every run. */
 const TEST_KEY = `-----BEGIN PRIVATE KEY-----
 ${Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.alloc(32, 7)]).toString("base64")}
 -----END PRIVATE KEY-----
 `;
 
-/** A Linux bundle at 0.131.0, its launcher saying its version. */
 const updateFixtures = Effect.gen(function* () {
   const dir = `${FIXTURES}update`;
   const work = `${dir}/work`;
@@ -196,7 +175,6 @@ const updateFixtures = Effect.gen(function* () {
     return yield* Effect.die("tar could not write the bundle fixture");
   yield* Effect.promise(() => Bun.$`rm -rf ${work}`.quiet());
   const tar = yield* Effect.promise(() => Bun.file(`${dir}/bundle.tar`).bytes());
-  // Inside version.json's data: the launcher is written, then the tar ends.
   const truncated = tar.slice(0, 2100);
   yield* write(`${dir}/truncated.tar`, truncated);
   yield* write(`${dir}/bundle.tar.sig`, signRelease(tar, TEST_KEY));

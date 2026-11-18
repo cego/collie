@@ -1,7 +1,3 @@
-// A Task's Flow as the host builds it: each Run's records read from its directory, its
-// launches and the engine's facts, with the waits and the merge request its card reads,
-// handed to `flow.ts`'s rules.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -50,7 +46,6 @@ const executionOfState = (state: RunState) => {
   }
 };
 
-/** What a lane is given beside its own records: what the Task around it knows. */
 export interface LaneContext {
   readonly children: ReadonlyArray<ChildFact>;
   readonly toCome: ReadonlyArray<{ readonly repo: string; readonly wave: number }>;
@@ -99,7 +94,6 @@ const requestedLink: (notice: {
   },
 });
 
-/** One Run's row, from what it recorded and what its Task says around it. */
 export const laneFor = Effect.fn("Flow.lane")(function* (
   env: PluginEnv,
   run: RunFacts,
@@ -143,7 +137,6 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
   });
 });
 
-/** The Step of a Run that started a child, from the Run's own records. */
 const startedIn = Effect.fn("Flow.startedIn")(function* (parent: RunFacts, child: string) {
   const lines = yield* readStepLines(parent.dir);
   const started = Option.getOrUndefined(
@@ -155,13 +148,9 @@ const startedIn = Effect.fn("Flow.startedIn")(function* (parent: RunFacts, child
   return null;
 });
 
-/** What a Task knows that its Flow is drawn from, beside each Run's own records. */
 export interface TaskFacts {
-  /** The Runs that are its rows: every Run of the Task but its Repo runs. */
   readonly rows: ReadonlyArray<RunFacts>;
-  /** Every Run the host knows, for the children a row started outside it. */
   readonly all: ReadonlyArray<RunFacts>;
-  /** A fan-out's Repo runs by their parent, and each repository's Wave. */
   readonly repoRunsOf: ReadonlyMap<string, ReadonlyArray<RunFacts>>;
   readonly waves: ReadonlyArray<{
     readonly parent: string;
@@ -170,19 +159,15 @@ export interface TaskFacts {
     readonly run: string | null;
   }>;
   readonly leader: RunFacts;
-  /** Whether the Task's work has settled, so nothing is current. */
   readonly settled: boolean;
-  /** Only the leader's lane, which is all a card's strip draws. */
   readonly leaderOnly?: boolean;
   readonly waitOf: (run: RunFacts) => LaneWait | null;
   readonly offer: { readonly id: string; readonly title: string; readonly run?: string } | null;
   readonly mr: string | null;
-  /** The Run whose merge request the Task's is. */
   readonly merging: string;
   readonly mrState: MrState | null;
   readonly mrStates: ReadonlyMap<string, MrState>;
   readonly ci: Parameters<typeof releaseRow>[0]["ci"];
-  /** Each of the Task's merge requests where it has several, by wave. */
   readonly releases?:
     | ReadonlyArray<{
         readonly id: string;
@@ -192,10 +177,8 @@ export interface TaskFacts {
         readonly url: string | null;
       }>
     | undefined;
-  /** Ready to release's first missing fact, or its word that it is ready, while the MR is open. */
   readonly readiness: string | null;
   readonly mrOf: (run: RunFacts) => string | null;
-  /** The MR id of the merge request `run` opened or was pointed at, keying `mrStates`. */
   readonly mrIdOf: (
     run: RunFacts,
   ) => Effect.Effect<string | null, never, ChildProcessSpawner.ChildProcessSpawner>;
@@ -226,7 +209,6 @@ export const flowInputsFor = Effect.fn("Flow.inputs")(function* (
   return { installation, children, requested, usual: yield* stepTimesByWorkflow };
 });
 
-/** A Task drawn as the work it took (ADR-draft-a-step-is-declared-where-its-work-is-written D3, D5). */
 export const taskFlowFor = Effect.fn("Flow.task")(function* (
   env: PluginEnv,
   task: TaskFacts,

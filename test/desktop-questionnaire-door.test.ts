@@ -1,7 +1,3 @@
-// A board question, read and answered by Desktop's questionnaire over a real bridge to a
-// real host: what the human picks goes out as Desktop's own action, and what the host
-// replies is what the dialog then says.
-
 import { Database } from "bun:sqlite";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -74,10 +70,6 @@ const started = (door: Door, world: World, goal: string) =>
 const through = (state: Questionnaire, events: ReadonlyArray<Event>) =>
   Arr.reduce(events, state, (now, event) => stepped(now, event).state);
 
-/**
- * Submits what is checked over `reached` as Desktop's action runner would, under the request
- * the questionnaire keeps, and settles it with the host's reply.
- */
 const submitted = Effect.fn("test.submitted")(function* (
   reached: Effect.Success<ReturnType<typeof doorOf>>,
   state: Questionnaire,
@@ -115,7 +107,6 @@ const submitted = Effect.fn("test.submitted")(function* (
   };
 });
 
-/** The Run's audit trail, as its host recorded it. */
 const trailOf = (world: World, runId: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     hostRecords(
@@ -145,7 +136,6 @@ test(
           const log: Array<Attempted> = [];
           const once = yield* submitted(first, picked, "answer-1", "submit", log);
           expect(once.request).toBe("answer-1");
-          // The reply was lost with the door: Desktop knows only that the connection renewed.
           const lost = stepped(stepped(picked, { kind: "submit", request: "answer-1" }).state, {
             kind: "replied",
             request: "answer-1",

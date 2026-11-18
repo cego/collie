@@ -26,7 +26,6 @@ const encodeClaim = flow(
 );
 
 describe("the record-open benchmark's statistics", () => {
-  // 37 is coprime with 200, so this is 1..200 in a scrambled order.
   const scrambled = Array.from({ length: 200 }, (_, i) => ((i * 37) % 200) + 1);
 
   test("reads p50, p95 and max of 200 samples by nearest rank", () => {
@@ -90,7 +89,6 @@ describe("the record-open benchmark's Flow comparison", () => {
     current: { run: "build-run", node: "build" },
     release: null,
   };
-  /** What the record paints of `host`, as its accessible names read. */
   const painted = () => [
     {
       name: "Implement, build-run, on laptop, running",
@@ -101,7 +99,6 @@ describe("the record-open benchmark's Flow comparison", () => {
     },
   ];
   const differ = (shown: Painted) => differences(shown, paintedOf(host, "laptop"));
-  /** The painted Flow with node `at` changed. */
   const changed = (at: number, over: Partial<PaintedNode>) =>
     Arr.map(painted(), (row) => ({
       ...row,
@@ -210,7 +207,6 @@ test("inside a Measurement, on a Machine without /proc, the host's lock is the b
       };
       const dir = yield* fs.makeTempDirectoryScoped();
       const lock = `${dir}/machine.lock`;
-      // The process that started this test stands in for the Measurement's host.
       yield* fs.writeFileString(
         lock,
         encodeClaim({ pid: process.ppid, start: yield* processStartTime(process.ppid) }),

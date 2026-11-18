@@ -78,7 +78,6 @@ describe("Collie's settings", () => {
     expect(
       parseSetting("claude_subagents", '{"model":"sonnet","forceModel":false,"cacheTtl":"1h"}'),
     ).toEqual({ value: '{"model":"sonnet","forceModel":false,"cacheTtl":"1h"}' });
-    // Empty is unset, never a configured empty string.
     expect(parseSetting("harness", "  ")).toEqual({ value: null });
   });
 

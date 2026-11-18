@@ -14,7 +14,6 @@ import type {
 } from "../../../src/board-model";
 import type { DesktopAction } from "./flock";
 
-/** A hold or a note with the record revision it was pressed at, which the host checks it against. */
 export const shownAt = (action: DesktopAction, revision: RunRevision | undefined) =>
   revision !== undefined && (action._tag === "Control" || action._tag === "Deliver")
     ? { ...action, shown: revision }

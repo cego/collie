@@ -1,6 +1,3 @@
-// The Projects root (ADR-0033): the one directory every checkout a human works in lives
-// under, and the checkouts found there.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -13,7 +10,6 @@ import { isString } from "./schema";
 
 export type ProjectsRootSource = "config" | "gitte" | "home";
 
-/** The `workspace` option that roots a Run at the Projects root. */
 export const PROJECTS_ROOT_OPTION = "projects-root";
 
 export interface ProjectsRoot {
@@ -39,10 +35,6 @@ export const projectsRoot = Effect.fn("Projects.projectsRoot")(function* (env: P
 const DEPTH = 5;
 const SKIPPED = "node_modules";
 
-/**
- * Every directory under `root`, to depth five, holding a `.git` directory, sorted. A
- * `.git` file is a worktree and is not a checkout; nothing below a checkout is looked at.
- */
 export const checkoutsUnder = Effect.fn("Projects.checkoutsUnder")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

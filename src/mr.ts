@@ -1,7 +1,3 @@
-// What the MR step needs to know before it can run: whether its forge is reachable
-// at all, who to assign, which template to fill, and which Linear tickets this
-// branch is answering. Push is this step's business and nothing else's.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -27,7 +23,6 @@ import type { MrReady, Posted } from "./sdk";
 import { waitingForIO } from "./foreground";
 import type { ParkCause } from "./park-cause";
 
-/** Variables a command gets on top of this process's environment. */
 export type RunnerEnv = Record<string, string | Redacted.Redacted<string>>;
 
 export type Runner<R = never> = (
@@ -37,14 +32,12 @@ export type Runner<R = never> = (
   env?: RunnerEnv,
 ) => Effect.Effect<Ran, never, R>;
 
-/** What a command said. `stderr` is optional so fakes may omit it; real runners always fill it. */
 export interface Ran {
   readonly code: number;
   readonly stdout: string;
   readonly stderr?: string;
 }
 
-/** What a command told a human — its stdout, then its stderr. An answer is read from `stdout` alone. */
 export function whatItSaid(result: Ran) {
   const returned: string = Arr.join(
     Arr.filter(
@@ -61,10 +54,6 @@ export function whatItSaid(result: Ran) {
   return returned;
 }
 
-/**
- * Makes `helper` the checkout's only credential helper for `host`: the empty entry before
- * it drops any helper git read from a wider config. Setting it again changes nothing.
- */
 export const keepCredentialHelper = Effect.fn("mr.keepCredentialHelper")(function* <R>(
   checkout: string,
   host: string,
@@ -80,16 +69,8 @@ export const keepCredentialHelper = Effect.fn("mr.keepCredentialHelper")(functio
   return { ok: true, reason: "" };
 });
 
-/** A Linear id, the shape it takes in a branch name, a URL, or an Output. */
 const LINEAR_ID = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
 
-/**
- * What `branch:<base>...<head>` — or a bare `branch:<head>` — is pointed at. Null for a
- * target of any other kind, and empty for one that names nothing: a caller that has
- * somewhere else to look wants those told apart. A ref, not necessarily a branch —
- * `branch:main...HEAD` and a diff of two shas are both things a human may review — so
- * what a caller may do with it depends on what the caller wants it for.
- */
 export function branchTargetHead(target: string) {
   if (!pipe_(target, Str.startsWith("branch:"))) {
     const returned: string | null = null;
@@ -105,17 +86,6 @@ export function branchTargetHead(target: string) {
   return returned;
 }
 
-/**
- * Whether this merge request is already `who`'s to get merged.
- *
- * GitLab keeps assignee and reviewer apart because they are two jobs: one person owns
- * landing the change, another says whether it should land. The same name in both roles is
- * a review nobody independent is doing — so where the answer here is yes, Collie reviews
- * for the human rather than at them: the findings are fixed here and nothing is posted.
- *
- * An unreadable merge request answers no. The costly mistake is the other one: staying
- * quiet about someone else's change because glab had a bad minute.
- */
 export function assignedTo<R>(mr: MrRef, who: string, cwd: string, run: Runner<R>) {
   const returned: Effect.Effect<boolean, never, R | ForgeHttp> = Effect.gen(function* () {
     const panel = yield* forgeOf(mr).details(mr, cwd, run);
@@ -124,21 +94,12 @@ export function assignedTo<R>(mr: MrRef, who: string, cwd: string, run: Runner<R
   return returned;
 }
 
-/**
- * A review on the merge request it is about, as one note that Collie sends.
- *
- * Every refusal is the message rather than an error: a target that is not a merge
- * request, a GitLab this machine cannot reach, and — the one worth saying out loud — a
- * merge request assigned to whoever is running this, whose findings are theirs to fix
- * rather than to write to themselves.
- */
 export function postNote<R>(
   options: {
     readonly target: string;
     readonly cwd: string;
     readonly body: string;
     readonly review?: { readonly runId: string; readonly head: string; readonly round: number };
-    /** The Flock's GitLab, which is GitLab whatever its name. */
     readonly gitlabHost?: string;
   },
   run: Runner<R>,
@@ -206,10 +167,6 @@ export function postNote<R>(
 
 export { mrTarget, targetKind };
 
-/**
- * `git@host:group/project.git` and `https://host/group/project.git` both name the
- * same project; either is what a bare iid or a branch's MR is resolved against.
- */
 export function projectFromRemote(url: string) {
   const text = Str.trim(url);
   if (text === "") {
@@ -233,25 +190,15 @@ export function projectFromRemote(url: string) {
   return returned;
 }
 
-/**
- * Runs a command and reports what it said, never failing: a command that could not start
- * comes back as exit 127 with why on stderr, which is what lets callers treat "no glab
- * here" as an answer rather than an error.
- */
 export function shell(cmd: string, args: string[], cwd: string, env?: RunnerEnv) {
   const returned: Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner> = Effect.gen(
     function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const command = ChildProcess.make(cmd, args, {
         cwd,
-        // A status that refreshes the index holds `index.lock` while it writes, and a commit an
-        // agent makes in that moment is refused. Git's optional locks are for the one working
-        // in a checkout, never for a reader beside it.
         env: cmd === "git" ? { GIT_OPTIONAL_LOCKS: "0", ...env } : env,
         stdout: "pipe",
         stderr: "pipe",
-        // extendEnv, so git and glab inherit this process's environment and find their
-        // config and credentials — the Effect-native spelling of `{ ...process.env }`.
         extendEnv: true,
       });
       const handle = yield* spawner.spawn(command);
@@ -277,7 +224,6 @@ export function shell(cmd: string, args: string[], cwd: string, env?: RunnerEnv)
   return returned;
 }
 
-/** The project this checkout pushes to, or null when there is no GitLab remote. */
 export function projectHere<R>(cwd: string, run: Runner<R>) {
   const returned: Effect.Effect<string | null, never, R> = Effect.gen(function* () {
     for (const remote of ["origin", "upstream"]) {
@@ -290,10 +236,6 @@ export function projectHere<R>(cwd: string, run: Runner<R>) {
   });
   return returned;
 }
-/**
- * `mr`'s MR id, where a bare or hostless one is resolved against the checkout at `cwd`;
- * null where it names no merge request a host can be told for.
- */
 export function mrIdIn<R>(mr: string, cwd: string, run: Runner<R>) {
   const returned: Effect.Effect<string | null, never, R> = Effect.gen(function* () {
     const id = mrId(mr);
@@ -309,15 +251,12 @@ export function mrIdIn<R>(mr: string, cwd: string, run: Runner<R>) {
   return returned;
 }
 
-// ponytail: a checkout's project for the process's life, read only for legacy references.
 const checkouts = new Map<string, string>();
 
-/** A checkout's forge and the project it pushes to, or why it has none. */
 export type ForgeHere =
   | { readonly ok: true; readonly forge: Forge; readonly project: string }
   | { readonly ok: false; readonly reason: string };
 
-/** The forge of the checkout at `cwd`: its `origin`'s host, else `upstream`'s (ADR-0050 D2). */
 export function forgeHere<R>(cwd: string, run: Runner<R>, gitlabHost?: string) {
   const answer: Effect.Effect<ForgeHere, never, R> = Effect.map(
     projectHere(cwd, run),
@@ -340,7 +279,6 @@ export function forgeHere<R>(cwd: string, run: Runner<R>, gitlabHost?: string) {
   return answer;
 }
 
-/** Whether the forge shows production carrying `sha`: false where it cannot say. */
 export function productionCarries<R>(
   cwd: string,
   sha: string,
@@ -356,11 +294,6 @@ export function productionCarries<R>(
   return returned;
 }
 
-/**
- * The URL of the checkout's branch's open merge request where it merges itself once green,
- * else null. A checkout on no forge has none to merge; a forge that cannot be read fails with
- * why, since a push is safe only once it has said no.
- */
 export function autoMergingHere<R>(cwd: string, run: Runner<R>, gitlabHost?: string) {
   const returned: Effect.Effect<string | null, string, R | ForgeHttp> = Effect.gen(function* () {
     const here = yield* forgeHere(cwd, run, gitlabHost);
@@ -374,12 +307,6 @@ export function autoMergingHere<R>(cwd: string, run: Runner<R>, gitlabHost?: str
   return returned;
 }
 
-/**
- * The line that decides whether to look again: has this merge request moved since the
- * review finished. GitLab's `updated_at` is what answers it in the one call the panel
- * makes — a commit count would need a second, and "has anything moved" is the question
- * a human actually has.
- */
 export function sinceReview(details: MrDetails, reviewedAt: number) {
   if (reviewedAt <= 0 || details.updatedAt <= 0) {
     const returned: string = "";
@@ -395,7 +322,6 @@ export function sinceReview(details: MrDetails, reviewedAt: number) {
   return returned;
 }
 
-/** The configured assignee wins; otherwise whoever the forge's CLI is logged in as. */
 export function resolveAssignee<R>(
   cwd: string,
   configured: YamlValue | undefined,
@@ -411,10 +337,6 @@ export function resolveAssignee<R>(
   return returned;
 }
 
-/**
- * Every Linear ticket this branch could be answering: the work source when the
- * human named one, and the branch name.
- */
 export function linearIssues<R>(opts: { cwd: string } & Settled, run: Runner<R>) {
   const returned: Effect.Effect<string[], never, R> = Effect.gen(function* () {
     const found: string[] = [];
@@ -438,17 +360,13 @@ function matchAll(text: string) {
   return returned;
 }
 
-/** The forge this branch pushes to, and the facts its delivery prompt needs. */
 export function prepareMergeRequest<R>(
   opts: {
     readonly cwd: string;
     readonly target?: string;
     readonly source?: { readonly value: string; readonly kind: string };
-    /** The branch a new merge request targets, where it is not the default branch. */
     readonly onto?: string | undefined;
-    /** `<forge>.assignee` from the user's config, by forge: one forge's never answers for another. */
     readonly assignees?: Partial<Record<MrForge, YamlValue>>;
-    /** The Flock's GitLab, which is GitLab whatever its name. */
     readonly gitlabHost?: string;
   },
   run: Runner<R>,
@@ -488,7 +406,6 @@ export function prepareMergeRequest<R>(
     const branch = Str.trim(
       (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd)).stdout,
     );
-    // A detached checkout, as renovate's is, is on no branch to have a merge request.
     const found =
       branch === "HEAD" || branch === ""
         ? { ok: true as const, open: null }

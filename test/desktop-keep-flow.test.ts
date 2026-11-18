@@ -1,6 +1,3 @@
-// A record's Flow is sent and timed again whole; what is unchanged in it keeps its identity,
-// so only a changed Step is drawn again.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { FlowNode } from "../src/board-model";
@@ -15,7 +12,6 @@ const child = (said: string) =>
   });
 const sent = (said: string, extra: ReadonlyArray<FlowNode> = []) =>
   mainFlow([child(said), ...extra]);
-/** The lane `mainFlow` puts extra Steps in. */
 const BUILD = 1;
 
 test("a Flow sent again as it was is the Flow already drawn", () => {

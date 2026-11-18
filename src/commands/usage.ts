@@ -1,6 +1,3 @@
-// `collie usage`: how much of each Subscription this Machine's logins have used, per
-// window, as its host last read it (ADR-0049).
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -11,7 +8,6 @@ import { agoMs, epochMs } from "../time";
 import { current, resetPhrase, type UsageReading } from "../usage-model";
 import { answering, cliDoor } from "./shared";
 
-/** One line per window, then the reading's age and source, or its problem. */
 export function usageLines(readings: ReadonlyArray<UsageReading>, now: number) {
   return Arr.join(
     Arr.flatMap(readings, (reading) => {

@@ -1,7 +1,3 @@
-// `collie bridge`: a front door on any computer reaches this Machine's host through one
-// command's stdio. The bridge is the Machine's own binary, so starting the host is done
-// here, never by the client at the other end of the stream.
-
 import * as Str from "effect/String";
 import * as Struct from "effect/Struct";
 
@@ -13,7 +9,6 @@ import { HostUnavailable, connect, peerChannel, socketOf } from "./host";
 import { ensurePaired, riding } from "./lifecycle";
 import { machineName } from "./peers";
 import { recordMarks, relayedRecords } from "./record-marks";
-/** Where this channel came from: the computer the front door names, and the SSH client sshd saw. */
 const whereFrom = Effect.fn("Bridge.whereFrom")(function* (client: string | null) {
   const connection = yield* Config.option(Config.String("SSH_CONNECTION")).pipe(
     Effect.orElseSucceed(() => Option.none<string>()),
@@ -36,7 +31,6 @@ export const bridge = Effect.fn("Bridge")(function* (
   machine: string | null = null,
 ) {
   const env = yield* currentEnv.pipe(Effect.orDie);
-  // A host on another build is still one to pipe: front doors speak a protocol, not a build.
   yield* Effect.scoped(
     connect(env.stateDir, {
       hostEnv: { COLLIE_STATE_DIR: env.stateDir },

@@ -1,6 +1,3 @@
-// The Heal: one Run the host starts for a park its own recovery could not clear, judged by
-// the parked Run's facts (ADR-draft-a-run-recovers-where-it-parks D7–D9).
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, Schema } from "effect";
@@ -13,7 +10,6 @@ import { ProducerReport } from "./narrative-model";
 
 export const HEALS_PER_RUN = 3;
 
-/** What a Heal hands back: a claim the host reads for words, never for its judgement. */
 const HealSaid = {
   ...ProducerReport.fields,
   diagnosis: Schema.String,
@@ -29,25 +25,18 @@ export const HealOutput = Schema.Union([
   Schema.Struct({
     ...HealSaid,
     result: Schema.Literal("escalate"),
-    /** Why only a person can move the Run. */
     needs_person: Schema.String,
   }),
 ]);
 export type HealOutput = typeof HealOutput.Type;
 
-/** Every Heal a Run has had, by its claim. */
 const healsIn = (recoveries: ReadonlyArray<Metric>) =>
   Arr.filter(recoveries, (line) => line.action === "healed" && line.outcome !== "skipped");
 
-/**
- * Why a needs-you park goes straight to a person rather than to a Heal, or null where a Heal
- * takes it. Whether a healer is declared is the caller's, asked last, as it reads modules.
- */
 export const passedOver = (facts: {
   readonly cause: ParkCause;
   readonly isHeal: boolean;
   readonly on: boolean;
-  /** It has a Hold, a Stop or an open Decision. */
   readonly waitsOnYou: boolean;
   readonly recoveries: ReadonlyArray<Metric>;
 }) => {
@@ -63,8 +52,6 @@ export const passedOver = (facts: {
   return null;
 };
 
-/** The definition that declares itself the healer for `project`, nearest layer first. */
-// Imported when asked: discovery loads modules through the engine, which imports this.
 export const healerFor = (env: Pick<PluginEnv, "pluginRoot" | "userDir">, project: string) =>
   Effect.promise(() => import("./discovery")).pipe(
     Effect.flatMap(({ savedModules }) =>

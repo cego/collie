@@ -37,7 +37,6 @@ test("a scenario added under a new name moves no other between shares", () => {
   expect(Arr.map(after, (share) => Arr.filter(share, (name) => name !== added))).toEqual(before);
 });
 
-// crc32 puts alpha in share 10, beta in 7, gamma in 5.
 const names = ["alpha", "beta", "gamma"];
 
 test("a pattern naming one scenario yields its shipped and unrelated shard files", () => {

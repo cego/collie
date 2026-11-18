@@ -1,6 +1,3 @@
-// A Hold or Stop an operator sets through `collie run` ends the wait a Run is in. The host
-// here is a real one over a fake core.
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -16,7 +13,6 @@ import { AWAITING } from "../src/engine";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
-/** The world's host, started from this process with `set` in its environment. */
 const hostWith = Effect.fn("test.hostWith")(function* (
   world: World,
   set: Readonly<Record<string, string>>,
@@ -38,7 +34,6 @@ const hostWith = Effect.fn("test.hostWith")(function* (
   return yield* connect(world.state).pipe(Effect.orDie);
 });
 
-/** Whether the host on `world` keeps an `awaiting` control over the Run. */
 const awaiting = (world: World, runId: string) =>
   hostRecords(
     world.state,
@@ -60,7 +55,6 @@ test(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
-          // The first operation's Output, and the agent still working after it.
           yield* fs.writeFileString(
             outputs,
             encode([{ writes: [], output: { verdict: "clean" }, then: "working" }]),
@@ -113,7 +107,6 @@ test(
               },
             })
             .pipe(Effect.orDie);
-          // Unreadable, so the wait goes on and says so on the card.
           yield* until(
             () => awaiting(world, runId).pipe(Effect.orElseSucceed(() => false)),
             (waiting) => waiting,

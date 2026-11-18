@@ -1,13 +1,3 @@
-// What the Collie tab renders and what it can be asked to do, as plain data. Effect
-// produces the board; this projects it into rows and actions; components read those and
-// dispatch the commands back.
-//
-// Nothing here imports `effect` and nothing here holds a runtime, which is what keeps the
-// components testable with plain fixtures and no services — `test/ui/boundary.test.ts`
-// is that rule, made executable. The bar is a direct import and a live runtime, not the
-// transitive graph: the value imports below reach `effect` through their own imports, and
-// what matters is that nothing in this file or the components can run an Effect.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -37,109 +27,46 @@ import type { Live } from "../live";
 import type { Selection } from "../selection";
 import type { ArtefactCollection } from "../artefact-model";
 
-/** What the nav switches between. One at a time, each a projection of state. */
 export type ViewName = "runs" | "history" | "workflows" | "settings";
-/**
- * What the Runs view is a board of. One Herd has one board (ADR-0009), so "this
- * workspace" is a filter over it rather than a board of its own — and a run filter is
- * how a `navigate` action puts one piece of work on screen without focusing a pane.
- */
 export type Filter =
   | { kind: "all" }
   | { kind: "workspace"; id: string }
   | { kind: "run"; id: string };
 
-/**
- * Whether this board is one Session's. Starting a run and handing off a review act on
- * one workspace's checkout and on this Session's register, so they mean something only
- * where the board has been narrowed — to a workspace, or to a Run inside one. Asked of
- * the filter itself rather than of a `local`/`all` copy of it: the persisted default is
- * the one place that vocabulary belongs, and every key set that used to be handed a
- * `Scope` was answering this one question about the filter.
- */
 export function sessionLocal(filter: Filter) {
   return filter.kind !== "all";
 }
 
-/**
- * What is being looked at, which is what decides how much has to be read. Plain data,
- * and held by the bridge as one source: which View is showing and what is selected
- * decide what the producers read, so they are state rather than render-local signals.
- */
 export interface Focus {
   view: ViewName;
-  /** Which of the Herd's work the Runs view is showing. */
   filter: Filter;
-  /**
-   * The workspace the board was opened from, which is what `g` narrows to. Null for a
-   * board nobody opened from anywhere — there is then nothing to narrow to, and `g`
-   * says so by doing nothing rather than by inventing a workspace.
-   */
   origin: string | null;
-  /** The proposal whose actions are on screen for a yes or no, or null. */
   previewing: string | null;
-  /**
-   * Every View shown at least once. Those are kept fresh; one never opened is never
-   * read at all, which is what keeps opening the tab cheap however much is on disk.
-   */
   shown: ReadonlyArray<ViewName>;
-  /** The Selection's row id, so its detail — and only its detail — is produced. */
   selected: string | null;
-  /** Whether the panel's log tail is showing, which is what makes the log worth reading. */
   tail: boolean;
   artefacts?: boolean;
-  /**
-   * How many caps of the selected Run's review to read. A review is capped so that one
-   * an agent wrote at 4 MB cannot stall a redraw, and this is how the rest of it is read
-   * without leaving the tab: `m` asks for another page. Reset by a new Selection.
-   */
   reviewPages: number;
-  /**
-   * Bumped whenever the state has to be read past a cache: a Refresh, and the read after
-   * a command changed something. A number rather than a flag because the same focus
-   * asked for twice must look new — `changes` drops a repeat, and a repeated Refresh is
-   * exactly what a human presses when they want to know now.
-   */
   nonce: number;
 }
 
-/**
- * Everything the app draws. Each View's data is `null` until that View is first shown —
- * the laziness is here, in the state, because reading every run's Outputs at startup is
- * what would make the tab slow the day it became useful.
- */
 export interface AppState {
   view: ViewName;
   filter: Filter;
-  /** Every Task on this Herd's board, in the order the board draws them. */
   tasks: ReadonlyArray<TaskView>;
-  /** When this state was read, which is what the board measures ages and folds against. */
   now: number;
-  /** How many cards fit across, where the pane is wide enough for the choice. */
   density: Density;
-  /** A newer release, shown in the header independently of the host's Tasks. */
   newer?: string | null;
   note: string | null;
-  /** Every finished Run of this checkout, whatever session it came from. */
   history: RunRow[] | null;
   definitions: { workflows: DefinitionRow[]; errors: string[] } | null;
   settings: SettingsView | null;
-  /** The selected Run, read from its directory. Null for any other Selection. */
   detail: RunDetail | null;
   artefacts?: ArtefactCollection | null;
   artefactsError?: string | null;
-  /**
-   * The Runs the board has marked to stop and not yet sent, so a card says it is going
-   * and the toast can still take it back. The bridge's own, not something a load reads.
-   */
   stopping: ReadonlyArray<string>;
-  /**
-   * The selected Run's live evidence and the Herd's pending proposals. Null outside
-   * the Runs view; with no drawer, only the Herd's proposals are displayed.
-   */
   live: Live | null;
   previewing: string | null;
-  /** This Machine's Usage readings, for the header; absent where none were read. */
   usage?: ReadonlyArray<UsageReading>;
 }
 
@@ -150,58 +77,30 @@ export type RowKind =
   | "history"
   | "definition"
   | "setting"
-  /** A workspace, in the wide scope: selectable, and the runs under it are its own. */
   | "group"
-  /** A name for the group under it, and nothing to act on. */
   | "header";
 
-/**
- * One selectable line. `id` is stable across refreshes — an agent by name, a run by
- * its id — because the list re-sorts under the cursor and an index would silently
- * retarget whatever the human pressed next.
- */
 export interface Row {
   id: string;
   kind: RowKind;
-  /** How long it has been like this — `2m ago` — or empty where nothing says. */
   ago: string;
-  /** The digit that focuses this agent, where the board had one left to give. */
   key: string | null;
   glyph: string;
-  /** What steering has found about this row's Run, as glyphs. Empty for most rows. */
   marks: string;
   title: string;
   detail: string;
   runId: string | null;
   agent: string | null;
-  /** What this Run reviewed, so "review again" and the MR panel have their ref. */
   target: string | null;
-  /** Whether this Run can supply the work for a fix round. */
   fixable: boolean;
-  /** Whether this Run has stopped and is waiting on the human. */
   needsYou: boolean;
-  /** The Workflow or Persona this row names, for the Workflows view. */
   definition: DefinitionRow | null;
-  /** The config key this row names, for the Settings view. */
   setting: { key: string; value: string; writable: boolean; multiline: boolean } | null;
   choice: PendingChoice | null;
-  /** Where Enter on this row goes, or null for a row that is only a row. */
   jump: Jump | null;
-  /**
-   * How deep this row sits in the wide tree: 0 a workspace, 1 its runs, 2 a run's
-   * agents. The indent belongs in the gutter beside the glyph and never in the title —
-   * padding the title left the glyphs in one column and the text in three, which is
-   * what made the tree unreadable.
-   */
   depth: number;
 }
 
-/**
- * Where a row points, as little of it as re-resolving the jump at Enter time needs: a
- * workspace id, a run id, an agent name. Never a tab or pane id — herdr compacts those,
- * so one cached when the row was drawn jumps into whatever has taken its place. `none`
- * is a row whose panes this session cannot reach, which still has to answer Enter.
- */
 export type Jump = { label: string } & (
   | { kind: "workspace"; workspaceId: string }
   | { kind: "run"; runId: string }
@@ -209,139 +108,55 @@ export type Jump = { label: string } & (
   | { kind: "none" }
 );
 
-/**
- * Everything a component may ask for, as plain data. The four at the bottom change what
- * is shown rather than what is true, so the bridge answers those itself; every other one
- * is a function in `src/operations.ts` that the CLI reaches too.
- */
 export type Command =
   | { _tag: "FocusAgent"; agent: string }
-  /**
-   * Stop this Run — after the board's grace, which is the bridge's to keep. Nothing
-   * reaches the Driver until it is up, so an undo inside it is exact rather than a race.
-   */
   | { _tag: "StopRun"; runId: string }
-  /** Hold this Run where it is, or release the hold. */
   | { _tag: "HoldRun"; runId: string; set: boolean }
-  /** Take back every stop still inside its grace. The bridge answers it. */
   | { _tag: "UndoStop" }
   | { _tag: "OpenLog"; runId: string }
-  /** A pane in the Task's workspace following the check Collie is running for the Run. */
   | { _tag: "OpenCheckOutput"; runId: string }
-  /**
-   * Answer the Choice the board drew, named by its id. The id is what makes it that
-   * Choice: a question replaced between the refresh that drew it and the key that
-   * answered it is a different question, and the answer belongs to the one on screen.
-   */
   | { _tag: "Answer"; runId: string; choiceId: string; value: string }
-  /**
-   * Hand the named Run's review to the live implementer. It names one, because every
-   * other action on the board acts on the Selection: an argument-less "send the review"
-   * meant the newest one in the Session, which with an older review selected handed off
-   * a different run's findings and said nothing about the mismatch. `null` is a
-   * Selection with no Run behind it, which sends nothing and says so — the text view
-   * asks the operation directly rather than through a command.
-   */
   | { _tag: "SendReview"; runId: string | null }
   | { _tag: "InvokeOffer"; runId: string; offer: string }
-  /** Every offer the Run's module makes now, chosen from and asked about when pressed. */
   | { _tag: "ChooseOffer"; runId: string }
   | { _tag: "PostReview"; runId: string }
-  /**
-   * The merge request in a browser. It names the run as well as the target, because
-   * `glab` resolves an unqualified `mr:42` from the directory it runs in, and on a
-   * board of every workspace that directory is not the run's.
-   */
   | { _tag: "OpenMr"; target: string; runId: string | null }
-  /** Which of a card's merge requests to open, or to copy the link of. */
   | { _tag: "ChooseMr"; copy: boolean; mrs: ReadonlyArray<MrChoice> }
   | { _tag: "CopyLink"; url: string }
   | { _tag: "RunWorkflow"; workflow: string }
-  /**
-   * Say something to Collie. `runId` null is a question about the flock: read-only, and
-   * answered about every Run whatever the board has selected or filtered to.
-   *
-   * A targeted message names its Run rather than taking it from the Selection. Two
-   * reasons, and both have bitten: a board whose filter moved between reading a row and
-   * typing about it would steer another one, and the row a human happens to be sitting
-   * on is not consent to act on it.
-   */
-  /**
-   * Carry out a proposal. The hash travels with the id because that is what makes this
-   * consent to a payload rather than to a summary — the board passes back exactly what
-   * it drew.
-   */
   | { _tag: "ConfirmProposal"; id: string; hash: string }
   | { _tag: "DeclineProposal"; id: string; hash: string }
-  /**
-   * Ask for a value, rather than write one. The app answers this itself by opening its
-   * editor: an empty `SetDefault` used to stand in for "ask me first", which the
-   * keyboard honoured and a click on the same button took literally — unsetting the
-   * default it was labelled to set.
-   */
   | { _tag: "EditSetting"; key: string; multiline: boolean }
-  /** Open this Task's record. The app answers it: the drawer is its own, not the bridge's. */
   | { _tag: "OpenRecord"; id: string }
-  /** The same, with the keyboard in the steer field. Also the app's own. */
   | { _tag: "OpenSteer"; id: string }
-  /** Say one thing to a Run's Driver, which Collie answers with a proposal. */
   | { _tag: "Steer"; runId: string; text: string }
   | { _tag: "ResumeRun"; runId: string }
-  /** Files for the Run's live agent, asked for as paths. */
   | { _tag: "AttachFiles"; runId: string }
-  /** A Run of its own that builds on a finished one. */
   | { _tag: "FollowUp"; runId: string }
-  /**
-   * What became of the work, recorded beside the Run's status and never over it. `ref` is
-   * what backs it up — the merge request where the board knows one.
-   */
   | {
       _tag: "RecordDisposition";
       runId: string;
       kind: "merged" | "abandoned" | "superseded";
       ref: string;
     }
-  /** A finished Run's report acknowledged, for every board in the Flock. */
   | { _tag: "Acknowledge"; runId: string }
   | { _tag: "SeeArtefact"; runId: string; id: string; revision: number | null }
   | { _tag: "ToggleArtefacts" }
-  /**
-   * Go to the next unanswered question. The app answers this itself, like
-   * `EditSetting`: it moves the Selection and clears a filter hiding the row, neither
-   * of which is anything the bridge owns.
-   */
   | { _tag: "NextQuestion" }
   | { _tag: "SetDefault"; key: string; value: string }
   | { _tag: "OpenMode"; mode: Mode }
   | { _tag: "ShowView"; view: ViewName }
-  /** Read the earlier finished runs of this checkout, which nothing reads until asked. */
   | { _tag: "ShowOlder" }
-  /** Show or hide the selected Run's log tail inside the panel. */
   | { _tag: "ToggleTail" }
-  /** Read another cap of the selected Run's review, for one that was cut short. */
   | { _tag: "MoreReview" }
-  /**
-   * The row the reads are about, and — for a Task's card — what the other half of the
-   * Home is told is selected. `on` carries the Task rather than the row id because
-   * chat answers about a Task by name and acts on its Run, neither of which a row id is.
-   */
   | { _tag: "Select"; id: string | null; on: Selection | null }
-  /** Go to what a row points at, resolved from its key at the moment Enter is pressed. */
   | { _tag: "Jump"; jump: Jump }
-  /** The whole Herd ⇄ the workspace this board was opened from. */
   | { _tag: "ToggleFilter" }
-  /** Which of the Herd's work the board shows: a group row narrows, Esc widens. */
   | { _tag: "SetFilter"; filter: Filter }
-  /** Put one proposal's actions on screen for a yes or no, or take them off. */
   | { _tag: "Preview"; id: string | null }
   | { _tag: "Refresh" }
   | { _tag: "Quit" };
 
-/**
- * The commands the bridge answers itself; they never reach an operation. One list, read
- * both as a guard and as the type below, because a command added to one of those and not
- * the other is a command that quietly goes down the wrong lane.
- */
 const FOCUS_ONLY = [
   "ShowView",
   "ShowOlder",
@@ -362,11 +177,6 @@ export function changesFocusOnly(command: Command): command is FocusCommand {
   return Arr.some(FOCUS_ONLY, (tag) => tag === command._tag);
 }
 
-/**
- * Where one focus command leaves what is being looked at. Exhaustive over
- * `FocusCommand`, so a new one of those is a type error here rather than a command the
- * bridge takes and does nothing with.
- */
 export function retarget(at: Focus, command: FocusCommand) {
   switch (command._tag) {
     case "ShowView": {
@@ -385,8 +195,6 @@ export function retarget(at: Focus, command: FocusCommand) {
       const returned: Focus = { ...at, artefacts: !at.artefacts };
       return returned;
     }
-    // A row of one filter is not a row of the other, so the Selection starts again:
-    // `clampSelection` then lands it on the first row of the board that arrives.
     case "ToggleFilter": {
       const returned: Focus = retarget(at, { _tag: "SetFilter", filter: widened(at) });
       return returned;
@@ -395,7 +203,6 @@ export function retarget(at: Focus, command: FocusCommand) {
       const returned: Focus = { ...at, filter: command.filter, selected: null, previewing: null };
       return returned;
     }
-    // Not a change in the world: a preview is what was already read, drawn.
     case "ShowOlder": {
       const returned: Focus = at.shown.includes("history")
         ? at
@@ -410,8 +217,6 @@ export function retarget(at: Focus, command: FocusCommand) {
       const returned: Focus = { ...at, reviewPages: at.reviewPages + 1 };
       return returned;
     }
-    // From the first page again: how far the last Selection had been paged says nothing
-    // about this one.
     case "Select": {
       const returned: Focus = { ...at, selected: command.id, reviewPages: 1 };
       return returned;
@@ -420,7 +225,6 @@ export function retarget(at: Focus, command: FocusCommand) {
       const returned: Focus = { ...at, nonce: at.nonce + 1 };
       return returned;
     }
-    // The bridge answers the close before this; there is no focus after it.
     case "Quit": {
       const returned: Focus = at;
       return returned;
@@ -428,35 +232,17 @@ export function retarget(at: Focus, command: FocusCommand) {
   }
 }
 
-/** What may be reused from the last read, and what has to be read past its cache. */
 export interface Rereads {
-  /** Whether the board and the Views may be taken from the last state. */
   reuse: boolean;
-  /** Whether the Selection's merge request must be read past its TTL. */
   forceMr: boolean;
 }
 
-// By contents, not by reference: `retarget` happens to return the same array when the
-// View is already shown, and relying on that made a reasonable-looking edit there —
-// `shown: [...at.shown]` — turn every cursor move back into a full re-read of the run
-// dirs, the definition layers and the config, with no test to catch it.
 const sameViews = (a: ReadonlyArray<ViewName>, b: ReadonlyArray<ViewName>) =>
   a.length === b.length && Arr.every(a, (view, at) => view === b[at]);
 
-/**
- * What a new Focus means for the reads behind it. One decision, in one place: "only the
- * Selection moved, so keep the board" and "something asked for a fresh read, so go past
- * the merge-request cache" are the same comparison of the same two Focus values, and a
- * field added to Focus without a decision here is how a cursor move starts re-reading
- * every run directory again — or worse, reuses a board it should not.
- */
 export function rereads(last: Focus | null, next: Focus) {
   if (last === null) return { reuse: false, forceMr: false };
-  // A Refresh, and the read after a command: posting a review is the obvious case, and
-  // a panel still showing the merge request as it was before would be lying.
   const asked = last.nonce !== next.nonce;
-  // Moving the cursor is not a change in the world, and re-reading every run directory
-  // per arrow key is a lag on every keypress — the tick and every command still re-read.
   const movedOnly =
     last.view === next.view &&
     sameFilter(last.filter, next.filter) &&
@@ -464,9 +250,6 @@ export function rereads(last: Focus | null, next: Focus) {
     last.tail === next.tail &&
     last.artefacts === next.artefacts &&
     last.reviewPages === next.reviewPages &&
-    // Previewing a proposal is the one focus change that reads nothing at all: the
-    // proposal is already in `live`. It is not required to move the Selection, so it
-    // reuses whether the Selection moved or not.
     (last.selected !== next.selected || last.previewing !== next.previewing);
   return { reuse: !asked && movedOnly, forceMr: asked };
 }
@@ -474,12 +257,6 @@ export function rereads(last: Focus | null, next: Focus) {
 const sameFilter = (a: Filter, b: Filter) =>
   a.kind === b.kind && ("id" in a ? "id" in b && a.id === b.id : true);
 
-/**
- * Where `g` goes from here: the whole Herd from anything narrower, and the workspace
- * this board was opened from when it is already showing everything. A board with no
- * origin has nothing to narrow to, so it stays where it is rather than narrowing to a
- * workspace nobody named.
- */
 function widened(at: Focus) {
   if (at.filter.kind !== "all" || at.origin === null) {
     const returned: Filter = { kind: "all" };
@@ -489,7 +266,6 @@ function widened(at: Focus) {
   return returned;
 }
 
-/** The fields every row shares, so each builder below only states what it differs in. */
 const BLANK = {
   ago: "",
   key: null,
@@ -508,39 +284,22 @@ const BLANK = {
   depth: 0,
 } as const;
 
-/**
- * One agent, under the run it works for. `connector` is what joins it to that run — the
- * last of a run's agents closes the group — and the run named by the row above it is not
- * named again here.
- */
 function agentRow(a: AgentRow, connector: string, marks?: Marks) {
   const returned: Row = {
     ...BLANK,
     id: `agent:${a.agent}`,
     kind: "agent",
-    // Only the override: the rest of a Run's marks are about the Run, and repeating
-    // them on every agent under it would say the same thing four times.
     marks: markFor(marks, a.run).override ? marksOf({ ...NO_MARKS, override: true }) : "",
-    // An agent's row is its live status, which herdr answers with no time attached.
     key: a.key === "" ? null : a.key,
     title: `${connector} ${a.name}`,
-    // What it is doing, where its harness publishes one: "working" alone said nothing a
-    // spinner does not. Which run it belongs to is the row above it, so this says what
-    // that run's agent is actually on.
     detail: doingLine(a),
     runId: a.run,
     agent: a.agent,
-    // By name: `agent.focus` selects the workspace, the tab and the pane in one call.
     jump: { kind: "agent", agent: a.agent, label: a.name },
   };
   return returned;
 }
 
-/**
- * What an agent's row says it is doing: its live status, and the task its harness
- * publishes as the pane's terminal title where there is one. Claude Code puts the task
- * it is on there, and it comes back on the same `agent list` the statuses do.
- */
 function doingLine(a: AgentRow, ...rest: string[]) {
   return Arr.join(
     Arr.filter([a.status, a.now ?? "", ...rest], (part) => part !== ""),
@@ -548,19 +307,10 @@ function doingLine(a: AgentRow, ...rest: string[]) {
   );
 }
 
-/**
- * One agent in the trailing group. It has no run above it, so its own row is the only
- * place left to say which run it names.
- */
 function orphanRow(a: AgentRow, connector: string, marks?: Marks) {
   return { ...agentRow(a, connector, marks), detail: doingLine(a, a.run) };
 }
 
-/**
- * One group of agents as rows: a run's own, or the orphans. `├` joins each to the group
- * and the last one closes it with `└`, which is the whole of the nesting — the list
- * itself stays flat.
- */
 function agentGroup(
   agents: readonly AgentRow[],
   row: (a: AgentRow, connector: string, marks?: Marks) => Row,
@@ -569,21 +319,14 @@ function agentGroup(
   return Arr.map(agents, (a, at) => row(a, at === agents.length - 1 ? "└" : "├", marks));
 }
 
-/** The prefix a Run's row id carries, minted here and read back by `runIdOf`. */
 const RUN_ROW = "run:";
 
-/**
- * The Run behind a row id, or `null` for a Selection that is not one. The shape of the
- * id is this module's own — it mints them — and the producers ask rather than parse: a
- * second `startsWith("run:")` elsewhere is a format two modules have to agree on.
- */
 export function runIdOf(rowId: string | null) {
   return rowId !== null && pipe(rowId, Str.startsWith(RUN_ROW))
     ? pipe(rowId, Str.slice(RUN_ROW.length))
     : null;
 }
 
-/** The row id a Run is selected by, minted here because `runIdOf` reads it back. */
 export function runRowId(runId: string) {
   return `${RUN_ROW}${runId}`;
 }
@@ -603,8 +346,6 @@ function runRow(r: RunRow, now: number, kind: "active" | "recent" | "history", m
     fixable: r.fixable,
     needsYou: r.needsYou,
     choice: r.choice,
-    // A History row is a record rather than a pane — the run it names may have been
-    // over for a week — so there is nowhere for Enter to go.
     jump: kind === "history" ? null : { kind: "run", runId: r.id, label: r.title },
   };
   return returned;
@@ -615,7 +356,6 @@ function definitionRow(d: DefinitionRow) {
     ...BLANK,
     id: `workflow:${d.name}`,
     kind: "definition",
-    // A fork that cannot run should be visible here rather than at launch.
     glyph: d.problems.length > 0 ? GLYPH.failed : GLYPH.done,
     title: d.title || d.name,
     detail: Arr.join(
@@ -630,12 +370,6 @@ function definitionRow(d: DefinitionRow) {
   return returned;
 }
 
-/**
- * `id` is given rather than derived from the key, because two rows can be about the same
- * key: the writable `trust` default and the trust state of this directory. They shared an
- * id, so clicking one selected both and `current()` resolved the first — every key after
- * that acted on the editable default rather than the row that was clicked.
- */
 function settingRow(
   id: string,
   key: string,
@@ -656,51 +390,27 @@ function settingRow(
   return returned;
 }
 
-/**
- * The board as one flat, ordered list: each Run followed by the agents working for it,
- * the running ones first and then the ones that have finished, and last any agent whose
- * Run is not on the board at all. Flat because one list region, one Selection and one set
- * of keys is the whole design — the nesting is drawn by the connector each agent row
- * carries, not by a tree the list would have to know about.
- *
- * A finished Run keeps its agents: the implementer a hand-off names outlives the Run it
- * was started for, and filing it under "no run here" while its Run sat two rows above
- * was the board contradicting itself.
- */
 export function rowsOf(board: WorkspaceView, marks?: Marks) {
   const rows: Row[] = [];
   const onBoard = [...board.active, ...board.recent];
-  /** The rows this board has, by id: what a child id and an agent's run resolve against. */
   const byId = new Map(Arr.map(onBoard, (r) => [r.id, r]));
   const agentsOf = (run: RunRow) => Arr.filter(board.agents, (a) => a.run === run.id);
   const childrenOf = (run: RunRow) =>
     Arr.flatMap(run.children, (id) => Arr.ensure(byId.get(id) ?? []));
-  /**
-   * One run, its children, and each of their agents — a run that fanned out into one
-   * run per repository is one thing on the board, not several beside each other.
-   */
   const under: (run: RunRow, kind: "active" | "recent", depth?: number) => Row[] = (
     run: RunRow,
     kind: "active" | "recent",
     depth = 0,
   ) => [
     nested(runRow(run, board.now, kind, marks), depth),
-    // An agent sits at its run's own depth: the connector is what joins it, and the
-    // gutter is what says which run is inside which.
     ...Arr.map(agentGroup(agentsOf(run), agentRow, marks), (a) => nested(a, depth)),
     ...Arr.flatMap(childrenOf(run), (child) =>
       under(child, board.active.includes(child) ? "active" : "recent", depth + 1),
     ),
   ];
-  // A child is drawn under its parent, so it is not also drawn beside it. Filtered once
-  // here, because a header counted over one list and drawn over another is how the
-  // "Needs you" header came to stand over no rows at all.
   const nestedIds = new Set(Arr.flatMap(onBoard, (r) => r.children));
   const top = (runs: ReadonlyArray<RunRow>) => Arr.filter(runs, (run) => !nestedIds.has(run.id));
   const active = top(board.active);
-  // The runs that have stopped for the human first, under a header saying so: a
-  // blocked run costs the whole run's wall-clock and used to be visible only if its
-  // row happened to be the Selection. Each keeps the agents nested under it.
   const waiting = Arr.filter(active, (r) => r.needsYou);
   if (waiting.length > 0) rows.push(headerRow(NEEDS_YOU));
   for (const run of [...waiting, ...Arr.filter(active, (r) => !r.needsYou)]) {
@@ -717,29 +427,11 @@ export function rowsOf(board: WorkspaceView, marks?: Marks) {
   return rows;
 }
 
-/**
- * The wide board: one group per workspace Collie has work in, in herdr's order, with
- * that workspace's runs under it and each run's agents under those. A tree, drawn as
- * one flat list the way the local board is — the depth is in the gutter, so title,
- * detail and age start in the same column at every level.
- */
 export function wideRows(wide: WideView, marks?: Marks) {
   const rows: Row[] = [];
   for (const [at, group] of wide.groups.entries()) {
-    // A blank line between workspaces. Groups of one-line rows with nothing between
-    // them read as one wall of text, whatever the columns do.
     if (at > 0) rows.push(spacer(`gap:${group.workspaceId ?? ELSEWHERE}`));
-    // Being unreachable is the group's property, not each row's: a workspace this
-    // session has lost has nothing in it that Enter can reach — and its runs keep the
-    // target that says which of the checkouts its group row names they are in.
     const away = group.workspaceId === null;
-    /**
-     * One run, and the agents working for it. A run is named by its workflow alone —
-     * the group row above already says which branch this is, and repeating it under it
-     * was the same sentence twice, clipped — but its jump keeps the run's whole name,
-     * because that is what the footer says it went to. An agent keeps its own name in
-     * full: the model is what tells two variants of one step apart.
-     */
     const inGroup = [...group.active, ...group.recent];
     const byId = new Map(Arr.map(inGroup, (r) => [r.id, r]));
     const under: (run: RunRow, kind: "active" | "recent", depth?: number) => Row[] = (
@@ -761,18 +453,14 @@ export function wideRows(wide: WideView, marks?: Marks) {
           ),
           (agent) => nested(agent, depth + 1),
         ),
-        // A repository run of a plan that fanned out, under the plan run that started it.
         ...Arr.flatMap(children, (child) =>
           under(child, group.active.includes(child) ? "active" : "recent", depth + 1),
         ),
       ];
     };
-    // A child is drawn under its parent, so it is not also drawn beside it.
     const nestedIds = new Set(Arr.flatMap(inGroup, (r) => r.children));
     const top = (runs: ReadonlyArray<RunRow>) => Arr.filter(runs, (run) => !nestedIds.has(run.id));
     const atTop = top(group.active);
-    // The runs with a question first, the way the local board lists them: a run that
-    // has stopped for you is costing its whole wall-clock while it waits.
     const active = [
       ...Arr.filter(atTop, (r) => r.needsYou),
       ...Arr.filter(atTop, (r) => !r.needsYou),
@@ -795,12 +483,6 @@ export function wideRows(wide: WideView, marks?: Marks) {
   return keyedInOrder([...rows, ...quietRow(wide)]);
 }
 
-/**
- * The agents' digits, numbered across the whole tree. Every group numbers its own from
- * 1, so without this each workspace showed a `1` and the key focused the first of them
- * — the digit has to name the row it is drawn on. Nine of them, as on the local board;
- * the tenth agent onwards keeps its row and loses its digit.
- */
 function keyedInOrder(rows: readonly Row[]) {
   let digit = 0;
   return Arr.map(rows, (row) => {
@@ -810,10 +492,6 @@ function keyedInOrder(rows: readonly Row[]) {
   });
 }
 
-/**
- * A row in a workspace this session no longer has. Its panes are somewhere this herdr
- * cannot select, so Enter says so rather than failing at a tab that is not there.
- */
 const unreachable: (row: Row) => Row = (row) => ({
   ...row,
   jump: row.jump === null ? null : { kind: "none", label: row.jump.label },
@@ -821,29 +499,14 @@ const unreachable: (row: Row) => Row = (row) => ({
 
 const ELSEWHERE = "elsewhere";
 
-/** A blank line. A header, so the arrows step over it and nothing can select it. */
 const spacer: (id: string) => Row = (id) => ({ ...BLANK, id, kind: "header", title: "" });
 
-/** One row inside a group, at its depth in the tree. */
 function nested(row: Row, depth: number) {
   return { ...row, depth };
 }
 
-/**
- * A run inside its workspace group, named by its workflow alone. The group row already
- * says what the workspace is for, and the run's own detail and age are what tell two
- * runs of it apart.
- */
 const unqualified = (row: Row) => ({ ...row, title: Str.split(row.title, " · ")[0]! });
 
-/**
- * One workspace. Selectable and bold: its own line is where the eye stops, and the
- * counts and the leading run's step are what make expanding it unnecessary.
- *
- * It carries no `needsYou`, though it counts them in its summary: that field is what
- * the footer counts and what a run row is ordered by, and a workspace counted beside
- * its own waiting run made "1 run(s) need you" read as two.
- */
 function groupRow(group: WideGroup, marks?: Marks) {
   const returned: Row = {
     ...BLANK,
@@ -860,11 +523,6 @@ function groupRow(group: WideGroup, marks?: Marks) {
   return returned;
 }
 
-/**
- * The session's other workspaces, on one line at the end. A herdr session is mostly
- * workspaces Collie has never run anything in; naming them here is what keeps them out
- * of the list without hiding them.
- */
 function quietRow(wide: WideView) {
   if (wide.quiet.length === 0) {
     const returned: Row[] = [];
@@ -883,12 +541,6 @@ function quietRow(wide: WideView) {
   return returned;
 }
 
-/**
- * A name for the group of rows under it. Selectable, like every row, and inert. Short
- * enough to fit the title column, which is a share of the pane: a header clipped
- * mid-word says less than no header at all.
- */
-/** The header over the runs that have stopped for the human. */
 export const NEEDS_YOU = "Needs you";
 
 function headerRow(title: string) {
@@ -896,40 +548,16 @@ function headerRow(title: string) {
   return returned;
 }
 
-/**
- * "2 run(s) need you", while the Selection is not on one of them. On one of them the
- * question itself is already on screen under the row, so the count would only be telling
- * the human about what they are looking at.
- */
 export function needsYouStatus(rows: readonly Row[], selected: string | null) {
   const waiting = Arr.filter(rows, (row) => row.needsYou);
   if (waiting.length === 0 || Arr.some(waiting, (row) => row.id === selected)) return null;
   return `${waiting.length} run(s) need you`;
 }
 
-/**
- * The rows the Selection may land on. A header names the group under it and nothing acts
- * on one, so the cursor steps over it: with a header first in the list, the board opened
- * with an inert row selected and the detail panel titled after a heading. Rendering still
- * draws every row — this is only about where the Selection can rest.
- */
 export function selectableRows(rows: readonly Row[]) {
   return Arr.filter(rows, (row) => row.kind !== "header");
 }
 
-/**
- * The rows of whichever View is showing. One list region, one Selection, one filter, one
- * set of scroll keys — a second implementation per View is how they would drift apart.
- */
-/**
- * The Runs view's rows, whichever View is showing. The same View at whichever scope is
- * showing, and the local board until the wide one has been read: a scope toggle is
- * answered before its board arrives.
- *
- * Read from outside the Runs view too, because a question is a question wherever the
- * human happens to be looking — `n` reaches one from Settings, and the button offering
- * it is drawn there for the same reason.
- */
 interface RunRowsState {
   filter: Filter;
   board: WorkspaceView;
@@ -944,28 +572,16 @@ export function runsRows(state: RunRowsState) {
     const group = Option.getOrUndefined(
       Arr.findFirst(state.wide.groups, (g) => g.workspaceId === filter.id),
     );
-    // Not on the wide board at all — a workspace Collie has nothing in — so this
-    // board's own runs are what is left to show.
     if (!group) return rowsOf(state.board, state.marks);
     return wideRows({ ...state.wide, groups: [group], quiet: [] }, state.marks);
   }
   return everyRow(state);
 }
 
-/** The Herd's whole board, and this board's own until the wide one has been read. */
 function everyRow(state: RunRowsState) {
   return state.wide ? wideRows(state.wide, state.marks) : rowsOf(state.board, state.marks);
 }
 
-/**
- * One Run and what hangs off it: the run's row, the agents working for it, and the
- * repository runs it fanned out.
- *
- * Not by depth: on the local board an agent sits at its run's *own* depth — the connector
- * is what joins them — so a depth test ended the group at the first agent and showed a
- * run with nothing under it. An agent is kept when it names this run, and a deeper row
- * when it is nested under what has been kept so far.
- */
 function onlyRun(rows: readonly Row[], runId: string) {
   const at = Option.getOrElse(
     Arr.findFirstIndex(rows, (row) => row.kind !== "agent" && row.runId === runId),
@@ -980,7 +596,6 @@ function onlyRun(rows: readonly Row[], runId: string) {
     const ofMine = row.runId !== null && mine.has(row.runId);
     if (!nestedDeeper && !(row.kind === "agent" && ofMine)) break;
     kept.push(row);
-    // A child run of this one brings its own agents along, so it joins the set.
     if (row.kind !== "agent" && row.runId !== null) mine.add(row.runId);
   }
   return kept;
@@ -989,13 +604,10 @@ function onlyRun(rows: readonly Row[], runId: string) {
 export function viewRows(state: AppState) {
   switch (state.view) {
     case "runs":
-      // Tasks are cards, not rows in the auxiliary pane.
       return [];
     case "history":
       return Arr.map(state.history ?? [], (r) => runRow(r, state.now, "history"));
     case "workflows":
-      // Workflows only: a persona is instructions, not something that can be run, so a
-      // persona row here offered a key that did nothing. Fork is where they are acted on.
       return Arr.map(state.definitions?.workflows ?? [], definitionRow);
     case "settings": {
       const settings = state.settings;
@@ -1025,7 +637,6 @@ export function viewRows(state: AppState) {
   }
 }
 
-/** What to say when a View has nothing in it, so an empty list is not a dead end. */
 export function emptyStateOf(view: ViewName) {
   switch (view) {
     case "runs":
@@ -1039,11 +650,6 @@ export function emptyStateOf(view: ViewName) {
   }
 }
 
-/**
- * The Selection after a refresh. The same id if it is still there; otherwise whatever
- * took its place, so a run finishing under the cursor leaves the neighbour selected
- * rather than nothing — and nothing only when there is nothing left to select.
- */
 export function clampSelection(
   selected: string | null,
   before: readonly Row[],
@@ -1067,23 +673,11 @@ export interface Action {
   command: Command;
 }
 
-/**
- * What this row can be asked to do. The row buttons and the footer both read this, so
- * a key the footer offers always acts on the Selection and never on something else —
- * and a key with nothing to act on is never on the line at all.
- *
- * The Scope decides two of them. Starting a workflow is this Session's: a fix round or
- * a second review runs in this workspace's checkout, so offering either on a board of
- * every workspace would start one against the wrong repository. They are offered on a
- * local board only, the way `s` is.
- */
 export function actionsFor(row: Row | null, filter: Filter) {
   if (!row) {
     const returned: Action[] = [];
     return returned;
   }
-  // A workspace is somewhere to go and nothing else: Enter on it is the jump, which
-  // `keyIntent` answers from the row for every kind of row alike.
   if (row.kind === "group") {
     const returned: Action[] = [];
     return returned;
@@ -1101,16 +695,12 @@ export function actionsFor(row: Row | null, filter: Filter) {
       const returned: Action[] = [];
       return returned;
     }
-    // Every definition row is a Workflow: a persona is instructions injected into an
-    // agent, so there is nothing to run on its own and the view stopped listing them.
     const returned: Action[] = [
       { key: "\r", label: "run", command: { _tag: "RunWorkflow", workflow: definition.name } },
     ];
     return returned;
   }
   if (row.kind === "setting") {
-    // A remembered value is a Run's own note to itself; the defaults are what a human
-    // sets, so only those are offered for editing.
     const returned: Action[] = row.setting?.writable
       ? [
           {
@@ -1133,18 +723,13 @@ export function actionsFor(row: Row | null, filter: Filter) {
     return returned;
   }
   const actions: Action[] = [{ key: "l", label: "log", command: { _tag: "OpenLog", runId } }];
-  // A finished run has no driver left to stop, so the key is not offered for one.
   if (row.kind === "active") {
     actions.push({ key: "k", label: "stop", command: { _tag: "StopRun", runId } });
   } else if (sessionLocal(filter)) {
-    // Only once it has stopped: work started from a Run still writing builds on half of it.
     actions.push({ key: "x", label: "offers", command: { _tag: "ChooseOffer", runId } });
   }
   if (row.target) {
     if (pipe(row.target, Str.startsWith("mr:"))) {
-      // Posting needs a review to post, and `fixable` is the row's only word on whether
-      // one was written. Looking at the merge request needs nothing but the target, so a
-      // review that came back clean is still one you can open.
       if (row.fixable) {
         actions.push({ key: "o", label: "post to the MR", command: { _tag: "PostReview", runId } });
       }
@@ -1159,38 +744,19 @@ export function actionsFor(row: Row | null, filter: Filter) {
   return returned;
 }
 
-/**
- * What the tab's keyboard is on. Three things have to agree about it — which keys act, a
- * paste, and what the footer offers — and they each used to work it out again from the
- * same four facts, in the same order, by hand. One value instead, so the order is stated
- * once: a flow asking a question owns the keyboard, then the selected run's question,
- * then the filter, then a Settings value, and the board's own keys when nothing is
- * taking typing.
- */
 export type Keyboarding =
   | { _tag: "Flow" }
-  /** A proposal on screen, which takes exactly two keys and refuses every other. */
   | { _tag: "Proposal"; proposal: { id: string; hash: string } }
   | { _tag: "Choice"; choice: PendingChoice }
   | { _tag: "Filter" }
   | { _tag: "Setting"; setting: { key: string; value: string } }
   | { _tag: "Board" };
 
-/** Where the keyboard is, from what the tab has open. Pure, and the order is the point. */
 export function keyboardOn(at: {
-  /** A flow asking a question inline; it has handlers of its own. */
   flow: boolean;
-  /**
-   * The proposal on screen, where one is. Above the question, because it is the narrower
-   * of the two — two keys and nothing else — and a human reading one has already been
-   * put in front of a decision.
-   */
   proposal?: { id: string; hash: string } | null;
-  /** The selected run's pending question, where it has one. */
   choice: PendingChoice | null;
-  /** Whether the cursor is in the filter, which outlives the text being kept. */
   filtering: boolean;
-  /** A Settings row being given a new value. */
   setting: { key: string; value: string } | null;
 }) {
   if (at.flow) return { _tag: "Flow" };
@@ -1203,39 +769,21 @@ export function keyboardOn(at: {
 
 const PASTED = new TextDecoder();
 
-/**
- * A paste appended to the field it was pasted into. opentui delivers a paste as bytes on
- * its own event rather than as keys, and the keyboard handlers take one printable
- * character at a time, so this is the one place a whole pasted string becomes field text.
- *
- * Every control character is dropped, the trailing newline a copied line carries most of
- * all: a newline is the submit key, and a pasted value has to be readable before it is
- * sent. Non-ASCII letters survive — a pasted branch name keeps them.
- */
 export function pasteInto(value: string, bytes: Uint8Array) {
   return value + pipe(PASTED.decode(bytes), Str.replace(/\p{C}/gu, ""));
 }
 
-/**
- * The options a question with room for `room` lines can show, as a window that keeps the
- * cursor inside it, and how many it leaves out. A question's region is capped so the list
- * it belongs to keeps rows of its own, and an option the cursor is on but nobody can see
- * is one nobody can knowingly press Enter on.
- */
 export function optionWindow<T>(items: readonly T[], at: number, room: number) {
   if (items.length <= room) return { shown: items, hidden: 0 };
-  // The window ends one past the cursor at the earliest, and stops at the last option.
   const end = Math.min(items.length, Math.max(room, at + 1));
   return { shown: items.slice(end - room, end), hidden: items.length - room };
 }
 
-/** The slice of a list a capped region shows, and how many it leaves out. */
 export interface Windowed<T> {
   shown: readonly T[];
   hidden: number;
 }
 
-/** One of a card's merge requests, as `w` and `y` offer it. */
 export interface MrChoice {
   readonly short: string;
   readonly target: string;
@@ -1243,7 +791,6 @@ export interface MrChoice {
   readonly runId: string | null;
 }
 
-/** The answers to a `ChooseMr` in the card's order, keyed 1 to 9; past nine, 9 is "More…". */
 export const mrChoices = (command: Extract<Command, { readonly _tag: "ChooseMr" }>) => {
   const usable = Arr.filter(command.mrs, (one) =>
     command.copy ? one.url !== null : readMrRef(one.target) !== null,
@@ -1281,7 +828,6 @@ export const mrChoices = (command: Extract<Command, { readonly _tag: "ChooseMr" 
   ];
 };
 
-/** One line of a card's menu: what it says, the key beside it, and what it does. */
 export interface MenuItem {
   key: string;
   label: string;
@@ -1289,7 +835,6 @@ export interface MenuItem {
   disabled?: boolean;
 }
 
-/** A card's action as this board draws it: the key beside it, its label, and its command. */
 function itemFor(view: TaskView, action: CardAction, primary: boolean) {
   const runId = view.run;
   switch (action.kind) {
@@ -1319,7 +864,6 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean) {
     }
     case "open-mr": {
       const returned: MenuItem = {
-        // One key cannot say which of several merge requests it opens.
         key: action.named === undefined ? "w" : "",
         label: openMrLabel(action.mr, primary, action.named),
         command: { _tag: "OpenMr", target: mrTarget(action.mr.project, action.mr.iid), runId },
@@ -1404,13 +948,11 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean) {
 
 const DISPOSITION_KEYS = { merged: "M", abandoned: "A", superseded: "S" } as const;
 
-/** The one action that ends a card's wait, drawn first on the card. */
 export function primaryFor(view: TaskView) {
   const action = primaryAction(view);
   return action === null ? null : itemFor(view, action, true);
 }
 
-/** What this Task can be asked for, in the order the menu shows it, its record first. */
 export function menuFor(view: TaskView) {
   const actions = cardActions(view);
   const mrs = Arr.flatMap(actions, (action) =>
@@ -1446,25 +988,17 @@ export function menuFor(view: TaskView) {
   return returned;
 }
 
-/** What became of the work, for work that is over. */
 export function dispositionsFor(view: TaskView) {
   return Arr.map(dispositionActions(view), (action) => itemFor(view, action, false));
 }
 
-/** The earlier finished runs on screen, and whether there are more to ask for. */
 export interface Older {
   rows: ReadonlyArray<RunRow>;
   more: boolean;
 }
 
-/** How many earlier runs each press of `older…` brings in. */
 const OLDER_BATCH = 10;
 
-/**
- * The finished runs of this checkout that the board is not already showing as cards,
- * a page at a time. `more` is true while there is anything left to ask for — including
- * before History has been read at all, because asking is what reads it.
- */
 export function olderFinished(
   history: ReadonlyArray<RunRow> | null,
   finished: ReadonlyArray<TaskView>,
@@ -1478,7 +1012,6 @@ export function olderFinished(
   return { rows, more: rows.length < rest.length };
 }
 
-/** Where this Task's work is. Which tab that is stays for the handler to resolve. */
 export function goToTab(view: TaskView) {
   const returned: Command = {
     _tag: "Jump",
@@ -1487,11 +1020,6 @@ export function goToTab(view: TaskView) {
   return returned;
 }
 
-/**
- * Every key the board takes, the card menu's included. One list: `?` draws it and
- * `docs/using.md` restates it, so a key added to the handler and not to this is a key
- * nobody can find. It has to fit a 24-row pane.
- */
 export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "Tab", what: "The board, the record over it, then ≡" },
   { key: "/", what: "Search, and narrow all three sections" },
@@ -1515,27 +1043,13 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "k", what: "Stop run" },
 ];
 
-/**
- * The globals the line always ends in. Few, because the footer's job is the Selection's
- * own keys: the two-line wrap of every global was what made the important ones
- * unreadable, and `?` is what the rest of them live behind now. The scope is here
- * rather than behind `?` because it is the one thing about this board that is not
- * visible on it — and the key names where it goes, not where it is.
- */
 const globalKeys = (filter: Filter) => [
   `g ${sessionLocal(filter) ? "all" : "local"}`,
-  // Starting a run is this Session's, so it is not offered from a board of every
-  // workspace; `g local` above is how you get back to somewhere it means something.
   ...(sessionLocal(filter) ? ["p run"] : []),
   "? keys",
   "q close",
 ];
 
-/**
- * The footer's key line: what a field that has taken the keys says they do, and the
- * board's own three where nothing has. Pure, so what the line says in each of those is a
- * test rather than a screenshot — and so it cannot drift from what each mode accepts.
- */
 export function footerKeys(opts: {
   panel: ReadonlyArray<string>;
   on: Keyboarding;
@@ -1543,18 +1057,11 @@ export function footerKeys(opts: {
 }) {
   if (opts.on._tag === "Choice") return "↑↓ move · Enter choose · Esc leave the run open";
   if (opts.on._tag === "Setting") return "type a value · Enter set it · Esc leave it";
-  // The filter has the keys too, so the board's own are as much a lie here as the
-  // Selection's buttons were: `k` typed a `k` while `[k stop]` stopped the run.
   if (opts.on._tag === "Filter") return "type to narrow · Enter keep it · Esc drop it";
   if (opts.on._tag === "Proposal") return "Enter carry it out · Esc decline it";
   return Arr.join([...opts.panel, ...globalKeys(opts.filter)], " · ");
 }
 
-/**
- * One keypress, as much of it as anything here needs. Structurally typed rather than
- * OpenTUI's `KeyEvent`, because this module must stay renderer-free — the same reason it
- * stays Effect-free.
- */
 export interface Keypress {
   sequence: string;
   name?: string;
@@ -1563,65 +1070,26 @@ export interface Keypress {
   meta?: boolean;
 }
 
-/**
- * What the board is, as far as the keyboard is concerned. Plain facts, which is what
- * makes the whole cascade below a unit test instead of a rendered one: the precedence
- * between six things that can own the keyboard used to be readable only as the order of
- * early returns inside a `useKeyboard` callback.
- */
 export interface KeyContext {
-  /** Which View is showing: the scope is the Runs view's, so `g` is that view's key. */
   view: ViewName;
-  /**
-   * What the board is filtered to. Only the Session-local keys ask: a hand-off names one
-   * of this Session's live agents, and a board of the whole session has rows that are
-   * not this Session's.
-   */
   filter: Filter;
-  /**
-   * Where the keyboard is. `keyboardOn` above is the one answer to that, shared with the
-   * paste handler and the footer, so this does not restate the facts it is made of.
-   */
   on: Keyboarding;
-  /**
-   * Whether the help overlay is up, in which case any key closes it. Not part of
-   * `Keyboarding`, because the overlay takes no typing — it is drawn over whatever does.
-   */
   helping: boolean;
-  /** Where answering the pending question has got to. */
   asking: Asking;
-  /** The text narrowing the list, while the keyboard is in it. Not the board's Filter. */
   query: string;
-  /** Whether the detail panel is on screen and can be scrolled. */
   scrollable: boolean;
-  /** The Selection, and every row, for the keys that act on one or find one. */
   row: Row | null;
   rows: readonly Row[];
-  /** Whether the panel cut something short, which is the only thing `m` can act on. */
   cutShort: boolean;
-  /** The merge requests `c` copies the link of: the only one, or one asked for. */
   mrs: ReadonlyArray<MrChoice>;
 }
 
-/**
- * What one keypress does. Everything the app can be asked to do by the keyboard, as
- * plain data: the four at the top are the app's own state, `Scroll` and `Copy` are the
- * two effects only a renderer can perform, and `Do` is every command that already has a
- * name. `null` is a key this board does nothing with.
- */
 export type KeyIntent =
   | { _tag: "Help"; open: boolean }
-  /** Where one keystroke left a pending question: what to show, and what to send. */
   | { _tag: "Answered"; asking: Asking; value: string | null }
   | { _tag: "Filtering"; filter: string; typing: boolean }
   | { _tag: "Editing"; editing: { key: string; value: string } | null }
-  /**
-   * The value being edited, sent: dispatch it and close the editor. One intent for one
-   * key doing both, the way `Answered` carries the new asking state and the answer —
-   * a bare `Do` left the footer in editor mode with every later key still editing.
-   */
   | { _tag: "Submitted"; command: Command }
-  /** Select the next pending Choice; the app knows the rows and the filter. */
   | { _tag: "NextQuestion" }
   | { _tag: "Move"; by: -1 | 1 }
   | { _tag: "ShowViewBy"; by: -1 | 1 }
@@ -1631,31 +1099,13 @@ export type KeyIntent =
 
 const PRINTABLE = /^[\x20-\x7e]$/;
 
-/**
- * The key that goes to the next unanswered question. Unused by the rest of the map,
- * and deliberately reachable while a menu is up: a board of several asking Runs is
- * exactly when it is needed, and a menu takes no text for it to steal.
- */
 const NEXT_QUESTION = "n";
 
-/**
- * Whether what has the keyboard is a field being typed into. A global shortcut must
- * never be read out of one — the character belongs to the answer, the filter or the
- * value — which is what keeps `n` from jumping while a free-text question is open.
- */
 function takesText(on: Keyboarding) {
   if (on._tag === "Filter" || on._tag === "Setting") return true;
   return on._tag === "Choice" && on.choice.kind === "ask";
 }
 
-/**
- * The next Run with a pending Choice after the Selection, wrapping once. Over every row
- * of the current Scope rather than what a filter left, because a question hidden behind
- * a filter is still unanswered — the app clears the filter to show the one this picks.
- *
- * A Selection that is not on this board starts the search at the top, so the first
- * question is not skipped. `null` means there is no question anywhere.
- */
 export function nextQuestionId(rows: readonly Row[], selected: string | null) {
   const list = selectableRows(rows);
   const at = Option.getOrElse(
@@ -1670,7 +1120,6 @@ export function nextQuestionId(rows: readonly Row[], selected: string | null) {
   return null;
 }
 
-/** The keys that start something in this Session, and what each opens. */
 const SESSION_MODES = new Map<string, Mode>([
   ["p", "pick"],
   ["C", "continue"],
@@ -1680,45 +1129,21 @@ const SESSION_MODES = new Map<string, Mode>([
 
 const doing: (command: Command) => KeyIntent = (command) => ({ _tag: "Do", command });
 
-/**
- * What one keypress means, given what is on screen. One ordered cascade, and the order
- * is the whole design: whoever owns the keyboard is asked first, and only a board with
- * nobody else asking gets to the list's own keys.
- *
- * Pure, so each of those rules is a test. It returns intents rather than performing
- * anything because two of them — scrolling the panel, putting a URL on the clipboard —
- * belong to the renderer, and a function that reached for those could not be tested at
- * all. `Do` carries the commands unchanged, so a key and a click on the same row button
- * still cannot mean different things.
- */
 export function keyIntent(at: KeyContext, key: Keypress) {
-  // The overlay is the whole screen and every key behind it acts on something nobody
-  // can see, so any key closes it and does nothing else. First, because that is the
-  // order App draws them in: it hides the Flow behind the overlay, so giving a flow the
-  // keyboard here left a visible overlay that no key could close.
   if (at.helping) return { _tag: "Help", open: false };
-  // A flow asking a question owns the keyboard: `Flow` has its own handler, and a key
-  // that also moved the Selection underneath would act on a board nobody is looking at.
   if (at.on._tag === "Flow") return null;
-  // A proposal on screen: two keys, and every other one refused. A human reading what
-  // they are being asked to consent to must not be able to stop a run by pressing `k` at
-  // it — the payload is on screen, and the only answers to it are yes and no.
   if (at.on._tag === "Proposal") {
     const { id, hash } = at.on.proposal;
     if (key.name === "return") return doing({ _tag: "ConfirmProposal", id, hash });
     if (key.name === "escape") return doing({ _tag: "DeclineProposal", id, hash });
     return null;
   }
-  // Before whoever has the keyboard, but only where that is not a field taking text:
-  // this is the one way to a question on a board where a question already has the keys.
   if (key.sequence === NEXT_QUESTION && !takesText(at.on)) return { _tag: "NextQuestion" };
   if (at.on._tag === "Choice") {
     const next = answerFor(at.on.choice, at.asking, key.sequence);
     return { _tag: "Answered", asking: next.asking, value: next.value };
   }
   if (at.on._tag === "Filter") {
-    // Enter stops typing and keeps the text — `/` narrows the list so a row can then be
-    // acted on — and only Esc drops it.
     if (key.name === "escape") return { _tag: "Filtering", filter: "", typing: false };
     if (key.name === "return") return { _tag: "Filtering", filter: at.query, typing: false };
     if (key.name === "backspace") {
@@ -1729,8 +1154,6 @@ export function keyIntent(at: KeyContext, key: Keypress) {
     }
     return null;
   }
-  // A Settings row being given a new value: every key belongs to that until it is sent
-  // or abandoned, the same rule a pending question follows.
   if (at.on._tag === "Setting") {
     const editing = at.on.setting;
     if (key.name === "escape") return { _tag: "Editing", editing: null };
@@ -1749,42 +1172,23 @@ export function keyIntent(at: KeyContext, key: Keypress) {
     }
     return null;
   }
-  // A filter kept so a row can be acted on outlives the keyboard being in it, so Esc
-  // has to reach it from the board too: it used to mean `/` first, and a filter nobody
-  // remembers setting hides whole workspaces on a wide board.
   if (key.name === "escape" && at.query !== "") {
     return { _tag: "Filtering", filter: "", typing: false };
   }
-  // And once there is no text filter left to drop, Esc widens the board: narrowing to a
-  // workspace is a filter too, and the way out of one has to be the same key.
   if (key.name === "escape") return doing({ _tag: "SetFilter", filter: { kind: "all" } });
-  // After everything that takes text, never before: a printable character belongs to
-  // the answer, the filter or the value being typed, and a free-text answer that could
-  // not contain a question mark was the cost of checking this first.
   if (key.sequence === "?") return { _tag: "Help", open: true };
-  // The panel's keys before the list's: the arrows move the Selection, so these are
-  // deliberately the arrows with a modifier plus the two keys that mean "page" on every
-  // other reader.
   if (at.scrollable) {
     if (key.name === "pageup") return { _tag: "Scroll", by: -1, unit: "page" };
     if (key.name === "pagedown") return { _tag: "Scroll", by: 1, unit: "page" };
     if (key.shift && key.name === "up") return { _tag: "Scroll", by: -1, unit: "line" };
     if (key.shift && key.name === "down") return { _tag: "Scroll", by: 1, unit: "line" };
   }
-  // Arrows, and not `hjkl`: `k` is the stop key the board has always had and the one the
-  // footer offers, and a destructive key that sometimes means "up" is worse than no vim
-  // binding.
   if (key.name === "up") return { _tag: "Move", by: -1 };
   if (key.name === "down") return { _tag: "Move", by: 1 };
   if (key.name === "tab") return { _tag: "ShowViewBy", by: key.shift ? -1 : 1 };
   if (key.sequence === "/") return { _tag: "Filtering", filter: at.query, typing: true };
-  // Re-reading what is on screen, and the one merge request behind it: a cached read is
-  // what makes selecting cheap, so there has to be a way to say "ask again".
   if (key.sequence === "R") return doing({ _tag: "Refresh" });
-  // The log, in the panel: `l` still opens it in a pane, because grepping and copying
-  // belong in one.
   if (key.sequence === "t") return at.row?.runId ? doing({ _tag: "ToggleTail" }) : null;
-  // The rest of a review the panel cut short, a cap at a time.
   if (key.sequence === "m") return at.cutShort ? doing({ _tag: "MoreReview" }) : null;
   if (key.sequence === "c") {
     if (at.mrs.length > 1) return doing({ _tag: "ChooseMr", copy: true, mrs: at.mrs });
@@ -1792,34 +1196,18 @@ export function keyIntent(at: KeyContext, key: Keypress) {
     return url !== null ? { _tag: "Copy", text: url } : null;
   }
   if (key.name === "q" || (key.ctrl && key.name === "c")) return doing({ _tag: "Quit" });
-  // A digit focuses that agent wherever the Selection is: those keys are the board's
-  // shortcut into a pane, not an action on a row.
   if (/^[1-9]$/.test(key.sequence)) {
     const agent = Option.getOrUndefined(
       Arr.findFirst(at.rows, (r) => r.kind === "agent" && r.key === key.sequence),
     );
     return agent?.agent ? doing({ _tag: "FocusAgent", agent: agent.agent }) : null;
   }
-  // The way into the whole session, and back. The Runs view's own key: it is the only
-  // View a Scope means anything to, and widening one nobody is looking at would read
-  // the whole session on every tick for nothing.
   if (key.sequence === "g") return at.view === "runs" ? doing({ _tag: "ToggleFilter" }) : null;
-  // The local board's keys, all four under the one rule: starting a workflow, resuming
-  // one and forking a definition act on this workspace's checkout rather than on the
-  // selected row, and the hand-off `s` names an agent on this Session's register —
-  // none of which is what a board of every workspace is about. A wide board falls
-  // through to the row's own keys, which are none of these.
   if (sessionLocal(at.filter)) {
     const mode = SESSION_MODES.get(key.sequence);
     if (mode) return doing({ _tag: "OpenMode", mode });
     if (key.sequence === "s") return doing({ _tag: "SendReview", runId: at.row?.runId ?? null });
   }
-  // Enter means "go to it" wherever a row points at anything — a workspace, a run, an
-  // agent, in either scope — resolved from the row's own key when it is pressed rather
-  // than from an id cached when the row was drawn. A Workflow and a Settings row point
-  // at nothing and keep Enter for their own action, below.
-  // A workspace row is a filter, not a pane: Enter narrows the board to it, and its
-  // runs are what Enter jumps into from there.
   if (key.name === "return" && at.row?.kind === "group" && at.row.jump?.kind === "workspace") {
     return doing({ _tag: "SetFilter", filter: { kind: "workspace", id: at.row.jump.workspaceId } });
   }
@@ -1833,23 +1221,16 @@ export function keyIntent(at: KeyContext, key: Keypress) {
   return action ? doing(action.command) : null;
 }
 
-/** Where a pending question has got to: the highlighted option, or the text so far. */
 export interface Asking {
   index: number;
   typed: string;
 }
 
-/** Where one keystroke left a question: what to show next, and what to send back. */
 export interface Answered {
   asking: Asking;
-  /** `""` for Esc, which leaves the run open; `null` while it is still being composed. */
   value: string | null;
 }
 
-/**
- * One keystroke against a pending question. Pure, so the app and the text fallback
- * answer a question identically rather than each having their own idea of Esc.
- */
 export function answerFor(choice: PendingChoice, asking: Asking, key: string) {
   if (key === "\x1b" || key === "\x03") return { asking, value: "" };
   if (key === "\r" || key === "\n") {
@@ -1875,11 +1256,6 @@ export function answerFor(choice: PendingChoice, asking: Asking, key: string) {
   return { asking, value: null };
 }
 
-/**
- * The colour that reinforces a status glyph. Colour is never the only carrier — the
- * glyph is what the text fallback and herdr's tab strip show, and not everyone can see
- * the colour — so this only ever restates what the glyph already says.
- */
 export function statusColour(glyph: string) {
   switch (glyph) {
     case GLYPH.running:
@@ -1904,12 +1280,6 @@ function subsequence(needle: string, hay: string) {
   return needle.length === 0;
 }
 
-/**
- * Name prefix first, then substring anywhere, then in-order characters. The popup
- * picker's filter, kept when the popup became components: typing `imp` should find
- * `implement` before it finds a run whose detail mentions "improved", and the fuzzy
- * pass is what makes a half-remembered name findable at all.
- */
 export function filterItems<T>(items: readonly T[], query: string, hay: (item: T) => string) {
   const needle = Str.toLowerCase(Str.trim(query));
   if (needle === "") return [...items];
@@ -1925,21 +1295,8 @@ export function filterItems<T>(items: readonly T[], query: string, hay: (item: T
   return [...prefix, ...anywhere, ...fuzzy];
 }
 
-/**
- * The rows a filter leaves. The list is already nested when this sees it — a run, then
- * the agents working for it — so a row is kept when it matches and a run or a header is
- * kept when anything in its group does: filtering the rows one by one dropped a run whose
- * agent matched and left that agent under nothing, and an agent row does not name its own
- * run any more.
- *
- * The order is the board's own, not the order the matches were ranked in. Ranking is
- * what a pick list wants; here it would lift an agent above the run it hangs off.
- */
 export function matching(rows: readonly Row[], query: string) {
   if (Str.trim(query) === "") return [...rows];
-  // A header is not something to look for: it says what the group under it is, so it is
-  // never a match of its own — a heading kept over a group that was filtered out is a
-  // line that names nothing.
   const looked = Arr.filter(rows, (row) => row.kind !== "header");
   const hit = new Set(Arr.map(filterItems(looked, query, rowHay), (row) => row.id));
   return Arr.filter(
@@ -1951,12 +1308,6 @@ export function matching(rows: readonly Row[], query: string) {
   );
 }
 
-/**
- * Whether a row this one is nested under matched, which is what a filter on a workspace
- * name is asking for: narrowing the wide board to `gitlab` means that workspace and the
- * runs in it, not one row saying its name. Local rows are all at depth 0 and have no
- * such row above them, so this only ever answers in the tree.
- */
 function underAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>) {
   let depth = rows[at]!.depth;
   for (let above = at - 1; above >= 0 && depth > 0; above--) {
@@ -1968,19 +1319,9 @@ function underAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>)
   return false;
 }
 
-/** The rows that have a group under them, which is what `rowsOf` puts there. A finished
- * run keeps its agents, so it opens a group exactly as a running one does. */
 const opensAGroup = (row: Row) =>
   row.kind === "active" || row.kind === "recent" || row.kind === "header" || row.kind === "group";
 
-/**
- * Whether anything in the group under this row matched: the rows that follow it, until
- * one that is not nested under it. A run's group is the agent rows under it, so a later
- * run matching is not this run's business. A header's group is what the header names —
- * the runs that need you, or the agents with no run here — and the agents of those runs
- * come along with them. A workspace's group is everything indented under it, which is
- * how a filtered wide board keeps the row that says which workspace a run is in.
- */
 function groupHasAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>) {
   const opener = rows[at]!;
   const nested = (under: Row) =>
@@ -1994,12 +1335,10 @@ function groupHasAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<strin
   return false;
 }
 
-/** What a row is matched against: everything on it a human might type at. */
 export function rowHay(row: Row) {
   return `${row.title} ${row.detail}`;
 }
 
-/** And what a pick item is matched against; its id is the name the prefix pass finds. */
 export function itemHay(item: PickItem) {
   return `${item.id} ${item.title} ${item.subtitle ?? ""}`;
 }

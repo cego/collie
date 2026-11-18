@@ -1,16 +1,11 @@
 import * as Cause from "effect/Cause";
-// This Machine's peers (ADR-0057): the pairing each side keeps, the listener a peer that
-// dials in reaches, and one relay socket per peer that speaks what `host.sock` speaks.
-// Every client reaches another Machine by opening `relayOf(stateDir, name)`, and nothing
-// above that path knows there is a WebSocket behind it.
 
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { createServer, isIP, type Server, type Socket } from "node:net";
-// effect/crypto has no X.509 certificate inspection.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
+// oxlint-disable-next-line effecttsgo/node-builtin-import -- effect/crypto has no X.509 certificate inspection.
 import { X509Certificate } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
 import type { ServerWebSocket } from "bun";
@@ -86,7 +81,6 @@ export const certOf = (stateDir: string) => `${stateDir}/peer-cert.pem`;
 export const keyOf = (stateDir: string) => `${stateDir}/peer-key.pem`;
 const listenerCertOf = (stateDir: string) => `${stateDir}/peer-listener-cert.pem`;
 
-/** This Machine as a peer names it, where nothing better is known. */
 export const machineName = () => hostname();
 
 export const runShell = Effect.fn("Peers.shell")(
@@ -139,7 +133,6 @@ export const runShell = Effect.fn("Peers.shell")(
 const decodePeers = Schema.decodeUnknownEffect(PeersFile);
 const encodePeers = flow(Schema.encodeResult(PeersFile), Result.getOrThrow);
 
-/** Every pairing this Machine keeps; none where it has never paired. */
 export const peersOf = (stateDir: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(fileOf(stateDir))),
@@ -166,7 +159,6 @@ const bindHost = Config.String("COLLIE_PEER_HOST").pipe(
   Effect.orDie,
 );
 
-/** Whether a secret is this one, without saying how much of it matched. */
 const sameSecret = (given: string, kept: string) => {
   const a = Buffer.from(given);
   const b = Buffer.from(kept);
@@ -176,7 +168,6 @@ const sameSecret = (given: string, kept: string) => {
   return differ === 0;
 };
 
-/** The names and addresses this Machine may be dialled by, and the one the asker will use. */
 const namesFor = (address: string | null) => {
   const ips = Arr.flatMap(Rec.values(networkInterfaces()).flat(), (one) =>
     one === undefined ? [] : [one.address],
@@ -188,7 +179,6 @@ const namesFor = (address: string | null) => {
   );
 };
 
-/** This Machine's certificate, made once with `openssl`. */
 export const certificateFor = Effect.fn("Peers.certificateFor")(function* (
   stateDir: string,
   address: string | null,
@@ -230,7 +220,6 @@ export const certificateFor = Effect.fn("Peers.certificateFor")(function* (
   return yield* fs.readFileString(certOf(stateDir));
 });
 
-/** An address certificate signed by the original pin, keeping every previously invited alias. */
 const listenerCertificateFor = Effect.fn("Peers.listenerCertificateFor")(function* (
   stateDir: string,
   address: string | null,
@@ -310,7 +299,6 @@ export interface PeerClient {
   }) => Effect.Effect<ReadonlyArray<SharedDefinition>, PeerCallFailure>;
 }
 
-/** What a peer link reaches its own host with, which only it may declare `from.machine` with. */
 export interface Link {
   readonly reconnected: Effect.Effect<void>;
   readonly dir: string;
@@ -325,15 +313,10 @@ export interface Link {
     Scope.Scope
   >;
   readonly installation: string;
-  /** This host's own, which a front door cannot know. */
   readonly stamp: string;
-  /** This host's socket, which a channel from a peer is declared on. */
   readonly socket: string;
-  /** Tells a peer this Machine has forgotten it, over its relay. */
   readonly tell: (peer: Peer) => Effect.Effect<void>;
-  /** This Machine's Machines, or null where its backend could not say. */
   readonly machines: Effect.Effect<ReadonlyArray<SshMachine> | null>;
-  /** Told each time a paired peer's link comes up. */
   readonly linked: (peer: Peer) => Effect.Effect<void>;
 }
 
@@ -386,7 +369,6 @@ export const levelPeer = Effect.fn("Peers.level")(function* (link: Link, peer: P
   );
 }, Effect.scoped);
 
-/** What this host's peers module answers. */
 export interface Peers {
   readonly invite: (asker: {
     readonly installation: string;
@@ -395,15 +377,12 @@ export interface Peers {
   }) => Effect.Effect<Invited, HostRefused>;
   readonly add: (peer: Peer) => Effect.Effect<void, HostRefused>;
   readonly forget: (installation: string) => Effect.Effect<void>;
-  /** Forgets the peer by that name, tells it so, and ends this computer's SSH connection to it. */
   readonly unpair: (name: string) => Effect.Effect<void>;
   readonly list: Effect.Effect<ReadonlyArray<PeerView>>;
-  /** Ends the backoff of the link to the peer this Machine dials by that name. */
   readonly wake: (name: string) => Effect.Effect<void>;
   readonly live: (installation: string) => Effect.Effect<boolean>;
 }
 
-/** One line answering a relay connection's header: open, or why not. */
 export const RelayAnswer = Schema.Struct({
   ok: Schema.Boolean,
   refused: Schema.optionalKey(Schema.String),
@@ -417,7 +396,6 @@ const encodeAnswer = flow(
 );
 export const decodeAnswer = Schema.decodeUnknownOption(Schema.fromJsonString(RelayAnswer));
 
-/** Reads a connection's first line, handing on whatever followed it. */
 const firstLine = (conn: Socket, then: (line: string, rest: Buffer) => void) => {
   let seen = Buffer.alloc(0);
   const take = (chunk: Buffer) => {
@@ -434,14 +412,10 @@ const firstLine = (conn: Socket, then: (line: string, rest: Buffer) => void) => 
   conn.on("data", take);
 };
 
-/** How long a dial-back ticket can be used for. */
 const TICKET_LIFE_MS = 10_000;
-/** How often a listener says it is still there over each control link. */
 const BEAT = "15 seconds";
-/** A control link heard nothing from for this long is down. */
 const SILENCE_MS = 15_000;
 
-/** What a listener sends over a control link: a dial-back asked for, or that it is there. */
 const ControlMessage = Schema.Union([
   Schema.Struct({
     dial: Schema.String,
@@ -456,14 +430,12 @@ const encodeControl = flow(Schema.encodeResult(ControlJson), Result.getOrThrow);
 const decodeControl = Schema.decodeUnknownOption(ControlJson);
 const BEAT_MESSAGE = encodeControl({ beat: true });
 
-/** The far end of a channel to a peer, however it was opened. */
 interface Far {
   readonly send: (chunk: Uint8Array) => void;
   readonly close: () => void;
   readonly listen: (deliver: (chunk: Uint8Array) => void, done: () => void) => void;
 }
 
-/** What arrives on a WebSocket, held until someone listens. */
 const held = () => {
   const queued: Array<Uint8Array> = [];
   let deliver: (chunk: Uint8Array) => void = (chunk) => void queued.push(chunk);
@@ -484,7 +456,6 @@ const held = () => {
   };
 };
 
-/** A peer's WebSocket on this Machine's listener; what it is for decides what each event does. */
 interface Accepted {
   readonly peer: Peer;
   readonly opened: (ws: ServerWebSocket<Accepted>) => void;
@@ -498,22 +469,15 @@ interface Ticket {
   readonly arrive: (far: Far) => void;
 }
 
-/** Where a peer stands now, as `collie machine list` says it. */
 type Standing = Pick<
   PeerView,
   "state" | "since" | "failure" | "transport" | "direct" | "ssh" | "waits"
 >;
 const NO_WAY = { transport: null, direct: null, ssh: null, waits: null } as const;
 
-/**
- * The peers module, for as long as the host's scope: the records, a relay socket for each
- * peer, the control link to each peer this Machine dials, and the listener while any peer
- * dials in.
- */
 export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   const fs = yield* FileSystem.FileSystem;
   const scope = yield* Effect.scope;
-  // Forked with the host's own services, so what they log reaches the host log.
   const runInHost = yield* FiberSet.makeRuntime();
   const clock = yield* Clock.Clock;
   const services = yield* Effect.context<
@@ -522,8 +486,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     | SecureRandom.SecureRandom
     | ChildProcessSpawner.ChildProcessSpawner
   >();
-  // Port 0 takes what is free once; every later opening, by any host of the directory,
-  // binds that same port.
   const keptPort = `${link.dir}/peer-port`;
   let listenPort = yield* port;
   if (listenPort === 0)
@@ -532,13 +494,10 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   const startedAt = DateTime.formatIso(DateTime.makeUnsafe(clock.currentTimeMillisUnsafe()));
   let peers = [...(yield* peersOf(link.dir))];
   const relays = new Map<string, Server>();
-  /** The dialler of each peer this Machine keeps a control link to. */
   const diallers = new Map<string, Fiber.Fiber<never>>();
-  /** The control link each peer that dials in holds open. */
   const controls = new Map<string, ServerWebSocket<Accepted>>();
   const tickets = new Map<string, Ticket>();
   const standings = new Map<string, Standing>();
-  /** What ends the wait before each dialler's next attempt. */
   const wakers = new Map<string, Deferred.Deferred<void>>();
   const builds = new Map<string, string>();
   const syncing = yield* Semaphore.make(1);
@@ -592,7 +551,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         Effect.provideContext(services),
       );
 
-  /** Per peer, the edit of each path it is known to hold, so a watch gives it only newer ones. */
   const holds = new Map<string, Map<string, string>>();
   const unsynced = (peer: Peer, held: ReadonlyArray<SharedDefinition>) =>
     Arr.some(held, (one) => holds.get(peer.installation)?.get(one.path) !== one.at);
@@ -690,7 +648,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         return yield* new HostRefused({ reason: `"${name}" cannot name a relay socket` });
     });
 
-  /** The SSH connection the Machine by this peer's name has, or none where the list names none. */
   const connectionOf = (peer: Peer) =>
     Effect.gen(function* () {
       const machine = Option.getOrUndefined(
@@ -705,13 +662,11 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       );
     }).pipe(Effect.provideContext(services));
 
-  /** The way a peer's live link went, which its channels take too; none while it is down. */
   const wayOf = (peer: Peer) => {
     const standing = standings.get(peer.installation);
     return standing?.state === "live" ? (standing.transport ?? undefined) : undefined;
   };
 
-  /** A fresh `/channel` to a peer this Machine dials. */
   const dialOut = (peer: Peer, as: FrontDoor, client: string, sender?: AgentAddress) =>
     openPeer(
       peer,
@@ -721,7 +676,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       wayOf(peer),
     );
 
-  /** A peer that dials in, asked over its control link to dial back for this channel. */
   const dialBack = (peer: Peer, as: FrontDoor, client: string, sender?: AgentAddress) =>
     Effect.gen(function* () {
       const control = controls.get(peer.installation);
@@ -754,7 +708,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       });
     });
 
-  /** A relay connection, once its header is read, piped to the far end of a fresh channel. */
   const relayed = (peer: Peer, conn: Socket, line: string, rest: Uint8Array) =>
     Effect.gen(function* () {
       const answer = (said: RelayAnswer) => `${encodeAnswer(said)}\n`;
@@ -793,7 +746,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       });
     }).pipe(Effect.scoped);
 
-  /** A channel from `peer` into this host, declared as coming from that Machine. */
   const intoHost = (peer: Peer, as: FrontDoor, client: string, far: Far, sender?: AgentAddress) =>
     channelInto(
       link.socket,
@@ -812,7 +764,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       },
     );
 
-  /** The dial-back a listener asked for: `/reverse` with its ticket, piped into this host. */
   const dialledBack = (
     peer: Peer,
     dial: string,
@@ -833,7 +784,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       Effect.scoped,
     );
 
-  /** One control link to a peer this Machine dials, until it ends: whether it was up, and why it ended. */
   const controlLink = (peer: Peer) =>
     Effect.gen(function* () {
       const opened = yield* openPeer(
@@ -893,7 +843,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       return { up: true, ended: { failure, ...NO_WAY } };
     }).pipe(Effect.scoped);
 
-  /** The control link to `peer`, kept open for as long as this host runs. */
   const dialling = (peer: Peer) =>
     Effect.gen(function* () {
       let failures = 0;
@@ -929,7 +878,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       relays.set(peer.installation, server);
     }).pipe(Effect.orDie);
 
-  /** Everything kept for a peer this Machine no longer has. */
   const drop = (installation: string) =>
     Effect.gen(function* () {
       for (const [conn, owner] of connections) if (owner === installation) conn.destroy();
@@ -948,7 +896,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       builds.delete(installation);
     });
 
-  /** Whom the listener lets in: the installation a bearer secret was minted for. */
   const bearerOf = (request: Request) => {
     const given = /^Bearer (.+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
     if (given === undefined) return undefined;
@@ -957,7 +904,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     );
   };
 
-  /** A `/channel` a peer opened, declared into this host. */
   const channelFrom: (
     peer: Peer,
     as: FrontDoor,
@@ -986,10 +932,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     };
   };
 
-  /**
-   * A peer's control link: the newest one an installation opens is the one kept, over the
-   * transport its dialler declared.
-   */
   const controlFrom: (peer: Peer, transport: Way, direct: string | null) => Accepted = (
     peer,
     transport,
@@ -1023,7 +965,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     },
   });
 
-  /** The dial-back a ticket was minted for, handed to the relay connection waiting on it. */
   const reverseFrom: (peer: Peer, ticket: Ticket) => Accepted = (peer, ticket) => {
     const inbox = held();
     return {
@@ -1039,7 +980,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     };
   };
 
-  /** What a request to the listener is let in as, or the response refusing it. */
   const accept = (request: Request) => {
     const url = new URL(request.url);
     const peer = bearerOf(request);
@@ -1115,7 +1055,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     });
   });
 
-  /** A relay and its link for every peer, and the listener while one dials in. */
   const settle: Effect.Effect<void> = Effect.gen(function* () {
     for (const installation of new Set([...relays.keys(), ...diallers.keys()]))
       if (!Arr.some(peers, (peer) => peer.installation === installation)) yield* drop(installation);
@@ -1200,7 +1139,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   });
   yield* Effect.forkIn(
     Effect.gen(function* () {
-      // ponytail: polled quietly while the user directory is gone, which only its owner makes.
       if (!(yield* fs.exists(link.userDir))) return yield* Effect.sleep("10 seconds");
       for (const kind of definitionKinds)
         if (!(yield* fs.exists(`${link.userDir}/${kind}`)))
@@ -1271,7 +1209,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         const previous = Option.getOrUndefined(
           Arr.findFirst(peers, (one) => one.installation === peer.installation),
         );
-        // Simultaneous opposite invitations agree that the higher installation dials.
         const paired =
           peer.dials === "out" &&
           previous?.dials === "in" &&
@@ -1352,18 +1289,12 @@ const decodeRefusal = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ error: Schema.Struct({ message: Schema.String }) })),
 );
 
-/**
- * Pairs with a herdr machine through this computer's open SSH connection to it, and
- * answers the pairing for this Machine to keep. Only a front door that can show the login
- * opening that connection calls this; a connection that went is a failure, never a login.
- */
 export const pairWith = Effect.fn("Peers.pairWith")(
   function* (
     machine: HerdrMachine,
     asker: {
       readonly installation: string;
       readonly name: string;
-      /** The control path of the open connection the invite rides. */
       readonly control: string;
     },
   ) {
@@ -1424,11 +1355,6 @@ export const pairWith = Effect.fn("Peers.pairWith")(
     ),
 );
 
-/**
- * Each time a definition under `userDir` may have changed, until a kind's directory is
- * replaced, since a watch stays on the directory it was given. The first is a catch-up, once
- * every watch is in place, so a save made before then is still seen.
- */
 export const definitionChanges = (userDir: string, kinds: ReadonlyArray<string>) =>
   Stream.unwrap(
     Effect.gen(function* () {

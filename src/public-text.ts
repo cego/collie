@@ -1,5 +1,3 @@
-// Public text: what Collie sends outside Collie in the human's name (ADR-draft-public-text-reads-as-the-humans).
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -60,7 +58,6 @@ const PHRASES: ReadonlyArray<{ readonly pattern: RegExp; readonly reason: string
   { pattern: /\.collie\//g, reason: "is a path in Collie's own directory" },
 ];
 
-/** Each phrase in `text` that names Collie or its process, once, in the order of the list. */
 export const leaksIn: (text: string) => ReadonlyArray<Leak> = (text) =>
   Arr.dedupeWith(
     Arr.flatMap(PHRASES, ({ pattern, reason }) =>
@@ -78,9 +75,7 @@ export const refusal = (leaks: ReadonlyArray<Leak>) =>
     "; ",
   )}. Reword it for the repository's own readers.`;
 
-/** The hidden marker Collie's own post ends with, which no reader sees. */
 export const marker = (runId: string) => `<!-- collie:${runId} -->`;
 
-/** The repository the installation's releases come from, as an `MrRef`'s `host/path`. */
 export const ownRepository = (releases: string) =>
   pipe(releases, Str.replace(/^https?:\/\//, ""), Str.replace(/\/releases\/?$/, ""));

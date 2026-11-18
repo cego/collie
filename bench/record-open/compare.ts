@@ -1,6 +1,3 @@
-// Whether a record painted the host's Flow: each row, node and action by its accessible
-// name, and each node's attempts and wait, which no name carries.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import type { Flow, FlowRun } from "../../src/board-model";
@@ -20,7 +17,6 @@ export interface PaintedRow {
 }
 export type Painted = ReadonlyArray<PaintedRow>;
 
-/** What FlowMap paints of `flow` on a live Machine with nothing linked away. */
 export const paintedOf = (flow: Flow, installation: string) =>
   Arr.map(flowRows(flow), (row) => {
     const lane = Option.getOrElse(
@@ -54,7 +50,6 @@ export const paintedOf = (flow: Flow, installation: string) =>
 
 const listed = (names: ReadonlyArray<string>) => `"${Arr.join(names, ", ")}"`;
 
-/** How `shown` differs from `host`, empty where it is the same Flow. */
 export const differences = (shown: Painted, host: Painted) => {
   if (shown.length !== host.length || Arr.some(shown, (row, at) => row.name !== host[at]!.name))
     return [

@@ -89,7 +89,6 @@ test(
               Arr.some(
                 cards,
                 (card) =>
-                  // The completed carrier can still lead an intermediate board snapshot.
                   card.run === release.runId &&
                   Arr.some(offers(card), (offer) => offer.unavailable === reason),
               ),

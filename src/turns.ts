@@ -1,20 +1,14 @@
-// A scheduler whose turns of the event loop are bounded in time, so a request waiting behind
-// background work is read at the next turn (ADR-draft-a-runs-record-is-read-from-its-hosts-run-model, D6).
-
 import * as Arr from "effect/Array";
 import * as Scheduler from "effect/Scheduler";
 
-/** How long one turn runs fibers before the event loop takes its I/O. */
 export const TURN_MS = 8;
 
 // oxlint-disable-next-line no-restricted-globals -- A scheduler runs outside every fiber, so no Clock.
 const platformNow = () => performance.now();
 
 class TurnDispatcher implements Scheduler.SchedulerDispatcher {
-  /** Tasks of fibers serving interactive work, run before any other. */
   readonly front: Array<() => void> = [];
   private buckets: Array<[priority: number, tasks: Array<() => void>]> = [];
-  /** What the last turn drained and had no time left for, in the order it was drained. */
   private left: Array<() => void> = [];
   private at = 0;
   private running = false;
@@ -67,24 +61,17 @@ class TurnDispatcher implements Scheduler.SchedulerDispatcher {
   }
 }
 
-/**
- * Effect's own scheduler, with one dispatcher for every fiber whose turns end once they have
- * run for `TURN_MS`, and a fiber yielding once it has run that long at a stretch.
- */
 export class TurnScheduler implements Scheduler.Scheduler {
   readonly executionMode = "async" as const;
   private readonly inner = new Scheduler.MixedScheduler();
   private readonly dispatcher: TurnDispatcher;
-  /** `first` says whether the running fiber's tasks go before every other's. */
   constructor(
     private readonly first: () => boolean = () => false,
     private readonly now: () => number = platformNow,
   ) {
     this.dispatcher = new TurnDispatcher(first, now);
   }
-  /** When the running fiber's stretch began: one fiber runs at a time. */
   private since = 0;
-  /** Fibers told to yield, whose next check opens a new stretch whatever their operation count. */
   private readonly yielded = new WeakSet<object>();
   shouldYield(fiber: Parameters<Scheduler.Scheduler["shouldYield"]>[0]) {
     if (this.yielded.delete(fiber) || fiber.currentOpCount === 1) this.since = this.now();
@@ -95,7 +82,6 @@ export class TurnScheduler implements Scheduler.Scheduler {
   }
   private overTurn(fiber: Parameters<Scheduler.Scheduler["shouldYield"]>[0]) {
     if ((fiber.currentOpCount & 63) !== 0) return false;
-    // Background work steps aside while a served fiber's task waits.
     return this.now() - this.since > TURN_MS || (this.dispatcher.front.length > 0 && !this.first());
   }
   makeDispatcher() {

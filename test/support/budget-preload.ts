@@ -1,9 +1,3 @@
-// A `bun test` that `bun run test` did not start on a hold joins the Machine's budget as a
-// small run (ADR-draft-test-processes-share-one-budget-per-machine, D4). Bun 1.4.4 runs this
-// in every process that runs test files, and again for each file under `--isolate`, as
-// `--parallel`'s workers are, so each run of it takes one worker and gives it back once its
-// files end. Its wait is no test's: a test's timeout starts after it.
-
 import * as Arr from "effect/Array";
 import { afterAll } from "bun:test";
 import { availableParallelism } from "node:os";
@@ -34,7 +28,6 @@ await Effect.runPromise(
   }).pipe(
     Scope.provide(scope),
     Effect.provide(BunServices.layer),
-    // Effect's default provider keeps the environment it first reads, before hosts.ts sets the test's.
     Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
   ),
 );

@@ -1,36 +1,3 @@
-// The live probe: `src/hc.ts`'s decoders against the real `hc` that `hc-pin.json` names.
-// The contract test compares the decoders with the schema; only this catches a core that
-// sends less than its schema promises (hc 0.1.14's `terminal.list` without `machines`).
-//
-//   bun run probe:hc
-//   bun tools/hc-probe.ts --harness claude|codex|pi
-//   bun tools/hc-probe.ts --harness opencode [--no-reporter]
-//   bun tools/hc-probe.ts --harness pi-question
-//   bun tools/hc-probe.ts --resume claude|codex|opencode|pi
-//
-// It downloads and checksums the pinned release, starts it on a session of its own with
-// scratch XDG directories, and drives run, list, get, read, send, keys, events and attach.
-// With `--harness`, it instead starts that harness in a core terminal and sends it a prompt
-// as Collie does, then passes once the prompt arrived without core's `<hc from>` mark and
-// the harness answered it, reporting `idle`, `working` and `done` through OSC 7501. It runs
-// the installed harness, with no tool it would need to answer, and costs one turn of its model.
-// OpenCode runs as Collie launches it on core: two agents in one checkout, each with Collie's
-// reporter and its first prompt at launch. Each must report working then idle, one must act
-// on a second prompt sent as Collie does, each reporter must write its own agent's session,
-// and OpenCode's settings files must not change. `--no-reporter` leaves the reporter out,
-// and fails for want of status. OpenCode's store is a scratch one, so it uses its free model.
-// `pi-question` starts pi as Collie launches a Run's pi agent on core, with Collie's question
-// tool and a session id, and stands in for the host that owns its state. Told to ask, pi must
-// call the tool, put its question where the host reads it, and end its turn; then it must act
-// on the answer sent as Collie sends it.
-// `--resume` tells that harness's agent a word, stops core and starts it again as a reboot
-// would, then starts the agent again as Collie's host does: a new terminal under its name, in
-// its checkout, with `sessionArgs`' resume of the session recorded at launch (Codex's on a
-// new App Server). It passes once the agent answers with the word, which only the
-// conversation it had holds.
-// Then it stops that core, and fails if a process of the binary is still running or core's
-// default state, config or runtime directory changed.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -86,14 +53,12 @@ const Pin = Schema.Struct({
 
 const fail = (message: string) => Effect.fail(new Cause.UnknownError(message, message));
 
-/** The release target names hc uses, for the platforms Collie ships. */
 const target = () => {
   const os = process.platform === "darwin" ? "macos" : "linux";
   const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
   return `${os}-${arch}`;
 };
 
-/** Downloads the pinned archive, checks it against the pin, and unpacks `herdr-core` into `dir`. */
 const fetchPinned = Effect.fn("HcProbe.fetchPinned")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const digest = yield* Digest.Digest;
@@ -144,10 +109,6 @@ const run = Effect.fn("HcProbe.run")(function* (
   return stdout;
 }, Effect.scoped);
 
-/**
- * Every entry under each of `dirs`, by name and type: what a probe leaking into them would
- * add or remove. Not contents, which a live core on the same Machine changes by itself.
- */
 const fingerprint = Effect.fn("HcProbe.fingerprint")(function* (dirs: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem;
   const lines: string[] = [];
@@ -164,7 +125,6 @@ const fingerprint = Effect.fn("HcProbe.fingerprint")(function* (dirs: ReadonlyAr
   return lines;
 });
 
-/** Pids whose executable is `binary`, read from /proc where there is one. */
 const runningFrom = Effect.fn("HcProbe.runningFrom")(function* (binary: string) {
   const fs = yield* FileSystem.FileSystem;
   if (!(yield* fs.exists("/proc/self/exe"))) return [];
@@ -310,7 +270,6 @@ const framed = Effect.fn("HcProbe.framed")(function* (socket: string, cwd: strin
   );
 });
 
-/** How each harness starts as an interactive agent that answers in text and asks nothing. */
 const harnessArgv = (name: string) => {
   switch (name) {
     case "claude":
@@ -331,7 +290,6 @@ const harnessArgv = (name: string) => {
   }
 };
 
-// The answer is not in the prompt, so seeing it shows the harness acted on what it was sent.
 const ANSWER = "DETCA";
 const PROMPT = "Reply with the word acted spelled backwards in capital letters, and nothing else.";
 const TURN_SECONDS = 300;
@@ -339,7 +297,6 @@ const TURN_SECONDS = 300;
 const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: string, name: string) {
   const argv = harnessArgv(name);
   if (argv === undefined) return yield* fail(`no harness ${name}: claude, codex or pi`);
-  // As Collie's launch does, so Claude opens at its prompt and not its folder-trust dialog.
   if (name === "claude") {
     const granted = yield* claudeTrust(yield* Config.String("HOME"), `${cwd}/..`).grant(cwd);
     if (!granted.ok) return yield* fail(granted.message);
@@ -399,13 +356,11 @@ const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: str
   );
   const shown = yield* screen;
   yield* Console.error(`${name}: reported ${Arr.join(words, ", ")}; answered ${ANSWER}`);
-  // A TUI wraps and indents a long line, so the prompt is looked for with its spacing evened out.
   const even = (text: string) => pipe(text, Str.replace(/\s+/g, " "));
   yield* expect(
     pipe(even(shown), Str.includes(even(PROMPT))),
     `${name}'s screen to show the prompt:\n${shown}`,
   );
-  // Measured on 0.1.14: a plain send is not marked. A pin that marks it is the planner's question.
   yield* expect(
     !pipe(shown, Str.includes("<hc from")),
     `${name}'s screen to show the prompt without core's <hc from> mark:\n${shown}`,
@@ -419,7 +374,6 @@ const PI_ANSWER = "BLUE";
 
 const piQuestion = Effect.fn("HcProbe.piQuestion")(function* (socket: string, dir: string) {
   const fs = yield* FileSystem.FileSystem;
-  // The probe stands in for the host that owns this state directory.
   yield* fs.writeFileString(hostLockOf(dir), `{"pid":${process.pid},"start":null}`);
   const name = "probe-pi-question";
   const control = yield* controlDir(dir, name);
@@ -497,10 +451,6 @@ const piQuestion = Effect.fn("HcProbe.piQuestion")(function* (socket: string, di
   yield* api.call("terminal.kill", { terminal: agent.address });
 });
 
-/**
- * Each OpenCode agent's first prompt, given at launch, and the answer that shows it acted.
- * Its free model misspells a word spelled backwards, so these are facts it gets right.
- */
 const capital = (country: string, answer: string) => ({
   prompt: `Reply with the capital of ${country} in capital letters, and nothing else.`,
   answer,
@@ -545,7 +495,6 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
   );
   const before = yield* settings;
   const cwd = `${dir}/work`;
-  // The operator's settings, and a store of the probe's own.
   const openEnv = {
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
@@ -610,7 +559,6 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
   const workedThenIdle = (seen: ReadonlyArray<string>) =>
     seen.includes("working") && seen.lastIndexOf("idle") > seen.indexOf("working");
 
-  // Settled by the screen, not by status, so a run without the reporter still gets this far.
   yield* until("each agent to answer its first prompt", () =>
     Effect.gen(function* () {
       for (const one of agents)
@@ -727,7 +675,6 @@ const resume = Effect.fn("HcProbe.resume")(function* (
     codexPort("codex app-server").install({ agent, harness: "codex", cwd, dir: `${dir}/codex` });
   const codexFlags = ["--sandbox", "workspace-write", "--ask-for-approval", "never"];
 
-  /** The agent in a core terminal of its own, with what it reported and showed. */
   const started = (argv: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       const events = yield* connect(socket);
@@ -771,7 +718,6 @@ const resume = Effect.fn("HcProbe.resume")(function* (
         const after = words.slice(from);
         return after.includes("working") && ["idle", "done"].includes(after.at(-1) ?? "");
       };
-      /** Sends `text` once it is at its prompt, and waits for the turn it starts to end. */
       const told = (text: string) =>
         Effect.gen(function* () {
           yield* until(`${name} to report idle`, () =>
@@ -814,8 +760,6 @@ const resume = Effect.fn("HcProbe.resume")(function* (
   );
   yield* expect(left.length === 0, `${agent} to be gone after core stopped`);
 
-  // Codex's old App Server is put down before a new one is started, as a launch waits for
-  // it: a server still holding the thread leaves it read-only to the next.
   if (server?.pid !== undefined) {
     yield* terminate(server.pid);
     yield* fs.exists(`/proc/${server.pid}`).pipe(
@@ -833,7 +777,6 @@ const resume = Effect.fn("HcProbe.resume")(function* (
     opencodeReporter({ sessionFile, tty: "/dev/tty", session: recorded }),
   );
   const resumed = sessionArgs(name, { id: recorded, resumed: true });
-  // OpenCode's server, as Collie's controls give it, is what a resumed agent is prompted on.
   const served =
     name === "opencode"
       ? yield* COMPACTION_PORTS.opencode!.install({
@@ -846,11 +789,9 @@ const resume = Effect.fn("HcProbe.resume")(function* (
       : null;
   const second =
     name === "codex"
-      ? // The thread keeps its permissions: a remote resume refuses them again.
-        ["codex", ...resumed.lead, ...(again?.args ?? [])]
+      ? ["codex", ...resumed.lead, ...(again?.args ?? [])]
       : name === "opencode"
-        ? // OpenCode drops a --prompt given with a session that has a conversation.
-          ["opencode", ...(served?.args ?? [])]
+        ? ["opencode", ...(served?.args ?? [])]
         : [...(harnessArgv(name) ?? []), ...resumed.tail];
   const after = yield* started(second);
   if (served?.endpoint) {
@@ -861,7 +802,6 @@ const resume = Effect.fn("HcProbe.resume")(function* (
     yield* promptAsync(served.endpoint, recorded, RECALL);
     yield* after.until(`${name} to answer`, () => Effect.succeed(after.settled(from)));
   } else yield* after.told(RECALL);
-  // Claude reports done before it has drawn its answer.
   const shown = yield* after.screen.pipe(
     Effect.repeat({
       until: (text) => pipe(text, Str.includes(RECALLED)),
@@ -880,7 +820,6 @@ const resume = Effect.fn("HcProbe.resume")(function* (
         : yield* fs.readFileString(sessionFile);
     yield* expect(now === recorded, `${name} to be in session ${recorded}, not ${now}`);
   }
-  // Claude and pi keep their own transcript of each session: the answer has to be in its.
   const store =
     name === "claude"
       ? { dir: `${home}/.claude/projects`, file: `${recorded}.jsonl` }
@@ -920,7 +859,6 @@ const program = Effect.gen(function* () {
     yield* fs.makeDirectory(`${dir}/${sub}`, { mode: 0o700 });
   const binary = yield* fetchPinned(dir);
   const socket = `${dir}/run/hc.sock`;
-  // Only what hc and the probe's shells need: nothing that names a live core, herdr or agent.
   const env = {
     PATH: yield* Config.String("PATH"),
     HOME: home,

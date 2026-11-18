@@ -1,7 +1,3 @@
-// A human's message to an agent closes that agent's own open question, with no revision
-// (ADR-draft-a-humans-message-supersedes-a-runs-open-question D4). The host is a real one
-// over a fake core, running `reuses`: one agent given two operations in turn.
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -97,7 +93,6 @@ test(
             () => launchOf(world.state, runId, "first-step"),
             (one) => one !== undefined,
           ))!;
-          // It asks once it has its prompt, as an agent does.
           yield* until(
             () => deliveredTo(world.state, runId),
             (lines) =>

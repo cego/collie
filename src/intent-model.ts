@@ -1,5 +1,3 @@
-// The Intent's Schemas, with nothing else: a browser bundle of the board imports them.
-
 import { Schema } from "effect";
 import { VerifySpecSchema } from "./verify-spec";
 
@@ -47,24 +45,13 @@ export const AuthoritySchema = Schema.Struct({
   stop_allowed: Schema.Boolean,
   exclusive_steering: Schema.Boolean,
   run_verification: Schema.Array(VerifySpecSchema),
-  /**
-   * A spending quota an earlier revision wrote. Read so an Intent from then still
-   * decodes; never written and never enforced — the user's decision is that model-call
-   * usage is data, not a restriction on their work.
-   */
   model_calls_per_run: Schema.optionalKey(Schema.Int),
 });
 
-/** What a workspace offers a new Run before anyone types anything. */
 export const DefaultsSchema = Schema.Struct({
   constraints: Schema.Array(ConstraintSchema),
   authority: AuthoritySchema,
 });
-/**
- * What a front door knows of a new Run's Intent: the defaults of the workspace it was
- * started from, and the goal and constraints named at launch. The host adds what the work
- * source asks for and what the Run may verify, and writes version 1 before any work runs.
- */
 export const IntentSeedSchema = Schema.Struct({
   defaults: Schema.optionalKey(DefaultsSchema),
   goal: Schema.optionalKey(Schema.String),
@@ -77,7 +64,6 @@ export const IntentSeedSchema = Schema.Struct({
 
 export const IntentChangeSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("set-goal"), goal: Schema.NullOr(Schema.String) }),
-  /** Null clears it; the host refuses a kind it does not know. */
   Schema.Struct({ kind: Schema.Literal("set-outcome"), outcome: Schema.NullOr(Schema.String) }),
   Schema.Struct({
     kind: Schema.Literal("add-constraint"),
@@ -118,6 +104,5 @@ export const ChangedIntent = Schema.Struct({
   propagated: Schema.Array(Schema.String),
   approved: Schema.optionalKey(Schema.Array(VerifySpecSchema)),
   warning: Schema.optionalKey(Schema.String),
-  /** The kind of each credential-shaped value taken out before anything was written. */
   redacted: Schema.optionalKey(Schema.Array(Schema.String)),
 });

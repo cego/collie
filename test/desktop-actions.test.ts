@@ -1,5 +1,3 @@
-// A gesture's try as the record hears it: a refusal over a finished Step names that Step.
-
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import { Effect, Exit } from "effect";

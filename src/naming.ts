@@ -1,6 +1,3 @@
-// Agent names must match /^[a-z][a-z0-9_-]{0,31}$/, so they cannot be the readable
-// labels. Labels are shown beside them; these name agents.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -22,20 +19,10 @@ function sanitize(text: string) {
   );
 }
 
-/**
- * Unique, valid agent name. The run's sequence number is what makes it unique
- * across runs, so it is reserved before anything else: a provider-qualified model
- * (`openai-codex/gpt-5.6-sol`) is long enough to have truncated it away, and two
- * runs then picked the same name and herdr refused the second with
- * `agent_name_taken`. The step and the variant take what is left, and the run's
- * slug only what is left after that. A name anything was cut from carries a digest
- * of all three, so two that differ only in what was cut stay apart.
- */
 export function agentName(slug: string, stepId: string, variantKey: string | null, seq: number) {
   return nameWith(slug, stepId, variantKey, seq, false);
 }
 
-/** The name older launches persisted, before a leading letter reserved its own space. */
 export const legacyAgentName = (
   slug: string,
   stepId: string,
@@ -59,7 +46,6 @@ function nameWith(
   return layout(slug, stepId, variantKey, `${sum}-r${seq}`, legacy).name;
 }
 
-/** Whether this launch's agent is the one launched under `name`, as `build`. */
 export const launchedAs = (
   one: { readonly agent: string; readonly runId: string; readonly sequence?: number },
   name: string,
@@ -100,7 +86,6 @@ function layout(
   return { ...shorter, name: `w${shorter.name}` };
 }
 
-/** The readable name for a tab or pane. */
 export function stepLabel(slug: string, stepId: string, variantKey: string | null) {
   return Arr.join(
     Arr.map(
@@ -111,53 +96,25 @@ export function stepLabel(slug: string, stepId: string, variantKey: string | nul
   );
 }
 
-/**
- * Workflow-controlled names become single path components inside the Run, so a
- * definition must not be able to spell one that lands anywhere else. Returns why
- * a value is unsafe, or null when it is a plain component. Validation wraps it
- * in field-naming messages; Run path construction wraps it in a throw.
- */
 export function unsafePathComponent(value: string) {
   if (value === "") return "is empty";
   if (value === "." || value === "..") return `is "${value}"`;
   if (pipe(value, Str.includes("/")) || pipe(value, Str.includes("\\")))
     return "contains a path separator";
-  // Filesystem APIs reject NUL in paths, and a newline corrupts the frontmatter a
-  // forked name is written into; catching both here keeps the error a field-naming
-  // validation message instead of a raw fs throw or a mangled file after the Run starts.
   if (/\p{Cc}/u.test(value)) return "contains a control character";
   return null;
 }
 
-/** ⚙ working, ⚠ your turn, ✓ finished, ✗ stopped. */
-/**
- * What a failure says in a log line or a board row: a caught Error's own message, and
- * anything else as it prints. Both adapters and the engine report failures this way.
- */
 export function reason(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
 export const GLYPH = { running: "⚙", waiting: "⚠", done: "✓", failed: "✗" } as const;
 
-/**
- * The dog that marks Collie's own tab. Kept out of GLYPH — that is run status —
- * and out of every call site: the label below is an identity, matched against
- * herdr's own tab list, not a decoration to be assembled where it is used.
- */
 const COLLIE_GLYPH = "\u{1F415}";
 
-/**
- * The Session's own tab, and the label on the view pane inside it. One per
- * workspace: the runner reuses it, and recreates it when it has been closed.
- */
 export const COLLIE_TAB = `${COLLIE_GLYPH} Collie`;
 
-/**
- * Everything a human reads is Capitalized. A model id that is not a word keeps
- * its own casing (`gpt-5.6-sol`), and a target keeps whatever it actually is —
- * a branch is not a branch any more once it has been prettied up.
- */
 export function displayName(name: string) {
   const [head, ...rest] = Str.split(name, " · ");
   const word = /^[a-z][a-z-]*$/.test(head)
@@ -166,25 +123,17 @@ export function displayName(name: string) {
   return Arr.join([word, ...rest], " · ");
 }
 
-/** A sha, or `HEAD`, names nothing a human recognises on a tab. */
 function opaque(ref: string) {
   return ref === "" || ref === "HEAD" || /^[0-9a-f]{7,40}$/i.test(ref);
 }
 
-/** A Run's own name, without the workflow its slug already carries. */
 export function runName(workflow: string, slug: string) {
   const prefix = `${workflow}-`;
   return pipe(slug, Str.startsWith(prefix)) ? pipe(slug, Str.slice(prefix.length)) : slug;
 }
 
-/**
- * What this run is pointed at, short enough for a tab: an MR as `!123` (`#30` on GitHub), a branch
- * by name, the working tree, or — for the workflows that have no target — the
- * run's own slug without the workflow it already carries.
- */
 export function targetLabel(workflow: string, slug: string, target: string) {
   if (target === "worktree") return "worktree";
-  // An MR target carries its project; only the iid belongs on a label.
   const mr = parseMrTarget(target);
   if (mr) return `${mrWords(mr).sign}${mr.iid}`;
   if (pipe(target, Str.startsWith("branch:"))) {
@@ -196,33 +145,19 @@ export function targetLabel(workflow: string, slug: string, target: string) {
   return runName(workflow, slug);
 }
 
-/**
- * `⚙ review`. A tab is the word a human would say for what is in it: the workflow
- * for a run's own tab, the step for a step's. The target is added only where two
- * live tabs would otherwise read the same.
- */
 export function tabLabel(glyph: string, name: string) {
   return `${glyph} ${displayName(name)}`;
 }
 
-/** The name part of a tab label, i.e. what a collision is judged on. */
 export function tabNameOf(label: string) {
   const glyphs = Arr.join([...Rec.values(GLYPH), COLLIE_GLYPH], "");
-  // The u flag, or the dog (U+1F415) enters the class as its two surrogate halves
-  // and stripping matches one of them, leaving a lone surrogate in the name.
   return Str.trim(pipe(label, Str.replace(new RegExp(`^[${glyphs}]\\s*`, "u"), "")));
 }
 
-/** `implement` vs `implement · add-picker`, once something else owns the plain name. */
 export function disambiguate(name: string, target: string) {
   return target ? `${name} · ${target}` : name;
 }
 
-/**
- * `Reviewer · synthesize`: an agent's tab names its role and, for an agent kept for one
- * piece of work, which piece — a reviewer seat and the synthesis are otherwise two tabs
- * that read the same. A shared agent does several, so its tab names only the role.
- */
 export function agentTabLabel(ask: { role: string; operation: string; agent: string | null }) {
   const step =
     ask.agent === null
@@ -234,16 +169,10 @@ export function agentTabLabel(ask: { role: string; operation: string; agent: str
   return disambiguate(displayName(ask.role), step);
 }
 
-/** `openai-codex/gpt-5.6-sol` is a model id; `gpt-5.6-sol` is the model. */
 function shortModel(model: string) {
   return pipe(model, Str.slice(Option.getOrElse(pipe(model, Str.lastIndexOf("/")), () => -1) + 1));
 }
 
-/**
- * A pane says only what the tab cannot. Parallel variants say which model they
- * are; a pane sharing a tab with others says which step it is; a pane alone in
- * its tab says nothing, because the tab already said it.
- */
 export function paneLabel(
   variant: { harness: string; model: string },
   stepId: string,
@@ -251,11 +180,9 @@ export function paneLabel(
   sharesTab: boolean,
 ) {
   if (variantCount > 1) {
-    // On the harness's own default there is no model to name, so the harness is the name.
     const name = variant.model === DEFAULT_MODEL ? variant.harness : shortModel(variant.model);
     return displayName(name);
   }
-  // `use:` prefixes an embedded step's id; the prefix is bookkeeping, not a name.
   return sharesTab
     ? displayName(
         pipe(stepId, Str.slice(Option.getOrElse(pipe(stepId, Str.lastIndexOf(".")), () => -1) + 1)),
@@ -263,18 +190,15 @@ export function paneLabel(
     : null;
 }
 
-/** Splitting N panes evenly: the i-th split leaves the left pane 1/N of the tab. */
 export function evenRatio(index: number, count: number) {
   return 1 / (count - index + 1);
 }
 
-/** A Run's title from its facts: the workflow, and what it was pointed at. */
 export function runTitle(run: { readonly workflow: string; readonly settled: Settled }) {
   const target = diffTargetOf(run.settled)?.value ?? "";
   return disambiguate(displayName(run.workflow), targetLabel(run.workflow, "", target));
 }
 
-/** `Collie | Task workspaces`: a task workspace's own label, from its two halves. */
 export function taskWorkspaceLabel(name: { project: string; title: string }) {
   return Arr.join(
     Arr.filter([displayName(oneLine(name.project)), oneLine(name.title)], (part) => part !== ""),
@@ -282,17 +206,11 @@ export function taskWorkspaceLabel(name: { project: string; title: string }) {
   );
 }
 
-/** `Task workspaces` from `Collie | Task workspaces`: what the work is, without its project. */
 export function taskTitleOf(label: string) {
   const at = Option.getOrElse(pipe(label, Str.indexOf(" | ")), () => -1);
   return at < 0 ? label : pipe(label, Str.slice(at + 3));
 }
 
-/**
- * A label as herdr may be given it: one line, no control characters, no runs of space.
- * Names reach here from the model and from the user's own live labels, and both are
- * display data — a newline in one would break the sidebar row it is drawn in.
- */
 export function oneLine(text: string) {
   return Str.trim(pipe(text, Str.replace(/\p{Cc}/gu, " "), Str.replace(/\s+/g, " ")));
 }

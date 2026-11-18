@@ -731,7 +731,6 @@ test("a question's buttons can be clicked before Pi's HTTP call reaches Desktop"
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));
 
-/** Pi's `tool_call` event and its answer, as far as Collie's extension uses them. */
 type ToolCallHandler = (
   event: { readonly toolName: string; readonly input: Readonly<Record<string, string>> },
   ctx: { readonly cwd: string },
@@ -855,7 +854,6 @@ interface LoadedPi {
   readonly on: (event: string, handler: SessionStart) => void;
 }
 
-/** Pi as the extension meets it, refusing the server named `refused` as Pi refuses a name. */
 const refusingPi: (registered: Registered[], started: SessionStart[]) => LoadedPi = (
   registered,
   started,
@@ -912,7 +910,6 @@ test("what Pi reports after its command's turn has ended comes with a later mess
     Effect.gen(function* () {
       const turn = yield* opened(driver, "pi-after-command");
       yield* turn("/mcp login linear-server");
-      // Pi may send it before or after the next message is written, so either next note may carry it.
       const notes = [
         inspectedOf(yield* turn("inspect")).prompt.message,
         inspectedOf(yield* turn("inspect")).prompt.message,

@@ -1,10 +1,3 @@
-// The rows Collie owns beside the executions Effect owns.
-//
-// Real SQLite in a real file, because the questions are about durability and atomicity:
-// does a request claimed twice make one run, does a database that is closed and opened
-// again still hold what was admitted, and does a subscriber hear about a committed change.
-// None of those is answerable in a map.
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -20,7 +13,6 @@ import { runEffect } from "./support/effect";
 
 const ReportJson = Schema.fromJsonString(RunReport);
 
-/** One store on one file. Opening it again is what a restart does. */
 const opens = (file: string) =>
   storeLayer().pipe(
     Layer.provideMerge(
@@ -47,7 +39,6 @@ const admission = (
   parent: belongs?.parent ?? null,
 });
 
-/** A database of its own, and the store on it, for the length of one question. */
 const onStore = <A, E>(prefix: string, body: Effect.Effect<A, E, Store | SqlClient.SqlClient>) =>
   runEffect(
     Effect.gen(function* () {
@@ -187,7 +178,6 @@ test("a request claims one run, and claiming it again is that same run", () =>
       expect(first.fresh).toBe(true);
       expect(first.row.run).toBe("run-a");
 
-      // The same request again, with the run id a retrying caller minted for itself.
       const again = yield* store.admit(admission("req-1", "run-b", { note: "once" }));
       expect(again.fresh).toBe(false);
       expect(again.row.run).toBe("run-a");
@@ -250,7 +240,6 @@ test("a request reused with other host options, another Task or another parent i
         const refused = yield* store.admit({ ...changed, run: "run-b" }).pipe(Effect.flip);
         expect(refused._tag).toBe("RequestConflict");
       }
-      // Placing a fresh Task is the host's doing, not an argument the retry changed.
       yield* store.place("run-a", { checkout: "{}", task: "task-new" });
       expect((yield* store.admit({ ...first, run: "run-b" })).fresh).toBe(false);
     }),
@@ -481,7 +470,6 @@ test("what a host admitted is there when the database is opened again", () =>
         yield* store.admit(admission("req-1", "run-a", { note: "durable" }));
       }).pipe(Effect.provide(opens(file)), Effect.scoped);
 
-      // A second host, on the same file, with nothing carried over in memory.
       yield* Effect.gen(function* () {
         const store = yield* Store;
         expect(yield* store.generations).toEqual([
@@ -490,7 +478,6 @@ test("what a host admitted is there when the database is opened again", () =>
         const found = yield* store.run("run-a");
         expect(found?.request).toBe("req-1");
         expect(found?.execution).toBe("execution-run-a");
-        // Admitted and never accepted: work for the new host to pick up.
         expect(Arr.map(yield* store.pending, (row) => row.run)).toEqual(["run-a"]);
       }).pipe(Effect.provide(opens(file)), Effect.scoped);
     }).pipe(Effect.scoped),
@@ -507,7 +494,6 @@ test("a run belongs to the task and the run it was started from", () =>
       const found = yield* store.run("run-a");
       expect(found?.task).toBe("task-7");
       expect(found?.parent).toBe("run-parent");
-      // What was started on its own belongs to nothing, which is not the same as "task-7".
       yield* store.admit(admission("req-2", "run-b", { note: "alone" }));
       expect((yield* store.run("run-b"))?.task).toBeNull();
     }),
@@ -532,7 +518,6 @@ test("a subscriber is told once the change is committed", () =>
       const store = yield* Store;
       yield* store.admit(admission("req-1", "run-a", { note: "before" }));
 
-      // The first is what is there; the second is what the admission below committed.
       const seen = yield* Effect.forkChild(Stream.runCollect(Stream.take(store.changes, 2)));
       yield* Effect.yieldNow;
       yield* store.admit(admission("req-2", "run-b", { note: "after" }));
@@ -616,7 +601,6 @@ test("a write reads again only the rows of the Runs it wrote, and an announce no
       yield* store.admit(admission("req-b", "run-b", { note: "b" }));
       const before = yield* store.runs;
 
-      // Unseen by the store, as no write through it names run-a.
       yield* sql`UPDATE collie_runs SET project = '/elsewhere' WHERE run = 'run-a'`;
       yield* store.announce;
       yield* store.accepted("run-b");
@@ -629,7 +613,6 @@ test("a write reads again only the rows of the Runs it wrote, and an announce no
     }),
   ));
 
-/** An accepted run-a whose next read of the Runs waits on the connection until `release`. */
 const waitingRead = Effect.gen(function* () {
   const store = yield* Store;
   const sql = yield* SqlClient.SqlClient;

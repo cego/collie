@@ -1,7 +1,3 @@
-// The files Collie kept its own records in before they were rows in `host.db`, each read
-// once into its table by the migration that made it (ADR-draft-collies-own-records-live-in-the-hosts-database, D5).
-// The files are left where they are, for a host of an older build.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Data, Effect, FileSystem, Layer, Option, Path, PlatformError, Schema } from "effect";
@@ -32,10 +28,6 @@ import {
   trimStepTimes,
 } from "./run-records";
 
-/**
- * Nothing there, or a file where a directory would be, is no records. Any other failure
- * fails the migration, so the next host retries it.
- */
 const orMissing =
   <A>(none: A) =>
   <R>(read: Effect.Effect<A, PlatformError.PlatformError, R>) =>
@@ -64,17 +56,12 @@ export const importReports = Effect.fn("RecordsImport.reports")(function* (state
   }
 });
 
-/** A journal's lines, less a torn last one: the append a crash cut short. */
 const journalLines = (raw: string) => {
   const lines = Arr.filter(Str.split(raw, "\n"), (text) => Str.trim(text) !== "");
   const last = lines.at(-1);
   return last !== undefined && !isJson(last) ? lines.slice(0, -1) : lines;
 };
 
-/**
- * Every agent's delivery ledger file, `agents/<incarnation key>/`. A line that cannot be read is kept as it
- * is, so the ledger still counts it and still blocks the work it was about.
- */
 export const importLedgers = Effect.fn("RecordsImport.ledgers")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -88,7 +75,6 @@ export const importLedgers = Effect.fn("RecordsImport.ledgers")(function* (state
   }
 });
 
-/** Every `herd/<key>/proposals.jsonl`, each line that is a proposal's. */
 export const importProposals = Effect.fn("RecordsImport.proposals")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -104,7 +90,6 @@ export const importProposals = Effect.fn("RecordsImport.proposals")(function* (s
   }
 });
 
-/** Every `agents/<register>.json`, its entries in the order it kept them. */
 export const importRegisters = Effect.fn("RecordsImport.registers")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -122,7 +107,6 @@ export const importRegisters = Effect.fn("RecordsImport.registers")(function* (s
   }
 });
 
-/** Every `tasks/<id>.json` that is a Task. */
 export const importTasks = Effect.fn("RecordsImport.tasks")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -137,7 +121,6 @@ export const importTasks = Effect.fn("RecordsImport.tasks")(function* (stateDir:
   }
 });
 
-/** Every `agents/<run>/*.launch.json`, each placed where its Run's `launches` order last put it. */
 export const importLaunches = Effect.fn("RecordsImport.launches")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -168,14 +151,9 @@ export const importLaunches = Effect.fn("RecordsImport.launches")(function* (sta
   }
 });
 
-/** A plain-text journal's lines, less a last one its newline never reached. */
 const textLines = (raw: string) =>
   Arr.filter(Str.split(raw, "\n").slice(0, -1), (text) => Str.trim(text) !== "");
 
-/**
- * When anything under these directories was last written, as the board measured it before
- * activity was recorded, less bookkeeping: what Collie wrote about the Run from outside it.
- */
 const writtenIn = Effect.fn("RecordsImport.writtenIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -201,14 +179,12 @@ const writtenIn = Effect.fn("RecordsImport.writtenIn")(function* (dir: string) {
   return newest;
 });
 
-/** Where in a Run's directory in `area` the record `name` was kept; null for another area's. */
 const localName = (area: (typeof AREAS)[number], name: string) => {
   const of = Arr.findFirst(AREAS, (one) => one !== "runs" && Str.startsWith(`${one}/`)(name));
   const owner = Option.getOrElse(of, () => "runs");
   return owner !== area ? null : area === "runs" ? name : Str.slice(area.length + 1)(name);
 };
 
-/** The files of a Run's directory in `area` that an older build kept a fact in, by name. */
 const legacyFacts = Effect.fn("RecordsImport.legacyFacts")(function* (
   area: (typeof AREAS)[number],
   dir: string,
@@ -235,10 +211,6 @@ const legacyFacts = Effect.fn("RecordsImport.legacyFacts")(function* (
   return found;
 });
 
-/**
- * Every Run's journals and facts, under `runs/<run>/` and `evidence/<run>/`, each line and
- * value as it was written, and when each Run last did work.
- */
 export const importRunRecords = Effect.fn("RecordsImport.runRecords")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -290,7 +262,6 @@ export const importRunRecords = Effect.fn("RecordsImport.runRecords")(function* 
       `;
   }
   yield* keepStepTimes(null);
-  // An older build kept each Step's last ten times here, past the Runs that cleanup retired.
   const kept = yield* fs
     .readFileString(path.join(stateDir, "step-durations.json"))
     .pipe(orMissing(""));
@@ -318,11 +289,6 @@ const KeptStepTimes = Schema.fromJsonString(
 const ROOT_CONTROL = new RegExp(`^(${Arr.join([...LEGACY_CONTROLS, NOTIFIED], "|")})\\.(.+)$`);
 const AWAITED_DIR = new RegExp(`^${AWAITED}\\.(.+)$`);
 
-/**
- * The files an older build kept a Run's controls in: `<control>.<run>` in the state
- * directory, `awaited.<run>/<child>`, `relaunch/<run>/<agent>.json` and
- * `running-checks/<id>.json`, whose Run is in the file.
- */
 const legacyControls = Effect.fn("RecordsImport.legacyControls")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const list = (dir: string) => fs.readDirectory(dir).pipe(orMissing<ReadonlyArray<string>>([]));
@@ -364,7 +330,6 @@ const legacyControls = Effect.fn("RecordsImport.legacyControls")(function* (stat
   return found;
 });
 
-/** Where an older build kept the control row `row`. */
 const controlPath = (
   stateDir: string,
   row: { readonly control: string; readonly run: string; readonly key: string },
@@ -377,26 +342,16 @@ const controlPath = (
         ? `${stateDir}/running-checks/${row.key}.json`
         : `${stateDir}/${row.control}.${row.run}`;
 
-/** Where an older build kept the record `name` of `run`. */
 const legacyPath = (stateDir: string, run: string, name: string) => {
   const area = Arr.findFirst(AREAS, (one) => localName(one, name) !== null);
   const at = Option.getOrElse(area, () => "runs" as const);
   return `${stateDir}/${at}/${run}/${localName(at, name) ?? name}`;
 };
 
-/** A later build's migration is recorded: it must be undone by that build first. */
 export class LaterMigration extends Data.TaggedError("LaterMigration")<{
   readonly migration: string;
 }> {}
 
-/**
- * Undoes `RUN_RECORDS_MIGRATION` for a host that is not running: every Run's records,
- * controls and the usual Step times are written back where an older build reads them, each Run's files dated by when
- * it last did work, a legacy file the host has since removed is removed, and only then are
- * the tables and the migration's record dropped, in one transaction, so a later upgrade
- * imports the files again. Refused while a later migration is recorded, since a re-upgrade
- * runs only migrations after the latest one recorded.
- */
 export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -481,7 +436,6 @@ export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* 
   return true;
 });
 
-/** `rollbackRunRecords` on `stateDir`'s own database, while no host owns it. */
 export const rollbackAt = (stateDir: string) =>
   withLock(
     hostLockOf(stateDir),

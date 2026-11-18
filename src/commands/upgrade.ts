@@ -14,8 +14,6 @@ export const upgrade = Command.make("upgrade", { to: toFlag }, ({ to }) =>
     const global = yield* root;
     yield* attempt(
       Effect.gen(function* () {
-        // No workspace: upgrading is about this installation, not about a Run, and it
-        // has to work from a plain shell as much as from inside herdr.
         const resolved = yield* context(global, false);
         if (resolved._tag === "ContextFailure") return resolved.result;
         return yield* upgradeInstallation(resolved.env, { to: Option.getOrUndefined(to) });

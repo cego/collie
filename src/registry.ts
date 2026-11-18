@@ -9,16 +9,9 @@ import type { AgentInfo } from "./herdr";
 import { StoreWrites } from "./store-writes";
 import { epochMs } from "./time";
 
-/**
- * Core's own identity for one live agent process, recorded when it is registered and
- * checked again every time something is about to be sent to it. An agent name is reused
- * by whatever takes that role next, so it names no process; the terminal's address does.
- */
 export interface Incarnation {
   terminalId: string;
-  /** Only Herdr 1 knew one; kept so its records still decode. */
   agentSession: { kind: string; value: string } | null;
-  /** Absent on a Herdr 1 incarnation, which is gone. */
   backend?: "core";
 }
 
@@ -30,11 +23,9 @@ export interface AgentEntry {
   runId: string;
   workflow: string;
   at: string;
-  /** Absent on an entry written before incarnations: never a delivery target. */
   incarnation?: Incarnation;
 }
 export interface RegistryScope {
-  /** Herdr 1's socket and workspace, which named an older register; null on core. */
   session: string | null;
   workspaceId: string | null;
   cwd: string;
@@ -54,19 +45,15 @@ export const AgentEntrySchema = Schema.Struct({
   runId: Schema.String,
   workflow: Schema.String,
   at: Schema.String,
-  // Optional so a register written before incarnations still decodes. It reads as an
-  // entry that can be stopped and pruned but never delivered to, which is what it is.
   incarnation: Schema.optionalKey(IncarnationSchema),
 });
 const EntryJson = Schema.fromJsonString(AgentEntrySchema);
 export const encodeAgentEntry = flow(Schema.encodeResult(EntryJson), Result.getOrThrow);
 const decodeEntry = Schema.decodeOption(EntryJson);
-/** A register file as an older build wrote it, for the import. */
 export const decodeRegisterOption = Schema.decodeOption(
   Schema.fromJsonString(Schema.Array(AgentEntrySchema)),
 );
 
-/** The register a scope's agents are kept in, named as its file was so the import keeps it. */
 export function registerOf(scope: RegistryScope) {
   const where = scope.workspaceId ?? scope.cwd;
   const last = Option.getOrElse(
@@ -76,14 +63,6 @@ export function registerOf(scope: RegistryScope) {
   return `${pipe_(last, Str.replace(/[^A-Za-z0-9._-]+/g, "-")) || "repo"}-${scopeKey(scope)}`;
 }
 
-/**
- * The short stable key a Session's per-workspace state is filed under. The workspace is
- * the Session, so a Run's own worktree and the board's directory read the same one; the
- * directory only stands in where there is no workspace. Exported because the register is
- * no longer the only thing keyed this way — steering defaults are too — and two copies of
- * the formula is two answers to "which workspace is this".
- */
-// `Bun.hash`: Effect has no non-cryptographic digest, and this only needs a short stable key.
 export function scopeKey(scope: RegistryScope) {
   const where = scope.workspaceId ?? scope.cwd;
   return pipe_(Bun.hash(`${scope.session ?? ""} ${where}`).toString(16), Str.slice(0, 12));
@@ -93,12 +72,9 @@ export function scopeFor(cwd: string) {
   return { session: null, workspaceId: null, cwd };
 }
 
-/** What a write to the register invalidates. */
 export const REGISTERED = "collie/registered";
 
-/** The register, in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database). */
 export interface RegisteredApi {
-  /** Oldest registration first. */
   readonly all: Effect.Effect<ReadonlyArray<AgentEntry>>;
   readonly register: (
     scope: RegistryScope,
@@ -157,38 +133,18 @@ export const registeredLayer = Layer.effect(Registered)(
   }),
 );
 
-/** Every agent registered in this state directory, whichever Session registered it. */
 export const everyRegistered = Registered.use((registered) => registered.all);
 
-/**
- * One entry per agent: every Run started from the same place shares a register, and a
- * panel's seats share a Run and a role. Given what core listed, an entry registered
- * before that listing whose agent it did not have is dropped; one registered since may be
- * an agent that started after it, as another seat launched at once does.
- */
 export const registerAgent = (
   scope: RegistryScope,
   entry: AgentEntry,
   alive?: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
 ) => Registered.use((registered) => registered.register(scope, entry, alive));
 
-/**
- * Whether anything may be sent to this entry at all. A register is a cache of what core
- * was last seen to have, and an entry with no incarnation names a role and a pane, both
- * of which the next agent inherits — so a delivery to it could reach a process nobody
- * addressed. Fail closed: the entry stays stoppable and prunable, and undeliverable.
- */
 export function deliverable(entry: AgentEntry): entry is AgentEntry & { incarnation: Incarnation } {
   return entry.incarnation !== undefined;
 }
 
-/**
- * Whether this entry still names the process it was registered for. `liveEntries`
- * answers "is an agent by this name on this pane", which the next incarnation in the
- * same role also satisfies; this additionally requires core's own identity to match.
- * The reason is returned rather than logged here, so the caller records it where its
- * own refusal is recorded.
- */
 export function verifyIncarnation(entry: AgentEntry, alive: ReadonlyArray<AgentInfo>) {
   if (!deliverable(entry)) {
     const returned: { ok: true; info: AgentInfo } | { ok: false; reason: string } = {
@@ -234,11 +190,6 @@ export function liveEntries(entries: ReadonlyArray<AgentEntry>, alive: ReadonlyA
   return Arr.filter(entries, (e) => matching(e, alive).length > 0);
 }
 
-/**
- * The live agent in this role nearest the first of these Runs: that Run's own, then the
- * Run it came from, and so on. Another Run's agent in the role is never the answer. Only
- * read: `alive` may predate an agent registered since, and other Herds share the register.
- */
 export const lineageAgent = Effect.fn("lineageAgent")(function* (
   alive: ReadonlyArray<AgentInfo>,
   role: string,

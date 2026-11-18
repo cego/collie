@@ -1,6 +1,3 @@
-// Why a Run parked, from one closed list, and what each cause lets the host do about it
-// (ADR-draft-a-run-recovers-where-it-parks).
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { Schema } from "effect";
@@ -29,14 +26,12 @@ export type ParkCause = typeof ParkCause.Type;
 export const ParkKind = Schema.Literals(["asks-agent", "rechecks", "needs-you"]);
 export type ParkKind = typeof ParkKind.Type;
 
-/** A park as a reader shows it. */
 export const Park = Schema.Struct({
   cause: ParkCause,
   kind: ParkKind,
   id: Schema.optionalKey(Schema.String),
   since: Schema.optionalKey(Schema.String),
   history: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** The Heal Run working on this park, while one is. */
   healing: Schema.optionalKey(Schema.String),
 });
 export type Park = typeof Park.Type;
@@ -99,7 +94,6 @@ export const parkOf = (cause: ParkCause) => ({ cause, kind: PARK_CAUSES[cause].k
 export const recoveryLine = (line: Metric) =>
   `${line.at}: ${line.action} ${line.outcome} — ${line.note}`;
 
-/** A Heal claimed or started and not yet judged. */
 export const healInFlight = (line: Metric) =>
   line.action === "healed" && (line.outcome === "claimed" || line.outcome === "started");
 

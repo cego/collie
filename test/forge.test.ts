@@ -63,7 +63,6 @@ const model = (forge: MrForge, over: Partial<ForgeModel> = {}) => ({
 
 const ref = (forge: MrForge) => ({ project: PROJECT[forge], iid: "30" });
 
-/** A job's id as its forge gives it: GitHub's names the Actions run of merge request 30. */
 const jobId = (forge: MrForge, job: number) => (forge === "github" ? `4030/${job}` : String(job));
 
 const against = <A>(
@@ -1186,7 +1185,6 @@ for (const name of ["gitlab", "github"] as const) {
   });
 }
 
-// Shell metacharacters without the injection shapes endpoint security flags (SEC-148).
 const SHELL_WORD = `'x;y $HOME *`;
 
 const URLS = {
@@ -1200,7 +1198,6 @@ const URLS = {
   },
 } as const;
 
-/** A job of pipeline or Actions run 7, as each forge links it. */
 const JOB_URL = {
   gitlab: (id: number) => `https://gitlab.example.com/group/app/-/jobs/${id}`,
   github: (id: number) => `https://github.com/owner/repo/actions/runs/7/job/${id}`,
@@ -2230,7 +2227,6 @@ for (const name of ["gitlab", "github"] as const) {
         ).toMatchObject({ ok: true, at: TIP, state: "failed" });
         expect((yield* read({ base: { at: BASE } })).ok).toBe(false);
         expect((yield* read({ target: { at: TIP, jobs: failed } })).ok).toBe(false);
-        // CI ran there without it: the target's red job says nothing about it.
         expect(
           yield* read({
             base: { at: BASE, jobs: [{ name: "lint", state: "passed" }] },
@@ -2359,7 +2355,6 @@ test("a gitlab clone that cannot start shows glab's token in neither its command
       const token = "glpat-SECRET";
       const header = `Authorization: Basic ${Buffer.from(`oauth2:${token}`).toString("base64")}`;
       const fake = fakeForge("gitlab", model("gitlab", { token }));
-      // The fake records the clone; the real runner then fails to start it.
       const run: Runner<ChildProcessSpawner.ChildProcessSpawner> = (cmd, args, cwd, env) =>
         fake
           .run(cmd, args, cwd, env)
@@ -2409,7 +2404,6 @@ for (const name of ["gitlab", "github"] as const) {
           const onPath = yield* forgeOnPath(bin, name, model(name, { token: "first-token" }));
           const clone = `${dir}/clone`;
           yield* exec(["git", "init", "--quiet", clone]);
-          // A global helper with a stale answer, which git would otherwise ask first.
           const global = `${dir}/global.gitconfig`;
           yield* fs.writeFileString(
             global,
@@ -2524,7 +2518,6 @@ test("a GitLab merged-results pipeline counts for the head it was built from, an
         retryOf: [],
         target: null,
       });
-      // A pipeline of an older head: this head's has not started.
       expect(
         yield* read({ pipelineAt: MERGE }, { [MERGE]: [TARGET, "an-older-head"] }),
       ).toMatchObject({ ok: true, state: "pending" });
@@ -2541,9 +2534,7 @@ const WEB = {
 
 for (const name of ["gitlab", "github"] as const) {
   const forge = FORGES[name];
-  /** A thread, by the id of its first comment: GitLab's discussion, GitHub's first review comment. */
   const thread = (first: number) => (name === "gitlab" ? `d${first}` : String(first));
-  /** A comment's address: GitLab's note, GitHub's review comment or issue comment. */
   const urlOf = (id: number, threaded: boolean) =>
     name === "gitlab"
       ? `${WEB.gitlab}#note_${id}`
@@ -2774,7 +2765,6 @@ for (const name of ["gitlab", "github"] as const) {
             "21": true,
             "31": true,
             "41": false,
-            // Linked by 22 only as part of comment 21's address.
             "2": false,
             "52": false,
           });
@@ -3037,7 +3027,6 @@ for (const snapshot of [
   test(`GitLab approval snapshot: a ${snapshot.change} supplies both rule readiness and current human names`, () =>
     runEffect(
       Effect.gen(function* () {
-        // The global /approvals list and /approval_state disagree on current rule contributors.
         const review = yield* reviewOn("gitlab", {
           required: 1,
           approvers: snapshot.earlier,
@@ -3085,7 +3074,6 @@ test("GitLab counts each approval rule again without Collie's approval, on every
         approved: true,
         approvers: ["alice", "bob"],
       });
-      // Collie's approval is the only one on the second rule.
       const rules = [
         { name: "Maintainers", required: 1, approvers: ["alice"] },
         { name: "Security", required: 1, approvers: ["me"] },
@@ -3103,7 +3091,6 @@ test("GitLab counts each approval rule again without Collie's approval, on every
         approved: true,
         approvers: ["alice", "bob"],
       });
-      // No rule requires an approval.
       expect(yield* gitlabOn({})).toEqual({ approved: true, approvers: [] });
       const asked = yield* reviewOn("gitlab", { changesRequested: true });
       expect(asked).toMatchObject({ ok: true, approved: false, changesRequested: true });
@@ -3168,7 +3155,6 @@ test("GitHub's approval stands without Collie's only where the base branch's req
         approved: true,
         approvers: ["alice", "bob"],
       });
-      // A ruleset requiring more than branch protection decides.
       const ruleset = { reviewsRequired: { classic: 1, rulesets: [2] } };
       expect(
         yield* githubOn([review(1, "alice", "APPROVED"), review(2, "me", "APPROVED")], ruleset),
@@ -3176,7 +3162,6 @@ test("GitHub's approval stands without Collie's only where the base branch's req
         approved: false,
         approvers: ["alice"],
       });
-      // Approved by others alone needs no count.
       expect(
         yield* githubOn([review(1, "alice", "APPROVED")], { reviewsRequired: { classic: 1 } }),
       ).toEqual({
@@ -3220,7 +3205,6 @@ test("GitHub with no review required is approved unless an external reviewer ask
         ],
       });
       expect(asked).toMatchObject({ ok: true, approved: false, changesRequested: true });
-      // The review's body is a comment of its own.
       if (asked.ok)
         expect(asked.comments).toEqual([
           expect.objectContaining({
@@ -3253,11 +3237,9 @@ test("GitHub with no review required is approved unless an external reviewer ask
     }),
   ));
 
-/** What ForgeHttp may run: a credential read, and nothing else. */
 const CREDENTIAL_READ =
   /^(?:gh auth token --hostname github\.com|(?:env -u GITLAB_TOKEN -u GITLAB_ACCESS_TOKEN -u OAUTH_TOKEN )?glab config get (?:token|oauth2_expiry_date) --host \S+|glab auth status --hostname \S+)$/;
 
-/** The commands one cold credential read of a forge's host runs. */
 const READ_ONCE = {
   github: ["gh auth token --hostname github.com"],
   gitlab: [
@@ -3293,7 +3275,6 @@ for (const name of ["gitlab", "github"] as const) {
     );
   type Fake = ReturnType<typeof jobbed>;
   const job = (fake: Fake) => forge.job(ref(name), "nuxi-typecheck", "/w", fake.run);
-  /** Each operation moved onto HTTP, and whether the forge answered it. */
   const asked = {
     job: (fake: Fake) => Effect.map(job(fake), (read) => read.ok),
     baseJob: (fake: Fake) =>
@@ -3465,7 +3446,6 @@ for (const name of ["gitlab", "github"] as const) {
   });
 }
 
-/** `read` against a fake forge over HTTP, which must run nothing but credential reads. */
 const overHttp = <A>(
   forge: MrForge,
   over: Partial<ForgeModel>,
@@ -3556,11 +3536,6 @@ describe("GitHub's merge where the base branch requires a merge queue", () => {
         mrs: [mr("github", { targetBranch: "main", mergedSha: MERGED, ...over })],
       }),
     );
-  /**
-   * The merge at HEAD, `queue` doing what the queue does once the merge waits on it: after
-   * its requests for the merge method, the queue, the pull request and, unless `queued`, the
-   * enqueue.
-   */
   const mergeQueued = (
     fake: ReturnType<typeof fakeForge>,
     queue: (pull: FakeMr) => FakeMr = (pull) => pull,

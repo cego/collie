@@ -1,8 +1,3 @@
-// What the host keeps an eye on while a Run works: whether the work still matches its
-// Intent, and the cards a human reads its progress from. Everything here is a view of what
-// is already recorded — the tree, the journal, the Intent and its drift — so nothing a
-// card or a report says is a claim nobody can check.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -79,29 +74,20 @@ import { nowIso } from "./time";
 import { ranOneTest, readVerifications, treeOf } from "./verify";
 import { owedLocally } from "./check-proof";
 
-/** One Run as the host has placed it: where it works, and where its records are. */
 export interface Watched {
   readonly runId: string;
   readonly stateDir: string;
   readonly runDir: string;
   readonly evidenceDir: string;
-  /** Where each piece of agent work's Output is, as `<operation>.json`. */
   readonly agentsDir: string;
-  /** Where the work is: the Run's own worktree, or the checkout it was started in. */
   readonly cwd: string;
   readonly worktree: string | null;
   readonly mr: string | null;
-  /** Whether a question of this Run's is still unanswered. */
   readonly asking: boolean;
-  /** Whether a human has held this Run. */
   readonly held: boolean;
-  /** This Run and every Run related to it: its parent, that parent's children, its own, and Runs about its merge request. */
   readonly family: ReadonlyArray<string>;
-  /** Where any Run's records are, by its id. */
   readonly dirOf: (runId: string) => string;
-  /** Where any Run's work is, by its id: its worktree, else the checkout it was placed in. */
   readonly cwdOf: (runId: string) => Effect.Effect<string>;
-  /** The Herd this Run is judged and charged in, or null where there is none. */
   readonly herd: string | null;
 }
 
@@ -111,7 +97,6 @@ type Services =
   | ChildProcessSpawner.ChildProcessSpawner
   | Records;
 
-/** Where `rev` left the default branch: their merge-base, or `rev` itself. */
 export const baseOf = Effect.fn("Oversight.baseOf")(function* (cwd: string, rev = "HEAD") {
   const head = yield* shell("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], cwd);
   const upstream = head.code === 0 ? Str.trim(head.stdout) : "origin/main";
@@ -121,7 +106,6 @@ export const baseOf = Effect.fn("Oversight.baseOf")(function* (cwd: string, rev 
 
 const lines = (text: string) => Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "");
 
-/** Whether the Herd still owes this Run a cross-run check, has made one, or has none to make. */
 const crossRunOf = Effect.fn("Oversight.crossRunOf")(function* (at: Watched) {
   const key = at.herd;
   if (key === null) return "none" as const;
@@ -133,16 +117,10 @@ const crossRunOf = Effect.fn("Oversight.crossRunOf")(function* (at: Watched) {
   return evaluatedFor(found, at.runId) ? ("evaluated" as const) : ("none" as const);
 });
 
-/** Proposals about this Run nobody has answered. */
 const pendingProposals = Effect.fn("Oversight.pendingProposals")(function* (at: Watched) {
   return pendingFor(yield* proposalsOf(at.runId), at.runId, yield* Clock.currentTimeMillis);
 });
 
-/**
- * One card for one slice of work, appended to the Run's cards. Never fatal: a card is how
- * a human learns what happened, and losing the work to protect the report of it is the
- * wrong way round.
- */
 export const writeCard = Effect.fn("Oversight.writeCard")(function* (
   at: Watched,
   what: {
@@ -156,7 +134,6 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     readonly report?: Card["report"];
   },
 ) {
-  // Every read of the checkout at once: only the two that name the base wait for it.
   const facts = baseOf(at.cwd).pipe(
     Effect.flatMap((base) =>
       Effect.all(
@@ -239,7 +216,6 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     narrative: what.narrative ?? null,
     ...reportFields(what),
   });
-  // A card is a reading of the Run; failing to keep one must not fail the Run.
   yield* appendCard(at.runDir, card).pipe(
     Effect.catchDefect((defect) =>
       Effect.logError(`${at.runId}'s card was not recorded`, Cause.die(defect)),
@@ -248,11 +224,9 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
   return card;
 });
 
-/** A line of the Run's own log, which its record's log tab shows: what the host saw of its work. */
 export const appendLog = (runDir: string, line: string) =>
   appendLogLine(runDir, line).pipe(Effect.asVoid);
 
-/** Best effort: oversight's notes never fail the thing they are about. */
 export const said = (at: { readonly runDir: string }, line: string) =>
   appendLog(at.runDir, line).pipe(Effect.ignore({ log: "Warn" }));
 
@@ -265,14 +239,12 @@ const JudgedJson = Schema.fromJsonString(
 );
 const JUDGED = "steering/judged.json";
 
-/** What the last judgement of this Run got to, which is what `aligned` may claim. */
 const judgedOf = (at: Watched) =>
   RunRecords.use((records) => records.fact(runOfDir(at.runDir), JUDGED)).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(JudgedJson)),
     Effect.orElseSucceed(() => NOT_JUDGED),
   );
 
-/** What a rule check compares against: the tree, every Output, and what was verified. */
 export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched) {
   const fs = yield* FileSystem.FileSystem;
   const changed = (yield* merging(at.cwd))
@@ -284,8 +256,6 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
         ],
         "\n",
       );
-  // Untracked too: a file an agent created is exactly what a `protected_paths` rule is
-  // for, and it is in no diff until somebody commits it.
   const untracked = yield* gitOutput(["ls-files", "--others", "--exclude-standard"], at.cwd);
   const branch = yield* shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], at.cwd);
   const outputs: Record<string, Record<string, string>> = {};
@@ -312,7 +282,6 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
   return returned;
 });
 
-/** The half Collie establishes itself: what the rules say about the evidence, recorded. */
 const checkRuleDrift = Effect.fn("Oversight.checkRuleDrift")(function* (
   at: Watched,
   intent: Intent,
@@ -332,9 +301,6 @@ const checkRuleDrift = Effect.fn("Oversight.checkRuleDrift")(function* (
     yield* appendDrift(at.runDir, report).pipe(Effect.ignore({ log: "Unhandled" }));
     yield* said(at, driftSaid(report, where));
   }
-  // A report that was open and is no longer found is one the work came back from — but
-  // only where the check found fewer things: an unchanged tree finds the same ones, and
-  // calling that a fix would clear a report nobody acted on.
   for (const report of openReports(before)) {
     if (Arr.some(found, (still) => still.constraint === report.constraint)) continue;
     yield* appendDrift(at.runDir, { ...report, at: yield* nowIso, resolution: "verified" }).pipe(
@@ -344,11 +310,6 @@ const checkRuleDrift = Effect.fn("Oversight.checkRuleDrift")(function* (
   }
 });
 
-/**
- * The half only a model can make: one Judgement of the semantic constraints, at a
- * boundary or the finish. A judgement that could not be made is recorded as skipped,
- * which keeps the Run `unverified` rather than reading as checked.
- */
 const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
   at: Watched,
   intent: Intent,
@@ -395,7 +356,6 @@ const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
   }
 });
 
-/** The agent a correction would go to, and the one sender that takes it there. */
 export interface Correcting {
   readonly agent: {
     readonly agent: string;
@@ -412,7 +372,6 @@ export interface Correcting {
   }) => Effect.Effect<boolean>;
 }
 
-/** What correcting did: constraints a correction went out about, and ones given up on. */
 export interface Corrected {
   readonly sent: ReadonlyArray<string>;
   readonly escalated: ReadonlyArray<string>;
@@ -420,11 +379,6 @@ export interface Corrected {
 
 const NOTHING_CORRECTED: Corrected = { sent: [], escalated: [] };
 
-/**
- * A human typing into the agent's pane since the last look, written onto its ledger as a
- * manual override: from then on Collie does not take turns with them. Counted rather than
- * timestamped, against the count seen last time, which is kept beside the Run.
- */
 const noticeOverride = Effect.fn("Oversight.noticeOverride")(function* (
   at: Watched,
   to: Correcting["agent"],
@@ -447,12 +401,6 @@ const noticeOverride = Effect.fn("Oversight.noticeOverride")(function* (
   yield* said(at, `${to.agent}: manual_override — someone typed into its pane`);
 });
 
-/**
- * Sends what this Run's own authority lets Collie send about its open drift, and gives up
- * where the bound is spent. Every refusal is somebody being deferred to: the human at that
- * keyboard, the human who held the Run, the human who turned this off. A correction is
- * `correction_submitted`, never `verified`: sending text is not the work changing.
- */
 const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
   at: Watched,
   intent: Intent,
@@ -504,7 +452,6 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
     yield* said(at, `correction sent for ${report.constraint} (${mode})`);
     sent.push(report.constraint);
   }
-  // The bound is spent and it is still open: nothing else Collie can do about it.
   const escalated: string[] = [];
   for (const report of open) {
     if (report.resolution === "escalated") continue;
@@ -520,13 +467,8 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
   return { sent, escalated };
 });
 
-/** Delivery states nothing follows, so a correction in one is not in flight. */
 const SETTLED: ReadonlySet<string> = new Set(["failed", "superseded"]);
 
-/**
- * The Run's own SPEC, read into its Intent before anything is judged against it. Only a
- * Run on a worktree of its own builds from it; elsewhere the SPEC is its product.
- */
 const followRunPlan = Effect.fn("Oversight.followRunPlan")(
   function* (at: Watched) {
     if (at.worktree === null) return;
@@ -550,12 +492,6 @@ const followRunPlan = Effect.fn("Oversight.followRunPlan")(
   (effect) => Effect.ignore(effect),
 );
 
-/**
- * Where this Run's work stands against its Intent, at one moment: after a piece of work
- * is collected (the rules only, which cost nothing), before the next one starts, and at
- * the finish, where a model judges what no rule can. What is open is then corrected where
- * the Intent allows and there is an agent to correct. A Run with no Intent is not checked.
- */
 export const checkDrift = Effect.fn("Oversight.checkDrift")(function* (
   at: Watched,
   where: string,
@@ -566,25 +502,21 @@ export const checkDrift = Effect.fn("Oversight.checkDrift")(function* (
   yield* followRunPlan(at);
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return NOTHING_CORRECTED;
-  // A boundary mid-Integration would take the default branch's changes for the Run's own.
   const deferred = judging === "boundary" && (yield* merging(at.cwd));
   if (deferred)
     yield* said(at, `drift not judged at ${where}: an integration's conflicts are open`);
   else if (judging !== "none") yield* judgeDrift(at, intent, where, judging, deps);
   const rules = Arr.some(intent.constraints, (constraint) => constraint.kind === "rule");
   if (rules) yield* checkRuleDrift(at, intent, where);
-  // With no rule to check there may still be something to correct, from the judgement.
   if (to === null || !(rules || judging !== "none")) return NOTHING_CORRECTED;
   return yield* correctDrift(at, intent, to);
 });
 
-/** A related Run's committed change at its newest card, or why it is not shown. */
 type CrossRunDiff =
   | { readonly kind: "shown"; readonly blocks: ReadonlyArray<EvidenceBlock> }
   | { readonly kind: "no card" }
   | { readonly kind: "unread"; readonly why: string };
 
-/** One Run the cross-run question is about: where it has got to, and what it is for. */
 interface CrossRunTarget {
   readonly id: string;
   readonly dir: string;
@@ -596,15 +528,11 @@ interface CrossRunTarget {
   readonly diff: CrossRunDiff;
   readonly outputs: ReadonlyArray<ShownOutput>;
   readonly replies: ReadonlyArray<RunReply>;
-  /** Whether any of its diff or Outputs was cut to the cap. */
   readonly truncated: boolean;
-  /** Whether it has ended, so a report about it is said on the board rather than filed. */
   readonly finished: boolean;
-  /** The vector as one line, which is what the log and the pack both show. */
   readonly line: string;
 }
 
-/** The change `head` made since it left the default branch, read in its own Run's checkout. */
 const committedWork: (cwd: string, head: string) => Effect.Effect<CrossRunDiff, never, Services> =
   Effect.fn("Oversight.committedWork")(function* (cwd: string, head: string) {
     if (head === "") return { kind: "unread", why: "its card names no commit" };
@@ -618,7 +546,6 @@ const committedWork: (cwd: string, head: string) => Effect.Effect<CrossRunDiff, 
     return { kind: "shown", blocks: splitDiff(ran.stdout) };
   });
 
-/** The merge request a Run opened or was given. */
 export const MERGE_REQUEST = "merge-request";
 
 const namedIn = (goal: string | null) =>
@@ -634,11 +561,6 @@ const namedIn = (goal: string | null) =>
     },
   );
 
-/**
- * A Run and every Run the cross-run question relates it to: its children, its parent, that
- * parent's other children, and any Run whose recorded merge request is the one this Run
- * recorded or its goal names, or whose goal names the one this Run recorded.
- */
 export const familyOf = Effect.fn("Oversight.familyOf")(function* (
   rows: ReadonlyArray<{ readonly run: string; readonly parent: string | null }>,
   row: { readonly run: string; readonly parent: string | null },
@@ -664,7 +586,6 @@ export const familyOf = Effect.fn("Oversight.familyOf")(function* (
   const recorded = yield* recordedBy(row.run);
   const about = new Set([...(recorded === null ? [] : [recorded]), ...(yield* namedBy(row.run))]);
   if (about.size === 0) return [...related];
-  // ponytail: reads every Run's records per boundary; index by merge request if that gets slow.
   for (const one of rows) {
     if (related.has(one.run)) continue;
     const theirs = yield* recordedBy(one.run);
@@ -677,11 +598,6 @@ export const familyOf = Effect.fn("Oversight.familyOf")(function* (
   return [...related];
 });
 
-/**
- * Every related Run's Intent version, newest card and open drift, and its work at that
- * card: the snapshot a cross-run Judgement is made from, read whether or not anyone can
- * judge it.
- */
 const versionVector = Effect.fn("Oversight.versionVector")(function* (
   at: Watched,
   family: ReadonlyArray<string>,
@@ -726,7 +642,6 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
   return targets;
 });
 
-/** The work a target's section of the pack shows, which is all a report may cite. */
 const shownOf = (target: CrossRunTarget) => ({
   files: target.diff.kind === "shown" ? Arr.map(target.diff.blocks, (block) => block.path) : [],
   outputs: Arr.map(target.outputs, (output) => output.operation),
@@ -739,10 +654,6 @@ const unshown = (diff: CrossRunDiff) =>
       ? `diff could not be read: ${diff.why}`
       : null;
 
-/**
- * A target's work, fenced and named as the data being judged: a diff can say anything,
- * including that it is an instruction.
- */
 const workLines = (target: CrossRunTarget) => {
   const { diff } = target;
   return [
@@ -766,7 +677,6 @@ const workLines = (target: CrossRunTarget) => {
   ];
 };
 
-/** The cross-run question: what each related Run is for, where it has got to, and its work. */
 const crossRunPack = (targets: ReadonlyArray<CrossRunTarget>) =>
   Arr.join(
     [
@@ -786,12 +696,6 @@ const crossRunPack = (targets: ReadonlyArray<CrossRunTarget>) =>
     "\n",
   );
 
-/**
- * The Judgement an election exists to make: one call over the vector, and each report
- * filed on the Run it is about — its drift journal while it is working, and the board's
- * pending reports once it has ended, since a finished Run's record does not change. Why
- * none was made, or null where it was.
- */
 const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
   at: Watched,
   deps: JudgementDeps | null,
@@ -805,9 +709,6 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
   const byId = new Map(Arr.map(targets, (target) => [target.id, target]));
   let filed = 0;
   for (const found of asked.reports) {
-    // Only a Run this question was about, one of its own constraints, and its work or another
-    // Run's reply as the pack showed them: anything else is a model reaching outside what it
-    // was shown.
     const target = byId.get(found.run);
     if (target === undefined || !target.constraintIds.includes(found.constraint)) continue;
     const work = citedIn(shownOf(target), target.cwd);
@@ -856,13 +757,6 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
   return null;
 });
 
-/**
- * Stands for the Herd's cross-run check, and makes it if it wins. A Run with relatives
- * stands at every boundary and at its finish; any Run stands while a check is owed, which
- * is what stops an owed check waiting for a Run that may never work again. One winner at
- * a time judges; a loser says it moved, which is what tells the winner its snapshot is
- * behind. A Run leaving without an answer writes the check down as owed.
- */
 export const standForElection = Effect.fn("Oversight.standForElection")(function* (
   at: Watched,
   where: string,
@@ -921,14 +815,9 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
         );
         if (why !== null) {
           yield* said(at, `cross-run judgement not made at ${snapshotAt}: ${why}`);
-          // Only a Run leaving writes it down: a mark at every boundary nobody could pay
-          // for would be a mark no later boundary could clear.
           if (leaving) yield* owe("nobody could make it");
           return;
         }
-        // Answered — for the snapshot it was made from. A loser's `dirty` newer than that
-        // means something moved while the call was out, so judge again, a bounded number
-        // of times, and then leave it owed.
         if (
           !staleSince(yield* readElections(file).pipe(Effect.orElseSucceed(() => [])), snapshotAt)
         )
@@ -940,10 +829,6 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
   ).pipe(Effect.ignore({ log: "Unhandled" }));
 });
 
-/**
- * The verifications Collie may run itself at the finish: approved for this Run, named by a
- * `command_exit` rule, and not yet run by anybody.
- */
 export const grantedToRun = Effect.fn("Oversight.grantedToRun")(function* (at: Watched) {
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return [];
@@ -964,12 +849,6 @@ export const grantedToRun = Effect.fn("Oversight.grantedToRun")(function* (at: W
   );
 });
 
-/**
- * What a finished Run leaves behind: an honest answer about whether its work is what was
- * asked for, and — where something is still open and blocking — a proposal of a follow-up
- * Run for the human rather than another prompt to an agent. A finished Run is not extended
- * by anyone but them. The proposal's id, where one was made.
- */
 export const settleAtFinish = Effect.fn("Oversight.settleAtFinish")(function* (at: Watched) {
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return null;
@@ -1004,14 +883,8 @@ export const settleAtFinish = Effect.fn("Oversight.settleAtFinish")(function* (a
   }).pipe(Effect.map((recorded) => recorded.id));
 });
 
-/** Which checkpoints have a card already, so a restart does not card them twice. */
 const CARDED = "steering/carded";
 
-/**
- * A card per ticket an agent has said it finished, while its work is still going: a
- * human sees a slice land without waiting for the whole piece, and the agent's own words
- * for it are carried as claims and labelled as claims.
- */
 export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* (
   at: Watched,
   step: string,
@@ -1026,7 +899,6 @@ export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* 
   for (const { file, checkpoint } of done) {
     const key = `${file}@${checkpoint.at}`;
     if (carded.has(key)) continue;
-    // Together: a watch interrupted between the two would leave a ticket marked but never carded.
     const card = yield* Effect.uninterruptible(
       records
         .append(run, CARDED, [key])
@@ -1037,11 +909,9 @@ export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* 
   return written;
 });
 
-/** The host's eye on a Run, as the work reaches the moments a card is written at. */
 export class Oversight extends Context.Service<
   Oversight,
   {
-    /** A card for a piece of work that just finished, or for the Run as it ends. */
     readonly card: (
       runId: string,
       what: {
@@ -1055,15 +925,8 @@ export class Oversight extends Context.Service<
         readonly report?: Card["report"];
       },
     ) => Effect.Effect<void>;
-    /** Cards for the tickets an agent has said it finished since the last look. */
     readonly checkpoints: (runId: string, step: string) => Effect.Effect<void>;
-    /**
-     * A Run's end, before it is reported: the verifications Collie was granted, its work
-     * judged against its Intent one last time, what is still blocking offered as a
-     * follow-up, and the card that closes it.
-     */
     readonly finish: (runId: string) => Effect.Effect<void>;
-    /** The Run's work against its Intent, at one of the moments `checkDrift` names. */
     readonly drift: (
       runId: string,
       where: string,

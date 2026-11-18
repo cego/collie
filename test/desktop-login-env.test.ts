@@ -1,5 +1,3 @@
-// What Desktop takes of the login shell's environment, and that every child it starts is given it.
-
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem } from "effect";
@@ -39,7 +37,6 @@ test("no markers, or an unclosed one, takes nothing", () => {
   expect(parseLoginEnv(`${BEGIN}A=1\0`).size).toBe(0);
 });
 
-/** Sets `name` in the environment until the scope closes. */
 const setFor = (name: string, value: string) =>
   Effect.acquireRelease(
     Effect.sync(() => {
@@ -211,7 +208,6 @@ test("Desktop keeps its own SSH agent where the login shell's holds no keys and 
     Effect.gen(function* () {
       const takes = (login: AgentState, session: AgentState) =>
         takesLoginAgent("/session", "/login", states({ "/login": login, "/session": session }));
-      // keychain's agent before a terminal has asked for the passphrase, beside the desktop's.
       expect(yield* takes("empty", "holds")).toBe(false);
       expect(yield* takes("gone", "holds")).toBe(false);
       expect(yield* takes("gone", "empty")).toBe(false);
@@ -248,7 +244,6 @@ test("Desktop keeps its SSH agent over a login shell's that holds no keys", () =
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-agent-" });
-      // An ssh-add on PATH that finds keys only in the session's agent.
       yield* fs.writeFileString(
         `${dir}/ssh-add`,
         `#!/bin/sh\n[ "$SSH_AUTH_SOCK" = /session/agent ] && exit 0; exit 1\n`,

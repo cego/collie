@@ -1,6 +1,3 @@
-// Every subscription the view holds retries by itself: it keeps its last value, says what
-// went wrong and when it tries again, backs off, and wakes on Retry now.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -11,10 +8,6 @@ import { untilStarted } from "../desktop/src/bun/chat";
 import { ActionFailed } from "../desktop/src/shared/flock";
 import { backoff, foldedOf, heldOf, retryWake, retrying } from "../desktop/src/shared/retrying";
 
-/**
- * One subscription per entry: `fail` and `interrupt` end it so, `x!` gives x then fails,
- * `x.` gives x then ends, and anything else gives itself and stays open.
- */
 const scripted = (subscriptions: ReadonlyArray<string>) => {
   let at = 0;
   return Stream.suspend(() => {

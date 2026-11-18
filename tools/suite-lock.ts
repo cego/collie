@@ -1,13 +1,9 @@
-// The suite's turn on this machine: one suite runs at a time, and the next waits. A wait
-// says who it is waiting for once, then how long it has waited, so it is never silent.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Clock, Duration, Effect, Fiber, Option, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { lockHolder, withLock } from "../src/lock";
 
-/** What `ps` says of a pid: when it started (`lstart` is always 24 characters) and its command. */
 export const described = (pid: number) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -15,7 +11,6 @@ export const described = (pid: number) =>
       ChildProcess.make("ps", ["-o", "lstart=", "-o", "args=", "-p", String(pid)], {
         stdout: "pipe",
         stderr: "ignore",
-        // `lstart`'s width is fixed only in the C locale.
         env: { LC_ALL: "C" },
         extendEnv: true,
       }),
@@ -52,10 +47,6 @@ export const elapsed = (ms: number) => {
   return minutes === 0 ? `${seconds}s` : `${minutes}m ${seconds % 60}s`;
 };
 
-/**
- * Runs `run` once this process holds `lock`, waiting as long as that takes. Where it has to
- * wait it says who holds it, then every `every` how long it has been.
- */
 export const inTurn = <A, E, R>(
   lock: string,
   run: Effect.Effect<A, E, R>,

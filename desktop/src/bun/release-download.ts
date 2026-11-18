@@ -1,5 +1,3 @@
-// Desktop updates come from Collie's public GitHub releases. A redirect may hand an
-// asset to GitHub's CDN, but must never turn an update into a request to another service.
 import { Effect } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -20,7 +18,6 @@ const allowed = (url: URL, redirected: boolean) =>
       (url.hostname === "release-assets.githubusercontent.com" ||
         url.hostname === "objects.githubusercontent.com")));
 
-/** What a release that does not carry the asset answers. */
 export const UNPUBLISHED = "the update download answered 404";
 
 export const downloadRelease = (source: string) =>

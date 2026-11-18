@@ -1,8 +1,3 @@
-// Forking: take a baseline definition into a later Layer so it can be edited
-// without touching the team baseline. Two shapes, and the first is the default:
-// a stub that `extends:` the parent and names only what you came to change, or a
-// full copy that stops tracking the parent altogether.
-
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -20,13 +15,9 @@ export interface ForkResult {
 }
 
 export interface ForkOptions {
-  /** Filename/frontmatter name for a fork that is not shadowing its parent. */
   name?: string;
-  /** A whole copy instead of an `extends:` stub: it stops following the parent. */
   full?: boolean;
-  /** The step a workflow stub names, so there is something to edit in it. */
   step?: string;
-  /** The parent's body, so a stub can carry the section it is overriding. */
   section?: string;
 }
 
@@ -37,7 +28,6 @@ export interface ForkSource {
   body: string;
 }
 
-/** The operation both front doors use: validate the selected part, then write once. */
 export const forkResolvedDefinition = Effect.fn("Fork.forkResolvedDefinition")(function* (
   source: ForkSource,
   targetDir: string,
@@ -57,7 +47,6 @@ export const forkResolvedDefinition = Effect.fn("Fork.forkResolvedDefinition")(f
   });
 });
 
-/** Never overwrites: an existing fork is the one you already edited. */
 export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
   source: string,
   kind: DefinitionKind,
@@ -120,20 +109,11 @@ export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
       };
 });
 
-/**
- * A full copy records the parent it was taken from — over any hash it inherited, which
- * would otherwise be its grandparent's — and answers to its own name, since the parent's
- * frontmatter name would make the copy shadow it instead of being found as the fork.
- */
 function copied(text: string, hash: string, source: string, target: string) {
   const stamped = setFrontmatterKey(text, "forked_from_hash", hash);
   return source === target ? stamped : setFrontmatterKey(stamped, "name", target);
 }
 
-/**
- * The smallest file that changes one thing. Everything not named here is still the
- * parent's, so the stub is what the fork is actually for, and nothing else.
- */
 function stub(name: string, parent: string, kind: DefinitionKind, opts: ForkOptions) {
   const head = ["---", `name: ${yamlScalar(name)}`, `extends: ${yamlScalar(parent)}`];
   const body: string[] = [];

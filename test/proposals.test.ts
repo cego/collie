@@ -1,8 +1,3 @@
-// A proposal exists so that a human can say yes to a specific thing. Everything tested
-// here is a way of saying yes to something else: a payload that changed, a proposal that
-// has aged out, a Run whose Intent moved, a caller that is not a person, and an action
-// nobody can say whether it already happened.
-
 import type { Records } from "../src/records";
 import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
@@ -93,8 +88,6 @@ const written = Effect.fn("test.written")(function* () {
 test("a card-bound proposal carries the revision it was asked about", () =>
   runEffect(
     Effect.gen(function* () {
-      // Without this the binding exists only on the conversation turn, and `admit` has
-      // nothing to compare — `revision_moved` becomes a refusal nothing can reach.
       const bound = yield* record(file, {
         interpretation: "the branch is wrong",
         targets,
@@ -105,12 +98,10 @@ test("a card-bound proposal carries the revision it was asked about", () =>
         card: { id: "card-1", revision: "sha:fingerprint" },
       });
       expect(bound.card).toEqual({ id: "card-1", revision: "sha:fingerprint" });
-      // And it survives the journal, which is where a confirmation reads it from.
       const back = Option.getOrUndefined(
         Arr.findFirst(yield* read(file), (line): line is typeof bound => line.kind === "proposal"),
       );
       expect(back?.card?.revision).toBe("sha:fingerprint");
-      // Unbound proposals stay unbound: nothing invents a revision to compare.
       expect((yield* written()).card).toBeUndefined();
     }),
   ));
@@ -122,7 +113,6 @@ test("the hash is of the payload, so a changed action is a different proposal", 
     { kind: "hold", run: "r1" },
   ];
   expect(contentHash(targets, reworded)).not.toBe(contentHash(targets, actions));
-  // Order is part of it: the same actions in another order do different things.
   expect(contentHash(targets, [...actions].reverse())).not.toBe(contentHash(targets, actions));
 });
 
@@ -133,7 +123,6 @@ test("a human confirming the exact payload gets the actions back, once", () =>
       const first = yield* confirm(file, proposal.id, proposal.content_hash, human, versions);
       expect(first).toMatchObject({ actions });
 
-      // Confirming again is not a second execution: it is already settled.
       const second = yield* confirm(file, proposal.id, proposal.content_hash, human, versions);
       expect(second).toMatchObject({ refused: "not_pending" });
     }),
@@ -151,7 +140,6 @@ test("every refusal is its own fact, and says which one it was", () =>
       ).toMatchObject({
         refused: "not_found",
       });
-      // A summary is not consent to a payload nobody saw.
       expect(
         judgeConfirmation(lines, proposal.id, "some-other-hash", human, now, versions),
       ).toMatchObject({
@@ -167,7 +155,6 @@ test("every refusal is its own fact, and says which one it was", () =>
           versions,
         ),
       ).toMatchObject({ refused: "expired" });
-      // The Intent moved, so this was proposed about a Run that no longer wants that.
       expect(
         judgeConfirmation(
           lines,
@@ -203,7 +190,6 @@ test("a carry-out cut off partway is read back as unsettled and unrun, not as do
       const proposal = yield* written();
       yield* confirm(file, proposal.id, proposal.content_hash, human, versions);
       yield* stepStarted(file, proposal.id, 0);
-      // Cut off here: action 0 never settled and action 1 never ran.
 
       expect(stepResults(yield* read(file), proposal.id)).toMatchObject([
         { index: 0, kind: "deliver", state: "unknown" },
@@ -220,7 +206,6 @@ test("an action that started and never settled stops the next confirmation", () 
       yield* stepStarted(file, proposal.id, 0);
       yield* stepSettled(file, proposal.id, 0, "applied");
       yield* stepStarted(file, proposal.id, 1);
-      // Crash here: nobody can say whether action 1 happened.
 
       const later = yield* written();
       const lines = yield* read(file);
@@ -234,7 +219,6 @@ test("an action that started and never settled stops the next confirmation", () 
       );
       expect(judged).toMatchObject({ refused: "reconcile_required" });
 
-      // Only an action that really is waiting can be reconciled.
       expect(yield* reconcileStep(file, later.id, 1, "not-applied", human)).toMatchObject({
         refused: "not_pending",
       });
@@ -263,7 +247,6 @@ test("declining settles it, and it cannot then be confirmed", () =>
       expect(
         yield* confirm(file, proposal.id, proposal.content_hash, human, versions),
       ).toMatchObject({ refused: "not_pending" });
-      // And it cannot be declined twice: the journal would say it was answered twice.
       expect(yield* decline(file, proposal.id, human)).toMatchObject({ refused: "not_pending" });
     }),
   ));
@@ -273,7 +256,6 @@ test("a confirmed proposal cannot then be declined", () =>
     Effect.gen(function* () {
       const proposal = yield* written();
       yield* confirm(file, proposal.id, proposal.content_hash, human, versions);
-      // Both facts in one journal would leave nobody able to say which one happened.
       expect(yield* decline(file, proposal.id, human)).toMatchObject({ refused: "not_pending" });
     }),
   ));
@@ -305,7 +287,6 @@ test("admission asks again, immediately before the action runs", () => {
   };
   expect(admit(deliver, ctx())).toBeNull();
   expect(admit(deliver, ctx({ run: null }))).toBe("the run is gone");
-  // The agent moved on between the proposal and the yes.
   expect(admit(deliver, ctx({ incarnation: "term-2" }))).toContain("not the one in that pane");
   expect(admit(deliver, ctx({ intentVersion: 3 }))).toContain("v2");
 
@@ -314,22 +295,17 @@ test("admission asks again, immediately before the action runs", () => {
   expect(admit(answer, ctx({ pendingChoice: null }))).toContain("not asking a Choice");
   expect(admit(answer, ctx({ pendingChoice: "c2" }))).toContain('"c2"');
 
-  // A follow-up is a child of a finished Run, so the rule runs the other way.
   const followup: Action = { kind: "followup", run: "r1", text: "the block is open" };
   expect(admit(followup, ctx())).toContain("still going");
   expect(admit(followup, ctx({ run: { id: "r1", status: "succeeded" } }))).toBeNull();
 
-  // A resume is what a failed or stopped Run is offered, so ending is not a reason to
-  // refuse it; `resumeRun` owns the rest, the one that already succeeded included.
   const resume: Action = { kind: "resume", run: "r1" };
   expect(admit(resume, ctx({ run: { id: "r1", status: "failed" } }))).toBeNull();
   expect(admit(resume, ctx({ run: { id: "r1", status: "stopped" } }))).toBeNull();
   expect(admit(resume, ctx({ run: { id: "r1", status: "succeeded" } }))).toBeNull();
 
-  // A card-bound proposal is about a revision, and revisions move.
   expect(admit(deliver, ctx({ revision: { card: "abc", now: "def" } }))).toBe("revision_moved");
 
-  // Nothing is asked of an action that does nothing to a Run.
   expect(admit({ kind: "none", why: "nothing to do" }, ctx({ run: null }))).toBeNull();
   expect(admit({ kind: "ask_human", question: "which?" }, ctx({ run: null }))).toBeNull();
 });
@@ -337,7 +313,6 @@ test("admission asks again, immediately before the action runs", () => {
 test("a change made on a stale Intent is refused in the host's words, whichever check sees it", () =>
   runEffect(
     Effect.gen(function* () {
-      // Which check sees the newer version first is timing, so none may say it differently.
       const hold: Action = { kind: "hold", run: "r1" };
       expect(admit(hold, ctx({ intentVersion: 3 }))).toBe("the Intent is v3, not v2");
       const proposal = yield* written();
@@ -358,7 +333,6 @@ const NO_STEP = "a finished Run has no step left to hold; stop closes its agents
 const COLLECTED =
   "its checks were collected when it finished; remember_verification keeps them for the next Run";
 
-/** Every Run-scoped action kind, and what a finished Run's admission says to it (ADR-0041 D2). */
 const ON_A_FINISHED_RUN: ReadonlyArray<readonly [Action, string | null]> = [
   [{ kind: "deliver", run: "r1", agent: "impl-1", text: "merge it", mode: "now" }, null],
   [{ kind: "answer", run: "r1", choiceId: "c1", answer: "yes" }, "the run is not asking a Choice"],
@@ -393,8 +367,6 @@ for (const status of ["succeeded", "failed", "stopped"]) {
   });
 }
 
-// From here on this process has executors registered, which is why it comes last.
-/** A Herd of this test's own with a host in it, and the proposals file its Herd keeps. */
 const inHerd = <A, E>(
   body: (herd: {
     world: World;
@@ -404,8 +376,6 @@ const inHerd = <A, E>(
 ) =>
   hosted("hw-proposals-", ({ world, env }) =>
     Effect.gen(function* () {
-      // Core's socket is what names a Herd, so the proposal has to be filed under the one
-      // this env resolves to rather than under a key the test picked.
       const herdFile = yield* machineHerd(env);
       return yield* body({ world, env, herdFile }).pipe(Effect.provide(recordsAt(world.state)));
     }),
@@ -416,8 +386,6 @@ test(
   () =>
     inHerd(({ world, env, herdFile }) =>
       Effect.gen(function* () {
-        // A Run that has ended: something nothing can hold, which a proposal could not know
-        // about and only the moment of carrying it out can.
         const { id, dir } = yield* settledRun(world, "hello");
         yield* writeIntent(dir, seedIntent(id, { goal: "a picker" }));
 
@@ -435,13 +403,10 @@ test(
             },
           ],
           allowedNow: [],
-          // The Intent was v1 when this was proposed, and `seedIntent` wrote v1.
           intentVersions: { [id]: 1 },
           by: "evaluator:call-1",
         });
 
-        // The board used to run its actions without asking this, which is the whole point
-        // of one module.
         const out = yield* carryOutProposal(env, proposal.id, undefined, board);
         expect(out.ok).toBe(false);
         if (out.ok) return;
@@ -469,8 +434,6 @@ test(
           by: "evaluator:call-1",
         });
 
-        // Corrupt after the proposal was written, which is the window that matters: the
-        // version it was checked against is now unreadable rather than merely absent.
         yield* RunRecords.use((records) => records.put(run.id, INTENT_FILE, "{ not json"));
 
         const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
@@ -538,7 +501,6 @@ test(
         expect(nowhere.ok).toBe(false);
         if (nowhere.ok) return;
         expect(nowhere.error.message).toContain('"workspace"');
-        // Told how chat names one, not the command line's flag.
         expect(nowhere.error.message).toContain("the action's workspace");
         expect(nowhere.error.message).not.toContain("--input");
       }),
@@ -605,10 +567,6 @@ test(
           by: "evaluator:call-1",
         });
 
-        // `start` goes through the same two steps `run start` takes, so an Input nobody
-        // named is a refusal rather than a guess — there is no human here to ask. The
-        // refusal is this action's and not the next one's: the `hold` is about another Run,
-        // so it is still attempted and reported on its own.
         const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
         expect(out.ok).toBe(false);
         if (out.ok) return;
@@ -679,7 +637,6 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const unit = { name: "unit", executable: "true", argv: [], cwd: "worktree" };
-        // A checkout of its own, as a worktree is, and gone once the Run has settled.
         const worktree = `${world.home}/worktree`;
         yield* fs.makeDirectory(worktree, { recursive: true });
         yield* exec(["git", "init", "-q"], { cwd: worktree });
@@ -709,7 +666,6 @@ test(
         expect((yield* carry()).ok).toBe(true);
         const file = `${world.config}/verify/example.test/team/app.json`;
         expect(yield* fs.readFileString(file)).toContain('"executable": "true"');
-        // The checkout it was started for still names the repository.
         yield* fs.remove(worktree, { recursive: true });
         expect((yield* carry()).ok).toBe(false);
         expect((yield* carry(true)).ok).toBe(true);
@@ -735,9 +691,7 @@ test("a proposal is pending until it is answered or it expires", () => {
     state: "pending",
   };
   expect(Arr.map(pendingFor([proposal], "r1", now), (line) => line.id)).toEqual(["p1"]);
-  // Somebody else's Run is not this Run's decision.
   expect(pendingFor([proposal], "r2", now)).toEqual([]);
-  // Answered either way, and expired, are all "nobody is being waited on".
   const settled = { id: "p1", at: "t", by: "human:1" } as const;
   expect(pendingFor([proposal, { ...settled, kind: "confirmed" }], "r1", now)).toEqual([]);
   expect(pendingFor([proposal, { ...settled, kind: "declined" }], "r1", now)).toEqual([]);
@@ -747,10 +701,6 @@ test("a proposal is pending until it is answered or it expires", () => {
 test("a proposal about the installation is waiting on the Herd, not on any Run", () =>
   runEffect(
     Effect.gen(function* () {
-      // `upgrade`, `home_cleanup`, `update_defaults` and `fork_definition` name no Run, so
-      // they record no targets — and a board that only asked `pendingFor(run)` would never
-      // draw them, leaving them to expire at the one front door that is meant to confirm
-      // them.
       const herdWide = yield* record(file, {
         interpretation: "bring this installation up to date",
         targets: [],
@@ -762,8 +712,6 @@ test("a proposal about the installation is waiting on the Herd, not on any Run",
       const lines = yield* read(file);
       const now = epochMs(herdWide.expires_at) - 1;
       expect(Arr.map(pendingHerdWide(lines, now), (p) => p.id)).toEqual([herdWide.id]);
-      // And a proposal about a Run is that Run's, never the Herd's: the two lists do not
-      // overlap, so confirming one is never confirming the other.
       yield* written();
       const both = yield* read(file);
       expect(Arr.map(pendingHerdWide(both, now), (p) => p.id)).toEqual([herdWide.id]);

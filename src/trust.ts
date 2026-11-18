@@ -1,7 +1,3 @@
-// Whether a Harness will work in a directory, or stop and ask first. Claude asks
-// once per directory and remembers the answer in ~/.claude.json; this file is
-// Claude's, so unreadable data is always left untouched.
-
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
@@ -16,11 +12,9 @@ export interface TrustResult {
 }
 
 export interface Trust {
-  /** `unknown` when the harness has left nothing here to read. */
   readonly state: (
     cwd: string,
   ) => Effect.Effect<TrustState, PlatformError.PlatformError, FileSystem.FileSystem>;
-  /** Writing goes through the pid lock, which is what pulls in the spawner. */
   readonly grant: (
     cwd: string,
   ) => Effect.Effect<
@@ -50,21 +44,18 @@ function trustedIn(config: YamlMap, cwds: ReadonlyArray<string>) {
   });
 }
 
-/** A grant is worth retrying while claude is writing, but not for ever. */
 const GRANT_ATTEMPTS = 3;
 const CHANGED = "changed" as const;
 
 export function claudeTrust(home: string, backupDir: string) {
   const configPath = `${home}/.claude.json`;
 
-  /** The file as claude last wrote it, or null when it is not there or cannot be read. */
   const readRaw = Effect.fn("Trust.readRaw")(function* () {
     const fs = yield* FileSystem.FileSystem;
     if (!(yield* fs.exists(configPath))) return null;
     return yield* fs.readFileString(configPath).pipe(Effect.orElseSucceed(() => null));
   });
 
-  /** Those same bytes and what they decode to, so a write can check them both. */
   const readConfig = Effect.fn("Trust.readConfig")(function* () {
     const raw = yield* readRaw();
     const config =
@@ -89,12 +80,6 @@ export function claudeTrust(home: string, backupDir: string) {
     );
   });
 
-  /**
-   * The lock keeps collie's own grants apart; claude takes no lock, so its writes are kept
-   * by giving up rather than by excluding them. Each attempt is built on the bytes it just
-   * read and lands only while those bytes are still the ones on disk, so a claude write in
-   * that window costs this grant a retry instead of costing the user their configuration.
-   */
   const writeGrant = Effect.fn("Trust.writeGrant")(function* (cwd: string) {
     for (let attempt = 0; attempt < GRANT_ATTEMPTS; attempt++) {
       const result = yield* tryGrant(cwd);
@@ -131,8 +116,6 @@ export function claudeTrust(home: string, backupDir: string) {
 
     const info = yield* fs.stat(configPath);
     const backup = pathService.join(backupDir, "claude.json.bak");
-    // The bytes this grant was built on, which are the ones a restore has to put back —
-    // and no more readable than the file they came from, which holds claude's own secrets.
     yield* fs.writeFileString(backup, raw);
     yield* fs.chmod(backup, info.mode & 0o777);
     const tmp = `${configPath}.herdr-${yield* currentPid}`;

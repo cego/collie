@@ -18,7 +18,6 @@ const entry = (machine: string, over: Partial<ScheduleEntry> = {}) => ({
   ...over,
 });
 
-/** A host's Schedules in memory, which replays a request id it has seen as a host does. */
 const fakeMachine = (
   name: string,
   initial: ReadonlyArray<ScheduleEntry>,

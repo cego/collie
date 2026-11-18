@@ -5,7 +5,6 @@ export const ArtefactDate = Schema.Struct({
   at: Schema.String,
   provenance: Schema.String,
 });
-/** What a provider said of its resource: reported by a caller, or verified by a reader. */
 export const ProviderObservation = Schema.Struct({
   name: Schema.String,
   namespace: Schema.NullOr(Schema.String),
@@ -43,10 +42,8 @@ export const Artefact = Schema.Struct({
   pending: Schema.optionalKey(Schema.Boolean),
   stale: Schema.optionalKey(Schema.Boolean),
   description: Schema.optionalKey(Schema.String),
-  /** The registered destination; absent where none was given. */
   url: Schema.optionalKey(Schema.String),
   provider: Schema.optionalKey(ProviderObservation),
-  /** Where the retained export of an external resource is read from. */
   export: Schema.optionalKey(Schema.Struct({ source: Schema.String, availability: Schema.String })),
 });
 export type Artefact = typeof Artefact.Type;
@@ -83,7 +80,6 @@ export const ArtefactRegistered = Schema.Struct({
 
 const dateLine = (date: Artefact["created"]) =>
   date == null ? "unknown" : `${date.at} (${date.provenance})`;
-/** What a terminal shows of one artefact, ending with how to open it. */
 export const artefactLines = (run: string, item: Artefact) => {
   const seen =
     item.seen?.revision === item.revision ? "Seen" : item.seen === null ? "Unseen" : "Updated";
@@ -110,7 +106,6 @@ export const artefactLines = (run: string, item: Artefact) => {
   ];
 };
 
-/** Where a page of a host's search ended, in its order: newest detected first, then Run and id. */
 export const ArtefactKey = Schema.Struct({
   detectedAt: Schema.String,
   run: Schema.String,
@@ -127,7 +122,6 @@ export const ArtefactSearch = Schema.Struct({
   limit: Schema.optional(Schema.Int),
 });
 export type ArtefactSearch = typeof ArtefactSearch.Type;
-/** One host's page, and how many of its retained Runs its catalogue has reached. */
 export const ArtefactMatches = Schema.Struct({
   items: Schema.Array(Artefact),
   more: Schema.Boolean,

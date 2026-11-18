@@ -26,7 +26,6 @@ import { runEffect } from "./support/effect";
 const SIGNED_IN = (n: number) =>
   `SLACK_USER_TOKEN=xoxe.xoxp-1-access-${n}\nSLACK_USER_ID=U456\nSLACK_TEAM_ID=T123\nSLACK_USER_SCOPES=chat:write,channels:read,groups:read,reactions:write,reactions:read,channels:history,groups:history,search:read\n`;
 
-/** Desktop with two Machines, a fake Slack and a browser that answers as `browser` says. */
 const desktop = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-slack-user-" });
@@ -36,7 +35,6 @@ const desktop = Effect.gen(function* () {
     readonly reached: Deferred.Deferred<void>;
     readonly release: Deferred.Deferred<void>;
   } | null = null;
-  /** Holds the next read of the grant, once read, until released. */
   const pauseGrantLookup = Effect.gen(function* () {
     const held = { reached: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
     pause = held;
@@ -99,7 +97,6 @@ const desktop = Effect.gen(function* () {
     client: fake.client,
   });
   const file = (name: string, which: string) => `${dir}/${name}/.config/collie/${which}`;
-  /** What each Machine holds in `slack-user.env`, or null without one. */
   const held = Effect.forEach(["vm", "mini"], (name) =>
     fs.readFileString(file(name, "slack-user.env")).pipe(Effect.orElseSucceed(() => null)),
   );
@@ -386,7 +383,6 @@ test("an older Collie's bot token stays until the human signs in, then leaves ev
     }),
   ));
 
-/** The given record `it` saved, read by a Desktop opened again. */
 const reopen = (it: Effect.Success<typeof desktop>) =>
   givenCredentials({
     dir: `${it.dir}/given`,
@@ -418,7 +414,6 @@ test("a Machine an older Desktop gave the sign-in is not given it again, and a l
       yield* it.session.signIn;
       const fs = yield* FileSystem.FileSystem;
       const signIn = fingerprint((yield* it.keyring.lookup("slack-user-grant"))!);
-      // An older Desktop recorded the bot's removal as `slack` and the sign-in as `slack-user`.
       const older = `{"slack":"${fingerprint("")}","slack-user":"${signIn}"}`;
       yield* fs.writeFileString(`${it.dir}/given/given.json`, `{"vm":${older},"mini":${older}}`);
       const desktop2 = yield* reopen(it);

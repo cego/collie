@@ -223,12 +223,12 @@ describe("the main process reaches each Machine's host", () => {
           let toClient: (response: RpcMessage.FromServer<Rpcs>) => Effect.Effect<void> = () =>
             Effect.void;
           const server = yield* RpcServer.makeNoSerialization(Older, {
-            // SAFETY: what a host answers is the same envelope whichever group it serves.
+            // WARNING: what a host answers is the same envelope whichever group it serves.
             onFromServer: (response) => toClient(response as RpcMessage.FromServer<Rpcs>),
           }).pipe(Effect.provide(Older.toLayer({ ping: () => Effect.void })));
           const client = yield* RpcClient.makeNoSerialization(FrontDoorRpcs, {
             supportsAck: true,
-            // SAFETY: the older host is handed a request it has no schema for, as over the wire.
+            // WARNING: the older host is handed a request it has no schema for, as over the wire.
             onFromClient: ({ message }) =>
               server.write(0, message as RpcMessage.FromClient<RpcGroup.Rpcs<typeof Older>>),
           });

@@ -1,11 +1,3 @@
-// Saying something to Collie about one Run, and answering what it proposes.
-//
-// `steer` carries out requested actions. `--dry-run` previews them instead; `confirm`
-// remains available for optional proposals already on the board.
-//
-// It is about a Run, always. Questions about the flock are the Home's native chat, which
-// reads through `collie tools` rather than paying for a model to be asked one here.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -72,18 +64,11 @@ const proposalIdArg = Argument.String("proposal-id").pipe(
   Argument.withDescription("The proposal, as `steer` printed it"),
 );
 
-/** The proposal's own hash, for a yes that names only its id: the host still checks one. */
 const hashOf = Effect.fn("Steer.hashOf")(function* (env: PluginEnv, id: string) {
   const found = yield* asks({ ...env, machine: undefined }, (client) => client.proposal({ id }));
   return (found.ok ? found.value?.content_hash : undefined) ?? "";
 });
 
-/**
- * Carry out a confirmed proposal, action by action, in order. Each one is admitted again
- * immediately before it runs and journalled on both sides of running, so a crash leaves a
- * record that says which action nobody can account for. The first failure stops the rest:
- * a sequence the human approved as a sequence is not half-applied on a guess.
- */
 export const confirm = Command.make(
   "confirm",
   { proposalId: proposalIdArg, hash: hashFlag, requestId: requestIdFlag },
@@ -116,11 +101,6 @@ export const decline = Command.make(
     ),
 ).pipe(Command.withDescription("Say no to a proposal, so it stops being pending"));
 
-/**
- * What has been sent to a Run's agents, and the one thing a human can settle: a delivery
- * nobody can say the fate of. Collie never decides that for itself, which is why this is
- * a command and not a timeout.
- */
 export const runDeliveries = Command.make(
   "deliveries",
   {
@@ -180,7 +160,6 @@ export const runDeliveries = Command.make(
     ),
 ).pipe(Command.withDescription("What has been sent to a Run's agents, and settle what is unknown"));
 
-/** A proposal action that started and never settled, answered by the person who knows. */
 export const proposal = Command.make("proposal").pipe(
   Command.withDescription("Settle a proposal action nobody can account for"),
   Command.withSubcommands([

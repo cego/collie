@@ -1,6 +1,3 @@
-// Whether a recorded pid is still a compaction endpoint of Collie's, where there is no /proc
-// to read it from, as on macOS: `ps` says what the process is.
-
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { endpointPid } from "../src/compaction";

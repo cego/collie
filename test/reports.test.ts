@@ -118,7 +118,6 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           const farOutputs = `${second.world.home}/outputs.json`;
           yield* fs.writeFileString(localOutputs, encode([null]));
           const built = { verdict: "done" };
-          // OpenCode's reporter writes the session it opened beside the prompt.
           const openedSession = {
             writes: [],
             sh: 'printf ses_requester > "${PROMPT_PATH%.prompt.md}.session"',
@@ -298,7 +297,6 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           );
           let sibling: string | undefined;
           if (mode === "sibling") {
-            // The reported Run's agent is still working; the sibling's gets "done".
             yield* fs.writeFileString(
               localOutputs,
               encode([{ writes: [], output: null, owed: true }, { verdict: "done" }]),
@@ -328,7 +326,6 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             )?.paneId;
             expect(sibling).toBeDefined();
           }
-          // Stopped, not killed: core starts a running Run's lost agent again.
           if (mode === "gone")
             expect((yield* second.cli(["run", "stop", requesterRun])).envelope.ok).toBe(true);
           if (mode === "away" || mode === "away-close") yield* stopHost(second.world.state);
@@ -360,7 +357,6 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
               Effect.orElseSucceed(() => 0),
             );
           if (mode === "away-close") {
-            // The requester's link comes back while the report's close is still running.
             yield* until(
               () => fs.readFileString(first.coreLog),
               (log) => pipe_(log, Str.includes('"cmd":"terminal.kill"')),
@@ -404,7 +400,6 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           expect(Arr.some(live, (one) => one.paneId === entry?.paneId)).toBe(false);
           if (sibling !== undefined)
             expect(Arr.some(live, (one) => one.paneId === sibling)).toBe(true);
-          // Three lines and a sender line are over the paste budget, so a report is kept as a file.
           const reports = Arr.filter(
             Str.split(yield* fs.readFileString(second.coreLog), "\n"),
             (line) => pipe_(line, Str.includes(`From ${entry?.agent ?? "host"} of ${runId} on `)),

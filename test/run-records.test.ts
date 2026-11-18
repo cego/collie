@@ -1,5 +1,3 @@
-// A Run's own records, kept in the host's database
-// (ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database).
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { epochMs } from "../src/time";
@@ -40,7 +38,6 @@ afterEach(() =>
   ),
 );
 
-/** A Run's legacy files, as an older build left them. */
 const legacy = Effect.fn("test.legacy")(function* (files: Record<string, string>) {
   const fs = yield* FileSystem.FileSystem;
   for (const [name, text] of Rec.toEntries(files)) {
@@ -106,7 +103,6 @@ test("migrate up: the first host imports every legacy record once, as written, a
         ],
         missing: null,
       });
-      // A file written after the import is not a record, and a second host imports nothing again.
       yield* fs.writeFileString(`${stateDir}/runs/run-a/steps.jsonl`, '{"kind":"late"}\n');
       expect(yield* read).toEqual(first);
       expect(yield* fs.readFileString(`${stateDir}/runs/run-a/intent.json`)).toBe(

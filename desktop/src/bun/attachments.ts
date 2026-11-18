@@ -1,7 +1,3 @@
-// Desktop's copies of the files the human gives the Flock chat: staged from the view in
-// parts, kept once by sha256 under Desktop's state directory, and read back by id for the
-// model, a thumbnail or a Run (ADR-0046).
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
@@ -17,27 +13,22 @@ export class AttachmentRefused extends Schema.TaggedError<
 
 const refused = (reason: string) => new AttachmentRefused({ reason });
 
-/** One part of a file on its way from the view. */
 export interface StagedPart {
-  /** The view's own name for this transfer, the same for all its parts. */
   readonly key: string;
   readonly name: string;
   readonly mediaType: string;
   readonly size: number;
   readonly offset: number;
-  /** This part's bytes, as base64. */
   readonly content: string;
   readonly scaledOf?: string | undefined;
 }
 
 const storeOf = (dir: string) => `${dir}/attachments`;
 
-/** A name that stays one entry of the directory it is put in, and one line of a listing. */
 const plainName = (name: string) =>
   // oxlint-disable-next-line no-control-regex -- File names must reject ASCII control bytes and DEL.
   !["", ".", "..", ".scaled"].includes(name) && !/[/\\\u0000-\u001f\u007f]/.test(name);
 
-/** `<sha256>/<name>`, which is where a copy is kept under the store. */
 const ID = /^[0-9a-f]{64}\/(.+)$/;
 const validId = (id: string) => {
   const name = ID.exec(id)?.[1];
@@ -47,7 +38,6 @@ const validId = (id: string) => {
 const mediaTypeOf = (path: string, given: string) =>
   Str.split(Bun.file(path).type, ";")[0] || given || "application/octet-stream";
 
-/** Desktop's copy of an attachment, or null where it has none, or none any more. */
 export const describeAttachment = Effect.fn("Attachments.describe")(function* (
   dir: string,
   id: string,
@@ -67,18 +57,15 @@ export const describeAttachment = Effect.fn("Attachments.describe")(function* (
   } satisfies Staged;
 });
 
-/** Where the scaled copy of an image is kept beside its original. */
 const scaledPath = (dir: string, id: string) =>
   `${storeOf(dir)}/${pipe_(id, Str.slice(0, 64))}/.scaled/${pipe_(id, Str.slice(65))}`;
 
-/** The scaled copy of an image, where the view made one. */
 export const scaledCopy = Effect.fn("Attachments.scaledCopy")(function* (dir: string, id: string) {
   if (!validId(id)) return null;
   const path = scaledPath(dir, id);
   return (yield* (yield* FileSystem.FileSystem).exists(path)) ? path : null;
 });
 
-/** `bytes` kept once under their sha256, by `name`, and the copy's descriptor. */
 const keep = Effect.fn("Attachments.keep")(function* (
   dir: string,
   name: string,
@@ -99,7 +86,6 @@ const keep = Effect.fn("Attachments.keep")(function* (
     { recursive: true },
   );
   yield* fs.writeFile(kept, bytes);
-  // Attached again, a copy is kept another 30 days from now.
   const now = (yield* Clock.currentTimeMillis) / 1000;
   yield* fs.utimes(
     pipe_(
@@ -121,10 +107,6 @@ const keep = Effect.fn("Attachments.keep")(function* (
   } satisfies Staged;
 });
 
-/**
- * A file on this computer, named by its path as a file manager names it, copied in; or why
- * it cannot be.
- */
 export const stagePath = Effect.fn("Attachments.stagePath")(function* (dir: string, path: string) {
   const fs = yield* FileSystem.FileSystem;
   const name = Str.split(path, "/").at(-1) ?? "";
@@ -140,11 +122,6 @@ export const stagePath = Effect.fn("Attachments.stagePath")(function* (dir: stri
   return yield* keep(dir, name, bytes.value, "");
 });
 
-/**
- * One part of a file the view stages, appended to what came before it. The last part is
- * checked against the size, kept under its sha256 and answered with its descriptor; null
- * until then.
- */
 export const stageAttachment = Effect.fn("Attachments.stage")(function* (
   dir: string,
   part: StagedPart,
@@ -185,7 +162,6 @@ export const stageAttachment = Effect.fn("Attachments.stage")(function* (
   return yield* keep(dir, part.name, whole, part.mediaType);
 });
 
-/** Part of Desktop's copy, for a thumbnail the view draws again. */
 export const readAttachment = Effect.fn("Attachments.read")(function* (
   dir: string,
   id: string,

@@ -1,6 +1,4 @@
 import * as Cause from "effect/Cause";
-// The host's Usage readings: how often each endpoint is called, what a refusal or a silent
-// endpoint leaves behind, a login read and never written, and the status lines' samples.
 
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
@@ -60,7 +58,6 @@ const read: (subscription: "claude" | "chatgpt", at: number, percent: number) =>
   problem: null,
 });
 
-/** A source that answers what `answers` says next, counting each call. */
 const counted = (answers: (call: number, at: number) => Effect.Effect<Asked>) => {
   const calls = { count: 0 };
   const ask = Effect.gen(function* () {

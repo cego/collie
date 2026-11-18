@@ -1,7 +1,3 @@
-// ForgeHttp: a `forges` provider per forge host, its token read from the CLI logged in to
-// that host (ADR-draft-a-forge-is-asked-over-http-with-its-clis-login). Only `src/forge/`
-// imports `forges`, and only here: lazily, so a start that asks no forge never loads it.
-
 import * as Str from "effect/String";
 import * as Cause from "effect/Cause";
 import { pipe as pipe_ } from "effect/Function";
@@ -12,32 +8,21 @@ import type { MrForge } from "../board-model";
 import { shell, type Runner } from "../mr";
 import type { Readiness } from "./forge";
 
-/**
- * How a host's CLI login is read. Each step is a **credential read**, the only commands
- * ForgeHttp runs; an adapter supplies them, since only it runs its CLI.
- */
 export interface ForgeLogin {
   readonly forge: MrForge;
   readonly host: string;
-  /** One cache entry per key: a stricter read of a host keeps its own. */
   readonly key: string;
   readonly display: string;
   readonly cli: string;
-  /** What a host whose CLI holds no token answers, as `ready` says it. */
   readonly notReady: string;
-  /** The command that logs the CLI in to the host again. */
   readonly relogin: string;
-  /** When the stored token expires, in epoch ms, null where it does not. */
   readonly expiry: (run: Runner, cwd: string) => Effect.Effect<number | null>;
   readonly token: <R>(run: Runner<R>, cwd: string) => Effect.Effect<string | null, never, R>;
-  /** Has the CLI refresh an expired token; false where it could not. */
   readonly refresh: (run: Runner, cwd: string) => Effect.Effect<boolean>;
 }
 
-/** A host's provider: GitHub's also answers GraphQL. */
 export type Provider = ForgeProvider & Partial<Pick<GitHubProvider, "graphql">>;
 
-/** What a forge answered, or why it could not be asked. */
 export type Answered<A> =
   | { readonly ok: true; readonly value: A }
   | {
@@ -50,10 +35,6 @@ export type Answered<A> =
 export class ForgeHttp extends Context.Service<
   ForgeHttp,
   {
-    /**
-     * `call` on the login's host with the CLI's token. After a 401 the token is read again
-     * once and `call` made once more: a forge that answers 401 applied nothing.
-     */
     readonly ask: <A>(
       login: ForgeLogin,
       cwd: string,
@@ -64,7 +45,6 @@ export class ForgeHttp extends Context.Service<
 
 const library = () => import("forges");
 
-/** Why a call failed, from the library's typed error. */
 const reasonOf = (forges: Awaited<ReturnType<typeof library>>, display: string, error: Error) => {
   if (error instanceof forges.RateLimitedError)
     return `${display} answered ${error.status}: rate limited${error.resetAt === undefined ? "" : `, until ${error.resetAt.toISOString()}`}`;
@@ -129,7 +109,6 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
         });
       }));
 
-    /** The host's token: the cached one while it has not expired, else the CLI's, refreshed first where it expired. */
     const tokenOf = (login: ForgeLogin, cwd: string, slot: Slot) =>
       lockOf(login.host).withPermits(1)(
         Effect.gen(function* () {
@@ -173,7 +152,6 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
                 const error =
                   failed.cause instanceof Error ? failed.cause : new Error(String(failed.cause));
                 const refused = error instanceof forges.ForgeApiError && error.status === 401;
-                // Another call may have read a new token since this one sent its own.
                 if (refused && slot.token === token) slot.token = null;
                 const reason = reasonOf(forges, login.display, error);
                 const transient =
@@ -213,7 +191,6 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
     return { ask };
   });
 
-/** Whether the forge takes the CLI's login, by asking who it is: only a refusal needs a human. */
 export const loginReadiness: <R>(
   login: ForgeLogin,
   cwd: string,
@@ -237,7 +214,6 @@ export const loginReadiness: <R>(
         };
   });
 
-/** One request to the login's host, as `<cli> api` sent it: its parsed body, or why not. */
 export const request = (
   login: ForgeLogin,
   cwd: string,
@@ -251,7 +227,6 @@ export const request = (
     ),
   );
 
-/** A GET of `path`, its body read as text, as a job's log is. */
 export const requestText = (login: ForgeLogin, cwd: string, path: string) =>
   Effect.flatMap(ForgeHttp, (http) =>
     http.ask(login, cwd, (provider, signal) =>
@@ -261,7 +236,6 @@ export const requestText = (login: ForgeLogin, cwd: string, path: string) =>
     ),
   );
 
-/** Reads `body` as `schema`, or says what was asked was answered in another shape. */
 const decodedAs =
   <S extends Schema.Decoder<unknown>>(schema: S, login: ForgeLogin, what: string) =>
   (answer: Answered<unknown>) => {
@@ -279,7 +253,6 @@ const decodedAs =
     return returned;
   };
 
-/** A GraphQL query's `data`, read as `schema`, or why not. */
 export const graphqlAs = <S extends Schema.Decoder<unknown>>(
   schema: S,
   login: ForgeLogin,
@@ -295,7 +268,6 @@ export const graphqlAs = <S extends Schema.Decoder<unknown>>(
     ),
   ).pipe(Effect.map(decodedAs(schema, login, "a GraphQL query")));
 
-/** A GET of `path`, its body read as `schema`, or why not. */
 export const requestAs = <S extends Schema.Decoder<unknown>>(
   schema: S,
   login: ForgeLogin,
@@ -303,7 +275,6 @@ export const requestAs = <S extends Schema.Decoder<unknown>>(
   path: string,
 ) => Effect.map(request(login, cwd, "GET", path), decodedAs(schema, login, path));
 
-/** Every page of a list at `path`, its items read as `schema`, or why not. */
 export const pagesAs: <S extends Schema.Decoder<unknown>>(
   item: S,
   login: ForgeLogin,
@@ -336,10 +307,6 @@ export const pagesAs: <S extends Schema.Decoder<unknown>>(
 
 const PAGE = 100;
 
-/**
- * ForgeHttp as Collie runs it: credential reads through the CLIs on PATH, and requests to
- * each forge host, or to `COLLIE_FORGE_API` where a test serves the fake forge there.
- */
 export const forgeHttpLayer = Layer.effect(ForgeHttp)(
   Effect.gen(function* () {
     const spawner = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
@@ -353,6 +320,5 @@ export const forgeHttpLayer = Layer.effect(ForgeHttp)(
   }),
 );
 
-/** ForgeHttp over a fake: its credential reads through `run`, its requests through `fetch`. */
 export const forgeHttpTest = (run: Runner, fetch: FetchLike) =>
   Layer.effect(ForgeHttp)(make(run, fetch, null));

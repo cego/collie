@@ -24,7 +24,6 @@ import { isHostName } from "../gitlab-token";
 
 const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 
-/** Everything on stdin, for `--inputs-json -`, through the Stdio service. */
 export const stdinText = Effect.gen(function* () {
   const stdio = yield* Stdio.Stdio;
   return yield* stdio.stdin.pipe(
@@ -45,18 +44,11 @@ export type Global = {
 };
 export const selected = (global: Global) => Effect.succeed(Option.getOrNull(global.workspace));
 
-/**
- * What a Run lookup is scoped to. Runs belong to Tasks, not to whichever workspace a
- * command was typed in, so the scope is the Task whose workspace is selected — and
- * nothing at all where that workspace is not a Task's. A human who starts a Run from
- * their project workspace can still wait on it from there.
- */
 export const selectedTask = Effect.fn("collie.selectedTask")(function* (global: Global) {
   const env = yield* currentEnv;
   return (yield* hostTaskOf(env, yield* selected(global)))?.id ?? null;
 });
 
-/** Whom a Run lookup is for, built once from the command line: the Task, and the calling agent's Run. */
 export type RunScope = { readonly task: string | null; readonly caller: string | null };
 
 export const runScope = Effect.fn("collie.runScope")(function* (global: Global) {
@@ -79,7 +71,6 @@ const textOf = (asked: Schema.Json | undefined) =>
     onSome: (said) => said.text,
   });
 
-/** Whether `caller`'s Run started `view`, or its goal, inputs or a steer it received name it. */
 const callerReaches = Effect.fn("collie.callerReaches")(function* (
   env: PluginEnv,
   view: RunView,
@@ -105,10 +96,8 @@ const callerReaches = Effect.fn("collie.callerReaches")(function* (
   return pipe_(inputs, Str.includes(view.runId));
 });
 
-/** Why `view`, on `machine` (null for this one), is out of `scope`'s reach; null where it is not. */
 export const outOfReach = Effect.fn("collie.outOfReach")(
   function* (env: PluginEnv, view: RunView, machine: string | null, scope: RunScope) {
-    // A Task is this Machine's, so a Run on another is never outside it.
     if (machine !== null || scope.task === null || view.task === scope.task) return null;
     if (yield* callerReaches(env, view, scope.caller)) return null;
     const workspace =
@@ -160,7 +149,6 @@ export const context = Effect.fn("collie.context")(function* (
 ) {
   const id = yield* selected(global);
   const baseEnv = yield* currentEnv;
-  // A terminal's command can show the SSH login that pairs a Machine on first reach.
   const reach = Option.isSome(global.machine)
     ? { pairs: true, machine: global.machine.value }
     : { pairs: true };
@@ -184,25 +172,13 @@ export const context = Effect.fn("collie.context")(function* (
     return contextFailure(err("workspace_not_found", `Workspace "${id}" was not found.`, details));
   }
   return resolvedContext(
-    // An explicitly named directory wins over the workspace's.
     { ...base, cwd: base.cwdExplicit ? base.cwd : lookup.workspace.cwd || base.cwd },
     lookup.workspace,
   );
 });
 
-/**
- * Where a discovery command looks. The spec makes Workflow and Persona discovery
- * global and reserves `workspace_not_found` for a workspace the caller named, so an id
- * inherited from a pane whose workspace has since closed falls back to no scope rather
- * than failing a listing that needs no workspace at all. Project-layer resolution then
- * uses the process's own directory, which is the best answer available.
- */
 export const discoveryContext = Effect.fn("collie.discoveryContext")(function* (global: Global) {
-  // Named on the command line: the strict path, so an unresolvable workspace is the
-  // caller's error, as the spec requires.
   if (Option.isSome(global.workspace)) return yield* context(global, true);
-  // Inherited from the environment: used where it helps, never a reason to fail. It
-  // may name a workspace that has closed, and there may be no herdr to ask at all.
   const tried = yield* context(global, (yield* selected(global)) !== null).pipe(
     Effect.orElseSucceed(() => null),
   );
@@ -214,10 +190,6 @@ export const definitions = Effect.fn("collie.definitions")(function* (env: Plugi
   return yield* loadDefinitions(yield* layers(env));
 });
 
-/**
- * A Run named on the command line, with the work it produced and the evidence filed about
- * it, or the reason the caller cannot have it.
- */
 export type Located =
   | {
       readonly _tag: "Hosted";
@@ -227,7 +199,6 @@ export type Located =
     }
   | { readonly _tag: "RunFailure"; readonly result: Failure };
 
-/** Which of those this id is. */
 export const locateRun: (
   env: PluginEnv,
   id: string,
@@ -257,7 +228,6 @@ export const locateRun: (
   };
 });
 
-/** What a located Run is called and what it was for. */
 export function runFacts(located: Extract<Located, { _tag: "Hosted" }>) {
   return {
     id: located.view.runId,
@@ -311,13 +281,11 @@ export const parseInput: (
   return { ok: true, given: { json: typed, text } };
 });
 
-/** Every mutation takes one, and it means the same thing on all of them. */
 export const requestIdFlag = Flag.String("request-id").pipe(
   Flag.withDescription("Idempotency key; retrying it returns the first result"),
   Flag.optional,
 );
 
-/** The Run a `run` subcommand acts on. */
 export const runIdArg = Argument.String("run-id").pipe(
   Argument.withDescription("The Run's id, as `run list` prints it"),
 );
@@ -354,11 +322,6 @@ export const root = Command.make("collie").pipe(
   Command.withDescription("Discover and run Collie workflows"),
 );
 
-/**
- * A command that answers a question: the global flags, the resolved context, and one
- * envelope. A workspace the caller named that cannot be resolved is refused here rather
- * than in each command.
- */
 export function answering<E, R>(
   apply: (env: PluginEnv) => Effect.Effect<Result, E, R>,
   resolveLive = false,
@@ -376,10 +339,6 @@ export function answering<E, R>(
   });
 }
 
-/**
- * The same for a command that changes something, with the request id around it: a retry
- * of the same id returns the first result rather than acting twice.
- */
 export function mutating(
   operation: string,
   requestId: Option.Option<string>,
@@ -388,27 +347,12 @@ export function mutating(
   return answering((env) => mutation(env, operation, requestId, (id) => apply(env, id)));
 }
 
-/**
- * A human's only at a terminal in a pane herdr does not report as an agent's: an agent's
- * harness has a terminal too. `agentPanes` is null where herdr could not say.
- */
-export function cliOrigin(at: {
-  readonly terminal: boolean;
-  /** Whether this process runs in a terminal Collie launched as an agent. */
-  readonly agent: boolean;
-}) {
+export function cliOrigin(at: { readonly terminal: boolean; readonly agent: boolean }) {
   return at.terminal && !at.agent ? "cli-tty" : "cli";
 }
 
-/**
- * Which front door this command is. A piped command is still a CLI request, not a Driver.
- *
- * All three streams, not stdout alone: `collie --json confirm … > out.json` is a person
- * at a terminal, and a Driver has a pipe on every one of them.
- */
 export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
   const terminal = Boolean(process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY);
-  // Who it is comes from its launch: core names no agent of a process.
   const named = env.raw.COLLIE_AGENT ?? "";
   if (named !== "") {
     const run = yield* Effect.scoped(
@@ -419,7 +363,6 @@ export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
   return cliOrigin({ terminal, agent: named !== "" });
 });
 
-/** Who is asking, for an operation of this command's own. */
 export const actorNow = Effect.fn("Shared.actorNow")(function* (env: PluginEnv, requestId: string) {
   const door = yield* cliDoor(env);
   return Schema.is(FrontDoor)(door) ? { origin: door, requestId } : { ...door, requestId };
@@ -427,13 +370,11 @@ export const actorNow = Effect.fn("Shared.actorNow")(function* (env: PluginEnv, 
 
 export { actorName };
 
-/** `--gitlab-host`, which names the GitLab for this run ahead of `GITLAB_HOST` and the setting. */
 export const gitlabHostFlag = Flag.String("gitlab-host").pipe(
   Flag.withDescription("The GitLab to work against, over GITLAB_HOST and gitlab_host"),
   Flag.optional,
 );
 
-/** `env` with `--gitlab-host` as its `GITLAB_HOST`, or the refusal of one that is not a host. */
 export const withGitlabHost = (env: PluginEnv, given: Option.Option<string>) => {
   if (Option.isNone(given)) return env;
   if (!isHostName(given.value)) {

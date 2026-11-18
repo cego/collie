@@ -35,7 +35,6 @@ const C = question("c", "r-2");
 const keyOf = (asked: Question) => answerKey("vm", asked.run, asked.id);
 
 let sends = 0;
-/** An answer as the dialog sends it: what is shown, to which Machine, and which send it is. */
 const sent = (shown: string) => ({
   shown,
   machine: "vm-mk",
@@ -45,7 +44,6 @@ const sending = (state: Answering, asked: Question, shown: string) => {
   const answer = sent(shown);
   return { state: answerSent(state, keyOf(asked), answer), answer };
 };
-/** A board of one Task on Machine "vm", with `open` its open questions. */
 const shownBy = (state: Answering, open: ReadonlyArray<Question>) =>
   answersSettled(state, [{ installation: "vm", task: { decision: null, questions: open } }]);
 
@@ -82,7 +80,6 @@ test("answers are per question: confirming, failing or retrying one leaves the o
   const failedB = answerTried(confirmedA, keyOf(B), second.answer, false);
   expect(failedB.answers.get(keyOf(A))?.confirmed).toBe(true);
   expect(failedB.answers.has(keyOf(B))).toBe(false);
-  // Try again of B shows B sending again and nothing else.
   const retried = answerTried(failedB, keyOf(B), second.answer, null);
   expect(retried.answers.get(keyOf(B))).toEqual({ ...second.answer, confirmed: false });
   expect(retried.answers.get(keyOf(A))?.confirmed).toBe(true);
@@ -191,7 +188,6 @@ test("with every question's answer in flight, the card says how many are sending
   expect(cardQuestion(card, "vm", both)?.pending).toBe(
     "Answered 2 questions; waiting for vm-mk's board",
   );
-  // A refusal brings the button back.
   expect(cardQuestion(card, "vm", answerTried(both, keyOf(B), b.answer, false))?.label).toBe(
     "Answer…",
   );
@@ -242,7 +238,6 @@ test("answering moves to the next unanswered question after it, wrapping round",
   expect(sittingView(sitting, now(open, state)).question).toEqual(A);
   state = sending(state, A, "yes").state;
   sitting = sittingAnswered(sitting, now(open, state));
-  // Nothing is left unanswered: the cursor stays where it is.
   expect(sittingView(sitting, now(open, state))).toMatchObject({
     question: A,
     condition: { kind: "answered", said: "Sending yes to vm-mk…", sending: true },
@@ -270,7 +265,6 @@ test("a question answered elsewhere stays, as no longer open; one this dialog an
   })();
   let sitting = sittingStarts(now([A, B], nothingAnswered));
   sitting = sittingAnswered(sitting, now([A, B], confirmed));
-  // The board drops both: A because its answer landed, B because it was answered elsewhere.
   const settled = shownBy(confirmed, []);
   sitting = sittingSees(sitting, now([], settled));
   const shown = (k: number) =>
@@ -283,7 +277,6 @@ test("an answer still sending when its question leaves the board reads no longer
   const a = sending(shownBy(nothingAnswered, [A, B]), A, "yes");
   let sitting = sittingStarts(now([A, B], nothingAnswered));
   sitting = sittingAnswered(sitting, now([A, B], a.state));
-  // Another client answered A, so the board drops it before this send's refusal arrives.
   const settled = shownBy(a.state, [B]);
   const refused = answerTried(settled, keyOf(A), a.answer, false);
   sitting = sittingSees(sitting, now([B], refused));
@@ -339,7 +332,6 @@ test("the sitting is done only once nothing is unanswered and nothing is still s
 
 test("closed and reopened while an answer is sending, the dialog waits for it, and closes once it is confirmed", () => {
   const a = sending(shownBy(nothingAnswered, [A, B]), A, "yes");
-  // Reopened: A is still sending.
   let sitting = sittingStarts(now([A, B], a.state));
   expect(sittingView(sitting, now([A, B], a.state))).toMatchObject({ k: 2, question: B });
   expect(sittingView(sittingMoved(sitting, -1), now([A, B], a.state)).condition).toEqual({
@@ -357,7 +349,6 @@ test("closed and reopened while an answer is sending, the dialog waits for it, a
   expect(
     sittingView(sittingSees(sitting, now([A, B], aConfirmed)), now([A, B], aConfirmed)).done,
   ).toBe(true);
-  // A leaving the board does too.
   const aGone = shownBy(bConfirmed, [B]);
   expect(sittingView(sittingSees(sitting, now([B], aGone)), now([B], aGone)).done).toBe(true);
 });

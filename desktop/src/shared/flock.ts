@@ -1,7 +1,3 @@
-// What Desktop's main process tells its view: every Machine's board messages, each named
-// by its Machine, and the board those messages add up to. No Bun-only import: the view
-// bundles this.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -52,11 +48,6 @@ import { HostDefinitions } from "../../../src/definitions-model";
 import { PeerView } from "../../../src/peers-model";
 import { ComputerStores, SetupChoice } from "./standing-setup";
 
-/**
- * A Machine as Desktop knows it: its installation id, the herdr profile it is reached
- * through (Local's is `local`), the name a human reads, and the SSH target, which Local
- * has none of.
- */
 export const Machine = Schema.Struct({
   installation: Schema.String,
   profile: Schema.String,
@@ -66,18 +57,15 @@ export const Machine = Schema.Struct({
 });
 export type Machine = typeof Machine.Type;
 
-/** A Machine as it is known before its host has said which installation it is. */
 const KnownMachine = Machine.mapFields(Struct.omit(["installation"]));
 export type KnownMachine = typeof KnownMachine.Type;
 
-/** One message of a Machine's board stream, as the host sent it, and which Machine sent it. */
 export const MachineMessage = Schema.Struct({ machine: Machine, message: BoardMessage });
 export type MachineMessage = typeof MachineMessage.Type;
 
 export const NotLive = Schema.Literals(["unreachable", "sso", "no-collie", "update-desktop"]);
 export type NotLive = typeof NotLive.Type;
 
-/** How the board's alert says a Machine is not live. */
 export const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
   unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
   sso: { icon: "i-lucide-key-round", title: (name) => `Waiting for SSO login on ${name}` },
@@ -88,7 +76,6 @@ export const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => 
   },
 };
 
-/** A route Desktop could not open, or lost, and since when. */
 export const MachineLost = Schema.TaggedStruct("Lost", {
   machine: KnownMachine,
   state: NotLive,
@@ -97,7 +84,6 @@ export const MachineLost = Schema.TaggedStruct("Lost", {
 });
 export type MachineLost = typeof MachineLost.Type;
 
-/** A Machine's board as Desktop last saw it live, and when. */
 export const MachineSaved = Schema.TaggedStruct("Saved", {
   machine: Machine,
   herds: Schema.Array(Herd),
@@ -108,39 +94,32 @@ export const MachineSaved = Schema.TaggedStruct("Saved", {
 });
 export type MachineSaved = typeof MachineSaved.Type;
 
-/** A route that turned out to reach a Machine already shown through another. */
 export const MachineMerged = Schema.TaggedStruct("Merged", { machine: KnownMachine });
 export type MachineMerged = typeof MachineMerged.Type;
 
-/** A route Desktop reopens on purpose, as Sync now or an upgrade does, and since when. */
 export const MachineReconnecting = Schema.TaggedStruct("Reconnecting", {
   machine: KnownMachine,
   at: Schema.Finite,
 });
 export type MachineReconnecting = typeof MachineReconnecting.Type;
 
-/** What Desktop did on a Machine that a human should hear of, such as upgrading it. */
 export const MachineNotice = Schema.TaggedStruct("Notice", {
   machine: KnownMachine,
   text: Schema.String,
 });
 export type MachineNotice = typeof MachineNotice.Type;
 
-/** A route Desktop reaches a Machine by, from herdr's list or Local, as it is opened. */
 export const MachineRouted = Schema.TaggedStruct("Routed", { machine: KnownMachine });
 export type MachineRouted = typeof MachineRouted.Type;
 
-/** A route removed from herdr's list, with whatever Desktop showed through it. */
 export const MachineRemoved = Schema.TaggedStruct("Removed", { machine: KnownMachine });
 export type MachineRemoved = typeof MachineRemoved.Type;
 
-/** Every route Desktop has as a subscription starts: a Machine on no other was removed meanwhile. */
 export const MachineRoutes = Schema.TaggedStruct("Routes", {
   profiles: Schema.Array(Schema.String),
 });
 export type MachineRoutes = typeof MachineRoutes.Type;
 
-/** A step of onboarding as `collie onboard` streams it, or one Desktop takes before it. */
 export const OnboardStep = Schema.Struct({
   step: Schema.String,
   title: Schema.String,
@@ -154,24 +133,19 @@ export const OnboardStep = Schema.Struct({
     "failed",
   ]),
   detail: Schema.optionalKey(Schema.String),
-  /** What to run by hand: the root command, or the one that retries the step. */
   command: Schema.optionalKey(Schema.String),
   url: Schema.optionalKey(Schema.String),
 });
 export type OnboardStep = typeof OnboardStep.Type;
 
-/** One onboarding of a Machine so far: its steps, and whether it was ready once it ended. */
 export const OnboardRun = Schema.Struct({
   steps: Schema.Array(OnboardStep),
-  /** Null while it runs. */
   ready: Schema.NullOr(Schema.Boolean),
-  /** Why it ended short where no step says. */
   reason: Schema.NullOr(Schema.String),
   at: Schema.Finite,
 });
 export type OnboardRun = typeof OnboardRun.Type;
 
-/** An onboarding as it stands, under the job the view started it as. */
 export const MachineOnboarding = Schema.TaggedStruct("Onboarding", {
   job: Schema.String,
   machine: KnownMachine,
@@ -179,14 +153,12 @@ export const MachineOnboarding = Schema.TaggedStruct("Onboarding", {
 });
 export type MachineOnboarding = typeof MachineOnboarding.Type;
 
-/** How `collie doctor` found a Machine once it was live, or after an onboarding of it. */
 export const MachineDoctored = Schema.TaggedStruct("Doctored", {
   machine: KnownMachine,
   run: OnboardRun,
 });
 export type MachineDoctored = typeof MachineDoctored.Type;
 
-/** How a Machine's latest settings or definitions sync ended: null where it synced, else why not. */
 export const MachineSynced = Schema.TaggedStruct("Synced", {
   part: Schema.Literals(["settings", "definitions"]),
   machine: KnownMachine,
@@ -200,7 +172,6 @@ export const MachineOwnRead = Schema.TaggedStruct("OwnRead", {
 });
 export type MachineOwnRead = typeof MachineOwnRead.Type;
 
-/** A Machine's paired link, as Local's `collie machine list` says it now. */
 export const MachineLinked = Schema.TaggedStruct("Linked", {
   machine: KnownMachine,
   link: PeerView,
@@ -209,7 +180,6 @@ export type MachineLinked = typeof MachineLinked.Type;
 
 export const SlackUserState = Schema.Struct({
   signedIn: Schema.NullOr(Schema.Struct({ user: Schema.String, team: Schema.String })),
-  /** Why the last renewal failed, until one works. */
   trouble: Schema.NullOr(Schema.String),
 });
 export const NOT_SIGNED_IN: typeof SlackUserState.Type = {
@@ -217,12 +187,10 @@ export const NOT_SIGNED_IN: typeof SlackUserState.Type = {
   trouble: null,
 };
 
-/** A credential Desktop gives every Machine. */
 export const Credential = Schema.Literals(["gitlab", "helle", "slack"]);
 export type Credential = typeof Credential.Type;
 export const CREDENTIALS = Credential.literals;
 
-/** Whether a Machine has the credential Desktop holds now, and why its last give failed. */
 export const MachineGiven = Schema.TaggedStruct("Given", {
   machine: KnownMachine,
   credential: Credential,
@@ -231,22 +199,17 @@ export const MachineGiven = Schema.TaggedStruct("Given", {
 });
 export type MachineGiven = typeof MachineGiven.Type;
 
-/** Which credentials Desktop holds for every Machine, and nothing of the secrets themselves. */
 export const Credentials = Schema.Struct({
   gitlab: Schema.NullOr(Schema.Struct({ expires: Schema.NullOr(Schema.String) })),
   helle: Schema.Boolean,
-  /** The GitLab every Machine is onboarded and doctored against. */
   host: Schema.String,
-  /** GitLab's page for a new token, with its scopes filled in. */
   tokenPage: Schema.String,
 });
 export type Credentials = typeof Credentials.Type;
 
-/** The default steps a Machine may go without. */
 export const Skippable = Schema.Literals(["helle", "linear"]);
 export type Skippable = typeof Skippable.Type;
 
-/** What a step may end as and leave the human nothing to do. */
 export const SETTLED: ReadonlyArray<OnboardStep["status"]> = ["done", "in_place", "skipped"];
 
 export const FlockItem = Schema.Union([
@@ -268,7 +231,6 @@ export const FlockItem = Schema.Union([
 ]);
 export type FlockItem = typeof FlockItem.Type;
 
-/** One board action, as the view asks it of a Machine's host. */
 export const DesktopAction = Schema.Union([
   Schema.TaggedStruct("Answer", {
     runId: Schema.String,
@@ -281,7 +243,6 @@ export const DesktopAction = Schema.Union([
     set: Schema.Boolean,
     reason: Schema.optionalKey(Schema.String),
     before: Schema.optional(Schema.String),
-    /** The record revision it was shown at, from a record. */
     shown: Schema.optionalKey(RunRevision),
   }),
   Schema.TaggedStruct("Resume", { runId: Schema.String }),
@@ -294,10 +255,6 @@ export const DesktopAction = Schema.Union([
   }),
   Schema.TaggedStruct("Seen", { runId: Schema.String }),
   Schema.TaggedStruct("Steer", { runId: Schema.String, text: Schema.String }),
-  /**
-   * Said word for word, as review comments are (ADR-0051): to `agent`, or to the role `to`
-   * names, else to the agent at work.
-   */
   Schema.TaggedStruct("Deliver", {
     runId: Schema.String,
     step: Schema.optional(Schema.String),
@@ -316,21 +273,16 @@ export const DesktopAction = Schema.Union([
 ]);
 export type DesktopAction = typeof DesktopAction.Type;
 
-/** What a Machine's host said no with, or why it could not be asked. */
 export class ActionFailed extends Schema.TaggedError<
   ActionFailed,
   { readonly brand: unique symbol }
 >()("ActionFailed", {
   reason: Schema.String,
-  /** The id it was asked under, which a retry sends again so the host does it once. */
   request: Schema.optional(Schema.String),
-  /** The Step an act was refused over because it finished since it was shown. */
   step: Schema.optional(Schema.String),
-  /** The host said no, so sending the same request again changes nothing. */
   refused: Schema.optional(Schema.Boolean),
 }) {}
 
-/** `command` is the herdr client that shows the pane, to copy where no terminal opened it. */
 export const WentToPane = Schema.Struct({
   at: PaneAt,
   command: Schema.String,
@@ -340,7 +292,6 @@ export type WentToPane = typeof WentToPane.Type;
 
 const Positive = Schema.Int.check(Schema.isGreaterThan(0));
 
-/** What the human does in a pane's terminal. */
 export const TerminalCommand = Schema.Union([
   Schema.Struct({ type: Schema.Literal("terminal.input"), text: Schema.String }),
   Schema.Struct({
@@ -351,10 +302,6 @@ export const TerminalCommand = Schema.Union([
 ]);
 export type TerminalCommand = typeof TerminalCommand.Type;
 
-/**
- * A pane's terminal in Desktop: where it was opened, each of herdr's frames as base64 ANSI,
- * and why it ended; or, where the host named no pane, only where it focused.
- */
 export const TerminalEvent = Schema.Union([
   Schema.TaggedStruct("Opened", { at: PaneAt }),
   Schema.TaggedStruct("Frame", { bytes: Schema.String }),
@@ -363,62 +310,40 @@ export const TerminalEvent = Schema.Union([
 ]);
 export type TerminalEvent = typeof TerminalEvent.Type;
 
-/** What Desktop's latest check for its own update found, or is finding. */
 export const UpdateNews = Schema.Union([
   Schema.TaggedStruct("Checking", {}),
-  /** `version` is this Desktop's own. */
   Schema.TaggedStruct("UpToDate", { version: Schema.String }),
   Schema.TaggedStruct("Downloading", { version: Schema.String }),
-  /** Downloaded and verified, waiting on Restart Desktop. */
   Schema.TaggedStruct("Ready", { version: Schema.String }),
   Schema.TaggedStruct("Refused", { version: Schema.String, reason: Schema.String }),
-  /** The check or the download failed, and is tried again at the next one. */
   Schema.TaggedStruct("Failed", { reason: Schema.String }),
-  /** This Desktop never updates itself. */
   Schema.TaggedStruct("Never", { reason: Schema.String }),
 ]);
 export type UpdateNews = typeof UpdateNews.Type;
 
-/** This Desktop's version, and what its latest check for an update found. */
 export const DesktopUpdates = Schema.Struct({ version: Schema.String, news: UpdateNews });
 export type DesktopUpdates = typeof DesktopUpdates.Type;
-/** What the human set in Desktop. */
 export const DesktopSettings = Schema.Struct({
-  /** An earlier Desktop's own, kept only until carried into the Flock's settings. */
   proactive: Schema.optionalKey(Schema.Boolean),
-  /** The GitLab every Machine is onboarded and doctored against; unset is the default one. */
   gitlabHost: Schema.optionalKey(Schema.String),
-  /** An earlier Desktop's own, kept only until carried into the Flock's settings. */
   machineRule: Schema.optionalKey(Schema.String),
-  /** The human's Zoom, 1 the size of the other apps on each monitor; unset is 1. */
   zoom: Schema.optionalKey(Schema.Finite),
-  /** The harness the Flock chat runs on; unset is claude. */
   chatHarness: Schema.optionalKey(Schema.String),
-  /** The model the Flock chat runs on; unset is the harness's own default. */
   chatModel: Schema.optionalKey(Schema.String),
-  /** The effort the Flock chat runs at; unset is the harness's own default. */
   chatEffort: Schema.optionalKey(Schema.String),
-  /** The Flock chat's width beside the board in CSS pixels; unset is `chatWidth`'s start. */
   chatWidth: Schema.optionalKey(Schema.Finite),
-  /** Whether each record open's timing marks are also logged; unset is off. */
   recordTiming: Schema.optionalKey(Schema.Boolean),
-  /** The Desktop version the human said "Not now" to the Standing direction's setup at. */
   setupNotNow: Schema.optionalKey(Schema.String),
-  /** The human said "Don't ask again" to it. */
   setupNever: Schema.optionalKey(Schema.Boolean),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 
-/** The settings a change sets; the rest stay as they are. */
 export const DesktopSettingsChange = Schema.Struct({
   gitlabHost: Schema.optionalKey(Schema.String),
   zoom: Schema.optionalKey(Schema.Finite),
   chatHarness: Schema.optionalKey(Schema.String),
-  /** Empty unsets it. */
   chatModel: Schema.optionalKey(Schema.String),
-  /** Empty unsets it. */
   chatEffort: Schema.optionalKey(Schema.String),
-  /** Null unsets it. */
   chatWidth: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   recordTiming: Schema.optionalKey(Schema.Boolean),
   setupNotNow: Schema.optionalKey(Schema.String),
@@ -431,27 +356,20 @@ export interface MachineToAdd {
   readonly label: string;
 }
 
-/** What Add Machine sends, trimmed, once every field is filled. */
 export const machineToAdd = (typed: MachineToAdd) => {
   const [target, label] = Arr.map([typed.target, typed.label], (one) => Str.trim(one));
   return target && label ? { target, label } : null;
 };
 
-/** A record as Desktop keeps it: `asOf` is when its host last confirmed it, while it has not since. */
 export const KeptRecord = Schema.Struct({
   detail: Schema.NullOr(RunDetail),
   asOf: Schema.NullOr(Schema.Finite),
-  /** Its latest frame's encoded size, which bounds how many records the view keeps. */
   bytes: Schema.Finite,
 });
 export type KeptRecord = typeof KeptRecord.Type;
 
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
-  /**
-   * The view names the request, the same on every try of one gesture. `unsent` is why the
-   * view would not have it sent, which the main process says and logs instead.
-   */
   Rpc.make("act", {
     payload: {
       installation: Schema.String,
@@ -472,7 +390,6 @@ export const DesktopRpcs = RpcGroup.make(
     success: WentToPane,
     error: ActionFailed,
   }),
-  /** The pane `focus` finds, held while the stream runs and released when it is interrupted. */
   Rpc.make("terminal", {
     payload: {
       installation: Schema.String,
@@ -485,43 +402,27 @@ export const DesktopRpcs = RpcGroup.make(
     error: ActionFailed,
     stream: true,
   }),
-  /** One command to the open terminal; never recorded anywhere. */
   Rpc.make("terminalSend", { payload: { command: TerminalCommand }, error: ActionFailed }),
-  /** A web page, opened in the human's own browser. */
   Rpc.make("openLink", { payload: { url: Schema.String } }),
-  /** Its host's Workflows and Personas, for the Workflows page. */
   Rpc.make("definitions", {
     payload: { installation: Schema.String },
     success: HostDefinitions,
     error: ActionFailed,
   }),
-  /** Desktop's own version and update news, the latest first. */
   Rpc.make("updates", { success: DesktopUpdates, stream: true }),
-  /** Checks for Desktop's own update now, or joins the check already running. */
   Rpc.make("checkForUpdates", { success: UpdateNews }),
-  /** Installs the update that is ready, which quits Desktop and starts the new one. */
   Rpc.make("restart", { error: ActionFailed }),
-  /**
-   * Onboards, or repairs, the Machine a route reaches; its progress comes on `flock`. A step
-   * in `skip` is skipped for that Machine from then on.
-   */
   Rpc.make("onboard", {
     payload: { profile: Schema.String, skip: Schema.optionalKey(Schema.Array(Skippable)) },
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** Saves a Machine in core, then onboards it, under the job it answers with. */
   Rpc.make("addMachine", {
     payload: { target: Schema.String, label: Schema.String },
     success: Schema.String,
     error: ActionFailed,
   }),
-  /**
-   * The Flock's settings, now and whenever they change. Asking syncs every connected
-   * Machine, so an edit made on one since it connected is picked up.
-   */
   Rpc.make("flockSettings", { success: FlockSettings, error: ActionFailed, stream: true }),
-  /** One of Collie's settings, as typed, for every Machine; what came of it in a line. */
   Rpc.make("setFlockSetting", {
     payload: { key: Schema.String, value: Schema.String },
     success: Schema.String,
@@ -532,63 +433,49 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** Which credentials Desktop holds, now and whenever that changes. */
   Rpc.make("credentials", { success: Credentials, stream: true }),
-  /** Keeps the Flock's GitLab token once GitLab accepts it, and gives it to every Machine. */
   Rpc.make("saveGitlab", {
     payload: { token: Schema.String },
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** Makes `host` the GitLab every Machine is onboarded and doctored against. */
   Rpc.make("saveGitlabHost", {
     payload: { host: Schema.String },
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** Who Helle says a token belongs to; a token it refuses fails. */
   Rpc.make("checkHelle", {
     payload: { token: Schema.String },
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** Slack, where Helle makes tokens: its app where that is here, else the web. */
   Rpc.make("openSlack"),
   Rpc.make("copyText", { payload: { text: Schema.String } }),
-  /** Keeps Helle's token once Helle accepts it, and writes it on every Machine. */
   Rpc.make("saveHelle", {
     payload: { token: Schema.String },
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** Whether the human is signed in to Slack, told again as it changes; no token. */
   Rpc.make("slackUser", { success: SlackUserState, stream: true }),
-  /** Signs the human in to Slack in their browser. */
   Rpc.make("signInSlackUser", { success: Schema.String, error: ActionFailed }),
   Rpc.make("signOutSlackUser", { success: Schema.String, error: ActionFailed }),
-  /** The channels the human signed in to Slack is in, for both Slack destinations. */
   Rpc.make("slackUserChannels", { success: Schema.Array(SlackChannel), error: ActionFailed }),
-  /** Logs Claude Code in on the Machine a route reaches, then onboards it again. */
   Rpc.make("claudeLogin", {
     payload: { profile: Schema.String },
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** A code the human pasted, typed into the login a job runs. */
   Rpc.make("pasteCode", { payload: { job: Schema.String, code: Schema.String } }),
-  /** Removes a route from herdr's list; nothing on its Machine is stopped or uninstalled. */
   Rpc.make("removeMachine", {
     payload: { profile: Schema.String },
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** Does for a lagging Machine what connecting would, and says what it did. */
   Rpc.make("syncNow", {
     payload: { profile: Schema.String },
     success: Schema.Struct({ said: Schema.String, failed: Schema.Boolean }),
     error: ActionFailed,
   }),
-  /** What each connected Machine's host read of its Usage. */
   Rpc.make("usage", { success: Schema.Array(MachineUsage) }),
   Rpc.make("catalogues", { success: Schema.Array(MachineCatalogue) }),
   Rpc.make("connectionReadings", { success: Schema.Array(MachineConnections) }),
@@ -612,21 +499,17 @@ export const DesktopRpcs = RpcGroup.make(
     error: ActionFailed,
   }),
   Rpc.make("pasteGitlab", { success: Schema.String, error: ActionFailed }),
-  /** What each connected Machine's host listed of its Schedules. */
   Rpc.make("schedules", { success: Schema.Array(MachineSchedules) }),
-  /** What a sweep would remove now on the Machine with this profile, waited on while it is connected. */
   Rpc.make("cleanup", {
     payload: { profile: Schema.String },
     success: CleanupListing,
     error: ActionFailed,
   }),
-  /** Sweeps one Machine now under the view's request; `machine` names it if it isn't connected. */
   Rpc.make("sweep", {
     payload: { installation: Schema.String, machine: Schema.String, request: Schema.String },
     success: CleanupReport,
     error: ActionFailed,
   }),
-  /** Pauses, resumes or removes one of a Machine's Schedules; what came of it in a line. */
   Rpc.make("changeSchedule", {
     payload: {
       installation: Schema.String,
@@ -637,7 +520,6 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** Moves a Schedule to another Machine, with its checkout there where that is another path. */
   Rpc.make("moveSchedule", {
     payload: {
       from: Schema.String,
@@ -649,14 +531,12 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** One Run's details while its record is open, with its log's tail, again as they change. */
   Rpc.make("runDetail", {
     payload: { installation: Schema.String, runId: Schema.String },
     success: KeptRecord,
     error: ActionFailed,
     stream: true,
   }),
-  /** A large item of a Run's, by the reference its details hand out, from `offset` bytes on. */
   Rpc.make("runFile", {
     payload: {
       installation: Schema.String,
@@ -676,7 +556,6 @@ export const DesktopRpcs = RpcGroup.make(
     success: ArtefactCollection,
     error: ActionFailed,
   }),
-  /** Retained material across every Machine, with each Machine searched or why not. */
   Rpc.make("artefactSearch", {
     payload: FlockSearch.fields,
     success: FlockArtefacts,
@@ -703,7 +582,6 @@ export const DesktopRpcs = RpcGroup.make(
     success: ArtefactRegistered,
     error: ActionFailed,
   }),
-  /** A file on Desktop's own Machine, sent to the Run's when that is another. */
   Rpc.make("artefactImport", {
     payload: {
       installation: Schema.String,
@@ -725,23 +603,16 @@ export const DesktopRpcs = RpcGroup.make(
     success: Artefact,
     error: ActionFailed,
   }),
-  /** One message from the human to the Flock chat, and the turn it starts as it streams. */
-  /** `now` interrupts the turn under way rather than waiting behind it. */
   Rpc.make("say", {
     payload: {
       text: Schema.String,
       about: Schema.NullOr(About),
       now: Schema.optionalKey(Schema.Boolean),
-      /** Desktop's copies the message carries, by id. */
       attachments: Schema.optionalKey(Schema.Array(Schema.String)),
     },
     success: AguiEvent,
     stream: true,
   }),
-  /**
-   * One part of a file for the chat, from `offset` bytes on, as base64: the reverse of
-   * `runFile`. The last part answers Desktop's copy; null before it.
-   */
   Rpc.make("stage", {
     payload: {
       key: Schema.String,
@@ -750,136 +621,87 @@ export const DesktopRpcs = RpcGroup.make(
       size: Schema.Int,
       offset: Schema.Int,
       content: Schema.String,
-      /** The original this is a scaled copy of. */
       scaledOf: Schema.optionalKey(Schema.String),
     },
     success: Schema.NullOr(Staged),
     error: ActionFailed,
   }),
-  /** Files on this computer, named by path as a paste or a drop names them, copied in. */
   Rpc.make("stagePaths", {
     payload: { paths: Schema.Array(Schema.String) },
     success: Schema.Array(StagedOrRefused),
   }),
-  /** The files a dialog lets the human choose, copied in; none where they chose nothing. */
   Rpc.make("pickFiles", { success: Schema.Array(StagedOrRefused) }),
-  /** The files on the system clipboard, for a paste the view was handed no files in. */
   Rpc.make("clipboardFiles", { success: Schema.Array(StagedOrRefused) }),
-  /**
-   * Desktop's copies, by id, placed on the Machine of a pane they were pasted or dropped on,
-   * through its host's `upload`; their paths there, in order. Nothing is placed past the
-   * first that cannot be, and the refusal names it.
-   */
   Rpc.make("placeFiles", {
     payload: { installation: Schema.String, ids: Schema.Array(Schema.String) },
     success: Schema.Array(Schema.String),
     error: ActionFailed,
   }),
-  /** Part of Desktop's copy of an attachment, for a thumbnail drawn again. */
   Rpc.make("attachmentFile", {
     payload: { id: Schema.String, offset: Schema.optionalKey(Schema.Int) },
     success: Schema.Struct({ content: Schema.String, size: Schema.Int }),
     error: ActionFailed,
   }),
-  /** The human's choices for a question the chat asked. */
   Rpc.make("answer", {
     payload: { toolCallId: Schema.String, answers: Answers },
   }),
-  /** The current conversation, as far as it has gone. */
   Rpc.make("transcript", { success: Schema.Array(ChatMessage) }),
   Rpc.make("conversations", { success: Conversations }),
-  /**
-   * Makes that conversation the current one, moving the chat to its harness, or a fresh one
-   * on the set harness; the one before it ends.
-   */
   Rpc.make("reopen", {
     payload: { conversation: Schema.NullOr(HeldConversation) },
     error: ActionFailed,
   }),
-  /** Opens the chat in its own window, and succeeds when that window is closed. */
   Rpc.make("popOut"),
-  /** Closes the chat's own window, which puts the chat back beside the board. */
   Rpc.make("popIn"),
-  /** When the Flock chat starts and ends a turn of Desktop's own. */
   Rpc.make("conversationChanges", { success: Schema.String, stream: true }),
   Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
-  /** Desktop's own settings, now and after every saved change. */
   Rpc.make("settings", { success: DesktopSettings, stream: true }),
-  /** What the Flock chat holds, runs on and is offered, now and after each change. */
   Rpc.make("chatChoices", { success: ChatChoices, stream: true }),
-  /** How the board's window is drawn, again whenever its zoom is decided again. */
   Rpc.make("drawn", { success: Drawn, stream: true }),
-  /** What the settings are now, or why the change was refused and nothing kept. */
   Rpc.make("setSettings", {
     payload: DesktopSettingsChange,
     success: DesktopSettings,
     error: ActionFailed,
   }),
-  /** One of a record open's timing marks, logged where the record timing setting is on. */
   Rpc.make("recordMark", {
     payload: { name: Schema.String, at: Schema.Finite, card: Schema.String },
   }),
-  /** Whether Desktop offers to help write the Standing direction, now and as that changes. */
   Rpc.make("setupOffer", { success: Schema.Boolean, stream: true }),
-  /** "Not now", or "Don't ask again" `forGood`. */
   Rpc.make("declineSetup", { payload: { forGood: Schema.Boolean }, error: ActionFailed }),
-  /** Where each computer keeps the human's sessions, and how many; no message is read. */
   Rpc.make("setupInventory", { success: Schema.Array(ComputerStores) }),
-  /** The human's choice in the dialog, for the Flock chat in whichever window it is. */
   Rpc.make("chooseSetup", { payload: { choice: SetupChoice } }),
-  /** The choice waiting for a Flock chat to take it, or null, now and as that changes. */
   Rpc.make("setupChosen", { success: Schema.NullOr(SetupChoice), stream: true }),
-  /** The waiting choice, to the one chat that takes it, or null. */
   Rpc.make("takeSetup", { success: Schema.NullOr(SetupChoice) }),
-  /** The setup conversation the human chose, opened fresh, and its first turn as it streams. */
   Rpc.make("setUp", { payload: { choice: SetupChoice }, success: AguiEvent, stream: true }),
 );
 
-/**
- * What a Machine's host last told: who it is, its Herds, and its Tasks by id, and since when
- * that is no longer live, if it is not.
- */
 export interface FlockMachine {
   readonly machine: Machine;
   readonly herds: ReadonlyArray<Herd>;
   readonly tasks: ReadonlyMap<string, TaskView>;
   readonly asOf: number | null;
-  /** The Collie it runs; null where a saved board did not say. */
   readonly build: string | null;
-  /** `<version>+<sha>` where the Machine runs a development checkout. */
   readonly development: string | null;
-  /** The board protocol its latest Snapshot spoke; null for a saved board. */
   readonly protocol: number | null;
-  /** Whether its host takes files, as its latest Snapshot said. */
   readonly files: boolean;
   readonly artefacts?: boolean;
 }
 
-/** Each Machine keyed by installation id, and each route not live by its herdr profile. */
 export interface Flock {
   readonly machines: ReadonlyMap<string, FlockMachine>;
   readonly lost: ReadonlyMap<
     string,
     { readonly name: string; readonly state: NotLive; readonly reason: string }
   >;
-  /** Every notice so far, oldest first. */
   readonly notices: ReadonlyArray<string>;
-  /** Every route Desktop reaches a Machine by, by herdr profile. */
   readonly routes: ReadonlyMap<string, KnownMachine>;
-  /** Each onboarding the view started, by job. */
   readonly onboarding: ReadonlyMap<string, MachineOnboarding>;
-  /** The latest onboarding of each route, by herdr profile. */
   readonly onboarded: ReadonlyMap<string, OnboardRun>;
-  /** Doctor's latest reading of each route, by herdr profile. */
   readonly doctored: ReadonlyMap<string, OnboardRun>;
-  /** How each route's latest settings sync ended, by herdr profile. */
   readonly synced: ReadonlyMap<string, string | null>;
   readonly own: ReadonlyMap<string, OwnReading>;
-  /** How each route's latest definitions sync ended, by herdr profile. */
   readonly definitions: ReadonlyMap<string, string | null>;
-  /** Each route's credentials, by herdr profile. */
   readonly given: ReadonlyMap<string, CredentialsGiven>;
-  /** Each route's paired link, by herdr profile. */
   readonly links: ReadonlyMap<string, PeerView>;
 }
 
@@ -902,11 +724,6 @@ export const EMPTY_FLOCK: Flock = {
   links: new Map(),
 };
 
-/**
- * A snapshot replaces its Machine and makes it live; a change touches one Task; a lost or
- * reopened route dims the Machine it was showing; a merged one is no longer lost; a saved board
- * stands in until its Machine is live; anything newer is skipped.
- */
 const removed = (flock: Flock, profile: string) => {
   const without = <V>(map: ReadonlyMap<string, V>) => {
     const kept = new Map(map);
@@ -1045,7 +862,6 @@ export const applyItem = (flock: Flock, item: FlockItem) => {
   };
 };
 
-/** Each Machine's display name: its own, or with how it is reached where two share one. */
 export const machineNames = (machines: ReadonlyArray<Machine>) => {
   const counts = new Map<string, number>();
   for (const { name } of machines) counts.set(name, (counts.get(name) ?? 0) + 1);
@@ -1057,7 +873,6 @@ export const machineNames = (machines: ReadonlyArray<Machine>) => {
   );
 };
 
-/** `machineNames`, with a saved board told apart from a live Machine reached the same way. */
 const shownNames = (flock: Flock) => {
   const names = machineNames(Arr.map([...flock.machines.values()], ({ machine }) => machine));
   const counts = new Map<string, number>();
@@ -1070,22 +885,17 @@ const shownNames = (flock: Flock) => {
   return names;
 };
 
-/** What the board calls a Machine, among every Machine it shows, saved ones included. */
 export const nameAsShown = (flock: Flock) => {
   const names = shownNames(flock);
   return (machine: Machine) => names.get(machine.installation) ?? machine.name;
 };
 
-/** A Task as the board draws it: keyed across the Flock, and where it is when that matters. */
 export interface PlacedTask {
   readonly key: string;
-  /** The Machine its actions go to. */
   readonly installation: string;
-  /** That Machine's display name, as the chat's tools name it. */
   readonly machine: string;
   readonly task: TaskView;
   readonly where: string;
-  /** When its Machine was last live, where it is not now; its actions are off until it is. */
   readonly asOf: number | null;
 }
 
@@ -1093,13 +903,11 @@ export interface FlockCards {
   readonly tasks: ReadonlyArray<TaskView>;
   readonly placedOf: (task: TaskView) => PlacedTask;
   readonly byKey: ReadonlyMap<string, PlacedTask>;
-  /** Each live Machine by its display name, and whether it is this computer's. */
   readonly machines: ReadonlyArray<{
     readonly installation: string;
     readonly name: string;
     readonly local: boolean;
   }>;
-  /** The names of the Machines whose cards are saved ones, not live. */
   readonly away: ReadonlySet<string>;
 }
 
@@ -1110,18 +918,13 @@ const samePlace = (one: PlacedTask, other: Omit<PlacedTask, "task">) =>
   one.where === other.where &&
   one.asOf === other.asOf;
 
-/**
- * Every Task of the Flock in the board's own order, and where it is: its Machine once there
- * is more than one, and its Herd only when its Machine runs several. A Task placed as it was
- * in `before` is the same object, so what draws it is not drawn again.
- */
 export const flockCards = (flock: Flock, before?: FlockCards) => {
   const names = shownNames(flock);
   const placed = new Map<TaskView, PlacedTask>();
   const byKey = new Map<string, PlacedTask>();
   const away = new Set<string>();
   for (const [installation, { herds, tasks, asOf }] of flock.machines) {
-    // SAFETY: `names` holds every Machine of this Flock.
+    // WARNING: `names` holds every Machine of this Flock.
     const machine = names.get(installation)!;
     if (asOf !== null) away.add(machine);
     for (const task of tasks.values()) {
@@ -1160,7 +963,7 @@ export const flockCards = (flock: Flock, before?: FlockCards) => {
   );
   return {
     tasks: sortBoard([...placed.keys()]),
-    // SAFETY: the board's helpers filter and sort these Tasks; they never make new ones.
+    // WARNING: the board's helpers filter and sort these Tasks; they never make new ones.
     placedOf: (task: TaskView) => placed.get(task)!,
     byKey,
     machines,
@@ -1173,7 +976,6 @@ export const flockCards = (flock: Flock, before?: FlockCards) => {
   };
 };
 
-/** A Machine's board as the chat reads it: the one the window draws live, or why there is none. */
 export type ChatBoard =
   | {
       readonly _tag: "Live";
@@ -1182,16 +984,10 @@ export type ChatBoard =
       readonly protocol: number;
       readonly files: boolean;
     }
-  /** `since` is when Desktop began waiting for its first board, where it knows. */
   | { readonly _tag: "Connecting"; readonly since: number | null }
   | { readonly _tag: "Lost"; readonly state: NotLive; readonly reason: string }
-  /** A saved board whose route reaches no host that could make it live. */
   | { readonly _tag: "Saved"; readonly at: number };
 
-/**
- * Every Machine the window shows, by the name its cards use, with its board as the chat
- * reads it. `since` is when Desktop began waiting on each route, by herdr profile.
- */
 export const chatBoards = (flock: Flock, since: ReadonlyMap<string, number>) => {
   const names = shownNames(flock);
   const waiting: (profile: string) => ChatBoard = (profile) => {
@@ -1220,7 +1016,7 @@ export const chatBoards = (flock: Flock, since: ReadonlyMap<string, number>) => 
         : liveThere || !flock.routes.has(profile)
           ? { _tag: "Saved", at: known.asOf }
           : waiting(profile);
-    // SAFETY: `names` holds every Machine of this Flock.
+    // WARNING: `names` holds every Machine of this Flock.
     return { name: names.get(installation)!, profile, installation, board };
   });
   const unshown = Arr.map(
@@ -1245,7 +1041,6 @@ const waited = (ms: number) => {
   return seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
 };
 
-/** Why the chat cannot read `name`'s board, as one clause naming it. */
 export const unreadBecause = (
   name: string,
   board: Exclude<ChatBoard, { readonly _tag: "Live" }>,
@@ -1263,7 +1058,6 @@ export const unreadBecause = (
   }
 };
 
-/** A route as the Machines list shows it: how it stands now, and how onboarded it is. */
 export interface MachineRow {
   readonly profile: string;
   readonly name: string;
@@ -1271,23 +1065,16 @@ export interface MachineRow {
   readonly route: "link" | "ssh" | null;
   readonly state: "live" | "connecting" | NotLive;
   readonly onboarded: OnboardRun | null;
-  /** The Collie it runs, as it was last seen; null where it never was. */
   readonly build: string | null;
   readonly development: string | null;
-  /** How its latest settings sync ended; null until one has. */
   readonly settings: { readonly failed: string | null } | null;
-  /** How its latest definitions sync ended; null until one has. */
   readonly definitions: { readonly failed: string | null } | null;
   readonly credentials: CredentialsGiven;
-  /** Why it isn't live, or that its link waits on an SSH connection; else null. */
   readonly reason: string | null;
-  /** The way its live paired link goes; null with no live link. */
   readonly transport: "direct" | "ssh" | null;
-  /** Why a link over SSH did not go direct. */
   readonly transportReason: string | null;
 }
 
-/** How the Machines page names a row's route: a paired link says which way it goes. */
 export const routeSaid = ({ route, transport }: Pick<MachineRow, "route" | "transport">) =>
   route === "ssh"
     ? "SSH"
@@ -1296,12 +1083,6 @@ export const routeSaid = ({ route, transport }: Pick<MachineRow, "route" | "tran
 const WAITS_SAID =
   "Its link waits on an SSH connection, which Desktop opens when it next connects.";
 
-/**
- * How onboarded a route is: doctor's reading, less a step its latest onboarding skipped and
- * with a default step that onboarding left unsettled, which doctor cannot see (a Linear
- * server added but not logged in); or that onboarding where it is newer or doctor has not
- * answered.
- */
 const standing = (onboarding?: OnboardRun, doctor?: OnboardRun) => {
   if (doctor === undefined || (onboarding !== undefined && onboarding.at > doctor.at))
     return onboarding ?? null;
@@ -1327,7 +1108,6 @@ const standing = (onboarding?: OnboardRun, doctor?: OnboardRun) => {
   return { ...doctor, steps, ready: steps.length === 0 };
 };
 
-/** Why an installation's records show what it last said, in the board's words; null while live. */
 export const notLiveOf = (flock: Flock, installation: string) => {
   const shown = flock.machines.get(installation);
   if (shown === undefined || shown.asOf === null) return null;
@@ -1341,7 +1121,6 @@ export const notLiveOf = (flock: Flock, installation: string) => {
       };
 };
 
-/** Every route, in the order Desktop opened them. */
 export const machineRows: (flock: Flock) => ReadonlyArray<MachineRow> = (flock) =>
   Arr.map([...flock.routes.values()], ({ profile, name, target }) => {
     const seen = Arr.filter(
@@ -1376,10 +1155,8 @@ export const machineRows: (flock: Flock) => ReadonlyArray<MachineRow> = (flock) 
     };
   });
 
-/** The board after each item, from the first item on. */
 export const flockOf = <E, R>(items: Stream.Stream<FlockItem, E, R>) =>
   items.pipe(
     Stream.scan(() => EMPTY_FLOCK, applyItem),
-    // The empty Flock a scan starts from is not a board anyone was told.
     Stream.drop(1),
   );

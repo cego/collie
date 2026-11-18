@@ -1,6 +1,3 @@
-// A listing pays only for what can still change: the engine is asked about a finished Run
-// once, and everything a finished Run may still be given is read on every view.
-
 import { Herdr } from "../src/herdr";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -57,13 +54,12 @@ const dir = () => env().stateDir;
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(fastForward(effect));
 
-/** How many times the engine was polled for each execution. */
 let polls: Map<string, number>;
 
 const counted = Layer.effect(WorkflowEngine.WorkflowEngine)(
   Effect.map(WorkflowEngine.WorkflowEngine, (engine) => ({
     ...engine,
-    // SAFETY: the same arguments reach the real engine; only the count is added.
+    // WARNING: the same arguments reach the real engine; only the count is added.
     poll: ((workflow, execution) => {
       polls.set(execution, (polls.get(execution) ?? 0) + 1);
       return engine.poll(workflow, execution);
@@ -379,7 +375,6 @@ test(
   120_000,
 );
 
-/** Each view the reports sweep builds: a Run's id, or the Task a listing was asked for. */
 let built: Array<string | null>;
 
 const sweeping = Effect.gen(function* () {

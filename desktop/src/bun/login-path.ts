@@ -5,13 +5,11 @@ import { CHILD_CWD } from "./login-env";
 
 export const MARK = "__COLLIE_PATH__";
 
-/** The PATH a shell printed between the markers, or null where it printed none. */
 export const pathIn = (printed: string) => {
   const parts = Str.split(printed, MARK);
   return (parts.length > 2 && parts[1]) || null;
 };
 
-/** PATH as the user's interactive login shell sets it on macOS; null elsewhere or where it cannot be read. */
 export const loginPath = Effect.fn("Desktop.loginPath")(function* (
   platform: NodeJS.Platform,
   shell: string,

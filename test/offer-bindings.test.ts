@@ -1,6 +1,3 @@
-// What an offer binds is Collie's to fill and nobody's to type: the values it gives, and the
-// inputs only the started workflow's own orchestration sets. What it ships it says.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import * as Rec from "effect/Record";

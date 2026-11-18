@@ -1,7 +1,4 @@
 import * as Cause from "effect/Cause";
-// Collie's polled waits, on a clock that moves only by what is slept on it: how often each
-// asks, what it says once its deadline has passed between two asks, and that an ask still
-// running at the deadline is waited for and its answer used.
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
@@ -29,7 +26,6 @@ const decodeFrame = flow(
   Result.getOrThrow,
 );
 
-/** Runs `wait` on a TestClock its sleeps advance, and the times it asked, from its start. */
 const timed = <A, E, R>(wait: (ask: Effect.Effect<number>) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const clock = yield* TestClock.make();
@@ -57,7 +53,6 @@ const port = (over: Partial<CompactionPort>) => ({
   ...over,
 });
 
-/** An agent's control record under a fresh state directory, with `attempt` in the air. */
 const controlled = (attempt: { readonly deadline: number } | null) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -194,7 +189,6 @@ test("a compaction poll still running at the deadline is waited for, and its out
     }),
   ));
 
-/** A FileSystem whose reads of `log` are `said` at each ask. */
 const logSays = (fs: FileSystem.FileSystem, log: string, said: Effect.Effect<string>) => ({
   ...fs,
   readFileString: (path: string, encoding?: string) =>
@@ -267,11 +261,9 @@ test("a fast-forwarded server start waits for a server that takes real time to c
     ),
   ));
 
-// Past any pid_max, so no process here can be one of the machine's.
 const ROOT = 4_194_400;
 const CHILD = 4_194_401;
 
-/** `/proc` showing one process of `ROOT`'s session, `CHILD`, while each listing says it is there. */
 const session: (
   fs: FileSystem.FileSystem,
   listed: Effect.Effect<boolean>,
@@ -406,7 +398,6 @@ test("a hand-over's look still running at its deadline is waited for, and its st
     }),
   ));
 
-/** A Codex App Server stand-in that replays usage only when the test says. */
 const codexServer = () => {
   const { promise: replaying, resolve: resumed } =
     Promise.withResolvers<(threadId: string, tokens: number) => void>();
@@ -444,7 +435,6 @@ const codexServer = () => {
   };
 };
 
-/** `currentContext` on a TestClock, forked once the server has its rejoin. */
 const reading = Effect.fn("test.reading")(function* (url: string) {
   const clock = yield* TestClock.make();
   const fiber = yield* Effect.forkChild(

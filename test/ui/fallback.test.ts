@@ -15,13 +15,11 @@ import { focus } from "../support/focus";
 import { stopHost, until } from "../support/host";
 import { blockedAtItsPrompt, collie, proves } from "../support/world";
 
-/** The text board, as a pane with no terminal prints it, from the host this world runs. */
 const printed = Effect.gen(function* () {
   const env = yield* currentEnv.pipe(Effect.orDie);
   const written: string[] = [];
   const write = process.stdout.write.bind(process.stdout);
-  // SAFETY: the board writes one string and reads nothing back, so the overload
-  // that takes an encoding or a callback is never the one reached here.
+  // WARNING: the board writes one string and reads nothing back, so the overload that takes an encoding or a callback is never the one reached here.
   process.stdout.write = ((chunk: string) => {
     written.push(String(chunk));
     return true;
@@ -35,11 +33,6 @@ const printed = Effect.gen(function* () {
   return { code, board: Arr.join(written, ""), env };
 });
 
-/**
- * A pane that cannot render must still be readable. `bun test` has no terminal, which is
- * exactly the condition — so this is the fallback under its own reason rather than a
- * simulated one, and the renderer is never asked to start.
- */
 test(
   "with no terminal the tab prints the text board and ends",
   () =>
@@ -51,7 +44,6 @@ test(
           yield* stopHost(world.state);
           expect(code).toBe(0);
           expect(board).toContain(`${COLLIE_TAB} — ${Str.split(env.cwd, "/").at(-1)}`);
-          // The reason is on screen too: a pane that fell back says why it did.
           expect(board).toContain("no terminal on this pane");
           expect(board).toContain("p run a workflow");
         }),
@@ -67,7 +59,6 @@ test(
       "collie-fallback-no-host-",
       () =>
         Effect.gen(function* () {
-          // A host too broken to start.
           const { board } = yield* printed.pipe(
             Effect.provide(
               ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_HOST: "/bin/false" }), {
@@ -146,8 +137,6 @@ test(
               );
               const before = yield* app.load(focus());
               expect(Arr.map(before.tasks, (task) => task.name)).toEqual(["Hi"]);
-              // Reading a subscription's latest value is not what drives it. Each next
-              // read below happens only after the host follower says something changed.
               const changed = Effect.gen(function* () {
                 yield* Queue.take(changes);
                 return yield* app.load(focus());
@@ -155,7 +144,6 @@ test(
               yield* changed;
               const beforeChange = notifications;
 
-              // Through the host, the only writer of a Run's records (ADR-0040).
               yield* (yield* connect(world.state))
                 .dispose({
                   runId: before.tasks[0]!.run,
@@ -174,7 +162,6 @@ test(
               expect(after.tasks[0]?.disposition).toBe("merged");
               expect(notifications).toBeGreaterThan(beforeChange);
 
-              // A host gone away is said, and the cards it last sent are not passed off as live.
               const beforeDisconnect = notifications;
               yield* stopHost(world.state);
               const away = yield* changed.pipe(
@@ -186,7 +173,6 @@ test(
               expect(away.note).toContain("reconnecting to the workflow host");
               expect(away.tasks[0]?.disposition).toBe("merged");
               expect(notifications).toBeGreaterThan(beforeDisconnect);
-              // Moving the cursor reads nothing, and says what the last read said.
               const moved = yield* app.load(focus({ selected: away.tasks[0]!.id }));
               expect(moved.note).toBe(away.note);
               const beforeReconnect = notifications;

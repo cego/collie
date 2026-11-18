@@ -1,5 +1,3 @@
-// The controls an operator sets over a Run, as the host keeps them: one row each.
-
 import { Effect } from "effect";
 import { RunRecords, type RunRecordsApi } from "./run-records";
 

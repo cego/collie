@@ -1,7 +1,3 @@
-// The host's Run model against changes made outside it: with the host's board tick off, each
-// reaches the board stream through its own event, and the board then equals one this process
-// builds from disk, item by item.
-
 import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -30,13 +26,11 @@ const encodeJson = flow(
 const MERGED = "mr:gitlab.example.com/mk/project!7";
 const UNKNOWN = "mr:gitlab.example.com/mk/project!8";
 
-/** A card as both builds draw it, without what only the model adds or the clock moves. */
 const comparable = (view: TaskView) => {
   const { revision: _, age: __, ...rest } = view;
   return rest;
 };
 
-/** A statement run on the host's database by a SQLite connection of another process. */
 const elsewhere = (world: World, statement: string, params: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const script = `${world.home}/sql-elsewhere.ts`;
@@ -135,7 +129,6 @@ test(
           );
           const cardOf = (tasks: Map<string, TaskView>, run: string) =>
             Arr.findFirst([...tasks.values()], (view) => view.runs.includes(run));
-          /** Waits for the stream to tell what `wanted` waits for, after the `from`th board it told. */
           const arrival = (from: number, wanted: (tasks: Map<string, TaskView>) => boolean) =>
             until(
               () => Effect.sync(() => Arr.findFirst(seen.slice(from), wanted)),
@@ -183,7 +176,6 @@ test(
             });
             return new Map(Arr.map(built, (view) => [view.id, comparable(view)]));
           });
-          /** The model's board and one read from disk at the same moment: the next board told, where one moved between. */
           const equalsDisk = Effect.gen(function* () {
             for (let tries = 0; ; tries++) {
               const told = seen.length;
@@ -206,21 +198,18 @@ test(
             return card._tag === "Some" && card.value.state !== "active";
           };
           yield* arrival(0, (tasks) => ended(files)(tasks) && ended(store)(tasks));
-          // Core tells of the agent's terminal once it runs it.
           yield* arrival(0, (tasks) => {
             const card = cardOf(tasks, agent);
             return card._tag === "Some" && card.value.agents.length > 0;
           });
           yield* equalsDisk;
 
-          // The forge says the merge request merged; the change is the host's poll learning it.
           yield* arrival(0, (tasks) => {
             const card = cardOf(tasks, merged);
             return card._tag === "Some" && card.value.mrState === "merged";
           });
           yield* equalsDisk;
 
-          // A second connection, in another process, changes a Run's row.
           let mark = seen.length;
           let changed = changedFrom(store);
           yield* elsewhere(world, "UPDATE collie_runs SET checkout = ? WHERE run = ?", [
@@ -235,7 +224,6 @@ test(
           yield* arrival(mark, changed);
           yield* equalsDisk;
 
-          // A branch the board reads the head of moves in its checkout.
           const repo = `${world.home}/repo`;
           const git = (...args: ReadonlyArray<string>) =>
             exec(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", ...args]);
@@ -277,7 +265,6 @@ test(
           });
           yield* equalsDisk;
 
-          // The Run's agent waits on the human; core's event says so, with no tick to re-read it.
           mark = seen.length;
           for (const one of yield* new Herdr(env).agentList().pipe(Effect.orDie))
             yield* core.report(one.name, "blocked");
@@ -287,7 +274,6 @@ test(
           });
           yield* equalsDisk;
 
-          // Another process writes a plan ticket into a Run's directory.
           const runDir = `${world.state}/runs/${files}`;
           mark = seen.length;
           changed = changedFrom(files);
@@ -300,7 +286,6 @@ test(
           yield* arrival(mark, changed);
           yield* equalsDisk;
 
-          // The Run's directory is taken away, then copied back in.
           const kept = `${world.home}/kept-run`;
           mark = seen.length;
           changed = changedFrom(files);

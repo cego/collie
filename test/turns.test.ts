@@ -6,7 +6,6 @@ import { Foreground, makeForeground, servedNow } from "../src/foreground";
 import { timingFirstValues } from "../src/host";
 import { TurnScheduler } from "../src/turns";
 
-/** Runs 300 steps, each `step` around a counter, and says when the turn's time made the fiber yield. */
 const timeYields = (step: (count: Effect.Effect<void>) => Effect.Effect<unknown>) => {
   const opsBeforeYield = 2048;
   let time = 0;
@@ -55,7 +54,6 @@ test("an automatically resumed fiber receives a fresh turn budget", () =>
 test("a fiber resumed into a chain of inline continuations receives a fresh turn budget", () => {
   const mapped = (count: Effect.Effect<unknown>) =>
     Arr.reduce(Arr.range(1, 20), count, (effect) => Effect.map(effect, (value) => value));
-  // Effect's operation-budget yields resume into the chain.
   return timeYields(mapped).then((yielded) => expect(yielded).toHaveLength(1));
 });
 
@@ -144,7 +142,6 @@ test("verify and read answers hold background slices only until their first valu
           yield* Queue.take(passed);
           expect(boundaries).toBe(2);
           expect(verify.pollUnsafe()).toBeUndefined();
-          // The pass works a slice since it was last held, so a hold is owed again.
           yield* clock.adjust("20 millis");
 
           const read = yield* handlers.read().pipe(Effect.forkScoped);

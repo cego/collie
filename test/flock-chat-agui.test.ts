@@ -1,6 +1,3 @@
-// The Flock chat's window hears AG-UI, which Desktop's main process makes from the Agent
-// SDK's messages. Tested against streams recorded from a real session.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -22,7 +19,6 @@ const eventsOf = (messages: ReadonlyArray<SdkMessage>) => {
   return events;
 };
 
-/** Each run of deltas to one message as one entry, so a test reads a turn in order. */
 const sequence = (events: ReadonlyArray<AguiEvent>) => {
   const types = Arr.map(events, (event) => event.type);
   return Arr.filter(

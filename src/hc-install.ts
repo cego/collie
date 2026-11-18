@@ -1,8 +1,3 @@
-// The hc a placed release carries, put where upstream's installer puts it
-// (https://releases.herdr.dev/core/install.sh): `herdr-core` in `~/.local/bin`, with `hc`
-// beside it only where no `hc` exists. One already there older than the carried hc is swapped
-// with `hc update --from`, so its running terminals survive; one at or past it is left alone.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Path } from "effect";
@@ -11,12 +6,10 @@ import { answered, onPath } from "./doctor-check";
 import type { Runner } from "./mr";
 
 const IDENTIFIER = String.raw`(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)`;
-/** semver.org's grammar, whole: major, minor, patch, optional prerelease and build. */
 const SEMVER = new RegExp(
   String.raw`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-${IDENTIFIER}(?:\.${IDENTIFIER})*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`,
 );
 
-/** The valid semantic version hc's `--version` output names as its first numeric word, or null. */
 export const hcVersion = (said: string) => {
   const word = Arr.findFirst(Str.split(said, /\s+/), (one) => /^\d/.test(one));
   if (Option.isNone(word)) return null;
@@ -26,19 +19,13 @@ export const hcVersion = (said: string) => {
     : null;
 };
 
-/**
- * Whether hc's `--version` output names a version at or above `min` by semver precedence,
- * so a prerelease is older than its release. Output naming none does not.
- */
 export const hcMeets = (said: string, min: string) => {
   const version = hcVersion(said);
   return version !== null && Bun.semver.order(version, min) >= 0;
 };
 
-/** Where a release keeps its hc archive, relative to the release. */
 export const BUNDLED_HC = "hc/herdr-core.tar.gz";
 
-/** Upstream's `HC_INSTALL_DIR`, else `~/.local/bin`. */
 export const hcInstallDir = (raw: Readonly<Record<string, string | undefined>>, home: string) =>
   raw.HC_INSTALL_DIR || `${home}/.local/bin`;
 
@@ -48,14 +35,8 @@ export interface HcStep {
   readonly detail: string;
 }
 
-/** The sha256 of the hc archive last installed or updated without a failure. */
 const PLACED_HC = "hc-placed.sha256";
 
-/**
- * Installs the hc that the release at `root` carries (`is`, its archive's sha256, `min` its
- * version), or swaps it in where the last one placed was another archive or failed to go in
- * and the installed hc is older than `min`. Null where the release carries no hc.
- */
 export const placeHc = Effect.fn("HcInstall.place")(function* (
   env: {
     readonly raw: Readonly<Record<string, string | undefined>>;

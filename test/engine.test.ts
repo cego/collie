@@ -1,10 +1,3 @@
-// The go/no-go proof: a workflow written outside this checkout, run by Collie's own
-// executable on Effect's workflow engine over real SQLite, surviving a real restart.
-//
-// Every host here is a subprocess and every database is a file, because the questions
-// being asked — does a completed Activity come back, does a pending decision survive, does
-// a missing module leave work recoverable — have no answer in an in-memory engine.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -31,10 +24,8 @@ const stopsIn = (log: ReadonlyArray<string>) =>
 
 const suspended = (reply: typeof HostReply.Type) => reply.status === "suspended";
 
-/** What a `checks` reply carries: each entry asked about, with its problems. */
 const Problems = Schema.Record(Schema.String, Schema.Array(Schema.String));
 
-/** The run has reached its question and the host knows it, so an answer has one to land on. */
 const asking = (reply: typeof HostReply.Type) => (reply.diagnostics ?? []).includes("decision");
 const complete = (reply: typeof HostReply.Type) => reply.status === "complete";
 
@@ -48,21 +39,16 @@ test(
         const loaded = yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
         expect(loaded.ok).toBe(true);
         expect(loaded.id).toBe("proof");
-        // The public id, the registration and the run are three separate names.
         expect(loaded.registration).toBe("proof@1");
 
         yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "first" } });
         yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        // The helper it imported and the Markdown it imported both ran: `note:` is the
-        // helper's, and the number is the length of the prompt beside it.
         const started = yield* events(state, "r1");
         expect(started).toHaveLength(2);
         expect(started[0]).toMatch(/^launch note:first \d+$/);
         expect(started[1]).toBe("wait");
         yield* first.stop;
 
-        // A different process, the same SQLite file, and the registration rebuilt from
-        // the module as it is now — no bundle of the code that started the run.
         const second = yield* openHost(state);
         const registrations = yield* second.ask({ op: "registrations" });
         expect(registrations.registrations).toEqual(["proof@1"]);
@@ -77,8 +63,6 @@ test(
         expect(done.value).toBe("note:first=yes");
         yield* second.stop;
 
-        // One launch across both hosts: the completed Activity came back rather than
-        // running again. The wait re-entered, which is what a wait is for.
         const log = yield* events(state, "r1");
         expect(Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch")))).toHaveLength(1);
         expect(Arr.filter(log, (line) => line === "wait").length).toBeGreaterThan(1);
@@ -105,9 +89,6 @@ test(
           decision: "decision",
           value: "go",
         });
-        // Held once it has its answer: the boundary read is a plain Effect, so it saw the
-        // flag an operator set while it waited rather than a value cached from the first
-        // attempt.
         const paused = yield* until(
           () => events(state, "r1"),
           (log) => log.includes("held"),
@@ -134,7 +115,6 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { wf, state } = yield* workspace("collie-engine-release-race-");
-        // The boundary has read its hold and not yet suspended when the release lands.
         const entry = `${wf}/proof.workflow.ts`;
         yield* fs.writeFileString(
           entry,
@@ -178,7 +158,6 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { wf, state } = yield* workspace("collie-engine-hold-peek-");
-        // Reads its hold the way an idle agent's reminder does: often, and without suspending.
         const entry = `${wf}/peeks.workflow.ts`;
         yield* fs.writeFileString(
           entry,
@@ -224,7 +203,6 @@ export default defineWorkflow({
           (reply.diagnostics ?? []).includes("second"),
         );
         yield* host.until({ op: "poll", id: "peeks", runId: "r1" }, suspended);
-        // Long enough for a stray wake, polling every quarter second, to have resumed it.
         yield* Effect.sleep("2 seconds");
         const log = yield* events(state, "r1");
         expect(Arr.filter(log, (line) => line === "released")).toHaveLength(1);
@@ -251,8 +229,6 @@ test(
             () => events(state, "r1"),
             (log) => stopsIn(log) === cycle,
           );
-          // Asked until rather than once: the run logs that it is stopping before it has
-          // finished suspending, so reading the engine on that line is reading it mid-attempt.
           yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
           yield* host.ask({ op: "resume", id: "proof", runId: "r1" });
         }
@@ -269,8 +245,6 @@ test(
         expect(done.value).toBe("note:stopped=done");
         yield* host.stop;
 
-        // Stopping is not a counter and it is not a relaunch: the wait is re-entered once
-        // per stop and once per resume, and the launch happened once.
         const log = yield* events(state, "r1");
         expect(stopsIn(log)).toBe(2);
         const launches = Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch")));
@@ -307,8 +281,6 @@ test(
           ),
         ).toContain("proof.workflow.ts");
 
-        // Pending, with the file to repair named — not failed, and not run on some other
-        // generation's code.
         const refused = yield* second.ask({
           op: "answer",
           id: "proof",
@@ -319,13 +291,11 @@ test(
         expect(refused.ok).toBe(false);
         expect(refused.detail).toContain("proof.workflow.ts");
 
-        // The workflow beside it is unaffected.
         yield* second.ask({ op: "start", id: "plain", runId: "r2", input: { note: "fine" } });
         const other = yield* second.until({ op: "poll", id: "plain", runId: "r2" }, complete);
         expect(other.value).toBe("plain:fine");
         yield* second.stop;
 
-        // Put it back, and the run that was waiting is recoverable again.
         yield* fs.copyFile(`${fixtures}/proof.workflow.ts`, `${wf}/proof.workflow.ts`);
         const third = yield* openHost(state);
         yield* third.ask({
@@ -358,7 +328,6 @@ test(
         yield* host.ask({ op: "start", id: "proof", runId: "old", input: { note: "before" } });
         yield* host.until({ op: "poll", id: "proof", runId: "old" }, suspended);
 
-        // The helper and the prompt beside the entry are edited while work is running.
         yield* fs.writeFileString(
           `${wf}/helper.ts`,
           "export const label = (note: string): string => `edited:${note}`;\n",
@@ -370,7 +339,6 @@ test(
           "proof@2",
         ]);
 
-        // New work sees the edit; the run already going keeps the code it started on.
         const started = yield* host.ask({
           op: "start",
           id: "proof",
@@ -411,12 +379,9 @@ test(
         expect((yield* hostOne.ask({ op: "registrations" })).registrations).toEqual(["proof@1"]);
         expect((yield* hostTwo.ask({ op: "registrations" })).registrations).toEqual(["plain@1"]);
 
-        // A run started in one project is not a run the other has.
         yield* hostOne.ask({ op: "start", id: "proof", runId: "shared", input: { note: "one" } });
         const elsewhere = yield* hostTwo.ask({ op: "poll", id: "proof", runId: "shared" });
         expect(elsewhere.ok).toBe(false);
-        // Stopped once it waits: a host stopped mid-step gives the step upstream's fifteen
-        // seconds to end, and this test is not about that.
         yield* hostOne.until({ op: "poll", id: "proof", runId: "shared" }, suspended);
         yield* hostOne.stop;
         yield* hostTwo.stop;
@@ -432,13 +397,10 @@ test(
       Effect.gen(function* () {
         const { wf, state } = yield* workspace("collie-engine-toolchain-");
         const fs = yield* FileSystem.FileSystem;
-        // Here alone: a healer in every workspace would heal the other tests' parks.
         for (const name of ["heal.workflow.ts", "heal.md"])
           yield* fs.copyFile(`${root}workflows/${name}`, `${wf}/${name}`).pipe(Effect.orDie);
         const host = yield* openHost(state);
 
-        // Before provisioning there is no compiler, and that is what it says rather than
-        // reporting the module as fine.
         const unprovisioned = yield* host.ask({
           op: "check",
           dir: wf,
@@ -454,17 +416,13 @@ test(
         expect(clean.ok).toBe(true);
         expect(clean.diagnostics).toEqual([]);
 
-        // One module's error says nothing about another's: the broken one names its own
-        // file and line, and the entries beside it still check clean.
         const beside = [
           "plain",
-          // Definitions, typechecked against the same declarations authors are given.
           "hello",
           "quiet",
           "branches",
           "delegates",
           "declines",
-          // The examples an author is given.
           "echo",
           "unwired",
           "agent",
@@ -478,10 +436,7 @@ test(
           "offered",
           "planned",
           "measured",
-          // A fork of a shipped workflow, which is code an author writes the same way.
           "landing",
-          // The shipped seven, held to the same declarations: a workflow Collie ships is
-          // a module an author could have written, or the contract is two contracts.
           "plan",
           "review",
           "architecture",
@@ -489,7 +444,6 @@ test(
           "renovate",
           "release",
           "general",
-          // Its benchmark plan is built from the declared schema's fields.
           "tune-up",
           "heal",
         ];
@@ -528,7 +482,6 @@ test(
         expect(loaded.ok).toBe(true);
         yield* host.ask({ op: "start", id: "paths", runId: "r1", input: { note: "n" } });
         const done = yield* host.until({ op: "poll", id: "paths", runId: "r1" }, complete);
-        // One set of objects, not a copy the host's services would not recognise.
         expect(done.value).toBe("n:before+after:same");
         const ran = Arr.filter(
           yield* events(state, "r1"),
@@ -563,7 +516,6 @@ test("a Run's execution id is the one Effect 4.0.1 derived, so a recorded Run is
       const execution = yield* entry
         .make("echo@1")
         .workflow.executionId({ runId: "run-0c0ffee0", input: { text: "hi", times: 2 } });
-      // Captured under Effect 4.0.1.
       expect(execution).toBe("5c3dc3215494e321b93f992d11ccc29e");
     }),
   ));
@@ -574,10 +526,10 @@ test("an answer given before its Run waits on the question is handed over only o
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-answer-" });
       const asking: HostWorkflow = Workflow.make("asking", {
-        // SAFETY: a struct of schemas with no services, as the host's own envelope is.
+        // WARNING: a struct of schemas with no services, as the host's own envelope is.
         payload: Schema.Struct({ runId: Schema.String }) as HostPayload,
         idempotencyKey: (payload) => String(payload["runId"]),
-        // SAFETY: a string codec needs no services.
+        // WARNING: a string codec needs no services.
         success: Schema.String as HostCodec,
       });
       const payload = { runId: "r1" };
@@ -646,7 +598,6 @@ test("work for a workflow nobody has registered waits past upstream's deadline f
       const sibling = flow("sibling");
       const payload = { runId: "r1" };
       const executionId = yield* patient.executionId(payload);
-      // In-process, so the minute upstream would fail it after passes on a test clock.
       const session = <A, E>(
         registered: Layer.Layer<never, never, WorkflowEngine.WorkflowEngine>,
         body: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | TestClock.TestClock>,
@@ -666,15 +617,12 @@ test("work for a workflow nobody has registered waits past upstream's deadline f
           Effect.orDie,
         );
 
-      // Its module is missing while another one loaded, which is when upstream's
-      // registration window starts; three minutes is past it whichever way it counts.
       const waiting = yield* session(
         sibling.toLayer(() => Effect.succeed("ran")),
         Effect.gen(function* () {
           yield* patient.execute(payload, { discard: true });
           for (let step = 0; step < 36; step++) {
             yield* TestClock.adjust("5 seconds");
-            // The engine's storage reads are real IO between ticks.
             yield* TestClock.withLive(Effect.sleep("2 millis"));
           }
           return yield* patient.poll(executionId);
@@ -712,7 +660,6 @@ test("work an engine on upstream's 300 shards left waiting is finished by the on
       const sql = SqliteClient.layer({ filename: `${dir}/host.db` }).pipe(
         Layer.provideMerge(Reactivity.layer),
       );
-      // The engine a host ran before this one: upstream's sharding, nothing registered.
       yield* patient.execute(payload, { discard: true }).pipe(
         Effect.provide(
           ClusterWorkflowEngine.layer.pipe(
@@ -762,10 +709,7 @@ test(
         yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "crashed" } });
         yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
 
-        // No shutdown at all, which is the case a host that is stopped preemptively would
-        // be indistinguishable from: nothing got to mark the run one way or the other.
         yield* first.child.kill({ killSignal: "SIGKILL" });
-        // A killed child has no exit code, only the signal that ended it.
         yield* first.child.exitCode.pipe(Effect.ignore);
 
         const second = yield* openHost(state);
@@ -800,8 +744,6 @@ test(
         const loaded = yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
         expect(loaded.ok).toBe(true);
 
-        // What the module declared about itself, as a card would read it: ids and titles
-        // and the projection of the action's arguments, and none of the closures.
         const declared = yield* host.ask({ op: "metadata", id: "echo" });
         expect(declared.metadata).toMatchObject({
           hints: { text: "work-source" },
@@ -819,8 +761,6 @@ test(
         yield* host.until({ op: "poll", id: "echo", runId: "e1" }, suspended);
         yield* host.ask({ op: "answer", id: "echo", runId: "e1", decision: "keep", value: "yes" });
         const done = yield* host.until({ op: "poll", id: "echo", runId: "e1" }, complete);
-        // `<hi>` is the module's own service; `#1 #2` is an ordinary Effect operator over
-        // its own typed input. Collie supplied neither.
         expect(done.value).toBe("<hi>#1 <hi>#2|yes");
         yield* host.stop;
       }).pipe(Effect.scoped),
@@ -846,7 +786,6 @@ test(
         expect(refused.detail).toContain("invalid_input");
         expect(refused.detail).toContain("times");
 
-        // Settled before anything exists: there is no run to poll, not a failed one.
         const polled = yield* host.ask({ op: "poll", id: "echo", runId: "e1" });
         expect(polled.ok).toBe(false);
         expect(polled.detail).toContain('no run "e1" was started here');
@@ -909,7 +848,6 @@ test(
         ]) {
           expect(refused.detail).toContain(conflict);
         }
-        // Nothing of it was registered, and the workflow beside it still loads.
         expect((yield* host.ask({ op: "registrations" })).registrations).toEqual([]);
         yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
         expect((yield* host.ask({ op: "registrations" })).registrations).toEqual(["echo@1"]);
@@ -954,8 +892,6 @@ test(
           { op: "poll", id: "unwired", runId: "u1" },
           (reply) => reply.status === "failed",
         );
-        // Merging a Layer beside a workflow supplies it nothing, and the host can only
-        // know that when the body asks — so it says which file to open.
         expect(failed.value).toContain("Service not found: unwired/Missing");
         expect(failed.id).toContain("unwired.workflow.ts");
         yield* host.stop;
@@ -986,7 +922,6 @@ test("the engine's count for an execution stands while it sleeps and moves when 
         );
         const asleep = touches.of(executionId);
         expect(asleep).toBeGreaterThan(0);
-        // What lets a host keep a suspended Run's view instead of asking the engine again.
         yield* Effect.sleep("300 millis");
         expect(touches.of(executionId)).toBe(asleep);
         yield* sleeper.interrupt(executionId);

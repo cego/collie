@@ -1,5 +1,3 @@
-// A failure as the window says it: a sentence about the work, never about Effect.
-
 import { expect, test } from "bun:test";
 import { Cause } from "effect";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";

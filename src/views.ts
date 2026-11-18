@@ -1,9 +1,3 @@
-// The three Views beyond the board: History, Workflows and Settings. Each is a plain
-// projection of what is already on disk — run dirs, definition layers, config — with no
-// state of its own, produced by Effect and handed to the app as data. Produced when the
-// View is first shown, because loading every run's outputs at startup is what would make
-// the tab slow the day it became useful.
-
 import * as Arr from "effect/Array";
 import { branchMovement } from "./recovery";
 import * as Str from "effect/String";
@@ -56,10 +50,8 @@ import type { MachineOwn } from "./board-model";
 import { isReachKey } from "./reach";
 import type { Mutable } from "effect/Types";
 
-/** Long enough to answer "what did I do here", short enough to stay one read. */
 const HISTORY = 200;
 
-/** How long the run took, where both ends of it were recorded. */
 function ranFor(run: RunFacts) {
   if (!run.finished) {
     const returned: string | null = null;
@@ -74,11 +66,6 @@ function ranFor(run: RunFacts) {
   return returned;
 }
 
-/**
- * Every finished Run of this checkout, whatever session or workspace it came from —
- * which is exactly what separates History from the board: the Runs view is this
- * Session's live work, and this is the record of everything before it.
- */
 export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
   cwd: string;
   runs: ReadonlyArray<RunFacts>;
@@ -101,15 +88,10 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
       detail: Arr.join(parts, " · "),
       at: run.finished ? epochMs(run.finished) : 0,
       target: diffTargetOf(run.settled)?.value ?? null,
-      // History never nests: each Run is a row of its own in the record of everything
-      // before now.
       children: [],
-      // The board's own rule, not a second copy of it: History and the Runs view both
-      // decide from this whether to offer the action that starts a fix run.
       fixable: open > 0,
       choice: null,
       needsYou: false,
-      // History is what happened, not what to do about it.
       ...NO_OUTCOME,
     });
   }
@@ -121,26 +103,15 @@ function glyphOf(state: RunState) {
   return returned;
 }
 
-/** One Workflow as the Workflows view lists it. */
 export interface DefinitionRow {
   name: string;
   title: string;
   layer: string;
   path: string;
   inputs: string[];
-  /** What checking it says, so a module that will not run is visible without running it. */
   problems: string[];
 }
 
-/**
- * Every Workflow the layers offer, with the validation each would fail on. Validation is
- * the point: a fork that cannot run should be visible here rather than at launch, so the
- * errors are collected per row instead of aborting the view.
- *
- * Workflows only. A persona cannot be run, so the view stopped listing them, and there is
- * nothing here to build a row from — `fork` reads the personas it offers straight from
- * the definitions, and `collie persona list` has its own.
- */
 export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: PluginEnv) {
   const saved = yield* savedModules(env);
   const described = yield* Effect.forEach(saved.entries, readModule);
@@ -157,40 +128,25 @@ export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: 
     problems: [...(problemsOf.get(one.path) ?? []), ...(one.broken === null ? [] : [one.broken])],
   })).sort((a, b) => pipe(a.name, Str.localeCompare(b.name)));
 
-  // A module that will not load at all is the view's problem too, not a silent gap.
   return {
     workflows,
     errors: Arr.map(saved.problems, (one) => `${one.path}: ${one.message}`),
   };
 });
 
-/**
- * Whether a panel's text was cut short, which is the one thing a `Text` panel says
- * beyond its text — and the only thing `m` can act on. Takes an absent panel too,
- * because every caller is reading through a Selection that may not have one.
- */
 export function truncated(panel: Panel | null | undefined) {
   const returned: boolean = panel?._tag === "Text" && panel.truncated;
   return returned;
 }
 
-/**
- * How much of a file the panel will read. A run dir can hold a 40 MB log and a review
- * long enough to stall a redraw; the panel is for reading, and what does not fit is
- * said to be cut rather than quietly dropped.
- */
 const REVIEW_CAP = 64 * 1024;
 const OUTPUT_CAP = 8 * 1024;
-/** And how much of the log the tail shows: the end of it is the part worth reading. */
 const TAIL_CAP = 8 * 1024;
 
 const capped = Effect.fn("Views.capped")(function* (file: string, cap: number) {
   const fs = yield* FileSystem.FileSystem;
   const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => null));
   if (info === null) return null;
-  // Read the cap, rather than read the file and then slice it to the cap: an agent
-  // writes these, so a review or an Output can be any size at all, and every selection
-  // and every refresh after it would pull the whole of one into the tab's memory.
   const text = yield* fs.stream(file, { bytesToRead: cap }).pipe(
     Stream.decodeText(),
     Stream.mkString,
@@ -200,11 +156,6 @@ const capped = Effect.fn("Views.capped")(function* (file: string, cap: number) {
   return { _tag: "Text" as const, text, truncated: Number(info.size) > cap };
 });
 
-/**
- * The end of a file, for a file only the end of which is interesting. Read from an
- * offset rather than read and sliced: a run dir can hold a 40 MB log, and the panel
- * asking for one is not a reason to hold it in memory.
- */
 export const tailed = Effect.fn("Views.tailed")(function* (file: string, cap: number) {
   const fs = yield* FileSystem.FileSystem;
   const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => null));
@@ -215,7 +166,6 @@ export const tailed = Effect.fn("Views.tailed")(function* (file: string, cap: nu
     Stream.mkString,
     Effect.orElseSucceed(() => ""),
   );
-  // Starting mid-line reads as corruption, so the partial first line goes.
   return from === 0
     ? { _tag: "Text" as const, text, truncated: false }
     : {
@@ -227,11 +177,6 @@ export const tailed = Effect.fn("Views.tailed")(function* (file: string, cap: nu
 
 const CHECKBOX = /^\s*[-*]\s*\[( |x|X)\]/;
 
-/**
- * One ticket as the panel lists it. Pure, and deliberately shallow: the first heading is
- * the title because that is what every workflow's ticket template writes, and a file
- * with none is named by its file rather than by a guess at its first sentence.
- */
 export function planTicket(file: string, text: string) {
   const lines = Str.split(text, "\n");
   const heading = Str.trim(
@@ -240,24 +185,15 @@ export function planTicket(file: string, text: string) {
       Str.replace(/^#+\s*/, ""),
     ),
   );
-  // The mark inside each checkbox, in one pass: a line that is not one contributes none.
   const marks = Arr.flatMap(lines, (line) => Arr.ensure(CHECKBOX.exec(line)?.[1] ?? []));
   const returned: PlanTicket = {
     file,
     title: heading === "" ? file : heading,
-    // A ticket nobody has marked up is open, not finished: `every` over nothing is true,
-    // which would have called every prose-only ticket done.
     done: marks.length > 0 && Arr.every(marks, (mark) => mark !== " "),
   };
   return returned;
 }
 
-/**
- * The plan behind a run, and `null` for one that has none.
- *
- * The spec is capped and paged exactly like the review: an agent wrote it, so it can be
- * any size at all, and `m` is how the rest of it is read.
- */
 const buildPlan = Effect.fn("Views.buildPlan")(function* (
   run: RunFacts,
   cap: number,
@@ -279,7 +215,6 @@ const buildPlan = Effect.fn("Views.buildPlan")(function* (
   ).sort();
   const tickets: PlanTicket[] = [];
   for (const file of files) {
-    // Capped like everything else the panel reads: a ticket is prose an agent wrote.
     const text = yield* capped(path.join(issues, file), OUTPUT_CAP);
     const ticket = planTicket(file, text?.text ?? "");
     tickets.push({
@@ -291,14 +226,12 @@ const buildPlan = Effect.fn("Views.buildPlan")(function* (
   return { spec, specStamp: yield* stampOf(path.join(dir, "SPEC.md")), tickets };
 });
 
-/** A file's size and modification time, read without reading the file; empty where it is gone. */
 const stampOf = (file: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.stat(file)).pipe(
     Effect.map((info) => `${info.size}:${Option.getOrUndefined(info.mtime)?.getTime() ?? ""}`),
     Effect.orElseSucceed(() => ""),
   );
 
-/** The tickets of this Run's plan that a succeeded Run built from it finished. */
 const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
   run: RunFacts,
   runs: ReadonlyArray<RunFacts>,
@@ -345,19 +278,13 @@ const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
   return finished;
 });
 
-// ponytail: never evicted; a few bytes per ticket file ever seen.
 const repoLines = new Map<
   string,
   { readonly stamp: string; readonly line: string | null; readonly change: string }
 >();
 
-/** How far into a ticket its `**Repo:**` line is looked for: past the panel's cap, but bounded. */
 const REPO_SCAN_CAP = 1024 * 1024;
 
-/**
- * A ticket's `**Repo:**` match, or null where the part of the file not read could change it:
- * an empty value can still run on to a later line.
- */
 function repoLineIn(text: string, truncated: boolean) {
   const whole = truncated
     ? pipe(text, Str.slice(0, Option.getOrElse(pipe(text, Str.lastIndexOf("\n")), () => -1) + 1))
@@ -371,7 +298,6 @@ function repoLineIn(text: string, truncated: boolean) {
   return returned;
 }
 
-/** Each ticket's `**Repo:**` and `**Change:**` lines, null where unknown, read only when the ticket has changed. */
 const ticketRepoLines = Effect.fn("Views.ticketRepoLines")(function* (issues: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -404,7 +330,6 @@ const writtenAt = (file: string) =>
     Effect.orElseSucceed(() => undefined),
   );
 
-/** Every plan file's stamp, which changes whenever one of them is written. */
 const planStamps = Effect.fn("Views.planStamps")(function* (run: RunFacts) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -420,14 +345,8 @@ const planStamps = Effect.fn("Views.planStamps")(function* (run: RunFacts) {
   return Arr.join(stamps, "\n");
 });
 
-/** A finished Run's plan, by Run and cap, with the stamps it was read at. */
 export type PlanCache = Map<string, { readonly stamps: string; readonly plan: PlanPanel | null }>;
 
-/**
- * The plan behind a Run, from the caller's cache while none of its files has changed.
- * Keyed by the cap as well as the Run, because `m` asking for another page has to read
- * further into a spec that was cut short.
- */
 const plannedFor = Effect.fn("Views.plannedFor")(function* (
   run: RunFacts,
   cap: number,
@@ -445,15 +364,6 @@ const plannedFor = Effect.fn("Views.plannedFor")(function* (
   return plan;
 });
 
-/**
- * The selected Run, read from its own directory. Files, so this is state produced by an
- * Effect fiber and never a read inside a component — that is what would make the app
- * stutter, and untestable before that.
- *
- * The merge request is passed in rather than fetched: it is cached per ref with a TTL by
- * the caller, because a list must never fetch and a re-selection must cost nothing.
- */
-/** A detail with nothing to say about its outcome: fixtures, and a Run that proved none. */
 export const NO_RUN_OUTCOME: RunDetail["outcome"] = {
   kind: null,
   gaps: [],
@@ -464,7 +374,6 @@ export const NO_RUN_OUTCOME: RunDetail["outcome"] = {
   metrics: metricsOf([], ""),
 };
 
-/** What became of the work, as one phrase, or nothing where nobody has said. */
 function dispositionOf(line: Disposition | null) {
   if (line === null) {
     const returned: string | null = null;
@@ -474,7 +383,6 @@ function dispositionOf(line: Disposition | null) {
   return returned;
 }
 
-/** What a Run kept beside its journals, which a drawer fetches one by one. */
 const evidenceIn = Effect.fn("Views.evidenceIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -490,7 +398,6 @@ const evidenceIn = Effect.fn("Views.evidenceIn")(function* (dir: string) {
   return kept;
 });
 
-/** A record's long texts: its review, read to `pages` caps, and the plan behind it. */
 export const textsOf = Effect.fn("Views.textsOf")(function* (opts: {
   readonly env: PluginEnv;
   readonly run: RunFacts;
@@ -508,7 +415,6 @@ export const textsOf = Effect.fn("Views.textsOf")(function* (opts: {
   };
 });
 
-/** The end of a Run's log, as its record's tail shows it. */
 export const tailOf = Effect.fn("Views.tailOf")(function* (run: RunFacts) {
   const log = yield* readLogTail(run.dir, TAIL_CAP).pipe(Effect.orElseSucceed(() => null));
   return {
@@ -520,23 +426,12 @@ export const tailOf = Effect.fn("Views.tailOf")(function* (run: RunFacts) {
 export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts: {
   env: PluginEnv;
   runId: string;
-  /** The Runs this read already has, so the selected one is not asked for twice. */
   runs?: ReadonlyArray<RunFacts>;
   mr: MrPanel | null;
-  /** Whether the panel's log tail is showing; the log is only read while it is. */
   tail?: boolean;
-  /** How many caps of the review to read, for one the panel has been asked to page. */
   pages?: number;
-  /**
-   * Where a finished Run's plan is kept between reads, owned by the caller the way the
-   * merge request is, because the panel is re-produced on every board tick. A finished
-   * Run's agent can still rewrite it, so it is kept only while its files are unchanged. A
-   * Run still going is never cached: it may be writing that plan as we read it.
-   */
   plans?: PlanCache;
-  /** Its Task's Flow, as the board builds it. */
   flow?: Flow | null;
-  /** False leaves out what comes in later frames: the texts, the tail and the diff. */
   parts?: boolean;
 }) {
   const run =
@@ -545,7 +440,6 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
         Option.getOrUndefined(Arr.findFirst(present, (one) => one.id === opts.runId)),
       ),
     ) ?? (yield* findRun(opts.env, opts.runId));
-  // Gone, or never there: the panel shows the row's own facts instead.
   if (!run) return null;
 
   const parts = opts.parts ?? true;
@@ -585,8 +479,6 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       kind: run.outcome === "unspecified" ? null : run.outcome,
       gaps: [],
       obstacle: run.state === "succeeded" ? null : run.note,
-      // The first of the actions `attention` already worked out, rather than a second
-      // opinion about what to do — one classification, however it is asked for.
       next: attention.actions[0] ?? null,
       delivered: dispositionOf(latest(yield* readDispositions(run.dir))),
       measurement:
@@ -658,20 +550,14 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
   return shown;
 });
 
-/** What Settings shows and can write back. No new store: `config.json` and the harness. */
 export interface SettingsView {
   configPath: string;
-  /** The defaults a Run uses, resolved through the config file and the fallbacks. */
   defaults: Array<{ key: string; value: string; multiline: boolean }>;
-  /** Values a Run remembered for next time, `linear.team` and its kind. */
   remembered: Array<{ key: string; value: string }>;
-  /** Whether the harness will work in this directory without stopping to ask. */
   trust: { cwd: string; state: string };
-  /** The Desktop that shares the defaults with its Flock, where one does. */
   flock: string | null;
 }
 
-/** Every leaf of the config file as a dotted key, so a nested value still has a name. */
 function flatten(raw: YamlMap, prefix = "") {
   const out: Array<{ key: string; value: string }> = [];
   for (const [key, value] of Rec.toEntries(raw)) {
@@ -683,7 +569,6 @@ function flatten(raw: YamlMap, prefix = "") {
   return returned;
 }
 
-/** One config value as a line of text. A nested map has no one line, so it has none. */
 function scalar(value: YamlValue | undefined) {
   if (value === null || value === undefined) {
     const returned: string = "";
@@ -697,8 +582,6 @@ function scalar(value: YamlValue | undefined) {
     const returned: string = "";
     return returned;
   }
-  // Serialised rather than stringified: a value the checker still reads as map-like
-  // would otherwise reach Settings as "[object Object]".
   const returned: string = isString(value) ? value : (JSON.stringify(value) ?? "");
   return returned;
 }
@@ -712,8 +595,6 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
 
   const returned: SettingsView = {
     configPath: path.join(env.userDir, "config.json"),
-    // As written where it is set, so a hand-edited value that loadDefaults would
-    // coerce is shown here, where it is put right.
     defaults: Arr.map(SETTINGS, ({ key, kind, fallback }) => {
       const written = configValue(raw, key);
       return {
@@ -722,8 +603,6 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
         multiline: kind === "json",
       };
     }),
-    // Everything else the file holds: remembered answers, per-harness model lists, the
-    // notification kinds someone turned off. Shown as written rather than interpreted.
     remembered: Arr.filter(flatten(raw), (entry) => settingOf(entry.key) === undefined),
     trust: { cwd: env.cwd, state },
     flock: (yield* readSettingsSet(env.userDir)).flock?.by ?? null,

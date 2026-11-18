@@ -1,6 +1,3 @@
-// Cleanup (ADR-0045): one sweeper per kind of thing Collie made. A listing is every judge; a
-// sweep is every judge, then each removal judged again and written to `cleanup.jsonl`.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -73,27 +70,22 @@ import { holderLives, lockHolder, withLock } from "./lock";
 import { machineLockOf } from "./measurement";
 import { once } from "./audit";
 
-/** One kind of thing Collie cleans. */
 export interface Sweeper {
-  /** What `collie cleanup` calls each of its items. */
   readonly kind: string;
   readonly judge: Effect.Effect<
     {
       remove: ReadonlyArray<CleanupItem>;
       keep: ReadonlyArray<CleanupKept>;
-      /** Kept for now, but a sweep still offers each to `remove`: a stop to try again. */
       retry?: ReadonlyArray<CleanupItem>;
     },
     never,
     PlatformServices | Records
   >;
-  /** Removes `item` if it still should go, answering with the bytes freed or why it stays. */
   readonly remove: (
     item: CleanupItem,
   ) => Effect.Effect<{ freed: number } | { kept: string }, never, PlatformServices | Records>;
 }
 
-/** `sweeper`, judging and removing through `fs`. */
 export const sweepingWith = (fs: FileSystem.FileSystem) => (sweeper: Sweeper) => {
   const returned: Sweeper = {
     kind: sweeper.kind,
@@ -109,11 +101,9 @@ const JOURNAL_KEEP_MS = 30 * DAY_MS;
 const UPLOAD_KEEP_MS = 7 * DAY_MS;
 export const JOURNAL = "cleanup.jsonl";
 
-/** What each of `paths` takes on disk, links not followed; 0 where one cannot be read. */
 export const sizesOf = (paths: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const sizes = new Map<string, number>();
-    // ponytail: one `du` per 500 paths, so a cache of 100k entries is 200 processes.
     for (let at = 0; at < paths.length; at += 500) {
       const du = yield* shell("du", ["-sk", ...paths.slice(at, at + 500)], "/");
       for (const line of Str.split(du.stdout, "\n")) {
@@ -125,13 +115,10 @@ export const sizesOf = (paths: ReadonlyArray<string>) =>
     return Arr.map(paths, (path) => sizes.get(path) ?? 0);
   });
 
-/** What `path` takes on disk. */
 export const sizeOf = (path: string) => sizesOf([path]).pipe(Effect.map(([bytes]) => bytes ?? 0));
 
-/** One sweep at a time in this host, whichever door or schedule asked. */
 export const sweeping = Semaphore.makeUnsafe(1);
 
-/** One line per item, then the kept, then the total. */
 export const cleanupLines = (report: CleanupReport, applied: boolean) =>
   Arr.join(
     [
@@ -155,13 +142,10 @@ export const cleanupLines = (report: CleanupReport, applied: boolean) =>
     "\n",
   );
 
-/** How long a listing or sweep may take before the host log says where its time went. */
 const SLOW_CLEANUP_MS = 2_000;
 
-/** Sweepers already in hand, or how to gather them, which is then timed too. */
 type Sweepers<E, R> = ReadonlyArray<Sweeper> | Effect.Effect<ReadonlyArray<Sweeper>, E, R>;
 
-/** `body` over the sweepers, and over 2 s in all one warning naming where the time went. */
 const timedJudging = <A, E, R, F, Q>(
   what: "listing" | "sweep",
   sweepers: Sweepers<F, Q>,
@@ -208,7 +192,6 @@ const timedJudging = <A, E, R, F, Q>(
     return result;
   });
 
-/** The listing: every sweeper's judgement, and what the removable items come to. */
 export const judge = <E = never, R = never>(sweepers: Sweepers<E, R>) =>
   timedJudging("listing", sweepers, (sweepers, judgeOf) =>
     Effect.gen(function* () {
@@ -227,7 +210,6 @@ export const judge = <E = never, R = never>(sweepers: Sweepers<E, R>) =>
 const total = (items: ReadonlyArray<CleanupItem>) =>
   Arr.reduce(items, 0, (sum, item) => sum + item.bytes);
 
-/** Who asked for a sweep: a front door's Actor, or the host on its own schedule. */
 export const SweptBy = Schema.Union([
   Schema.Literal("host"),
   Schema.Struct({
@@ -250,7 +232,6 @@ const JournalLine = Schema.Struct({
 });
 const JournalJson = Schema.fromJsonString(JournalLine);
 
-/** A sweep: every judge, then every removal, each journaled with who asked. */
 export const sweep = <E = never, R = never>(
   sweepers: Sweepers<E, R>,
   stateDir: string,
@@ -285,10 +266,6 @@ export const sweep = <E = never, R = never>(
     }),
   );
 
-/**
- * A front door's sweep, once per request: asked again, even while it runs, it answers with its
- * report. Once begun it finishes and records its report even if its caller goes away.
- */
 export const sweepAsked = <E, R>(
   trail: string,
   line: Omit<Parameters<typeof once>[1], "result">,
@@ -302,7 +279,6 @@ export const sweepAsked = <E, R>(
     ),
   );
 
-/** Drops journal lines older than 30 days, rewriting it only when something went. */
 const trimJournal = (file: string) =>
   Effect.gen(function* () {
     const lines = yield* readJournal(file, JournalJson);
@@ -322,20 +298,13 @@ const trimJournal = (file: string) =>
     yield* fs.rename(tmp, file);
   }).pipe(Effect.ignore);
 
-/** Collie's own cache directory, `~/.cache/collie`. */
 export const collieCache = () =>
   `${Bun.env.XDG_CACHE_HOME || `${Bun.env.HOME ?? Bun.env.TMPDIR ?? "/tmp"}/.cache`}/collie`;
 
-/** Where module generations are staged, as the engine stages them. */
 export const generationsDir = () => `${collieCache()}/entries/generations`;
 
-/**
- * Staged module generations, each gone 7 days after it was last used: a cache hit touches
- * it, and one that is needed again is staged again.
- */
 export const generationsSweeper: (dir: string) => Sweeper = (dir) => {
   const kind = "generation";
-  /** How long ago `target` was last used, or null where it is gone. */
   const unusedFor = (target: string) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -376,15 +345,9 @@ export const generationsSweeper: (dir: string) => Sweeper = (dir) => {
   };
 };
 
-/**
- * What the settled rule reads beside the checkout: whose work has landed, by the merge
- * watch's answers or what settled it on the board; which branch's merge request is still
- * open; and which checkouts' Tasks still have their workspace open.
- */
 export const settlingOf = (opts: {
   stateDir: string;
   runs: ReadonlyArray<RunFacts>;
-  /** The board's Tasks, which say what each still owes; null where it could not be built. */
   views: ReadonlyArray<TaskView> | null;
   tasks: ReadonlyArray<TaskRecord>;
   protect: ReadonlyArray<string>;
@@ -400,7 +363,6 @@ export const settlingOf = (opts: {
             runs: opts.runs,
             tasks: opts.tasks,
             includeHistory: true,
-            // Settlement needs work facts, not interactive offers from this host's own socket.
             offers: () => Effect.succeed([]),
           });
     const viewOf = new Map(Arr.map([...views, ...(opts.views ?? [])], (view) => [view.id, view]));
@@ -420,7 +382,6 @@ export const settlingOf = (opts: {
           Option.getOrUndefined,
         );
       const item = Option.getOrUndefined(Arr.findFirst(view?.mrs ?? [], (one) => one.id === id));
-      // Whatever a Run's line says, a Task keeps what it still owes on.
       const owed = opts.views === null || (view !== undefined && !view.landed);
       const openLabel = state === "open" && branch !== "" ? label : null;
       if (owed) {
@@ -430,7 +391,6 @@ export const settlingOf = (opts: {
         continue;
       }
       const head = id === null ? null : (forge.get(id)?.head ?? null);
-      // Only a merge's head is on the remote: a closed merge request's never landed.
       const heads =
         head !== null && state !== undefined && state !== "open" && state !== "closed"
           ? [head]
@@ -474,14 +434,12 @@ export const settlingOf = (opts: {
     return returned;
   });
 
-/** Worktrees Collie made, judged by the settled rule in `worktree.ts`. */
 export const worktreesSweeper: (opts: {
   herdr: Herdr;
   stateDir: string;
   runs: ReadonlyArray<RunFacts>;
   registered: ReadonlyArray<AgentEntry>;
   cwd: string;
-  /** Read when it judges, so a Task closed earlier in the same sweep counts as closed. */
   settling?: Effect.Effect<Settling, never, PlatformServices | Records>;
 }) => Sweeper = (opts) => {
   const kind = "worktree";
@@ -522,13 +480,11 @@ export const worktreesSweeper: (opts: {
 
 const RECEIPT_KEEP_MS = 30 * DAY_MS;
 
-/** Whether anything at or under `path` changed in the last day; true where it cannot tell. */
 const changedToday = (path: string) =>
   shell("find", [path, "-mmin", "-1440", "-print", "-quit"], "/").pipe(
     Effect.map((found) => found.code !== 0 || Str.trim(found.stdout) !== ""),
   );
 
-/** What the state directory holds that is the host's own and never a sweeper's. */
 const KEPT_KINDS = new Set([
   "host.db",
   "host.db-wal",
@@ -561,29 +517,20 @@ const KEPT_KINDS = new Set([
 ]);
 const MARKER_KINDS = ["stop", "hold", "parked", "awaiting", "notified"];
 const MARKER = new RegExp(`^(?:${Arr.join(MARKER_KINDS, "|")})\\.(.+)$`);
-/** Nothing reads these any more ([ADR-0027](../docs/adr/0027-one-engine-and-a-hard-cutover.md)). */
 const DEAD = /^(?:events\..*\.log|plans)$/;
 
-/**
- * The state directory's own leftovers: whatever no `collie_runs` row owns, once it has not
- * changed for a day, and CLI receipts 30 days on. An entry of a kind Collie does not know
- * is kept and said.
- */
 export const stateSweeper: (stateDir: string, rows: ReadonlySet<string>) => Sweeper = (
   stateDir,
   rows,
 ) => {
   const kind = "state";
-  /** A child's files are its root Run's as well. */
   const owned = (run: string) => rows.has(run) || rows.has(Str.split(run, ".")[0] ?? run);
-  /** Gone once quiet for a day, for `why`. */
   const quiet = (target: string, why: string) =>
     Effect.map(changedToday(target), (changed) =>
       changed ? { keep: "changed in the last day" } : { remove: why },
     );
   const rowless = "no Run has a row for it";
 
-  /** What becomes of one entry, or null where it is not this sweeper's to judge. */
   const verdict: (
     target: string,
   ) => Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> = (
@@ -630,13 +577,11 @@ export const stateSweeper: (stateDir: string, rows: ReadonlySet<string>) => Swee
             return returned;
           }),
         );
-        // Imported into host.db, and left for a later release to delete (D5).
         if (inside.includes(LEDGER_FILE)) return null;
       }
       return yield* quiet(target, rowless);
     });
 
-  /** Every entry this sweeper might judge. */
   const entries = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const list = (dir: string) =>
@@ -672,7 +617,6 @@ export const stateSweeper: (stateDir: string, rows: ReadonlySet<string>) => Swee
   };
 };
 
-/** Uploads not asked for in a week: a Run given one holds its own copy (ADR-0046). */
 export const uploadsSweeper: (stateDir: string) => Sweeper = (stateDir) => {
   const kind = "upload";
   const root = uploadsDir(stateDir);
@@ -704,7 +648,6 @@ export const uploadsSweeper: (stateDir: string) => Sweeper = (stateDir) => {
   };
 };
 
-/** Removes `target` where `verdict`, asked now, still says it goes. */
 const removeIf = (
   target: string,
   verdict: Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices>,
@@ -719,11 +662,6 @@ const removeIf = (
     return gone._tag === "Success" ? { freed: bytes } : { kept: String(gone.failure) };
   });
 
-/**
- * Compaction controls of agents core does not list: their server stopped and their
- * state removed, or kept with why while it is not Quiet, to be stopped again next sweep.
- * Nothing is judged where core will not list its agents.
- */
 export const compactionSweeper: (
   stateDir: string,
   sessions: ReadonlyArray<Herdr>,
@@ -732,7 +670,6 @@ export const compactionSweeper: (
 ) => Sweeper = (stateDir, sessions, ports = COMPACTION_PORTS, stopMs?) => {
   const kind = "compaction";
   const root = `${stateDir}/${CONTROL_DIR}`;
-  /** Every agent any session lists, or null where one would not say. */
   const listed = Effect.gen(function* () {
     const names = new Set<string>();
     for (const session of sessions) {
@@ -787,7 +724,6 @@ export const compactionSweeper: (
   };
 };
 
-/** Runner copies under `~/.cache/collie/runners`, but the running version's and the newest. */
 export const runnersSweeper: (dir: string, running: string) => Sweeper = (dir, running) => {
   const kind = "runner";
   const versionOf = (name: string) => /^collie-(.+)$/.exec(name)?.[1] ?? null;
@@ -850,11 +786,6 @@ const SECTION_SAID: Record<Section, string> = {
   finished: "Finished",
 };
 
-/**
- * Tasks, each closed an hour after it became Finished: its record is all there is to close
- * (ADR-0045 D3). `seen` is when each Task was first seen Finished, kept by the host across
- * sweeps; a host restart only delays a close.
- */
 export const tasksSweeper: (opts: {
   tasks: ReadonlyArray<TaskRecord>;
   views: ReadonlyArray<TaskView>;
@@ -862,7 +793,6 @@ export const tasksSweeper: (opts: {
 }) => Sweeper = (opts) => {
   const kind = "workspace";
 
-  /** How long a Task has been Finished, or why it is not. */
   const finishedFor: (
     task: TaskRecord,
   ) => Effect.Effect<{ keep: string } | { ms: number; said: string } | null> = (task) =>
@@ -923,15 +853,12 @@ export const tasksSweeper: (opts: {
   };
 };
 
-/** When this host first saw each agent `idle` or `done` without a break since, by terminal. */
 export type IdleSince = Map<string, number>;
 
 const IDLE: ReadonlySet<string | null> = new Set<AgentStatus>(["idle", "done"]);
 
-/** When this host first saw each Run finished, for a Run that records no finish of its own. */
 export type FinishedSince = Map<string, number>;
 
-/** Notes what herdr says of `agents`: any status but idle or done clears its time. */
 export const noteIdle = (
   idle: IdleSince,
   agents: ReadonlyArray<{ terminalId: string | null; status: string | null }>,
@@ -944,7 +871,6 @@ export const noteIdle = (
   }
 };
 
-/** Clears the time of every terminal herdr no longer has. */
 export const forgetGone = (idle: IdleSince, terminals: ReadonlySet<string>) => {
   for (const key of idle.keys()) if (!terminals.has(key)) idle.delete(key);
 };
@@ -953,25 +879,15 @@ const FINISHED: ReadonlySet<RunFacts["state"]> = new Set(["succeeded", "failed",
 
 const QUEUED: ReadonlySet<string> = new Set(["reserved", "deferred"]);
 
-/**
- * A finished Run's agents, each closed once core has reported it idle for `idleCloseMs`
- * since the Run finished, unless something still needs it
- * (ADR-draft-a-finished-runs-idle-agent-is-closed).
- */
 export const idleAgentsSweeper: (opts: {
   stateDir: string;
   sessions: ReadonlyArray<{ readonly herd: string | null; readonly herdr: Herdr }>;
   runs: ReadonlyArray<RunFacts>;
   idle: IdleSince;
   finishedSince: FinishedSince;
-  /** 0 closes nothing. */
   idleCloseMs: number;
   ports?: CompactionPorts;
   stopMs?: number;
-  /**
-   * Whether core proves no person is viewing or typing into the agent's terminal. Core
-   * cannot say yet, so by default every agent is kept.
-   */
   unattended?: (at: AgentInfo) => Effect.Effect<boolean>;
 }) => Sweeper = (opts) => {
   const kind = "idle-agent";
@@ -979,7 +895,6 @@ export const idleAgentsSweeper: (opts: {
   const targetOf = (agent: string, runId: string) => `${agent} of ${runId}`;
   const minutes = (ms: number) => Math.floor(ms / 60_000);
 
-  /** Each agent a finished Run launched that core has on its recorded terminal. */
   const candidates = Effect.gen(function* () {
     const live = new Set<string>();
     const named: Array<{ run: RunFacts; launched: Launched }> = [];
@@ -1027,10 +942,6 @@ export const idleAgentsSweeper: (opts: {
     return found;
   });
 
-  /**
-   * The newest of the Run's final card, its stop, and when this host first saw it finished:
-   * a Run that resumed and ended again between sweeps counts from that end.
-   */
   const lastFinished = (run: RunFacts, now: number) =>
     Effect.gen(function* () {
       const card = yield* finishedOnRecord(run.dir).pipe(Effect.orElseSucceed(() => null));
@@ -1045,7 +956,6 @@ export const idleAgentsSweeper: (opts: {
 
   type Candidate = Effect.Success<typeof candidates>[number];
 
-  /** Why `one` stays, or how long it has been idle since its Run finished. */
   const verdict: (
     one: Candidate,
   ) => Effect.Effect<{ keep: string } | { idleFor: number }, never, PlatformServices | Records> = (
@@ -1125,7 +1035,6 @@ export const idleAgentsSweeper: (opts: {
         if (one === undefined) return { kept: "already gone" };
         const judged = yield* verdict(one);
         if ("keep" in judged) return { kept: judged.keep };
-        // Read before the end, which lets the record be put down.
         const transcript = yield* transcriptOf(opts.stateDir, one.launched.agent);
         const why = `idle for ${minutes(judged.idleFor)} min; ${
           transcript === null
@@ -1156,10 +1065,6 @@ export const idleAgentsSweeper: (opts: {
   };
 };
 
-/**
- * Renovate's clones in the state directory, each removed once no Run with a row cut a
- * checkout from it and no checkout cut from it is left on disk.
- */
 export const renovateClonesSweeper: (stateDir: string, runs: ReadonlyArray<RunFacts>) => Sweeper = (
   stateDir,
   runs,
@@ -1219,10 +1124,6 @@ export const renovateClonesSweeper: (stateDir: string, runs: ReadonlyArray<RunFa
   };
 };
 
-/**
- * The base trees a Run's Measurements were taken on, each removed with git's record of it
- * once its Run has ended or has no row and no Measurement is running on this Machine.
- */
 export const measurementTreesSweeper: (
   stateDir: string,
   runs: ReadonlyArray<RunFacts>,
@@ -1272,7 +1173,6 @@ export const measurementTreesSweeper: (
       const sizes = yield* sizesOf(Arr.map(remove, (item) => item.target));
       return { remove: Arr.map(remove, (item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
     }),
-    // One claim: a Measurement holds the lock from before its tree is made until it ends.
     remove: (item) =>
       withLock(
         lock,
@@ -1305,13 +1205,8 @@ export const measurementTreesSweeper: (
   };
 };
 
-/** The Cache Directory Tagging signature, which Cargo writes into every `target`. */
 const CACHE_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55";
 
-/**
- * Build caches in checkouts Collie made: git-ignored directories holding a signed
- * `CACHEDIR.TAG`, each removed once no live Run works in its checkout (ADR-0045 D1, D5).
- */
 export const buildCachesSweeper: (
   runs: Effect.Effect<ReadonlyArray<RunFacts>, never, PlatformServices>,
 ) => Sweeper = (runs) => {
@@ -1380,22 +1275,15 @@ export const buildCachesSweeper: (
 
 const RETAIN_MS = 30 * DAY_MS;
 
-/** What retention judges a Task against, read again before each removal. */
 export interface RetentionFacts {
   readonly tasks: ReadonlyArray<TaskRecord>;
   readonly views: ReadonlyArray<TaskView>;
   readonly runs: ReadonlyArray<RunFacts>;
 }
 
-/**
- * Tasks, each forgotten with every one of its Runs once nothing can need them and its last
- * Run ended 30 days ago (ADR-0045 D5): the rows in one transaction through `retire`, then
- * the files, which a failure between leaves for the state sweeper's no-row rule.
- */
 export const retentionSweeper: (opts: {
   stateDir: string;
   sessions: ReadonlyArray<Herdr>;
-  /** Read for every judgement, so a Run started since the last one is seen. */
   facts: Effect.Effect<RetentionFacts, never, PlatformServices>;
   retire: (
     runs: ReadonlyArray<string>,
@@ -1407,7 +1295,6 @@ export const retentionSweeper: (opts: {
       Arr.map(["runs", "agents", "evidence"], (dir) => `${opts.stateDir}/${dir}/${id}`),
     );
 
-  /** When its last Run ended: the board's own reading, else the newest of its files. */
   const endedAt = (view: TaskView, ids: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       if (view.ended !== null) return view.ended;
@@ -1423,11 +1310,9 @@ export const retentionSweeper: (opts: {
             newest = Math.max(newest, Option.getOrNull(info.value.mtime)?.getTime() ?? 0);
         }
       }
-      // No time to go by: as good as just ended, so nothing is forgotten on a guess.
       return newest === 0 ? yield* Clock.currentTimeMillis : newest;
     });
 
-  /** Every live agent's terminal, or null where core could not be asked. */
   const openNow = Effect.gen(function* () {
     const terminals = new Set<string>();
     for (const session of opts.sessions) {
@@ -1537,7 +1422,6 @@ export const retentionSweeper: (opts: {
               0,
               (sum, one) => sum + one,
             );
-            // Rows first: a file left behind without its row is the no-row rule's next sweep.
             const gone = yield* opts.retire(judged.ids);
             yield* forgetDeliveries(gone);
             const markers = Arr.flatMap(gone, (id) =>
@@ -1572,10 +1456,6 @@ const DesktopInstalled = Schema.fromJsonString(
   Schema.Struct({ version: Schema.String, hash: Schema.optionalKey(Schema.String) }),
 );
 
-/**
- * Desktop's own files on this computer, by the rule Desktop applies at its start; none where
- * Desktop has no data folder here. A tar is kept wherever the running bundle is not known.
- */
 export const desktopSweeper: (root: string, state: string, installedPath: string) => Sweeper = (
   root,
   state,
@@ -1633,7 +1513,6 @@ export const desktopSweeper: (root: string, state: string, installedPath: string
   };
 };
 
-/** Check processes no host is collecting (ADR-draft-a-check-ends-with-the-host-that-runs-it D7). */
 export const checksSweeper: (checks: CheckProcessesApi) => Sweeper = (checks) => {
   const kind = "check";
   const collecting = "this host is collecting it";

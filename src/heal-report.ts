@@ -1,6 +1,3 @@
-// A judged Heal's Collie defect, filed on Collie's own repository or linked to the issue
-// already there for its cause (cego/collie#443).
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
@@ -10,7 +7,6 @@ import { WorkflowError, type HostApi } from "./sdk";
 import { recoveriesIn, type HealFinding, type Metric, type Publication } from "./metrics";
 
 const KEY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-// self-improve's marker (workflows/retrospective.ts), so either finds the other's issues.
 const MARKER = /<!-- collie-finding: ([a-z0-9-]+) -->/g;
 const markerOf = (key: string) => `<!-- collie-finding: ${key} -->`;
 const keysIn = (body: string) =>
@@ -26,13 +22,10 @@ export interface Pending {
   readonly cause: string;
   readonly build: string;
   readonly finding: HealFinding;
-  /** The issue a comment was sent to whose answer was lost, or null. */
   readonly commented: string | null;
-  /** The report last recorded for this Heal, or null. */
   readonly last: Pick<Reported, "publication" | "note"> | null;
 }
 
-/** Each of this Run's judged Heals whose Collie defect is not yet filed, linked or set aside. */
 export const pendingIn = (run: string, lines: ReadonlyArray<Metric>) => {
   const latest = new Map<string, Metric>();
   for (const line of lines)
@@ -65,7 +58,6 @@ export const pendingIn = (run: string, lines: ReadonlyArray<Metric>) => {
   });
 };
 
-/** Each key filed or linked from these lines, with its issue. */
 export const knownIn = (lines: ReadonlyArray<Metric>) =>
   Arr.flatMap(lines, (line) =>
     line.kind === "report" &&
@@ -75,7 +67,6 @@ export const knownIn = (lines: ReadonlyArray<Metric>) =>
       : [],
   );
 
-/** Why a finding is not filed as fact, or null where it is. */
 const setAside = ({ judged, finding }: Pending) => {
   if (judged === "false-recovery")
     return "its Heal said the Run resumed while it stayed parked, so its finding is not filed as fact";
@@ -123,11 +114,9 @@ const commentOf = (item: Pending) =>
     "\n\n",
   );
 
-// The forge's own words for a write whose answer was lost (src/forge/threads.ts).
 const sent = (reason: string) => pipe(reason, Str.endsWith("before retrying"));
 
 const ANSWER_WITHIN = Duration.minutes(2);
-/** `call`, failing as unanswered after ANSWER_WITHIN; a write's may have landed. */
 const bounded = <A>(call: Effect.Effect<A, WorkflowError>, write: boolean) =>
   call.pipe(
     Effect.timeoutOrElse({
@@ -147,11 +136,6 @@ export interface Reported {
   readonly issue?: string;
 }
 
-/**
- * Files `item` on Collie's repository, or links the issue already there: the one the healer
- * named, else an open one carrying its key, else one `known` for its key. Lists first every
- * time, so a filing whose answer was lost is found by its marker rather than filed again.
- */
 export const report = (host: HostApi, item: Pending, known: ReadonlyMap<string, string>) =>
   Effect.gen(function* () {
     const why = setAside(item);

@@ -1,8 +1,3 @@
-// Two Machines reach each other over a paired link (ADR-0057): adding a Machine to herdr
-// is all it takes, a command about a Run goes to the Machine that has it, and the host
-// there records who asked and from where. Two real hosts, each with its own state
-// directory and fake herdr, paired on 127.0.0.1.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -485,7 +480,6 @@ test(
             expect((yield* handOff(older, "older")).envelope.error).toBeUndefined();
             expect(yield* successors(older)).toEqual([successor]);
             expect(yield* successors(newer)).toEqual([]);
-            // The card shows the older handoff once the board has read it.
             const handedOff = yield* until(card, (shown) => shown?.disposition != null);
             expect(handedOff?.landed).toBe(false);
             expect((yield* handOff(newer, "newer")).envelope.error).toBeUndefined();
@@ -509,7 +503,6 @@ const CallLine = Schema.fromJsonString(
 const read = (file: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(file)).pipe(Effect.orDie);
 
-/** What a fake agent answers each prompt with, so a Run gets as far as its question. */
 const answering = (side: Side) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -519,7 +512,6 @@ const answering = (side: Side) =>
     );
   }).pipe(Effect.orDie);
 
-/** A Run of `attended` on `side`, waiting on its question with its agent alive. */
 const waitingRun = (side: Side) =>
   Effect.gen(function* () {
     yield* answering(side);
@@ -606,7 +598,6 @@ test(
               ),
             ).toBe(true);
 
-            // The one connection was the pairing's, and its invite rode it.
             const calls = Str.split(yield* read(first.sshLog), "\n");
             expect(Arr.filter(calls, (line) => pipe_(line, Str.startsWith("master")))).toHaveLength(
               1,
@@ -647,7 +638,6 @@ test(
               name: secondPeers[0]!.name,
             });
 
-            // A second command needs no connection of its own.
             const shown = yield* first.cli(["run", "show", runId]);
             expect(shown.envelope.error).toBeUndefined();
             const local = yield* second.cli(["run", "show", runId]);
@@ -691,7 +681,6 @@ test(
   180_000,
 );
 
-/** A listener of another process's on this port, for as long as the scope lasts. */
 const occupy = (port: string) =>
   Effect.acquireRelease(
     Effect.callback<Server>((resume) => {
@@ -720,7 +709,6 @@ test(
   180_000,
 );
 
-/** Whether something accepts a connection on this port of 127.0.0.1. */
 const listening = (port: string) =>
   Effect.callback<boolean>((resume) => {
     const conn = createConnection({ host: "127.0.0.1", port: Number(port) });
@@ -768,7 +756,6 @@ test(
   180_000,
 );
 
-/** A /proc table's rows, under its header line; none where the kernel has no such table (no IPv6). */
 const procTable = (path: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(path)).pipe(
     Effect.map((text) => Str.split(text, "\n").slice(1)),
@@ -789,7 +776,6 @@ test("a /proc table the kernel does not have is no rows, and any other read fail
     }),
   ));
 
-/** The TCP ports a process listens on: its sockets among the kernel's listening ones. */
 const listensOn = (pid: number, tables = ["/proc/net/tcp", "/proc/net/tcp6"]) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -804,7 +790,6 @@ const listensOn = (pid: number, tables = ["/proc/net/tcp", "/proc/net/tcp6"]) =>
     const ports: number[] = [];
     for (const table of tables) {
       for (const row of yield* procTable(table)) {
-        // local_address, rem_address, st, …, inode; st 0A is LISTEN.
         const [, local, , state, , , , , , inode] = Str.split(Str.trim(row), /\s+/);
         if (state === "0A" && inode !== undefined && sockets.has(inode))
           ports.push(Number.parseInt(Str.split(local!, ":")[1]!, 16));
@@ -827,7 +812,6 @@ test.skipIf(process.platform !== "linux")(
     ),
 );
 
-/** A WebSocket to a listener: open, or refused. */
 const dialListener = (
   port: string,
   ca: string,
@@ -931,7 +915,6 @@ test(
   180_000,
 );
 
-/** One line written to a relay socket, and the line it answered with. */
 const relayAnswer = (path: string, header: string) =>
   Effect.callback<string>((resume) => {
     const conn = createConnection(path);
@@ -1200,7 +1183,6 @@ test(
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
             const [laptop] = yield* peersOf(second.world.state);
             const relay = relayOf(second.world.state, laptop!.name);
-            // A dial-back that works first, so the link was heard just before it is frozen.
             yield* until(
               () => relayAnswer(relay, '{"as":"cli","client":"probe"}'),
               (said) => pipe_(said, Str.includes('"ok":true')),
@@ -1210,7 +1192,6 @@ test(
             const resumed = Effect.sync(() => process.kill(owner!.pid, "SIGCONT"));
             yield* Effect.gen(function* () {
               yield* relayAnswer(relay, '{"as":"cli","client":"late"}');
-              // Past the ticket's life, so the dial-back the frozen host makes is refused.
               yield* Effect.sleep("6 seconds");
             }).pipe(Effect.ensuring(resumed));
             const logged = yield* until(
@@ -1240,7 +1221,6 @@ test(
         (first, second) =>
           Effect.gen(function* () {
             const { runId } = yield* waitingRun(second);
-            // A host nobody dials listens on nothing but its socket.
             expect(yield* peersOf(first.world.state)).toEqual([]);
             if (process.platform === "linux") {
               const host = yield* ownerOf(second.world.state);

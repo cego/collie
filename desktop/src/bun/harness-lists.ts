@@ -62,7 +62,6 @@ export const harnessLists = Effect.fn("HarnessLists.open")(function* (
 
 export type HarnessLists = Effect.Success<ReturnType<typeof harnessLists>>;
 
-/** A harness's list as this computer's host read it: what it does not hide, or why it read none. */
 export const listedIn = (
   catalogues: ReadonlyArray<HarnessCatalogue>,
   harness: string,

@@ -1,6 +1,3 @@
-// Outputs are JSON files in the run dir. Gates and loops read these,
-// never terminal text (CONTEXT.md, Output).
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -12,17 +9,12 @@ import type { Measurement } from "./measurement-model";
 import type { CheckCommand, Snapshot, Verification } from "./verify";
 import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
 
-/** Present and not only whitespace: a required judgement nobody wrote is not one. */
 const said = (field: string) =>
   Schema.refine<Schema.String, string>((value): value is string => Str.trim(value) !== "", {
     title: `${field} is required`,
     message: `${field} is required, and must not be blank`,
   });
 
-/**
- * A list an Output may leave out; absent and null both read as none, which is what the
- * parsers below have always done and what keeps an old Output readable.
- */
 const optionalList = <S extends Schema.Top>(item: S) =>
   Schema.NullOr(Schema.Array(item)).pipe(
     Schema.decodeTo(Schema.Array(item), {
@@ -32,7 +24,6 @@ const optionalList = <S extends Schema.Top>(item: S) =>
     Schema.withDecodingDefaultKey(Effect.succeed(null)),
   );
 
-/** A verdict of `findings` with nothing in the list is a report that says nothing. */
 const listed = <
   S extends Schema.Top & {
     readonly Type: { readonly verdict: string; readonly findings: ReadonlyArray<unknown> };
@@ -47,15 +38,6 @@ const listed = <
     },
   );
 
-/**
- * A finding, as every Output that carries one writes it.
- *
- * `severity` is free text on purpose. `blocker`, `major` and `minor` are the vocabulary
- * this repository's prompts ask for, but a fork's own word is a valid judgement and only
- * `minor` is not blocking, so closing this to a literal union would throw away reviews
- * rather than validate them. The judgement fields beside it are optional for the same
- * reason: a reviewer who has no line number has still said something worth reading.
- */
 export const FindingSchema = Schema.Struct({
   id: Schema.optionalKey(Schema.String.pipe(said("id"))),
   status: Schema.optionalKey(Schema.Literals(["open", "fixed", "disputed", "obsolete"])),
@@ -63,8 +45,6 @@ export const FindingSchema = Schema.Struct({
   note: Schema.optionalKey(Schema.String),
   file: Schema.optionalKey(Schema.String),
   line: Schema.optionalKey(Schema.Finite),
-  // Free text, because a fork's own word is a judgement and not an error — and named
-  // here, because every Output that carries a finding is read by `isBlocking`.
   severity: Schema.String.annotate({
     description: "blocker, major or minor; any other word is treated as blocking",
   }).pipe(said("severity")),
@@ -73,9 +53,7 @@ export const FindingSchema = Schema.Struct({
   internal: Schema.optionalKey(
     Schema.Boolean.annotate({ description: "true only for a finding about Collie's own process" }),
   ),
-  /** A reviewer's answer to the implementer's reason for disputing this finding. */
   rebuttal: Schema.optionalKey(Schema.String),
-  /** Why the implementer disputes this finding, or the review withdraws it. */
   reason: Schema.optionalKey(Schema.String),
 });
 
@@ -90,9 +68,7 @@ export interface Finding {
   title: string;
   detail?: string;
   internal?: boolean;
-  /** A reviewer's answer to the implementer's reason for disputing this finding. */
   rebuttal?: string;
-  /** Why the implementer disputes this finding, or the review withdraws it. */
   reason?: string;
 }
 
@@ -100,28 +76,21 @@ export interface ReviewOutput {
   verdict: "clean" | "findings";
   findings: Finding[];
   disputed: Finding[];
-  /** The one judgement only a reviewer can give, named by the kind of result. */
   scope_met?: boolean;
   behavior_preserved?: boolean;
   supported?: boolean;
   accurate?: boolean;
   compatible?: boolean;
-  /** Beside `behavior_preserved`, for a performance change: the benchmark measures what it claims. */
   measurement_valid?: boolean;
 }
 
-/** The one review that comes out of several, and the file a human reads it in. */
 export interface Synthesis extends ReviewOutput {
-  /** Two sentences: what the change does, and what is wrong with it. */
   summary: string;
   public_summary?: string;
-  /** Findings withdrawn with a reason, including disputes the review accepts. */
   dropped: Finding[];
-  /** What the previous review over this target raised and this one found fixed. */
   fixed: Fixed[];
 }
 
-/** A finding the last review raised that is not there any more. */
 export interface Fixed {
   file?: string;
   title: string;
@@ -130,21 +99,6 @@ export interface Fixed {
 
 const VerdictSchema = Schema.Literals(["clean", "findings"]);
 
-/**
- * The shapes a workflow's steps write, shared with an author through the SDK so a module
- * declaring a review step declares the same contract the engine reads — one definition,
- * not a copy per workflow. `output-schemas.test.ts` holds each of these to the parser
- * below it, case for case, because two readings of one file is the bug they would
- * otherwise be.
- *
- * None of them is closed against extra keys: an Output may say more than a gate reads.
- */
-/**
- * The one judgement a reviewer gives that nothing else can, named by the kind of result
- * the change was for. One of them applies and the rest do not, so all are optional — and
- * the gate reads it from a reviewer's Output alone, because the agent that wrote the
- * change cannot vouch for its own scope.
- */
 const JUDGEMENTS = {
   scope_met: Schema.optionalKey(Schema.Boolean),
   behavior_preserved: Schema.optionalKey(Schema.Boolean),
@@ -195,7 +149,6 @@ export const FixedSchema = Schema.Struct({
   note: Schema.optionalKey(Schema.String),
 });
 
-/** A finding a synthesis dropped says why, or it is a finding lost rather than resolved. */
 const DroppedSchema = FindingSchema.pipe(
   Schema.refine<typeof FindingSchema, typeof FindingSchema.Type>(
     (value): value is typeof FindingSchema.Type => Str.trim(value.reason ?? "") !== "",
@@ -222,7 +175,6 @@ export const CheckSchema = Schema.Struct({
   note: Schema.optionalKey(Schema.String),
 });
 
-/** How one of a ticket's acceptance criteria is met, in the builder's words. */
 export const CriterionSchema = Schema.Struct({
   criterion: Schema.String.annotate({
     description: "the criterion, copied from the ticket",
@@ -234,7 +186,6 @@ export const CriterionSchema = Schema.Struct({
 });
 export type Criterion = typeof CriterionSchema.Type;
 
-/** A criterion as compared: its words, without the formatting a copy may drop. */
 const criterionKey = (text: string) =>
   Str.trim(
     pipe(
@@ -245,16 +196,11 @@ const criterionKey = (text: string) =>
     ),
   );
 
-/** The newest answer to this criterion's whole wording; a copy without its formatting counts. */
 export const answerFor = (criterion: string, answers: ReadonlyArray<Criterion>) =>
   Option.getOrUndefined(
     Arr.findLast(answers, (one) => criterionKey(one.criterion) === criterionKey(criterion)),
   );
 
-/**
- * Each criterion of the ticket the builder's answers leave unanswered or say is not met,
- * as a blocking finding against the ticket.
- */
 export function unmetCriteria(
   ticket: string,
   criteria: ReadonlyArray<string>,
@@ -284,7 +230,6 @@ export function unmetCriteria(
   });
 }
 
-/** Each criterion whose newest answer says only CI, a merge or a deploy can show it. */
 export const afterMergeAnswers = (
   criteria: ReadonlyArray<string>,
   answers: ReadonlyArray<Criterion>,
@@ -305,47 +250,26 @@ export const FixOutputSchema = Schema.Struct({
   checks: optionalList(CheckSchema),
 }).pipe(listed());
 
-/**
- * What the step that opens a merge request reports. `pushed: false` is a real answer —
- * auto-merge on someone else's merge request is a reason not to push — so the url is
- * optional rather than the proof.
- */
 export const MrOutputSchema = Schema.Struct({
   pushed: Schema.Boolean,
   mr_url: Schema.optionalKey(Schema.NullOr(Schema.String)),
   note: Schema.optionalKey(Schema.String),
 });
 
-/** What a plan leaves behind: the directory of tickets a later Run is fanned out from. */
 export const PlanOutputSchema = Schema.Struct({
   issues_dir: Schema.String.pipe(said("issues_dir")),
   spec: Schema.optionalKey(Schema.String),
 });
 
-/** The human-facing review, written in the Run's own directory. */
 export const REVIEW_FILE = "review.md";
 
-/**
- * The findings that review left, beside it, as the JSON a reader can count. The prose is
- * for the human and this is for the card: what a Run left open is a fact about it, and a
- * card that had to read `review.md` would be reading a summary for one.
- */
 export const FINDINGS_FILE = "findings.json";
 
 const FindingsJson = Schema.fromJsonString(Schema.Array(FindingSchema));
 const decodeFindings = Schema.decodeUnknownEffect(FindingsJson);
 const encodeFindings = flow(Schema.encodeResult(FindingsJson), Result.getOrThrow);
 
-/**
- * What a Run leaves behind about a review: the prose a human reads, and the findings
- * beside it for whatever reads them next. Written together because they are one answer —
- * a review with no findings file is a review nothing can count.
- */
-export const leaveReview = (
-  dir: string,
-  // What the schema decodes, readonly, as the declarations an author is given say it is.
-  synthesis: typeof SynthesisSchema.Type,
-) =>
+export const leaveReview = (dir: string, synthesis: typeof SynthesisSchema.Type) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
       Effect.all([
@@ -357,10 +281,6 @@ export const leaveReview = (
     Effect.orDie,
   );
 
-/**
- * The findings still standing after a last fix `settleFinalFix` accepted, for whatever
- * counts them next. The review's prose stays as the reviewers wrote it.
- */
 export const leaveOutstanding = (dir: string, outstanding: ReadonlyArray<Finding>) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -369,7 +289,6 @@ export const leaveOutstanding = (dir: string, outstanding: ReadonlyArray<Finding
     Effect.orDie,
   );
 
-/** The extra axes a human asked for, as a paragraph, or nothing where they asked for none. */
 export function riskLine(risks: string) {
   const asked = Str.trim(risks);
   if (asked === "") return "";
@@ -381,7 +300,6 @@ export function riskLine(risks: string) {
   );
 }
 
-/** The findings of the review a Run left, or none where it left no review. */
 export const findingsIn = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -389,11 +307,6 @@ export const findingsIn = (dir: string) =>
     return yield* decodeFindings(yield* fs.readFileString(`${dir}/${FINDINGS_FILE}`));
   }).pipe(Effect.orElseSucceed(() => []));
 
-/**
- * How many findings this Run left for somebody to fix. A finding still open *and* the
- * review that holds it: a Run with findings and no review wrote no review, and one with
- * a review and no findings came back clean.
- */
 export const openFindingsIn = (dir: string) =>
   findingsIn(dir).pipe(
     Effect.map(
@@ -548,10 +461,6 @@ export function parseFindings(raw: YamlValue | undefined, where: string) {
   return returned;
 }
 
-/**
- * What makes two findings the same finding. The line is deliberately left out: it
- * moves as the branch is fixed, and a dispute has to survive that to ever settle.
- */
 export function findingKey(f: Pick<Finding, "file" | "title">) {
   return `${f.file ?? ""}::${Str.toLowerCase(Str.trim(f.title))}`;
 }
@@ -562,10 +471,6 @@ export function sameFinding(left: Finding, right: Finding) {
     : findingKey(left) === findingKey(right);
 }
 
-/**
- * A review of reviews: everything `review.json` has, plus the summary a human reads
- * first and the findings this synthesis decided not to carry.
- */
 export function parseSynthesis(text: string, where: string) {
   const base = parseReviewOutput(text, where);
   if (!base.ok) {
@@ -598,7 +503,6 @@ export function parseSynthesis(text: string, where: string) {
     return returned;
   }
   for (const [i, finding] of dropped.value.entries()) {
-    // A finding dropped without a reason is a finding lost, not one resolved.
     if (!finding.reason || Str.trim(finding.reason) === "") {
       const returned: Parsed<Synthesis> = {
         ok: false,
@@ -623,7 +527,6 @@ export function parseSynthesis(text: string, where: string) {
   return returned;
 }
 
-/** What the last review raised and this one could not find any more. */
 export function parseFixed(value: YamlValue | undefined, where: string) {
   if (value === undefined || value === null) {
     const returned: Parsed<Fixed[]> = { ok: true, value: [] };
@@ -652,24 +555,13 @@ export function parseFixed(value: YamlValue | undefined, where: string) {
   return returned;
 }
 
-/**
- * One check the implementer says it ran, by the name it was recorded under. Whether it
- * passed is not here: that is read from the verification journal, bound to the tree it
- * ran on. A `passed` the Output carries is a claim, and is ignored as one.
- */
 export interface Check {
   name: string;
   note?: string;
 }
 
-/**
- * What a fix step reports under a converging loop: each finding it fixed, keyed like
- * the finding itself, each one it disputed, and the checks it ran. A `fixed` entry is
- * an object here, not a sentence, because the engine has to match it to a finding.
- */
 export interface FixOutput {
   verdict: "clean" | "findings";
-  /** What the fix itself still reports open: work it did not finish. */
   findings: Finding[];
   fixed: Fixed[];
   disputed: Finding[];
@@ -755,25 +647,11 @@ function parseChecks(value: YamlValue | undefined, where: string) {
   return returned;
 }
 
-/**
- * Whether a blocking finding says enough to act on: where it is, and what goes wrong.
- * A `blocker` with no file and no detail is a reviewer's impression, and the implementer
- * it lands on can only guess at it or dispute it — both of which cost a round.
- *
- * Deliberately **not** "the file is in the diff". An unchanged caller this change breaks,
- * and a file that should exist and does not, are exactly the blockers worth having; a
- * changed-file whitelist would throw them away to catch the vaguer ones. What is required
- * is that the reviewer named a place and gave a reason.
- *
- * Minor findings are exempt: they do not drive the loop, and holding a passing remark to
- * the standard of a blocker would cost a repair round for a note nobody has to act on.
- */
 export function substantiated(finding: Finding) {
   if (!isBlocking(finding)) return true;
   return Str.trim(finding.file ?? "") !== "" && Str.trim(finding.detail ?? "") !== "";
 }
 
-/** What to tell a reviewer whose blocking findings cannot be acted on, naming them. */
 export function unsubstantiated(findings: ReadonlyArray<Finding>) {
   const bad = Arr.filter(findings, (f) => !substantiated(f));
   if (bad.length === 0) return null;
@@ -788,14 +666,12 @@ export function unsubstantiated(findings: ReadonlyArray<Finding>) {
   );
 }
 
-/** Minor is the one severity not worth blocking on; anything unrecognised fails closed. */
 export function isBlocking(finding: Finding) {
   return (
     finding.status !== "fixed" && finding.status !== "obsolete" && finding.severity !== "minor"
   );
 }
 
-/** Why a converging loop stopped for the human; `attention` reports it as `reason`. */
 export type Halt =
   | "no_progress"
   | "dispute_unresolved"
@@ -803,11 +679,6 @@ export type Halt =
   | "definition_changed"
   | "evidence_missing";
 
-/**
- * What the blocking findings of one round come to, as the key a later round compares
- * against. A finding a reviewer answered a dispute on is the argument moving rather than
- * standing, so it is not part of what "the same set again" means.
- */
 export function blockingKeys(findings: ReadonlyArray<Finding>) {
   return [
     ...new Set(
@@ -819,18 +690,14 @@ export function blockingKeys(findings: ReadonlyArray<Finding>) {
   ].sort();
 }
 
-/** Where a review/fix rally goes after one review, and what it is carrying there. */
 export type Rally =
-  /** Nothing blocking is left; `remaining` is what was raised and is not worth a round. */
   | { readonly go: "clean"; readonly remaining: Finding[] }
-  /** Another fix, on `live`, of which `blocking` drives it; `keys` is this round's set. */
   | {
       readonly go: "fix";
       readonly live: Finding[];
       readonly blocking: Finding[];
       readonly keys: ReadonlyArray<string>;
     }
-  /** The rally is the human's now, and why. */
   | {
       readonly go: "halt";
       readonly halt: Halt;
@@ -838,34 +705,17 @@ export type Rally =
       readonly outstanding: Finding[];
     };
 
-/**
- * Where one round of a converging review/fix rally goes next, as a function the loop a
- * module writes asks.
- *
- * `live` is what `splitDisputed` left for the implementer. Only blocking findings drive
- * it: a dispute nobody answered is the human's call rather than another round of the same
- * two agents, and the same blocking set twice running is not progress, because a third
- * attempt would raise it a third time.
- */
 export function settleRound(round: {
-  /** What the review left for the implementer, as `splitDisputed` returns it. */
   readonly live: ReadonlyArray<Finding>;
-  /** What the implementer has disputed so far, carried between rounds. */
   readonly disputed: ReadonlyArray<Finding>;
-  /** Disputes put back in front of the implementer; these drive the loop whatever their
-   *  severity, because a human resumed the Run to have them acted on. */
   readonly reopened?: ReadonlyArray<Finding>;
-  /** Which round this is, counting from one. */
   readonly at: number;
-  /** The blocking set of an earlier round, and which round that was. */
   readonly seen?: { readonly at: number; readonly keys: ReadonlyArray<string> } | null;
 }) {
   const live = Arr.filter(round.live, (f) => f.status !== "fixed" && f.status !== "obsolete");
   const reopened = [...(round.reopened ?? [])];
   const blocking = [...Arr.filter(live, isBlocking), ...reopened];
   if (blocking.length === 0) {
-    // A dispute the reviewers did not answer settles nothing serious, whether they
-    // raised it again or left it out.
     const standing = Arr.dedupeWith(
       Arr.filter(round.disputed, isBlocking),
       (left: Finding, right: Finding) => sameFinding(left, right),
@@ -914,10 +764,6 @@ export type FinalFix =
     }
   | { ok: false; halt: "fix_unverified"; reasons: string[]; outstanding: Finding[] };
 
-/**
- * A fix report as a reader takes one. The lists are not the reader's to change, so a
- * decoded Output — whose arrays are readonly — is one of these without being copied.
- */
 export interface FixReport {
   readonly verdict: "clean" | "findings";
   readonly findings: ReadonlyArray<Finding>;
@@ -926,25 +772,15 @@ export interface FixReport {
   readonly checks: ReadonlyArray<Check>;
 }
 
-/** What the journal holds, and the tree in front of us, for the checks to be read against. */
 export interface CheckEvidence {
   readonly verifications: ReadonlyArray<Verification>;
   readonly final: Snapshot;
-  /** The Run's checks' commands as they resolve here, so a record is read as the check it ran. */
   readonly commands?: ReadonlyArray<CheckCommand>;
-  /** The Run's Measurements, oldest first. */
   readonly measurements?: ReadonlyArray<Measurement>;
-  /** Where this checkout leaves the default branch a merge request targets; null where it has none. */
   readonly mergeBase?: string | null;
-  /** The Git tree HEAD names, to compare with a Measurement's base tree. */
   readonly content?: string;
 }
 
-/**
- * Why a named check halts the last fix, or null where it does not: it is proof on this
- * tree, or the gate decides it on the final tree. A record by an agent counts: what binds
- * it is the collector, not who called it.
- */
 function checkGap(name: string, proof: CheckProof, evidence: CheckEvidence) {
   switch (proof.state) {
     case "passed":
@@ -967,15 +803,6 @@ function checkGap(name: string, proof: CheckProof, evidence: CheckEvidence) {
   }
 }
 
-/**
- * The last fix of a loop has no review after it, so its own report is what decides:
- * every blocking finding the review raised is fixed by key, nothing is disputed, and
- * every check it names passed on the tree as it stands or is left to the gate, which runs
- * the Run's Checks on the final tree: one that passed only earlier, or one of the Run's
- * Checks with no record. The review before it is history, not evidence that the fixed
- * code still has its findings — and the fix's word is not a review either, which is what
- * the attestation says. Nor is it evidence that the checks passed: the journal is.
- */
 export function settleFinalFix(
   live: ReadonlyArray<Finding>,
   fix: FixReport,
@@ -1015,8 +842,6 @@ export function settleFinalFix(
       unverified.push(`no disposition for ${oneLine(finding)}`);
     }
   }
-  // A blocking dispute the review did not raise again is still a dispute: the reviewers
-  // were told to leave it to the human, and leaving it out is not the human deciding.
   const raised = new Set(Arr.map(live, findingKey));
   const standing = Arr.filter(fix.disputed, (d) => isBlocking(d) && !raised.has(findingKey(d)));
   for (const d of standing) disputes.push(disputeLine(d));
@@ -1030,9 +855,7 @@ export function settleFinalFix(
     else if (owesNothingHere(proof)) verifiedHere.push(check.name);
     else leftToGate.push(check.name);
   }
-  // A fix that does not hold up verifies nothing: everything the review raised stays open.
   const unresolved = [...live, ...fix.findings, ...standing];
-  // A dispute is the human's call only once everything else about the fix holds up.
   if (unverified.length > 0) {
     const returned: FinalFix = {
       ok: false,
@@ -1069,7 +892,6 @@ export function settleFinalFix(
 
 const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}`;
 
-/** Worst first; anything a fork's own vocabulary adds sorts after these, by name. */
 const SEVERITIES = ["blocker", "major", "minor"];
 
 function severityOrder(findings: ReadonlyArray<Finding>) {
@@ -1078,10 +900,8 @@ function severityOrder(findings: ReadonlyArray<Finding>) {
   return [...known, ...Arr.filter(present, (s) => !SEVERITIES.includes(s)).sort()];
 }
 
-/** The complete review kept in the Run, including process findings and fixed entries. */
 export function renderReview(synthesis: typeof SynthesisSchema.Type) {
   const blocks = [Str.trim(synthesis.summary)];
-  // Read first: it is what says the rally is converging rather than repeating.
   if (synthesis.fixed.length > 0) {
     blocks.push("**Fixed since last review**");
     blocks.push(
@@ -1124,7 +944,6 @@ export function renderPublicReview(synthesis: typeof SynthesisSchema.Type) {
 
 function reviewBullet(finding: Finding) {
   const at = finding.file ? `\`${finding.file}${finding.line ? `:${finding.line}` : ""}\` — ` : "";
-  // The detail is a sentence or two; a continuation line keeps it in the same bullet.
   const text = Option.getOrElse(
     Option.map(Option.fromNullishOr(finding.detail), Str.trim),
     () => "",
@@ -1135,15 +954,11 @@ function reviewBullet(finding: Finding) {
 }
 
 export interface Split {
-  /** What the fix step still has to act on. */
   live: Finding[];
-  /** Already disputed, raised again with no answer: the human decides, not the loop. */
   settled: Finding[];
-  /** Disputes a reviewer answered, so they are back in front of the implementer. */
   rebutted: Finding[];
 }
 
-/** A review can confirm a fix or withdraw a disputed finding; silence leaves it unresolved. */
 export function remainingDisputes(
   disputed: ReadonlyArray<Finding>,
   review: {
@@ -1166,11 +981,6 @@ export function remainingDisputes(
   );
 }
 
-/**
- * A finding the implementer has already rejected with a reason cannot be settled by
- * another round of the same two agents — only by the human. So it stops driving the
- * loop, unless a reviewer answers the reason with a `rebuttal`.
- */
 export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: ReadonlyArray<Finding>) {
   const split: Split = { live: [], settled: [], rebutted: [] };
   for (const finding of findings) {

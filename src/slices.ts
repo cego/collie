@@ -1,25 +1,13 @@
-// A list of work and the hand-off between its items, for a module that writes its own
-// loop.
-//
-// An item is known by an identity, never by where it sits in the list: that is what
-// makes a reordered plan reuse the work it already has rather than hand one item's
-// result to another. Two items that cannot be told apart are refused here, before any
-// of them is started, because one result answering for both is a lie nobody can see.
-
 import * as Arr from "effect/Array";
 import { unsafePathComponent } from "./naming";
 
-/** One item of work that finished, and what it left for the ones after it. */
 export interface Handed {
-  /** Its identity: the name its results, its Output and its prompt are all kept under. */
   readonly item: string;
   readonly title: string;
   readonly commits: ReadonlyArray<string>;
-  /** What was verified while it ran, as `name: result`; nothing where nothing was. */
   readonly verifications?: ReadonlyArray<string>;
 }
 
-/** What the items before this one left behind: their work, their commits, their evidence. */
 export function renderProgress(done: ReadonlyArray<Handed>) {
   if (done.length === 0) return "(this is the first ticket)";
   return Arr.join(
@@ -40,11 +28,6 @@ export function renderProgress(done: ReadonlyArray<Handed>) {
   );
 }
 
-/**
- * Why these identities cannot key a list of work, or null where they can. An identity is
- * a name of its own — it becomes a directory entry and an agent's work — and no two items
- * may share one.
- */
 export function identityProblem(keys: ReadonlyArray<string>) {
   const seen = new Set<string>();
   for (const key of keys) {

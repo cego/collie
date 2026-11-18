@@ -1,6 +1,3 @@
-// The two records `run report` counts that nothing wrote before: a park, as the `halt` its
-// metrics journal already documents, and a context sample read at a work boundary.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -51,7 +48,6 @@ test(
 
 const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
 
-/** A `parks-for` Run started on a host of this world, once it has parked. */
 const parkedFor = Effect.fn("test.parkedFor")(function* (world: World, causes: string) {
   const client = yield* connect(world.state).pipe(Effect.orDie);
   const { runId } = yield* client

@@ -1,6 +1,3 @@
-// Which commands Collie may run itself is a permission, so where it comes from and what
-// happens to a Run when that file changes are the whole of what matters here.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -85,8 +82,6 @@ test("the project's file wins whole, and the user's is not merged into it", () =
       const path = yield* Path.Path;
       yield* write(path.join(userDir, "verify.json"), [LINT]);
       yield* write(path.join(cwd, PROJECT_FILE), [TESTS]);
-      // Not [TESTS, LINT]: the project said what this repository's verifications are,
-      // and adding the user's global ones would run a command neither file names here.
       expect(yield* approvedFrom({ cwd, userDir })).toEqual([TESTS]);
     }),
   ));
@@ -166,10 +161,7 @@ test("an Intent's authority is the set; the seed is only for a Run with no Inten
   });
   expect(approvedFor([TESTS], null)).toEqual([TESTS]);
   expect(approvedFor([TESTS], intent([LINT]))).toEqual([LINT]);
-  // An Intent that grants nothing is a Run that may run nothing: the last entry was
-  // removed by a human, and the seed does not put it back behind their back.
   expect(approvedFor([TESTS], intent([]))).toEqual([]);
-  // Which is why the seed goes into the Intent at version 1, and is the set from there.
   const seeded = seedIntent("r1", { runVerification: [TESTS] });
   expect(seeded.authority.run_verification).toEqual([TESTS]);
   expect(approvedFor([LINT], seeded)).toEqual([TESTS]);
@@ -226,14 +218,11 @@ test("a Run keeps the set it started with, whatever the file says later", () =>
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-approved-run-" });
       yield* write(path.join(cwd, PROJECT_FILE), [TESTS]);
 
-      // Read at start, and written into the Run's Intent: from there, the Intent is the set.
       yield* writeIntent(
         dir,
         seedIntent("r1", { runVerification: yield* approvedFrom({ cwd, userDir }) }),
       );
 
-      // Someone edits the project's file after the Run is going. A permission that moved
-      // under a Run is not a permission, so the Run is unchanged.
       yield* write(path.join(cwd, PROJECT_FILE), [LINT]);
       const now = yield* approvedFrom({ cwd, userDir });
       expect(now).toEqual([LINT]);

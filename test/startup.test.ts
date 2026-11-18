@@ -1,7 +1,3 @@
-// What a start loads before its first line runs. Every `collie`, hook and board start pays
-// for it, and the compaction helper starts on every status line and every prompt a Claude
-// agent submits.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -15,7 +11,6 @@ const scanners = {
   tsx: new Bun.Transpiler({ loader: "tsx" }),
 };
 
-/** Everything loading `entry` loads first: its static imports, all the way down. */
 const loads = (entry: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

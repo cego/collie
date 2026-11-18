@@ -44,7 +44,6 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-/** A scripted shell, so these tests never touch a real glab or git. */
 function runner(table: Record<string, { code?: number; stdout?: string }>) {
   return (cmd: string, args: string[]) =>
     Effect.succeed(
@@ -105,7 +104,6 @@ test("a checkout's forge is its origin's, else its upstream's, whatever else it 
         Effect.map(forgeHere("/w", runner(table)), (found) =>
           found.ok ? [found.forge.name, found.project] : found.reason,
         );
-      // cego/collie: a GitHub origin beside an old gitlab remote is GitHub.
       expect(
         yield* here({
           "git remote get-url origin": { stdout: "git@github.com:cego/collie.git\n" },
@@ -140,7 +138,6 @@ test("the assignee is the configured one, else whoever the forge's CLI is logged
       expect(yield* ask("someone-else", glab)).toBe("someone-else");
       expect(yield* ask("  ", glab)).toBe("mk");
       expect(yield* ask(undefined, glab)).toBe("mk");
-      // Not logged in, and nothing configured: say so rather than guess a username.
       expect(
         yield* ask(
           undefined,
@@ -157,7 +154,6 @@ test("Linear ids come from the work source and the branch, deduplicated", () =>
         "git rev-parse --abbrev-ref HEAD": { stdout: "feature/FRO-149-modal\n" },
       });
 
-      // A linear work source contributes itself, and is not repeated by the branch.
       expect(
         yield* linearIssues(
           {
@@ -169,7 +165,6 @@ test("Linear ids come from the work source and the branch, deduplicated", () =>
         ),
       ).toEqual(["FRO-149"]);
 
-      // Free text names no ticket, so only the branch does.
       expect(
         yield* linearIssues(
           { cwd: rig.projectDir, inputs: { plan: "make it nicer", plan_kind: "text" } },
@@ -212,7 +207,6 @@ for (const name of ["gitlab", "github"] as const) {
   test(`a merge request from a ${name} checkout is that forge's, with its login and template`, () =>
     runEffect(
       Effect.gen(function* () {
-        // The other forge's configured assignee never answers for this one.
         const other = name === "gitlab" ? "github" : "gitlab";
         const ready = yield* prepare(checkout(), { [other]: "someone-else" });
         expect(ready).toMatchObject({
@@ -296,10 +290,8 @@ test("an MR target carries host, group and project, and reads back", () => {
     project: "gitlab.cego.dk/cego/herdr-plugin",
     iid: "42",
   });
-  // The shape that came before, still understood: an iid in whatever repo you are in.
   expect(mrTarget(null, "42")).toBe("mr:42");
   expect(parseMrTarget("mr:42")).toEqual({ project: null, iid: "42" });
-  // Anything that is not an MR target, and anything malformed, is not one.
   expect(parseMrTarget("worktree")).toBeNull();
   expect(parseMrTarget("branch:main...x")).toBeNull();
   expect(parseMrTarget("mr:cego/x!")).toBeNull();
@@ -321,7 +313,6 @@ test("a project is read out of either remote shape", () => {
   expect(projectFromRemote("git@gitlab.cego.dk:cego/sub/deep.git")).toBe(
     "gitlab.cego.dk/cego/sub/deep",
   );
-  // Not a remote this plugin can name a project from.
   expect(projectFromRemote("")).toBeNull();
   expect(projectFromRemote("/srv/git/bare.git")).toBeNull();
 });
@@ -350,13 +341,11 @@ test("not logged in to that host says so, and no project leaves the checkout to 
       expect((yield* gitlabForProject("gitlab.cego.dk/cego/x", "/x", fake.run)).reason).toBe(
         "glab is not logged in to gitlab.cego.dk",
       );
-      // A target with no project is judged by its checkout's forge, before the adapter is asked.
       expect(yield* gitlabForProject(null, "/x", fake.run)).toEqual({ ok: true, reason: "" });
     }).pipe(Effect.provide(fake.layer)),
   );
 });
 
-/** Every field a GitLab version or a token might not answer, nulled rather than absent. */
 const ALL_NULL = `{
   "iid": 9,
   "title": null,
@@ -393,7 +382,6 @@ const MR_JSON = JSON.stringify({
   approvals_left: 1,
 });
 
-/** A recording runner, so a test can count what was asked of glab as well as read it. */
 function recorder(table: Record<string, { code?: number; stdout?: string }>) {
   const calls: string[][] = [];
   const run = (cmd: string, args: string[]) => {
@@ -405,14 +393,11 @@ function recorder(table: Record<string, { code?: number; stdout?: string }>) {
   return { run, calls };
 }
 
-/** glab logged in to gitlab.example.com, as ForgeHttp reads its token. */
 const READY = { "glab config get token --host gitlab.example.com": { stdout: "glpat-test\n" } };
 
-/** The request for merge request `iid` of g/p, as `glab api` is asked it. */
 const viewOf = (iid: string, host = "gitlab.example.com") =>
   `glab api --hostname ${host} -X GET projects/g%2Fp/merge_requests/${iid}`;
 
-/** `mrDetails`, its requests answered as the recorded glab answers their routes. */
 const detailsOver = (ref: { project: string; iid: string }, glab: ReturnType<typeof recorder>) =>
   mrDetails(ref, "/w/p", glab.run).pipe(Effect.provide(forgeHttpOver(glab.run)));
 
@@ -438,12 +423,10 @@ test("a merge request answers the whole panel from one read of it", () =>
       expect(details.approvals).toBe("1 of 2 still needed");
       expect(details.unresolved).toBe(true);
       expect(details.notes).toBe(7);
-      // Short enough to read, long enough to tell two heads apart.
       expect(details.headSha).toBe("0123456");
       expect(details.updatedAt).toBe(epochMs("2026-09-02T11:00:00.000Z"));
       expect(details.url).toBe("https://gitlab.example.com/g/p/-/merge_requests/42");
 
-      // One read of the merge request itself; its approvals and discussions are others.
       expect(Arr.filter(glab.calls, (c) => Arr.join(c, " ") === viewOf("42"))).toHaveLength(1);
     }),
   ));
@@ -453,21 +436,18 @@ test("no login and a dead merge request each come back as one stated line", () =
     Effect.gen(function* () {
       const ref = { project: "gitlab.example.com/g/p", iid: "42" };
 
-      // No glab and a glab logged out alike hold no token for the host.
       expect(yield* detailsOver(ref, recorder({}))).toEqual({
         _tag: "Unavailable",
         reason:
           "could not read gitlab.example.com/g/p!42: glab is not logged in to gitlab.example.com",
       });
 
-      // Logged in, but GitLab cannot answer about this merge request.
       expect(yield* detailsOver(ref, recorder({ ...READY, [viewOf("42")]: { code: 1 } }))).toEqual({
         _tag: "Unavailable",
         reason: "could not read gitlab.example.com/g/p!42: GitLab answered 404: 404",
         transient: false,
       });
 
-      // Answering, with something that is not a merge request.
       expect(
         yield* detailsOver(ref, recorder({ ...READY, [viewOf("42")]: { stdout: "[]" } })),
       ).toEqual({
@@ -489,15 +469,12 @@ test("a merge request that has not moved since a review says so, and one that ha
       const details = yield* detailsOver({ project: "gitlab.example.com/g/p", iid: "42" }, glab);
       if (details._tag !== "Details") throw new Error("expected details");
 
-      // The review finished after the last change: nothing has moved, stop looking.
       expect(sinceReview(details, epochMs("2026-09-02T12:00:00.000Z"))).toBe(
         "nothing has moved since this review",
       );
-      // The review finished before it: they have pushed, review again.
       expect(sinceReview(details, epochMs("2026-09-02T09:00:00.000Z"))).toBe(
         "changed 2h after this review — head 0123456",
       );
-      // No review to compare against.
       expect(sinceReview(details, 0)).toBe("");
     }),
   ));
@@ -505,11 +482,6 @@ test("a merge request that has not moved since a review says so, and one that ha
 test("a real merge request decodes, nulls and absent approvals and all", () =>
   runEffect(
     Effect.gen(function* () {
-      // Captured verbatim from `glab mr view 17 --repo … -F json` against a live GitLab,
-      // trimmed to the fields the panel reads. `"pipeline": null` is what a merge request
-      // with no second pipeline actually sends: a schema that allowed the key to be
-      // omitted but not null rejected it, and the panel reported a merge request it had
-      // just read as "not a merge request".
       const fs = yield* FileSystem.FileSystem;
       const real = yield* fs.readFileString("test/support/mr-view.json");
       const glab = recorder({
@@ -525,11 +497,8 @@ test("a real merge request decodes, nulls and absent approvals and all", () =>
       expect(details.state).toBe("opened");
       expect(details.author).toBe("mk");
       expect(details.sourceBranch).toBe("collie-app");
-      // `head_pipeline` answers even though `pipeline` is null.
       expect(details.pipeline).toBe("skipped");
       expect(details.unresolved).toBe(false);
-      // Approvals are not on the merge-request object here, so the panel says nothing
-      // about them rather than claiming none are needed.
       expect(details.approvals).toBe("");
       expect(details.headSha).toBe("a40caaf");
     }),
@@ -548,8 +517,6 @@ test("a required-but-unknown approval count says what is required, not that none
       const details = yield* detailsOver({ project: "gitlab.example.com/g/p", iid: "8" }, glab);
 
       if (details._tag !== "Details") throw new Error("expected details");
-      // How many are left is what this GitLab did not answer; "2 of 2 still needed"
-      // would assert nobody has approved, which the input does not say.
       expect(details.approvals).toBe("2 approval(s) required");
     }),
   ));
@@ -564,8 +531,6 @@ test("a null where a value could have been is the same as no value", () =>
 
       const details = yield* detailsOver({ project: "gitlab.example.com/g/p", iid: "9" }, glab);
 
-      // Every one of them nulled: the panel renders a merge request it knows little
-      // about rather than refusing to render one at all.
       expect(details._tag).toBe("Details");
       if (details._tag !== "Details") return;
       expect(details.iid).toBe("9");
@@ -592,7 +557,6 @@ test("a pipeline's status is read from GitLab by its address", () => {
       expect(yield* status("https://gitlab.example.com/g/p/-/pipelines/77/failures")).toBe(
         "failed",
       );
-      // Not answered, or not a pipeline at all: nothing to say.
       expect(yield* status("https://gitlab.example.com/g/p/-/pipelines/78")).toBeNull();
       expect(yield* status("https://gitlab.example.com/g/p/-/merge_requests/1")).toBeNull();
       expect(Arr.map(fake.requests, (one) => one.url)).toEqual([

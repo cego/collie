@@ -1,6 +1,3 @@
-// What the operator's agent profile may say, and what it becomes at a launch: a pane's
-// environment lines and the Claude settings Collie merges into its own.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
@@ -52,7 +49,6 @@ test("the setting refuses what the profile cannot be, with the reason", () => {
   const secret = refused(JSON.stringify({ "*": { env: { DEPLOY: `use ${GITLAB}` } } }));
   expect(secret).toContain("hold it in a 0600 file");
   expect(secret).not.toContain(GITLAB);
-  // Stored as the JSON text it was given, so a sync carries it like any other value.
   const text = JSON.stringify({ "*": { env: { PONYTAIL_DEFAULT_MODE: "off" } } });
   expect(parseSetting("agent_profile", text)).toEqual({ value: text });
 });

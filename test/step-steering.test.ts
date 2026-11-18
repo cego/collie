@@ -12,7 +12,6 @@ import {
 } from "../src/step-steering";
 import { runEffect } from "./support/effect";
 
-/** `effect`, failing where it writes Step steering that changed nothing. */
 const unchanged = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const records = yield* RunRecords;

@@ -1,6 +1,3 @@
-// A Machine's connection is renewed under Desktop: a request it cut off fails naming the
-// Machine, and a Run's details carry on over the next door.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Exit, Fiber, Queue, Result, Stream } from "effect";
@@ -25,11 +22,10 @@ import { fastForward } from "./support/effect";
 
 const machine = { profile: "vm", name: "vm-mk" };
 const reached = (fake: Partial<Door>) => {
-  // SAFETY: each test calls only what its fake answers.
+  // WARNING: each test calls only what its fake answers.
   const desktop = fake as Door;
   return { machine, desktop };
 };
-/** A Run's details as its record's frames carry them. */
 const runDetailOn = (doors: DoorMap<Pick<Doors, "record">>, installation: string, runId: string) =>
   recordEvents(doors, installation, runId).pipe(
     Stream.filterMap((event: RecordEvent) =>
@@ -75,19 +71,18 @@ test("a call whose caller lets go is still an interrupt", () =>
     }),
   ));
 
-/** A door whose Run's details are whatever its queue is given, and which says it is open. */
 const detailDoor = (name: string, open: Set<string>) =>
   Effect.map(
     Queue.unbounded<string, { readonly _tag: "Closed" | "Broken" | "Died" }>(),
     (queue) => ({
       queue,
       door: {
-        // SAFETY: the tests read only a record's details.
+        // WARNING: the tests read only a record's details.
         record: {
-          // SAFETY: a stream, as the client gives one when not asked for a queue.
+          // WARNING: a stream, as the client gives one when not asked for a queue.
           runDetail: (() =>
             Stream.fromQueue(queue).pipe(
-              // SAFETY: the tests read only a detail's title.
+              // WARNING: the tests read only a detail's title.
               Stream.map((title) => ({ title }) as RunDetail),
               Stream.catch(({ _tag }) =>
                 _tag === "Died"
@@ -192,7 +187,7 @@ test("a Machine's definitions are read over its door, as its other reads are", (
     Effect.gen(function* () {
       const answer: HostDefinitions = { workflows: [], problems: [], personas: [], errors: ["x"] };
       const doors = new DoorMap<ReturnType<typeof reached>>();
-      // SAFETY: answered as the client answers a call not asked to discard its reply.
+      // WARNING: answered as the client answers a call not asked to discard its reply.
       const answering = (reply: Effect.Effect<HostDefinitions, HostRefused>) =>
         reached({ definitions: (() => reply) as Door["definitions"] });
       doors.set("i-1", answering(Effect.succeed(answer)));

@@ -1,9 +1,3 @@
-// An installation, a project and a state directory, as an operator's machine has them.
-//
-// The suites that drive the real host need all three: a module is found by where it was
-// saved, a Run belongs to a project, and the host that serves both owns a directory of
-// its own. Building that is the same work for every one of them, so it is here.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -32,7 +26,6 @@ import { marked } from "./sweep";
 import { testBunfig } from "./packages";
 
 export interface World {
-  /** The installation whose user directory an author saves into. */
   readonly install: string;
   readonly user: string;
   readonly state: string;
@@ -61,18 +54,15 @@ const Envelope = Schema.fromJsonString(
 );
 const asEnvelope = Schema.decodeUnknownEffect(Envelope);
 
-/** `collie` as the suite runs it: the compiled binary where `COLLIE_TEST_BINARY` names one. */
 export const collieCommand = Config.option(Config.String("COLLIE_TEST_BINARY")).pipe(
   Effect.map((binary) =>
     Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`],
   ),
 );
 
-/** The command itself, run as an operator runs it: another process, one JSON envelope. */
 export const collie = Effect.fn("World.collie")(function* (
   world: World,
   args: ReadonlyArray<string>,
-  /** More of the operator's environment, over this world's own. */
   extra: Readonly<Record<string, string>> = {},
   onStderr: (text: string) => Effect.Effect<void> = () => Effect.void,
 ) {
@@ -87,10 +77,8 @@ export const collie = Effect.fn("World.collie")(function* (
       COLLIE_STATE_DIR: world.state,
       COLLIE_USER_DIR: world.config,
       COLLIE_CWD: world.project,
-      // The host a client starts is this same program, as an installation's would be.
       COLLIE_HOST: asCommand(command),
       ...suite,
-      // The world's own core, which `proves` set: this env is otherwise built from nothing.
       HC_SOCKET: Bun.env.HC_SOCKET,
       ...extra,
     },
@@ -128,7 +116,6 @@ export const collie = Effect.fn("World.collie")(function* (
   };
 });
 
-/** Fixture files, saved where an author saves them. */
 export const save = (into: string, names: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -136,17 +123,10 @@ export const save = (into: string, names: ReadonlyArray<string>) =>
     for (const name of names) yield* fs.copyFile(`${fixtures}/${name}`, `${into}/${name}`);
   }).pipe(Effect.orDie);
 
-/**
- * Harnesses on `PATH` behind the tripwire's `herdr`, and a fake core on `HC_SOCKET`, set in
- * the process environment too while the world lasts: a host is a child that inherits them,
- * not a reader of this world's Config.
- */
 const fakesIn = Effect.fn("World.fakesIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const tripwire = yield* armTripwire(dir);
   yield* Effect.addFinalizer(() => tripwire.stop);
-  // A host asks `claude --help` before an agent starts; the operator's claude, run under a
-  // loaded suite, is slow enough to time a test out. Anything else fails, as on CI.
   const harnesses = `${dir}/harnesses`;
   yield* fs.makeDirectory(harnesses).pipe(Effect.orDie);
   yield* fs
@@ -184,12 +164,6 @@ const fakesIn = Effect.fn("World.fakesIn")(function* (dir: string) {
   return { set, tripwire, core };
 });
 
-/**
- * An installation with a workflow saved in it, a project to run it for, and a state
- * directory for the host that serves both. Exercised against the compiled binary when
- * `COLLIE_TEST_BINARY` names one, and the sources otherwise.
- */
-/** Every host this world started read its board from disk: the Run model was never filled. */
 const neverModelled = (world: World) =>
   Effect.gen(function* () {
     const log = yield* (yield* FileSystem.FileSystem)
@@ -221,12 +195,8 @@ export const proves = <A, E>(
         home: `${dir}/home`,
         project: `${dir}/project`,
       };
-      // Before the directory goes, or a host left running can write it back.
       yield* Effect.addFinalizer(() =>
         stopHost(world.state).pipe(
-          // A forwarded call can outlive the host that started it, and so can this process's
-          // answer to it. Let this world's finish before removing their directory, which an
-          // answer would write back; another world's are left alone.
           Effect.andThen(
             until(
               () =>
@@ -250,11 +220,9 @@ export const proves = <A, E>(
       ]) {
         yield* fs.makeDirectory(made, { recursive: true }).pipe(Effect.orDie);
       }
-      // A project is a checkout, which is what an agent's start from inside it names.
       yield* fs.writeFileString(`${world.home}/.bunfig.toml`, testBunfig).pipe(Effect.orDie);
       yield* exec(["git", "init", "-q"], { cwd: world.project });
       yield* save(world.user, modules);
-      // `off` runs a suite on the board read from disk, which `run_model: false` restores.
       const modelOff =
         (yield* Config.String("COLLIE_TEST_RUN_MODEL").pipe(Config.withDefault(""))) === "off";
       if (modelOff)
@@ -263,8 +231,6 @@ export const proves = <A, E>(
           .pipe(Effect.orDie);
       const command = yield* collieCommand;
       const suite = yield* suiteEnv;
-      // A core of the world's own, for this process and the host it starts: the real one
-      // is not on a CI runner, and on a desk it is the operator's live session.
       const fakes = yield* fakesIn(dir);
       return yield* body(world, fakes.core).pipe(
         Effect.tap(() => (modelOff ? neverModelled(world) : Effect.void)),
@@ -289,7 +255,6 @@ export const proves = <A, E>(
     }).pipe(Effect.scoped),
   );
 
-/** The Run's agent, once its first turn ends, waits at its own prompt as one in a dialog does. */
 export const blockedAtItsPrompt = (core: FakeHc) =>
   Effect.gen(function* () {
     const herdr = new Herdr(yield* currentEnv.pipe(Effect.orDie));

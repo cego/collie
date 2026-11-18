@@ -1,6 +1,3 @@
-// A Run outside the selected workspace's Task is refused by the doors that scope by Task, naming
-// where it is, unless it is on another Machine or the caller's Run started or was asked about it.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
@@ -26,7 +23,6 @@ import { collieCommand } from "./support/world";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 
-/** The calls `run show`, `run wait` and `run metrics` make, as a host answers them. */
 const Asked = RpcGroup.make(
   Rpc.make("identity", {
     success: Schema.Struct({
@@ -146,7 +142,6 @@ const hostOf = (
     return asked;
   });
 
-/** The relay to paired Machine `name`, as this Machine's host keeps it: one line said, then the peer's host. */
 const relayTo = (state: string, name: string, peerSocket: string) =>
   Effect.acquireRelease(
     Effect.callback<ReturnType<typeof createServer>>((resume) => {
@@ -364,7 +359,6 @@ test(
           {},
           Arr.map(["a", "b", "c", "d", "e", "f", "p"], task),
         );
-        // A goal given with --goal, or amended since, is in the Run's Intent, not its input.
         yield* fs.makeDirectory(`${state}/runs/run-a`, { recursive: true });
         yield* writeIntent(
           `${state}/runs/run-a`,
@@ -435,7 +429,6 @@ test(
     world(({ state, collie }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        // A host's database, migrated as a host leaves it: run-a's trail is read from it.
         yield* Effect.provide(Effect.void, recordsAt(state));
         yield* hostOf(
           socketOf(state),

@@ -1,7 +1,3 @@
-// A Machine's Schedules, as its host keeps and fires them (ADR-0052): the record of each
-// under `schedules/`, the one write and the read every door uses, and the `Schedule`
-// workflow on the host's engine, one execution per occurrence.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -65,22 +61,17 @@ import {
 } from "./schedule-model";
 
 export const schedulesDir = (dir: string) => `${dir}/schedules`;
-/** A Schedule's own directory: its record, and the trail of each change and occurrence. */
 const trailOf = (dir: string, name: string) => `${schedulesDir(dir)}/${name}`;
 const recordOf = (dir: string, name: string) => `${trailOf(dir, name)}/schedule.json`;
-/** The request that last removed it, kept so a retry interrupted before its receipt finds it done. */
 const removedOf = (dir: string, name: string) => `${trailOf(dir, name)}/removed`;
 
-/** How long an occurrence waits between asking a herdr that does not answer. */
 const HERDR_WAIT = "1 minute";
 
-/** One occurrence of one Schedule's chain; the next is started by this one. */
 export const ScheduleWorkflow = Workflow.make("Schedule", {
   payload: {
     name: Schema.String,
     epoch: Schema.String,
     occurrence: Schema.String,
-    /** The occurrence of the execution that started this one, whose engine state it clears. */
     after: Schema.NullOr(Schema.String),
   },
   idempotencyKey: ({ name, epoch, occurrence }) => `${name}/${epoch}/${occurrence}`,
@@ -96,7 +87,6 @@ const decodeRecord = Schema.decodeUnknownEffect(RecordJson);
 const encodeRecord = flow(Schema.encodeResult(RecordJson), Result.getOrThrow);
 const asJson = flow(Schema.decodeUnknownResult(Schema.Json), Result.getOrThrow);
 
-/** Who asks for a change, as the channel declared it. */
 export type ScheduleAsker = Voice & {
   readonly origin: FrontDoor;
   readonly from?: Where | undefined;
@@ -116,20 +106,14 @@ export class Schedules extends Context.Service<
 
 const refusedInput = (why: string) => new HostRefused({ reason: `${REFUSED_INPUT}: ${why}` });
 
-/** The occurrence the chain waits for next, and null while it waits for a Run instead. */
 const upcoming = (record: ScheduleRecord) =>
   record.pending !== null &&
   (record.last === null || epochMs(record.pending) > epochMs(record.last.occurrence))
     ? record.pending
     : null;
 
-/** The host's own time zone, which a Schedule added without one is read in. */
 const hostZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-/**
- * The host's Schedules, and the `Schedule` workflow registered on its engine. `seconds`
- * is the test-only allowance for a sixth cron field.
- */
 export const schedulesLayer = (options: {
   readonly dir: string;
   readonly env: PluginEnv;
@@ -144,7 +128,6 @@ export const schedulesLayer = (options: {
       const hosted = yield* Effect.context<HostServices | PlatformServices>();
       const scope = yield* Effect.scope;
       const machine: ScheduleMachine = { installation: options.installation, hostname: hostname() };
-      // One writer of the records at a time: a change and an occurrence both read and write one.
       const writing = yield* Semaphore.make(1);
 
       const read = (name: string) =>
@@ -171,7 +154,6 @@ export const schedulesLayer = (options: {
         Result.getOrUndefined(parseSchedule(record.cron, record.tz, { seconds: options.seconds }));
       const now = Clock.currentTimeMillis;
 
-      /** The chain's next execution, started apart from this one so neither waits on the other. */
       const startExecution = (payload: typeof ScheduleWorkflow.payloadSchema.Type) =>
         ScheduleWorkflow.execute(payload, { discard: true }).pipe(
           Effect.updateContext((context: Context.Context<WorkflowEngine.WorkflowEngine>) =>
@@ -228,7 +210,6 @@ export const schedulesLayer = (options: {
         return { machine, schedules: entries };
       });
 
-      /** Where a saved start runs, and what the host is given to start it there. */
       const placed = Effect.fn("Schedules.placed")(function* (start: SavedStart) {
         const atRoot = start.workspace === SCHEDULE_PROJECTS_ROOT;
         const root = atRoot
@@ -246,7 +227,6 @@ export const schedulesLayer = (options: {
         };
       });
 
-      /** The start checked as an agent's start is, before the Schedule is written. */
       const checkStart = Effect.fn("Schedules.checkStart")(function* (
         start: SavedStart,
         request: string,
@@ -300,7 +280,6 @@ export const schedulesLayer = (options: {
         });
       }, Effect.provideContext(hosted));
 
-      /** One occurrence's Run, admitted for the Schedule to execute itself. */
       const startSaved = Effect.fn("Schedules.startSaved")(function* (
         start: SavedStart,
         by: ScheduledBy,
@@ -344,7 +323,6 @@ export const schedulesLayer = (options: {
         return admitted.runId;
       }, Effect.provideContext(hosted));
 
-      /** Core answering, waited for each minute, so a scheduled Run's agents can start. */
       const herdrAnswers = (name: string, occurrence: string) =>
         new Herdr(env).agentList().pipe(
           Effect.tapError(() =>
@@ -365,8 +343,6 @@ export const schedulesLayer = (options: {
       ) {
         yield* herdrAnswers(name, occurrence);
         const refused = (why: string) => ({ kind: "refused" as const, reason: why });
-        // Under the write lock from the read to the recorded Run, so a pause, resume or
-        // removal lands wholly before the start or after its Run is the Schedule's.
         return yield* writing.withPermits(1)(
           Effect.gen(function* () {
             const record = yield* read(name);
@@ -398,11 +374,6 @@ export const schedulesLayer = (options: {
         );
       });
 
-      /**
-       * What became of an occurrence, written down, and which execution the chain goes on
-       * with. A chain a resume left waiting for its Run hands the Schedule's new epoch its
-       * first occurrence, with no catch-up.
-       */
       const recordOccurrence = Effect.fn("Schedules.recordOccurrence")(function* (
         payload: typeof ScheduleWorkflow.payloadSchema.Type,
         occurrence: string,
@@ -443,7 +414,6 @@ export const schedulesLayer = (options: {
         );
       });
 
-      /** What the engine kept of an execution that has finished, gone. */
       const forgetFinished = (payload: typeof ScheduleWorkflow.payloadSchema.Type) =>
         Effect.gen(function* () {
           const execution = yield* ScheduleWorkflow.executionId(payload);
@@ -458,7 +428,6 @@ export const schedulesLayer = (options: {
             yield* DurableClock.sleep({
               name: "occurrence",
               duration: Duration.millis(Math.max(0, due - (yield* Clock.currentTimeMillis))),
-              // Every wake-up is the persisted clock, however near the occurrence.
               inMemoryThreshold: Duration.zero,
             });
             const woke = yield* Activity.make({
@@ -488,14 +457,11 @@ export const schedulesLayer = (options: {
               success: OccurrenceOutcome,
               execute: startOccurrence(payload.name, payload.epoch, woke.occurrence),
             });
-            // On this execution's own fiber, so the Run's end is what wakes it. A suspension
-            // is the engine's and passes through; how the Run ended is its own record's.
             if (outcome.kind === "started")
               yield* registry.result(outcome.run).pipe(
                 Effect.catch(() => Effect.void),
                 Effect.catchDefect(() => Effect.void),
               );
-            // Decided once, so a replay starts the same execution rather than a later one.
             const next = yield* Activity.make({
               name: "record",
               success: Schema.NullOr(
@@ -509,7 +475,6 @@ export const schedulesLayer = (options: {
                 ...next,
                 after: next.epoch === payload.epoch ? payload.occurrence : null,
               });
-            // ponytail: an execution that ends unstarted (paused, removed, superseded) has no follower to forget it; one row each.
             if (payload.after !== null)
               yield* forgetFinished({ ...payload, occurrence: payload.after });
           }),
@@ -555,7 +520,6 @@ export const schedulesLayer = (options: {
           const removals = yield* fs
             .readFileString(removedOf(dir, change.name))
             .pipe(Effect.orElseSucceed(() => ""));
-          // Each line is a removal's request and the `added` of the record it removed.
           const removed = Option.getOrUndefined(
             Option.map(
               Option.fromNullishOr(
@@ -570,7 +534,6 @@ export const schedulesLayer = (options: {
           );
           if (removed !== undefined && removed !== record?.added) return yield* done(null);
         }
-        // This request's own write, from an attempt that stopped before its receipt.
         if (record !== null && record.epoch === request && change.change !== "pause")
           return yield* done(record);
         if (change.change === "add") {
@@ -630,7 +593,6 @@ export const schedulesLayer = (options: {
         if (cron === undefined)
           return yield* refusedInput(`"${record.cron}" no longer reads as a cron expression here`);
         const at = yield* now;
-        // A chain still waiting for its Run hands the new epoch its first occurrence.
         const pending = record.running === null ? isoOf(nextOccurrence(cron, at, at)) : null;
         const resumed = { ...record, paused: false, epoch: request, pending };
         yield* write(resumed);
@@ -644,10 +606,6 @@ export const schedulesLayer = (options: {
         return yield* done(resumed);
       });
 
-      /**
-       * The first occurrence of a Schedule resumed while its Run went, where that Run has
-       * ended and no chain was left to hand it over; null while one still may.
-       */
       const handedOverAndLost = (record: ScheduleRecord) =>
         Effect.gen(function* () {
           const cron = cronOf(record);
@@ -660,8 +618,6 @@ export const schedulesLayer = (options: {
           return pending;
         });
 
-      // Each active Schedule's waiting execution, again: its key makes this a no-op unless
-      // the engine lost it.
       yield* Effect.forkScoped(
         Effect.gen(function* () {
           const names = yield* fs

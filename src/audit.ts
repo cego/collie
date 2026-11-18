@@ -1,6 +1,3 @@
-// A Run's audit trail: every operation a front door asked of it, who asked, and what came
-// of it. Written by the host alone, which stamps the front door the channel declared.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -24,7 +21,6 @@ export type ScheduledBy = typeof ScheduledBy.Type;
 
 export const AuditLine = Schema.Struct({
   at: Schema.String,
-  /** When the request was asked, where its act ran before `at` was taken. */
   requested: Schema.optionalKey(Schema.String),
   operation: Schema.String,
   request: Schema.String,
@@ -35,12 +31,9 @@ export const AuditLine = Schema.Struct({
     conversation: Schema.optionalKey(Schema.String),
     said: Schema.optionalKey(Schema.String),
     attachments: Schema.optionalKey(Schema.Array(Schema.String)),
-    /** The Schedule, and the occurrence it was for, where the host started a Run for one. */
     schedule: Schema.optionalKey(ScheduledBy),
   }),
-  /** Why, in the asker's own words, where they gave one. */
   reason: Schema.optionalKey(Schema.String),
-  /** What the request asked for, which the same request asking again has to match. */
   asked: Schema.optionalKey(Schema.Json),
   result: Schema.Json,
 });
@@ -54,7 +47,6 @@ const STARTED_FROM: Partial<Record<FrontDoor, string>> = {
   "cli-tty": "the CLI",
 };
 
-/** Who started a Run, from its start line, else from its parent; undefined where neither says. */
 export const startedBy = (
   lines: ReadonlyArray<AuditLine>,
   run: { readonly id: string; readonly parent: string | null },
@@ -73,7 +65,6 @@ export const startedBy = (
   return `Started by ${run.parent} as ${invocation}`;
 };
 
-/** Who did something, in the words a Flow says it: the agent's name, or the front door a human used. */
 export const whoActed = (actor: AuditLine["actor"]) =>
   actor.from?.agent ?? STARTED_FROM[actor.origin] ?? actor.origin;
 
@@ -82,7 +73,6 @@ const sameJson = Schema.toEquivalence(Schema.Json);
 export const AUDIT_FILE = "operations.jsonl";
 const fileOf = (runDir: string) => `${runDir}/${AUDIT_FILE}`;
 
-/** A Run's trail is a journal in the host's database; any other trail is its own file. */
 const ofRun = (dir: string) => runOfDir(parentOf(dir)) === "runs";
 
 export const readAudit = Effect.fn("Audit.read")(function* (dir: string) {
@@ -90,7 +80,6 @@ export const readAudit = Effect.fn("Audit.read")(function* (dir: string) {
   return yield* readJournal(fileOf(dir), AuditJson);
 });
 
-/** The trail's last line of one of `operations`, or its last line for null. */
 export const lastAudit = Effect.fn("Audit.last")(function* (
   dir: string,
   operations: ReadonlyArray<string> | null,
@@ -102,7 +91,6 @@ export const lastAudit = Effect.fn("Audit.last")(function* (
   );
 });
 
-/** Keeps a trail's newest `keep` lines, for one that is written too often to keep whole. */
 export const trimAudit = Effect.fn("Audit.trim")(function* (runDir: string, keep: number) {
   const lines = yield* readAudit(runDir);
   if (lines.length <= keep) return;
@@ -119,8 +107,6 @@ export const trimAudit = Effect.fn("Audit.trim")(function* (runDir: string, keep
   yield* fs.rename(tmp, fileOf(runDir));
 });
 
-/** What one operation did, written down under the request that asked for it. */
-/** Who asked, as an audit line records them under `request`. */
 export const actorOf = (
   who: Voice & {
     readonly origin: FrontDoor;
@@ -165,11 +151,6 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     : appendJournal(fileOf(runDir), AuditJson, full);
 });
 
-/**
- * An operation that is not idempotent by itself, done once per request: a request already
- * in the trail hands back what it did then, and one that asked for something else is refused.
- */
-// ponytail: two copies of one request arriving together can both act; a lock per Run if that happens.
 export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json, E, R>(
   runDir: string,
   line: Voice & {

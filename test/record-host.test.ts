@@ -1,7 +1,3 @@
-// A Run's record as the host serves it from its Run model: the Flow first, each part after
-// it, a held revision answered `Unchanged`, and an old caller still served as before.
-// Imports only what the base had, so it fails there on what the host sends.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Schema, SchemaRepresentation, Stream } from "effect";
@@ -11,11 +7,10 @@ import { stopHost } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 import frozenJson from "./fixtures/run-detail-base.json";
 
-// The record's wire schema on master at ec7ce76b, before revisions, as an older client decodes it.
 const frozen: unknown = frozenJson;
 const baseRunDetail = Schema.make<Schema.Codec<unknown, unknown>>(
   SchemaRepresentation.fromRepresentation(
-    // SAFETY: the fixture is `SchemaRepresentation.toJson` of that schema's representation.
+    // WARNING: the fixture is `SchemaRepresentation.toJson` of that schema's representation.
     SchemaRepresentation.fromJson(frozen as Schema.Json),
     { revivers: [SchemaRepresentation.isFiniteReviver, SchemaRepresentation.isIntReviver] },
   ).ast,
@@ -23,7 +18,6 @@ const baseRunDetail = Schema.make<Schema.Codec<unknown, unknown>>(
 
 const RunId = Schema.Struct({ data: Schema.Struct({ runId: Schema.String }) });
 
-/** A `plain` Run, finished. */
 const finished = (world: World) =>
   Effect.gen(function* () {
     const { envelope } = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
@@ -37,7 +31,6 @@ interface Revision {
   readonly seq: number;
 }
 
-/** What the record stream sends, as a caller that knows nothing of its schema reads it. */
 interface Sent {
   readonly _tag?: string;
   readonly revision?: Revision;
@@ -54,8 +47,7 @@ const framesOf = (
 ) =>
   Effect.gen(function* () {
     const door = yield* frontDoor(socketOf(world.state));
-    // SAFETY: the fields a base host's schema lacks are sent as they are, and what comes back
-    // is read as no more than `Sent` says.
+    // WARNING: the fields a base host's schema lacks are sent as they are, and what comes back is read as no more than `Sent` says.
     return door
       .runDetail({ runId, tail: true, pages: 1, refreshMr: false, ...more } as never)
       .pipe(Stream.map((frame) => frame as Sent | null));
@@ -152,7 +144,7 @@ test(
           );
           expect(first._tag).toBe("Some");
           const sent = yield* Schema.encodeEffect(Schema.NullOr(RunDetail))(
-            // SAFETY: an ask without `held` is answered with a record or null, never Unchanged.
+            // WARNING: an ask without `held` is answered with a record or null, never Unchanged.
             first._tag === "Some" ? (first.value as RunDetail | null) : null,
           ).pipe(Effect.orDie);
           const decoded = yield* Schema.decodeEffect(Schema.NullOr(baseRunDetail), {

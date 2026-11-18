@@ -12,9 +12,6 @@ import onGithub from "../workflows/release.github.md" with { type: "text" };
 import renovateOnGitlab from "../workflows/renovate.gitlab.md" with { type: "text" };
 import renovateOnGithub from "../workflows/renovate.github.md" with { type: "text" };
 
-// release keeps a content file per forge, as renovate does (ADR-0050 D1): the procedure
-// differs, so each says it its forge's way.
-
 const content = { gitlab: contentOf(onGitlab), github: contentOf(onGithub) };
 const flat = (text: string) => Str.trim(pipe(text, Str.replace(/\s+/g, " ")));
 
@@ -33,7 +30,6 @@ test("both forges' release content has the steps the module asks for, and every 
       "production",
       "share",
     ]);
-  // A template naming anything ReleaseInput does not give is refused as it is made.
   expect(Rec.keys(RELEASE_ON.github)).toEqual(Rec.keys(RELEASE_ON.gitlab));
 });
 
@@ -185,7 +181,6 @@ test("production names its jobs with their URLs, then by name, then by count, wh
 });
 
 test("checks a release recorded before it knew of conflicts decode on replay as not conflicting", () => {
-  // As 0.109.2 journaled run-31754f6b.implement.release's answer-2.checks.
   const recorded = { head: "8cc52cf15f461725e8d0b8e7da3a1204c5082e7d", failed: [] };
   const decode = (value: typeof Checked.Encoded) =>
     Effect.runSync(Schema.decodeEffect(Checked)(value));

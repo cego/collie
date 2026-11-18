@@ -158,11 +158,9 @@ test("a check left to CI waits on its job until its pass on this commit is recor
   const nuxi = (verifications: ReadonlyArray<Verification>, final = FINAL) =>
     checkProof({ verifications, final, approved: [NUXI] }, "nuxi");
   expect(nuxi([]).state).toBe("waiting");
-  // A local run of its command is no proof of it.
   expect(nuxi([jobPass({ pass: "gate", job: undefined })]).state).toBe("waiting");
   const earlier = { head_sha: "abc000", fingerprint: "tree-0" };
   expect(nuxi([jobPass({ start: earlier, end: earlier })]).state).toBe("waiting");
-  // A job ran on its commit, so another commit of the same bytes still waits on its own.
   const sameBytes = { head_sha: "abc000", fingerprint: FINAL.fingerprint };
   const onAnotherCommit = jobPass({ start: sameBytes, end: sameBytes });
   expect(nuxi([onAnotherCommit]).state).toBe("waiting");
@@ -223,7 +221,6 @@ test("no gap decider counts a check left to CI's missing local pass", () => {
     { verifications: [], final: FINAL, commands: [NUXI_COMMAND] },
   );
   expect(settled.ok).toBe(true);
-  // A Run whose only Check is left to CI still names one.
   expect(evidenceGaps("unspecified", collected([], { approved: [NUXI] }))).toEqual([]);
 });
 

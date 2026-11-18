@@ -45,7 +45,6 @@ const cli = Effect.fn("test.cli")(function* (
   const fs = yield* FileSystem.FileSystem;
   const suite = yield* suiteEnv;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-cli-" });
-  // Before the directory goes, or a host the command started can write it back.
   yield* Effect.addFinalizer(() => Effect.ignore(stopHost(join(dir, "state"))));
   yield* fs.makeDirectory(join(dir, "config"), { recursive: true });
   yield* fs.writeFileString(join(dir, ".bunfig.toml"), testBunfig);
@@ -80,7 +79,6 @@ const decodeRemembered = flow(
   Result.getOrThrow,
 );
 
-/** `workflow show` for a module: what a caller may give it, and what it gives back. */
 const ShownModule = Schema.fromJsonString(
   Schema.Struct({
     data: Schema.Struct({
@@ -99,7 +97,6 @@ const ShownModule = Schema.fromJsonString(
   }),
 );
 
-/** `workflow list`, just far enough to read each workflow's inputs back. */
 const WorkflowRows = Schema.fromJsonString(
   Schema.Struct({
     data: Schema.Struct({
@@ -155,7 +152,6 @@ test("invalid input is one envelope on stdout, its reason on stderr, and exit 2"
     Effect.gen(function* () {
       const missing = yield* cli(["--json", "workflow", "show"]);
 
-      // No usage text: under --json stdout carries the envelope and nothing else.
       expect(yield* parseEnvelope(missing.stdout)).toEqual({
         ok: false,
         error: {
@@ -166,7 +162,6 @@ test("invalid input is one envelope on stdout, its reason on stderr, and exit 2"
       });
       expect(missing.stdout).not.toContain("USAGE");
       expect(missing.exit).toBe(2);
-      // The diagnostic is still there for a human, on the stream that cannot corrupt it.
       expect(missing.stderr).toContain("Missing required argument");
 
       const unknownFlag = yield* cli(["--json", "workflow", "list", "--nope"]);
@@ -176,7 +171,6 @@ test("invalid input is one envelope on stdout, its reason on stderr, and exit 2"
       });
       expect(unknownFlag.exit).toBe(2);
 
-      // Asking for help is nobody's failure, and the release gate runs it.
       const help = yield* cli(["--help"]);
       expect(help.exit).toBe(0);
       expect(help.stdout).toContain("USAGE");
@@ -242,8 +236,6 @@ test("a workflow is forked by importing it, so fork takes no Markdown merge flag
 test("a command group named with no subcommand is invalid input, not success", () =>
   runEffect(
     Effect.gen(function* () {
-      // Effect's CLI raises the same ShowHelp it raises for --help, carrying no parse
-      // errors, so what tells them apart is whether help was actually asked for.
       for (const argv of [["--json", "run"], ["--json", "workflow"], ["--json"]]) {
         const stopped = yield* cli(argv);
         expect(yield* parseEnvelope(stopped.stdout)).toMatchObject({
@@ -251,8 +243,6 @@ test("a command group named with no subcommand is invalid input, not success", (
           error: { code: "invalid_input" },
         });
         expect(stopped.exit).toBe(2);
-        // The envelope is the whole of stdout: no help document, and no blank line
-        // ahead of it for a consumer reading a line at a time.
         expect(pipe_(stopped.stdout, Str.startsWith("{"))).toBe(true);
         expect(Str.split(Str.trimEnd(stopped.stdout), "\n")).toHaveLength(1);
       }
@@ -270,8 +260,6 @@ test("discovery ignores a workspace id Herdr 1 left in the environment", () =>
       const personas = yield* cli(["--json", "persona", "list"], stale);
       expect(yield* parseEnvelope(personas.stdout)).toMatchObject({ ok: true });
 
-      // A workspace the caller named is still an error: the spec reserves
-      // workspace_not_found for exactly that.
       const named = yield* cli(["--json", "--workspace", "gone", "workflow", "list"], stale);
       expect(yield* parseEnvelope(named.stdout)).toMatchObject({
         ok: false,
@@ -329,7 +317,6 @@ test(
   60_000,
 );
 
-/** A Projects root holding two checkouts, and a directory that is none of them. */
 const projectsTree = Effect.fn("test.projectsTree")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-projects-" });
@@ -398,7 +385,6 @@ test(
         expect(Arr.map(missing, (one) => one.name)).toEqual(["plan", "proves"]);
         for (const one of missing) expect(one.meaning).not.toBe("");
 
-        // An internal Input is the starting workflow's to set: a release's merge_only and together.
         const release = yield* cli(["--json", "run", "start", "release", "--input", "mr=!1"]);
         const releaseMissing = (yield* parseEnvelope(release.stdout)).error?.details["inputs"];
         expect(releaseMissing).toEqual([expect.objectContaining({ name: "ship" })]);
@@ -522,7 +508,6 @@ test(
   60_000,
 );
 
-/** Every `collie run start` a reader can paste as it is written: no placeholder, no continuation. */
 const documentedStarts = Effect.fn("test.documentedStarts")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const lines: string[] = [];
@@ -538,7 +523,6 @@ const documentedStarts = Effect.fn("test.documentedStarts")(function* () {
   return lines;
 });
 
-/** A command line's words, with a double-quoted value kept whole. */
 const words = (line: string) =>
   Arr.map([...pipe_(line, Str.matchAll(/(?:[^\s"]+|"[^"]*")+/g))], ([word]) =>
     pipe_(word, Str.replaceAll('"', "")),
@@ -603,9 +587,6 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        // An agent driving Collie cannot pass an Input nothing names, and `branch` is
-        // the one that decides which checkout the run gets. A module never declares it —
-        // declaring it is refused — so it is published as the host's, with what it means.
         const implement = yield* cli(["--json", "workflow", "show", "implement"]);
         const described = (yield* Schema.decodeEffect(ShownModule)(implement.stdout).pipe(
           Effect.orDie,
@@ -626,12 +607,10 @@ test(
           "effort",
         ]);
 
-        // And for a human, the order `branch` is resolved in, which is the whole of it.
         const human = yield* cli(["workflow", "show", "implement"]);
         expect(human.stdout).toContain("branch:");
         expect(human.stdout).toContain("--input branch=");
 
-        // `branch` is the host's, not a module's: it is never among what a module declares.
         const listed = yield* cli(["--json", "workflow", "list"]);
         const workflows = (yield* Schema.decodeEffect(WorkflowRows)(listed.stdout).pipe(
           Effect.orDie,
@@ -649,7 +628,6 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        // The project layer, so nothing outside this scratch directory is written.
         const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-" });
         const scratch = { COLLIE_CWD: cwd };
         const saved = join(cwd, ".collie", "workflows");
@@ -663,22 +641,18 @@ test(
           ok: true,
           data: { path: join(saved, "tally.workflow.ts"), toolchain: null },
         });
-        // The setup to typecheck it is beside it, provisioned with the embedded Bun.
         for (const name of ["package.json", "tsconfig.json", "collie.d.ts"]) {
           expect(yield* fs.exists(join(saved, name))).toBe(true);
         }
 
-        // Saving it is the whole of it: no registry to edit, no rebuild, no restart.
         const listed = yield* cli(["workflow", "list"], scratch);
         expect(listed.stdout).toContain("tally\tproject");
 
-        // And it compiles against the declarations it was written against.
         const checked = yield* cli(["workflow", "check", "tally"], scratch);
         expect(checked.exit).toBe(0);
         expect(checked.stdout).toContain("tally\tproject\tok");
         expect(checked.stdout).not.toContain("not typechecked");
 
-        // Never over a file that is already there — it is the one they already edited.
         const before = yield* fs.readFileString(join(saved, "tally.workflow.ts"));
         const again = yield* cli(
           ["--json", "workflow", "create", "tally", "--layer", "project"],
@@ -711,22 +685,18 @@ test(
         expect(forked.exit).toBe(0);
         const path = join(cwd, ".collie", "workflows", "ours.workflow.ts");
         expect(yield* parseEnvelope(forked.stdout)).toMatchObject({ ok: true, data: { path } });
-        // Ordinary composition: it imports the original and spreads it under its own id.
         const text = yield* fs.readFileString(path);
         expect(text).toContain("workflows/implement.workflow.ts");
         expect(text).toContain("...original");
         expect(text).toContain('id: "ours"');
-        // Its title and description are the original's too, so they follow an upgrade.
         expect(text).not.toContain("title:");
 
-        // Both are runnable, each under its own id, and the fork takes what it inherited.
         const shown = yield* cli(["--json", "workflow", "show", "ours"], scratch);
         const described = (yield* Schema.decodeEffect(ShownModule)(shown.stdout).pipe(Effect.orDie))
           .data.workflow;
         expect(described.layer).toBe("project");
         expect(Arr.map(described.inputs, (one) => one.name)).toEqual(["plan", "recovery", "then"]);
 
-        // There is nothing to merge in a module, so the flags that merged steps say so.
         const merged = yield* cli(
           [
             "--json",
@@ -760,7 +730,6 @@ test("upgrade is a command of its own, and says what it would do", () =>
       const help = yield* cli(["upgrade", "--help"]);
       expect(help.exit).toBe(0);
       expect(help.stdout).toContain("Update this installation");
-      // Discoverable from the root help, like every other command.
       const root = yield* cli(["--help"]);
       expect(root.stdout).toContain("upgrade");
     }),
@@ -770,7 +739,6 @@ test("the version the CLI reports is the one package.json declares", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      // The installer and runner must agree about which release to fetch.
       const manifest = yield* fs.readFileString(join(root, "package.json"));
       const declared = yield* Schema.decodeEffect(
         Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
@@ -802,7 +770,6 @@ test(
         const shown = yield* cli(["--json", "run", "intent", "defaults", "show"], shared);
         expect(shown.stdout).toContain("no new dependencies");
 
-        // A grant nobody named is not a grant: the file is refused, not silently ignored.
         const bogus = yield* cli(
           ["--json", "run", "intent", "defaults", "set-authority", "invented=true"],
           shared,
@@ -853,8 +820,6 @@ test(
   () =>
     hosted("collie-metrics-", ({ world }) =>
       Effect.gen(function* () {
-        // One state directory the Run and the command both see: `cli` makes its own per
-        // call, and a Run written into one of those would not be there for the next.
         const env = { COLLIE_STATE_DIR: world.state };
         const run = yield* settledRun(world, "hello", { outcome: "bug" });
 
@@ -862,14 +827,11 @@ test(
         expect(empty.exit).toBe(0);
         const bare = yield* parseEnvelope(empty.stdout);
         expect(bare.ok).toBe(true);
-        // SAFETY: the envelope decoded `ok: true` above, and `run metrics` puts exactly
-        // these fields in `data` — asserted immediately below, so a shape that changed
-        // fails here rather than passing silently.
+        // WARNING: the envelope decoded `ok: true` above, and `run metrics` puts exactly these fields in `data` — asserted immediately below, so a shape that changed fails here rather than passing silently.
         const data = bare.data as {
           metrics: { timeToFirstEvidence: number | null };
           outcome: string;
         };
-        // Null rather than zero: "nothing yet" and "immediately" are different facts.
         expect(data.metrics.timeToFirstEvidence).toBeNull();
         expect(data.outcome).toBe("bug");
 
@@ -898,7 +860,6 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const env = { COLLIE_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
-        // A checkout of its own, as a worktree is, and gone once the Run has settled.
         const worktree = join(world.home, "worktree");
         yield* fs.makeDirectory(worktree, { recursive: true });
         yield* exec(["git", "init", "-q"], { cwd: worktree });
@@ -924,7 +885,6 @@ test(
           { name: "unit", executable: "true", argv: [], cwd: "worktree" },
         ]);
 
-        // The checkout it was started for still names the repository.
         yield* fs.remove(worktree, { recursive: true });
         const again = yield* cli(remember, env);
         expect(again.exit).not.toBe(0);
@@ -949,13 +909,11 @@ test(
         expect(all.exit).toBe(0);
         const report = yield* parseEnvelope(all.stdout);
         expect(report.ok).toBe(true);
-        // SAFETY: the envelope decoded `ok: true` above, and `run report`'s `data` is the
-        // Report — these two fields are asserted immediately below.
+        // WARNING: the envelope decoded `ok: true` above, and `run report`'s `data` is the Report — these two fields are asserted immediately below.
         const data = report.data as { total: number; workflows: Array<{ total: number }> };
         expect(data.total).toBe(1);
         expect(data.workflows[0]!.total).toBe(1);
 
-        // The measures, from what the Run recorded: a context sample, and nothing else.
         const ran = yield* settledRun(world, "hello");
         yield* appendMetric(evidenceDir(world.state, ran.id), {
           at: "2026-09-30T10:00:00.000Z",
@@ -965,7 +923,7 @@ test(
           note: "",
         }).pipe(Effect.provide(recordsAt(world.state)));
         const measured = yield* cli(["--json", "run", "report"], env);
-        // SAFETY: `run report`'s `data` is the Report; only its peak context is read.
+        // WARNING: `run report`'s `data` is the Report; only its peak context is read.
         const measures = (yield* parseEnvelope(measured.stdout)).data as {
           measures: {
             peakContext: Array<{ runId: string; tokens: number | null; agent: string | null }>;
@@ -976,7 +934,6 @@ test(
           tokens: 42_000,
           agent: "hello-agent",
         });
-        // Chat reads the same report, word for word.
         const text = yield* cli(["run", "report"], env);
         expect(text.stdout).toContain("peak context tokens: 1 of 2 Runs recorded");
         const asked = yield* callTool(readEnv({ ...process.env, ...env }), "collie_report", {});
@@ -984,7 +941,7 @@ test(
 
         const later = yield* cli(["--json", "run", "report", "--since", "2999-01-01"], env);
         expect(later.exit).toBe(0);
-        // SAFETY: as above; only `total` is read.
+        // WARNING: as above; only `total` is read.
         expect(((yield* parseEnvelope(later.stdout)).data as { total: number }).total).toBe(0);
 
         const bad = yield* cli(["--json", "run", "report", "--since", "nope"], env);
@@ -1008,7 +965,6 @@ test(
         yield* fs.writeFileString(join(claudeDir, ".credentials.json"), login);
         const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-state-" });
         yield* Effect.addFinalizer(() => Effect.ignore(stopHost(state)));
-        // No PATH: this Machine has no Codex, and nothing here may reach a real endpoint.
         const env = { CLAUDE_CONFIG_DIR: claudeDir, COLLIE_STATE_DIR: state };
 
         const read = yield* cli(["--json", "usage"], env);
@@ -1046,7 +1002,6 @@ test(
           ["usage", "cli"],
         ]);
 
-        // Past the trail's length, reads at once each record and the trim keeps the newest.
         const door = yield* frontDoor(socketOf(state));
         yield* Effect.forEach(Array.from({ length: 230 }), () => door.usage(), {
           concurrency: "unbounded",

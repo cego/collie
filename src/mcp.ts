@@ -1,12 +1,3 @@
-// Collie as a local MCP server, which is how Claude Code reaches the tools in
-// `tools.ts`.
-//
-// A transport adapter and nothing more. Effect serves the MCP protocol over this
-// process's stdin and stdout, started by the chat launch with `--mcp-config`, and it
-// exposes exactly what the `CollieTools` Toolkit does. There is no port, no daemon and no second
-// orchestration service: the server lives as long as the chat that started it, and every
-// answer it gives is a read through the shared operations.
-
 import type { PlatformServices } from "./platform";
 import {
   Cause,
@@ -32,10 +23,6 @@ import { shell } from "./mr";
 import { isJsonObject, type JsonObject } from "./schema";
 import { callTool, TOOLS } from "./tools";
 
-/**
- * Serve until stdin closes. Nothing is written to stdout but the protocol — a stray log
- * line there is a framing error that reads, to the harness, as Collie having no tools.
- */
 export const serveMcp = Effect.fn("Mcp.serve")(
   function* () {
     const env = yield* currentEnv;
@@ -47,16 +34,12 @@ export const serveMcp = Effect.fn("Mcp.serve")(
       rebuilt: (name, input) =>
         rebuiltAnswer(process.execPath, env.cwd, name, input).pipe(Effect.provideContext(services)),
     });
-    // Not `McpServer.toolkit`, which answers in JSON and refuses bad input as a protocol
-    // error: chat is answered in sentences, a refusal included.
     for (const tool of TOOLS) {
       const descriptor = yield* Schema.decodeUnknownEffect(McpSchema.Tool)({
         name: tool.name,
         title: tool.title,
         description: tool.description,
         inputSchema: tool.input,
-        // Clients use this to decide what they may run without asking. A tool that
-        // settles news or carries out an instruction must not claim to be read-only.
         annotations: { readOnlyHint: tool.readOnly },
       });
       yield* server.addTool({
@@ -80,8 +63,6 @@ export const serveMcp = Effect.fn("Mcp.serve")(
     }),
   ),
   Effect.provideService(Logger.LogToStderr, true),
-  // Native stdio interrupts its owner at EOF. End this child cleanly without
-  // swallowing interruption of the caller or turning normal EOF into exit 130.
   Effect.forkScoped,
   Effect.flatMap(Fiber.await),
   Effect.flatMap((exit) =>
@@ -90,12 +71,6 @@ export const serveMcp = Effect.fn("Mcp.serve")(
   Effect.scoped,
 );
 
-/**
- * How a tool call is answered: here, until `collie upgrade` renames a new binary over this
- * one, and then by that binary, so a chat keeps its server across an upgrade and is still
- * answered by the build the host runs. Tool names and schemas stay this build's until
- * the chat reconnects.
- */
 export const answering = Effect.fn("Mcp.answering")(function* <R>(opts: {
   readonly binary: string;
   readonly every?: Duration.Input;
@@ -111,7 +86,6 @@ export const answering = Effect.fn("Mcp.answering")(function* <R>(opts: {
       Effect.andThen(Ref.set(replaced, true)),
     ),
   );
-  // An answer waits for the binary to be read, or one renamed over at once is never seen replaced.
   return (name: string, input: JsonObject) =>
     Deferred.await(watching).pipe(
       Effect.andThen(Ref.get(replaced)),
@@ -133,7 +107,6 @@ const encodeInput = flow(
   Result.getOrThrow,
 );
 
-/** One tool call made by the binary now on disk, through the `tools call` a human can run. */
 export const rebuiltAnswer = (binary: string, cwd: string, name: string, input: JsonObject) =>
   shell(binary, ["--json", "tools", "call", name, "--input", encodeInput(input)], cwd).pipe(
     Effect.flatMap((ran) => Schema.decodeEffect(Answered)(ran.stdout)),

@@ -1,6 +1,3 @@
-// The Rune spike's bundle (desktop/scripts/bundle.ts): the main process compiled so the
-// bundle needs no Bun, each OS's layout and update files, and how macOS signs it.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -33,7 +30,6 @@ describe.skipIf(process.platform !== "linux")("the compiled main process", () =>
           const fs = yield* FileSystem.FileSystem;
           const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-core-" });
           yield* compileCore(`${dir}/collie-core`);
-          // `collie bridge` as Desktop starts it: it never answers, so no Machine is reached.
           yield* fs.writeFileString(`${dir}/fake-bridge`, "#!/bin/sh\nexec cat >/dev/null\n");
           yield* fs.chmod(`${dir}/fake-bridge`, 0o755);
           const core = yield* Effect.acquireRelease(
@@ -77,7 +73,6 @@ describe.skipIf(process.platform !== "linux")("the compiled main process", () =>
   );
 });
 
-/** Every file under `dir`, relative to it, sorted. */
 const filesUnder = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

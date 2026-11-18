@@ -2,7 +2,6 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { CLOSED, tipAfter, type StepTip, type TipEvent, type TipNext } from "../step-tip";
 
-/** The tip after each event in turn, with the wait the last one asked for. */
 const after = (events: ReadonlyArray<TipEvent>, from: StepTip = CLOSED) => {
   const start: TipNext = { tip: from, wait: null };
   return Arr.reduce(events, start, ({ tip }, event) => tipAfter(tip, event));

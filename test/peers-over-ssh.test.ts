@@ -1,6 +1,3 @@
-// ADR-draft-a-blocked-link-rides-the-machines-ssh-connection: a resetter holds the port the
-// second advertised, and the first's fake ssh forwards to where it moved.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -24,10 +21,8 @@ const Connected = Schema.Struct({
 });
 const Started = Schema.Struct({ runId: Schema.String });
 
-/** How many times each side's `machine list` was read, each asking ssh's `-O check` once. */
 const reads = new Map<string, number>();
 
-/** How `side`'s `machine list` has the Machine `name`. */
 const listed = (side: Side, name: string) =>
   side.cli(["machine", "list"]).pipe(
     Effect.tap(() => Effect.sync(() => reads.set(side.name, (reads.get(side.name) ?? 0) + 1))),
@@ -83,16 +78,13 @@ test(
             yield* second.cli(["machine", "list"]);
             yield* first.lists([second]);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
-            // Pairing's connection ends, as a laptop's does when it sleeps.
             yield* first.ssh.drop;
             const [laptop] = yield* peersOf(second.world.state);
             const advertised = Number(yield* listenerPort(first, second));
             const url = `wss://127.0.0.1:${advertised}`;
 
-            // The network starts refusing the port: the listener moves, a resetter holds it.
             const moved = yield* freePort;
             const blocking = yield* Scope.make();
-            // Counted from the stop, where the dialler's backoff starts, not the restart.
             const paired = (yield* first.ssh.calls).length;
             reads.set(first.name, 0);
             yield* stopHost(second.world.state);
@@ -112,7 +104,6 @@ test(
               "no SSH connection is open; `collie machine connect second` opens one",
             );
 
-            // The dialler backs off to 8 s while it waits, having only checked.
             const checks = (from: number) =>
               since(first, from).pipe(
                 Effect.map((calls) => {
@@ -160,7 +151,6 @@ test(
             );
             expect(once).toEqual(["master mk@second"]);
 
-            // Runs go both ways through the tunnel while direct still resets.
             const started = yield* first.cli([
               "--machine",
               "second",
@@ -185,7 +175,6 @@ test(
               true,
             );
 
-            // Losing the connection loses the link, and nothing logs in.
             const before = (yield* first.ssh.calls).length;
             yield* first.ssh.drop;
             yield* until(
@@ -200,7 +189,6 @@ test(
               ),
             ).toEqual([]);
 
-            // Lifting the block brings the next connect back direct.
             yield* Scope.close(blocking, Exit.void);
             yield* stopHost(second.world.state);
             yield* second.cli(["machine", "list"]);

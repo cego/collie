@@ -14,7 +14,6 @@ export type Installation =
 
 const RELEASED: Installation = { release: true };
 
-/** Whether `root` is the Collie directory itself, however either is spelled. */
 export const atCollieDir = Effect.fn("release.atCollieDir")(function* (
   root: string,
   collieDir: string,
@@ -24,7 +23,6 @@ export const atCollieDir = Effect.fn("release.atCollieDir")(function* (
   return (yield* real(root)) === (yield* real(collieDir));
 });
 
-/** Whether `root` is the top of a git worktree; a release placed inside a kept clone is not. */
 export const isCheckout = Effect.fn("release.isCheckout")(function* (
   root: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
@@ -33,10 +31,6 @@ export const isCheckout = Effect.fn("release.isCheckout")(function* (
   return prefix.code === 0 && Str.trim(prefix.stdout) === "";
 });
 
-/**
- * Not a checkout is a release, and so is a clone at the Collie directory, which its next
- * upgrade migrates. Any other checkout is a development checkout.
- */
 export const installation = Effect.fn("release.installation")(function* (
   root: string,
   collieDir: string,
@@ -52,7 +46,6 @@ export const installation = Effect.fn("release.installation")(function* (
 
 const PackageVersion = Schema.fromJsonString(Schema.Struct({ version: Schema.String }));
 
-/** The version of the installation at `root`, or "" when no version is declared. */
 export const releaseVersion = Effect.fn("release.releaseVersion")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -65,9 +58,7 @@ export const releaseVersion = Effect.fn("release.releaseVersion")(function* (roo
   });
 });
 
-/** The release a compiled runner carries, embedded by `tools/build.ts`. */
 export const CARRIED_TREE = "/$bunfs/root/release";
-/** Each placed file's sha256, written into the release it describes. */
 export const RECORD = "placed.json";
 
 export interface Carried {
@@ -75,7 +66,6 @@ export interface Carried {
   readonly runner: string;
 }
 
-/** What this runner carries: nothing unless it is a compiled build. */
 export const carriedRelease = (
   modulePath: string = import.meta.path,
   execPath: string = process.execPath,
@@ -97,12 +87,6 @@ const filesUnder = Effect.fn("release.filesUnder")(function* (dir: string) {
   return files.sort();
 });
 
-/**
- * Writes `carried` into `<collieDir>/release` whole: beside the current one, recorded, then
- * swapped. Every file of the current release that differs from its own record is copied into
- * `kept/<when>/` first; the result names each, relative to `collieDir`, with the sha256 of each
- * file placed. Unlocked: callers go through `placeLocked`.
- */
 export const placeRelease = Effect.fn("release.place")(function* (
   carried: Carried,
   collieDir: string,

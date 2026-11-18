@@ -1,5 +1,3 @@
-// What a Desktop terminal's size changes tell herdr's controller, which resizes the agent's pane.
-
 import { expect, test } from "bun:test";
 import { settledResizes, type Timers } from "../desktop/src/shared/terminal-size";
 import { keyAction } from "../desktop/src/shared/terminal-input";

@@ -47,10 +47,7 @@ const outputWith = <Fields extends Schema.Struct.Fields>(fields: Fields) => {
   ]);
 };
 
-/** Fresh agent output must include the evidence an issue report needs. */
 export const Healed = outputWith({ ...finding, ...report });
-// Completed executions predate issue reporting. Read their durable exits as recorded;
-// only agentWork below validates new output, so this never relaxes a new healer's proof.
 const RecordedHeal = outputWith({
   ...finding,
   title: Schema.optionalKey(report.title),

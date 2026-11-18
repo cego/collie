@@ -1,8 +1,3 @@
-// The Rune spike's side of `DesktopRpcs`: frames encoded here through the real Schemas,
-// decoded and re-encoded by the Rust types, and decoded here again, come back equal. A field
-// the Rust types lack is dropped on the way, and that turns this red. Needs cargo, which the
-// `desktop-checks` CI job has.
-
 import { beforeAll, describe, expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -22,15 +17,13 @@ const flock = DesktopRpcs.requests.get("flock")!;
 const syncNow = DesktopRpcs.requests.get("syncNow")!;
 const say = DesktopRpcs.requests.get("say")!;
 const detail = DesktopRpcs.requests.get("runDetail")!;
-/** Each request of the group, typed as all of them. */
 type DesktopRpc = typeof flock;
 
-// SAFETY: the schemas of the RPCs the spike speaks need no services to encode or decode.
+// WARNING: the schemas of the RPCs the spike speaks need no services to encode or decode.
 const codec = (schema: Schema.Top) => Schema.toCodecJson(schema as Schema.Codec<unknown, unknown>);
 const encoder = (schema: Schema.Top) => Schema.encodeEffect(codec(schema));
 const decoder = (schema: Schema.Top) => Schema.decodeUnknownEffect(codec(schema));
 
-/** The frames of Desktop's channel, each RPC part still encoded. */
 const Frame = Schema.Union([
   Schema.TaggedStruct("Hello", {}),
   Schema.TaggedStruct("Request", {
@@ -49,7 +42,6 @@ const PAYLOAD = { profile: "build" };
 const SYNCED = { said: "Synced Build box", failed: false };
 const REFUSED = new ActionFailed({ reason: "no Machine is called gone", request: "q-7" });
 
-/** Hello, then each RPC asked and answered as the main process answers it. */
 const frames = Effect.gen(function* () {
   const syncNowPayload = encoder(syncNow.payloadSchema);
   const flockExit = encoder(Rpc.exitSchema(flock));
@@ -130,7 +122,6 @@ const frames = Effect.gen(function* () {
   return sent;
 });
 
-/** A frame with every part it carries decoded through its RPC's Schemas. */
 const typed = (frame: Frame, tags: ReadonlyMap<number, DesktopRpc>) =>
   Effect.gen(function* () {
     switch (frame._tag) {

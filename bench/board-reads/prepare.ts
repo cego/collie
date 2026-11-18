@@ -1,6 +1,4 @@
 /* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/global-console, no-restricted-globals -- prepares an offline benchmark's copy, never a host's live state. */
-// Gives this tree its own copy of the snapshot, opened once so a tree that imports records
-// into its database has done so before any sample.
 import { chmodSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 
 const [snapshot, views] = Bun.argv.slice(2);
@@ -26,7 +24,6 @@ mkdirSync(`${work}/bin`, { recursive: true });
 mkdirSync(`${work}/home`, { recursive: true });
 const git = Bun.which("git");
 if (git === null) process.exit(1);
-// Git that reads and never fetches, pushes or writes.
 writeFileSync(
   `${work}/bin/git`,
   `#!/bin/sh
@@ -48,7 +45,6 @@ GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 exec ${git} "$@"
 `,
 );
 chmodSync(`${work}/bin/git`, 0o755);
-// Nothing a build could reach that acts outside this copy.
 for (const tool of ["gh", "glab", "herdr", "hc", "collie", "claude", "codex", "opencode", "pi"]) {
   writeFileSync(
     `${work}/bin/${tool}`,
@@ -56,7 +52,6 @@ for (const tool of ["gh", "glab", "herdr", "hc", "collie", "claude", "codex", "o
   );
   chmodSync(`${work}/bin/${tool}`, 0o755);
 }
-// Keeping modification times: a build before Run records read when a Run worked from them.
 run(["cp", "-a", snapshot, `${work}/state`]);
 cpSync(views, `${work}/views.json`);
 run(["bun", "bench/board-reads/run.ts", "--open"]);

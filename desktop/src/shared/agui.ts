@@ -1,6 +1,3 @@
-// The Flock chat as the view hears it: AG-UI events, the ones Desktop's main process makes
-// from the Agent SDK's messages. No Bun-only import: the view bundles this.
-
 import { Schema } from "effect";
 
 const Message = { messageId: Schema.String };
@@ -60,6 +57,5 @@ export const AguiEvent = Schema.Union([
 ]);
 export type AguiEvent = typeof AguiEvent.Type;
 
-/** Whether a turn's stream has said all it will. */
 export const ends = (event: AguiEvent) =>
   event.type === "RUN_FINISHED" || event.type === "RUN_ERROR";

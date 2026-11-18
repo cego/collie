@@ -1,5 +1,3 @@
-// What `collie upgrade` does to an installation, and what it says it did.
-
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer } from "effect";
@@ -25,7 +23,6 @@ beforeEach(() =>
       yield* installBaseline(rig);
       bin = yield* FakeBin.make(`${rig.root}/bin`);
       yield* installFakeSkills(rig.root);
-      // Inference shells out; nothing here depends on what it finds.
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `echo main`);
     }),
@@ -51,7 +48,6 @@ const PREPARED = Arr.join(
   "\n",
 );
 
-/** A checkout that answers `git` and a `prepare.sh` that says what it did. */
 const fakeTools = Effect.fn("operationsTest.fakeTools")(function* (opts: {
   head: string;
   pull?: string;
@@ -66,7 +62,6 @@ const fakeTools = Effect.fn("operationsTest.fakeTools")(function* (opts: {
       *) exit 1 ;;
     esac`,
   );
-  // A marker, so a test can tell "the preparation ran" from "it was never reached".
   yield* bin.add(
     "sh",
     opts.install ??
@@ -84,15 +79,11 @@ test("upgrade pulls the checkout, then installs, and says what moved", () =>
 
       const same = yield* upgrade(env);
 
-      // Nothing moved: the same HEAD before and after is worth saying plainly rather
-      // than reporting an update that did not happen.
       expect(same).toMatchObject({
         ok: true,
         data: { checkout: true, updated: false },
       });
       expect(same.ok && same.human).toContain("already up to date at abc1234");
-      // Every step of preparing the machine, so "nothing to do" reads differently
-      // from "the runner updated but the skills step could not run".
       expect(same.ok && same.human).toMatch(/plugin-link\s+already in place/);
       expect(same.ok && same.human).toMatch(/runner\s+done/);
       expect(same.ok && same.human).toMatch(/skills\s+skipped — no npx on PATH/);
@@ -113,7 +104,6 @@ test("upgrade reports a pull it could not do rather than installing anyway", () 
   runEffect(
     Effect.gen(function* () {
       const env = { ...rig.pluginEnv(), pluginRoot: rig.projectDir };
-      // A dirty tree, a diverged branch, no upstream: all the same answer.
       yield* fakeTools({
         head: "abc1234",
         pull: `echo "would clobber local changes" >&2; exit 1`,
@@ -128,7 +118,6 @@ test("upgrade reports a pull it could not do rather than installing anyway", () 
           details: { output: "would clobber local changes" },
         },
       });
-      // And it did not go on to install over the top of whatever is there.
       const fs = yield* FileSystem.FileSystem;
       expect(yield* fs.exists(`${rig.root}/installed`)).toBe(false);
     }),
@@ -138,8 +127,6 @@ test("upgrade that moves the checkout says the range it moved through", () =>
   runEffect(
     Effect.gen(function* () {
       const env = { ...rig.pluginEnv(), pluginRoot: rig.projectDir };
-      // A HEAD that differs before and after the pull: the commit range is what tells
-      // "you are now three commits newer" from "nothing to do".
       yield* bin.add(
         "git",
         `case "$1 $2" in

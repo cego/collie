@@ -1,7 +1,3 @@
-// Which of a Run's agents a steer or a correction reaches. Pure, so the host and its tests
-// decide the same way.
-
-/** One launch, and whether the work it was given has its Output yet. */
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -14,7 +10,6 @@ export interface Candidate {
 
 const BUILDER_ROLES: ReadonlyArray<string> = ["implementer"];
 
-/** The names `--to` takes for a role, and the launch roles each covers. */
 export const ROLES = {
   builder: BUILDER_ROLES,
   reviewer: ["reviewer"],
@@ -30,10 +25,6 @@ export interface Asked {
   readonly agent?: string | undefined;
 }
 
-/**
- * The launch a message reaches. Named, it is that agent, operation or role. Otherwise it is
- * the agent whose step is active, then the builder, then whoever was launched last.
- */
 export function steerTarget<C extends Candidate>(
   launches: ReadonlyArray<C>,
   asked: Asked,

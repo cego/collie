@@ -1,7 +1,3 @@
-// Desktop sends a Run's review comments as one `deliver`, word for word, at any length:
-// the host, not Desktop, signs it as the human in Desktop and keeps one over the paste budget
-// as a file in the Run (test/finished-steer.test.ts).
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -24,16 +20,12 @@ const Calls = RpcGroup.make(
   ),
 );
 
-/**
- * `action` asked through the host's own `act` client, so its payload meets the wire's schema,
- * and what the host decodes of it with `ActionSchema`.
- */
 const sent = (action: DesktopAction, result: ActionResult, request = "send-1") =>
   Effect.gen(function* () {
     const decoded: unknown[] = [];
     const said = yield* Effect.gen(function* () {
       const desktop = yield* RpcTest.makeClient(Calls);
-      // SAFETY: Desktop's `act` and `invoke` are the only calls these actions make.
+      // WARNING: Desktop's `act` and `invoke` are the only calls these actions make.
       return yield* act({ machine, desktop: desktop as never }, request, action);
     }).pipe(
       Effect.scoped,
@@ -135,7 +127,7 @@ test("a request its host's call cannot carry is said with what failed where, und
           _tag: "Invoke",
           runId: "r-1",
           offer: "o-1",
-          // SAFETY: a value no JSON holds, as Deliver's absent step once was.
+          // WARNING: a value no JSON holds, as Deliver's absent step once was.
           input: { left: undefined as never },
         },
         applied,

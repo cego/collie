@@ -1,6 +1,3 @@
-// How this Machine dials a peer: direct, or through its SSH connection's tunnel
-// (ADR-draft-a-blocked-link-rides-the-machines-ssh-connection).
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -11,15 +8,12 @@ import type { SshConnection } from "./ssh-connection";
 
 export type Way = "direct" | "ssh";
 
-/** What each way saw, as a failure carries it. */
 type Ways = { -readonly [K in "direct" | "ssh" | "waits"]?: NonNullable<MachineUnreachable[K]> };
 
-/** How long a way may take to open before it has failed. */
 export const REACH_BOUND = "5 seconds";
-/** How long `openPeer` may take: both ways' bounds, and the SSH calls between them. */
 export const LADDER_BOUND = "15 seconds";
 
-// SAFETY: Bun's WebSocket takes these options; where DOM's declaration of the global wins, its type does not say so.
+// WARNING: Bun's WebSocket takes these options; where DOM's declaration of the global wins, its type does not say so.
 const BunWebSocket = WebSocket as new (
   url: string,
   options?:
@@ -31,18 +25,14 @@ const BunWebSocket = WebSocket as new (
       },
 ) => WebSocket;
 
-/** An open socket to a peer, and the way it went. */
 export interface Opened {
   readonly send: (data: Uint8Array) => void;
   readonly close: () => void;
-  /** What arrived, text as its UTF-8, from before anyone listened, and why it closed: its reason, or "". */
   readonly listen: (deliver: (data: Uint8Array) => void, done: (reason: string) => void) => void;
   readonly way: Way;
-  /** Why direct failed, where it went over SSH after trying direct. */
   readonly direct: string | null;
 }
 
-/** The URL's port, which the peer's listener is on at its own `127.0.0.1` too. */
 const portOf = (url: string) =>
   Number(new URL(pipe_(url, Str.replace(/^wss:/, "https:"))).port || 443);
 
@@ -57,7 +47,6 @@ const freePort = Effect.callback<number>((resume) => {
   });
 });
 
-/** A pinned socket to `url`, open within the bound, or what was seen instead. */
 const dial = (peer: Peer, url: string, words: { refused: string; silent: string }) =>
   Effect.gen(function* () {
     const ws = yield* Effect.acquireRelease(
@@ -105,12 +94,6 @@ const dial = (peer: Peer, url: string, words: { refused: string; silent: string 
     return yield* Effect.fail(Option.isNone(open) ? words.silent : words.refused);
   });
 
-/**
- * Opens `path` on `peer`: the way given, or direct, then SSH where direct failed, through
- * the connection herdr's machine of that name has, read only then. `path` is told the way,
- * so a control link can declare it. Whatever ends the socket's scope also
- * cancels its forward.
- */
 export const openPeer = (
   peer: Peer,
   path: (way: Way, direct: string | null) => string,

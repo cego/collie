@@ -1,6 +1,3 @@
-// Desktop's main process: one window on the view, every Machine's board relayed to it as
-// Effect RPC over Electrobun's message channel, and the Flock chat beside them.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { homedir, hostname, tmpdir } from "node:os";
@@ -183,28 +180,22 @@ import {
   saving,
 } from "./saved";
 import { applyAtLaunch, restartToUpdate, updatesOf } from "./updates";
-// The version Desktop keeps every Machine on: the Collie it was built from.
 import manifest from "../../../package.json";
 import { timingLine } from "../shared/record";
 
-/** A window on the view, and the channel its RPC rides. */
 const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => {
-  // The view loads while Desktop starts, so it asks before anything serves it.
   const inbox = heldUntilListened<ToMain>();
   const rpc = BrowserView.defineRPC({
     maxRequestTime: 10_000,
     handlers: {
       requests: {},
       messages: {
-        // SAFETY: only the view sends on this channel, and the view sends nothing but `ToMain`.
+        // WARNING: only the view sends on this channel, and the view sends nothing but `ToMain`.
         frame: (frame) => inbox.receive(frame as ToMain),
       },
     },
   });
-  // macOS bundles no CEF, so its windows render with the system's WebKit.
   const window = new BrowserWindow({ title, url, renderer: "cef", frame, rpc });
-  // The view holds the Bun bridge, so nothing may navigate the window off it. Set on the
-  // webview: as a window option, Linux CEF ignores it.
   window.webview.setNavigationRules(["^*", url, "about:srcdoc"]);
   const channel: Channel<ToView, ToMain> = {
     send: (frame) => window.webview.rpc?.send.frame(frame),
@@ -222,7 +213,6 @@ const Collie = (shell: ReadonlyArray<string>) =>
 
 const OPENER = process.platform === "darwin" ? "open" : "xdg-open";
 
-/** Opens a web page in the human's own browser. */
 const openUrl = (url: string) =>
   Effect.sync(() => {
     if (which(OPENER) === null) return Utils.openExternal(url);
@@ -235,10 +225,8 @@ const openUrl = (url: string) =>
     });
   });
 
-/** Slack's own app where it opens, else its web client. */
 const openSlack = Effect.gen(function* () {
   if (which(OPENER) === null) return yield* openUrl(SLACK_WEB);
-  // Never killed: still running is the app taking it.
   const child = Bun.spawn([OPENER, SLACK_APP], {
     env: childEnv(),
     cwd: CHILD_CWD,
@@ -248,24 +236,17 @@ const openSlack = Effect.gen(function* () {
   if (Option.isSome(code) && code.value !== 0) yield* openUrl(SLACK_WEB);
 });
 
-/**
- * Where Desktop keeps what is its own on this computer, the Flock chat's session among it.
- * COLLIE_DESKTOP_STATE_HOME moves only Desktop's own; what it starts keeps XDG_STATE_HOME.
- */
 const StateDir = Config.String("COLLIE_DESKTOP_STATE_HOME").pipe(
   Config.orElse(() => Config.String("XDG_STATE_HOME")),
   Config.orElse(() => Config.String("HOME").pipe(Config.map((home) => `${home}/.local/state`))),
 );
 
 const main = Effect.gen(function* () {
-  // Before anything is spawned, so every child starts with the shell's PATH and variables.
   const tookLoginEnv = yield* takeLoginEnv;
   const updater = yield* electrobunUpdater(Updater);
   yield* applyAtLaunch(updater).pipe(
     Effect.catch((reason) => Effect.logWarning(`Desktop update not installed: ${reason}`)),
   );
-  // Opened once an update readied before the last quit has had its chance to install, so
-  // installing one never shows a window that closes again.
   const board = windowOn(VIEW, "Collie", { width: 1200, height: 800, x: 120, y: 80 });
   const updates = yield* updatesOf(updater, manifest.version);
   const local = hostname();
@@ -274,7 +255,6 @@ const main = Effect.gen(function* () {
   const releases = yield* Config.String("COLLIE_DESKTOP_RELEASES").pipe(
     Config.withDefault(RELEASES),
   );
-  // A Desktop from a checkout, as its tests run, may trust another key; a release never.
   const key =
     (yield* updater.channel) === "stable"
       ? RELEASE_PUBLIC_KEY
@@ -282,7 +262,6 @@ const main = Effect.gen(function* () {
           Config.withDefault(RELEASE_PUBLIC_KEY),
         );
   const own = (yield* Path.Path).join(yield* StateDir, "collie-desktop");
-  // Started on this bundle, so every other staged update has been applied or passed over.
   yield* pruneDesktop({
     root: Utils.paths.userData,
     state: own,
@@ -293,7 +272,6 @@ const main = Effect.gen(function* () {
   const doors = new DoorMap<Doors>();
   const readDoors = new Map<string, Doors>();
   const records = yield* recordKeeper(doors);
-  /** A harness's list from this computer's Machine; its own reader's where it has none or an older one. */
   const fromMachine = (harness: string, own: Effect.Effect<ReadonlyArray<ListedModel>, string>) =>
     Effect.suspend(() => {
       const local = Option.getOrUndefined(
@@ -316,7 +294,6 @@ const main = Effect.gen(function* () {
       Effect.suspend(() => readPiModels(SubscriptionRef.getUnsafe(flockSettings), own)),
     ),
   });
-  // Before Desktop's own settings are held, so a save does not write back what was carried.
   const loadedFlock = yield* carryIntoFlock(own, yield* nowIso).pipe(Effect.result);
   const flockReadable = Result.isSuccess(loadedFlock);
   const unreadableFlock = new ActionFailed({
@@ -350,7 +327,6 @@ const main = Effect.gen(function* () {
   };
   // oxlint-disable-next-line no-restricted-globals -- When this process started, as the view's marks count time.
   yield* timed({ name: "launch", at: performance.timeOrigin, card: "" });
-  // The GitLab host an earlier Desktop kept as its own becomes the Flock's.
   const ownGitlabHost = settings().gitlabHost;
   const seeded =
     ownGitlabHost === undefined || saved.settings.gitlab_host !== undefined
@@ -373,7 +349,6 @@ const main = Effect.gen(function* () {
     `${homedir()}/.config`;
   const keyring = credentialsFile(`${config}/collie-desktop`);
   const blank: Credentials = { gitlab: null, helle: false, ...gitlabPages() };
-  // Its expiry is GitLab's to say, so a token renewed elsewhere is not warned of.
   const held = Effect.gen(function* () {
     const token = yield* keyring.lookup("gitlab-token");
     const expires =
@@ -392,8 +367,6 @@ const main = Effect.gen(function* () {
     return returned;
   });
   const credentials = yield* SubscriptionRef.make(blank);
-  // Read beside the start rather than before it: frames the view sends before Desktop
-  // serves its RPCs are lost. A save made meanwhile is newer than it.
   yield* held.pipe(
     Effect.flatMap((read) =>
       SubscriptionRef.update(credentials, (now) => (now === blank ? read : now)),
@@ -401,9 +374,7 @@ const main = Effect.gen(function* () {
     Effect.ignore({ log: "Warn" }),
     Effect.forkScoped,
   );
-  // An older Desktop that was killed left its own masters behind.
   yield* sweepSshControls(tmpdir(), childEnv()).pipe(Effect.ignore);
-  // The Machines this computer's core lists.
   const listed = yield* rosterOf(collie).pipe(
     Effect.map((said) => said.roster),
     Effect.result,
@@ -427,7 +398,6 @@ const main = Effect.gen(function* () {
       return returned;
     },
   });
-  // Every route by herdr profile, each herdr machine's with the scope it lives in.
   const routes = new Map<string, { route: ShellRoute; scope?: Scope.Closeable }>();
   routes.set("local", { route: localRoute(collie, local, shell) });
   const open = (machine: HerdrMachine) =>
@@ -467,7 +437,6 @@ const main = Effect.gen(function* () {
   );
   const changes = yield* PubSub.unbounded<RouteChange>();
   const news = yield* PubSub.unbounded<FlockItem>();
-  /** Each route's paired link as Local last listed it, told again to a view that subscribes. */
   const links = new Map<string, MachineLinked>();
   const asListed = flow(Schema.encodeResult(Schema.fromJsonString(PeerView)), Result.getOrThrow);
   yield* pairedMachines(collie).pipe(
@@ -492,7 +461,6 @@ const main = Effect.gen(function* () {
     Effect.forkScoped,
   );
   const flockValue = (key: string) => SubscriptionRef.getUnsafe(flockSettings).settings[key]?.value;
-  /** Keeps an edit made here, then gives it to every connected Machine. */
   const editFlockSettings = (
     changes: ReadonlyArray<{ readonly key: string; readonly value: string }>,
   ) =>
@@ -523,10 +491,8 @@ const main = Effect.gen(function* () {
   const onboardings = `${Utils.paths.userData}/onboarding`;
   const runners = `${Utils.paths.userData}/runners`;
   const scope = yield* Effect.scope;
-  /** How the board's window is drawn, which Settings says. */
   const drawn = yield* SubscriptionRef.make<Drawn | null>(null);
   const zoomAgain = new Set<Effect.Effect<void>>();
-  /** Keeps `window` at its monitor's own scale until it closes, telling `told` how. */
   const zoomed = (
     window: BrowserWindow,
     title: string,
@@ -548,7 +514,6 @@ const main = Effect.gen(function* () {
     });
   yield* zoomed(board.window, "Collie", (now) => SubscriptionRef.set(drawn, now));
   const uuid = (yield* SecureRandom.SecureRandom).uuidV4();
-  /** Each route's latest settings and definitions sync, told again to a view that subscribes. */
   const synced = new Map<string, MachineSynced>();
   const settingsOf = (door: Doors) => ({
     name: door.machine.name,
@@ -559,8 +524,6 @@ const main = Effect.gen(function* () {
     },
     machine: door.machine,
   });
-  // A Machine out of reach, or on a collie without the operation until it is upgraded, is
-  // synced when it next connects.
   const toldSynced =
     (part: MachineSynced["part"]) =>
     ({ machine }: { readonly machine: KnownMachine }, failed: string | null) =>
@@ -620,7 +583,6 @@ const main = Effect.gen(function* () {
       ),
   });
 
-  // The job onboarding each route, and its fiber, while one runs; and the question each job waits on.
   const onboarding = new Map<string, { job: string; fiber?: Fiber.Fiber<unknown, unknown> }>();
   const tell = (job: string, machine: KnownMachine) => (run: OnboardRun) =>
     PubSub.publish(news, { _tag: "Onboarding", job, machine, run }).pipe(Effect.asVoid);
@@ -640,12 +602,10 @@ const main = Effect.gen(function* () {
     Effect.sync(() => {
       if (onboarding.get(profile)?.job === job) onboarding.delete(profile);
     });
-  /** Records the fiber, unless `job` has already ended. */
   const recorded = (job: string, profile: string) => (fiber: Fiber.Fiber<unknown, unknown>) =>
     Effect.sync(() => {
       if (onboarding.get(profile)?.job === job) onboarding.set(profile, { job, fiber });
     });
-  /** The run, with core's adding of the Machine once onboarding placed the `hc` it needs there. */
   const addedToCore = (job: string, machine: KnownMachine, run: OnboardRun, target: string) =>
     Effect.gen(function* () {
       const title = `Added to core as ${machine.name}`;
@@ -666,10 +626,6 @@ const main = Effect.gen(function* () {
       yield* tell(job, machine)(after);
       return after;
     });
-  /**
-   * Onboards through `route` under `job`, then keeps how it ended and has it tried at once.
-   * With `adding`, the ssh target of a Machine new to core, core adds it after.
-   */
   const onboardAs = (
     job: string,
     route: ShellRoute,
@@ -681,7 +637,6 @@ const main = Effect.gen(function* () {
     const { machine } = route;
     onboarding.set(machine.profile, { job });
     return Effect.gen(function* () {
-      // Without its credentials file, a Machine is onboarded as far as it goes with none.
       const secrets = yield* secretsFor(keyring).pipe(Effect.orElseSucceed(() => ""));
       const handed = yield* given.held;
       const before = Option.getOrUndefined(
@@ -710,7 +665,6 @@ const main = Effect.gen(function* () {
         adding === undefined ? onboarded : yield* addedToCore(job, machine, onboarded, adding);
       yield* offer.onboarded(run);
       if (run.ready === true && secrets !== "") yield* given.handed(machine, handed, run.steps);
-      // Kept as skipped where the run ended before it, so the next run skips it too.
       const unreached = Arr.map(
         Arr.filter(skip, (step) => !Arr.some(run.steps, (one) => one.step === step)),
         (step) => {
@@ -722,7 +676,6 @@ const main = Effect.gen(function* () {
     }).pipe(
       Effect.tap((run) => saveOnboarding(onboardings, { _tag: "Onboarding", job, machine, run })),
       Effect.tap(() => PubSub.publish(changes, { _tag: "Wake", profile: machine.profile })),
-      // Forked, as a Machine out of reach would hold the onboarding open until it is back.
       Effect.tap(() => doctored(route).pipe(Effect.forkIn(scope))),
       Effect.ensuring(ended(job, machine.profile)),
       Effect.provide(BunServices.layer),
@@ -730,10 +683,6 @@ const main = Effect.gen(function* () {
       Effect.tap(recorded(job, machine.profile)),
     );
   };
-  /**
-   * Opens the Machine's SSH connection, onboards it, then has core add it with a `via`
-   * riding that connection, so its one login is the only one.
-   */
   const addToCoreAs = (job: string, target: string, label: string) =>
     Effect.gen(function* () {
       const route = yield* open({ id: label, label, target, session: "default", enabled: true });
@@ -764,7 +713,6 @@ const main = Effect.gen(function* () {
   });
   yield* slackUser.keepSignedIn.pipe(Effect.forkIn(scope));
   const codes = new Map<string, Queue.Queue<string>>();
-  /** Logs Claude Code in through `route`, then onboards it again under the same job. */
   const loginAs = (job: string, route: ShellRoute) =>
     Effect.gen(function* () {
       const typed = yield* Queue.unbounded<string>();
@@ -779,7 +727,6 @@ const main = Effect.gen(function* () {
       yield* Fiber.join(yield* onboardAs(job, route, run));
     });
 
-  /** Desktop's own settings, one change at a time, as Settings and the Flock chat make them. */
   const saveSettings = (changed: DesktopSettingsChange) =>
     desktop
       .save(changed)
@@ -791,9 +738,7 @@ const main = Effect.gen(function* () {
         ),
       );
 
-  /** What this session placed on each Machine for a pane: path there, and when, by sha256. */
   const placed = new Map<string, Map<string, { readonly path: string; readonly at: number }>>();
-  /** Files named by path, each copied in or refused in words. */
   const stagedFrom = (paths: ReadonlyArray<string>) =>
     Effect.forEach(paths, (path) =>
       stagePath(own, path).pipe(
@@ -801,15 +746,12 @@ const main = Effect.gen(function* () {
       ),
     ).pipe(Effect.provide(BunServices.layer));
 
-  // The Flock as the board was last sent it: the chat reads its Machines and boards from it.
   let shown = EMPTY_FLOCK;
-  /** When Desktop began waiting on each route, by herdr profile. */
   const routedAt = new Map<string, number>();
   const holds = Effect.map(given.held, (texts) => ({
     version: manifest.version,
     credentials: Arr.filter(CREDENTIALS, (one) => texts[one] !== undefined && texts[one] !== ""),
   }));
-  /** Sync now: what connecting would do for the Machine on `profile`. */
   const syncMachine = (profile: string) =>
     Effect.gen(function* () {
       const route = routes.get(profile)?.route;
@@ -839,7 +781,6 @@ const main = Effect.gen(function* () {
         },
       );
     });
-  // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
   const chat = yield* openFlockChat({
     drivers: (context) =>
       loopbackTools(context).pipe(
@@ -963,7 +904,6 @@ const main = Effect.gen(function* () {
     Stream.runForEach(() => offer.directionChanged),
     Effect.forkIn(scope),
   );
-  /** The terminal open in the window, and what ends it. */
   let shownTerminal:
     | {
         readonly send: (command: TerminalCommand) => Effect.Effect<void>;
@@ -984,29 +924,23 @@ const main = Effect.gen(function* () {
       return gave("GitLab token", yield* given.giveEvery(everyRoute(), "gitlab", said));
     }).pipe(Effect.mapError((reason) => new ActionFailed({ reason })));
   const handlers = DesktopRpcs.toLayer({
-    // Every board change may have left News, so each one nudges the chat to look.
     flock: () =>
       Stream.unwrap(
         Effect.gen(function* () {
-          // Before the routes are read, so a route added meanwhile is not missed.
           const changed = yield* PubSub.subscribe(changes);
           const told = yield* PubSub.subscribe(news);
           const reachable = Arr.map([...routes.values()], ({ route }) => route);
-          // A Machine herdr no longer lists is not Desktop's to show.
           const listed = ({ machine }: { readonly machine: KnownMachine }) =>
             routes.has(machine.profile);
           const checked = new Set<string>();
           const doctorOnceLive = (item: FlockItem) => {
             if ("_tag" in item || item.message._tag !== "Snapshot") return Effect.void;
             const route = routes.get(item.machine.profile)?.route;
-            // Again on a new build, which an older one could not answer `--gitlab-host` for.
             const once = `${item.machine.profile}@${item.message.build}`;
             if (route === undefined || checked.has(once)) return Effect.void;
             checked.add(once);
             return doctored(route).pipe(Effect.forkIn(scope));
           };
-          // Each Snapshot is a Machine (re)connected, so whatever changed while apart is synced
-          // and given.
           const syncOnceLive = (item: FlockItem) => {
             if ("_tag" in item || item.message._tag !== "Snapshot") return Effect.void;
             const door = doors.get(item.machine.installation);
@@ -1071,7 +1005,6 @@ const main = Effect.gen(function* () {
           Effect.map(Clock.currentTimeMillis, (now) => {
             if ("_tag" in item && item._tag === "Routed" && !routedAt.has(item.machine.profile))
               routedAt.set(item.machine.profile, now);
-            // A lost route waits for its board again from then.
             if ("_tag" in item && item._tag === "Lost") routedAt.set(item.machine.profile, item.at);
             shown = applyItem(shown, item);
           }),
@@ -1141,8 +1074,6 @@ const main = Effect.gen(function* () {
           return yield* Effect.fail(`"${named}" is not a host name, such as gitlab.example.com`);
         if (named === gitlabHost()) return `GitLab is ${named} already`;
         if (!flockReadable) return yield* Effect.fail(unreadableFlock.reason);
-        // A token is made for one GitLab, so the old host's goes before the host changes.
-        // Without a keyring there is none to go.
         const token = yield* keyring.lookup("gitlab-token").pipe(Effect.orElseSucceed(() => null));
         if (token !== null) yield* keyring.clear("gitlab-token");
         yield* editFlock("gitlab_host", named).pipe(Effect.mapError((failed) => failed.reason));
@@ -1221,7 +1152,6 @@ const main = Effect.gen(function* () {
         );
         const done = yield* Deferred.make<void>();
         yield* PubSub.publish(changes, { _tag: "Remove", profile, done });
-        // Without a board open there is no stream to end.
         yield* Deferred.await(done).pipe(Effect.timeoutOption("5 seconds"));
         routes.delete(profile);
         ownReadings.delete(profile);
@@ -1248,7 +1178,6 @@ const main = Effect.gen(function* () {
         const at = yield* focusOn(door, yield* uuid, runId);
         if (at.core === undefined)
           return yield* new ActionFailed({ reason: `${runId} has no live agent on core` });
-        // This computer's core reaches another Machine's terminals by their qualified address.
         const attach = [
           "hc",
           "attach",
@@ -1272,7 +1201,6 @@ const main = Effect.gen(function* () {
             cols,
             rows,
           );
-          // One at a time: a newer terminal ends this one.
           if (shownTerminal !== undefined) Deferred.doneUnsafe(shownTerminal.ended, Effect.void);
           const mine = { send: opened.send, ended: Deferred.makeUnsafe<void>() };
           shownTerminal = mine;
@@ -1556,7 +1484,6 @@ const main = Effect.gen(function* () {
           refused === null ? Effect.void : Effect.fail(new ActionFailed({ reason: refused })),
         ),
       ),
-    // Annotated because it serves its own window through `servedOn`, which needs these handlers.
     popOut: () => {
       const returned: Effect.Effect<
         void,
@@ -1620,11 +1547,9 @@ const main = Effect.gen(function* () {
   return yield* Layer.launch(servedOn(board.channel));
 }).pipe(Effect.scoped, Effect.provide(platformLayer));
 
-// A Mac sends Cmd+C, Cmd+V, Cmd+Q and the rest through its menu bar, which is empty until set.
 if (process.platform === "darwin")
   Electrobun.ApplicationMenu.setApplicationMenu(applicationMenu(process.platform));
 
-// Quitting may end the process before any scope closes, and an SSH master would outlive it.
 Electrobun.events.on("before-quit", endChildren);
 process.on("exit", endChildren);
 

@@ -1,8 +1,3 @@
-// The client for herdr-core (`hc`): JSON-RPC lines on the session socket, then frames
-// after `hello {framed: true}`, as core's API.md describes. Every reply Collie reads is
-// decoded by `replies`, which `test/hc-contract.test.ts` holds to the pinned
-// `hc.openrpc.json` and `tools/hc-probe.ts` runs against the pinned `hc`.
-
 import * as Arr from "effect/Array";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Socket from "effect/socket/Socket";
@@ -49,7 +44,6 @@ export const HcMachine = Schema.Struct({
 });
 export type HcMachine = typeof HcMachine.Type;
 
-/** The decoder of each method's reply, by method. A method Collie calls has a row here. */
 export const replies = {
   hello: Schema.Struct({
     generation: Schema.Finite,
@@ -59,7 +53,6 @@ export const replies = {
   "terminal.run": HcTerminal,
   "terminal.list": Schema.Struct({
     terminals: Schema.Array(HcTerminal),
-    // Required by the schema, but hc 0.1.14 leaves it out.
     machines: opt(Schema.Array(Machine)),
   }),
   "terminal.get": HcTerminal,
@@ -88,11 +81,6 @@ export type HcReply<M extends HcMethod> = Replies[M]["Type"];
 
 const CoreConfig = Schema.Struct({ socket: opt(Schema.String) });
 
-/**
- * Where this Machine's core listens, found as core finds it: `HC_SOCKET`, else the `socket`
- * its `config.toml` names, else the session's socket under the runtime directory, else under
- * the session's state directory.
- */
 export const coreSocket = Effect.fn("Hc.coreSocket")(function* (
   raw: Readonly<Record<string, string | undefined>>,
 ) {
@@ -117,7 +105,6 @@ export const coreSocket = Effect.fn("Hc.coreSocket")(function* (
 export class HcError extends Data.TaggedError("HcError")<{
   readonly method: string;
   readonly message: string;
-  /** Core's `data.kind`, or `unreachable` and `undecodable` for what Collie found. */
   readonly kind: string;
 }> {}
 
@@ -141,7 +128,6 @@ const HeartbeatNote = Schema.Struct({
 export const HcNote = Schema.Union([EventNote, MissedNote, HeartbeatNote]);
 export type HcNote = typeof HcNote.Type;
 
-/** The terminals an `events.subscribe` stream describes, as of event `seq`. */
 export interface HcSnapshot {
   readonly seq: number;
   readonly terminals: ReadonlyMap<string, HcTerminal>;
@@ -158,7 +144,6 @@ const TurnData = Schema.Struct({ turn: Schema.Finite });
 const decodeOr = <S extends Schema.Decoder<unknown>>(schema: S, data: Schema.Json) =>
   Option.getOrUndefined(Schema.decodeOption(schema)(data));
 
-/** The snapshot after `note`, as API.md §Events says to apply it. */
 export function applyNote(snapshot: HcSnapshot, note: HcNote) {
   if (note.method === "missed") return snapshotOf(note.params);
   if (note.method === "heartbeat" || note.params.seq <= snapshot.seq) return snapshot;
@@ -233,9 +218,7 @@ export interface HcConnection {
     method: M,
     params: Schema.JsonObject,
   ) => Effect.Effect<HcReply<M>, HcError>;
-  /** Every notification, in arrival order. */
   readonly notes: Queue.Dequeue<HcNote>;
-  /** What arrives on a stream channel; DATA is credited as its connection's `credit` says. */
   readonly channel: (id: number) => Effect.Effect<Queue.Dequeue<Frame>>;
   readonly send: (
     channel: number,
@@ -266,11 +249,9 @@ export const u32 = (value: number) => {
   return bytes;
 };
 
-/** A connection to the core listening at `path`, closed with the scope. */
 export const connect = (path: string) =>
   Effect.flatMap(BunSocket.makeNet({ path }), (socket) => connectOver(socket, path));
 
-/** A connection to core over `socket`, which reaches the core at `path`, closed with the scope. */
 export const connectOver = Effect.fn("Hc.connectOver")(function* (
   socket: Socket.Socket,
   path: string,
@@ -305,7 +286,6 @@ export const connectOver = Effect.fn("Hc.connectOver")(function* (
       return Option.isSome(note) ? Queue.offer(notes, note.value).pipe(Effect.asVoid) : Effect.void;
     }
     pending.delete(message.id);
-    // Framed mode starts with the bytes after the hello reply, which are still to be parsed.
     if (framesAfter.delete(message.id) && message.result !== undefined) framed = true;
     return Deferred.succeed(reply, message).pipe(Effect.asVoid);
   };

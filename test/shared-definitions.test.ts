@@ -1,5 +1,3 @@
-// The user Layer's files as one host shares them: what it reads, and what it takes.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -46,7 +44,6 @@ test(
             yield* put(`workflows/${toolchain}`, "this Machine's own\n", 5);
           yield* put("workflows/node_modules/effect/package.json", "{}\n", 5);
           yield* put("workflows/nested/deeper.ts", "not shared\n", 5);
-          // Neither an editor's leftovers nor a link, which would reach outside the Layer.
           yield* put("workflows/.mine.workflow.ts.swp", "vim's\n", 5);
           yield* put("workflows/mine.md~", "a backup\n", 5);
           yield* put("outside.txt", "not the Layer's\n", 5);
@@ -62,7 +59,6 @@ test(
             { path: "workflows/mine.workflow.ts", base64: b64("the module\n"), at: at(1) },
           ]);
 
-          // A file seen and gone since is a removal, from when it was first missed.
           const before = yield* nowIso;
           yield* fs.remove(`${user}/workflows/helper.ts`);
           const removed = Option.getOrUndefined(
@@ -73,7 +69,6 @@ test(
           );
           expect(removed?.base64).toBeNull();
           expect(removed!.at >= before).toBe(true);
-          // And it keeps that time, rather than being removed again at every read.
           expect(
             Option.getOrUndefined(
               Arr.findFirst(
@@ -106,7 +101,6 @@ test(
           expect(yield* fs.readFileString(`${user}/workflows/mine.workflow.ts`)).toBe(
             "the module\n",
           );
-          // What a write replaced or removed is kept, by path and the time of its own edit.
           expect(yield* fs.readFileString(`${user}/replaced/${at(2)}/workflows/mine.md`)).toBe(
             "the prompt\n",
           );
@@ -118,7 +112,6 @@ test(
             "this Machine's own\n",
           );
 
-          // A path outside the two directories is refused, and nothing is written for it.
           const refused = yield* door
             .setSharedDefinitions({
               request: "share-2",
@@ -128,7 +121,6 @@ test(
           expect(refused._tag).toBe("HostRefused");
           expect(yield* fs.exists(`${user}/config.json`)).toBe(false);
 
-          // Both are recorded under the Actor that asked.
           const audited = yield* readAudit(`${world.state}/definitions`).pipe(
             Effect.provide(memoryRecords),
           );
@@ -181,7 +173,6 @@ test(
             { path: "workflows/kept.md", base64: b64("before\n"), at: at(1) },
           ]);
 
-          // An edit at a time that is not one is refused whole, before anything is written.
           const refused = yield* door
             .setSharedDefinitions({
               request: "share-bad-time",
@@ -211,7 +202,6 @@ test(
           expect(yield* fs.readFileString(`${outside}/personas/secret.md`)).toBe(
             "not the Layer's\n",
           );
-          // Nothing replaced is written while what it replaces could not be kept.
           expect(yield* fs.readDirectory(`${outside}/replaced`)).toEqual([]);
           expect(yield* fs.readFileString(`${user}/workflows/kept.md`)).toBe("before\n");
           expect(yield* fs.readFile(`${user}/workflows/copy.png`)).toEqual(binary);

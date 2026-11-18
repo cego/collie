@@ -3,22 +3,17 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Schema } from "effect";
 
-/** How long a new head must stand unchanged before it is a change. */
 export const QUIET_MS = 5 * 60_000;
-/** How long a running pipeline is waited for before the change goes ahead without it. */
 export const PIPELINE_CAP_MS = 30 * 60_000;
 
-/** Where the watching Run left off: the head it worked from, the comments it has seen, its pipeline. */
 export const WatchCursor = Schema.Struct({
   head: Schema.String,
   seen: Schema.Array(Schema.String),
-  /** The head's checks as the card reads them: `passed`, `failed`, `running`, `unknown` or `none`. */
   pipeline: Schema.String,
   headOnly: Schema.optionalKey(Schema.Boolean),
 });
 export type WatchCursor = typeof WatchCursor.Type;
 
-/** The head the watch last read, since when it has stood, and since when its pipeline has run. */
 export const Observed = Schema.Struct({
   head: Schema.String,
   since: Schema.Finite,
@@ -26,7 +21,6 @@ export const Observed = Schema.Struct({
 });
 export type Observed = typeof Observed.Type;
 
-/** One read of the merge request, as the merge watch made it. */
 export interface MrReading {
   readonly state: "open" | "merged" | "closed";
   readonly head: string;
@@ -36,19 +30,14 @@ export interface MrReading {
 
 export const WatchChange = Schema.Struct({
   head: Schema.String,
-  /** The cursor's head. */
   previous: Schema.String,
   newHead: Schema.Boolean,
-  /** Comments new since the cursor, none of them Collie's. */
   comments: Schema.Array(Schema.String),
-  /** The head's pipeline where it has ended, `passed` or `failed`. */
   pipeline: Schema.NullOr(Schema.String),
-  /** A new head that does not descend from `previous`; null where ancestry was not read. */
   forcePush: Schema.NullOr(Schema.Boolean),
 });
 export type WatchChange = typeof WatchChange.Type;
 
-/** What wakes a watching Run. */
 export const Woke = Schema.Union([
   Schema.TaggedStruct("Changed", { change: WatchChange }),
   Schema.TaggedStruct("Ended", { state: Schema.Literals(["merged", "closed"]) }),
@@ -68,7 +57,6 @@ const SIGNATURES = [
   /^Posted by Collie's Run (\S+) on /,
 ];
 
-/** A verdict, and what the watch keeps for the next judgement. */
 export interface Judgement {
   readonly verdict: Verdict;
   readonly observed: Observed;
@@ -84,13 +72,8 @@ export const collieRunOf = (body: string) => {
   return null;
 };
 
-/** Whether a comment's last line is one Collie signs its notes and replies with. */
 export const signedByCollie = (body: string) => collieRunOf(body) !== null;
 
-/**
- * The verdict on `reading` against `cursor`.
- * `descends` says whether a new head descends from the cursor's; left out, it was not read.
- */
 export function judge(options: {
   readonly cursor: WatchCursor;
   readonly observed: Observed | null;

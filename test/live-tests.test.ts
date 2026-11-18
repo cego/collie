@@ -1,6 +1,3 @@
-// A test against an installed harness runs only through `bun run test:live`, so a file of
-// them the script does not name would never run anywhere.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";

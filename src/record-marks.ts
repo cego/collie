@@ -1,5 +1,3 @@
-// Benchmark marks from the host, bridge and Desktop, off unless COLLIE_RECORD_MARKS names a file.
-
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as Str from "effect/String";
 import { Clock, Config, Effect, FileSystem, Option, Stream } from "effect";
@@ -11,7 +9,6 @@ export type RecordMarkAt =
   | "desktop:serve"
   | "board:built";
 
-/** A line per mark, with a Run id or board-build milliseconds, or null when marking is off. */
 export const recordMarks = Effect.gen(function* () {
   const file = yield* Config.option(Config.String("COLLIE_RECORD_MARKS")).pipe(
     Effect.orElseSucceed(() => Option.none<string>()),
@@ -27,7 +24,6 @@ export const recordMarks = Effect.gen(function* () {
     );
 }).pipe(Effect.provide(BunFileSystem.layer));
 
-/** Marks `at` when `frames` gives its first value. */
 export const markFirst =
   (at: RecordMarkAt, runId: string) =>
   <A, E, R>(frames: Stream.Stream<A, E, R>) =>
@@ -52,7 +48,6 @@ const wholeLines = () => {
   };
 };
 
-/** The Runs whose `runDetail` request the bridge passed to the host, by its first answer. */
 export const relayedRecords = () => {
   const asked = new Map<string, string>();
   const requests = wholeLines();

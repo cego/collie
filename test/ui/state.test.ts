@@ -46,9 +46,7 @@ import { NO_OUTCOME } from "../../src/workspace";
 import { focus } from "../support/focus";
 import { task, taskMr } from "../support/task";
 
-/** A fixed clock: relative times are the point, so they must not depend on the wall. */
 const NOW = epochMs("2026-09-02T12:00:00.000Z");
-/** `ago` takes an ISO string and `agoShort` epoch millis; this is the one clock in both. */
 const FIXED_ISO = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
 function board(over: Partial<WorkspaceView> = {}) {
@@ -117,14 +115,10 @@ test("every row carries the stable id its actions are aimed at", () => {
     ["agent", "agent:impl-1"],
     ["recent", "run:r0"],
   ]);
-  // Ids never carry a position: the list re-sorts every refresh and an index
-  // would silently retarget the action.
   expect(Arr.map(rows, (r) => r.id)).not.toContain("0");
 });
 
 test("an agent is listed under the run it works for", () => {
-  // A run's steps used to float above every run, so which run an agent belonged to was
-  // in the detail column or nowhere. They hang off their run now.
   const rows = rowsOf(
     board({
       agents: [
@@ -145,18 +139,13 @@ test("an agent is listed under the run it works for", () => {
     ["agent", "└ Planner"],
     ["recent", "Implement · r0"],
   ]);
-  // The run above it says which run it is, so the detail column says what it is doing
-  // instead of repeating the name.
   expect(rows[1]!.detail).toBe("working");
-  // Every agent row keeps what a key and an action are aimed at.
   expect(rows[1]!.agent).toBe("implementer-1");
   expect(rows[1]!.key).toBe("1");
   expect(Arr.map(actionsFor(rows[1]!, HERE), (a) => a.key)).toEqual(["1"]);
 });
 
 test("a run's children are listed under it, and its agents under those", () => {
-  // A plan run that fanned out is one thing with several runs inside it, so its
-  // repository runs hang off it the way its agents do rather than floating beside it.
   const rows = rowsOf(
     board({
       agents: [agent("1", "Implementer", "child-api")],
@@ -172,14 +161,10 @@ test("a run's children are listed under it, and its agents under those", () => {
     ["active", "Implement · child-api", 1],
     ["agent", "└ Implementer", 1],
   ]);
-  // Enter on a child still goes to that child's own run.
   expect(rows[1]!.jump).toMatchObject({ kind: "run", runId: "child-api" });
 });
 
 test("an ordinary chain's child is a row of its own, not nested under a finished parent", () => {
-  // A `plan` run that chained finishes the moment its child has a Driver, so the child
-  // is a live run and the parent is a finished one. Nesting on parentage drew that live
-  // run inside the finished region — and moved it back out when the parent aged off.
   const rows = rowsOf(
     board({
       active: [run("implement-1")],
@@ -194,9 +179,6 @@ test("an ordinary chain's child is a row of its own, not nested under a finished
 });
 
 test("a run that needs you is under the header, and the header only when one is", () => {
-  // The header is drawn from the rows that will be, not from the list before nesting
-  // took some of them away: it used to sit over nothing when the only run needing an
-  // answer was a repository run of a fan-out.
   const nestedOnly = rowsOf(
     board({
       active: [
@@ -209,7 +191,6 @@ test("a run that needs you is under the header, and the header only when one is"
   expect(Arr.map(nestedOnly, (r) => r.kind)).toEqual(["active", "active"]);
   expect(Arr.map(nestedOnly, (r) => r.title)).not.toContain(NEEDS_YOU);
 
-  // And a top-level run that needs you still gets it.
   const asking = rowsOf(board({ active: [run("r1", { needsYou: true, choice: MENU })] }));
   expect(asking[0]!.title).toBe(NEEDS_YOU);
 });
@@ -219,8 +200,6 @@ test("an agent whose run is not on the board goes in a group of its own", () => 
     board({
       agents: [
         agent("1", "Implementer", "r1"),
-        // A finished run keeps its agents: the implementer a hand-off names outlives the
-        // run it was started for, so it hangs off that run like any other.
         agent("2", "Reviewer", "r0"),
         agent("3", "Stray", "gone"),
       ],
@@ -237,17 +216,14 @@ test("an agent whose run is not on the board goes in a group of its own", () => 
     ["header", "agents with no run here"],
     ["agent", "└ Stray"],
   ]);
-  // An orphan has no run above it, so its own row is the only place the run can be said.
   expect(Option.getOrUndefined(Arr.findFirst(rows, (r) => r.agent === "stray-1"))!.detail).toBe(
     "working · gone",
   );
-  // The header names a group; it is not a row anything can be asked of.
   expect(
     actionsFor(Option.getOrUndefined(Arr.findFirst(rows, (r) => r.kind === "header"))!, HERE),
   ).toEqual([]);
 });
 
-/** One workspace of the wide board: what is in it, and what its group row says. */
 function group(label: string, over: Partial<WideGroup> = {}) {
   return {
     workspaceId: `w${label.length}`,
@@ -287,20 +263,16 @@ test("the wide board is one tree: workspaces, their runs, and each run's agents"
 
   expect(Arr.map(rows, (r) => [r.kind, r.depth, r.title])).toEqual([
     ["group", 0, "Implement · glass"],
-    // Named by workflow alone: the group row above already says what it is for.
     ["active", 1, "Implement"],
     ["agent", 2, "├ Implementer"],
     ["agent", 2, "└ Reviewer"],
     ["recent", 1, "Implement"],
-    // A blank line between workspaces, and nothing selectable on it.
     ["header", 0, ""],
     ["group", 0, "Collie"],
     ["recent", 1, "Implement"],
     ["header", 0, ""],
-    // The rest of the session: named, so nothing is hidden, and out of the way.
     ["header", 0, "2 more workspace(s)"],
   ]);
-  // A group row is selectable and a spacer is not, so the arrows walk workspaces.
   expect(Arr.map(selectableRows(rows), (r) => r.kind)).toEqual([
     "group",
     "active",
@@ -310,19 +282,13 @@ test("the wide board is one tree: workspaces, their runs, and each run's agents"
     "group",
     "recent",
   ]);
-  // The group row is the whole triage: what it is, how much is going, and the leading
-  // run's step.
   expect(rows[0]!.glyph).toBe("⚙");
   expect(rows[0]!.detail).toBe("1 running · build");
   expect(rows.at(-1)!.detail).toBe("nothing of Collie's in them · Env · gitlab.cego.dk");
-  // The agents keep the digit that focuses them.
   expect(rows[2]!.key).toBe("1");
 });
 
 test("the digits are numbered across the tree, so one names the row it is on", () => {
-  // Every group numbers its own agents from 1, so without renumbering each workspace
-  // showed a `1` and `keyIntent` — which takes the first row with that digit — focused
-  // the first workspace's agent wherever the cursor was.
   const rows = wideRows(
     wideView([
       group("Implement · glass", {
@@ -342,8 +308,6 @@ test("the digits are numbered across the tree, so one names the row it is on", (
     ["└ Reviewer", "2"],
     ["└ Planner", "3"],
   ]);
-  // Past the ninth the row stays and the digit goes, as on the local board: there are
-  // nine digits, and a board of every workspace can hold more agents than that.
   const many = Arr.filter(
     wideRows(
       wideView([
@@ -358,7 +322,6 @@ test("the digits are numbered across the tree, so one names the row it is on", (
   expect(many).toHaveLength(10);
   expect(Arr.map(many, (r) => r.key)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", null]);
 
-  // And the digit reaches that agent: the second workspace's is `3`, not another `1`.
   const context = keys({ rows, row: rows[0]! });
   expect(keyIntent(context, press("3"))).toEqual({
     _tag: "Do",
@@ -367,9 +330,6 @@ test("the digits are numbered across the tree, so one names the row it is on", (
 });
 
 test("an agent in the tree keeps the model that tells two variants apart", () => {
-  // `agentTitle` appends the model where a step ran several, and the tree used to take
-  // everything after the first ` · ` off every nested row — so two reviewers of one
-  // step became two rows both reading `Review`.
   const rows = wideRows(
     wideView([
       group("Implement · glass", {
@@ -381,7 +341,6 @@ test("an agent in the tree keeps the model that tells two variants apart", () =>
 
   expect(Arr.map(rows, (r) => r.title)).toEqual([
     "Implement · glass",
-    // The run is still named by its workflow alone.
     "Implement",
     "├ Review · Opus",
     "└ Review · Sonnet",
@@ -398,7 +357,6 @@ test("an Elsewhere run keeps what it is pointed at, because its group names seve
     ]),
   );
 
-  // The group row names both checkouts, so the run rows are what say which is which.
   expect(Arr.map(rows, (r) => r.title)).toEqual([
     "Elsewhere · one · two",
     "Implement · r1",
@@ -420,13 +378,11 @@ test("the wide board names workspaces, and never a herdr id", () => {
     ),
   );
 
-  // A herdr id is `w28`, `w28:t3` or `1-4`, and none of them is anything a human reads.
   for (const row of rows) {
     for (const text of [row.title, row.detail, row.ago]) {
       expect(text).not.toMatch(/\bw\d+(:[a-z]\d+)?\b|\b\d+-\d+\b/);
     }
   }
-  // The id is on the row all the same: it is what a jump is resolved from.
   expect(rows[0]!.id).toBe("group:w28");
 });
 
@@ -441,13 +397,8 @@ test("a group keeps a run's question, so it is answered where it is seen", () =>
     ]),
   );
 
-  // The waiting run first inside its group, and its question travels with the row —
-  // the same rendering the local board gives it.
   expect(Arr.map(rows, (r) => r.runId)).toEqual([null, "r1", "r2"]);
   expect(rows[1]!.choice).toBe(MENU);
-  // How many of its runs are waiting is in the group row's own summary, and not on it
-  // as `needsYou`: the footer counts those, and a workspace counted beside its own
-  // waiting run made "1 run(s) need you" read as two.
   expect(rows[0]!.detail).toContain("1 running");
   expect(needsYouStatus(rows, null)).toBe("1 run(s) need you");
 });
@@ -464,20 +415,13 @@ test("Enter on a row says where to go, from a key rather than a cached id", () =
   );
   const [workspace, active, agentRow] = rows;
 
-  // A workspace, a run and an agent each point at what they are, by the one key that
-  // survives a redraw: herdr compacts tab and pane ids, so nothing carries one.
   expect(workspace!.jump).toEqual({
     kind: "workspace",
     workspaceId: "w28",
     label: "Implement · glass",
   });
-  // The run's own name, not the one its group row shortened it to: the footer says
-  // where you went, and "went to Implement" says less than the run's whole name.
   expect(active!.jump).toEqual({ kind: "run", runId: "r1", label: "Implement · r1" });
   expect(agentRow!.jump).toEqual({ kind: "agent", agent: "implementer-1", label: "Implementer" });
-  // Enter is what does it, on a run and on an agent alike, and it is the same key on
-  // every row rather than one of the row's own actions. A workspace row is the one
-  // exception: it is a filter, so Enter narrows the board to it instead.
   for (const row of [active, agentRow]) {
     expect(keyIntent(keys({ row }), press("\r", { name: "return" }))).toEqual({
       _tag: "Do",
@@ -501,8 +445,6 @@ test("nothing under Elsewhere is somewhere this session can go", () => {
   );
 
   for (const row of rows) expect(row.jump?.kind ?? "none").toBe("none");
-  // Enter still answers: a key that silently does nothing reads as a broken board, so
-  // the jump is dispatched and it is the operation that says there is nowhere to go.
   expect(keyIntent(keys({ row: rows[0]! }), press("\r", { name: "return" }))).toEqual({
     _tag: "Do",
     command: { _tag: "Jump", jump: rows[0]!.jump! },
@@ -572,16 +514,12 @@ test("a setting a Desktop shares with the Flock says so, and a remembered one do
 });
 
 test("the keys that start something are this Session's, not a wide board's", () => {
-  // They act on this workspace's checkout rather than on the selected row, so the spec
-  // keeps them on the local board — where `g local` is how you get back to one.
   const row = rowsOf(board({ active: [run("r1")] }))[0]!;
 
   for (const key of ["p", "u", "f", "s"]) {
     expect(keyIntent(keys({ row, filter: HERE }), press(key))).not.toBeNull();
     expect(keyIntent(keys({ row, filter: EVERYWHERE }), press(key))).toBeNull();
   }
-  // What a wide row can still be asked for goes through, so gating them is not a gate
-  // on everything after.
   expect(keyIntent(keys({ row, filter: EVERYWHERE }), press("l"))).toEqual({
     _tag: "Do",
     command: { _tag: "OpenLog", runId: "r1" },
@@ -593,18 +531,12 @@ test("the keys that start something are this Session's, not a wide board's", () 
 });
 
 test("starting a workflow is this Session's, so a wide row is not offered one", () => {
-  // A fix round and a second review both run in *this* workspace's checkout. Offered
-  // on another workspace's run they would build from its run directory against the
-  // wrong repository, which is what the spec keeps Session-local.
   const target = "mr:gitlab.example.com/g/p!42";
-  // SAFETY: one recent row goes in, so one row comes out.
+  // WARNING: one recent row goes in, so one row comes out.
   const [row] = rowsOf(board({ recent: [run("r0", { target, fixable: true })] })) as [Row];
 
   expect(Arr.map(actionsFor(row, HERE), (a) => a.key)).toEqual(["l", "x", "o", "w"]);
-  // The merge request is still the run's own: opening it and posting its review act on
-  // the run, not on this checkout.
   expect(Arr.map(actionsFor(row, EVERYWHERE), (a) => a.key)).toEqual(["l", "o", "w"]);
-  // And the keys go with the buttons, so neither can be pressed from a wide board.
   expect(keyIntent(keys({ row, filter: HERE }), press("x"))).toEqual({
     _tag: "Do",
     command: { _tag: "ChooseOffer", runId: "r0" },
@@ -623,9 +555,7 @@ test("a selection that finishes lands on the row that took its place", () => {
   const before = rowsOf(board({ active: [run("r1"), run("r2"), run("r3")] }));
   const after = rowsOf(board({ active: [run("r1"), run("r3")] }));
 
-  // r2 was second; second is now r3.
   expect(clampSelection("run:r2", before, after)).toBe("run:r3");
-  // The last row going leaves the new last row selected, not nothing.
   expect(clampSelection("run:r3", before, rowsOf(board({ active: [run("r1")] })))).toBe("run:r1");
   expect(clampSelection("run:r1", before, rowsOf(board()))).toBeNull();
 });
@@ -646,8 +576,7 @@ test("a row's actions name the row, not the newest run", () => {
     }),
   );
   expect(rows).toHaveLength(3);
-  // SAFETY: one active run with one agent under it and one recent run went in, and the
-  // length is asserted above, so the three rows are there in that order.
+  // WARNING: one active run with one agent under it and one recent run went in, and the length is asserted above, so the three rows are there in that order.
   const [active, working, recent] = rows as [Row, Row, Row];
 
   expect(Arr.map(actionsFor(working, HERE), (a) => [a.key, a.command])).toEqual([
@@ -657,26 +586,21 @@ test("a row's actions name the row, not the newest run", () => {
     ["l", { _tag: "OpenLog", runId: "r1" }],
     ["k", { _tag: "StopRun", runId: "r1" }],
   ]);
-  // A finished run has nothing to stop; what it offers next is its module's to say.
   expect(Arr.map(actionsFor(recent, HERE), (a) => a.key)).toEqual(["l", "x"]);
 });
 
 test("a clean review can still be opened in a browser", () => {
   const target = "mr:gitlab.example.com/g/p!42";
-  // SAFETY: one recent row goes into each board, so each list has exactly that row.
+  // WARNING: one recent row goes into each board, so each list has exactly that row.
   const [clean] = rowsOf(board({ recent: [run("r0", { target, fixable: false })] })) as [Row];
-  // SAFETY: as above — one row in, one row out.
+  // WARNING: as above — one row in, one row out.
   const [withFindings] = rowsOf(board({ recent: [run("r1", { target, fixable: true })] })) as [Row];
 
-  // Nothing to fix and nothing to post, but the merge request is still there to look at:
-  // opening it has nothing to do with whether the review found anything.
   expect(Arr.map(actionsFor(clean, HERE), (a) => a.key)).toEqual(["l", "x", "w"]);
   expect(Arr.map(actionsFor(withFindings, HERE), (a) => a.key)).toEqual(["l", "x", "o", "w"]);
 });
 
 test("one thing owns the keyboard, in one order", () => {
-  // Three things have to agree about which field the keyboard is on: the keys, a paste
-  // and what the footer offers. They each used to work it out again.
   const setting = { key: "model", value: "opus" };
   const all = { flow: true, choice: MENU, filtering: true, setting };
 
@@ -687,7 +611,6 @@ test("one thing owns the keyboard, in one order", () => {
     _tag: "Setting",
     setting,
   });
-  // Nothing is taking typing, so the board's own keys are the ones that act.
   expect(keyboardOn({ flow: false, choice: null, filtering: false, setting: null })._tag).toBe(
     "Board",
   );
@@ -696,19 +619,14 @@ test("one thing owns the keyboard, in one order", () => {
 test("a menu is answered by the option the cursor is on", () => {
   const start = { index: 0, typed: "" };
   expect(answerFor(MENU, start, "\x1b[B").asking.index).toBe(1);
-  // The cursor stops at the ends rather than wrapping past them.
   expect(answerFor(MENU, { index: 1, typed: "" }, "\x1b[B").asking.index).toBe(1);
   expect(answerFor(MENU, start, "\x1b[A").asking.index).toBe(0);
   expect(answerFor(MENU, { index: 1, typed: "" }, "\r").value).toBe("Stop here");
-  // Esc leaves the run open, which is an empty answer rather than no answer.
   expect(answerFor(MENU, start, "\x1b").value).toBe("");
   expect(answerFor(MENU, start, "x").value).toBeNull();
 });
 
 test("a filter keeps a matching agent under the run it works for", () => {
-  // The rows are already nested when the filter sees them, so filtering them one by one
-  // could drop a run and leave its agent behind — and an agent row no longer names its
-  // own run, so that row would say nothing about what it belongs to.
   const rows = rowsOf(
     board({
       agents: [agent("1", "Reviewer", "r1"), agent("2", "Planner", "r2")],
@@ -717,17 +635,13 @@ test("a filter keeps a matching agent under the run it works for", () => {
     }),
   );
 
-  // The agent matches and its run does not, so the run comes with it, above it.
   expect(Arr.map(matching(rows, "Reviewer"), (r) => [r.kind, r.title])).toEqual([
     ["active", "Implement · r1"],
     ["agent", "└ Reviewer"],
   ]);
-  // A run that matches brings only itself: its agents are not what was asked for.
   expect(Arr.map(matching(rows, "r2"), (r) => [r.kind, r.title])).toEqual([
     ["active", "Implement · r2"],
   ]);
-  // The order is the board's, whatever order the matches were ranked in: a pick list
-  // wants the best match first, and here that would lift an agent above its own run.
   const order = (kept: Row[]) => Arr.map(kept, (r) => rows.indexOf(r));
   expect(order(matching(rows, "Planner"))).toEqual([2, 3]);
   expect(order(matching(rows, "r"))).toEqual([0, 1, 2, 3]);
@@ -761,16 +675,12 @@ test("a filtered wide board keeps the workspace a matching run is in", () => {
     ]),
   );
 
-  // A run in the wide board is named by its workflow alone, so the row that says which
-  // workspace it is in is the one thing a filtered list cannot drop.
   const byAgent = matching(rows, "Implementer");
   expect(Arr.map(byAgent, (r) => [r.kind, r.title])).toEqual([
     ["group", "Implement · glass"],
     ["active", "Implement"],
     ["agent", "└ Implementer"],
   ]);
-  // And a workspace that matched brings what is in it along: narrowing to a workspace
-  // means its runs, not one row saying its name.
   expect(Arr.map(matching(rows, "Collie"), (r) => r.kind)).toEqual(["group", "active"]);
   expect(Arr.map(matching(rows, "glass"), (r) => r.kind)).toEqual(["group", "active", "agent"]);
 });
@@ -784,11 +694,8 @@ test("a header is never kept without the group it names", () => {
     }),
   );
 
-  // The header's own words match, and every agent under it does not: a group heading
-  // with no group under it is a line that says nothing.
   expect(matching(rows, "agents with no run")).toEqual([]);
   expect(matching(rows, "no run here")).toEqual([]);
-  // It comes back the moment something in its group does match.
   expect(Arr.map(matching(rows, "Stray"), (r) => r.kind)).toEqual(["header", "agent"]);
 });
 
@@ -796,15 +703,11 @@ test("a capped question shows a window of options that follows the cursor", () =
   const items = ["a", "b", "c", "d", "e"];
   const shown = (at: number, room: number) => optionWindow(items, at, room);
 
-  // Room for everything: no window at all.
   expect(shown(0, 5)).toEqual({ shown: items, hidden: 0 });
-  // The cursor at the top, and then walked past the bottom of the window: it stays in
-  // what is shown, because an option nobody can see is one nobody can knowingly choose.
   expect(shown(0, 3)).toEqual({ shown: ["a", "b", "c"], hidden: 2 });
   expect(shown(2, 3)).toEqual({ shown: ["a", "b", "c"], hidden: 2 });
   expect(shown(3, 3)).toEqual({ shown: ["b", "c", "d"], hidden: 2 });
   expect(shown(4, 3)).toEqual({ shown: ["c", "d", "e"], hidden: 2 });
-  // A pane with room for one still shows the one the cursor is on.
   expect(shown(4, 1)).toEqual({ shown: ["e"], hidden: 4 });
 });
 
@@ -813,7 +716,6 @@ test("a question is answered by what was typed", () => {
   expect(answerFor(ask, { index: 0, typed: "" }, "h").asking.typed).toBe("h");
   expect(answerFor(ask, { index: 0, typed: "hi" }, "\x7f").asking.typed).toBe("h");
   expect(answerFor(ask, { index: 0, typed: "hi" }, "\r").value).toBe("hi");
-  // A menu key means nothing here and must not be typed into the answer.
   expect(answerFor(ask, { index: 0, typed: "hi" }, "\x1b[B").asking.typed).toBe("hi");
 });
 
@@ -823,12 +725,8 @@ test("a paste fills a field and never submits it", () => {
 
   expect(pasteInto("", bytes(url))).toBe(url);
   expect(pasteInto("https://", bytes("gitlab.cego.dk"))).toBe("https://gitlab.cego.dk");
-  // A copied line brings its newline with it, and a newline is the submit key: it has
-  // to reach the field as nothing at all.
   expect(pasteInto("", bytes(`${url}\n`))).toBe(url);
   expect(pasteInto("", bytes(`one\r\ntwo\n`))).toBe("onetwo");
-  // Escape sequences and every other control character go the same way; a pasted
-  // branch name keeps its non-ASCII letters.
   expect(pasteInto("", bytes("\x1b[Bfix-\x07caf\u00e9"))).toBe("[Bfix-caf\u00e9");
 });
 
@@ -838,15 +736,11 @@ test("a row says how long it has been like this, not when", () => {
   expect(agoShort(NOW - 120_000, NOW)).toBe("2m ago");
   expect(agoShort(NOW - 3 * 3_600_000, NOW)).toBe("3h ago");
   expect(agoShort(NOW - 4 * 86_400_000, NOW)).toBe("4d ago");
-  // A run whose record never said when has no time to show rather than 1970.
   expect(agoShort(0, NOW)).toBe("");
-  // A clock that ran backwards between the record and the read is not the future.
   expect(agoShort(NOW + 5_000, NOW)).toBe("now");
 });
 
 test("the long and short renderings never disagree about the unit", () => {
-  // Both are on screen in one session — the resume menu's subtitles and the tab's row
-  // list — so the same instant must not read as an hour in one and a day in the other.
   for (const seconds of [0, 59, 60, 3_599, 3_600, 86_399, 86_400, 200_000]) {
     const at = NOW - seconds * 1000;
     const long = ago(FIXED_ISO(at), NOW);
@@ -873,14 +767,11 @@ test("one focus command changes only what it names", () => {
   expect(retarget(at, { _tag: "ToggleTail" }).tail).toBe(true);
   expect(retarget({ ...at, tail: true }, { _tag: "ToggleTail" }).tail).toBe(false);
   expect(retarget(at, { _tag: "Refresh" }).nonce).toBe(1);
-  // Another page of a capped review, and a new Selection starts from the first page
-  // again rather than inheriting how far the last one had been paged.
   expect(retarget(at, { _tag: "MoreReview" }).reviewPages).toBe(2);
   expect(
     retarget({ ...at, reviewPages: 4 }, { _tag: "Select", id: "run:r2", on: null }).reviewPages,
   ).toBe(1);
 
-  // A View shown once is kept fresh from then on; one already shown is not listed twice.
   const shown = retarget(at, { _tag: "ShowView", view: "history" });
   expect(shown.view).toBe("history");
   expect(shown.shown).toEqual(["runs", "history"]);
@@ -890,20 +781,16 @@ test("one focus command changes only what it names", () => {
 test("moving the Selection reuses the board; anything else re-reads it", () => {
   const at = focus({ selected: "run:r1" });
 
-  // The first read has nothing to reuse.
   expect(rereads(null, at)).toEqual({ reuse: false, forceMr: false });
 
-  // Moving the cursor is not a change in the world.
   expect(rereads(at, { ...at, selected: "run:r2" })).toEqual({ reuse: true, forceMr: false });
 
-  // A Refresh, and the read after a command, go past the merge-request cache.
   expect(rereads(at, { ...at, nonce: 1 })).toEqual({ reuse: false, forceMr: true });
   expect(rereads(at, { ...at, selected: "run:r2", nonce: 1 })).toEqual({
     reuse: false,
     forceMr: true,
   });
 
-  // Showing another View, and toggling the log tail, are both reads of their own.
   expect(rereads(at, { ...at, view: "history", shown: ["runs", "history"] }).reuse).toBe(false);
   expect(rereads(at, { ...at, tail: true }).reuse).toBe(false);
   expect(rereads(at, { ...at, reviewPages: 2 }).reuse).toBe(false);
@@ -911,17 +798,13 @@ test("moving the Selection reuses the board; anything else re-reads it", () => {
 
 test("a row id says whether it is a Run, and which one", () => {
   expect(runIdOf("run:review-17-20260902")).toBe("review-17-20260902");
-  // Every other Selection has no Run behind it, so nothing is read for one.
   expect(runIdOf("agent:impl-1")).toBeNull();
   expect(runIdOf("workflow:review")).toBeNull();
   expect(runIdOf(null)).toBeNull();
-  // The row ids the board mints are the ones this reads back.
   expect(runIdOf(rowsOf(board({ recent: [run("r1")] }))[0]!.id)).toBe("r1");
 });
 
 test("an agent's row says what it is doing, and its run only where that is all it has", () => {
-  // Nested under its run, so which run it belongs to is the row above it: the detail is
-  // what the agent is actually on, from the terminal title its harness publishes.
   const rows = rowsOf(
     board({
       agents: [agent("1", "Implementer", "r1", "Simplify cego.collie plugin")],
@@ -933,12 +816,9 @@ test("an agent's row says what it is doing, and its run only where that is all i
     "working · Simplify cego.collie plugin",
   ]);
 
-  // A harness that publishes no title leaves the status alone.
   const quiet = rowsOf(board({ agents: [agent("1", "Reviewer", "r1")], active: [run("r1")] }));
   expect(quiet[1]!.detail).toBe("working");
 
-  // An orphan has no run above it, so its own row says which one it names — and still
-  // says what it is doing.
   const orphans = rowsOf(board({ agents: [agent("1", "Planner", "r9", "Write the spec")] }));
   expect(orphans[1]!.detail).toBe("working · Write the spec · r9");
 });
@@ -951,7 +831,6 @@ test("a run that needs you is listed first, under a header saying so", () => {
     }),
   );
 
-  // The waiting run first, its own agents still nested under it.
   expect(Arr.map(rows, (r) => [r.kind, r.id])).toEqual([
     ["header", "header:Needs you"],
     ["active", "run:r2"],
@@ -960,15 +839,12 @@ test("a run that needs you is listed first, under a header saying so", () => {
     ["active", "run:r3"],
   ]);
   expect(rows[0]!.title).toBe("Needs you");
-  // No header where nothing is waiting: an empty section is noise on every refresh.
   expect(Arr.map(rowsOf(board({ active: [run("r1")] })), (r) => r.kind)).toEqual(["active"]);
 });
 
 test("nothing acts on a header row", () => {
   const rows = rowsOf(board({ active: [run("r1"), run("r2", { needsYou: true })] }));
 
-  // It is a name for the group under it: selectable like every row, and inert, so no
-  // key and no button is ever offered for one.
   expect(rows[0]!.kind).toBe("header");
   expect(actionsFor(rows[0]!, HERE)).toEqual([]);
 });
@@ -977,8 +853,6 @@ test("the footer counts the runs waiting on you, and only while the Selection is
   const waiting = [run("r1", { needsYou: true }), run("r2", { needsYou: true }), run("r3")];
 
   expect(needsYouStatus(rowsOf(board({ active: waiting })), "run:r3")).toBe("2 run(s) need you");
-  // Standing on one of them: the question itself is on screen, so the count would
-  // be telling the human about the row they are already answering.
   expect(needsYouStatus(rowsOf(board({ active: waiting })), "run:r1")).toBeNull();
   expect(needsYouStatus(rowsOf(board({ active: [run("r1")] })), "run:r1")).toBeNull();
 });
@@ -986,10 +860,8 @@ test("the footer counts the runs waiting on you, and only while the Selection is
 test("how long something took reads in the coarsest unit that still says it", () => {
   expect(took(45_000)).toBe("45s");
   expect(took(12 * 60_000)).toBe("12m");
-  // An hour is two units, because "63m" is a number to divide in your head.
   expect(took(63 * 60_000)).toBe("1h03m");
   expect(took(24 * 3_600_000)).toBe("24h00m");
-  // Under a second, and a clock that went backwards: neither is a duration to show.
   expect(took(400)).toBe("0s");
   expect(took(-5_000)).toBe("0s");
 });
@@ -1000,17 +872,12 @@ test("the footer offers the panel's keys and the globals, and no more", () => {
   expect(footerKeys({ panel: ["t log tail"], on: { _tag: "Board" }, filter: HERE })).toBe(
     `t log tail · ${globals}`,
   );
-  // `g` names where it goes, not where it is: the nav is what says which scope this is.
-  // And starting a run is this Session's, so a board of every workspace does not offer
-  // it — the key is gated the same way.
   expect(footerKeys({ panel: [], on: { _tag: "Board" }, filter: EVERYWHERE })).toBe(
     "g local · ? keys · q close",
   );
 });
 
 test("a field that has taken the keys says what they do instead", () => {
-  // Every other key is inert while one of these has the keyboard, so offering the
-  // board's would be a lie — `k` typed a `k` while `[k stop]` stopped the run.
   expect(footerKeys({ panel: [], on: { _tag: "Choice", choice: MENU }, filter: HERE })).toBe(
     "↑↓ move · Enter choose · Esc leave the run open",
   );
@@ -1032,11 +899,9 @@ test("the help overlay lists every key the board handles, each with what it does
   expect(Arr.every(ALL_KEYS, (k) => k.what !== "")).toBe(true);
 });
 
-/** The two boards the Session-local keys distinguish: this workspace's, and the Herd's. */
 const HERE: Filter = { kind: "workspace", id: "w1" };
 const EVERYWHERE: Filter = { kind: "all" };
 
-/** The board as the keyboard sees it, with only what a test cares about set. */
 function keys(over: Partial<KeyContext> = {}) {
   const returned: KeyContext = {
     on: { _tag: "Board" },
@@ -1055,7 +920,6 @@ function keys(over: Partial<KeyContext> = {}) {
   return returned;
 }
 
-/** The whole of what the app draws, with everything a test does not care about empty. */
 function state() {
   return {
     view: "runs",
@@ -1074,33 +938,22 @@ function state() {
   };
 }
 
-/** A bare Row, for the keys that only need one to exist. */
 const ROW: Row = rowsOf(board({ active: [run("r1")] }))[0]!;
 
-/** One keypress, as OpenTUI reports one. */
 function press(sequence: string, over: Omit<Keypress, "sequence"> = {}) {
   return { sequence, ...over };
 }
 
 test("the help overlay owns the keyboard, then a flow, then the board", () => {
-  // A flow running inline has its own handler; a key that also moved the Selection
-  // underneath would act on a board nobody is looking at.
   expect(keyIntent(keys({ on: { _tag: "Flow" } }), press("q", { name: "q" }))).toBeNull();
-  // `?` during a flow is the flow's, not the board's.
   expect(keyIntent(keys({ on: { _tag: "Flow" } }), press("?"))).toBeNull();
 
-  // Any key closes the overlay and does nothing else — including a key the board would
-  // otherwise have acted on.
   expect(keyIntent(keys({ helping: true }), press("k", { name: "k" }))).toEqual({
     _tag: "Help",
     open: false,
   });
   expect(keyIntent(keys(), press("?"))).toEqual({ _tag: "Help", open: true });
 
-  // The overlay beats a flow, because that is the order App draws them in: it hides the
-  // Flow behind the overlay, so a flow that became pending while help was open used to
-  // take the keyboard for a component nobody could see — and every key returned nothing,
-  // leaving a visible overlay that could not be closed.
   expect(
     keyIntent(keys({ on: { _tag: "Flow" }, helping: true }), press("k", { name: "k" })),
   ).toEqual({
@@ -1110,9 +963,6 @@ test("the help overlay owns the keyboard, then a flow, then the board", () => {
 });
 
 test("a literal question mark reaches the text it was typed into", () => {
-  // `?` opens the overlay only where the board owns the keyboard. Every printable
-  // character belongs to whatever is taking text: a free-text answer to a run's own
-  // question, the filter, and a Settings value are all things a `?` belongs in.
   const asked: PendingChoice = { ...MENU, kind: "ask", items: [] };
   expect(
     keyIntent(
@@ -1144,20 +994,16 @@ test("the filter keeps the keyboard until Enter or Esc, and Enter keeps the text
     filter: "revie",
     typing: true,
   });
-  // Enter stops typing and keeps the text: `/` narrows the list so a row can then be
-  // acted on, which is only possible once the keys mean the board again.
   expect(keyIntent(typing, press("\r", { name: "return" }))).toEqual({
     _tag: "Filtering",
     filter: "revi",
     typing: false,
   });
-  // Only Esc drops it.
   expect(keyIntent(typing, press("\x1b", { name: "escape" }))).toEqual({
     _tag: "Filtering",
     filter: "",
     typing: false,
   });
-  // And a key the board owns is text while the filter has the keyboard.
   expect(keyIntent(typing, press("R"))).toEqual({
     _tag: "Filtering",
     filter: "reviR",
@@ -1170,8 +1016,6 @@ test("Esc on the board drops a filter it is still narrowed by, and nothing else"
   const esc = press("\x1b", { name: "escape" });
 
   expect(keyIntent(narrowed, esc)).toEqual({ _tag: "Filtering", filter: "", typing: false });
-  // With none set it widens the board instead: narrowing to one workspace is a filter
-  // too, and the way out of both has to be the same key.
   expect(keyIntent(keys({ query: "" }), esc)).toEqual({
     _tag: "Do",
     command: { _tag: "SetFilter", filter: { kind: "all" } },
@@ -1185,9 +1029,6 @@ test("a Settings row being edited owns the keyboard until it is sent or abandone
     _tag: "Editing",
     editing: { key: "model", value: "opus" },
   });
-  // Enter both sends the value and closes the editor: one key, two effects, the way
-  // `Answered` carries the new asking state and the answer together. Returning a bare
-  // command left the footer in editor mode with every later key still editing.
   expect(keyIntent(editing, press("\r", { name: "return" }))).toEqual({
     _tag: "Submitted",
     command: { _tag: "SetDefault", key: "model", value: "opu" },
@@ -1211,19 +1052,16 @@ test("the panel's scroll keys do not fight the list's arrows", () => {
     by: 1,
     unit: "line",
   });
-  // A bare arrow is still the Selection's, panel or no panel.
   expect(keyIntent(scrollable, press("\x1b[B", { name: "down" }))).toEqual({ _tag: "Move", by: 1 });
-  // And with no panel on screen the scroll keys do nothing rather than moving the row.
   expect(keyIntent(keys(), press("\x1b[6~", { name: "pagedown" }))).toBeNull();
 });
 
 test("a key with nothing to act on does nothing, rather than acting on something else", () => {
-  // `t` needs a Run, `m` needs something cut short, `c` needs a merge request.
   expect(keyIntent(keys(), press("t"))).toBeNull();
   expect(keyIntent(keys(), press("m"))).toBeNull();
   expect(keyIntent(keys(), press("c"))).toBeNull();
 
-  // SAFETY: one active run went in, so one row comes out.
+  // WARNING: one active run went in, so one row comes out.
   const [row] = rowsOf(board({ active: [run("r1")] })) as [Row];
   expect(keyIntent(keys({ row }), press("t"))).toEqual({
     _tag: "Do",
@@ -1254,26 +1092,21 @@ test("a digit focuses that agent wherever the Selection is", () => {
       recent: [run("r0")],
     }),
   );
-  // The Selection is the finished run, and the digit still reaches the agent: those
-  // keys are the board's shortcut into a pane, not an action on a row.
   expect(keyIntent(keys({ rows, row: rows[1]! }), press("1"))).toEqual({
     _tag: "Do",
     command: { _tag: "FocusAgent", agent: "impl-1" },
   });
-  // A digit no agent answers to does nothing.
   expect(keyIntent(keys({ rows, row: rows[1]! }), press("4"))).toBeNull();
 });
 
 test("the row's own actions are the last thing a key is tried against", () => {
-  // SAFETY: one active run went in, so one row comes out.
+  // WARNING: one active run went in, so one row comes out.
   const [row] = rowsOf(board({ active: [run("r1")] })) as [Row];
 
   expect(keyIntent(keys({ row }), press("k", { name: "k" }))).toEqual({
     _tag: "Do",
     command: { _tag: "StopRun", runId: "r1" },
   });
-  // `s` hands off the Selection's review, and names it: an argument-less send meant the
-  // newest run in the Session.
   expect(keyIntent(keys({ row }), press("s"))).toEqual({
     _tag: "Do",
     command: { _tag: "SendReview", runId: "r1" },
@@ -1285,8 +1118,6 @@ test("the row's own actions are the last thing a key is tried against", () => {
 });
 
 test("a Task pointed at a merge request can open it, however it got there", () => {
-  // A `review` Run is given one and opens none; an `implement` Run opens one. Both are
-  // a merge request the human can ask for from the card.
   const given = menuFor(task({ mr: "mr:gitlab.cego.dk/mk/collie!151" }));
   expect(Arr.map(given, (one) => one.label)).toContain("Open merge request");
   expect(
@@ -1390,8 +1221,6 @@ test("every one of more than nine merge requests is reachable from the chooser b
 });
 
 test("every key a card's menu offers is one the overlay advertises", () => {
-  // Two lists that have to agree: the menu is built per Task state, and a key offered
-  // on a card and missing from `?` is a key nobody can look up.
   const advertised = new Set(Arr.map(ALL_KEYS, (entry) => entry.key));
   const states = ["blocked", "active", "quiet", "failed", "stopped", "done"] as const;
   const offered = new Set(
@@ -1407,8 +1236,6 @@ test("every key a card's menu offers is one the overlay advertises", () => {
 });
 
 test("a filter keeps a matching agent under a finished run too", () => {
-  // A finished run keeps its agents, so it opens a group exactly as an active one does:
-  // filtering by the agent alone left it hanging under nothing.
   const rows = rowsOf(
     board({
       agents: [agent("1", "Reviewer", "r1")],
@@ -1424,8 +1251,6 @@ test("a filter keeps a matching agent under a finished run too", () => {
 });
 
 test('the "Needs you" header survives a filter its runs match', () => {
-  // The group under this header is runs, not agents, so a scan that stopped at the
-  // first non-agent row could never judge it a match.
   const rows = rowsOf(
     board({
       agents: [],
@@ -1438,7 +1263,6 @@ test('the "Needs you" header survives a filter its runs match', () => {
     ["header", "Needs you"],
     ["active", "Implement · r1"],
   ]);
-  // A run outside the group does not bring the header with it.
   expect(Arr.map(matching(rows, "r2"), (r) => [r.kind, r.title])).toEqual([
     ["active", "Implement · r2"],
   ]);
@@ -1457,12 +1281,8 @@ test("the next unanswered question is the one after the Selection, wrapping once
   const ids = Arr.map(selectableRows(rows), (r) => r.id);
   const [first, middle, last] = [ids[0]!, ids[1]!, ids[2]!];
 
-  // Runs that need you sort to the top, so the two asking rows bracket the third.
   expect(nextQuestionId(rows, first)).toBe(middle === last ? last : ids[1]!);
-  // From the last question it wraps back to the first rather than stopping.
   expect(nextQuestionId(rows, last)).toBe(first);
-  // With nothing selected, or a Selection that is not on this board, it starts at the
-  // top rather than skipping the first question.
   expect(nextQuestionId(rows, null)).toBe(first);
   expect(nextQuestionId(rows, "run:gone")).toBe(first);
 });
@@ -1478,13 +1298,10 @@ test("the next-question key is the board's, unless a field is taking text", () =
   const asking = keys({ row: null });
 
   expect(keyIntent(asking, press("n", { name: "n" }))).toEqual({ _tag: "NextQuestion" });
-  // A menu is not a text field: `n` is not one of its options, so it still navigates.
   expect(
     keyIntent(keys({ on: { _tag: "Choice", choice: MENU } }), press("n", { name: "n" })),
   ).toEqual({ _tag: "NextQuestion" });
 
-  // Everything that takes text keeps the character. A free-text question, the filter
-  // and a Settings value each own `n` while the cursor is in them.
   expect(
     keyIntent(
       keys({ on: { _tag: "Choice", choice: { ...MENU, kind: "ask", items: [] } } }),
@@ -1504,11 +1321,7 @@ test("the next-question key is the board's, unless a field is taking text", () =
   ).toEqual({ _tag: "Editing", editing: { key: "model", value: "opun" } });
 });
 
-// --- The Home board's filter ---------------------------------------------------------
-
 test("the filter says which board this is, and the Session-local keys read it", () => {
-  // Narrowed either way is one Session's: a Run belongs to the workspace it was started
-  // in, so a board filtered to one is as local as a board filtered to that workspace.
   expect(sessionLocal({ kind: "all" })).toBe(false);
   expect(sessionLocal({ kind: "workspace", id: "w1" })).toBe(true);
   expect(sessionLocal({ kind: "run", id: "r1" })).toBe(true);
@@ -1522,11 +1335,8 @@ test("g toggles between the whole Herd and the workspace the board was opened fr
   });
   const narrowed = focus({ filter: { kind: "workspace", id: "w1" }, origin: "w1" });
   expect(retarget(narrowed, { _tag: "ToggleFilter" }).filter).toEqual({ kind: "all" });
-  // A run filter widens rather than toggling into a workspace nobody named.
   const onRun = focus({ filter: { kind: "run", id: "r1" }, origin: "w1" });
   expect(retarget(onRun, { _tag: "ToggleFilter" }).filter).toEqual({ kind: "all" });
-  // Nothing to narrow to: a board with no origin stays where it is rather than
-  // narrowing to a workspace it would have to invent.
   const nowhere = focus({ filter: { kind: "all" }, origin: null });
   expect(retarget(nowhere, { _tag: "ToggleFilter" }).filter).toEqual({ kind: "all" });
 });
@@ -1541,7 +1351,6 @@ test("a new filter starts the Selection again", () => {
 test("the proposal being previewed costs no read", () => {
   const at = focus({ selected: "run:r1" });
   expect(rereads(at, { ...at, previewing: "p1" }).reuse).toBe(true);
-  // The filter is a different board, so it is read again.
   expect(rereads(at, { ...at, filter: { kind: "all" } }).reuse).toBe(false);
 });
 
@@ -1560,9 +1369,7 @@ test("a row says what steering has found about its Run, worst mark first", () =>
   expect(marked("run:r1")).toBe("↯ ▶");
   expect(marked("run:r2")).toBe("⏸");
   expect(marked("run:r3")).toBe("⚠ manual !");
-  // The override is a fact about the agents a human typed at, so their rows carry it.
   expect(marked("agent:fix-1")).toBe("⚠ manual");
-  // A Run nothing has found anything about is unmarked.
   expect(rowsOf(board({ active: [run("r4")] }))[0]!.marks).toBe("");
 });
 
@@ -1592,7 +1399,6 @@ test("a workspace row inherits the worst mark of the runs under it", () => {
 });
 
 test("`:` is no longer a mode: the board keeps its keys", () => {
-  // The composer is gone; talking to Collie is the native pane beside the board.
   expect(
     keyIntent(keys({ row: { ...ROW, kind: "active" as const, runId: "r1" } }), press(":")),
   ).toBeNull();
@@ -1638,9 +1444,6 @@ test("a run filter keeps that run's agents and its repository runs", () => {
     }),
   });
 
-  // The run, and what hangs off it. On the local board an agent sits at its run's own
-  // depth — the connector is what joins them — so depth alone cannot say where the
-  // group ends.
   expect(Arr.map(rows, (r) => r.id)).toEqual(["run:r1", "agent:implementer-1"]);
 });
 
@@ -1664,7 +1467,6 @@ test("a card's menu offers only what that Task can be asked for", () => {
   expect(working[4]!.command).toEqual({ _tag: "ChooseOffer", runId: "r1" });
   expect(working[5]!.command).toEqual({ _tag: "HoldRun", runId: "r1", set: true });
   expect(working[6]!.command).toEqual({ _tag: "StopRun", runId: "r1" });
-  // A held run offers its release instead.
   expect(
     Option.getOrUndefined(
       Arr.findFirst(menuFor(task({ held: "⏸ Held." })), (item) => item.key === "h"),
@@ -1675,7 +1477,6 @@ test("a card's menu offers only what that Task can be asked for", () => {
     set: false,
   });
 
-  // A run nobody is driving cannot be stopped or steered; it can be taken up again.
   expect(Arr.map(menuFor(task({ state: "failed" })), (item) => item.label)).toEqual([
     "Open record",
     "Go to its tab",
@@ -1685,7 +1486,6 @@ test("a card's menu offers only what that Task can be asked for", () => {
   expect(Arr.map(menuFor(task({ state: "stopped" })), (item) => item.label)).toContain(
     "Resume run",
   );
-  // Only a run that finished has work to build on.
   expect(Arr.map(menuFor(task({ state: "done" })), (item) => item.label)).toEqual([
     "Open record",
     "Go to its tab",
@@ -1703,7 +1503,6 @@ test("a ready plan's first action is the offer its module declares, under its ow
     command: { _tag: "InvokeOffer", runId: "r1", offer: "build-it" },
   });
   expect(Arr.map(menuFor(ready), (item) => item.label)).toContain("Build these tickets");
-  // A plan whose module offers nothing gets no button for something nobody declared.
   const undeclared = task({ state: "done", landed: false, planReady: true, offer: null });
   expect(primaryFor(undeclared)).toBeNull();
   expect(Arr.map(menuFor(undeclared), (item) => item.label)).not.toContain("Implement now");
@@ -1731,8 +1530,6 @@ test("the merge request is offered when there is one to open, named the way glab
     target: "mr:gitlab.cego.dk/mk/collie!151",
     runId: "r1",
   });
-  // A URL nothing can resolve is not offered: a menu item that would fail is worse than
-  // none at all.
   expect(Arr.map(menuFor(task({ mr: "see the ticket" })), (one) => one.label)).not.toContain(
     "Open merge request",
   );
@@ -1753,7 +1550,6 @@ test("what became of the work is offered once the work is over, with its MR as t
       command: { _tag: "RecordDisposition", runId: "r1", kind: "abandoned", ref: "" },
     },
   ]);
-  // Stopped and failed work can also have been landed by hand.
   expect(dispositionsFor(task({ state: "failed" }))[0]!.command).toEqual({
     _tag: "RecordDisposition",
     runId: "r1",
@@ -1766,10 +1562,8 @@ test("older… offers the finished runs of this checkout the board is not alread
   const history = [run("r1"), run("r2"), run("r3"), run("r4")];
   const onBoard = [task({ id: "t1", state: "done", run: "r1", runs: ["r1", "r2"] })];
 
-  // Nothing read yet: the link is there, because asking for it is what reads it.
   expect(olderFinished(null, onBoard, 1)).toEqual({ rows: [], more: true });
 
-  // A run already on the board as a card is not repeated under it.
   const first = olderFinished(history, onBoard, 1, 1);
   expect(Arr.map(first.rows, (row) => row.id)).toEqual(["r3"]);
   expect(first.more).toBe(true);
@@ -1778,6 +1572,5 @@ test("older… offers the finished runs of this checkout the board is not alread
   expect(Arr.map(second.rows, (row) => row.id)).toEqual(["r3", "r4"]);
   expect(second.more).toBe(false);
 
-  // Before anyone asks, none of it is drawn.
   expect(olderFinished(history, onBoard, 0)).toEqual({ rows: [], more: true });
 });

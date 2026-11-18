@@ -1,6 +1,3 @@
-// The hc a release carries: the archive `hc-pin.json` names for the runner's target, from a
-// served fake release rather than the network, bundled only once it hashes to the pin.
-
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
@@ -33,7 +30,6 @@ afterEach(() => served.stop(true));
 
 const releases = () => `http://127.0.0.1:${served.port}`;
 
-/** `bundleHc` into a fresh release tree and cache, with what it left or why it refused. */
 const bundle = (sha256: Record<string, string>, target = "bun-linux-x64", cache?: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

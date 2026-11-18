@@ -48,12 +48,6 @@ const SKIPPED = new Set([
   ".vscode-server",
 ]);
 
-/**
- * Working repositories under each of `roots` to depth six, including hidden, nested and
- * linked ones, plus each of `known` that is one; dependencies, Git metadata and tool
- * directories are not looked into. A link to nothing or a path the user cannot access is
- * skipped, other inspection errors propagate.
- */
 export const publicationCheckouts = Effect.fn("Issues.publicationCheckouts")(function* (
   roots: ReadonlyArray<string>,
   known: ReadonlyArray<string> = [],
@@ -62,9 +56,6 @@ export const publicationCheckouts = Effect.fn("Issues.publicationCheckouts")(fun
   const path = yield* Path.Path;
   const checkouts = new Set<string>();
   const aliases: DirectoryAlias[] = [];
-  // A link to nothing, such as a forwarded agent socket left by a closed login, an entry
-  // removed during the walk, or a path the user cannot access, holds no checkout their Runs
-  // worked in.
   const unseen = (error: PlatformError) =>
     error.reason._tag === "NotFound" || error.reason._tag === "PermissionDenied"
       ? Effect.succeed(null)
@@ -79,7 +70,6 @@ export const publicationCheckouts = Effect.fn("Issues.publicationCheckouts")(fun
       }
       return canonical;
     });
-  // Levels a directory was last walked with; a shallower route walks it again.
   const walked = new Map<string, number>();
   const children = (root: string, dir: string, left: number) =>
     Effect.gen(function* () {
@@ -115,7 +105,6 @@ export const publicationCheckouts = Effect.fn("Issues.publicationCheckouts")(fun
   return { checkouts: [...checkouts].sort(), aliases };
 });
 
-/** The Git directory `dir/.git` leads to, or null for an empty `.git` or a copied submodule's gitfile. */
 export const gitDirOf = Effect.fn("Issues.gitDirOf")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -130,7 +119,6 @@ export const gitDirOf = Effect.fn("Issues.gitDirOf")(function* (dir: string) {
       pipe_(present___, Str.slice("gitdir: ".length)),
     ),
   );
-  // Joined unnormalised, as Git does, so `..` leaves a linked `dir` physically.
   const gitDir = named === undefined ? marker : path.isAbsolute(named) ? named : `${dir}/${named}`;
   return (yield* fs.exists(`${gitDir}/HEAD`)) ? gitDir : null;
 });

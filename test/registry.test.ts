@@ -1,5 +1,3 @@
-// The agent register, kept in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database).
-
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Result, Schema, Stream } from "effect";
@@ -99,7 +97,6 @@ test("an agent registered again is one entry, the newest; one core no longer lis
       yield* registerAgent(here, entry({ at: "2026-09-09T09:05:00Z" }));
       expect(agents(yield* everyRegistered)).toEqual(["impl-gone", "impl-there", "impl-1"]);
 
-      // A seat registered after the listing is kept: it may have started alongside.
       const seat = entry({ agent: "impl-seat", paneId: "1-7", at: "2026-09-09T09:20:00Z" });
       yield* registerAgent(here, seat);
       const kept = yield* registerAgent(here, entry({ agent: "impl-2", paneId: "1-6" }), {
@@ -173,7 +170,6 @@ test("the first host imports each register file once, in its order, and leaves t
         `${stateDir}/agents/${registerOf(there)}.json`,
         `${asJson([entry({ agent: "impl-later" })])}\n`,
       );
-      // Imported into the register it was kept in: a registration there replaces its agent.
       const after = yield* registerAgent(here, entry({ at: "2026-09-09T10:00:00Z" })).pipe(
         Effect.provide(recordsAt(stateDir)),
       );

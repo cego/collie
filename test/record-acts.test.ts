@@ -1,6 +1,3 @@
-// What a record's revision is for: an act shown at one is refused once the Step it targets
-// has finished, and every reader of a Run's Flow says the same at the same revision.
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
@@ -28,7 +25,6 @@ const start = (world: World, workflow: string, input: Readonly<Record<string, st
     Effect.orDie,
   );
 
-/** A `stepped` Run in mode `stop`, waiting inside `ship` until its own gate is opened. */
 const shipping = (world: World, name: string) =>
   Effect.gen(function* () {
     const gates = `${world.home}/gates-${name}`;
@@ -40,7 +36,6 @@ const shipping = (world: World, name: string) =>
 
 const isDone = (frame: RunDetail | null) => frame !== null && frame.pending?.length === 0;
 
-/** The record as a drawer opening on the Run now is sent it, every part come. */
 const recordOf = (world: World, runId: string) =>
   Effect.gen(function* () {
     const door = yield* frontDoor(socketOf(world.state));
@@ -229,7 +224,6 @@ test(
           });
 
           for (const runId of [large, live]) {
-            /** Each reader once, between two reads of the record. */
             const read = Effect.gen(function* () {
               const before = yield* recordOf(world, runId);
               const shown = yield* collie(world, ["run", "show", runId]).pipe(
@@ -242,7 +236,6 @@ test(
               const after = yield* recordOf(world, runId);
               return { before, shown, said, after };
             });
-            // A Run settling after its end moves its revision; the readers are compared at one.
             const { before, shown, said } = yield* until(
               () => read,
               (one) =>

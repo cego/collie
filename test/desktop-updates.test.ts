@@ -1,7 +1,3 @@
-// Desktop's own updates, through a stand-in for Electrobun's updater: checked at launch,
-// every hour and when asked, downloaded in the background, and applied only once the tar it
-// would install verifies against Collie's release key.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
@@ -44,15 +40,12 @@ const pair = () => {
 
 const TAR = new TextEncoder().encode("the 0.33.0 bundle");
 
-/** What a check finds, which a test changes as releases are published or the network goes. */
 interface Feed {
   version: string;
   failing?: string;
-  /** A check that never answers. */
   hangs?: boolean;
 }
 
-/** An updater that finds 0.33.0, whose tar is `bytes` once downloaded and signed `signature`. */
 const fakeUpdater = (
   dir: string,
   options: {
@@ -61,19 +54,12 @@ const fakeUpdater = (
     readonly signature: string | null;
     readonly preparedAtStart?: boolean;
     readonly applyRefused?: string;
-    /** Whether a check finds 0.33.0. */
     readonly available?: boolean;
-    /** Why a check could not look. */
     readonly failing?: string;
-    /** Held open until it is done, so a second check can arrive while it runs. */
     readonly downloading?: Deferred.Deferred<void>;
-    /** The update archive Electrobun prepared, as its platform names it. */
     readonly artifact?: string;
-    /** What each check finds, in place of `available` and `failing`. */
     readonly feed?: Feed;
-    /** Why the signature could not be fetched. */
     readonly signatureFails?: string;
-    /** A signature request that never answers while `hangs` holds. */
     readonly signatureHangs?: { hangs: boolean };
   },
 ) =>
@@ -141,10 +127,6 @@ const fakeUpdater = (
     return { port, calls };
   });
 
-/**
- * Runs `effect` on a test clock that moves on by itself, whose wall time `sleep` puts ahead
- * without firing a timer, as a laptop's clock jumps over a suspend.
- */
 const suspendable = <A, E, R>(
   effect: (sleep: (duration: Duration.Input) => void) => Effect.Effect<A, E, R>,
 ) =>
@@ -172,7 +154,6 @@ const suspendable = <A, E, R>(
 
 const checks = (calls: ReadonlyArray<string>) => Arr.filter(calls, (call) => call === "check");
 
-/** Runs `effect` with a scratch directory of its own for the updater's tar. */
 const run = <A, E>(effect: (dir: string) => Effect.Effect<A, E, FileSystem.FileSystem>) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -181,7 +162,6 @@ const run = <A, E>(effect: (dir: string) => Effect.Effect<A, E, FileSystem.FileS
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   );
 
-/** Every news `updates` gives while `during` runs. */
 const told = <A, E, R>(
   updates: { readonly news: Stream.Stream<UpdateNews> },
   during: Effect.Effect<A, E, R>,
@@ -284,7 +264,6 @@ test("the Electrobun adapter validates JavaScript SDK fields before failing with
     Effect.gen(function* () {
       const sdk = upstreamUpdater(dir);
       const port = yield* electrobunUpdater(sdk.api);
-      // The SDK runs as JavaScript even when its generated declarations are present.
       Object.defineProperty(sdk.checked, "error", { value: 42 });
       expect(yield* port.check.pipe(Effect.flip)).toContain("string");
       Object.defineProperty(sdk.downloaded, "error", { value: false });

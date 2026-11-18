@@ -1,8 +1,3 @@
-// The Collie tab. A header sentence, three sections of cards, and one Task's record over
-// them. Everything this file reads is the plain `AppState` the bridge pushes in, and
-// everything it does is a plain `Command` dispatched back out: it imports no Effect and
-// holds no runtime, which is what makes it testable with `testRender` and plain data.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -37,18 +32,12 @@ import { Flow } from "./Flow";
 import type { Pending } from "./prompts";
 
 const PRINTABLE = /^[\x20-\x7e]$/;
-/** How far in from the right the header's own menu opens, so it sits under its button. */
 const MENU_GAP = 28;
 
 export interface AppProps {
   state: () => AppState;
-  /**
-   * A question a flow running inline is waiting on. The popup renders the same component
-   * as its whole screen; here it is an overlay over the board that asked for it.
-   */
   pending?: () => Pending | null;
   dispatch: (command: Command) => void;
-  /** The brand mark's file, for a terminal that can draw one. Absent in a test. */
   logo?: string;
 }
 
@@ -57,45 +46,30 @@ export function App(props: AppProps) {
   const dimensions = useTerminalDimensions();
   const [query, setQuery] = createSignal("");
   const [searching, setSearching] = createSignal(false);
-  /** The Task whose record is open, by its own id: a Run finishing must not close it. */
   const [openId, setOpenId] = createSignal<string | null>(null);
-  /** Which part of that record is being read. A new record opens on Summary. */
   const [tab, setTab] = createSignal<Tab>("summary");
-  /** Remembered for this tab's life only: which day's finished work someone opened is
-      not a Run's business. */
   const [finishedOpen, setFinishedOpen] = createSignal(false);
   const [waitingOlderOpen, setWaitingOlderOpen] = createSignal(false);
   const [drawer, setDrawer] = createSignal<ScrollBoxRenderable>();
-  /** Answers being composed, by run and question: the tab's, until someone sends one. */
   const [drafts, setDrafts] = createSignal<Readonly<Record<string, string>>>({});
   const [typingTo, setTypingTo] = createSignal<string | null>(null);
-  /** What the open menu offers and where it was asked for: a card's, or the header's. */
   const [menuOn, setMenuOn] = createSignal<{
     items: ReadonlyArray<MenuItem>;
     at: Where;
     cursor?: number;
   } | null>(null);
-  /** How many pages of this checkout's earlier finished runs someone has asked for. */
   const [olderPages, setOlderPages] = createSignal(0);
-  /** The setting being typed into, and what has been typed at it. */
   const [editing, setEditing] = createSignal<{
     key: string;
     typed: string;
     multiline: boolean;
   } | null>(null);
-  /** The cards picked with shift, by Task: what the bar at the foot acts on. */
   const [picked, setPicked] = createSignal<ReadonlySet<string>>(new Set());
-  /** What is being steered, and what has been typed at it so far. */
   const [steering, setSteering] = createSignal(false);
   const [steers, setSteers] = createSignal<Readonly<Record<string, string>>>({});
   const [toast, setToast] = createSignal<string | null>(null);
   const [helping, setHelping] = createSignal(false);
 
-  /**
-   * Mouse reporting only while the pane has focus. herdr is a multiplexer: with mouse
-   * on, clicking anywhere in the terminal is delivered here instead of starting a text
-   * selection, so the human loses copy-and-paste in every other pane.
-   */
   onFocus(() => {
     renderer.useMouse = true;
   });
@@ -105,16 +79,12 @@ export function App(props: AppProps) {
 
   const tasks = () => props.state().tasks;
   const sections = createMemo(() => sectionsOf(tasks(), query()));
-  // Over every Task rather than what the search left: a decision a query is hiding is
-  // still waiting on the human.
   const header = createMemo(() => headerSentence(tasks(), props.state().now));
   const usage = createMemo(() => usagePhrase(props.state().usage ?? [], props.state().now));
   const columns = () => columnsFor(dimensions().width, props.state().density);
   const open = () =>
     Option.getOrUndefined(Arr.findFirst(tasks(), (view) => view.id === openId())) ?? null;
 
-  // What is open decides what the producers read, so it is dispatched rather than kept
-  // here: that is what fills the drawer's record.
   let told: string | null = null;
   createEffect(() => {
     const view = open();
@@ -129,27 +99,18 @@ export function App(props: AppProps) {
     if (view?.unseen === true) props.dispatch({ _tag: "Acknowledge", runId: view.run });
   });
 
-  // A new record opens on Summary with the keyboard back on the board: which tab the last
-  // one was left on says nothing about this one.
   createEffect(() => {
     openId();
     setSteering(false);
     setTab("summary");
   });
 
-  // And from the top, for a new record or a new tab: how far the last one had been
-  // scrolled says nothing about what is in the box now.
   createEffect(() => {
     openId();
     tab();
     drawer()?.scrollTo(0);
   });
 
-  /**
-   * The run's log is read only while the Log tab is showing it. What was asked for is
-   * remembered rather than read back off the record: the read lands a tick after the
-   * dispatch, and asking again in between would switch it off.
-   */
   let tailing = false;
   let showingArtefacts = false;
   createEffect(() => {
@@ -167,16 +128,6 @@ export function App(props: AppProps) {
 
   const flow = () => props.pending?.() ?? null;
 
-  /**
-   * Everything a card, its menu or the drawer asks for. The two that open the drawer are
-   * answered here: which record is on screen is the tab's own business, not the bridge's.
-   */
-  /**
-   * Closed on the next tick, not in the press: a terminal that reports a press twice — two
-   * mouse protocols, or a press and a release both read as one — sends the second while
-   * the menu is still on screen, where the menu's backdrop takes it instead of the card
-   * that was under the item.
-   */
   const closeMenu = () => {
     queueMicrotask(() => setMenuOn(null));
   };
@@ -202,11 +153,6 @@ export function App(props: AppProps) {
     props.dispatch(command);
   };
 
-  /**
-   * What the last command said it did. It goes when the human does anything else rather
-   * than on a clock: a line that vanishes while it is being read says nothing, and this
-   * file holds no runtime to time one with.
-   */
   createEffect(() => setToast(props.state().note));
 
   const OVERFLOW: ReadonlyArray<MenuItem> = [
@@ -222,7 +168,6 @@ export function App(props: AppProps) {
     props.dispatch({ _tag: "ShowOlder" });
   };
 
-  /** Which of Workflows and Settings is filling the pane, or null for the board. */
   const pane = () => {
     const view = props.state().view;
     return view === "runs" ? null : view;
@@ -236,11 +181,6 @@ export function App(props: AppProps) {
     if (action !== undefined) act(action.command);
   };
 
-  /**
-   * Tab moves the keyboard on, through whatever is on screen: the board, the record over
-   * it, and the one menu that leads off the board. It used to move between views, and
-   * there are no views left to move between.
-   */
   const onwards = () => {
     if (menuOn() !== null) return setMenuOn(null);
     if (openId() !== null && !steering()) return setSteering(true);
@@ -248,14 +188,12 @@ export function App(props: AppProps) {
     openOverflow();
   };
 
-  /** Whether the document on screen was cut short, which is the one thing `m` acts on. */
   const cutShort = () => {
     const detail = props.state().detail;
     if (tab() === "review") return truncated(detail?.review);
     return tab() === "plan" && truncated(detail?.plan?.spec);
   };
 
-  /** The keyboard is in one field at a time: taking it is taking it off the last one. */
   const focusSearch = () => {
     setTypingTo(null);
     setSteering(false);
@@ -305,11 +243,6 @@ export function App(props: AppProps) {
     typeHere: focusAnswer,
   };
 
-  /**
-   * The stops the board is holding, as the one line they are worth. Until the grace is
-   * up nothing has been sent, so this is what Undo takes back — and when it runs out the
-   * bridge clears the marks and the command's own note takes this line's place.
-   */
   const goingNote = () => {
     const going = props.state().stopping;
     if (going.length === 0) return null;
@@ -328,7 +261,6 @@ export function App(props: AppProps) {
       }),
   };
 
-  /** What is picked, in the board's own order, and whether there is anything to stop. */
   const stoppable = (view: TaskView) =>
     Arr.some(menuFor(view), (item) => item.command._tag === "StopRun");
   const pickedViews = () => Arr.filter(tasks(), (view) => picked().has(view.id));
@@ -338,7 +270,6 @@ export function App(props: AppProps) {
     setPicked(new Set<string>());
   };
 
-  /** The question the keyboard is in, while the board is still asking it. */
   const typingInto = () => {
     const at = typingTo();
     if (at === null) return null;
@@ -349,7 +280,6 @@ export function App(props: AppProps) {
     return null;
   };
 
-  /** The proposals a card carries: those are answered on the card, not over the board. */
   const carded = () =>
     new Set(
       Arr.flatMap(tasks(), (view) =>
@@ -357,11 +287,6 @@ export function App(props: AppProps) {
       ),
     );
 
-  /**
-   * The proposal on screen, resolved from what is pending rather than from what was
-   * drawn: a confirmation names an id and a hash, and one cached when the overlay opened
-   * would consent to a payload that has since been superseded.
-   */
   const previewing = () => {
     const id = props.state().previewing;
     if (id === null || carded().has(id)) return null;
@@ -373,11 +298,6 @@ export function App(props: AppProps) {
       ) ?? null
     );
   };
-  /**
-   * A proposal that has just appeared is put on screen. It is the one thing the board
-   * does about a proposal on its own, and it takes no pane focus: nothing but a pending
-   * question does.
-   */
   let answered = new Set<string>();
   createEffect(() => {
     const onCards = carded();
@@ -389,7 +309,6 @@ export function App(props: AppProps) {
     }
   });
 
-  /** A paste is typing, so it goes to whichever field the keyboard is on. */
   usePasteInto((append) => {
     if (flow() !== null) return;
     const setting = editing();
@@ -404,16 +323,11 @@ export function App(props: AppProps) {
   });
 
   useKeyboard((key: Keypress) => {
-    // The inline launch flow is a question over the whole board: while it is asking,
-    // `q` is a letter of the goal rather than the key that closes the tab.
     if (flow() !== null) return;
     setToast(null);
     if (helping()) return setHelping(false);
     if (key.name === "tab") return onwards();
-    // A pane fills the board, so the board's own keys are not what is on screen.
     if (pane() !== null) return typeIntoSetting(key);
-    // Above everything: a human answering a confirmation is answering it, and the keys
-    // behind it act on cards they cannot see.
     const proposal = previewing();
     if (proposal !== null) {
       if (key.name === "return") {
@@ -452,8 +366,6 @@ export function App(props: AppProps) {
       return item === undefined || item.disabled === true ? undefined : act(item.command);
     }
     if (steering()) return typeIntoSteer(key);
-    // Before the board's own keys: while a card is being typed into, `q` is a letter of
-    // the answer and `/` is not the search.
     const asked = typingInto();
     if (asked !== null) return typeIntoAnswer(asked, key);
     if (searching()) return typeIntoSearch(key);
@@ -461,7 +373,6 @@ export function App(props: AppProps) {
       if (openId() !== null) return setOpenId(null);
       return setQuery("");
     }
-    // The rest of a document the record cut short, a cap at a time.
     if (key.sequence === "m" && cutShort()) return props.dispatch({ _tag: "MoreReview" });
     if (key.sequence === "/") return focusSearch();
     if (key.sequence === "?") return setHelping(true);
@@ -469,10 +380,6 @@ export function App(props: AppProps) {
     if (key.name === "r") return props.dispatch({ _tag: "Refresh" });
   });
 
-  /**
-   * A pane's keys. A setting is typed into from empty rather than amended: these are
-   * short values, and Enter on an empty field is what unsets one.
-   */
   const typeIntoSetting = (key: Keypress) => {
     const at = editing();
     if (at === null) return key.name === "escape" ? toBoard() : undefined;
@@ -488,7 +395,6 @@ export function App(props: AppProps) {
     if (PRINTABLE.test(key.sequence)) setEditing({ ...at, typed: at.typed + key.sequence });
   };
 
-  /** The same as an answer's field: Esc leaves it and keeps what was typed. */
   const typeIntoSteer = (key: Keypress) => {
     const id = openId();
     if (id === null) return setSteering(false);
@@ -498,7 +404,6 @@ export function App(props: AppProps) {
     if (PRINTABLE.test(key.sequence)) editSteer((was) => was + key.sequence);
   };
 
-  /** Esc leaves the field and keeps the draft; only sending it empties the card. */
   const typeIntoAnswer = (question: Question, key: Keypress) => {
     if (key.name === "escape") return setTypingTo(null);
     if (key.name === "return") return decide.answer(question, Str.trim(decide.draft(question)));
@@ -506,11 +411,6 @@ export function App(props: AppProps) {
     if (PRINTABLE.test(key.sequence)) editDraft(question, (was) => was + key.sequence);
   };
 
-  /**
-   * The search keeps what was typed when the keyboard leaves it: `/` narrows the board so
-   * a card can then be clicked, so Enter stops typing and keeps the text; only Esc drops
-   * it.
-   */
   const typeIntoSearch = (key: Keypress) => {
     if (key.name === "escape") {
       setQuery("");
@@ -523,7 +423,6 @@ export function App(props: AppProps) {
 
   return (
     <box style={{ flexDirection: "column", width: "100%", height: "100%" }}>
-      {/* The launch flow, inline: the same component the popup pane draws. */}
       <Show when={flow()}>
         <Flow pending={flow()!} />
       </Show>
@@ -570,8 +469,6 @@ export function App(props: AppProps) {
             onNewRun={() => props.dispatch({ _tag: "OpenMode", mode: "pick" })}
             onClearQuery={() => setQuery("")}
           />
-          {/* Over the board, never instead of it: reading one Task must not cost the
-              overview of every other one. */}
           <Show when={open()}>
             <Drawer
               ref={setDrawer}
@@ -594,17 +491,12 @@ export function App(props: AppProps) {
           </Show>
         </box>
       </Show>
-      {/* What a confirmation is consent to, over everything: a human answering one is
-          answering it, and the keys behind it act on cards they cannot see. */}
       <Show when={previewing()}>
         <ProposalPreview proposal={previewing()!} />
       </Show>
-      {/* What a selection can do that a card cannot: the same stop, once, for all of it. */}
       <Show when={picked().size > 1}>
         <box style={{ flexDirection: "row", height: 1, flexShrink: 0, backgroundColor: C.line }}>
           <text fg={C.text}>{` ${picked().size} selected `}</text>
-          {/* Absent where nothing picked can be stopped: a button that would do nothing
-              is worse than no button. */}
           <Show when={Arr.some(pickedViews(), stoppable)}>
             <text
               fg={C.amber}
@@ -623,8 +515,6 @@ export function App(props: AppProps) {
           <text fg={C.text} bg={C.selected} style={{ flexGrow: 1 }}>
             {` ${goingNote() ?? toast()} `}
           </text>
-          {/* Only while nothing has been sent: an undo offered after the fact would be
-              a button that cannot do what it says. */}
           <Show when={goingNote() !== null}>
             <text
               fg={C.ground}

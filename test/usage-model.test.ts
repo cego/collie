@@ -1,5 +1,3 @@
-// A Usage reading from each source's recorded answer, and what is judged from it.
-
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
@@ -233,7 +231,6 @@ describe("usedFor and Exhausted", () => {
     expect(usedFor(readings, { harness: "claude", model: "claude-opus-4-1" }, NOW)?.exhausted).toBe(
       true,
     );
-    // `default` is resolved by the caller; unresolved, it names no model.
     expect(usedFor(readings, { harness: "claude", model: "default" }, NOW)?.exhausted).toBe(false);
     const sonnet45 = window({
       kind: "weekly-model",

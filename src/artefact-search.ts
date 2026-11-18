@@ -1,7 +1,3 @@
-// The Flock's search over its Machines' catalogues: each host searches its own, and this
-// merges their pages by installation, so two routes to one Machine are searched once and a
-// Machine that could not be searched is named rather than read as having nothing.
-
 import { Cause, Data, Effect, Option, Schema } from "effect";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -25,14 +21,12 @@ export class AmbiguousRun extends Data.TaggedError("AmbiguousRun")<{
   }
 }
 
-/** A Machine's host as the search reaches it. */
 export interface SearchDoor {
   readonly installation: string;
   readonly search: (asked: ArtefactSearch) => Effect.Effect<ArtefactMatches, Away>;
   readonly has: (run: string) => Effect.Effect<boolean, Away>;
 }
 
-/** A route to a Machine, by the label it is known by here. */
 export interface SearchSource<R> {
   readonly machine: string;
   readonly reach: Effect.Effect<SearchDoor, Away, R>;
@@ -40,7 +34,6 @@ export interface SearchSource<R> {
 
 export const FlockSearch = Schema.Struct({
   query: Schema.optional(Schema.String),
-  /** A Run id, alone or as `<installation>:<run>` or `<machine>:<run>`. */
   run: Schema.optional(Schema.String),
   kind: Schema.optional(Schema.String),
   role: Schema.optional(Schema.String),
@@ -60,7 +53,6 @@ export const MachineSearched = Schema.Struct({
 }).annotate({ identifier: "MachineSearched" });
 export type MachineSearched = typeof MachineSearched.Type;
 
-/** An artefact as the Flock found it: on which installation, under the label it has here. */
 export const FoundArtefact = Schema.Struct({
   installation: Schema.String,
   machine: Schema.String,
@@ -69,10 +61,8 @@ export const FoundArtefact = Schema.Struct({
 
 export const FlockArtefacts = Schema.Struct({
   items: Schema.Array(FoundArtefact),
-  /** The next page's cursor; null once every searched Machine is read to its end. */
   next: Schema.NullOr(Schema.String),
   machines: Schema.Array(MachineSearched),
-  /** Every Machine was searched and has reached all of its retained Runs. */
   complete: Schema.Boolean,
 });
 export type FlockArtefacts = typeof FlockArtefacts.Type;
@@ -106,7 +96,6 @@ export const artefactOwner = (page: FlockArtefacts, named: string) => {
   });
 };
 
-/** Each installation's place: where its last page ended, or that it has no more. */
 const Cursor = Schema.Record(Schema.String, Schema.Union([ArtefactKey, Schema.Literal("done")]));
 const CursorText = Schema.fromJsonString(Cursor);
 const readCursor = (cursor: string | undefined) =>
@@ -116,7 +105,6 @@ const readCursor = (cursor: string | undefined) =>
     Effect.mapError(() => new HostRefused({ reason: "That search cursor is not one Collie gave" })),
   );
 
-/** Pages compare newest detected first, then by installation, Run and id. */
 const before = (
   a: { readonly installation: string; readonly item: Artefact },
   b: { readonly installation: string; readonly item: Artefact },
@@ -297,7 +285,6 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
 
 const UPGRADE = "Upgrade this Machine's Collie host to search Artefacts";
 
-/** Why a Machine's host could not be searched: too old for the call, or not answering. */
 export const awayFrom = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.catchCause((cause) => {
@@ -311,7 +298,6 @@ export const awayFrom = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     }),
   );
 
-/** The calls the search makes of one host, as any front door's client offers them. */
 export const searchDoorOf = <E1, E2, E3>(client: {
   readonly identity: () => Effect.Effect<{ readonly installation?: string }, E1>;
   readonly artefactSearch: (asked: ArtefactSearch) => Effect.Effect<ArtefactMatches, E2>;

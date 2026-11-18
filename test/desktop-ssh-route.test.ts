@@ -1,6 +1,3 @@
-// ADR-draft-a-blocked-link-rides-the-machines-ssh-connection: a fake local `collie` stands
-// in for `machine connect`.
-
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -29,12 +26,10 @@ const rig = Effect.gen(function* () {
   });
   const path = `${dir}/ctl`;
   const scripts = {
-    // The far Machine's collie: a bridge to a host that identifies itself, or the words it was given.
     "far/collie": `#!/bin/sh
 if [ "$1" = bridge ]; then ${bridging(dir, "far")}; fi
 echo "far $*"
 `,
-    // This computer's collie: `machine connect` opens the shared connection, as Collie's does.
     collie: `#!/bin/sh
 echo "control=\${COLLIE_SSH_CONTROL-} $*" >> '${dir}/collie.log'
 if [ "$1 $2 $3" = "--json machine connect" ]; then

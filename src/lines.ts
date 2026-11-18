@@ -1,16 +1,3 @@
-// One card, one drift report, one delivery — as lines, once. Both the app's Live region
-// and the one-screen text view draw these, and two renderers of one card is how the text
-// view comes to say less about a Run than the app does. A row's marks and a proposed
-// action's sentence are here for the same reason: they are the same words in both.
-//
-// Nothing here reaches for Effect, which is what lets the state layer and the components
-// take these directly (ADR-0005).
-//
-// The discipline is in the lines themselves rather than in whoever draws them: a claim is
-// prefixed `claimed:` so it can never be read as a pass, `missing` is emitted even when it
-// is empty, and the narrative is last and named as Collie's. A `tone` is a hint about
-// emphasis and never the only carrier — every line reads correctly with no colour at all.
-
 import * as Struct from "effect/Struct";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -22,22 +9,18 @@ import type { Delivery } from "./steering";
 import type { DriftReport, Ref } from "./evaluator";
 import { recipientOf, type Action } from "./actions";
 
-/** How much a line asks for the eye. Never the only thing saying what it says. */
 export type Tone = "plain" | "dim" | "bad" | "accent";
 
 export interface Line {
   text: string;
   tone: Tone;
-  /** How far in it sits, so a renderer can indent without parsing the text. */
   depth: number;
 }
 
 const line = (text: string, tone: Tone = "dim", depth = 0) => ({ text, tone, depth });
 
-/** A short revision: enough to say which tree a card is about without filling its header. */
 const short = (sha: string) => pipe(sha, Str.slice(0, 7));
 
-/** Where a piece of evidence is, in the words a human would use to go and look. */
 export function refText(ref: Ref) {
   const where = Arr.join(
     Arr.map([ref.path, ref.line === undefined ? "" : `:${ref.line}`], (part) =>
@@ -51,13 +34,11 @@ export function refText(ref: Ref) {
   );
 }
 
-/** What a verification's result asks for. A pass takes none: plain text reads as ordinary. */
 function resultTone(result: Card["verifications"][number]["result"]) {
   if (result === "fail") return "bad";
   return result === "pass" ? "plain" : "dim";
 }
 
-/** Why a result that is neither a pass nor a fail is neither, said in words. */
 function resultNote(result: Card["verifications"][number]["result"]) {
   if (result === "stale") return " (against an older tree)";
   return result === "unstable" ? " (not repeatable)" : "";
@@ -77,7 +58,6 @@ export function cardLines(card: Card) {
   if (card.changes.files.length > 0) {
     lines.push(line(`changed: ${Arr.join(card.changes.files, " ")}`));
   }
-  // What somebody ran, bound to this tree. Never mixed with what an agent said.
   for (const check of card.verifications) {
     lines.push(
       line(
@@ -90,7 +70,6 @@ export function cardLines(card: Card) {
   for (const claim of card.claims) {
     lines.push(line(`claimed: ${claim.text} · ${claim.ref}`, "dim", 1));
   }
-  // Always: the half of a report that is usually missing from one.
   lines.push(
     line(
       `missing: ${card.missing.length === 0 ? "nothing was left unchecked" : Arr.join(card.missing, "; ")}`,
@@ -109,16 +88,10 @@ export function cardLines(card: Card) {
   )) {
     lines.push(line(`${name}: ${String(where)}`, "dim", 1));
   }
-  // Last, and dim: prose a model wrote about its own work, marked as its author.
   if (card.narrative !== null) lines.push(line(`Collie: ${card.narrative}`, "dim", 1));
   return lines;
 }
 
-/**
- * One drift report and its evidence. `undelivered` is a report about a Run that had
- * already finished when it was judged: never written to that Run's inbox, because there
- * is nothing there to act on it (SPEC §9.5).
- */
 export function driftLines(report: DriftReport, undelivered = false) {
   const lines = [
     line(
@@ -141,12 +114,6 @@ export function deliveryLine(delivery: Delivery) {
   );
 }
 
-/**
- * What Collie has noticed that the conversation has not been told. Drawn because a chat
- * that cannot be pushed to leaves this waiting for its next turn, and a human should see
- * it waiting rather than find out by asking. An item nobody can account for having sent
- * is said separately: it is not the same as one that has not gone yet.
- */
 export function newsLines(news: { waiting: number; uncertain: number }) {
   if (news.waiting === 0) return [];
   return [
@@ -160,7 +127,6 @@ export function newsLines(news: { waiting: number; uncertain: number }) {
   ];
 }
 
-/** One line as text, indented. What the one-screen view draws and what a test reads. */
 // oxlint-disable-next-line effecttsgo/prefer-effect-string -- Effect repeat would remove RangeError validation for negative indentation.
 export const asText = (entry: Line) => `${"  ".repeat(entry.depth)}${entry.text}`;
 
@@ -177,11 +143,6 @@ const commandLine = (command: {
 const named = (fields: Record<string, string>) =>
   Arr.map(Rec.toEntries(fields), ([name, value]) => `${name}=${value}`);
 
-/**
- * One proposed action in a sentence. Here rather than beside the CLI that first needed
- * it, because the board draws the same preview and a board that described an action its
- * own way would be a second opinion about what a human is being asked to consent to.
- */
 export function describeAction(action: Action) {
   switch (action.kind) {
     case "deliver":
@@ -194,8 +155,6 @@ export function describeAction(action: Action) {
         : `let Collie run ${action.name} for ${action.run}: ${commandLine(action.command)}`;
     case "remember_verification":
       return `keep ${action.run}'s checks for every later Run in its repository${action.replace === true ? ", replacing what is kept there" : ""}`;
-    // Which workspace, always: this writes the file that workspace's next Runs begin
-    // with, and a line that left it out asked for a yes to a change nobody could see.
     case "update_defaults":
       return action.change === "remove-constraint"
         ? `remove the constraint ${action.text} from ${everyNewRunIn(action.workspace)}`
@@ -219,13 +178,10 @@ export function describeAction(action: Action) {
     case "none":
       return `do nothing: ${action.why}`;
     case "start": {
-      // A launch that names none is refused when it is carried out; said before the yes.
       const where =
         action.workspace === undefined
           ? "no workspace named, so it will be refused"
           : `workspace ${action.workspace}`;
-      // And the inputs, because they are what the Run does: a yes to a workflow name
-      // alone is a yes to a plan nobody read.
       const on = named(action.inputs);
       const decided = named(action.decisions ?? {});
       const checks = Arr.map(action.verify ?? [], (spec) => `${spec.name}: ${commandLine(spec)}`);
@@ -244,31 +200,12 @@ export function describeAction(action: Action) {
   }
 }
 
-/**
- * What steering has found about one Run, as the row's own marks. Facts, not a verdict:
- * significance is the card's business and drift is the report's, so a row only says
- * which of them there is something to see about.
- */
 export interface RunMarks {
-  /** A card worth a human's eyes: significance `try-it`, nobody has looked yet. */
   tryIt: boolean;
-  /** A DriftReport nobody has resolved. */
   drift: boolean;
-  /** Told to take on no new work until a human releases it. */
   held: boolean;
-  /**
-   * A human typed at one of this Run's agents themselves. Per Run rather than per
-   * incarnation: the ledger records it against one agent, and what a human needs to know
-   * is that this Run is being argued with — so the Run's row and its agents' rows both
-   * say so.
-   */
   override: boolean;
-  /**
-   * Corrections are going out on a harness that cannot tell Collie's submissions from a
-   * human's. Words rather than a glyph, because it is a disclosure — see `Live.unattributed`.
-   */
   unattributed: boolean;
-  /** A proposal waiting on a yes or a no. */
   proposal: boolean;
 }
 
@@ -281,7 +218,6 @@ export const NO_MARKS: RunMarks = {
   proposal: false,
 };
 
-/** What a Run's marks look like, worst first. */
 const MARKS: ReadonlyArray<readonly [keyof RunMarks, string]> = [
   ["drift", "↯"],
   ["override", "⚠ manual"],
@@ -291,11 +227,6 @@ const MARKS: ReadonlyArray<readonly [keyof RunMarks, string]> = [
   ["tryIt", "▶"],
 ];
 
-/**
- * A Run's marks as one string. Glyphs rather than colour, because the text fallback and
- * herdr's tab strip show these too — and `⚠ manual` is words as well as a glyph because
- * a human sending to an agent behind Collie's back is what stops corrections.
- */
 export function marksOf(marks: RunMarks) {
   return Arr.join(
     Arr.map(
@@ -306,7 +237,6 @@ export function marksOf(marks: RunMarks) {
   );
 }
 
-/** The marks a group row inherits: the worst of what is under it. */
 export function worstOf(marks: ReadonlyArray<RunMarks>) {
   for (const [key, glyph] of MARKS) {
     if (Arr.some(marks, (mark) => mark[key])) return glyph;
@@ -314,7 +244,6 @@ export function worstOf(marks: ReadonlyArray<RunMarks>) {
   return "";
 }
 
-/** What a producer hands the rows: one entry per Run it found anything about. */
 export type Marks = Readonly<Record<string, RunMarks>>;
 
 export const markFor = (marks: Marks | undefined, runId: string | null) =>

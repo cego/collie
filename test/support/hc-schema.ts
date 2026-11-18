@@ -1,6 +1,3 @@
-// The pinned `hc.openrpc.json`, as the two questions the tests ask of it: every reply a
-// method may answer with, and whether one reply is among them.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -8,7 +5,6 @@ import { pipe } from "effect/Function";
 import { isString } from "../../src/schema";
 import { Exit, JsonSchema, Result, Schema, SchemaRepresentation, flow } from "effect";
 
-/** One node of the schema, in the keywords `hc.openrpc.json` uses. */
 interface Node {
   readonly $ref?: string;
   readonly type?: string | ReadonlyArray<string>;
@@ -33,18 +29,16 @@ interface Document {
 }
 
 const root = new URL("../../", import.meta.url).pathname;
-// SAFETY: the pinned files committed beside the code; a lookup below throws by name when
-// one is not shaped as this says, failing the test.
+// WARNING: the pinned files committed beside the code; a lookup below throws by name when one is not shaped as this says, failing the test.
 export const pin = (await Bun.file(`${root}hc-pin.json`).json()) as {
   readonly version: string;
   readonly schema: string;
 };
-// SAFETY: as above.
+// WARNING: as above.
 const doc = (await Bun.file(`${root}${pin.schema}`).json()) as Document;
 
 export const schemaVersion = doc.info.version;
 
-/** A reply as one line of JSON, the way a finding names it. */
 export const jsonText = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Json)),
   Result.getOrThrow,
@@ -67,14 +61,9 @@ const component: (ref: string) => [string, Node] = (ref) => {
 
 const ANY: ReadonlyArray<Schema.Json> = [null, false, 0, "s", [], {}];
 
-/**
- * Replies a node allows: each alternative at each position at least once, and each object
- * both with only its required properties and with all of them.
- */
 function samples(node: Node, seen: ReadonlyArray<string> = []) {
   if (node.$ref !== undefined) {
     const [name, target] = component(node.$ref);
-    // WaitResult nests itself: one level of it is sampled.
     const answer: ReadonlyArray<Schema.Json> = seen.includes(name)
       ? []
       : samples(target, [...seen, name]);
@@ -163,30 +152,28 @@ function samples(node: Node, seen: ReadonlyArray<string> = []) {
   }
 }
 
-/** Every reply the pinned schema allows `method` to answer with, as far as sampling goes. */
 export const replySamples = (method: string) => samples(resultOf(method));
 
 const definitions = Rec.map(
   doc.components.schemas,
-  // SAFETY: a component is a JSON Schema node; the conversion reads it as one.
+  // WARNING: a component is a JSON Schema node; the conversion reads it as one.
   (node) => JsonSchema.fromSchemaOpenApi3_1(node as JsonSchema.JsonSchema).schema,
 );
 
 const allowed = new Map<string, Schema.Top>();
 
-/** Why the pinned schema forbids `reply` to `method`, or undefined where it allows it. */
 export function replyViolation(method: string, reply: Schema.Json) {
   let schema = allowed.get(method);
   if (!schema) {
     schema = SchemaRepresentation.fromJsonSchemaDocument({
       dialect: "draft-2020-12",
-      // SAFETY: as above.
+      // WARNING: as above.
       schema: JsonSchema.fromSchemaOpenApi3_1(resultOf(method) as JsonSchema.JsonSchema).schema,
       definitions,
     });
     allowed.set(method, schema);
   }
-  // SAFETY: a schema imported from JSON Schema decodes plain JSON and needs no services.
+  // WARNING: a schema imported from JSON Schema decodes plain JSON and needs no services.
   const exit = Schema.decodeExit(schema as Schema.Decoder<unknown>)(reply);
   return Exit.isSuccess(exit) ? undefined : String(exit.cause);
 }

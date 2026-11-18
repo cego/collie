@@ -1,6 +1,5 @@
 import { Effect, Stream } from "effect";
 
-/** Closing the client's reply also closes its RPC reader, even between events. */
 export const replyEvents = <A, E>(stream: Stream.Stream<A, E>, signal?: AbortSignal) =>
   Stream.toAsyncIterable(
     signal === undefined

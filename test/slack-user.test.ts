@@ -11,7 +11,6 @@ import { Rig } from "./support/recorder";
 
 const USER_TOKEN = "xoxe.xoxp-1-user-opaque-secret";
 
-/** A Machine's home with `slack-user.env` holding `lines`, or no such file for null. */
 const machine = (lines: string | null, bot?: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -142,7 +141,6 @@ test("the user token is handed back only once Slack says it is the expected huma
   ));
 
 test("Slack's rotating access and refresh tokens are redacted whole", () => {
-  // Joined here so the forge's secret scanning does not take them for real tokens.
   const refresh = "xoxe-1" + "-My0xLTEyMzQ1Ni1yZWZyZXNoLXRva2Vu";
   const access = "xoxe.xoxp-1" + "-Mi0yLTEyMzQ1Ni1hY2Nlc3MtdG9rZW4";
   expect(redact(`refresh ${refresh} then ${access}.`)).toBe(

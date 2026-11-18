@@ -1,7 +1,3 @@
-// A Run's agents on core: launched, given their work, read and
-// stopped through core's own API on the rig's fake core, which takes a prompt the way a
-// harness does. The rest of the host is real: the dispatcher, its ledger and the engine.
-
 import { launchedAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
@@ -65,7 +61,6 @@ const body = work.toLayer((payload) =>
   }).pipe(asRun(payload)),
 );
 
-/** A review, then a fix, by one OpenCode agent: its first prompt goes at launch, its second as a send. */
 const opencodeWork = enveloped({
   name: "core-opencode",
   input: {},
@@ -88,7 +83,6 @@ const opencodeBody = opencodeWork.toLayer((payload) =>
   }).pipe(asRun(payload)),
 );
 
-/** What an OpenCode launch on core carries, as the fake core logged it. */
 const OpenCodeLaunch = Schema.Struct({
   argv: Schema.Array(Schema.String),
   env: Schema.Struct({
@@ -104,7 +98,6 @@ const OpenCodeLaunch = Schema.Struct({
   }),
 });
 
-/** The part of an OpenCode plugin OpenCode calls, as the reporter exports it. */
 interface OpenCodePlugin {
   readonly CollieStatus: () => Promise<{
     readonly event: (input: { readonly event: Schema.Json }) => Promise<void>;
@@ -113,7 +106,6 @@ interface OpenCodePlugin {
 
 const PiLaunch = Schema.Struct({ argv: Schema.Array(Schema.String) });
 
-/** One step by a pi agent, which asks the human before it writes anything. */
 const piWork = enveloped({ name: "core-pi", input: {}, success: Verdict });
 const piBody = piWork.toLayer((payload) =>
   agentWork({
@@ -130,7 +122,6 @@ const piBody = piWork.toLayer((payload) =>
 
 const CLAUDE_HELP = "  --autocompact <auto|tokens>           Auto-compact window size";
 
-/** No compaction and no trust prompt, so a turn is only what the test sends. */
 const quietConfig = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const userDir = rig.pluginEnv().userDir;
@@ -153,7 +144,6 @@ const hostOf: (env: Record<string, string>) => AgentHost = (env) => ({
   collectMs: 400,
   help: () => Effect.succeed(CLAUDE_HELP),
   version: () => Effect.succeed("2.1.309 (Claude Code)"),
-  // The helper a pi agent's question tool runs, from source.
   self: [process.execPath, `${import.meta.dir}/../src/main.ts`],
 });
 
@@ -268,7 +258,6 @@ test("an OpenCode agent on core is launched with its reporter and its first prom
       const core = yield* rig.startCore();
       yield* quietConfig;
       const sessionFile = `${dir}/agents/r1/review.session`;
-      // The reporter writes the session id once OpenCode opens the session, before any Output.
       yield* rig.queueOutputs([
         { writes: [{ path: sessionFile, text: "ses_review" }], output: { verdict: "clean" } },
         { verdict: "fixed" },
@@ -355,7 +344,6 @@ test(
           hostLockOf(rig.pluginEnv().stateDir),
           `{"pid":${process.pid},"start":null}`,
         );
-        // Two more for the Output reminders its review turn draws by ending before it asks.
         yield* rig.queueOutputs([null, null, null, null, null]);
         const agent = agentName("r1", "builder", null, 1);
         const delivered = () =>
@@ -385,8 +373,6 @@ test(
             expect(launched.agentSession).toEqual({ kind: "pi", value: chosen ?? "" });
 
             const tools = yield* piTools(argv[argv.indexOf("-e") + 1] ?? "");
-            // The tool's helper stamps its question on the wall clock, which this test's clock
-            // runs ahead of: a question stamped before its work was given is not that work's.
             yield* waitFor(
               Effect.map(TestClock.withLive(Clock.currentTimeMillis), (now) => now > launched.at!),
             );
@@ -536,8 +522,6 @@ test("Go to pane names an agent's core terminal while the host still inherits He
     Effect.gen(function* () {
       const core = yield* rig.startCore();
       const started = yield* launched(core, "builder-1", rig.projectDir);
-      // The rig's environment carries HERDR_SOCKET_PATH to its tripwire, as a host started
-      // from an old login did; asking it anything fails the rig on close.
       const env = rig.pluginEnv();
 
       const at = yield* focusPane(yield* liveHerds(new Herdr(env), env), [

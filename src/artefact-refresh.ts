@@ -7,7 +7,6 @@ export interface RefreshJob<R> {
   readonly check: Effect.Effect<boolean, never, R>;
 }
 
-/** Coalesced, bounded refreshes due every 30 seconds, backing off a failing source. */
 export const refreshJobs = () => {
   const permits = Semaphore.makeUnsafe(2);
   const pending = new Map<string, Deferred.Deferred<boolean>>();
@@ -60,7 +59,6 @@ export const refreshJobs = () => {
         (job: RefreshJob<R>) => job.key,
         Order.String,
       );
-      // On from the last one checked, so a failing source cannot hold the front.
       const rotated = Arr.take(
         [
           ...Arr.filter(ready, (job) => job.key > cursor),

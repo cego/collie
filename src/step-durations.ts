@@ -1,9 +1,6 @@
-// How long a workflow's Steps usually take, from the Step lines its Runs recorded.
-
 import { Effect } from "effect";
 import { RunRecords } from "./run-records";
 
-/** The median of each Step's samples, where it has at least three. */
 const usualOf = (samples: ReadonlyArray<number>) => {
   if (samples.length < 3) return undefined;
   const values = [...samples].sort((a, b) => a - b);
@@ -11,7 +8,6 @@ const usualOf = (samples: ReadonlyArray<number>) => {
   return values.length % 2 === 0 ? (values[middle - 1]! + values[middle]!) / 2 : values[middle]!;
 };
 
-/** Each workflow's usual Step times, by Step id. */
 export const stepTimesByWorkflow = RunRecords.use((records) => records.stepSamples).pipe(
   Effect.map((rows) => {
     const byStep = new Map<string, Map<string, number[]>>();

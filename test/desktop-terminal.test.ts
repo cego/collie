@@ -1,5 +1,3 @@
-// Desktop attaches only to core: local and remote terminals, input, resize and reconnect.
-
 import { pipe as pipe_ } from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -27,11 +25,11 @@ test("a chosen agent is focused by its own Run, and no choice asks for the Run's
     Effect.gen(function* () {
       const asked: Array<unknown> = [];
       const focus: Partial<Door> = {
-        // SAFETY: focusOn calls focus with a payload alone, and reads only its pane.
+        // WARNING: focusOn calls focus with a payload alone, and reads only its pane.
         focus: ((payload: { runId: string; agent?: string; request: string }) =>
           Effect.sync(() => (asked.push(payload), AT))) as Door["focus"],
       };
-      // SAFETY: focusOn calls only focus.
+      // WARNING: focusOn calls only focus.
       const door: Reached = { machine: { profile: "vm", name: "vm-mk" }, desktop: focus as Door };
       yield* focusOn(door, "rq-1", "run-1.implement", "review-1");
       yield* focusOn(door, "rq-2", "run-1");
@@ -105,7 +103,6 @@ test("a Run whose host names no pane has nothing to control, and is only said wh
     }),
   ));
 
-/** A fake core and a login shell whose PATH rejects every legacy herdr call. */
 const coreRig = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* socketDir("desktop-core-");
@@ -148,7 +145,6 @@ socket.end();
   const Logged = Schema.fromJsonString(
     Schema.Struct({ cmd: Schema.String, params: Schema.optionalKey(Schema.Json) }),
   );
-  /** What core was told, once `ready` holds of it. */
   const told = (ready: (entries: ReadonlyArray<typeof Logged.Type>) => boolean) =>
     fs.readFileString(logPath).pipe(
       Effect.map((text) =>
@@ -165,7 +161,6 @@ const drawn = (event: TerminalEvent | undefined) =>
     ? new TextDecoder().decode(Result.getOrThrow(Base64.decode(event.bytes)))
     : `not a frame: ${event?._tag}`;
 
-/** Every event the terminal shows, drawn as it comes. */
 const shownAll = (opened: { readonly events: Stream.Stream<TerminalEvent> }) =>
   Effect.gen(function* () {
     const shown = yield* Queue.unbounded<TerminalEvent>();

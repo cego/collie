@@ -1,5 +1,3 @@
-// How the Flow's workspace shares the record between the rail, the Step's context and its work.
-
 import { expect, test } from "bun:test";
 import {
   contextStepped,

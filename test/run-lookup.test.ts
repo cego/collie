@@ -1,5 +1,3 @@
-// A question about one Run asks the host for that Run, and an answer lists every Run at most once.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
@@ -22,7 +20,6 @@ import { recordsAt } from "../src/records";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 
-/** The few calls these answers make, as a host answers them. */
 const Asked = RpcGroup.make(
   Rpc.make("identity", {
     success: Schema.Struct({ build: Schema.String, pid: Schema.Int, dir: Schema.String }),
@@ -66,7 +63,6 @@ const view: (runId: string, parent?: string | null) => RunView = (runId, parent 
   landing: null,
 });
 
-/** A host in `dir` answering as `build`, holding `views`, with each call it is asked counted. */
 const hostOf = (dir: string, views: ReadonlyArray<RunView>, build = BUILD) =>
   Effect.gen(function* () {
     const asked: Array<string> = [];

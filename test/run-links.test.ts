@@ -56,7 +56,6 @@ const linksTo = (side: Side, requester: string, run: string) =>
     }),
   );
 
-/** How many of `run`'s reports `side`'s core was asked to give its agents. */
 const reportsTo = (side: Side, run: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(side.coreLog)),
@@ -382,7 +381,6 @@ test(
               },
             });
             yield* first.cli(["board"]);
-            // The notice is sent again before the report.
             yield* until(
               () => reportsTo(first, d),
               (count) => count > 0,
@@ -514,7 +512,6 @@ test(
               },
             });
             yield* first.cli(["board"]);
-            // Its dial is refused, which is as far as the link gets.
             yield* until(
               () =>
                 first

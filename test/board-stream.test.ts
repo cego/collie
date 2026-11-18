@@ -1,6 +1,3 @@
-// The board as the host serves it on `FrontDoorRpcs`: what a client on another computer
-// reads, over the same socket every client uses.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -64,7 +61,6 @@ const firstSnapshot = (state: string) =>
     }),
   ).pipe(Effect.orDie);
 
-/** What became of a Run's work, recorded through the host as a human records it. */
 const recordDisposed = (world: World, runId: string, kind: "merged" | "abandoned" | "superseded") =>
   collie(world, ["run", "disposition", runId, "--as", kind]).pipe(
     Effect.tap((said) => Effect.sync(() => expect(said.envelope.ok).toBe(true))),
@@ -77,7 +73,6 @@ test(
       "collie-board-stream-",
       (world) =>
         Effect.gen(function* () {
-          // A specific title keeps startup's generic-task renamer out of this fixture.
           yield* writeTask({
             id: "task-1",
             workspace: "w1",
@@ -109,7 +104,6 @@ test(
             Stream.runCollect,
             Effect.forkScoped,
           );
-          // A second subscriber rides the same change stream and is told too.
           const alongside = yield* (yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie))
             .board()
             .pipe(Stream.filter(merged), Stream.runHead, Effect.forkScoped);
@@ -134,12 +128,10 @@ test(
           const last = changes.at(-1)!;
           expect(last._tag === "Upsert" && last.task.id).toBe(snapshot.tasks[0]!.id);
 
-          // A client that comes back is told where the board is now, not what it missed.
           const again = yield* firstSnapshot(world.state);
           expect(again?._tag).toBe("Snapshot");
           expect(again?.tasks[0]?.disposition).toBe("merged");
 
-          // The CLI prints that same snapshot.
           const printed = yield* collie(world, ["board"]);
           const cards = (yield* Schema.decodeUnknownEffect(
             Schema.Struct({ tasks: Schema.Array(TaskView) }),
@@ -148,7 +140,6 @@ test(
             Arr.map(again!.tasks, ({ id, name, sentence }) => ({ id, name, sentence })),
           );
 
-          // Every subscriber has left; one that reconnects is still told what changes.
           const abandoned = disposed("abandoned");
           const back = yield* (yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie))
             .board()
@@ -183,7 +174,6 @@ test(
             Schema.Struct({ runId: Schema.String }),
           )(started.envelope.data).pipe(Effect.orDie);
           expect((yield* collie(world, ["run", "wait", runId])).envelope.ok).toBe(true);
-          // The host sees the finish a moment after the wait returns.
           yield* until(
             () => firstSnapshot(world.state),
             (snapshot) => snapshot?.tasks[0]?.state === "done",
@@ -200,7 +190,6 @@ test(
               ),
             ),
           ).toEqual(["Hi"]);
-          // `age` is reckoned when a board is built, and a tick may build one between the two.
           const ageless = (tasks: ReadonlyArray<TaskView> = []) =>
             Arr.map(tasks, (task) => ({ ...task, age: null }));
           expect(ageless(second?.tasks)).toEqual(ageless(first?.tasks));
@@ -303,7 +292,6 @@ const asJson = Schemaflow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
-/** The actions a Run's Flow offers on the node of the agent named `agent`. */
 const actionsOf = (flow: Flow | null | undefined, agent: string) =>
   Option.getOrUndefined(
     Option.flatMap(Option.fromNullishOr(flow), (present_) =>
@@ -409,7 +397,6 @@ test("an older host's focus, which names no pane, still decodes", () => {
 
 const HEAD = { installation: "i", build: "b", protocol: PROTOCOL, herds: [] };
 
-/** A board built from what the test hands it, one build at a time, counting each. */
 const handBuilt = Effect.gen(function* () {
   const builds = yield* Queue.unbounded<ReadonlyArray<TaskView> | "fails">();
   const changed = yield* Queue.unbounded<void>();
@@ -430,7 +417,6 @@ const handBuilt = Effect.gen(function* () {
       Stream.runCollect,
       Effect.forkScoped,
     );
-  /** Hands over a board and waits until a build has taken it, so the next change is its own. */
   const built = (next: ReadonlyArray<TaskView> | "fails") =>
     Queue.offer(builds, next).pipe(
       Effect.andThen(
@@ -505,7 +491,6 @@ test("changes that arrive during a build are folded into one more build", () =>
       Effect.gen(function* () {
         const hand = yield* handBuilt;
         const following = yield* hand.follow(1);
-        // The first build is under way, so the changes arrive during it.
         while (hand.calls() === 0) yield* Effect.yieldNow;
         yield* Queue.offerAll(hand.changed, [undefined, undefined, undefined]);
         yield* hand.built([one]);
@@ -547,7 +532,6 @@ test("the board is built with nobody subscribed, and every reader of one interva
         yield* hand.built([one]);
         expect(hand.calls()).toBe(1);
         const clients = [yield* hand.follow(1), yield* hand.follow(1)];
-        // News and the merge watch each read the latest board.
         const latest = [yield* Stream.runHead(hand.boards), yield* Stream.runHead(hand.boards)];
         for (const client of clients) expect(tags(yield* Fiber.join(client))).toEqual(["Snapshot"]);
         expect(Arr.map(latest, (read) => read._tag === "Some" && read.value)).toEqual([
@@ -578,7 +562,6 @@ test("the latest board is read at once while a newer one builds, and the first i
         expect(Arr.map(yield* Fiber.join(first), (view) => view.id)).toEqual(["built-1"]);
 
         yield* Queue.offer(changed, undefined);
-        // The next build rests as long as the last one took, at most 5 s.
         yield* TestClock.adjust("5 seconds");
         while (builds < 2) yield* Effect.yieldNow;
         const asked = yield* Clock.currentTimeMillis;
@@ -611,7 +594,6 @@ test("a build waits as long as the last one took, and at most 5 s, before it sta
         });
         yield* settle;
         expect(starts).toEqual([0]);
-        // Moved during the first build, which took 2 s: the next starts 2 s after it.
         yield* Queue.offer(changed, undefined);
         yield* TestClock.adjust("2 seconds");
         yield* settle;
@@ -621,7 +603,6 @@ test("a build waits as long as the last one took, and at most 5 s, before it sta
         yield* TestClock.adjust("1 millis");
         yield* settle;
         expect(starts).toEqual([0, 4_000]);
-        // An 8 s build is followed by 5 s of rest, not 8.
         yield* Queue.offer(changed, undefined);
         yield* TestClock.adjust("8 seconds");
         yield* settle;
@@ -804,7 +785,6 @@ test("a Run recorded in the store is on the board at once, with no tick and no f
         const seen = yield* boards.pipe(
           Stream.filter((views) => Arr.some(views, (view) => view.id === "run-new")),
           Stream.runHead,
-          // Well inside the 5 s tick, which this board does not have.
           Effect.timeout("3 seconds"),
         );
         expect(seen._tag).toBe("Some");
@@ -831,7 +811,6 @@ test("a reader that arrives after a change reads a board built after it, not the
     ).pipe(fastForward),
   ));
 
-/** A state directory with a Run's files, and the paths its board's watch lets through. */
 const watchedState = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -860,7 +839,6 @@ const watchedState = Effect.gen(function* () {
   yield* Effect.forkScoped(Stream.runForEach(boardWrites(dir), (path) => Queue.offer(seen, path)));
   yield* until(() => write("ready").pipe(Effect.andThen(Queue.poll(seen))), Option.isSome);
   const told = new Set<string>();
-  /** Each path through not told before, readiness left out, once every one of `wanted` is. */
   const through = (wanted: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       const paths = new Set<string>();
@@ -1001,7 +979,6 @@ test("a Run's open drawer lists a handoff's new size while the board's watch let
           () =>
             Option.getOrUndefined(Arr.findFirst(listed, (file) => file.name === name))?.bytes ?? 0,
         );
-      // Further apart than the drawer's debounce, which each write would put off again.
       const followed = append("runs/run-a/handoffs/ready").pipe(
         Effect.map(() => drawerSaw),
         Effect.repeat({ until: (saw) => saw, schedule: Schedule.spaced("300 millis") }),

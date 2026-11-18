@@ -1,14 +1,3 @@
-// Collie's workflow engine: Effect's, run from the compiled binary.
-//
-// A workflow lives in a TypeScript file outside this checkout. This module is what lets
-// the packaged executable load one, give it the binary's own Effect rather than a second
-// copy, and run it on ClusterWorkflowEngine over real SQLite — so a host that dies leaves
-// completed work completed and a pending decision pending. Nothing here interprets a
-// workflow: the module is code, and Effect executes it.
-//
-// `docs/adr/0014-native-workflows-run-on-effects-own-engine.md` records why each of the
-// pieces below is upstream's rather than Collie's.
-
 import { ShippingGo, writeStageProof } from "./shipping";
 import { Artefacts } from "./artefacts";
 import { NarrativeReport } from "./narrative-model";
@@ -384,8 +373,6 @@ import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 
-/** A module that cannot be loaded, named by its own file. Schema-backed, so the local
- *  host can fail a client with the same value rather than a copy of it. */
 export class EntryError extends Schema.TaggedError<EntryError, { readonly brand: unique symbol }>()(
   "EntryError",
   {
@@ -394,12 +381,9 @@ export class EntryError extends Schema.TaggedError<EntryError, { readonly brand:
   },
 ) {}
 
-/** What a refusal says first where the input is why, which a front door reads back. */
 export const REFUSED_INPUT = "invalid_input";
-/** The prefix of a refusal that names what a start left unsaid. */
 export const NEEDS_INPUT = "needs_input";
 
-/** A placement that may have changed something outside, which nothing here can prove either way. */
 class PlacementUncertain extends Schema.TaggedError<
   PlacementUncertain,
   { readonly brand: unique symbol }
@@ -412,26 +396,14 @@ export class ToolchainError extends Data.TaggedError("ToolchainError")<{
   readonly message: string;
 }> {}
 
-/**
- * The SDK the binary serves to a module it loads. Without this an external file resolves
- * `effect` from its own directory — a second copy whose `Effect.succeed` builds values
- * this process's runtime does not recognise, and whose service keys are not the host's.
- * The directory does hold one, because that is where an author's declarations come from,
- * which is exactly why serving the bundled namespaces has to win.
- *
- * Each index module is expanded into its members, so `effect/Effect` and
- * `effect/workflow/Workflow` are the binary's objects as surely as `effect` is.
- */
 const NAMESPACES = [
   ["effect", EffectRoot],
   ["effect/workflow", WorkflowModules],
   ["effect/process", ProcessModules],
   ["effect/crypto", CryptoModules],
-  // rc.117's path, so a module saved before 4.0.0 moved it still loads. Goes in Collie 0.42.0.
   ["effect/unstable/workflow", WorkflowModules],
 ] as const;
 
-/** What Effect removed that a module saved before may still import, and what replaces it. */
 const REMOVED = [
   [
     "effect/Crypto",
@@ -440,9 +412,6 @@ const REMOVED = [
 ] as const;
 
 export const sdkModules: () => ReadonlyArray<readonly [string, object]> = () => {
-  // Two files, one module: `sdk.ts` is what a module declares about itself and `agents.ts`
-  // is what it does with an agent. They are apart because the second reaches for herdr
-  // and the first must not, and an author has no reason to know that.
   const served: Array<readonly [string, object]> = [["collie", { ...Sdk, ...AgentsSdk }]];
   for (const [prefix, namespace] of NAMESPACES) {
     served.push([prefix, namespace]);
@@ -452,18 +421,11 @@ export const sdkModules: () => ReadonlyArray<readonly [string, object]> = () => 
   return served;
 };
 
-/** Kept in step with package.json, which `engine.test.ts` checks: the host and an
- *  author's declarations have to be the same Effect, or the types are about another one. */
 export const TOOLCHAIN = {
   effect: "4.1.4",
   typescript: "^7.0.2",
 } as const;
 
-/**
- * The declarations an author typechecks `collie` against, kept in step with
- * `src/sdk.ts` by `engine.test.ts` — which typechecks a module using the whole
- * surface, so a declaration that has drifted fails a test rather than an author's build.
- */
 export const SDK_DECLARATIONS = `declare module "collie" {
   export type ConnectionId = ${Arr.join(
     Arr.map(ConnectionId.literals, (id) => JSON.stringify(id)),
@@ -2756,18 +2718,8 @@ declare module "*.md" {
 
 let sdkInstalled = false;
 
-/**
- * Registers the SDK with Bun's module resolver, once per process. A virtual module per
- * specifier, so `import "effect"` from anywhere in the author's imports lands here.
- */
-/** `self` is the workflow that declared the offer, whatever a fork has renamed it to. */
 const itself = (workflow: string) => (workflow === "self" ? SELF : workflow);
 
-/**
- * What a module declares, as offers. The eligibility functions are the author's own and
- * are kept as they are: the module is the only thing that can answer for its own actions,
- * and a projection of one would be a copy that stops agreeing with it.
- */
 export function declaredByModule(metadata: WorkflowMetadata | undefined) {
   const actions = Arr.map(metadata?.actions ?? [], (action) => ({
     id: action.id,
@@ -2809,8 +2761,6 @@ export function installSdk() {
     name: "collie-sdk",
     setup(build) {
       for (const [specifier, namespace] of sdkModules()) {
-        // Spread rather than passed on: Bun's object loader takes a plain object, and
-        // the values in it stay the very functions and keys the binary is running on.
         build.module(specifier, () => ({ exports: { ...namespace }, loader: "object" }));
       }
       for (const [specifier, reason] of REMOVED)
@@ -2821,26 +2771,12 @@ export function installSdk() {
   });
 }
 
-/**
- * Imports a workflow entry file and holds it to the published contract. A module that
- * does not compile, does not exist, does not export the contract or contradicts itself
- * fails naming its own file — so one bad entry says which one it is and leaves every
- * other entry loadable.
- *
- * Importing runs the module's top level, which is the author's code. It does not run a
- * workflow body, acquire an agent or open a worktree; nothing here is a sandbox. What the
- * definition declares is checked here, at load, which is why a contradiction never
- * reaches a Run.
- */
 export const loadEntry: (
   file: string,
-  /** Its directory's `revisionOf`, where a caller reading every entry in it has it already. */
   revision?: string,
 ) => Effect.Effect<WorkflowEntry, EntryError, FileSystem.FileSystem> = Effect.fn(
   "Engine.loadEntry",
 )(function* (file: string, revision?: string) {
-  // Bun's module registry has no invalidation, so an entry or a helper read twice at one
-  // path is the first read both times. Each read is of a copy of what is there now.
   const staged = yield* stagedEntry(file, revision);
   return yield* readStagedEntry(file, staged);
 });
@@ -2875,7 +2811,6 @@ const readStagedEntry = Effect.fn("Engine.readStagedEntry")(function* (
 
 const IsSchema = Schema.declare(Schema.isSchema);
 
-/** What a default export has to be before it is read as a definition. */
 const DefinitionContract = Schema.Struct({
   id: Schema.String,
   title: Schema.optionalKey(Schema.String),
@@ -2888,11 +2823,9 @@ const DefinitionContract = Schema.Struct({
 });
 const readDefinition = Schema.decodeUnknownResult(DefinitionContract, { errors: "all" });
 
-/** A module's default export held to the contract a definition is read against. */
 const isWritten = (exported: unknown): exported is WrittenDefinition =>
   Schema.is(DefinitionContract)(exported);
 
-/** A definition as the entry the rest of the host reads. */
 const entryOf: (definition: WorkflowDefinition) => WorkflowEntry = (definition) => {
   const { outcome, checkout, closes, heals, followUps, actions, connections, follows } = definition;
   const path = Option.getOrUndefined(
@@ -2926,7 +2859,7 @@ const entryOf: (definition: WorkflowDefinition) => WorkflowEntry = (definition) 
       ([, value]) => value !== undefined,
     ),
   );
-  // SAFETY: checkEntry refuses an input field that is not a schema before anything settles one.
+  // WARNING: checkEntry refuses an input field that is not a schema before anything settles one.
   return {
     id: definition.id,
     title: definition.title,
@@ -2938,32 +2871,26 @@ const entryOf: (definition: WorkflowDefinition) => WorkflowEntry = (definition) 
   };
 };
 
-/** The strategies the executing definition declares, so its host can read a Run's diff target. */
 const WorkflowHints = Context.Reference<Readonly<Record<string, InputStrategy>>>(
   "collie/WorkflowHints",
   { defaultValue: () => ({}) },
 );
 
-/** The envelope a definition is executed with, read where the host hands it over. */
 const readEnvelope = flow(
   Schema.decodeUnknownResult(Schema.Struct({ runId: Schema.String })),
   Result.getOrThrow,
 );
 
-/** One line of a Run's Step records, stamped now. The host is their only writer. */
 const noteStep = (dir: string, note: StepNote) =>
   Effect.gen(function* () {
-    // SAFETY: a note is a line without its time, which is added here.
+    // WARNING: a note is a line without its time, which is added here.
     yield* appendStepLine(dir, { ...note, at: yield* nowIso } as StepLine);
   });
 
-/** Why a Run's work is about to be entered again, where it goes on with work left part-done. */
 const entryCauses = new Map<string, "restarted" | "resumed">();
 
-/** In-flight Runs a resume made live with another Run's module: held at entry until their own resume. */
 const heldAtEntry = new Map<string, Deferred.Deferred<void>>();
 
-/** Lets a held Run enter; false where it was not held. */
 const releaseEntry = (runId: string) =>
   Effect.suspend(() => {
     const hold = heldAtEntry.get(runId);
@@ -2971,7 +2898,6 @@ const releaseEntry = (runId: string) =>
     return hold === undefined ? Effect.succeed(false) : Deferred.succeed(hold, undefined);
   });
 
-/** Observed Run entries; upstream resume returns no wake acknowledgment. */
 const entriesOf = new WeakMap<HostWorkflow, Map<string, number>>();
 
 const waitForEntry = (workflow: HostWorkflow, runId: string, before: number) =>
@@ -2982,16 +2908,11 @@ const waitForEntry = (workflow: HostWorkflow, runId: string, before: number) =>
     Effect.orElseSucceed(() => false),
   );
 
-/**
- * The Effect workflow a definition is registered as, under the host's own name for this
- * generation. The Run it executes as is provided here, so no author passes it along.
- */
 const registrationOf: (definition: WorkflowDefinition, name: string) => Registration = (
   definition,
   name,
 ) => {
-  // SAFETY: every workflow is executed with this envelope, and its input is the
-  // definition's own struct, whose fields checkEntry has held to be schemas.
+  // WARNING: every workflow is executed with this envelope, and its input is the definition's own struct, whose fields checkEntry has held to be schemas.
   const payload = Schema.Struct({ runId: Schema.String, input: definition.input }) as HostPayload;
   const error: HostCodec =
     definition.error === undefined
@@ -3012,12 +2933,11 @@ const registrationOf: (definition: WorkflowDefinition, name: string) => Registra
       ),
     ) ?? [];
   const enter = (envelope: Schema.Schema.Type<HostPayload>) => {
-    // SAFETY: the envelope decoded against the definition's own input struct.
+    // WARNING: the envelope decoded against the definition's own input struct.
     const input = envelope.input as never;
     const run = Run.of({ id: readEnvelope(envelope).runId, workflow: definition.id });
     const before = entries.get(run.id) ?? 0;
     entries.set(run.id, before + 1);
-    // A host's first entry into work some host entered before goes on where that one died.
     const cause = entryCauses.get(run.id) ?? (before === 0 ? "restarted" : null);
     entryCauses.delete(run.id);
     const entered = Effect.gen(function* () {
@@ -3056,20 +2976,13 @@ const registrationOf: (definition: WorkflowDefinition, name: string) => Registra
   return { workflow, layer };
 };
 
-/** The Run a follow-up recovered the implementation of. */
 const RECOVERY_PARENT = "recovery-parent";
 
-/** How a Run that completed or failed ended, kept for when its module is gone. */
 const TERMINAL = "terminal.json";
 
-/**
- * A Run's ending, as the host tells it: what Oversight settles as it finishes, then the
- * toast. A suspension is not an ending, and a question or a stop says so for itself.
- */
 const ended = (runId: string, status: typeof RunStatus.Type) =>
   Effect.gen(function* () {
     if (status.status === "complete" || status.status === "failed") {
-      // The host runs every Run with its records; a module's own Layer cannot ask for them.
       const records = yield* Effect.serviceOption(RunRecords);
       if (Option.isNone(records))
         return yield* Effect.die(`${runId} ended with no records to keep it`);
@@ -3080,7 +2993,6 @@ const ended = (runId: string, status: typeof RunStatus.Type) =>
     yield* told(runId, status);
   });
 
-/** What an ending says to whoever started the Run, in the words the board reads it in. */
 const told = (runId: string, status: typeof RunStatus.Type) =>
   Effect.serviceOption(Notifier).pipe(
     Effect.flatMap((found) => {
@@ -3097,11 +3009,6 @@ const told = (runId: string, status: typeof RunStatus.Type) =>
     }),
   );
 
-/**
- * Where entries are staged to be read: this account's own cache, and only while nobody
- * else can write there, since what is in it is imported as code. A copy is named by its
- * content, so it is never stale.
- */
 const entriesRoot = Effect.fn("Engine.entriesRoot")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   const cache = Bun.env.XDG_CACHE_HOME || `${Bun.env.HOME ?? Bun.env.TMPDIR ?? "/tmp"}/.cache`;
@@ -3121,11 +3028,6 @@ const entriesRoot = Effect.fn("Engine.entriesRoot")(function* (file: string) {
   return entries;
 });
 
-/**
- * An entry's directory as it is now, staged once and then shared by every process that
- * reads it. Staged under a name of its own and renamed into place, so nobody imports a
- * copy another process is still writing.
- */
 const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, revision?: string) {
   const fs = yield* FileSystem.FileSystem;
   const entries = yield* entriesRoot(file);
@@ -3134,7 +3036,6 @@ const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, rev
   const root = `${entries}/generations/${name}`;
   const staged = { root, file: `${root}${file}` };
   if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) {
-    // Its age is its last use, which is what cleanup removes it by (ADR-0045).
     const now = DateTime.toDateUtc(yield* DateTime.now);
     yield* fs.utimes(root, now, now).pipe(Effect.ignore);
     return staged;
@@ -3144,26 +3045,16 @@ const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, rev
     Effect.provide(Path.layer),
   );
   const drafted = `${entries}/generations/${draft}`;
-  // Another process that staged it first is as good as this one.
   yield* fs
     .rename(drafted, root)
     .pipe(Effect.catch(() => fs.remove(drafted, { recursive: true }).pipe(Effect.ignore)));
   return staged;
 });
 
-/**
- * What beside an entry is not its code: the installed toolchain, linked rather than copied,
- * and the project file a typecheck writes for itself and removes again.
- */
 const unstaged = (name: string) =>
   name === "node_modules" || pipe(name, Str.startsWith(CHECK_PROJECT));
 const CHECK_PROJECT = ".collie-check";
 
-/**
- * Every path under `dir` a recursive listing names, but none of what is `unstaged`: a
- * provisioned toolchain is thousands of files, and every load of every entry beside it
- * listed them all.
- */
 const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const names: Array<string> = [];
@@ -3178,7 +3069,6 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
     names.push(name);
     const info = yield* fs.stat(`${dir}/${name}`).pipe(Effect.option);
     if (Option.isNone(info) || info.value.type !== "Directory") continue;
-    // A link is named and not followed, as a recursive listing treats it.
     const link = yield* fs.readLink(`${dir}/${name}`).pipe(
       Effect.as(true),
       Effect.orElseSucceed(() => false),
@@ -3195,12 +3085,6 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
   return names;
 });
 
-/**
- * What a generation of an entry would be staged from, as one value. A generation is a copy
- * of the whole directory and of what it imports from outside it, so an edited helper or
- * Markdown prompt is as much a change as an edited entry — and nothing touched is the same
- * code to run.
- */
 export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSystem.FileSystem> =
   Effect.fn("Engine.revisionOf")(function* (dir: string) {
     return (yield* sourceTree(dir)).revision;
@@ -3221,9 +3105,6 @@ const sourceTree = Effect.fn("Engine.sourceTree")(function* (dir: string) {
           }),
         );
   };
-  // An installed dependency counts by its names alone: the toolchain a module is
-  // typechecked against lives here too, and reading all of it would cost more than
-  // every start it is on the way of.
   const installed = yield* fs.readDirectory(`${dir}/node_modules`, { recursive: true }).pipe(
     Effect.orElseSucceed(() => {
       const returned: Array<string> = [];
@@ -3236,8 +3117,6 @@ const sourceTree = Effect.fn("Engine.sourceTree")(function* (dir: string) {
   );
   const names = (yield* sourcesIn(dir)).sort();
   for (const name of names) {
-    // A directory reads as nothing, and what is inside it is in the list under a name
-    // of its own.
     const content = yield* contentOf(`${dir}/${name}`);
     read += `${name}:${Bun.hash(content).toString(16)}\n`;
   }
@@ -3249,10 +3128,6 @@ const sourceTree = Effect.fn("Engine.sourceTree")(function* (dir: string) {
   return { names, outside, revision: Bun.hash(read).toString(16) };
 });
 
-/**
- * The files outside `dir` its code imports by a relative path or a package import, what
- * those import in turn, and the `package.json` files above them that such imports resolve by.
- */
 const outsideOf = Effect.fn("Engine.outsideOf")(function* (
   dir: string,
   contentOf?: (file: string) => Effect.Effect<string>,
@@ -3291,10 +3166,6 @@ const scanners = {
   js: new Bun.Transpiler({ loader: "js" }),
 };
 
-/**
- * What this code imports by a relative path or a package import, where Bun resolves it.
- * Unparseable code imports nothing, and an installed package is linked, never copied.
- */
 const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => {
   let imports: ReadonlyArray<{ readonly path: string }> = [];
   try {
@@ -3313,17 +3184,6 @@ const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => 
   });
 };
 
-/**
- * A generation's own copy of the directory the entry lives in, so an edited helper reaches
- * new work without restarting the host. Bun's module registry has no invalidation:
- * re-importing the entry under a new query re-reads the entry, but its `./helper.ts`
- * resolves to the path already cached. A copy gives every file a path nothing has
- * imported yet. The directory and what it imports from outside it are copied to their
- * absolute paths under the generation, so every relative import names the same file, and
- * every `node_modules` a package is looked up in is linked where its copy looks.
- * It is a cache — a host wipes it on start and stages from the module as it is now, so
- * this is never the code a past run is recovered onto.
- */
 export const stageGeneration: (options: {
   readonly dir: string;
   readonly name: string;
@@ -3402,7 +3262,6 @@ const parentOf = (at: string) =>
     ),
   );
 
-/** Every generation a host staged, gone: a new host stages from the sources again. */
 export const clearGenerations: (
   dir: string,
 ) => Effect.Effect<void, never, FileSystem.FileSystem> = (dir) =>
@@ -3411,37 +3270,20 @@ export const clearGenerations: (
     Effect.ignore({ log: "Warn" }),
   );
 
-/**
- * The host's own stack: Bun's SQLite under Effect's single-node cluster under its
- * workflow engine. Three settings are not the defaults; why each is here is in ADR-0014
- * and ADR-draft-one-runner-holds-one-shard.
- */
 export function engineLayer(options: {
   readonly dir: string;
-  /** How often the engine reads its storage for messages now due; upstream's default if unset. */
   readonly messagePoll?: Duration.Input | undefined;
 }) {
-  // One connection, two halves: the engine's own tables and the rows Collie keeps beside
-  // them are in the same file, written by the same process.
-  // A host that cannot open its own database has nothing to serve.
   const sql = hostDatabase(options.dir).pipe(Layer.orDie, Layer.provideMerge(Reactivity.layer));
   const shardingConfig = {
-    // A host told to stop must not take a running workflow down with it: the work
-    // finishes its step, and what is left is picked up by the next host.
     preemptiveShutdown: false,
-    // A workflow whose module is missing has no entity to receive its messages. The
-    // default marks them failed after a minute, which turns "the file is not there
-    // yet" into a terminal result; waiting is what lets a repair recover the work.
     entityRegistrationTimeout: Duration.infinity,
-    // Each shard is a lock row taken, refreshed and released by the one runner there is.
     shardsPerGroup: 1,
   };
   const polled =
     options.messagePoll === undefined
       ? shardingConfig
       : { ...shardingConfig, entityMessagePollInterval: options.messagePoll };
-  // Loaded when a host builds it, not when anything imports this file: the cluster is
-  // the heaviest thing here, and every other command the binary runs is a client.
   const engine = Layer.unwrap(
     Effect.promise(() =>
       Promise.all([
@@ -3466,7 +3308,6 @@ export function engineLayer(options: {
           SqlRunnerStorage,
           ClusterWorkflowEngine,
         ]) => {
-          // Upstream's SingleRunner, with its storage telling `touches` of each write.
           const storage = Layer.effect(MessageStorage.MessageStorage)(
             Effect.gen(function* () {
               const inner = yield* MessageStorage.MessageStorage;
@@ -3480,7 +3321,6 @@ export function engineLayer(options: {
             Layer.provide(ShardingConfig.layerFromEnv(polled)),
             Layer.provide([oneShard.pipe(Layer.provideMerge(sql)), Digest.layerWebCrypto]),
           );
-          // The message storage too: forgetting a Run clears what the engine kept of it.
           return ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster));
         },
       ),
@@ -3497,13 +3337,8 @@ export function engineLayer(options: {
   return returned;
 }
 
-/** The one shard this engine holds, which every message is on. */
 const ONE_SHARD = "default:1";
 
-/**
- * Moves what an engine on upstream's 300 shards left onto the one shard this engine holds,
- * before the cluster reads its storage: a message on any other shard is never read again.
- */
 const oneShard = Layer.effectDiscard(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -3517,7 +3352,6 @@ const oneShard = Layer.effectDiscard(
   }).pipe(Effect.orDie),
 );
 
-/** What the engine kept of one execution of a workflow registered under `name`, gone. */
 export const forgetExecution = (name: string, execution: string) =>
   Effect.gen(function* () {
     const [cluster, entity, ids, types, shard] = yield* Effect.promise(() =>
@@ -3530,7 +3364,6 @@ export const forgetExecution = (name: string, execution: string) =>
       ]),
     );
     const storage = yield* cluster.MessageStorage;
-    // Messages are found by entity type and id; the shard is part of the address only.
     const address = (entityType: string) =>
       entity.EntityAddress.make({
         entityType: types.make(entityType),
@@ -3543,13 +3376,10 @@ export const forgetExecution = (name: string, execution: string) =>
     ]).pipe(Effect.orDie);
   });
 
-/** How long a start waits for the engine to take its Run before it is refused. */
 const HAND_OVER_TIMEOUT = "30 seconds";
 
 export { HOLD, STOP };
-/** Why work parked; the host clears it when taking that work up. */
 export const PARKED = "parked";
-/** The Park cause of the park in `PARKED`; left when that clears, and read only beside it. */
 export const PARK_CAUSE = "park-cause";
 const PARK_INFO = "park-info";
 const ParkJson = Schema.fromJsonString(Park);
@@ -3557,13 +3387,9 @@ const parkInfoOf = (text: string | null) =>
   text === null
     ? Effect.succeed(null)
     : Schema.decodeEffect(ParkJson)(text).pipe(Effect.orElseSucceed(() => null));
-/** A wait that ends by itself; the host clears it when the wait ends. */
 export const AWAITING = "awaiting";
-/** Work waiting for a Subscription to reset; cleared once it goes on. */
 export const USAGE = "usage";
-/** A row per child whose result its parent is blocked on, keyed by the child. */
 const AWAITED = "awaited";
-/** A row per notice sent about a Run, keyed by it, so a replay does not send it again. */
 const NOTIFIED = "notified";
 
 const decodeParkCause = Schema.decodeUnknownOption(ParkCause);
@@ -3581,30 +3407,14 @@ export const UsageWaitSchema = Schema.Struct({
 });
 const UsageWaitJson = Schema.fromJsonString(UsageWaitSchema);
 
-/** What a Run nobody classified proves: the approved set, and no ticket's evidence. */
 const UNSPECIFIED = "unspecified";
 
-/**
- * Where one Run's evidence lives: the verification journal `verify.ts` writes and
- * reads, and the approved set the Run was started under. A directory rather than a table
- * because the collector is the same one the command line uses — what proves a Run is not
- * a different thing for being a module's.
- */
 export const evidenceDir: (dir: string, runId: string) => string = (dir, runId) =>
   `${dir}/evidence/${runId}`;
 
-/**
- * Where one Run's own work belongs: the plan it wrote, the review it left, and
- * anything else a card reads back. A directory per Run rather than a column, because what
- * a Run produces is files and the things that read them are ordinary readers of files.
- */
 export const runDir: (dir: string, runId: string) => string = (dir, runId) =>
   `${dir}/runs/${runId}`;
 
-/**
- * A Run, then the Runs it came from: its parent and the Run whose plan it builds. Stops at
- * a Run the store has no row for, and at a cycle.
- */
 const lineageIn = (store: StoreApi) =>
   Effect.fn("Engine.lineageOf")(function* (runId: string) {
     const lineage = [runId];
@@ -3625,12 +3435,8 @@ const decodeAskedAttachments = Schema.decodeUnknownOption(
   ),
 );
 
-/** Where a Run keeps the merge request it opened. */
-
-/** Says why a Run's reviewed checkout was refused, in the Run's directory `dir`. */
 export const checkoutRefusedFile = (dir: string) => `${dir}/checkout-refused`;
 
-/** What resolving `runId`'s reviewed branch from `cwd` asks, as a build of the review's findings is placed (ADR-0054). */
 const reviewedAsk = (
   dir: string,
   runId: string,
@@ -3640,13 +3446,11 @@ const reviewedAsk = (
 ) => ({
   cwd,
   name: runId,
-  // As placement feeds a build of a review's findings: this Run is the review.
   inputs: { [REVIEWED]: target, work: runDir(dir, runId), work_kind: "review" },
   strategies: { [REVIEWED]: "diff-target", work: "work-source" },
   login,
 });
 
-/** The Run that recorded the checkout at a path; a review's fix round never takes one over. */
 const recordedIn: (store: StoreApi) => RecordedBy = (store) => (at) =>
   store.runs.pipe(
     Effect.map((rows) => {
@@ -3664,10 +3468,6 @@ const recordedIn: (store: StoreApi) => RecordedBy = (store) => (at) =>
     }),
   );
 
-/**
- * Why a Run `starter` starts on `target` would have its reviewed checkout refused now, or
- * null; cuts nothing. `awaits` says `starter` waits on it, so its own checkout may be used.
- */
 const refusedCheckout = (o: {
   readonly dir: string;
   readonly store: StoreApi;
@@ -3697,13 +3497,11 @@ const refusedCheckout = (o: {
       : refused.success;
   });
 
-/** The merge request a Run opened, or null where it recorded none. */
 const recordedMergeRequest = (runId: string) =>
   RunRecords.use((records) => records.fact(runId, MERGE_REQUEST)).pipe(
     Effect.map((url) => (url === null ? null : Str.trim(url) || null)),
   );
 
-/** Where new work in `cwd` starts, or null where it has no such ref. */
 const startOf = (cwd: string) =>
   defaultStart(cwd, runShell).pipe(
     Effect.flatMap((ref) =>
@@ -3713,10 +3511,6 @@ const startOf = (cwd: string) =>
     ),
   );
 
-/**
- * The checks a Run in `cwd` starting at `ref` takes: the project's file as that ref has it,
- * or as the working tree has it where there is no ref (ADR-draft-a-runs-checks-are-read-where-its-checkout-starts).
- */
 const approvedAt = Effect.fn("Engine.approvedAt")(function* (
   cwd: string,
   userDir: string,
@@ -3732,16 +3526,11 @@ const approvedAt = Effect.fn("Engine.approvedAt")(function* (
   });
 });
 
-/**
- * This Run's checks as they were when the Run started. Frozen at
- * admission, so editing the file changes the next Run and never a live one.
- */
 export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (options: {
   readonly dir: string;
   readonly runId: string;
   readonly project: string;
   readonly userDir: string;
-  /** The set the start already settled; without it, the files are read here. */
   readonly approved?: ReadonlyArray<VerifySpec>;
 }) {
   const evidence = evidenceDir(options.dir, options.runId);
@@ -3766,10 +3555,8 @@ const ciJobsOfIn = (dir: string, runId: string) =>
     Arr.flatMap(approved, (spec) => (spec.ci === undefined ? [] : [spec.ci])),
   );
 
-/** Where a host keeps what a Run claimed, so a resume knows whose the claim was. */
 const claimPath = (dir: string, runId: string) => `${runDir(dir, runId)}/helle.json`;
 
-// A single claim is how a host recorded one before a Run could hold several.
 const decodeClaims = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Union([HelleClaimSchema, Schema.Array(HelleClaimSchema)])),
 );
@@ -3778,7 +3565,6 @@ const encodeClaims = flow(
   Result.getOrThrow,
 );
 
-/** What this Run already claimed, empty where it has claimed nothing yet. */
 const recordedClaims: (
   file: string,
 ) => Effect.Effect<ReadonlyArray<HelleClaim>, never, FileSystem.FileSystem> = (file) =>
@@ -3792,7 +3578,6 @@ const recordedClaims: (
     }),
   );
 
-/** Writes a Run's claims, and removes the record where none are left. */
 const writeClaims = (file: string, claims: ReadonlyArray<HelleClaim>) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -3802,11 +3587,8 @@ const writeClaims = (file: string, claims: ReadonlyArray<HelleClaim>) =>
     ),
   );
 
-// Several Runs change one Run's record at once: one adopting a claim, the Run recording or
-// releasing its own.
 const changingClaims = Semaphore.makeUnsafe(1);
 
-/** Changes a Run's claims as they are now, one change at a time. */
 const updateClaims = (
   file: string,
   change: (claims: ReadonlyArray<HelleClaim>) => ReadonlyArray<HelleClaim>,
@@ -3819,7 +3601,6 @@ const DeclaredSchema = Schema.fromJsonString(
   Schema.Struct({ projects: Schema.Array(Schema.String) }),
 );
 
-/** The Helle projects a repository's `.collie/helle.json` declares, null where it has none. */
 const declaredProjects = (cwd: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -3848,17 +3629,12 @@ const helleWhere = (
       envFile: env.raw.HELLE_ENV_FILE ?? null,
       url: helleUrlOf(env.raw),
       repositoryPath: yield* projectHere(cwd, runShell),
-      // Roaming checkout names do not identify Helle projects.
       repoName: (yield* repositoryName(runShell, cwd)) ?? (yield* Path.Path).basename(cwd),
       deploys: deploys ?? null,
       declared: yield* declaredProjects(cwd),
     };
   });
 
-/**
- * The Run's Check a command is, with the latest record this host collected of it on this
- * tree, or null where the command is none of the Run's Checks.
- */
 export class Reliance extends Context.Service<
   Reliance,
   {
@@ -3866,7 +3642,6 @@ export class Reliance extends Context.Service<
       runId: string,
       command: Pick<Verification, "executable" | "argv" | "cwd">,
     ) => Effect.Effect<{ readonly check: string; readonly record: Verification | null } | null>;
-    /** The record that answers a command that is none of the Run's Checks, or null where it runs. */
     readonly recorded: (
       runId: string,
       command: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect">,
@@ -3874,31 +3649,17 @@ export class Reliance extends Context.Service<
   }
 >()("collie/Reliance") {}
 
-/** A Run's execution as the host that runs it can stop it and see it stopped. */
 export class Executions extends Context.Service<
   Executions,
   {
-    /**
-     * An operator's stop: the Run and every child it started, flagged, woken and their
-     * agents closed. Answers the Runs it reached and the agents that did not close.
-     */
     readonly stop: (runId: string) => Effect.Effect<{
       readonly runs: ReadonlyArray<string>;
       readonly left: ReadonlyArray<string>;
     }>;
-    /** Whether its execution has stopped: suspended, finished, or not one this host runs. */
     readonly stopped: (runId: string) => Effect.Effect<boolean>;
   }
 >()("collie/Executions") {}
 
-/**
- * Takes a claim over from this operator's other Runs that recorded it. Each is stopped
- * with every child it started, as an operator's stop does; their executions are waited
- * out; and their agents are closed again, for any that started before they stopped. Only
- * then is its record of the claim removed, so nothing it left running goes on changing
- * what the claim guards. An agent that will not close, or a Run still in a step when
- * patience runs out, refuses the adoption. Answers the Runs it was taken from.
- */
 export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (options: {
   readonly dir: string;
   readonly slug: string;
@@ -3952,10 +3713,8 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
   return handed;
 });
 
-/** Where a checkout was before a comparison at the default branch moved it. */
 const AWAY_FILE = "away-from";
 
-/** A comparison a crash interrupted leaves the checkout at the base; this puts it back. */
 const restoreCheckout = (cwd: string, away: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -3967,14 +3726,12 @@ const restoreCheckout = (cwd: string, away: string) =>
     yield* fs.remove(away).pipe(Effect.ignore);
   });
 
-/** The pass a workflow's verify asked for: at the default branch's base it is `baseline`. */
 const passAsked: (asked: Parameters<Sdk.HostApi["verify"]>[0]) => CheckPass = (asked) => {
   if (asked.at === "default-base") return { pass: "baseline" };
   if (asked.pass === "fix" && asked.round !== undefined) return { pass: "fix", round: asked.round };
   return { pass: asked.pass ?? "check" };
 };
 
-/** Where the checkout at `cwd` leaves the default branch, or why that cannot be read. */
 const defaultMergeBase = (cwd: string) =>
   Effect.gen(function* () {
     const git = (...args: string[]) => runShell("git", args, cwd);
@@ -3986,17 +3743,12 @@ const defaultMergeBase = (cwd: string) =>
     return { found: true, branch, base: Str.trim(merged.stdout) } as const;
   });
 
-/** Whether the branch at `cwd` adds or changes `test` since it left the default branch. */
 const branchOwns = (cwd: string, test: FailedTest) =>
   Effect.gen(function* () {
     const branch = yield* defaultBase(runShell, cwd);
     return branch !== null && ownTests([test], yield* branchChange(cwd, branch)).length > 0;
   });
 
-/**
- * Runs `body` with the checkout at its merge-base with the default branch, then puts it
- * back. A checkout with changes of its own is refused: they would travel to the base.
- */
 const atDefaultBase = <A, R>(
   cwd: string,
   away: string,
@@ -4060,22 +3812,14 @@ const recoveryFor = Effect.fn("Engine.recoveryFor")(function* (
 
 export const hostLayer: (options: {
   readonly dir: string;
-  /** Where a user's own `verify.json` is, for a project that wrote none. */
   readonly userDir?: string;
-  /** Where a toast goes; left out, nothing is raised. */
   readonly toast?: Toast;
   readonly slack?: typeof slackApi;
-  /** The Herd this host works for; left out, nothing is judged or charged to one. */
   readonly herd?: Herd;
-  /** This Machine's Usage readings; none where left out. */
   readonly readings?: Effect.Effect<ReadonlyArray<UsageReading>>;
-  /** The herdr a reviewed checkout is made through; the host's own by default. */
   readonly placing?: { readonly herdr: Herdr; readonly env: PluginEnv };
-  /** How often a wait for production asks the forge again. */
   readonly productionPoll?: Duration.Input;
-  /** How long the checkouts issue text is checked against may take to find. */
   readonly issuePrivacyBudget?: Duration.Input;
-  /** How often a wait for review reads the merge request again. */
   readonly reviewPoll?: Duration.Input;
 }) => Layer.Layer<
   Host | Notifier | Oversight | Reliance,
@@ -4087,7 +3831,6 @@ export const hostLayer: (options: {
       const dir = options.dir;
       const fs = yield* FileSystem.FileSystem;
       const store = yield* Store;
-      // Captured, so a workflow asks for a verification without asking for a filesystem.
       type Collecting =
         | FileSystem.FileSystem
         | Path.Path
@@ -4146,7 +3889,6 @@ export const hostLayer: (options: {
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
       const toast = options.toast;
       const notifying = yield* Semaphore.make(1);
-      /** Why this needs-you park goes straight to a person, or null where a Heal takes it first. */
       const passedOverHere = (runId: string, cause: ParkCause, recoveries: ReadonlyArray<Metric>) =>
         Effect.gen(function* () {
           const row = yield* store.run(runId);
@@ -4186,7 +3928,6 @@ export const hostLayer: (options: {
             const channel = isText(configured) ? Str.trim(configured) : "";
             const row = yield* store.run(runId);
             if (toast === undefined && (channel === "" || row === null)) return;
-            // Mark before delivery: a replay must not repeat an attempted post.
             const said = `${kind}:${pipe(about.key ?? "", Str.replaceAll("\n", " "))}`;
             if ((yield* runRecords.control(NOTIFIED, runId, said)) !== null) return;
             yield* runRecords.setControl(NOTIFIED, runId, "", said);
@@ -4282,7 +4023,6 @@ export const hostLayer: (options: {
           Arr.flatten,
         );
       const hostStarted = yield* nowIso;
-      /** A pass this host collected that answers for this check now, said in the Run log. */
       const relyOn = (runId: string, run: CheckRun, spec: VerifySpec, recorded: CheckPass) =>
         Effect.gen(function* () {
           const kept = yield* reliedFor(evidenceDir(dir, runId), run, spec, hostStarted);
@@ -4293,7 +4033,6 @@ export const hostLayer: (options: {
             ).pipe(Effect.orDie);
           return kept;
         });
-      /** Runs one approved command for a Run, under the pass it was asked for (ADR-0042). */
       const check = (asked: Parameters<Sdk.HostApi["verify"]>[0], recorded: CheckPass) =>
         under(
           Effect.gen(function* () {
@@ -4306,7 +4045,6 @@ export const hostLayer: (options: {
                 reason: `"${asked.name}" is not among this Run's checks`,
               });
             }
-            // The workflow's checkout has to be the Run's own; the grant's directory is resolved from it.
             const own = yield* treeOf(yield* store.run(asked.runId), asked.runId, dir);
             if (!(yield* insideRun(asked.cwd, own))) {
               return yield* new WorkflowError({
@@ -4339,11 +4077,9 @@ export const hostLayer: (options: {
                   reason: `${spec.name} did not run: the Run was stopped while it waited for memory`,
                 });
             }
-            // Written once the checkout is where the check runs, so it names that revision.
             const verified = (base: string | null) =>
               Effect.gen(function* () {
                 const head = yield* runShell("git", ["rev-parse", "HEAD"], asked.cwd);
-                // A test is asked about once per base revision.
                 if (base !== null && rerun !== undefined) {
                   const checkDir = yield* checkCwd({ ...own, cwd: asked.cwd }, spec);
                   const known = Option.getOrUndefined(
@@ -4361,7 +4097,6 @@ export const hostLayer: (options: {
                   if (known !== undefined) return known;
                 }
                 const started = yield* nowIso;
-                // A file per run of the check, beside the journal its record goes to.
                 const log = `${journal}/checks/${pipe(started, Str.replace(/[:.]/g, "-"))}-${pipe(spec.name, Str.replace(/[^\w.-]/g, "_"))}.log`;
                 yield* marker.set(
                   encodeVerifying({
@@ -4402,7 +4137,6 @@ export const hostLayer: (options: {
                   Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
                 );
               });
-            // A stop ends the check and its processes; the Run parks, and a resume runs it again.
             const ran = yield* Effect.raceFirst(
               (asked.at === "default-base"
                 ? atDefaultBase(asked.cwd, away, verified)
@@ -4424,7 +4158,6 @@ export const hostLayer: (options: {
             Effect.map((env) => ({ herdr: new Herdr(env), env })),
             Effect.orDie,
           );
-      /** Why Public text bound for `project` is refused, or null; Collie's own repository takes any. */
       const publicRefusal = <E, R>(text: string, project: Effect.Effect<string | null, E, R>) =>
         Effect.gen(function* () {
           const leaks = leaksIn(text);
@@ -4435,7 +4168,6 @@ export const hostLayer: (options: {
             ? null
             : refusal(leaks);
         });
-      /** What resolving a Run's reviewed branch needs, as a build of the review's findings is placed (ADR-0054). */
       const reviewing = (runId: string) =>
         Effect.gen(function* () {
           const row = yield* store.run(runId);
@@ -4464,7 +4196,6 @@ export const hostLayer: (options: {
             ask: reviewedAsk(dir, runId, placed.cwd, isText(target) ? target : "", env.gitlabLogin),
           };
         });
-      /** The reviewed branch, or why there is none, by the checkout's own resolution; cuts nothing. */
       const reviewedBranch = (runId: string) =>
         Effect.gen(function* () {
           const asked = yield* reviewing(runId);
@@ -4479,7 +4210,6 @@ export const hostLayer: (options: {
             ? { refused: plan.success.refused }
             : { branch: plan.success.branch };
         }).pipe(Effect.provideContext(bun), under);
-      /** The checkout of the Run that started `row`, while that Run is blocked on `row` alone and has one of its own. */
       const startingCheckout = (row: RunRow) =>
         Effect.gen(function* () {
           const parent = row.parent === null ? null : yield* store.run(row.parent);
@@ -4491,7 +4221,6 @@ export const hostLayer: (options: {
             ? { starting: { run: parent.run, cwd: placed.cwd } }
             : {};
         });
-      /** The reviewed branch's checkout, found or cut as a build of the review's findings is (ADR-0054). */
       const checkoutReviewed = (runId: string, opts?: { readonly inStarter?: boolean }) =>
         Effect.gen(function* () {
           const asked = yield* reviewing(runId);
@@ -4511,7 +4240,6 @@ export const hostLayer: (options: {
               recordedBy: recordedIn(store),
             }),
           );
-          // Recorded, so its card can ask whether another attempt would get past it.
           const refuse = (refused: string) =>
             fs
               .makeDirectory(runDir(dir, runId), { recursive: true })
@@ -4539,7 +4267,6 @@ export const hostLayer: (options: {
           });
           return { cwd: checkout.cwd, branch: checkout.branch ?? "" };
         }).pipe(Effect.provideContext(bun), under);
-      /** Refuses what a Run would say outside Collie once it is stopped. */
       const unstopped = (runId: string, what: string) =>
         Effect.flatMap(set(STOP, runId), (stopped) =>
           stopped
@@ -4599,7 +4326,6 @@ export const hostLayer: (options: {
           Effect.gen(function* () {
             const { env } = yield* placing;
             const roots = [root];
-            // Checkouts made before the setting stay where herdr put them.
             for (const dir of [yield* worktreesDirectory(env), `${env.home}/.herdr/worktrees`])
               if (yield* fs.exists(dir)) roots.push(dir);
             return yield* publicationCheckouts(roots);
@@ -4624,7 +4350,6 @@ export const hostLayer: (options: {
             return name === null ? [] : [name];
           });
         });
-      /** Every checkout issue text may not name, with its remotes; the walk under `root` is kept a while. */
       const inventoryOf = (root: string) =>
         Effect.gen(function* () {
           const walked = yield* Cache.get(walks, root);
@@ -4677,7 +4402,6 @@ export const hostLayer: (options: {
           });
           const inventory = yield* inventoryOf(root.path);
           const expanded = yield* Effect.try(() => throughAliases(text, inventory.aliases));
-          // Collie's repository has no checkout of the Run's to exempt.
           let own: string | null = null;
           if (!here.collie) {
             const common = yield* runShell(
@@ -4733,7 +4457,6 @@ export const hostLayer: (options: {
             : new WorkflowError({ reason: `issue privacy check failed: ${String(cause)}` }),
         ),
       );
-      /** Awaits, parking once overdue; parks a repair; null clears both. */
       const waitOn = (
         runId: string,
         wait:
@@ -4773,7 +4496,6 @@ export const hostLayer: (options: {
           }
           if (overdue !== null || parked) yield* host.parked(runId, overdue);
         }).pipe(Effect.orDie);
-      /** One read of the review of the merge request a Run recorded, judged. */
       const reviewRead = (asked: {
         readonly runId: string;
         readonly cwd: string;
@@ -4811,7 +4533,6 @@ export const hostLayer: (options: {
             return yield* new WorkflowError({ reason: `${mr} could not be read: ${read.reason}` });
           return { mr, ref, read };
         });
-      /** Where a recorded merge request went: merged lands only once origin's default branch has it. */
       const landingOf = (mr: string, cwd: string) =>
         under(
           Effect.gen(function* () {
@@ -5051,11 +4772,6 @@ export const hostLayer: (options: {
                         })),
                       ),
                 ),
-                // A Run nobody has a row for works nowhere in particular; its own directory
-                // is still its own, so what it writes is not written into somebody else's.
-                // Made for a Run there is one, so a workflow writes what it produces into
-                // its own directory without first asking whether it is there — and asking
-                // about a run that was never started leaves nothing behind.
                 Effect.tap((admitted) =>
                   admitted === null
                     ? Effect.void
@@ -5204,8 +4920,6 @@ export const hostLayer: (options: {
             writeCheckpoint(runDir(dir, runId), { ...checkpoint, at }),
           ).pipe(Effect.provideService(RunRecords, runRecords)),
         record: (runId, event) =>
-          // A replay writes its records again, as it re-enters every step: the log is what
-          // the Run did each time it ran, not a deduplicated story.
           appendLog(runDir(dir, runId), event).pipe(
             Effect.provideService(FileSystem.FileSystem, fs),
             Effect.provideService(RunRecords, runRecords),
@@ -5234,8 +4948,6 @@ export const hostLayer: (options: {
                     yield* put(PARKED, why);
                     return;
                   }
-                  // Decided before the park shows: a resume that comes while the Run is still
-                  // in this call is lost, and finding the healer loads every module.
                   const recoveries = recoveriesIn(
                     yield* readMetrics(evidenceDir(dir, runId)).pipe(Effect.provideContext(bun)),
                   );
@@ -5247,7 +4959,6 @@ export const hostLayer: (options: {
                       recoveries,
                       (line) => line.action === "healed" && line.park === park.id,
                     ) &&
-                    // A park its Heal caused again is that Heal's to settle.
                     !(healing._tag === "Some" && healing.value.cause === cause);
                   const passed = claims ? yield* passedOverHere(runId, cause, recoveries) : null;
                   yield* put(PARK_CAUSE, cause);
@@ -5497,7 +5208,6 @@ export const hostLayer: (options: {
                   log: null,
                 };
               const own = yield* treeOf(yield* store.run(asked.runId), asked.runId, dir);
-              // A stop ends the wait: the workflow suspends on it, as it does on an agent's.
               const stopped = untilStopped(asked.runId).pipe(
                 Effect.as({
                   unproved: `${spec.name} is left to CI and unproved: the Run was stopped while job ${spec.ci} was read`,
@@ -5765,8 +5475,6 @@ export const hostLayer: (options: {
                     Arr.filter(before, (one) => one.slug !== slug),
                   ).pipe(Effect.orDie),
                 out: asked.say,
-                // The question is the workflow's, so it is durable and asked once; this only
-                // turns the answer into the word the gate reads.
                 ask: () => asked.adopting.pipe(Effect.map((yes) => (yes ? "yes" : null))),
                 queued: (slug, position) =>
                   waitOn(asked.runId, {
@@ -5784,8 +5492,6 @@ export const hostLayer: (options: {
           ).pipe(
             Effect.provide(FetchHttpClient.layer),
             Effect.provideContext(services),
-            // Helle refusing to answer is this Run being unable to take the claim; the
-            // author's own failures pass through untouched.
             Effect.mapError((cause: HelleError | E) =>
               cause instanceof HelleError ? new WorkflowError({ reason: cause.message }) : cause,
             ),
@@ -5811,7 +5517,6 @@ export const hostLayer: (options: {
               envFile: env.raw.HELLE_ENV_FILE ?? null,
               url: helleUrlOf(env.raw),
             });
-            // One Helle refuses to give back stays recorded, for a later release to retry.
             const given = new Set<string>();
             for (const one of held) {
               const released = yield* releaseClaim(creds, one.slug).pipe(
@@ -5827,7 +5532,6 @@ export const hostLayer: (options: {
             );
           }).pipe(
             Effect.provideContext(services),
-            // Helle not asked at all gave nothing back.
             Effect.catch(() =>
               recordedClaims(claimPath(dir, runId)).pipe(
                 Effect.map((held) => Arr.map(held, (one) => one.slug)),
@@ -5855,7 +5559,6 @@ export const hostLayer: (options: {
                 stopped: set(STOP, asked.runId),
               }).pipe(Effect.mapError((cause) => new WorkflowError({ reason: cause.why })));
               if (answered !== "stopped") return answered;
-              // A stop ends the Measurement and records nothing; the Run parks, and a resume measures again.
               const instance = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
               if (Option.isSome(instance)) return yield* Workflow.suspend(instance.value);
               return yield* new WorkflowError({
@@ -5957,7 +5660,6 @@ export const hostLayer: (options: {
                 reason: `${asked.target} names no merge request the merge watch can read`,
               });
             yield* store.watch({ run: asked.runId, mr, name: asked.name, cursor: asked.cursor });
-            // A question sharing the wake is what the card shows: it waits on whoever answers.
             if (asked.asking === true) return;
             const slack = yield* reviewSlackTrouble(
               `${runDir(dir, asked.runId)}/${REVIEW_SLACK}`,
@@ -6115,7 +5817,6 @@ export const hostLayer: (options: {
                 }),
               ).pipe(Effect.orDie);
             if (comment.answered) {
-              // The forge may have taken this Run's reply before the host could record it.
               const others = Arr.filter(read.comments, (one) => one !== comment);
               const posted = Option.getOrUndefined(
                 Arr.findFirst(
@@ -6430,7 +6131,6 @@ export const hostLayer: (options: {
             }),
           ),
         approveReview: (asked) =>
-          // Approval may already stand: finish verification and dismissal without parking to replay it.
           under(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
@@ -6451,7 +6151,6 @@ export const hostLayer: (options: {
                 };
               const approved = yield* forgeOf(ref).approve(ref, asked.head, asked.cwd, runShell);
               if (approved.retryable) {
-                // The retry reads whether approval already stands before it submits.
                 yield* fs.remove(marker).pipe(Effect.orDie);
                 yield* parkReview(approved.message);
               }
@@ -6461,7 +6160,6 @@ export const hostLayer: (options: {
       });
       let herdSocket = options.herd?.socketPath ?? null;
       let locatedAt = Number.NEGATIVE_INFINITY;
-      /** The host's Herd: its own socket, else herdr's, asked again each minute until it answers. */
       const hostHerd = Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         if (
@@ -6494,7 +6192,6 @@ export const hostLayer: (options: {
           const worktree = placed?.worktree?.path ?? null;
           return { worktree, cwd: worktree ?? placed?.cwd ?? dir };
         });
-      /** The wave of its fan-out's plan the Change run that opened `id` is in; none for no such Run. */
       const planWaveOf = (id: string) =>
         Effect.gen(function* () {
           const rows = yield* store.runs;
@@ -6539,7 +6236,6 @@ export const hostLayer: (options: {
           }
           return undefined;
         }).pipe(Effect.provideContext(bun));
-      /** A Run as a card sees it: where it works, and where its records are. */
       const watched = (runId: string) => {
         const returned: Effect.Effect<Watched> = Effect.gen(function* () {
           const row = yield* store.run(runId);
@@ -6579,14 +6275,12 @@ export const hostLayer: (options: {
         });
         return returned;
       };
-      /** A card that is something a human could go and try is worth telling them about. */
       const told = (runId: string, cards: ReadonlyArray<Card>) =>
         Effect.forEach(cards, (card) =>
           card.significance === "try-it"
             ? notify(runId, "slice-ready", card.readiness, { key: card.id })
             : Effect.void,
         );
-      /** What judging a Run's drift takes, or null where there is no Herd to charge it to. */
       const judging = (at: Watched) =>
         Effect.gen(function* () {
           if (options.herd === undefined || at.herd === null) return null;
@@ -6604,8 +6298,6 @@ export const hostLayer: (options: {
           const at = yield* watched(runId);
           const deps =
             judged === "none" ? null : yield* judging(at).pipe(Effect.provideContext(bun));
-          // Corrected through the caller's own agents: the work that drifted is theirs.
-          // Not at the finish, where there is no next piece of work to bring back.
           const agents = yield* Effect.serviceOption(Agents);
           const atWork =
             Option.isNone(agents) || judged === "finish" ? null : yield* agents.value.atWork(runId);
@@ -6620,8 +6312,6 @@ export const hostLayer: (options: {
           const done = yield* checkDrift(at, where, judged, deps, to).pipe(
             Effect.provideContext(bun),
           );
-          // The Herd's cross-run check, stood for at every boundary; at the finish the Run
-          // stands as it leaves, which is what writes an unanswered check down as owed.
           if (judged !== "none")
             yield* standForElection(at, where, judged === "finish", deps).pipe(
               Effect.provideContext(bun),
@@ -6654,7 +6344,6 @@ export const hostLayer: (options: {
         finish: (runId) =>
           Effect.gen(function* () {
             const at = yield* watched(runId);
-            // Bounded: an approved command that hangs would hold the Run's ending for ever.
             for (const name of yield* under(grantedToRun(at))) {
               const outcome = yield* check({ runId, name, cwd: at.cwd }, { pass: "finish" }).pipe(
                 Effect.map((one) => `${one.result} (exit ${one.exit})`),
@@ -6679,8 +6368,6 @@ export const hostLayer: (options: {
               writeCard(settled, { kind: "final", step: "finish", claims: [] }),
             );
             yield* told(runId, [card]);
-            // Once, here: the finish is the only moment at which nobody is left to make an
-            // owed cross-run check, which is what makes it something a human has to know.
             if (card.cross_run === "pending")
               yield* notify(runId, "drift-unresolved", "cross_run_pending", { key: "cross_run" });
           }).pipe(Effect.ignore({ log: "Unhandled" })),
@@ -6730,7 +6417,6 @@ export const hostLayer: (options: {
     }),
   );
 
-/** Where a toast is raised: to each connected Desktop, in a host. */
 export type Toast = (
   title: string,
   body: string,
@@ -6738,32 +6424,18 @@ export type Toast = (
   runId: string,
 ) => Effect.Effect<void>;
 
-/** The Herd a host works for: whose budget a judgement is charged to, and whose prompts it reads. */
 export interface Herd {
   readonly socketPath: string | null;
   readonly pluginRoot: string;
-  /** Where herdr's server listens, asked while `socketPath` is null. */
   readonly locate?: Effect.Effect<string | null, never, PlatformServices>;
 }
 
-/** Which toasts a Run has raised, so a replay or a second host does not raise them again. */
-
-/**
- * The next generation of an entry: opaque, distinct, and never a name already used. A
- * workflow's registration name is the tag its executions are stored under, so a run
- * recovers only if the next host registers the module under the name that run started on.
- * Loading the same file again mints the next name rather than replacing the old one.
- *
- * The public workflow id, this registration name and a run id stay three different things;
- * only the first is what an operator types.
- */
 export const nextRegistrationName: (
   known: ReadonlyArray<{ readonly workflow: string }>,
   id: string,
 ) => string = (known, id) =>
   `${id}@${Arr.filter(known, (entry) => entry.workflow === id).length + 1}`;
 
-/** Once the Run has stopped, however long it takes to. */
 const untilStopped = (registration: Registration, executionId: string) =>
   WorkflowEngine.WorkflowEngine.pipe(
     Effect.flatMap((engine) => engine.poll(registration.workflow, executionId)),
@@ -6773,16 +6445,10 @@ const untilStopped = (registration: Registration, executionId: string) =>
 
 const wokeText = flow(Schema.encodeResult(Schema.fromJsonString(Woke)), Result.getOrThrow);
 
-/**
- * The exit a decision is answered with, encoded by the decision's own schema, once the Run
- * has stopped to wait on it: the engine still wakes a Run that read its answer early, and
- * that wake resumes whatever park the Run reached next.
- */
 export const answerDecision: (
   registration: Registration,
   options: { readonly name: string; readonly executionId: string; readonly value: string },
 ) => Effect.Effect<void, never, WorkflowEngine.WorkflowEngine> = (registration, options) => {
-  // A question is its name: one asked as the work reached it is found by that alone.
   const decision = DurableDeferred.make(options.name, { success: Schema.String });
   const token = DurableDeferred.tokenFromExecutionId(decision, {
     workflow: registration.workflow,
@@ -6793,21 +6459,14 @@ export const answerDecision: (
   );
 };
 
-/**
- * What a poll says about a run. A failure carries the module it happened in, because a
- * service the author never provided is invisible until the body asks for it, and the
- * sentence a human needs names the file to open.
- */
 export const RunStatus = Schema.Union([
   Schema.Struct({ status: Schema.Literals(["pending", "suspended"]) }),
   Schema.Struct({ status: Schema.Literal("ended"), at: Schema.String }),
-  /** The result as the workflow's own success schema encodes it. */
   Schema.Struct({ status: Schema.Literal("complete"), value: Schema.Json }),
   Schema.Struct({
     status: Schema.Literal("failed"),
     reason: Schema.String,
     entry: Schema.String,
-    /** A failure of the workflow's own, as its error schema encodes it. */
     error: Schema.optionalKey(Schema.Json),
   }),
 ]);
@@ -6827,7 +6486,6 @@ export const pollStatus: (
   return exitStatus(value.exit, entry, success, error);
 };
 
-/** A finished execution as a client reads it. */
 const exitStatus: (
   exit: Exit.Exit<unknown, unknown>,
   entry: string,
@@ -6835,7 +6493,6 @@ const exitStatus: (
   error?: Schema.Codec<unknown, unknown, never, never>,
 ) => typeof RunStatus.Type = (exit, entry, success?, error?) => {
   if (Exit.isSuccess(exit)) {
-    // Encoded by its own schema, so a client can decode it again; as it is where that fails.
     const result = exit.value;
     const encoded =
       success === undefined
@@ -6846,7 +6503,6 @@ const exitStatus: (
     }
     return { status: "complete", value: isJson(result) ? result : Formatter.format(result) };
   }
-  // A failure of the workflow's own is what it says it is, in the words its schema writes.
   const failure = Cause.findErrorOption(exit.cause);
   const written =
     error === undefined || Option.isNone(failure) || isWorkflowError(failure.value)
@@ -6862,12 +6518,6 @@ const isJson = Schema.is(Schema.Json);
 
 const isWorkflowError = Schema.is(WorkflowError);
 
-/**
- * Why a run failed, in one sentence. A workflow that reported its own failure said it in
- * `reason`, and that is what an operator is owed — a child refusing input names the field
- * there. Anything else is a defect, where the first line is the sentence: a service a
- * module never provided reads as "Service not found: <its key>".
- */
 const reasonOf: (cause: Cause.Cause<unknown>) => string = (cause) => {
   const failure = Cause.findErrorOption(cause);
   if (Option.isSome(failure) && isWorkflowError(failure.value)) return failure.value.reason;
@@ -6875,11 +6525,6 @@ const reasonOf: (cause: Cause.Cause<unknown>) => string = (cause) => {
   return reason;
 };
 
-/**
- * What this Run was pointed at, from whichever field carries the diff-target inference.
- * The field's own name is the author's, so a module that calls it `change` is read the
- * same as one that calls it `target`.
- */
 const pointedAt: (
   generation: Generation,
   input: Readonly<Record<string, Schema.Json>>,
@@ -6893,18 +6538,14 @@ const pointedAt: (
 
 const isText = Schema.is(Schema.String);
 
-/** A set's first merge request stands for it; a bare or hostless one is read in `cwd`. */
 const mrIdOf = (said: string | null, cwd: string) =>
   said === null ? Effect.succeed(null) : mrIdIn(mrRefsIn(said)[0] ?? "", cwd, runShell);
 
-/** The field a module gives this strategy, if it gives it to one. */
 const fieldWith = (hints: Readonly<Record<string, InputStrategy>>, strategy: InputStrategy) =>
   Option.getOrUndefined(Arr.findFirst(Rec.toEntries(hints), ([, hint]) => hint === strategy))?.[0];
 
-/** Where placement reads a reviewed target the building module has no field for. */
 const REVIEWED = "reviewed";
 
-/** The input a run was admitted with, as the row keeps it. */
 const decodeInput = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
 );
@@ -6913,33 +6554,16 @@ const decodeStrings = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
 );
 
-/**
- * What a caller said, in the two halves a front door keeps apart. `text` is what a human
- * typed — `--input k=v`, an answer to a prompt — and `json` is what already has a type:
- * `--inputs-json`, an action's arguments, a chained run's values.
- */
 export interface Given {
   readonly json: Readonly<Record<string, Schema.Json>>;
   readonly text: Readonly<Record<string, string>>;
-  /** The names in `text` a front door worked out rather than was told. */
   readonly inferred?: ReadonlyArray<string>;
 }
 
-/** Where a settled value came from: already typed, as text a human wrote, or worked out. */
 export const GIVEN = "given";
 export const TYPED = "typed";
 export const INFERRED = "inferred";
 
-/**
- * The author's input, settled against the author's schemas before anything exists.
- *
- * Text is tried as text first and parsed as JSON only where the schema will not take the
- * text, so `--input ref=12` is the string for a string-or-number union and `--input
- * count=12` is the number for a number. A typed value is decoded as it came, which is how
- * `--inputs-json` settles the same tie the other way. A field nobody gave is left out
- * rather than given an empty string, so an optional one stays absent and a required one is
- * the schema's own complaint.
- */
 export const settleInput: (
   fields: InputFields,
   given: Given,
@@ -6978,11 +6602,6 @@ export const settleInput: (
   return Effect.succeed({ input, provenance });
 };
 
-/**
- * The author's values as their own schemas settled them, and where each came from. Held
- * encoded: the payload is decoded from this, and the row keeps the same JSON, so a value
- * is written down exactly as it was admitted.
- */
 export interface Settled {
   readonly input: Record<string, Schema.Json>;
   readonly provenance: Record<string, string>;
@@ -6991,7 +6610,6 @@ export interface Settled {
 const asParsedJson = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json));
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 
-/** One field's value from what a human typed: as text, or as the JSON the text spells. */
 const asText = (field: InputField, text: string) => {
   const decode = Schema.decodeUnknownResult(field);
   if (decode(text)._tag === "Success") return { value: text };
@@ -7000,7 +6618,6 @@ const asText = (field: InputField, text: string) => {
   return decode(parsed.success)._tag === "Success" ? { value: parsed.success } : undefined;
 };
 
-/** What a field will take, as short as a refusal can say it. */
 const describe: (field: InputField) => string = (field) => {
   const drawn = jsonSchemaFor(field).document;
   if (!isDrawn(drawn)) return "what this input takes";
@@ -7016,20 +6633,13 @@ const asWord = (value: Schema.Json) => (isWord(value) ? value : asJsonText(value
 
 const isDrawn = Schema.is(Schema.Record(Schema.String, Schema.Json));
 
-/** A refusal a front door turns into `invalid_input` and exit 2, rather than a failure. */
 const refusedInput = (reason: string) =>
   Effect.fail(new HostRefused({ reason: `${REFUSED_INPUT}: ${reason}` }));
 
-/**
- * The host's own launch options, checked against what the module says about itself. An
- * outcome a workflow fixes is not one a caller may ask to be something else: a Run that
- * promised evidence it cannot produce finds out at the gate before its merge request.
- */
 const refuseOptions: (
   generation: Generation,
   options: Readonly<Record<string, string>>,
 ) => Effect.Effect<void, HostRefused> = (generation, options) => {
-  // Scoped policy travels separately from inputs without reserving another input name.
   const strange = Arr.filter(
     Struct.keys(options),
     (name) => name !== "claudeSubagents" && !(name in RESERVED_INPUTS),
@@ -7060,22 +6670,16 @@ const refuseOptions: (
   return Effect.void;
 };
 
-/** What a caller asked of the checkout, decoded from the host's own `workspace` option. */
 type CheckoutRequest =
-  /** What the workflow declares: its own worktree where it declares one, else where it started. */
   | { readonly kind: "declared" }
-  /** A worktree of the Run's own, which is what a Workflow with a checkout is given anyway. */
   | { readonly kind: "separate" }
-  /** The checkout the Run starts from, by its absolute path. */
   | { readonly kind: "existing"; readonly path: string };
 
 const isSeparate = Schema.is(Schema.Literal("new"));
 
-/** The `workspace` option as the typed request it is, refused naming the field where it is not one. */
 const checkoutRequest = Effect.fn("Engine.checkoutRequest")(function* (
   generation: Generation,
   asked: Readonly<Record<string, string>>,
-  /** The Projects root the front door resolved, which `projects-root` names; null for none. */
   root: string | null,
 ) {
   const given =
@@ -7110,13 +6714,10 @@ const checkoutRequest = Effect.fn("Engine.checkoutRequest")(function* (
   return { kind: "existing", path } satisfies CheckoutRequest;
 });
 
-/** Where a Run works, as the host placed it before the Run existed. */
 const Placed = Schema.Struct({
   cwd: Schema.String,
   branch: Schema.NullOr(Schema.String),
-  /** A workspace of its own, where it asked for one; null lives in its Task's. */
   workspace: Schema.NullOr(Schema.String),
-  /** The worktree it was given, which says who takes it away again. */
   worktree: Schema.NullOr(WorktreeRecordSchema),
 });
 type Placed = typeof Placed.Type;
@@ -7132,32 +6733,23 @@ const stripeOf = (key: string) => {
   return hash % CLAIM_STRIPES;
 };
 
-/** A checkout a claimant cut, as its receipt records it. */
 const Cut = Schema.Struct({
   placed: Placed,
   opened: Schema.NullOr(Schema.Struct({ id: Schema.String, label: Schema.NullOr(Schema.String) })),
 });
 type Cut = typeof Cut.Type;
 
-/**
- * What a claimant places a Run from: the checkout it starts in, and a fresh Task's name.
- * `checkout` and `workspace` are null once asked for, and what was made once it answered.
- */
 const Placing = Schema.Struct({
   requestedBy: Schema.optional(RequestedBy),
-  /** The Run this one is a Heal of. */
   heals: Schema.optionalKey(Schema.String),
-  /** The human door that started it and their words, where one did. */
   started: Schema.optional(StartedSchema),
   branchBase: Schema.optional(Schema.String),
   closes: Schema.optional(Schema.Literal("reported")),
   from: Schema.String,
   taskLabel: Schema.NullOr(Schema.String),
-  /** The Projects root the start was given, kept so a re-placement and a child name the same. */
   root: Schema.optionalKey(Schema.NullOr(Schema.String)),
   workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
   checkout: Schema.optionalKey(Schema.NullOr(Cut)),
-  /** The source's final card a follow-up of the same work was admitted from. */
   continues: Schema.optionalKey(ConsumedCard),
 });
 type Placing = typeof Placing.Type;
@@ -7167,7 +6759,6 @@ const encodePlacing = flow(Schema.encodeResult(PlacingJson), Result.getOrThrow);
 
 const owing = new WeakMap<RunRow, boolean>();
 
-/** Whether a Run's report is owed: an agent started it, or its Task closes once it is reported. */
 export const owesReport = (row: RunRow) => {
   const known = owing.get(row);
   if (known !== undefined) return known;
@@ -7179,7 +6770,6 @@ export const owesReport = (row: RunRow) => {
   return owes;
 };
 
-/** What a Run's agents are told it authorises; a record from before this was kept authorises nothing. */
 const authorityOf: (
   worktree: WorktreeRecord | null,
   started: Started | undefined,
@@ -7192,10 +6782,8 @@ const authorityOf: (
   started: started ?? null,
 });
 
-/** A row claimed and not placed yet: nothing hands it to the engine until it is. */
 const unplaced = (row: RunRow) => row.checkout === null && row.placing !== null;
 
-/** The directories a Run owns: its cwd and its worktree, as its placement recorded them. */
 const treeOf = Effect.fn("Engine.treeOf")(function* (
   row: RunRow | null,
   runId: string,
@@ -7216,14 +6804,12 @@ const treeOf = Effect.fn("Engine.treeOf")(function* (
   return { id: runId, cwd: placed?.cwd ?? dir, worktree: placed?.worktree?.path ?? null };
 });
 
-/** Where a row works: as placed, or, while it is being placed, as its receipt says so far. */
 const workingPlace: (row: RunRow) => Placed = (row) => {
   if (!unplaced(row)) return placedOf(row, {});
   const receipt = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
   return receipt?.checkout?.placed ?? { ...placedOf(row, {}), cwd: receipt?.from ?? row.project };
 };
 
-/** Where a Run works: as the host placed it, or for a row from before that, as it started. */
 const optionsNow = (dir: string, runId: string, options: Readonly<Record<string, string>>) =>
   readIntent(runDir(dir, runId)).pipe(
     Effect.map((intent) => withOutcome(options, intent)),
@@ -7244,7 +6830,6 @@ const placedOf: (row: RunRow, options: Readonly<Record<string, string>>) => Plac
     worktree: null,
   }));
 
-/** A launch as the branch resolver reads one: its text, each work source's kind, and the task. */
 const branchInputs = Effect.fn("Engine.branchInputs")(function* (
   generation: Generation,
   input: Readonly<Record<string, Schema.Json>>,
@@ -7264,10 +6849,6 @@ const branchInputs = Effect.fn("Engine.branchInputs")(function* (
   return inputs;
 });
 
-/**
- * The plan a Run fans out over: one spanning repositories, where the Run was given no
- * `repo` share of it. Null for every other Run.
- */
 const fanOutOf = Effect.fn("Engine.fanOutOf")(function* (
   generation: Generation,
   input: Readonly<Record<string, Schema.Json>>,
@@ -7283,11 +6864,6 @@ const fanOutOf = Effect.fn("Engine.fanOutOf")(function* (
   return plan === null || isSingleRepo(plan) ? null : plan;
 });
 
-/**
- * The checks a start is admitted with, settled before anything exists. None is fine: the
- * Run's agent names them (ADR-0055). A checks file that does not read is refused by name,
- * and so is `--verify` for a plan that spans repositories.
- */
 const checksOfStart = Effect.fn("Engine.checksOfStart")(function* (o: {
   readonly generation: Generation;
   readonly input: Readonly<Record<string, Schema.Json>>;
@@ -7296,14 +6872,12 @@ const checksOfStart = Effect.fn("Engine.checksOfStart")(function* (o: {
   readonly project: string;
   readonly verify: ReadonlyArray<VerifySpec> | undefined;
   readonly userDir: string;
-  /** Where a checkout for the Run starts, by placement's rule. */
   readonly start: Effect.Effect<string | null, never, PlatformServices>;
 }) {
   const readApproved = (cwd: string, ref: string | null) =>
     approvedAt(cwd, o.userDir, ref).pipe(Effect.catch((cause) => refusedInput(cause.message)));
   const approved = o.verify ?? (yield* readApproved(o.project, yield* o.start));
   const fanOut = yield* fanOutOf(o.generation, o.input, o.launch, o.from);
-  // Placement refuses a plan it cannot fan out, and says why.
   if (fanOut === null || fanOut.refusal !== null) return approved;
   if (o.verify !== undefined)
     return yield* refusedInput(
@@ -7317,12 +6891,6 @@ const checksOfStart = Effect.fn("Engine.checksOfStart")(function* (o: {
   return approved;
 });
 
-/**
- * A new Run's Intent, version 1: the workspace's defaults and what was named at launch
- * from the front door, what its work source asks for, and what it may verify. A Run
- * started from another inherits that one's Intent as it stands. Written once, before the
- * engine has the work; a retry of the same request finds it written.
- */
 const seedIntentOf = (options: {
   readonly dir: string;
   readonly row: RunRow;
@@ -7331,8 +6899,6 @@ const seedIntentOf = (options: {
   readonly parent: RunRow | null;
 }) =>
   writeSeed(options).pipe(
-    // Said in the Run's own log: a Run without its Intent still runs, and whoever reads
-    // why its drift was never checked is told.
     Effect.catch((cause) =>
       said(
         { runDir: runDir(options.dir, options.row.run) },
@@ -7385,58 +6951,35 @@ const writeSeed = Effect.fn("Engine.writeSeed")(function* (options: {
   yield* writeIntent(at, inherited === null ? seeded : propagate(inherited, seeded).intent);
 });
 
-/**
- * What a launch records beside the author's own input: the caller's host options, and the
- * outcome this Run has to prove — the module's own fixed kind, or the one the caller
- * selected. A card reads this and never the workflow's id.
- */
 const launchOptions = (generation: Generation, asked: Readonly<Record<string, string>>) =>
   generation.fixedOutcome === null ? asked : { ...asked, outcome: generation.fixedOutcome };
 
-/**
- * A run as a front door shows it: the identities it was admitted under, what it was
- * started with, and what the engine says about it now. The status is a projection read
- * from the engine when asked — never a second record of what the work has done.
- */
-/** A question a run has been asked, as a front door shows it. */
 export const OpenDecision = Schema.Struct({
   shipping: Schema.optionalKey(Schema.NullOr(ShippingGo)),
   name: Schema.String,
   prompt: Schema.String,
-  /** The solutions it takes, recommended first; empty is a question answered in words. */
   options: Schema.Array(RecordedSolution),
-  /** What settled it, or null while it is still open. */
   answer: Schema.NullOr(Schema.String),
-  /** When it was asked and answered; absent from an older host. */
   asked: Schema.optionalKey(Schema.String),
   answered: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** Who answered it, as an agent's name or the front door a human used. */
   by: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** The operation whose agent asked it; null where the workflow did. */
   asker: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** When a human's message set it aside, and the Delivery or submit that carried it. */
   superseded: Schema.optionalKey(Schema.NullOr(Schema.String)),
   cause: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** Every agent a human messaged since, oldest first. */
   messaged: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** The question this one asks again, or null for an original. */
   revises: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** What keeps it short of standard, or null where nothing does. */
   shortfall: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** While open, the agent a human's words about it would reach; null where none was launched. */
   steer: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type OpenDecision = typeof OpenDecision.Type;
 
 const SupersedeRecord = Schema.Struct({ decision: Schema.String, agent: Schema.String });
 
-/** What became of one delivery to a run's agent. */
 export { Steered };
 
 export const RunView = Schema.Struct({
   narratives: Schema.optionalKey(Schema.Array(NarrativeReport)),
   requestedBy: Schema.optional(RequestedBy),
-  /** The parked Run this one is a Heal of; absent for every other Run. */
   heals: Schema.optionalKey(Schema.String),
   report: Schema.optional(RunReport),
   linkNotices: Schema.optional(Schema.Array(LinkDelivery)),
@@ -7448,74 +6991,43 @@ export const RunView = Schema.Struct({
   task: Schema.NullOr(Schema.String),
   parent: Schema.NullOr(Schema.String),
   registration: Schema.String,
-  /** The module file this run was admitted on, recorded so a deleted one is still named. */
   entry: Schema.String,
   input: Schema.Record(Schema.String, Schema.Json),
-  /** Where each of those values came from, and the host options it was launched with. */
   provenance: Schema.Record(Schema.String, Schema.String),
-  /** Which inference each input carries, as its module declares it now; empty without one. */
   strategies: Schema.Record(Schema.String, Schema.String),
   options: Schema.Record(Schema.String, Schema.String),
-  /** Where it works: its own worktree, on `branch`, or the checkout it was started for. */
   cwd: Schema.String,
   branch: Schema.NullOr(Schema.String),
-  /** A workspace of its own, where it asked for one; null lives in its Task's. */
   workspace: Schema.NullOr(Schema.String),
-  /** The worktree it was given, which says who takes it away again. */
   worktree: Schema.NullOr(WorktreeRecordSchema),
-  /**
-   * What this Run has to prove, as the module fixed it or the caller selected it. A fact
-   * on the Run rather than a reading of its id, so a renamed or user-authored workflow
-   * is held to what it declared and to nothing its name suggests.
-   */
   outcome: Schema.String,
-  /** When this Run was admitted, which is when it began. */
   created: Schema.String,
   status: RunStatus,
-  /** Every question this run has been asked, answered or not, oldest first. */
   waiting: Schema.Array(OpenDecision),
-  /** The controls an operator has set over it: a hold, a stop, or neither. */
   controls: Schema.Array(Schema.String),
-  /** Why the engine could not be asked, or null when it was. */
   diagnostic: Schema.NullOr(Schema.String),
-  /** Why the Run parked its own work and what picks it up again, or null. */
   parked: Schema.NullOr(Schema.String),
-  /** That park's cause and what it lets the host do; absent from an older host. */
   park: Schema.optionalKey(Schema.NullOr(Park)),
   recovery: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** What it waits for that needs nobody to repair anything, or null. */
   awaiting: Schema.NullOr(AwaitingSchema),
-  /** The merge request the Run opened, as its workflow recorded it, or null. */
   mr: Schema.NullOr(Schema.String),
-  /** Its landing of that merge request through the host's merge, or null. */
   landing: Schema.NullOr(LandingSchema),
-  /** When a durable timer it sleeps on wakes it, or null; absent from an older host. */
   wakes: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** The Subscription its work waits on to reset, or null; absent from an older host. */
   usage: Schema.optionalKey(Schema.NullOr(UsageWaitSchema)),
-  /** A performance Run's latest \`final\` Measurement, or null; absent from an older host. */
   measurement: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type RunView = typeof RunView.Type;
 
-/** What a run reads as, for comparing one poll with the last. */
 const encodeView = flow(Schema.encodeResult(Schema.fromJsonString(RunView)), Result.getOrThrow);
 
-/**
- * How often a host asks the engine about work it has not finished. One fiber does it for
- * every client, so watching costs the same whether nobody or the whole board is looking.
- */
 const SWEEP_INTERVAL = "500 millis";
-/** Every this many sweeps, one reads even the suspended Runs the engine has not written for. */
 const WHOLE_SWEEP_EVERY = 60;
 
-/** How long a woken run is given to settle before a caller is told it was woken. */
 const WAKE_INTERVAL = "250 millis";
 const WAKE_TRIES = 8;
 
 const VIEW_CONCURRENCY = 8;
 
-/** Settled Runs' views kept from one read to the next, and the revision a Run's files are at. */
 export interface KeptViews {
   readonly revision: (run: string) => number;
   readonly views: Map<
@@ -7524,51 +7036,36 @@ export interface KeptViews {
       readonly row: RunRow;
       readonly decided: number;
       readonly revision: number;
-      /** The engine's count of writes for the Run's execution, where the host counts them. */
       readonly engine: number | undefined;
       readonly view: RunView;
     }
   >;
 }
 
-/** What a host is holding, as a caller may see it: live names and unloadable ones. */
 export const Registrations = Schema.Struct({
   live: Schema.Array(Schema.String),
   unavailable: Schema.Array(Schema.String),
 });
 
-/**
- * One loaded generation of a module: the id an operator types, the opaque name Effect
- * stores its executions under, and the live registration itself.
- */
 export interface Generation {
   readonly id: string;
   readonly name: string;
   readonly title: string;
   readonly entry: string;
-  /** What the module declares it takes, which is what settles a launch. */
   readonly fields: InputFields;
-  /** Which input carries which inference, as the module attached it. */
   readonly hints: Readonly<Record<string, InputStrategy>>;
-  /** The outcome this module fixes, so asking it for another is refused. */
   readonly fixedOutcome: string | null;
-  /** What it needs of the repository, which is what the host places a Run of it on. */
   readonly checkout: CheckoutKind;
   readonly closes?: "reported";
-  /** The setting that makes a start on a merge request its login's one Run of it. */
   readonly follows?: string;
-  /** The file and the revision this was built from: what makes a later start the same code. */
   readonly source: string;
   readonly metadata: Schema.Json;
   readonly connections?: import("./sdk").WorkflowConnections;
-  /** What a finished Run of this module offers next, with the author's own eligibility. */
   readonly offers: ReadonlyArray<Declared>;
-  /** What the workflow prefers for its own agents. */
   readonly agents: WorkflowAgentPreferences | undefined;
   readonly registration: Registration;
 }
 
-/** What the registry's own work takes, which is what a host holds already. */
 export type HostServices =
   | WorkflowEngine.WorkflowEngine
   | Host
@@ -7579,115 +7076,62 @@ export type HostServices =
   | ChildProcessSpawner.ChildProcessSpawner
   | ForgeHttp;
 
-/**
- * Which modules a host holds and what it does with them, in front of one state directory.
- * Both hosts run on this, so the rule that a run stays on the generation it started on is
- * decided once rather than twice.
- *
- * Registrations are built in the scope the registry is built in — the host's — so they
- * outlive whichever client asked for one and are finalized when the host goes.
- */
 export interface RegistryApi {
   readonly load: (entry: string) => Effect.Effect<Generation, EntryError, HostServices>;
-  /**
-   * The generation new work goes to: the one already built from this file at this
-   * revision, or a new one. An edit is therefore a new generation and an unchanged file is
-   * not, without either being asked for.
-   */
   readonly use: (options: {
     readonly entry: string;
     readonly revision: string;
   }) => Effect.Effect<Generation, EntryError, HostServices>;
   readonly registrations: Effect.Effect<typeof Registrations.Type>;
   readonly newest: (id: string) => Effect.Effect<Generation, HostRefused>;
-  /**
-   * The generation a start of this id in this project goes to, through whatever search
-   * path the host was built with. A host with none has only what was loaded into it, so
-   * this is `newest` there.
-   */
   readonly resolve: (options: {
     readonly project: string;
     readonly id: string;
   }) => Effect.Effect<Generation, HostRefused, HostServices>;
-  /**
-   * Admits work and hands it to the engine. The request id is the claim: the same one
-   * twice is the same run, and one whose arguments have changed is refused rather than
-   * quietly becoming something else. A caller that already has an identity for the work
-   * brings it; otherwise the host mints one.
-   */
   readonly start: (
     options: StartOptions,
   ) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
-  /** Refuses a start as `start` would, before anything is claimed, and starts nothing. */
   readonly check: (options: StartOptions) => Effect.Effect<void, HostRefused, HostServices>;
-  /**
-   * Executes a Run admitted with `handsOver` on the caller's own fiber, as a parent
-   * executes its child: the Run's end wakes the caller's workflow.
-   */
   readonly result: (runId: string) => Effect.Effect<unknown, WorkflowError>;
   readonly status: (
     runId: string,
   ) => Effect.Effect<typeof RunStatus.Type, HostRefused, HostServices>;
-  /**
-   * Settles the question a run is waiting on. A name the run is not asking, one it has
-   * already answered, and a value the question does not take are all refused before
-   * anything is completed — so nothing an operator sends twice becomes work twice.
-   * A null name means the one open question, which is refused where there is not exactly one.
-   */
   readonly answer: (options: {
     readonly runId: string;
     readonly decision: string | null;
     readonly value: string;
-    /** The caller's claim on this answer, so the same one arriving twice is one answer. */
     readonly request: string;
     readonly by?: Asker & { readonly schedule?: ScheduledBy | undefined };
   }) => Effect.Effect<typeof Answered.Type, HostRefused, HostServices>;
-  /**
-   * Wakes a Run watching its merge request with what the merge watch judged, once it has
-   * stopped to wait, and then forgets its watch. Kept on the watch first, so a host that
-   * ends before the wake is done leaves it to the next.
-   */
   readonly wake: (
     run: string,
     name: string,
     woke: Woke,
   ) => Effect.Effect<void, never, HostServices>;
-  /** Sets one open question aside for a human's message, and records it on the Run's trail. */
   readonly supersede: (options: {
     readonly runId: string;
     readonly decision: string;
-    /** The Delivery or submit that carried the message. */
     readonly cause: string;
     readonly by: Asker;
-    /** The agent the message went to. */
     readonly agent: string;
   }) => Effect.Effect<Superseded, never, HostServices>;
-  /** Sets or clears one durable control over one run, and says whether it reached it. */
   readonly control: (options: {
     readonly runId: string;
     readonly control: string;
     readonly set: boolean;
     readonly before?: string;
     readonly by?: string;
-    /** A stop of this Run without the children it started. */
     readonly alone?: boolean;
-    /** Why a stop ends the Run's agents, for its log. */
     readonly reason?: string;
   }) => Effect.Effect<typeof Controlled.Type, HostRefused, HostServices>;
-  /**
-   * Grants this run one command Collie may run itself, or withdraws the grant of that
-   * name where the command is null, and answers with what the run may run now.
-   */
   readonly grant: (options: {
     readonly runId: string;
     readonly name: string;
     readonly command: Omit<VerifySpec, "name"> | null;
   }) => Effect.Effect<ReadonlyArray<VerifySpec>, HostRefused, HostServices>;
-  /** Says something to the agent this run has, through the one sender. */
   readonly steer: (options: {
     readonly runId: string;
     readonly text: string;
-    /** The caller's claim on the delivery, so the same message twice is one message. */
     readonly request: string;
     readonly step?: string;
     readonly to?: string;
@@ -7696,137 +7140,80 @@ export interface RegistryApi {
     readonly mode?: AgentsSdk.DeliveryMode;
     readonly actor?: Asker;
   }) => Effect.Effect<typeof Steered.Type, HostRefused, HostServices>;
-  /** Puts every agent's question no step is reading on its Run, and sends back the answers. */
   readonly tendQuestions: Effect.Effect<void, never, HostServices>;
-  /** Every question this run has been asked, answered or not, oldest first. */
   readonly waiting: (runId: string) => Effect.Effect<ReadonlyArray<OpenDecision>>;
-  /** One run as a front door shows it, or null where nothing was admitted under that id. */
   readonly view: (runId: string) => Effect.Effect<RunView | null>;
-  /** Drops `slug` from every Run's claim record, answering the Runs it was in. */
   readonly forgetClaim: (slug: string) => Effect.Effect<ReadonlyArray<string>>;
-  /** Every run this host has rows for, newest last, narrowed to one Task where named; read through `read` where given. */
   readonly views: (
     task: string | null,
     read?: FileSystem.FileSystem,
     kept?: KeptViews,
   ) => Effect.Effect<ReadonlyArray<RunView>>;
-  /**
-   * The Runs a Run's record reads, chosen from the rows alone: its Task's, their parents,
-   * the Runs they started or asked for, and `also`. Empty where `runId` has no row.
-   */
   readonly related: (
     runId: string,
     also: ReadonlyArray<string>,
     read?: FileSystem.FileSystem,
     kept?: KeptViews,
   ) => Effect.Effect<ReadonlyArray<RunView>>;
-  /** Records `url` as the merge request `runId` opened, as the MR step does, without its notice. */
   readonly mergeRequest: (runId: string, url: string) => Effect.Effect<void>;
-  /**
-   * Forgets these Runs' rows, and what the engine keeps of their executions, in one
-   * transaction (ADR-0045 D5). Answers with the Runs it forgot; a row the engine never
-   * accepted is left.
-   */
   readonly retire: (
     runs: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyArray<string>, never, MessageStorage.MessageStorage>;
-  /** The same run, again, whenever anything about it changes. */
   readonly watch: (runId: string) => Stream.Stream<RunView | null>;
-  /**
-   * Rebuilds what this host could not register from the modules as they are now and hands
-   * over anything still outstanding. A repaired file is picked up without a restart.
-   */
   readonly recover: Effect.Effect<typeof Registrations.Type, never, HostServices>;
   readonly resume: (
     runId: string,
     recoveryPark?: string,
-    /**
-     * The park a Heal's resume was started for: it applies only while the Run is still there
-     * and neither it nor a Run under it has a Stop, which a Heal must never undo.
-     */
     healing?: string,
   ) => Effect.Effect<typeof Controlled.Type, HostRefused, HostServices>;
-  /**
-   * What this Run offers to do next, decided by the module as it is now rather than as it
-   * was when the Run started: an author who edits their actions changes what is offered.
-   * An offer that cannot be made is listed with the reason rather than left out.
-   */
   readonly offers: (
     runId: string,
   ) => Effect.Effect<ReadonlyArray<Offer>, HostRefused, HostServices>;
-  /**
-   * Carries one out. The offer is looked up again, its eligibility asked again and its
-   * arguments decoded again, so one that has gone, stopped being eligible or was given
-   * something it will not take starts nothing at all.
-   */
   readonly invoke: (options: {
     readonly runId: string;
     readonly offer: string;
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly request: string;
     readonly attachments?: ReadonlyArray<string> | undefined;
-    /** The human who took the offer, recorded as who started the Run it starts. */
     readonly started?: Started | undefined;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
-  /** The generation a run is on and the execution it was admitted as. */
   readonly routed: (
     runId: string,
   ) => Effect.Effect<{ readonly generation: Generation; readonly execution: string }, HostRefused>;
 }
 
-/** What a start is given. */
 export interface StartOptions {
   readonly requestedBy?: RequestedBy;
-  /** The parked Run this one is started to heal. */
   readonly heals?: string;
-  /** The human door that started it and their words, where one did. */
   readonly started?: Started;
   readonly branchBase?: string | undefined;
   readonly generation: Generation;
   readonly request: string;
   readonly project: string;
   readonly runId?: string;
-  /** What the caller said, in the two halves a front door keeps apart. */
   readonly input: Readonly<Record<string, Schema.Json>>;
   readonly text?: Readonly<Record<string, string>>;
   readonly inferred?: ReadonlyArray<string>;
-  /** The Projects root the front door resolved, which `workspace=projects-root` names. */
   readonly root?: string | undefined;
-  /** The host's own launch options, which never reach the author's payload. */
   readonly options?: Readonly<Record<string, string>>;
-  /** What this work belongs to: a Task, and the run it came out of. */
   readonly task?: string | null;
-  /** A new Task to open for it, under this label, on the checkout it is given. */
   readonly taskLabel?: string | undefined;
   readonly parent?: string | null;
-  /** The parent's final card this follow-up carries the same work on from. */
   readonly continues?: ConsumedCard | undefined;
-  /** What the front door knows of the Run's Intent. */
   readonly intent?: IntentSeed;
-  /** The approved set given with the start, over the project's and the user's files. */
   readonly verify?: ReadonlyArray<VerifySpec> | undefined;
-  /** Paths on this Machine, copied into the Run before its first step. */
   readonly attachments?: ReadonlyArray<string> | undefined;
-  /** The caller executes the Run itself with `result`, so the engine is not handed it. */
   readonly handsOver?: boolean;
 }
 
-/** What a start records and returns: the run it is, and whether this call is what made it. */
 export interface Admitted {
   readonly runId: string;
   readonly registration: string;
   readonly execution: string;
-  /** False when the request had already been admitted: a retry, not a second run. */
   readonly fresh: boolean;
-  /** The merge request a Run of this login already follows, which this start became. */
   readonly followed?: string;
 }
 
-/**
- * Where a host may be made to die, for the proof that neither window loses work: with the
- * run recorded and the engine not yet told, and with the engine told and the receipt not
- * yet written. Only a test sets one, through the host's `COLLIE_HOST_CRASH_AT`.
- */
 export type CrashPoint =
   | "admitted"
   | "executed"
@@ -7835,14 +7222,6 @@ export type CrashPoint =
   | "recovery-park-cleared"
   | "recovery-entered";
 
-/**
- * How a host turns a public workflow id into the module this project should run. It is
- * the host's own search path, passed in rather than reached for: the registry decides
- * which generation a run is on, and where a module was saved is somebody else's question.
- *
- * A parent starting a child asks this too, so a project's override is what its parents'
- * work gets — rather than whichever generation of that id this host loaded last.
- */
 export type Locate = (options: {
   readonly project: string;
   readonly id: string;
@@ -7852,25 +7231,16 @@ export type Locate = (options: {
   FileSystem.FileSystem
 >;
 
-/** The registry a host holds, as a service its handlers ask for. */
 export class Registry extends Context.Service<Registry, RegistryApi>()("collie/Registry") {}
 
 export interface RegistryOptions {
   readonly catalogue?: Effect.Effect<MachineCatalogue>;
   readonly crashAt?: CrashPoint;
   readonly locate?: Locate;
-  /** Where a user's own `verify.json` is, for a project that wrote none. */
   readonly userDir?: string;
-  /** The herdr checkouts and Task workspaces are made through; the host's own by default. */
   readonly placing?: { readonly herdr: Herdr; readonly env: PluginEnv };
-  /** Whether a child's own Task is named by the namer's model, or by the stand-in. */
   readonly namesTasks?: boolean;
-  /** How long a messaged agent may take to start a turn before its work counts as ended. */
   readonly supersedeGraceMs?: number | undefined;
-  /**
-   * The host's Run model, which every listing reads through and keeps settled Runs' views
-   * by: without it each one reads every Run from disk again.
-   */
   readonly keep?:
     | { readonly revision: (run: string) => number; readonly reading: FileSystem.FileSystem }
     | undefined;
@@ -7889,24 +7259,14 @@ export const registryLayer: (
   | PlatformServices
 > = (dir, options?) => Layer.effect(Registry)(makeRegistry(dir, options));
 
-/**
- * One host's foundation: the engine, the rows beside it, and the run's own view of its
- * controls and questions. Composed here so there is one SQLite client and one Store
- * behind all three, rather than a second connection reading what the first wrote.
- */
 export const foundationLayer: (options: {
   readonly dir: string;
-  /** Where a user's own `verify.json` is, for a project that wrote none. */
   readonly userDir?: string;
-  /** Where a toast goes; left out, nothing is raised. */
   readonly toast?: Toast;
   readonly slack?: typeof slackApi;
-  /** The Herd this host works for; left out, nothing is judged or charged to one. */
   readonly herd?: Herd;
-  /** This Machine's Usage readings; none where left out. */
   readonly readings?: Effect.Effect<ReadonlyArray<UsageReading>>;
   readonly messagePoll?: Duration.Input | undefined;
-  /** The herdr a reviewed checkout is made through; the host's own by default. */
   readonly placing?: { readonly herdr: Herdr; readonly env: PluginEnv };
   readonly productionPoll?: Duration.Input;
   readonly issuePrivacyBudget?: Duration.Input;
@@ -7965,20 +7325,11 @@ const makeRegistry: (
       Effect.map((env) => ({ herdr: new Herdr(env), env })),
       Effect.orDie,
     ));
-  // Captured, so placing a Run asks git and herdr without its callers providing either.
   const bun = yield* Effect.context<PlatformServices | SecureRandom.SecureRandom | Records>();
   const runRecords = Context.get(bun, RunRecords);
   const mergeRequestOf = (runId: string) =>
     recordedMergeRequest(runId).pipe(Effect.provideContext(bun));
 
-  /**
-   * Every `diff-target` as `mr:`, `branch:` or `worktree`, since every reader decides from
-   * that shape; any other is refused here, before anything exists.
-   */
-  /**
-   * A branch Run works in the checkout it is started in, which only Home places by a
-   * repository's URL or path; a repository naming any other is refused, never ignored.
-   */
   const refuseElsewhere = Effect.fn("Engine.refuseElsewhere")(function* (
     generation: Generation,
     settled: Settled,
@@ -8031,21 +7382,14 @@ const makeRegistry: (
     }
     return { ...settled, input: { ...settled.input, [field]: target.value } };
   });
-  /** Every generation this host is holding, by its registration name. */
   const live = new Map<string, Generation>();
-  /** Why a recorded generation is not holdable, so a caller hears the file, not a timeout. */
   const unavailable = new Map<string, string>();
-  /** Which generation of an id new work goes to. */
   const newestOf = new Map<string, string>();
   let known = yield* store.generations;
-  // Staged copies last only as long as this host: every generation below is staged from
-  // the module as it is now, never restored.
   yield* clearGenerations(dir);
   const waking = yield* Semaphore.make(1);
   const controlling = yield* Semaphore.make(1);
-  /** The Runs whose watch this host is waking now. */
   const wakingWatches = new Set<string>();
-  /** A watch's row and the card's wait on the author, once the Run no longer waits on it. */
   const forgetWatch = (run: string, name?: string) =>
     Effect.gen(function* () {
       if (!(yield* store.unwatch(run, name))) return;
@@ -8099,7 +7443,6 @@ const makeRegistry: (
           route.entry,
         ).status;
         if (status === "pending" && !reached(row.run)) {
-          // Registering delivers the engine's waiting work for every Run of the generation.
           held.push(row.run);
         } else if (status === "pending") {
           pending.push({
@@ -8111,9 +7454,6 @@ const makeRegistry: (
       }
     }
     for (const run of held) heldAtEntry.set(run, yield* Deferred.make<void>());
-    // The composition root, and the only place a host binds anything into a module's
-    // own Layer: explicitly provided to this generation, never a table something looks
-    // itself up in. Everything else the module needs it provides for itself.
     yield* Layer.buildWithScope(
       registration.layer.pipe(
         Layer.provide(
@@ -8179,14 +7519,8 @@ const makeRegistry: (
     return generation;
   });
 
-  /**
-   * The host's own services, under whatever the caller already has. A child is executed
-   * on the parent's fiber, and merging this way is what leaves the parent's workflow
-   * instance and scope in place — which is the whole linkage between the two.
-   */
   const hostServices = yield* Effect.context<HostServices>();
   const generationsRegistered = yield* Deferred.make<void>();
-  /** Every other Run's landing and how it ended, weighed by `takeOver`. */
   const landingTakeover = Effect.fn("Host.takeOverLanding")(function* (asked: {
     readonly runId: string;
     readonly cwd: string;
@@ -8243,14 +7577,9 @@ const makeRegistry: (
       Context.merge(hostServices, caller),
     );
 
-  /** A child's run id: its parent's, and what the parent called this invocation. */
   const childRunId = (ask: ChildAsk & { readonly runId: string }) =>
     `${ask.runId}.${ask.invocation}`;
 
-  /**
-   * A Run's own harness, model and effort, checked the way its agents will be given them:
-   * over the operator's configuration and under what the workflow prefers.
-   */
   const refuseAgent = Effect.fn("Engine.refuseAgent")(function* (
     generation: Generation,
     options: Readonly<Record<string, string>>,
@@ -8287,7 +7616,6 @@ const makeRegistry: (
 
   const refused = (reason: string) => new WorkflowError({ reason });
 
-  /** What the review Run whose directory this is was pointed at, or null. */
   const reviewedTarget = Effect.fn("Engine.reviewedTarget")(function* (dirOfRun: string) {
     const row = yield* store.run(
       Str.split(pipe(dirOfRun, Str.replace(/\/+$/, "")), "/").at(-1) ?? "",
@@ -8300,10 +7628,6 @@ const makeRegistry: (
     );
   });
 
-  /**
-   * The branch the Runs of this plan Run's lineage were placed on, and null where none was
-   * or its merge request has merged or closed, so its work there is done.
-   */
   const plannedOn = Effect.fn("Engine.plannedOn")(function* (planRun: string, runId: string) {
     const states = yield* readMrStates(dir).pipe(Effect.orElseSucceed(() => new Map()));
     let branch: string | null = null;
@@ -8320,7 +7644,6 @@ const makeRegistry: (
     return branch;
   });
 
-  /** What deciding a Run's branch asks, as placement and admission both put it. */
   const branchAskOf = Effect.fn("Engine.branchAskOf")(function* (ask: {
     readonly generation: Generation;
     readonly runId: string;
@@ -8331,7 +7654,6 @@ const makeRegistry: (
   }) {
     const { generation } = ask;
     const inputs = yield* branchInputs(generation, ask.input, ask.options);
-    // A build of a review's findings works on the branch that review was pointed at.
     const source = fieldWith(generation.hints, "work-source");
     const reviewed =
       source !== undefined &&
@@ -8362,10 +7684,6 @@ const makeRegistry: (
     } satisfies BranchAsk;
   });
 
-  /**
-   * Where a checkout for a starting Run is cut from, by placement's own rule but fetching
-   * nothing, so the checks it is admitted with are its tree's. Null where there is no such ref.
-   */
   const startRefOf = Effect.fn("Engine.startRefOf")(function* (ask: {
     readonly generation: Generation;
     readonly runId: string;
@@ -8385,19 +7703,12 @@ const makeRegistry: (
       const plan = yield* branchFor({ ...(yield* branchAskOf(ask)), fetches: false }).pipe(
         Effect.option,
       );
-      // A branch that cannot be settled here is placement's to refuse, saying why.
       if (Option.isSome(plan) && plan.value.refused === null)
         return ask.branchBase ?? plan.value.base;
     }
     return yield* startOf(ask.project);
   });
 
-  /**
-   * Where a Run will work, settled before it exists. A workflow that declares a checkout is
-   * cut one from the checkout it starts from, and one that cannot be is refused here, while
-   * there is nothing to clean up. A fresh Task's workspace is opened now, on that checkout,
-   * or is the worktree workspace herdr opened for it — never a second one beside it.
-   */
   const placeRun = Effect.fn("Engine.placeRun")(function* (ask: {
     readonly generation: Generation;
     readonly runId: string;
@@ -8420,7 +7731,6 @@ const makeRegistry: (
       });
     let placed: Placed = { cwd: from, branch: null, workspace: null, worktree: null };
     let opened: Cut["opened"] = null;
-    // A fan-out has no checkout of its own: each repository's Run cuts its own.
     const fanOut =
       ask.checkout === undefined && generation.checkout !== "none"
         ? yield* fanOutOf(generation, ask.input, ask.options, from)
@@ -8465,7 +7775,6 @@ const makeRegistry: (
               Arr.findLast(others, (row) => workingPlace(row).worktree?.path === at),
             );
             if (latest === undefined) return null;
-            // Whoever works in it, recorded or not and by whatever path, gives it up too.
             const real = (dir: string) => fs.realPath(dir).pipe(Effect.orElseSucceed(() => dir));
             const here = yield* real(at);
             const users: string[] = [];
@@ -8518,17 +7827,13 @@ const makeRegistry: (
       if (checkout.note !== "") yield* said({ runDir: runDir(dir, ask.runId) }, checkout.note);
     }
     if (ask.taskLabel === undefined) return { placed, task: ask.task };
-    // One workspace per Task: a start about a Task's work — a release of its merge request,
-    // a review of it, a fix of that review — is that Task's, wherever it came from.
     if (ask.workspace === undefined && opened === null) {
       const joined = yield* taskWorking(generation, ask, placed);
       if (joined !== null) return { placed, task: joined.id };
     }
     const label = opened?.label ?? ask.taskLabel;
-    // A workspace only a Herdr 1 placement recorded; core has none.
     const workspace = opened?.id ?? ask.workspace ?? null;
     const rootPane = opened === null ? null : (placed.worktree?.root_pane_id ?? null);
-    // A workspace an earlier attempt recorded may already have its Task.
     const known =
       ask.workspace === undefined ? null : yield* taskOfWorkspace(workspace).pipe(Effect.orDie);
     const task =
@@ -8546,11 +7851,6 @@ const makeRegistry: (
     return { placed, task: task.id };
   }, Effect.provideContext(bun));
 
-  /**
-   * The Task whose work this Run is about, or null: one whose Runs opened or were given the
-   * merge request its diff target names, or, while it is open, were placed on its branch.
-   * Where several are, the one whose matching Run came first.
-   */
   const taskWorking = Effect.fn("Engine.taskWorking")(function* (
     generation: Generation,
     ask: {
@@ -8604,16 +7904,11 @@ const makeRegistry: (
     return null;
   }, Effect.provideContext(bun));
 
-  // One admission of a request at a time: placing is external, and only its claimant places.
   const claiming = yield* Effect.forEach(Array.from({ length: CLAIM_STRIPES }), () =>
     Semaphore.make(1),
   );
   const claimingOf = (request: string) => claiming[stripeOf(request)]!;
 
-  /**
-   * Places a claimed Run, as its claimant only. Refused, a claim this admission made is
-   * withdrawn; one found claimed may have made something already, so it is kept.
-   */
   const placeClaimed = Effect.fn("Engine.placeClaimed")(function* (row: RunRow, fresh: boolean) {
     const generation = live.get(row.generation);
     const placing = decodePlacing(row.placing ?? "");
@@ -8644,7 +7939,6 @@ const makeRegistry: (
         },
       });
     }).pipe(
-      // An uncertain one keeps its claim: the same request again must not open another.
       Effect.tapErrorTag("HostRefused", () => (fresh ? store.forget(row.run) : Effect.void)),
       Effect.catchTag("PlacementUncertain", (failure) =>
         Effect.fail(new HostRefused({ reason: failure.reason })),
@@ -8674,16 +7968,10 @@ const makeRegistry: (
           engine.poll(found.generation.registration.workflow, found.execution),
         ),
         Effect.map(Option.isSome),
-        // A Run this host holds no generation for has nothing executing here.
         Effect.orElseSucceed(() => true),
       ),
   };
 
-  /**
-   * Another workflow, as part of this one. Selected in the parent's own project and
-   * decoded against the child's own schema before a row exists, so input the child will
-   * not take is the parent's failure rather than a half-made Run.
-   */
   const children: ChildrenApi = {
     start: (ask: ChildAsk) => lending(admitChild(ask)),
     result: (child: ChildRun) => lending(runChild(child)),
@@ -8708,8 +7996,6 @@ const makeRegistry: (
         return none;
       }),
     );
-    // What the parent prefers where it starts the child, as options the child is given:
-    // serializable, so no Context, service or Layer of the parent's crosses over.
     const parentPreferences = yield* preferencesFromOptions(parentOptions).pipe(
       Effect.mapError((cause) => refused(`claudeSubagents: ${String(cause)}`)),
     );
@@ -8719,8 +8005,6 @@ const makeRegistry: (
     ]);
     const inherited: Record<string, string> = preferences;
     if (claudeSubagents !== undefined) inherited.claudeSubagents = encodeSubagents(claudeSubagents);
-    // The host's own options, held to the same rule a front door's are: a name that is
-    // not the host's would be a field the child's author never declared.
     const asked = { ...inherited, ...ask.options };
     yield* refuseOptions(generation, asked).pipe(
       Effect.mapError((failure) => refused(failure.reason)),
@@ -8735,7 +8019,6 @@ const makeRegistry: (
     const request = yield* checkoutRequest(generation, asked, root).pipe(
       Effect.mapError((failure) => refused(failure.reason)),
     );
-    // Where its parent works, unless it named a checkout of its own.
     const from = request.kind === "existing" ? request.path : placedOf(parent, parentOptions).cwd;
     const settled = yield* settleInput(generation.fields, { json: ask.input, text: {} }).pipe(
       Effect.flatMap((given) => settleTargets(generation, given, from)),
@@ -8750,7 +8033,6 @@ const makeRegistry: (
         EXCLUSIVE_STRATEGIES.includes(strategy),
       ),
     )?.[0];
-    // An admitted child's saved placement also covers replay and crash recovery.
     const taskLabel =
       ask.ownTask === true && (yield* store.run(runId)) === null
         ? yield* freshTaskLabel(
@@ -8763,8 +8045,6 @@ const makeRegistry: (
           ).pipe(Effect.provideContext(bun))
         : null;
     const claimed = yield* claimAndPlace({
-      // The invocation is the claim, so replaying the parent admits nothing new and
-      // changing what an invocation is given is refused rather than run twice.
       request: runId,
       run: runId,
       workflow: generation.id,
@@ -8778,9 +8058,6 @@ const makeRegistry: (
       task: ask.ownTask === true ? null : parent.task,
       parent: ask.runId,
     }).pipe(Effect.mapError((failure) => refused(failure.reason)));
-    // A child is a Run, so what it may verify is frozen with it rather than read when
-    // it asks. It is held to what its parent was, grants included, as an offer's start
-    // is; one that works in a checkout of its own is held to what that checkout approves.
     const parentChecks = request.kind === "existing" ? [] : yield* approvedOf(dir, parent.run);
     yield* freezeApproved({
       dir,
@@ -8794,8 +8071,6 @@ const makeRegistry: (
       Effect.ignore({ log: "Unhandled" }),
     );
     if (claimed.row.accepted === null) yield* attachInto(claimed.row);
-    // The parent hands its own children over, so the receipt is written here: a host
-    // sweep dispatching one would give the engine a child with no parent to wake.
     yield* store.accepted(claimed.row.run);
     const at = yield* CurrentStep;
     if (at !== null && claimed.fresh)
@@ -8822,14 +8097,8 @@ const makeRegistry: (
       Effect.mapError(() => refused(`${found.generation.entry} no longer takes ${row.input}`)),
     );
     if (row.parent !== null) yield* runRecords.setControl(AWAITED, row.parent, "", child.runId);
-    // Executed on the parent's own fiber, which is what links the two: the engine
-    // reads the parent's instance from here, so the child's completion wakes the
-    // parent and interrupting the parent reaches the child.
     const workflow = found.generation.registration.workflow;
     const written = Schema.encodeUnknownOption(Schema.toCodecJson(workflow.errorSchema));
-    // A release that derives ids differently would otherwise run a finished child again.
-    // ponytail: the engine registers the child with the parent a few synchronous steps
-    // later than `workflow.execute` would; a yield in between re-executes the same id.
     const derived = row.execution === (yield* workflow.executionId(payload));
     return yield* Effect.suspend(() =>
       derived
@@ -8842,7 +8111,6 @@ const makeRegistry: (
             suspendedRetrySchedule: workflow.suspendedRetrySchedule,
           }),
     ).pipe(
-      // A suspension is still a wait; only a result ends it.
       Effect.onExit((exit) =>
         row.parent === null || (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause))
           ? Effect.void
@@ -8850,7 +8118,6 @@ const makeRegistry: (
       ),
       Effect.mapError((failure) => {
         if (isWorkflowError(failure)) return failure;
-        // A child's own typed failure, as its error schema writes it.
         const encoded = written(failure);
         const text =
           Option.isSome(encoded) && isJson(encoded.value) ? asJsonText(encoded.value) : "";
@@ -8859,7 +8126,6 @@ const makeRegistry: (
     );
   });
 
-  /** A host dying where the proof needs one to; nothing else ever sets this. */
   const crash = (point: CrashPoint) =>
     crashAt === point
       ? currentPid.pipe(
@@ -8878,16 +8144,6 @@ const makeRegistry: (
       ),
     );
 
-  /**
-   * Gives the engine work that is recorded and not yet accepted, and writes the receipt.
-   * A start, a retry of one that crashed before the engine heard, and a host that starts
-   * with rows outstanding all come through here — under the identity the row was
-   * admitted with, so the engine's own idempotency makes a repeat a no-op rather than a
-   * second run.
-   *
-   * Nothing happens where it cannot be handed over: the module is not registered here,
-   * or no longer takes what it was started with. The row stays as it is, for a repair.
-   */
   const handOver = Effect.fn("Engine.handOver")(function* (row: RunRow, clear = true) {
     const generation = live.get(row.generation);
     if (generation === undefined || unplaced(row)) return false;
@@ -8899,8 +8155,7 @@ const makeRegistry: (
     const old = yield* parkedOf(row.run);
     if (clear) yield* clearParked(row.run);
     yield* releaseEntry(row.run);
-    // Upstream retries a send it cannot route without end; the row stays unaccepted for the next host.
-    // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- The registered author's erased error schema reaches this discard call; failures become defects below.
+    // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Upstream retries a send it cannot route without end; the row stays unaccepted for the next host. The registered author's erased error schema reaches this discard call; failures become defects below.
     yield* engine
       .execute(generation.registration.workflow, {
         executionId: row.execution,
@@ -8929,7 +8184,6 @@ const makeRegistry: (
     return true;
   });
 
-  /** A Run's own attachments, then its Lineage's, copied in before its first step. */
   const attachInto = (row: RunRow) =>
     Effect.gen(function* () {
       const own = Option.match(decodeAskedAttachments(row.asked ?? "{}"), {
@@ -8943,16 +8197,11 @@ const makeRegistry: (
       yield* copyInto(attachmentsDir(runDir(dir, row.run)), [...own, ...inherited]);
     }).pipe(
       Effect.provideContext(bun),
-      // ponytail: a file gone since it was checked starts the Run without it; refuse instead if that bites.
       Effect.catch((cause) =>
         Effect.logWarning(`${row.run}'s attachments could not be copied: ${reason(cause)}`),
       ),
     );
 
-  /**
-   * Admitted work a host did not live to place or hand over, finished under its claim. The
-   * row is read again under the claim: another pass may have placed or handed it over since.
-   */
   const recoverAdmission = (row: RunRow) =>
     claimingOf(row.request).withPermits(1)(
       store.run(row.run).pipe(
@@ -8967,7 +8216,6 @@ const makeRegistry: (
       ),
     );
 
-  /** Every recorded answer handed again to a run still waiting; the engine keeps one completion. */
   const reconcileAnswers = (reached: (run: string) => boolean = () => true) =>
     Effect.gen(function* () {
       const woken: string[] = [];
@@ -9000,11 +8248,9 @@ const makeRegistry: (
       return woken;
     }).pipe(waking.withPermits(1));
 
-  /** The file a generation was built from, which a row keeps naming after it has gone. */
   const entryOf = (name: string) =>
     Option.getOrUndefined(Arr.findFirst(known, (route) => route.name === name))?.entry ?? "";
 
-  /** The projects a Run still holds a claim on, as one line; null where it holds none. */
   const claimOf = (runId: string) =>
     recordedClaims(claimPath(dir, runId)).pipe(
       Effect.map((held) =>
@@ -9018,9 +8264,7 @@ const makeRegistry: (
       Effect.provideService(FileSystem.FileSystem, fs),
     );
 
-  /** A finished execution's status: it is never resumed, so it cannot change. */
   const finished = new Map<string, typeof RunStatus.Type>();
-  /** Settled Runs' views every listing that brings none of its own shares. */
   const shared: KeptViews | undefined =
     options?.keep === undefined ? undefined : { revision: options.keep.revision, views: new Map() };
   const polled = Effect.fn("Engine.polled")(function* (generation: Generation, execution: string) {
@@ -9035,11 +8279,6 @@ const makeRegistry: (
     return status;
   });
 
-  /**
-   * When the engine's durable clock next wakes this execution, read from its own table.
-   * By shard and processed, so upstream's one index serves it: by entity alone it scans
-   * every message ever sent, once per suspended Run on each sweep.
-   */
   const wakeOf = Effect.fn("Engine.wakeOf")(function* (execution: string) {
     const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
     if (Option.isNone(sql)) return null;
@@ -9053,15 +8292,10 @@ const makeRegistry: (
     return at === null ? null : DateTime.formatIso(DateTime.makeUnsafe(Number(at)));
   });
 
-  /**
-   * A suspended execution's status and wake, as the engine said them when its count of
-   * writes was `at`: only a message to it or a reply for it moves it again.
-   */
   const asleep = new Map<
     string,
     { readonly status: typeof RunStatus.Type; readonly wakes: string | null; readonly at: number }
   >();
-  /** True while the engine has written nothing for a suspended execution since it was read. */
   const stillAsleep = (execution: string) =>
     touches !== undefined && asleep.get(execution)?.at === touches.of(execution);
   const engineSays = Effect.fn("Engine.engineSays")(function* (
@@ -9072,7 +8306,6 @@ const makeRegistry: (
     if (done !== undefined) return { status: done, wakes: null };
     const kept = asleep.get(execution);
     if (kept !== undefined && stillAsleep(execution)) return kept;
-    // Before the poll, so a write landing during it moves the count past what is kept.
     const at = touches?.of(execution);
     const status = yield* polled(generation, execution);
     if (status.status !== "suspended") {
@@ -9188,8 +8421,6 @@ const makeRegistry: (
             )
           : null,
     };
-    // Not registered here is not a verdict on the work: the rows are all still there,
-    // and what is missing is the module, named so somebody can put it back.
     if (generation === undefined) {
       const recorded = yield* RunRecords.use((records) => records.fact(row.run, TERMINAL)).pipe(
         Effect.provideContext(bun),
@@ -9215,7 +8446,6 @@ const makeRegistry: (
       };
     }
     const { status, wakes } = yield* engineSays(generation, row.execution);
-    // A failed Run keeps a claim it may have left shared work half-done under.
     const kept = status.status === "failed" ? yield* claimOf(row.run) : null;
     return {
       ...about,
@@ -9233,11 +8463,9 @@ const makeRegistry: (
     control: string,
     set: boolean,
   ) {
-    // A stop's value is when it was set, which a sweep counts the Run's idle time from.
     yield* runRecords.setControl(control, runId, set ? yield* nowIso : null);
   });
 
-  /** Which controls an operator has set over this run. */
   const controlsOf = Effect.fn("Engine.controlsOf")(function* (runId: string) {
     const set: string[] = [];
     for (const control of [HOLD, STOP])
@@ -9245,14 +8473,6 @@ const makeRegistry: (
     return set;
   });
 
-  /**
-   * Wakes a run and waits for it to settle where it is going next.
-   *
-   * A woken run runs before it parks again, and a completion that arrives inside that
-   * window is delivered to a run that is not waiting on anything yet — so it is lost,
-   * and resuming afterwards does not bring it back. Returning only once the run has
-   * settled is what makes the next thing an operator does land on it.
-   */
   const wake = Effect.fn("Engine.wake")(function* (
     runId: string,
     found: {
@@ -9337,13 +8557,6 @@ const makeRegistry: (
     return recoveryPark !== undefined || status === "suspended";
   }, waking.withPermits(1));
 
-  /**
-   * A boundary's read of `control`. One that finds it set suspends the run, and a release that
-   * lands before that suspend has completed finds the run still going and resumes nothing
-   * (ADR-0021, D7): so once the run has suspended, the control is read again, and a run it
-   * no longer holds is woken. A later read that finds it clear shows the run went on past
-   * that read without suspending, so nothing is woken for it.
-   */
   const armed = new Map<string, object>();
   const boundary = (read: Effect.Effect<boolean>, control: string, runId: string) =>
     Effect.tap(read, (on) => {
@@ -9386,7 +8599,6 @@ const makeRegistry: (
       Effect.ignore,
     );
 
-  /** Every question this run has been asked, with the answers its options allow. */
   const asked = Effect.fn("Engine.asked")(function* (runId: string) {
     const rows = yield* store.asked(runId);
     const none: ReadonlyArray<Solution> = [];
@@ -9415,10 +8627,6 @@ const makeRegistry: (
     );
   });
 
-  /**
-   * Its questions, each open one naming the agent a human's words about it reach: the
-   * agent that asked it, or the one `run steer` reaches by default.
-   */
   const steered = Effect.fn("Engine.steered")(function* (runId: string) {
     const waiting = yield* asked(runId);
     if (!Arr.some(waiting, isUnanswered)) return waiting;
@@ -9446,7 +8654,6 @@ const makeRegistry: (
     );
   }, Effect.provideContext(bun));
 
-  /** The Run's view kept where its row, decisions and files are as they were, else undefined. */
   const keptHit = (row: RunRow, decided: (run: string) => number, kept: KeptViews) => {
     const was = kept.views.get(row.run);
     return was !== undefined &&
@@ -9458,7 +8665,6 @@ const makeRegistry: (
       : undefined;
   };
 
-  /** The Run's view, read again and kept once its execution has settled. */
   const keepView = (
     row: RunRow,
     decided: (run: string) => number,
@@ -9473,15 +8679,12 @@ const makeRegistry: (
       };
       yield* (yield* Foreground).boundary;
       const view = yield* viewOf(row, read);
-      // A settled execution's status is final, and a suspended one's stands until the
-      // engine writes for it; a going one's is polled each time.
       if (finished.has(row.execution) || stillAsleep(row.execution))
         kept.views.set(row.run, { row, ...before, view });
       else kept.views.delete(row.run);
       return view;
     });
 
-  /** Each Run's view, reading again only those not kept. */
   const keptViews = (
     rows: ReadonlyArray<RunRow>,
     concurrency: number,
@@ -9503,7 +8706,7 @@ const makeRegistry: (
             : Effect.void,
         { concurrency, discard: true },
       );
-      // SAFETY: every slot a hit left empty was filled by its keepView above.
+      // WARNING: every slot a hit left empty was filled by its keepView above.
       return views as Array<RunView>;
     });
 
@@ -9512,22 +8715,15 @@ const makeRegistry: (
       .run(runId)
       .pipe(Effect.flatMap((row) => (row === null ? Effect.succeed(null) : viewOf(row))));
 
-  /**
-   * What the engine last said about each run it may still change. Upstream's tables are
-   * upstream's: a write there invalidates nothing of Collie's, so one fiber asks on a
-   * schedule every client shares and says so once — rather than each client looping.
-   */
   const watched = new Map<string, { readonly row: RunRow; said: string }>();
   const remember = (row: RunRow) => watched.set(row.run, { row, said: "" });
   for (const row of yield* store.runs) remember(row);
-  /** How many clients are listening. A host nobody is watching asks nothing at all. */
   let watchers = 0;
 
   let sweeps = 0;
   const sweep = Effect.gen(function* () {
     if (watchers === 0) return;
     const { boundary } = yield* Foreground;
-    // Now and then every Run, for what a suspended Run's files say without the engine.
     const whole = ++sweeps % WHOLE_SWEEP_EVERY === 0;
     let changed = false;
     for (const [runId, entry] of watched) {
@@ -9538,7 +8734,6 @@ const makeRegistry: (
       if (said === entry.said) continue;
       entry.said = said;
       changed = true;
-      // A run the engine has finished with cannot change again, so nothing asks after.
       if (terminalStatus(view.status)) {
         watched.delete(runId);
       }
@@ -9547,7 +8742,6 @@ const makeRegistry: (
   });
   yield* Effect.forkScoped(sweep.pipe(Effect.repeat(Schedule.spaced(SWEEP_INTERVAL))));
 
-  /** What this host is holding, as a caller may see it. */
   const held = Effect.sync(() => ({
     live: [...live.keys()].sort(),
     unavailable: Arr.map([...unavailable.entries()], ([name, why]) => `${name}: ${why}`).sort(),
@@ -9562,7 +8756,6 @@ const makeRegistry: (
   });
 
   const routed = Effect.fn("Engine.routed")(function* (runId: string) {
-    // A Run recovered at startup may resume before its child's generation is registered.
     yield* Deferred.await(generationsRegistered);
     const row = yield* store.run(runId);
     if (row === null) {
@@ -9578,17 +8771,13 @@ const makeRegistry: (
     return { generation, execution: row.execution };
   });
 
-  /** Whether a Run has ended, a stop included: no step is left to hold, and a gone agent's work goes on elsewhere. */
   const hasEnded = Effect.fn("Engine.hasEnded")(function* (runId: string) {
-    // A stopped Run writes no final card; its stop is the record.
     if ((yield* controlsOf(runId)).includes(STOP)) return true;
     return yield* workflowEnded(runId);
   });
 
-  /** Whether a Run's Workflow ran to its end: the status a stop must not rewrite. */
   const workflowEnded = Effect.fn("Engine.workflowEnded")(function* (runId: string) {
     const found = yield* routed(runId).pipe(Effect.option);
-    // With its module gone the engine cannot be asked, and the finish's record answers.
     if (Option.isNone(found)) {
       const current = yield* view(runId);
       return current !== null && terminalStatus(current.status);
@@ -9625,14 +8814,8 @@ const makeRegistry: (
     return superseded;
   });
 
-  /** Each set-aside question's messaged agent herdr has reported working since, in memory only. */
   const seenWorking = new Set<string>();
 
-  /**
-   * A human's message submitted to `agent` sets its Run's Workflow questions and that
-   * agent's own aside (D1, D4), and a Workflow's question already set aside then waits for
-   * that agent too.
-   */
   const supersedeFor = Effect.fn("Engine.supersedeFor")(function* (
     runId: string,
     cause: string,
@@ -9672,11 +8855,6 @@ const makeRegistry: (
       ? supersedeFor(runId, sent.delivery, actor, sent.agent)
       : Effect.void;
 
-  /**
-   * Each human's message the host has not yet acted on (D1, D7): one typed into a Claude
-   * agent's pane, which its hook records as `external`, and a Delivery herdr took before
-   * the host that sent it could set the question aside.
-   */
   const missedMessages = Effect.gen(function* () {
     const runs = Arr.dedupe(Arr.map(yield* store.supersedable, (row) => row.run));
     if (runs.length === 0) return;
@@ -9718,7 +8896,6 @@ const makeRegistry: (
   });
   const graceMs = options?.supersedeGraceMs ?? SUPERSEDE_GRACE_MS;
 
-  /** Whether the Workflow's latest entry reached `decision`'s root, so it waits on that deferred. */
   const awaitsRoot = Effect.fn("Engine.awaitsRoot")(function* (
     runId: string,
     rows: ReadonlyArray<DecisionRow>,
@@ -9736,10 +8913,6 @@ const makeRegistry: (
     );
   });
 
-  /**
-   * Asks each set-aside question again once its messaged agent's work has ended, while
-   * the Run is not stopped and still suspended on it (D3, D7): from the rows and herdr alone.
-   */
   const reviseQuestions = Effect.gen(function* () {
     const agents = yield* Agents;
     const setAside = yield* store.setAside;
@@ -9779,7 +8952,6 @@ const makeRegistry: (
           (yield* Clock.currentTimeMillis) - epochMs(since) >= graceMs
         );
       });
-      // Every agent is asked, so each one herdr sees working now is remembered as seen.
       const ended = yield* Effect.forEach(messaged, (one) => finished(one.agent, one.at));
       if (!Arr.every(ended, (one) => one)) continue;
       const lineage = lineageOf(rows, row.decision);
@@ -9795,7 +8967,6 @@ const makeRegistry: (
     }
   });
 
-  /** Why a live agent in any session works inside `dir`, or null when none does. */
   const agentIn = Effect.fn("Engine.agentIn")(function* (dir: string) {
     const real = (at: string) => fs.realPath(at).pipe(Effect.orElseSucceed(() => at));
     const agents = yield* Effect.result(placing.herdr.agentList());
@@ -9819,7 +8990,6 @@ const makeRegistry: (
     return null;
   }, Effect.provideContext(bun));
 
-  /** Why one of these Runs has not ended, or null once all have. A stopped Run may resume. */
   const unended = Effect.fn("Engine.unended")(function* (runs: ReadonlyArray<string>) {
     for (const runId of runs) {
       if (!(yield* workflowEnded(runId))) return `${runId} has not ended and may still go on in it`;
@@ -9827,7 +8997,6 @@ const makeRegistry: (
     return null;
   }, Effect.provideContext(hostServices));
 
-  /** Closes ended Runs' agents; null once closed, or why not. */
   const releaseRuns = Effect.fn("Engine.releaseRuns")(function* (runs: ReadonlyArray<string>) {
     const live = yield* unended(runs);
     if (live !== null) return live;
@@ -9837,7 +9006,6 @@ const makeRegistry: (
     return left.length === 0 ? null : `its agents did not all close (${Arr.join(left, "; ")})`;
   }, Effect.provideContext(hostServices));
 
-  /** Sets a control, and a stop over every child the Run started, then wakes what must look again. */
   const applyControl = Effect.fn("Engine.applyControl")(function* (
     runId: string,
     control: string,
@@ -9846,7 +9014,6 @@ const makeRegistry: (
     alone = false,
     healing?: string,
   ) {
-    // A stop reaches the children a Run started: they are its work too.
     const runs =
       control === STOP && !alone ? [runId, ...descendantsOf(yield* store.runs, runId)] : [runId];
     if (healing !== undefined && control === STOP && !set) {
@@ -9861,17 +9028,12 @@ const makeRegistry: (
           reason: `${runId} has left park ${healing}, the one its Heal was started for`,
         });
     }
-    // Written before anything is woken, so a run that wakes up never finds the request
-    // that stopped it still there.
     const stopped = new Set<string>();
     for (const one of runs) {
       if (control === STOP && !set && (yield* controlsOf(one)).includes(STOP)) stopped.add(one);
       yield* setControl(one, control, set);
     }
-    // A file, not a row: nothing tells a watcher about it unless this does.
     yield* store.announce;
-    // A hold is read at the next boundary and needs no waking. Everything else does: a
-    // run parked on its question has nothing that would make it look again.
     const woken: string[] = [];
     if (!(control === HOLD && set)) {
       for (const one of runs) {
@@ -9883,7 +9045,6 @@ const makeRegistry: (
     return { runs, woken };
   }, controlling.withPermits(1));
 
-  /** A stop, and the agents of every Run it reached closed: the Runs, and what did not close. */
   const stopTree = Effect.fn("Engine.stopTree")(function* (
     runId: string,
     alone = false,
@@ -9891,22 +9052,16 @@ const makeRegistry: (
   ) {
     const { runs } = yield* applyControl(runId, STOP, true, undefined, alone);
     for (const one of runs) yield* forgetWatch(one);
-    // Closing their panes is what stops the agents; the Run only stops looking.
     const agents = yield* Agents;
     const left: string[] = [];
     for (const one of runs) left.push(...(yield* agents.halt(one, reason)).left);
     return { runs, left };
   });
 
-  // One registration at a time. Two clients starting different modules of one id at the
-  // same moment would otherwise mint one name for both and stage over each other.
   const registering = yield* Semaphore.make(1);
-  // A grant is a read and a write of one file: two at once would each drop the other's.
   const invoking = yield* Semaphore.make(1);
 
   const mint = Effect.fn("Engine.Registry.mint")(function* (file: string) {
-    // Read as it is now to learn the id this file claims, then register the next
-    // generation of that id.
     const described = yield* stageEntry(file);
     const route = {
       workflow: described.entry.id,
@@ -9943,7 +9098,6 @@ const makeRegistry: (
     );
   });
 
-  /** A follow-up takes what its workflow needs and the offer does not fill, so a front door asks for it. */
   const unfilled = (offer: Offer, project: string, filled: Readonly<Record<string, Schema.Json>>) =>
     resolve({ project, id: offer.workflow }).pipe(
       Effect.map((target) => {
@@ -9962,7 +9116,6 @@ const makeRegistry: (
       Effect.orElseSucceed(() => offer),
     );
 
-  /** An action draws neither what its offer gives nor what its target only lets its orchestration set. */
   const unbound = (offer: Offer, project: string) =>
     resolve({ project, id: offer.workflow }).pipe(
       Effect.map((target) => Rec.keys(Rec.filter(target.hints, (hint) => hint === "internal"))),
@@ -9976,7 +9129,6 @@ const makeRegistry: (
       })),
     );
 
-  /** Resolve offers from current project code; removed modules leave the Run readable but refuse its offers. */
   const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (
     runId: string,
     request?: string,
@@ -10001,9 +9153,6 @@ const makeRegistry: (
     );
     const asked = options.outcome ?? UNSPECIFIED;
     const where = runDir(dir, runId);
-    // The facts a host has about a Run. What it was launched with and how it
-    // ended are the row's; the tickets it wrote and the findings it left are read from
-    // its own directory, because producing them is the only way a Run can have them.
     const disposition = latest(
       yield* readDispositions(where).pipe(
         Effect.orElseSucceed(() => [] satisfies Array<Disposition>),
@@ -10013,7 +9162,6 @@ const makeRegistry: (
     const facts: Types.Mutable<ActionFacts> = {
       outcome: isOutcome(asked) ? asked : "unspecified",
       succeeded: state.status === "complete",
-      // Where the host placed it: a branch it inferred is as much the Run's as one named.
       branch: placedOf(row, options).branch,
       mrUrl: yield* mergeRequestOf(runId),
       nothingToLand: (yield* runRecords.fact(runId, NOTHING_TO_LAND)) !== null,
@@ -10052,7 +9200,6 @@ const makeRegistry: (
           refused.set(offer.id, `needs ${id}: ${reading.detail}. Fix: ${reading.fix}`);
       }
     }
-    // A plan spanning repositories is a fan-out, which an offer does not start.
     for (const offer of generation.offers) {
       const field = Option.getOrUndefined(
         Arr.findFirst(Rec.toEntries(offer.inputs), ([, source]) => source === "plan-dir"),
@@ -10075,8 +9222,6 @@ const makeRegistry: (
         );
       }
     }
-    // A follow-up works in its parent's checkout, which a Run still going, or a stopped one
-    // that can be resumed, would be working in too.
     const ended = state.status === "complete" || state.status === "failed";
     const stopped = (yield* controlsOf(runId)).includes(STOP);
     const notYet = ended
@@ -10091,8 +9236,6 @@ const makeRegistry: (
         if (offer.kind === "follow-up") refused.set(offer.id, notYet);
       }
     }
-    // Starting this workflow again meets the same reviewed checkout, so it is asked whether
-    // that would still be refused (ADR-draft-an-occupied-branch-checkout-path-is-passed-over).
     const again = Arr.filter(
       generation.offers,
       (offer) => offer.kind === "follow-up" && offer.workflow === SELF && !refused.has(offer.id),
@@ -10184,7 +9327,6 @@ const makeRegistry: (
     ];
   });
 
-  /** What a start is checked against before anything exists to clean up. */
   const settleStart = Effect.fn("Engine.Registry.settleStart")(function* (
     options: StartOptions,
     runId: string,
@@ -10200,10 +9342,7 @@ const makeRegistry: (
       return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${unattachable}` });
     const request = yield* checkoutRequest(generation, asked, options.root ?? null);
     const launch = launchOptions(generation, asked);
-    // An empty set given is none given, so the project's verify.json still applies.
     const verify = options.verify?.length ? options.verify : undefined;
-    // Settled before anything exists to clean up: an input the workflow's own schema
-    // rejects names its field here, and no row, claim or execution is created.
     const settled = yield* settleInput(generation.fields, {
       json: options.input,
       text: options.text ?? {},
@@ -10243,7 +9382,6 @@ const makeRegistry: (
     }
     const provenance = {
       ...settled.provenance,
-      // A host option a front door worked out, such as the checkout it placed the Run in.
       ...Rec.fromEntries(
         Arr.map(
           Arr.filter(options.inferred ?? [], (name) => name in asked),
@@ -10251,8 +9389,6 @@ const makeRegistry: (
         ),
       ),
     };
-    // A retry of a Run already admitted is not a new start: it keeps what it froze, or
-    // freezes what it carries.
     const approved =
       (yield* store.requested(options.request)) === null
         ? yield* checksOfStart({
@@ -10345,7 +9481,6 @@ const makeRegistry: (
       parent: options.parent ?? null,
       attachments: options.attachments,
     });
-    // Frozen with the Run, so editing the project's list changes the next one.
     yield* freezeApproved({
       dir,
       runId: claimed.row.run,
@@ -10360,9 +9495,6 @@ const makeRegistry: (
       seed: options.intent,
       parent: options.parent ? yield* store.run(options.parent) : null,
     }).pipe(Effect.provideContext(bun), Effect.ignore({ log: "Unhandled" }));
-    // A retry of work the engine already has is nothing more to do; one that crashed
-    // before it heard is handed over now, under the identity it was admitted with.
-    // A caller that executes the Run itself has the receipt first, as a parent does.
     if (claimed.row.accepted === null)
       yield* options.handsOver === true ? store.accepted(claimed.row.run) : handOver(claimed.row);
     return {
@@ -10373,7 +9505,6 @@ const makeRegistry: (
     };
   });
 
-  /** Registers, admits and answers again what is outstanding: the herd's, or only the reached Runs'. */
   const recover = (reach?: ReadonlySet<string>) =>
     Effect.gen(function* () {
       const recovered = new Set<string>();
@@ -10402,7 +9533,6 @@ const makeRegistry: (
                   ),
                 ),
           );
-          // After registering, which may have held the Runs it did not reach.
           for (const { run } of rows) {
             if (!reached(run) || !(yield* releaseEntry(run))) continue;
             yield* clearParked(run);
@@ -10411,7 +9541,6 @@ const makeRegistry: (
           }
         }),
       );
-      // Taken up, so a control does not wake them again, and settled as a wake would be.
       for (const run of released) yield* routed(run).pipe(Effect.flatMap(settle), Effect.ignore);
       for (const row of yield* store.pending) {
         if (reached(row.run) && (yield* recoverAdmission(row))) recovered.add(row.run);
@@ -10420,9 +9549,6 @@ const makeRegistry: (
       return { registrations: yield* held, takenUp: recovered };
     });
 
-  // What was registered before this host existed, rebuilt from the modules as they are
-  // now. A file that has gone leaves its generation unavailable and every other one
-  // registered, which is what keeps one broken module from stopping the rest.
   for (const route of known) {
     yield* register(route).pipe(
       Effect.catchTag("EntryError", (failure) =>
@@ -10433,8 +9559,6 @@ const makeRegistry: (
 
   yield* Deferred.succeed(generationsRegistered, undefined);
 
-  // What a host admitted and did not live to hand over. Every crash window ends here.
-  // Forked, so a hand-over that stalls does not keep the host from serving.
   yield* Effect.forkScoped(
     Effect.gen(function* () {
       for (const row of yield* store.pending) yield* recoverAdmission(row);
@@ -10442,8 +9566,6 @@ const makeRegistry: (
     }),
   );
 
-  // The agents of a running Run that core lost, started again: once now, and whenever core
-  // says one may have gone.
   const hosted = yield* Effect.context<HostServices>();
   yield* Effect.forkScoped(
     (yield* Agents).onLosses(
@@ -10501,7 +9623,6 @@ const makeRegistry: (
         Effect.flatMap((rows) =>
           keptViews(
             task === null ? rows : Arr.filter(rows, (row) => row.task === task),
-            // The host's own background read goes one Run at a time, so the loop stays free.
             kept === undefined ? VIEW_CONCURRENCY : 1,
             read ?? (keeping === undefined ? undefined : options?.keep?.reading),
             keeping,
@@ -10665,8 +9786,6 @@ const makeRegistry: (
         options.runId,
         options.request,
       );
-      // Asked again here, of the module as it is now: the card this was read from may
-      // have been drawn before the file was edited, and a card is not authority.
       const offer = Option.getOrUndefined(
         Arr.findFirst(
           offersFrom(generation.offers, facts, {
@@ -10692,14 +9811,10 @@ const makeRegistry: (
         return yield* new HostRefused({
           reason: `"${bound.value}" is Collie's to set when "${options.offer}" starts ${offer.workflow}, so it cannot be given`,
         });
-      // What the offer said Collie fills in, filled from the Run it is about. The
-      // caller's own values win: an offer names where a value comes from, and a caller
-      // that has a better one for the same field is not overruled by a default.
       const filled = {
         ...inputsFor(offer, { runId: row.run, runDir: where, facts, input }),
         ...options.input,
       };
-      // Held to what its parent was, grants included, where the parent had anything.
       const inherited = yield* approvedOf(dir, row.run);
       const launch = Rec.map(
         Rec.filter(filled, (_, name) => name in RESERVED_INPUTS),
@@ -10732,8 +9847,6 @@ const makeRegistry: (
           carriedWork,
           (name) => JSON.stringify(filled[name]) === JSON.stringify(startedWith[name]),
         );
-      // The offer's own workflow settles what it was given, so arguments it will not
-      // take are refused here and nothing is started.
       return yield* startWork({
         continues: sameWork ? yield* consumedCard(row.run, where) : undefined,
         generation: starting,
@@ -10745,7 +9858,6 @@ const makeRegistry: (
         verify: inherited,
         attachments: options.attachments,
         started: options.started,
-        // A follow-up carries on the parent's work, so it is on the parent's branch.
         options: launch,
       });
     }, invoking.withPermits(1)),
@@ -10779,15 +9891,11 @@ const makeRegistry: (
         return yield* found.failure;
       const asks = yield* asked(options.runId);
       const open = Arr.filter(asks, isUnanswered);
-      // Nothing open but one question set aside with no revision yet: only the agent the
-      // human messaged may answer it (D8), which the store decides.
       const setAside = Arr.filter(asks, (one) => isSetAside(asks, one));
       const candidates = open.length === 0 && setAside.length === 1 ? setAside : open;
       const sole = options.decision === null ? soleOpen(options.runId, candidates, asks) : null;
       if (sole !== null) return yield* sole;
       const name = options.decision ?? candidates[0]?.name ?? "";
-      // Every question, not only the open ones: one already answered and one never
-      // asked are different refusals, and an operator is owed the difference.
       const question = Option.getOrUndefined(Arr.findFirst(asks, (one) => one.name === name));
       if (question === undefined) {
         return yield* new HostRefused({
@@ -10811,14 +9919,11 @@ const makeRegistry: (
         });
       }
       const value = named?.id ?? options.value;
-      // An agent's question needs no workflow to wake: a finished Run's module may be gone.
       const byAgent = Arr.some(
         yield* store.asked(options.runId),
         (row) => row.decision === name && row.asker !== null,
       );
       if (!byAgent && found._tag === "Failure") return yield* found.failure;
-      // Recorded first, and only the caller the write hands the row to completes the
-      // deferred: two answers racing are separated by the database, not by timing.
       const settled = yield* store.settle({
         run: options.runId,
         decision: name,
@@ -10830,10 +9935,6 @@ const makeRegistry: (
         return yield* new HostRefused({ reason: settled.reason });
       }
       if (settled._tag === "accepted") yield* crash("answered");
-      // Completed again on a repeat: the recording host may have died before the run was told.
-      // An agent's question is answered to its agent; waking the workflow would replay it.
-      // Handed over in the background: a Run may take any time to stop, and only the
-      // handing-over needs the wake permit. A host that ends first leaves it to the next one.
       if (settled.row.asker === null && found._tag === "Success") {
         const { registration } = found.success.generation;
         const executionId = found.success.execution;
@@ -10854,7 +9955,6 @@ const makeRegistry: (
     wake: Effect.fn("Engine.Registry.wake")(function* (run: string, name: string, woke: Woke) {
       yield* store.wake(run, name, woke);
       if (wakingWatches.has(run)) return;
-      // A question asked under the watch's name is the watch's to close, unless it was answered.
       if (Arr.some(yield* store.asked(run), (row) => row.decision === name)) {
         const closed = yield* store.settle({
           run,
@@ -10920,7 +10020,6 @@ const makeRegistry: (
         return yield* new HostRefused({
           reason: "a finished Run has no step left to hold; stop closes its agents",
         });
-      // A finished Run's status is history: a stop closes its live agents and sets nothing.
       if (options.control === STOP && options.set && (yield* workflowEnded(options.runId))) {
         const halted = yield* (yield* Agents).halt(options.runId, options.reason);
         return {
@@ -10954,7 +10053,6 @@ const makeRegistry: (
       if (row === null) {
         return yield* new HostRefused({ reason: `no run "${options.runId}" was started here` });
       }
-      // Resolved as the gate resolves it, so a check that could never run is refused now.
       if (options.command !== null) {
         const own = yield* treeOf(row, options.runId, dir);
         const at =
@@ -10985,7 +10083,6 @@ const makeRegistry: (
       readonly mode?: AgentsSdk.DeliveryMode;
       readonly actor?: Asker;
     }) {
-      // A row is enough: a finished Run's agents need its launch journal, not its module.
       if ((yield* store.run(options.runId)) === null) {
         return yield* new HostRefused({ reason: `no run "${options.runId}" was started here` });
       }
@@ -11137,11 +10234,6 @@ const askedQuestions = (rows: ReadonlyArray<DecisionRow>, audit: ReadonlyArray<A
     }),
   );
 
-/**
- * What a human's message submitted to `agent` at `submitted` does to its Run's questions
- * asked before it: those it sets aside, and the set-aside ones it has not yet made wait for
- * `agent`. Empty for a message already applied.
- */
 const touchedBy = (
   rows: ReadonlyArray<DecisionRow>,
   launches: ReadonlyArray<{ readonly operation: string; readonly agent: string }>,
@@ -11172,7 +10264,6 @@ const asksAs: (
 ) => boolean = (launches, asker, agent) =>
   Arr.some(launches, (launch) => launch.operation === asker && launch.agent === agent);
 
-/** Every child this Run started, however deep; an offer's Run has a request of its own. */
 const descendantsOf: (rows: ReadonlyArray<RunRow>, runId: string) => ReadonlyArray<string> = (
   rows,
   runId,
@@ -11186,7 +10277,6 @@ const descendantsOf: (rows: ReadonlyArray<RunRow>, runId: string) => ReadonlyArr
 
 const SUPERSEDE_GRACE_MS = 30_000;
 
-/** The questions `name` asks again, the original first and `name` last. */
 const lineageOf: (
   rows: ReadonlyArray<{ readonly decision: string; readonly revises: string | null }>,
   name: string,
@@ -11202,17 +10292,11 @@ const lineageOf: (
   return Arr.reverse(line);
 };
 
-/** The question a revision asks again, whose deferred its Workflow is waiting on. */
 const rootOf: (
   rows: ReadonlyArray<{ readonly decision: string; readonly revises: string | null }>,
   name: string,
 ) => string = (rows, name) => lineageOf(rows, name)[0] ?? name;
 
-/**
- * Why a caller who named no question cannot be given one, or null where exactly one is
- * open. Nothing is guessed at: an answer landing on the wrong question is the mistake
- * this exists to prevent.
- */
 const soleOpen: (
   runId: string,
   open: ReadonlyArray<OpenDecision>,
@@ -11242,11 +10326,6 @@ const encodeCheckProject = flow(
   Result.getOrThrow,
 );
 
-/**
- * The authoring setup, written as the files an author opens and edits rather than encoded
- * from a value: `paths` is what makes `collie` resolve to the declarations beside
- * it, and `effect` is pinned to the host's so the types are about the Effect that runs.
- */
 const TOOLCHAIN_FILES = {
   "package.json": `{
   "name": "collie-workflows",
@@ -11275,7 +10354,6 @@ const TOOLCHAIN_FILES = {
 
 const SDK_FILE = "collie.d.ts";
 
-/** Every file the toolchain puts beside a workflow directory, which is each Machine's own. */
 export const TOOLCHAIN_NAMES: ReadonlyArray<string> = [
   ...Struct.keys(TOOLCHAIN_FILES),
   SDK_FILE,
@@ -11294,10 +10372,6 @@ const objectIn: (value: Schema.Json | undefined) => Readonly<Record<string, Sche
   value,
 ) => (isJsonObject(value) ? value : {});
 
-/**
- * An author's package.json with what a module is typechecked against added where it is
- * missing, and the host's own Effect over any other: two Effects are two sets of types.
- */
 const mergedPackage = (pkg: Readonly<Record<string, Schema.Json>>) => {
   const dependencies = objectIn(pkg.dependencies);
   const devDependencies = objectIn(pkg.devDependencies);
@@ -11311,11 +10385,9 @@ const mergedPackage = (pkg: Readonly<Record<string, Schema.Json>>) => {
   };
 };
 
-/** An author's tsconfig.json with `collie` mapped to the declarations beside it. */
 const mergedCompiler = (dir: string, tsconfig: Readonly<Record<string, Schema.Json>>) => {
   const options = objectIn(tsconfig.compilerOptions);
   const paths = objectIn(options.paths);
-  // Paths resolve from baseUrl where one is set, so the mapping cannot be relative to it.
   const declarations = isText(options.baseUrl) ? `${dir}/collie.d.ts` : "./collie.d.ts";
   return {
     ...tsconfig,
@@ -11323,12 +10395,6 @@ const mergedCompiler = (dir: string, tsconfig: Readonly<Record<string, Schema.Js
   };
 };
 
-/**
- * Writes the authoring setup beside a workflow directory and installs its toolchain with
- * the embedded Bun, so a machine with neither Bun nor Node on it can still typecheck a
- * module. An existing package.json or tsconfig.json is the author's: what the setup needs
- * is merged into it and nothing of theirs is replaced.
- */
 export const provisionToolchain: (
   dir: string,
 ) => Effect.Effect<
@@ -11340,7 +10406,6 @@ export const provisionToolchain: (
   const unavailable = (message: string) =>
     new ToolchainError({ code: "toolchain_unavailable", message });
   yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
-  // Collie's own, so an upgraded installation's declarations replace the last one's.
   yield* fs.writeFileString(`${dir}/${SDK_FILE}`, SDK_DECLARATIONS).pipe(Effect.orDie);
   const unmerged: string[] = [];
   for (const [name, merge] of [
@@ -11372,7 +10437,6 @@ export const provisionToolchain: (
       `${Arr.join(unmerged, " and ")} in ${dir} is not plain JSON, so nothing was merged into it: add "effect" and "typescript" to package.json and map "collie" to ./collie.d.ts under compilerOptions.paths`,
     );
   }
-  // A successful dry run or an install omitting dev dependencies is not a toolchain.
   const compiler = yield* fs
     .exists(`${dir}/node_modules/typescript/lib/tsc.js`)
     .pipe(Effect.mapError((cause) => unavailable(String(cause))));
@@ -11388,11 +10452,6 @@ export const provisionToolchain: (
 
 const InstalledPackage = Schema.fromJsonString(Schema.Struct({ version: Schema.String }));
 
-/**
- * Provisions again where the installed Effect is not the host's, as after an upgrade, so
- * a module is checked against the Effect it will run on. A directory with no Effect
- * installed is left alone.
- */
 export const refreshToolchain = Effect.fn("Engine.refreshToolchain")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const installed = yield* fs
@@ -11403,11 +10462,6 @@ export const refreshToolchain = Effect.fn("Engine.refreshToolchain")(function* (
   }
 });
 
-/**
- * Typechecks one entry file against the provisioned toolchain and reports every
- * diagnostic with the source it is in. Errors in one file say nothing about another, so
- * a host checking several reports each on its own.
- */
 export const typecheckEntry: (options: {
   readonly dir: string;
   readonly file: string;
@@ -11427,10 +10481,6 @@ export const typecheckEntry: (options: {
       message: `no typechecker in ${options.dir}; provision it while you have a network`,
     });
   }
-  // One file at a time, through a project that extends the author's settings. Naming a
-  // file on tsc's command line makes it ignore the tsconfig beside it, which would check
-  // the module against defaults nobody wrote and report nothing useful.
-  // A project of its own, so two checks in one directory never compile each other's file.
   const project = `${options.dir}/${CHECK_PROJECT}-${Bun.hash(options.file).toString(16)}.json`;
   yield* fs
     .writeFileString(
@@ -11452,8 +10502,6 @@ export const typecheckEntry: (options: {
   const diagnostics = Arr.filter(Str.split(ran.output, "\n"), (line) =>
     /\(\d+,\d+\): error /.test(line),
   );
-  // tsc exits non-zero for the diagnostics it printed; a failure that printed none is the
-  // toolchain's problem, not the module's, and must not read as a clean module.
   if (diagnostics.length === 0) {
     return yield* unavailable(
       `the typechecker exited ${ran.code} without checking: ${Str.trim(ran.output)}`,
@@ -11462,11 +10510,6 @@ export const typecheckEntry: (options: {
   return diagnostics;
 });
 
-/**
- * The embedded Bun. A compiled executable with `BUN_BE_BUN` set is the `bun` CLI, so
- * installing a package and running a compiler need neither Bun nor Node on the machine;
- * running from source, `execPath` is already Bun and the variable changes nothing.
- */
 const runBun: (
   cwd: string,
   args: ReadonlyArray<string>,
@@ -11483,7 +10526,6 @@ const runBun: (
       ChildProcess.make(process.execPath, args, {
         cwd,
         env: { BUN_BE_BUN: "1", PATH: "/usr/bin:/bin", TMPDIR: tmp },
-        // Registry credentials, proxy settings and package caches belong to the caller.
         extendEnv: true,
         stdout: "pipe",
         stderr: "pipe",

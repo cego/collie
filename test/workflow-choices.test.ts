@@ -1,6 +1,3 @@
-// A workflow's Choice as a questionnaire: a recommendation missing or doubled is flagged and
-// never fatal, and a Choice of fewer than three options offers Hold the Run.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Clock, Effect, FileSystem, Result, Schema, flow } from "effect";

@@ -145,7 +145,6 @@ test("search filters by name, description, URL, path, Run, kind, role and unseen
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      // One host's database, opened by two hosts in turn: the second is the first restarted.
       const hostOn = Layer.build(recordsAt(rig.stateDir)).pipe(
         Effect.map((built) => Context.get(built, Artefacts)),
       );
@@ -290,7 +289,6 @@ const found = (installation: string, run: string, id: string, detectedAt: string
   installation,
 });
 
-/** A host's search over `items`, ordered and paged as a host's catalogue is. */
 const hostOf = (
   installation: string,
   items: ReadonlyArray<ArtefactMatches["items"][number]>,
@@ -353,7 +351,6 @@ test("the Flock's search keeps Machines' Runs apart, refuses an ambiguous bare i
       const sources: Array<SearchSource<never>> = [
         { machine: "alpha", reach: Effect.succeed(a) },
         { machine: "beta", reach: Effect.succeed(b) },
-        // A second route to the first installation, as a paired link and herdr both offer it.
         { machine: "alpha-over-ssh", reach: Effect.succeed(a) },
       ];
 
@@ -515,7 +512,6 @@ test(
             Effect.map(({ runId }) => runId),
             Effect.orDie,
           );
-          // Given at the start, so each Run's material is there before anything indexes it.
           for (const name of ["old", "active", "loose"])
             yield* fs.writeFileString(`${world.project}/${name}-findings.md`, `# ${name}\n`);
           const attach = (name: string) => ["--attach", `${world.project}/${name}-findings.md`];

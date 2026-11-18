@@ -1,6 +1,3 @@
-// What `collie run wait` stops at, and what `--follow` says changed, read from the Run's
-// view and its progress. Pure, so the wait and its tests decide the same way.
-
 import * as Arr from "effect/Array";
 import {
   mrReadiness,
@@ -16,10 +13,6 @@ import { isSetAside, isUnanswered } from "./store";
 export const UNTILS = ["terminal", "attention", "ready", "needs-human"] as const;
 export type Until = (typeof UNTILS)[number];
 
-/**
- * Waiting on someone: a question, a hold or a stop, or a park its status may not show. A
- * superseded question keeps the workflow suspended while the agent works on the message.
- */
 export const atAttention: (view: RunView) => boolean = (view) =>
   view.parked !== null ||
   (view.status.status === "suspended" &&
@@ -28,7 +21,6 @@ export const atAttention: (view: RunView) => boolean = (view) =>
       view.controls.includes(HOLD) ||
       view.controls.includes(STOP)));
 
-/** Whether the wait is over, or can only be over once a human acts (`stuck`). */
 export type Reached = "waiting" | "reached" | "stuck";
 
 export function reached(
@@ -70,7 +62,6 @@ export type FollowEvent =
     }
   | { readonly type: "parked"; readonly reason: string }
   | { readonly type: "awaiting"; readonly on: string; readonly who: string | null }
-  /** A merge request that opened, or with `state`, one that merged or closed. */
   | { readonly type: "mr"; readonly mr: string; readonly state?: "merged" | "closed" }
   | { readonly type: "ci"; readonly ci: ForgeChecks };
 
@@ -81,7 +72,6 @@ export interface Followed {
 
 const ciSaid = (ci: ForgeChecks) => (ci.state === "failed" ? `failed: ${ci.name}` : ci.state);
 
-/** What happened between two looks at a Run, oldest first. */
 export function followEvents(before: Followed, after: Followed) {
   const events: FollowEvent[] = [];
   if (after.progress !== null) {
@@ -134,7 +124,6 @@ const MERGED: ReadonlySet<string> = new Set(["merged", "on-stage", "in-prod"]);
 const endOf = (state: TaskMr["state"]) =>
   state === null ? null : MERGED.has(state) ? "merged" : state === "closed" ? "closed" : null;
 
-/** Each merge request of a Task that appeared, merged or closed between two looks. */
 const mrEvents: (
   before: ReadonlyArray<TaskMr>,
   after: ReadonlyArray<TaskMr>,
@@ -153,7 +142,6 @@ const mrEvents: (
   });
 };
 
-/** One event as `--follow` prints it without `--json`. */
 export function followLine(runId: string, event: FollowEvent) {
   switch (event.type) {
     case "agent": {
@@ -183,7 +171,6 @@ export function followLine(runId: string, event: FollowEvent) {
   }
 }
 
-/** Ready to release as a human reads it: yes, or each missing fact and whether it may still come. */
 export const readyLines: (ready: ReadyToRelease) => ReadonlyArray<string> = (ready) =>
   ready.ready
     ? ["Ready to release."]
@@ -195,7 +182,6 @@ export const readyLines: (ready: ReadyToRelease) => ReadonlyArray<string> = (rea
         ),
       ];
 
-/** Ready to release for each of a Task's several merge requests; the Task's own where it has one. */
 export const progressReadyLines: (progress: RunProgress) => ReadonlyArray<string> = (progress) =>
   progress.mrs !== undefined && progress.mrs.length > 1
     ? Arr.map(progress.mrs, (one) => `- ${one.short}: ${mrReadiness(one, progress.mrs!)}`)

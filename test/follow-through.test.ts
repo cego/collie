@@ -80,7 +80,6 @@ const git = (args: ReadonlyArray<string>, cwd = rig.projectDir) =>
     ),
   );
 
-/** A project whose origin keeps the merge request's ref, as GitLab does. */
 const repository = Effect.gen(function* () {
   yield* git(["init", "-q", "--bare", `${rig.root}/origin.git`], rig.root);
   yield* git(["init", "-q", "-b", "main"]);
@@ -90,7 +89,6 @@ const repository = Effect.gen(function* () {
   yield* git(["push", "-q", "origin", "main"]);
 });
 
-/** The author pushes a commit, and GitLab moves the merge request's ref to it. */
 const pushed = (what: string, ref = MR_REF) =>
   Effect.gen(function* () {
     yield* git(["commit", "-q", "--allow-empty", "-m", what]);
@@ -98,7 +96,6 @@ const pushed = (what: string, ref = MR_REF) =>
     return Str.trim((yield* git(["rev-parse", "HEAD"])).stdout);
   });
 
-/** The shipped review, under its own id or one that has nothing to do with it. */
 const entryOf = (id: string) =>
   Effect.gen(function* () {
     if (id === "review") return `${ROOT}workflows/review.workflow.ts`;
@@ -304,7 +301,6 @@ test("idle review-request rounds list for the account glab switched to", () =>
             () => Effect.sync(() => listings(forge).length),
             (count) => count >= 1,
           );
-          // The old token is refused and ForgeHttp retries with the new one, so no round sees a 401.
           yield* forge.set({ ...(yield* forge.model()), token: "ann-token", login: "ann" });
           yield* until(
             () =>
@@ -1176,8 +1172,6 @@ test.each(["major", "minor"] as const)(
         yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
         yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
         const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
-        // The fixer works on until its Output is written by hand, so no reminder takes the
-        // second review's.
         yield* rig.queueOutputs([
           review([{ ...F1, severity }]),
           { writes: [], output: null, then: "working" },
@@ -1806,7 +1800,6 @@ for (const id of ["review", "second-look"])
           let second = "";
           let third = "";
           let moving: Promise<void> | null = null;
-          // Once round 2's reviewer is at work, the author pushes again before it is done.
           forge.before(
             () =>
               moving ??
@@ -1878,7 +1871,6 @@ for (const id of ["review", "second-look"])
     600_000,
   );
 
-/** A followed review of !7 at its first head, the reviewers answering `outputs` in turn. */
 const begun = (id: string, outputs: ReadonlyArray<Schema.Json>) =>
   Effect.gen(function* () {
     yield* repository;
@@ -1890,7 +1882,6 @@ const begun = (id: string, outputs: ReadonlyArray<Schema.Json>) =>
   });
 type Forge = Effect.Success<ReturnType<typeof begun>>["forge"];
 
-/** The author pushes on from `from`, and the merge request shows it. */
 const pushedOn = (forge: Forge, from: string) =>
   Effect.gen(function* () {
     const next = yield* pushed("and more");
@@ -2005,8 +1996,6 @@ for (const id of ["review", "second-look"])
                 });
                 expect(yield* host.agentStarts).toHaveLength(1);
                 yield* forge.set(before);
-                // The fast clock outruns the host, so the outage can last long enough for
-                // rechecks to back off to their one-hour cap.
                 yield* until(
                   () => readMetrics(`${host.dir()}/evidence/${runId}`),
                   (lines) =>

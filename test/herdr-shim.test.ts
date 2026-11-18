@@ -1,6 +1,3 @@
-// Herdr 1 is gone: a rig whose code runs `herdr` or opens the socket a host may still
-// inherit as `HERDR_SOCKET_PATH` fails, naming the call.
-
 import { expect, test } from "bun:test";
 import { Effect, Exit } from "effect";
 import { exec } from "./support/command";

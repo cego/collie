@@ -1,6 +1,3 @@
-// The state the samples start from: Runs settled under a host on the fake herdr, the oldest
-// moved back as if settled long ago, and live Runs still writing.
-
 import { Database } from "bun:sqlite";
 import { readdirSync, statSync, utimesSync } from "node:fs";
 import { Effect, FileSystem } from "effect";
@@ -41,7 +38,6 @@ const filesUnder = (dir: string) =>
     entry.isDirectory() ? filesUnder(`${dir}/${entry.name}`) : [`${dir}/${entry.name}`],
   );
 
-/** Moves everything these Runs recorded OLD_DAYS back: their files, their times and rows. */
 const backdate = (runs: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -118,7 +114,6 @@ export const prepare = (
       yield* Effect.sleep("1 second");
     }
     yield* stopHost(world.state);
-    // An old settled Run is on the board only while it leaves work to file: here, a plan.
     for (const run of small.slice(0, counts.old)) {
       yield* fs.makeDirectory(`${world.state}/runs/${run}/plan/issues`, { recursive: true });
       yield* fs.writeFileString(`${world.state}/runs/${run}/plan/issues/01-bench.md`, "# Bench\n");

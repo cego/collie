@@ -1,6 +1,3 @@
-// How a Machine's shared SSH connection is opened, asked and ridden
-// (ADR-draft-a-blocked-link-rides-the-machines-ssh-connection).
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -11,26 +8,21 @@ import { withLock } from "./lock";
 import { MachineUnreachable } from "./peers-model";
 import { MUX_BOUND, muxArgv, riderArgv, type Verb } from "./ssh-argv";
 
-/** A herdr machine as its SSH connection is named: its label and its target. */
 export interface SshMachine {
   readonly label: string;
   readonly target: string;
 }
 
-/** The longest unix socket path macOS binds. */
 export const SOCKET_PATH_MAX = 104;
-/** What ssh appends to a control path while it binds it: a dot and 16 characters. */
 const BIND_SUFFIX = 17;
 const OPEN_BOUND = "2 minutes";
 
-/** Where this computer's connection to `machine` is held: a changed target is another. */
 export const controlPathOf = (stateDir: string, machine: SshMachine) =>
   `${stateDir}/ssh/${pipe_(
     new Bun.CryptoHasher("sha256").update(`${machine.label}\n${machine.target}`).digest("hex"),
     Str.slice(0, 16),
   )}`;
 
-/** The control path, in a directory only this user reads, or why a socket cannot bind it. */
 export const controlPath = Effect.fn("SshConnection.controlPath")(
   function* (stateDir: string, machine: SshMachine) {
     const path = controlPathOf(stateDir, machine);
@@ -51,7 +43,6 @@ export const controlPath = Effect.fn("SshConnection.controlPath")(
   ),
 );
 
-/** What ssh said on stderr, and how it ended. */
 const ran = (argv: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -70,14 +61,10 @@ const ran = (argv: ReadonlyArray<string>) =>
     return { code: Number(code), stderr: Str.trim(stderr) };
   }).pipe(Effect.scoped);
 
-/** A host's handle on a Machine's connection: it asks an open master, and never logs in. */
 export interface SshConnection {
   readonly path: string;
-  /** Whether a master answers on the control path. */
   readonly check: Effect.Effect<boolean>;
-  /** Forwards this computer's `127.0.0.1:<local>` to the Machine's `127.0.0.1:<peer>` for the scope. */
   readonly forward: (local: number, peer: number) => Effect.Effect<void, HostRefused, Scope.Scope>;
-  /** Ends the master, and removes its path where it had already gone. */
   readonly exit: Effect.Effect<void>;
 }
 
@@ -150,11 +137,6 @@ export const sshConnection = Effect.fn("SshConnection.handle")(function* (
   return connection;
 });
 
-/**
- * Opens this computer's SSH connection to `machine`, unless one is open: the master is
- * ssh's own, kept by `ControlPersist` after this returns. What ssh says, such as an SSO
- * login's prompt, is handed to `said` as it comes.
- */
 export const openConnection = Effect.fn("SshConnection.open")(function* (
   stateDir: string,
   machine: SshMachine,
@@ -192,7 +174,6 @@ export const openConnection = Effect.fn("SshConnection.open")(function* (
     machine: machine.label,
     seen: `another opener held its SSH connection for longer than ${Duration.format(bound)}`,
   });
-  // Another process opening it may be waiting on the same SSO login: wait for it, then look again.
   return yield* withLock(
     `${path}.lock`,
     contended,
@@ -239,7 +220,6 @@ const opened = Effect.fnUntraced(function* (
           "ConnectTimeout=15",
           machine.target,
         ],
-        // Not its own process group, which a scope closing would end with the master in it.
         { stdin: "ignore", stdout: "ignore", stderr: "pipe", detached: false },
       ),
     );
@@ -272,7 +252,6 @@ const opened = Effect.fnUntraced(function* (
   });
 });
 
-/** The host name ssh's own configuration resolves `target` to, or null where it says none. */
 export const resolvedHost = (target: string, ssh = "ssh") =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -291,10 +270,6 @@ export const resolvedHost = (target: string, ssh = "ssh") =>
     );
   }).pipe(Effect.orElseSucceed(() => null));
 
-/**
- * Runs `remote` in a session riding the connection at `path`, answering what it printed
- * and the last thing ssh said.
- */
 export const ride = (path: string, target: string, remote: string, ssh = "ssh") =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;

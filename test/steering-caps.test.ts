@@ -1,7 +1,3 @@
-// A capability is a recorded live result, not a reading of documentation, so the thing
-// tested here is what happens when there is no result: the gate refuses, and the refusal
-// is written down where a human looking for their steer will find it.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -87,16 +83,10 @@ test("proven is a recorded date, attribution and the other harnesses are not, an
     Effect.gen(function* () {
       for (const row of Rec.values(CAPABILITIES))
         for (const [capability, record] of Rec.toEntries(row)) {
-          // A capability moves to `proven` only with the day it was recorded.
           if (record.status === "proven") expect(record.tested_at).not.toBeNull();
           else expect(record.tested_at).toBeNull();
-          // Attribution needs a human at a Collie-launched agent's pane: nothing an agent
-          // pressing keys can record, so no build claims it.
           if (capability === "attribution") expect(record.status).toBe("unproven");
         }
-      // The live rows from 2026-09-11, kept with their evidence in CAPABILITIES.md: Claude
-      // took a delivery while working and acknowledged it, and both Claude and pi left
-      // `working` on Escape and acknowledged what followed. Nothing else has a pass.
       const proven = Arr.flatMap(Rec.toEntries(CAPABILITIES), ([harness, row]) =>
         Arr.flatMap(Rec.toEntries(row), ([capability, record]) =>
           record.status === "proven" ? [`${harness}.${capability}`] : [],
@@ -110,7 +100,6 @@ test("proven is a recorded date, attribution and the other harnesses are not, an
       ]);
 
       expect(needed("boundary")).toBeNull();
-      // A boundary delivery is the next prompt file, which every harness already takes.
       expect(yield* gate("claude", "boundary").pipe(Effect.exit)).toMatchObject({
         _tag: "Success",
       });
@@ -162,9 +151,6 @@ test("an interrupt is a key and a message, and is never called stopping", () =>
       expect(interruptKeys("claude")).toEqual(["Escape"]);
       expect(interruptKeys("nothing-like-this")).toBeNull();
 
-      // What an interrupt can say is what was observed: keys were sent, and later the
-      // agent acknowledged. herdr has no way to show a harness has actually stopped, so
-      // neither of these files may claim one has.
       const fs = yield* FileSystem.FileSystem;
       for (const name of ["dispatcher.ts", "steering-caps.ts"]) {
         const source = new URL(`../src/${name}`, import.meta.url).pathname;

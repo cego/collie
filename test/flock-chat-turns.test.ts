@@ -1,6 +1,3 @@
-// The Flock chat's turns, driven against a scripted Claude Code: one turn at a time, a turn
-// of Desktop's own only about News that matters, and every turn ending however it ends.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
@@ -58,7 +55,6 @@ const item: (key: string, significance: Significance) => Item = (key, significan
   significance,
 });
 
-/** A Machine whose one Herd has this News until it is settled read. */
 const machine: (
   items: ReadonlyArray<Item>,
   read: string[],
@@ -75,7 +71,7 @@ const machine: (
         };
       }),
   };
-  // SAFETY: the chat's turns reach a Machine only through declare and news.
+  // WARNING: the chat's turns reach a Machine only through declare and news.
   return {
     name: "vm-mk",
     door: door as ChatDoor,
@@ -91,30 +87,21 @@ interface Seen {
   flock?: FlockChat;
   readonly transcripts: Map<string, unknown[]>;
   readonly prompts: string[];
-  /** Each message as the SDK was handed it. */
   readonly contents: unknown[];
-  /** What each turn's message went with, as the UserPromptSubmit hook adds it. */
   readonly context: string[];
   readonly refusals: string[];
-  /** Each time the session was interrupted. */
   readonly interrupts: string[];
-  /** Each session started: its model, and the conversation it resumed or started. */
   readonly sessions: Array<{
     readonly model: string;
     readonly resume?: string;
     readonly sessionId?: string;
   }>;
-  /** Each session's MCP servers, by name. */
   readonly servers: string[][];
   readonly efforts: string[];
 }
 
 const SAID = { type: "stream_event", parent_tool_use_id: null };
 
-/**
- * Claude Code answering each message with `reply`'s messages; one `holds` names answers only
- * once it is interrupted.
- */
 const scripted: (
   seen: Seen,
   reply: (text: string) => ReadonlyArray<SdkMessage>,
@@ -141,14 +128,13 @@ const scripted: (
           const transcript = seen.transcripts.get(id) ?? [];
           transcript.push({ ...message, uuid: `u-${transcript.length}` });
           seen.transcripts.set(id, transcript);
-          // SAFETY: sessionOptions sets one UserPromptSubmit hook.
+          // WARNING: sessionOptions sets one UserPromptSubmit hook.
           const added = yield* Effect.promise(() => options.hooks.UserPromptSubmit[0]!.hooks[0]!());
           seen.context.push(
             "hookSpecificOutput" in added
               ? (added.hookSpecificOutput?.additionalContext ?? "")
               : "",
           );
-          // A human's turn would wait for their click; only Desktop's own is asked here.
           if (pipe_(text, Str.startsWith(DESKTOP_SAID))) {
             const asked = yield* Effect.promise(() =>
               options.canUseTool(
@@ -218,7 +204,6 @@ const answered = (text: string) => [
   },
 ];
 
-/** Waits, in real time, for what a session's own promises settle. */
 const eventually = (check: () => boolean) =>
   Effect.gen(function* () {
     for (let tries = 0; tries < 200 && !check(); tries++)
@@ -226,7 +211,6 @@ const eventually = (check: () => boolean) =>
     expect(check()).toBe(true);
   });
 
-/** Claude Code whose first `failed` sessions fail as they start, as one not logged in does. */
 const failingFirst: (claude: ClaudeCode<string>, failed: number) => ClaudeCode<string> = (
   claude,
   failed,
@@ -244,7 +228,6 @@ const failingFirst: (claude: ClaudeCode<string>, failed: number) => ClaudeCode<s
   };
 };
 
-/** A harness that finishes each turn at once, with its own history, and the conversations it opened. */
 const fakeDriver = (
   listed: ReadonlyArray<{ readonly session: string; readonly title: string; readonly at: number }>,
   transcripts: Readonly<Record<string, ReadonlyArray<ChatMessage>>> = {},
@@ -294,16 +277,12 @@ const withChat = <A, E>(
     readonly rule?: string;
     readonly declared?: Declaration[];
     readonly failedStarts?: number;
-    /** What Desktop's Settings have, which a test may change between turns. */
     readonly settings?: { current: DesktopSettings };
     readonly pi?: (context: DriverContext) => ChatDriver;
-    /** Drivers in place of, or beside, the scripted Claude Code. */
     readonly drivers?: ScriptedDrivers;
     readonly gate?: Deferred.Deferred<void>;
-    /** The current conversation's file, as an earlier Desktop left it. */
     readonly savedFile?: string;
     readonly transcripts?: ReadonlyArray<readonly [string, unknown[]]>;
-    /** Ticks as Desktop's saved settings or the Flock's models would. */
     readonly retold?: Stream.Stream<unknown>;
     readonly readers?: Readonly<Record<string, Effect.Effect<ReadonlyArray<ListedModel>, string>>>;
   },
@@ -372,7 +351,6 @@ const withChat = <A, E>(
           model: settings.current.chatModel,
           effort: settings.current.chatEffort,
         }),
-        // As Desktop saves it: through the settings check.
         setChatHarness: ({ harness, model, effort }) =>
           Effect.sync(() => {
             const changed = changeSettings(settings.current, NO_FLOCK_SETTINGS, {
@@ -403,13 +381,10 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
         expect(seen.prompts[0]).toStartWith(DESKTOP_SAID);
         expect(seen.prompts[0]).toContain("r1:asking happened.");
         expect(seen.prompts[0]).not.toContain("r2:ended");
-        // Desktop's own turn knows where work goes, as the human's would.
         expect(seen.context[0]).toContain("Everything is on the vm");
         expect(read).toEqual(["r1:asking"]);
-        // Nobody is there to click an answer, so the question is refused rather than waited on.
         expect(seen.refusals).toEqual(seen.prompts.slice(0, 1));
         const fs = yield* FileSystem.FileSystem;
-        // Recorded once the turn has drained, after its News was marked read.
         for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
           yield* TestClock.withLive(Effect.sleep("10 millis"));
         const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
@@ -544,7 +519,6 @@ test("News a failed turn of Desktop's carried waits for the next look, and wakes
         yield* eventually(() => seen.prompts.length === 1);
         yield* TestClock.withLive(Effect.sleep("50 millis"));
         expect(read).toEqual([]);
-        // Not again at the next nudge, which would retry a rate-limited seat every few seconds.
         yield* TestClock.adjust("3 seconds");
         yield* TestClock.withLive(Effect.sleep("50 millis"));
         expect(seen.prompts).toHaveLength(1);
@@ -556,7 +530,6 @@ test("News a failed turn of Desktop's carried waits for the next look, and wakes
   );
 });
 
-/** Staged as the view stages it: in parts, the last of which answers the descriptor. */
 const staged = (
   dir: string,
   name: string,
@@ -601,7 +574,6 @@ test("a message with an image hands the SDK the words, Desktop's listing and the
         expect(shot).toMatchObject({ name: "shot.png", size: 16, mediaType: "image/png" });
         expect(shot.path).toStartWith(`${dir}/attachments/`);
         expect(yield* (yield* FileSystem.FileSystem).readFile(shot.path)).toEqual(original);
-        // A PNG's header is all Desktop reads to know an image is within 2000 px.
         const smaller = new Uint8Array(24);
         smaller.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
         new DataView(smaller.buffer).setUint32(16, 2000);
@@ -621,11 +593,9 @@ test("a message with an image hands the SDK the words, Desktop's listing and the
             },
           },
         ]);
-        // The News the turn carried is settled in the turn's voice: the words, and no file.
         yield* eventually(() => read.includes("r1:ended"));
         expect(declared.at(-1)?.said).toBe("what is this?");
 
-        // Words are not needed, and a copy that is gone is said to be.
         yield* Stream.runDrain(conversation.send("", null, false, [shot.id]));
         expect(seen.contents[1]).toEqual([
           { type: "text", text: listing([shot]) },
@@ -655,7 +625,6 @@ test("a message's files are inlined only while their base64 fits the request, an
           Arr.map(pdfs, ({ id }) => id),
         ),
       );
-      // Four 4 MB PDFs fit the 24 MB of base64; the fifth would not.
       expect(seen.contents[0]).toEqual([
         { type: "text", text: "read these" },
         { type: "text", text: listing(pdfs) },

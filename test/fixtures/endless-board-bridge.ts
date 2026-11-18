@@ -1,6 +1,3 @@
-// A bridge whose host streams board changes without end, and answers a record only once its
-// board stream has stopped being read, or at once on a channel that never asked for a board.
-
 import { BunRuntime } from "@effect/platform-bun";
 import * as BunStdio from "@effect/platform-bun/BunStdio";
 import * as Arr from "effect/Array";
@@ -11,14 +8,13 @@ import { BRIDGE_READY, FrontDoorRpcs, IdentityRpc, PROTOCOL } from "../../src/bo
 
 const served = ["identity", "board", "toasts", "runDetail"];
 const Rpcs = FrontDoorRpcs.omit(
-  // SAFETY: every other tag of the group, whatever it holds today.
+  // WARNING: every other tag of the group, whatever it holds today.
   ...(Arr.filter([...FrontDoorRpcs.requests.keys()], (tag) => !served.includes(tag)) as [
     "refresh",
   ]),
 ).add(IdentityRpc);
 
 let sent = 0;
-/** Once the board's count of sent changes holds still, its reader has stopped taking them. */
 const boardStalled = Effect.gen(function* () {
   for (let waited = 0; ; waited++) {
     const before = sent;
@@ -28,7 +24,7 @@ const boardStalled = Effect.gen(function* () {
 });
 
 const handlers = Rpcs.toLayer(
-  // SAFETY: the client asks only what `served` names.
+  // WARNING: the client asks only what `served` names.
   {
     identity: () =>
       Effect.succeed({

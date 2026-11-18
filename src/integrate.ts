@@ -1,6 +1,3 @@
-// The default branch merged into a Run's branch where it has moved: a merge commit, never a
-// rebase, and never over work the builder has not committed.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Path, Schema } from "effect";
@@ -9,14 +6,6 @@ import { installDependencies } from "./dependencies";
 import { defaultBase } from "./inputs";
 import { whatItSaid, type Runner } from "./mr";
 
-/**
- * What an integration did. `ref` and `sha` are what the branch is now measured against —
- * a reviewer's diff is `<sha>...HEAD`. `conflicted` leaves the merge in progress for the
- * builder to finish; `waiting` merged nothing because the checkout has work of its own;
- * `unavailable` could not tell where the default branch is, a failed fetch included, or
- * could not bring the checkout's dependencies to the merged head, which the next
- * integration installs again before it reports `merged`.
- */
 export const IntegrationSchema = Schema.Struct({
   status: Schema.Literals(["unchanged", "merged", "conflicted", "waiting", "unavailable"]),
   branch: Schema.String,
@@ -27,7 +16,6 @@ export const IntegrationSchema = Schema.Struct({
 });
 export type Integration = typeof IntegrationSchema.Type;
 
-/** The Run log's line for an integration, or null where nothing was merged. */
 export const integratedLine = (done: Integration) => {
   const at = `integrated ${done.branch}@${done.sha}`;
   if (done.status === "merged") return at;
@@ -74,7 +62,6 @@ export const integrateDefault = (
       Arr.filter(Str.split(said.stdout, "\n"), (file) => file !== ""),
     );
     const merging = yield* git("rev-parse", "-q", "--verify", "MERGE_HEAD");
-    // An unfinished merge is still the builder's, however often it is asked about.
     if (merging.code === 0) {
       const files = yield* unmerged;
       if (files.length > 0)
@@ -91,7 +78,6 @@ export const integrateDefault = (
         status: "waiting",
         reason: "the checkout has uncommitted changes, so it waits for the builder's commit",
       } satisfies Integration;
-    // Outlives a failed install, so a resume installs at a head it finds already integrated.
     const owing = path.resolve(
       cwd,
       Str.trim((yield* git("rev-parse", "--git-path", "collie-dependencies-owed")).stdout),

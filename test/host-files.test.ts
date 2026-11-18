@@ -1,6 +1,3 @@
-// A Machine's files, as its host hands them to the Flock chat over a front door: read in
-// parts, found, written and edited, and never written inside the host's own state.
-
 import { memoryRecords } from "./support/effect";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -17,7 +14,6 @@ import { receive } from "../src/uploads";
 import { uploadsSweeper } from "../src/cleanup";
 import { proves } from "./support/world";
 
-/** Why the host refused, where it did; anything else fails the test. */
 const reasonOf = (error: { readonly _tag: string }) =>
   Schema.is(HostRefused)(error) ? error.reason : `not a refusal: ${JSON.stringify(error)}`;
 
@@ -167,9 +163,7 @@ test(
           expect(last.path).toBe(`${world.state}/uploads/${digest}/shot.png`);
           expect(yield* fs.readFile(last.path!)).toEqual(bytes);
 
-          // Held already: answered at its first part, whatever that part holds.
           expect((yield* door.upload({ ...asked, offset: 0, content: "" })).path).toBe(last.path);
-          // The same bytes under another name are found under that name.
           const again = yield* door.upload({ ...asked, name: "again.png", offset: 0, content: "" });
           expect(again.path).toBe(`${world.state}/uploads/${digest}/again.png`);
 
@@ -212,7 +206,6 @@ test(
           const trail = yield* readAudit(`${world.state}/uploads`).pipe(
             Effect.provide(memoryRecords),
           );
-          // As each arrived, and as what this host already held.
           expect(Arr.map(trail, ({ operation, actor }) => [operation, actor.said])).toEqual([
             ["upload", "upload"],
             ["upload", "upload"],
@@ -241,7 +234,6 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
         yield* fs.makeDirectory(`${dir}/${sub}`);
         for (let n = 0; n < 4; n++) yield* fs.writeFileString(`${dir}/${sub}/f${n}.ts`, "needle\n");
       }
-      // A link back up is not followed, so the walk ends.
       yield* fs.symlink(dir, `${dir}/a/loop`);
       const globbed = yield* globFiles("**/*.ts", dir, 5);
       expect(globbed.paths).toHaveLength(5);
@@ -249,7 +241,6 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
       yield* fs.makeDirectory(`${dir}/.github/workflows`, { recursive: true });
       yield* fs.writeFileString(`${dir}/.github/workflows/ci.yml`, "on: push\n");
       yield* fs.writeFileString(`${dir}/.env`, "KEY=1\n");
-      // A dot-named path is found where the pattern names it, and only there.
       for (const [pattern, found] of [
         [".github/**/*.yml", [`${dir}/.github/workflows/ci.yml`]],
         [".env", [`${dir}/.env`]],
@@ -260,19 +251,16 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
           expect((yield* globFiles(pattern, root)).paths).toEqual([...found]);
       expect((yield* globFiles("a/*.ts", `${dir}/`)).paths).toHaveLength(4);
       expect((yield* globFiles("a/*{.ts,.js}", dir)).paths).toHaveLength(4);
-      // A dot name inside braces is named too, and a linked root is followed.
       expect((yield* globFiles("{.env,.envrc}", dir)).paths).toEqual([`${dir}/.env`]);
       expect((yield* globFiles(".{github,gitlab}/**/*.yml", dir)).paths).toHaveLength(1);
       const link = `${yield* inTemp("collie-search-link-")}/root`;
       yield* fs.symlink(dir, link);
       expect((yield* globFiles("**/.env", link)).paths).toEqual([`${link}/.env`]);
-      // A root that is no directory, or cannot be listed, is refused.
       expect(Result.isFailure(yield* Effect.result(globFiles("*", `${dir}/.env`)))).toBe(true);
       yield* Effect.acquireUseRelease(
         fs.makeDirectory(`${dir}/locked`, { mode: 0o000 }),
         () =>
           Effect.gen(function* () {
-            // A directory below the root that cannot be read is passed by.
             expect((yield* globFiles("**/*.nomatch", dir)).paths).toEqual([]);
             if (process.getuid?.() !== 0)
               expect(Result.isFailure(yield* Effect.result(globFiles("*", `${dir}/locked`)))).toBe(
@@ -412,7 +400,6 @@ test("a part at the wrong offset clears what arrived, and asking for a held file
       }).pipe(Effect.flip);
       expect(reasonOf(skipped)).toContain("send it again from the start");
       expect(yield* fs.exists(dir)).toBe(false);
-      // With nothing arrived, a later part is refused the same way.
       const first = yield* receive(state, {
         ...asked,
         offset: 10,

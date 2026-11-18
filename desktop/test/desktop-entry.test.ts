@@ -1,5 +1,3 @@
-// The launcher entry's name and comment, and the macOS bundle's name, as people see them.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";

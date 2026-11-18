@@ -1,14 +1,3 @@
-// One complete review of a target, reconciled into the one review a human reads.
-//
-// A reviewer per seat of the reviewer panel the definition declares — one by default, and a
-// second is a seat in a fork rather than a new step — then the synthesis that reconciles
-// them, written into the Run's own directory as prose for the human and findings for the
-// card.
-//
-// Shared, because the workflow that reviews and the workflow that builds want the same
-// pass: an ordinary function over the same content and the same schemas, not a step one
-// of them copied from the other. The Markdown beside this file is the content.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import {
@@ -53,7 +42,6 @@ import type { Reviewed } from "./delivering.ts";
 const content = contentOf(markdown);
 const text = Schema.String;
 
-/** What every review prompt is told: the change, what it is held to, and where it lives. */
 const change = {
   inputs: Schema.Struct({ target: text, target_kind: text, plan: text, outcome: text }),
   target_repo: text,
@@ -61,17 +49,13 @@ const change = {
   base: text,
 };
 
-/** How a review whose merge request's head moved under it fails, so a caller can carry on. */
 export const HEAD_MOVED = "reviewed head changed while reviewing";
 export const MR_ENDED = "reviewed merge request ended: ";
 
-/** What a prompt is told of a target that is not a merge request. */
 export const NO_MR = { forge: "", noun: "", diff: "", view: "", checkout: "" };
 
-/** What a worktree's change is measured against where nothing integrated the default branch. */
 export const DEFAULT_BASE = "<default-branch>";
 
-/** A reviewer's round: the one before it, what was disputed, and where this Run keeps its work. */
 export const REVIEW = content.template("review", {
   ...change,
   run: Schema.Struct({ dir: text, id: text }),
@@ -87,7 +71,6 @@ export const REVIEW = content.template("review", {
   criteria: text,
 });
 
-/** The reviews to reconcile, and the one before them. */
 const SYNTHESIZE = content.template("synthesize", {
   ...change,
   run: Schema.Struct({ dir: text, id: text }),
@@ -99,7 +82,6 @@ const SYNTHESIZE = content.template("synthesize", {
   obstacle: text,
 });
 
-/** An implementer fixing what a review found. */
 export const FIX_PROMPT = content.template("fix", {
   ...change,
   run: Schema.Struct({ dir: text, id: text }),
@@ -110,18 +92,10 @@ export const FIX_PROMPT = content.template("fix", {
   disputed: text,
 });
 
-/**
- * The reviewer panel's one seat, as a definition declares it for the role rather than as
- * the work pins it, so a fork's `agents.roles.reviewer` reaches every reviewer and the
- * synthesis. A second reviewer is what a specialist axis or a fork is for, not what every
- * change gets.
- */
 export const REVIEWER = { harness: "claude", model: "opus", effort: "high" };
 
-/** The implementer's seat: implement's builder, and whoever fixes what a review found. */
 export const IMPLEMENTER = { harness: "claude", model: "opus", effort: "high" };
 
-/** A round of review and the fix after it, which every Workflow that reviews makes the same way. */
 export const reviewRound = step({
   id: "review",
   title: "Review",
@@ -140,38 +114,27 @@ export const synthesisStep = step({
   produces: "review",
 });
 
-/** What one pass is about, and where in a rally it stands. */
 export interface ReviewAsk {
   readonly target: string;
-  /** The spec the change is held to, where whoever asked for this has one. */
   readonly plan: string;
-  /** What the change under review has to prove, which decides one judgement field. */
   readonly proves: string;
-  /** The review before this one, for the reviewers to read rather than repeat. */
   readonly previous: string;
   readonly ledger?: ReadonlyArray<Finding>;
   readonly head?: string;
   readonly changes?: string;
-  /** Where the implementer's account of that review is; empty where nobody fixed one. */
   readonly answered: string;
-  /** The extra axes a human asked for, where they asked for any. */
   readonly risks: string;
-  /** Which round this is, and how many there may be. It also names the round's work. */
   readonly at: number;
   readonly of: number;
-  /** What the implementer has already stood on, so a reviewer answers it or drops it. */
   readonly disputed: ReadonlyArray<Finding>;
   readonly prefix?: string;
   readonly reviewers?: string;
   readonly obstacle?: string;
-  /** The commit a worktree's change is diffed against: the default branch as last integrated. */
   readonly base?: string;
-  /** What the builder says of each criterion, and its assumptions, for the reviewer to check. */
   readonly criteria?: string;
   readonly source?: string | null;
 }
 
-/** The disagreement is evidence for the review, alongside the finding that prompted it. */
 const formatDisputes = (disputed: ReadonlyArray<Finding>) =>
   formatFindings(
     Arr.map(disputed, (finding) => {
@@ -182,13 +145,11 @@ const formatDisputes = (disputed: ReadonlyArray<Finding>) =>
     }),
   );
 
-/** What the reviewers and the synthesis are both told, beside the section they are given. */
 export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: string }) => ({
   inputs: {
     target: ask.target,
     target_kind: targetKind(ask.target),
     plan: ask.plan,
-    // What the change has to prove, under the name the prose asks for it by.
     outcome: ask.proves,
   },
   run,
@@ -210,10 +171,6 @@ export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: s
   obstacle: ask.obstacle ?? "",
 });
 
-/**
- * Every reviewer, then the one review that comes out of them — left behind as the prose a
- * human reads and the findings whatever comes next counts.
- */
 export const reviewPass = (ask: ReviewAsk) =>
   Effect.gen(function* () {
     const agents = yield* Agents;
@@ -301,7 +258,6 @@ export const reviewPass = (ask: ReviewAsk) =>
         yield* recordReview(recorded);
         return recorded;
       });
-    // A check left to CI is read from the forge where the Run has a merge request, never run.
     const leftToCi = yield* Effect.forEach(
       Arr.filter(yield* host.approved(id), (spec) => spec.ci !== undefined),
       (spec) =>
@@ -312,8 +268,6 @@ export const reviewPass = (ask: ReviewAsk) =>
         })),
     );
     const checks = renderRecordedChecks(yield* host.evidence(id, cwd), leftToCi);
-    // The round comes first, and the first round keeps the plain names: a Run with one
-    // review reads as one, and a rally's rounds sort in the order they happened.
     const prefix = ask.prefix ?? "";
     const reviewOp = (seat: string) =>
       `${prefix}${ask.at === 1 ? `review-${seat}` : `review-${ask.at}-${seat}`}`;
@@ -336,7 +290,6 @@ export const reviewPass = (ask: ReviewAsk) =>
         const collected = yield* Effect.forEach(seats, ({ operation }) =>
           fs.exists(agents.outputFor(id, operation)),
         );
-        // Earlier passes without a journaled scope cannot acquire one on replay.
         if (Arr.some(collected, Boolean)) return null;
         return yield* host.reviewScope(id, ask.source ?? ask.plan, ask.proves, ask.risks);
       }).pipe(Effect.orDie),
@@ -348,8 +301,6 @@ export const reviewPass = (ask: ReviewAsk) =>
         success: Schema.Void,
         execute: host.recordReview(id, scope, scope?.target ?? ask.base ?? "", review),
       });
-    // One seat is one review, already the one the human reads: its prompt asks a lone
-    // reviewer for the synthesis's own fields, so a second agent would only copy it.
     if (seats.length === 1) {
       const [only] = seats;
       const alone: SynthesisReport = yield* agentWork({
@@ -394,16 +345,13 @@ export const reviewPass = (ask: ReviewAsk) =>
         output: SynthesisSchema,
       }),
     );
-    // The prose a human reads and the findings a card counts, where both are looked for.
     return yield* record(reconciled);
   });
 
-/** At most four rounds per rally; it leaves at the first review with nothing blocking. */
 export const ROUNDS = 4;
 
 type Needs = Run | Agents | Host | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem;
 
-/** Each blocking dispute left standing, as the merge request lists it for the human. */
 const disputesOf = (findings: ReadonlyArray<Finding>) =>
   Arr.map(
     Arr.filter(findings, isBlocking),
@@ -411,38 +359,24 @@ const disputesOf = (findings: ReadonlyArray<Finding>) =>
       `disputed blocking finding: [${one.severity}] ${one.title}${one.file ? ` (${one.file})` : ""}${one.reason ? `: ${one.reason}` : ""}`,
   );
 
-/** Where a rally stood when it stopped: what halted it, and what the last fix left. */
 export interface Rallied extends Reviewed {
-  /** Why the loop stopped short, or null where it converged. */
   readonly halted: string | null;
 }
 
-/**
- * Review, fix, review again. The loop leaves at the first review with nothing blocking;
- * a dispute is carried rather than re-argued, and the last round has no review after it,
- * so that fix's own account is judged against the journal rather than taken on its word.
- */
 export const rally = (ask: {
-  /** Review rounds the Run has had, so each round of every rally is a run of its own. */
   readonly rounds: { n: number };
   readonly cwd: string;
   readonly plan: string;
-  /** The outcome kind each round is held to, read as the round starts. */
   readonly proves: Effect.Effect<string, never, WorkflowEngine | WorkflowInstance>;
   readonly risks: string;
-  /** What the change is held to beside the spec, for the reviewer. */
   readonly criteria: string;
   readonly source?: string | null;
-  /** Before every operation's name, telling this rally's rounds from another's. */
   readonly prefix: string;
-  /** What every round's reviewers are told beside the change; empty for nothing. */
   readonly obstacle: string;
   readonly resume?: { readonly previous: Rallied; readonly reviewers: string };
-  /** Integrates the default branch, answering with what a review is diffed against. */
   readonly integrate: (
     operation: string,
   ) => Effect.Effect<Integration & { readonly base: string }, WorkflowError, Needs>;
-  /** What blocked a round, fixed under `operation` by whoever fixes this change. */
   readonly fix: (round: {
     readonly operation: string;
     readonly at: number;
@@ -492,14 +426,11 @@ export const rally = (ask: {
           const merged = yield* ask.integrate(`${prefix}merge-${at}`);
           const proves = yield* ask.proves;
           const synthesis = yield* reviewPass({
-            // The change is the work in this checkout: a Run that built it reviews what it
-            // built, rather than a merge request somebody else has to be pointed at.
             target: "",
             plan: ask.plan,
             source: ask.source,
             proves,
             previous: "",
-            // The last round's fix, which a follow-up review checks each of its findings against.
             answered:
               ask.resume !== undefined
                 ? agents.outputFor(runId, `${prefix}fix`)
@@ -543,8 +474,6 @@ export const rally = (ask: {
             };
           }
           if (round.go === "clean") {
-            // Nothing blocking is not nothing found: what is left is carried to the merge
-            // request unfixed, and the record says so rather than the loop going quiet.
             if (synthesis.findings.length > 0) {
               yield* host.record(
                 runId,
@@ -578,9 +507,6 @@ export const rally = (ask: {
             proves,
             findings: formatFindings(round.live),
           });
-          // A dispute is carried, not re-argued: the next review either answers it with a
-          // rebuttal or it stops driving the loop. One renewed after a rebuttal carries its new
-          // reason, and one fixed since is gone.
           const settledNow = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
           disputed = [
             ...Arr.filter(disputed, (one) => !settledNow.has(findingKey(one))),
@@ -589,8 +515,6 @@ export const rally = (ask: {
 
           if (at === ROUNDS) {
             const settled = settleFinalFix(round.live, fixed, yield* host.evidence(runId, ask.cwd));
-            // Every round's disputes, not only this fix's: earlier ones were split out of what
-            // this fix was shown, and are still the human's to settle.
             if (settled.ok || settled.halt === "dispute_unresolved") {
               yield* leaveOutstanding((yield* host.place(runId)).dir, settled.outstanding);
               return {

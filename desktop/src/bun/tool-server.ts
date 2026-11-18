@@ -32,7 +32,7 @@ export const toolServer = (
         name: tool.name,
         title: tool.title,
         description: tool.description,
-        // SAFETY: each tool's parameters are an object JSON Schema.
+        // WARNING: each tool's parameters are an object JSON Schema.
         inputSchema: tool.input() as { type: "object" },
         annotations: { readOnlyHint: tool.readOnly },
       })),

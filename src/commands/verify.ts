@@ -8,11 +8,6 @@ import { checkNameOf } from "../verify-spec";
 import { printResult } from "../envelope";
 import { answering, cliDoor, root } from "./shared";
 
-/**
- * The command's own output, shown as it runs: a failure says why the first time, rather
- * than after running it again outside Collie. Under `--json` both streams go to stderr,
- * since stdout is the one envelope.
- */
 const echoed = Effect.fn("collie.verify.echoed")(function* () {
   const stdio = yield* Stdio.Stdio;
   const json = (yield* root).json;
@@ -25,14 +20,6 @@ const echoed = Effect.fn("collie.verify.echoed")(function* () {
   return returned;
 });
 
-/**
- * A command whose result Collie watched, bound to the tree it ran on. Not a mutation:
- * running the tests twice is running the tests twice, and a request id that replayed the
- * receipt would hand back a result about a tree that has since moved.
- *
- * The exit status is the command's own, so anything wrapping `collie verify -- bun test`
- * behaves as it would around `bun test`.
- */
 export const verify = Command.make(
   "verify",
   {

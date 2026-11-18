@@ -1,5 +1,3 @@
-// The human's Claude Code servers as Pi registers them, and what the Pi chat is told of them.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -78,7 +76,6 @@ const asPi: (server: UserMcpServer) => Result.Result<PiServer, string> = (server
 const NONE: PiServers = { given: {}, left: [] };
 const piName = (name: string) => pipe(name, Str.replaceAll("-", "_"));
 
-/** Each server Pi can run, and each it cannot with why; Pi reads `-` and `_` alike in a name. */
 export const piServers = (servers: UserMcpServers) =>
   Arr.reduce(Rec.toEntries(servers), NONE, (so, [name, server]) => {
     const leave = (why: string) => ({ ...so, left: [...so.left, { name, why }] });

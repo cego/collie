@@ -1,6 +1,3 @@
-// The GitHub adapter: everything Collie asks GitHub, through `gh` or over HTTP with gh's
-// token. Only github.com.
-
 import { stripVTControlCharacters } from "node:util";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -107,10 +104,8 @@ const optionalText = Schema.optionalKey(Schema.NullOr(Schema.String));
 const optionalFlag = Schema.optionalKey(Schema.NullOr(Schema.Boolean));
 const Login = Schema.Struct({ login: optionalText });
 
-/** GitHub's merge states it would merge in; the rest say why not, or that it is still deciding. */
 const MERGES = new Set(["CLEAN", "HAS_HOOKS", "UNSTABLE"]);
 
-/** GitHub's own answer to "can this merge now", which carries its branch protection. */
 function mergeabilityOf(pull: Pick<Pull, "mergeable" | "mergeStateStatus">) {
   if (pull.mergeable === "CONFLICTING") {
     const returned: Mergeability | undefined = { state: "blocked", said: "conflicting" };
@@ -152,7 +147,6 @@ const RED = new Set([
 ]);
 const GREEN = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 
-/** A pull request's check rollup: a check run's conclusion, or a status context's state. */
 export function rollupChecks(rollup: typeof Rollup.Type | null | undefined) {
   const checks = rollup ?? [];
   if (checks.length === 0) {
@@ -162,7 +156,6 @@ export function rollupChecks(rollup: typeof Rollup.Type | null | undefined) {
   const verdicts = Arr.map(checks, (one) => ({
     name: one.name ?? one.context ?? "a check",
     url: one.detailsUrl ?? one.targetUrl,
-    // A check run has a conclusion once it completes; a status context has only a state.
     said:
       one.conclusion ??
       (one.status != null && one.status !== "COMPLETED" ? "PENDING" : (one.state ?? "PENDING")),
@@ -192,7 +185,6 @@ const Rollup = Schema.Array(
   }),
 );
 
-/** One page of a pull request's panel, as GitHub's GraphQL answers `PANEL`. */
 const PanelData = Schema.Struct({
   repository: Schema.NullOr(
     Schema.Struct({
@@ -258,7 +250,6 @@ const PanelData = Schema.Struct({
   ),
 });
 
-/** Every field `gh pr view --json` read for the panel, the head's checks a page at a time. */
 const PANEL = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
@@ -274,14 +265,12 @@ const PANEL = `query($owner: String!, $name: String!, $number: Int!, $after: Str
   }
 }`;
 
-/** GitHub's review decision, phrased as a GitLab panel phrases its approvals. */
 const APPROVALS = new Map([
   ["APPROVED", "approved"],
   ["CHANGES_REQUESTED", "changes requested"],
   ["REVIEW_REQUIRED", "review required"],
 ]);
 
-/** One page of `ref`'s panel, its checks from `after`. */
 const panelPage = (ref: MrRef, cwd: string, after: string | null) => {
   const [owner, name = ""] = Str.split(mrPath(ref), "/");
   return graphqlAs(PanelData, LOGIN, cwd, PANEL, { owner, name, number: Number(ref.iid), after });
@@ -292,7 +281,6 @@ type PanelContexts = NonNullable<
   PanelPull["commits"]["nodes"][number]["commit"]["statusCheckRollup"]
 >["contexts"];
 
-/** The pull request, with every page of its head's checks. */
 const panelOf: (
   ref: MrRef,
   cwd: string,
@@ -318,7 +306,6 @@ const panelOf: (
     }
   });
 
-/** One pull request, in one GraphQL query, and one more per further page of its checks. */
 function details(ref: MrRef, cwd: string) {
   const returned: Effect.Effect<MrPanel, never, ForgeHttp> = Effect.map(
     panelOf(ref, cwd),
@@ -377,7 +364,6 @@ function details(ref: MrRef, cwd: string) {
 
 const RepoJson = Schema.fromJsonString(Schema.Struct({ nameWithOwner: Schema.String }));
 
-/** gh installed, logged in to github.com, and — where a repository is named — able to read it. */
 function ready<R>(project: string | null, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
     const no = (reason: string) => ({ ok: false, reason });
@@ -410,7 +396,6 @@ const BranchPull = Schema.Struct({
   auto_merge: Schema.optionalKey(Schema.NullOr(Schema.Struct({}))),
 });
 
-/** The pull requests from `branch` of the repository's own, in `state`, every page of them. */
 const pullsFrom = (project: string, branch: string, state: "open" | "all", cwd: string) => {
   const repo = mrPath({ project, iid: "" });
   const head = encodeURIComponent(`${Str.split(repo, "/")[0]}:${branch}`);
@@ -437,10 +422,6 @@ const ClassicRules = Schema.Struct({
 const PAGE = 100;
 const CLASSIC_RULES = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { branchProtectionRules(first: ${PAGE}) { nodes { pattern } } } }`;
 
-/**
- * The default branch, the rules active for the name (which GitHub answers for a branch not
- * pushed yet), and the classic protection rules' patterns; null where any is unread.
- */
 function protects(project: string, branch: string, cwd: string) {
   return Effect.gen(function* () {
     const repo = mrPath({ project, iid: "" });
@@ -458,13 +439,11 @@ function protects(project: string, branch: string, cwd: string) {
     const classic = yield* graphqlAs(ClassicRules, LOGIN, cwd, CLASSIC_RULES, { owner, name });
     if (!classic.ok) return null;
     const nodes = classic.value.repository.branchProtectionRules.nodes;
-    // A full page leaves protection unknown.
     if (nodes.length >= PAGE) return null;
     return Arr.some(nodes, (rule) => new Bun.Glob(rule.pattern).match(branch));
   });
 }
 
-/** The open pull request from `branch`; a failed read is not "none". */
 function forBranch(project: string, branch: string, cwd: string) {
   const returned: Effect.Effect<ForBranch, never, ForgeHttp> = Effect.map(
     pullsFrom(project, branch, "open", cwd),
@@ -488,7 +467,6 @@ function forBranch(project: string, branch: string, cwd: string) {
   return returned;
 }
 
-/** Every pull request from `branch`, whatever its state; a failed read is not "none". */
 function fromBranch(project: string, branch: string, cwd: string) {
   const returned: Effect.Effect<FromBranchList, never, ForgeHttp> = Effect.map(
     pullsFrom(project, branch, "all", cwd),
@@ -503,7 +481,6 @@ function fromBranch(project: string, branch: string, cwd: string) {
             url: pull.html_url ?? `https://${project}/pull/${iid}`,
             state: pull.merged_at ? "merged" : pull.state === "open" ? "open" : "closed",
             created: pull.created_at,
-            // A merged pull request is closed too; when it merged is when it ended.
             ended: pull.merged_at ?? pull.closed_at ?? null,
           };
         }),
@@ -543,7 +520,6 @@ const CONCLUSIONS = new Map<string, JobState>([
   ["neutral", "skipped"],
 ]);
 
-/** gh's login to github.com, which ForgeHttp asks GitHub with; its token does not expire. */
 const LOGIN: ForgeLogin = {
   forge: "github",
   host: HOST,
@@ -563,7 +539,6 @@ const LOGIN: ForgeLogin = {
 const rest = <S extends Schema.Decoder<unknown>>(schema: S, cwd: string, path: string) =>
   requestAs(schema, LOGIN, cwd, path);
 
-/** The check run of that name on the pull request's head commit; GitHub lists the newest first. */
 function job(ref: MrRef, name: string, cwd: string) {
   const returned: Effect.Effect<JobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = mrWords(ref).label;
@@ -573,7 +548,6 @@ function job(ref: MrRef, name: string, cwd: string) {
     const head = pull.value.head.sha;
     const unread = (why: string) =>
       ({ ok: false, reason: `could not list the check runs on ${head}: ${why}` }) as const;
-    // `filter=all` lists the attempts a rerun left behind, newest first.
     const named: Array<(typeof CheckRuns.Type)["check_runs"][number]> = [];
     for (let page = 1; ; page++) {
       const some = yield* checkRuns(
@@ -590,7 +564,6 @@ function job(ref: MrRef, name: string, cwd: string) {
     const failed = Arr.filter(before, (one) => stateOf(one) === "failed");
     let absent: JobState = "missing";
     if (found === undefined) {
-      // GitHub creates a job behind `needs` only once its needs finish.
       let listed = 0;
       for (let page = 1; absent === "missing"; page++) {
         const some = yield* checkRuns(repo, head, `per_page=100&page=${page}`, cwd);
@@ -618,13 +591,11 @@ function job(ref: MrRef, name: string, cwd: string) {
   return returned;
 }
 
-/** `<run>/<job>` for a check run Actions ran, else null: a gate's retry and log need its run. */
 const actionsJob = (url: string | null | undefined) => {
   const [, run, job] = /\/actions\/runs\/(\d+)\/job\/(\d+)/.exec(url ?? "") ?? [];
   return run === undefined ? null : `${run}/${job}`;
 };
 
-/** The newest check run named `name` on `ref`, undefined for none. */
 const checkRun = (repo: string, ref: string, name: string, cwd: string) =>
   Effect.map(checkRuns(repo, ref, `check_name=${encodeURIComponent(name)}`, cwd), (runs) => {
     const returned: Answered<(typeof CheckRuns.Type)["check_runs"][number] | undefined> = runs.ok
@@ -645,7 +616,6 @@ const stateOf = (found: { readonly status: string; readonly conclusion?: string 
       : "pending"
     : (CONCLUSIONS.get(found.conclusion ?? "") ?? "failed");
 
-/** The check run at the pull request's merge-base, else on its base branch's tip. */
 function baseJob(ref: MrRef, name: string, cwd: string) {
   const returned: Effect.Effect<BaseJobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = mrWords(ref).label;
@@ -668,7 +638,6 @@ function baseJob(ref: MrRef, name: string, cwd: string) {
     const there = yield* checkRun(repo, base, name, cwd);
     if (!there.ok) return unread(there.reason);
     if (there.value === undefined) {
-      // Only where CI never ran at the merge-base does the target branch's tip stand in for it.
       const any = yield* checkRuns(repo, base, "per_page=1", cwd);
       if (!any.ok) return unread(any.reason);
       if (any.value.length > 0)
@@ -693,7 +662,6 @@ function baseJob(ref: MrRef, name: string, cwd: string) {
   return returned;
 }
 
-/** The newest check run named `name` at the head of the pull request's base branch. */
 function targetJob(ref: MrRef, name: string, cwd: string) {
   const returned: Effect.Effect<TargetJobRead, never, ForgeHttp> = Effect.gen(function* () {
     const repo = mrPath({ project: ref.project, iid: "" });
@@ -824,7 +792,6 @@ const BranchRule = Schema.Struct({
   ),
 });
 
-/** The approving reviews `base` requires, or why that cannot be counted. */
 const requiredReviews = (repo: string, base: string, cwd: string) =>
   Effect.gen(function* () {
     const [owner, name = ""] = Str.split(repo, "/");
@@ -860,10 +827,6 @@ const requiredReviews = (repo: string, base: string, cwd: string) =>
     } as const;
   });
 
-/**
- * The pull request's view, every page of its issue comments, review comments and reviews,
- * and which review threads are resolved.
- */
 function readReview(ref: MrRef, cwd: string) {
   const answer: Effect.Effect<ReviewRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = mrWords(ref).label;
@@ -964,7 +927,6 @@ function readReview(ref: MrRef, cwd: string) {
             ],
       ),
     ];
-    // Each reviewer's latest review that is more than a comment is the one that stands.
     const standing = new Map<string, { readonly state: string; readonly bot: boolean }>();
     for (const one of reviews.value)
       if (one.user !== null && one.state !== "COMMENTED" && one.state !== "PENDING")
@@ -1018,7 +980,6 @@ function readReview(ref: MrRef, cwd: string) {
   return answer;
 }
 
-/** A reply in a review comment's thread, else a new comment on the pull request. */
 function reply(ref: MrRef, to: Pick<ForgeComment, "thread">, body: string, cwd: string) {
   const repo = mrPath(ref);
   const route =
@@ -1078,7 +1039,6 @@ const MERGED_PULL = `query($owner: String!, $name: String!, $number: Int!) { rep
 const ENQUEUE = `mutation($id: ID!, $head: GitObjectID!) { enqueuePullRequest(input: { pullRequestId: $id, expectedHeadOid: $head }) { clientMutationId } }`;
 const DEQUEUE = `mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }`;
 const Mutated = Schema.Struct({});
-/** How often a queued pull request is read, and for how long: Collie's CI bound. */
 const QUEUE_POLL = Duration.seconds(30);
 const QUEUE_BOUND = Duration.hours(2);
 type Merged = typeof MergedPull.Type;
@@ -1091,12 +1051,6 @@ const alreadyMerged: (pull: Merged) => MergeAnswer = (pull) => ({
   at: pull.mergedAt ?? "",
 });
 
-/**
- * The merge through the base branch's merge queue: `head` enqueued unless its entry is
- * already there, then read every 30 s until the queue merges or removes it. One still
- * queued after two hours is dequeued, and read until it is out or merged, so nothing
- * merges while no Run waits on it. Only the queue's merge at `head` is this merge.
- */
 const mergeQueued: (
   ref: MrRef,
   id: string,
@@ -1165,7 +1119,6 @@ const mergeQueued: (
   }
 });
 
-/** GitHub's merge endpoint at `head`, by the repository's default merge method for the viewer. */
 function merge(ref: MrRef, head: string, cwd: string) {
   const returned: Effect.Effect<MergeAnswer, never, ForgeHttp> = Effect.gen(function* () {
     const where = mrWords(ref).label;
@@ -1249,7 +1202,6 @@ const AttemptJobs = Schema.Struct({
   ),
 });
 
-/** A job log as bun printed it: GitHub's columns, timestamps, `##[…]` markers, colours and CRs gone. */
 const plainLog = (log: string) =>
   pipe(
     stripVTControlCharacters(log),
@@ -1258,7 +1210,6 @@ const plainLog = (log: string) =>
     Str.replaceAll("\r", ""),
   );
 
-/** Check run `id`'s failed attempt, with the failed tests its run attempt's failed jobs' logs name. */
 function failedAttempt(ref: MrRef, id: string, cwd: string) {
   return Effect.gen(function* () {
     const repo = mrPath({ project: ref.project, iid: "" });
@@ -1304,7 +1255,6 @@ const jobLog = (ref: MrRef, id: string) =>
     ]),
   );
 
-/** Where GitHub looks for a pull request template, in the order it looks. */
 const TEMPLATES = [
   ".github/pull_request_template.md",
   ".github/PULL_REQUEST_TEMPLATE.md",
@@ -1334,7 +1284,6 @@ const Statuses = Schema.Array(Schema.Struct({ state: Schema.String, log_url: opt
 const Compare = Schema.Struct({ status: Schema.String });
 const RunState = Schema.Struct({ status: Schema.String, conclusion: optionalText });
 
-/** Production by the flag or by name, staging by name; any other environment is neither. */
 function tierOf(environment: string, production: boolean) {
   const name = Str.toLowerCase(environment);
   if (production || name === "production" || name === "prod") return "production";
@@ -1342,19 +1291,12 @@ function tierOf(environment: string, production: boolean) {
   return null;
 }
 
-/**
- * How far a merged commit has got on GitHub (ADR-0050 D7): the newest deployment of each
- * environment whose latest status is `success` is what is live there, and it carries the
- * merge where GitHub's compare of the two says `identical` or `ahead`. No such
- * environment, or no answer, is null, and the card says "Merged." and nothing more.
- */
 function liveTier(ref: MrRef, mergedSha: string, cwd: string) {
   return Effect.gen(function* () {
     if (mergedSha === "" || ref.project === null) return null;
     const repo = `repos/${mrPath(ref)}`;
     const listed = yield* pagesAs(Deployment, LOGIN, cwd, `${repo}/deployments`);
     if (!listed.ok) return null;
-    // Newest first, so the first successful one seen per environment is what is live there.
     const live = new Map<string, { readonly sha: string; readonly tier: DeployTier }>();
     for (const deployment of listed.value) {
       const tier = tierOf(deployment.environment, deployment.production_environment === true);
@@ -1383,7 +1325,6 @@ function liveTier(ref: MrRef, mergedSha: string, cwd: string) {
   });
 }
 
-/** The commit the newest deployment of `tier` whose latest status is `success` has. */
 function deployed(ref: MrRef, tier: DeployTier, cwd: string) {
   const returned: Effect.Effect<DeployedRead, never, ForgeHttp> = Effect.gen(function* () {
     if (ref.project === null) return { ok: false, reason: "no repository to read deployments of" };
@@ -1495,7 +1436,6 @@ function stagingEnvironments<R>(
   return returned;
 }
 
-/** `https://github.com/<o>/<r>/actions/runs/<id>`'s conclusion, or its status while it runs. */
 function runStatus(url: string, cwd: string) {
   return Effect.gen(function* () {
     const m =
@@ -1525,7 +1465,6 @@ const WorkflowRuns = Schema.Struct({
   workflow_runs: Schema.Array(Schema.Struct({ html_url: Schema.String })),
 });
 
-/** The newest Actions run `tag` started in `ref`'s repository, a push or a release. */
 function tagPipeline(ref: MrRef, tag: string, cwd: string) {
   const returned: Effect.Effect<TagPipelineRead, never, ForgeHttp> = Effect.gen(function* () {
     if (ref.project === null) return { ok: false, reason: "no repository to read runs of" };
@@ -1540,7 +1479,6 @@ function tagPipeline(ref: MrRef, tag: string, cwd: string) {
   return returned;
 }
 
-/** An Actions run and its jobs; one waiting on an environment's reviewers waits by hand. */
 function pipeline(url: string, cwd: string) {
   const returned: Effect.Effect<PipelineRead, never, ForgeHttp> = Effect.gen(function* () {
     const m =
@@ -1581,7 +1519,6 @@ function pipeline(url: string, cwd: string) {
   return returned;
 }
 
-/** `gh repo clone`, with gh's own login; one nobody logged in to says how to log in. */
 function clone<R>(project: string, into: string, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
     if ((yield* run("gh", ["auth", "status", "--hostname", HOST], cwd)).code !== 0)

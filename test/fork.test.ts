@@ -60,7 +60,6 @@ test("a fork is a stub that extends the original", () =>
       expect(result.path).toBe(join(rig.userDir, "personas", "reviewer.md"));
       expect(yield* readText(result.path)).toContain("extends: reviewer");
 
-      // It wins by name, and everything it does not name is still the baseline's.
       const forked = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
       expect(forked.layer).toBe("user");
       expect(forked.extends).toBe("reviewer");
@@ -81,14 +80,10 @@ test("a full copy is the whole file, and records what it copied", () =>
       expect(result.message).toContain("no longer follows the original");
       const text = yield* readText(result.path);
       const hash = yield* contentHash(before);
-      // Quoted where the hash happens to be all digits, which YAML would otherwise
-      // decode as a number — and a numeric hash is one `parseWorkflow` drops.
       expect(text).toMatch(new RegExp(`^forked_from_hash: "?${hash}"?$`, "m"));
-      // Whichever it is, it survives a round trip as the string it is.
       expect(
         (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!.forkedFromHash,
       ).toBe(hash);
-      // Everything else is the file, byte for byte, after that one line.
       expect(pipe(text, Str.replace(/^forked_from_hash: .*\n/m, ""))).toBe(before);
 
       const forked = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
@@ -108,7 +103,6 @@ test("a full copy whose original has changed since is stale", () =>
         false,
       );
 
-      // The baseline moves on, which is exactly what a full copy cannot follow.
       yield* exec(["sh", "-c", `printf '\n<!-- a later change -->\n' >> ${source.path}`]);
 
       expect(isStale((yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!)).toBe(
@@ -192,8 +186,6 @@ test("a target occupied while a fork is being prepared is never overwritten", ()
         { stdout: "pipe", stderr: "pipe" },
       );
 
-      // The child writes the marker on its way into the fork; from there the fifo is
-      // what holds it, so writing the source below is the handover.
       const deadline = (yield* Clock.currentTimeMillis) + 30_000;
       while (!(yield* exists(marker)) && (yield* Clock.currentTimeMillis) < deadline) {
         yield* Effect.sleep("10 millis");

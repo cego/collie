@@ -1,6 +1,3 @@
-// One Run's details as the host serves a drawer: its diff, the large items a front door
-// fetches by reference, and the details themselves followed as they change.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -17,21 +14,15 @@ import { settled, type RunFacts } from "./runs";
 import { workSourceOf } from "./strategies";
 import { readVerifications } from "./verify";
 
-/** What a Run's own plan directory is called inside it (ADR-0002). */
 export const PLAN_DIR = "plan";
 
-/** Which directory holds this run's plan, or `null` when it has none behind it. */
 export const planDirOf = Effect.fn("RunDetail.planDirOf")(function* (run: RunFacts) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  // Its own copy first: a run that wrote a plan is building from that one.
   const own = path.join(run.dir, PLAN_DIR);
   if (yield* fs.exists(own)) return own;
-  // Then the directory it was started from, which is how an `implement` run reaches the
-  // spec a `plan` run wrote for it.
   const work = workSourceOf(run.settled);
   if (work === null) return null;
-  // A start that recorded no kind, as one from a plan's end menu, is classified as the engine does.
   const kind =
     work.kind !== ""
       ? work.kind
@@ -45,10 +36,8 @@ export const planDirOf = Effect.fn("RunDetail.planDirOf")(function* (run: RunFac
 
 const git = (cwd: string, args: ReadonlyArray<string>) => shell("git", [...args], cwd);
 
-/** NUL-separated, so a path git would otherwise quote comes back as it is on disk. */
 const fields = (text: string) => Arr.filter(Str.split(text, "\0"), (field) => field !== "");
 
-/** Where the Run's branch left the default branch, from the first default this checkout has. */
 const mergeBase = Effect.fn("RunDetail.mergeBase")(function* (root: string, branch: string) {
   for (const base of ["origin/HEAD", "origin/main", "origin/master", "main", "master"]) {
     if (base === branch) continue;
@@ -60,10 +49,8 @@ const mergeBase = Effect.fn("RunDetail.mergeBase")(function* (root: string, bran
 
 const statusOf = (code: string) => (code === "A" ? "added" : code === "D" ? "deleted" : "modified");
 
-/** An untracked file this big is listed without counting its lines. */
 const COUNTED_BYTES = 1024 * 1024;
 
-/** The checkout's top level, which every path git reports is relative to. */
 const rootOf = Effect.fn("RunDetail.rootOf")(function* (cwd: string) {
   const there = yield* (yield* FileSystem.FileSystem)
     .exists(cwd)
@@ -73,11 +60,6 @@ const rootOf = Effect.fn("RunDetail.rootOf")(function* (cwd: string) {
   return top.code === 0 ? Str.trim(top.stdout) : null;
 });
 
-/**
- * The Run's branch against its merge base, one entry per file. Live is the checkout as it
- * is now, uncommitted and untracked files included; otherwise the branch's commits alone.
- * Null where there is no checkout or no merge base to compare with.
- */
 export const runDiff = Effect.fn("RunDetail.runDiff")(function* (at: {
   readonly cwd: string;
   readonly branch: string;
@@ -114,7 +96,6 @@ export const runDiff = Effect.fn("RunDetail.runDiff")(function* (at: {
       (yield* git(root, ["ls-files", "-z", "--others", "--exclude-standard"])).stdout,
     )) {
       const file = `${root}/${path}`;
-      // Never through a link or into a device or FIFO: an agent's checkout is untrusted.
       const linked = yield* fs.readLink(file).pipe(
         Effect.as(true),
         Effect.orElseSucceed(() => false),
@@ -145,7 +126,6 @@ export const runDiff = Effect.fn("RunDetail.runDiff")(function* (at: {
   } satisfies RunDiff;
 });
 
-/** A settled Run's diff and each file's patch, with the branch head it was taken at. */
 const KeptJson = Schema.fromJsonString(
   Schema.Struct({
     head: Schema.String,
@@ -155,11 +135,8 @@ const KeptJson = Schema.fromJsonString(
 );
 export const FINAL_DIFF = "diff.json";
 
-/** The patch the first part of a `diff:` item was cut from, so its later parts reuse it. */
-// ponytail: the last one only; key by front door if two drawers page large diffs at once.
 let lastPatch: { readonly key: string; readonly text: string } | null = null;
 
-/** Paths taken as written: a name with `[` or `*` in it is no glob. */
 const literally = (root: string, args: ReadonlyArray<string>) =>
   git(root, ["--literal-pathspecs", ...args]);
 
@@ -177,11 +154,6 @@ const headOf = Effect.fn("RunDetail.headOf")(function* (cwd: string, branch: str
   return head.code === 0 ? Str.trim(head.stdout) : null;
 });
 
-/**
- * The Run's own diff, where it has a branch to compare. A settled Run's is kept in its
- * directory with the head it was taken at, so a merged branch or a pruned checkout keeps
- * it, and a resumed Run that committed more is read again.
- */
 export const diffOf = Effect.fn("RunDetail.diffOf")(function* (run: RunFacts) {
   const fs = yield* FileSystem.FileSystem;
   const final = settled(run);
@@ -195,7 +167,6 @@ export const diffOf = Effect.fn("RunDetail.diffOf")(function* (run: RunFacts) {
   if (head !== null && diff !== null) {
     const root = (yield* rootOf(run.cwd)) ?? run.cwd;
     const patches: Record<string, string> = {};
-    // ponytail: one git call per file, once each time the Run settles.
     for (const file of diff.files) {
       const args = ["diff", "--no-renames", diff.base, run.branch, "--", file.path];
       patches[file.path] = (yield* literally(root, args)).stdout;
@@ -210,13 +181,11 @@ export const diffOf = Effect.fn("RunDetail.diffOf")(function* (run: RunFacts) {
   return diff;
 });
 
-/** Each Run's diff, kept once each time it settles, while its branch is still there to read. */
 export const keepDiffs = Effect.fn("RunDetail.keepDiffs")(function* (
   runs: ReadonlyArray<RunFacts>,
   kept: Set<string>,
 ) {
   for (const run of runs) {
-    // Going again after a resume: what it settles with next is kept afresh.
     if (!settled(run)) kept.delete(run.id);
     else if (run.branch !== null && !kept.has(run.id)) {
       yield* diffOf(run);
@@ -225,12 +194,10 @@ export const keepDiffs = Effect.fn("RunDetail.keepDiffs")(function* (
   }
 });
 
-/** Kept as text; anything else a front door is handed as base64. */
 const TEXT = /\.(txt|log|md|json|jsonl|html|xml|csv|diff|patch|ts|tsx|js|yaml|yml|toml)$/;
 
 const refused = (reason: string) => new HostRefused({ reason });
 
-/** `relative` under `root` once every link is followed, or nothing where that leaves it. */
 const inside = Effect.fn("RunDetail.inside")(function* (root: string, relative: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -240,10 +207,6 @@ const inside = Effect.fn("RunDetail.inside")(function* (root: string, relative: 
   return pipe_(real.value, Str.startsWith(`${top.value}${path.sep}`)) ? real.value : null;
 });
 
-/**
- * One large item of a Run's, by reference. Only what the Run's details point at can be
- * fetched, and never through a link out of the directory it belongs to.
- */
 export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
   run: RunFacts,
   ref: string,
@@ -251,7 +214,6 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
     offset: 0,
     length: PART_BYTES,
   },
-  /** Where glab runs: not the Run's checkout, which is removed once the Run settles. */
   glabCwd: string = run.dir,
 ) {
   const part = {
@@ -259,7 +221,6 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
     length: Math.min(Math.max(0, range.length), PART_BYTES),
   };
   const fs = yield* FileSystem.FileSystem;
-  // A part of a text is bytes too: a character across the seam is whole once the parts are joined.
   const asked: (bytes: Uint8Array, size: number, file: string | null) => RunFile = (
     bytes,
     size,
@@ -272,7 +233,6 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
     const bytes = new TextEncoder().encode(content);
     return asked(bytes.subarray(part.offset, part.offset + part.length), bytes.length, null);
   };
-  // Only the part asked for, and only from a regular file: a FIFO or device never answers.
   const read = (file: string) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -377,8 +337,6 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
-/** The details now, then again each time `changed` says they may have moved, when they have. */
-// ponytail: every change rebuilds the whole detail, its diff included; rebuild per part if open drawers cost.
 export const followDetail = <A, E, R, R2>(
   build: Effect.Effect<A, E, R>,
   changed: Stream.Stream<unknown, never, R2>,

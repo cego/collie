@@ -1,7 +1,3 @@
-// The card board: a header sentence over five sections of cards. One card per Task, and
-// everything on it is a fact the TaskView already carries — this file decides colour and
-// placement and nothing else.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { For, Index, Show, type JSX } from "solid-js";
@@ -27,17 +23,11 @@ import { parkLine } from "../park-cause";
 import { ALL_KEYS, type Command, type MenuItem, type Older, primaryFor } from "./state";
 import { C, cardEdge, sentenceColour, stateGlyph, stepGlyph } from "./sections";
 
-/**
- * What a card's decision buttons do, and where a half-typed answer is kept. A draft
- * belongs to the tab for as long as it is open; only sending one reaches a run.
- */
 export interface Decide {
   answer: (question: Question, value: string) => void;
   confirm: (proposal: Proposal) => void;
   decline: (proposal: Proposal) => void;
-  /** What has been typed into this question and not sent. */
   draft: (question: Question) => string;
-  /** Whether the keyboard is in this question's field. */
   typing: (question: Question) => boolean;
   typeHere: (question: Question) => void;
 }
@@ -49,73 +39,45 @@ export interface BoardProps {
   usage: UsagePhrase;
   newer: string | null;
   query: string;
-  /** Whether the search field has the keyboard, so the board says where typing goes. */
   searching: boolean;
   onSearch: () => void;
   finishedOpen: boolean;
-  /** The finished runs of this checkout from before the board's own cards, once asked for. */
   older: Older;
   onOlder: () => void;
-  /** Workflows and Settings, from the one button that still leads off the board. */
   onOverflow: (at: Where) => void;
-  /** The Task whose record is open, drawn as the one the board is pointing at. */
   open: string | null;
   onOpen: (view: TaskView) => void;
-  /** The menu for this Task, opened where the pointer is. */
   onMenu: (view: TaskView, at: Where) => void;
-  /** Everything a card offers that is not opening its record. */
   onAct: (command: Command) => void;
   decide: Decide;
   batch: Batch;
   onToggleFinished: () => void;
-  /** Whether the week-old part of Waiting on you is unfolded. */
   waitingOlderOpen: boolean;
   onToggleWaitingOlder: () => void;
-  /** The clock the fold is measured against. */
   now: number;
-  /** The pane's width in cells, which is what a card's name has to fit. */
   width: number;
-  /** The brand mark's file, or null where there is none to draw. */
   logo: string | null;
   onNewRun: () => void;
   onClearQuery: () => void;
 }
 
-/**
- * What a card is besides open: on its way out, or picked for the bar that stops several
- * at once. One prop rather than three, because it travels the same three layers `decide`
- * does and each of them only passes it on.
- */
 export interface Batch {
-  /** Marked to stop, and still inside the grace in which it can be taken back. */
   stopping: (view: TaskView) => boolean;
   picked: (view: TaskView) => boolean;
-  /** Shift and the left button: picks this card, or drops it again. */
   onPick: (view: TaskView) => void;
 }
 
-/** Where on the pane something was pressed, which is where its menu belongs. */
 export interface Where {
   x: number;
   y: number;
 }
 
-/** What the search field says before anything has been typed into it. */
 const PLACEHOLDER = "find a task or agent";
-/** The board's side margin, in cells: the header and the cards share it. */
 const SIDE = 2;
-/** Cells between a card's border and its text, each side. */
 const CARD_PAD = 1;
-/** The header's height, which is the buttons' and the mark's. */
 const HEADER_ROWS = 3;
-/**
- * The light signature is 3.2 times as wide as it is tall, and a cell is about twice as
- * tall as it is wide: three rows of it want about twenty cells. `fit` keeps the aspect.
- */
 const LOGO_COLS = 21;
 
-// No ground of the board's own: the cards carry the colour, and the pane's own background
-// showing between them is what makes them read as cards rather than as cells of a table.
 export function Board(props: BoardProps) {
   const empty = () =>
     props.sections.needs.length +
@@ -126,12 +88,9 @@ export function Board(props: BoardProps) {
     0;
   const waiting = () => foldWaiting(props.sections.waiting, props.now);
   const finished = () => foldFinished(props.sections.finished);
-  // What is behind the Finished line: today's cards, and this checkout's earlier runs —
-  // the ones already read as much as the ones still to ask for.
   const earlier = () =>
     props.sections.finished.length > 0 || props.older.more || props.older.rows.length > 0;
 
-  // Drawn in the board model's one order, which the text board and chat read too.
   const drawn: Record<SectionId, () => JSX.Element> = {
     "ready-to-ship": () => (
       <Show when={props.sections.ready.length > 0}>
@@ -171,8 +130,6 @@ export function Board(props: BoardProps) {
     ),
     waiting: () => (
       <>
-        {/* Work that ended without landing, and that nobody has asked you about. A week
-            open; the rest behind one counted line, never hidden from the header's count. */}
         <Show when={props.sections.waiting.length > 0}>
           <Section label={waitingLabel(props.sections.waiting)}>
             <Grid
@@ -233,8 +190,6 @@ export function Board(props: BoardProps) {
     ),
     finished: () => (
       <>
-        {/* One line until it is asked for: yesterday's success must not compete with
-            today's problems for the top of the board. */}
         <Show when={earlier()}>
           <box style={{ flexDirection: "column", paddingTop: 1, flexShrink: 0 }}>
             <Show when={finished().unseen.length > 0}>
@@ -273,8 +228,6 @@ export function Board(props: BoardProps) {
                 decide={props.decide}
                 batch={props.batch}
               />
-              {/* What the History view was: this checkout's earlier runs, a page at a
-                  time, as lines — they are a record rather than work in hand. */}
               <For each={props.older.rows}>
                 {(row) => (
                   <box style={{ flexDirection: "row" }}>
@@ -311,16 +264,11 @@ export function Board(props: BoardProps) {
         onNewRun={props.onNewRun}
         onOverflow={props.onOverflow}
       />
-      {/* A row of its own, so it is said whole however little the header leaves. */}
       <Show when={props.newer !== null}>
         <text fg={C.amber} wrapMode="none" style={{ paddingLeft: SIDE, flexShrink: 0 }}>
           {newerLine(props.newer ?? "")}
         </text>
       </Show>
-      {/* Nothing in this column may shrink: yoga would otherwise fit a tall board into the
-          viewport by compressing every card, which drew sentences over names and folds
-          over borders the moment the content outgrew the pane. The scroll area is what
-          gives; the side padding is the board's own margin. */}
       <scrollbox
         style={{ flexGrow: 1 }}
         contentOptions={{ flexDirection: "column", paddingLeft: SIDE, paddingRight: SIDE }}
@@ -361,8 +309,6 @@ function Header(props: {
         flexShrink: 0,
       }}
     >
-      {/* The signature carries the lettering, so the wordmark is for the terminals that
-          cannot show a picture. */}
       <Show
         when={props.logo !== null}
         fallback={
@@ -378,7 +324,6 @@ function Header(props: {
       >
         <Logo file={props.logo!} />
       </Show>
-      {/* One line, whatever the width: a sentence wrapped under the mark reads as two. */}
       <text fg={props.header.urgent ? C.amber : C.muted} wrapMode="none" style={{ flexShrink: 0 }}>
         {`  ${props.header.text}`}
       </text>
@@ -390,13 +335,9 @@ function Header(props: {
         </box>
       </Show>
       <box style={{ flexGrow: 1 }} />
-      {/* A field, not a word: three rows like the buttons beside it, lit while it has
-          the keys. */}
       <box
         backgroundColor={props.searching ? C.selected : C.card}
         style={{
-          // The one thing in the header that gives way on a narrow pane: the sentence and
-          // the buttons say what the board is for, the field only has to stay clickable.
           width: props.width < 150 ? 18 : 34,
           flexShrink: 0,
           height: 3,
@@ -411,7 +352,6 @@ function Header(props: {
         </text>
       </box>
       <HeaderButton label="+ New run" primary onPress={() => props.onNewRun()} />
-      {/* Everything that is not the board, behind one button: the nav rail's whole job. */}
       <HeaderButton label="≡" onPress={(at) => props.onOverflow(at)} />
     </box>
   );
@@ -428,11 +368,6 @@ function Section(props: { label: string; fg?: string; children: JSX.Element }) {
   );
 }
 
-/**
- * The cards, `columns` across. Rows and cells own their native widgets by position;
- * a fresh Task snapshot updates the cell instead of destroying its text and layout.
- * Cards keep no Task-local state, and every action reads the cell's current Task.
- */
 function Grid(props: {
   views: ReadonlyArray<TaskView>;
   columns: number;
@@ -478,12 +413,6 @@ function Grid(props: {
   );
 }
 
-/**
- * One Task. Its border carries the edge colour the design puts down the left of a card:
- * in cells a card's border is its edge, and a state worth interrupting someone for is
- * what earns one.
- */
-/** `…` at the end of what will not fit, so a name never pushes the age off its card. */
 function clipped(text: string, room: number) {
   return text.length <= room ? text : `${pipe(text, Str.slice(0, Math.max(0, room - 1)))}…`;
 }
@@ -500,7 +429,6 @@ function Card(props: {
   batch: Batch;
 }) {
   const state = () => stateGlyph(props.view.state);
-  /** The header row less its border, padding, glyph, project and age: what is left for the name. */
   const nameRoom = () =>
     Math.max(
       6,
@@ -525,22 +453,17 @@ function Card(props: {
         flexBasis: 0,
         flexDirection: "column",
         minWidth: 0,
-        // A cell of air inside the border: text drawn against a box edge reads as part of it.
         paddingLeft: CARD_PAD,
         paddingRight: CARD_PAD,
       }}
       onMouseDown={(event: MouseEvent) => {
         if (event.button === RIGHT_BUTTON) return menu(event);
-        // Shift picks this card for the bar; a plain click is about this one card, and
-        // ends the selection rather than adding to it.
         if (event.modifiers.shift) return props.batch.onPick(props.view);
         props.onOpen();
       }}
     >
       <box style={{ flexDirection: "row" }}>
         <text fg={state().fg} attributes={TextAttributes.BOLD}>{`${state().glyph} `}</text>
-        {/* The name gives way, clipped rather than wrapped: a card is the same height
-            whatever it is called, and the project and the age keep their place. */}
         <box style={{ flexShrink: 1, minWidth: 0, overflow: "hidden" }}>
           <text attributes={TextAttributes.BOLD} fg={C.text} wrapMode="none">
             {clipped(props.view.name, nameRoom())}
@@ -563,7 +486,6 @@ function Card(props: {
         <Deciding decision={props.view.decision!} decide={props.decide} />
       </Show>
 
-      {/* One amber line, in words: drift a human has to look up is drift nobody reads. */}
       <Show when={props.view.drift !== null}>
         <text fg={C.amber}>{`↯ ${props.view.drift}`}</text>
       </Show>
@@ -590,8 +512,6 @@ function Card(props: {
         <text fg={C.dim}>{`  ${whereItIs(props.view)}`}</text>
         <text fg={C.dim}>{agentCount(props.view) === "" ? "" : `  ${agentCount(props.view)}`}</text>
       </box>
-      {/* Always drawn, on a row of their own: a button that appears under the pointer moves
-          the card under the pointer, and a terminal does not promise a hover anyway. */}
       <box style={{ flexDirection: "row", marginTop: 1 }}>
         <Show when={primaryFor(props.view)} keyed>
           {(primary: MenuItem) => (
@@ -610,7 +530,6 @@ function Card(props: {
   );
 }
 
-/** The decision, answered where it is: nothing to select first and no key to learn. */
 function Deciding(props: { decision: Decision; decide: Decide }) {
   const question = () => (props.decision.kind === "question" ? props.decision : null);
   const proposal = () => (props.decision.kind === "proposal" ? props.decision : null);
@@ -692,17 +611,12 @@ function Proposed(props: { proposal: Proposal; decide: Decide }) {
       <box style={{ flexDirection: "row" }}>
         <Button label="Confirm" primary onPress={() => props.decide.confirm(props.proposal)} />
         <Button label="Decline" onPress={() => props.decide.decline(props.proposal)} />
-        {/* Cells have no tooltip, so what a yes names is beside the button that gives it. */}
         <text fg={C.dim}>{`  ${props.proposal.id} · ${props.proposal.hash}`}</text>
       </box>
     </box>
   );
 }
 
-/**
- * One Task's menu, where it was asked for. The scrim under it is what makes a click
- * anywhere else a way out rather than an action on whatever happens to be there.
- */
 export function CardMenu(props: {
   items: ReadonlyArray<MenuItem>;
   cursor: number | null;
@@ -758,10 +672,6 @@ export function CardMenu(props: {
   );
 }
 
-/**
- * Every key the board takes, over the whole pane, from the one list `docs/using.md`
- * restates. Any key closes it, which is why nothing in here is a target.
- */
 export function KeyHelp(props: { onClose: () => void }) {
   return (
     <box
@@ -796,20 +706,9 @@ export function KeyHelp(props: { onClose: () => void }) {
   );
 }
 
-/** Wide enough for the longest label and its key, and narrow enough for a 1-column pane. */
 const MENU_WIDTH = 26;
 const RIGHT_BUTTON = 2;
 
-/** One button. The press stops here: the card under it opens the record, which a human
-    aiming at Confirm is not asking for. */
-/** The header's buttons: three rows, the height of the field beside them. */
-/**
- * The brand signature — the mascot and the lettering, the light version for dark ground — where
- * there is one to draw: the bitmap itself over the Kitty graphics protocol, three rows
- * tall like the controls beside it. The caller decides whether
- * every human looking at this pane can see a picture (`outer.ts`); a board that cannot
- * be sure draws no mark at all rather than a blank where one should be.
- */
 function Logo(props: { file: string }) {
   return (
     <image

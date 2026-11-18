@@ -24,7 +24,6 @@ export const reportsLayer = (opts: {
   stamp: string;
   crashAt?: CrashPoint;
   linked: Queue.Dequeue<Peer>;
-  /** Whether the link to the peer of that installation is up now. */
   live: (installation: string) => Effect.Effect<boolean>;
 }) =>
   Layer.effectDiscard(
@@ -160,14 +159,12 @@ export const reportsLayer = (opts: {
           yield* write(view.runId, closure === undefined ? report : { ...report, closure });
         });
 
-      // A peer's link is up before its host serves calls over it.
       const answers = (peer: Peer) =>
         asks({ ...env, machine: peer.name }, (client) => client.identity()).pipe(
           Effect.timeoutOption("5 seconds"),
           Effect.map((answered) => Option.isSome(answered) && answered.value.ok),
         );
 
-      /** Sends again what `peer` is owed; true once nothing that may still reach it is. */
       const resend = (peer: Peer) =>
         Effect.gen(function* () {
           const views = yield* Effect.forEach(
@@ -199,7 +196,6 @@ export const reportsLayer = (opts: {
             if (
               report?.state === "undelivered" &&
               report.unreached === true &&
-              // A close still owed is the sweep's to write.
               (view.closes !== "reported" || report.closed)
             ) {
               yield* retell(view, report);
@@ -210,7 +206,6 @@ export const reportsLayer = (opts: {
           return false;
         });
 
-      // Each linked peer is owed a resend until nothing is left, or its link drops again.
       const due = new Map<string, Peer>();
       yield* Effect.forkScoped(
         Effect.gen(function* () {

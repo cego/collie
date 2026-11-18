@@ -15,9 +15,7 @@ import {
 export interface Journal {
   readonly verifications: ReadonlyArray<Verification>;
   readonly final: Snapshot;
-  /** The Run's Checks' commands as they resolve here; a record of exactly one counts for it, whoever asked. */
   readonly commands?: ReadonlyArray<CheckCommand>;
-  /** The Run's Checks, which say which are left to CI where `commands` is not given. */
   readonly approved?: ReadonlyArray<LeftToCi>;
 }
 
@@ -28,18 +26,11 @@ type LeftToCi = {
 };
 
 export interface CheckProof {
-  /** A check left to CI is only ever `waiting` on its job or `proved` by it. */
   readonly state: "passed" | "failed" | "unstable" | "earlier" | "never" | "waiting" | "proved";
-  /** Every run of the Check's own command, oldest first. */
   readonly runs: ReadonlyArray<Verification>;
-  /** The latest of them on this tree. */
   readonly last: Verification | undefined;
 }
 
-/**
- * Whose records count, by name, for a Check whose command is not given: anyone's, or only
- * the runs Collie made itself.
- */
 export type Unmatched = "anyone" | "collie";
 
 export function checkProof(got: Journal, name: string, unmatched: Unmatched = "anyone") {
@@ -67,7 +58,6 @@ export function checkProof(got: Journal, name: string, unmatched: Unmatched = "a
           ? check.argv === undefined || sameCommand(v, { ...v, argv: check.argv })
           : sameCommand(v, { ...command, executable: command.executable ?? v.executable })),
     );
-    // A pipeline job ran on its commit, so its pass is bound to that head, not only to the bytes.
     const proof = Option.getOrUndefined(
       Arr.findLast(
         jobs,
@@ -103,15 +93,12 @@ function stateOf(runs: ReadonlyArray<Verification>, last: Verification | undefin
   return "earlier";
 }
 
-/** Whether a proof leaves a local run nothing to close: a pass here, or a check left to CI. */
 export const owesNothingHere = (proof: CheckProof) =>
   proof.state === "passed" || proof.state === "waiting" || proof.state === "proved";
 
-/** The Checks a Run runs itself: all but those left to CI. */
 export const owedLocally = <C extends LeftToCi>(checks: ReadonlyArray<C>) =>
   Arr.filter(checks, (check) => check.ci === undefined);
 
-/** Why a check is unstable: git's first line where its latest unstable record kept why it could not measure the tree. */
 export function unstableWhy(runs: ReadonlyArray<Verification>) {
   const latest = Option.getOrUndefined(Arr.findLast(runs, (v) => v.result === "unstable"));
   const reason = latest?.end.unmeasured ?? latest?.start.unmeasured ?? "";

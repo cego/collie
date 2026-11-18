@@ -1,14 +1,6 @@
-// One budget of test processes per user per Machine
-// (ADR-draft-test-processes-share-one-budget-per-machine). A whole suite and a small run each
-// take workers from their kind's share of it, so the Machine is never oversubscribed and a
-// small run never waits behind a whole suite. A request is admitted as soon as its share has
-// the workers free, whatever waits before it; arrival order decides only between those that
-// do not fit, so a large one can wait behind a stream of smaller ones.
-
 import * as Arr from "effect/Array";
 import * as Num from "effect/Number";
-// FileSystem cannot write to or close a pipe it did not open.
-// oxlint-disable-next-line effecttsgo/node-builtin-import
+// oxlint-disable-next-line effecttsgo/node-builtin-import -- FileSystem cannot write to or close a pipe it did not open.
 import { closeSync, writeSync } from "node:fs";
 import { getPriority, setPriority, tmpdir } from "node:os";
 import { Clock, Duration, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
@@ -22,7 +14,6 @@ export interface Budget {
 
 export type Kind = "whole" | "small";
 
-/** A ticket while it waits, and a hold once admitted. */
 export interface Entry {
   readonly id: string;
   readonly kind: Kind;
@@ -43,7 +34,6 @@ export const budgetOf = (cores: number, override?: string) => {
   return { total, reserve: Math.max(2, Math.floor(total / 4)) };
 };
 
-/** Under two slots for whole suites, both kinds take from all of the budget. */
 const pooled = (budget: Budget) => budget.total - budget.reserve < 2;
 
 export const shareOf = (budget: Budget, kind: Kind) =>
@@ -61,7 +51,6 @@ export const admission: (
   );
   const holds = Arr.filter(classOf, (one) => one.state === "held");
   let free = share - Arr.reduce(holds, 0, (sum, one) => sum + one.workers);
-  // An earlier waiter that fits now is admitted on its own look, so its workers are not free.
   const ahead: Entry[] = [];
   for (const one of Arr.sortWith(
     Arr.filter(classOf, (it) => it.state === "waiting" && it.seq < request.seq),
@@ -109,10 +98,8 @@ export type Process = typeof ProcessSchema.Type;
 export type Stored = typeof StoredSchema.Type;
 type State = typeof StateSchema.Type;
 
-/** The environment variable that tells a `bun test` it runs on a hold, and which. */
 export const HOLD_ENV = "COLLIE_TEST_HOLD";
 
-/** Per user, so one user's runs never wait on a store they cannot clean. */
 export const STORE = `${tmpdir()}/collie-test-budget-${process.getuid?.() ?? "user"}`;
 
 const POLL = "250 millis";
@@ -128,7 +115,6 @@ export const processOf = (pid: number) =>
 const alive = (one: Stored) =>
   Effect.map(Effect.forEach(one.processes, holderLives), (each) => each.includes(true));
 
-/** Reads the store, drops what no live process holds, and writes back what `change` makes of it. */
 const modify = <A>(dir: string, change: (state: State) => readonly [State, A]) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -151,7 +137,6 @@ const modify = <A>(dir: string, change: (state: State) => readonly [State, A]) =
     );
   }).pipe(Effect.orDie);
 
-/** What the store holds now, after dropping what no live process holds. */
 export const entriesOf = (dir: string) => modify(dir, (state) => [state, state.entries] as const);
 
 export const enqueue = (
@@ -177,7 +162,6 @@ type Looked =
   | Extract<Admission, { _tag: "admit" }>
   | { readonly _tag: "wait"; readonly behind: ReadonlyArray<Stored> };
 
-/** One look: admits the ticket when it may go, and otherwise says whom it waits behind. */
 export const look = (dir: string, budget: Budget, id: string) =>
   modify(dir, (state) => {
     const mine = Option.getOrUndefined(Arr.findFirst(state.entries, (one) => one.id === id));
@@ -207,7 +191,6 @@ export const leave = (dir: string, id: string) =>
       ] as const,
   );
 
-/** Names another process that runs on the hold, such as the `bun test` its runner starts. */
 export const join = (dir: string, id: string, joined: Process) =>
   modify(
     dir,
@@ -234,10 +217,6 @@ const behindLine = (one: Stored) =>
       : `test: waiting behind the ${what} in ${who}, which queued first`;
   });
 
-/**
- * Holds `asked` workers of `kind` from the budget for as long as the scope lasts, waiting in
- * turn for them. A wait says whom it is behind once, then every `every` how long it has been.
- */
 export const admitted = (
   dir: string,
   budget: Budget,
@@ -272,11 +251,6 @@ export const admitted = (
     }
   });
 
-/**
- * Starts `cmd` on the hold, named in it so it counts as long as it runs, and stops it if the
- * scope ends first. `cmd` runs only once it is named: a runner that dies first closes the
- * gate it waits on, and it exits instead.
- */
 export const startOnHold = (
   dir: string,
   id: string,
@@ -311,7 +285,6 @@ export const startOnHold = (
     );
     const gate = child.stdio[3]!;
     yield* Effect.flatMap(processOf(child.pid), (named) => join(dir, id, named)).pipe(
-      // Set before opening the gate so workers and their descendants inherit it.
       Effect.andThen(
         Effect.sync(() => {
           if (options.kind === "whole")

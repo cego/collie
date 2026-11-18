@@ -1,6 +1,3 @@
-// Where the CLI finds hc and its core from the environment it was started with, as hc's
-// own installer and `hc` itself would.
-
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";

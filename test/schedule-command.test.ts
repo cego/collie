@@ -19,7 +19,6 @@ test(
       (world) =>
         Effect.gen(function* () {
           const daily = ["--cron", "0 7 * * *"];
-          // Not in a checkout and naming none.
           const nowhere = yield* add(world, ["a", "hello", ...daily, "--input", "name=x"], {
             COLLIE_CWD: world.home,
           });
@@ -178,7 +177,6 @@ test(
             ok: true,
             data: { machine, schedules: [] },
           });
-          // What changed and who asked stays beside the Schedule after it is gone.
           const trail = yield* fs.readFileString(`${world.state}/schedules/daily/operations.jsonl`);
           expect(Arr.filter(Str.split(trail, "\n"), (line) => line !== "")).toHaveLength(4);
         }),

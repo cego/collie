@@ -66,11 +66,9 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
       return {
         ...faked,
         api: yield* serveForges({ forge: faked.forge, face }),
-        /** Runs ahead of each HTTP request the forge is sent, as what changes it in between. */
         before: (hook: typeof before) => {
           before = hook;
         },
-        /** Stands between the forge's answer and its caller, as a host that dies before it hears one. */
         after: (hook: typeof after) => {
           after = hook;
         },
@@ -78,7 +76,6 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     });
   type Forge = Effect.Success<ReturnType<typeof gitlab>>;
 
-  /** One host over the state directory, ended with its scope. */
   const session = <A, E>(
     forge: Forge,
     work: Effect.Effect<A, E, Registry | Store | HostServices | PlatformServices | Scope.Scope>,
@@ -119,7 +116,6 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
       Effect.scoped,
     );
 
-  /** The host's merge watch, over the board its Runs make. */
   const mergeWatched = Effect.gen(function* () {
     const registry = yield* Registry;
     const store = yield* Store;
@@ -210,7 +206,6 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     Arr.filter((cmd) => cmd === "terminal.run"),
   );
 
-  // Five-minute forge polls need fewer clock steps; every intervening timer still fires.
   const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
     runLive(
       fastForward(
@@ -250,7 +245,6 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
   };
 };
 
-/** `read` once `done` holds, looked at each second of the fast clock for up to `seconds` of it. */
 export const until = <A, E, R>(
   read: () => Effect.Effect<A, E, R>,
   done: (value: A) => boolean,

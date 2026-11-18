@@ -1,5 +1,3 @@
-// Opening a web page in the human's default browser, in a window of its own where it can.
-
 import { expect, test } from "bun:test";
 import { appWindow } from "../browser";
 

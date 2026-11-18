@@ -1,6 +1,3 @@
-// A Task's record: its tabs, the one shown, each tab's place and the Log's, where a jump lands,
-// its keys, and what its Summary says.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { mrWords, readMrRef, type RecordPart, type RunDetail } from "../../../src/board-model";
@@ -15,20 +12,15 @@ export const recoveryOf = (facts: Pick<RunDetail, "park" | "recovery">, limit = 
 
 export interface TabFacts {
   readonly flow?: boolean;
-  /** Whether the Run's details are loaded; every tab but Log, Terminal and Facts needs them. */
   readonly loaded: boolean;
   readonly plan: boolean;
   readonly reviewText: boolean;
   readonly findings: boolean;
-  /** A followed location, which Review shows read-only where there is no diff. */
   readonly target: boolean;
   readonly diff: boolean;
   readonly terminal: boolean;
-  /** The merge request's tab label, where there is one. */
   readonly mr: string | null;
-  /** A tab for each of several merge requests, in place of `mr`'s. */
   readonly mrs?: ReadonlyArray<Tab>;
-  /** The parts the host is still sending: each one's tab is shown loading until it comes. */
   readonly pending?: ReadonlyArray<RecordPart>;
 }
 
@@ -65,7 +57,6 @@ export const recordTabs = (facts: TabFacts) => {
   );
 };
 
-/** A tab per merge request where the record has several, by its MR id; none otherwise. */
 export const mrTabsOf = (mrs: RunDetail["mrs"]) =>
   mrs === undefined || mrs.length < 2
     ? []
@@ -77,30 +68,24 @@ export const mrTabsOf = (mrs: RunDetail["mrs"]) =>
         };
       });
 
-/** The chosen tab while it is present, else the first. */
 export const tabShown = (tabs: ReadonlyArray<Tab>, chosen: string | undefined) =>
   (Option.getOrUndefined(Arr.findFirst(tabs, ({ value }) => value === chosen)) ?? tabs[0]!).value;
 
-/** Each tab's scroll position, by the tab's value, while the record is open. */
 export type ScrollMemory = ReadonlyMap<string, number>;
 
-/** Terminal fills the record and has no position of its own. */
 const UNSCROLLED = "terminal";
 
 export const rememberScroll = (memory: ScrollMemory, tab: string, position: number) =>
   tab === UNSCROLLED ? memory : new Map(memory).set(tab, position);
 
-/** The position to show a tab at, 0 on its first visit; null for Terminal. */
 export const scrollToRestore = (memory: ScrollMemory, tab: string) =>
   tab === UNSCROLLED ? null : (memory.get(tab) ?? 0);
 
-/** Every tab visited, kept mounted so what was opened in it is there on return. */
 export const tabsKept = (kept: ReadonlySet<string>, shown: string) =>
   shown === UNSCROLLED || shown === "log" || kept.has(shown) ? kept : new Set(kept).add(shown);
 
 export const videoPlays = (tab: string | undefined) => tab === "evidence" || tab === "artefacts";
 
-/** Where the Log's own lines are scrolled, kept while the record is open. */
 export interface LogPlace {
   readonly top: number;
   readonly following: boolean;
@@ -108,7 +93,6 @@ export interface LogPlace {
 
 export const FOLLOWING_LOG: LogPlace = { top: 0, following: true };
 
-/** Followed to its end unless the human scrolled up to read. */
 export const logPlaceOf = ({
   scrollTop,
   clientHeight,
@@ -132,7 +116,6 @@ export type Landing =
       readonly line: number | null;
     };
 
-/** `diff` is the paths of the diff's files, or null where the Run has no diff. */
 export const landingOf = (
   { file, line }: { readonly file: string; readonly line: number | null },
   diff: ReadonlyArray<string> | null,
@@ -144,7 +127,6 @@ export const landingOf = (
     : { tab: "diff", at: "line", file, line };
 };
 
-/** The tab one step from the one shown, skipping Terminal, whose pane keeps the keys. */
 export const tabBeside = (tabs: ReadonlyArray<Tab>, shown: string, step: 1 | -1) => {
   const stops = Arr.filter(tabs, ({ value }) => value !== UNSCROLLED || value === shown);
   const at = Option.getOrElse(
@@ -155,13 +137,11 @@ export const tabBeside = (tabs: ReadonlyArray<Tab>, shown: string, step: 1 | -1)
 };
 
 export interface KeyFacts {
-  /** The character typed, which Alt or AltGr may have made. */
   readonly key: string;
   readonly ctrlOrMeta: boolean;
   readonly inField: boolean;
   readonly overlay: boolean;
   readonly tab: string;
-  /** Whether focus is in the record, or on nothing. */
   readonly inRecord: boolean;
 }
 
@@ -185,10 +165,6 @@ export const keyAction = (facts: KeyFacts) => {
   }
 };
 
-/**
- * The element a key was typed in, from the event's composed path with each entry that is not an
- * element as null: inside a shadow root the event's target is only its host.
- */
 export const typedIn = (composedPath: ReadonlyArray<Target>) => composedPath[0] ?? null;
 
 export type SummaryFacts = Pick<
@@ -215,7 +191,6 @@ const saysSomething = ({ kind, gaps, obstacle, next, delivered, measurement }: O
   gaps.length > 0 ||
   Arr.some([kind, obstacle, next, delivered, measurement ?? null], (said) => said !== null);
 
-/** In order, each left out when it has nothing to say; the status always says something. */
 export const summaryOf = (detail: SummaryFacts) => {
   const { kind, gaps, obstacle, next, delivered } = detail.outcome;
   const measurement = detail.outcome.measurement ?? null;
@@ -235,10 +210,6 @@ export const summaryOf = (detail: SummaryFacts) => {
 
 export type RecordMark = "record:click" | "record:mounted" | "record:frame" | "record:usable";
 
-/**
- * Marks each step of opening a card's record, from its click to a usable Flow, in order and
- * once each. A card no longer the one last clicked marks nothing more.
- */
 export const recordTiming = (mark: (name: RecordMark, at: number, card: string) => void) => {
   let clicked: string | null = null;
   let reached: RecordMark | null = null;
@@ -268,23 +239,16 @@ export type DesktopMark =
   | "chat-drawn"
   | "frame";
 
-/** The line a mark adds to record-timing.log, or null while Record timing is off. */
 export const timingLine = (
   settings: { readonly recordTiming?: boolean | undefined },
   mark: { readonly name: string; readonly at: number; readonly card: string },
 ) => (settings.recordTiming === true ? `${JSON.stringify(mark)}\n` : null);
 
-/** A scroll with no other this long after it has ended. */
 const SCROLL_SETTLED_MS = 150;
 
-/** Runs `then` once the change just made is painted; a frame's callbacks run before its paint. */
 export const afterPaint = (frame: (callback: () => void) => void, then: () => void) =>
   frame(() => frame(then));
 
-/**
- * Marks the board's first draw; a key or chat chunk and the first draw after it, with no
- * other start marked before that draw; and each frame of a scroll, named once per scroll.
- */
 export const desktopTiming = (mark: (name: DesktopMark, at: number, card: string) => void) => {
   const answered = (start: DesktopMark, end: DesktopMark) => {
     let waiting: string | null = null;
@@ -316,7 +280,6 @@ export const desktopTiming = (mark: (name: DesktopMark, at: number, card: string
     echoed: terminal.end,
     chunk: chat.start,
     chatDrawn: chat.end,
-    /** Whether this starts a scroll, whose frames are then to be watched. */
     scrolled: (view: string, at: number) => {
       if (scroll !== null) {
         scroll.last = at;
@@ -325,7 +288,6 @@ export const desktopTiming = (mark: (name: DesktopMark, at: number, card: string
       scroll = { card: `${view}:${++scrolls}`, last: at };
       return true;
     },
-    /** Whether the scroll goes on, so the next frame is watched too. */
     frame: (at: number) => {
       if (scroll === null) return false;
       if (at - scroll.last > SCROLL_SETTLED_MS) {

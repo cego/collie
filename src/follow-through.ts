@@ -1,6 +1,3 @@
-// The claim a start of a merge request makes when its workflow follows merge requests: one
-// Run per merge request and forge login (ADR-0017), whichever door asked.
-
 import * as Str from "effect/String";
 import { Effect, Schema } from "effect";
 import { mrId, parseMrTarget } from "./board-model";
@@ -8,7 +5,6 @@ import { configValue, readConfig } from "./config";
 import { forgeOf } from "./forge/forge";
 import { shell } from "./mr";
 
-/** Whether the boolean setting a workflow follows under is on. */
 export const followingOn = Effect.fn("FollowThrough.on")(function* (
   userDir: string,
   setting: string,
@@ -20,13 +16,10 @@ export const followingOn = Effect.fn("FollowThrough.on")(function* (
   );
 });
 
-/** The suffix of the request a follow claim is made under, after the workflow's id. */
 export const followClaim = (mr: string, login: string) => `-follow:${mr}:${login}`;
 
-/** The request a start of `target` is claimed under, or null where it follows nothing. */
 export const followRequest = Effect.fn("FollowThrough.request")(function* (opts: {
   readonly workflow: string;
-  /** The setting the workflow declares it follows under. */
   readonly setting: string | undefined;
   readonly target: string | null;
   readonly userDir: string;

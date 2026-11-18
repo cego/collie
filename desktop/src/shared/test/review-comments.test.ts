@@ -1,5 +1,3 @@
-// Review comments: a Run's drafts, where each is about, and the one message they become.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";

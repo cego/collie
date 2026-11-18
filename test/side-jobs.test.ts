@@ -1,5 +1,3 @@
-// What the host does on its own, with no pane open: the merge watch, News and pruning.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
@@ -30,7 +28,6 @@ import { collie, proves } from "./support/world";
 
 const MR = "mr:gitlab.example.com/mk/project!7";
 
-/** A glab on `PATH`, served over HTTP too, that says the merge request has merged. */
 const mergedForge = Effect.fn("sideJobs.mergedForge")(function* (dir: string) {
   const bin = yield* FakeBin.make(dir);
   const gitlab = yield* forgeOnPath(bin, "gitlab", {
@@ -198,7 +195,6 @@ test(
           expect(started.envelope.ok).toBe(true);
           const runId = yield* runIdOf(started.envelope);
           const file = yield* newsPath(world.state, yield* herdOf(Bun.env.HC_SOCKET ?? null));
-          // Another conversation's view, so nothing Native chat read can hide an item here.
           const keys = readNews(file).pipe(
             Effect.map((lines) => Arr.map(pending(lines, "flock@pc").items, (item) => item.key)),
           );
@@ -221,12 +217,10 @@ test(
           ]);
           expect(disposed.envelope.ok).toBe(true);
           const after = yield* until(keys, (now) => now.length === 0);
-          // Two more rounds, so a retired cause said again would show.
           yield* Effect.sleep("11 seconds");
           const lines = yield* readNews(file);
           yield* stopHost(world.state);
           expect(after).toEqual([]);
-          // Retired, and kept: the journal still says what was news and that it stopped being.
           expect(
             Arr.flatMap(lines, (line) => (line.kind === "superseded" ? [line.key] : [])).sort(),
           ).toEqual([asked, ended].sort());
@@ -278,7 +272,6 @@ test("News and the merge watch read the host's latest board, and list no Runs of
         requested: NO_REQUESTS,
         sweepers: Effect.succeed([]),
       }).pipe(Effect.timeout("12 seconds"), Effect.ignore, fastForward);
-      // Two merge looks and three News looks at least, on one build.
       expect(reads).toBeGreaterThanOrEqual(5);
       expect(listings).toBe(1);
     }),
@@ -351,7 +344,6 @@ test(
           const client = yield* connect(world.state).pipe(Effect.orDie);
           const ended = yield* until(
             client.run({ runId }).pipe(Effect.orElseSucceed(() => null)),
-            // Suspended, so the wait itself ended rather than polling on under the stop.
             (view) => view?.status.status === "suspended",
           );
           const log = yield* fs

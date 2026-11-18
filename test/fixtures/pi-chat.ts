@@ -101,7 +101,6 @@ for await (const chunk of Bun.stdin.stream()) {
       });
       const url = /url: "([^"]+)"/.exec(extension)![1]!;
       const client = new Client({ name: "pi-script", version: "1" });
-      // The scripted child, like Pi, keeps reading abort while an MCP call is pending.
       void client
         .connect(
           new StreamableHTTPClientTransport(new URL(url), {

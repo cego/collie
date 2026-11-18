@@ -1,15 +1,11 @@
-// What keeps the benchmark off the human's own host and out of another Measurement's way.
-
 import { Effect, Option, Path, pipe } from "effect";
 import * as Str from "effect/String";
 import { ensureLockDir, lockHolder, withLock } from "../../src/lock";
 import { processOf } from "../../src/processes";
 
-/** The state directory a host uses when nothing names another. */
 export const userStateDir = (home: string, env: Readonly<Record<string, string | undefined>>) =>
   env.COLLIE_STATE_DIR ?? `${home}/.local/state/herdr/plugins/cego.collie`;
 
-/** Why the benchmark may not run its host there, or null where it may. */
 export const refusal = Effect.fnUntraced(function* (
   ours: { readonly state: string; readonly socket: string },
   user: { readonly home: string; readonly env: Readonly<Record<string, string | undefined>> },
@@ -31,10 +27,6 @@ const ancestorsOf = Effect.fnUntraced(function* (pid: number) {
   return found;
 });
 
-/**
- * Runs `effect` holding the Machine Measurement `lock`, waiting while another process holds
- * it. Inside a Measurement the host that started this process holds it, and it is left so.
- */
 export const measuring = <A, E, R>(
   lock: string,
   say: (line: string) => Effect.Effect<void>,
@@ -62,7 +54,6 @@ export const measuring = <A, E, R>(
     }
   });
 
-/** Whether the host that started last in `log` has filled its Run model. */
 export const filledSinceStart = (log: string) =>
   Option.match(pipe(log, Str.lastIndexOf(" host started, pid ")), {
     onNone: () => false,

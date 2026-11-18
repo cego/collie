@@ -1,15 +1,3 @@
-// The one way a Run's agent ends (ADR-0059 D1, D4). Every end takes the same steps, in
-// this order:
-//
-// 1. prove the incarnation is this Run's, from its launch record;
-// 2. stop it where its work runs;
-// 3. require it to be Quiet;
-// 4. end its core terminal;
-// 5. log the end on the Run's log.
-//
-// In the caller's mode, steps 4 and 5 are the caller's: it ends the terminals itself once
-// every agent has answered, then logs each end with `endedLine`.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Data, Effect, FileSystem } from "effect";
@@ -24,23 +12,18 @@ export interface EndDeps extends Pick<CompactionDeps, "ports" | "stateDir" | "lo
   readonly stopMs?: number;
 }
 
-/** Who closes the agent's pane: this module, or the caller once every agent has answered. */
 export type Closes = "close" | "caller";
 
 export type Ended =
-  /** `ended` is false where nothing of this Run's was there to end. */
   | { readonly _tag: "Closed"; readonly ended: boolean }
-  /** `locked` is why no stop could be made, where none could. */
   | { readonly _tag: "NotQuiet"; readonly reason: string; readonly locked?: string }
   | { readonly _tag: "Unprovable"; readonly reason: string }
-  /** Only where the caller closes: another process has the agent's name, so its panes stay. */
   | { readonly _tag: "Replaced"; readonly reason: string };
 
 export const endedLine = (agent: string, why: string) => `${agent} ended: ${why}`;
 
 export const UNPROVABLE = "cannot be proven to be this Run's, so it was left running";
 
-/** Core would not list its agents, so nothing about this one can be proved. */
 export class AgentsUnlisted extends Data.TaggedError("AgentsUnlisted")<{
   readonly cause: HerdrError;
 }> {}
@@ -50,10 +33,6 @@ export class PaneOpen extends Data.TaggedError("PaneOpen")<{
   readonly cause: HerdrError;
 }> {}
 
-/**
- * Ends one agent of a Run. `listed` is core's agent list where the caller has already
- * read it for several ends.
- */
 export const endAgent = Effect.fn("AgentEnd.end")(function* (
   deps: EndDeps,
   launched: Ending,
@@ -71,7 +50,6 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
       reason: `${launched.agent} could not be stopped while core's recovery starts it again`,
     }),
     Effect.gen(function* () {
-      // Recovery rewrites the record with the incarnation it started.
       const operation = launched.operation;
       const stem = operation === undefined ? null : stemOf({ ...launched, operation });
       const now = Option.getOrUndefined(
@@ -151,7 +129,6 @@ const ending = Effect.fnUntraced(function* (
       reason: notStopped(launched.agent, reached.success, reached.success.target),
     } satisfies Ended;
 
-  // Ended on purpose, so nothing starts it again.
   const runId = launched.runId;
   if (runId !== undefined)
     yield* RunRecords.use((records) => records.setControl(RELAUNCH, runId, null, launched.agent));
@@ -165,7 +142,6 @@ const ending = Effect.fnUntraced(function* (
   return { _tag: "Closed", ended } satisfies Ended;
 });
 
-/** A Run's log, for an end its Agents service does not make. */
 export const runLog = (stateDir: string, runId: string) => (line: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

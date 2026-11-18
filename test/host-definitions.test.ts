@@ -1,5 +1,3 @@
-// What a front door is told a Machine's Workflows and Personas are, in one read of its host.
-
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -27,7 +25,6 @@ const SHIPPED = [
   "tune-up",
 ];
 
-/** Overrides the shipped general, so the user Layer's claim is the one read. */
 const OVERRIDE = `import { defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 
@@ -40,7 +37,6 @@ export default defineWorkflow({
 });
 `;
 
-/** Loads, but its failure schema cannot be built, so `make` throws. */
 const UNBUILT = `import { defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 
@@ -61,7 +57,6 @@ export default defineWorkflow({
 });
 `;
 
-/** Names a template value, which a Persona may not. */
 const UNLOADABLE = `---
 name: unloadable
 description: Asks for what it is never told
@@ -138,7 +133,6 @@ test(
           const implement = byId.get("implement")?.files[0];
           expect(implement?.text).toBe(yield* fs.readFileString(`${root}workflows/implement.md`));
 
-          // The user Layer's general is the one read, once, with its own files.
           expect(byId.get("general")).toMatchObject({
             layer: "user",
             title: "My general",
@@ -171,16 +165,13 @@ test(
           });
           expect(read.errors).toEqual([expect.stringContaining("unloadable.md")]);
 
-          // `persona show` gives the same data.
           const shown = yield* collie(world, ["persona", "show", "mine"]);
           expect(shown.envelope.data).toEqual({ persona: personas.get("mine") });
 
-          // Nothing was provisioned to read them.
           for (const dir of [world.user, `${world.install}/workflows`])
             for (const made of ["package.json", "node_modules", "bun.lock"])
               expect(yield* fs.exists(`${dir}/${made}`)).toBe(false);
 
-          // An added read: the protocol is the one Desktops already speak.
           expect(PROTOCOL).toBe(5);
         }).pipe(Effect.orDie),
       [],

@@ -1,6 +1,3 @@
-// An offer's form, read from the JSON Schema its arguments are drawn as: which control each
-// field takes, and what a human's entries send, or why they cannot be sent.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Schema } from "effect";

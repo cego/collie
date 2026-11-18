@@ -1,7 +1,4 @@
 /* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/global-console, no-restricted-globals, effecttsgo/prefer-effect-array, effecttsgo/prefer-schema-over-json -- an offline benchmark's driver, on its own copy of a state directory. */
-// One board build as a host draws it, without its caches, on this tree's copy of the
-// snapshot at a fixed time, from the Run views a host listed when it was taken; `--open`
-// only opens the copy's records.
 import { Effect, ManagedRuntime } from "effect";
 import { buildBoard } from "../../src/board";
 import { readEnv } from "../../src/env";
@@ -9,7 +6,6 @@ import { platformLayer } from "../../src/platform";
 import { recordsAt } from "../../src/records";
 import { factsOfView } from "../../src/runs";
 
-// A Collie entry asked to start a host would start this file again; it never may.
 if (Bun.argv.slice(2).some((arg) => arg !== "--open")) process.exit(2);
 Bun.env.COLLIE_HOST = "/bin/false";
 
@@ -47,7 +43,6 @@ const result = await runtime.runPromise(
         update_ms,
         runs: runs.length,
         tasks: views.length,
-        // What both trees must agree on, not text a change may word differently.
         digest: Number(
           BigInt(
             Bun.hash(

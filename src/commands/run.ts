@@ -127,12 +127,6 @@ import {
   type Global,
 } from "./shared";
 
-/**
- * What `--constraint` and `--severity` say together. Paired by position rather than by
- * interleaved order, because a repeated flag arrives as its own list and the order
- * between two lists is not recoverable — so the pairing has to be one the human can see
- * in what they typed.
- */
 function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArray<string>) {
   const constraints: Array<Omit<Constraint, "since">> = [];
   const refuse = (error: string) => ({ error, constraints });
@@ -148,11 +142,6 @@ function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArra
   return { error: null, constraints };
 }
 
-/**
- * Which Task this start belongs to: fresh unless the caller named one, because a
- * continuation that was never asked for is how two pieces of work become one. The host
- * still gives a fresh start the open Task already working its branch.
- */
 const chosenTask = Effect.fn("collie.chosenTask")(function* (
   env: PluginEnv,
   named: Option.Option<string>,
@@ -170,11 +159,6 @@ const chosenTask = Effect.fn("collie.chosenTask")(function* (
   return taken({ mode: "continue", task });
 });
 
-/**
- * `--decide` answers a question before it is asked, which a module never does: its
- * questions are asked when the work reaches them. Refused rather than dropped, since a
- * decision nobody answered is worse than being told so here.
- */
 function unsupportedDecide(decide: ReadonlyArray<string>) {
   if (decide.length === 0) return null;
   return err(
@@ -188,7 +172,6 @@ const attachFlag = Flag.String("attach").pipe(
   Flag.atLeast(0),
 );
 
-/** Each `--attach` as an absolute path, resolved against where the command runs. */
 const absolute = (files: ReadonlyArray<string>) =>
   Effect.map(Path.Path, (path) =>
     files.length === 0 ? undefined : Arr.map(files, (file) => path.resolve(file)),
@@ -292,18 +275,10 @@ const runStart = Command.make(
           if (!given.ok) return err("invalid_input", given.error);
           return yield* mutation(base.env, "run-start", request, (requestId) =>
             Effect.gen(function* () {
-              // The live workspace is resolved inside the mutation, so replaying a
-              // receipt returns what was recorded rather than needing that workspace
-              // to still be open. Only a start that is actually happening needs it.
               const resolved = yield* context(global, (yield* selected(global)) !== null);
               if (resolved._tag === "ContextFailure") return resolved.result;
-              // Which Task, before the Workflow is prepared: inference is task-local,
-              // so a continuation sees its own Task's plans and a fresh start sees only
-              // the Runs recorded before Tasks existed.
               const task = yield* chosenTask(resolved.env, taskId);
               if (!task.ok) return task.error;
-              // What an id runs is the module saved for this project.
-              // A Machine named with --machine has its own modules, and says what it lacks.
               const saved =
                 resolved.env.machine === undefined
                   ? yield* moduleFor(resolved.env, workflow)
@@ -311,15 +286,11 @@ const runStart = Command.make(
               if (saved !== null) {
                 const unsupported = unsupportedDecide(decide);
                 if (unsupported !== null) return unsupported;
-                // The host's own options are settled apart from the author's payload, so
-                // nothing the host supplies is ever injected into a module's input.
                 const launch = hostOptions(explicit.given);
                 const agent = Arr.flatMap(
                   Rec.toEntries({ harness, model, effort }),
                   ([name, value]) => (Option.isSome(value) ? [[name, value.value] as const] : []),
                 );
-                // What it declares and nobody gave, with what would fill each, so a caller
-                // can fill the gaps and retry under the same request id.
                 if ("inputs" in saved) {
                   const needed = yield* agentStartRefusal(resolved.env, saved, launch.input, {
                     named: yield* namedCheckout(resolved.env, launch.options.workspace ?? ""),
@@ -361,8 +332,6 @@ const runStart = Command.make(
                   ),
                 };
               }
-              // Nothing else runs work. An id with no module is a workflow this
-              // installation does not have, said once, with where to look.
               return err(
                 "workflow_not_found",
                 `No workflow module is saved as "${workflow}". \`collie workflow list\` is what this installation has, and \`collie workflow create ${workflow}\` starts one.`,
@@ -401,8 +370,6 @@ const runList = Command.make("list", {}, () =>
       Effect.gen(function* () {
         const resolved = yield* context(global, false);
         if (resolved._tag === "ContextFailure") return resolved.result;
-        // Scoped to the Task whose workspace this is, where it is one: Runs belong to
-        // Tasks now, and a workspace that is not a Task's narrows nothing.
         const task = yield* selectedTask(global);
         const hosted = yield* flockRuns(resolved.env, task);
         return {
@@ -426,11 +393,9 @@ const runList = Command.make("list", {}, () =>
   }),
 ).pipe(Command.withDescription("List Runs in the selected workspace, or everywhere without one"));
 
-/** `run show`'s line for each agent: `  review  claude/opus xhigh`. */
 export const agentLines = (agents: ReadonlyArray<RunAgent>) =>
   Arr.map(agents, (agent) => `  ${agent.operation}  ${agent.agent}  ${ranOn(agent)}`);
 
-/** The Run this command is about, and the environment it was resolved in. */
 const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
   global: Global,
   runId: string,
@@ -439,15 +404,9 @@ const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
   if (resolved._tag === "ContextFailure")
     return { _tag: "RunFailure" as const, result: resolved.result };
   const located = yield* locateRun(resolved.env, runId, yield* runScope(global));
-  // The environment travels with the Run: a command that then reads the Run's children
-  // out of the same state directory should not resolve the context twice.
   return located._tag === "RunFailure" ? located : { ...located, env: resolved.env };
 });
 
-/**
- * The directory a CLI start names as its checkout, or null for none: its `workspace`
- * option, else the checkout the command was run in.
- */
 const namedCheckout = Effect.fn("run.namedCheckout")(function* (env: PluginEnv, workspace: string) {
   const given = Str.trim(workspace);
   if (given === PROJECTS_ROOT_OPTION) return (yield* projectsRoot(env)).path;
@@ -489,8 +448,6 @@ const runShow = Command.make(
           if (refused !== null) return refused;
           const progress = yield* runProgress(resolved.env, runId);
           const ready = progress.ok && progress.value !== null ? progress.value.ready : null;
-          // Both facts on the head line: how execution ended, and what became of the
-          // work. A Run that failed and whose work shipped anyway says both.
           return {
             ok: true,
             data: {
@@ -625,7 +582,6 @@ const runChecks = Command.make(
     Effect.gen(function* () {
       const global = yield* root;
       const stdio = yield* Stdio.Stdio;
-      // Under --json the envelope is stdout's, so the output goes to stderr.
       const say = (text: string) =>
         Stream.make(text).pipe(
           Stream.run(stdio[global.json ? "stderr" : "stdout"]({ endOnDone: false })),
@@ -734,11 +690,6 @@ const runReport = Command.make(
   ),
 );
 
-/**
- * Everything the Run wrote, as JSON where it is JSON. The files are the record — an
- * agent's Output, a review, a plan — so this reads the directory rather than a list some
- * engine kept of what it put there.
- */
 const runOutput = Command.make(
   "output",
   {
@@ -784,7 +735,6 @@ const runOutput = Command.make(
 
 type ParsedTimeout = { ok: true; ms: number | null } | { ok: false; error: Result };
 
-/** A duration in Effect's canonical `DurationFromString` grammar. */
 function parseTimeout(value: Option.Option<string>) {
   if (Option.isNone(value)) {
     const returned: ParsedTimeout = { ok: true, ms: null };
@@ -799,7 +749,6 @@ function parseTimeout(value: Option.Option<string>) {
 
 type ParsedUntil = { ok: true; until: Until } | { ok: false; error: Result };
 
-/** What ends the wait. Omitted keeps the terminal-only wait every caller already has. */
 function parseUntil(value: Option.Option<string>) {
   if (Option.isNone(value)) {
     const returned: ParsedUntil = { ok: true, until: "terminal" };
@@ -841,21 +790,12 @@ const runWait = Command.make(
   ({ runId, follow, timeout, until }) =>
     Effect.gen(function* () {
       const global = yield* root;
-      // `guarded`, not `attempt`: this command streams its own lines rather than
-      // returning one result, but a defect must still end as one envelope like
-      // everywhere else.
       yield* guarded(waitFor(global, runId, follow, timeout, until), global.json);
     }),
 ).pipe(
   Command.withDescription("Wait for a Run to finish, or to need attention, optionally following"),
 );
 
-/**
- * A Run watched to the end, or to whatever `until` names. Every state the host reports
- * arrives here, current one first — so a wait that starts long after the work did is not
- * waiting for an update that has already happened. What the status stream does not carry —
- * Ready to release, steps, agents and CI — is asked for every `PROGRESS_EVERY`.
- */
 const waitForRun = Effect.fn("collie.waitForRun")(function* (
   global: Global,
   env: PluginEnv,
@@ -888,7 +828,6 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
   const once = watchRun(env, runId, (view) =>
     Effect.gen(function* () {
       const last = yield* Ref.getAndSet(seen, view);
-      // One line per change, not per look: a run polled while it waits is not news.
       if (options.follow && (last === null || statusOf(last) !== statusOf(view))) {
         yield* say(
           global.json
@@ -902,9 +841,6 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
       return (yield* verdict) !== "waiting";
     }).pipe(Effect.orDie),
   ).pipe(Effect.scoped);
-  // A host replaced or restarted under the wait ends its stream before the Run got
-  // anywhere. The engine is durable and the next host serves the same Run, so the wait
-  // goes on against it rather than reporting a Run that has not moved.
   const watching = Effect.gen(function* () {
     for (;;) {
       const exit = yield* Effect.exit(once);
@@ -923,8 +859,6 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
   });
   const needsProgress = options.until === "ready" || options.until === "needs-human";
   const asking = options.follow || needsProgress;
-  // A host restarting under the wait fails a look or two; one that never answers, such as
-  // an older build without `progress`, cannot end a wait for readiness.
   const polling = Effect.gen(function* () {
     let failures = 0;
     for (;;) {
@@ -956,7 +890,6 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
     ),
   );
   if (failed !== null) return yield* printResult(failed, global.json);
-  // The status stream can end the race between two looks: what changed since is still said.
   if (asking) {
     const last = yield* runProgress(env, runId);
     if (last.ok && last.value !== null) yield* Ref.set(progressed, last.value);
@@ -975,8 +908,6 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
       ),
       global.json,
     );
-  // `--follow` has already said everything as it happened, as it does for a Run with a
-  // Driver: one envelope after the stream would be the last line twice.
   if (options.follow) return;
   const view = yield* Ref.get(seen);
   if (view === null)
@@ -1000,7 +931,6 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
   );
 });
 
-/** How often a wait asks for what the status stream does not carry. */
 const PROGRESS_EVERY = "2 seconds";
 const PROGRESS_TRIES = 5;
 
@@ -1035,10 +965,6 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
   });
 });
 
-/**
- * One command against one Run. The host settles it, because the host is the only thing
- * executing anything.
- */
 function runMutationCommand(
   operation: string,
   runId: string,
@@ -1208,7 +1134,6 @@ const holdTaskFlag = Flag.String("task").pipe(
   Flag.optional,
 );
 
-/** Every unfinished Run of a Task, held. */
 const holdTask = Effect.fn("run.holdTask")(function* (
   env: PluginEnv,
   id: string,
@@ -1340,12 +1265,6 @@ const runClearOverride = Command.make(
   Command.withDescription("Let Collie correct an agent again after someone typed into its pane"),
 );
 
-/**
- * What became of a Run's work, which is not the same fact as how its execution ended. A
- * Run that failed still failed; this says whether the work landed anyway, and by what.
- * Nothing here can reach the Run's status, so a row can stop being a lie without the
- * history becoming one. Without `--as` it reads rather than writes, like its neighbours.
- */
 const runDisposition = Command.make(
   "disposition",
   {
@@ -1414,7 +1333,6 @@ const runDisposition = Command.make(
   Command.withDescription("What became of a Run's work, recorded beside its status not over it"),
 );
 
-/** A finished Run's report acknowledged, for every board in the Flock; reading a Run never does this. */
 const runSeen = Command.make(
   "seen",
   { runId: runIdArg, requestId: requestIdFlag },
@@ -1475,8 +1393,6 @@ const runDrift = Command.make("drift", { runId: runIdArg }, ({ runId }) =>
                       ", ",
                     )}${report.evidence_truncated ? " (evidence truncated)" : ""}`,
                 ),
-                // A judgement nobody could make is worth saying: the alternative is a Run
-                // that looks clean because nothing looked at it.
                 ...Arr.map(skipped, (line) => `skipped\t${line.reason}`),
               ],
               "\n",
@@ -1522,11 +1438,6 @@ const runCards = Command.make("cards", { runId: runIdArg }, ({ runId }) =>
   ),
 );
 
-/**
- * What a finished Run offers to do next. The offers are the Workflow's own declaration,
- * decided against the facts as they are now — so what this prints is what invoking one
- * would actually do, not what a card said a minute ago.
- */
 const runActions = Command.make("actions", { runId: runIdArg }, ({ runId }) =>
   Effect.gen(function* () {
     const global = yield* root;
@@ -1534,8 +1445,6 @@ const runActions = Command.make("actions", { runId: runIdArg }, ({ runId }) =>
       Effect.gen(function* () {
         const resolved = yield* context(global, false);
         if (resolved._tag === "ContextFailure") return resolved.result;
-        // Current code supplies the actions, so a Run whose module has gone offers
-        // nothing and says why.
         return yield* showOffers(resolved.env, runId);
       }),
       global.json,
@@ -1579,7 +1488,6 @@ const runAction = Command.make(
     ),
 ).pipe(Command.withDescription("Do one of the things this Run offers, if it still offers it"));
 
-/** Said to a human who reached for `--workspace` as though it moved the Run. */
 const RESUME_WORKSPACE =
   "--workspace only chose where this command looked; it does not move a Run. The Run resumes in its own checkout.";
 
@@ -1611,12 +1519,6 @@ const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =
   }),
 ).pipe(Command.withDescription("Pick a Run up again on the modules as they are now"));
 
-/**
- * Every `run intent` mutation goes through here: read the Intent, apply one pure
- * `amend`, write it back. The version the caller is told is the one on disk, so a
- * change that turned out to be a no-op reports the version that still stands rather
- * than one nobody wrote.
- */
 function intentChange(
   operation: string,
   runId: string,
@@ -1624,7 +1526,6 @@ function intentChange(
   change: (intent: Intent) => Change | Failure,
   options: {
     readonly propagate?: boolean;
-    /** What a hosted Run does instead, where it keeps this outside an Intent. */
     readonly verification?: {
       readonly name: string;
       readonly command: Omit<import("../verify-spec").VerifySpec, "name"> | null;
@@ -1841,11 +1742,6 @@ const intentAuthority = Command.make(
     ),
 ).pipe(Command.withDescription("Grant or withdraw what Collie may do to a Run without asking"));
 
-/**
- * The one amendment that is not a `k=v` word: a check Collie runs itself, bound argument
- * for argument. The wrapper is part of the check — `bun test` and `bun test --bail` are
- * two different ones.
- */
 const intentVerification = Command.make(
   "verification",
   {
@@ -1933,7 +1829,6 @@ const intentRemember = Command.make(
   ),
 );
 
-/** The Session's own defaults file, which is what every Run it starts begins with. */
 const defaultsFile = Effect.fn("run.defaultsFile")(function* (env: PluginEnv) {
   return yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env.cwd)));
 });
@@ -1985,7 +1880,6 @@ const defaultsAdd = Command.make(
       if (level === null) return err("invalid_input", `--severity is block or warn.`);
       const parsed = parseConstraint(text, level);
       if ("error" in parsed) return err("invalid_input", parsed.error);
-      // Filed as what it is: a default, not something a human typed for this Run.
       const constraint = { ...parsed, source: "workspace-default" as const, since: 1 };
       return {
         ...defaults,

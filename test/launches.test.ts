@@ -1,6 +1,3 @@
-// A Run's agents, read back from the launch records its agents layer wrote, and shown in
-// its detail and in `collie run show`.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Option, Stream } from "effect";
@@ -44,7 +41,6 @@ const twoAgents = (runId: string) => [
     model: "gpt-5",
   }),
   launched(runId, { model: "opus", effort: "xhigh" }),
-  // Reused the reviewer, and recorded before effort and model were.
   launched(runId, { operation: "re-review", agent: `${runId}-review-r1`, reused: true }),
 ];
 
@@ -107,7 +103,7 @@ test("a Fallback's launch says what it fell back from and why, and an earlier on
           effort: null,
           from: { harness: "claude", model: "opus", effort: null },
           why: "session 100%, resets 15:45",
-          at: 1791467100000, // 2026-10-08T13:45Z
+          at: 1791467100000,
         }),
         launched("r1", {}),
       ]);
@@ -144,7 +140,6 @@ test(
           ),
         ).toEqual(["review", "build", "re-review"]);
 
-        // Chat's read of the Run says the same.
         const facts = yield* runFacts(env, (yield* findRun(env, run.id))!).pipe(
           Effect.provide(recordsReadLayer(world.state)),
         );

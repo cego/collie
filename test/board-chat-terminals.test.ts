@@ -1,6 +1,3 @@
-// The board and native chat as core terminals a host keeps on its Machine: started once when the host starts, and once more under the same name each
-// time one ends. herdr is never asked for a tab, pane or popup for either.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
@@ -48,7 +45,6 @@ test(
           for (const name of ["collie-board", "collie-chat"])
             expect(runsOf(started, name)[0]?.params).toMatchObject({ name, no_parent: true });
 
-          // A preference changed while chat runs is its next start, never a swap.
           yield* writeConfigValue(world.config, "chat_harness", "pi");
           yield* core.exit("collie-board", 0);
           const restarted = yield* until(
@@ -78,7 +74,6 @@ test(
       "collie-chat-backoff-",
       (world, core) =>
         Effect.gen(function* () {
-          // As on a Machine whose core was started where the harness is not on its PATH.
           core.startable("claude", false);
           yield* connect(world.state, {
             hostEnv: { HC_SOCKET: core.socketPath, HERDR_SOCKET_PATH: `${world.home}/herdr.sock` },
@@ -88,12 +83,9 @@ test(
             (calls) => runsOf(calls, "collie-chat").length > 0,
           );
           yield* Effect.sleep("3 seconds");
-          // Each failure makes core say a terminal was removed; retried on that, it is
-          // dozens of starts a second, and the host answers nothing else.
           const failed = runsOf(yield* logged(core), "collie-chat").length;
           expect(failed).toBeLessThanOrEqual(3);
 
-          // Once core can start it, the next try starts it, and a started chat is left be.
           core.startable("claude", true);
           yield* until(
             () => logged(core),
@@ -114,7 +106,6 @@ test(
       "collie-bare-core-",
       (world, core) =>
         Effect.gen(function* () {
-          // As a core another Machine's SSH dial started, with no login shell's PATH.
           core.barePath();
           yield* connect(world.state, {
             hostEnv: { HC_SOCKET: core.socketPath, HERDR_SOCKET_PATH: `${world.home}/herdr.sock` },
@@ -125,7 +116,6 @@ test(
               runsOf(calls, "collie-board").length > 0 && runsOf(calls, "collie-chat").length > 0,
           );
           yield* Effect.sleep("2 seconds");
-          // Each was started at its first try: neither was refused and tried again.
           const calls = yield* logged(core);
           expect(runsOf(calls, "collie-board")).toHaveLength(1);
           expect(runsOf(calls, "collie-chat")).toHaveLength(1);

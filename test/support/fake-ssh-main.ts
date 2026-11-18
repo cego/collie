@@ -1,8 +1,3 @@
-// A fake `ssh`, run by the shim `writeFakeSsh` writes. It models what Collie relies on:
-// a master that `ControlPersist` detaches, ssh's `-O` control commands against it, a
-// session that rides it, and OpenSSH's fallback to a login of its own where the socket has
-// gone. Every call is logged with its mode: `master`, `mux <verb>`, `ride` or `login`.
-
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
@@ -51,20 +46,17 @@ const main = Effect.gen(function* () {
     );
   const log = yield* Config.String("FAKE_SSH_LOG").pipe(Config.withDefault("/dev/null"));
   const dir = yield* Config.String("FAKE_SSH_DIR").pipe(Config.withDefault("/tmp"));
-  /** The far Machine's environment, which a session there starts with. */
   const far = yield* Config.String("FAKE_SSH_ENV").pipe(
     Config.withDefault("{}"),
     Effect.flatMap(Schema.decodeEffect(FarEnvironment)),
   );
   const said = (line: string) => fs.writeFileString(log, `${line}\n`, { flag: "a" });
-  /** Where a far `127.0.0.1:<port>` really is, as the test maps it; else that port itself. */
   const farPort = (port: number) =>
     fs.readFileString(`${dir}/ports.json`).pipe(
       Effect.flatMap(Schema.decodeEffect(PortMap)),
       Effect.map((ports) => ports[String(port)] ?? port),
       Effect.orElseSucceed(() => port),
     );
-  /** One request to a master over its control path, and its answer: null where none answers. */
   const ask = (path: string, request: Request) =>
     Effect.gen(function* () {
       if (!(yield* fs.exists(path))) return null;
@@ -82,7 +74,6 @@ const main = Effect.gen(function* () {
         });
       });
     });
-  /** A master holding `path`, until `-O exit`, a drop, SIGTERM, or its path is removed. */
   const master = (path: string) =>
     Effect.gen(function* () {
       const forwards = new Map<string, Server>();
@@ -138,7 +129,6 @@ const main = Effect.gen(function* () {
                 return reply("ok");
               }
               if (asked.op === "exit" || asked.op === "drop") {
-                // Gone before it answers, so the asker may bind the path at once.
                 yield* unlink;
                 conn.end("ok\n", finish);
                 return;
@@ -197,7 +187,6 @@ const main = Effect.gen(function* () {
     }
     process.stderr.write(`Authenticated to ${target}\n`);
     if (options.get("ControlPersist") !== "yes") return yield* master(path!);
-    // As ssh does with ControlPersist: the master goes to the background, and this exits.
     const child = yield* spawner.spawn(
       ChildProcess.make(
         process.execPath,
@@ -230,8 +219,6 @@ const main = Effect.gen(function* () {
   }
   if (verb !== undefined) {
     yield* said(`mux ${verb}${spec === undefined ? "" : ` ${spec}`} ${target}`);
-    // OpenSSH includes configured forwards in both requests, even though -S already
-    // identifies the master. An unrelated remote forward can fail either operation.
     if (
       (verb === "forward" || verb === "cancel") &&
       config !== "/dev/null" &&

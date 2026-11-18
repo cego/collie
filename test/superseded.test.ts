@@ -1,7 +1,3 @@
-// A question a human's message set aside is not a Decision on any surface, refuses a
-// stale answer, and stays set aside across a restart, with the Workflow still waiting
-// on it (ADR-draft-a-humans-message-supersedes-a-runs-open-question).
-
 import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -72,7 +68,6 @@ const readsCounted = (reads: Array<string>) =>
     }),
   );
 
-/** One host over the state directory; a second call is that host restarted. */
 const hosted = <A, E>(
   run: Effect.Effect<A, E, Registry | Store | HostServices | PlatformServices | Scope.Scope>,
   reads: Array<string> = [],

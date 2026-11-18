@@ -137,7 +137,6 @@ export const piEvents = (thread: string) => {
   const step: (record: PiRecord) => ReadonlyArray<AguiEvent> = (record) => {
     switch (record.type) {
       case "agent_start":
-        // Pi may start another low-level run while recovering; it is still this message.
         return [];
       case "message_start":
         if (record.message.role === "assistant") message++;
@@ -234,7 +233,6 @@ export const piEvents = (thread: string) => {
     }
   };
   return {
-    /** A turn of one of Pi's own commands has Pi's notices as its reply. */
     begin: (isCommand = false) => {
       turn++;
       command = isCommand;
@@ -251,7 +249,6 @@ export const piEvents = (thread: string) => {
     },
     step,
     usage: () => ({ ...usage }),
-    /** What Pi noticed outside its commands since last asked, once. */
     reported: () => {
       const said = reported;
       reported = [];

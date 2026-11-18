@@ -1,13 +1,3 @@
-// Where a Run works, settled by the host before the Run exists.
-//
-// Two things a launch places, and never one as the other: the Task, whose workspace every
-// Run of it lives in, and the checkout, which a workflow that changes the repository
-// declares and the host cuts. A chained build is the same Task in the same workspace, on a
-// worktree of its own; a workspace of its own is only ever something a Run asked for.
-//
-// The host here is the real registry, engine and agents over a stand-in herdr, and the
-// repository is a real git one, so the worktree is one git actually made.
-
 import { Herdr, HerdrError } from "../src/herdr";
 import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
@@ -74,7 +64,6 @@ beforeEach(() =>
       rig = yield* Rig.make();
       helleUrl = HELLE_URL;
       coreGone = false;
-      // On the wall's clock: its agents' turns outlive this setup's fast-forward.
       yield* rig.startCore();
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
@@ -86,7 +75,6 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-/** A repository with one commit on master, which is all a worktree needs to be cut from. */
 const gitRepo = Effect.fn("test.gitRepo")(function* (at: string) {
   const git = (...args: string[]) =>
     exec(["git", ...args], {
@@ -112,7 +100,6 @@ const gitRepo = Effect.fn("test.gitRepo")(function* (at: string) {
 });
 
 let helleUrl = HELLE_URL;
-/** Whether core stops answering, as one that went away does. */
 let coreGone = false;
 const env = () => {
   const given = {
@@ -123,7 +110,6 @@ const env = () => {
   };
   return rig.pluginEnv(coreGone ? { ...given, HC_SOCKET: `${rig.root}/gone.sock` } : given);
 };
-/** The state directory the host, its Tasks and its agents all share, as an install's do. */
 const dir = () => env().stateDir;
 
 const hostOf: () => AgentHost = () => ({
@@ -138,7 +124,6 @@ const hostOf: () => AgentHost = () => ({
   collectMs: 60_000,
 });
 
-/** Every wait in here is on a clock that moves many times faster than the wall's. */
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(fastForward(effect));
 
@@ -183,7 +168,6 @@ const hosted = <A, E>(
 
 const worktreeOf = (branch: string) => `${rig.root}/.collie/worktrees/project/${LOGIN}/${branch}`;
 
-/** An open Task in the project, as a start inside it continues it. */
 const aTask = Effect.gen(function* () {
   const task: TaskRecord = {
     id: "task-1",
@@ -196,7 +180,6 @@ const aTask = Effect.gen(function* () {
   return task;
 });
 
-/** A command the operator approved for every Run, so a build has something to prove. */
 const approvedByOperator = FileSystem.FileSystem.pipe(
   Effect.flatMap((fs) =>
     fs.writeFileString(
@@ -207,7 +190,6 @@ const approvedByOperator = FileSystem.FileSystem.pipe(
   Effect.orDie,
 );
 
-/** The directory each agent was started in on core, in order. */
 const launchedIn = (calls: ReadonlyArray<Call>) =>
   Arr.map(
     Arr.filter(calls, (call) => call.cmd === "terminal.run"),
@@ -342,7 +324,6 @@ const asPlacing = flow(
   Result.getOrThrow,
 );
 
-/** A claim as a dying host left it: the row, what to place it from, and what it had asked for. */
 const claimCut = (
   receipt: { readonly workspace?: string | null; readonly checkout?: null } = {},
   workflow = "builds",
@@ -398,8 +379,6 @@ test(
 
         const worktree = worktreeOf("add-a-picker");
         expect(views.parent?.status.status).toBe("complete");
-        // Both Runs are the Task's; the parent works where it was started, the child on the
-        // branch it builds, and neither was given a workspace of its own.
         expect(views.parent).toMatchObject({
           task: "task-1",
           cwd: rig.projectDir,
@@ -411,12 +390,10 @@ test(
           branch: `${LOGIN}/add-a-picker`,
           workspace: null,
         });
-        // Nothing the parent was given reached the child as a placement.
         expect(views.child?.options).toEqual({ task: "add-a-picker" });
         expect(yield* FileSystem.FileSystem.pipe(Effect.flatMap((fs) => fs.exists(worktree)))).toBe(
           true,
         );
-        // Each agent started on its own Run's checkout.
         expect(launchedIn(yield* rig.calls())).toEqual([rig.projectDir, worktree]);
         expect(yield* listTasks).toHaveLength(1);
       }).pipe(Effect.provide(recordsAt(dir()))),
@@ -532,7 +509,6 @@ test(
 
         expect(refusedWith(outcome.refused)).toContain(`invalid_input:`);
         expect(refusedWith(outcome.refused)).toContain(container);
-        // Nothing exists to clean up: no Run, no Task, no worktree, no workspace, no agent.
         expect(outcome.rows).toEqual([]);
         expect(yield* fs.exists(`${rig.root}/.collie/worktrees`)).toBe(false);
         expect(yield* listTasks.pipe(Effect.provide(recordsAt(dir())))).toEqual([]);
@@ -720,7 +696,6 @@ test(
             });
             if (started._tag === "Failure") return yield* Effect.die(started.failure);
             const done = yield* finished(started.success.runId);
-            // Nobody named the branch; the one the host inferred is what the offer sees.
             const offers = yield* registry.offers(started.success.runId);
             return { ...done!, offers: Arr.map(offers, (one) => one.id) };
           }),
@@ -827,7 +802,6 @@ test(
   120_000,
 );
 
-/** A plan whose tickets name checkouts under the project, the web one waiting on the api. */
 const twoRepoPlan = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const plan = `${rig.root}/plan`;
@@ -869,7 +843,6 @@ test(
             const started = yield* start(implement!, { request: "r1", text: { plan } });
             if (started._tag === "Failure") return yield* Effect.die(started.failure);
             const runId = started.success.runId;
-            // Until the api's Run is placed and held to what it approved, not merely admitted.
             const [api, approved] = yield* until(
               () =>
                 Effect.all([
@@ -892,16 +865,13 @@ test(
         expect(seen.api?.options).toMatchObject({ repo: "api" });
         expect(seen.api?.worktree?.path).toStartWith(`${rig.root}/.collie/worktrees/api/`);
         expect(seen.api?.branch).toBe(`${LOGIN}/${seen.runId}`);
-        // Held to what its own repository approved, not the project it was started from.
         expect(Arr.map(seen.approved, (spec) => spec.name)).toContain("api-unit");
-        // The web waits on the api, so nothing has started it yet.
         expect(seen.web).toBeNull();
       }),
     ),
   120_000,
 );
 
-/** One repository's plan in two Changes, the schema one waiting on the default one. */
 const twoChangePlan = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const plan = `${rig.root}/plan`;
@@ -936,13 +906,11 @@ test(
               (view) => view?.branch != null,
             );
             const waiting = yield* registry.view(`${runId}.implement-.--schema`);
-            // The first Change's work, pushed, and a later commit of it that is not.
             const at = first!.worktree!.path;
             yield* committing(at, "commit", "--quiet", "--allow-empty", "-m", "the api");
             yield* committing(at, "push", "--quiet", "origin", first!.branch!);
             const pushed = yield* head(at);
             yield* committing(at, "commit", "--quiet", "--allow-empty", "-m", "not pushed");
-            // Started as the fan-out starts a stacked Change once the first has ended.
             const stacking = yield* start(implement!, {
               request: "r2",
               // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
@@ -965,7 +933,6 @@ test(
         );
         expect(seen.first?.branch).toBe(`${LOGIN}/${seen.runId}`);
         expect(seen.first?.options).toMatchObject({ repo: "." });
-        // The stacked Change waits on the first, so nothing has started it yet.
         expect(seen.waiting).toBeNull();
         expect(seen.stacked?.branch).toBe(`${LOGIN}/${seen.runId}--schema`);
         expect(yield* head(seen.stacked!.worktree!.path)).toBe(seen.pushed);
@@ -1204,13 +1171,11 @@ for (const { following, retry, name } of [
   );
 }
 
-/** A repository's checks file committed, since a start reads it where its checkout starts. */
 const checksCommitted = (at: string) =>
   committing(at, "add", ".collie/verify.json").pipe(
     Effect.andThen(committing(at, "commit", "--quiet", "-m", "checks")),
   );
 
-/** What a Run was frozen with at admission. */
 const frozen = (runId: string) =>
   approvedIn(evidenceDir(dir(), runId)).pipe(Effect.provide(recordsAt(dir())));
 
@@ -1342,7 +1307,6 @@ test(
             const registry = yield* Registry;
             const [proved] = yield* loaded(registry, [`${fixtures}/proved.workflow.ts`]);
             const input = { note: "x" };
-            // The host died between admitting the Run and freezing what proves it.
             yield* (yield* Store).admit({
               request: "r1",
               run: "run-cut",
@@ -1439,7 +1403,6 @@ test(
             const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
             if (first._tag === "Failure") return yield* Effect.die(first.failure);
             const failed = yield* finished(first.success.runId);
-            // Where the failed Run left its checkout: somewhere other than the default branch.
             yield* exec(["git", "checkout", "--quiet", "-b", "renovate/left", "master"], {
               cwd: roaming,
             });
@@ -1454,7 +1417,6 @@ test(
         expect(views.retried?.worktree?.path).toBe(roaming);
         const head = yield* exec(["git", "symbolic-ref", "-q", "HEAD"], { cwd: roaming });
         expect(head.exitCode).not.toBe(0);
-        // The branch the failed Run left is still there, with whatever it held.
         const left = yield* exec(["git", "rev-parse", "--verify", "renovate/left"], {
           cwd: rig.projectDir,
         });
@@ -1478,7 +1440,6 @@ test(
         yield* git(rig.root, "init", "--quiet", "--bare", "-b", "master", origin);
         yield* git(rig.projectDir, "remote", "add", "origin", origin);
         yield* git(rig.projectDir, "push", "--quiet", "origin", "master");
-        // origin moves on after this checkout last fetched.
         yield* git(rig.root, "clone", "--quiet", origin, elsewhere);
         yield* git(elsewhere, "commit", "--quiet", "--allow-empty", "-m", "later");
         yield* git(elsewhere, "push", "--quiet", "origin", "master");
@@ -1537,7 +1498,6 @@ test(
             const whileWaiting = refusedWith(
               yield* start(roams!, { request: "r2", text: { work: "next" } }),
             );
-            // A stopped Run has not ended either: a resume picks it up again in its checkout.
             const runId = waiting.success.runId;
             yield* registry.control({ runId, control: "stop", set: true });
             const whileStopped = refusedWith(
@@ -1560,7 +1520,6 @@ test(
         expect(refusals.whileStopped).toContain("has not ended");
         expect(refusals.whileWaiting).not.toContain("uncommitted changes");
         expect(refusals.whileStopped).not.toContain("uncommitted changes");
-        // Nothing was closed under it: it answered and finished in its checkout.
         expect(refusals.ended?.status).toEqual({ status: "complete", value: roaming });
         expect(yield* fs.readFileString(`${roaming}/left.txt`)).toBe("live work");
       }),
@@ -1588,7 +1547,6 @@ const withOrigin = Effect.gen(function* () {
   return origin;
 });
 
-/** A roaming start that fails at once, leaving its checkout to the next one. */
 const endedIn = (roams: Generation, request: string) =>
   Effect.gen(function* () {
     const started = yield* start(roams, { request, text: { work: "fail" } });
@@ -1948,7 +1906,6 @@ test(
             if (first._tag === "Failure") return yield* Effect.die(first.failure);
             yield* finished(first.success.runId);
 
-            // A Run that declares no checkout, started inside this one, records none.
             const borrower = yield* start(waits!, {
               request: "r2",
               project: roaming,
@@ -1970,7 +1927,6 @@ test(
             });
             yield* finished(borrower.success.runId);
 
-            // A start that has taken the checkout over and not finished being placed.
             const payload = { runId: "run-placing", input: { work: "next" } };
             const placed = { cwd: roaming, branch: null, workspace: null };
             yield* store.admit({
@@ -2082,7 +2038,6 @@ test(
             const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
             if (first._tag === "Failure") return yield* Effect.die(first.failure);
             yield* finished(first.success.runId);
-            // The default branch now tracks a file the checkout holds, ignored, as its own.
             yield* fs.writeFileString(`${rig.projectDir}/.git/info/exclude`, "generated.txt\n");
             yield* fs.writeFileString(`${rig.projectDir}/generated.txt`, "tracked");
             yield* git("add", "-f", "generated.txt");
@@ -2164,7 +2119,6 @@ test(
             const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
             if (first._tag === "Failure") return yield* Effect.die(first.failure);
             yield* finished(first.success.runId);
-            // Started in the repository, and moved into the checkout since.
             at = yield* rig.addAgent("claude", rig.projectDir);
             (yield* rig.startCore()).cd("claude", roaming);
             return refusedWith(yield* start(roams!, { request: "r2", text: { work: "next" } }));
@@ -2225,7 +2179,6 @@ test(
     runEffect(
       Effect.gen(function* () {
         const task = yield* aTask;
-        // Nothing the first time, so the stop lands while the work is out.
         yield* rig.queueOutputs([null, { verdict: "clean" }]);
         const view = yield* hosted(
           Effect.gen(function* () {
@@ -2382,13 +2335,11 @@ test(
           }),
         );
 
-        // Inside a Task, the worktree it asked for is its own, and the Task stays its.
         expect(views.own).toMatchObject({
           task: "task-1",
           branch: `${LOGIN}/add-a-picker`,
           cwd: worktreeOf("add-a-picker"),
         });
-        // A fresh Task is rooted at the worktree its Run was given.
         const fresh = yield* readTask(views.fresh?.task ?? "");
         expect(views.fresh?.cwd).toBe(worktreeOf("add-a-menu"));
         expect(fresh).toMatchObject({ label: "Project | Menu", cwd: views.fresh?.cwd });
@@ -2433,8 +2384,6 @@ test(
   120_000,
 );
 
-// The shipped chains, as a planner or an architect hands their work to the build.
-
 const REPORT = {
   verdict: "clean",
   findings: [],
@@ -2454,7 +2403,6 @@ const GRILLED = {
 const SPEC = { verdict: "clean", findings: [], spec: "plan/SPEC.md" };
 const TICKETS = { verdict: "clean", findings: [], issues_dir: "plan/issues", tickets: 1 };
 
-/** A shipped workflow started in a Task, answered "Implement now" at its menu. */
 const chainedFrom = (options: {
   readonly entry: string;
   readonly text: Readonly<Record<string, string>>;
@@ -2482,7 +2430,6 @@ const chainedFrom = (options: {
         .answer({ runId, decision: options.decision, value: "Implement now", request: "a1" })
         .pipe(Effect.orDie);
       const child = `${runId}.implement`;
-      // The child's first agent, or the parent's end where no child could be admitted.
       const settled = yield* until(
         () =>
           Effect.all({
@@ -2524,7 +2471,6 @@ test(
       Effect.gen(function* () {
         yield* aTask;
         yield* approvedByOperator;
-        // The reviewed branch, pushed where a build can fetch the reviewed work from.
         const origin = `${rig.root}/origin.git`;
         for (const args of [
           ["init", "--quiet", "--bare", origin],
@@ -2597,7 +2543,6 @@ for (const chain of CHAINS) {
         Effect.gen(function* () {
           yield* aTask;
           yield* approvedByOperator;
-          // A forge that finds no merge request from the branch, so the build may push.
           const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (made) =>
             made.restore(),
           );
@@ -2697,7 +2642,6 @@ test(
                 },
               ],
               [hello!, { request: "r3", text: { name: "you" }, taskLabel: "Project | Hello" }],
-              // Typed in the Task's own checkout, but about no branch: not the Task's.
               [
                 hello!,
                 {
@@ -2727,7 +2671,6 @@ test(
   120_000,
 );
 
-/** The incident's Task: rooted at the main checkout, its child building on a worktree. */
 const builtByAChild = (
   registry: typeof Registry.Service,
   chain: Generation,
@@ -2811,11 +2754,6 @@ test(
   120_000,
 );
 
-/**
- * An open Task's planner, its build on `add-a-picker` with MR_URL, then a build started by
- * hand from the planner's own plan directory, as a human does where "Implement now" cannot
- * be used.
- */
 const builtFromItsPlan = (mrState: MrState | null) =>
   Effect.gen(function* () {
     const task = yield* aTask;
@@ -2915,7 +2853,6 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        // The older Task's Run comes second, so the Task's own age decides nothing.
         for (const [id, created] of [
           ["task-old", "2026-09-01T00:00:00.000Z"],
           ["task-new", "2026-09-20T00:00:00.000Z"],
@@ -3106,7 +3043,6 @@ test(
             const gone = ids[0]!;
             const kept = ids[1]!;
             const execution = (yield* store.run(gone))!.execution;
-            // A claim the engine never accepted, which recovery would hand over.
             yield* store.admit({
               request: "r-claim",
               run: "run-claimed",
@@ -3157,7 +3093,6 @@ test(
 
         expect(seen.forgotten).toHaveLength(1);
         expect(seen.view).toBeNull();
-        // What every listing reads — the board, History, `run list` — no longer has it.
         expect(seen.listed).not.toContain(seen.forgotten[0]);
         expect(seen.listed).toContain(seen.other!.runId);
         expect(seen.other?.status.status).toBe("complete");
@@ -3170,11 +3105,10 @@ test(
   120_000,
 );
 
-/** An engine that takes nothing handed to it, the way the one that wedged did. */
 const stalled = Layer.effect(WorkflowEngine.WorkflowEngine)(
   Effect.map(WorkflowEngine.WorkflowEngine, (engine) => ({
     ...engine,
-    // SAFETY: the same arguments reach the real engine; only a discarded send stalls.
+    // WARNING: the same arguments reach the real engine; only a discarded send stalls.
     execute: ((workflow, options) =>
       options.discard ? Effect.never : engine.execute(workflow, options)) as typeof engine.execute,
   })),
@@ -3222,7 +3156,6 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        // A Run a host admitted and died before handing over.
         yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -3275,7 +3208,6 @@ test(
   120_000,
 );
 
-/** A merge request's branch, at master's one commit: the head every checkout here is cut at. */
 const REVIEWED = "branch:master...feature";
 
 const git = (...args: string[]) =>
@@ -3542,7 +3474,6 @@ test("a Connection deadline provided around the host is the one its start reads 
     }).pipe(Effect.scoped),
   ));
 
-/** This Machine's user settings. */
 const configured = (settings: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -3598,7 +3529,6 @@ test(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean" }]);
         const seen = new Map<string, number>();
-        /** Cleanup's pass over the Tasks, with the first one Finished on the board. */
         const cleanup = (first: string) =>
           Effect.gen(function* () {
             return yield* sweep(
@@ -3613,7 +3543,6 @@ test(
               "host",
             );
           });
-        /** The Task a start ends in, on a host of its own over the same state. */
         const taskOf = (workflow: string, request: string, text: Record<string, string>) =>
           hosted(
             Effect.gen(function* () {

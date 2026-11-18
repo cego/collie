@@ -1,6 +1,3 @@
-// The Flock's settings, as Desktop keeps them: each key is decided by its latest edit,
-// made in Desktop or on any Machine, and every Machine is given what it lacks.
-
 import { pipe } from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -21,7 +18,6 @@ import type { DesktopSettings, DesktopSettingsChange, MachineRow } from "./flock
 import { whenOf } from "./flow";
 import { percent } from "./scale";
 
-/** Where an edit made in Desktop's own Settings is said to come from. */
 export const DESKTOP = "Desktop";
 
 export {
@@ -37,7 +33,6 @@ const valueOf = (value: Schema.Json | null) =>
   Option.getOrNull(Schema.decodeUnknownOption(SettingValue)(value));
 const GIVEN_ONLY = "gitlab_host";
 
-/** The Flock's Standing direction and its last edit, or undefined while it is empty. */
 export const standingDirectionOf = (flock: FlockSettings) => {
   const held = flock.settings.standing_direction;
   return held !== undefined && isString(held.value) && held.value !== ""
@@ -45,7 +40,6 @@ export const standingDirectionOf = (flock: FlockSettings) => {
     : undefined;
 };
 
-/** An edit made in Desktop's Settings, checked as the TUI checks one, at `now`. */
 export const editSetting = (flock: FlockSettings, key: string, typed: string, now: string) => {
   const parsed = parseSetting(key, typed);
   if ("refused" in parsed) return parsed;
@@ -72,14 +66,11 @@ export const editSettings = (
   return edited;
 };
 
-/** Desktop's own settings, which no Machine has. */
 interface DesktopSetting extends Setting {
   readonly read: (desktop: DesktopSettings) => string;
-  /** What setting it to `typed` changes; `typed` is never empty. */
   readonly change: (typed: string) => DesktopSettingsChange;
 }
 
-/** The harnesses the Flock chat has a driver for. */
 export const CHAT_HARNESSES = ["claude", "pi"];
 export const DEFAULT_CHAT_HARNESS = "claude";
 
@@ -110,7 +101,6 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
   },
 ];
 
-/** What Settings says of a setting while it is unset, where its default says nothing. */
 const UNSET_SAID = new Map([
   ["zoom", "Default: 100%, the size of your other apps"],
   ["machine_rule", "Unset: no rule"],
@@ -119,7 +109,6 @@ const UNSET_SAID = new Map([
   ["slack.notification_channel", "Unset: toasts only"],
 ]);
 
-/** The canvas's sub-groups within a group, by key; any other key has none. */
 const SUBS: ReadonlyArray<readonly [string, (key: string) => boolean]> = [
   ["Who does the work", (key) => ["harness", "model", "effort", "fallbacks"].includes(key)],
   ["What agents may do", (key) => ["permissions", "trust"].includes(key)],
@@ -140,43 +129,33 @@ const SUBS: ReadonlyArray<readonly [string, (key: string) => boolean]> = [
 ];
 const subOf = (key: string) =>
   Option.getOrUndefined(Arr.findFirst(SUBS, ([, has]) => has(key)))?.[0] ?? "";
-/** Where a sub-group falls within its group: none first, then the canvas's order. */
 const subRank = (sub: string) =>
   Option.getOrElse(
     Arr.findFirstIndex(SUBS, ([title]) => title === sub),
     () => -1,
   );
 
-/** What setting Desktop's own `key` to `typed` changes; empty sets it back to its default. */
 export const desktopChange = (key: string, typed: string) => {
   const setting = Option.getOrUndefined(Arr.findFirst(DESKTOP_SETTINGS, (one) => one.key === key))!;
   return setting.change(typed || setting.fallback);
 };
 
-/** One setting as Settings shows it, its value and default in its unit. */
 export interface SettingRow {
   readonly key: string;
   readonly group: SettingGroup;
-  /** The sub-group it is shown under within its group, empty for none. */
   readonly sub: string;
   readonly label: string;
   readonly description: string;
   readonly kind: SettingKind;
   readonly choices: ReadonlyArray<string>;
-  /** What it is set to, empty where it is unset. */
   readonly value: string;
-  /** What a Run uses while it is unset. */
   readonly fallback: string;
   readonly unit: SettingUnit | undefined;
-  /** The default as Settings says it, in the row's unit. */
   readonly defaultSaid: string;
   readonly set: boolean;
-  /** Whose edit it is and when, or the Machine it was taken from over a different value. */
   readonly edit: string | null;
-  /** Every Machine's, or this computer's alone. */
   readonly shared: boolean;
   readonly multiline: boolean;
-  /** What its value brings about, stated rather than confirmed. */
   readonly hint: string | null;
 }
 
@@ -254,11 +233,6 @@ const rowOf = ({ key, group, label, description, kind, choices, unit }: Setting)
   unit,
 });
 
-/**
- * Every setting of Collie's and Desktop's own, under its group in order, but the GitLab
- * host, which Settings keeps beside its tokens. An edit is said at `now`, on the clock of
- * `timeZone`.
- */
 export const settingSections = (
   flock: FlockSettings,
   desktop: DesktopSettings,
@@ -318,10 +292,6 @@ const reachedOf = (machines: ReadonlyArray<Reached>) => {
   };
 };
 
-/**
- * How far an edit of the Flock's settings reached, from each Machine's latest sync, or why
- * it is not sent: one made while the Flock's settings cannot be read would be made blind.
- */
 export const flockReach = (readable: boolean, machines: ReadonlyArray<Reached>) => {
   if (!readable) return { refused: "Not set: the Flock's settings could not be read" };
   const { behind, all, of } = reachedOf(machines);

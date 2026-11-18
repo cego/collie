@@ -20,7 +20,6 @@ const MARK = {
   failed: "✗",
 } satisfies Record<StepStatus, string>;
 
-/** `KEY=value` lines; anything else is ignored. */
 const secretLines = (text: string) =>
   Rec.fromEntries(
     Arr.flatMap(Str.split(text, "\n"), (line) => {
@@ -29,7 +28,6 @@ const secretLines = (text: string) =>
     }),
   );
 
-/** One event as a terminal shows it. */
 export function eventText(event: OnboardEvent) {
   if (event.event === "start") return `→ ${event.title}`;
   if (event.event === "human") return `  … ${event.detail}\n    open: ${event.url}`;

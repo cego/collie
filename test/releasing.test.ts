@@ -1,6 +1,3 @@
-// What a Release Run has the host prove: its checkout at the merge request's head, its tag
-// on origin and the tag's pipeline, read from git and the forge rather than an Output.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -22,7 +19,6 @@ const git = (cwd: string, ...args: string[]) =>
     return Str.trim(ran.stdout);
   });
 
-/** git for real; any other command is the forge's, answered by `forge`. */
 const runner: (forge?: Runner<never>) => Runner<never> =
   (forge = () => Effect.succeed({ code: 1, stdout: "" })) =>
   (cmd, args, cwd) =>
@@ -34,7 +30,6 @@ const runner: (forge?: Runner<never>) => Runner<never> =
         }))
       : forge(cmd, args, cwd);
 
-/** A bare origin and a checkout of it with one commit pushed. */
 const repository = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-releasing-" });
@@ -58,7 +53,6 @@ const repository = Effect.gen(function* () {
       return yield* git(cwd, "rev-parse", "HEAD");
     });
   const first = yield* commit("one.ts");
-  /** Tags HEAD, annotated, and pushes the tag; gives back the commit it tags. */
   const tag = (name: string, force = false) =>
     Effect.gen(function* () {
       yield* git(cwd, "tag", ...(force ? ["-f"] : []), "-a", name, "-m", name);
@@ -101,15 +95,10 @@ test("a plain push past the journaled head is not refused; the checkout is taken
   runEffect(
     Effect.gen(function* () {
       const { root, cwd, commit, first } = yield* repository;
-      // The Run parked, journaled `first`. While parked a plain push moved the branch two
-      // commits past it, descending from it, and the checkout already sits at the tip.
       const second = yield* commit("two.ts");
       const third = yield* commit("three.ts");
       expect(second).not.toBe(first);
       expect(third).not.toBe(second);
-      // Replaying the journaled head, the old code refused as after a force push and the Run
-      // parked on the same stale head forever. Now it is answered `At` on what the checkout
-      // actually holds, so a resumed Run re-proves the real head.
       const moved = yield* fastForward({ runDir: `${root}/run`, cwd, head: first, run: runner() });
       expect(moved._tag).toBe("At");
       if (moved._tag === "At") {
@@ -123,9 +112,6 @@ test("a true force push (a head the checkout neither is at nor sits behind) is s
   runEffect(
     Effect.gen(function* () {
       const { fs, root, cwd, first } = yield* repository;
-      // Rewrite main in place so the checkout no longer carries the journaled `first`: this is
-      // the force push a plain push is told apart from. `first` is kept as a loose object so
-      // the journaled head still resolves, exactly as a rewritten remote branch leaves it.
       yield* git(cwd, "update-ref", "-d", "refs/heads/main");
       yield* git(cwd, "checkout", "-q", "--orphan", "main");
       yield* fs.writeFileString(`${cwd}/rewrite.ts`, "rewrite.ts");
@@ -140,7 +126,6 @@ test("a true force push (a head the checkout neither is at nor sits behind) is s
     }).pipe(Effect.scoped),
   ));
 
-/** GitLab answering `runs`, and git for real. */
 const onGitlab = (runs: ForgeModel["runs"], over: Partial<ForgeModel> = {}) => {
   const fake = fakeForge("gitlab", {
     installed: true,

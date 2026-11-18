@@ -1,8 +1,3 @@
-// A Codex agent's question, as its App Server carries it: never `blocked`, but an
-// `agentMessage` with `questions` on its thread. `fixtures/codex-question.json` is that
-// item as `thread/items/list` read it back from codex-cli 0.166.0, live; the stand-in in
-// `support/codex-server.ts` serves it on the agent's thread.
-
 import { Herdr } from "../src/herdr";
 import { isString } from "../src/schema";
 import * as Arr from "effect/Array";
@@ -120,7 +115,6 @@ const spend = (ms: number) =>
     yield* waitFor(Effect.map(Clock.currentTimeMillis, (now) => now >= until));
   });
 
-/** The text of every prompt typed into an agent, in the order typed. */
 const typed = (calls: ReadonlyArray<Call>) =>
   Arr.filterMap(calls, (call) =>
     call.cmd === "terminal.send" && isString(call.params?.text)
@@ -135,7 +129,6 @@ const typedCount = (about: string) =>
 
 const STEP = "Your task for this step";
 
-/** The recorded question, asked to standard: Blue recommended among three. */
 const standard = {
   ...question,
   item: {
@@ -149,7 +142,6 @@ const standard = {
   },
 };
 
-/** The agent's next question after a repair, still two options and no recommendation. */
 const stillShort = {
   ...question,
   item: {
@@ -215,7 +207,6 @@ test(
             const lastLines = Arr.map(typed(yield* rig.calls()), (one) =>
               Option.getOrElse(Arr.last(Str.split(one, "\n")), () => ""),
             );
-            // The answered turn ends without review.json, so a reminder may come before fix's prompt.
             const reminded = `OUTPUT_PATH: ${dir}/agents/r1/review.json`;
             expect(Arr.filter(lastLines, (line) => line !== reminded)).toEqual([
               expect.stringContaining("/review.prompt.md"),
@@ -411,7 +402,6 @@ test(
         yield* (yield* FileSystem.FileSystem)
           .writeFileString(config(), asJson(standIn))
           .pipe(Effect.orDie);
-        // Its turn ends when the test says, once the check has seen it working.
         yield* rig.queueOutputs([{ writes: [], output: null, then: "working" }]);
         const asked: Array<AskedQuestion> = [];
         const questions: Questions = {

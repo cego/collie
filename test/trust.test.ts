@@ -41,7 +41,6 @@ afterEach(() =>
   ),
 );
 
-/** A ~/.claude.json with the shape claude actually writes. */
 const claudeConfig = Effect.fn("test.claudeConfig")(function* (projects: ClaudeProjects) {
   const fs = yield* FileSystem.FileSystem;
   const path = join(rig.root, ".claude.json");
@@ -225,8 +224,6 @@ test("a config claude keeps rewriting is left alone rather than overwritten", ()
       const fs = yield* FileSystem.FileSystem;
       const path = yield* claudeConfig({});
       const before = yield* fs.readFileString(path);
-      // Every read of the config different bytes, which is what a claude writing between
-      // this grant's read and its rename looks like from in here.
       let n = 0;
       const rewriting = FileSystem.FileSystem.of({
         ...fs,

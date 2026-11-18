@@ -10,7 +10,6 @@ import {
   writeFileSync,
 } from "node:fs";
 
-/** The merge base this harness was written on: every tree's fixture is built by its code. */
 const BASE = "0abec91ba11987e78819847be58b332004e62bd3";
 
 const root = new URL("../../", import.meta.url).pathname;

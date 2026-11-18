@@ -1,7 +1,3 @@
-// The ledgers exist to answer "was this already sent" and "has this cost too much"
-// after a crash, so what is tested here is what they say when nobody came back: an
-// unsettled reservation, a second attempt at the same work, a failed model call.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -126,16 +122,11 @@ test("an entry written before incarnations still decodes, and is never a deliver
 test("an entry with no incarnation is not an answer either, so a later read can heal it", () =>
   runEffect(
     Effect.gen(function* () {
-      // herdr had not named a `terminal_id` when the agent started. Treating that as the
-      // final word would make one listing's gap an unsteerable Run for ever, so the entry
-      // is not deliverable and a later read is free to replace it with what herdr has now.
       const early = entry();
       delete early.incarnation;
       yield* registerAgent(scope, early);
       expect(deliverable((yield* everyRegistered)[0]!)).toBe(false);
 
-      // Registering the same agent again replaces it rather than adding a second row,
-      // which is what makes healing on read a write of one line and not a duplicate.
       yield* registerAgent(scope, entry());
       const healed = yield* everyRegistered;
       expect(healed).toHaveLength(1);
@@ -153,7 +144,6 @@ test("a second agent in the same role and pane is not the one that was registere
   expect(verifyIncarnation(entry(), [])).toEqual({ ok: false, reason: "agent_gone" });
 });
 
-/** A ledger file as a host of an older build left it. */
 const oldLedger = (incarnation: string, lines: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -220,7 +210,6 @@ test("the first host imports each ledger file once, still blocking on a line it 
       });
       yield* read.pipe(Effect.provide(recordsAt(stateDir)));
       expect(yield* fs.exists(file)).toBe(true);
-      // A second host finds the import made, and does not make it again.
       yield* read.pipe(Effect.provide(recordsAt(stateDir)));
     }),
   ));
@@ -305,7 +294,6 @@ test("the same work blocks a second delivery; the same words about other work do
   const inFlight = delivery({ state: "submitted" });
   expect(blocked([inFlight], inFlight.causal_key)?.id).toBe("d1");
 
-  // Same text, different work: a nudge and a correction can read identically.
   const elsewhere = delivery({
     id: "d2",
     cause: { kind: "nudge", ref: "build" },
@@ -313,7 +301,6 @@ test("the same work blocks a second delivery; the same words about other work do
   });
   expect(blocked([inFlight], elsewhere.causal_key)).toBeNull();
 
-  // Settled work stops blocking; unknown work keeps blocking until someone answers.
   expect(blocked([delivery({ state: "superseded" })], inFlight.causal_key)).toBeNull();
   expect(blocked([delivery({ state: "unknown" })], inFlight.causal_key)?.state).toBe("unknown");
 });
@@ -330,7 +317,6 @@ test("an explicit reconciliation works from automation and stops an unknown bloc
   expect(reconcile([delivery({ state: "submitted" })], "d1", "sent", "human:req-2", "t")).toEqual({
     error: 'delivery "d1" is submitted',
   });
-  // One sent that nothing showed was taken is a human's to account for too.
   expect(
     reconcile([delivery({ state: "submitted", note: "unobserved" })], "d1", "not-sent", "h", "t"),
   ).toMatchObject({ state: "superseded", note: "reconciled as not-sent by h" });
@@ -363,8 +349,6 @@ test("the call record counts every call, settles the abandoned, and refuses none
   const limits = { maxSeconds: 120, maxOutputBytes: 262_144 };
   const at = (minute: number) => `2026-09-09T10:${pipe_(String(minute), Str.padStart(2, "0"))}:00Z`;
 
-  // A hundred calls already made this hour, every one of them a failure. Usage is data:
-  // the record grows, and nothing in it is a reason to refuse the next call.
   const call: (id: string, when: string) => BudgetLine[] = (id, when) => [
     { kind: "reserve", id, run: "r1", at: when, max_seconds: 120, max_output_bytes: 1 },
     { kind: "settle", id, at: when, outcome: "failed", seconds: 1, bytes: 0 },
@@ -383,15 +367,12 @@ test("the call record counts every call, settles the abandoned, and refuses none
     },
   ]);
 
-  // A reservation nobody settled is counted as a failure, not forgotten — the record says
-  // how many calls were made, so it must not say fewer than were.
   const abandoned: BudgetLine[] = [
     { kind: "reserve", id: "gone", run: "r1", at: at(0), max_seconds: 120, max_output_bytes: 1 },
   ];
   const after = planReservation(abandoned, { id: "next", run: "r1", at: at(30) }, limits);
   expect(Arr.some(after.append, (l) => l.kind === "settle" && l.outcome === "failed")).toBe(true);
 
-  // A line from before spending caps were dropped still reads; its cap decides nothing.
   const old: BudgetLine = {
     kind: "reserve",
     id: "old",
@@ -428,7 +409,6 @@ test("with no socket there is no Herd, and nothing falls back to a directory", (
     Effect.gen(function* () {
       const failure = yield* herdKey(null, () => Effect.succeed(null)).pipe(Effect.flip);
       expect(failure._tag).toBe("HerdrUnreachable");
-      // The status server's answer is used when the environment does not carry one.
       expect(yield* herdKey(null, () => Effect.succeed("/tmp/from-status.sock"))).toBe(
         yield* herdKey("/tmp/from-status.sock", () => Effect.succeed(null)),
       );

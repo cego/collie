@@ -1,7 +1,3 @@
-// An agent's start, from `collie run start` or chat: nothing is inferred or routed, so it
-// names its checkout and every Input, and a gap is refused with what would fill it
-// (ADR-0033). The Launch flow is the human's front door and does not come through here.
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -20,11 +16,6 @@ import { RESERVED_INPUTS } from "./sdk";
 import { strategyMeaning } from "./strategies";
 import { repositoryName } from "./worktree";
 
-/**
- * What the host supplies at launch, split from what the author declared. A module may not
- * declare one of these names — `checkEntry` refuses that at load — so a value under one is
- * the host's option and never an input, and nothing of the host's reaches the payload.
- */
 export function hostOptions(given: Given) {
   return {
     input: {
@@ -43,41 +34,29 @@ export function hostOptions(given: Given) {
 
 const isOption = (name: string) => name in RESERVED_INPUTS;
 
-/** A host option is text; one that arrived as typed JSON is written back down as it came. */
 export const asOptionText = (value: Schema.Json) => (isText(value) ? value : asJsonText(value));
 const isText = Schema.is(Schema.String);
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 
-/** How many plan directories a refusal offers for a work source. */
 const PLANS_OFFERED = 5;
 
 const CHECKOUT_MEANING = `Which checkout the Run starts in: its absolute path, or \`${PROJECTS_ROOT_OPTION}\` for the Projects root`;
 
-/** How a CLI start names its checkout. */
 export const CLI_CHECKOUT_FIX = `Name the checkout with --input workspace=<absolute path> or workspace=${PROJECTS_ROOT_OPTION}.`;
 
-/** How a chat start names its checkout. */
 export const CHAT_CHECKOUT_FIX = `Name the checkout in the action's workspace: a workspace id, its label, an absolute path, a repository's name under the Projects root, or ${PROJECTS_ROOT_OPTION}.`;
 
-/** Whether a start from `cwd` has named its checkout by being in one. */
 export const insideCheckout = (cwd: string) =>
   repositoryName(shell, cwd).pipe(
     Effect.map((name) => name !== null),
     Effect.orElseSucceed(() => false),
   );
 
-/**
- * The refusal for an agent's start that leaves anything unsaid, or null where it names
- * everything. The checkout is the front door's to say — a CLI start in a checkout has
- * named it, a chat start names one only through its `workspace` — and so is the sentence
- * that tells its caller how to name one.
- */
 export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
   env: PluginEnv,
   entry: Found,
   given: Given,
   checkout: {
-    /** The directory the start names, or null where it names none. */
     readonly named: string | null;
     readonly fix: string;
   },
@@ -161,7 +140,6 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
   ) satisfies Failure;
 });
 
-/** What a field is for: the schema's own description, else what its strategy means. */
 function meaningOf(field: Found["inputs"][number]) {
   const described = Option.getOrUndefined(describedIn(field.schema))?.description ?? "";
   if (described !== "") return described;

@@ -1,5 +1,3 @@
-// Collie's OpenCode reporter plugin, loaded as OpenCode loads it and fed OpenCode's events.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";

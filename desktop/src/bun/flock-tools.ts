@@ -1,9 +1,3 @@
-// The Flock chat's tools: Collie's own Toolkit, answered by each Machine's host over the
-// `chat` channel Desktop holds for it. Everything a tool says or takes is named
-// `<machine>:<id>`; a bare id is taken where one Machine has it, and refused with the
-// candidates where several do. The human's words go with each write as the channel's
-// declaration, attached here and never by the model.
-
 import * as Rec from "effect/Record";
 import { withArtefacts } from "../../../src/artefact-client";
 import { RegisterArtefact } from "../../../src/artefact-model";
@@ -73,7 +67,6 @@ import { type ActionsLog, confirmed, Outlined, reasonOf, unlogged, withheldOf } 
 import type { Door } from "./machine";
 import type { StandingDirection } from "../../../src/standing-direction";
 
-/** What the Flock chat asks of a Machine's host, over the channel the bridge declared `chat`. */
 export const chatDoor = (door: Door) => ({
   act: (asked: Parameters<Door["act"]>[0]) => door.act(asked),
   confirm: (asked: Parameters<Door["confirm"]>[0]) => door.confirm(asked),
@@ -105,20 +98,15 @@ export const chatDoor = (door: Door) => ({
 
 export type ChatDoor = ReturnType<typeof chatDoor>;
 
-/** A Machine as the Flock chat reaches it: the name the window calls it by, its board, and its `chat` channel. */
 export interface ChatMachine {
   readonly name: string;
-  /** The board Desktop follows for it, or why it has none live. */
   readonly board: ChatBoard;
-  /** Absent until its `chat` channel is open. */
   readonly door?: ChatDoor;
-  /** This computer, where Desktop runs. */
   readonly local?: boolean;
 }
 
 type LiveBoard = Extract<ChatBoard, { readonly _tag: "Live" }>;
 
-/** A Machine the chat can act on now: its live board and open channel. */
 export interface Reached {
   readonly name: string;
   readonly board: LiveBoard;
@@ -127,36 +115,24 @@ export interface Reached {
 
 export interface FlockChat {
   readonly machines: () => ReadonlyArray<ChatMachine>;
-  /** `flock@<this computer>`, which the host records each operation under. */
   readonly conversation: string;
-  /** The human's message this turn, where there is one. */
   readonly said: () => string | undefined;
-  /** Desktop's copies of the files the human's message this turn carried. */
   readonly attachments: () => ReadonlyArray<Staged> | undefined;
-  /** Where each write's attempts are kept; none where absent. */
   readonly actionsLog?: ActionsLog;
-  /** What this session uploaded to each Machine: path there, and when, by sha256. */
   readonly uploaded: Map<string, Map<string, { readonly path: string; readonly at: number }>>;
   readonly machineRule: () => string | undefined;
   readonly setMachineRule: (rule: string) => Effect.Effect<void>;
   readonly standingDirection: () => StandingDirection | undefined;
-  /** Saved through Settings' edit path; why not, where it is refused. */
   readonly setStandingDirection: (text: string) => Effect.Effect<string | null>;
-  /** Each Machine's In sync standing; with a Machine's name, Sync now on it. */
   readonly inSync: (sync: string | undefined) => Effect.Effect<string>;
-  /** Retained material across Desktop's Machines; none where absent. */
   readonly searchArtefacts?: (asked: FlockSearch) => Effect.Effect<FlockArtefacts, ActionFailed>;
-  /** Helle with the token Desktop holds, or null without one; none where absent. */
   readonly helle?: Effect.Effect<HelleCredentials | null, string>;
-  /** The chat's harness, model and effort as set. */
   readonly chatHarness: () => {
     readonly harness: string;
     readonly model: string | undefined;
     readonly effort: string | undefined;
   };
-  /** What the chat holds, runs on and each harness offers. */
   readonly chatChoices: Effect.Effect<ChatChoices>;
-  /** Saved with Settings' checks; why not, where it is refused. */
   readonly setChatHarness: (change: {
     readonly harness?: string;
     readonly model?: string;
@@ -164,7 +140,6 @@ export interface FlockChat {
   }) => Effect.Effect<string | null>;
 }
 
-/** Desktop's own: a Herd's chat never chooses between Machines. */
 const MachineRuleTool = Tool.make("collie_machine_rule", {
   description:
     "The human's Machine rule: their own words, from Desktop's Settings, for which Machine " +
@@ -179,7 +154,6 @@ const MachineRuleTool = Tool.make("collie_machine_rule", {
   .annotate(Tool.Title, "The Machine rule")
   .annotate(Tool.Readonly, false);
 
-/** Desktop's own: a Machine's chat edits it with `collie settings set`. */
 const StandingDirectionTool = Tool.make("collie_direction", {
   description:
     "The human's Standing direction: their own words, kept for every chat, on how they like " +
@@ -194,7 +168,6 @@ const StandingDirectionTool = Tool.make("collie_direction", {
   .annotate(Tool.Title, "The Standing direction")
   .annotate(Tool.Readonly, false);
 
-/** Desktop's own: moving needs two Machines, which a Herd's chat never has. */
 const MoveScheduleTool = Tool.make("collie_move_schedule", {
   description:
     "Move a Schedule to another Machine, when the human asks: it is added there paused, " +
@@ -224,7 +197,6 @@ const SchedulesTool = Tool.make("collie_schedules", {
   .annotate(Tool.Title, "The Flock's Schedules")
   .annotate(Tool.Readonly, true);
 
-/** Desktop's own: a Herd's chat runs on the Home's harness. */
 const ChatHarnessTool = Tool.make("collie_chat_harness", {
   description:
     "The harness, model and effort this conversation runs on, from Desktop's Settings. " +
@@ -245,7 +217,6 @@ const ChatHarnessTool = Tool.make("collie_chat_harness", {
   .annotate(Tool.Title, "The Flock chat's harness")
   .annotate(Tool.Readonly, false);
 
-/** Desktop's own: what its Machines page says of each Machine, and its Sync now. */
 const InSyncTool = Tool.make("collie_in_sync", {
   description:
     "Whether each Machine is In sync with Desktop (its Collie version, settings, the " +
@@ -261,7 +232,6 @@ const InSyncTool = Tool.make("collie_in_sync", {
   .annotate(Tool.Title, "In sync")
   .annotate(Tool.Readonly, false);
 
-/** Desktop's own: Helle is the team's, not a Machine's. */
 const HelleTool = Tool.make("collie_helle", {
   description:
     "Helle, the team's record of who holds each project, as the human is signed in to it. " +
@@ -279,10 +249,6 @@ const HelleTool = Tool.make("collie_helle", {
   .annotate(Tool.Title, "Helle")
   .annotate(Tool.Readonly, false);
 
-/**
- * The Toolkit's tools a front door can answer. Definitions, the installation and
- * workspace-wide holds read a Machine's own files, which no host operation hands over.
- */
 export const FlockTools = Toolkit.make(
   CollieTools.tools.collie_herd,
   CollieTools.tools.collie_run,
@@ -324,7 +290,6 @@ const unanswered = (name: string, cause: Cause.Cause<unknown>) => {
     : `${name} did not answer: ${detail}`;
 };
 
-/** A host's answer within `ANSWER_WITHIN`, or why it gave none. */
 const answered: <A, E>(
   machine: ChatMachine,
   asking: Effect.Effect<A, E>,
@@ -343,7 +308,6 @@ const answered: <A, E>(
     Effect.catchCause((cause) => Effect.succeed(Result.fail(unanswered(machine.name, cause)))),
   );
 
-/** The Machine's live board and channel, or why it has none. */
 const reachedAt = ({ name, board, door }: ChatMachine, now: number) =>
   board._tag !== "Live"
     ? Result.fail(unreadBecause(name, board, now))
@@ -364,7 +328,6 @@ export const readable = (machine: ChatMachine) =>
     ? reach(machine).pipe(Effect.map(({ name, door }) => ({ name, door })))
     : Effect.succeed({ name: machine.name, door: machine.door });
 
-/** Each Machine, and the live board Desktop follows for it or why it has none. */
 const boards = (flock: FlockChat) =>
   Effect.map(Clock.currentTimeMillis, (now) =>
     Arr.map(flock.machines(), (machine) => {
@@ -381,19 +344,13 @@ const boards = (flock: FlockChat) =>
 
 type Boards = Effect.Success<ReturnType<typeof boards>>;
 
-/** A Run or a proposal, and the Machine it is on. */
 interface Placed {
   readonly machine: ChatMachine;
   readonly id: string;
 }
 
-/**
- * Where a name points: the Machine it names, or the only Machine with that id. A name
- * nobody has goes to the only Machine there is, whose host says it has no such thing.
- */
 export const place = (
   named: string,
-  /** `ids` is null for a Machine whose board could not be read, and `unread` says why. */
   owners: ReadonlyArray<{
     readonly machine: ChatMachine;
     readonly ids: ReadonlySet<string> | null;
@@ -471,7 +428,6 @@ const owning = (known: Boards, ids: (tasks: ReadonlyArray<TaskView>) => Readonly
     unread,
   }));
 
-/** Who has the Run `named`, each host with an open channel asked where no board lists a bare id. */
 const runOwners = (known: Boards, named: string) => {
   const owners = owning(known, runsOf);
   if (
@@ -512,7 +468,6 @@ const placeArtefact = (flock: FlockChat, known: Boards, named: string) =>
         Effect.catch(({ reason }) => Effect.succeed(Result.fail(reason))),
       );
 
-/** Says, before a write, who is asking and what the human said that turn. */
 export const declareVoice = (flock: FlockChat, machine: Reached) => {
   const said = flock.said();
   const files =
@@ -530,7 +485,6 @@ export const declareVoice = (flock: FlockChat, machine: Reached) => {
   return machine.door.declare(voice);
 };
 
-/** The Machine to write to, refused where it has no live board or its board speaks an older protocol than Desktop's. */
 export const writable = (machine: ChatMachine) =>
   reach(machine).pipe(
     Effect.mapError(
@@ -548,7 +502,6 @@ export const writable = (machine: ChatMachine) =>
     ),
   );
 
-/** `declareVoice` on a `writable` Machine, which it gives back. */
 export const speaking = (flock: FlockChat, machine: ChatMachine) =>
   writable(machine).pipe(Effect.tap((reached) => declareVoice(flock, reached)));
 
@@ -556,7 +509,6 @@ export const newRequest = Effect.flatMap(SecureRandom.SecureRandom, (random) => 
 
 export { reasonOf };
 
-/** A chat write to `machine` under `request`, logged and confirmed as a board action is. */
 const sentOn = <A, E extends { readonly _tag: string; readonly message: string }, R>(
   flock: FlockChat,
   machine: ChatMachine,
@@ -597,7 +549,6 @@ const sentOn = <A, E extends { readonly _tag: string; readonly message: string }
   );
 };
 
-/** What a write's outcome is called in the chat: one no reply confirmed is not a failure. */
 const endedAs = (error: { readonly _tag: string; readonly message: string }) => ({
   state: error._tag === "Unconfirmed" ? "not confirmed" : "failed",
   note: reasonOf(error),
@@ -632,7 +583,6 @@ const onRun = Effect.fn("FlockTools.onRun")(function* (
   return Result.isFailure(placed) ? placed.failure : yield* answer(placed.success);
 });
 
-/** A Machine's own answer to one of its reads, headed with its name. */
 const readOn = (machine: ChatMachine, tool: (typeof FLOCK_READS)[number], input: JsonObject) =>
   readable(machine).pipe(
     Effect.matchEffect({
@@ -724,7 +674,6 @@ const schedules = Effect.fn("FlockTools.schedules")(function* (flock: FlockChat)
   return sections.length === 0 ? "No Machines to read Schedules from." : Arr.join(sections, "\n\n");
 });
 
-/** Each Machine's Harness catalogue, or the one Machine `machine` names. */
 const models = Effect.fn("FlockTools.models")(function* (
   flock: FlockChat,
   asked: { readonly machine?: string; readonly harness?: string },
@@ -785,7 +734,6 @@ const connections = Effect.fn("FlockTools.connections")(function* (
 
 type NewsItem = (typeof NewsBatch.Type)["items"][number];
 
-/** One Herd's pending News on one Machine. */
 export interface Heard {
   readonly machine: string;
   readonly herd: string;
@@ -805,7 +753,6 @@ type PlacedNews = {
   readonly item: NewsItem;
 };
 
-/** One item across the Flock: the same key in two Herds is two items. */
 export const newsKey = ({ machine, herd, item }: PlacedNews) =>
   `${machine}\u0000${herd}\u0000${item.key}`;
 
@@ -817,10 +764,6 @@ const bySignificance = (newestFirst: boolean) => (a: PlacedNews, b: PlacedNews) 
         : pipe(a.item.at, Str.localeCompare(b.item.at))),
   );
 
-/**
- * Every Herd's News as one batch: a screen's worth of what matters most, newest first among
- * equals, listed by significance then time, and how many items each Machine had left out.
- */
 export const flockBatch = (heard: ReadonlyArray<Heard>) => {
   const all = Arr.flatMap(heard, ({ machine, herd, items }) =>
     Arr.map(items, (item) => ({ machine, herd, item })),
@@ -853,10 +796,6 @@ export const flockNewsText = (batch: FlockBatch) =>
     "\n",
   );
 
-/**
- * What a turn nobody asked for would be about: the decisions and consequential items not yet
- * spoken of, or null. Everything else waits for the human's next message.
- */
 export const worthSpeaking = (batch: FlockBatch, spoken: ReadonlySet<string>) => {
   const items = Arr.filter(
     batch.items,
@@ -866,16 +805,10 @@ export const worthSpeaking = (batch: FlockBatch, spoken: ReadonlySet<string>) =>
   return items.length === 0 ? null : { items, omitted: new Map() };
 };
 
-/**
- * Every Herd's pending News on every Machine, taking nothing: what the conversation is
- * given is settled apart, by `delivered`. Asked as `sent` with no keys, so a host from
- * before `keys`, which settles what it hands over, records only that it was handed over.
- */
 export const heardNews = Effect.fn("FlockTools.heardNews")(function* (flock: FlockChat) {
   const told = yield* Effect.forEach(
     flock.machines(),
     (machine) =>
-      // `reach` first, so an unread Machine's reason comes without a write's refusal.
       reach(machine).pipe(
         Effect.andThen(speaking(flock, machine)),
         Effect.flatMap((reached) =>
@@ -917,7 +850,6 @@ export const heardNews = Effect.fn("FlockTools.heardNews")(function* (flock: Flo
   return { batch: flockBatch(heard), unread };
 });
 
-/** Settles what the conversation was given as read, in each Herd it came from. */
 export const delivered = Effect.fn("FlockTools.delivered")(function* (
   flock: FlockChat,
   batch: FlockBatch,
@@ -925,7 +857,7 @@ export const delivered = Effect.fn("FlockTools.delivered")(function* (
   const byMachine = new Map(Arr.map(flock.machines(), (machine) => [machine.name, machine]));
   const herds = Map.groupBy(batch.items, ({ machine, herd }) => `${machine}\u0000${herd}`);
   for (const items of herds.values()) {
-    // SAFETY: `groupBy` makes no empty group.
+    // WARNING: `groupBy` makes no empty group.
     const { machine: name, herd } = items[0]!;
     const machine = byMachine.get(name);
     if (machine === undefined) continue;
@@ -984,13 +916,11 @@ const hold = Effect.fn("FlockTools.hold")(
   }),
 );
 
-/** A text field of an action decoded from JSON, or "" where it has none. */
 const textAt = (action: JsonObject, key: string) => {
   const value = action[key];
   return isString(value) ? value : "";
 };
 
-/** The field an action names its Machine in, and the name. */
 const machineRef = (action: JsonObject) => {
   for (const field of ["run", "workspace"]) {
     const value = action[field];
@@ -999,7 +929,6 @@ const machineRef = (action: JsonObject) => {
   return null;
 };
 
-/** The Machine an action's `machine` field names, or null where it names none. */
 const machineField = (action: JsonObject, known: Boards) => {
   const explicit = textAt(action, "machine");
   if (explicit === "") return Result.succeed(null);
@@ -1009,7 +938,6 @@ const machineField = (action: JsonObject, known: Boards) => {
     : Result.succeed(found.machine);
 };
 
-/** `ref` with `<machine>:<run>` words bare: herdr names a Machine as its host may not. */
 const refOn = (ref: string, machine: string) =>
   Arr.join(
     Arr.map(Str.split(ref, /([\s;,]+)/), (part) =>
@@ -1019,9 +947,7 @@ const refOn = (ref: string, machine: string) =>
   );
 
 interface Localized {
-  /** Null for an action that names no Machine. */
   readonly machine: ChatMachine | null;
-  /** The action under the Machine's own ids. */
   readonly action: JsonObject;
 }
 
@@ -1149,19 +1075,15 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
     ).pipe(Effect.catch((error) => Effect.succeed(endedAs(error))));
     said.push(`${kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
     if (done.state === "not confirmed") unconfirmed = true;
-    // What follows a failure was asked for on the assumption that it did not happen.
     if (done.state === "failed" || done.state === "not confirmed") break;
   }
   return `${unconfirmed ? `Request: ${request}\n` : ""}${Arr.join(said, "\n")}`;
 });
 
-/** The kinds of action that carry files to the work they start or steer. */
 const CARRIES = new Set(["start", "followup", "take_offer", "deliver"]);
 
-/** The action with the files it carries as paths on its Machine. */
 const withFiles = (flock: FlockChat, machine: Reached, action: JsonObject) => {
   if (textAt(action, "kind") === "artefact_register" && isString(action.path)) {
-    // Only a path on the Run's own Machine stays tracked; any other is sent as a snapshot.
     const path = action.path;
     return carriedPaths(flock, machine, [path]).pipe(
       Effect.map((paths) => {
@@ -1220,7 +1142,7 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
       return door
         .dispose({
           runId: text("run"),
-          // SAFETY: decodeAsked held `became` to the three a disposition takes.
+          // WARNING: decodeAsked held `became` to the three a disposition takes.
           kind: text("became") as "merged" | "abandoned" | "superseded",
           ref: text("ref"),
           note: null,
@@ -1257,7 +1179,6 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
     default:
       return door.act({ actions: [action], request }).pipe(
         Effect.map((results) => results[0] ?? { state: "failed", note: "the host said nothing" }),
-        // Chat names no revision, so no act of its is stale.
         Effect.catchTag("StaleAct", (stale) =>
           Effect.fail(new HostRefused({ reason: stale.reason })),
         ),
@@ -1493,7 +1414,6 @@ const projectLine = (project: HelleProject, me: string) => {
   }`;
 };
 
-/** Runs share the human's Helle identity, so one that recorded `slug` would give the human's claim back. */
 const forgottenByRuns = Effect.fn("FlockTools.forgottenByRuns")(function* (
   flock: FlockChat,
   slug: string,
@@ -1561,7 +1481,6 @@ const helle = (flock: FlockChat, asked: { claim?: string; release?: string }) =>
         );
   }).pipe(Effect.catchTag("HelleError", ({ message }) => Effect.succeed(message)));
 
-/** The handlers for one call, which take the input as it was sent once the Toolkit has decoded it. */
 const handlersFor = (flock: FlockChat, sent: JsonObject) =>
   Effect.gen(function* () {
     const services = yield* Effect.context<SecureRandom.SecureRandom | FileSystem.FileSystem>();
@@ -1601,7 +1520,6 @@ const handlersFor = (flock: FlockChat, sent: JsonObject) =>
     });
   });
 
-/** One call to a Flock tool, answered in a sentence, a refusal included. */
 export const callFlockTool = Effect.fn("FlockTools.call")(
   function* (flock: FlockChat, name: string, input: JsonObject) {
     const toolkit = yield* FlockTools.pipe(

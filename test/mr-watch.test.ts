@@ -178,7 +178,6 @@ test(
               (view) => view?.status.status === "complete",
             );
             const resumedAt = yield* Clock.currentTimeMillis;
-            // From the first host's sighting, not from this host's own first read.
             expect(resumedAt - since).toBeLessThan(QUIET_MS + 60_000);
             const value = done?.status.status === "complete" ? done.status.value : null;
             expect((yield* decodeWoke(value))._tag).toBe("Changed");

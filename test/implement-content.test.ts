@@ -47,8 +47,6 @@ test.each([implement, tuneUp])(
   },
 );
 
-// Who asks for a merge is audit, never a reason to refuse (AGENTS.md invariant 1).
-
 test("implement's mr step merges on a request of its own from the human, chat or another agent alike", () => {
   const mr = pipe(contentOf(implement).sections.get("mr") ?? "", Str.replace(/\s+/g, " "));
   expect(mr).toContain("the human typing in this pane");
@@ -79,7 +77,6 @@ test("no shipped content or prompt text Collie types spells out `collie verify -
         (pattern) => Array.from(new Bun.Glob(pattern).scanSync({ cwd: root })),
       );
       expect(typed.length).toBeGreaterThan(0);
-      // Its usage examples show both forms.
       const examples = "src/commands/verify.ts";
       const spelled: string[] = [];
       for (const file of typed)

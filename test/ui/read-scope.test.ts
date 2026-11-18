@@ -1,6 +1,3 @@
-// A Task board reads the host's Task board. The older workspace lists are not another
-// source of truth to rebuild whenever a Task changes.
-
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import { Effect } from "effect";

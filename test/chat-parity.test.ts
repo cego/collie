@@ -1,27 +1,3 @@
-// Every human-facing Collie operation, and the conversational route that covers it.
-//
-// The promise this proves is "chat is not a reduced-control interface", and the way it
-// fails silently is a list of hand-picked actions that looks complete. So the operations
-// are not listed here at all: they are the CLI's own command tree, walked, plus the
-// board's own commands and the flags that change what a command does. A command added
-// upstream with no row here fails this file rather than passing unnoticed.
-//
-// Each row says how native chat does it, and every operation has one — anything a human
-// can do, an agent can do (AGENTS.md, invariant 1):
-//
-//   read        — a tool answers it. The row carries the call, and it is made here.
-//   write       — carried out at once by a tool of its own. Sending the human to the UI
-//                 for something chat can plainly do is chat obstructing the person it
-//                 serves.
-//   propose     — carried out by collie_propose in the same call, with no yes. The row
-//                 carries the action, and it is decoded against the closed union and
-//                 matched to a registered executor.
-//   shell       — chat runs the command itself, as the human types it: the same
-//                 validation and the same executors, so a tool of its own would only
-//                 restate it.
-//
-// A leaf with no row is what this file exists to fail on.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -68,7 +44,6 @@ const encodeJson = flow(
   Result.getOrThrow,
 );
 
-/** A propose tool's input schema, as far as the action kinds it offers. */
 const decodeOffered = flow(
   Schema.decodeUnknownResult(
     Schema.Struct({
@@ -91,7 +66,6 @@ const decodeOffered = flow(
 );
 const decodeAction = flow(Schema.decodeUnknownResult(ActionSchema), Result.getOrThrow);
 
-// A file that registers its own executors leaves none for the next file.
 afterAll(() => {
   resetExecutors();
 });
@@ -100,13 +74,11 @@ type Route =
   | { readonly route: "read"; readonly tool: string; readonly input?: JsonObject }
   | { readonly route: "propose"; readonly kind: ActionKind; readonly action: JsonObject }
   | { readonly route: "write"; readonly tool: string }
-  /** Called on a finished Run that offers `grade-it`, in a Herd with a host. */
   | { readonly route: "offer"; readonly tool: string; readonly input: (run: string) => JsonObject }
   | { readonly route: "shell" };
 
 const RUN = "r-does-not-exist";
 
-/** `collie <this>`, as the command tree spells it, and what chat does about it. */
 const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["workflow list", { route: "read", tool: "collie_definitions" }],
   ["workflow show", { route: "read", tool: "collie_definitions", input: { workflow: "review" } }],
@@ -130,8 +102,6 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
       action: { kind: "fork_definition", what: "persona", name: "reviewer", as: "reviewer-ours" },
     },
   ],
-  // Asked for by the human, carried out; wanted by Collie, proposed. `start` is in both
-  // schemas for that reason, and the row names the human's side.
   ["run start", { route: "write", tool: "collie_do" }],
   ["run list", { route: "read", tool: "collie_herd" }],
   ["run show", { route: "read", tool: "collie_run", input: { run: RUN } }],
@@ -157,9 +127,6 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run resume", { route: "write", tool: "collie_do" }],
   ["run publish", { route: "shell" }],
   ["run answer", { route: "write", tool: "collie_do" }],
-  // The human's own instruction, carried out rather than proposed (ADR-0011). Stop,
-  // resume, release, answer, steer and follow up are `collie_do`'s; a hold has a tool of
-  // its own because it also holds a whole workspace, which no action kind does.
   ["run hold", { route: "write", tool: "collie_hold" }],
   ["run release", { route: "write", tool: "collie_do" }],
   ["run steer", { route: "shell" }],
@@ -303,8 +270,6 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     {
       route: "propose",
       kind: "update_defaults",
-      // The id, not the prose: ids are a hash of the text, so a constraint named in words
-      // matches nothing and removes nothing.
       action: {
         kind: "update_defaults",
         change: "remove-constraint",
@@ -323,9 +288,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["decline", { route: "write", tool: "collie_do" }],
   ["proposal reconcile", { route: "shell" }],
   ["verify", { route: "shell" }],
-  // Chat runs `collie measure` as the human types it, through the same host operation.
   ["measure", { route: "shell" }],
-  // The same Herd, shaped as the board's Tasks rather than as its Runs.
   ["board", { route: "read", tool: "collie_herd" }],
   ["cleanup", { route: "read", tool: "collie_installation" }],
   ["cleanup --apply", { route: "propose", kind: "cleanup", action: { kind: "cleanup" } }],
@@ -361,7 +324,6 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["chat status", { route: "read", tool: "collie_installation" }],
   ["chat harness", { route: "shell" }],
   ["chat news", { route: "read", tool: "collie_news" }],
-  // The line under the human's own prompt; chat is told the same fact at each prompt.
   ["chat status-line", { route: "shell" }],
   ["chat context", { route: "shell" }],
   ["chat heard", { route: "shell" }],
@@ -380,8 +342,6 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["upgrade", { route: "propose", kind: "upgrade", action: { kind: "upgrade" } }],
   ["onboard", { route: "propose", kind: "onboard", action: { kind: "onboard" } }],
   ["doctor", { route: "read", tool: "collie_installation" }],
-  // Not commands: the board's own operations, and the flags that change what a command
-  // does rather than what it is about.
   [
     "board: focus an agent",
     {
@@ -417,18 +377,11 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ],
 ];
 
-/** Any command in the tree, as the CLI itself types one. */
 type CommandNode = (typeof app.subcommands)[number]["commands"][number];
 
-/**
- * Every command a human can actually type, walked out of the command tree itself rather
- * than remembered. A group contributes its leaves and not itself: `collie run` alone is
- * a help page, and what a person runs is `collie run stop`.
- */
 function leaves(node: CommandNode, path: ReadonlyArray<string> = []) {
   const here = [...path, node.name];
   const children = Arr.flatMap(node.subcommands ?? [], (group) => group.commands ?? []);
-  // The root's own name is not part of what a person types after `collie`.
   if (children.length === 0) {
     const returned: string[] = [Arr.join(here.slice(1), " ")];
     return returned;
@@ -439,8 +392,6 @@ function leaves(node: CommandNode, path: ReadonlyArray<string> = []) {
 
 test("the operations are the command tree's, not a list somebody kept up to date", () => {
   const found = leaves(app);
-  // The walk reaches the tree through Effect's own command shape, so a shape that
-  // changed under it would quietly find nothing and pass everything.
   expect(found.length).toBeGreaterThan(40);
   expect(found).toContain("run stop");
   expect(found).toContain("run intent defaults show");
@@ -455,20 +406,13 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-parity-" });
-        // An empty PATH: the installation checks would otherwise run the operator's own
-        // claude, glab and gh, each allowed twenty seconds to answer, on every call below.
         const env = readEnv({ ...process.env, COLLIE_STATE_DIR: stateDir, PATH: "" });
-        // The registry is filled by the module that owns each operation, so it has to be
-        // asked rather than listed: a kind with no executor is refused at confirmation as
-        // `executor_missing`, and a route to one would be control reduced to advice.
         yield* registerRunExecutors();
         const carried = new Set(registeredKinds());
         const offered = encodeJson(toolNamed("collie_propose")!.input);
 
         for (const [operation, route] of INVENTORY) {
           if (route.route === "read") {
-            // Called, not looked up: a tool named in a table and never run is exactly the
-            // completeness this file exists to stop claiming.
             const tool = toolNamed(route.tool);
             expect([operation, tool !== null]).toEqual([operation, true]);
             const answer = yield* tool!.call(env, route.input ?? {});
@@ -480,17 +424,12 @@ test(
             continue;
           }
           if (route.route === "write") {
-            // A tool of its own, and one that admits it writes: a client decides from
-            // `readOnly` what it may run without asking.
             const tool = toolNamed(route.tool);
             expect([operation, tool !== null]).toEqual([operation, true]);
             expect([operation, tool!.readOnly]).toEqual([operation, false]);
             continue;
           }
           if (route.route === "propose") {
-            // Three halves, and each is a different way this goes wrong: a kind the model
-            // is invited to ask for, an action the closed union actually accepts, and a
-            // kind this build can carry out.
             expect([operation, pipe_(offered, Str.includes(`"${route.kind}"`))]).toEqual([
               operation,
               true,
@@ -500,12 +439,8 @@ test(
             expect([operation, carried.has(route.kind)]).toEqual([operation, true]);
             continue;
           }
-          // offer: called in the next test, on a Run that has one.
-          // shell: the leaf is the command tree's own, which the first test holds.
         }
 
-        // The decisions, named: no action kind is any of these, so a proposal can never
-        // carry its own yes. Settling one is a separate act — the human's or chat's.
         const kinds = Arr.flatMap(
           decodeOffered(toolNamed("collie_propose")!.input).properties.actions.items.anyOf,
           (one) => one.properties.kind.enum,
@@ -516,8 +451,6 @@ test(
         expect(registeredKinds()).not.toContain("confirm");
       }),
     ),
-  // `collie_installation` runs the installation checks, and one of them reaches a remote
-  // with its own timeout. Calling the routes for real is the point of this test.
   120_000,
 );
 
@@ -565,7 +498,6 @@ test(
         expect(child?.task).toBe("task-offering");
       }),
     ),
-  // A host, and a Run of it that finishes, then one it starts.
   60_000,
 );
 
@@ -605,8 +537,6 @@ test("nothing this build cannot carry out is offered as something to ask for", (
     Effect.gen(function* () {
       yield* registerRunExecutors();
       const carried = new Set<string>(registeredKinds());
-      // `ask_human` and `none` are what the validator turns a refused action into, not
-      // something to ask for; everything else the schema offers has to be runnable.
       const offered = Arr.flatMap(
         decodeOffered(toolNamed("collie_propose")!.input).properties.actions.items.anyOf,
         (one) => one.properties.kind.enum,
@@ -621,7 +551,6 @@ test("nothing this build cannot carry out is offered as something to ask for", (
   ));
 
 test("every tool chat is given is a route somebody named", () => {
-  // The other direction: a tool that no operation routes to is reach nobody asked for.
   const routed = new Set(
     Arr.flatMap(INVENTORY, (entry) =>
       entry[1].route === "shell" || entry[1].route === "propose" ? [] : [entry[1].tool],
@@ -836,7 +765,6 @@ test(
       Effect.gen(function* () {
         const run = yield* hostedRun(world, "draw the work");
         const door = yield* frontDoor(socketOf(world.state));
-        // Its question is asked a moment before the engine records the Run suspended.
         const detail = yield* until(
           () =>
             door
@@ -859,7 +787,6 @@ test(
         expect(Arr.map(detail!.flow!.lanes, (lane) => lane.run)).toEqual([run.id]);
       }).pipe(Effect.provide(recordsAt(world.state))),
     ),
-  // A host, and a Run of it waiting on its decision.
   60_000,
 );
 
@@ -870,7 +797,6 @@ test("collie_run answers from related Runs without polling unrelated live execut
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-related-answer-" });
       const run = yield* madeRun(dir, { id: "r-parent", state: "succeeded" });
       const child = yield* madeRun(dir, { id: "r-child", parent: run.id });
-      // The records a host on `dir` would have made, which collie_run reads.
       yield* Effect.provide(Effect.void, recordsAt(dir));
       const reads = {
         runs: Effect.die("unrelated live executions were polled"),
@@ -921,7 +847,6 @@ test("a Machine's Native chat and Desktop's Flock chat are given the same Standi
       );
       if ("refused" in edited) throw new Error(edited.refused);
       flock = edited;
-      // What a Desktop gives a Machine when it syncs the Flock's settings.
       yield* takeShared(
         env.userDir,
         [{ key: "standing_direction", ...flock.settings["standing_direction"]! }],
@@ -950,7 +875,6 @@ test(
         expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
       }),
     ),
-  // A host, and a Run of it that finishes.
   60_000,
 );
 

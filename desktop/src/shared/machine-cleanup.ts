@@ -1,6 +1,3 @@
-// What a sweep would remove on each Machine, as the Cleanup dialog draws it (ADR-0045). Pure,
-// so the main process and the view read one thing.
-
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
 import { Schema } from "effect";
@@ -9,14 +6,12 @@ import { humanBytes } from "../../../src/bytes";
 import type { MachineRow } from "./flock";
 import { NOT_LIVE_SAID } from "./in-sync";
 
-/** What one Machine's host listed, and the installation it listed on. */
 export const CleanupListing = Schema.Struct({
   installation: Schema.String,
   report: CleanupReport,
 });
 export type CleanupListing = typeof CleanupListing.Type;
 
-/** One Machine's listing in the dialog: out since a time in milliseconds, listed, or failed. */
 export type CleanupRead =
   | { readonly state: "reading"; readonly since: number }
   | ({ readonly state: "listed" } & CleanupListing)
@@ -46,17 +41,13 @@ export interface CleanupRowView {
   readonly profile: string;
   readonly name: string;
   readonly said: string;
-  /** That its host still sweeps where Desktop can't reach it. */
   readonly note: string | null;
-  /** Why its sweep failed. */
   readonly reason: string | null;
   readonly tryAgain: boolean;
   readonly readAgain: boolean;
-  /** That `said` is why it can't be chosen or wasn't cleaned. */
   readonly warn: boolean;
   readonly choosable: boolean;
   readonly chosen: boolean;
-  /** What it would free. */
   readonly bytes: number;
   readonly groups: ReadonlyArray<CleanupGroup>;
   readonly kept: { readonly said: string; readonly items: ReadonlyArray<CleanupKept> } | null;
@@ -64,11 +55,8 @@ export interface CleanupRowView {
 
 export interface CleanupView {
   readonly rows: ReadonlyArray<CleanupRowView>;
-  /** The profiles that can be chosen. */
   readonly choosable: ReadonlyArray<string>;
-  /** `2 Machines chosen · would free 4.1 GiB`. */
   readonly chosen: string;
-  /** Disabled with nothing chosen, and from the first press until the dialog reads again. */
   readonly button: { readonly said: string; readonly disabled: boolean };
 }
 
@@ -163,11 +151,6 @@ const rowOf = (
   });
 };
 
-/**
- * The dialog over the Machines page's rows, in their order, joined to their reads and sweeps
- * by profile, at `now` in milliseconds. `chosen` null chooses every Machine that can be.
- * Once any Machine is swept, the choice is fixed and none is read again.
- */
 export const cleanupView = (
   shown: ReadonlyArray<CleanupShown>,
   reads: ReadonlyMap<string, CleanupRead>,

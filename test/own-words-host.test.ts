@@ -1,6 +1,3 @@
-// A host gives the human's own words only to Desktop's own door, after the human's click
-// there; every other door, a chat's tools among them, is refused without a word of them.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, FileSystem, Result, Schema, flow } from "effect";
@@ -35,7 +32,6 @@ const session = (home: string) =>
     );
   });
 
-/** Every file under `dir`, read whole, for a word of the fixture. */
 const everything = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -81,7 +77,6 @@ test(
             ]),
           );
 
-          // Started here, the host reads this world's home and not this process's.
           const desktop = yield* connect(world.state, { hostEnv: { HOME: world.home } });
           yield* desktop.declare({ frontDoor: "desktop" });
           const read = yield* desktop.ownWords();

@@ -1,7 +1,3 @@
-// A Measurement: a Run's benchmark plan sampled on a base tree and a candidate tree of this
-// Machine, alternately, and judged (ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement,
-// D1, D2 and D4). `collie measure` and `host.measure` both come here.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -70,17 +66,12 @@ const LOCKFILES = [
 ];
 
 const OUTPUT_BYTES = 4 * 1024;
-/** Of stdout, for its last line: a longer one is cut, and its metrics are missing. */
 const LINE_BYTES = 64 * 1024;
-/** What the host reads of every command, which no command's own JSON replaces. */
 const HOST_READINGS = ["wall_ms", "cpu_ms", "peak_kb"];
-/** A benchmark's process as the host's checks record it; a dead host's are ended by the next Measurement. */
 const MEASURING = "measure: ";
 
 export const measurementsDir = (stateDir: string) => `${stateDir}/measurements`;
-/** Held for a whole Measurement, so one runs on a Machine at a time. */
 export const machineLockOf = (stateDir: string) => `${measurementsDir(stateDir)}/machine.lock`;
-/** Every base tree a Run's Measurements were taken on, Cleanup's to remove. */
 export const baseTreesDir = (stateDir: string, runId: string) =>
   `${measurementsDir(stateDir)}/trees/${runId}`;
 const journalOf = (evidence: string) => runJournal(evidence, "measurements.jsonl");
@@ -90,13 +81,10 @@ export const readMeasurements = (evidence: string) =>
 
 export interface MeasureAsk {
   readonly runId: string;
-  /** The commit the base tree is made at. */
   readonly base: string;
-  /** The candidate tree: the caller has checked it is the Run's. */
   readonly cwd: string;
   readonly plan: unknown;
   readonly pass: string;
-  /** Why the plan changed: needed where the Run was measured under another. */
   readonly reason?: string;
 }
 
@@ -105,7 +93,6 @@ const git = (args: ReadonlyArray<string>, cwd: string) => shell("git", [...args]
 const tail = (text: string, bytes = OUTPUT_BYTES) =>
   text.length <= bytes ? text : pipe_(text, Str.slice(-bytes));
 
-/** The last `bytes` of a stream, kept as it arrives rather than buffered whole. */
 const tailOf = (stream: ReadableStream<Uint8Array>, bytes: number) =>
   Stream.fromReadableStream({ evaluate: () => stream, onError: (cause) => cause }).pipe(
     Stream.decodeText(),
@@ -118,7 +105,6 @@ const tailOf = (stream: ReadableStream<Uint8Array>, bytes: number) =>
 
 const digestOf = (text: string) => Bun.hash(text).toString(16);
 
-/** The commit `ref` names, or why it names none. */
 const commitOf = (ref: string, cwd: string) =>
   Effect.gen(function* () {
     const ran = yield* git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], cwd);
@@ -149,7 +135,6 @@ const treeAt = (cwd: string) =>
     };
   });
 
-/** Each path a harness commit touches outside the plan's harness paths. */
 const outsideHarness = (
   commits: ReadonlyArray<string>,
   paths: ReadonlyArray<string>,
@@ -170,10 +155,6 @@ const outsideHarness = (
     return [...outside].sort();
   });
 
-/**
- * A detached worktree at `commit` with the harness commits applied: the base tree, or a
- * candidate's scratch tree. Kept for the Run's later Measurements and removed by Cleanup.
- */
 const baseTree = (
   stateDir: string,
   runId: string,
@@ -238,11 +219,6 @@ type Ended =
     }
   | { readonly _tag: "TimedOut" };
 
-/**
- * One command, recorded as the host's checks are and its process group ended whichever way it
- * leaves; no shell between. Spawned here rather than by the checks, for its CPU time and peak.
- * Timed out where `deadline`, in epoch ms, passes before it exits, its recording included.
- */
 const runOnce = (
   check: CheckOf,
   command: { readonly executable: string; readonly argv: ReadonlyArray<string> },
@@ -259,12 +235,9 @@ const runOnce = (
     const end = () => {
       try {
         if (group !== undefined) process.kill(-group, "SIGKILL");
-      } catch {
-        // Already gone.
-      }
+      } catch {}
     };
     yield* Effect.addFinalizer(() => Effect.sync(end));
-    // Adoption cannot be interrupted once it spawns, so its deadline ends the command beside it.
     yield* Effect.forkScoped(
       Effect.sleep(Duration.millis(deadline - (yield* Clock.currentTimeMillis))).pipe(
         Effect.andThen(
@@ -292,7 +265,6 @@ const runOnce = (
         }),
       )
       .pipe(Effect.mapError((cause) => new MeasureRefused({ why: cause.why })));
-    // This host began to end before it spawned.
     if (adopted === null) return yield* Effect.interrupt;
     const spawned = adopted.handle;
     const left = deadline - (yield* Clock.currentTimeMillis);
@@ -314,8 +286,6 @@ const runOnce = (
             output: tail(`${stdout}${stderr}`),
             wall: Number(now - began) / 1e6,
             cpu: Number(usage?.cpuTime.total ?? 0) / 1000,
-            // ponytail: Linux keeps the host's RSS at the fork in a child's maxRSS, so this has
-            // the host's size as a floor; a clean peak needs a small launcher between them.
             peak: Number(usage?.maxRSS ?? 0) / 1024,
           };
           return returned;
@@ -324,11 +294,9 @@ const runOnce = (
       Effect.timeoutOption(Duration.millis(left)),
       Effect.map((ended) => (expired ? timedOut : Option.getOrElse(ended, () => timedOut))),
     );
-    // A check its host ended as it stops never answers, so no failure is recorded of it.
     return yield* adopted.collected(left <= 0 || expired ? Effect.succeed(timedOut) : collecting);
   }).pipe(Effect.scoped);
 
-/** The named numbers of a command's last stdout line, where it is one JSON object. */
 const reportedBy = (stdout: string) => {
   const last = Str.split(Str.trimEnd(stdout), "\n").at(-1) ?? "";
   const parsed = Schema.decodeOption(
@@ -340,13 +308,11 @@ const reportedBy = (stdout: string) => {
   );
 };
 
-/** A B B A …: base first, then each pair turned round, so drift falls on both sides alike. */
 export const sampleOrder = (samples: number) =>
   Array.from({ length: samples }, (_, at) =>
     at % 2 === 0 ? (["base", "candidate"] as const) : (["candidate", "base"] as const),
   ).flat();
 
-/** A recorded Measurement of the same trees under the same plan answers again. */
 const recordedFor = (
   records: ReadonlyArray<Measurement>,
   key: {
@@ -368,7 +334,6 @@ const recordedFor = (
     ),
   ) ?? null;
 
-/** What a Measurement waited on before it sampled, filled in as it waits. */
 interface Waited {
   memory: boolean;
   readonly machine: Array<string>;
@@ -376,22 +341,14 @@ interface Waited {
 
 export interface Measuring {
   readonly stateDir: string;
-  /** Where the Machine's memory is read; without one, nothing waits for memory. */
   readonly env: PluginEnv | null;
   readonly ask: MeasureAsk;
-  /** The Run's evidence directory. */
   readonly evidence: string;
-  /** The Run's `awaiting` control, which says what its waiting Measurement waits for. */
   readonly awaiting: Control;
   readonly stopped: Effect.Effect<boolean>;
   readonly say?: (line: string) => Effect.Effect<void>;
 }
 
-/**
- * The recorded Measurement of these trees under this plan, or a new one taken while this
- * Machine runs no other: `ran` says which. `stopped` where the Run's Stop ended it first,
- * which records nothing.
- */
 export const measure = Effect.fn("Measurement.measure")(function* (opts: Measuring) {
   const { ask } = opts;
   const fs = yield* FileSystem.FileSystem;
@@ -552,7 +509,6 @@ const taking = Effect.fn("Measurement.taking")(function* (
     readonly id: string;
     readonly commit: string;
     readonly harness: ReadonlyArray<string>;
-    /** Harness commits to sample the candidate with, in a scratch tree, where it carries none. */
     readonly applied: ReadonlyArray<string> | null;
     readonly repository: string;
     readonly waited: Waited;

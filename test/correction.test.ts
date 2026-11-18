@@ -1,7 +1,3 @@
-// Every gate on an automatic correction is somebody being deferred to, so the matrix is
-// the test: each one flips the answer on its own, and none of them can be satisfied by
-// any of the others.
-
 import { expect, test } from "bun:test";
 import {
   alignment,
@@ -75,23 +71,16 @@ test("each gate refuses on its own, and none of them substitutes for another", (
   const open = [report()];
   const intent = intentWith();
 
-  // Somebody is at that keyboard.
   expect(decideCorrections(intent, open, ctx({ overridden: true }))).toEqual([]);
-  // Somebody held the Run.
   expect(decideCorrections(intent, open, ctx({ held: true }))).toEqual([]);
-  // Something about this constraint is already in the air.
   expect(decideCorrections(intent, open, ctx({ inFlight: new Set(["c1"]) }))).toEqual([]);
-  // The bound is spent.
   expect(decideCorrections(intent, open, ctx({ sent: { c1: 2 } }))).toEqual([]);
   expect(decideCorrections(intent, open, ctx({ sent: { c1: 1 } }))).toHaveLength(1);
-  // A report about an Intent that has since moved is about a Run that wanted something
-  // else, and correcting towards it would be correcting towards the old thing.
   expect(decideCorrections(intent, [report({ intent_version: 0 })], ctx())).toEqual([]);
 });
 
 test("a harness that cannot tell Collie's own text from a human's needs to be told nobody else is steering", () => {
   const open = [report()];
-  // No attribution: Collie cannot know whether it is taking turns with a person.
   expect(decideCorrections(intentWith(), open, ctx({ attributable: false }))).toEqual([]);
   expect(
     decideCorrections(intentWith({ exclusive_steering: true }), open, ctx({ attributable: false })),
@@ -101,7 +90,6 @@ test("a harness that cannot tell Collie's own text from a human's needs to be to
 test("a blocking report may go now, but only where that was granted and proven", () => {
   const blocking = [report({ severity: "block" })];
   expect(decideCorrections(intentWith(), blocking, ctx())[0]?.mode).toBe("boundary");
-  // Granted but never shown to work on this harness: still a boundary delivery.
   expect(decideCorrections(intentWith({ now_allowed: true }), blocking, ctx())[0]?.mode).toBe(
     "boundary",
   );
@@ -109,7 +97,6 @@ test("a blocking report may go now, but only where that was granted and proven",
     decideCorrections(intentWith({ now_allowed: true }), blocking, ctx({ nowProven: true }))[0]
       ?.mode,
   ).toBe("now");
-  // A warning is never urgent, however much authority there is.
   expect(
     decideCorrections(intentWith({ now_allowed: true }), [report()], ctx({ nowProven: true }))[0]
       ?.mode,
@@ -132,7 +119,6 @@ test("the correction says what to do, and what to do instead of choosing", () =>
   expect(text).toContain("Steering correction d-1 for constraint c1");
   expect(text).toContain("stay inside src/");
   expect(text).toContain("docs/using.md");
-  // The sentence that matters: an agent told only to obey would pick silently.
   expect(text).toContain("say so");
   expect(text).toContain("in your Output instead of choosing");
 });
@@ -159,7 +145,6 @@ test("aligned: true is the strong claim, and every way of not knowing is unverif
 
   expect(alignment(intent, [], judged).aligned).toBe("true");
 
-  // Every way of not knowing, one at a time.
   expect(alignment(null, [], judged)).toMatchObject({ aligned: "unverified" });
   expect(alignment(intent, [], { ...judged, semantic: false })).toMatchObject({
     aligned: "unverified",
@@ -178,13 +163,10 @@ test("aligned: true is the strong claim, and every way of not knowing is unverif
     why: expect.stringContaining("budget_exhausted"),
   });
 
-  // An open warning is not a failure, but it is not alignment either.
   expect(alignment(intent, [report()], judged)).toMatchObject({ aligned: "unverified" });
-  // An open blocking report is the other strong claim.
   expect(alignment(intent, [report({ severity: "block" })], judged)).toMatchObject({
     aligned: "false",
   });
-  // A correction that was sent settles nothing on its own: the report is still open.
   expect(
     alignment(intent, [report({ severity: "block", resolution: "correction_submitted" })], judged),
   ).toMatchObject({ aligned: "false" });
@@ -203,7 +185,6 @@ test("a Run with no goal and no semantic constraints can still be aligned", () =
 
 test("a Driver says it is standing once per pending, not once per boundary", () => {
   const pending: ElectionLine[] = [{ kind: "pending", since: "t1", runs: ["r1"] }];
-  // Nothing pending: every election is its own event, and every candidate is written down.
   expect(alreadyStood([], "r1")).toBe(false);
   expect(alreadyStood(pending, "r1")).toBe(false);
   const stood: ElectionLine[] = [
@@ -211,33 +192,26 @@ test("a Driver says it is standing once per pending, not once per boundary", () 
     { kind: "candidate", at: "t2", by: "boundary", run: "r1" },
   ];
   expect(alreadyStood(stood, "r1")).toBe(true);
-  // Somebody else's line is not this Run's, and one from before the pending is not
-  // about it.
   expect(alreadyStood(stood, "r2")).toBe(false);
   expect(
     alreadyStood([{ kind: "candidate", at: "t0", by: "boundary", run: "r1" }, ...pending], "r1"),
   ).toBe(false);
-  // Standing again is still the wake rule working: only the journal line is suppressed.
   expect(shouldStand(stood, false)).toBe(true);
 });
 
 test("a pending evaluation is cleared by a Judgement that covers it, and by nothing less", () => {
   const owed: ElectionLine[] = [{ kind: "pending", since: "t1", runs: ["r1", "r2"] }];
-  // A Judgement about only one of the Runs it named answers nothing the mark asked.
   const partial: ElectionLine[] = [
     ...owed,
     { kind: "evaluated", at: "t2", by: "r3", runs: ["r1"] },
   ];
   expect(pendingEvaluation(partial)).toMatchObject({ since: "t1" });
-  // One that covers every named Run is the evaluation the Herd owed: cleared, so no
-  // Driver stands — or pays — for it again.
   const covered: ElectionLine[] = [
     ...owed,
     { kind: "evaluated", at: "t2", by: "r3", runs: ["r1", "r2", "r3"] },
   ];
   expect(pendingEvaluation(covered)).toBeNull();
   expect(shouldStand(covered, false)).toBe(false);
-  // An evaluation from before the mark is not an answer to it.
   const earlier: ElectionLine[] = [
     { kind: "evaluated", at: "t0", by: "r3", runs: ["r1", "r2"] },
     ...owed,
@@ -256,12 +230,9 @@ test("a snapshot is stale only when a loser wrote dirty after it was taken", () 
 
 test("the wake rule makes every Driver a candidate, not only the ones with siblings", () => {
   const nobody: ElectionLine[] = [];
-  // No siblings and nothing pending: this Driver has no cross-run question to ask.
   expect(shouldStand(nobody, false)).toBe(false);
   expect(shouldStand(nobody, true)).toBe(true);
 
-  // A pending evaluation is everybody's: without this it would wait for a Driver with a
-  // parent, which may never run again.
   const stuck: ElectionLine[] = [{ kind: "pending", since: "t1", runs: ["r1"] }];
   expect(shouldStand(stuck, false)).toBe(true);
   expect(pendingEvaluation(stuck)).toMatchObject({ runs: ["r1"] });

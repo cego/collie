@@ -53,7 +53,7 @@
     "anti-slop/no-unknown-type-aliases": "error",
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-widen-then-assert": "error",
-    "anti-slop/require-safety-comment-for-type-assertion": "error",
+    "anti-slop/require-safety-comment-for-type-assertion": ["error", { "markers": ["WARNING"] }],
     "anti-slop-effect/no-service-constructor-imports": "error",
     "landmines-style/no-comments": ["error", { "publicApi": ["/src/(sdk|collie-module)\\.ts$"] }],
     "effecttsgo/any-unknown-in-error-context": "error",

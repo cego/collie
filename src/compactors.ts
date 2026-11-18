@@ -1,12 +1,3 @@
-// The four harnesses' official compaction interfaces, behind the one policy in
-// `compaction.ts`. Everything here ships inside Collie: the helpers are generated per
-// agent into that agent's control directory, so an installed binary carries them and
-// no persistent user or project harness settings are rewritten.
-//
-// Every adapter reduces to the same two things — a telemetry file the harness's own
-// interface appends to, and a channel that asks it to compact — because the shared
-// policy owns the threshold, the budget and what counts as an outcome.
-
 import * as Num from "effect/Number";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -85,12 +76,6 @@ import {
 import { holderLives, hostLockOf, lockHolder, withLock } from "./lock";
 import { carriedDelivery } from "./dispatcher";
 
-/**
- * A compaction request, through the Dispatcher's channel. `Unsubmitted` is reserved for
- * the case the policy treats specially — the channel provably never sent it, so nothing
- * is in flight and the waiting work may be released. Anything else may already have
- * reached the harness, so it is an ordinary failure and the attempt's budget runs.
- */
 const submitCompaction = Effect.fn("Compactors.submitCompaction")(function* (
   ctx: AgentContext,
   requestId: string,
@@ -116,12 +101,6 @@ import { reason } from "./naming";
 import { isToStandard, questionRepair } from "./question-standard";
 import type { JsonObject } from "./schema";
 
-/**
- * The harness releases these adapters were verified against. The gate refuses an older
- * one: the research traced these contracts in these versions, and a launch that
- * installed controls an older release does not honour would be an unmanaged agent
- * wearing the managed agent's record.
- */
 export const VERIFIED_VERSIONS: ReadonlyMap<string, string> = new Map([
   ["claude", "2.1.263"],
   ["codex", "0.162.0"],
@@ -129,32 +108,13 @@ export const VERIFIED_VERSIONS: ReadonlyMap<string, string> = new Map([
   ["pi", "0.87.1"],
 ]);
 
-/** The file each agent's controls append their telemetry to, one JSON object per line. */
 const TELEMETRY = "events.jsonl";
-/** Held for the read-slice-write of that file, by whichever process is writing it. */
 const TELEMETRY_LOCK = "events.lock";
-/**
- * Events no control could record, one `{at}` per line. Appended rather than rewritten, so
- * the writer that could not have the telemetry can still say that it could not: what is
- * missing from a file is invisible, and a correlation that reads absence as evidence would
- * read it as nothing having happened.
- */
 const LOSSES = "events.lost";
-/**
- * Claims a telemetry write makes before giving up, at the lock module's spacing: five
- * seconds, where a write holds the file for milliseconds. Longer buys nothing a hung
- * holder would give back, and a write that does give up is recorded as a loss.
- */
 const TELEMETRY_CLAIMS = 200;
 
-/**
- * What a control may report. Decoded rather than trusted: a hook, an extension and a
- * loopback server are all untrusted input, and a line Collie cannot decode is dropped
- * rather than allowed to decide whether an agent gets its next piece of work.
- */
 const EventSchema = Schema.Struct({
   at: Schema.Finite,
-  /** The harness's own session identity, so a `/new` in the pane invalidates the rest. */
   session: Schema.NullOr(Schema.String),
   kind: Schema.Literals([
     "session",
@@ -167,30 +127,14 @@ const EventSchema = Schema.Struct({
     "out",
     "stopped",
   ]),
-  /** Current-context total. `null` where the harness has not measured this context. */
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
-  /** Collie's own request id, which is what correlates an outcome to an attempt. */
   request: Schema.optionalKey(Schema.String),
-  /** On a `submit`: the delivery whose token the prompt carried. */
   delivery: Schema.optionalKey(Schema.String),
   message: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
-  /**
-   * Which half of a compaction an uncorrelated event was: Claude's `PostCompact`
-   * payload carries no field Collie's marker survives into, so a completion is told
-   * from a start by position, and a start that is not Collie's is what makes the
-   * completion after it somebody else's.
-   */
   phase: Schema.optionalKey(Schema.Literals(["pre", "post"])),
-  /**
-   * What a harness with no request id of its own had before the request was submitted,
-   * so that what it has afterwards can be told apart. Codex's compaction endpoint
-   * takes a thread and nothing else, and this is what supplies the correlation.
-   */
   items: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** On a Claude `usage`: its Subscription's windows, as the status line had them. */
   limits: Schema.optionalKey(StatusLineLimits),
-  /** On an `out` or a `usage`: where the harness keeps this conversation. */
   transcript: Schema.optionalKey(Schema.String),
 });
 interface TelemetryEvent extends Schema.Schema.Type<typeof EventSchema> {}
@@ -202,11 +146,6 @@ const LossJson = Schema.fromJsonString(Schema.Struct({ at: Schema.Finite }));
 const decodeLoss = Schema.decodeUnknownOption(LossJson);
 const encodeLoss = flow(Schema.encodeResult(LossJson), Result.getOrThrow);
 
-/**
- * Whether anything went unrecorded since `since`. A correlation that reads absence —
- * Claude's, where an unmarked start is what makes the completion after it somebody
- * else's — cannot answer from a file with a hole in it.
- */
 const lostSince = Effect.fn("Compactors.lostSince")(function* (dir: string, since: number) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -219,12 +158,6 @@ const lostSince = Effect.fn("Compactors.lostSince")(function* (dir: string, sinc
   });
 });
 
-/**
- * This agent's telemetry, narrowed to the session it is on now. The newest `session`
- * line is the binding: a harness that started a second session in the same pane has a
- * context Collie has measured nothing about, so the older session's samples and
- * outcomes are stale rather than merely old.
- */
 const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -234,8 +167,6 @@ const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
     .readFileString(file)
     .pipe(Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "")));
   const bound = boundSession(lines);
-  // Nothing has said which session this agent is on, so nothing here describes a
-  // context Collie can vouch for.
   if (bound === undefined) return [];
   const events: TelemetryEvent[] = [];
   for (const line of lines) {
@@ -245,20 +176,10 @@ const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
   return events;
 });
 
-/**
- * How many lines of telemetry one agent keeps. A status line runs on every event in a
- * harness's own UI, so an append-only file would be tens of thousands of lines by
- * lunchtime; only the newest sample and the current attempt are ever read.
- */
 export const KEEP_LINES = 200;
 
-/**
- * How many compaction events the cap keeps whatever else it drops: one compaction's start
- * and outcome, with room for a human's or an automatic one in between.
- */
 const KEEP_LIFECYCLE = 6;
 
-/** The newest identity line, and the newest `KEEP_LIFECYCLE` compaction events. */
 function protectedLines(lines: ReadonlyArray<string>) {
   const keep = new Set<number>();
   let lifecycle = 0;
@@ -279,7 +200,6 @@ function protectedLines(lines: ReadonlyArray<string>) {
   return returned;
 }
 
-/** The newest `room` lines, giving up the oldest unprotected ones. */
 function trimmed(lines: ReadonlyArray<string>, room: number) {
   if (lines.length <= room) {
     const returned: ReadonlyArray<string> = lines;
@@ -296,14 +216,8 @@ function trimmed(lines: ReadonlyArray<string>, room: number) {
   return returned;
 }
 
-/**
- * Appends one event, keeping the file bounded. Read-slice-write rather than append,
- * because the cap is the point — and under this agent's own lock, because the writers are
- * independent processes: a status line, a hook and a Driver all reach the same file.
- */
 export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
   dir: string,
-  /** Everything but the timestamp, which is the writer's to stamp. */
   written: Omit<TelemetryEvent, "at">,
 ) {
   const event: TelemetryEvent = { ...written, at: yield* Clock.currentTimeMillis };
@@ -314,23 +228,15 @@ export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
   const line = encodeEvent(event);
   yield* withLock(
     path.join(dir, TELEMETRY_LOCK),
-    // Nothing goes in the telemetry outside the lock — the holder's snapshot would
-    // overwrite it — so what is recorded instead is that this event is missing.
     fs.writeFileString(path.join(dir, LOSSES), `${encodeLoss({ at: event.at })}\n`, {
       flag: "a",
     }),
     Effect.gen(function* () {
       const existing = (yield* fs.exists(file)) ? yield* fs.readFileString(file) : "";
-      // Room for the event and for an identity line in front of it.
       const older = trimmed(
         Arr.filter(Str.split(existing, "\n"), (text) => Str.trim(text) !== ""),
         KEEP_LINES - 2,
       );
-      // Identity is the writer's job, once, rather than every adapter's: an event on a
-      // session nothing has bound yet binds it, and one on a session that has changed
-      // rebinds — which is what makes every earlier sample and attempt stale. Read from
-      // what survives the trim, so a file the cap took the binding out of is one this
-      // write puts it back into.
       const bound = boundSession(older);
       const rebinds = bound !== event.session && event.kind !== "session";
       const session = rebinds
@@ -342,7 +248,6 @@ export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
   );
 });
 
-/** The session every later line is read against: the newest one a `session` line named. */
 function boundSession(lines: ReadonlyArray<string>) {
   for (const line of [...lines].reverse()) {
     const decoded = decodeEvent(line);
@@ -355,24 +260,17 @@ function boundSession(lines: ReadonlyArray<string>) {
   return returned;
 }
 
-/** Anything the harness's own controls wrote, which a launch's fresh directory starts without. */
 const reported = (ctx: ReadyContext) =>
   readEvents(ctx.dir).pipe(
     Effect.map((events) => events.length > 0),
     Effect.orElseSucceed(() => false),
   );
 
-/** The harness's own latest current-context total, or null where it has none. */
 const latestUsage = Effect.fn("Compactors.latestUsage")(function* (dir: string) {
   const events = yield* readEvents(dir);
   return Arr.filter(events, (event) => event.kind === "usage").at(-1)?.tokens ?? null;
 });
 
-/**
- * What this request has established. Only an outcome carrying this request id counts:
- * a native automatic compaction, another Run's request and a duplicate event all
- * appear here, and none of them may complete an attempt they do not belong to.
- */
 const outcomeOf = Effect.fn("Compactors.outcomeOf")(function* (dir: string, requestId: string) {
   const events = yield* readEvents(dir);
   const mine = Arr.filter(events, (event) => event.request === requestId);
@@ -383,7 +281,6 @@ const outcomeOf = Effect.fn("Compactors.outcomeOf")(function* (dir: string, requ
   return null;
 });
 
-/** `a.b.c` against `x.y.z`, numerically, missing parts as zero. */
 export function atLeast(installed: string, wanted: string) {
   const parts = (text: string) =>
     Arr.map(
@@ -410,11 +307,6 @@ export class HarnessVersionError extends Data.TaggedError("HarnessVersionError")
   readonly message: string;
 }> {}
 
-/**
- * A harness's version, asked once per process: a gate runs before every launch, and the
- * installed binary does not change under a running Driver. A failed probe is asked again
- * after a while, so one hiccup does not refuse every launch until a restart.
- */
 const versions = Effect.runSync(
   Cache.makeWith(
     (harness: string) =>
@@ -445,11 +337,6 @@ const versions = Effect.runSync(
   ),
 );
 
-/**
- * What this machine has installed, as the harness itself reports it, or null where it
- * cannot be asked. Unknown is never treated as new enough: a gate that guessed would be
- * a gate.
- */
 export const installedVersion = Effect.fn("Compactors.installedVersion")(function* (
   harness: string,
 ) {
@@ -481,16 +368,6 @@ const gateVersion = Effect.fn("Compactors.gateVersion")(function* (harness: stri
     });
 });
 
-/**
- * The Pi extension Collie loads into one agent, generated with that agent's telemetry
- * path in it. Pi's official extension surface supplies all three parts: the current
- * context estimate its own compaction and footer use, a command that calls `compact`
- * with per-request completion callbacks, and the compaction lifecycle events that tell
- * a native automatic compaction from this one.
- *
- * `-e` rather than a discovered location: an extension written into `~/.pi` would be a
- * persistent settings change, and would load into every Pi the human ever starts.
- */
 function piExtension(file: string) {
   const returned: string = `// Generated by Collie for one agent. Do not edit: it is rewritten at launch.
 import { readFileSync, writeFileSync } from "node:fs";
@@ -649,35 +526,19 @@ const pi: CompactionPort = {
       return { args: ["-e", extension] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
-  // The extension's `session_start` sample.
   ready: reported,
-  // Through the human's channel, which is what a slash command is: the extension's
-  // command carries the request id, so the outcome that comes back is this request's.
-  // The human's channel, so a refusal from herdr is a request that never left.
   request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
   poll: (ctx, requestId) => outcomeOf(ctx.dir, requestId),
 };
 
-/**
- * The two sides of one line: the call that submits a compaction, and everything an
- * adapter does before it. Only the adapter knows where that line is, and the policy
- * needs to know which side a failure came from — a request that never left may release
- * the waiting work, and one that may have been accepted may not.
- */
 export class Submitting extends Data.TaggedError("Submitting")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
 
-/** The one call that hands the request to the harness. */
 const submitting = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.mapError((cause) => new Submitting({ message: reason(cause), cause })));
 
-/**
- * Everything else in a `request`: connecting, binding, reading, recording. A
- * `Submitting` passes through as it is — keeping it says
- * in a log which side of the line the failure came from.
- */
 const beforeSubmitting = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.mapError((cause) =>
@@ -685,28 +546,16 @@ const beforeSubmitting = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     ),
   );
 
-/**
- * Claude Code's status-line and hook payloads, as much of them as Collie reads. Every
- * field optional: the payload is a documented contract, but it arrives on a pipe from
- * a process Collie does not control, and a version that renamed one field must make
- * the sample unavailable rather than crash a human's status line.
- */
 const ClaudePayload = Schema.Struct({
   session_id: Schema.optionalKey(Schema.String),
-  /** Absent for the status line; the hook's name for a hook. */
   hook_event_name: Schema.optionalKey(Schema.String),
-  /** `StopFailure` only: why the turn stopped, `rate_limit` among them. */
   error: Schema.optionalKey(Schema.String),
-  /** `StopFailure` only: the API's own words for it, where it gave any. */
   error_details: Schema.optionalKey(Schema.String),
   transcript_path: Schema.optionalKey(Schema.String),
   trigger: Schema.optionalKey(Schema.String),
-  /** `UserPromptSubmit` only: what was submitted, which is how Collie's own is told. */
   prompt: Schema.optionalKey(Schema.String),
   custom_instructions: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** Decoded on its own, so a renamed field loses the limits and keeps the context line. */
   rate_limits: Schema.optionalKey(Schema.Unknown),
-  /** `PreToolUse` only: the tool called, its call's id and what it was called with. */
   tool_name: Schema.optionalKey(Schema.String),
   tool_use_id: Schema.optionalKey(Schema.String),
   tool_input: Schema.optionalKey(Schema.Unknown),
@@ -716,12 +565,6 @@ const ClaudePayload = Schema.Struct({
         total_input_tokens: Schema.optionalKey(Schema.Finite),
         total_output_tokens: Schema.optionalKey(Schema.Finite),
         used_percentage: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
-        /**
-         * Null before the first API call and again after a compaction until the next
-         * one. That is the freshness signal: the totals beside it are `0` in both
-         * cases, and a zero read as a measurement would be a sample of an empty
-         * context that is not empty.
-         */
         current_usage: Schema.optionalKey(
           Schema.NullOr(Schema.Struct({ input_tokens: Schema.optionalKey(Schema.Finite) })),
         ),
@@ -731,7 +574,6 @@ const ClaudePayload = Schema.Struct({
 });
 const decodeClaudePayload = Schema.decodeUnknownOption(Schema.fromJsonString(ClaudePayload));
 
-/** One question of an `AskUserQuestion` call, as Claude's tool takes it. */
 export const AgentQuestion = Schema.Struct({
   question: Schema.String,
   header: Schema.optionalKey(Schema.String),
@@ -745,10 +587,6 @@ export type AgentQuestion = typeof AgentQuestion.Type;
 const AskedQuestions = Schema.Struct({ questions: Schema.NonEmptyArray(AgentQuestion) });
 const decodeAsked = Schema.decodeUnknownOption(AskedQuestions);
 
-/**
- * pi's question tool, which it does not have itself: `AskUserQuestion`'s shape, handed to
- * the host by the helper Claude's hook runs, with the agent's control directory `dir`.
- */
 export const piQuestionTool = (self: ReadonlyArray<string>, dir: string) => {
   const document = Schema.toJsonSchemaDocument(AskedQuestions);
   return {
@@ -756,23 +594,17 @@ export const piQuestionTool = (self: ReadonlyArray<string>, dir: string) => {
     label: "Ask the human",
     description:
       'Ask the human one or more questions. Give each at least three options, each with a description of what it leads to, and end exactly one option\'s label with " (Recommended)". The questions go on your Run, and the answers arrive as your next message.',
-    // SAFETY: a JSON Schema document is JSON.
+    // WARNING: a JSON Schema document is JSON.
     parameters: { ...document.schema, $defs: document.definitions } as JsonObject,
     helper: [...self, "herdr", "compaction", dir],
   };
 };
 
-/** One `AskUserQuestion` call, as the hook recorded it for the agent's Run. */
 export const AskedCall = Schema.Struct({
   at: Schema.Finite,
   session: Schema.NullOr(Schema.String),
-  /** The call's `tool_use_id`, or the time where the payload had none. */
   id: Schema.String,
   questions: Schema.Array(AgentQuestion),
-  /**
-   * Where it fell short and was not posted: repaired in the tool's own reply, or to be
-   * repaired by a Delivery for a harness whose question tool has already returned.
-   */
   repair: Schema.optionalKey(Schema.Literals(["in-reply", "by-delivery"])),
 });
 export type AskedCall = typeof AskedCall.Type;
@@ -785,7 +617,6 @@ const encodeAskedCall = flow(
 );
 const decodeAskedCall = Schema.decodeUnknownOption(Schema.fromJsonString(AskedCall));
 
-/** Apart from the telemetry, whose cap trims lines: a question must not be trimmed away. */
 export const QUESTIONS = "questions.jsonl";
 
 const deniedWith = (reason: string) =>
@@ -801,13 +632,8 @@ const DENIED_QUESTION = deniedWith(
   "Collie has put your question on your Run for a human to answer. End your turn now: the answer will be your next message.",
 );
 
-/** Marks the copy of a call whose repair could not be sent, recorded to be posted as asked. */
 export const UNREPAIRED = "#unrepaired";
 
-/**
- * Records `call` again to be posted as asked, its repair having failed. Appended, so the
- * questions already posted keep their numbers.
- */
 export const postUnrepaired = Effect.fn("Compactors.postUnrepaired")(function* (
   dir: string,
   call: AskedCall,
@@ -826,7 +652,6 @@ export const postUnrepaired = Effect.fn("Compactors.postUnrepaired")(function* (
   return asked;
 });
 
-/** The `AskUserQuestion` calls this agent made at or after `since`, oldest first. */
 export const questionsSince = Effect.fn("Compactors.questionsSince")(function* (
   dir: string,
   since: number,
@@ -841,11 +666,6 @@ export const questionsSince = Effect.fn("Compactors.questionsSince")(function* (
     (call) => call.at >= since,
   );
 });
-/**
- * Records each question the agent's harness reports through its controls that is not
- * recorded yet, for a harness with no hook to record it as it is asked. A harness that
- * cannot be read now has asked nothing yet as far as anyone can tell.
- */
 export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")(function* (
   stateDir: string,
   ports: CompactionPorts,
@@ -876,7 +696,6 @@ export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")
 });
 const decodeLimits = Schema.decodeUnknownOption(StatusLineLimits);
 
-/** The newest sample one agent's telemetry holds, from its lines. */
 const newestIn: (text: string) => StatusSample | null = (text) => {
   let newest: StatusSample | null = null;
   for (const line of Str.split(text, "\n")) {
@@ -887,12 +706,6 @@ const newestIn: (text: string) => StatusSample | null = (text) => {
   return newest;
 };
 
-/**
- * A reader of the newest Subscription windows any Claude agent's status line reported on
- * this Machine, with when, or null where none has. It decodes again only the agents whose
- * telemetry changed since it last read, by size and modification time: a status line
- * rewrites its file on every event, and most agents are idle between two reads.
- */
 export const rateLimitsReader = Effect.fn("Compactors.rateLimitsReader")(function* (
   stateDir: string,
 ) {
@@ -923,7 +736,6 @@ export const rateLimitsReader = Effect.fn("Compactors.rateLimitsReader")(functio
       let known = read.get(agent);
       if (known === undefined || known.size !== size || known.mtime !== mtime) {
         const text = yield* fs.readFileString(file).pipe(Effect.option);
-        // A failed read keeps the agent's last sample and is retried on the next read.
         if (Option.isSome(text)) {
           known = { size, mtime, newest: newestIn(text.value) };
           read.set(agent, known);
@@ -937,24 +749,11 @@ export const rateLimitsReader = Effect.fn("Compactors.rateLimitsReader")(functio
   return { newest: newestNow };
 });
 
-/** The newest status-line sample on this Machine, read once. */
 export const newestRateLimits = (stateDir: string) =>
   Effect.flatMap(rateLimitsReader(stateDir), (reader) => reader.newest);
 
-/**
- * The token Collie puts in `/compact`'s own instructions and reads back out of the
- * `PreCompact` payload. Claude's compaction has no request id of its own, and its
- * manual instructions are the one field that survives from the request into a hook —
- * so this is what tells Collie's request from a human typing `/compact` in the pane.
- */
 const CLAUDE_MARKER = /\(collie:([A-Za-z0-9-]+)\)/;
 
-/**
- * Turns Claude submits itself through `UserPromptSubmit`: a background task or monitor
- * finishing, and a message from another agent. The payload has no field saying so; the
- * opening tag is the only sign, and it is checked before the delivery token because a
- * task's output can quote one.
- */
 const CLAUDE_INJECTED = ["<task-notification>", "<agent-message "];
 
 function claudeInstructions(requestId: string) {
@@ -962,15 +761,6 @@ function claudeInstructions(requestId: string) {
   return returned;
 }
 
-/**
- * What Claude's own status line and compaction hooks report, decoded into one agent's
- * telemetry. Run as `collie herdr compaction <dir>` with the payload on stdin, so the
- * helper a launch installs is the binary that installed it — no `jq`, no shell JSON
- * parsing, and one place that validates an untrusted payload.
- *
- * The status-line case also prints the line Claude displays: Collie is borrowing the
- * human's status line, and giving it back a blank one would be taking something away.
- */
 export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(function* (
   dir: string,
   stdin: string,
@@ -987,9 +777,6 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
 
   const event = payload.hook_event_name;
   if (event === "UserPromptSubmit") {
-    // Recorded whole? No: the prompt is the human's own text, and a transcript is not
-    // Collie's to keep (SPEC §2). Only who submitted it, which is the whole question
-    // attribution asks.
     const prompt = payload.prompt ?? "";
     const delivery = carriedDelivery(prompt);
     yield* writeEvent(
@@ -1007,7 +794,6 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     if (asked === null || asked._tag === "None") return "";
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    // No live host to put it on the Run, so the agent asks in its pane. `dir` is `controlDir(stateDir, agent)`.
     const owner = yield* lockHolder(hostLockOf(path.dirname(path.dirname(dir))));
     if (owner === null || !(yield* holderLives(owner))) return "";
     const at = yield* Clock.currentTimeMillis;
@@ -1021,7 +807,6 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   }
   const transcript = payload.transcript_path;
   if (event === "StopFailure") {
-    // It fires once Claude has given up on the turn. An overload stops nothing (ADR-0049 D9).
     const error = payload.error ?? "unknown";
     if (error === "rate_limit" || error === "billing_error")
       yield* writeEvent(dir, {
@@ -1040,10 +825,6 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     return "";
   }
   if (event === "PreCompact" || event === "PostCompact") {
-    // Only `PreCompact` is given the instructions back, so only it can carry the
-    // marker. Everything else — Claude's own automatic compaction, a human's
-    // `/compact`, and the `PostCompact` that ends any of them — is recorded with its
-    // trigger and its half, because that is what `claudeOutcome` reads.
     const request =
       event === "PreCompact" && payload.trigger === "manual"
         ? CLAUDE_MARKER.exec(payload.custom_instructions ?? "")?.[1]
@@ -1070,8 +851,6 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     ...(limits && { limits }),
     ...(transcript && { transcript }),
   });
-  // Once a session: a status line is redrawn on every event, and its `out` must not crowd
-  // the compaction records out of the telemetry's cap.
   const now = yield* Clock.currentTimeMillis;
   const full =
     limits && Arr.some(statusLineWindows(limits), (window) => isFull(current(window, now)));
@@ -1092,23 +871,11 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     : `context: ${Math.round(percent)}%`;
 });
 
-/**
- * The run-scoped settings a launch loads with `--settings`, which is additional
- * settings rather than a rewrite: the human's own `~/.claude/settings.json` and the
- * project's are untouched, and this file dies with the agent's control directory.
- *
- * The status line is the official current-context contract, and the two compaction
- * hooks are the official lifecycle. Both are matched on `manual` and `auto`, because
- * an automatic compaction is what invalidates a sample Collie is about to read.
- */
 export function claudeSettings(dir: string, stopFailure: boolean) {
   const helper = Result.getOrThrow(
     CommandLine.join([...selfCommand(), "herdr", "compaction", dir]),
   );
   const hook = { matcher: "manual|auto", hooks: [{ type: "command", command: helper }] };
-  // `UserPromptSubmit` is the only place a submitted turn is visible to Collie, and it
-  // is what attribution rests on: a prompt with no delivery token is somebody typing in
-  // the pane. It carries no matcher — every submission counts, which is the point.
   const submitted = { hooks: [{ type: "command", command: helper }] };
   const failed = { hooks: [{ type: "command", command: helper }] };
   const returned: string = `${JSON.stringify(
@@ -1128,17 +895,6 @@ export function claudeSettings(dir: string, stopFailure: boolean) {
   return returned;
 }
 
-/**
- * What Claude has established about one request. Its `PostCompact` payload is
- * `{hook_event_name, trigger, compact_summary}` — nothing of the request survives into
- * it — so the completion is correlated the way Codex's and OpenCode's are: by what was
- * not there when Collie asked. The marked `PreCompact` is the start, and the first
- * manual completion after it on the same session is that compaction's.
- *
- * A start that is not Collie's in between — a human's own `/compact` — makes the
- * completion after it theirs, and leaves the attempt unresolved rather than taking it.
- * An `auto` trigger is Claude's own automatic compaction and never an answer either.
- */
 const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (
   dir: string,
   requestId: string,
@@ -1152,17 +908,11 @@ const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (
   for (const event of events.slice(at + 1)) {
     if (event.kind !== "auto" || event.reason !== "manual") continue;
     if (event.phase === "pre") return null;
-    // The start that would have made this completion somebody else's may be the event
-    // nothing could record, so a hole since the request is unresolved, not success.
     return (yield* lostSince(dir, events[at]!.at)) ? null : ({ kind: "success" } as const);
   }
   return null;
 });
 
-/**
- * The busiest window this agent's status line last reported, with its reset, as a run-out
- * is said: `session 100%, resets 15:45 (in 2h 3m)`. Null where it reported none.
- */
 const lastFullWindow = Effect.fn("Compactors.lastFullWindow")(function* (dir: string) {
   const sampled = Option.getOrUndefined(
     Arr.findLast(
@@ -1184,16 +934,8 @@ const lastFullWindow = Effect.fn("Compactors.lastFullWindow")(function* (dir: st
   return `${Str.toLowerCase(busiest.label)} ${Math.round(busiest.usedPercent)}%${reset}`;
 });
 
-/**
- * The earliest Claude Code `StopFailure` was checked in. Older ones are left to their
- * status line and the Machine's reading rather than given a hook they may refuse.
- */
 const CLAUDE_STOP_FAILURE = "2.1.291";
 
-/**
- * When this agent's harness said it ran out of usage at or after `since`, why, and where
- * its conversation is; null where it has not.
- */
 export const ranOutSince = Effect.fn("Compactors.ranOutSince")(function* (
   dir: string,
   since: number,
@@ -1209,10 +951,6 @@ export const ranOutSince = Effect.fn("Compactors.ranOutSince")(function* (
     : { why: out.reason ?? "its usage ran out", transcript: out.transcript ?? null };
 });
 
-/**
- * What this agent's harness last said when a turn died on an error it will not retry, at
- * or after `since`, and where its conversation is; null where it has not.
- */
 export const stoppedSince = Effect.fn("Compactors.stoppedSince")(function* (
   dir: string,
   since: number,
@@ -1231,7 +969,6 @@ export const stoppedSince = Effect.fn("Compactors.stoppedSince")(function* (
       };
 });
 
-/** Where this agent's harness last said it keeps its conversation, or null where it never did. */
 export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
   stateDir: string,
   agent: string,
@@ -1259,59 +996,27 @@ const claude: CompactionPort = {
       return { args: ["--settings", settings] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
-  // The status line is drawn with the REPL, so its first call is the prompt being there.
   ready: reported,
-  // The documented native command, through the human's channel. Its instructions are
-  // real instructions with the correlation token appended: Claude has no request id
-  // for a compaction, and this field is the only one both hooks give back.
   request: (ctx, requestId) =>
     submitCompaction(ctx, requestId, `/compact ${claudeInstructions(requestId)}`),
-  // No documented compact-failed hook exists, so `poll` can only ever return success
-  // or nothing: a missing PostCompact is an unresolved outcome, which the shared
-  // policy pauses on, and never a confirmed failure.
   poll: (ctx, requestId) => claudeOutcome(ctx.dir, requestId),
 };
 
-/** Replaces a started server's own budget; a fast-forwarded test clock gives it none. */
 export const ServerStartDeadline = Context.Reference<Duration.Duration | null>(
   "collie/ServerStartDeadline",
   { defaultValue: () => null },
 );
 
-/**
- * A local server of this agent's own, started through a shell and waited on until it
- * says it is up. Two adapters need one — Codex's App Server, whose port is only ever on
- * its own stdout, and the `opencode serve` that exists just long enough to create a
- * session — and both had their own copy of the shell redirect, the detach, the deadline
- * loop and the failure message. The copy without a test was the one that read its log
- * before the shell had created it.
- *
- * Always detached and unreffed, and always reporting its pid: the spawner's own
- * finalizer would otherwise take down the server it just started, and who stops it is
- * the caller's decision — Codex records the pid for the agent's lifetime, OpenCode
- * stops it as soon as it has its session.
- *
- * `found` is the first capture group of `listening`, where the pattern has one. A
- * pattern that only asks whether the server is up leaves it empty.
- */
 export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (opts: {
   cwd: string;
-  /** The log the server is redirected into, inside the agent's control directory. */
   log: string;
-  /** The command exactly as a shell runs it, without the redirect. */
   command: string;
-  /** The line that says the server is up. */
   listening: RegExp;
   startMs: number;
-  /** What did not come up, for the failure a human reads. */
   what: string;
-  /** Shell lines run before the server, so it has the agent's environment. */
   env?: ReadonlyArray<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
-  // Created before the server is, because the wait below reads it: the shell's redirect
-  // makes it too, but a read that gets there first is a launch that fails on a missing
-  // file instead of waiting for the line it is waiting for.
   yield* fs.writeFileString(opts.log, "");
   const log = yield* Effect.orDie(Effect.fromResult(CommandLine.quote(opts.log)));
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -1331,8 +1036,6 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
           },
         ),
       );
-      // Unref before the scope closes, or the spawner's finalizer kills the server it
-      // just started — the same reason a detached Driver is unreffed.
       yield* Effect.asVoid(handle.unref);
       return handle.pid;
     }),
@@ -1353,20 +1056,6 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
   );
 });
 
-/** Stops a server this agent no longer needs. Best effort: it may already be gone. */
-
-/**
- * One App Server per agent, on a loopback port it picks itself, with the ordinary
- * interactive TUI in the pane connected to it by `--remote`. One server per agent is
- * not tidiness: it is the whole of Collie's thread identity. On a shared server
- * `thread/loaded/list` answers with every agent's thread and nothing in the protocol
- * says which is whose, so `boundThread` refuses rather than guesses.
- *
- * `--listen ws://127.0.0.1:0` rather than a port Collie picked: binding a port to read
- * its number and then handing it over is a race with everything else on the machine,
- * and the server prints the port it actually got. `unix://` is a documented form and
- * binds, but nothing sent over that socket on 0.153.4 is ever answered.
- */
 const CODEX_SERVER = "codex app-server";
 const CODEX_LOG = "app-server.log";
 const CODEX_LISTENING = /ws:\/\/127\.0\.0\.1:(\d+)/;
@@ -1377,7 +1066,6 @@ const codexEndpoint = Effect.fn("Compactors.codexEndpoint")(function* (
   server: string,
 ) {
   const path = yield* Path.Path;
-  // Through a shell, because the port it chose is only on its stdout.
   const served = yield* servedEndpoint({
     cwd: ctx.cwd,
     log: path.join(ctx.dir, CODEX_LOG),
@@ -1398,7 +1086,6 @@ const codexEndpoint = Effect.fn("Compactors.codexEndpoint")(function* (
   return { endpoint: `ws://127.0.0.1:${served.found}`, pid: served.pid, command: server };
 });
 
-/** The endpoint this agent's controls talk to, or a failure naming what is missing. */
 const codexAt = (ctx: ReadyContext) =>
   ctx.endpoint === null
     ? Effect.fail(
@@ -1406,13 +1093,6 @@ const codexAt = (ctx: ReadyContext) =>
       )
     : Effect.succeed(ctx.endpoint);
 
-/**
- * Stops a Codex agent where its turns run, on one connection opened before any signal:
- * prove the server is the agent's, note its turns and its session, drain it with one
- * SIGTERM — admission closes and no queued or goal continuation starts — interrupt every
- * running turn, sub-agents' included, wait for the server to exit, then give each proven
- * process left of its session one SIGTERM. Nothing gets a second, and nothing SIGKILL.
- */
 const stopCodex = (
   target: StopTarget,
   note: (line: string) => Effect.Effect<void>,
@@ -1423,7 +1103,6 @@ const stopCodex = (
     const signalled = [...target.signalled];
     const before = (one: SeenProcess) =>
       Arr.some(signalled, (seen) => seen.pid === one.pid && seen.started === one.started);
-    /** One SIGTERM, never a second, even across stops. */
     const once = (one: SeenProcess) =>
       before(one)
         ? Effect.void
@@ -1501,7 +1180,6 @@ const stopCodex = (
             const about = `thread ${one.thread} turn ${one.turn}, server ${target.endpoint} pid ${target.pid}${one.transcript === null ? "" : `, transcript ${one.transcript}`}`;
             submitted++;
             yield* note(`${target.agent}: interrupt submitted — ${about}`);
-            // A refusal is read back below rather than believed: the turn may have ended.
             const answered = yield* interruptTurn(client, one.thread, one.turn).pipe(Effect.result);
             if (answered._tag === "Success") {
               acknowledged++;
@@ -1513,7 +1191,6 @@ const stopCodex = (
             }
           });
         for (const one of running) {
-          // Its turns have all ended and it has gone: nothing is left to answer.
           if (!(yield* stillRunning(server))) break;
           yield* interrupt(one);
         }
@@ -1530,7 +1207,6 @@ const stopCodex = (
               once,
               inspected,
             );
-          // Read back rather than assumed: a lost connection is not a turn that ended.
           let unread: string | null = null;
           const unended: typeof running = [];
           for (const thread of busy) {
@@ -1548,7 +1224,6 @@ const stopCodex = (
                 ),
               );
               if (one === undefined) {
-                // A continuation the server started on an interrupt it read before its SIGTERM.
                 one = { thread: thread.id, turn, transcript: thread.transcript };
                 running.push(one);
                 yield* interrupt(one);
@@ -1573,8 +1248,6 @@ const stopCodex = (
         }
       }),
     ).pipe(
-      // Anything here is the connection: unanswered, refused or lost before the stop was done.
-      // Lost because the server exited is the stop going on, not failing.
       Effect.catch((cause) =>
         Effect.gen(function* () {
           if (yield* stillRunning(server)) return notQuiet(reason(cause));
@@ -1593,15 +1266,8 @@ const stopCodex = (
     );
   });
 
-/** How long the processes left of a server get to end, however late it exited in the budget. */
 const SURVIVOR_GRACE_MS = 2_000;
 
-/**
- * What is left of an exited server's session: each process noted before the drain that is
- * still the same process gets one SIGTERM and is looked at again; one nobody noted is
- * named and left alone. Without sessions, the noted descendants are all there is to look
- * at. Quiet only when none is left.
- */
 const survivors = (
   root: number,
   noted: ReadonlyArray<SeenProcess>,
@@ -1692,7 +1358,6 @@ const survivors = (
     ),
   );
 
-/** Codex's port, over the App Server `server` starts: `codex app-server`, or a test's stand-in. */
 export const codexPort: (server: string) => CompactionPort = (server) => ({
   gate: gateVersion("codex"),
   ready: (ctx) =>
@@ -1732,7 +1397,6 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
       return yield* withCodex(url, (client) =>
         Effect.gen(function* () {
           const threadId = yield* boundThread(client, ctx.cwd);
-          // The TUI has not started a thread yet, so there is no context to measure.
           if (threadId === null) return null;
           yield* writeEvent(ctx.dir, { session: threadId, kind: "session" });
           return yield* codexContext(client, threadId);
@@ -1741,10 +1405,6 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
     }),
   request: (ctx, requestId) =>
     Effect.gen(function* () {
-      // Connecting, binding the thread and listing what it already has all happen
-      // before the request itself, so their failures are requests that never left.
-      // `startCompaction`'s is not: its socket can close after the server took the
-      // frame, and the thread may be compacting on the strength of it.
       const url = yield* codexAt(ctx);
       yield* withCodex(url, (client) =>
         Effect.gen(function* () {
@@ -1754,9 +1414,6 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
               message: `${ctx.agent} has no Codex thread to compact`,
             });
           }
-          // The compactions this thread already has, recorded before the request is
-          // submitted. `thread/compact/start` carries no request id, so a compaction
-          // that was not there before is the only thing that can be this request's.
           const before = yield* compactionItems(client, threadId);
           yield* writeEvent(ctx.dir, {
             session: threadId,
@@ -1767,7 +1424,6 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
           yield* submitting(startCompaction(client, threadId));
         }),
       );
-      // Its own socket, not the human's channel: no submission for herdr to have seen.
       return null;
     }).pipe(beforeSubmitting),
   poll: (ctx, requestId) =>
@@ -1777,7 +1433,6 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
       const started = Option.getOrUndefined(
         Arr.findFirst(events, (event) => event.kind === "start" && event.request === requestId),
       );
-      // Nothing was recorded as submitted, so nothing here can have completed it.
       if (!started?.session) return null;
       const threadId = started.session;
       const before = new Set(started.items ?? []);
@@ -1786,8 +1441,6 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
           const now = yield* compactionItems(client, threadId);
           const mine = Option.getOrUndefined(Arr.findFirst(now, (item) => !before.has(item.id)));
           if (!mine) return null;
-          // A compaction runs as a turn of its own, so the turn's own status is the
-          // protocol's terminal answer rather than an inference from idleness.
           const outcome = yield* turnOutcome(client, threadId, mine.turnId);
           if (outcome.kind === "running") return null;
           return outcome.kind === "completed"
@@ -1798,17 +1451,6 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
     }),
 });
 
-/**
- * The ordinary OpenCode TUI, hosting its own loopback server on a port Collie picked.
- * That is the whole of the integration: no second process, and the endpoint lives
- * exactly as long as the agent does, because the agent is the process serving it.
- *
- * Collie has to pick the port. `--port 0` lets OpenCode choose, but the TUI prints it
- * nowhere Collie can read, and `opencode serve` + `attach` — which does print it —
- * refuses `--model` and `--auto`, so a Collie-launched agent would lose its model and
- * its unattended switch. A port claimed and released a moment earlier is a small race
- * that a launch fails loudly on; a launch that silently drops the model is not.
- */
 const OPENCODE_LOG = "server.log";
 const OPENCODE_LISTENING = /http:\/\/127\.0\.0\.1:\d+/;
 const OPENCODE_START_MS = 30_000;
@@ -1831,11 +1473,6 @@ const opencodeAt = (ctx: AgentContext) =>
       )
     : Effect.succeed(ctx.endpoint);
 
-/**
- * The session Collie created for this agent at launch, checked against its directory.
- * Read from the agent's own telemetry rather than from the server, because the server
- * cannot say which of a project's sessions is this agent's.
- */
 const opencodeBound = Effect.fn("Compactors.opencodeBound")(function* (
   ctx: LaunchContext,
   base: string,
@@ -1850,24 +1487,10 @@ const opencodeBound = Effect.fn("Compactors.opencodeBound")(function* (
   return bound;
 });
 
-/**
- * The launch: a port, a session created on a server that lives just long enough to
- * make it, or the one an agent started again had, and the ordinary TUI told to host that
- * port and continue that session.
- *
- * The temporary server is what buys exact identity. `opencode --port N` makes the TUI
- * its own server, so there is nothing to create a session on before it starts — and
- * `serve` + `attach`, which would let Collie own the server for the agent's whole
- * life, refuses `--model` and `--auto` and would cost a Collie-launched agent its
- * model and its unattended switch.
- */
 const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: LaunchContext) {
   const path = yield* Path.Path;
   const port = yield* openPort();
   const base = `http://127.0.0.1:${port}`;
-  // This server exists only to make the session, so it is stopped the moment it has —
-  // including when creating the session fails, because the agent's own TUI is about to
-  // want this port back.
   const created = Effect.gen(function* () {
     const served = yield* servedEndpoint({
       cwd: ctx.cwd,
@@ -1882,8 +1505,6 @@ const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: La
   });
   const session = ctx.session ?? (yield* created);
 
-  // Recorded before the agent starts, so the very first boundary reads the session
-  // Collie made rather than guessing among the project's.
   yield* writeEvent(ctx.dir, { session, kind: "session" });
   return {
     args: ["--hostname", "127.0.0.1", "--port", String(port), "--session", session],
@@ -1894,7 +1515,6 @@ const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: La
 const opencode: CompactionPort = {
   gate: gateVersion("opencode"),
   install: opencodeLaunch,
-  // The TUI is the server, so its answering for Collie's session is the TUI being up.
   ready: (ctx) =>
     ctx.endpoint === null
       ? Effect.succeed(false)
@@ -1910,33 +1530,22 @@ const opencode: CompactionPort = {
     }),
   request: (ctx, requestId) =>
     Effect.gen(function* () {
-      // Everything up to `summarize` is preparation, so its failures are requests that
-      // never left. `summarize`'s own is not: its HTTP call times out on the client
-      // while the server's summarize loop keeps running.
       const base = yield* opencodeAt(ctx);
       const session = yield* opencodeBound(ctx, base);
       const all = yield* openCodeMessages(base, session);
       const model = sessionModel(all);
       if (model === null) {
-        // Nothing has run in this session, so it has no model to summarize in — and
-        // no context worth compacting either.
         return yield* new Unsubmitted({
           message: `${ctx.agent}'s OpenCode session has not settled on a model yet`,
         });
       }
-      // Which compactions the session already had, before the request. Summarizing
-      // carries no request id, so a compaction that was not there before is the only
-      // thing that can be this one.
       yield* writeEvent(ctx.dir, {
         session,
         kind: "start",
         request: requestId,
         items: compactionIds(all),
       });
-      // A 200 here is the handler's own `true` after its loop, which says nothing
-      // about what the loop did. The outcome is read back off the session.
       yield* submitting(summarize(base, session, model));
-      // Its own HTTP call, not the human's channel: no submission for herdr to see.
       return null;
     }).pipe(beforeSubmitting),
   poll: (ctx, requestId) =>
@@ -1967,19 +1576,9 @@ export const COMPACTION_PORTS: CompactionPorts = {
   pi,
 };
 
-/**
- * Submissions this agent has taken that neither Collie nor Claude itself made. Claude's
- * `UserPromptSubmit` hook is the only place a submitted turn is visible, and what is left
- * is a human typing into that pane — which is the one thing automatic correction must
- * never fight.
- *
- * Counted rather than timestamped: the caller compares this against what it saw last
- * time, so a submission it has already turned into an override is not one again.
- */
 export const externalSubmissions = (dir: string) =>
   Effect.map(externalSubmits(dir), (ats) => ats.length);
 
-/** When each of those submissions was made, in epoch ms. */
 export const externalSubmits = Effect.fn("Compactors.externalSubmits")(function* (dir: string) {
   return Arr.map(
     Arr.filter(
@@ -1990,7 +1589,6 @@ export const externalSubmits = Effect.fn("Compactors.externalSubmits")(function*
   );
 });
 
-/** Whether the submit hook recorded this delivery's token: the harness took that prompt. */
 export const submittedDelivery = Effect.fn("Compactors.submittedDelivery")(function* (
   dir: string,
   delivery: string,

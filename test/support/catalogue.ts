@@ -1,5 +1,3 @@
-// The four harnesses as fakes: each answers what it answered on vm-mk on 29 Oct 2026.
-
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import { Effect, Layer, Schema, flow, Result } from "effect";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
@@ -29,13 +27,11 @@ export const fakeAdapters: HarnessAdapters = {
   opencode: recorded("opencode-models.txt"),
 };
 
-/** Every harness answering as recorded, but for the ones a test replaces. */
 export const fakeSources = (replaced: Partial<CatalogueSources> = {}) => ({
   ...sourcesOf(fakeAdapters),
   ...replaced,
 });
 
-// Unexpected RPCs die so a CLI test cannot pass by asking the wrong operation.
 export const serveCatalogue = (
   state: string,
   catalogues: HarnessCatalogues["Service"],
@@ -58,7 +54,7 @@ export const serveCatalogue = (
     );
     yield* Layer.build(
       RpcServer.layer(group).pipe(
-        // SAFETY: the Proxy answers every tag the group has, the unserved ones by dying.
+        // WARNING: the Proxy answers every tag the group has, the unserved ones by dying.
         Layer.provide(group.toLayer(served as never)),
         Layer.provide(RpcServer.layerProtocolSocketServer),
         Layer.provide(RpcSerialization.layerNdjson),

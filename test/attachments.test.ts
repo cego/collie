@@ -1,8 +1,3 @@
-// A Run takes attachments by path (ADR-0046): the host copies each into the Run's own
-// directory before its first step or the steer it came with, every step's prompt lists
-// them, and a Run started from it gets copies. Driven through the CLI and host an
-// installation runs, with core faked.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -19,7 +14,6 @@ import { hostRecords } from "./support/records";
 import { collie, proves, type World } from "./support/world";
 import type { FakeHc } from "./support/fake-hc";
 
-/** The Run's audit trail, as its host on `state` recorded it. */
 const trailOf = (state: string, runId: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     hostRecords(
@@ -56,7 +50,6 @@ const sentBy = (core: FakeHc) =>
     ),
   );
 
-/** A world whose fake agents answer each prompt with an Output, and stay alive. */
 const attending = <A, E>(
   prefix: string,
   body: (
@@ -179,7 +172,6 @@ test(
   () =>
     attending("collie-attach-conflict-", (world, cli) =>
       Effect.gen(function* () {
-        // Through the CLI, so the host it starts gives the fake agents their Outputs.
         const started = yield* cli([
           "run",
           "start",

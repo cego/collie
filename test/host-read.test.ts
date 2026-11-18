@@ -29,7 +29,6 @@ test(
             () => client.run({ runId }),
             (view) => view !== null && isSettled(view),
           );
-          // Both answers read Ready to release from the board, which is rebuilt after the engine settles.
           yield* until(
             () => client.progress({ runId }),
             (progress) =>

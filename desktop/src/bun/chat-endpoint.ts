@@ -7,13 +7,11 @@ import type { JsonObject } from "../../../src/schema";
 import { NO_HUMAN } from "./session";
 import { toolServer } from "./tool-server";
 
-/** One authenticated endpoint, started lazily and held for Desktop's lifetime. */
 export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context: DriverContext) {
   const scope = yield* Effect.scope;
   const token = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   const calls = new Map<string, Queue.Queue<string>>();
-  // The foreign MCP handler needs an AbortSignal for the human's pending click.
-  // oxlint-disable-next-line effecttsgo/abort-controller-in-effect
+  // oxlint-disable-next-line effecttsgo/abort-controller-in-effect -- The foreign MCP handler needs an AbortSignal for the human's pending click.
   let turn = new AbortController();
   const matching = (input: JsonObject) =>
     Effect.gen(function* () {

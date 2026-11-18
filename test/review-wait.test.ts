@@ -1,5 +1,3 @@
-// One read of a merge request's review, judged against the head a Release Run proved.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { ReviewComment, ReviewRead } from "../src/forge/review";

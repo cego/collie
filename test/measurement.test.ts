@@ -1,6 +1,3 @@
-// A Measurement taken by the shipped host, asked through `collie measure` and through
-// `host.measure` (ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement, D1, D2, D4).
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -27,7 +24,6 @@ const Shown = Schema.Struct({
   run: Schema.Struct({ awaiting: Schema.NullOr(Schema.Struct({ on: Schema.String })) }),
   memory: Schema.NullOr(Schema.String),
 });
-/** What the `measured` fixture answers: its Measurement, and the outcome table's reading as `performance`. */
 const Read = Schema.fromJsonString(
   Schema.Struct({
     id: Schema.String,
@@ -43,7 +39,6 @@ const Answered = Schema.Struct({
   measurement: Schema.Struct({ id: Schema.String }),
 });
 
-/** The world's project as three commits: a base, a harness on it, and a product change. */
 const project = (world: World) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -62,14 +57,11 @@ const project = (world: World) =>
     yield* write("bun.lock", "{}\n");
     const base = yield* commit("base");
     yield* fs.makeDirectory(`${world.project}/bench`).pipe(Effect.orDie);
-    // Counts each run outside the tree, by the tree it ran in, then prints the counter.
     yield* write("bench/bench.sh", 'echo "$PWD" >> "$1"\necho "{\\"counter\\": $(cat value)}"\n');
-    // 5, then 15, then 5 …, by how often it has run: noise no tree causes.
     yield* write(
       "bench/noisy.sh",
       'echo "$PWD" >> "$1"\nif [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then echo \'{"counter": 5}\'; else echo \'{"counter": 15}\'; fi\n',
     );
-    // Holds its sample until the file it names exists.
     yield* write(
       "bench/gate.sh",
       'echo "$PWD" >> "$1"\nwhile [ ! -e "$2" ]; do sleep 0.1; done\necho \'{"counter": 1}\'\n',
@@ -188,7 +180,6 @@ test(
           expect(Arr.map(cli.samples, (one) => one.readings["bench.counter"])).toEqual([
             10, 7, 10, 7, 7, 10,
           ]);
-          // What ran, in the order it ran: the base tree is a checkout of Collie's own.
           const order = yield* linesOf(world, ran);
           expect(Arr.map(order, (dir) => (dir === world.project ? "candidate" : "base"))).toEqual(
             Arr.map(cli.samples, (one) => one.tree),
@@ -203,7 +194,6 @@ test(
           expect(Arr.every(cli.samples, (one) => one.load.length === 3)).toBe(true);
           expect(cli.waited).toEqual({ memory: false, machine: [] });
 
-          // The same request through a workflow records the same Measurement.
           const started = yield* collie(world, [
             "run",
             "start",
@@ -226,7 +216,6 @@ test(
           const [fromWorkflow] = yield* recorded(world, workflowRun);
           const read = yield* Schema.decodeEffect(Read)(status.value).pipe(Effect.orDie);
           expect(fromWorkflow?.id).toBe(read.id);
-          // The host's evidence carries the Measurements: a product change is no tree to end on.
           expect(read.withoutPatch).toBe(false);
           expect(read.gaps).toContainEqual(expect.stringContaining("no `final` Measurement"));
           const same = (one: Measurement) => ({
@@ -249,7 +238,6 @@ test(
           });
           expect(same(fromWorkflow!)).toEqual(same(cli));
 
-          // An equal counter on both sides is no change.
           yield* write("value", "10\n");
           yield* commit("back");
           const level = yield* measuring(world, extra, runId, base, plan);
@@ -258,8 +246,6 @@ test(
             "no-change",
           );
 
-          // Back at the base tree's content, a `final` Measurement reads as no patch, judged
-          // against the merge base the host found rather than the base it was asked for.
           yield* exec(["git", "branch", "-M", "master"], { cwd: world.project });
           const back = Str.trim(
             (yield* exec(["git", "rev-parse", "HEAD"], {
@@ -297,7 +283,6 @@ test(
             },
           );
 
-          // Its base tree goes with the Run, once a sweep finds nothing needs it.
           const trees = `${world.state}/measurements/trees/${runId}`;
           expect(yield* fs.readDirectory(trees)).toHaveLength(1);
           yield* collie(world, ["run", "stop", runId]);
@@ -362,7 +347,6 @@ test(
           expect(yield* recorded(world, runId)).toHaveLength(2);
           expect((yield* recorded(world, runId)).at(-1)?.plan_reason).toBe("three samples a side");
 
-          // A sample over the plan's limit ends it without a verdict.
           const slow = yield* measuring(
             world,
             extra,
@@ -380,7 +364,6 @@ test(
             command: "bench",
           });
 
-          // A harness commit reaching past the harness paths is refused, naming each.
           yield* write("bench/more.sh", "true\n");
           yield* write("README", "product\n");
           const stray = yield* commit("stray harness");
@@ -392,7 +375,6 @@ test(
           expect(refused.envelope.error?.message).toContain("README");
           expect(refused.envelope.error?.message).not.toContain("bench/more.sh");
 
-          // A base whose prepare fails ends it without a verdict, naming the tree.
           const before = (yield* recorded(world, runId)).length;
           const prepared = yield* measuring(
             world,
@@ -487,7 +469,6 @@ test(
           expect(epochMs(after!.started)).toBeGreaterThanOrEqual(epochMs(held!.at));
           expect((yield* shown(waiter)).run.awaiting).toBeNull();
 
-          // Short of memory: it waits, says so, and records that it did.
           yield* memory(2);
           const short = yield* Effect.forkChild(
             measuring(

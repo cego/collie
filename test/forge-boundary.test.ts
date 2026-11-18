@@ -6,9 +6,6 @@ import { Effect, FileSystem, Path } from "effect";
 import { runEffect } from "./support/effect";
 import { forgesImportsIn } from "./support/forges-imports";
 
-// ADR-0050 D1: `glab` is run only by the GitLab adapter and `gh` only by the GitHub one,
-// and no workflow's content names either.
-
 const ADAPTER = new Map([
   ["src/forge/gitlab.ts", "glab"],
   ["src/forge/github.ts", "gh"],
@@ -16,16 +13,10 @@ const ADAPTER = new Map([
   ["src/forge/github-checks.ts", "gh"],
 ]);
 
-/** Files outside the adapters that reach a forge's CLI themselves, and why. */
-const ALLOWED = new Map([
-  // Permanent (ADR-0050 D1): onboarding's GitLab login and SSH key.
-  ["src/onboard.ts", "permanent"],
-]);
+const ALLOWED = new Map([["src/onboard.ts", "permanent"]]);
 
-/** A command a TypeScript file runs: the CLI as an argument, or a command line in a string. */
 const INVOKES =
   /(["'])(glab|gh)\1|["'`](glab|gh) (?:mr|pr|api|auth|repo|issue|ci|release|run|workflow)\b/g;
-/** Workflow content that names a CLI at all. */
 const NAMES = /\b(glab|gh)\b/g;
 
 const matcherOf = (file: string) =>
@@ -35,20 +26,17 @@ const matcherOf = (file: string) =>
       ? NAMES
       : null;
 
-/** A content file written for one forge (ADR-0050 D1): `<name>.gitlab.md` or `<name>.github.md`. */
 const CONTENT_FOR = /\.(gitlab|github)\.md$/;
 const CLI_OF = new Map([
   ["gitlab", "glab"],
   ["github", "gh"],
 ]);
 
-/** The CLI a file may run or name: its adapter's, or its content's forge's. */
 const allowedIn = (file: string) => {
   const forge = CONTENT_FOR.exec(file)?.[1];
   return ADAPTER.get(file) ?? (forge === undefined ? undefined : CLI_OF.get(forge));
 };
 
-/** Each file under `src/` and `workflows/` that runs or names a forge CLI, and which. */
 const scan = Effect.fn("boundary.scan")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -69,7 +57,6 @@ const scan = Effect.fn("boundary.scan")(function* () {
   return found;
 });
 
-/** Each CLI a file runs or names that neither its adapter, its forge nor the allowlist lets it. */
 const straysIn = (found: ReadonlyMap<string, ReadonlySet<string>>) =>
   Arr.flatMap([...found], ([file, clis]) =>
     Arr.map(

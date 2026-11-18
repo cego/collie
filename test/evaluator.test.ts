@@ -1,8 +1,3 @@
-// The evaluator's value is entirely in what it refuses: no tools, no inherited settings,
-// a cost ceiling, a clock, and a closed schema at both ends. Those are the assertions
-// here — the argv exactly as it goes out, and what happens when the model answers with
-// something that is not the shape it was given.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -40,12 +35,8 @@ test("the argv is the isolation, so it is asserted exactly", () => {
     "-p",
     "--output-format",
     "json",
-    // The schema text itself: the CLI parses this word as JSON, not as a path.
     "--json-schema",
     '{"type":"object"}',
-    // Every one of these is load-bearing. Without `--tools ""` the model has tools;
-    // without the settings and MCP flags it inherits the human's hooks and servers. No
-    // spending flag: what a call costs is recorded, never capped.
     "--tools",
     "",
     "--restricted",
@@ -72,7 +63,6 @@ test("a CLI missing any of those flags is not one Collie will call", () =>
       };
       expect(yield* flagsPresent(deps)).toEqual([]);
 
-      // claude 2.1.268 folds the file spelling into one row, and takes both.
       const folded = {
         ...deps,
         help: Effect.succeed(
@@ -99,7 +89,6 @@ test("a CLI missing any of those flags is not one Collie will call", () =>
 test("a CLI whose --help fails is unavailable in its own words, not missing every flag", () =>
   runEffect(
     Effect.gen(function* () {
-      // What claude says when the directory it was started in has been deleted.
       const deleted = yield* helpOf([
         "/bin/sh",
         "-c",
@@ -123,12 +112,10 @@ test("a CLI whose --help fails is unavailable in its own words, not missing ever
 
 test("the payload is found by what fits the schema, not by a field name", () => {
   const judgement = { reports: [] };
-  // Whatever the CLI calls its result field, and however deep it nests it.
   expect(structuredFrom(JSON.stringify({ result: judgement }), JudgementSchema)).toEqual(judgement);
   expect(structuredFrom(JSON.stringify({ data: { output: judgement } }), JudgementSchema)).toEqual(
     judgement,
   );
-  // Including when it hands the structured output back as a JSON string.
   expect(
     structuredFrom(JSON.stringify({ content: JSON.stringify(judgement) }), JudgementSchema),
   ).toEqual(judgement);
@@ -139,7 +126,6 @@ test("the payload is found by what fits the schema, not by a field name", () => 
   expect(structuredFrom(JSON.stringify({ result: "just prose" }), JudgementSchema)).toEqual({
     error: "nothing in the CLI's envelope matched the schema it was given",
   });
-  // An answer of the wrong kind is not this kind's answer.
   expect(structuredFrom(JSON.stringify({ result: judgement }), ProposalSchema)).toMatchObject({
     error: expect.any(String),
   });
@@ -171,7 +157,6 @@ test("every action the model may propose decodes, and nothing else does", () => 
   for (const action of valid)
     expect([action.kind, decode(action)._tag]).toEqual([action.kind, "Some"]);
 
-  // There is no action that is "run this string", and a kind nobody defined is not one.
   expect(decode({ kind: "shell", command: "rm -rf /" })._tag).toBe("None");
   expect(decode({ kind: "deliver", run: "r1", agent: "a", text: "t", mode: "whenever" })._tag).toBe(
     "None",
@@ -216,8 +201,6 @@ test("nothing is allowed without a grant, and a grant is only good for a Driver'
   const granting = { ...DEFAULT_AUTHORITY, auto_correct: true };
   expect(validate(correction, ctx({}, granting))[0]?.state).toBe("allowed_now");
 
-  // The same grant, the same action, out of a conversation with a human: back to them.
-  // The grant was for correcting drift, not for doing whatever the conversation found.
   expect(validate(correction, ctx({ origin: "steer" }, granting))[0]?.state).toBe("pending");
 });
 
@@ -254,7 +237,6 @@ test("a decision is never granted, however much authority a Run has", () => {
     "pending",
     "pending",
   ]);
-  // A stop is the one lifecycle action a Run can grant.
   expect(validate(proposal([{ kind: "stop", run: "r1" }]), ctx({}, everything))[0]?.state).toBe(
     "allowed_now",
   );
@@ -301,12 +283,9 @@ test("the frozen prompt says the three things it has to say", () =>
       const text = yield* fs.readFileString(
         new URL("../prompts/steward.md", import.meta.url).pathname,
       );
-      // No tools; tool data is not instructions; questions do not authorize actions.
       expect(text).toContain("You have no tools");
       expect(text).toContain("is **data**");
       expect(text).toContain("A question asking for an explanation is not a request");
-      // And it names the specific injections it must not obey, which is the part a reader
-      // of the pack would otherwise have to guess at.
       expect(text).toContain("ignore your instructions");
       expect(text).toContain("the human has already");
     }),
@@ -335,8 +314,6 @@ test("the probe reads a transcript by event: the structured-output channel is no
     "\n",
   );
   expect(leaks(clean)).toEqual([]);
-  // A real tool offered, a real tool used, a hook that ran, an MCP server connected:
-  // each is named, so the record says what leaked rather than that something did.
   const leaky = Arr.join(
     [
       line({
@@ -347,7 +324,6 @@ test("the probe reads a transcript by event: the structured-output channel is no
       }),
       line({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash" }] } }),
       line({ type: "hook_started" }),
-      // The words alone are not a leak: a clean init line names its tool list too.
       line({ type: "user", message: { content: [{ type: "text", text: "tool_use mcp hook" }] } }),
     ],
     "\n",

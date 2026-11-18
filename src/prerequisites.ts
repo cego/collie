@@ -4,7 +4,6 @@ import { Schema } from "effect";
 import { mrLabel } from "./board-model";
 import type { Prerequisite } from "./plan";
 
-/** A wait returns every one but `Waiting`; `Held` is a Hold or a Stop that ended it. */
 export const PrerequisiteStandingSchema = Schema.Union([
   Schema.TaggedStruct("Landed", {}),
   Schema.TaggedStruct("Waiting", { on: Schema.String, who: Schema.String }),
@@ -13,7 +12,6 @@ export const PrerequisiteStandingSchema = Schema.Union([
 ]);
 export type PrerequisiteStanding = typeof PrerequisiteStandingSchema.Type;
 
-/** What a Run near a Prerequisite was given and has done; a `change` of null is the default Change. */
 export interface RunDetail {
   readonly repo: string;
   readonly change: string | null;
@@ -21,7 +19,6 @@ export interface RunDetail {
   readonly mr: string | null;
 }
 
-/** A recorded merge request as the forge and the fetched default branch say it is. */
 export type MrLanding =
   | { readonly _tag: "Open" }
   | { readonly _tag: "Closed" }
@@ -40,7 +37,6 @@ function withDescendants(rows: ReadonlyArray<RunLine>, run: string) {
   return family;
 }
 
-/** The first Run of the named one's family in this repository and Change that recorded a merge request. */
 export function mergeRequestFor(
   prerequisite: Prerequisite,
   repo: string,
@@ -119,7 +115,6 @@ function oneOf(
   return returned;
 }
 
-/** The first that can never land, else every one still waiting, else Landed. */
 export function judgePrerequisites(facts: {
   readonly asking: { readonly run: string; readonly repo: string };
   readonly prerequisites: ReadonlyArray<Prerequisite>;

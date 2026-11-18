@@ -1,5 +1,3 @@
-// What the record's markdown keeps of what an agent wrote: no styling, and `file:line` as a jump.
-
 import { expect, test } from "bun:test";
 import type { Node } from "comark";
 import { confined } from "../markdown";

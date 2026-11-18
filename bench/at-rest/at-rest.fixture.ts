@@ -1,5 +1,4 @@
 /* oxlint-disable effecttsgo/async-function, effecttsgo/global-console, effecttsgo/global-console-in-effect, effecttsgo/global-date, effecttsgo/global-date-in-effect, effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-record, effecttsgo/prefer-effect-string, effecttsgo/prefer-schema-over-json, no-restricted-globals, no-restricted-properties -- the benchmark's drivers speak to processes, files and /proc on their own terms, as record-open's do. */
-// The pinned base creates the history, so candidate migrations must read what it left.
 
 import { Database } from "bun:sqlite";
 import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";

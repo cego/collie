@@ -1,12 +1,8 @@
-// The TaskView a test starts from. Shared rather than copied per file, for the reason
-// `focus.ts` gives: one fixture that grows every time a card learns to say something new.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import type { TaskMr, TaskView } from "../../src/board-model";
 import { epochMs } from "../../src/time";
 
-/** One Task, with the parts a test does not care about at rest. */
 export function task(over: Partial<TaskView> = {}) {
   const returned: TaskView = {
     id: "t1",
@@ -29,8 +25,6 @@ export function task(over: Partial<TaskView> = {}) {
     mr: null,
     branch: "mk/strapi-seed",
     disposition: null,
-    // A finished fixture has landed unless the test says otherwise: most tests are about
-    // the other sections, and an unlanded done Task is its own case.
     landed: (over.state ?? "active") === "done",
     ended: null,
     mrState: null,
@@ -48,7 +42,6 @@ export function task(over: Partial<TaskView> = {}) {
   return returned;
 }
 
-/** One of a Task's merge requests on `gitlab.cego.dk`, open and not ready unless said. */
 export function taskMr(project: string, iid: number, over: Partial<TaskMr> = {}) {
   const url = `https://gitlab.cego.dk/${project}/-/merge_requests/${iid}`;
   const short = `${Arr.lastNonEmpty(Str.split(project, "/"))}!${iid}`;

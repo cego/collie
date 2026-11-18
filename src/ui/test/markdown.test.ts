@@ -1,5 +1,3 @@
-// Comark's ANSI output as the drawer's chunks: styles, colours and what the agent wrote.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -42,7 +40,6 @@ test("SGR codes become attributes and the board's colours, and a reset clears bo
     ["bad", TextAttributes.BOLD, RED],
     ["still red", 0, RED],
     ["plain", 0, undefined],
-    // A true-colour code's components are its arguments, never styles of their own.
     ["rgb", 0, undefined],
   ]);
 });

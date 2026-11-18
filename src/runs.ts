@@ -1,5 +1,3 @@
-// Every Run a reader can see, as one shape, from the host's rows.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -28,10 +26,8 @@ import type { AskedFact, Execution, UsageWait } from "./flow";
 import type { ShippingGo } from "./shipping";
 import type { NarrativeReport } from "./narrative-model";
 
-/** Where a Run is, in the words every board and listing uses. */
 export type RunState = "running" | "waiting" | "succeeded" | "ended" | "failed" | "stopped";
 
-/** A question a Run is waiting on a human for. */
 export interface Asked {
   readonly shipping?: ShippingGo;
   readonly name: string;
@@ -39,7 +35,6 @@ export interface Asked {
   readonly options: ReadonlyArray<Solution>;
   readonly hold?: { readonly offered: boolean; readonly why: string | null };
   readonly shortfall?: string;
-  /** The agent a human's words about it would reach. */
   readonly steer?: string;
 }
 
@@ -49,59 +44,36 @@ export interface RunFacts {
   readonly report?: RunReport;
   readonly id: string;
   readonly workflow: string;
-  /** The checkout it was started for, which is what "done here before" asks about. */
   readonly project: string;
-  /** Where it works: its own worktree, or the checkout it was started for. */
   readonly cwd: string;
   readonly task: string | null;
   readonly parent: string | null;
   readonly outcome: string;
   readonly created: string;
-  /** When it ended, where that was recorded. */
   readonly finished: string | null;
   readonly state: RunState;
-  /** Its values, what each was inferred by, and where each came from. */
   readonly settled: Settled;
   readonly branch: string | null;
   readonly mr: string | null;
-  /** Its landing of that merge request, which the merge watch spares it by. */
   readonly landing: Landing | null;
-  /** A workspace of its own; null lives in its Task's. */
   readonly workspace: string | null;
-  /** The checkout Collie made for it, which is what says it may take it away again. */
   readonly worktree: WorktreeRecord | null;
-  /** Where what it produced is kept: its plan, review, cards, Intent and dispositions. */
   readonly dir: string;
-  /** Where its verifications are kept. */
   readonly evidence: string;
   readonly asking: ReadonlyArray<Asked>;
-  /** The agents a human messaged while that sets its question aside, until it is asked again. */
   readonly superseding?: ReadonlyArray<string>;
-  /** The questions it has been answered, oldest first. */
   readonly answered: ReadonlyArray<Asked & { readonly answer: string }>;
   readonly held: boolean;
-  /** The repository of a fan-out this Run builds, or null for a Run that is no Change run. */
   readonly repo: string | null;
-  /** The named Change of that repository it builds; null or absent for its default Change. */
   readonly change?: string | null;
-  /** Why it parked its own work, in its own words, or null while it has not. */
   readonly parked: string | null;
   readonly recovery?: ReadonlyArray<string>;
-  /** That park's cause, where its host named one. */
   readonly park?: Park | null;
-  /** What it waits for that ends without anyone repairing anything, or null. */
   readonly awaiting: Awaiting | null;
-  /** The Subscription its work waits on to reset, where it waits on one. */
   readonly usage?: UsageWait | null;
-  /** Whether the engine could not be asked about it, so nothing drives it. */
   readonly undriven: boolean;
-  /** Why it is not moving or why it ended, in its own words, where it said. */
   readonly note: string | null;
   readonly summary: string | null;
-  /**
-   * What the engine stored of its work: every question it asked, when it next wakes on a
-   * durable timer, and where its execution is. Absent where it was not read from a view.
-   */
   readonly engine?: {
     readonly questions: ReadonlyArray<AskedFact>;
     readonly wakes: string | null;
@@ -123,11 +95,9 @@ const stateOf: (view: RunView) => RunState = (view) => {
       return "succeeded";
     case "failed":
       return stopped ? "stopped" : "failed";
-    // A stop suspends the Run; otherwise only a question or a parked Run is waiting.
     case "suspended":
       if (stopped) return "stopped";
       return view.parked !== null || Arr.some(view.waiting, isUnanswered) ? "waiting" : "running";
-    // Concurrent work can keep the Run pending while one Activity is parked.
     case "pending":
       if (stopped) return "stopped";
       return view.parked !== null ? "waiting" : "running";
@@ -221,10 +191,6 @@ export const factsOfView: (stateDir: string, view: RunView) => RunFacts = (state
   },
 });
 
-/**
- * An ended Run's workflow asks nothing: a stop leaves its question open in the engine for a
- * resume. Its agent still asks after a steer, unless a stop closed it (ADR-0041).
- */
 const isAsking: (view: RunView, one: RunView["waiting"][number]) => boolean = (view, one) => {
   const state = stateOf(view);
   return isUnanswered(one) && (!settled({ state }) || (one.asker != null && state !== "stopped"));
@@ -248,10 +214,6 @@ const executionOf: (view: RunView) => Execution = (view) => {
 
 type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
 
-/**
- * Every Run in this state directory, newest first. A host that will not answer costs the
- * caller the Runs, never the read it was part of.
- */
 export const listRuns = Effect.fn("Runs.list")(function* (env: PluginEnv) {
   const live = yield* runViews(env, null);
   return newestFirst(Arr.map(live.runs, (view) => factsOfView(env.stateDir, view)));
@@ -260,7 +222,6 @@ export const listRuns = Effect.fn("Runs.list")(function* (env: PluginEnv) {
 export const newestFirst: (runs: ReadonlyArray<RunFacts>) => RunFacts[] = (runs) =>
   [...runs].sort((a, b) => pipe_(b.created, Str.localeCompare(a.created)));
 
-/** One Run by id, or null where there is none. */
 export const findRun: (
   env: PluginEnv,
   id: string,
@@ -269,14 +230,12 @@ export const findRun: (
     Effect.map((view) => (view === null || "ok" in view ? null : factsOfView(env.stateDir, view))),
   );
 
-/** Whether a Run has ended, which a question it is waiting on is not. */
 export const settled: (run: Pick<RunFacts, "state">) => boolean = (run) =>
   run.state === "succeeded" ||
   run.state === "ended" ||
   run.state === "failed" ||
   run.state === "stopped";
 
-/** Where this Machine's live Runs work, or null where the host could not be asked. */
 export const liveCheckouts: (
   env: PluginEnv,
 ) => Effect.Effect<ReadonlyArray<string> | null, never, Client> = (env) =>

@@ -1,7 +1,3 @@
-// The Agent SDK's messages as AG-UI events, one message at a time. Pure, so a recorded SDK
-// stream is its test; and decoded rather than typed against the SDK, which Collie's own
-// suite does not install. Anything this does not know is skipped.
-
 import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
@@ -47,7 +43,6 @@ const ToolResult = Schema.Struct({
   ]),
 });
 
-/** What is read of an SDK message. A subagent's (`parent_tool_use_id` set) is not. */
 const Known = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("stream_event"),
@@ -75,7 +70,6 @@ const Known = Schema.Union([
 
 const decodeKnown = Schema.decodeUnknownOption(Known);
 
-/** An SDK message, as far as this needs to know before decoding it. */
 export interface SdkMessage {
   readonly type: string;
 }
@@ -87,11 +81,8 @@ interface Open {
 
 export interface AguiState {
   readonly thread: string;
-  /** Turns started, which names the next one. */
   readonly turns: number;
-  /** The turn under way, if any. */
   readonly run: string | null;
-  /** The model message the open blocks belong to. */
   readonly message: string;
   readonly blocks: ReadonlyMap<number, Open>;
 }
@@ -112,7 +103,6 @@ const textOf = (content: typeof ToolResult.Type.content) =>
         "\n",
       );
 
-/** What one SDK message adds to the stream, and the state after it. */
 export const step: (
   state: AguiState,
   message: SdkMessage,
@@ -122,7 +112,6 @@ export const step: (
   const read = known.value;
   const begun: AguiEvent[] = [];
   let now = state;
-  // A turn begins with the model's first word, or ends without one; a message before it is not this turn's.
   if (now.run === null) {
     if (read.type === "user") return [now, []];
     const run = `${now.thread}:${now.turns + 1}`;

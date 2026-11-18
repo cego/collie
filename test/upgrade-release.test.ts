@@ -1,8 +1,3 @@
-// `collie upgrade` on a release: the runner places the release it carries into the Collie
-// directory's `release/`, keeping any edit it finds there, and never writes `user/`. Another
-// version is handed to that version's runner, downloaded from a served fake release and
-// verified first.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -25,7 +20,6 @@ let tree: string;
 let runner: string;
 let prepared: string[];
 let served: ReturnType<typeof Bun.serve>;
-/** What the fake release source answers: the newest version, and each published file. */
 let latest: string;
 let published: Map<string, Uint8Array | string>;
 
@@ -89,7 +83,6 @@ afterEach(() =>
   ),
 );
 
-/** Publishes `version`'s runner: it records how it was run and answers as an upgrade. */
 const publish = (version: string, signedBy = KEY.privateKey) => {
   const bytes = new TextEncoder().encode(`#!/bin/sh
 echo "$COLLIE_DIR $*" > "${rig.root}/handed-off"
@@ -99,7 +92,6 @@ echo '{"ok":true,"data":{"root":"'"$COLLIE_DIR"'/release","checkout":false,"rele
   published.set(`/download/${version}/${ASSET}.sig`, signRelease(bytes, signedBy));
 };
 
-/** Not a checkout to git, a `prepare.sh` whose directory is recorded, and anything else run. */
 const run = (cmd: string, args: string[], cwd: string) => {
   if (cmd === "git") return Effect.succeed<Ran>({ code: 128, stdout: "", stderr: "not a git" });
   if (cmd !== "sh") return shell(cmd, args, cwd);
@@ -109,7 +101,6 @@ const run = (cmd: string, args: string[], cwd: string) => {
   });
 };
 
-/** The files an upgrade said it kept, relative to their `kept/<when>/`. */
 const keptOf = (result: Effect.Success<ReturnType<typeof upgrade>>) =>
   result.ok && "kept" in result.data ? result.data.kept : [];
 const shipped = (file: string) => pipe(file, Str.replace(/^kept\/[^/]+\//, ""));
@@ -207,7 +198,6 @@ test(
         const other = `${rig.root}/other/release`;
         yield* fs.copy(tree, other);
         yield* write(`${other}/personas/extra.md`, "only in the other\n");
-        // Large enough that the two placements overlap.
         for (let file = 0; file < 1500; file++) {
           yield* write(`${tree}/bulk/${file}.md`, `${file}\n`);
           yield* write(`${other}/other/${file}.md`, `${file}\n`);
@@ -311,7 +301,6 @@ test("--to an older release moves to exactly it", () =>
     }),
   ));
 
-/** The release as it was placed, so a refused upgrade can be shown to have left it alone. */
 const placedRecord = () => read(`${collieDir}/release/placed.json`);
 
 test("a version with no release is refused, and the release is left as it was", () =>
@@ -357,14 +346,8 @@ test("a release source that cannot be reached changes nothing, and says so", () 
     }),
   ));
 
-/** Where upstream's hc installer puts hc, in the rig's home. */
 const hcBin = () => `${rig.root}/.local/bin`;
 
-/**
- * Carries an hc archive whose `herdr-core` says it is 0.1.0, older than any pin, and logs
- * every other way it is run, and the second line of a `--from` binary, which names the
- * build: `build` tells one pin's hc from another's.
- */
 const carryHc = (build: string) =>
   Effect.gen(function* () {
     const staged = `${rig.root}/hc-${build}`;
@@ -381,7 +364,6 @@ const carryHc = (build: string) =>
     expect(made.code).toBe(0);
   });
 
-/** `place`, with a PATH that has no hc on it: the human's own `hc` is never the rig's. */
 const placeHc = () =>
   upgrade(
     { ...releaseEnv(), raw: { ...releaseEnv().raw, PATH: "/usr/bin:/bin" } },
@@ -443,7 +425,6 @@ test("an upgrade with an unchanged pin leaves hc alone", () =>
     }),
   ));
 
-/** An hc of the human's own in upstream's place, saying `version`, logging every other call. */
 const ownHc = (version: string) =>
   Effect.gen(function* () {
     yield* write(

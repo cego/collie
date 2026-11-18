@@ -133,7 +133,6 @@ test("overlapping physical reads restore one hold only after both finish, preser
           yield* clock.adjust("1 millis");
           expect(stillWaiting.pollUnsafe()).toBeDefined();
           yield* Deferred.succeed(second, "second value");
-          // The pass works a slice since it was last held, so a hold is owed again.
           yield* clock.adjust("20 millis");
           const restored = yield* foreground.boundary.pipe(Effect.forkScoped);
           yield* clock.adjust("1 millis");
@@ -228,20 +227,17 @@ test("answers that never stop hold a background pass no longer than it last work
             )
             .pipe(Effect.forkScoped);
           yield* Deferred.await(entered);
-          // An answer that has just begun holds the pass for the whole patience.
           const first = yield* foreground.boundary.pipe(Effect.forkScoped);
           yield* clock.adjust("249 millis");
           expect(first.pollUnsafe()).toBeUndefined();
           yield* clock.adjust("1 millis");
           yield* Fiber.join(first);
-          // The pass works 10 ms, then is held 10 ms rather than 250: it keeps half the time.
           yield* clock.adjust("10 millis");
           const next = yield* foreground.boundary.pipe(Effect.forkScoped);
           yield* clock.adjust("9 millis");
           expect(next.pollUnsafe()).toBeUndefined();
           yield* clock.adjust("1 millis");
           expect(next.pollUnsafe()).toBeDefined();
-          // A pass that did no work since it was held is not held again: no time passes here.
           yield* foreground.boundary;
           yield* Deferred.succeed(finish, undefined);
         }).pipe(Effect.provideService(Clock.Clock, clock));

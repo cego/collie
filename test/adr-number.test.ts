@@ -1,8 +1,3 @@
-// `tools/adr-number.ts`: a branch's new ADR is a draft named by its slug, and it takes a
-// number only when the branch lands, so parallel branches stop renumbering each other's.
-// References are built here rather than written out, so the docs-links check never reads
-// this file's fixtures as the repository's own.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
@@ -46,7 +41,6 @@ const commit = (root: string, files: Record<string, string>, message: string) =>
     yield* git(root, "commit", "-q", "-m", message);
   });
 
-/** A repository on `master` with two ADRs, and `feature` branched from it. */
 const repository = (onMaster: Record<string, string> = {}) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

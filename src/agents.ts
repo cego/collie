@@ -1,18 +1,4 @@
 import * as Cause from "effect/Cause";
-// An agent a workflow operates, and the Output it is held to.
-//
-// Three things a workflow must not be left to get right on its own. An agent is launched
-// once however often the work replays. What it wrote is decoded before any of it is
-// believed. And a file it wrote wrongly buys exactly one more attempt, from the agent that
-// is still holding the work rather than a fresh one with none of the context. So an author
-// asks for the work — `agentWork` — and the Activities under it are Collie's.
-//
-// Launching is external, and no Activity makes an external effect exactly once. What
-// makes it safe is reconciliation: the agent's name is derived from the run and the
-// operation, so a launch that may already have happened is settled by looking rather than
-// by starting a second one, and a question nobody can answer blocks the work instead.
-//
-// `docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md` is why.
 
 import { Foreground } from "./foreground";
 import { ParkCause } from "./park-cause";
@@ -238,52 +224,34 @@ import {
   MAIN_CHECKOUT_SKILLS_VERSION,
 } from "./skill-overrides";
 
-/** A schema that decodes an agent's Output without services of the author's own. */
 export type OutputContract = Schema.Codec<unknown, unknown, never, never>;
 
-/** One piece of agent work, named so that replaying it finds what it already did. */
 export interface AgentAsk {
   readonly runId: string;
   readonly operation: string;
-  /** What this agent is being asked to be, stated rather than inferred from a name. */
   readonly role: string;
-  /** The persona it is started as, where it is not its role's. */
   readonly persona?: string | null;
-  /** The agent this work goes to, where several pieces share one. Null gives it its own. */
   readonly agent: string | null;
   readonly workflow: string;
-  /** The Run's Task: its agents open in that Task's workspace. Null opens where the host is. */
   readonly task: string | null;
-  /** The Run's own workspace, where it asked for one; its agents open there instead. */
   readonly workspace?: string | null;
   readonly cwd: string;
   readonly prompt: string;
   readonly output: string;
-  /** A skill this work is started with, invoked the way the human channel invokes one. */
   readonly skill: string | null;
-  /** What this step's agent is told, in its own turn, that it may do: its Clearance. */
   readonly clears?: ReadonlyArray<string>;
-  /** What the Run authorises, for a Claude agent's auto mode; nothing where left out. */
   readonly authority?: RunAuthority;
-  /** Null takes the host's own configured default, which is the operator's. */
   readonly harness: string | null;
   readonly model: string | null;
   readonly effort: string | null;
   readonly claudeSubagents?: ClaudeSubagents;
   readonly permissions: string | null;
-  /** What this work fell back from, and why, where it did. */
   readonly from?: AgentChoice;
   readonly why?: string;
-  /** Which agent of this work it is: past 1, one taking over from an agent that ran out. */
   readonly sequence?: number;
-  /** The Step run this work is in, where it is in one. */
   readonly step?: At;
 }
 
-/**
- * The agent chosen for one piece of work, recorded before anything starts it, with what it
- * fell back from and why.
- */
 export const AgentChoiceSchema = Schema.Struct({
   ...RanOn.fields,
   claudeSubagents: Schema.optionalKey(ClaudeSubagents),
@@ -292,16 +260,11 @@ export const AgentChoiceSchema = Schema.Struct({
 });
 export type ChosenAgent = typeof AgentChoiceSchema.Type;
 
-/** An agent that stopped because its subscription ran out, before it wrote its Output. */
 export const RanOut = Schema.TaggedStruct("RanOut", {
   why: Schema.String,
-  /** Where its harness keeps the conversation, where it said. */
   transcript: Schema.NullOr(Schema.String),
-  /** When its Subscription resets, where a reading says. */
   resetsAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** When this incident was observed; absent in older saved results. */
   observedAt: Schema.optionalKey(Schema.Finite),
-  /** The exhausted windows that substantiated this incident, kept across replay. */
   exhaustion: Schema.optionalKey(
     Schema.Struct({
       at: Schema.Finite,
@@ -330,14 +293,8 @@ const CollectedBeforeFallback = Schema.TaggedStruct("CollectedBeforeFallback", {
   text: Schema.String,
 });
 
-/** Output text, an expired budget, exhausted usage, or a turn ending without Output. */
 export const Collected = Schema.Union([Schema.String, Schema.Null, RanOut, TurnEnded]);
 
-/**
- * A failure nothing here could classify, so the Run fails. Uncertainty is reported; it is
- * never rounded down to "nothing happened". A launch unsure whether it started its agent or
- * gave it its work parks instead: a resume lists herdr's agents before it starts one.
- */
 export class AgentUncertain extends Schema.TaggedError<
   AgentUncertain,
   { readonly brand: unique symbol }
@@ -346,11 +303,6 @@ export class AgentUncertain extends Schema.TaggedError<
   reason: Schema.String,
 }) {}
 
-/**
- * The work cannot go on until something outside the Run changes — a pane that will not
- * take its prompt, a workspace and checkout that have both gone — and nothing about it is
- * uncertain. It parks for a resume rather than failing into a fresh agent.
- */
 export class AgentParked extends Schema.TaggedError<
   AgentParked,
   { readonly brand: unique symbol }
@@ -360,17 +312,14 @@ export class AgentParked extends Schema.TaggedError<
   cause: Schema.optionalKey(ParkCause),
 }) {}
 
-/** The Run's own questions, which a collection puts an agent's question on. */
 export interface Questions {
   readonly ask: (question: DecisionSpec, asker: string) => Effect.Effect<void>;
   readonly asked: Effect.Effect<ReadonlyArray<AskedQuestion>>;
   readonly close: (decision: string, value: string) => Effect.Effect<void>;
 }
 
-/** An agent's question on its Run, numbered from 1 in the order its step asked them. */
 export const agentQuestionName = (operation: string, n: number) => `ask-${operation}-${n}`;
 
-/** Answers in the order asked, grouped by who gave them, so each is sent under its own sender. */
 const bySender = (answerers: ReadonlyArray<Asker | undefined>) => {
   const groups = new Map<string, { by: Asker | undefined; at: number[] }>();
   for (const [at, by] of answerers.entries()) {
@@ -397,102 +346,45 @@ const answerTitle = (asked: AskedQuestion | undefined) =>
   Option.getOrUndefined(Arr.findFirst(asked?.options ?? [], (one) => one.id === asked?.answer))
     ?.title ?? asked?.answer;
 
-/** What a host lends a workflow that needs an agent. */
 export interface AgentsApi {
-  /** Where this operation's Output goes — known before anything starts, so a prompt can name it. */
   readonly outputFor: (runId: string, operation: string) => string;
-  /**
-   * Where each of these skills is installed, for the mentions a prompt carries. A name
-   * nobody has installed is left out, and the mention says so rather than pointing at a
-   * path that is not there.
-   */
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
-  /** What this Run's `attachments/` holds now, which its next prompt lists. */
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
-  /**
-   * What an agent is told about asking for a decision its work does not cover: the pane
-   * of whoever is live in that role in this Run's lineage — `Place.lineage` — and
-   * otherwise to decide and record it under `assumptions` in its Output. A role, not a bare route: who may be asked is the
-   * workflow's own declaration.
-   */
   readonly askRoute: (role: string, lineage: ReadonlyArray<string>) => Effect.Effect<string>;
-  /** How often anything here looks again, which a workflow's own watch for a stop shares. */
   readonly pollMs: number;
-  /** How long an agent may sit idle without writing its Output. */
   readonly collectMs: number;
-  /** Continuous managed endpoint failure, bounded independently of the idle budget. */
   readonly unhealthy: (launched: Launched) => Effect.Effect<string>;
-  /**
-   * The agent these preferences come to over the operator's configuration, lowest first,
-   * moved on to one with room where its Subscription is spent.
-   */
   readonly choose: (
     layers: ReadonlyArray<Preferences | undefined>,
     work: { readonly runId: string; readonly operation: string },
-    /** Agents that ran out on this work; their incident stands until its limits recover. */
     spent?: ReadonlyArray<SpentChoice>,
   ) => Effect.Effect<ChosenAgent, WorkflowError>;
-  /**
-   * What this Run's agent of that name runs on, as its newest incarnation, where it is
-   * running; null where it is not.
-   */
   readonly choiceOf: (
     runId: string,
     agent: string,
   ) => Effect.Effect<(ChosenAgent & { readonly sequence: number }) | null>;
-  /**
-   * Once this agent has run out — its harness said so since it was given this work, or
-   * its Subscription reads Exhausted for it — why. Never succeeds otherwise.
-   */
   readonly ranOut: (launched: Launched) => Effect.Effect<RanOut>;
-  /**
-   * What its harness said when a turn died on an error it will not retry, since `since` or
-   * its launch; null where none has.
-   */
   readonly stopped: (launched: Launched, since?: number) => Effect.Effect<string | null>;
-  /** Closes this one agent's pane, with `line` in the Run's log; parks unless it is gone. */
   readonly retire: (launched: Launched, line: string) => Effect.Effect<void, AgentParked>;
-  /** A line in the Run's log. */
   readonly say: (runId: string, line: string) => Effect.Effect<void>;
-  /** The step message as it will first be typed, token included, and its prompt's path. */
   readonly stepMessage: (ask: AgentAsk) => { readonly typed: string; readonly prompt: string };
-  /** `note` shows, and then clears, why a launch is still waiting without parking. */
   readonly launch: (
     ask: AgentAsk,
     note?: (why: string | null) => Effect.Effect<void>,
   ) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
-  /**
-   * Starts this work's agent again with its prompt where it is gone and its Output never
-   * came, true where it did; `unless` is an unusable Output that counts as none.
-   */
   readonly revive: (
     ask: AgentAsk,
     unless?: string | null,
     onlyDeadServer?: boolean,
     usable?: (text: string) => boolean,
   ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
-  /**
-   * Hands a message, through the one sender, to the live agent in this role of a Run this
-   * one came from; null where none. Parked where nobody can say whether it arrived.
-   */
   readonly handOff: (options: {
     readonly runId: string;
     readonly role: string;
-    /** The Run and the Runs it came from, nearest first: `Place.lineage`. */
     readonly lineage: ReadonlyArray<string>;
     readonly text: string;
   }) => Effect.Effect<Steered | null, AgentParked>;
-  /**
-   * Stops every agent this run launched where its work runs, then closes its pane; one
-   * that is not Quiet is in `left`, its pane open.
-   */
   readonly halt: (runId: string, why?: string) => Effect.Effect<Halted>;
-  /**
-   * What the agent wrote, or null where it has written nothing in the time allowed.
-   * `unless` is an Output already known to be unusable: the same text again is the agent
-   * not having rewritten the file, which is not an answer to having been asked to.
-   */
-  /** Runs `waiting` with this agent on the list of those collected from, as `collect` does. */
   readonly collectedDuring: <A, E, R>(
     launched: Launched,
     waiting: Effect.Effect<A, E, R>,
@@ -501,74 +393,46 @@ export interface AgentsApi {
     launched: Launched,
     unless?: string | null,
     questions?: Questions,
-    /** The idle time it may take; the host's budget where left out. */
     budgetMs?: number,
-    /** Where given, an Output it refuses is read again until the agent's turn has ended. */
     usable?: (text: string) => boolean,
   ) => Effect.Effect<string | null, AgentUncertain | AgentParked>;
-  /** One read of its Output, without reconciling or sending any delivery. */
   readonly peekOutput: (launched: Launched) => Effect.Effect<string | null>;
-  /** Keep this operation's exhaustion across interruption until it is collected or retired. */
   readonly usageWaiting: (launched: Launched, incident: RanOut | null) => Effect.Effect<void>;
-  /** An incident persisted before its collect Activity could record the result. */
   readonly usageIncident: (launched: Launched) => Effect.Effect<RanOut | null>;
-  /** Waits for working → idle/done with absent Output, no open question and permission to remind. */
   readonly endedWithoutOutput: (
     launched: Launched,
     may: Effect.Effect<boolean>,
     questions?: Questions,
   ) => Effect.Effect<void>;
-  /** Returns when the reminder was sent, or null if it could not be. */
   readonly remind: (
     launched: Launched,
     ordinal: number,
   ) => Effect.Effect<string | null, AgentUncertain | AgentParked>;
-  /** Records what the turn after a reminder left. */
   readonly reminded: (
     launched: Launched,
     ordinal: number,
     outcome: RecoveryOutcome,
     waitedMs: number,
   ) => Effect.Effect<void>;
-  /**
-   * Hands one unusable Output back to the agent that wrote it. True where it was asked, or
-   * where the Output is already something other than `unusable`; false where it could not
-   * be asked.
-   */
   readonly repair: (
     launched: Launched,
     problem: string,
     unusable: string,
-    /** Which repair of this Output; each is a delivery of its own. */
     round?: number,
   ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
-  /**
-   * The Output as its file holds it now, where this park of it is being resumed; null where
-   * it is parking for the first time, which marks it parked.
-   */
   readonly resumedOutput: (launched: Launched, round: number) => Effect.Effect<string | null>;
-  /**
-   * Says something of a human's to the agent this run has. The request is the claim on
-   * the delivery: the same one twice is one message, which is what the ledger refuses a
-   * second copy of.
-   */
   readonly steer: (options: {
     readonly runId: string;
     readonly text: string;
     readonly request: string;
-    /** A role (`builder`, `reviewer`, `planner`), an agent or an operation. */
     readonly to?: string;
-    /** Which of the run's agents, by operation or name. */
     readonly operation?: string;
-    /** One of the run's agents by name, which wins over `operation`. */
     readonly agent?: string;
     readonly mode?: DeliveryMode;
     readonly actor?: Asker;
     readonly workflowNotice?: string;
   }) => Effect.Effect<Steered>;
-  /** The agent a steer that names none reaches, which is whose work a correction is about. */
   readonly atWork: (runId: string) => Effect.Effect<Launched | null>;
-  /** One correction Collie decided on, to that agent, through the one sender; whether it went. */
   readonly correct: (
     runId: string,
     correction: {
@@ -580,65 +444,39 @@ export interface AgentsApi {
       readonly mode: DeliveryMode;
     },
   ) => Effect.Effect<boolean>;
-  /**
-   * Puts on its Run every question an agent asked that no collection is reading — its Run
-   * finished or parked, or the agent between steps — and sends it the answers.
-   */
   readonly tendQuestions: (
     questionsFor: (runId: string) => Questions,
-    /** Each of these Runs' questions, in one read; a Run with none is absent. */
     askedOf: (
       runs: ReadonlyArray<string>,
     ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<AskedQuestion>>>,
-    /** Told of each queued message it submits now. */
     submitted?: (queued: Queued, sent: Steered) => Effect.Effect<void>,
   ) => Effect.Effect<void>;
-  /** What herdr says `agent` is doing now: `gone` where herdr no longer has it. */
   readonly statusOf: (agent: string) => Effect.Effect<AgentStatus | "gone">;
-  /**
-   * Starts again, each in the session it had, every agent of this Run that core no longer
-   * has. The one whose Output is still out is told to carry on with its step.
-   */
   readonly resumeLost: (runId: string, run: RunNow) => Effect.Effect<void>;
-  /** Runs `resumed` each time an agent on core may have gone, for as long as this runs. */
   readonly onLosses: (resumed: Effect.Effect<void>) => Effect.Effect<void>;
 }
 
-/** What only the host knows of a Run whose agents are started again. */
 export interface RunNow {
   readonly running: Effect.Effect<boolean>;
-  /** Read again for each start, as a launch reads it. */
   readonly authority: Effect.Effect<RunAuthority>;
   readonly questions: Questions;
 }
 
 export type DeliveryMode = "boundary" | "now" | "interrupt";
 
-/**
- * What became of one delivery. `delivered` is what could be got out of herdr about it and
- * never "it was accepted for sending": a queue taking a message is not the agent having
- * been given it.
- */
 export interface Steered {
   readonly agent: string;
   readonly delivered: boolean;
-  /** The Delivery that carried it, where one was submitted. */
   readonly delivery?: string;
   readonly detail: string;
   readonly queued?: boolean;
-  /** Not delivered because no incarnation of the agent is alive. */
   readonly gone?: boolean;
-  /** Whether the agent was seen to take it; absent where nothing was sent. */
   readonly observed?: boolean;
-  /** How it was seen taken. */
   readonly how?: string;
-  /** The pane it went to, for a human to look at. */
   readonly pane?: string;
-  /** Said to whoever sent it where the words were kept as a file rather than typed. */
   readonly kept?: string;
 }
 
-/** The agents a stop made Quiet, and what may still be running after it. */
 export interface Halted {
   readonly stopped: ReadonlyArray<string>;
   readonly left: ReadonlyArray<string>;
@@ -646,17 +484,11 @@ export interface Halted {
 
 export class Agents extends Context.Service<Agents, AgentsApi>()("collie/Agents") {}
 
-/** What an author asks for: the work, not the steps it takes. */
 export type AgentWork<
   Output extends OutputContract,
   Input extends Readonly<Record<string, Schema.Json>> = never,
 > = Doing<Output> & Told<Input>;
 
-/**
- * What the agent is told: a template and the input it declares, or text of the author's
- * own — a template literal, say — with `input` for any `{{name}}` in it. Either way an
- * expression nothing fills is refused before an agent starts.
- */
 export type Told<Input extends Readonly<Record<string, Schema.Json>>> =
   | { readonly instructions: Template<Input>; readonly input: Input }
   | {
@@ -665,55 +497,23 @@ export type Told<Input extends Readonly<Record<string, Schema.Json>>> =
     };
 
 interface Doing<Output extends OutputContract> {
-  /** Stable within the run: the Activity names and the agent's name are derived from it. */
   readonly operation: string;
-  /** Where the agent works; the checkout the host placed the Run on where it is left out. */
   readonly cwd?: string;
-  /**
-   * What the Output has to be: the prompt carries its drawing, and this decides. Left out,
-   * the agent answers in plain text.
-   */
   readonly output?: Output;
   readonly role?: string;
-  /**
-   * The agent this work goes to. Several operations naming one agent are one agent's
-   * work in order — a list handed to one implementer, each item its own prompt — and
-   * leaving it out gives this operation an agent of its own.
-   */
   readonly agent?: string;
   readonly workflow?: string;
-  /** The skill this work is started with, where the work is one a skill describes. */
   readonly skill?: string;
-  /**
-   * The agent pushes the branch. While its merge request merges itself once green, the
-   * work does not start: the Run records why and parks as Needs you (ADR-0050 D4).
-   */
   readonly pushes?: boolean;
-  /**
-   * The step's Clearance: each entry one sentence naming one action and its target, built
-   * from facts Collie holds and never from an Output. Typed on one line after the step's
-   * pointer, where Claude's auto mode reads it as the user's own request.
-   */
   readonly clears?: ReadonlyArray<string>;
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
   readonly claudeSubagents?: ClaudeSubagents;
   readonly permissions?: PermissionMode;
-  /**
-   * The panel seat this work sits at: its agent over the role's, and its persona and
-   * instructions where it names them. Work for a role given none takes the agent of the
-   * role's first seat, and keeps its own persona and instructions.
-   */
   readonly seat?: Seat;
 }
 
-/**
- * Parks the Run while the checkout's merge request merges itself once green, since a push
- * to it is a merge, or while its forge cannot say whether it does. Suspending inside the
- * Activity leaves it unrecorded, so a resume asks the forge again; once it has said no, a
- * replay does not.
- */
 const untilPushable = (operation: string, cwd: string) =>
   Activity.make({
     name: `${operation}.pushable`,
@@ -740,15 +540,6 @@ const untilPushable = (operation: string, cwd: string) =>
     }),
   });
 
-/**
- * One agent, once, and its Output as a value of the author's own type.
- *
- * Launch and collection are separate Activities on purpose: replaying a collection must
- * never start a second agent, and only a recorded launch makes that true. The repair is a
- * third, which is what stops a restart from handing out another one — a workflow that
- * comes back to an Output it has already had repaired finds the repair recorded, not a
- * fresh allowance. Only a resume of the park that follows gives one more.
- */
 export const agentWork: <
   Output extends OutputContract = typeof Schema.String,
   Input extends Readonly<Record<string, Schema.Json>> = never,
@@ -772,7 +563,7 @@ export const agentWork: <
     const runId = run.id;
     const place = yield* host.place(runId);
     const plain = given.output === undefined;
-    // SAFETY: Output defaults to Schema.String exactly where no output was given.
+    // WARNING: Output defaults to Schema.String exactly where no output was given.
     const contract = (given.output ?? Schema.String) as Output;
     const told = given.seat?.instructions ?? given.instructions;
     const work = {
@@ -783,15 +574,10 @@ export const agentWork: <
       workflow: given.workflow ?? run.workflow,
       output: contract,
     };
-    // A boundary, and the last one before money is spent: a held run parks here rather
-    // than starting an agent. Read as a plain Effect because an operator sets a hold
-    // between attempts, and an Activity would hand back what the first attempt saw.
     if (yield* host.held(work.runId)) {
       return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
     }
     if (given.pushes === true) yield* untilPushable(work.operation, work.cwd);
-    // The operation is a name of its own before it is anything else: the Output, the
-    // prompt and the recorded launch are all kept under it.
     const unsafe = unsafePathComponent(work.operation);
     if (unsafe !== null) {
       return yield* new WorkflowError({
@@ -804,8 +590,6 @@ export const agentWork: <
     }
     const output = agents.outputFor(work.runId, work.operation);
     const role = work.role ?? work.operation;
-    // Where each skill the instructions mention lives, so a mention is the path to read
-    // rather than a name the agent has to go looking for.
     const skills = yield* agents.skills(skillsIn(work.instructions));
     const parts: PromptParts = {
       role,
@@ -823,9 +607,6 @@ export const agentWork: <
         reason: `${work.operation}: its instructions name ${Arr.join(prompt.unfilled, ", ")}, which nothing this work was given fills`,
       });
     }
-    // An agent already running on this work's name is the conversation this continues, and
-    // a conversation cannot become another agent: what is asked for here has to agree with
-    // it, and what only defaults below that does not apply.
     const scopes = yield* AgentScopes;
     const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
     const requested = foldPreferences([...scopes, preferencesIn(given)]);
@@ -834,16 +615,12 @@ export const agentWork: <
         reason: `${work.operation}: ${work.agent} is already running as ${held.harness}/${held.model}, and this work asks for ${requested.harness ?? held.harness}/${requested.model ?? held.model} or a different Claude subagent policy. A conversation cannot become another agent: give this work an agent of its own, or ask for the one it is.`,
       });
     }
-    // A boundary: the work so far is judged against the Intent before more is started.
-    // Recorded, because a judgement is paid for and a replay must not pay again.
     if (Option.isSome(oversight)) {
       yield* Activity.make({
         name: `${work.operation}.boundary`,
         execute: oversight.value.drift(work.runId, `boundary before ${work.operation}`, "boundary"),
       });
     }
-    // Decided and recorded before anything is started, so a recovery, a revival and a
-    // restart all start the agent this work was given, whatever is configured by then.
     const preferred = yield* WorkflowAgents;
     const seated = given.seat ?? (yield* panelOf(role))[0];
     const layers = [
@@ -898,13 +675,9 @@ export const agentWork: <
       }
     }
 
-    // Tickets an agent says it finished are carded while it is still working, so a human
-    // sees each one land rather than waiting for the whole piece — and looked for once
-    // more at the end, for one written just before the Output.
     const watching = <A, E, R>(collecting: Effect.Effect<A, E, R>) => {
       if (Option.isNone(oversight)) return collecting;
       const look = oversight.value.checkpoints(work.runId, work.operation);
-      // First to finish, failure included: a collection raised to a human must not wait on a watch that never ends.
       return Effect.raceFirst(
         collecting,
         look.pipe(
@@ -913,9 +686,6 @@ export const agentWork: <
         ),
       ).pipe(Effect.tap(() => look));
     };
-    // Its own Activity, so a replay that comes back through here writes no second card.
-    // The work's rules are checked against what it left before the card is written, so
-    // the card says what drifted.
     const carded = <A>(value: A) =>
       Option.isNone(oversight)
         ? Effect.succeed(value)
@@ -935,7 +705,6 @@ export const agentWork: <
 
     const harnessSaid = (on: Launched, why: string) =>
       `its harness ${said(choiceOfLaunch(on))} said "${why}". Collie keeps collecting it; tell it to carry on once its harness is fixed.`;
-    // An agent past its budget may still be working: park, and go on collecting.
     const pastBudget = (on: Launched, waiting?: string) =>
       Effect.map(agents.stopped(on), (why) => {
         const idle =
@@ -946,7 +715,6 @@ export const agentWork: <
           ? `${idle}. Collie keeps collecting it; if it has stopped, ask it to write it.`
           : `${idle}. Collie keeps collecting it.`;
       });
-    // Never ends, so collecting goes on after it parks.
     const parksOnStop = (on: Launched, since?: number) =>
       Effect.gen(function* () {
         let why = yield* agents.stopped(on, since);
@@ -966,7 +734,6 @@ export const agentWork: <
       asked: host.asked(runId),
       close: (decision, value) => host.close(runId, decision, value),
     };
-    /** Stops an agent started as a stop landed; one that is not Quiet is what the Run says. */
     const haltLate = agents
       .halt(runId)
       .pipe(
@@ -975,7 +742,6 @@ export const agentWork: <
         ),
       );
     const usable = (text: string) => decodeOutput(work.output, text, plain).ok;
-    // Uninterruptible, so a stop racing a restart waits for it and finds its agent to stop.
     const reviving = (from: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
@@ -990,7 +756,6 @@ export const agentWork: <
           return revived;
         }),
       );
-    // A stale working status must not hide a dead server for the entire idle budget.
     const recovering = (on: Launched, from: AgentAsk, unless?: string | null) =>
       Effect.raceFirst(
         reviving(from, unless, true).pipe(
@@ -1002,7 +767,6 @@ export const agentWork: <
           Effect.andThen(Effect.never),
         ),
       );
-    // Each budget spent idle, one that has gone is started again, as a resume once did.
     const untilWritten = (on: Launched, from: AgentAsk, canRevive = true) =>
       Effect.gen(function* () {
         for (;;) {
@@ -1016,7 +780,6 @@ export const agentWork: <
       return !Arr.some(yield* host.asked(runId), (one) => one.answer === null);
     });
     const collecting = (on: Launched, from: AgentAsk, waiting?: string) => {
-      // Collected throughout, so a verify ending between attempts is still told to it.
       const output = agents.collectedDuring(
         on,
         Effect.raceFirst(
@@ -1041,7 +804,6 @@ export const agentWork: <
         parkedWhenStuck(
           waiting === undefined
             ? Effect.gen(function* () {
-                // Reconcile a crash before the incident was journaled, before idle reminders race it.
                 const incident = yield* agents.usageIncident(on);
                 if (incident !== null) return incident;
                 yield* reviving(from);
@@ -1060,7 +822,6 @@ export const agentWork: <
       );
     };
     let reminder: { on: Launched; ordinal: number; endedAt: number } | null = null;
-    // Separate Activities keep replay from spending a reminder twice.
     const reminding = (at: string, on: Launched, from: AgentAsk, first: typeof Collected.Type) =>
       Effect.gen(function* () {
         reminder = null;
@@ -1136,7 +897,6 @@ export const agentWork: <
           agents
             .launch(next, (why) => host.parked(work.runId, why))
             .pipe(
-              // A stop that landed while a start failed or parked still reaches the server it left.
               Effect.tapError(() =>
                 Effect.gen(function* () {
                   if (yield* host.stopRequested(runId)) yield* haltLate;
@@ -1146,7 +906,6 @@ export const agentWork: <
           host,
           work.runId,
         );
-        // A stop that landed while it started: that agent is stopped too, and the work waits.
         if (yield* host.stopRequested(runId)) {
           yield* haltLate;
           return yield* Workflow.suspend(instance);
@@ -1171,14 +930,11 @@ export const agentWork: <
         execute: collecting(current, ask),
       }),
     );
-    // Each agent that ran out is closed and replaced by one on the next choice with room
-    // (ADR-0049 D8), every step its own Activity so a replay starts no third agent.
     const spent: Array<SpentChoice> = [];
     for (let n = 1; isRanOut(collected); n++) {
       const out: RanOut = collected;
       const on = choiceOfLaunch(current);
       spent.push({ ...out, on });
-      // Also seeds the marker when an older recorded RanOut is replayed.
       yield* agents.usageWaiting(current, out);
       const next = yield* Activity.make({
         name: `${work.operation}.fallback-${n}.agent`,
@@ -1233,7 +989,6 @@ export const agentWork: <
           ...parts,
           handover: handover({ on, why: out.why, transcript: out.transcript }),
         }).text,
-        // The chain's first agent, which is what a later ask for this agent may still name.
         from: currentAsk.from ?? on,
         why: out.why,
       };
@@ -1254,13 +1009,11 @@ export const agentWork: <
       yield* agents.usageWaiting(current, null);
       const replacement = yield* Activity.make({
         name: `${work.operation}.fallback-${n}.launch`,
-        // An older recorded launch still replays as Launched, without a new Output read.
         success: Schema.Union([Launched, CollectedBeforeFallback]),
         error: AgentUncertain,
         execute: Effect.gen(function* () {
           const instance = yield* WorkflowEngine.WorkflowInstance;
           if (yield* host.stopRequested(runId)) return yield* Workflow.suspend(instance);
-          // Retirement proved Quiet; a tool may have finished its Output while it stopped.
           const late = yield* agents.peekOutput(current);
           if (late !== null && decodeOutput(work.output, late, plain).ok) {
             if (yield* host.stopRequested(runId)) return yield* Workflow.suspend(instance);
@@ -1301,7 +1054,6 @@ export const agentWork: <
       return yield* carded(read.value);
     }
 
-    // A harness that stopped is waited on past the budget, as its park says it is.
     const recollecting = (unusable: string, since: number) =>
       Effect.gen(function* () {
         for (;;) {
@@ -1312,12 +1064,9 @@ export const agentWork: <
           yield* reviving(currentAsk, unusable);
         }
       });
-    // Each repair is its own Activity, so what a restart finds is a repair that happened
-    // rather than an allowance that has come back.
     const repairing = (round: number, unusable: string, problem: string) =>
       Effect.gen(function* () {
         const suffix = round === 1 ? "" : `-${round}`;
-        // Recorded, so a restart's wait still parks on a stop since this repair was asked.
         const since = yield* Activity.make({
           name: `${work.operation}.repair${suffix}.since`,
           success: Schema.Finite,
@@ -1329,7 +1078,6 @@ export const agentWork: <
           error: AgentUncertain,
           execute: stoppable(
             parkedWhenStuck(
-              // One started again was given its step, which asks for the Output anew.
               reviving(currentAsk, unusable).pipe(
                 Effect.flatMap((revived) =>
                   revived ? Effect.succeed(true) : agents.repair(current, problem, unusable, round),
@@ -1377,7 +1125,6 @@ export const agentWork: <
           ? repaired
           : { ok: false as const, problem: `${output} is still unusable: ${repaired.problem}` };
       });
-    // Unusable after its repair parks the Step (ADR-draft-a-fixable-failure-parks-its-step D2).
     let repaired = yield* repairing(1, first, read.problem);
     for (let round = 1; !repaired.ok; round++) {
       const why = `${current.agent} ${repaired.problem}. Correct it, then resume ${runId}.`;
@@ -1408,7 +1155,6 @@ export const agentWork: <
     ),
   );
 
-/** Notes on a choice, an ask or a launch what it fell back from and why, where there is either. */
 const fellBack = (
   onto: { from?: AgentChoice; why?: string },
   from: AgentChoice | null | undefined,
@@ -1418,10 +1164,6 @@ const fellBack = (
   if (why !== null && why !== undefined) onto.why = why;
 };
 
-/**
- * Whether what is asked for here is what an agent already running is, or, for one that
- * took over from an agent that ran out, what that agent was.
- */
 const agrees: (held: ChosenAgent, requested: Preferences) => boolean = (held, requested) => {
   const subagents =
     requested.claudeSubagents?.model === DEFAULT_MODEL
@@ -1452,11 +1194,6 @@ const agrees: (held: ChosenAgent, requested: Preferences) => boolean = (held, re
   return is(held) || (held.from !== undefined && is(held.from));
 };
 
-/**
- * A message handed, as an Activity, to the live agent in this role of a Run this one came
- * from: the agent it reached, or null where there is none to take it. One nobody can say
- * arrived parks the Run.
- */
 export const handOffWork: (given: {
   readonly operation: string;
   readonly role: string;
@@ -1494,11 +1231,6 @@ export const handOffWork: (given: {
     ),
   );
 
-/**
- * Work that cannot go on yet, parked rather than failed. The Activity is left unfinished,
- * so a resume runs it again: the launch finds the agent it started, or its workspace
- * again, and the same delivery goes out.
- */
 const parkedWhenStuck: <A>(
   sending: Effect.Effect<A, AgentUncertain | AgentParked>,
   host: HostApi,
@@ -1518,14 +1250,6 @@ const parkedWhenStuck: <A>(
     ),
   );
 
-/**
- * A collection or a repair an operator can stop while it is out, and resume back into.
- *
- * The suspension is the wait's own instance, never the workflow's: suspending the run
- * from in here would abandon the collection rather than park it, and the next attempt
- * would have nothing to re-enter. The launch is a separate Activity and is already
- * recorded, so what comes back reattaches instead of starting a second agent.
- */
 const stoppable: <A, E>(
   collecting: Effect.Effect<A, E, WorkflowEngine.WorkflowInstance>,
   host: HostApi,
@@ -1546,14 +1270,11 @@ const stoppable: <A, E>(
       ),
       untilStopped(host, runId, pollMs).pipe(Effect.as({ collected: false as const })),
     );
-    // A stop closes the agent, which can fail this before the stop is seen: the stop is
-    // what happened, so the work waits for the resume either way.
     if (!raced.collected || (yield* host.stopRequested(runId)))
       return yield* Workflow.suspend(wait);
     return yield* raced.exit;
   });
 
-/** Waits for an operator to stop this run, and for nothing else. */
 const untilStopped = (host: HostApi, runId: string, pollMs: number) =>
   host
     .stopRequested(runId)
@@ -1563,21 +1284,15 @@ const untilStopped = (host: HostApi, runId: string, pollMs: number) =>
       Effect.orDie,
     );
 
-/** What an Output decoded to, or every reason it could not be used. */
 type Read<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly problem: string };
 
 const asJson = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json));
 
-/**
- * The agent's file as the author's own type. Every issue at once, because an agent fixing
- * them one round trip at a time is the repair being spent on arithmetic.
- */
 export function decodeOutput<Output extends OutputContract>(
   contract: Output,
   text: string,
-  /** Read the file as the text it is rather than as JSON. */
   plain = false,
 ) {
   if (plain) {
@@ -1604,36 +1319,23 @@ export function decodeOutput<Output extends OutputContract>(
   return returned;
 }
 
-/** Everything a prompt is built from, none of which is an Activity. */
 export interface PromptParts {
   readonly role: string;
   readonly instructions: string;
   readonly output: string;
-  /** What the Output is drawn to; null asks for plain text. */
   readonly contract: Projection | null;
-  /** What the instructions' `{{name}}` expressions read, as the module supplies it. */
   readonly input?: Readonly<Record<string, Schema.Json>>;
-  /** Where each mentioned skill is installed; a mention of one that is not says so. */
   readonly skills?: ReadonlyMap<string, string>;
   readonly cwd?: string;
-  /** The Run's attachments when this step is launched. */
   readonly attachments?: ReadonlyArray<Attachment>;
-  /** What an agent taking over this work from one that ran out is told first. */
   readonly handover?: string;
 }
 
-/**
- * What the agent is asked to do, where the answer goes, and what the answer has to be.
- * Pure, so a test and an author can read one without starting anything, and so a replay
- * never builds a different one. The role is the persona, injected at launch, and
- * reaches a body here as `{{role}}`.
- */
 export function promptFor(parts: PromptParts) {
   const returned: string = renderPrompt(parts).text;
   return returned;
 }
 
-/** The prompt, and every expression in the instructions nothing filled. */
 function renderPrompt(parts: PromptParts) {
   const given = {
     ...parts.input,
@@ -1664,7 +1366,6 @@ function renderPrompt(parts: PromptParts) {
   return { text, unfilled };
 }
 
-/** What an agent taking over from one that ran out is told (ADR-0049 D8). */
 export function handover(ranOut: {
   readonly on: AgentChoice;
   readonly why: string;
@@ -1696,11 +1397,6 @@ function attachmentsSection(attachments: ReadonlyArray<Attachment>) {
   return returned;
 }
 
-/**
- * What the Output has to be, drawn from the schema that will decode it. The descriptions
- * are the author's own words about each field, and they are the judgment the agent is
- * being asked for — so they travel with the drawing rather than being summarised away.
- */
 function contractSection(contract: Projection) {
   const limits =
     contract.limits.length === 0
@@ -1714,53 +1410,34 @@ function contractSection(contract: Projection) {
   return returned;
 }
 
-/** What one delivery and its confirmation ask of core. */
 type DeliveringHerdr = Pick<Herdr, "agentPrompt" | "agentList" | "agentSendKeys" | "agentStatus">;
 
-/** What the host has, so an agent it starts is the one the operator configured. */
 export interface AgentHost {
-  /** The state directory this host owns: prompts, Outputs and the log live under it. */
   readonly dir: string;
   readonly env: PluginEnv;
   readonly herdr: Herdr;
   readonly harness: string;
   readonly model: string;
-  /** The operator's effort, where they configured one. */
   readonly effort?: string;
-  /** Models the operator added per harness, beside the ones each adapter knows. */
   readonly models?: Readonly<Record<string, ReadonlyArray<string>>>;
   readonly catalogue?: Effect.Effect<MachineCatalogue>;
-  /** This Machine's Usage readings; none where left out. */
   readonly readings?: Effect.Effect<ReadonlyArray<UsageReading>>;
-  /** A running agent's own reading, where its harness serves one; none where left out. */
   readonly ownReading?: (agent: string) => Effect.Effect<UsageReading | null>;
-  /** The human's Fallback chain; the configured `fallbacks`, read at every choice, where left out. */
   readonly fallbacks?: Effect.Effect<ReadonlyArray<string>>;
   readonly permissions: PermissionMode;
-  /** `auto` where not given. */
   readonly trust?: Defaults["trust"];
   readonly compactAtTokens: number;
   readonly pollMs?: number;
-  /** Idle time an agent has to write its Output; past it the work is uncertain, not finished. */
   readonly collectMs?: number;
   readonly version?: typeof installedVersion;
-  /** How long a new agent's harness has to show it can take its first prompt. */
   readonly readyMs?: number;
-  /** How long a compaction may run before the Run shows it needs you; `COMPACTION_WAIT_MS` where left out. */
   readonly compactionWaitMs?: number;
-  /** How long a settled agent may show neither an unobserved prompt nor a turn from it. */
   readonly confirmGraceMs?: number;
-  /** How long a steer or a correction waits to see its agent take it before saying it did not. */
   readonly observeMs?: number;
-  /** How a step's own prompts wait out a pane that says it will clear by itself. */
   readonly patience?: dispatch.Patience;
-  /** How long a stop may wait for an agent to be Quiet; the fixed budget where left out. */
   readonly stopMs?: number;
-  /** Each harness's compaction controls; the shipped ones where none are given. */
   readonly ports?: CompactionPorts;
-  /** A harness's `--help`, by its kind; the installed one's where left out. */
   readonly help?: typeof installedHelp;
-  /** How a launch's helpers run Collie; this binary where left out. */
   readonly self?: ReadonlyArray<string>;
 }
 
@@ -1769,7 +1446,6 @@ type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | Forg
 const DEFAULT_POLL_MS = 2000;
 const READING_EVERY_MS = 60_000;
 
-/** What a launch ran on, as a choice. */
 const choiceOfLaunch: (launched: Launched) => AgentChoice = (launched) => {
   const choice: Types.Mutable<AgentChoice> = {
     harness: launched.harness,
@@ -1780,21 +1456,14 @@ const choiceOfLaunch: (launched: Launched) => AgentChoice = (launched) => {
   return choice;
 };
 
-/** A choice that stayed on its preferred agent only because nothing else had room. */
 const nothingHasRoom = (chosen: ChosenAgent) =>
   chosen.from === undefined && chosen.why !== undefined;
 
-/** Whether two choices draw on the same usage: the same agent, or the same Subscription. */
 const sameUsage = (one: AgentChoice, other: AgentChoice) => {
   const drawn = subscriptionOf(one);
   return said(one) === said(other) || (drawn !== null && drawn === subscriptionOf(other));
 };
 
-/**
- * Old incidents cannot prove their original account or window. Fresh current capacity
- * can justify one retry; every new incident records observedAt, so another exhaustion
- * cannot take this compatibility path even when its usage source cannot be read.
- */
 const legacyRetryAvailable = (
   spent: SpentChoice,
   readings: ReadonlyArray<UsageReading>,
@@ -1826,7 +1495,6 @@ const legacyRetryAvailable = (
   );
 };
 
-/** Known incidents require reset evidence; old incomplete records can get one bounded retry. */
 const usageRecovered = (spent: SpentChoice, readings: ReadonlyArray<UsageReading>, now: number) => {
   const resetPassed = (at: string | null | undefined) =>
     at != null && Number.isFinite(epochMs(at)) && epochMs(at) <= now;
@@ -1863,27 +1531,18 @@ const usageRecovered = (spent: SpentChoice, readings: ReadonlyArray<UsageReading
   });
 };
 
-/** Past herdr's own start, which has already waited for the harness to be ready. */
 const READY_TIMEOUT_MS = 120_000;
 
-/** Longer than herdr takes to see a taken prompt become a turn, even under load. */
 const CONFIRM_GRACE_MS = 15_000;
 
-/** Someone is waiting on a steer's receipt, so it is not held for a busy agent's whole turn. */
 const OBSERVE_MS = 20_000;
 
-/** herdr still lists an agent whose process has gone, and refuses it with this. */
 const inactive = (refusal: string) => /not an active named agent/.test(refusal);
 
 const isGone = (agent: string, listed: ReadonlyArray<AgentInfo>, refusal: string) =>
   !Arr.some(listed, (one) => one.name === agent) || inactive(refusal);
 const DEFAULT_COLLECT_MS = 2 * 60 * 60 * 1000;
 
-/**
- * The agents a host really starts: herdr's, through the one sender, with the compaction
- * controls and permissions the operator configured. The host's own services are captured
- * here, so a workflow asks for an agent without asking for a filesystem.
- */
 export const agentsLayer: (
   host: AgentHost,
 ) => Layer.Layer<Agents | Collecting, never, AgentServices> = (host) =>
@@ -1905,8 +1564,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
 ) => {
   const dirFor = (runId: string) => launchDir(host.dir, runId);
   const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
-  // A recovery already admitted finishes before its quota incident is published. Once
-  // published, no recovery may pass the incident check and start the spent agent again.
   const recoveryGates = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
   const withRecoveryGate =
     (runId: string) =>
@@ -1958,19 +1615,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         return text === null ? null : yield* Schema.decodeEffect(RanOutJson)(text);
       }).pipe(Effect.orDie),
     );
-  /** What went out as a step's prompt or its repair, kept so a resend is the same words. */
   const sentPath = (about: Launched, kind: "step" | "repair") =>
     `${dirFor(about.runId)}/${stemOf(about)}.${kind}.md`;
   const promptFile = (ask: AgentAsk) => `${dirFor(ask.runId)}/${stemOf(ask)}.prompt.md`;
-  /** Where an OpenCode agent's reporter writes the id of the session OpenCode opened for it. */
   const sessionFileOf = (about: { readonly runId: string; readonly operation: string }) =>
     `${dirFor(about.runId)}/${stemOf(about)}.session`;
-  /** OpenCode's settings with Collie's status reporter after the operator's own plugins. */
   const withReporter = (ask: AgentAsk, settings: JsonObject, resumed: string | null) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const sessionFile = sessionFileOf(ask);
-      // One an earlier launch of this step left would be read as this launch's.
       yield* fs.remove(sessionFile, { force: true }).pipe(Effect.orDie);
       const reporter = `${dirFor(ask.runId)}/${stemOf(ask)}.status.js`;
       yield* write(
@@ -1984,7 +1637,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       const plugins = isJsonArray(settings.plugin) ? settings.plugin : [];
       return { ...settings, plugin: [...plugins, `file://${reporter}`] };
     });
-  /** The launch record with the session its harness opened, once `read` names it. */
   const withSession = (
     launched: Launched,
     read: Effect.Effect<string | null, never, AgentServices>,
@@ -2019,20 +1671,17 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       yield* recordLaunch(recorded);
       return recorded;
     });
-  /** The session the reporter wrote, once OpenCode has opened it. */
   const openedSession = (launched: Launched) =>
     FileSystem.FileSystem.pipe(
       Effect.flatMap((fs) => fs.readFileString(sessionFileOf(launched))),
       Effect.orElseSucceed(() => null),
     );
-  /** The thread Codex's App Server has for this agent, once it has one. */
   const boundThreadOf = (launched: Launched) =>
     Effect.gen(function* () {
       const record = yield* readControl(host.env.stateDir, launched.agent);
       if (record?.endpoint == null) return null;
       return yield* withCodex(record.endpoint, (client) => boundThread(client, record.cwd));
     }).pipe(Effect.orElseSucceed(() => null));
-  /** A launch nobody can say the fate of: a resume lists herdr's agents again before it starts one. */
   const unsettled = (ask: AgentAsk, what: string, cause: ParkCause = "unknown") =>
     new AgentParked({
       operation: ask.operation,
@@ -2044,7 +1693,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const skills = (names: ReadonlyArray<string>) => installedSkills(host.env, names);
   const personaOf = (role: string) => personaText(host.env, role);
 
-  /** The questions holding each agent, as collection and tending last saw them. */
   const openQuestions = new Map<string, Set<string>>();
   const deps: dispatch.DispatcherDeps = {
     stateDir: host.env.stateDir,
@@ -2057,8 +1705,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       }),
   };
 
-  // A harness nobody here has an adapter for falls back to the operator's own, which is
-  // the nearest true thing: the agent still starts, on what this machine is set up for.
   const configured = HARNESSES[host.harness] ?? HARNESSES.claude!;
   const ports = host.ports ?? COMPACTION_PORTS;
   const adapterFor = (harness: string) => HARNESSES[harness] ?? configured;
@@ -2075,7 +1721,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       ),
     );
 
-  /** Null places it where herdr says the agent is. */
   const entryFor = (
     about: Launched | AgentAsk,
     agent: string,
@@ -2095,35 +1740,24 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         workflow: about.workflow,
       });
       if (found.entry === null || place !== null) return found;
-      // Herdr 1 named its agents as core does: only a start on core registers this terminal.
       return (yield* registeredOnCore(about.runId, agent, found.entry.incarnation?.terminalId))
         ? found
         : { entry: null, reason: `${agent} was never started on core`, gone: true };
     });
 
-  /**
-   * The one sender: the first prompt, a repair and a human's own words all go out here.
-   * A delivery the ledger already holds under the same claim is refused rather than sent
-   * a second time, which is what makes a launch that may already have happened safe to
-   * reconcile onto and a retried steer one message rather than two.
-   */
   const deliver = Effect.fn("Agents.deliver")(function* (
     about: Launched,
     text: string,
     delivery: {
       readonly kind: "step" | "repair" | "steer" | "correction";
-      /** What this delivery is about; the ledger's causal key is built from it. */
       readonly ref: string;
       readonly mode?: DeliveryMode;
-      /** A correction is about one version of the Intent, and counts its attempts. */
       readonly intentVersion?: number;
       readonly attempt?: number;
       readonly requestId?: string;
       readonly actor?: Asker;
-      /** The session the agent is in, where it is not the host's own. */
       readonly herdr?: DeliveringHerdr;
       readonly idleOnly?: boolean;
-      /** An answer the host relays for its answerer (ADR-0062): not that human's own message. */
       readonly relayed?: true;
       readonly workflowNotice?: string;
     },
@@ -2141,7 +1775,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     const entry = found.entry;
     const requestId = delivery.requestId ?? `${about.runId}-${delivery.ref}-${delivery.kind}`;
     const attempt = delivery.attempt ?? 1;
-    // Someone's words; work, repairs and corrections are Collie's own and go as they are.
     const fitted =
       delivery.kind === "steer"
         ? yield* dispatch.fitDelivery(
@@ -2161,14 +1794,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       idleOnly: delivery.idleOnly,
       workflowNotice: delivery.workflowNotice,
       human: delivery.kind === "steer" && delivery.relayed !== true ? humanOf(fitted.actor) : null,
-      // Work, a repair and a steer share a causal key per thing they are about, which is
-      // what makes the second copy refusable; a correction's is its constraint's.
       intentVersion: delivery.intentVersion ?? 0,
       attempt,
       requestId,
     };
-    // A human's own words go out once: they are waiting on the answer, and can say it again.
-    // So does a correction: another attempt at one is Collie's to decide, not a retry's.
     const outcome = yield* (
       delivery.kind === "steer" || delivery.kind === "correction"
         ? dispatch.transaction(through, entry, (channel) => channel.submit(fitted.words, draft))
@@ -2207,8 +1836,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         kept: fitted.kept,
       };
     }
-    // Already sent about this work, on whichever attempt got there first. Sending it
-    // again is the second copy this ledger exists to prevent.
     if (outcome.reason === "blocked" && outcome.held !== undefined && SENT_STATES.has(outcome.held))
       return {
         sent: true,
@@ -2225,11 +1852,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     };
   });
 
-  /**
-   * How an unobserved steer or correction was seen taken — a turn starting, its harness's
-   * submit hook, or Enter pressed on it still in the prompt box — or null where nothing
-   * showed it within `observeMs`.
-   */
   const observe = (
     about: Launched,
     entry: AgentEntry,
@@ -2260,11 +1882,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       Effect.orElseSucceed(() => null),
     );
 
-  /**
-   * Waits out a reused agent's turn before its boundary, outside the Dispatcher's
-   * transaction so a steer still reaches it. A status herdr cannot give ends the wait.
-   * `false` where the Run was stopped while it waited.
-   */
   const stoppedRun = (runId: string) => under(controlSet(runId, STOP));
 
   const turnEnded = (launched: Launched) =>
@@ -2293,12 +1910,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       return true;
     });
 
-  /**
-   * A reused agent's work boundary: compacted past the limit, held while a compaction is
-   * unresolved. Only the request takes the Dispatcher's transaction, so a steer is never
-   * refused behind a poll. Past its budget the wait goes on with `note` shown. Null where
-   * the Run was stopped.
-   */
   const boundary = (launched: Launched, note: (why: string | null) => Effect.Effect<void>) =>
     Effect.gen(function* () {
       const found = yield* entryFor(launched, launched.agent, null);
@@ -2316,7 +1927,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 Effect.sync(() => (ran = true)).pipe(Effect.andThen(Effect.result(body(channel)))),
               )
               .pipe(
-                // Refused before the request was submitted, so nothing left.
                 Effect.mapError((cause) =>
                   ran
                     ? new Cause.UnknownError(cause, reason(cause))
@@ -2350,10 +1960,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
 
   const checkedTrust = new Set<string>();
 
-  /**
-   * The harness's own "may I work here", answered before it can ask. A grant that cannot be
-   * written never stops the launch: the harness then asks in its own pane.
-   */
   const ensureTrusted = Effect.fn("Agents.ensureTrusted")(function* (
     runId: string,
     adapter: HarnessAdapter,
@@ -2422,7 +2028,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     );
   });
 
-  /** A pane, an agent in it, and the registry entry that makes it addressable. */
   const start = Effect.fn("Agents.start")(function* (
     ask: AgentAsk,
     agent: string,
@@ -2430,15 +2035,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       readonly agents: ReadonlyArray<AgentInfo>;
       readonly listedAt: string;
     },
-    /** The step's prompt, for a harness given it at launch rather than sent it. */
     prompt: string | null,
-    /** The session its harness opens, where Collie chose it, or resumes. */
     session: StartSession | null,
   ) {
     const adapter = adapterFor(ask.harness ?? host.harness);
     const wanted = ask.permissions ?? undefined;
-    // Read at each start rather than kept from the host's: a host outlives the
-    // Settings change that flips this, and every agent after it has to see the change.
     const config = yield* readConfig(host.env.userDir).pipe(
       Effect.orElseSucceed(() => {
         const returned: YamlMap = {};
@@ -2461,7 +2062,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       autoCompactWindowAsWritten(config.claude_auto_compact_window),
       host.help ?? installedHelp,
     );
-    // Parked, never started on the default: 400000 would replace a window meant smaller.
     if ("refused" in window)
       return yield* new AgentParked({
         operation: ask.operation,
@@ -2469,7 +2069,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       });
     if (window.leftOff !== null)
       yield* log(ask.runId, `${agent}: started without an auto-compact window: ${window.leftOff}`);
-    // The remote TUI forwards hook trust to its App Server as a session override.
     const hookTrustArgs =
       adapter.id === "codex" &&
       /--dangerously-bypass-hook-trust(?![\w-])/.test(
@@ -2560,7 +2159,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       host.env.stateDir,
       agent,
       Effect.gen(function* () {
-        // Installed before the pane opens, so a failed installation leaves no empty tab.
         const env = envLines(profile.env ?? {}, host.env.home);
         const controls = yield* installControls(
           compactionDeps(host, ask.runId),
@@ -2614,7 +2212,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             ask.model ?? host.model,
             persona,
             ask.effort ?? undefined,
-            // A resumed Codex thread keeps its permissions, and its remote TUI refuses them again.
             session?.resumed === true && adapter.id === "codex" ? "harness" : permissions,
             window.passed ?? undefined,
           ),
@@ -2635,7 +2232,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               ...(opened?.lead ?? []),
               ...args,
               ...(prompt === null ? [] : ["--prompt", prompt]),
-              // OpenCode's controls, where installed, already name the session.
               ...(opened === null || settingsArgs.includes("--session") ? [] : opened.tail),
             ],
             cwd: ask.cwd,
@@ -2661,10 +2257,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     );
   });
 
-  /** The agents whose step is being launched or given: a steer to one waits for it. */
   const stepsGoingOut = new Map<string, Deferred.Deferred<void>>();
 
-  /** A recorded name is an external identity, even when the current spelling differs. */
   const nameFor = (ask: AgentAsk) =>
     under(
       Effect.gen(function* () {
@@ -2680,8 +2274,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const canonical = agentName(ask.runId, role, null, sequence);
         const legacy = legacyAgentName(ask.runId, role, null, sequence);
         if (legacy === canonical) return canonical;
-        // Core may have started it before its launch record was written. Its saved ask
-        // proves which generation owns the old name; the name alone does not.
         const text = yield* startedWith(ask.runId, legacy);
         if (text !== null) {
           const started = yield* decodeStarted(text);
@@ -2696,7 +2288,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       }).pipe(Effect.mapError((cause) => asUncertain(ask.operation, cause))),
     );
 
-  /** `fresh` starts again an agent gone at delivery, closing the pane herdr still lists it in. */
   const launch: (
     ask: AgentAsk,
     fresh?: boolean,
@@ -2732,8 +2323,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const listedAt = yield* nowIso;
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
         if (listing._tag === "Failure") {
-          // Nothing is started on a question nobody answered: a second agent on the same
-          // work is worse than work that stops and says why it stopped.
           return yield* unsettled(
             ask,
             `core cannot say which agents it has (${herdrFailureReason(listing.failure)})`,
@@ -2760,13 +2349,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const alive = live !== undefined && !fresh;
         const back = live === undefined ? comingBack.get(agent) : undefined;
         if (back !== undefined) {
-          // The host is starting it again after core lost it: this work goes to that one.
           yield* Deferred.await(back);
           return yield* launch(ask, false, note);
         }
-        // Only a new agent's first work holds a steer; one reused takes it at its boundary.
         if (alive) yield* stepGoneOut(agent);
-        // Core keeps a name while it lists it, so a new agent cannot take it until then.
         if (fresh && live !== undefined)
           yield* host.herdr.terminalKill(live.paneId).pipe(
             Effect.mapError(
@@ -2786,9 +2372,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               what: `${agent}'s launch`,
               stopped: stoppedRun(ask.runId),
             });
-        // Listed again: what herdr had before the wait may have changed during it.
         if (memory === "waited") return yield* launch(ask, fresh, note);
-        // Work in the launch order already is this same work replayed, not new work for the agent.
         const replayed = yield* wasOrdered(ask);
         const landedOn = (
           incarnation: Incarnation | undefined,
@@ -2819,7 +2403,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             if (chosen !== null) landed.agentSession = chosen;
             return landed;
           });
-        // Stopped while it waited for memory: nothing started, and the caller sees the stop.
         if (memory === "stopped") return yield* landedOn(undefined);
         const recorded = (
           incarnation: Incarnation | undefined,
@@ -2827,8 +2410,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         ) =>
           Effect.gen(function* () {
             const landed = yield* landedOn(incarnation, chosen);
-            // Beside it, the agent this work landed on, so a stop and a human steering this
-            // run later reach the agent that has it rather than one derived from a name again.
             yield* recordLaunch(landed);
             return landed;
           });
@@ -2839,18 +2420,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           ask.step === undefined
             ? ""
             : yield* takeStepNotes(`${host.dir}/runs/${ask.runId}`, ask.step.step, file);
-        // Written before it goes out and never rewritten: what a human reads to see what
-        // was actually asked, rather than what a prompt would be built as now.
         const address = `You are ${agent} of ${ask.runId} on ${machineName()}. Message another Run's agent with collie_do deliver to its Run and agent, or collie run steer <run> --operation <agent> "<words>"; push your branch before starting work on another Machine. ${READING_DELIVERIES} ${SHELL_HABITS} ${REGISTERING}${adapter.id === "codex" || adapter.id === "pi" ? ` ${ASKING}` : ""}`;
         yield* write(
           file,
           `${notes === "" ? "" : `${notes}\n\n`}${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
         );
         const pointer = stepText(adapter, ask, file);
-        // OpenCode reports no readiness, so its first prompt goes in at launch.
         const atLaunch = !alive && adapter.id === "opencode";
-        // One it had is resumed. Claude's and pi's are chosen here so a full stop can resume
-        // them; Codex's and OpenCode's are read once they have opened one.
         const had = alive
           ? null
           : yield* sessionHad(ask.runId, agent, adapter.kind, ask.sequence ?? 1);
@@ -2861,7 +2437,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               ? { id: yield* (yield* SecureRandom.SecureRandom).uuidV4(), resumed: false }
               : null;
         const chosen = session === null ? null : { kind: adapter.kind, value: session.id };
-        // Started and recorded as one step, so a stop never misses an agent this started.
         const launched = alive
           ? yield* Effect.gen(function* () {
               const found = yield* entryFor(ask, agent, { paneId: live.paneId, workspaceId: null });
@@ -2913,7 +2488,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           }
         }
         if (alive && !replayed) {
-          // Stopped while it waited: nothing is sent, and the caller sees the stop.
           if (!(yield* turnEnded(launched))) return launched;
           const due = yield* boundary(launched, note);
           if (due === null) return launched;
@@ -2925,15 +2499,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           }
         }
         if (!replayed) yield* orderLaunch(ask);
-        // One send is one message and not a transcript, and a step's prompt carries a
-        // whole contract. A skill marked `disable-model-invocation` refuses an agent that
-        // invokes it itself; this is the human's channel, so a slash command here runs.
         yield* write(sentPath(launched, "step"), pointer);
         let asked = yield* deliver(launched, pointer, {
           kind: "step",
           ref: stemOf(ask),
         });
-        // The sender reads a failed listing as no agent, so only one that answers settles it.
         if (alive && asked.gone === true) {
           const again = yield* host.herdr.agentList().pipe(Effect.result);
           if (
@@ -2941,7 +2511,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             (isGone(agent, again.success, asked.why) ||
               (yield* retireLost(ask, agent, again.success)))
           ) {
-            // Nothing reached it, so a new one is this work's agent rather than a second.
             yield* log(
               ask.runId,
               `${agent}: ${asked.why} before it was given ${ask.operation}; starting it again`,
@@ -2963,7 +2532,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           ask.runId,
           `${agent}: ${alive ? "reattached to" : "launched for"} ${ask.operation}`,
         );
-        // Only Codex's App Server names a thread; without one there is none to wait for.
         if (
           !alive &&
           adapter.id === "codex" &&
@@ -2981,11 +2549,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       ),
     );
 
-  /**
-   * The step's prompt, or the repair when `unless` is set, that herdr could not see taken,
-   * checked while its Output is awaited: taken, finished with one Enter, or raised to a
-   * human. Never silent. One a human settled as not sent goes out once more first.
-   */
   const confirmed = (launched: Launched, unless: string | null) =>
     Effect.gen(function* () {
       const found = yield* entryFor(launched, launched.agent, null);
@@ -2993,11 +2556,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       const dir = yield* controlDir(host.env.stateDir, launched.agent);
       const kind = unless === null ? "step" : "repair";
       const key = causalKey(launched.runId, { kind, ref: stemOf(launched) }, 0);
-      // Only this agent's own ledger: another incarnation's is listed in no time order.
       const incarnation = found.entry.incarnation?.terminalId;
       const last =
         incarnation === undefined ? undefined : (yield* deliveriesAbout(incarnation, key)).at(-1);
-      // Settled as not sent, or refused by herdr on the last resend: not delivered either way.
       const resend =
         Option.getOrUndefined(
           Option.flatMap(Option.fromNullishOr(last), (present__) =>
@@ -3009,7 +2570,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         (last?.state === "failed" && last.attempt > 1);
       if (last !== undefined && resend) {
         const fs = yield* FileSystem.FileSystem;
-        // Sent before its words were kept: the pointer without a skill command.
         const unkept: Effect.Effect<string, null> =
           kind === "step"
             ? Effect.succeed(stepPointer(`${dirFor(launched.runId)}/${stemOf(launched)}.prompt.md`))
@@ -3070,20 +2630,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       ),
     );
 
-  /** Calls whose answers were sent, or refused for good, by agent and call. */
   const answeredCalls = new Set<string>();
 
-  /**
-   * Puts each question the agent asked since it was given this work, and before `until`,
-   * on its Run, and sends the answers to one call as one Delivery once all of them are
-   * answered. True while any is open. `closing` records and closes with it instead.
-   */
   const questionsOf = (
     launched: Launched,
     questions: Questions,
     until = Infinity,
     herdr: Effect.Effect<Herdr, never, AgentServices> = Effect.succeed(host.herdr),
-    /** Its Run's questions as read once for a pass, kept up to date with what the pass asks and closes. */
     known?: Map<string, AskedQuestion>,
   ) =>
     Effect.gen(function* () {
@@ -3108,7 +2661,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               ids.has(`${call.id}${UNREPAIRED}`)
             )
               continue;
-            // Taken before the send, as a second reader of the same call may be polling.
             answeredCalls.add(key);
             const sent = yield* deliver(launched, questionRepair(call.questions), {
               kind: "repair",
@@ -3150,7 +2702,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             }
             const given = Arr.map(names, (name) => asked.get(name) ?? { name, answer: null });
             const key = `${launched.agent}\n${call.id}`;
-            // Until its answers are sent, so Collie's next prompt cannot reach it first.
             const holds = (holding: boolean) => {
               for (const name of names)
                 if (holding) opened.add(`${name} on ${launched.runId}`);
@@ -3170,7 +2721,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               holds(true);
               continue;
             }
-            // A superseded question's answer is never delivered: the agent asks again (D4).
             if (
               Arr.some(given, isSuperseded) ||
               Arr.some(given, (one) => Arr.some(closings, (closing) => closing === one.answer)) ||
@@ -3180,7 +2730,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               continue;
             }
             let sentAll = true;
-            // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
               call.questions[at]?.header || call.questions[at]?.question || names[at];
             const answered = (at: number) => answerTitle(given[at]);
@@ -3269,7 +2818,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             ([runId, asked]) => [runId, new Map(Arr.map(asked, (one) => [one.name, one] as const))],
           ),
         );
-        // None where core cannot be read: an agent there may be live.
         const alive = yield* Effect.cached(host.herdr.agentList().pipe(Effect.option));
         for (const agent of asking) {
           const launchesOf = Arr.filter(launches, (one) => one.agent === agent);
@@ -3278,7 +2826,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             (value) => value,
             (one, other) => Num.sign((one.at ?? 0) - (other.at ?? 0)),
           );
-          // A collection reads its launch's questions and every later one's.
           let collected = false;
           for (const [at, launched] of own.entries()) {
             const next = own[at + 1];
@@ -3386,7 +2933,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const now = yield* fs.readFileString(launched.output).pipe(Effect.orElseSucceed(() => ""));
-        // Rewritten while nobody was asking, as across a stop: that Output is the one to read.
         if (Str.trim(now) !== "" && now !== unusable) return true;
         const text = repairText(launched.output, problem);
         const file = sentPath(launched, "repair");
@@ -3433,7 +2979,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           Effect.map((text) => Str.trim(text) === ""),
           Effect.orElseSucceed(() => true),
         );
-        // Read here too: a turn that ended on a question may not be on its Run yet.
         const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
         const unasked =
           asking === null ? Effect.succeed(true) : Effect.map(asking(null), (open) => !open);
@@ -3505,7 +3050,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
 
   const launchesOf = (runId: string) => readLaunches(runId);
 
-  /** The latest session of this kind recorded for this agent of the Run, where one is. */
   const sessionHad = (runId: string, agent: string, kind: string, sequence: number) =>
     Effect.map(launchesOf(runId), (launches) =>
       Option.getOrNull(
@@ -3519,25 +3063,16 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       ),
     );
 
-  /** What a Run's agent on core was started with, until it is ended on purpose. */
   const startedWith = (runId: string, agent: string) =>
     under(RunRecords.use((records) => records.control(RELAUNCH, runId, agent)));
   const setStarted = (runId: string, agent: string, text: string | null) =>
     under(RunRecords.use((records) => records.setControl(RELAUNCH, runId, text, agent)));
 
-  /** The agents the host is starting again after core lost them, until each has started. */
   const comingBack = new Map<string, Deferred.Deferred<void>>();
-  /** Why the host could not start a lost agent again, until its collection parks on it. */
   const refusedStarts = new Map<string, string>();
-  /** Agents whose work was seen starting a turn, which may end before it is watched. */
   const turnBegun = new Set<string>();
   const resuming = Semaphore.makeUnsafe(1);
 
-  /**
-   * One agent core lost, started again in the session it had. What it is then told, where
-   * its work is still out, is handed back to go once every lost agent of the Run is back.
-   */
-  /** The host's core, but prompting an OpenCode agent's own server instead of its TUI. */
   const posting: (base: string, session: string) => DeliveringHerdr = (base, session) => ({
     agentList: () => host.herdr.agentList(),
     agentSendKeys: (target, keys) => host.herdr.agentSendKeys(target, keys),
@@ -3559,7 +3094,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const text = yield* startedWith(runId, agent);
-      // Ended on purpose since the Run's agents were read.
       if (text === null) return [];
       const started = yield* decodeStarted(text);
       const anchor = Arr.findLast(
@@ -3602,14 +3136,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         "";
       const asking = out && (yield* (yield* questionsOf(latest, run.questions))(null));
       const pointer = yield* fs.readFileString(sentPath(latest, "step")).pipe(Effect.option);
-      // A fresh conversation has nothing to carry on from, so it is given the step as it was.
       const told =
         !out || asking || Option.isNone(pointer)
           ? null
           : had === null
             ? pointer.value
             : `${RESUMED}\n\n${pointer.value}`;
-      // OpenCode drops a --prompt given with a session that has a conversation.
       const atLaunch = told !== null && adapter.id === "opencode" && had === null;
       const ask: AgentAsk = {
         ...started,
@@ -3633,7 +3165,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       );
       if (incarnation === undefined) return [];
       if (atLaunch) turnBegun.add(agent);
-      // Every record of its work names this incarnation now, so a stop and a send reach it.
       let now = latest;
       for (const one of own) {
         const updated: Launched =
@@ -3654,7 +3185,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       if (told === null || atLaunch) return [];
       const tell = Effect.gen(function* () {
         if (adapter.id === "opencode") {
-          // Its reporter's idle, never a timer: text typed before the TUI is up is lost.
           const budgetMs = host.readyMs ?? READY_TIMEOUT_MS;
           const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
           const idle = yield* Effect.suspend(() => host.herdr.agentStatus(agent)).pipe(
@@ -3681,7 +3211,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         if (late !== null)
           return yield* log(runId, `${agent}: was not told to carry on with its step: ${late}`);
         let delivery: Parameters<typeof deliver>[2] = { kind: "step", ref: stemOf(latest) };
-        // Its server where compaction gave it one; otherwise core, now that its reporter is idle.
         const base =
           adapter.id === "opencode"
             ? ((yield* readControl(host.env.stateDir, agent))?.endpoint ?? null)
@@ -3728,13 +3257,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             yield* Effect.gen(function* () {
               const listedAt = yield* nowIso;
               const listing = yield* host.herdr.agentList().pipe(Effect.option);
-              // Nothing is started on a list core did not give.
               if (Option.isNone(listing)) return;
               const launches = yield* launchesOf(runId);
               const tells: Array<Effect.Effect<void, never, AgentServices>> = [];
               for (const agent of agents) {
                 if (Arr.some(listing.value, (one) => one.name === agent)) continue;
-                // A launch already under way starts it.
                 if (stepsGoingOut.has(agent)) continue;
                 tells.push(
                   ...(yield* withRelaunchLock(
@@ -3838,7 +3365,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const refused = refusedStarts.get(agent);
         if (refused !== undefined) {
           refusedStarts.delete(agent);
-          // Resumed, it is started again with its step, as one ended on purpose is.
           yield* setStarted(ask.runId, agent, null);
           return yield* new AgentParked({ operation: ask.operation, reason: refused });
         }
@@ -3866,18 +3392,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           yield* log(ask.runId, `${agent}: started before core, so not started again`);
           return false;
         }
-        // The host starts an agent on core again, in the session it had.
         if (lost === null && (yield* startedWith(ask.runId, agent)) !== null) return false;
         const listing = yield* host.herdr.agentList().pipe(Effect.option);
         if (listing._tag === "None") return false;
         if (lost !== null) {
           if (!(yield* retireLost(ask, agent, listing.value))) return false;
-          // A surviving tool can finish the Output while its old server is being retired.
           if ((yield* completed) !== null) return false;
           yield* launch(ask);
           return true;
         }
-        // Asked only of one herdr lists: it has no delivery to say whether it is inactive.
         const refusal = Arr.some(listing.value, (one) => one.name === agent)
           ? yield* host.herdr
               .agentStatus(agent)
@@ -3904,7 +3427,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const alive = yield* host.herdr.agentList();
         const others = Arr.filter(options.lineage, (runId) => runId !== options.runId);
         const entry = yield* lineageAgent(alive, options.role, others);
-        // Without a proven incarnation the entry names a pane, not the agent now in it.
         if (entry === null) return null;
         if (!verifyIncarnation(entry, alive).ok) return null;
         const handed = { agent: entry.agent, delivered: true, detail: "" };
@@ -3976,7 +3498,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         for (;;) {
           const reported = yield* ranOutSince(dir, launched.at ?? 0);
           const now = yield* Clock.currentTimeMillis;
-          // The Machine's reading at most once a minute, and whenever the harness reports.
           let exhausted: string | null = null;
           let exhaustion: RanOut["exhaustion"];
           if (reported !== null || now - readAt >= READING_EVERY_MS) {
@@ -4026,7 +3547,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               observedAt: now,
             };
             if (exhaustion !== undefined) result.exhaustion = exhaustion;
-            // Core recovery must see the wait even before this RanOut is journaled.
             yield* usageWaiting(launched, result);
             return result;
           }
@@ -4077,7 +3597,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       Effect.gen(function* () {
         const stopped: string[] = [];
         const left: string[] = [];
-        // A start herdr never admitted has a server but no launch.
         const launchedBefore = new Set(Arr.map(yield* launchesOf(runId), (one) => one.agent));
         const found = yield* serversOfRun(host.env.stateDir, `${dirFor(runId)}/agents.log`).pipe(
           Effect.catch((cause) =>
@@ -4111,7 +3630,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           left.push(`core cannot say which agents it has (${reason(listing.failure)})`);
           return yield* reported(runId, stopped, left);
         }
-        // Every agent it launched, listed or not: a closed pane is not a stopped server.
         for (const name of new Set(Arr.map(launches, (launched) => launched.agent))) {
           const ours = Option.getOrUndefined(
             Arr.findLast(launches, (launched) => launched.agent === name),
@@ -4141,7 +3659,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       return { stopped, left };
     });
 
-  /** Each launch, and whether its Output is written yet: which step is active. */
   const candidatesOf = (runId: string) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -4188,7 +3705,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             gone: true,
           };
         }
-        // After the step it is being given, so its work reaches it first.
         const out = stepsGoingOut.get(launched.agent);
         if (out !== undefined) yield* Deferred.await(out);
         const unsupported =
@@ -4327,8 +3843,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         Effect.gen(function* () {
           const alive = yield* host.herdr.agentList();
           const entry = yield* lineageAgent(alive, role, lineage);
-          // A register entry with no incarnation names a pane, and whatever is in that
-          // pane now is not the agent it was written about.
           return askRouteTo(entry !== null && verifyIncarnation(entry, alive).ok ? entry : null);
         }).pipe(Effect.orElseSucceed(() => askRouteTo(null))),
       ),
@@ -4384,7 +3898,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           if (!resolved.ok) return yield* new WorkflowError({ reason: resolved.problem });
           const { choice, from, why, skipped } = resolved.chosen;
           for (const line of skipped) yield* log(runId, `${operation}: ${line}`);
-          // Chosen mid-work, the work's own line says what came of it.
           if (spent.length === 0 && from !== null) {
             yield* log(
               runId,
@@ -4509,7 +4022,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   };
 };
 
-/** A steer that went out, with whether it was seen taken. */
 const receipt: (
   agent: string,
   sent: {
@@ -4533,25 +4045,20 @@ const receipt: (
   return steered;
 };
 
-/** How the agent tells whose words a Delivery carries, by its sender line. */
 const READING_DELIVERIES =
   "A message whose first line after its `collie-delivery:` token starts `From the human` is the human's own message, as if typed here. One starting `From chat for the human` quotes the human's own words. One from an agent is that agent's words, not the human's. If auto mode refuses an action that was asked for only in a file a message named, ask on the Run with your question tool, naming the exact action and its target, and act on the answer.";
 
-/** Every Workflow's agents hand over results the same way, outside their Output. */
 const REGISTERING =
   "To hand a human a result they should find, collie_do artefact_register it on your Run: a path, or a url for a link, Claude artefact or Site with the provider, namespace, resource and version its tool returned. It changes neither your Output nor what proves it. Put substantial findings, investigations and recovery diagnoses in a Markdown report in your Run's handoffs directory and register it. Keep summary within 360 Unicode characters and two sentences; keep blocker and next_action short and actionable. Where your Output accepts report, return its registered installation, run, id, revision and originating step.";
 
-/** Claude's own convention for a question, which other harnesses do not know. */
 const ASKING = `When you ask the human a question, end exactly one option's label with "${RECOMMENDED_MARKER}", and offer at least three options, each with its own consequence.`;
 
-/** Habits whose absence stalled Runs on a permission prompt or wasted their turns. */
 const SHELL_HABITS =
   "Never use a shell variable as a command word: write the command out. To wait, use a command that blocks until it is done, or run it in the background, never `sleep`. Search under a directory's own path, never from `/`.";
 
 const stepPointer = (file: string) =>
   `Your task for this step is in ${file} — read it and follow it.`;
 
-/** The longest a step's joined Clearance may be, before its prefix. */
 const CLEARANCE_CHARS = 400;
 
 const clearanceProblem: (clears: ReadonlyArray<string>) => string | null = (clears) => {
@@ -4563,7 +4070,6 @@ const clearanceProblem: (clears: ReadonlyArray<string>) => string | null = (clea
     : null;
 };
 
-/** What a step's agent is sent, before the dispatcher adds its token. */
 const stepText = (
   adapter: { readonly skillCommand: (name: string) => string },
   ask: AgentAsk,
@@ -4582,14 +4088,11 @@ const encodeStarted = flow(
 );
 const decodeStarted = Schema.decodeUnknownEffect(Schema.fromJsonString(StartedWith));
 
-/** What an agent started again is told first, where its work is still out. */
 const RESUMED =
   "You were restarted after a stop, and this conversation was resumed. Carry on with your step from where you were; do not start it over.";
 
-/** What a delivery is called in a log: one line of it, so the log stays readable. */
 const firstLine = (text: string) => Str.split(text, "\n")[0] ?? "";
 
-/** A prompt that is waiting on its pane, said with what picks it up again. */
 const refusedWith = (
   about: { readonly runId: string; readonly operation: string },
   what: string,
@@ -4602,20 +4105,13 @@ const refusedWith = (
 
 const isParked = Schema.is(AgentParked);
 
-/** Anything a launch failed on, said as what it means: nobody can be sure what happened. */
 const isUncertain = Schema.is(AgentUncertain);
 const isNotQuiet = (cause: unknown): cause is NotQuiet => Predicate.isTagged(cause, "NotQuiet");
 const asUncertain: (operation: string, cause: unknown) => AgentUncertain = (operation, cause) =>
   isUncertain(cause) ? cause : new AgentUncertain({ operation, reason: herdrFailureReason(cause) });
 
-/** A persona's own front matter, which its definition reads and its agent is not told. */
 const PERSONA_FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
 
-/**
- * Where each named skill is installed. Resolved from the directories the operator's own
- * skills live in, so a mention is the path a harness can actually read and one nobody
- * installed is left out for `skillMention` to say so.
- */
 export const installedSkills = Effect.fn("Agents.skills")(function* (
   env: { readonly home: string; readonly cwd: string },
   names: ReadonlyArray<string>,
@@ -4640,11 +4136,6 @@ interface PersonaEnv {
 
 const EVERY_AGENT = "every-agent";
 
-/**
- * What this role is, as the persona Markdown for it says — the project's, then this
- * machine's, then the installation's — followed by the `every-agent` text. A role nobody
- * wrote a persona for is still a role: it is stated in one line rather than left blank.
- */
 export const personaText = Effect.fn("Agents.personaOf")(function* (env: PersonaEnv, role: string) {
   const dirs = Arr.map((yield* layers(env)).all, (layer) => layer.dir).reverse();
   const own = unsafePathComponent(role) === null ? yield* layeredPersona(env, role, dirs) : null;
@@ -4655,13 +4146,11 @@ export const personaText = Effect.fn("Agents.personaOf")(function* (env: Persona
   );
 });
 
-/** The `every-agent` text for the Home chat, which belongs to no project. */
 export const everyAgentText = Effect.fn("Agents.everyAgentText")(function* (env: PersonaEnv) {
   const where = yield* layers(env);
   return yield* layeredPersona(env, EVERY_AGENT, [where.user.dir, where.baseline.dir]);
 });
 
-/** The named persona's text from the first of `dirs` that has one, or null. */
 const layeredPersona = Effect.fn("Agents.layeredPersona")(function* (
   env: PersonaEnv,
   role: string,
@@ -4687,7 +4176,6 @@ const layeredPersona = Effect.fn("Agents.layeredPersona")(function* (
   return null;
 });
 
-/** What the role is stated as, in the persona and in the prompt alike. */
 const roleBody = (role: string) => `You are the ${role}.`;
 
 const OUTPUT_REMINDERS = 2;
@@ -4695,11 +4183,6 @@ const OUTPUT_REMINDERS = 2;
 const reminderText: (output: string) => string = (output) =>
   `Your turn ended without writing your Output. A chat message is not the Output: write ${output}, the JSON the contract described and nothing else.\nOUTPUT_PATH: ${output}`;
 
-/**
- * One Output the agent could not write correctly, handed back to that same agent with the
- * reason. It is still in its pane holding the work; starting the work again would throw a
- * whole round away over a write.
- */
 export const repairText: (output: string, problem: string) => string = (output, problem) =>
   `Your Output file is not usable: ${problem}\n\nWrite ${output} again — the JSON the contract described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${output}`;
 
@@ -4723,19 +4206,9 @@ const undeliverable = (cause: unknown) => ({
   ok: false as const,
   id: null,
   reason: "failed" as const,
-  // A tagged error's fields say what its empty message does not.
   detail: reason(cause) || Formatter.formatJson(cause),
 });
 
-/**
- * What the agent wrote, once there is something to read. A file that exists but is blank
- * is a write that has not happened — or one caught half done — not an empty answer, and
- * `unless` is the same again: an Output already known to be unusable is the file not
- * having been rewritten. Null where nothing arrived in the time allowed, which says the
- * work is uncertain and never that it did not happen. Only polls `counts` answers true for use
- * up that time, so a caller pauses the budget by answering false. A text that is not `usable`
- * is taken only once `settled`, as the file stands after it is.
- */
 const waitForOutput = <R>(
   path: string,
   unless: string | null,
@@ -4785,11 +4258,6 @@ const encodeSettings = flow(
 
 const NO_AUTHORITY: RunAuthority = { created: null, roaming: false, started: null };
 
-/**
- * The overlay with the Collie directory's instruction files excluded, for an agent working
- * inside it: Claude reads every ancestor's, and a clone install's `@AGENTS.md` is an external
- * import it asks about in each new worktree.
- */
 const withoutCollieInstructions: (
   overlay: ClaudeOverlay,
   cwd: string,
@@ -4810,10 +4278,6 @@ const withoutCollieInstructions: (
     : overlay;
 };
 
-/**
- * Claude's `--settings` with the operator's overlay and the Run's `autoMode` merged in: into
- * the file Collie's controls already pass, or into a file of its own where they pass none.
- */
 const claudeSettings = (
   controls: ReadonlyArray<string>,
   overlay: ClaudeOverlay,
@@ -4853,11 +4317,6 @@ const append = (path: string, line: string) =>
     yield* fs.writeFileString(path, `${line}\n`, { flag: "a" });
   }).pipe(Effect.ignore);
 
-/**
- * The agents layer as a host builds one, on the harness, model and permissions the
- * operator configured. Read when the host takes its directory: a host serves work for as
- * long as it owns one, and a launch is made under the settings that were in force then.
- */
 export const configuredAgents = Effect.fn("Agents.configured")(function* (
   dir: string,
   readings: Effect.Effect<ReadonlyArray<UsageReading>>,

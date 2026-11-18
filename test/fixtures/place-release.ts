@@ -1,4 +1,3 @@
-// One placement in a process of its own: `bun place-release.ts <tree> <runner> <collieDir> <version>`.
 import { Effect } from "effect";
 import { platformLayer } from "../../src/platform";
 import { placeLocked } from "../../src/operations";

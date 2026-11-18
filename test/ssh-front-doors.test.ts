@@ -1,5 +1,3 @@
-// ADR-draft-a-blocked-link-rides-the-machines-ssh-connection, across two real hosts.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -60,7 +58,6 @@ const pairedLinks = (side: Side) =>
       ),
     );
 
-/** What the fake ssh logged from `from` on that starts as one of `kinds`. */
 const logged = (side: Side, from: number, ...kinds: ReadonlyArray<string>) =>
   side.ssh.calls.pipe(
     Effect.map((all) =>
@@ -70,7 +67,6 @@ const logged = (side: Side, from: number, ...kinds: ReadonlyArray<string>) =>
     ),
   );
 
-/** Every line of the log is the host's `-O` call or a front door's master or ride. */
 const onlyMuxFromTheHost = (side: Side) =>
   side.ssh.calls.pipe(
     Effect.map((all) =>
@@ -93,7 +89,6 @@ test(
             expect(rides).toHaveLength(1);
             expect(rides[0]).toContain(" machine invite --for ");
 
-            // The network starts refusing the port: the link comes up over the open connection.
             const advertised = Number(yield* listenerPort(first, second));
             const moved = yield* freePort;
             const blocking = yield* Scope.make();
@@ -112,7 +107,6 @@ test(
             expect(viaSsh.ok).toBe(true);
             expect(viaSsh.detail).toBe(`second's link goes over SSH: direct ${over.direct}.`);
 
-            // The connection drops: a host job is refused, and nothing logs in.
             yield* first.ssh.drop;
             yield* until(
               () => listed(first, "second"),
@@ -140,7 +134,6 @@ test(
             });
             expect(yield* logged(first, dropped, "master", "login")).toEqual([]);
 
-            // A command opens it, once, and carries on.
             const board = yield* first.cli(["--machine", "second", "board"]);
             expect(board.envelope.error).toBeUndefined();
             expect(yield* logged(first, dropped, "master", "login")).toEqual(["master mk@second"]);

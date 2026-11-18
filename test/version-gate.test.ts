@@ -1,7 +1,3 @@
-// How Collie asks an installed harness about itself: the version gate before a launch, and
-// the `--help` a launch reads its flags from. Its own file, because the gate's answers are
-// kept for the process and must not reach the tests that gate a real harness.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
@@ -13,7 +9,6 @@ import { installedHelp } from "../src/harness";
 import { runEffect } from "./support/effect";
 import { until } from "./support/host";
 
-/** Answers each `--version` with the next of `answers`, once `settled`, and counts them. */
 function versionsAnswering(
   answers: Array<{ code: number; stdout: string }>,
   settled: Effect.Effect<void> = Effect.void,
@@ -55,7 +50,6 @@ test("a harness whose --version failed is asked again once the failure has expir
       );
 
       expect((yield* Effect.flip(gate)).message).toBe("cannot ask opencode its version (exit 1)");
-      // Kept a while, so a launch right behind a failed one does not probe again.
       expect((yield* Effect.flip(gate)).message).toBe("cannot ask opencode its version (exit 1)");
       expect(asked).toEqual([["opencode", "--version"]]);
 
@@ -71,7 +65,6 @@ test("a harness whose --version failed is asked again once the failure has expir
 test("two launches of one harness at once share one --version probe", () =>
   runEffect(
     Effect.gen(function* () {
-      // Answered later, so both launches are asking before either has an answer.
       const { asked, spawner } = versionsAnswering(
         [
           { code: 0, stdout: "99.0.0\n" },

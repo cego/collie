@@ -1,7 +1,3 @@
-// What a Step is as data, and what the host records of one as a Run's work enters and leaves
-// it (ADR-draft-a-step-is-declared-where-its-work-is-written D1–D4). The SDK's `step` makes
-// one, and the Flow is built from these records.
-
 import { Context, Effect, Schema, flow, Result } from "effect";
 import { RunRecords, runOfDir, STEPS } from "./run-records";
 
@@ -11,7 +7,6 @@ export type StepKind = typeof StepKind.Type;
 export const Produces = Schema.Literals(["plan", "review", "evidence", "merge-request"]);
 export type Produces = typeof Produces.Type;
 
-/** What a reader needs of a Step before it runs. */
 export const StepMeta = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
@@ -22,14 +17,12 @@ export const StepMeta = Schema.Struct({
 });
 export type StepMeta = typeof StepMeta.Type;
 
-/** Which of a Step's runs a call is: a round of so many, or an item of a list. */
 export const StepPlace = Schema.Union([
   Schema.Struct({ round: Schema.Int, of: Schema.NullOr(Schema.Int) }),
   Schema.Struct({ item: Schema.String, items: Schema.Array(Schema.String) }),
 ]);
 export type StepPlace = typeof StepPlace.Type;
 
-/** The Step run the work is in now. `key` names that run within the Run. */
 export interface At {
   readonly step: string;
   readonly place: StepPlace | null;
@@ -40,7 +33,6 @@ export const CurrentStep = Context.Reference<At | null>("collie/CurrentStep", {
   defaultValue: () => null,
 });
 
-/** A Step run's key: its id and place, or its id and how many calls without one came before. */
 export const runKey = (id: string, place: StepPlace | null, call: number) => {
   if (place === null) return call > 1 ? `${id}~${call}` : id;
   return "item" in place ? `${id}@${place.item}` : `${id}#${place.round}`;
@@ -50,7 +42,6 @@ const Line = <const Fields extends Schema.Struct.Fields>(fields: Fields) =>
   Schema.Struct({ ...fields, at: Schema.String });
 
 export const StepLine = Schema.Union([
-  /** The Steps the Run expects to take, in order. The latest one is the forecast. */
   Line({ kind: Schema.Literal("forecast"), steps: Schema.Array(StepMeta) }),
   Line({
     kind: Schema.Literal("enter"),
@@ -61,7 +52,6 @@ export const StepLine = Schema.Union([
   }),
   Line({ kind: Schema.Literal("leave"), key: Schema.String }),
   Line({ kind: Schema.Literal("fail"), key: Schema.String, why: Schema.String }),
-  /** The Run's work was entered again; a cause says it went on with a Step left part-done. */
   Line({
     kind: Schema.Literal("entry"),
     cause: Schema.NullOr(Schema.Literals(["restarted", "resumed"])),
@@ -72,7 +62,6 @@ export const StepLine = Schema.Union([
 ]);
 export type StepLine = typeof StepLine.Type;
 
-/** A line as the workflow hands it over: the host stamps when. */
 export type StepNote = StepLine extends infer L
   ? L extends StepLine
     ? Omit<L, "at">
@@ -86,11 +75,9 @@ const encodeLine = flow(Schema.encodeResult(Schema.fromJsonString(StepLine)), Re
 
 export const encodeStepLine = (line: StepLine) => encodeLine(line);
 
-/** What a Run records of its Steps, in the order it was written. */
 export const readStepLines = Effect.fn("Steps.read")(function* (runDir: string) {
   const texts = yield* RunRecords.use((records) => records.lines(runOfDir(runDir), STEPS_FILE));
   const lines: StepLine[] = [];
-  // A line at a time, so a long Run is read in the scheduler's turns.
   for (const text of texts) {
     const read = yield* Effect.sync(() => decodeLine(text));
     if (read._tag === "Some") lines.push(read.value);
@@ -98,6 +85,5 @@ export const readStepLines = Effect.fn("Steps.read")(function* (runDir: string) 
   return lines;
 });
 
-/** Records one Step line for the Run. The host is their only writer. */
 export const appendStepLine = (runDir: string, line: StepLine) =>
   RunRecords.use((records) => records.append(runOfDir(runDir), STEPS_FILE, [encodeLine(line)]));

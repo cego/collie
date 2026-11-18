@@ -1,6 +1,3 @@
-// The human signed in to Slack: OAuth with PKCE and no client secret, the
-// grant kept by Desktop and renewed while it runs, and each Machine given the access token.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import {
@@ -39,7 +36,6 @@ export const SlackUserGrant = Schema.Struct({
   clientId: Schema.String,
   accessToken: Schema.String,
   refreshToken: Schema.String,
-  /** Epoch milliseconds. */
   expiresAt: Schema.Finite,
   userId: Schema.String,
   userName: Schema.String,
@@ -50,7 +46,6 @@ export const SlackUserGrant = Schema.Struct({
 export type SlackUserGrant = typeof SlackUserGrant.Type;
 const GrantJson = Schema.fromJsonString(SlackUserGrant);
 
-/** The `slack-user.env` lines `probeSlackUser` checks. */
 export const slackUserLines = (grant: SlackUserGrant) =>
   `SLACK_USER_TOKEN=${grant.accessToken}\nSLACK_USER_ID=${grant.userId}\nSLACK_TEAM_ID=${grant.teamId}\nSLACK_USER_SCOPES=${grant.scopes}\n`;
 
@@ -76,7 +71,6 @@ export const slackAuthorizeUrl = (clientId: string, state: string, challenge: st
 
 type Given = ReadonlyArray<{ readonly name: string; readonly failed: string | null }>;
 
-/** The user's tokens in an answer, wherever Slack put them. */
 const userTokens = (answer: typeof SlackOAuthAnswer.Type) => {
   const tokens = answer.authed_user ?? (answer.token_type === "user" ? answer : undefined);
   return tokens?.access_token !== undefined &&
@@ -98,7 +92,6 @@ const listen = (state: string, open: (url: string) => Effect.Effect<void>, url: 
       Effect.try({
         try: () =>
           Bun.serve({
-            // A held port refuses here; browsers fall back to it for localhost.
             hostname: "127.0.0.1",
             port: SLACK_CALLBACK_PORT,
             fetch: (request) => {
@@ -136,14 +129,11 @@ const listen = (state: string, open: (url: string) => Effect.Effect<void>, url: 
 
 export const slackUserSession = Effect.fnUntraced(function* (options: {
   readonly keyring: Keyring;
-  /** Gives every Machine the grant, or "" to remove it, and says how each went. */
   readonly give: (text: string) => Effect.Effect<Given>;
   readonly open: (url: string) => Effect.Effect<void>;
-  /** Run each time a sign-in is kept, since nothing reads a bot token any more. */
   readonly retireBot: Effect.Effect<unknown, string>;
   readonly client?: HttpClient.HttpClient;
 }) {
-  // A refresh token works once, so renewals never overlap.
   const lock = Semaphore.makeUnsafe(1);
   let trouble: string | null = null;
   const changed = yield* SubscriptionRef.make(0);
@@ -175,7 +165,6 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
     );
 
   const signIn = Effect.gen(function* () {
-    // A grant from another app renews only against that app.
     const id = (yield* kept)?.clientId ?? SLACK_CLIENT_ID;
     const state = secret();
     const verifier = secret();
@@ -217,7 +206,6 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
     return { grant, given };
   }).pipe(Effect.mapError(hidden(null)));
 
-  /** Renews when less than an hour is left, or now when `now`; null when nothing was due. */
   const renew = (now: boolean) =>
     Effect.gen(function* () {
       const before = yield* kept;
@@ -268,7 +256,6 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
       .pipe(Effect.mapError(hidden(grant)));
   });
 
-  /** What the card says; no token. */
   const state = Effect.map(kept, (grant) => ({
     signedIn: grant === null ? null : { user: grant.userName, team: grant.teamName },
     trouble:
@@ -286,7 +273,6 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
     signIn,
     renew,
     channels,
-    /** Forgets the grant and removes it from every Machine, those that connect later too. */
     signOut: lock.withPermits(1)(
       Effect.gen(function* () {
         yield* options.keyring.store("slack-user-grant", "Slack signed out", "");

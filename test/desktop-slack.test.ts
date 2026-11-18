@@ -15,7 +15,6 @@ import {
   NO_FLOCK_SETTINGS,
 } from "../desktop/src/shared/flock-settings";
 
-/** The channels the signed-in human is in, as the fake answers their token. */
 const yoursIn = Effect.suspend(() =>
   slackApi("xoxe.xoxp-1-user-fixture", fakeSlack().client).channels(),
 );

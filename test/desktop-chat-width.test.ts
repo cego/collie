@@ -1,6 +1,3 @@
-// The Flock chat's width beside the board: chosen by dragging its edge or by keys, and drawn
-// within what the window leaves both.
-
 import { describe, expect, test } from "bun:test";
 import {
   CHAT_WIDTH,
@@ -41,7 +38,6 @@ describe("the chat's drawn width", () => {
   });
 
   test("is clamped again at a larger Zoom, which makes the same window fewer CSS pixels wide", () => {
-    // A 1600-device-pixel window at 200% is 800 CSS pixels.
     expect(chatWidth(700, 1600 / 2)).toBe(320);
   });
 });

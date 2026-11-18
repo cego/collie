@@ -1,6 +1,3 @@
-// Ready to release as `run show` and `run wait` read it from a real host: the same fact the
-// board's column is, and a wait that knows when only a human can move it.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";

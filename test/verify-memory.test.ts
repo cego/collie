@@ -1,7 +1,3 @@
-// `collie verify` waits in the host while its Machine is short of memory, for a human as for
-// an agent, says so first, and its result is the command's
-// (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory, D2, D4, D5 and D7).
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -19,7 +15,6 @@ import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
-/** The wait for memory the host on `state` has for the Run; none before it has made `host.db`. */
 const waitAt = (state: string, runId: string) =>
   hostRecords(state, memoryWaitOf(runId)).pipe(Effect.orElseSucceed(() => null));
 
@@ -146,12 +141,10 @@ test(
             yield* memory(2);
           }
 
-          // The agent that was running when the Machine became short is still there.
           expect(Arr.some(yield* registeredAt(world.state), (one) => one.runId === runId)).toBe(
             true,
           );
 
-          // What a human frees memory with never waits; a new Run's first agent does.
           const second = yield* client
             .start({
               project: world.project,

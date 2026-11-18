@@ -1,5 +1,3 @@
-// The files a Flock chat action carries, as paths on the Machine it goes to (ADR-0046).
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
@@ -15,7 +13,6 @@ import { reasonOf } from "./sent";
 const tooLarge = (path: string) =>
   new HostRefused({ reason: `${path} is larger than ${ATTACHMENT_BYTES / 1024 / 1024} MB` });
 
-/** The whole file, part by part, or until `enough` says of the latest part. */
 export const readWhole = Effect.fn("Carried.readWhole")(function* (
   machine: Pick<Reached, "name" | "door">,
   path: string,
@@ -37,10 +34,8 @@ export const readWhole = Effect.fn("Carried.readWhole")(function* (
   }
 });
 
-/** How long an upload is taken as still held: well inside the week a host keeps one. */
 const REMEMBERED = 24 * 60 * 60 * 1000;
 
-/** `bytes` on `machine`, uploaded unless this session did today, and their path there. */
 const uploaded = Effect.fn("Carried.upload")(function* (
   uploads: FlockChat["uploaded"],
   machine: { readonly name: string; readonly door: Pick<ChatDoor, "upload"> },
@@ -71,10 +66,6 @@ const uploaded = Effect.fn("Carried.upload")(function* (
   }
 });
 
-/**
- * What an action carries, as paths on `machine`: the files it names, or, named nowhere,
- * those of the human's message this turn. Undefined where it carries nothing to resolve.
- */
 export const carriedPaths = Effect.fn("Carried.paths")(function* (
   flock: FlockChat,
   machine: Reached,
@@ -130,18 +121,12 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
   return paths;
 });
 
-/** A Machine a pane is on, as placing a file there needs it. */
 export interface PlacedOn {
   readonly name: string;
-  /** Whether its host takes files, as its latest Snapshot said. */
   readonly files: boolean;
   readonly door: Pick<ChatDoor, "upload">;
 }
 
-/**
- * Desktop's copies, by id, placed on the Machine a pane is on, and their paths there, in
- * order; the first that cannot be placed fails the whole, naming it.
- */
 export const placeStaged = Effect.fn("Carried.place")(function* (
   held: FlockChat["uploaded"],
   machine: PlacedOn,

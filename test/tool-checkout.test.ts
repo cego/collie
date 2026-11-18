@@ -1,5 +1,3 @@
-// A Run in a checkout another tool made, as bodil makes one, on a real host with real git.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -14,7 +12,6 @@ import { collie, proves, type World } from "./support/world";
 const MODULES = ["provisions.workflow.ts", "placed.workflow.ts"] as const;
 const Listed = flow(Schema.decodeUnknownResult(CleanupReport), Result.getOrThrow);
 
-/** The tool's repository, with the one commit a worktree needs to be cut from. */
 const toolRepo = Effect.fn("ToolCheckoutTest.toolRepo")(function* (world: World) {
   const fs = yield* FileSystem.FileSystem;
   const repo = `${world.home}/tool/repo`;
@@ -28,14 +25,12 @@ const toolRepo = Effect.fn("ToolCheckoutTest.toolRepo")(function* (world: World)
   return repo;
 });
 
-/** What the tool logged: one line per "up" and "down" it ran. */
 const toolLog = (world: World) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${world.home}/tool/tool.log`)),
     Effect.map((text) => Str.split(Str.trim(text), "\n")),
   );
 
-/** The parent started, its question answered by a host that replaced the first, and both Runs settled. */
 const settled = Effect.fn("ToolCheckoutTest.settled")(function* (
   world: World,
   outcome: "succeed" | "fail",
@@ -58,7 +53,6 @@ const settled = Effect.fn("ToolCheckoutTest.settled")(function* (
       return run;
     }),
   ).pipe(Effect.orDie);
-  // A host that never ran "up" resumes the parent past it.
   yield* stopHost(world.state);
   const client = yield* connect(world.state).pipe(Effect.orDie);
   yield* client
@@ -89,7 +83,6 @@ test(
             branch: "collie-try",
             created_by_collie: false,
           });
-          // "up" ran once though a new host replayed the parent past it, and "down" once.
           expect(yield* toolLog(world)).toEqual(["up", "down"]);
 
           const listed = Listed((yield* collie(world, ["cleanup"])).envelope.data);

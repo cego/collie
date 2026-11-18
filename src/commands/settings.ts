@@ -1,6 +1,3 @@
-// Collie's settings on this Machine: what each is, and setting one through the host, so an
-// agent can do what the TUI's and Desktop's Settings do.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect } from "effect";

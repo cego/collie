@@ -1,6 +1,3 @@
-// The benchmark's Runs: `steps` declared Steps one after another, then, for a live Run, a
-// Step taken again every two seconds for as long as the host runs it.
-
 import { defineWorkflow, step } from "collie";
 import { Effect, Schema } from "effect";
 

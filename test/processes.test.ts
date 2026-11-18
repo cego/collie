@@ -28,8 +28,6 @@ test("a process's command and start time read alone are what reading it whole sa
 test.skipIf(process.platform !== "linux")(
   "a zombie is not running, whether proc or ps is read",
   () => {
-    // The child waits on stdin, which is closed only once the shell has become a sleep that
-    // never reaps it, so the child is certain to stay a zombie.
     const parent = Bun.spawn(
       ["sh", "-c", "cat >/dev/null <&0 & echo $!; exec sleep 30 >/dev/null"],
       { stdin: "pipe", stdout: "pipe" },
@@ -212,10 +210,8 @@ test("a running process's group and bindings are read, and a gone one has neithe
           stderr: "ignore",
         }),
       );
-      // Until it has exec'd, /proc shows its parent's environment, or none.
       yield* Stream.runDrain(Stream.take(Stream.decodeText(leader.stdout), 1));
       expect(yield* groupOf(leader.pid)).toBe(leader.pid);
-      // Without a readable /proc, a binding proves nothing.
       expect(yield* bindingsOf(leader.pid, ["COLLIE_PROBE", "COLLIE_ABSENT"])).toEqual(
         process.platform === "linux" ? { COLLIE_PROBE: "carried" } : null,
       );
@@ -295,7 +291,6 @@ test("a look for bound processes on a busy machine takes about one process's rea
         Effect.provideService(FileSystem.FileSystem, slowProc),
       );
       expect(found).toEqual([{ pid: 7, started: "start-7", bound: { COLLIE_PROBE: "carried" } }]);
-      // Read one after another, 100 processes' two reads take 4 seconds.
       expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(1_000);
     }),
   ));

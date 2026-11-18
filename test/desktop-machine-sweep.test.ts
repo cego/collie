@@ -1,6 +1,3 @@
-// Desktop's main process sweeps a chosen Machine: sent again only over a renewed connection,
-// waited on for up to 10 minutes in all, and logged in `actions.log` (ADR-0045).
-
 import { describe, expect, test } from "bun:test";
 import { Effect, Exit, Fiber, Scope } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
@@ -22,13 +19,11 @@ const report = (bytes: number) => ({
   bytes,
 });
 
-/** The `sweep` call alone, as a host serves it. */
 const Sweep = RpcGroup.make(
-  // SAFETY: the group's own `sweep`, which its map types as any of its Rpcs.
+  // WARNING: the group's own `sweep`, which its map types as any of its Rpcs.
   FrontDoorRpcs.requests.get("sweep") as Extract<Rpcs, { readonly _tag: "sweep" }>,
 );
 
-/** A host answering each `sweep` with `answer`; the request of every sweep it is sent is kept. */
 const fakeHost = (name: string, answer: Effect.Effect<CleanupReport, HostRefused>) =>
   Effect.gen(function* () {
     const swept: Array<string> = [];
@@ -48,7 +43,7 @@ const fakeHost = (name: string, answer: Effect.Effect<CleanupReport, HostRefused
       onFromClient: ({ message }) => server.write(0, message),
     });
     toClient = client.write;
-    // SAFETY: a sweep calls only `sweep` over its door.
+    // WARNING: a sweep calls only `sweep` over its door.
     const reached = { machine: { profile: `p-${name}`, name }, desktop: client.client } as Reached;
     return { reached, swept };
   });
@@ -82,7 +77,7 @@ const broken = new RpcClientError({
 });
 const brokenDoor: Reached = {
   machine: { profile: "p-vm-mk", name: "vm-mk" },
-  // SAFETY: a sweep calls only `sweep` over its door, answered as the client answers it.
+  // WARNING: a sweep calls only `sweep` over its door, answered as the client answers it.
   desktop: { sweep: (() => Effect.fail(broken)) as Door["sweep"] } as Door,
 };
 

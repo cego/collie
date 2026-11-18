@@ -1,11 +1,3 @@
-// A Task: the work a human is doing. A Run is
-// one execution of a Workflow; a Task is what several of them — a plan, the
-// implementation it chained into, the review of that — are all about.
-//
-// Membership is recorded here and carried on each Run's record, never inferred from a
-// label: two Tasks may share a project prefix, and that says nothing about whose work a
-// Run is.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -19,21 +11,12 @@ import { nowIso } from "./time";
 
 export const TaskSchema = Schema.Struct({
   id: Schema.String,
-  /** The Herdr 1 workspace an older Task was kept in; null for every Task core has. */
   workspace: Schema.NullOr(Schema.String),
-  /**
-   * What the Task is called. A display label and nothing more: it is never read to
-   * decide which Task something belongs to.
-   */
   label: Schema.String,
-  /** Where the Task's first Run was rooted, which is what a picker shows beside it. */
   cwd: Schema.String,
-  /** The shell pane an older Task's Herdr 1 workspace was made with; core never sets it. */
   root_pane: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** The Herd it is in. Absent from a record older than the field. */
   herd: Schema.optionalKey(Schema.NullOr(Schema.String)),
   created_at: Schema.String,
-  /** When Cleanup closed it. */
   closed_at: Schema.optionalKey(Schema.String),
 });
 export type TaskRecord = Schema.Schema.Type<typeof TaskSchema>;
@@ -42,22 +25,17 @@ const TaskJson = Schema.fromJsonString(TaskSchema);
 const encodeTask = flow(Schema.encodeResult(TaskJson), Result.getOrThrow);
 export const decodeTaskOption = Schema.decodeOption(TaskJson);
 
-/** Which Task a start belongs to: a new one, or one the caller named. */
 export type TaskChoice =
   | { readonly mode: "new" }
   | { readonly mode: "continue"; readonly task: TaskRecord };
 
-/** The Tasks, in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database). */
 export interface TasksApi {
   readonly get: (id: string) => Effect.Effect<TaskRecord | null>;
-  /** Newest first. */
   readonly list: Effect.Effect<ReadonlyArray<TaskRecord>>;
   readonly ofWorkspace: (workspace: string) => Effect.Effect<TaskRecord | null>;
   readonly put: (task: TaskRecord) => Effect.Effect<TaskRecord>;
   readonly remove: (id: string) => Effect.Effect<void>;
-  /** Held from reading a Task to writing it back, so two Runs cannot both replace its workspace. */
   readonly locked: <A, E, R>(id: string, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  /** `locked`, or nothing where another holds it now. */
   readonly lockedIfFree: <A, E, R>(
     id: string,
     effect: Effect.Effect<A, E, R>,
@@ -66,7 +44,6 @@ export interface TasksApi {
 
 export class Tasks extends Context.Service<Tasks, TasksApi>()("collie/Tasks") {}
 
-/** What a write to the Tasks invalidates. */
 export const TASKS = "collie/tasks";
 
 const decoded = (rows: ReadonlyArray<{ readonly record: string }>) =>
@@ -121,21 +98,17 @@ export const tasksLayer = Layer.effect(Tasks)(
   }),
 );
 
-/** The Task by that id, or null. */
 export const readTask = (id: string) => Tasks.use((tasks) => tasks.get(id));
 
 export const listTasks = Tasks.use((tasks) => tasks.list);
 
-/** Whether a Task is open: Cleanup has not closed it, nor was it kept in a Herdr 1 workspace. */
 export const isOpen = (task: TaskRecord) => task.workspace === null && task.closed_at === undefined;
 
-/** The Task whose workspace this is, which is what "the current Task" means. */
 export const taskOfWorkspace = (workspaceId: string | null) =>
   workspaceId ? Tasks.use((tasks) => tasks.ofWorkspace(workspaceId)) : Effect.succeed(null);
 
 export const writeTask = (task: TaskRecord) => Tasks.use((tasks) => tasks.put(task));
 
-/** Forgets the Task; its Runs' records are the store's and are left alone. */
 export const removeTask = (id: string) => Tasks.use((tasks) => tasks.remove(id));
 
 export const withTaskLock = <A, E, R>(id: string, effect: Effect.Effect<A, E, R>) =>

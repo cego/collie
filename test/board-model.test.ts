@@ -1,6 +1,3 @@
-// The board's model is imported by a browser bundle as well as by the host, so it must
-// bundle for a browser and load in a context that has no runtime to reach.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
@@ -226,7 +223,6 @@ test("a Step's reused agent stays addressable under another Run of the Task", ()
 const MODULE = new URL("../src/board-model.ts", import.meta.url).pathname;
 const RUNTIME_ONLY = /^(bun(:|$)|node:|@effect\/platform-bun|@opentui\/)/;
 
-/** The module bundled for a browser, and every runtime-only import the bundle reached. */
 const bundled = Effect.gen(function* () {
   const reached: string[] = [];
   const built = yield* Effect.promise(() =>
@@ -266,8 +262,6 @@ test("loading the board model does nothing but define it", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const { code } = yield* bundled;
-      // Only what a browser has that reaches nothing: process, timers, fetch or console at
-      // load throws here. Bun's contexts carry a console of their own, so it is blanked.
       const sandbox = { TextEncoder, TextDecoder, console: undefined };
       expect(() => runInNewContext(code, sandbox)).not.toThrow();
       expect(Rec.keys(sandbox)).toEqual(["TextEncoder", "TextDecoder", "console"]);
@@ -608,7 +602,6 @@ test.each([
   });
 });
 
-/** A merge request of a Task on gitlab.cego.dk, open and with nothing said of it. */
 const entryOf: (repo: string, iid: number, over?: Partial<TaskMr>) => TaskMr = (
   repo,
   iid,
@@ -674,7 +667,6 @@ test("the primary action of several merge requests is about the first one waitin
     Arr.filter(dispositionActions(closed), (one) => one.kind === "dispose" && one.ref === API7.id),
   ).toHaveLength(3);
 
-  // Once someone said what became of it, the one ready to release is what waits.
   const said = task({
     ...closed,
     mrs: [
@@ -743,7 +735,6 @@ const mergeableNow = {
 
 test("ready to release is mergeable now, and nothing is missing", () => {
   expect(readyToRelease(mergeableNow)).toEqual({ ready: true, missing: [] });
-  // No pipeline at all is not a pipeline that has not passed.
   expect(readyToRelease({ ...mergeableNow, ci: { state: "none" } }).ready).toBe(true);
 });
 
@@ -806,7 +797,6 @@ test("each fact ready to release needs is named when it is missing, and whether 
   expect(missing({ ci: { state: "failed", name: "lint" } })).toEqual([["ci", false]]);
   expect(missing({ ci: { state: "running" } })).toEqual([["ci", true]]);
   expect(missing({ ci: null })).toEqual([["ci", true]]);
-  // A pipeline that exists and has not passed (canceled, manual, skipped, or of an older head).
   expect(missing({ ci: { state: "unknown" } })).toEqual([["ci", false]]);
   expect(missing({ blocking: 2 })).toEqual([["review", false]]);
   expect(missing({ mergeable: { state: "blocked", said: "not_approved" } })).toEqual([

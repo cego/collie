@@ -1,7 +1,3 @@
-// This Machine's Usage readings (ADR-0049 D1–D2): Claude's from the endpoint Claude Code's
-// `/usage` reads and its agents' status lines, ChatGPT's from Codex's app server. Each
-// endpoint is called only when asked, and at most once per interval.
-
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Str from "effect/String";
@@ -46,24 +42,18 @@ import {
   type UsageReading,
 } from "./usage-model";
 
-/** How often an endpoint may be called; Claude's refuses callers that ask more often. */
 export const USAGE_INTERVAL_MS = 5 * 60_000;
-/** How long one call may take before it becomes a problem. */
 export const USAGE_CALL_MS = 10_000;
 
-/** What one source said when asked. */
 export interface Asked {
   readonly reading: UsageReading;
-  /** Whether an endpoint was called, which is what the interval paces. */
   readonly called: boolean;
-  /** Set when the endpoint refused: how long it asked to be left alone. */
   readonly retryAfterMs?: number | null;
 }
 
 export interface UsageSources {
   readonly claude: Effect.Effect<Asked>;
   readonly chatgpt: Effect.Effect<Asked>;
-  /** The newest Claude agent's status-line sample on this Machine. */
   readonly statusLine: Effect.Effect<StatusSample | null>;
 }
 
@@ -95,10 +85,6 @@ const problem: (
   problem: text,
 });
 
-/**
- * One source behind its interval: a call only once the last is old enough, a refusal's
- * back-off honoured, and the last good reading kept, with its age, while there is no new one.
- */
 const paced = Effect.fn("Usage.paced")(function* (
   subscription: Subscription,
   ask: Effect.Effect<Asked>,
@@ -143,7 +129,6 @@ const paced = Effect.fn("Usage.paced")(function* (
   );
 });
 
-/** Claude's reading, with a status-line sample newer than it in place of its session and weekly. */
 function withSample(reading: UsageReading, sample: StatusSample | null) {
   if (sample === null) {
     const returned: UsageReading = reading;
@@ -187,7 +172,6 @@ const Credentials = Schema.fromJsonString(
       Schema.NullOr(
         Schema.Struct({
           accessToken: Schema.String,
-          /** Epoch ms. */
           expiresAt: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
           subscriptionType: Schema.optionalKey(Schema.NullOr(Schema.String)),
         }),
@@ -201,11 +185,8 @@ const decodeClaudeUsage = Schema.decodeUnknownOption(ClaudeUsage);
 const decodeCodexAccount = Schema.decodeUnknownOption(CodexAccount);
 const decodeCodexRateLimits = Schema.decodeUnknownOption(CodexRateLimits);
 
-/** Where Claude Code keeps its login, and what to read it with. */
 export interface ClaudeLoginSource {
-  /** Claude Code's stored login, as text, or null where there is none. */
   readonly credentials: Effect.Effect<string | null>;
-  /** `~/.claude.json`, as text, or null. */
   readonly claudeJson: Effect.Effect<string | null>;
 }
 
@@ -217,7 +198,6 @@ const readText = (file: string) =>
     return yield* fs.readFileString(file);
   }).pipe(Effect.orElseSucceed(() => null));
 
-/** On macOS the Keychain's item, suffixed by the config directory's hash where one is set. */
 const keychain = (configDir: string | undefined) =>
   Effect.gen(function* () {
     const service =
@@ -259,10 +239,6 @@ export const claudeLoginSource = (env: PluginEnv) =>
     return returned;
   });
 
-/**
- * Asks Claude's usage endpoint with the login Claude Code keeps, read and never refreshed
- * or written: a refresh rotates the token and signs Claude Code out.
- */
 export const askClaude: (
   login: ClaudeLoginSource,
 ) => Effect.Effect<Asked, never, HttpClient.HttpClient> = (login) =>
@@ -337,13 +313,11 @@ export const askClaude: (
     } satisfies Asked;
   });
 
-/** What a Codex app server answers to the two calls a reading takes. */
 export interface CodexAnswers {
   readonly rateLimits: unknown;
   readonly account: unknown;
 }
 
-/** A Codex app server for one exchange: a running agent's own, else one over stdio. */
 export type CodexAsk = Effect.Effect<CodexAnswers, CodexError | Cause.UnknownError>;
 
 export const codexReading: (ask: CodexAsk) => Effect.Effect<Asked> = (ask) =>
@@ -393,7 +367,6 @@ export const codexReading: (ask: CodexAsk) => Effect.Effect<Asked> = (ask) =>
 const RATE_LIMITS = "account/rateLimits/read";
 const ACCOUNT = "account/read";
 
-/** A running Codex agent's own app server, where this Machine has one. */
 const runningCodex = (stateDir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -416,7 +389,6 @@ const viaEndpoint: (endpoint: string) => CodexAsk = (endpoint) =>
     }),
   );
 
-/** This Codex agent's own reading from its app server; null where it has none or it fails. */
 export const ownCodexReading = (stateDir: string, agent: string) =>
   readControl(stateDir, agent).pipe(
     Effect.flatMap((control) =>
@@ -438,7 +410,6 @@ const RpcReply = Schema.fromJsonString(
 );
 const decodeReply = Schema.decodeUnknownOption(RpcReply);
 
-/** `codex app-server` over stdio, for one exchange, closed again when it is answered. */
 const viaStdio: Effect.Effect<
   CodexAnswers,
   Cause.UnknownError,
@@ -462,7 +433,6 @@ const viaStdio: Effect.Effect<
   const handle = yield* spawner
     .spawn(
       ChildProcess.make("codex", ["app-server"], {
-        // Held open: a closed stdin is the server's cue to stop before it answers.
         stdin: Stream.concat(
           Stream.make(new TextEncoder().encode(Arr.join(lines, ""))),
           Stream.never,
@@ -505,7 +475,6 @@ const viaStdio: Effect.Effect<
   return { rateLimits: answers.get(2), account: answers.get(3) };
 }).pipe(Effect.scoped);
 
-/** This Machine's sources, as the host reads them. */
 export const liveSources = (env: PluginEnv) =>
   Effect.gen(function* () {
     const services = yield* Effect.context<
@@ -529,7 +498,6 @@ export const liveSources = (env: PluginEnv) =>
     return returned;
   });
 
-/** This Machine's one reader of its usage, on the environment this process runs in. */
 export const usageLayer = Layer.effect(
   Usage,
   currentEnv.pipe(Effect.orDie, Effect.flatMap(liveSources), Effect.flatMap(makeUsage)),

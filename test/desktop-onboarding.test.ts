@@ -1,7 +1,3 @@
-// Desktop onboards a Machine: herdr's questions while it saves one, a runner of Desktop's
-// own version that is used only once its signature verifies, `collie onboard`'s steps as
-// they come, and routes that come and go while Desktop runs.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -54,7 +50,6 @@ const scratch = Effect.flatMap(FileSystem.FileSystem, (fs) =>
   fs.makeTempDirectoryScoped({ prefix: "collie-onboarding-" }),
 );
 
-/** A release server with `files` under `/<version>/`, which logs every path asked for. */
 const releases = (files: Record<string, Uint8Array | string>) =>
   Effect.acquireRelease(
     Effect.sync(() => {
@@ -95,7 +90,6 @@ test("a runner is used only once its signature verifies, from the download or fr
       expect(runner.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
       expect(new TextDecoder().decode(runner.bytes)).toBe("#!/bin/sh\necho runner\n");
 
-      // The copy kept is checked again, so one changed since is refused rather than run.
       served.asked.length = 0;
       yield* verifiedRunner(served.base, "0.40.0", "linux-x64", dir, key.publicKey);
       expect(served.asked).toEqual([]);
@@ -137,7 +131,6 @@ test("an unsigned runner, or one signed by another key, is refused and never kep
     }),
   ));
 
-/** A runner that streams `collie --json onboard` as one whose system step needs root. */
 const ONBOARD = `#!/bin/sh
 [ "$*" = "--json onboard --to 0.40.0" ] || { echo "asked $*" >&2; exit 2; }
 echo '{"event":"start","step":"system","title":"Checking for git, curl and openssl"}'
@@ -184,7 +177,6 @@ test("onboarding puts the verified runner on the Machine and streams its steps, 
           command: "sudo apt-get install -y git",
         },
       ]);
-      // Every change was told as it came, the first while the runner was still on its way.
       expect(runs[0]!.steps).toEqual([
         { step: "runner", title: "Collie 0.40.0's runner, signed", status: "running" },
       ]);
@@ -192,7 +184,6 @@ test("onboarding puts the verified runner on the Machine and streams its steps, 
     }),
   ));
 
-/** A runner whose `collie --json onboard` finishes with the Machine ready. */
 const ONBOARDED = `#!/bin/sh
 echo '{"event":"start","step":"system","title":"Checking for git, curl and openssl"}'
 echo '{"event":"result","step":"system","status":"done"}'
@@ -265,7 +256,6 @@ test("a runner that does not verify is never put on the Machine, and onboarding 
     }),
   ));
 
-/** A runner whose bytes are not UTF-8, as a compiled one's are. */
 const BINARY = new Uint8Array([
   ...new TextEncoder().encode(`${ONBOARDED}# `),
   0xff,
@@ -276,10 +266,6 @@ const BINARY = new Uint8Array([
   0x0a,
 ]);
 
-/**
- * A paired Machine at `home`: its link carries stdin as text, as a bridge's shell request
- * does, and says what it was given; `sh` is its SSH command.
- */
 const paired: (
   home: string,
   sh?: ShellRoute["sh"],
@@ -392,7 +378,6 @@ test("an SSH connection that fails while the runner is on its way is said in its
     }),
   ));
 
-/** Local's shell, in a home of the test's own. */
 const localSh = (home: string) => (script: string) =>
   Effect.succeed(["/usr/bin/env", `HOME=${home}`, "/bin/sh", "-c", script]);
 
@@ -470,13 +455,11 @@ test("a route added while Desktop runs shows its Machine, one removed stops, and
       yield* Deferred.succeed(changes, undefined);
       yield* Deferred.await(removed);
       yield* until(() => told.includes("vm Snapshot"));
-      // Said once its route has ended, so nothing it said comes after.
       expect(Arr.filter(told, (one) => pipe_(one, Str.startsWith("pc ")))).toEqual([
         "pc Snapshot",
         "pc Removed",
       ]);
       expect(closed).toEqual(["pc"]);
-      // Installed now, and found at once rather than after the 2 s its second failure waits.
       yield* until(() => Arr.filter(told, (one) => one === "bare Lost").length === 2);
       installed = true;
       const woken = yield* Clock.currentTimeMillis;

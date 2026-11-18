@@ -1,6 +1,3 @@
-// Each record the view holds, as its host's subscription and what it last told: resumed from
-// the revision it holds when its door returns, and said to be as of an earlier time until then.
-
 import { Clock, Effect, Fiber, Schema, Stream, SubscriptionRef } from "effect";
 import { Flow, type RunDetail, type RunRevision } from "../../../src/board-model";
 import type { ActionFailed, KeptRecord } from "../shared/flock";
@@ -8,14 +5,11 @@ import { markFirst } from "../../../src/record-marks";
 import { recordEvents, type DoorMap, type RecordDoor, type RecordEvent } from "./machine";
 
 interface Told {
-  /** Undefined until the host's first frame. */
   readonly detail: RunDetail | null | undefined;
-  /** When the host last confirmed it, while it has not since its door went; else null. */
   readonly asOf: number | null;
   readonly confirmed: number;
   readonly revision: RunRevision | undefined;
   readonly failure: ActionFailed | null;
-  /** The encoded size of its latest frame. */
   readonly bytes: number;
 }
 
@@ -30,16 +24,11 @@ interface Kept {
 const keyOf = (installation: string, runId: string) => `${installation}\u0000${runId}`;
 
 const sameFlow = Schema.toEquivalence(Flow);
-// ponytail: a frame is encoded again to be weighed; the bytes the door read, once it hands them on.
 const weighed = (detail: RunDetail | null) =>
   Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(detail).pipe(
     Effect.map((text) => Buffer.byteLength(text, "utf8")),
     Effect.orDie,
   );
-/**
- * Each frame without a Flow the view already has, which it keeps: each later part of a record
- * carries the whole Flow again, and decoding a large one again costs the view a frame.
- */
 const newFlowsOnly: (
   shown: Flow | undefined,
   record: KeptRecord,
@@ -61,7 +50,6 @@ const apply = (told: Told, event: RecordEvent, now: number) => {
         asOf: null,
         confirmed: now,
         failure: null,
-        // A record whose parts are still coming is not yet at a revision to resume from.
         revision:
           event.detail === null
             ? undefined
@@ -135,7 +123,6 @@ export const recordKeeper = (doors: DoorMap<RecordDoor>) =>
       });
 
     return {
-      /** A record for as long as the view holds it, which the view keeps after closing it. */
       open: (installation: string, runId: string) =>
         Stream.unwrap(
           Effect.gen(function* () {

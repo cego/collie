@@ -1,5 +1,3 @@
-// What `self-improve` decides, as pure functions its module and its tests share.
-
 import * as Num from "effect/Number";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -74,16 +72,11 @@ export const markerOf = (key: string) => `<!-- collie-finding: ${key} -->`;
 export const keysIn = (body: string) =>
   Arr.map([...pipe(body, Str.matchAll(MARKER))], (match) => match[1] ?? "");
 
-/** The open issue a finding is about: the one it names, else the one carrying its key. */
 export const targetOf = (finding: Finding, open: ReadonlyArray<OpenIssue>) =>
   Option.getOrUndefined(Arr.findFirst(open, (one) => one.number === finding.issue)) ??
   Option.getOrUndefined(Arr.findFirst(open, (one) => one.keys.includes(finding.key))) ??
   null;
 
-/**
- * The findings worth acting on. Recurring means two of the window's Runs, or an issue
- * already open; a `defect` needs only one Run, and is filed only where `defects` allows.
- */
 export const sortOut = (
   findings: ReadonlyArray<Finding>,
   window: ReadonlySet<string>,
@@ -111,7 +104,6 @@ export type Outcome =
   | { readonly kind: "commented"; readonly number: number; readonly url: string }
   | { readonly kind: "refused"; readonly reason: string };
 
-/** The Improvements to start: only those whose findings were all filed new, up to `bound`. */
 export const chosen = (
   improvements: ReadonlyArray<Improvement>,
   outcomes: ReadonlyMap<string, Outcome>,
@@ -156,16 +148,11 @@ export type Ended = typeof Ended.Type;
 
 export const FAILED_TO_START = "failed to start";
 
-/** An Improvement to start, by the issues it fixes. */
 export interface Starting {
   readonly name: string;
   readonly issues: ReadonlyArray<number>;
 }
 
-/**
- * The Improvements earlier Runs failed to start, each once, whose issues are all still open
- * and which no Run started since the first of those Runs closes; one per name, the earliest.
- */
 export const restartsOf = (
   earlier: ReadonlyArray<{ readonly created: string; readonly ended: ReadonlyArray<Ended> }>,
   since: ReadonlyArray<{ readonly created: string; readonly closes: ReadonlyArray<number> }>,
@@ -209,7 +196,6 @@ export const restartsOf = (
   return restarts;
 };
 
-/** One of the window's Runs, as the report lists what it asked and where it ended. */
 export interface AskingRun {
   readonly runId: string;
   readonly workflow: string;
@@ -227,10 +213,6 @@ export const QuestionMeasures = Schema.Struct({
 });
 export type QuestionMeasures = typeof QuestionMeasures.Type;
 
-/**
- * Questions per merge request that landed, and how many implement Runs reached theirs
- * without failing, of those that reached one or ended.
- */
 export const questionMeasures = (runs: ReadonlyArray<AskingRun>) => {
   const asked = Arr.reduce(runs, 0, (sum, run) => sum + run.questions.length);
   const landed = new Set(Arr.flatMap(runs, ({ mr, merged }) => (merged && mr !== null ? [mr] : [])))
@@ -268,7 +250,6 @@ export const questionLines = (measures: QuestionMeasures | undefined) => {
 const REPEATED_ASKINGS = 10;
 const REPEATED_SHARE = 0.9;
 
-/** One question however often a Run asks it: `slice-02.go-3` and `go-1` are both `go`. */
 const classOf = (name: string) =>
   pipe(
     Arr.last(pipe(name, Str.split("."))),
@@ -279,10 +260,6 @@ const classOf = (name: string) =>
 const slug = (text: string) =>
   pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]+/g, "-"), Str.replace(/^-|-$/g, ""));
 
-/**
- * Each class of question answered the same at least nine times in ten over at least ten
- * answers: an answer Collie already knows, so asking it is Collie's defect.
- */
 export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>) => {
   const classes = new Map<
     string,

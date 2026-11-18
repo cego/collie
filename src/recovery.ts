@@ -34,7 +34,6 @@ export const Recovery = Schema.Struct({
   previous: Schema.String,
   commits: Schema.String,
   review: Schema.NullOr(SynthesisSchema),
-  /** The recovered Run and the Runs it recovered in turn, nearest first. */
   lineage: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type Recovery = typeof Recovery.Type;
@@ -193,7 +192,6 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       Arr.flatMap(readings, (one) => one.lines),
       Order.mapInput(Str.Order, (one: typeof ReviewedWork.Type) => one.at),
     );
-    // For the recovering agent, who cannot read the host's database.
     yield* (yield* FileSystem.FileSystem).writeFileString(
       `${options.dir}/recovery-reviews.jsonl`,
       Arr.join(
@@ -252,7 +250,6 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
           isBlocking,
         )
       : false;
-    // shortcut: external issue bodies need review until the host can snapshot them.
     const external = (yield* classifyWorkSource(options.source)).kind === "linear";
     const judgement = (review: typeof SynthesisSchema.Type) => {
       switch (current.outcome) {
@@ -337,7 +334,6 @@ export const branchMovement = Effect.fn("Recovery.branchMovement")(function* (ru
   return `Pushed branch: ${n} commit${n === "1" ? "" : "s"} past ${finished}, now ${head}.${run.state === "failed" ? " The failed record is stale." : " The succeeded record describes the earlier head."}`;
 });
 
-/** The card a follow-up continues from, bound when it is admitted. */
 export const ConsumedCard = Schema.Struct({
   run: Schema.String,
   card: Schema.String,
@@ -346,7 +342,6 @@ export const ConsumedCard = Schema.Struct({
 });
 export type ConsumedCard = typeof ConsumedCard.Type;
 
-/** The last final card `run` wrote, as a follow-up admitted now consumes it. */
 export const consumedCard = Effect.fn("Recovery.consumedCard")(function* (
   run: string,
   runDir: string,
@@ -365,11 +360,6 @@ export const consumedCard = Effect.fn("Recovery.consumedCard")(function* (
       };
 });
 
-/**
- * The verifications the consumed card listed, unchanged, where that card is unaltered and
- * the follow-up's checkout still carries its work on its branch. A failure needs the
- * same work's first verified fix, so later replays cannot stand in for its regression.
- */
 export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (options: {
   readonly cwd: string;
   readonly consumed: ConsumedCard;

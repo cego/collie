@@ -1,5 +1,3 @@
-// How many cards fit across: a Setting, and the pane's width overrules it.
-
 import { expect, test } from "bun:test";
 import { columnsFor } from "../sections";
 

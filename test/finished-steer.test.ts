@@ -1,7 +1,3 @@
-// A finished Run's live agents still take steering (ADR-0041), through the host an
-// installation runs: the Dispatcher, the ledger and the receipt a running Run gets, and a
-// status nothing rewrites.
-
 import type { Records } from "../src/records";
 import { RunRecords } from "../src/run-records";
 import * as Rec from "effect/Record";
@@ -54,7 +50,6 @@ const CoreCall = Schema.fromJsonString(
 
 const decodeCall = flow(Schema.decodeUnknownResult(CoreCall), Result.getOrThrow);
 
-/** This world's core, which `steerable` starts. */
 let core: FakeHc;
 const coreHerdr = () => new Herdr(readEnv({ HC_SOCKET: core.socketPath }));
 
@@ -63,7 +58,6 @@ interface Agent {
   readonly address: string;
 }
 
-/** The agents core has, by name and terminal address. */
 const coreAgents = Effect.suspend(() => coreHerdr().agentList()).pipe(
   Effect.orElseSucceed(() => []),
   Effect.map(
@@ -74,7 +68,6 @@ const coreAgents = Effect.suspend(() => coreHerdr().agentList()).pipe(
   ),
 );
 
-/** What core was asked to type, to which terminal, in order. */
 const typed = Effect.suspend(() =>
   Effect.gen(function* () {
     const log = yield* (yield* FileSystem.FileSystem)
@@ -93,7 +86,6 @@ const typed = Effect.suspend(() =>
   }),
 );
 
-/** Everything typed to `agent`, in order. */
 const typedTo = (agent: Agent) =>
   Effect.map(typed, (all) =>
     Arr.map(
@@ -103,7 +95,6 @@ const typedTo = (agent: Agent) =>
   );
 const lastTypedTo = (agent: Agent) => Effect.map(typedTo(agent), (all) => all.at(-1) ?? "");
 
-/** A `told` Run that has succeeded with its agent still alive, and the env chat acts in. */
 const finishedWithAgent = Effect.fn("test.finishedWithAgent")(function* (
   world: World,
   workflow = "told",
@@ -233,7 +224,6 @@ test(
     ),
   120_000,
 );
-/** Chat, under a request id of each call's own: one id twice is one operation. */
 const chat = () => ({
   origin: "chat" as const,
   requestId: `req-chat-${++asked}`,
@@ -294,11 +284,9 @@ test(
   120_000,
 );
 
-/** A world whose fake agent answers its one prompt with an Output, and is then left alive. */
 const steerable = <A, E>(
   prefix: string,
   body: (world: World) => Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>,
-  /** What the fake agent answers its prompts with; none leaves it working for good. */
   answers: ReadonlyArray<{ readonly verdict: string }> = [{ verdict: "built" }],
   modules: ReadonlyArray<string> = ["told.workflow.ts"],
 ) =>
@@ -310,8 +298,6 @@ const steerable = <A, E>(
         const fs = yield* FileSystem.FileSystem;
         const outputs = `${world.home}/outputs.json`;
         yield* fs.writeFileString(outputs, encode(answers)).pipe(Effect.orDie);
-        // The host a client spawns inherits this process's environment: it has to own this
-        // world's state, never the operator's.
         const set = {
           COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
@@ -461,7 +447,6 @@ for (const [status, terminal, offer] of [
               },
             ).pipe(Effect.orDie);
             check(desktop);
-            // One sent while the agent's turn runs goes at its boundary.
             const steered = yield* until(
               () =>
                 client.deliveries({ runId }).pipe(
@@ -610,7 +595,6 @@ test(
   () =>
     steerable("collie-finished-comments-", (world) =>
       Effect.gen(function* () {
-        // Desktop delivers `now`, which the host sends only to a claude it knows is new enough.
         const fs = yield* FileSystem.FileSystem;
         const bin = `${world.home}/bin`;
         yield* fs.makeDirectory(bin, { recursive: true }).pipe(Effect.orDie);
@@ -735,7 +719,6 @@ for (const [status, terminal] of [
             const before = yield* client.run({ runId }).pipe(Effect.orDie);
             const fs = yield* FileSystem.FileSystem;
             yield* fs.remove(`${world.user}/terminal-delivery.workflow.ts`).pipe(Effect.orDie);
-            // A host started again finds no module to register the Run's generation under.
             yield* stopHost(world.state);
 
             const [done] = yield* carryOutAsked(
@@ -798,7 +781,6 @@ test(
         expect(told?.state).toBe("failed");
         expect(told?.note).toContain("has finished and its agent is gone");
 
-        // Back with its module: still the status it finished with, under no control.
         yield* fs.writeFileString(module, saved).pipe(Effect.orDie);
         yield* stopHost(world.state);
         const client = yield* connect(world.state).pipe(Effect.orDie);
@@ -857,7 +839,6 @@ test(
               input: { work: "the picker" },
             })
             .pipe(Effect.orDie);
-          // Its one agent is up and working, and nothing will ever come of it.
           const agent = (yield* until(
             () => coreAgents,
             (agents) => agents.length > 0,
@@ -878,7 +859,6 @@ test(
   120_000,
 );
 
-/** The board's prompts, answering the one question with `typed`. */
 const typing: (typed: string) => FlowPrompts = (typed) => ({
   menu: () => Effect.succeed(null),
   ask: () => Effect.succeed(typed),

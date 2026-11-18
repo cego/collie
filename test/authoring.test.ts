@@ -1,10 +1,3 @@
-// Saving a workflow, checking it, and reading back what it takes.
-//
-// One projection answers every front door, so the questions here are about that reading:
-// does it say what a launch will hold the author to, does a drawing that says less than
-// the schema read as a limit rather than a fault, and does a module that will not compile
-// say so without a Run, an agent or a worktree. Writing is the same file the reading finds.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -87,8 +80,6 @@ test(
         const pkg = yield* fs.readFileString(installed);
         const shared = `${dir}/shared-package.json`;
         yield* fs.link(installed, shared);
-        // Bun can hardlink this file to its package cache. Replace the directory entry
-        // before changing its bytes, so this fixture cannot corrupt another install.
         yield* fs.remove(installed);
         yield* fs.writeFileString(
           installed,
@@ -114,7 +105,6 @@ test(
   30_000,
 );
 
-/** The three layers, empty, with the fixtures on hand to copy into them. */
 const layers = Effect.fn("AuthoringTest.layers")(function* (prefix: string) {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix });
@@ -148,18 +138,14 @@ test("a module is read as its public id, where it came from, and the shapes on b
       expect(described.layer).toBe("user");
       expect(described.path).toBe(path);
       expect(described.broken).toBeNull();
-      // What a caller may put in, drawn from the author's own schemas.
       expect(Arr.map(described.inputs, (one) => [one.name, one.required, one.strategy])).toEqual([
         ["text", true, "work-source"],
         ["times", true, null],
       ]);
       expect(described.inputs[0]?.schema).toMatchObject({ type: "string" });
-      // Both ends of the workflow, not only the way in.
       expect(described.success.schema).toMatchObject({ type: "string" });
       expect(described.error.schema).toMatchObject({ $defs: { WorkflowErrorEncoded: {} } });
-      // What the host settles beside the payload, so a caller knows the names it may use.
       expect(Arr.map(described.options, (one) => one.name)).toContain("branch");
-      // The domain metadata, as data rather than as the author's closures.
       expect(described.metadata).toMatchObject({
         hints: { text: "work-source" },
         selectable: ["feature", "docs"],
@@ -174,13 +160,10 @@ test("checking reads the module and the compiler, and keeps the three answers ap
       const good = yield* where.copy("user", "plain.workflow.ts");
       const conflicted = yield* where.copy("user", "conflicted.workflow.ts");
 
-      // Nothing was installed to check with, so nothing is reported as checked — and
-      // that is said rather than left to read as a clean module.
       const unchecked = yield* checkModule({ layer: "user", path: good });
       expect(unchecked.problems).toEqual([]);
       expect(unchecked.toolchain).toContain("no typechecker");
 
-      // A module that contradicts itself is refused at load, with no compiler involved.
       const refused = yield* checkModule({ layer: "user", path: conflicted });
       expect(Arr.join(refused.problems, " ")).toContain("outcome");
       expect(refused.id).toBe("conflicted");
@@ -202,7 +185,6 @@ test(
           `${dir}/tsconfig.json`,
           '{"compilerOptions":{"strict":false,"paths":{"~/*":["./src/*"]}}}',
         );
-        // Installing may need a network this machine lacks; what is merged is written first.
         yield* provisionToolchain(dir).pipe(Effect.result);
 
         const pkg = yield* fs.readFileString(`${dir}/package.json`);
@@ -246,7 +228,6 @@ test(
         const fs = yield* FileSystem.FileSystem;
         const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-stale-" });
         yield* provisionToolchain(dir);
-        // As a release on Effect 4.0.0-rc.117 left it.
         const pkg = yield* fs.readFileString(`${dir}/package.json`);
         yield* fs.writeFileString(
           `${dir}/package.json`,
@@ -287,7 +268,6 @@ test("a toolchain on the host's Effect, or with none installed, is not provision
 
       for (const dir of [current, bare]) {
         yield* refreshToolchain(dir);
-        // Provisioning writes these first, so neither being there means it never ran.
         expect(yield* fs.exists(`${dir}/package.json`)).toBe(false);
         expect(yield* fs.exists(`${dir}/collie.d.ts`)).toBe(false);
       }
@@ -352,7 +332,6 @@ test(
         const text = yield* fs.readFileString(forked.path);
         expect(text).toContain(`from "../../workflows/echo.workflow.ts"`);
 
-        // Both are found, each under its own id, and the fork takes the parent's inputs.
         const found = yield* discover(where.roots);
         expect(found.problems).toEqual([]);
         expect(Arr.map(found.entries, (one) => [one.id, one.layer])).toEqual([
@@ -364,7 +343,6 @@ test(
         )!;
         expect(Arr.map(mine.inputs, (one) => one.name)).toEqual(["text", "times"]);
 
-        // A host runs a staged copy, and the parent the fork climbs out to is still found.
         const staged = yield* stageGeneration({
           dir: `${where.dirOf("user")}/../state`,
           name: "echo-mine@1",
@@ -410,7 +388,6 @@ test("a helper outside a module's directory is part of its revision, and each ge
       yield* helper(1);
       const first = yield* staged();
       expect(first.module.value).toBe(1);
-      // A string that reads like the import is a value, not a path to anchor.
       expect(first.module.said).toBe("../shared/helper");
 
       yield* helper(2);
@@ -483,7 +460,6 @@ test("a staged helper resolves packages and package imports as it does where its
     }).pipe(Effect.scoped),
   ));
 
-/** What `workflow check` and `workflow list` carry, as far as these read them. */
 const Reported = Schema.Struct({
   workflows: Schema.Array(
     Schema.Struct({
@@ -497,7 +473,6 @@ const Reported = Schema.Struct({
 const reportedIn = (envelope: { readonly data?: unknown }) =>
   Schema.decodeUnknownEffect(Reported)(envelope.data).pipe(Effect.orDie);
 
-/** `workflow show` for a module, as far as the refusal has to agree with it. */
 const Shown = Schema.Struct({
   workflow: Schema.Struct({
     title: Schema.String,
@@ -530,15 +505,12 @@ test(
             data: { path: `${world.user}/tally.workflow.ts`, toolchain: null },
           });
 
-          // It compiles against the declarations that were provisioned beside it, with
-          // nothing on PATH but the system's own binaries.
           const checked = yield* collie(world, ["workflow", "check", "tally"]);
           expect(checked.exit).toBe(0);
           expect((yield* reportedIn(checked.envelope)).workflows).toEqual([
             { id: "tally", layer: "user", problems: [], toolchain: null },
           ]);
 
-          // A module that reads this Machine's usage and judges it through the SDK compiles too.
           yield* fs.copyFile(
             `${fixtures}budgeted.workflow.ts`,
             `${world.user}/budgeted.workflow.ts`,
@@ -549,7 +521,6 @@ test(
             { id: "budgeted", layer: "user", problems: [], toolchain: null },
           ]);
 
-          // An entry beside it that will not load costs that id and no other.
           yield* fs.writeFileString(`${world.user}/half.workflow.ts`, "export const id =\n");
           const both = yield* collie(world, ["workflow", "check"]);
           expect(both.exit).not.toBe(0);
@@ -557,8 +528,6 @@ test(
           expect(report).toContain("half\tuser\t1 problem(s)");
           expect(report).toContain("tally\tuser\tok");
 
-          // What a launch refuses for is the same reading `show` answers with: same file,
-          // same schema, so a caller that has never seen the module can still answer it.
           const shown = yield* collie(world, ["workflow", "show", "tally"]);
           const wanted = (yield* shownIn(shown.envelope)).workflow;
           const short = yield* collie(world, ["run", "start", "tally", "--request-id", "r0"]);
@@ -580,8 +549,6 @@ test(
             requestId: "r0",
           });
 
-          // Saving the file was the whole of it: nothing was registered, rebuilt or
-          // restarted between writing it and running it.
           const started = yield* collie(world, [
             "run",
             "start",
@@ -619,7 +586,6 @@ test(
           expect(checked.envelope.error?.message ?? "").toContain("crypto\tuser\t1 problem(s)");
           expect(checked.envelope.error?.message ?? "").toContain("effect/Crypto");
 
-          // What replaces it is served from the executable, as `effect` is.
           yield* fs.copyFile(`${fixtures}random.workflow.ts`, `${world.user}/random.workflow.ts`);
           const replaced = yield* collie(world, ["workflow", "check", "random"]);
           expect(replaced.exit).toBe(0);
