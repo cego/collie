@@ -764,6 +764,7 @@ const isolate = Effect.fn("Verify.isolate")(function* (
   const made = yield* baseTree(what.isolated.checkouts, root, start.head_sha, {
     tree: start.fingerprint,
     check: what.name,
+    command: JSON.stringify([absolute, what.argv, what.isolated.prepare ?? null]),
   }).pipe(Effect.mapError((cause) => refused(cause.why)));
   const checkout = path.join(made, path.relative(root, what.cwd));
   const there = yield* fingerprint(checkout);

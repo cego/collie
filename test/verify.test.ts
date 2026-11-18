@@ -1296,6 +1296,21 @@ test("an isolated checkout-local executable runs from its checkout, recorded by 
     }),
   ));
 
+test("two different isolated commands under one name, run at once, do not share a checkout", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { notes, ran } = yield* isolation;
+      const held = yield* Effect.forkScoped(
+        ran(`touch ${notes}/started; while [ ! -f ${notes}/go ]; do sleep 0.02; done`),
+      );
+      yield* until(() => fs.exists(`${notes}/started`), Boolean);
+      expect((yield* ran("echo x > made.txt")).result).toBe("unstable");
+      yield* fs.writeFileString(`${notes}/go`, "");
+      expect((yield* Fiber.join(held)).result).toBe("pass");
+    }),
+  ));
+
 test("an isolated command that writes an untracked file into its own checkout is unstable", () =>
   inRepository(
     Effect.gen(function* () {
