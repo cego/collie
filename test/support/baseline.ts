@@ -8476,7 +8476,8 @@ scenario(
       Effect.gen(function* () {
         const runId = "r-impl-unmarked";
         const { bin, options } = yield* fixedOnce(runId);
-        yield* freezeMarked(runId, "true", []);
+        // Not unit's command, which the host would answer with unit's record.
+        yield* freezeMarked(runId, "test", ["-d", "."]);
         const release = {
           ...options,
           entry: yield* released(`${ROOT}test/fixtures/reviewing.before-static.ts.txt`),
