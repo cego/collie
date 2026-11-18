@@ -7,4 +7,11 @@ preload = [
 ]
 # Desktop's own tests drive its built app, and run from desktop/.
 root = "."
-pathIgnorePatterns = ["desktop/**"]
+pathIgnorePatterns = [
+  "desktop/**",
+  "worktrees/**",
+  "release/**",
+  "kept/**",
+  "plans/**",
+  "advisor-plans/**",
+]

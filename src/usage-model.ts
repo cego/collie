@@ -62,18 +62,12 @@ const squeezed = (text: string) => pipe(Str.toLowerCase(text), Str.replace(/[^a-
 
 export function appliesTo(window: UsageWindow, model: string | null) {
   if (window.model === null) {
-    const returned: boolean = true;
-    return returned;
+    return true;
   }
   if (model === null) {
-    const returned: boolean = false;
-    return returned;
+    return false;
   }
-  const returned: boolean = pipe(
-    squeezed(model),
-    Str.includes(squeezed(Str.split(window.model, " ")[0] ?? "")),
-  );
-  return returned;
+  return pipe(squeezed(model), Str.includes(squeezed(Str.split(window.model, " ")[0] ?? "")));
 }
 
 export function current(window: UsageWindow, now: number) {
@@ -141,8 +135,7 @@ export function busiestWindow(reading: UsageReading, now: number) {
 
 export function usedPhrase(used: Used) {
   const amount = used.exhausted ? "out" : `${Math.round(used.usedPercent)}%`;
-  const returned: string = used.window.model === null ? amount : `${used.window.model} ${amount}`;
-  return returned;
+  return used.window.model === null ? amount : `${used.window.model} ${amount}`;
 }
 
 export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number) {
@@ -405,15 +398,12 @@ export function resetIn(resetsAt: string, now: number) {
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor((minutes % 1440) / 60);
   if (days > 0) {
-    const returned: string = `in ${days}d ${hours}h`;
-    return returned;
+    return `in ${days}d ${hours}h`;
   }
   if (hours > 0) {
-    const returned: string = `in ${hours}h ${minutes % 60}m`;
-    return returned;
+    return `in ${hours}h ${minutes % 60}m`;
   }
-  const returned: string = `in ${minutes}m`;
-  return returned;
+  return `in ${minutes}m`;
 }
 
 const resetClock = (iso: string, now: number) => {
@@ -426,8 +416,7 @@ const resetClock = (iso: string, now: number) => {
 };
 
 export function resetPhrase(resetsAt: string, now: number) {
-  const returned: string = `resets ${resetClock(resetsAt, now)} (${resetIn(resetsAt, now)})`;
-  return returned;
+  return `resets ${resetClock(resetsAt, now)} (${resetIn(resetsAt, now)})`;
 }
 
 export function roomFor(readings: ReadonlyArray<UsageReading>, now: number) {

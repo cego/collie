@@ -145,28 +145,22 @@ const mrEvents: (
 export function followLine(runId: string, event: FollowEvent) {
   switch (event.type) {
     case "agent": {
-      const returned: string = `${runId}: agent ${event.agent} launched for ${event.operation}`;
-      return returned;
+      return `${runId}: agent ${event.agent} launched for ${event.operation}`;
     }
     case "operation": {
-      const returned: string = `${runId}: operation ${event.operation} ${event.state}`;
-      return returned;
+      return `${runId}: operation ${event.operation} ${event.state}`;
     }
     case "parked": {
-      const returned: string = `${runId}: parked: ${event.reason}`;
-      return returned;
+      return `${runId}: parked: ${event.reason}`;
     }
     case "awaiting": {
-      const returned: string = `${runId}: Waiting for ${event.on}.`;
-      return returned;
+      return `${runId}: Waiting for ${event.on}.`;
     }
     case "mr": {
-      const returned: string = `${runId}: merge request ${event.mr} ${event.state ?? "opened"}`;
-      return returned;
+      return `${runId}: merge request ${event.mr} ${event.state ?? "opened"}`;
     }
     case "ci": {
-      const returned: string = `${runId}: CI ${ciSaid(event.ci)}`;
-      return returned;
+      return `${runId}: CI ${ciSaid(event.ci)}`;
     }
   }
 }

@@ -44,7 +44,7 @@ export const REQUESTABLE: ReadonlyArray<string> = [
 ];
 
 export function isOutcome(value: string): value is Outcome {
-  // WARNING: widening a readonly tuple of string literals to its element type, so that a plain string can be tested against it. Nothing is narrowed by the assertion itself.
+  // WARNING: widening a readonly tuple of string literals to its element type, so that a plain string can be tested against it.
   const known: ReadonlyArray<string> = KINDS;
   return known.includes(value);
 }

@@ -640,8 +640,7 @@ function textLabel(text: string) {
     if (next.length > 24) break;
     label = next;
   }
-  const returned: string = label || "work";
-  return returned;
+  return label || "work";
 }
 
 export function inputValues(resolutions: Resolution[]) {
@@ -664,11 +663,9 @@ export function confirmLine(
     return `${r.name}=${abbreviate(r.value) || "(empty)"} [${where}]`;
   });
   if (branch?.name) parts.push(`branch=${branch.name} [${branch.source ?? "resolved"}]`);
-  const returned: string = `${workflow}: ${Arr.join(parts, "  ")}`;
-  return returned;
+  return `${workflow}: ${Arr.join(parts, "  ")}`;
 }
 
 function abbreviate(value: string) {
-  const returned: string = value.length > 60 ? `${pipe(value, Str.slice(0, 57))}...` : value;
-  return returned;
+  return value.length > 60 ? `${pipe(value, Str.slice(0, 57))}...` : value;
 }

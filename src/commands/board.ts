@@ -6,11 +6,7 @@ import { boardSnapshot } from "../lifecycle";
 import { answering } from "./shared";
 
 function line(view: TaskView) {
-  const returned: string = Arr.join(
-    [sectionOf(view), view.state, view.project, view.name, view.sentence],
-    "\t",
-  );
-  return returned;
+  return Arr.join([sectionOf(view), view.state, view.project, view.name, view.sentence], "\t");
 }
 
 const draw = Effect.gen(function* () {

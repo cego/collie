@@ -8248,7 +8248,7 @@ const makeRegistry: (
     const old = yield* parkedOf(row.run);
     if (clear) yield* clearParked(row.run);
     yield* releaseEntry(row.run);
-    // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Upstream retries a send it cannot route without end; the row stays unaccepted for the next host. The registered author's erased error schema reaches this discard call; failures become defects below.
+    // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- The registered author's erased error schema reaches this discard call; failures become defects below.
     yield* engine
       .execute(generation.registration.workflow, {
         executionId: row.execution,
@@ -10640,8 +10640,7 @@ const collect = (stream: Stream.Stream<Uint8Array, PlatformError>) =>
     Stream.decodeText(),
     Stream.runFold(
       () => {
-        const returned: string = "";
-        return returned;
+        return "";
       },
       (all, chunk) => all + chunk,
     ),

@@ -39,7 +39,7 @@ export interface Ran {
 }
 
 export function whatItSaid(result: Ran) {
-  const returned: string = Arr.join(
+  return Arr.join(
     Arr.filter(
       [
         Str.trim(result.stdout),
@@ -51,7 +51,6 @@ export function whatItSaid(result: Ran) {
     ),
     "\n",
   );
-  return returned;
 }
 
 export const keepCredentialHelper = Effect.fn("mr.keepCredentialHelper")(function* <R>(
@@ -309,17 +308,14 @@ export function autoMergingHere<R>(cwd: string, run: Runner<R>, gitlabHost?: str
 
 export function sinceReview(details: MrDetails, reviewedAt: number) {
   if (reviewedAt <= 0 || details.updatedAt <= 0) {
-    const returned: string = "";
-    return returned;
+    return "";
   }
   if (details.updatedAt <= reviewedAt) {
-    const returned: string = "nothing has moved since this review";
-    return returned;
+    return "nothing has moved since this review";
   }
   const hours = Math.round((details.updatedAt - reviewedAt) / 3_600_000);
   const when = hours < 1 ? "since" : `${hours}h after`;
-  const returned: string = `changed ${when} this review — head ${details.headSha}`;
-  return returned;
+  return `changed ${when} this review — head ${details.headSha}`;
 }
 
 export function resolveAssignee<R>(

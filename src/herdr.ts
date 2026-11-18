@@ -28,8 +28,7 @@ export class HerdrError extends Data.TaggedError("HerdrError")<{
 
 export function herdrFailureReason(cause: unknown) {
   if (!(cause instanceof HerdrError)) {
-    const returned: string = reason(cause);
-    return returned;
+    return reason(cause);
   }
   const returned: string =
     cause.detail === "" ? cause.message : `${cause.message}: ${cause.detail}`;

@@ -125,7 +125,7 @@ test("the repository is the directory's own name, whatever the path around it", 
 });
 
 test("the work a start is about is its most descriptive Input, wherever the caller put it", () => {
-  // oxlint-disable-next-line unicorn/no-thenable -- A chat writes `then` first as often as not; an empty option is not what the work is. The fixture preserves the string-valued workflow input named then.
+  // oxlint-disable-next-line unicorn/no-thenable -- The fixture preserves the string-valued workflow input named then.
   expect(workNamedIn({ then: "", goal: "Design Tune-up performance workflow" })).toBe(
     "Design Tune-up performance workflow",
   );

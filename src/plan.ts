@@ -218,8 +218,7 @@ export interface PlanRepos {
 
 function ticketId(raw: string) {
   const digits = /^0*(\d+)/.exec(raw)?.[1];
-  const returned: string = digits ?? raw;
-  return returned;
+  return digits ?? raw;
 }
 
 function blockersIn(said: string) {
@@ -598,16 +597,14 @@ export interface Slice {
 function titleOf(file: string, text: string) {
   const heading = /^#+\s+(.+?)\s*$/m.exec(text)?.[1];
   if (heading) {
-    const returned: string = Str.trim(pipe_(heading, Str.replace(/^\d+[\s:.-]+/, "")));
-    return returned;
+    return Str.trim(pipe_(heading, Str.replace(/^\d+[\s:.-]+/, "")));
   }
-  const returned: string = pipe_(
+  return pipe_(
     file,
     Str.replace(/\.md$/, ""),
     Str.replace(/^\d+[-_]?/, ""),
     Str.replaceAll("-", " "),
   );
-  return returned;
 }
 
 export function orderedTickets(

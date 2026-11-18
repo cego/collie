@@ -1366,8 +1366,7 @@ export interface PromptParts {
 }
 
 export function promptFor(parts: PromptParts) {
-  const returned: string = renderPrompt(parts).text;
-  return returned;
+  return renderPrompt(parts).text;
 }
 
 function renderPrompt(parts: PromptParts) {
@@ -1411,16 +1410,14 @@ export function handover(ranOut: {
     ranOut.transcript === null
       ? ""
       : ` Its conversation is at ${ranOut.transcript}; read it if you need what it was told or decided.`;
-  const returned: string = `Another agent (${said(ranOut.on)}) started this work and stopped because its subscription ran out (${ranOut.why}). Whatever it changed is in the checkout: read \`git status\` and \`git diff\` before you start, and carry on rather than start over.${where}`;
-  return returned;
+  return `Another agent (${said(ranOut.on)}) started this work and stopped because its subscription ran out (${ranOut.why}). Whatever it changed is in the checkout: read \`git status\` and \`git diff\` before you start, and carry on rather than start over.${where}`;
 }
 
 function attachmentsSection(attachments: ReadonlyArray<Attachment>) {
   if (attachments.length === 0) {
-    const returned: string = "";
-    return returned;
+    return "";
   }
-  const returned: string = Arr.join(
+  return Arr.join(
     [
       "Files given to this Run, which you can open like any other:",
       ...Arr.map(
@@ -1430,7 +1427,6 @@ function attachmentsSection(attachments: ReadonlyArray<Attachment>) {
     ],
     "\n",
   );
-  return returned;
 }
 
 function contractSection(contract: Projection) {
@@ -1439,11 +1435,9 @@ function contractSection(contract: Projection) {
       ? ""
       : `\n\nThe drawing says less than the contract does at: ${Arr.join(contract.limits, "; ")}. Those are still checked.`;
   if (contract.document === null) {
-    const returned: string = `That file is checked against a schema this build cannot draw${limits || "."}`;
-    return returned;
+    return `That file is checked against a schema this build cannot draw${limits || "."}`;
   }
-  const returned: string = `That file must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.\n\n\`\`\`json\n${stringifyJson(contract.document, 2)}\n\`\`\`${limits}`;
-  return returned;
+  return `That file must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.\n\n\`\`\`json\n${stringifyJson(contract.document, 2)}\n\`\`\`${limits}`;
 }
 
 type DeliveringHerdr = Pick<Herdr, "agentPrompt" | "agentList" | "agentSendKeys" | "agentStatus">;

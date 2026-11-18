@@ -607,8 +607,7 @@ export function prepareSteps(output: string) {
 }
 
 function short(result: { code: number; stdout: string }) {
-  const returned: string = result.code === 0 ? Str.trim(result.stdout) : "";
-  return returned;
+  return result.code === 0 ? Str.trim(result.stdout) : "";
 }
 
 export const taskFor = Effect.fn("operations.taskFor")(function* (
@@ -736,8 +735,7 @@ const incarnationsFor = Effect.fn("operations.incarnationsFor")(function* (
 });
 
 function revisionOf(revision: { readonly head_sha: string; readonly fingerprint: string }) {
-  const returned: string = `${revision.head_sha}:${revision.fingerprint}`;
-  return returned;
+  return `${revision.head_sha}:${revision.fingerprint}`;
 }
 
 const cardRevision = Effect.fn("operations.cardRevision")(function* (
@@ -889,7 +887,7 @@ export const steer = Effect.fn("operations.steer")(function* (
 });
 
 function previewOf(interpretation: string, checked: ReadonlyArray<Validated>) {
-  const returned: string = Arr.join(
+  return Arr.join(
     [
       interpretation,
       ...Arr.map(
@@ -899,7 +897,6 @@ function previewOf(interpretation: string, checked: ReadonlyArray<Validated>) {
     ],
     "\n",
   );
-  return returned;
 }
 
 const HERD_LINES = 40;

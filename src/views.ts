@@ -100,8 +100,7 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
 });
 
 function glyphOf(state: RunState) {
-  const returned: string = state === "succeeded" ? "✓" : state === "failed" ? "✗" : "⚠";
-  return returned;
+  return state === "succeeded" ? "✓" : state === "failed" ? "✗" : "⚠";
 }
 
 export interface DefinitionRow {
@@ -136,8 +135,7 @@ export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: 
 });
 
 export function truncated(panel: Panel | null | undefined) {
-  const returned: boolean = panel?._tag === "Text" && panel.truncated;
-  return returned;
+  return panel?._tag === "Text" && panel.truncated;
 }
 
 const REVIEW_CAP = 64 * 1024;

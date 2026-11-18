@@ -105,27 +105,21 @@ function isDelivery(line: LedgerLine): line is Delivery {
 }
 
 function digest(value: string) {
-  const returned: string = Bun.hash(value).toString(16);
-  return returned;
+  return Bun.hash(value).toString(16);
 }
 
 export function textHash(text: string) {
-  const returned: string = digest(text);
-  return returned;
+  return digest(text);
 }
 
 export function causalKey(run: string, cause: Cause, intentVersion: number) {
-  const returned: string = digest(
-    `${run}\u0000${cause.kind}\u0000${cause.ref}\u0000${intentVersion}`,
-  );
-  return returned;
+  return digest(`${run}\u0000${cause.kind}\u0000${cause.ref}\u0000${intentVersion}`);
 }
 
 export const LEDGER_FILE = "deliveries.jsonl";
 
 export function incarnationKey(terminalId: string) {
-  const returned: string = digest(terminalId);
-  return returned;
+  return digest(terminalId);
 }
 
 type HumanSubmit = Delivery & { readonly human: HumanDoor };
@@ -374,8 +368,7 @@ export function overrideActive(lines: ReadonlyArray<LedgerLine>) {
     if (isDelivery(line)) continue;
     active = line.kind === "manual_override";
   }
-  const returned: boolean = active;
-  return returned;
+  return active;
 }
 
 export const isUnobserved = (delivery: Delivery) =>

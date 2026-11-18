@@ -59,7 +59,7 @@ const NOT_GIVEN = "not given";
 
 export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions = {}) {
   const missing: string[] = [];
-  // oxlint-disable-next-line effecttsgo/prefer-effect-string -- Skills first, so `{{skill:x}}` is never mistaken for missing input. This replacement depends on each match; Effect String accepts only string replacements.
+  // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
   const withSkills = text.replace(SKILL, (all, name: string) =>
     opts.skill ? opts.skill(name) : all,
   );

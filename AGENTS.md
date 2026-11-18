@@ -225,8 +225,10 @@ behaviour of the view is covered by testing the logic it renders.
 `bun run lint` holds the code to [landmines](https://github.com/interfere-inc/landmines):
 no prose comments (only directives, a one-line `// WARNING:` for a recurring footgun, which
 is also how a type assertion states its invariant, and TSDoc on the SDK in `src/sdk.ts`);
-no explicit return types, with `satisfies` at the return where a contract matters; a test
-beside the module it owns or in that directory's `test/`; and `.fixture.ts` or
+no explicit return types: where a contract matters, a typed variable holds the function
+(`const f: (a: A) => R = ...`) or a typed local holds the value it returns
+(`const returned: R = ...; return returned;`), since `satisfies` checks a type without
+widening to it; a test beside the module it owns or in that directory's `test/`; and `.fixture.ts` or
 `.test-utils.ts` for test data and helpers. Rationale goes in the ADRs and docs.
 
 For native UI inspection, operate Rune headlessly with its built-in CLI: `--snap out.png`

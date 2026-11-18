@@ -35,13 +35,11 @@ import { readLaunches } from "./launches";
 import { installDependencies } from "./dependencies";
 
 export function mutates(checkout: CheckoutKind) {
-  const returned: boolean = checkout !== "none";
-  return returned;
+  return checkout !== "none";
 }
 
 export function roams(checkout: CheckoutKind) {
-  const returned: boolean = checkout === "roaming";
-  return returned;
+  return checkout === "roaming";
 }
 
 const ROAMING_DIRS = ["roaming", "roaming-2", "roaming-3"];
@@ -271,16 +269,13 @@ function generated(from: string, source: BranchSource, distinctBy = from) {
 function taskSlug(from: string, distinctBy: string) {
   const derived = slugify(from, SLUG_MAX);
   if (letters(from) === letters(derived)) {
-    const returned: string = derived;
-    return returned;
+    return derived;
   }
-  const returned: string = `${derived}-${pipe_(Bun.hash(distinctBy).toString(36), Str.slice(0, 6))}`;
-  return returned;
+  return `${derived}-${pipe_(Bun.hash(distinctBy).toString(36), Str.slice(0, 6))}`;
 }
 
 function letters(text: string) {
-  const returned: string = pipe_(Str.toLowerCase(text), Str.replace(/[^\p{L}\p{N}]+/gu, ""));
-  return returned;
+  return pipe_(Str.toLowerCase(text), Str.replace(/[^\p{L}\p{N}]+/gu, ""));
 }
 
 const baseFor = Effect.fn("worktree.baseFor")(function* (
@@ -327,8 +322,7 @@ export const defaultStart = Effect.fn("worktree.defaultStart")(function* (
 const SAID = new Set(["explicit", "typed", "asked"]);
 
 function said(opts: BranchAsk, name: string) {
-  const returned: boolean = SAID.has(opts.sources?.[name] ?? "");
-  return returned;
+  return SAID.has(opts.sources?.[name] ?? "");
 }
 
 function targetBranch(target: string) {
@@ -1274,11 +1268,7 @@ const upstreamRemote = Effect.fn("worktree.upstreamRemote")(function* (
 });
 
 function commits(result: { stdout: string }) {
-  const returned: number = Arr.filter(
-    Str.split(result.stdout, "\n"),
-    (line) => Str.trim(line) !== "",
-  ).length;
-  return returned;
+  return Arr.filter(Str.split(result.stdout, "\n"), (line) => Str.trim(line) !== "").length;
 }
 
 const unpushedWork = Effect.fn("worktree.unpushedWork")(function* (
