@@ -1284,32 +1284,33 @@ test("a failing prepare records the check failed at stage prepare, without runni
     }),
   ));
 
-test("an isolated checkout-local executable runs from its checkout, recorded by its Worktree path", () =>
-  inRepository(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const { notes, checkouts } = yield* isolation;
-      yield* fs.writeFileString(`${repo}/check.sh`, "#!/bin/sh\nexit 7\n");
-      yield* fs.chmod(`${repo}/check.sh`, 0o755);
-      // Rewrites the Worktree's script after the checkout was made from it.
-      const prepare = {
-        executable: "sh",
-        argv: ["-c", `printf '#!/bin/sh\\nexit 0\\n' > ${repo}/check.sh`],
-      };
-      const record = yield* collect(`${notes}/run`, {
-        run: "r1",
-        name: "local",
-        executable: "./check.sh",
-        argv: [],
-        cwd: repo,
-        by: "agent",
-        isolated: { checkouts, prepare },
-      });
-      expect(record.exit).toBe(7);
-      expect(record.result).toBe("fail");
-      expect(record.executable).toBe(`${repo}/check.sh`);
-    }),
-  ));
+for (const script of ["check.sh", "..check.sh"])
+  test(`an isolated checkout-local executable ${script} runs from its checkout, recorded by its Worktree path`, () =>
+    inRepository(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { notes, checkouts } = yield* isolation;
+        yield* fs.writeFileString(`${repo}/${script}`, "#!/bin/sh\nexit 7\n");
+        yield* fs.chmod(`${repo}/${script}`, 0o755);
+        // Rewrites the Worktree's script after the checkout was made from it.
+        const prepare = {
+          executable: "sh",
+          argv: ["-c", `printf '#!/bin/sh\\nexit 0\\n' > ${repo}/${script}`],
+        };
+        const record = yield* collect(`${notes}/run`, {
+          run: "r1",
+          name: "local",
+          executable: `./${script}`,
+          argv: [],
+          cwd: repo,
+          by: "agent",
+          isolated: { checkouts, prepare },
+        });
+        expect(record.exit).toBe(7);
+        expect(record.result).toBe("fail");
+        expect(record.executable).toBe(`${repo}/${script}`);
+      }),
+    ));
 
 test("two different isolated commands under one name, run at once, do not share a checkout", () =>
   inRepository(

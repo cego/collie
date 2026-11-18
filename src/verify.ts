@@ -768,11 +768,9 @@ const isolate = Effect.fn("Verify.isolate")(function* (
   const there = yield* fingerprint(checkout);
   if (!sameTree(there, start))
     return yield* refused(`its checkout ${made} is not the tree it started on`);
-  const inRepository = path.relative(root, absolute);
-  const executable =
-    Str.startsWith("..")(inRepository) || path.isAbsolute(inRepository)
-      ? absolute
-      : path.join(made, inRepository);
+  const executable = Str.startsWith(`${root}${path.sep}`)(absolute)
+    ? path.join(made, path.relative(root, absolute))
+    : absolute;
   const prepare = what.isolated.prepare;
   if (prepare === undefined) return { checkout, executable };
   const began = yield* Clock.currentTimeMillis;
