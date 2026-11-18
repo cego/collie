@@ -9937,9 +9937,10 @@ const makeRegistry: (
         offer.kind === "follow-up" &&
         offer.workflow === generation.id &&
         carriedWork.length > 0 &&
-        Arr.every(
-          carriedWork,
-          (name) => stringifyJson(filled[name]) === stringifyJson(startedWith[name]),
+        Arr.every(carriedWork, (name) =>
+          filled[name] === undefined || startedWith[name] === undefined
+            ? filled[name] === startedWith[name]
+            : stringifyJson(filled[name]) === stringifyJson(startedWith[name]),
         );
       return yield* startWork({
         continues: sameWork ? yield* consumedCard(row.run, where) : undefined,

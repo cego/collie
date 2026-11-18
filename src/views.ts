@@ -583,7 +583,7 @@ function scalar(value: YamlValue | undefined) {
     const returned: string = "";
     return returned;
   }
-  const returned: string = isString(value) ? value : (stringifyJson(value) ?? "");
+  const returned: string = isString(value) ? value : stringifyJson(value);
   return returned;
 }
 
