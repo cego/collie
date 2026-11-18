@@ -1478,9 +1478,11 @@ panes and transcripts, its checks and pipeline), tells the agent that missed som
 it missed, and resumes the Run. It never does the Run's work. The host refuses everything
 else from it: answering a Decision, lifting a Hold, undoing a Stop, taking an offer, and
 anything on another Run. Its resume applies only while the Run is still at the park the
-Heal was started for and neither it nor a Run under it has a Stop, checked as one change with any Stop. It returns `{ diagnosis, actions, result, needs_person, finding }`,
-where `result` is `resumed` or `escalate`, `needs_person` says why only a person can move
-the Run and is required with `escalate`, and `finding` is required: `collie_defect`, `key`,
+Heal was started for and neither it nor a Run under it has a Stop, checked as one change with any Stop. It returns `{ diagnosis, diagnosis_complete, actions, result, needs_person, finding }`,
+where `result` is `resumed` or `escalate`, `diagnosis_complete` is `false` only where the
+evidence did not establish the cause (the same park then gets another Heal), `needs_person`
+says why only a person can move the Run and is required with `escalate`, and `finding` is
+required: `collie_defect`, `key`,
 `root_cause`, `fix`, `regression`, `title`, `observed`, `expected` and `issue`, stated for
 everyone who runs Collie. Before it starts, its healer is given Collie's open issues on
 github.com/cego/collie, and `issue` names the one, open or closed, about the same cause

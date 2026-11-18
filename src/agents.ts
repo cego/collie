@@ -166,6 +166,7 @@ import { isSuperseded, isUnanswered } from "./store";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue, type Queued } from "./delivery-queue";
+import { verifyingOf, type Verifying } from "./verify";
 import { agentName, launchedAs, legacyAgentName, reason, unsafePathComponent } from "./naming";
 import { machineName } from "./peers";
 import type { MachineCatalogue } from "./harness-choice";
@@ -228,13 +229,18 @@ import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } fro
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
+  appendLine,
   causalKey,
   deliveriesAbout,
   deliveriesOf,
+  isSettledDelivery,
   isUnobserved,
+  newestById,
+  readLedger,
   SENT_STATES,
   toldLine,
 } from "./steering";
+import { rememberUnsettled } from "./park-recheck";
 import type { Records } from "./records";
 import { RELAUNCH, RunRecords } from "./run-records";
 import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
@@ -1908,21 +1914,17 @@ export const agentsLayer = (
 
 type Under = <A, E>(effect: Effect.Effect<A, E, AgentServices>) => Effect.Effect<A, E>;
 
-const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
-  const dirFor = (runId: string) => launchDir(host.dir, runId);
-  const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
-  // A recovery already admitted finishes before its quota incident is published. Once
-  // published, no recovery may pass the incident check and start the spent agent again.
-  const recoveryGates = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
-  const withRecoveryGate =
-    (runId: string) =>
+/** Runs one effect at a time per key; a key's gate is dropped once nobody holds or waits on it. */
+const keyedGate = () => {
+  const gates = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
+  return (key: string) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.acquireUseRelease(
         Effect.sync(() => {
-          let entry = recoveryGates.get(runId);
+          let entry = gates.get(key);
           if (entry === undefined) {
             entry = { gate: Semaphore.makeUnsafe(1), users: 0 };
-            recoveryGates.set(runId, entry);
+            gates.set(key, entry);
           }
           entry.users++;
           return entry;
@@ -1930,9 +1932,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         (entry) => entry.gate.withPermits(1)(effect),
         (entry) =>
           Effect.sync(() => {
-            if (--entry.users === 0) recoveryGates.delete(runId);
+            if (--entry.users === 0) gates.delete(key);
           }),
       );
+};
+
+const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
+  const dirFor = (runId: string) => launchDir(host.dir, runId);
+  const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
+  // A recovery already admitted finishes before its quota incident is published. Once
+  // published, no recovery may pass the incident check and start the spent agent again.
+  const withRecoveryGate = keyedGate();
+  // A collect and an end-of-turn check read one agent's questions at once; one pass at a time.
+  const withQuestionPass = keyedGate();
   const usageWaitPath = (launched: Pick<AgentAsk, "runId" | "operation" | "sequence">) =>
     `${dirFor(launched.runId)}/${stemOf(launched)}.usage-wait`;
   const usageWaiting = (launched: Launched, incident: RanOut | null) =>
@@ -2117,6 +2129,44 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     });
 
   /**
+   * The Check Collie is collecting proof with on this agent's checkout, which its deliveries
+   * wait for; null for none. An agent whose own record puts it in another checkout is not held.
+   */
+  const fenceOf = (about: Pick<Launched, "runId" | "agent">) =>
+    Effect.gen(function* () {
+      const check = yield* under(verifyingOf(about.runId));
+      if (check === null || check.pass === "ci") return null;
+      const cwd = (yield* readControl(host.env.stateDir, about.agent).pipe(
+        Effect.orElseSucceed(() => null),
+      ))?.cwd;
+      if (check.checkout === undefined || cwd === undefined) return check;
+      const within = (inner: string, outer: string) =>
+        inner === outer || pipe(inner, Str.startsWith(`${outer}/`));
+      return within(cwd, check.checkout) || within(check.checkout, cwd) ? check : null;
+    });
+
+  const heldBehind = (check: Verifying) =>
+    `Held behind the Check "${check.name}" Collie started at ${check.started} on this agent's checkout, until it ends; the host delivers it then.`;
+
+  /** Waits while a Check collects proof on the agent's checkout, saying so once. */
+  const untilUnfenced = (about: Launched, what: string) =>
+    Effect.gen(function* () {
+      let said = false;
+      for (;;) {
+        const check = yield* fenceOf(about);
+        if (check === null) return;
+        if (!said) {
+          said = true;
+          yield* log(
+            about.runId,
+            `${about.agent}: its ${what} is ${Str.uncapitalize(heldBehind(check))}`,
+          );
+        }
+        yield* Effect.sleep(host.pollMs ?? DEFAULT_POLL_MS);
+      }
+    });
+
+  /**
    * The one sender: the first prompt, a repair and a human's own words all go out here.
    * A delivery the ledger already holds under the same claim is refused rather than sent
    * a second time, which is what makes a launch that may already have happened safe to
@@ -2145,6 +2195,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   ) {
     const lost = yield* lostServer(compactionDeps(host, about.runId), about.agent);
     if (lost !== null) return { sent: false, why: lost, gone: true };
+    if (delivery.kind !== "steer") yield* untilUnfenced(about, delivery.kind);
     const through = delivery.herdr === undefined ? deps : { ...deps, herdr: delivery.herdr };
     const found = yield* entryFor(about, about.agent, null, through);
     if (found.entry === null)
@@ -2232,11 +2283,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         observed: outcome.held === "acknowledged" ? "taken when it was first sent" : null,
         pane,
       };
+    const terminal = entry.incarnation?.terminalId;
     return {
       sent: false,
       why: `${outcome.reason}: ${outcome.detail}`,
       refused: outcome.reason === "exhausted",
       gone: inactive(outcome.detail),
+      blockedBy:
+        outcome.reason === "blocked" && outcome.id != null && terminal !== undefined
+          ? { terminal, delivery: outcome.id }
+          : undefined,
     };
   });
 
@@ -3120,6 +3176,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 
   /** Calls whose answers were sent, or refused for good, by agent and call. */
   const answeredCalls = new Set<string>();
+  /** Calls whose answers wait behind a Check, by agent and call, so that is logged once. */
+  const fencedCalls = new Set<string>();
 
   /**
    * Puts each question the agent asked since it was given this work, and before `until`,
@@ -3156,13 +3214,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               ids.has(`${call.id}${UNREPAIRED}`)
             )
               continue;
-            // Taken before the send, as a second reader of the same call may be polling.
-            answeredCalls.add(key);
             const sent = yield* deliver(launched, questionRepair(call.questions), {
               kind: "repair",
               ref: `question-${call.id}`,
               herdr: yield* herdr,
             });
+            // Taken once settled: a pass interrupted mid-send leaves it to the next, which
+            // the ledger answers as already sent where it went.
+            answeredCalls.add(key);
             if (sent.sent) continue;
             yield* log(
               launched.runId,
@@ -3227,6 +3286,18 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               holds(false);
               continue;
             }
+            const fence = yield* fenceOf(launched);
+            if (fence !== null) {
+              if (!fencedCalls.has(key))
+                yield* log(
+                  launched.runId,
+                  `${launched.agent}: the answers to its question are ${Str.uncapitalize(heldBehind(fence))}`,
+                );
+              fencedCalls.add(key);
+              holds(true);
+              continue;
+            }
+            fencedCalls.delete(key);
             let sentAll = true;
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
@@ -3269,7 +3340,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             holds(!answeredCalls.has(key));
           }
           return open;
-        }).pipe(Effect.orElseSucceed(() => false));
+        }).pipe(
+          withQuestionPass(launched.agent),
+          Effect.orElseSucceed(() => false),
+        );
     });
 
   const tendQuestions = (
@@ -3301,7 +3375,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           .readDirectory(yield* controlDir(host.env.stateDir, ""))
           .pipe(Effect.orElseSucceed(() => []));
         yield* Effect.forEach(named, (agent) =>
-          takeHarnessQuestions(host.env.stateDir, ports, agent).pipe(Effect.ignore),
+          takeHarnessQuestions(host.env.stateDir, ports, agent).pipe(
+            withQuestionPass(agent),
+            Effect.ignore,
+          ),
         );
         const asking = yield* Effect.filter(named, (agent) =>
           Effect.map(
@@ -3507,6 +3584,32 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       }),
     );
 
+  /**
+   * Whether a delivery blocking a reminder is settled, settling it as sent where the agent's
+   * own submit record shows it landed.
+   */
+  const settledNow = (launched: Launched, held: { terminal: string; delivery: string }) =>
+    Effect.gen(function* () {
+      const lines = yield* readLedger(held.terminal);
+      const now = newestById(lines).get(held.delivery);
+      if (now === undefined || isSettledDelivery(now)) return true;
+      const dir = yield* controlDir(host.env.stateDir, launched.agent);
+      if (!(yield* submittedDelivery(dir, held.delivery).pipe(Effect.orElseSucceed(() => false))))
+        return false;
+      // As `confirmSubmitted` settles one its agent took.
+      yield* appendLine({
+        ...now,
+        at: yield* nowIso,
+        state: "acknowledged",
+        note: "taken: its submit hook recorded it",
+      });
+      yield* log(
+        launched.runId,
+        `${launched.agent}: ${held.delivery} had landed; settled it as sent`,
+      );
+      return true;
+    });
+
   const remind = (launched: Launched, ordinal: number) =>
     under(
       Effect.gen(function* () {
@@ -3514,20 +3617,40 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           kind: "repair",
           ref: `${stemOf(launched)}.remind-${ordinal}`,
         });
+        const held = sent.sent ? undefined : sent.blockedBy;
+        if (held !== undefined) {
+          const settled =
+            (yield* settledNow(launched, held)) ||
+            (yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS)).pipe(
+              Effect.andThen(settledNow(launched, held)),
+            ));
+          if (!settled) {
+            yield* rememberUnsettled(`${host.dir}/runs/${launched.runId}`, held);
+            return yield* new AgentParked({
+              operation: launched.operation,
+              reason: `${launched.agent} could not be reminded to write ${launched.operation}.json: delivery ${held.delivery} has not settled. Collie rechecks it; \`collie run deliveries ${launched.runId} --reconcile ${held.delivery} --as sent|not-sent\` settles it now.`,
+              cause: "delivery-unsettled",
+            });
+          }
+        }
+        // A reminder is held only by an earlier copy of itself, so one that landed was sent.
+        const wasSent = sent.sent || held !== undefined;
         yield* log(
           launched.runId,
-          sent.sent
+          wasSent
             ? `${launched.agent}: ended its turn without ${launched.operation}.json, so was reminded to write it (${ordinal} of ${OUTPUT_REMINDERS})`
             : `${launched.agent}: ended its turn without ${launched.operation}.json, and could not be reminded to write it (${sent.why})`,
         );
-        if (sent.sent) yield* reminded(launched, ordinal, "still-absent", 0);
-        return sent.sent ? yield* nowIso : null;
+        if (wasSent) yield* reminded(launched, ordinal, "still-absent", 0);
+        return wasSent ? yield* nowIso : null;
       }).pipe(
-        Effect.catch((cause) =>
-          log(
-            launched.runId,
-            `${launched.agent}: could not be reminded to write ${launched.operation}.json (${reason(cause)})`,
-          ).pipe(Effect.as(null)),
+        Effect.catchIf(
+          (cause) => !isParked(cause),
+          (cause) =>
+            log(
+              launched.runId,
+              `${launched.agent}: could not be reminded to write ${launched.operation}.json (${reason(cause)})`,
+            ).pipe(Effect.as(null)),
         ),
       ),
     );
@@ -4266,6 +4389,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           pending.workflowNotice = options.workflowNotice;
         if (options.actor !== undefined && queued === undefined) {
           pending.actor = Struct.omit(actorOf(options.actor, options.request), ["requestId"]);
+        }
+        // Held for humans and agents alike: a message landing mid-Check moves the tree it proves.
+        const fence = yield* fenceOf(launched);
+        if (fence !== null) {
+          yield* keepQueued(dirFor(options.runId), pending).pipe(Effect.orDie);
+          return {
+            agent: launched.agent,
+            delivered: false,
+            queued: true,
+            detail: heldBehind(fence),
+          };
         }
         if (fallback) {
           const found = yield* entryFor(launched, launched.agent, null);

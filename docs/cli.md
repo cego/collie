@@ -1012,12 +1012,16 @@ Delivery reconciliation remains explicit: `not-sent` permits one resend, while `
 for Output. An unresolved delivery stays uncertain.
 
 A park whose cause rechecks can resume automatically. The host checks for the named CI job
-at the parked head, an answering forge, core listing its agents as a launch asks it to, or a
-clean Collie checkout. Rechecks start after one minute and double up to one hour. Host
-startup, a peer reconnecting, or a matching forge or pipeline update resets that wait to one
-minute. A forge that answered rate limited with a reset time, to a recheck or to the host's
-own read of the merge request, is not asked again until five seconds past that reset,
-whatever the backoff says. The resumed Step still runs its own gate.
+at the parked head, an answering forge, core listing its agents as a launch asks it to, a
+clean Collie checkout, or a delivery that has settled. `delivery-unsettled` is set when an
+Output reminder is held behind an earlier copy of itself whose fate nobody knows: the host
+first settles that copy as sent where the agent's own submit record shows it landed, and
+checks once more after a poll, and only then parks. It never gets a Heal. Rechecks start
+after one minute and double up to one hour. Host startup, a peer reconnecting, or a matching
+forge or pipeline update resets that wait to one minute. A forge that answered rate limited
+with a reset time, to a recheck or to the host's own read of the merge request, is not asked
+again until five seconds past that reset, whatever the backoff says. The resumed Step still
+runs its own gate.
 
 Automatic resumes use Actor `host` and request ids `recover:<run>:<park>:<n>`. A durable claim
 lets a restarted host finish the same request. They leave Decisions, Holds, Stops, and work
@@ -1031,14 +1035,27 @@ rechecks are still recorded. Set it to `true` to turn it on again, its default. 
 recheck rounds in a row raise one News item, `recovery-failing:<machine>`, which clears
 after a successful round. A failed round resumes nothing.
 
+A park's identity, `<cause>-<hash>`, is derived from the Run, its cause and the evidence that
+cause is about: the head and job a CI cause rechecks, the delivery a `delivery-unsettled` park
+waits on, and for any other cause the Step it parked in, the checkout's head and its words
+with times, ids and counts left out. The park keeps it while it stays parked, however its
+words change. A Run that parks again on the same evidence, after a restart, a resume or a
+hand-over to the engine, is the same park; a changed cause or evidence is a new one. A park
+recorded before identities were derived is given one when it next parks, and keeps the
+Heals it already had.
+
 A park that would need you, a needs-you cause or a recheck cause past its three resumes,
-first gets one **Heal**: a Run of the workflow that declares `heals: true`, the shipped
-[`heal`](workflows.md#heal) unless a project forks it. The host starts it with Actor `host`,
-request id `heal:<run>:<park>` and the input `{ run, park }`, in the parked Run's Task, and
+first gets a **Heal**: a Run of the workflow that declares `heals: true`, the shipped
+[`heal`](workflows.md#heal) unless a project forks it. A park gets one when no Heal is
+recorded for its identity, a claimed Heal that was skipped before it started not counting, or
+when its last Heal said `diagnosis_complete: false`; a Heal
+whose Output does not say reads as complete. The host starts it with Actor `host`, request id
+`heal:<run>:<park>` (`heal:<run>:<park>:<n>` for the park's nth) and the input
+`{ run, park }`, in the parked Run's Task, and
 its record says which Run it heals. Its agent may read everything about the parked Run, and
 may only `deliver` or `steer` to the parked Run's agents and `resume` it; the host refuses
 every other operation from it, naming the Run it heals. It never answers a Decision, lifts
-a Hold, undoes a Stop, writes code or merges. One Heal per park and three per Run; one runs
+a Hold, undoes a Stop, writes code or merges. Three per Run; one runs
 at a time on a Machine and none while it is Short of memory. No Heal starts for a Run with
 a Decision, Hold or Stop, for a cause only a person can act on (`checkout-dirty-human`,
 `login-missing`, `branch-force-pushed`), for a park of a Heal, or with
@@ -1882,6 +1899,20 @@ about either tree, so such a result is `unstable` and never `pass`. So is a tree
 to fingerprint at all, because two unmeasured trees are not one tree.
 A tree git cannot stage or write is unmeasured too. Collie tries once more before it says
 so, and the snapshot keeps git's message as `unmeasured`, so the record says why.
+
+An `unstable` result between two measured trees names what moved: the record's `moved`
+lists each path that differs between the start and end trees, from the repository root,
+as `added`, `modified`, `deleted` or `type-changed`, and classed `tracked` (in the index),
+`untracked`, or `lockfile` (a dependency lockfile such as `bun.lock`, either way). The
+answer and a check's gap name the first five and how many more, with the verification id
+that lists them all, and the Run's verification metric counts them by class.
+
+While a Check Collie runs itself collects proof on a checkout, the host holds deliveries to
+that Run's agents working there, for the human's steer and an agent's message alike: a steer
+is queued, its receipt says it is held behind that Check until it ends, and the card says
+how many are held. Collie's own step and repair, and the answers to an agent's question,
+wait the same way. A CI wait holds nothing.
+The hold ends with the Check, however it ends; a Check that crashes releases it.
 
 Reading the tree writes nothing in the checkout. Collie's status of a checkout runs with
 `GIT_OPTIONAL_LOCKS=0`, so it never holds `index.lock` and a commit made beside it is never

@@ -29,6 +29,7 @@ import {
 } from "../src/verify";
 import type { VerifySpec } from "../src/intent";
 import { fileTime } from "../src/time";
+import { noteVerification, readMetrics } from "../src/metrics";
 import { FakeBin, loggedGit } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -425,6 +426,101 @@ test("an expected failure passes when it fails, and fails when it does not", () 
         expect: "fail",
       });
       expect(moved.result).toBe("unstable");
+    }),
+  ));
+
+const movedBy = (name: string, script: string) =>
+  collect(`${repo}/.git/run-moved`, {
+    run: "r1",
+    name,
+    executable: "sh",
+    argv: ["-c", script],
+    cwd: repo,
+    by: "agent",
+  });
+
+test("a file created while the command runs makes it unstable, and its record names it added and untracked", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const record = yield* movedBy("creates", "echo x > created.txt");
+      expect(record.result).toBe("unstable");
+      expect(record.moved).toEqual([{ path: "created.txt", change: "added", class: "untracked" }]);
+      const kept = yield* readVerifications(`${repo}/.git/run-moved`);
+      expect(kept.at(-1)?.moved).toEqual(record.moved);
+    }),
+  ));
+
+test("a tracked file edited while the command runs is named modified and tracked", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const record = yield* movedBy("edits", "echo two > tracked.txt");
+      expect(record.result).toBe("unstable");
+      expect(record.moved).toEqual([{ path: "tracked.txt", change: "modified", class: "tracked" }]);
+    }),
+  ));
+
+test("a dependency lockfile changed while the command runs is classed as the lockfile", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${repo}/web`);
+      yield* fs.writeFileString(`${repo}/web/package-lock.json`, "{}\n");
+      yield* git(["add", "-A"]);
+      yield* git(["commit", "-qm", "lock"]);
+      const record = yield* movedBy(
+        "installs",
+        "echo '{ }' > web/package-lock.json; echo y > bun.lock",
+      );
+      expect(record.result).toBe("unstable");
+      expect(record.moved).toEqual([
+        { path: "bun.lock", change: "added", class: "lockfile" },
+        { path: "web/package-lock.json", change: "modified", class: "lockfile" },
+      ]);
+    }),
+  ));
+
+test("an unstable verification's metric counts what moved by class", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const record = yield* movedBy(
+        "everything",
+        "echo two > tracked.txt; echo new > made.txt; echo y > yarn.lock",
+      );
+      yield* noteVerification(`${repo}/.git/run-moved`, record);
+      const metric = (yield* readMetrics(`${repo}/.git/run-moved`)).at(-1);
+      expect(metric).toMatchObject({
+        kind: "verification",
+        note: "unstable",
+        moved: { tracked: 1, untracked: 1, lockfile: 1 },
+      });
+    }),
+  ));
+
+test("a command that moves nothing records no moved paths", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const record = yield* movedBy("still", "true");
+      expect(record.result).toBe("pass");
+      expect(record.moved).toBeUndefined();
+    }),
+  ));
+
+test("a command killed mid-run records no pass", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const runDir = path.join(repo, ".run-killed");
+      const killed = yield* collect(runDir, {
+        run: "r1",
+        name: "killed",
+        executable: "sh",
+        argv: ["-c", "kill -KILL $$; sleep 5"],
+        cwd: repo,
+        by: "agent",
+      }).pipe(Effect.result);
+      if (killed._tag === "Success") expect(killed.success.result).not.toBe("pass");
+      const recorded = yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => []));
+      expect(Arr.some(recorded, (one) => one.result === "pass")).toBe(false);
     }),
   ));
 

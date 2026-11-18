@@ -106,12 +106,18 @@ export const MetricSchema = Schema.Struct({
   entries: Schema.optionalKey(Schema.Int),
   /** The Heal Run a `healed` line is about. */
   heal: Schema.optionalKey(Schema.String),
+  /** False where a judged Heal said it could not establish the cause. */
+  diagnosisComplete: Schema.optionalKey(Schema.Boolean),
   /** What a Heal found about Collie, as its Output said it. */
   finding: Schema.optionalKey(HealFinding),
   /** A `report` line's standing, and the issue it was filed as or linked to. */
   publication: Schema.optionalKey(Publication),
   issue: Schema.optionalKey(Schema.String),
   usage: Schema.optionalKey(UsageEntry),
+  /** How many paths of each class moved under an unstable verification. */
+  moved: Schema.optionalKey(
+    Schema.Struct({ tracked: Schema.Int, untracked: Schema.Int, lockfile: Schema.Int }),
+  ),
 });
 export type Metric = Schema.Schema.Type<typeof MetricSchema>;
 const MetricJson = Schema.fromJsonString(MetricSchema);
@@ -139,15 +145,21 @@ export const noteVerification = (
     readonly at: string;
     readonly result: string;
     readonly by: "agent" | "collie";
+    readonly moved?: ReadonlyArray<{ readonly class: "tracked" | "untracked" | "lockfile" }>;
   },
-): Effect.Effect<void, never, RunRecords> =>
-  appendMetric(runDir, {
+): Effect.Effect<void, never, RunRecords> => {
+  const line: Metric = {
     at: record.at,
     kind: "verification",
     subject: record.id,
     value: record.by === "collie" ? 1 : 0,
     note: record.result,
-  });
+  };
+  if (record.moved === undefined) return appendMetric(runDir, line);
+  const moved = { tracked: 0, untracked: 0, lockfile: 0 };
+  for (const one of record.moved) moved[one.class] += 1;
+  return appendMetric(runDir, { ...line, moved });
+};
 
 /** A reminder's latest outcome; elapsed time starts at the first turn ending without Output. */
 export const noteReminder = (

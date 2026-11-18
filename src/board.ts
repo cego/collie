@@ -5,7 +5,15 @@
 // request has not been merged by anyone.
 
 import { readStageProof, type ShippingAction } from "./shipping";
-import { fallbacksOf, lastOrdered, Launches, launchesAhead, launchesOf } from "./launches";
+import {
+  fallbacksOf,
+  lastOrdered,
+  launchDir,
+  Launches,
+  launchesAhead,
+  launchesOf,
+} from "./launches";
+import { readQueue, type Queued } from "./delivery-queue";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -1500,6 +1508,15 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const at = Math.max(...Arr.map(working, (run) => touched.get(run.id) ?? 0));
         const checkOf = markers.has(leader.id) ? leader : (checking[0] ?? leader);
         const check = yield* runningCheck(checkOf, all, markers, now);
+        const heldMessages =
+          check === null
+            ? 0
+            : Arr.filter(
+                yield* readQueue(launchDir(stateDir, checkOf.id)).pipe(
+                  Effect.orElseSucceed((): ReadonlyArray<Queued> => []),
+                ),
+                (one) => one.result === null,
+              ).length;
         const memory =
           Arr.filter(
             Arr.map(everyRun, (run) => waitsOf(run).memory),
@@ -1933,7 +1950,12 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 step: doing?.step ?? null,
                 // Never the pane's title: a terminal names its harness or file, not the work.
                 verb: doing?.verb ?? null,
-                checking: check?.sentence ?? null,
+                checking:
+                  check === null
+                    ? null
+                    : heldMessages === 0
+                      ? check.sentence
+                      : `${check.sentence} ${heldMessages === 1 ? "A message is" : `${heldMessages} messages are`} held behind it.`,
                 memory: memory === null ? null : waitLine(memory),
                 awaiting: awaiting === null ? null : awaitingLine(awaiting),
                 reopened: state === "active" ? toldNow : null,
