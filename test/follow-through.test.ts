@@ -9,7 +9,7 @@ import { Rig } from "./support/recorder";
 import { runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { exec } from "./support/command";
-import { serveForges, type FakeMr, type ForgeModel } from "./support/forge";
+import { forgeHolds, serveForges, type FakeMr, type ForgeModel } from "./support/forge";
 import { fixtures } from "./support/host";
 import { ROOT, until, watching } from "./support/watching";
 import { HOLD, Registry } from "../src/engine";
@@ -1022,7 +1022,13 @@ test.each(["major", "minor"] as const)(
               () => host.watchOf(parent.runId, TARGET),
               (row) => row?.name === "follow-1" || row?.name === "approve-1",
             );
-            const offered = yield* registry.offers(parent.runId);
+            // The first listing only starts the merge request's read.
+            const offered = yield* until(
+              () => registry.offers(parent.runId),
+              (offers) =>
+                Option.getOrUndefined(Arr.findFirst(offers, (one) => one.id === "improve"))
+                  ?.unavailable === null,
+            );
             expect(
               Option.getOrUndefined(Arr.findFirst(offered, (one) => one.id === "improve"))
                 ?.unavailable,
@@ -1067,6 +1073,85 @@ test.each(["major", "minor"] as const)(
                 one.params.text.includes(`${improved.runId}/findings.json`),
             );
             expect(handed).toHaveLength(1);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "a listing reads a review's merge request from the forge once, and taking Improve reads it again",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        yield* repository;
+        yield* git(["checkout", "-q", "-b", "feature"]);
+        const head = yield* pushed("Task work");
+        const forge = yield* host.gitlab(model(head));
+        yield* rig.queueOutputs([review([F1])]);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            yield* writeTask({
+              id: "task-human",
+              workspace: null,
+              label: "The human's work",
+              cwd: rig.projectDir,
+              created_at: "2026-11-12T09:00:00Z",
+            });
+            const registry = yield* Registry;
+            yield* registry.start({
+              generation: yield* registry.load(`${fixtures}/placed.workflow.ts`),
+              request: "building",
+              project: rig.projectDir,
+              input: { work: "keep feature", ending: "succeed" },
+              task: "task-human",
+              options: { branch: "feature" },
+            });
+            yield* configured(false);
+            yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+            const parent = yield* registry.start({
+              generation: yield* registry.load(yield* entryOf("review")),
+              request: "review-task",
+              project: rig.projectDir,
+              input: { target: TARGET },
+              task: "task-human",
+            });
+            yield* until(
+              () => asked(parent.runId),
+              (rows) => rows.length > 0,
+            );
+            const reads = () =>
+              Arr.filter(forge.requests(), (one) =>
+                Str.includes("/merge_requests/7/approvals")(one.url),
+              ).length;
+            const improve = (offered: ReadonlyArray<{ id: string; unavailable: string | null }>) =>
+              Option.getOrUndefined(Arr.findFirst(offered, (one) => one.id === "improve"));
+            // A first read still out: the card is drawn, its offers refused.
+            const { promise: held, resolve: release } = Promise.withResolvers<void>();
+            forgeHolds.until = (url) =>
+              Str.includes("/merge_requests/7/approvals")(url) ? held : null;
+            const waiting = improve(yield* registry.offers(parent.runId))?.unavailable;
+            expect(waiting).toContain("still being read from the forge");
+            const before = reads();
+            release();
+            forgeHolds.until = null;
+            yield* until(
+              () => Effect.map(registry.offers(parent.runId), improve),
+              (offer) => offer?.unavailable === null,
+            );
+            const listed = reads();
+            expect(listed).toBeGreaterThan(before);
+            expect(improve(yield* registry.offers(parent.runId))?.unavailable).toBeNull();
+            expect(reads()).toBe(listed);
+            yield* registry.invoke({
+              runId: parent.runId,
+              offer: "improve",
+              input: {},
+              request: "improve-fresh",
+            });
+            expect(reads()).toBeGreaterThan(listed);
           }),
         );
       }),

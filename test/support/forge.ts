@@ -2746,6 +2746,12 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
   };
 });
 
+/** A test's hold on the served forges: a request whose URL it answers a promise for waits on it. */
+export interface ForgeHolds {
+  until: ((url: string) => Promise<void> | null) | null;
+}
+export const forgeHolds: ForgeHolds = { until: null };
+
 /**
  * The HTTP faces of forges on PATH on one loopback port, until the scope closes: what
  * `COLLIE_FORGE_API` points a host at, each forge host's API under `/<its API host>`.
@@ -2770,7 +2776,8 @@ export const serveForges = (
               Arr.findFirst(onPath, (one) => one.forge === forge),
             )?.face;
             if (face === undefined) return new Response(null, { status: 404 });
-            const body = request.body === null ? Promise.resolve(undefined) : request.text();
+            const held = forgeHolds.until?.(request.url) ?? Promise.resolve();
+            const body = held.then(() => (request.body === null ? undefined : request.text()));
             return body.then((body) =>
               face(`https://${apiHost}/${Arr.join(rest, "/")}${url.search}`, {
                 method: request.method,

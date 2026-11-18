@@ -107,6 +107,7 @@ import {
   registryLayer,
   Registry,
   Reliance,
+  RevisionMemo,
   runDir,
   evidenceDir,
   STOP,
@@ -209,7 +210,15 @@ import { currentEnv, leaveLauncher, withoutHerdrOne, withoutLauncher } from "./e
 import { installation as installedRelease, RELEASE_TAG } from "./release";
 import { Herdr, isSettled, type AgentInfo } from "./herdr";
 import { taskOffers, type Offer } from "./offers";
-import { buildBoard, type KeptCards, LANDED_STATES, ownedMrs, taskFlowOf } from "./board";
+import {
+  buildBoard,
+  type KeptCards,
+  LANDED_STATES,
+  ownedMrs,
+  readFolded,
+  taskFlowOf,
+  writeFolded,
+} from "./board";
 import { mrOf, readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
 import { mrIdIn, projectHere, shell } from "./mr";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
@@ -1422,6 +1431,7 @@ const hostBoard = (dir: string) =>
     const finishedSince: FinishedSince = new Map();
     const cards: KeptCards | undefined =
       model === undefined ? undefined : { revision: model.inputsAt, kept: new Map() };
+    const history = yield* readFolded(env.stateDir).pipe(Effect.provideContext(bun));
     /** The offers a build read, which the door is told of with its listing. */
     const offered = new Map<string, ReadonlyArray<OfferView>>();
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
@@ -1439,6 +1449,7 @@ const hostBoard = (dir: string) =>
             ),
           head: model?.head,
           cards,
+          history,
         });
       }).pipe(
         (built) =>
@@ -1462,7 +1473,17 @@ const hostBoard = (dir: string) =>
     /** The board this host serves: with the model, each card carries its revision. */
     const listing = Effect.gen(function* () {
       const started = yield* Clock.currentTimeMillis;
-      const built = yield* listingOf(agentsNow);
+      const built = yield* listingOf(agentsNow).pipe(
+        Effect.provideServiceEffect(
+          RevisionMemo,
+          Effect.sync(() => new Map<string, string>()),
+        ),
+      );
+      // A board that cannot say what it folded is drawn all the same; the next host reads more.
+      yield* writeFolded(env.stateDir, history).pipe(
+        Effect.provideContext(bun),
+        Effect.catchCause((cause) => Effect.logWarning("the folded cards were not written", cause)),
+      );
       if (model === undefined) return built;
       if (!filled) {
         filled = true;

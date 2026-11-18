@@ -116,6 +116,14 @@ at most 5 s: a board that keeps moving takes half of the host's time while its b
 5 s or less, and more once they take longer (an 8 s build then rests 5 s), and is never more
 than 5 s and a build behind.
 
+A build reads each workflow directory's revision once, however many cards resolve a workflow
+from it. A card's offers use the forge's last answer about its merge request, read again in the
+background once it is a minute old; until the first answer arrives, the card's offers say the
+merge request is still being read. Taking an offer always reads the forge again. A card folded
+into History is written to `board/folded.json` with its Runs' ids, states and finish times, and
+any later build, the next host's first one included, skips it without reading anything while its
+Runs are unchanged and no check or proposal is open on it.
+
 Background merge and cleanup checks read historical cards without interactive offers.
 Their settlement decisions still use the same merge states and outstanding work, but do
 not open clients back to the host for actions that only a front door displays.

@@ -12,7 +12,7 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { discover, searchPath, type EntryLayer } from "../src/discovery";
-import { revisionOf } from "../src/engine";
+import { RevisionMemo, revisionOf } from "../src/engine";
 import { runEffect } from "./support/effect";
 
 const repo = new URL("../", import.meta.url).pathname;
@@ -249,6 +249,39 @@ test("one revision reads each source once and the next revision reads an edited 
       expect(Arr.filter(reads, (one) => one === file)).toHaveLength(1);
       expect(Arr.filter(reads, (one) => one === helper)).toHaveLength(1);
     }),
+  ));
+
+test("a pass that keeps revisions reads a tree once, and the next pass reads it afresh", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "revision-memo-" });
+      const file = `${dir}/entry.ts`;
+      yield* fs.writeFileString(file, "export const n = 1;");
+      const reads: string[] = [];
+      const counted: FileSystem.FileSystem = {
+        ...fs,
+        readFileString: (file, encoding) =>
+          Effect.sync(() => reads.push(file)).pipe(
+            Effect.andThen(fs.readFileString(file, encoding)),
+          ),
+      };
+      const revision = revisionOf(dir).pipe(Effect.provideService(FileSystem.FileSystem, counted));
+      const pass = Effect.provideServiceEffect(
+        Effect.gen(function* () {
+          const first = yield* revision;
+          yield* fs.writeFileString(file, "export const n = 2;");
+          return [first, yield* revision] as const;
+        }),
+        RevisionMemo,
+        Effect.sync(() => new Map<string, string>()),
+      );
+      const [first, second] = yield* pass;
+      expect(second).toBe(first);
+      expect(Arr.filter(reads, (one) => one === file)).toHaveLength(1);
+      const [next] = yield* pass;
+      expect(next).not.toBe(first);
+    }).pipe(Effect.scoped),
   ));
 
 test("what an edited helper exports is what the entry beside it says next", () =>

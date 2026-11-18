@@ -3183,6 +3183,11 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
   return names;
 });
 
+/** Revisions a pass has read, by directory: a board build would read each tree once per card. */
+export const RevisionMemo = Context.Reference<Map<string, string> | null>("collie/RevisionMemo", {
+  defaultValue: () => null,
+});
+
 /**
  * What a generation of an entry would be staged from, as one value. A generation is a copy
  * of the whole directory and of what it imports from outside it, so an edited helper or
@@ -3191,7 +3196,12 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
  */
 export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSystem.FileSystem> =
   Effect.fn("Engine.revisionOf")(function* (dir: string) {
-    return (yield* sourceTree(dir)).revision;
+    const memo = yield* RevisionMemo;
+    const known = memo?.get(dir);
+    if (known !== undefined) return known;
+    const { revision } = yield* sourceTree(dir);
+    memo?.set(dir, revision);
+    return revision;
   });
 
 const sourceTree = Effect.fn("Engine.sourceTree")(function* (dir: string) {
@@ -9859,6 +9869,34 @@ const makeRegistry: (
       })),
     );
 
+  // A listing shows the forge's last answer and refreshes it in the background: asking per
+  // card held each board build ~6 s a card. Until the first read answers, the card's offers
+  // are refused and a later build draws them. Taking an offer reads afresh.
+  type ReviewFacts = Effect.Success<ReturnType<Sdk.HostApi["reviewFix"]>>;
+  const reviews = new Map<string, { at: number; reading: boolean; facts: ReviewFacts | null }>();
+  const reviewOf = (runId: string, target: string, fresh: boolean) =>
+    Effect.gen(function* () {
+      const key = `${runId}\0${target}`;
+      const read = Effect.flatMap(
+        Context.get(hostServices, Host).reviewFix(runId, target),
+        (facts) =>
+          Effect.map(Clock.currentTimeMillis, (at) => {
+            reviews.set(key, { at, reading: false, facts });
+            return facts;
+          }),
+      );
+      if (fresh) return Option.some(yield* read);
+      const kept = reviews.get(key) ?? { at: -Infinity, reading: false, facts: null };
+      reviews.set(key, kept);
+      if (kept.reading || (yield* Clock.currentTimeMillis) - kept.at <= REVIEW_STALE_MS)
+        return Option.fromNullishOr(kept.facts);
+      kept.reading = true;
+      yield* read.pipe(
+        Effect.ensuring(Effect.sync(() => (kept.reading = false))),
+        Effect.forkDetach,
+      );
+      return Option.fromNullishOr(kept.facts);
+    });
   /** Resolve offers from current project code; removed modules leave the Run readable but refuse its offers. */
   const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (
     runId: string,
@@ -9902,8 +9940,16 @@ const makeRegistry: (
       claim: yield* claimOf(runId),
     };
     const work = fieldWith(generation.hints, "work-source");
-    if (facts.diffTarget !== null && readMrRef(facts.diffTarget) !== null && facts.openFindings > 0)
-      facts.review = yield* Context.get(hostServices, Host).reviewFix(runId, facts.diffTarget);
+    let unread: string | null = null;
+    if (
+      facts.diffTarget !== null &&
+      readMrRef(facts.diffTarget) !== null &&
+      facts.openFindings > 0
+    ) {
+      const review = yield* reviewOf(runId, facts.diffTarget, request !== undefined);
+      if (Option.isSome(review)) facts.review = review.value;
+      else unread = facts.diffTarget;
+    }
     const workSource =
       work === undefined ? undefined : Rec.get(input, work).pipe(Option.getOrUndefined);
     if (isText(workSource) && Arr.some(generation.offers, (offer) => offer.entry !== undefined))
@@ -9911,6 +9957,12 @@ const makeRegistry: (
         Effect.provideContext(bun),
       );
     const refused = new Map<string, string>();
+    if (unread !== null)
+      for (const offer of generation.offers)
+        refused.set(
+          offer.id,
+          `${unread} is still being read from the forge; offered once it answers`,
+        );
     const readings = new Map<ConnectionId, ConnectionReading>();
     for (const offer of generation.offers) {
       const ids = yield* connectionIds(
@@ -11049,6 +11101,8 @@ const descendantsOf = (rows: ReadonlyArray<RunRow>, runId: string): ReadonlyArra
 };
 
 const SUPERSEDE_GRACE_MS = 30_000;
+/** How old a card's review facts may grow before a listing asks the forge again, in the background. */
+const REVIEW_STALE_MS = 60_000;
 
 /** The questions `name` asks again, the original first and `name` last. */
 const lineageOf = (

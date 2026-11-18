@@ -18,9 +18,11 @@ import {
   withForge,
   finishedLabel,
   heldLine,
+  readFolded,
   sentenceFor,
   whereItIs,
   workingLabel,
+  writeFolded,
   type Sentence,
 } from "../src/board";
 import {
@@ -1441,6 +1443,39 @@ test("an unseen report is still drawn a day later, and a seen one goes to Histor
       const seen = yield* madeRun(dir, { ...reported, id: "r-seen" });
       yield* recordSeen(seen.dir, { at: "2026-09-14T10:02:00Z", by: "human:ack-1" });
       expect(yield* board(env, [seen], later)).toEqual([]);
+    }),
+  ));
+
+test("a card folded into History is skipped unread by the next host until one of its Runs moves", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const week = yield* madeRun(dir, {
+        id: "r-week",
+        workflow: "review",
+        state: "succeeded",
+        created: "2026-09-07T09:00:00Z",
+        finished: "2026-09-07T09:30:00Z",
+      });
+      const first = yield* readFolded(dir);
+      expect(yield* board(env, [week], { history: first })).toEqual([]);
+      expect(first.changed).toBe(true);
+      yield* writeFolded(dir, first);
+
+      // What would draw it again is not read while its Run stands as it was folded.
+      const next = yield* readFolded(dir);
+      expect(next.folded.size).toBe(1);
+      const unread = { ...week, summary: "a report nobody saw" };
+      yield* markSeenSince(dir, "2026-09-07T09:00:00Z");
+      expect(yield* board(env, [unread], { history: next })).toEqual([]);
+      expect(Arr.map(yield* board(env, [unread]), (view) => view.run)).toEqual([week.id]);
+
+      const resumed = { ...week, state: "running" as const, finished: null };
+      expect(Arr.map(yield* board(env, [resumed], { history: next }), (view) => view.run)).toEqual([
+        week.id,
+      ]);
+      expect(next.folded.size).toBe(0);
+      expect(next.changed).toBe(true);
     }),
   ));
 

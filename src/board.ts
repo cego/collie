@@ -1194,7 +1194,52 @@ interface BoardOptions {
   head?: (run: RunFacts) => Effect.Effect<string | null>;
   /** Cards from the last build, reused where nothing they were derived from moved. */
   cards?: KeptCards;
+  /** Cards an earlier build, maybe an earlier host's, folded into History: skipped unread while their Runs are as they were. */
+  history?: HistoryCards;
 }
+
+/** Each History card's id and its Runs as they were when it was folded, and whether that moved. */
+export interface HistoryCards {
+  readonly folded: Map<string, string>;
+  changed: boolean;
+}
+
+/** Where the folded cards are kept, so a host's first board skips them too. */
+export const FOLDED_FILE = "board/folded.json";
+const FoldedJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
+
+/** The folded cards written last, or none: an unreadable file is only a slower first board. */
+export const readFolded = Effect.fn("Board.readFolded")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const text = yield* fs
+    .readFileString(`${stateDir}/${FOLDED_FILE}`)
+    .pipe(Effect.orElseSucceed(() => "{}"));
+  const folded = Option.getOrElse(Schema.decodeOption(FoldedJson)(text), () => ({}));
+  const history: HistoryCards = { folded: new Map(Rec.toEntries(folded)), changed: false };
+  return history;
+});
+
+/** Writes the folded cards where a build moved them. */
+export const writeFolded = Effect.fn("Board.writeFolded")(function* (
+  stateDir: string,
+  history: HistoryCards,
+) {
+  if (!history.changed) return;
+  history.changed = false;
+  const fs = yield* FileSystem.FileSystem;
+  const file = `${stateDir}/${FOLDED_FILE}`;
+  const text = yield* Schema.encodeEffect(FoldedJson)(Rec.fromEntries([...history.folded]));
+  yield* fs.makeDirectory(`${stateDir}/board`, { recursive: true });
+  yield* fs.writeFileString(`${file}.next`, `${text}\n`);
+  yield* fs.rename(`${file}.next`, file);
+});
+
+/** A card's Runs, as much as decides whether a folded card could come back. */
+const foldedAs = (runs: ReadonlyArray<RunFacts>) =>
+  Arr.join(
+    Arr.map(runs, (run) => `${run.id} ${run.state} ${run.finished ?? ""}`),
+    "\n",
+  );
 
 const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: RunRecordsApi) {
   const { stateDir } = opts.env;
@@ -1269,6 +1314,17 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const everyRun = [...runs, ...children];
         if (opts.only !== undefined && !Arr.some(everyRun, (run) => run.id === opts.only))
           return null;
+        const pending = Arr.flatMap(everyRun, (run) => pendingFor(proposals, run.id, now));
+        // Landed work stays landed and a seen report stays seen: a folded card comes back only
+        // when one of its Runs moves, or a check or proposal starts on it.
+        const history = opts.only === undefined && !opts.includeHistory ? opts.history : undefined;
+        const folded = foldedAs(everyRun);
+        if (
+          history?.folded.get(id) === folded &&
+          pending.length === 0 &&
+          !Arr.some(everyRun, (run) => checked.has(run.id))
+        )
+          return null;
         const missingCheckouts = new Map<string, boolean>();
         for (const run of everyRun)
           missingCheckouts.set(
@@ -1276,7 +1332,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             run.worktree !== null &&
               !(yield* fs.exists(run.worktree.path).pipe(Effect.orElseSucceed(() => true))),
           );
-        const pending = Arr.flatMap(everyRun, (run) => pendingFor(proposals, run.id, now));
         const cards = opts.only === undefined ? opts.cards : undefined;
         const carried: { run: RunFacts; id: string | null; mr: string | null }[] = [];
         for (const run of everyRun) {
@@ -1471,8 +1526,14 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               asking: false,
             }).landed) &&
           !(yield* unseenReport(leader))
-        )
+        ) {
+          if (history !== undefined && history.folded.get(id) !== folded) {
+            history.folded.set(id, folded);
+            history.changed = true;
+          }
           return keep(null, Infinity);
+        }
+        if (history?.folded.delete(id) === true) history.changed = true;
         const agents = agentsOf(everyRun, registered, live);
         const waits = new Map(
           yield* Effect.forEach(everyRun, (run) =>
