@@ -4250,6 +4250,12 @@ or not logged in. Machines logged in to one account each read it for themselves;
 names the account by its id, never its email, because one email can hold a personal plan and
 a team seat.
 
+What a Run itself used is its token ledger, in `collie run metrics` and the chat's
+`collie_run`: each request its agents made, read from the harness's own records, by step,
+by commit, by agent session, and the part that went to recovery. A category the harness
+does not report reads `unavailable`, not 0, and each session lists its start-up context
+by part, in characters ([Metrics](cli.md#metrics)). Usage is recorded, never enforced.
+
 An agent can also run out in the middle of its work
 ([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md) D8): Claude Code says it
 stopped on its limit, or its status line shows a window at 100%; pi stops on a usage-limit

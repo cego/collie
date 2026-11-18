@@ -14,6 +14,7 @@ import * as Cause from "effect/Cause";
 import * as Struct from "effect/Struct";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
@@ -65,6 +66,7 @@ import {
 } from "../src/engine";
 import { readStepLines } from "../src/steps";
 import { readMetrics } from "../src/metrics";
+import { usageOf, type Source } from "../src/usage-ledger-model";
 import { measuresOf } from "../src/outcomes";
 import { launchDir, recordLaunch, stemOf } from "../src/launches";
 import { Collected } from "../src/agents";
@@ -9299,3 +9301,96 @@ test(
     ),
   120_000,
 );
+
+/** A harness that never needs compacting and keeps its records in `sources`. */
+const recording = (sources: ReadonlyArray<Source>): CompactionPorts => ({
+  claude: { ...fullContext([], null).claude!, records: () => Effect.succeed(sources) },
+});
+
+const ledgered = { compactAtTokens: 1_000_000 };
+const usageLines = (runId: string) =>
+  readMetrics(evidenceDir(dir, runId)).pipe(Effect.provide(recordsAt(dir)));
+
+test("a session's start-up lists each part its harness exposes, with its size, and the rest unavailable", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "built" }]);
+      const codex = new URL("./fixtures/usage-ledger/codex.jsonl", import.meta.url).pathname;
+      yield* session(
+        Effect.gen(function* () {
+          yield* started("r1");
+          yield* (yield* Agents).halt("r1");
+        }),
+        { ...ledgered, ports: recording([{ path: codex, format: "codex", parent: null }]) },
+      );
+      const [one] = usageOf(yield* usageLines("r1")).sessions;
+      // Sizes in characters, counted by hand from the fixture; the persona is "You are the reviewer.".
+      expect(one?.startup).toEqual({
+        system: 14,
+        persona: 21,
+        project: 40,
+        tools: 164,
+        skills: null,
+      });
+    }),
+  ));
+
+const claudeRequest = (id: string, at: string, output: number) =>
+  JSON.stringify({
+    type: "assistant",
+    sessionId: "c9",
+    timestamp: at,
+    requestId: `req_${id}`,
+    message: {
+      id: `msg_${id}`,
+      role: "assistant",
+      model: "claude-opus-5-5",
+      usage: {
+        input_tokens: 2,
+        cache_creation_input_tokens: 10,
+        cache_read_input_tokens: 100,
+        output_tokens: output,
+      },
+    },
+  }) + "\n";
+
+test("requests an agent made after its last delivery are in the ledger once it is ended, and still once after its Run settles", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const transcript = `${dir}/late/c9.jsonl`;
+      yield* fs.makeDirectory(`${dir}/late`, { recursive: true });
+      yield* fs.writeFileString(transcript, claudeRequest("A", "2026-11-17T10:00:00.000Z", 5));
+      yield* rig.queueOutputs([{ verdict: "clean", note: "built" }]);
+      const keys = (
+        lines: ReadonlyArray<{ readonly usage?: { readonly what: string; readonly key?: string } }>,
+      ) =>
+        Arr.getSomes(
+          Arr.map(lines, (line) =>
+            line.usage?.what === "request" ? Option.fromNullishOr(line.usage.key) : Option.none(),
+          ),
+        );
+      const [ended, settled] = yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          yield* started("r1");
+          yield* fs.writeFileString(
+            transcript,
+            claudeRequest("B", "2026-11-17T10:01:00.000Z", 7) +
+              claudeRequest("C", "2026-11-17T10:02:00.000Z", 9),
+            { flag: "a" },
+          );
+          yield* agents.halt("r1");
+          const ended = keys(yield* usageLines("r1"));
+          yield* agents.account("r1", false);
+          return [ended, keys(yield* usageLines("r1"))] as const;
+        }),
+        {
+          ...ledgered,
+          ports: recording([{ path: transcript, format: "claude", parent: null }]),
+        },
+      );
+      expect(Arr.sort(ended, Order.String)).toEqual(["msg_A", "msg_B", "msg_C"]);
+      expect(Arr.sort(settled, Order.String)).toEqual(["msg_A", "msg_B", "msg_C"]);
+    }),
+  ));

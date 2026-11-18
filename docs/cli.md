@@ -1700,9 +1700,33 @@ collie --json run metrics <run-id>
 
 What a Run actually did, from its own journal: time to the first collected verification,
 how many passed, failed or were unstable and how many Collie ran itself, how many slices
-landed, how much rework (fix rounds and halts), and the largest context sample any of its
-agents reported. Plus the outcome it is being held to, what the evidence gate found
-missing, and the obstacle where there is one.
+landed (each ticket once, by its name), how much rework (review rounds past the first, and
+halts), and the largest context sample any of its agents reported. Plus the outcome it is
+being held to, what the evidence gate found missing, and the obstacle where there is one.
+
+`usage` is the Run's token ledger, read from each agent's own harness records — Claude's
+transcript and its sub-agents' beside it, Codex's thread events, Pi's session, and what
+Collie's plugin writes for OpenCode. It is read whenever the host reads a context sample,
+again when an agent is ended, and once more as the Run settles; a request read twice is
+counted once, at its largest figures.
+
+| Field        | What it says                                                                                                                                                                                                                                                                 |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `totals`     | `requests`, and the tokens in each category: `input` (uncached), `cacheRead`, `cacheCreation`, `output`, and `reasoning`, which is part of `output`, not added to it.                                                                                                        |
+| `recovery`   | The same, for sessions that were recovery: a Heal's, or one whose first prompt was an Output repair.                                                                                                                                                                         |
+| `steps[]`    | The same per `step`: the work the agent was given last before each request.                                                                                                                                                                                                  |
+| `heads[]`    | The same per `head`: the newest commit of the agent's checkout made by the time of the request.                                                                                                                                                                              |
+| `sessions[]` | Per `agent` and harness `session`, with its `harness`, `model`, `effort` and `recovery`: the same categories, `initialContext` and `peakContext` (all a request was sent), `compactions`, `toolResultChars`, `reminders` and `repairs`, its `startup` and its `subagents[]`. |
+| `rounds[]`   | Each review `round`, when it started (`at`), and the `context` the reviewed agent had then.                                                                                                                                                                                  |
+
+A category a harness does not report is `null`, never `0`: Codex may report no cache
+creation, and a Claude transcript may name no reasoning. A total is `null` only when
+no request reported it. `startup` is a session's start-up context in characters, by part:
+`system`, `persona`, `project`, `tools` and `skills`. Each is `null` where the harness's
+records do not show it; today Codex shows its system prompt, its tool list and its project
+instructions, every harness has the persona Collie gave it, and none shows its skills. An
+agent with no controls — `compact_at_tokens` 0 and nothing to ask — has no records to read
+and no ledger.
 
 Terminal activity is not on this list, on purpose. A changing pane says an agent is alive;
 it does not say anything was produced. The pane clock is liveness; this is progress.

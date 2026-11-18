@@ -30,7 +30,7 @@ import {
 import { reason } from "./naming";
 import { readTask, taskOfWorkspace, withTaskLock, writeTask } from "./task";
 
-export interface EndDeps extends Pick<CompactionDeps, "ports" | "stateDir" | "log"> {
+export interface EndDeps extends Pick<CompactionDeps, "ports" | "stateDir" | "log" | "account"> {
   readonly herdr: Pick<Herdr, "agentList" | "paneList" | "paneClose" | "tabCreate">;
   /** Where a shell kept open for a workspace starts, where its pane names no directory. */
   readonly cwd: string;
@@ -165,6 +165,9 @@ const ending = Effect.fnUntraced(function* (
       reason: `${launched.agent} could not be stopped (its controls are those of the agent started on its name since)`,
     } satisfies Ended;
 
+  // Read before the stop, while a harness that answers only alive can name its records,
+  // and again once Quiet, for what it did after.
+  if (!theirs && deps.account !== undefined) yield* deps.account(launched.agent);
   const reached = theirs
     ? Result.succeed(null)
     : yield* stopAgent(deps, launched.agent, deps.stopMs ?? STOP_WAIT_MS).pipe(Effect.result);
@@ -182,6 +185,7 @@ const ending = Effect.fnUntraced(function* (
       reason: notStopped(launched.agent, reached.success, reached.success.target),
     } satisfies Ended;
 
+  if (!theirs && deps.account !== undefined) yield* deps.account(launched.agent);
   // Ended on purpose, so nothing starts it again.
   const runId = launched.runId;
   if (runId !== undefined)

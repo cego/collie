@@ -137,6 +137,20 @@ test("a Run's metrics are what it produced, and when it first produced anything"
   expect(metrics.obstacles).toEqual(["tests has failed 3 times"]);
 });
 
+test("a ticket is one slice however often its status is noted, and only a re-review is rework", () => {
+  const metrics = metricsOf(
+    [
+      line({ kind: "slice", subject: "01-a.md", note: "started" }),
+      line({ kind: "round", subject: "review#1", value: 1 }),
+      line({ kind: "slice", subject: "01-a.md", note: "done" }),
+      line({ kind: "round", subject: "review#2", value: 2 }),
+    ],
+    "2026-09-11T10:00:00.000Z",
+  );
+  expect(metrics.slices).toEqual({ done: 1, total: 1 });
+  expect(metrics.rework).toBe(1);
+});
+
 test("a Run that has proved nothing says so, rather than reporting a zero", () => {
   const metrics = metricsOf([], "2026-09-11T10:00:00.000Z");
   // Null, not 0: "no evidence yet" and "evidence immediately" are different facts.

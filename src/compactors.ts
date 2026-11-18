@@ -24,9 +24,11 @@ import {
   Path,
   Result,
   Schedule,
+  Order,
   Schema,
   flow,
 } from "effect";
+import type { Source } from "./usage-ledger-model";
 import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 import {
   agentThreads,
@@ -634,6 +636,10 @@ const pi: CompactionPort = {
       return { args: ["-e", extension] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
+  records: (ctx) =>
+    transcriptsIn(ctx.dir).pipe(
+      Effect.map(Arr.map((path): Source => ({ path, format: "pi", parent: null }))),
+    ),
   // The extension's `session_start` sample.
   ready: reported,
   // Through the human's channel, which is what a slash command is: the extension's
@@ -1189,6 +1195,31 @@ export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
   );
 });
 
+/** Every conversation this agent's controls have named, on the session they are bound to. */
+const transcriptsIn = (dir: string) =>
+  readEvents(dir).pipe(
+    Effect.map((events) =>
+      Arr.dedupe(Arr.getSomes(Arr.map(events, (event) => Option.fromNullishOr(event.transcript)))),
+    ),
+  );
+
+/** Claude's transcript, and each sub-agent's file Claude keeps beside it. */
+const claudeRecords = Effect.fn("Compactors.claudeRecords")(function* (ctx: AgentContext) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sources: Source[] = [];
+  for (const transcript of yield* transcriptsIn(ctx.dir)) {
+    sources.push({ path: transcript, format: "claude", parent: null });
+    const session = path.basename(transcript, ".jsonl");
+    const subagents = path.join(path.dirname(transcript), session, "subagents");
+    const names = yield* fs.readDirectory(subagents).pipe(Effect.orElseSucceed(() => []));
+    for (const name of Arr.sort(names, Order.String))
+      if (Str.endsWith(".jsonl")(name))
+        sources.push({ path: path.join(subagents, name), format: "claude", parent: session });
+  }
+  return sources;
+});
+
 const claude: CompactionPort = {
   gate: gateVersion("claude"),
   install: (ctx) =>
@@ -1202,6 +1233,7 @@ const claude: CompactionPort = {
       return { args: ["--settings", settings] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
+  records: claudeRecords,
   // The status line is drawn with the REPL, so its first call is the prompt being there.
   ready: reported,
   // The documented native command, through the human's channel. Its instructions are
@@ -1672,6 +1704,23 @@ export const codexPort = (server: string): CompactionPort => ({
         }),
       );
     }),
+  // Each loaded thread's rollout: its own, and those of the sub-agents it spawned.
+  records: (ctx) =>
+    Effect.gen(function* () {
+      const url = yield* codexAt(ctx);
+      const threads = yield* withCodex(url, (client) => agentThreads(client, ctx.cwd));
+      return Arr.getSomes(
+        Arr.map(threads, (thread) =>
+          thread.transcript === null || thread.ephemeral
+            ? Option.none()
+            : Option.some<Source>({
+                path: thread.transcript,
+                format: "codex",
+                parent: thread.parent,
+              }),
+        ),
+      );
+    }),
   request: (ctx, requestId) =>
     Effect.gen(function* () {
       // Connecting, binding the thread and listing what it already has all happen
@@ -1743,6 +1792,8 @@ export const codexPort = (server: string): CompactionPort => ({
  * that a launch fails loudly on; a launch that silently drops the model is not.
  */
 const OPENCODE_LOG = "server.log";
+/** Where Collie's usage plugin writes what OpenCode reports of each message, beside its controls. */
+export const OPENCODE_USAGE = "opencode-usage.jsonl";
 const OPENCODE_LISTENING = /http:\/\/127\.0\.0\.1:\d+/;
 const OPENCODE_START_MS = 30_000;
 
@@ -1835,6 +1886,12 @@ const opencode: CompactionPort = {
           Effect.as(true),
           Effect.orElseSucceed(() => false),
         ),
+  records: (ctx) =>
+    Path.Path.use((path) =>
+      Effect.succeed([
+        { path: path.join(ctx.dir, OPENCODE_USAGE), format: "opencode" as const, parent: null },
+      ]),
+    ),
   usage: (ctx) =>
     Effect.gen(function* () {
       const base = yield* opencodeAt(ctx);

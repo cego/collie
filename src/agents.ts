@@ -87,6 +87,7 @@ import {
 } from "./compaction";
 import {
   COMPACTION_PORTS,
+  OPENCODE_USAGE,
   atLeast,
   installedVersion,
   questionsSince,
@@ -135,6 +136,7 @@ import {
   installedHelp,
   isPermissionMode,
   opencodeReporter,
+  opencodeUsage,
   permissionsAsWritten,
   personaPrefix,
   ceilingIn,
@@ -179,6 +181,8 @@ import type { MachineCatalogue } from "./harness-choice";
 import { askRouteTo } from "./handoff";
 import { epochMs, nowIso } from "./time";
 import { noteContext, noteReminder, type RecoveryOutcome } from "./metrics";
+import { recordUsage } from "./usage-ledger";
+import { REMINDER_OPENING, REPAIR_OPENING } from "./usage-ledger-model";
 import manifest from "../herdr-plugin.toml";
 import {
   appliesTo,
@@ -497,6 +501,8 @@ export interface AgentsApi {
    * that is not Quiet is in `left`, its pane open.
    */
   readonly halt: (runId: string, why?: string) => Effect.Effect<Halted>;
+  /** Reads each of this Run's agents' usage into its ledger once more, as the Run settles. */
+  readonly account: (runId: string, heal: boolean) => Effect.Effect<void>;
   /**
    * What the agent wrote, or null where it has written nothing in the time allowed.
    * `unless` is an Output already known to be unusable: the same text again is the agent
@@ -1983,6 +1989,15 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const plugins = isJsonArray(settings.plugin) ? settings.plugin : [];
       return { ...settings, plugin: [...plugins, `file://${reporter}`] };
     });
+  /** OpenCode's settings with Collie's usage plugin after every other. */
+  const withUsage = (ask: AgentAsk, agent: string, settings: JsonObject) =>
+    Effect.gen(function* () {
+      const plugin = `${dirFor(ask.runId)}/${stemOf(ask)}.usage.js`;
+      const into = `${yield* controlDir(host.env.stateDir, agent)}/${OPENCODE_USAGE}`;
+      yield* write(plugin, opencodeUsage(into));
+      const plugins = isJsonArray(settings.plugin) ? settings.plugin : [];
+      return { ...settings, plugin: [...plugins, `file://${plugin}`] };
+    });
   /** The launch record with the session its harness opened, once `read` names it. */
   const withSession = (
     launched: Launched,
@@ -2347,6 +2362,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       if (found.entry === null) return { dispatch: true as const };
       const entry = found.entry;
       const compaction = compactionDeps(host, launched.runId);
+      yield* recordUsage(ledgerDeps(host), { run: launched.runId, agent: launched.agent });
       const due = yield* atBoundary(
         compaction,
         { agent: launched.agent, run: launched.runId, step: launched.operation },
@@ -2585,10 +2601,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             host.env.raw.OPENCODE_CONFIG_CONTENT,
           )
         : undefined;
-    const settings =
+    const reported =
       backend === "core" && adapter.id === "opencode"
         ? yield* withReporter(ask, operators ?? {}, session?.resumed === true ? session.id : null)
         : operators;
+    const settings =
+      adapter.id === "opencode" ? yield* withUsage(ask, agent, reported ?? {}) : reported;
     const mcp = adapter.mcp({
       command,
       env: serverEnv,
@@ -4507,6 +4525,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     say: (runId, line) => under(log(runId, line)),
     handOff,
     halt,
+    account: (runId, heal) =>
+      under(
+        Effect.gen(function* () {
+          const agents = Arr.dedupe(Arr.map(yield* launchesOf(runId), (one) => one.agent));
+          for (const agent of agents)
+            yield* recordUsage(ledgerDeps(host), { run: runId, agent, heal });
+        }).pipe(Effect.ignore),
+      ),
     collect: (...args: Parameters<typeof collect>) =>
       Effect.tap(collect(...args), (text) =>
         text === null
@@ -4765,7 +4791,7 @@ const roleBody = (role: string) => `You are the ${role}.`;
 const OUTPUT_REMINDERS = 2;
 
 const reminderText = (output: string): string =>
-  `Your turn ended without writing your Output. A chat message is not the Output: write ${output}, the JSON the contract described and nothing else.\nOUTPUT_PATH: ${output}`;
+  `${REMINDER_OPENING} A chat message is not the Output: write ${output}, the JSON the contract described and nothing else.\nOUTPUT_PATH: ${output}`;
 
 /**
  * One Output the agent could not write correctly, handed back to that same agent with the
@@ -4773,10 +4799,17 @@ const reminderText = (output: string): string =>
  * whole round away over a write.
  */
 export const repairText = (output: string, problem: string): string =>
-  `Your Output file is not usable: ${problem}\n\nWrite ${output} again — the JSON the contract described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${output}`;
+  `${REPAIR_OPENING} ${problem}\n\nWrite ${output} again — the JSON the contract described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${output}`;
+
+const ledgerDeps = (host: AgentHost) => ({
+  dir: host.dir,
+  stateDir: host.env.stateDir,
+  ports: host.ports ?? COMPACTION_PORTS,
+});
 
 const compactionDeps = (host: AgentHost, runId: string): CompactionDeps => ({
   ports: host.ports ?? COMPACTION_PORTS,
+  account: (agent) => recordUsage(ledgerDeps(host), { run: runId, agent }),
   stateDir: host.env.stateDir,
   configured: host.compactAtTokens,
   herdr: host.herdr,

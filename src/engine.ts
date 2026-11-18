@@ -149,6 +149,8 @@ import { skillDirs, skillFile, type CheckoutKind, type InputStrategy } from "./d
 import { EXCLUSIVE_STRATEGIES } from "./strategies";
 import {
   appendMetric,
+  noteRound,
+  noteSlice,
   noteVerification,
   metricsOf,
   readMetrics,
@@ -3066,6 +3068,16 @@ const ended = (runId: string, status: typeof RunStatus.Type) =>
       if (Option.isNone(records))
         return yield* Effect.die(`${runId} ended with no records to keep it`);
       yield* records.value.put(runId, TERMINAL, asJsonText(status));
+      // The last read of its agents' usage, for what they did after their last delivery.
+      const agents = yield* Effect.serviceOption(Agents);
+      if (Option.isSome(agents)) {
+        const store = yield* Effect.serviceOption(Store);
+        const row = Option.isSome(store)
+          ? yield* store.value.run(runId).pipe(Effect.orElseSucceed(() => null))
+          : null;
+        const placing = Option.getOrUndefined(decodePlacing(row?.placing ?? ""));
+        yield* agents.value.account(runId, placing?.heals !== undefined);
+      }
     }
     const oversight = yield* Effect.serviceOption(Oversight);
     if (Option.isSome(oversight)) yield* oversight.value.finish(runId);
@@ -5124,6 +5136,13 @@ export const hostLayer = (options: {
                 `── ${note.step.title}${place === null ? "" : ` · ${place}`} ──`,
               ).pipe(Effect.orDie);
               yield* noteStep(where, { ...note, log });
+              if (note.place !== null && "round" in note.place && note.step.produces === "review")
+                yield* noteRound(
+                  evidenceDir(dir, runId),
+                  yield* nowIso,
+                  note.key,
+                  note.place.round,
+                );
               const pause = yield* reachPause(where, note.step.id);
               if (pause !== null) {
                 yield* runRecords.setControl(
@@ -5146,7 +5165,11 @@ export const hostLayer = (options: {
           ),
         checkpoint: (runId, checkpoint) =>
           Effect.flatMap(nowIso, (at) =>
-            writeCheckpoint(runDir(dir, runId), { ...checkpoint, at }),
+            writeCheckpoint(runDir(dir, runId), { ...checkpoint, at }).pipe(
+              Effect.andThen(
+                noteSlice(evidenceDir(dir, runId), at, checkpoint.ticket, checkpoint.status),
+              ),
+            ),
           ).pipe(Effect.provideService(RunRecords, runRecords)),
         record: (runId, event) =>
           // A replay writes its records again, as it re-enters every step: the log is what

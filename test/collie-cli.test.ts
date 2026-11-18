@@ -12,6 +12,7 @@ import { installFakeSkills } from "./support/defs";
 import { testBunfig } from "./support/packages";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
+import { recordFrom } from "../src/usage-ledger";
 import { hosted, settledRun } from "./support/hosted";
 import { evidenceDir } from "../src/engine";
 import { connect, frontDoor, socketOf } from "../src/host";
@@ -888,6 +889,43 @@ test(
         expect(shown.stdout).toContain("time to first evidence: 0s");
         expect(shown.stdout).toContain("1 pass, 0 fail, 0 unstable (1 by collie)");
         expect(shown.stdout).toContain("rework: 0");
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "run metrics shows a token category the harness never reported as unavailable, not 0",
+  () =>
+    hosted("collie-usage-", ({ world }) =>
+      Effect.gen(function* () {
+        const env = { HERDR_PLUGIN_STATE_DIR: world.state };
+        const run = yield* settledRun(world, "hello");
+        yield* recordFrom(
+          { dir: world.state },
+          { run: run.id, agent: "build" },
+          { harness: "codex", cwd: world.home, dir: join(world.home, "controls") },
+          [
+            {
+              path: new URL("./fixtures/usage-ledger/codex-no-cache-write.jsonl", import.meta.url)
+                .pathname,
+              format: "codex",
+              parent: null,
+            },
+          ],
+        ).pipe(Effect.provide(recordsAt(world.state)));
+
+        const shown = yield* cli(["--json", "run", "metrics", run.id], env);
+        expect(shown.exit).toBe(0);
+        const envelope = yield* parseEnvelope(shown.stdout);
+        // SAFETY: `run metrics` puts the Run's usage in `data`; the assertion below fails
+        // on any other shape.
+        const data = envelope.data as {
+          usage: { totals: { cacheCreation: number | null; cacheRead: number | null } };
+        };
+        expect(data.usage.totals).toMatchObject({ cacheCreation: null, cacheRead: 100 });
+        const human = yield* cli(["run", "metrics", run.id], env);
+        expect(human.stdout).toContain("cache creation unavailable");
       }),
     ),
   60_000,

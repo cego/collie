@@ -21,6 +21,7 @@ import type { Metrics } from "./board-model";
 import { epochMs } from "./time";
 import { ParkCause } from "./park-cause";
 import { ProducerReport } from "./narrative-model";
+import { UsageEntry } from "./usage-ledger-model";
 
 export const RecoveryAction = Schema.Literals(["reminded", "rechecked", "resumed", "healed"]);
 export type RecoveryAction = typeof RecoveryAction.Type;
@@ -85,6 +86,7 @@ export const MetricSchema = Schema.Struct({
     "checkpoint",
     "recovery",
     "report",
+    "usage",
   ]),
   /** What it is about: an agent, a step, a verification name, a ticket. */
   subject: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
@@ -109,6 +111,7 @@ export const MetricSchema = Schema.Struct({
   /** A `report` line's standing, and the issue it was filed as or linked to. */
   publication: Schema.optionalKey(Publication),
   issue: Schema.optionalKey(Schema.String),
+  usage: Schema.optionalKey(UsageEntry),
 });
 export type Metric = Schema.Schema.Type<typeof MetricSchema>;
 const MetricJson = Schema.fromJsonString(MetricSchema);
@@ -170,6 +173,14 @@ export const noteReminder = (
     recoveryId: line.recoveryId,
     build: line.build,
   });
+
+/** A ticket's slice as it stands: started, then done. */
+export const noteSlice = (runDir: string, at: string, ticket: string, status: string) =>
+  appendMetric(runDir, { at, kind: "slice", subject: ticket, value: 0, note: status });
+
+/** A review round starting, its number as the rally counts it. */
+export const noteRound = (runDir: string, at: string, round: string, n: number) =>
+  appendMetric(runDir, { at, kind: "round", subject: round, value: n, note: "" });
 
 /** One context sample the harness reported at a work boundary. */
 export const noteContext = (runDir: string, at: string, agent: string, tokens: number) =>
@@ -259,7 +270,7 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metr
   const created = epochMs(createdAt);
   const first = Option.getOrUndefined(Arr.findFirst(lines, (line) => line.kind === "verification"));
   const verifications = { pass: 0, fail: 0, unstable: 0, byCollie: 0 };
-  const slices = { done: 0, total: 0 };
+  const slices = new Map<string, string>();
   let rework = 0;
   let peak: { agent: string; tokens: number } | null = null;
   const halts: string[] = [];
@@ -274,11 +285,11 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metr
         if (line.value === 1) verifications.byCollie += 1;
         break;
       case "slice":
-        slices.total += 1;
-        if (line.note === "done") slices.done += 1;
+        slices.set(line.subject, line.note);
         break;
       case "round":
-        rework += 1;
+        // A round past the first reviews a fix.
+        if (line.value > 1) rework += 1;
         break;
       case "context":
         if (peak === null || line.value > peak.tokens)
@@ -301,7 +312,10 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metr
     timeToFirstEvidence:
       first && Number.isFinite(created) ? Math.max(0, (epochMs(first.at) - created) / 1000) : null,
     verifications,
-    slices,
+    slices: {
+      done: Arr.filter([...slices.values()], (status) => status === "done").length,
+      total: slices.size,
+    },
     rework,
     peakContext: peak,
     halts,

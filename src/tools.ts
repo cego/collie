@@ -20,6 +20,8 @@
 // — a model inside a harness's pane inherits that pane's terminal, and the CLI's "a TTY
 // means a person" shortcut would read it as human. Attribution, never a gate.
 
+import { readMetrics } from "./metrics";
+import { usageLines, usageOf } from "./usage-ledger-model";
 import * as Rec from "effect/Record";
 import { withArtefacts } from "./artefact-client";
 import * as Arr from "effect/Array";
@@ -585,12 +587,14 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
           "```",
         ];
   const movement = yield* branchMovement(run);
+  const usage = ["", "### Usage", "", ...usageLines(usageOf(yield* readMetrics(run.evidence)))];
   return Arr.join(
     [
       ...running,
       facts,
       ...(movement === null ? [] : [movement]),
       ...done,
+      ...usage,
       ...offered,
       ...ready,
       ...flow,
