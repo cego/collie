@@ -131,6 +131,17 @@ replacement's evidence is never collected beside a predecessor that might still 
   putting a second writer in the checkout.
 - Collie cannot find a server whose record an older build already deleted. The release's
   operator check looks for one by hand.
-- Claude, Pi and OpenCode run their work in the pane, and this changes nothing about how
-  they are stopped. A harness that later moves its work out of its pane gets a stop under
-  D1–D4 in the same change.
+- Claude, Pi and OpenCode run their work in the pane. A harness that later moves its work
+  out of its pane gets a stop under D1–D4 in the same change.
+
+**Amended: an in-pane harness is found Quiet too.** Closing a Claude, Pi or OpenCode pane
+is no longer taken as its stop. An agent's start records the process at its pane's root:
+herdr's `pane.process_info` shell pid, or core's terminal pid, with its start time. Before
+the close, the end notes that root's session (D2 step 6's listing) and, where herdr names a
+different root now, that one's too; a root whose pid is now another process names nothing.
+After the close, every noted process and every process still in those sessions gets a short
+grace, then one SIGTERM, and the stop's wait. None left is Quiet. One left makes the end
+`NotQuiet`; a Fallback then parks with the cause `predecessor-not-quiet`, which records what
+was left and rechecks it, with the agent's control record's `keptFor`, and never heals.
+Where no root can be named, the end says Quiet was not confirmed and the close stands as
+the stop, as before.

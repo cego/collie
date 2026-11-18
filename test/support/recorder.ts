@@ -180,6 +180,47 @@ const rememberTokens = Effect.fn("Rig.rememberTokens")(function* (
   );
 });
 
+const ShellPids = Schema.fromJsonString(
+  Schema.Struct({
+    paneList: Schema.optionalKey(
+      Schema.Array(
+        Schema.Struct({
+          pane_id: Schema.String,
+          shell_pid: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+        }),
+      ),
+    ),
+  }),
+);
+const ProcessInfoParams = Schema.Struct({ pane_id: Schema.String });
+
+/** herdr's `pane.process_info`, from the shell a test gave the pane in the fake's state. */
+const paneProcess = (statePath: string, params: Schema.JsonObject) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const paneId = Option.match(Schema.decodeUnknownOption(ProcessInfoParams)(params), {
+      onNone: () => "",
+      onSome: (asked) => asked.pane_id,
+    });
+    const state = Schema.decodeOption(ShellPids)(
+      yield* fs.readFileString(statePath).pipe(Effect.orElseSucceed(() => "{}")),
+    );
+    const pane = Option.getOrUndefined(
+      Arr.findFirst(
+        Option.match(state, { onNone: () => [], onSome: (one) => one.paneList ?? [] }),
+        (one) => one.pane_id === paneId,
+      ),
+    );
+    return {
+      type: "pane_process_info",
+      process_info: {
+        pane_id: paneId,
+        shell_pid: pane?.shell_pid ?? null,
+        foreground_processes: [],
+      },
+    };
+  });
+
 /**
  * The GitLab login every rig runs as. In its environment rather than the process's, so
  * no test reaches out to a real glab to find out who is running it — and none of them
@@ -416,6 +457,23 @@ export class Rig {
     return Effect.andThen(pane, agent);
   }
 
+  /** The pane's shell is the real process `pid`, which closing the pane hangs up. */
+  paneShell(paneId: string, pid: number): Effect.Effect<void, RigError, RigServices> {
+    return editState(this.logPath, (text) =>
+      Effect.gen(function* () {
+        const state = yield* Schema.decodeEffect(JsonObjectString)(text);
+        const panes = Option.getOrElse(
+          Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state.paneList),
+          (): ReadonlyArray<Schema.JsonObject> => [],
+        );
+        const given = Arr.map(panes, (pane) =>
+          pane.pane_id === paneId ? Object.assign({}, pane, { shell_pid: pid }) : pane,
+        );
+        return encodeJson(Object.assign({}, state, { paneList: given }));
+      }),
+    );
+  }
+
   /** Another process under this agent's name, in the same pane. */
   reincarnate(name: string): Effect.Effect<void, RigError, RigServices> {
     return editState(this.logPath, (text) =>
@@ -588,16 +646,20 @@ export class Rig {
         readonly entry: string;
         /** Metadata this call attached, written before its reply goes back. */
         readonly tokens: MetadataCall | null;
-        readonly succeed: () => void;
+        /** What the call answers, read after what came before it was written. */
+        readonly answer: Effect.Effect<Schema.Json, never, FileSystem.FileSystem>;
+        readonly succeed: (answer: Schema.Json) => void;
         readonly fail: () => void;
       }>();
       setFiber(
         yield* Queue.take(writes).pipe(
-          Effect.flatMap(({ entry, tokens, succeed, fail }) =>
+          Effect.flatMap(({ entry, tokens, answer, succeed, fail }) =>
             fs
               .writeFileString(logPath, entry, { flag: "a" })
               .pipe(
                 Effect.andThen(tokens === null ? Effect.void : rememberTokens(logPath, tokens)),
+                Effect.andThen(answer),
+                Effect.provideService(FileSystem.FileSystem, fs),
                 Effect.match({ onFailure: fail, onSuccess: succeed }),
               ),
           ),
@@ -629,12 +691,16 @@ export class Rig {
                 Queue.offerUnsafe(writes, {
                   entry,
                   tokens,
-                  succeed: () => {
+                  answer:
+                    req.method === "pane.process_info"
+                      ? paneProcess(`${logPath}.state.json`, params)
+                      : Effect.succeed({ type: "ok" }),
+                  succeed: (answer) => {
                     socket.write(
                       `${encodeJson(
                         failure
                           ? { id: req.id, error: { message: failure } }
-                          : { id: req.id, result: { type: "ok" } },
+                          : { id: req.id, result: answer },
                       )}\n`,
                     );
                     // A subscription herdr has something to say on at once.

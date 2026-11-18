@@ -18,6 +18,10 @@ import type { CompactionPorts, Stopped } from "../src/compaction";
 import { runEffect } from "./support/effect";
 import { FakeHerdr, Rig } from "./support/recorder";
 import * as Layer from "effect/Layer";
+import { IGNORES_TERM, SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
+import { processOf, startedOf } from "../src/processes";
+import { passedOver } from "../src/heal";
+import { connect } from "../src/hc";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
@@ -121,7 +125,10 @@ test("a Claude agent ends: nothing runs outside its pane, its pane closes, and t
       );
       expect(ended._tag).toBe("Closed");
       expect(yield* paneCloses).toEqual(["p1"]);
-      expect(lines).toEqual(["impl ended: its Run was stopped"]);
+      expect(lines).toEqual([
+        "impl: Quiet not confirmed: no process of its pane could be named",
+        "impl ended: its Run was stopped",
+      ]);
     }),
   ));
 
@@ -241,7 +248,10 @@ test("a restored pane whose work is in it ends as the agent its session proves, 
       expect(ended).toEqual({ _tag: "Closed", ended: true });
       expect(stops).toEqual([]);
       expect(yield* paneCloses).toEqual(["p9"]);
-      expect(lines).toEqual(["impl ended: idle for 61 min"]);
+      expect(lines).toEqual([
+        "impl: Quiet not confirmed: no process of its pane could be named",
+        "impl ended: idle for 61 min",
+      ]);
     }),
   ));
 
@@ -367,6 +377,117 @@ test("where the caller closes the panes, another process under the agent's name 
     }),
   ));
 
+/** `impl` in a pane whose root is the process `shell`, on herdr or on core. */
+const paneOn = (backend: "herdr" | "core", shell: number) =>
+  Effect.gen(function* () {
+    if (backend === "herdr") {
+      yield* arranged("impl", "p1");
+      yield* rig.paneShell("p1", shell);
+      return { env: rig.pluginEnv(), terminalId: "term-impl" };
+    }
+    const fs = yield* FileSystem.FileSystem;
+    const userDir = rig.pluginEnv().userDir;
+    yield* fs.makeDirectory(userDir, { recursive: true });
+    yield* fs.writeFileString(`${userDir}/config.json`, `{ "terminal_backend": "core" }`);
+    const core = yield* rig.startCore();
+    core.runsAs(shell);
+    const started = yield* Effect.scoped(
+      Effect.flatMap(connect(core.socketPath), (hc) =>
+        hc.call("terminal.run", {
+          name: "impl",
+          argv: ["claude"],
+          cwd: rig.projectDir,
+          labels: { run: "r1" },
+        }),
+      ),
+    );
+    return {
+      env: rig.pluginEnv({ HC_SOCKET: core.socketPath, HERDR_SOCKET_PATH: "" }),
+      terminalId: started.address,
+    };
+  });
+
+/** Every pane or core terminal closed, by its id. */
+const closed = Effect.map(
+  Effect.suspend(() => rig.calls()),
+  (calls) =>
+    Arr.flatMap(calls, (call) =>
+      call.cmd === "pane close"
+        ? [call.argv?.at(2)]
+        : call.cmd === "terminal.kill"
+          ? [call.params?.terminal]
+          : [],
+    ),
+);
+
+for (const backend of ["herdr", "core"] as const) {
+  test(`a Claude agent on ${backend} whose pane leaves a child running after its close ends Closed only once the escalation has stopped it`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const tree = yield* paneTree(SURVIVES_HANGUP);
+        const { env, terminalId } = yield* paneOn(backend, tree.shell);
+        const { deps } = depsOf({ herdr: new FakeHerdr(env), stopMs: 3_000 });
+        const ended = yield* endAgent(
+          deps,
+          { agent: "impl", terminalId, harness: "claude" },
+          "it ran out",
+          "close",
+        );
+        expect(yield* processOf(tree.child)).toBeNull();
+        expect(ended).toEqual({ _tag: "Closed", ended: true });
+        expect(yield* closed).toEqual([backend === "herdr" ? "p1" : terminalId]);
+      }).pipe(Effect.scoped),
+    ));
+
+  test(`a Pi agent on ${backend} whose pane leaves a child that will not stop is not Quiet, and its Fallback parks on predecessor-not-quiet, which no Heal takes`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const tree = yield* paneTree(IGNORES_TERM);
+        const { env, terminalId } = yield* paneOn(backend, tree.shell);
+        const retired = yield* Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.retire({ ...launchedImpl, harness: "pi", terminalId }, "ran out"),
+          ),
+          Effect.flip,
+          Effect.provide(agentsWith(500, env)),
+          Effect.scoped,
+        );
+        expect(yield* processOf(tree.child)).not.toBeNull();
+        expect(retired.cause).toBe("predecessor-not-quiet");
+        expect(retired.reason).toContain(`impl is not Quiet: pid ${tree.child} of its pane`);
+        expect(
+          passedOver({
+            cause: "predecessor-not-quiet",
+            isHeal: false,
+            on: true,
+            waitsOnYou: false,
+            recoveries: [],
+          }),
+        ).toBe("only what its recheck reads can clear its cause");
+      }).pipe(Effect.scoped),
+    ));
+}
+
+test("an agent whose pane has already gone still has the session its start recorded stopped", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const tree = yield* paneTree(SURVIVES_HANGUP);
+      const root = { pid: tree.shell, started: (yield* startedOf(tree.shell))! };
+      process.kill(tree.shell, "SIGHUP");
+      while ((yield* processOf(tree.shell)) !== null) yield* Effect.sleep(10);
+      const { deps, lines } = depsOf({ stopMs: 3_000 });
+      const ended = yield* endAgent(
+        deps,
+        { agent: "impl", terminalId: "term-impl", harness: "claude", root },
+        "it ran out",
+        "close",
+      );
+      expect(yield* processOf(tree.child)).toBeNull();
+      expect(ended).toEqual({ _tag: "Closed", ended: true });
+      expect(lines).toEqual(["impl ended: it ran out"]);
+    }).pipe(Effect.scoped),
+  ));
+
 const launchedImpl = {
   agent: "impl",
   output: "out.json",
@@ -411,6 +532,20 @@ test("a Fallback's close parks on an agent it cannot prove is this Run's, and cl
       expect(yield* paneCloses).toEqual([]);
     }),
   ));
+
+/** The Agents service of a host whose stops wait `stopMs`. */
+const agentsWith = (stopMs?: number, env = rig.pluginEnv()) =>
+  agentsLayer({
+    dir: rig.stateDir,
+    env,
+    herdr: new FakeHerdr(env),
+    harness: "claude",
+    model: "opus",
+    permissions: "auto",
+    compactAtTokens: 0,
+    help: () => Effect.succeed(""),
+    ...(stopMs !== undefined && { stopMs }),
+  }).pipe(Layer.provideMerge(foundationLayer({ dir: rig.stateDir })));
 
 const recorded = (launched: Launched) => recordLaunch(launched);
 

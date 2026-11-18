@@ -1037,7 +1037,8 @@ Delivery reconciliation remains explicit: `not-sent` permits one resend, while `
 for Output. An unresolved delivery stays uncertain.
 
 A park whose cause rechecks can resume automatically. The host checks for the named CI job
-at the parked head, an answering forge or herdr, or a clean Collie checkout. Rechecks start
+at the parked head, an answering forge or herdr, a clean Collie checkout, or, for
+`predecessor-not-quiet`, that nothing the agent a Fallback replaces left is still running. Rechecks start
 after one minute and double up to one hour. Host startup, a peer reconnecting, or a matching
 forge or pipeline update resets that wait to one minute. The resumed Step still runs its own gate.
 

@@ -16,6 +16,7 @@ import * as Cause from "effect/Cause";
 
 import { Foreground } from "./foreground";
 import { ParkCause } from "./park-cause";
+import { rememberNotQuiet } from "./park-recheck";
 import * as Struct from "effect/Struct";
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
@@ -102,7 +103,7 @@ import {
   type AgentQuestion,
 } from "./compactors";
 import { RECOMMENDED_MARKER, questionRepair, shortfallOf, solutionsOf } from "./question-standard";
-import { UNPROVABLE, endAgent, type EndDeps } from "./agent-end";
+import { UNPROVABLE, endAgent, rootOf, type EndDeps } from "./agent-end";
 import { boundThread, withCodex } from "./codex";
 import { kindForRole } from "./cards";
 import { narrativeOf } from "./narrative-model";
@@ -369,6 +370,16 @@ export class AgentParked extends Schema.TaggedError<
   reason: Schema.String,
   cause: Schema.optionalKey(ParkCause),
 }) {}
+
+/** An incarnation with the process at its pane's root, where one could be named at its start. */
+type Rooted = Incarnation & { readonly root?: Launched["root"] };
+
+const rooted = (incarnation: Incarnation | undefined, root: Launched["root"]): Rooted | undefined =>
+  incarnation === undefined
+    ? undefined
+    : root === undefined
+      ? incarnation
+      : { ...incarnation, root };
 
 /** The Run's own questions, which a collection puts an agent's question on. */
 export interface Questions {
@@ -2701,7 +2712,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           const found = yield* entryFor(ask, agent, { paneId: terminal, workspaceId: null });
           if (found.entry === null) return undefined;
           yield* registerAgent(scopeFor(host.env, ask.cwd), found.entry, alive);
-          return found.entry.incarnation;
+          return rooted(found.entry.incarnation, yield* rootOf(host.herdr, terminal, "core"));
         }
         const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
         const reused = ask.workspace ? null : yield* rootPane(ask);
@@ -2750,7 +2761,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         });
         if (found.entry === null) return undefined;
         yield* registerAgent(scopeFor(host.env, ask.cwd), found.entry, alive);
-        return found.entry.incarnation;
+        return rooted(found.entry.incarnation, yield* rootOf(host.herdr, tab.paneId));
       }),
     );
   });
@@ -2880,10 +2891,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (memory === "waited") return yield* launch(ask, fresh, note);
         // Work in the launch order already is this same work replayed, not new work for the agent.
         const replayed = yield* wasOrdered(ask);
-        const landedOn = (
-          incarnation: Incarnation | undefined,
-          chosen: AgentSession | null = null,
-        ) =>
+        const landedOn = (incarnation: Rooted | undefined, chosen: AgentSession | null = null) =>
           Effect.gen(function* () {
             const landed: Types.Mutable<Launched> = {
               agent,
@@ -2905,16 +2913,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             if (incarnation !== undefined) {
               landed.terminalId = incarnation.terminalId;
               if (incarnation.agentSession !== null) landed.agentSession = incarnation.agentSession;
+              if (incarnation.root !== undefined) landed.root = incarnation.root;
             }
             if (chosen !== null) landed.agentSession = chosen;
             return landed;
           });
         // Stopped while it waited for memory: nothing started, and the caller sees the stop.
         if (memory === "stopped") return yield* landedOn(undefined);
-        const recorded = (
-          incarnation: Incarnation | undefined,
-          chosen: AgentSession | null = null,
-        ) =>
+        const recorded = (incarnation: Rooted | undefined, chosen: AgentSession | null = null) =>
           Effect.gen(function* () {
             const landed = yield* landedOn(incarnation, chosen);
             // Beside it, the agent this work landed on, so a stop and a human steering this
@@ -2958,7 +2964,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ? yield* recorded(
               live.terminalId === null
                 ? undefined
-                : { terminalId: live.terminalId, agentSession: live.agentSession },
+                : rooted(
+                    { terminalId: live.terminalId, agentSession: live.agentSession },
+                    yield* rootOf(host.herdr, live.paneId, live.backend),
+                  ),
             )
           : yield* Effect.uninterruptible(
               start(
@@ -4133,13 +4142,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ),
         );
         if (ended._tag === "Unprovable") return yield* parked(`it ${UNPROVABLE}`);
-        if (ended._tag === "NotQuiet")
-          return yield* ended.locked === undefined
-            ? new AgentParked({
-                operation: launched.operation,
-                reason: `${ended.reason}. It ran out, and no agent takes its work until it has stopped; resume once it has`,
-              })
-            : parked(`it could not be stopped (${ended.locked})`);
+        if (ended._tag === "NotQuiet") {
+          if (ended.locked !== undefined)
+            return yield* parked(`it could not be stopped (${ended.locked})`);
+          yield* rememberNotQuiet(`${host.dir}/runs/${launched.runId}`, {
+            agent: launched.agent,
+            left: ended.left ?? [],
+          });
+          return yield* new AgentParked({
+            operation: launched.operation,
+            reason: `${ended.reason}. It ran out, and no agent takes its work until it has stopped; this Run goes on once it has`,
+            cause: "predecessor-not-quiet",
+          });
+        }
         yield* log(launched.runId, line);
       }),
     );

@@ -144,6 +144,11 @@ const AgentSessionReply = Schema.Struct({
   kind: Schema.String,
   value: Schema.String,
 });
+const PaneProcessReply = Schema.Struct({
+  result: Schema.Struct({
+    process_info: Schema.Struct({ shell_pid: Schema.optionalKey(Schema.NullOr(Schema.Finite)) }),
+  }),
+});
 const PaneListReply = Schema.Struct({
   result: Schema.Struct({
     panes: Schema.Array(
@@ -279,6 +284,7 @@ export const SOCKET_METHODS = [
   "pane.report_metadata",
   "popup.close",
   "events.subscribe",
+  "pane.process_info",
 ] as const;
 
 export type SocketMethod = (typeof SOCKET_METHODS)[number];
@@ -297,6 +303,7 @@ export const replySchemas = {
   WorkspaceListReply,
   TabListReply,
   PaneListReply,
+  PaneProcessReply,
   PaneSplitReply,
   AgentListReply,
   AgentStatusReply,
@@ -1586,6 +1593,26 @@ export class Herdr {
       // nothing in it is this caller's to take over.
       Effect.map(({ result }) => ({ ...worktreeWorkspace(result), rootTab: null })),
     );
+  }
+
+  /** The process at the root of a pane: its shell on herdr, its program on core; null where neither says. */
+  paneRoot(paneId: string, backend: Backend = "herdr"): HerdrEffect<number | null> {
+    if (backend === "herdr")
+      return this.rpc("pane.process_info", { pane_id: paneId }).pipe(
+        Effect.flatMap((result) =>
+          decodeBoundary("pane.process_info", PaneProcessReply, { result: result ?? null }),
+        ),
+        Effect.map((reply) => reply.result.process_info.shell_pid ?? null),
+      );
+    const raw = this.env.raw;
+    return Effect.gen(function* () {
+      const listed = yield* coreCall(yield* coreSocket(raw), "terminal.list", {});
+      const terminal = Arr.findFirst(
+        listed.terminals,
+        (one) => one.state === "live" && one.address === paneId,
+      );
+      return Option.getOrUndefined(terminal)?.pid ?? null;
+    });
   }
 
   /** On core, `paneId` is the agent's terminal, and closing it ends its program. */

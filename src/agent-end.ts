@@ -5,7 +5,7 @@
 // 2. stop it where its work runs;
 // 3. require it to be Quiet;
 // 4. keep its Task's workspace, where the caller wants it kept;
-// 5. close its pane;
+// 5. close its pane, and require what ran in it to be Quiet;
 // 6. log the end on the Run's log.
 //
 // In the caller's mode, steps 4 to 6 are the caller's: it closes the panes itself once
@@ -14,10 +14,17 @@
 
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Data, Effect, FileSystem, Result } from "effect";
+import { Clock, Data, Effect, FileSystem, Result, Schedule } from "effect";
 import type { PlatformServices } from "./platform";
 import { RELAUNCH, RunRecords } from "./run-records";
-import { STOP_WAIT_MS, notStopped, stopAgent, type CompactionDeps } from "./compaction";
+import {
+  STOP_WAIT_MS,
+  notStopped,
+  stopAgent,
+  type CompactionDeps,
+  type SeenProcess,
+} from "./compaction";
+import { processOf, sessionOf, startedOf, stillRunning, terminate } from "./processes";
 import type { AgentInfo, Herdr, HerdrError, PaneInfo } from "./herdr";
 import {
   launchDir,
@@ -31,7 +38,7 @@ import { reason } from "./naming";
 import { readTask, taskOfWorkspace, withTaskLock, writeTask } from "./task";
 
 export interface EndDeps extends Pick<CompactionDeps, "ports" | "stateDir" | "log"> {
-  readonly herdr: Pick<Herdr, "agentList" | "paneList" | "paneClose" | "tabCreate">;
+  readonly herdr: Pick<Herdr, "agentList" | "paneList" | "paneClose" | "paneRoot" | "tabCreate">;
   /** Where a shell kept open for a workspace starts, where its pane names no directory. */
   readonly cwd: string;
   readonly stopMs?: number;
@@ -43,8 +50,16 @@ export type Closes = "close" | "caller";
 export type Ended =
   /** `ended` is false where nothing of this Run's was there to end. */
   | { readonly _tag: "Closed"; readonly ended: boolean }
-  /** `locked` is why no stop could be made, where none could. */
-  | { readonly _tag: "NotQuiet"; readonly reason: string; readonly locked?: string }
+  /**
+   * `locked` is why no stop could be made, where none could. `left` is what of its pane was
+   * still running once it closed.
+   */
+  | {
+      readonly _tag: "NotQuiet";
+      readonly reason: string;
+      readonly locked?: string;
+      readonly left?: ReadonlyArray<SeenProcess>;
+    }
   | { readonly _tag: "Unprovable"; readonly reason: string }
   /** Only where the caller closes: another process has the agent's name, so its panes stay. */
   | { readonly _tag: "Replaced"; readonly reason: string };
@@ -117,7 +132,7 @@ const unlocked = (agent: string, cause: unknown) =>
     locked: reason(cause),
   });
 
-type Ending = Pick<Launched, "agent" | "terminalId" | "agentSession"> & {
+type Ending = Pick<Launched, "agent" | "terminalId" | "agentSession" | "root"> & {
   readonly harness?: string;
   readonly runId?: string;
   readonly operation?: string;
@@ -182,6 +197,13 @@ const ending = Effect.fnUntraced(function* (
       reason: notStopped(launched.agent, reached.success, reached.success.target),
     } satisfies Ended;
 
+  const backend = restored === undefined ? one?.backend : undefined;
+  // Only where its work is in its pane, and this end closes it.
+  const pane =
+    reached.success === null && closes === "close"
+      ? yield* paneProcesses(deps, launched.root, paneId, backend)
+      : null;
+
   // Ended on purpose, so nothing starts it again.
   const runId = launched.runId;
   if (runId !== undefined)
@@ -193,13 +215,121 @@ const ending = Effect.fnUntraced(function* (
       yield* keepWorkspace(deps, paneId, panes);
     }
     yield* deps.herdr
-      .paneClose(paneId, restored === undefined ? one?.backend : undefined)
+      .paneClose(paneId, backend)
       .pipe(Effect.mapError((cause) => new PaneOpen({ paneId, cause })));
   }
-  const ended = paneId !== undefined || reached.success !== null;
-  if (ended && closes === "close")
+  const stopMs = deps.stopMs ?? STOP_WAIT_MS;
+  const left =
+    pane === null || "unconfirmed" in pane ? [] : yield* settled(pane.roots, pane.noted, stopMs);
+  if (left.length > 0)
+    return {
+      _tag: "NotQuiet",
+      reason: `${launched.agent} is not Quiet: ${Arr.join(
+        Arr.map(left, (one) => `pid ${one.pid}`),
+        ", ",
+      )} of its pane still running ${Math.round(stopMs / 1000)}s after it closed`,
+      left,
+    } satisfies Ended;
+  const ended =
+    paneId !== undefined ||
+    reached.success !== null ||
+    (pane !== null && !("unconfirmed" in pane) && pane.noted.length > 0);
+  if (ended && closes === "close") {
+    if (pane !== null && "unconfirmed" in pane)
+      yield* deps
+        .log(`${launched.agent}: Quiet not confirmed: ${pane.unconfirmed}`)
+        .pipe(Effect.ignore);
     yield* deps.log(endedLine(launched.agent, why)).pipe(Effect.ignore);
+  }
   return { _tag: "Closed", ended } satisfies Ended;
+});
+
+/** The process at a pane's root now, which its agent's start records; undefined where none is named. */
+export const rootOf = (
+  herdr: Pick<Herdr, "paneRoot">,
+  paneId: string,
+  backend?: AgentInfo["backend"],
+) =>
+  Effect.gen(function* () {
+    const pid = yield* herdr.paneRoot(paneId, backend).pipe(Effect.orElseSucceed(() => null));
+    const started = pid === null ? null : yield* startedOf(pid);
+    return pid === null || started === null ? undefined : { pid, started };
+  });
+
+/** How long what a closed pane leaves gets to end before each process is sent its one SIGTERM. */
+const HANGUP_GRACE_MS = 2_000;
+
+/**
+ * Every process of the agent's pane, read before its close: the session of the root its
+ * start recorded and of the root its pane has now. A root whose pid is now another process
+ * names nothing; where none names anything, why Quiet cannot be confirmed.
+ */
+const paneProcesses = Effect.fnUntraced(function* (
+  deps: Pick<EndDeps, "herdr">,
+  recorded: SeenProcess | undefined,
+  paneId: string | undefined,
+  backend: AgentInfo["backend"],
+) {
+  const current = paneId === undefined ? undefined : yield* rootOf(deps.herdr, paneId, backend);
+  const named = [
+    ...(recorded === undefined ? [] : [recorded]),
+    ...(current === undefined || current.pid === recorded?.pid ? [] : [current]),
+  ];
+  if (named.length === 0) return { unconfirmed: "no process of its pane could be named" };
+  const roots: number[] = [];
+  const noted: SeenProcess[] = [];
+  for (const root of named) {
+    const now = yield* processOf(root.pid);
+    if (now !== null && now.started !== root.started) continue;
+    const session = yield* sessionOf(root.pid).pipe(Effect.result);
+    if (session._tag === "Failure")
+      return {
+        unconfirmed: `its pane's processes could not be listed (${reason(session.failure)})`,
+      };
+    roots.push(root.pid);
+    if (now !== null) noted.push(root);
+    for (const one of session.success) noted.push({ pid: one.pid, started: one.started });
+  }
+  if (roots.length === 0)
+    return { unconfirmed: `its pane's root, pid ${named[0]!.pid}, is now another process` };
+  return { roots, noted };
+});
+
+/**
+ * What of a closed pane is still running once the stop's budget is spent: each process left
+ * after the grace a hang-up gets is sent one SIGTERM, as a Codex server's session is.
+ */
+const settled = Effect.fnUntraced(function* (
+  roots: ReadonlyArray<number>,
+  noted: ReadonlyArray<SeenProcess>,
+  budgetMs: number,
+) {
+  const start = yield* Clock.currentTimeMillis;
+  const running = Effect.gen(function* () {
+    const found = [...noted];
+    // A process started as the pane closed is in its session too.
+    for (const root of roots)
+      for (const one of yield* sessionOf(root).pipe(Effect.orElseSucceed(() => [])))
+        found.push({ pid: one.pid, started: one.started });
+    const distinct = Arr.dedupeWith(
+      found,
+      (one, other) => one.pid === other.pid && one.started === other.started,
+    );
+    return yield* Effect.filter(distinct, stillRunning);
+  });
+  const until = (end: number) =>
+    running.pipe(
+      Effect.repeat({
+        until: (left) => left.length === 0,
+        schedule: Schedule.spaced(50).pipe(Schedule.while(({ now }) => now < end)),
+      }),
+    );
+  const hungUp = yield* until(start + Math.min(HANGUP_GRACE_MS, budgetMs));
+  if (hungUp.length === 0) return hungUp;
+  for (const one of hungUp) yield* terminate(one.pid);
+  return yield* until(
+    Math.max(start + budgetMs, (yield* Clock.currentTimeMillis) + HANGUP_GRACE_MS),
+  );
 });
 
 /** A pane herdr restored resuming the harness session recorded for this agent, if any. */

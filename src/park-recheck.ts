@@ -8,6 +8,8 @@ import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { projectHere, shell, whatItSaid } from "./mr";
 import type { RunView } from "./engine";
 import type { Herdr } from "./herdr";
+import { keptFor, readControl } from "./compaction";
+import { stillRunning } from "./processes";
 
 const CiTarget = Schema.fromJsonString(
   Schema.Struct({
@@ -40,6 +42,19 @@ export const rememberFailedCi = (dir: string, target: typeof FailedCi.Type) =>
     if (last?.head === target.head && last.mr === target.mr) return;
     yield* appendRunJournal(failedCiJournal(dir), FailedCi, target);
   });
+
+const NotQuiet = Schema.fromJsonString(
+  Schema.Struct({
+    agent: Schema.String,
+    left: Schema.Array(Schema.Struct({ pid: Schema.Finite, started: Schema.String })),
+  }),
+);
+
+const notQuietJournal = (dir: string) => runJournal(dir, "not-quiet.jsonl");
+
+/** The predecessor a `predecessor-not-quiet` park waits on, and what of its pane was left. */
+export const rememberNotQuiet = (dir: string, predecessor: typeof NotQuiet.Type) =>
+  appendRunJournal(notQuietJournal(dir), NotQuiet, predecessor);
 
 const reply = (cleared: boolean, note: string, error = false) => ({ cleared, note, error });
 
@@ -155,6 +170,24 @@ export const recheckPark = (
           shell,
         );
         return read.ok ? reply(true, "forge answered") : reply(false, read.reason, true);
+      }
+      case "predecessor-not-quiet": {
+        const last = (yield* readRunJournal(
+          notQuietJournal(`${stateDir}/runs/${view.runId}`),
+          NotQuiet,
+        ).pipe(Effect.orElseSucceed(() => []))).at(-1);
+        if (last === undefined) return reply(false, "no predecessor recorded");
+        for (const one of last.left)
+          if (yield* stillRunning(one))
+            return reply(false, `${last.agent}'s pid ${one.pid} is still running`);
+        const kept = yield* readControl(stateDir, last.agent).pipe(
+          Effect.flatMap((record) => (record === null ? Effect.succeed(null) : keptFor(record))),
+          Effect.result,
+        );
+        if (kept._tag === "Failure") return reply(false, String(kept.failure), true);
+        return kept.success === null
+          ? reply(true, `${last.agent} is Quiet`)
+          : reply(false, `${last.agent}: ${kept.success}`);
       }
       case "herdr-unavailable": {
         const read = yield* herdr.sessionList().pipe(Effect.result);

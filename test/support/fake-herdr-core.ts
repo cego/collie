@@ -68,6 +68,13 @@ const herdrCall = (args: string[], env: Record<string, string>) =>
     ),
   );
 
+/** What a closed pty does to the process at its root. */
+export const hangUp = (pid: number) => {
+  try {
+    process.kill(pid, "SIGHUP");
+  } catch {}
+};
+
 /** The fake herdr at `bin`, for the processes a test spawns: its calls are answered here. */
 export const writeFakeHerdrShim = (bin: string) =>
   Effect.gen(function* () {
@@ -99,6 +106,7 @@ interface FakePane {
   /** The socket of the one session that lists it; unset, every session does. */
   session?: string;
   agent_session?: FakeAgentSession | null;
+  shell_pid?: number | null;
 }
 
 /** The harness session herdr says a pane's agent is driving. */
@@ -195,6 +203,8 @@ const FakePaneSchema = Schema.Struct({
   /** The socket of the one session that lists it; unset, every session does. */
   session: Schema.optionalKey(Schema.String),
   agent_session: Schema.optionalKey(Schema.NullOr(FakeAgentSessionSchema)),
+  /** A real process a test made the pane's shell; none by default. */
+  shell_pid: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
 });
 const FakeAgentSchema = Schema.Struct({
   name: Schema.String,
@@ -312,6 +322,7 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
       terminal_id: pane.terminal_id,
       agent_session: pane.agent_session,
       ...(pane.session !== undefined && { session: pane.session }),
+      ...(pane.shell_pid != null && { shell_pid: pane.shell_pid }),
     })),
     agents: Arr.map(state.agents ?? [], (agent) => ({ ...agent })),
     workspaces: Arr.map(state.workspaces ?? [], (workspace) => ({ ...workspace })),
@@ -896,6 +907,8 @@ function handle(
         break;
       }
       case "pane close":
+        for (const pane of state.paneList)
+          if (pane.pane_id === argv[2] && pane.shell_pid != null) hangUp(pane.shell_pid);
         state.paneList = Arr.filter(state.paneList, (p) => p.pane_id !== argv[2]);
         // The agent in a pane goes with it.
         state.agents = Arr.filter(state.agents, (a) => a.pane_id !== argv[2]);

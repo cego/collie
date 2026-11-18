@@ -18,6 +18,8 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
+import { SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
+import { processOf } from "../src/processes";
 import type { PlatformServices } from "../src/platform";
 import {
   Clock,
@@ -29,6 +31,7 @@ import {
   FileSystem,
   Layer,
   Path,
+  Ref,
   Schema,
   flow,
   Result,
@@ -4396,6 +4399,82 @@ test("a Codex agent whose own app server says its limit is reached is replaced",
         "review: codex/default ran out (weekly 100%, resets",
       );
     }),
+  ));
+
+test("an OpenCode agent that runs out is replaced only once nothing of its pane is running", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.startSocket();
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "finished on codex" }]);
+      const tree = yield* paneTree(SURVIVES_HANGUP);
+      const successor = agentName("r1", "review", null, 2);
+      const startOf = (agent: string) =>
+        rig.calls().pipe(
+          Effect.map((calls) =>
+            Arr.findFirst(
+              calls,
+              (call) => call.cmd === "agent start" && (call.argv ?? [])[2] === agent,
+            ),
+          ),
+          Effect.orElseSucceed(() => Option.none<Call>()),
+        );
+      let ranOut = false;
+      // Its pane's shell is the tree above once herdr has started it in one.
+      yield* Effect.forkScoped(
+        Effect.gen(function* () {
+          let launched = yield* startOf(agentFor("r1"));
+          while (Option.isNone(launched)) {
+            yield* TestClock.withLive(Effect.sleep("5 millis"));
+            launched = yield* startOf(agentFor("r1"));
+          }
+          const argv = launched.value.argv ?? [];
+          yield* rig.paneShell(argv[argv.indexOf("--pane") + 1]!, tree.shell);
+          ranOut = true;
+        }).pipe(Effect.orDie),
+      );
+      const aliveAtTakeover = yield* Ref.make<boolean | null>(null);
+      yield* Effect.forkScoped(
+        Effect.gen(function* () {
+          while (Option.isNone(yield* startOf(successor)))
+            yield* TestClock.withLive(Effect.sleep("1 millis"));
+          yield* Ref.set(aliveAtTakeover, (yield* processOf(tree.child)) !== null);
+        }),
+      );
+      const reached: UsageReading = {
+        subscription: "claude",
+        account: "acct",
+        accountLabel: null,
+        plan: "max",
+        windows: [
+          {
+            kind: "session",
+            label: "Session",
+            model: null,
+            usedPercent: 100,
+            resetsAt: "2099-01-01T15:45:00Z",
+            reached: true,
+          },
+        ],
+        at: "2026-10-08T08:00:00Z",
+        source: "claude-usage",
+        problem: null,
+      };
+      const result = yield* session(started("r1"), {
+        harness: "opencode",
+        model: "anthropic/claude-opus-4-1",
+        fallbacks: Effect.succeed(["codex"]),
+        readings: Effect.succeed([{ ...reached, windows: [] }]),
+        ownReading: (agent) =>
+          Effect.sync(() => (ranOut && agent === agentFor("r1") ? reached : null)),
+        collectMs: 30_000,
+      });
+      expect(result._tag === "Success" && result.success.note).toBe("finished on codex");
+      expect(yield* Ref.get(aliveAtTakeover)).toBe(false);
+      expect(Arr.map(yield* agentsAt(dir, "r1"), (one) => one.harness)).toEqual([
+        "opencode",
+        "codex",
+      ]);
+    }).pipe(Effect.scoped),
   ));
 
 test("quota incident publication waits for an admitted managed-server revival", () =>

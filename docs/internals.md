@@ -1483,6 +1483,20 @@ and writes the end, with why, on the Run's `agents.log`, in that order; the work
 and the tab close do their own closing once every agent has answered. An agent it cannot
 prove is this Run's is left running, and named.
 
+Where its work is in its pane (Claude, Pi, OpenCode, and Codex without its controls) and
+`endAgent` closes the pane itself, it requires Quiet after the close. A launch records the
+process at its pane's root in its launch record as `root` (`rootOf`: herdr's
+`pane.process_info` shell pid, core's terminal pid from `terminal.list`, with its start
+time). Before the close, `paneProcesses` takes that root and the pane's root now, drops one
+whose pid is another process, and notes each one's session with `sessionOf`, so a pane that
+already died still has its processes checked. After the close, `settled` waits up to two seconds
+for what the hang-up ends, sends each process still running one SIGTERM, and waits out the
+stop's budget. What is left makes the end `NotQuiet` with `left`; the Fallback's
+retirement records the agent and `left` in the Run's `not-quiet.jsonl` journal and parks
+with the cause `predecessor-not-quiet`, whose recheck clears once none of `left` is still
+the process noted and `keptFor` keeps no control record of the agent. Where no root can be
+named, the end logs `<agent>: Quiet not confirmed: <why>` and the close stands as the stop.
+
 Every path that replaces an agent or releases what it worked in goes through the same stop
 first. `installControls` stops a record left under the name it installs and fails
 `NotQuiet` rather than delete it; the Agents service turns that into a parked launch. A

@@ -49,6 +49,10 @@ const replies = {
   },
   TabListReply: { of: replySchemas.TabListReply, at: { envelope: "tab_list" } },
   PaneListReply: { of: replySchemas.PaneListReply, at: { envelope: "pane_list" } },
+  PaneProcessReply: {
+    of: replySchemas.PaneProcessReply,
+    at: { envelope: "pane_process_info" },
+  },
   PaneSplitReply: { of: replySchemas.PaneSplitReply, at: { envelope: "pane_info" } },
   AgentListReply: { of: replySchemas.AgentListReply, at: { envelope: "agent_list" } },
   AgentStatusReply: { of: replySchemas.AgentStatusReply, at: { envelope: "agent_info" } },
@@ -84,6 +88,7 @@ const calls = {
   "pane.report_metadata": (herdr: Herdr) =>
     herdr.paneReportMetadata("1-2", { collie_home: "abc123" }, 86_400_000),
   "popup.close": (herdr: Herdr) => herdr.popupClose(),
+  "pane.process_info": (herdr: Herdr) => herdr.paneRoot("1-2"),
   "events.subscribe": (herdr: Herdr) =>
     herdr.waitForEvent(
       Effect.succeed([...PANE_EVENTS, { type: "pane.agent_status_changed", pane_id: "1-2" }]),

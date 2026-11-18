@@ -34,7 +34,7 @@
 
 **Fallback chain** — The human's `fallbacks` setting: an ordered list of `harness` or `harness/model` entries, shared across the Flock. It is tried after whatever the work itself prefers, including a Workflow's own `otherwise`. It is empty by default. The **Flock chat** has a chain of its own, `chatFallbacks` in Desktop's Settings, for this computer only. It is tried after the chat's own harness and model, judged by the same rules.
 
-**Fallback** — Work moved to the next agent with room because its agent's Subscription is Exhausted. If that is known before the agent starts, the recorded choice is simply another agent. Mid-work, Collie stops the agent and, once it is **Quiet**, starts a new one on the same operation, with the same prompt and a hand-over. The hand-over says the checkout holds what was done and where the earlier transcript is. The new agent also takes the old one's place for later work. A Fallback is recorded with what it fell back from and why. In the **Flock chat** a Fallback keeps the conversation on another model of the same harness. On another harness it starts a new conversation, and Desktop's hand-over says where it came from and where the earlier transcript is.
+**Fallback** — Work moved to the next agent with room because its agent's Subscription is Exhausted. If that is known before the agent starts, the recorded choice is simply another agent. Mid-work, Collie stops the agent and, once it is **Quiet**, starts a new one on the same operation, with the same prompt and a hand-over; one that is not Quiet parks the Run on `predecessor-not-quiet` until it is. The hand-over says the checkout holds what was done and where the earlier transcript is. The new agent also takes the old one's place for later work. A Fallback is recorded with what it fell back from and why. In the **Flock chat** a Fallback keeps the conversation on another model of the same harness. On another harness it starts a new conversation, and Desktop's hand-over says where it came from and where the earlier transcript is.
 
 **Input** — A value a Workflow needs (plan directory, diff target, goal). Only the **Launch flow** infers one, for a human, from context (branch, cwd, earlier plan Runs, glab), and a Run records which of its Inputs were inferred and which were given. An agent's start — chat's Collie tools or `collie run start` — gives every Input explicitly, an optional one as an explicit empty, and a start missing one is refused with what would fill it.
 
@@ -366,7 +366,11 @@ is (ADR-0059).
 **Quiet** — An incarnation that can no longer change anything. Every turn it was running
 has ended, as read back from the harness. The process that ran them is gone, and nothing it
 started is still running. `submitted` (an interrupt was sent) and `acknowledged` (the
-harness accepted it) are not Quiet. Only Quiet counts as stopped.
+harness accepted it) are not Quiet. Only Quiet counts as stopped. For a harness whose work
+runs in its pane (Claude, Pi, OpenCode), Quiet is no process of the pane's session left
+once the pane has closed; one left past a short grace gets one SIGTERM. Where no process of
+the pane can be named, as for an agent started before Collie recorded one, its end says
+Quiet was not confirmed and the close stands as the stop.
 
 **Conversation** — Scoped to one Herd (Native chat, in its Home) or to the Flock (the
 **Flock chat**, in Desktop). For a Herd, also the durable journal of human and Collie turns, plus the turns
@@ -483,7 +487,9 @@ rather than what the step was doing.
 **Park cause** — Why a Run parked, from one closed list: what the host may do about it.
 A cause either asks the Run's own agent something, or rechecks the fact it parked on, or
 needs you and says why. An unclassified park is `unknown`, never a guess. Counted per cause
-in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
+in `collie run report` (ADR-draft-a-run-recovers-where-it-parks). `predecessor-not-quiet`
+is an agent that had to stop before another took its work, and was not **Quiet** within
+the stop's wait: it rechecks that nothing it left is still running, and never starts a Heal.
 
 **Recovery** — What the host does about a park, without being asked: an **Output reminder**
 to an agent whose turn ended without writing its Output, and a resume once a recheck shows the
