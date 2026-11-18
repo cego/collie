@@ -383,7 +383,6 @@ export default defineWorkflow({
       }
 
       const findings = [...(window.repeated ?? []), ...triaged.findings];
-      // What is already fixed, or being fixed, so it is not filed again.
       const matching =
         findings.length === 0
           ? { closed: [], releases: [], underway: [] }

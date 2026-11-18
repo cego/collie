@@ -5,7 +5,6 @@ export const Issue = Schema.Struct({
   title: Schema.String,
   body: Schema.String,
   url: Schema.String,
-  /** When a closed issue closed. */
   closedAt: Schema.optionalKey(Schema.String),
 });
 export type Issue = typeof Issue.Type;

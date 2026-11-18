@@ -3095,7 +3095,7 @@ const ended = (runId: string, status: typeof RunStatus.Type) =>
       if (Option.isNone(records))
         return yield* Effect.die(`${runId} ended with no records to keep it`);
       yield* records.value.put(runId, TERMINAL, asJsonText(status));
-      // The last read of its agents' usage, for what they did after their last delivery.
+      // Requests its agents made after their last delivery are read nowhere else.
       const agents = yield* Effect.serviceOption(Agents);
       if (Option.isSome(agents)) {
         const store = yield* Effect.serviceOption(Store);

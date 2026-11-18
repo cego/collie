@@ -420,7 +420,7 @@ export interface LoadedThread {
   readonly transcript: string | null;
   /** In-progress turns, by id. */
   readonly running: ReadonlyArray<string>;
-  /** The thread a sub-agent's was spawned from; null for the agent's own. */
+  /** For a sub-agent's thread, the thread that spawned it; null for the agent's own. */
   readonly parent: string | null;
   /** The cheap thread a TUI keeps for itself. */
   readonly ephemeral: boolean;
