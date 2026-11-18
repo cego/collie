@@ -2246,12 +2246,12 @@ first line, with Attach and Send on the right of the next.
 A choice is saved at once, through the same checks as `collie_chat_harness`, and focus goes
 back to the message box. Settings › Chat has no rows for them.
 
-- **Harness** offers **Claude Code** (`claude`) and **Pi** (`pi`), using your own install and
-  login on this computer. One not installed is shown disabled, marked **Not installed on this
+- **Harness** offers **Claude Code** (`claude`), **Codex** (`codex`) and **Pi** (`pi`), using
+  your own install and login on this computer. One not installed is shown disabled, marked **Not installed on this
   computer**.
 - **Model** starts with **Default · …**, named by the model an unset choice runs as and
   described "What the chat runs with no model set"; choosing it unsets the model. Then come
-  Claude Code's own models with their names and descriptions, or Pi's with its own names. It can be searched,
+  Claude Code's or Codex's own models with their names and descriptions, or Pi's with its own names. It can be searched,
   and an id that is not listed is offered as **Use <id>**, ignoring surrounding whitespace
   when you paste or type it. A typed model is checked as a
   Run's model is.
@@ -2264,7 +2264,7 @@ A refused choice is shown in red above the message box, ending "Nothing was save
 
 Claude Code's model list comes from your own install and login on this computer. Where this
 computer has a Machine, Desktop reads the list from that Machine's host, the same [Harness
-catalogue](cli.md#models) `collie models` prints. Pi's list comes from there too. Where the
+catalogue](cli.md#models) `collie models` prints. Codex's and Pi's lists come from there too. Where the
 computer has no Machine, or its Collie is older, Desktop reads each harness itself. Desktop
 reads the list once per start, when the chat is first shown, with no turn started and no
 tokens spent, and keeps the successful list until it quits. Each model lists its own effort
@@ -2331,12 +2331,37 @@ claude.ai connectors, such as Slack, reach only the Claude harness. On both, Git
 are reached with `glab` and `gh`. A server added while a conversation is open reaches the next
 one: start a new conversation, switch harness, or restart Desktop.
 
+On Codex, Desktop starts `codex app-server` on its login PATH, in Desktop's state directory,
+and speaks to it over stdio; your Codex configuration loads as Codex loads it, so its MCP
+servers, sign-in and `~/.codex/AGENTS.md` apply. Its threads run with no approval prompts and
+no sandbox, so its shell and file edits reach this computer without asking first, as on the
+other harnesses, and Collie's system prompt goes in as developer instructions. Collie's tools,
+the five Machine file tools and AskUserQuestion reach it through the same loopback MCP endpoint
+as Pi's, under the private server name `collie_desktop`, with the token in the child's
+environment and the 24-hour tool timeout. Unset, the model is Codex's own configured one, at
+its own effort; a set model runs at `medium` or the effort set, as on Claude Code, passed with
+each message, and a model's levels are the ones Codex's own list gives it. Desktop reads that list with the App Server's `model/list`,
+from this computer's Machine first, as for Claude Code. Codex missing from PATH is said in the
+chat. Codex not signed in is said before any turn: "Codex is not signed in on this computer:
+run `codex login` in a terminal, then send your message again." A turn Codex refuses as
+unauthorized says the same; any other failed turn says Codex's own error, and a Codex that exits
+ends the session with what it printed. A question Codex's App Server asks the client itself,
+such as an elicitation, is refused, so the turn goes on.
+
+What Codex cannot take is said here rather than dropped: it has no PDF input, so a PDF goes by
+the path Desktop lists in the message, which Codex reads with its shell; your Claude Code MCP
+servers and claude.ai connectors do not reach it, since it has its own; and nothing stops its
+shell reading your agents' session stores (`~/.claude/projects`, `~/.codex/sessions` and the
+like), which Claude Code's and Pi's chats refuse. Codex could refuse them only with its
+sandbox, which needs user namespaces this computer may not give it.
+
 The effort is chosen in its select, or by asking the chat, for example "answer at high
 effort from now on", which `collie_chat_harness` saves. Claude's levels range from `low` to
-`max`; Pi's from `off` to `max`, passed as `--thinking`. Each model offers its own subset.
+`max`; Pi's from `off` to `max`, passed as `--thinking`; Codex's are the ones its model list
+names. Each model offers its own subset.
 An effort the model does not list is refused with the ones it takes,
 and any effort on a model that lists none; nothing is saved. Another model keeps the effort
-only where it lists it, unsetting the model included. Unset, Claude runs at `medium` and Pi
+only where it lists it, unsetting the model included. Unset, Claude and Codex run at `medium` and Pi
 at its configured level clamped to the model's available levels. A new effort applies with the next message, in the same
 conversation; another harness unsets the model and the effort.
 Before a session opens, Desktop checks a saved explicit effort against the model list
@@ -2365,7 +2390,7 @@ is named in "This reply finishes on <model · effort>. Your next message runs on
 change notice.
 
 Earlier conversations lists every installed harness's history, ten at most, newest first, each
-marked **Claude Code** or **Pi** beside its date. Reopening one from another harness moves
+marked **Claude Code**, **Codex** or **Pi** beside its date. Reopening one from another harness moves
 the chat to that harness, unsetting the model and the effort, and shows that conversation,
 never a new one; the menu's last line says so whenever it lists one. **Start fresh** stays on
 the set harness. You can ask the chat to read or change these settings through
@@ -2377,7 +2402,9 @@ says when a list is being read or comes from the table, and why a read failed.
 Your first message starts the session, and it stays warm between turns. Its session id
 and harness are kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation. Claude Code
-keeps and compacts its transcript; Pi keeps its session files under Desktop's `pi-sessions/`.
+keeps and compacts its transcript; Pi keeps its session files under Desktop's `pi-sessions/`;
+Codex keeps its threads in its own history, and Desktop's `codex-threads.json` names the thread
+each conversation is held on.
 Desktop reads Pi's current branch and earlier conversations from those files.
 The Machine rule, Standing direction, News and card note reach Pi after your words as a bracketed note of
 Desktop's own. Reading the transcript back leaves the context out of your bubble and keeps
