@@ -3062,6 +3062,7 @@ test(
                 Effect.orDie,
               ),
             );
+            yield* spend(5_000);
             expect(sent(yield* rig.calls(), ANSWERED)).toBe(1);
             expect(yield* reminders).toEqual([]);
           }),

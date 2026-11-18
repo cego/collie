@@ -3562,11 +3562,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
         const unasked =
           asking === null ? Effect.succeed(true) : Effect.map(asking(null), (open) => !open);
+        const statusNow = Effect.suspend(() => host.herdr.agentStatus(launched.agent)).pipe(
+          Effect.orElseSucceed(() => null),
+        );
+        const settled = Effect.map(statusNow, (status) => status !== null && isSettled(status));
         let working = turnBegun.delete(launched.agent);
         for (;;) {
-          const status = yield* host.herdr
-            .agentStatus(launched.agent)
-            .pipe(Effect.orElseSucceed(() => null));
+          const status = yield* statusNow;
           working ||= status === "working";
           if (
             working &&
@@ -3576,7 +3578,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             (yield* unasked) &&
             (yield* may) &&
             !(yield* holdsBudgetOf(launched.runId, launched.agent)) &&
-            (openQuestions.get(launched.agent)?.size ?? 0) === 0
+            (openQuestions.get(launched.agent)?.size ?? 0) === 0 &&
+            // `unasked` can wait out a delivery of answers, which starts a turn.
+            (yield* settled)
           )
             return;
           yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
