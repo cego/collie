@@ -84,487 +84,440 @@ const workspace = Effect.fn("HostTest.workspace")(function* (prefix: string) {
   return { wf, project: `${dir}/project`, state: `${dir}/state` };
 });
 
-test(
-  "a starting host clears the marker of a CI wait the host before it died during",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { state } = yield* workspace("collie-host-ci-wait-");
-        yield* hostRunRecords(() => state).setControl(
-          VERIFYING,
-          "run-ci",
-          encodeVerifying({
-            name: "check",
-            executable: "bun",
-            argv: ["test"],
-            pass: "ci",
-            round: null,
-            revision: "abc",
-            base: null,
-            started: "2026-11-16T08:00:00.000Z",
-            job: "test",
-          }),
-        );
-        yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
-        yield* Effect.scoped(
-          connect(state).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.orDie);
-        expect(yield* hostRecords(state, verifyingOf("run-ci"))).toBeNull();
-      }),
-    ),
-  120_000,
-);
+test("a starting host clears the marker of a CI wait the host before it died during", () =>
+  proves(
+    Effect.gen(function* () {
+      const { state } = yield* workspace("collie-host-ci-wait-");
+      yield* hostRunRecords(() => state).setControl(
+        VERIFYING,
+        "run-ci",
+        encodeVerifying({
+          name: "check",
+          executable: "bun",
+          argv: ["test"],
+          pass: "ci",
+          round: null,
+          revision: "abc",
+          base: null,
+          started: "2026-11-16T08:00:00.000Z",
+          job: "test",
+        }),
+      );
+      yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
+      yield* Effect.scoped(connect(state).pipe(Effect.flatMap((client) => client.identity()))).pipe(
+        Effect.orDie,
+      );
+      expect(yield* hostRecords(state, verifyingOf("run-ci"))).toBeNull();
+    }),
+  ));
 
-test(
-  "clients that start at the same moment converge on the one host that holds the lock",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { state } = yield* workspace("collie-host-owner-");
-        const identities = yield* Effect.all(
-          Arr.map([1, 2, 3, 4], () =>
-            Effect.scoped(
-              connect(state).pipe(
-                Effect.flatMap((client) => client.identity()),
-                Effect.orDie,
-              ),
+test("clients that start at the same moment converge on the one host that holds the lock", () =>
+  proves(
+    Effect.gen(function* () {
+      const { state } = yield* workspace("collie-host-owner-");
+      const identities = yield* Effect.all(
+        Arr.map([1, 2, 3, 4], () =>
+          Effect.scoped(
+            connect(state).pipe(
+              Effect.flatMap((client) => client.identity()),
+              Effect.orDie,
             ),
           ),
-          { concurrency: "unbounded" },
-        );
-        expect(new Set(Arr.map(identities, (who) => who.pid)).size).toBe(1);
+        ),
+        { concurrency: "unbounded" },
+      );
+      expect(new Set(Arr.map(identities, (who) => who.pid)).size).toBe(1);
 
-        const owner = yield* ownerOf(state);
-        expect(owner?.pid).toBe(identities[0]!.pid);
-        yield* stopHost(state);
-      }),
-    ),
-  120_000,
-);
+      const owner = yield* ownerOf(state);
+      expect(owner?.pid).toBe(identities[0]!.pid);
+      yield* stopHost(state);
+    }),
+  ));
 
-test(
-  "a host started in a directory an update then deletes keeps answering from its state directory, without the launcher's LD_PRELOAD",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { state } = yield* workspace("collie-host-cwd-");
-        const gone = `${state}/../bin`;
-        const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-        const host = Option.isSome(binary)
-          ? [binary.value]
-          : [process.execPath, `${root}src/main.ts`];
-        const launcher = [
-          "/bin/sh",
-          "-c",
-          'env > "$GONE.env" && mkdir -p "$GONE" && cd "$GONE" && exec "$@"',
-          "sh",
-          ...host,
-        ];
-        yield* Effect.acquireRelease(
+test("a host started in a directory an update then deletes keeps answering from its state directory, without the launcher's LD_PRELOAD", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { state } = yield* workspace("collie-host-cwd-");
+      const gone = `${state}/../bin`;
+      const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+      const host = Option.isSome(binary)
+        ? [binary.value]
+        : [process.execPath, `${root}src/main.ts`];
+      const launcher = [
+        "/bin/sh",
+        "-c",
+        'env > "$GONE.env" && mkdir -p "$GONE" && cd "$GONE" && exec "$@"',
+        "sh",
+        ...host,
+      ];
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const was = Bun.env.LD_PRELOAD;
+          Bun.env.LD_PRELOAD = "./libcef.so:./libvk_swiftshader.so";
+          return was;
+        }),
+        (was) =>
           Effect.sync(() => {
-            const was = Bun.env.LD_PRELOAD;
-            Bun.env.LD_PRELOAD = "./libcef.so:./libvk_swiftshader.so";
-            return was;
+            if (was === undefined) delete Bun.env.LD_PRELOAD;
+            else Bun.env.LD_PRELOAD = was;
           }),
-          (was) =>
-            Effect.sync(() => {
-              if (was === undefined) delete Bun.env.LD_PRELOAD;
-              else Bun.env.LD_PRELOAD = was;
-            }),
-        );
-        const who = yield* Effect.scoped(
-          connect(state, { hostEnv: { GONE: gone } }).pipe(
-            Effect.flatMap((client) => client.identity()),
-          ),
-        ).pipe(Effect.provide(starts(launcher)), Effect.orDie);
-        yield* fs.remove(gone, { recursive: true });
-        const after = yield* Effect.scoped(
-          connect(state).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.provide(starts(launcher)), Effect.orDie);
-        expect(after.pid).toBe(who.pid);
-        const given = yield* fs.readFileString(`${gone}.env`);
-        expect(given).toContain(`GONE=${gone}`);
-        expect(given).not.toContain("LD_PRELOAD");
-        if (process.platform === "linux") {
-          expect(yield* fs.readLink(`/proc/${who.pid}/cwd`)).toBe(yield* fs.realPath(state));
-        }
-        yield* stopHost(state);
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+      );
+      const who = yield* Effect.scoped(
+        connect(state, { hostEnv: { GONE: gone } }).pipe(
+          Effect.flatMap((client) => client.identity()),
+        ),
+      ).pipe(Effect.provide(starts(launcher)), Effect.orDie);
+      yield* fs.remove(gone, { recursive: true });
+      const after = yield* Effect.scoped(
+        connect(state).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.provide(starts(launcher)), Effect.orDie);
+      expect(after.pid).toBe(who.pid);
+      const given = yield* fs.readFileString(`${gone}.env`);
+      expect(given).toContain(`GONE=${gone}`);
+      expect(given).not.toContain("LD_PRELOAD");
+      if (process.platform === "linux") {
+        expect(yield* fs.readLink(`/proc/${who.pid}/cwd`)).toBe(yield* fs.realPath(state));
+      }
+      yield* stopHost(state);
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a host given its state directory relatively owns it where it was named",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const { state } = yield* workspace("collie-host-relative-");
-        const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-        const [executable = "bun", ...prefix] = Option.isSome(binary)
-          ? [binary.value]
-          : [process.execPath, `${root}src/main.ts`];
-        const host = yield* spawner.spawn(
-          ChildProcess.make(executable, [...prefix, "host", "--dir", "state"], {
-            cwd: `${state}/..`,
-            env: { COLLIE_ROOT: root, COLLIE_TEST_ROOT: (yield* suiteEnv).COLLIE_TEST_ROOT },
-            extendEnv: true,
-            stdout: "ignore",
-            stderr: "ignore",
-          }),
-        );
-        const owner = yield* until(
-          () => ownerOf(state),
-          (owner) => owner !== null,
-        );
-        expect(owner?.pid).toBe(host.pid);
-        yield* stopHost(state);
-      }),
-    ),
-  120_000,
-);
+test("a host given its state directory relatively owns it where it was named", () =>
+  proves(
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const { state } = yield* workspace("collie-host-relative-");
+      const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+      const [executable = "bun", ...prefix] = Option.isSome(binary)
+        ? [binary.value]
+        : [process.execPath, `${root}src/main.ts`];
+      const host = yield* spawner.spawn(
+        ChildProcess.make(executable, [...prefix, "host", "--dir", "state"], {
+          cwd: `${state}/..`,
+          env: { COLLIE_ROOT: root, COLLIE_TEST_ROOT: (yield* suiteEnv).COLLIE_TEST_ROOT },
+          extendEnv: true,
+          stdout: "ignore",
+          stderr: "ignore",
+        }),
+      );
+      const owner = yield* until(
+        () => ownerOf(state),
+        (owner) => owner !== null,
+      );
+      expect(owner?.pid).toBe(host.pid);
+      yield* stopHost(state);
+    }),
+  ));
 
-test(
-  "a client that hangs up leaves its work, its registrations and the client watching it",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { wf, project, state } = yield* workspace("collie-host-disconnect-");
-        const watching = yield* connect(state).pipe(Effect.orDie);
+test("a client that hangs up leaves its work, its registrations and the client watching it", () =>
+  proves(
+    Effect.gen(function* () {
+      const { wf, project, state } = yield* workspace("collie-host-disconnect-");
+      const watching = yield* connect(state).pipe(Effect.orDie);
 
-        const started = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(state);
-            const loaded = yield* client.load({ entry: `${wf}/proof.workflow.ts` });
-            expect(loaded.registration).toBe("proof@1");
-            return yield* client.start({
-              project,
-              id: "proof",
-              request: "req-1",
-              input: { note: "kept" },
-            });
-          }),
-        ).pipe(Effect.orDie);
-        expect(started.registration).toBe("proof@1");
-        const runId = started.runId;
+      const started = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(state);
+          const loaded = yield* client.load({ entry: `${wf}/proof.workflow.ts` });
+          expect(loaded.registration).toBe("proof@1");
+          return yield* client.start({
+            project,
+            id: "proof",
+            request: "req-1",
+            input: { note: "kept" },
+          });
+        }),
+      ).pipe(Effect.orDie);
+      expect(started.registration).toBe("proof@1");
+      const runId = started.runId;
 
-        const held = yield* watching.registrations().pipe(Effect.orDie);
-        expect(held.live).toEqual(["proof@1"]);
-        yield* until(
-          () => watching.status({ runId }),
-          (status) => status.status === "suspended",
-        );
-        yield* watching
-          .answer({ runId, decision: "decision", value: "yes", request: "answer-yes" })
-          .pipe(Effect.orDie);
-        const done = yield* until(
-          () => watching.status({ runId }),
-          (status) => status.status === "complete",
-        );
-        expect(done).toEqual({ status: "complete", value: "note:kept=yes" });
-        yield* stopHost(state);
-      }),
-    ),
-  120_000,
-);
+      const held = yield* watching.registrations().pipe(Effect.orDie);
+      expect(held.live).toEqual(["proof@1"]);
+      yield* until(
+        () => watching.status({ runId }),
+        (status) => status.status === "suspended",
+      );
+      yield* watching
+        .answer({ runId, decision: "decision", value: "yes", request: "answer-yes" })
+        .pipe(Effect.orDie);
+      const done = yield* until(
+        () => watching.status({ runId }),
+        (status) => status.status === "complete",
+      );
+      expect(done).toEqual({ status: "complete", value: "note:kept=yes" });
+      yield* stopHost(state);
+    }),
+  ));
 
-test(
-  "one request sent by four clients at once is one run, and changing it is refused",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { project, state } = yield* workspace("collie-host-request-");
-        const client = yield* connect(state).pipe(Effect.orDie);
+test("one request sent by four clients at once is one run, and changing it is refused", () =>
+  proves(
+    Effect.gen(function* () {
+      const { project, state } = yield* workspace("collie-host-request-");
+      const client = yield* connect(state).pipe(Effect.orDie);
 
-        const admitted = yield* Effect.all(
-          Arr.map([1, 2, 3, 4], () =>
-            client.start({ project, id: "proof", request: "req-1", input: { note: "once" } }),
-          ),
-          { concurrency: "unbounded" },
-        ).pipe(Effect.orDie);
-        expect(new Set(Arr.map(admitted, (one) => one.runId)).size).toBe(1);
-        expect(Arr.filter(admitted, (one) => one.fresh)).toHaveLength(1);
+      const admitted = yield* Effect.all(
+        Arr.map([1, 2, 3, 4], () =>
+          client.start({ project, id: "proof", request: "req-1", input: { note: "once" } }),
+        ),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.orDie);
+      expect(new Set(Arr.map(admitted, (one) => one.runId)).size).toBe(1);
+      expect(Arr.filter(admitted, (one) => one.fresh)).toHaveLength(1);
 
-        const other = yield* client
-          .start({ project, id: "proof", request: "req-2", input: { note: "once" } })
-          .pipe(Effect.orDie);
-        expect(other.runId).not.toBe(admitted[0]?.runId);
-        expect(other.fresh).toBe(true);
+      const other = yield* client
+        .start({ project, id: "proof", request: "req-2", input: { note: "once" } })
+        .pipe(Effect.orDie);
+      expect(other.runId).not.toBe(admitted[0]?.runId);
+      expect(other.fresh).toBe(true);
 
-        const refused = yield* client
-          .start({ project, id: "proof", request: "req-1", input: { note: "changed" } })
-          .pipe(Effect.flip, Effect.orDie);
-        if (refused._tag !== "RequestConflict") {
-          throw new Error(`started, or refused with ${refused._tag}`);
-        }
-        expect(refused.request).toBe("req-1");
-        yield* stopHost(state);
-      }),
-    ),
-  120_000,
-);
+      const refused = yield* client
+        .start({ project, id: "proof", request: "req-1", input: { note: "changed" } })
+        .pipe(Effect.flip, Effect.orDie);
+      if (refused._tag !== "RequestConflict") {
+        throw new Error(`started, or refused with ${refused._tag}`);
+      }
+      expect(refused.request).toBe("req-1");
+      yield* stopHost(state);
+    }),
+  ));
 
-test(
-  "a decision pending when the host goes is still pending for the host that replaces it",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { wf, project, state } = yield* workspace("collie-host-restart-");
-        const first = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(state);
-            yield* client.load({ entry: `${wf}/proof.workflow.ts` });
-            const started = yield* client.start({
-              project,
-              id: "proof",
-              request: "req-1",
-              input: { note: "durable" },
-            });
-            yield* until(
-              () => client.status({ runId: started.runId }),
-              (status) => status.status === "suspended",
-            );
-            return { ...(yield* client.identity()), runId: started.runId };
-          }),
-        ).pipe(Effect.orDie);
+test("a decision pending when the host goes is still pending for the host that replaces it", () =>
+  proves(
+    Effect.gen(function* () {
+      const { wf, project, state } = yield* workspace("collie-host-restart-");
+      const first = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(state);
+          yield* client.load({ entry: `${wf}/proof.workflow.ts` });
+          const started = yield* client.start({
+            project,
+            id: "proof",
+            request: "req-1",
+            input: { note: "durable" },
+          });
+          yield* until(
+            () => client.status({ runId: started.runId }),
+            (status) => status.status === "suspended",
+          );
+          return { ...(yield* client.identity()), runId: started.runId };
+        }),
+      ).pipe(Effect.orDie);
 
-        yield* stopHost(state);
-        const fs = yield* FileSystem.FileSystem;
-        expect(yield* fs.exists(`${state}/host.sock`)).toBe(false);
+      yield* stopHost(state);
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.exists(`${state}/host.sock`)).toBe(false);
 
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(state);
-            const second = yield* client.identity();
-            expect(second.pid).not.toBe(first.pid);
-            expect((yield* client.registrations()).live).toEqual(["proof@1"]);
-            expect((yield* client.status({ runId: first.runId })).status).toBe("suspended");
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(state);
+          const second = yield* client.identity();
+          expect(second.pid).not.toBe(first.pid);
+          expect((yield* client.registrations()).live).toEqual(["proof@1"]);
+          expect((yield* client.status({ runId: first.runId })).status).toBe("suspended");
 
-            yield* client.answer({
-              runId: first.runId,
-              decision: "decision",
-              value: "still here",
-              request: "answer-still-here",
-            });
-            const done = yield* until(
-              () => client.status({ runId: first.runId }),
-              (status) => status.status === "complete",
-            );
-            expect(done).toEqual({ status: "complete", value: "note:durable=still here" });
-          }),
-        ).pipe(Effect.orDie);
-        yield* stopHost(state);
-      }),
-    ),
-  180_000,
-);
+          yield* client.answer({
+            runId: first.runId,
+            decision: "decision",
+            value: "still here",
+            request: "answer-still-here",
+          });
+          const done = yield* until(
+            () => client.status({ runId: first.runId }),
+            (status) => status.status === "complete",
+          );
+          expect(done).toEqual({ status: "complete", value: "note:durable=still here" });
+        }),
+      ).pipe(Effect.orDie);
+      yield* stopHost(state);
+    }),
+  ));
 
-test(
-  "a restart with no host starts one, and one with a host replaces it while a parked and a pending Run carry on",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { wf, project, state } = yield* workspace("collie-host-restart-cmd-");
-        const fresh = yield* restartHost(state).pipe(Effect.orDie);
-        expect(fresh.before).toBeNull();
-        expect((yield* ownerOf(state))?.pid).toBe(fresh.after.pid);
+test("a restart with no host starts one, and one with a host replaces it while a parked and a pending Run carry on", () =>
+  proves(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { wf, project, state } = yield* workspace("collie-host-restart-cmd-");
+      const fresh = yield* restartHost(state).pipe(Effect.orDie);
+      expect(fresh.before).toBeNull();
+      expect((yield* ownerOf(state))?.pid).toBe(fresh.after.pid);
 
-        const marker = `${state}/started`;
-        const runs = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(state);
-            yield* client.load({ entry: `${wf}/proof.workflow.ts` });
-            const parked = yield* client.start({
-              project,
-              id: "proof",
-              request: "req-parked",
-              input: { note: "parked" },
-            });
-            const pending = yield* client.start({
-              project,
-              id: "stubborn",
-              request: "req-pending",
-              input: { marker },
-            });
-            yield* until(
-              () => client.status({ runId: parked.runId }),
-              (status) => status.status === "suspended",
-            );
-            return { parked: parked.runId, pending: pending.runId };
-          }),
-        ).pipe(Effect.orDie);
-        yield* until(() => fs.exists(marker), Boolean);
-        yield* fs.remove(marker);
+      const marker = `${state}/started`;
+      const runs = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(state);
+          yield* client.load({ entry: `${wf}/proof.workflow.ts` });
+          const parked = yield* client.start({
+            project,
+            id: "proof",
+            request: "req-parked",
+            input: { note: "parked" },
+          });
+          const pending = yield* client.start({
+            project,
+            id: "stubborn",
+            request: "req-pending",
+            input: { marker },
+          });
+          yield* until(
+            () => client.status({ runId: parked.runId }),
+            (status) => status.status === "suspended",
+          );
+          return { parked: parked.runId, pending: pending.runId };
+        }),
+      ).pipe(Effect.orDie);
+      yield* until(() => fs.exists(marker), Boolean);
+      yield* fs.remove(marker);
 
-        const restarted = yield* restartHost(state).pipe(Effect.orDie);
-        expect(restarted.before).toEqual(fresh.after);
-        expect(restarted.after.pid).not.toBe(fresh.after.pid);
-        expect(yield* signalProcess(fresh.after.pid)).toBe(false);
+      const restarted = yield* restartHost(state).pipe(Effect.orDie);
+      expect(restarted.before).toEqual(fresh.after);
+      expect(restarted.after.pid).not.toBe(fresh.after.pid);
+      expect(yield* signalProcess(fresh.after.pid)).toBe(false);
 
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(state);
-            expect((yield* client.identity()).pid).toBe(restarted.after.pid);
-            yield* until(() => fs.exists(marker), Boolean);
-            expect((yield* client.status({ runId: runs.pending })).status).toBe("pending");
-            expect((yield* client.status({ runId: runs.parked })).status).toBe("suspended");
-            yield* client.answer({
-              runId: runs.parked,
-              decision: "decision",
-              value: "after",
-              request: "answer-after",
-            });
-            const done = yield* until(
-              () => client.status({ runId: runs.parked }),
-              (status) => status.status === "complete",
-            );
-            expect(done).toEqual({ status: "complete", value: "note:parked=after" });
-          }),
-        ).pipe(Effect.orDie);
-        yield* stopHost(state);
-      }),
-    ),
-  180_000,
-);
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(state);
+          expect((yield* client.identity()).pid).toBe(restarted.after.pid);
+          yield* until(() => fs.exists(marker), Boolean);
+          expect((yield* client.status({ runId: runs.pending })).status).toBe("pending");
+          expect((yield* client.status({ runId: runs.parked })).status).toBe("suspended");
+          yield* client.answer({
+            runId: runs.parked,
+            decision: "decision",
+            value: "after",
+            request: "answer-after",
+          });
+          const done = yield* until(
+            () => client.status({ runId: runs.parked }),
+            (status) => status.status === "complete",
+          );
+          expect(done).toEqual({ status: "complete", value: "note:parked=after" });
+        }),
+      ).pipe(Effect.orDie);
+      yield* stopHost(state);
+    }),
+  ));
 
-test(
-  "a Run stopped inside a Step enters no other after a restart, and goes on once resumed",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { wf, project, state } = yield* workspace("collie-host-restart-stopped-");
-        yield* fs.copyFile(`${fixtures}/two-steps.workflow.ts`, `${wf}/two-steps.workflow.ts`);
-        const dir = `${state}-steps`;
-        yield* fs.makeDirectory(dir);
-        const runId = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(state);
-            const started = yield* client.start({
-              project,
-              id: "two-steps",
-              request: "req-1",
-              input: { dir },
-            });
-            yield* until(() => fs.exists(`${dir}/one`), Boolean);
-            yield* client.control({
-              runId: started.runId,
-              control: "stop",
-              set: true,
-              request: "stop-1",
-            });
-            return started.runId;
-          }),
-        ).pipe(Effect.orDie);
+test("a Run stopped inside a Step enters no other after a restart, and goes on once resumed", () =>
+  proves(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { wf, project, state } = yield* workspace("collie-host-restart-stopped-");
+      yield* fs.copyFile(`${fixtures}/two-steps.workflow.ts`, `${wf}/two-steps.workflow.ts`);
+      const dir = `${state}-steps`;
+      yield* fs.makeDirectory(dir);
+      const runId = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(state);
+          const started = yield* client.start({
+            project,
+            id: "two-steps",
+            request: "req-1",
+            input: { dir },
+          });
+          yield* until(() => fs.exists(`${dir}/one`), Boolean);
+          yield* client.control({
+            runId: started.runId,
+            control: "stop",
+            set: true,
+            request: "stop-1",
+          });
+          return started.runId;
+        }),
+      ).pipe(Effect.orDie);
 
-        yield* restartHost(state).pipe(Effect.orDie);
-        yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
-        yield* fs.writeFileString(`${dir}/open`, "");
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(state);
-            const parked = yield* until(
-              () => client.status({ runId }),
-              (status) => status.status !== "pending",
-            );
-            expect(parked.status).toBe("suspended");
-            expect(yield* fs.exists(`${dir}/two`)).toBe(false);
+      yield* restartHost(state).pipe(Effect.orDie);
+      yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
+      yield* fs.writeFileString(`${dir}/open`, "");
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(state);
+          const parked = yield* until(
+            () => client.status({ runId }),
+            (status) => status.status !== "pending",
+          );
+          expect(parked.status).toBe("suspended");
+          expect(yield* fs.exists(`${dir}/two`)).toBe(false);
 
-            yield* client.resume({ runId, request: "resume-1" });
-            yield* until(
-              () => client.status({ runId }),
-              (status) => status.status === "complete",
-            );
-            expect(yield* fs.exists(`${dir}/two`)).toBe(true);
-          }),
-        ).pipe(Effect.orDie);
-      }),
-    ),
-  180_000,
-);
+          yield* client.resume({ runId, request: "resume-1" });
+          yield* until(
+            () => client.status({ runId }),
+            (status) => status.status === "complete",
+          );
+          expect(yield* fs.exists(`${dir}/two`)).toBe(true);
+        }),
+      ).pipe(Effect.orDie);
+    }),
+  ));
 
-test(
-  "collie host restart replaces the host and says what it did",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const starting = yield* collie;
-        const rig = yield* Effect.acquireRelease(Rig.make(), (rig) => Effect.orDie(rig.close()));
-        const env = rig.pluginEnv();
-        const old = yield* Effect.scoped(
-          connect(env.stateDir).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.provide(starting), Effect.orDie);
+test("collie host restart replaces the host and says what it did", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const starting = yield* collie;
+      const rig = yield* Effect.acquireRelease(Rig.make(), (rig) => Effect.orDie(rig.close()));
+      const env = rig.pluginEnv();
+      const old = yield* Effect.scoped(
+        connect(env.stateDir).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.provide(starting), Effect.orDie);
 
-        const restarted = yield* restartHostAt(env.stateDir).pipe(Effect.provide(starting));
-        const owner = yield* ownerOf(env.stateDir);
-        expect(owner?.pid).not.toBe(old.pid);
-        expect(restarted.ok && restarted.human).toContain(`pid ${old.pid}`);
-        expect(
-          Arr.filter(yield* rig.calls(), (call) => pipe_(call.cmd, Str.startsWith("notification"))),
-        ).toEqual([]);
-        yield* stopHost(env.stateDir);
-      }).pipe(Effect.scoped, Effect.orDie),
-    ),
-  120_000,
-);
+      const restarted = yield* restartHostAt(env.stateDir).pipe(Effect.provide(starting));
+      const owner = yield* ownerOf(env.stateDir);
+      expect(owner?.pid).not.toBe(old.pid);
+      expect(restarted.ok && restarted.human).toContain(`pid ${old.pid}`);
+      expect(
+        Arr.filter(yield* rig.calls(), (call) => pipe_(call.cmd, Str.startsWith("notification"))),
+      ).toEqual([]);
+      yield* stopHost(env.stateDir);
+    }).pipe(Effect.scoped, Effect.orDie),
+  ));
 
-test(
-  "what a spawned host writes to its stderr is kept in the state directory",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { state } = yield* workspace("collie-host-output-");
-        const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-        const host = Option.isSome(binary)
-          ? [binary.value]
-          : [process.execPath, `${root}src/main.ts`];
-        const noisy = ["/bin/sh", "-c", 'echo "said on stderr" >&2; exec "$@"', "sh", ...host];
-        yield* Effect.scoped(
-          connect(state).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.provide(starts(noisy)), Effect.orDie);
-        const kept = yield* fs.readFileString(outputOf(state));
-        expect(kept).toContain("said on stderr");
-        expect(kept).toContain("host started");
-        yield* stopHost(state);
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+test("what a spawned host writes to its stderr is kept in the state directory", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { state } = yield* workspace("collie-host-output-");
+      const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+      const host = Option.isSome(binary)
+        ? [binary.value]
+        : [process.execPath, `${root}src/main.ts`];
+      const noisy = ["/bin/sh", "-c", 'echo "said on stderr" >&2; exec "$@"', "sh", ...host];
+      yield* Effect.scoped(connect(state).pipe(Effect.flatMap((client) => client.identity()))).pipe(
+        Effect.provide(starts(noisy)),
+        Effect.orDie,
+      );
+      const kept = yield* fs.readFileString(outputOf(state));
+      expect(kept).toContain("said on stderr");
+      expect(kept).toContain("host started");
+      yield* stopHost(state);
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a host told to stop while a step will not end is gone within seconds, and lets go",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { project, state } = yield* workspace("collie-host-stubborn-");
-        const marker = `${state}/started`;
-        const who = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(state);
-            yield* client.start({ project, id: "stubborn", request: "req-1", input: { marker } });
-            return yield* client.identity();
-          }),
-        ).pipe(Effect.orDie);
-        yield* until(() => fs.exists(marker), Boolean);
+test("a host told to stop while a step will not end is gone within seconds, and lets go", () =>
+  proves(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { project, state } = yield* workspace("collie-host-stubborn-");
+      const marker = `${state}/started`;
+      const who = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(state);
+          yield* client.start({ project, id: "stubborn", request: "req-1", input: { marker } });
+          return yield* client.identity();
+        }),
+      ).pipe(Effect.orDie);
+      yield* until(() => fs.exists(marker), Boolean);
 
-        yield* signalProcess(who.pid, "SIGTERM");
-        yield* until(
-          () => signalProcess(who.pid),
-          (alive) => !alive,
-        );
-        expect(yield* ownerOf(state)).toBeNull();
-        const log = yield* fs.readFileString(`${state}/host.log`);
-        expect(log).toContain("host started");
-        expect(log).toContain("still stopping after");
-      }),
-    ),
-  120_000,
-);
+      yield* signalProcess(who.pid, "SIGTERM");
+      yield* until(
+        () => signalProcess(who.pid),
+        (alive) => !alive,
+      );
+      expect(yield* ownerOf(state)).toBeNull();
+      const log = yield* fs.readFileString(`${state}/host.log`);
+      expect(log).toContain("host started");
+      expect(log).toContain("still stopping after");
+    }),
+  ));
 
 const outlivesAStubbornStep = (
   watch: string,
@@ -598,24 +551,20 @@ const outlivesAStubbornStep = (
     return { took, log, bound: Duration.sum(grace, Duration.seconds(5)) };
   });
 
-test(
-  "a host whose state directory is taken away while a step will not end is gone within its grace",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { took, log, bound } = yield* outlivesAStubbornStep("", (state) =>
-          Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
-            yield* fs.rename(state, `${state}.gone`);
-            yield* fs.makeDirectory(state);
-          }).pipe(Effect.orDie),
-        );
-        expect(Duration.isLessThanOrEqualTo(took, bound)).toBe(true);
-        expect(log).toContain("its lock is gone; stopping");
-      }),
-    ),
-  120_000,
-);
+test("a host whose state directory is taken away while a step will not end is gone within its grace", () =>
+  proves(
+    Effect.gen(function* () {
+      const { took, log, bound } = yield* outlivesAStubbornStep("", (state) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.rename(state, `${state}.gone`);
+          yield* fs.makeDirectory(state);
+        }).pipe(Effect.orDie),
+      );
+      expect(Duration.isLessThanOrEqualTo(took, bound)).toBe(true);
+      expect(log).toContain("its lock is gone; stopping");
+    }),
+  ));
 
 const watchable = Effect.gen(function* () {
   const pid = yield* startDetached(["sleep", "60"]);
@@ -641,7 +590,6 @@ test.skipIf(process.platform !== "linux")(
         expect(log).toContain("the process it watches has exited; stopping");
       }),
     ),
-  120_000,
 );
 
 const heldCheck = `${root}test/fixtures/checks/held.sh`;
@@ -753,7 +701,6 @@ test.skipIf(process.platform !== "linux")(
         );
       }),
     ),
-  120_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -788,7 +735,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* releasedOnce(state, runId, notes)).toHaveLength(1);
       }),
     ),
-  120_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -862,7 +808,6 @@ test.skipIf(process.platform !== "linux")(
         );
       }),
     ),
-  120_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -890,7 +835,6 @@ test.skipIf(process.platform !== "linux")(
         expect(watched.running).toEqual([false, false]);
       }),
     ),
-  120_000,
 );
 
 const notedIn = (notes: string, file: string) =>
@@ -954,7 +898,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* notedIn(notes, "starts")).toHaveLength(2);
       }),
     ),
-  120_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -988,7 +931,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* releasedOnce(state, runId, notes)).toHaveLength(1);
       }),
     ),
-  120_000,
 );
 
 const OLDER = "0.0.1";
@@ -1110,13 +1052,11 @@ test.skipIf(process.platform !== "linux")(
         Effect.orDie,
       ),
     ),
-  120_000,
 );
 
 test.skipIf(process.platform !== "linux")(
   "a restart onto a newer build hands over the check, which is recorded once with what it produced",
   () => takesOverTheCheck((state) => restartHost(state).pipe(Effect.orDie)),
-  120_000,
 );
 
 const termWaits = (status: string) =>
@@ -1164,13 +1104,11 @@ test.skipIf(process.platform !== "linux")(
         Effect.orDie,
       ),
     ),
-  120_000,
 );
 
 test.skipIf(process.platform !== "linux")(
   "a restart onto a newer build hands over the check of a host too slow to answer",
   () => takesOverFromASlowHost((state) => restartHost(state).pipe(Effect.orDie)),
-  120_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -1229,7 +1167,6 @@ test.skipIf(process.platform !== "linux")(
         expect(Arr.filter(recorded, (one) => one.name === "handed")).toHaveLength(1);
       }),
     ),
-  120_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -1259,7 +1196,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* stillRunning(check)).toBe(false);
       }),
     ),
-  120_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -1374,146 +1310,121 @@ test.skipIf(process.platform !== "linux")(
         ]);
       }),
     ),
-  120_000,
 );
 
-test(
-  "a lock left by a dead host is recovered without touching the process that has its pid",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { state } = yield* workspace("collie-host-stale-");
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const bystander = yield* spawner.spawn(
-          ChildProcess.make("sleep", ["30"], { stdout: "ignore", stderr: "ignore" }),
-        );
-        yield* fs.writeFileString(`${state}/host.lock`, `{"pid":${bystander.pid},"start":"0"}\n`);
-        yield* fs.writeFileString(`${state}/host.sock`, "");
+test("a lock left by a dead host is recovered without touching the process that has its pid", () =>
+  proves(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { state } = yield* workspace("collie-host-stale-");
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const bystander = yield* spawner.spawn(
+        ChildProcess.make("sleep", ["30"], { stdout: "ignore", stderr: "ignore" }),
+      );
+      yield* fs.writeFileString(`${state}/host.lock`, `{"pid":${bystander.pid},"start":"0"}\n`);
+      yield* fs.writeFileString(`${state}/host.sock`, "");
 
-        const who = yield* Effect.scoped(
-          connect(state).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.orDie);
-        expect(who.pid).not.toBe(bystander.pid);
-        expect((yield* ownerOf(state))?.pid).toBe(who.pid);
-        expect(yield* signalProcess(bystander.pid)).toBe(true);
-        yield* stopHost(state);
-      }),
-    ),
-  120_000,
-);
+      const who = yield* Effect.scoped(
+        connect(state).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.orDie);
+      expect(who.pid).not.toBe(bystander.pid);
+      expect((yield* ownerOf(state))?.pid).toBe(who.pid);
+      expect(yield* signalProcess(bystander.pid)).toBe(true);
+      yield* stopHost(state);
+    }),
+  ));
 
-test(
-  "a host of another build is reported with what to do, and nothing is taken from it",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { state } = yield* workspace("collie-host-build-");
-        const who = yield* Effect.scoped(
-          connect(state).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.orDie);
+test("a host of another build is reported with what to do, and nothing is taken from it", () =>
+  proves(
+    Effect.gen(function* () {
+      const { state } = yield* workspace("collie-host-build-");
+      const who = yield* Effect.scoped(
+        connect(state).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.orDie);
 
-        const refused = yield* Effect.scoped(connect(state, { build: "0.0.0-elsewhere" })).pipe(
-          Effect.flip,
-        );
-        if (refused._tag !== "HostVersionMismatch") {
-          throw new Error(`connected, or refused with ${refused._tag}`);
-        }
-        expect(refused).toMatchObject({
-          host: who.build,
-          client: "0.0.0-elsewhere",
-          pid: who.pid,
-        });
-        expect(refused.restart).toContain("run `collie host restart`");
-        expect((yield* ownerOf(state))?.pid).toBe(who.pid);
+      const refused = yield* Effect.scoped(connect(state, { build: "0.0.0-elsewhere" })).pipe(
+        Effect.flip,
+      );
+      if (refused._tag !== "HostVersionMismatch") {
+        throw new Error(`connected, or refused with ${refused._tag}`);
+      }
+      expect(refused).toMatchObject({
+        host: who.build,
+        client: "0.0.0-elsewhere",
+        pid: who.pid,
+      });
+      expect(refused.restart).toContain("run `collie host restart`");
+      expect((yield* ownerOf(state))?.pid).toBe(who.pid);
 
-        const again = yield* Effect.scoped(
-          connect(state).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.orDie);
-        expect(again.pid).toBe(who.pid);
-        yield* stopHost(state);
-      }),
-    ),
-  120_000,
-);
+      const again = yield* Effect.scoped(
+        connect(state).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.orDie);
+      expect(again.pid).toBe(who.pid);
+      yield* stopHost(state);
+    }),
+  ));
 
-test(
-  "a client newer than the host stops it and starts a host of its own",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { state } = yield* workspace("collie-host-newer-");
-        const old = yield* Effect.scoped(
-          connect(state).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.orDie);
+test("a client newer than the host stops it and starts a host of its own", () =>
+  proves(
+    Effect.gen(function* () {
+      const { state } = yield* workspace("collie-host-newer-");
+      const old = yield* Effect.scoped(
+        connect(state).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.orDie);
 
-        const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
-          Effect.flip,
-        );
-        expect(refused._tag).toBe("HostVersionMismatch");
-        const now = yield* ownerOf(state);
-        expect(now?.pid).not.toBe(old.pid);
-        expect(yield* signalProcess(old.pid)).toBe(false);
-        yield* stopHost(state);
-      }),
-    ),
-  120_000,
-);
+      const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(Effect.flip);
+      expect(refused._tag).toBe("HostVersionMismatch");
+      const now = yield* ownerOf(state);
+      expect(now?.pid).not.toBe(old.pid);
+      expect(yield* signalProcess(old.pid)).toBe(false);
+      yield* stopHost(state);
+    }),
+  ));
 
-test(
-  "a newer client of the release placed inside a clone install replaces that clone's host",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { state } = yield* workspace("collie-host-clone-");
-        const old = yield* Effect.scoped(
-          connect(state).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.orDie);
+test("a newer client of the release placed inside a clone install replaces that clone's host", () =>
+  proves(
+    Effect.gen(function* () {
+      const { state } = yield* workspace("collie-host-clone-");
+      const old = yield* Effect.scoped(
+        connect(state).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.orDie);
 
-        yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
-          Effect.flip,
-          Effect.provide(
-            ConfigProvider.layer(
-              ConfigProvider.fromUnknown({ COLLIE_ROOT: `${old.root}/release` }),
-            ),
-          ),
-        );
-        expect(yield* signalProcess(old.pid)).toBe(false);
-        yield* stopHost(state).pipe(Effect.ignore);
-      }),
-    ),
-  120_000,
-);
+      yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
+        Effect.flip,
+        Effect.provide(
+          ConfigProvider.layer(ConfigProvider.fromUnknown({ COLLIE_ROOT: `${old.root}/release` })),
+        ),
+      );
+      expect(yield* signalProcess(old.pid)).toBe(false);
+      yield* stopHost(state).pipe(Effect.ignore);
+    }),
+  ));
 
-test(
-  "a newer client replaces a host that does not stop when asked, within seconds",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { project, state } = yield* workspace("collie-host-wedged-");
-        const marker = `${state}/started`;
-        const old = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(state, { hostEnv: { COLLIE_HOST_STOP_GRACE: "1 hour" } });
-            yield* client.start({ project, id: "stubborn", request: "req-1", input: { marker } });
-            return yield* client.identity();
-          }),
-        ).pipe(Effect.orDie);
-        yield* until(() => fs.exists(marker), Boolean);
+test("a newer client replaces a host that does not stop when asked, within seconds", () =>
+  proves(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { project, state } = yield* workspace("collie-host-wedged-");
+      const marker = `${state}/started`;
+      const old = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(state, { hostEnv: { COLLIE_HOST_STOP_GRACE: "1 hour" } });
+          yield* client.start({ project, id: "stubborn", request: "req-1", input: { marker } });
+          return yield* client.identity();
+        }),
+      ).pipe(Effect.orDie);
+      yield* until(() => fs.exists(marker), Boolean);
 
-        const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
-          (effect) => fastForward(effect, 5),
-          Effect.flip,
-        );
-        expect(refused._tag).toBe("HostVersionMismatch");
-        expect(yield* signalProcess(old.pid)).toBe(false);
-        expect((yield* ownerOf(state))?.pid).not.toBe(old.pid);
-        yield* stopHost(state);
-      }),
-    ),
-  120_000,
-);
+      const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
+        (effect) => fastForward(effect, 5),
+        Effect.flip,
+      );
+      expect(refused._tag).toBe("HostVersionMismatch");
+      expect(yield* signalProcess(old.pid)).toBe(false);
+      expect((yield* ownerOf(state))?.pid).not.toBe(old.pid);
+      yield* stopHost(state);
+    }),
+  ));
 
 const pauseHost = (state: string, pid: number) =>
   Effect.gen(function* () {
@@ -1533,168 +1444,148 @@ const pauseHost = (state: string, pid: number) =>
     expect((yield* ownerOf(state))?.pid).toBe(pid);
   });
 
-test(
-  "a host that takes the connection and never answers is reported rather than waited on",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { state } = yield* workspace("collie-host-silent-");
-        const fs = yield* FileSystem.FileSystem;
-        const who = yield* Effect.scoped(
-          connect(state).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.orDie);
-        yield* pauseHost(state, who.pid);
-        const outcome = yield* Effect.scoped(
-          connect(state).pipe(
-            Effect.flatMap((client) => client.identity().pipe(Effect.timeoutOption("1 second"))),
-          ),
-        ).pipe(fastForward, Effect.result);
-        if (outcome._tag === "Success")
-          throw new Error(
-            `stopped host unexpectedly accepted a client: ${Bun.inspect({
-              stopped: who,
-              answer: outcome.success,
-              owner: yield* ownerOf(state),
-              process: yield* exec(["ps", "-o", "stat=", "-p", String(who.pid)]),
-              log: yield* fs.readFileString(outputOf(state)).pipe(Effect.orElseSucceed(() => "")),
-            })}`,
-          );
-        const refused = outcome.failure;
-        if (refused._tag !== "HostUnavailable") {
-          throw new Error(`connected, or refused with ${refused._tag}`);
-        }
-        expect(refused.reason).toContain(`pid ${who.pid} owns the directory and is not answering`);
-        yield* signalProcess(who.pid, "SIGCONT");
-        yield* stopHost(state);
-      }),
-    ),
-  120_000,
-);
-
-test(
-  "a newer client replaces an older host that does not answer, by the build it recorded",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { state } = yield* workspace("collie-host-silent-older-");
-        const old = yield* Effect.scoped(
-          connect(state).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.orDie);
-        yield* pauseHost(state, old.pid);
-
-        const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
-          (effect) => fastForward(effect, 5),
-          Effect.flip,
+test("a host that takes the connection and never answers is reported rather than waited on", () =>
+  proves(
+    Effect.gen(function* () {
+      const { state } = yield* workspace("collie-host-silent-");
+      const fs = yield* FileSystem.FileSystem;
+      const who = yield* Effect.scoped(
+        connect(state).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.orDie);
+      yield* pauseHost(state, who.pid);
+      const outcome = yield* Effect.scoped(
+        connect(state).pipe(
+          Effect.flatMap((client) => client.identity().pipe(Effect.timeoutOption("1 second"))),
+        ),
+      ).pipe(fastForward, Effect.result);
+      if (outcome._tag === "Success")
+        throw new Error(
+          `stopped host unexpectedly accepted a client: ${Bun.inspect({
+            stopped: who,
+            answer: outcome.success,
+            owner: yield* ownerOf(state),
+            process: yield* exec(["ps", "-o", "stat=", "-p", String(who.pid)]),
+            log: yield* fs.readFileString(outputOf(state)).pipe(Effect.orElseSucceed(() => "")),
+          })}`,
         );
-        expect(refused._tag).toBe("HostVersionMismatch");
-        expect(yield* signalProcess(old.pid)).toBe(false);
-        expect((yield* ownerOf(state))?.pid).not.toBe(old.pid);
-        yield* stopHost(state);
-      }),
-    ),
-  120_000,
-);
+      const refused = outcome.failure;
+      if (refused._tag !== "HostUnavailable") {
+        throw new Error(`connected, or refused with ${refused._tag}`);
+      }
+      expect(refused.reason).toContain(`pid ${who.pid} owns the directory and is not answering`);
+      yield* signalProcess(who.pid, "SIGCONT");
+      yield* stopHost(state);
+    }),
+  ));
 
-test(
-  "a newer client from another installation leaves the host running and says why",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { state } = yield* workspace("collie-host-elsewhere-");
-        const who = yield* Effect.scoped(
-          connect(state).pipe(Effect.flatMap((client) => client.identity())),
-        ).pipe(Effect.orDie);
+test("a newer client replaces an older host that does not answer, by the build it recorded", () =>
+  proves(
+    Effect.gen(function* () {
+      const { state } = yield* workspace("collie-host-silent-older-");
+      const old = yield* Effect.scoped(
+        connect(state).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.orDie);
+      yield* pauseHost(state, old.pid);
 
-        const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
-          Effect.flip,
-          Effect.provide(
-            ConfigProvider.layer(ConfigProvider.fromUnknown({ COLLIE_ROOT: "/elsewhere" })),
-          ),
+      const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
+        (effect) => fastForward(effect, 5),
+        Effect.flip,
+      );
+      expect(refused._tag).toBe("HostVersionMismatch");
+      expect(yield* signalProcess(old.pid)).toBe(false);
+      expect((yield* ownerOf(state))?.pid).not.toBe(old.pid);
+      yield* stopHost(state);
+    }),
+  ));
+
+test("a newer client from another installation leaves the host running and says why", () =>
+  proves(
+    Effect.gen(function* () {
+      const { state } = yield* workspace("collie-host-elsewhere-");
+      const who = yield* Effect.scoped(
+        connect(state).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.orDie);
+
+      const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
+        Effect.flip,
+        Effect.provide(
+          ConfigProvider.layer(ConfigProvider.fromUnknown({ COLLIE_ROOT: "/elsewhere" })),
+        ),
+      );
+      if (refused._tag !== "HostVersionMismatch") {
+        throw new Error(`connected, or refused with ${refused._tag}`);
+      }
+      expect(refused.restart).toContain("COLLIE_STATE_DIR");
+      expect((yield* ownerOf(state))?.pid).toBe(who.pid);
+      yield* stopHost(state);
+    }),
+  ));
+
+test("a host that will not start is said out loud rather than waited on forever", () =>
+  proves(
+    Effect.gen(function* () {
+      const { state } = yield* workspace("collie-host-unavailable-");
+      const refused = yield* Effect.scoped(connect(state)).pipe(Effect.flip);
+      if (refused._tag !== "HostUnavailable") {
+        throw new Error(`connected, or refused with ${refused._tag}`);
+      }
+      expect(refused.reason).toContain("nothing owns the directory");
+      expect(yield* ownerOf(state)).toBeNull();
+    }),
+    starts(["/bin/false"]),
+  ));
+
+test("a host stops once its directory is gone, or the process it was to outlive no longer is", () =>
+  proves(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+      const command = Option.isSome(binary)
+        ? [binary.value]
+        : [process.execPath, `${root}src/main.ts`];
+      const [executable = "bun", ...prefix] = command;
+      const detached = yield* exec(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"]);
+      const outlived = Number(Str.trim(detached.stdout));
+      const suite = yield* suiteEnv;
+      yield* Effect.addFinalizer(() => signalProcess(outlived, "SIGKILL"));
+      const hostFor = (state: string, watch: string) =>
+        spawner.spawn(
+          ChildProcess.make(executable, [...prefix, "host", "--dir", state], {
+            env: {
+              HOME: state,
+              PATH: "/usr/bin:/bin",
+              COLLIE_ROOT: root,
+              COLLIE_HOST_WATCH_PID: watch,
+              COLLIE_TEST_ROOT: suite.COLLIE_TEST_ROOT,
+            },
+            extendEnv: false,
+            stdout: "ignore",
+            stderr: "ignore",
+          }),
         );
-        if (refused._tag !== "HostVersionMismatch") {
-          throw new Error(`connected, or refused with ${refused._tag}`);
-        }
-        expect(refused.restart).toContain("COLLIE_STATE_DIR");
-        expect((yield* ownerOf(state))?.pid).toBe(who.pid);
-        yield* stopHost(state);
-      }),
-    ),
-  120_000,
-);
+      const owned = (state: string) =>
+        until(
+          () => ownerOf(state),
+          (owner) => owner !== null,
+        );
+      const gone = <A, E>(host: { readonly exitCode: Effect.Effect<A, E> }) =>
+        host.exitCode.pipe(Effect.timeout("20 seconds"), Effect.orDie);
 
-test(
-  "a host that will not start is said out loud rather than waited on forever",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const { state } = yield* workspace("collie-host-unavailable-");
-        const refused = yield* Effect.scoped(connect(state)).pipe(Effect.flip);
-        if (refused._tag !== "HostUnavailable") {
-          throw new Error(`connected, or refused with ${refused._tag}`);
-        }
-        expect(refused.reason).toContain("nothing owns the directory");
-        expect(yield* ownerOf(state)).toBeNull();
-      }),
-      starts(["/bin/false"]),
-    ),
-  120_000,
-);
+      const watching = (yield* workspace("collie-host-watched-")).state;
+      const watcher = yield* hostFor(watching, String(outlived));
+      yield* owned(watching);
+      yield* signalProcess(outlived, "SIGKILL");
+      yield* gone(watcher);
+      expect(yield* ownerOf(watching)).toBeNull();
 
-test(
-  "a host stops once its directory is gone, or the process it was to outlive no longer is",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-        const command = Option.isSome(binary)
-          ? [binary.value]
-          : [process.execPath, `${root}src/main.ts`];
-        const [executable = "bun", ...prefix] = command;
-        const detached = yield* exec(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"]);
-        const outlived = Number(Str.trim(detached.stdout));
-        const suite = yield* suiteEnv;
-        yield* Effect.addFinalizer(() => signalProcess(outlived, "SIGKILL"));
-        const hostFor = (state: string, watch: string) =>
-          spawner.spawn(
-            ChildProcess.make(executable, [...prefix, "host", "--dir", state], {
-              env: {
-                HOME: state,
-                PATH: "/usr/bin:/bin",
-                COLLIE_ROOT: root,
-                COLLIE_HOST_WATCH_PID: watch,
-                COLLIE_TEST_ROOT: suite.COLLIE_TEST_ROOT,
-              },
-              extendEnv: false,
-              stdout: "ignore",
-              stderr: "ignore",
-            }),
-          );
-        const owned = (state: string) =>
-          until(
-            () => ownerOf(state),
-            (owner) => owner !== null,
-          );
-        const gone = <A, E>(host: { readonly exitCode: Effect.Effect<A, E> }) =>
-          host.exitCode.pipe(Effect.timeout("20 seconds"), Effect.orDie);
-
-        const watching = (yield* workspace("collie-host-watched-")).state;
-        const watcher = yield* hostFor(watching, String(outlived));
-        yield* owned(watching);
-        yield* signalProcess(outlived, "SIGKILL");
-        yield* gone(watcher);
-        expect(yield* ownerOf(watching)).toBeNull();
-
-        const removed = (yield* workspace("collie-host-removed-")).state;
-        const orphan = yield* hostFor(removed, "");
-        yield* owned(removed);
-        yield* fs.rename(removed, `${removed}.gone`);
-        yield* gone(orphan);
-      }),
-    ),
-  120_000,
-);
+      const removed = (yield* workspace("collie-host-removed-")).state;
+      const orphan = yield* hostFor(removed, "");
+      yield* owned(removed);
+      yield* fs.rename(removed, `${removed}.gone`);
+      yield* gone(orphan);
+    }),
+  ));
 
 const hostFor = (pluginRoot: string) =>
   Effect.map(Config.option(Config.String("COLLIE_TEST_BINARY")), (binary) =>
@@ -1719,36 +1610,32 @@ const identityAt = (pluginRoot: string) =>
     return { ...who, board: Option.getOrUndefined(snapshot) };
   });
 
-test(
-  "a host on a development checkout names its build, and one on a release does not",
-  () =>
-    proves(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const checkout = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-checkout-" });
-        const git = (...args: string[]) =>
-          exec(["git", "-C", checkout, ...args], {
-            env: {
-              PATH: "/usr/bin:/bin",
-              GIT_AUTHOR_NAME: "t",
-              GIT_AUTHOR_EMAIL: "t@example.com",
-              GIT_COMMITTER_NAME: "t",
-              GIT_COMMITTER_EMAIL: "t@example.com",
-            },
-          }).pipe(Effect.map((done) => Str.trim(done.stdout)));
-        yield* git("init", "--quiet", "-b", "feature");
-        yield* git("commit", "--quiet", "--allow-empty", "-m", "work");
-        const sha = yield* git("rev-parse", "--short", "HEAD");
-        const release = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-release-" });
+test("a host on a development checkout names its build, and one on a release does not", () =>
+  proves(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const checkout = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-checkout-" });
+      const git = (...args: string[]) =>
+        exec(["git", "-C", checkout, ...args], {
+          env: {
+            PATH: "/usr/bin:/bin",
+            GIT_AUTHOR_NAME: "t",
+            GIT_AUTHOR_EMAIL: "t@example.com",
+            GIT_COMMITTER_NAME: "t",
+            GIT_COMMITTER_EMAIL: "t@example.com",
+          },
+        }).pipe(Effect.map((done) => Str.trim(done.stdout)));
+      yield* git("init", "--quiet", "-b", "feature");
+      yield* git("commit", "--quiet", "--allow-empty", "-m", "work");
+      const sha = yield* git("rev-parse", "--short", "HEAD");
+      const release = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-release-" });
 
-        const development = yield* identityAt(checkout);
-        const released = yield* identityAt(release);
+      const development = yield* identityAt(checkout);
+      const released = yield* identityAt(release);
 
-        expect(development.development).toBe(`${development.build}+${sha}`);
-        expect(released.development).toBeUndefined();
-        expect(development.board).toMatchObject({ development: development.development });
-        expect(released.board && "development" in released.board).toBe(false);
-      }),
-    ),
-  120_000,
-);
+      expect(development.development).toBe(`${development.build}+${sha}`);
+      expect(released.development).toBeUndefined();
+      expect(development.board).toMatchObject({ development: development.development });
+      expect(released.board && "development" in released.board).toBe(false);
+    }),
+  ));

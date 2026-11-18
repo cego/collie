@@ -1867,46 +1867,40 @@ test("a status context's state counts as a check run's conclusion does", () => {
   });
 });
 
-test(
-  "each fake answers the same on PATH, logs what it got, and keeps what was posted",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const bin = yield* FakeBin.make(
-          yield* fs.makeTempDirectoryScoped({ prefix: "forge-bin-" }),
-        );
-        try {
-          for (const name of ["gitlab", "github"] as const) {
-            const onPath = yield* forgeOnPath(bin, name, model(name));
-            expect(
-              yield* FORGES[name]
-                .details(ref(name), "/", shell)
-                .pipe(Effect.provide(forgeHttpOnPath)),
-            ).toMatchObject({
-              _tag: "Details",
-              head: HEAD,
-            });
-            expect(
-              (yield* FORGES[name]
-                .post(ref(name), "LGTM", "/", shell)
-                .pipe(Effect.provide(forgeHttpOnPath))).ok,
-            ).toBe(true);
-            expect(Rec.values((yield* onPath.model()).notes ?? {})).toEqual([["LGTM"]]);
-            expect((yield* onPath.calls()).length).toBeGreaterThan(0);
-            yield* forgeOnPath(bin, name, model(name, { installed: false }));
-            expect(yield* exec([CLI[name], "--version"])).toMatchObject({
-              exitCode: 127,
-              stdout: "",
-            });
-          }
-        } finally {
-          yield* bin.restore();
+test("each fake answers the same on PATH, logs what it got, and keeps what was posted", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const bin = yield* FakeBin.make(yield* fs.makeTempDirectoryScoped({ prefix: "forge-bin-" }));
+      try {
+        for (const name of ["gitlab", "github"] as const) {
+          const onPath = yield* forgeOnPath(bin, name, model(name));
+          expect(
+            yield* FORGES[name]
+              .details(ref(name), "/", shell)
+              .pipe(Effect.provide(forgeHttpOnPath)),
+          ).toMatchObject({
+            _tag: "Details",
+            head: HEAD,
+          });
+          expect(
+            (yield* FORGES[name]
+              .post(ref(name), "LGTM", "/", shell)
+              .pipe(Effect.provide(forgeHttpOnPath))).ok,
+          ).toBe(true);
+          expect(Rec.values((yield* onPath.model()).notes ?? {})).toEqual([["LGTM"]]);
+          expect((yield* onPath.calls()).length).toBeGreaterThan(0);
+          yield* forgeOnPath(bin, name, model(name, { installed: false }));
+          expect(yield* exec([CLI[name], "--version"])).toMatchObject({
+            exitCode: 127,
+            stdout: "",
+          });
         }
-      }),
-    ),
-  30_000,
-);
+      } finally {
+        yield* bin.restore();
+      }
+    }),
+  ));
 
 test("a fake forge's model stays readable while its replacement is being written", () =>
   runEffect(

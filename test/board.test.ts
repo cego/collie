@@ -86,195 +86,191 @@ import { readCards } from "../src/cards";
 import { toolNamed } from "../src/tools";
 import { fixtures } from "./support/host";
 
-test(
-  "a finished Run shows pushed branch movement without rewriting its failed record",
-  () =>
-    proves(
-      "collie-board-moved-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const clean = {
-            verdict: "clean",
-            summary: "The requested work is complete.",
-            scope_met: true,
-            findings: [],
-            dropped: [],
-            fixed: [],
-          };
-          const outputs = `${world.home}/outputs.json`;
-          yield* fs.writeFileString(
-            outputs,
-            yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([clean]),
-          );
-          yield* fs.writeFileString(
-            `${world.user}/historical-builder.workflow.ts`,
-            `export { default } from "${fixtures}/reviewed-parent.workflow.ts";\n`,
-          );
-          const origin = `${world.home}/origin.git`;
-          yield* exec(["git", "init", "--bare", "-q", origin], { cwd: world.project });
-          for (const args of [
-            ["init", "-q"],
-            ["config", "user.name", "test"],
-            ["config", "user.email", "test@example.com"],
-            ["remote", "add", "origin", origin],
-            ["remote", "add", "upstream", "https://gitlab.example.com/group/project.git"],
-            ["commit", "--allow-empty", "-qm", "base"],
-            ["push", "-qu", "origin", "HEAD"],
-            ["remote", "set-head", "origin", "-a"],
-          ])
-            yield* exec(["git", ...args], { cwd: world.project });
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const started = yield* client
-            .start({
-              project: world.project,
-              id: "recovery",
-              request: "failed",
-              taskLabel: "recover work",
-              input: { goal: "recover work" },
-              options: { branch: "feature" },
-              verify: [{ name: "unit", executable: "true", argv: [], cwd: "worktree" }],
-            })
-            .pipe(Effect.orDie);
-          const finished = yield* until(
-            () => client.run({ runId: started.runId }).pipe(Effect.orDie),
-            (view) => view?.status.status === "failed",
-          );
-          expect(finished?.branch).not.toBeNull();
-          const cards = yield* until(
-            () => hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`)),
-            (cards) => Arr.some(cards, (card) => card.kind === "final"),
-          );
-          const ended = cards.at(-1)!.revision.head_sha;
-          const cwd = finished!.cwd;
-          yield* exec(["git", "commit", "--allow-empty", "-qm", "finish after the Run"], { cwd });
-          yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd });
-          const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
-          yield* stopHost(world.state);
-          yield* connect(world.state).pipe(Effect.orDie);
-          const board = yield* collie(world, ["board"]);
-          const data = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({
-              tasks: Schema.Array(
-                Schema.Struct({ state: Schema.String, drift: Schema.NullOr(Schema.String) }),
-              ),
-            }),
-          )(board.envelope.data).pipe(Effect.orDie);
-          expect(data.tasks[0]?.state).toBe("failed");
-          expect(data.tasks[0]?.drift).toContain(`1 commit past ${ended}`);
-          expect(data.tasks[0]?.drift).toContain(head);
-          expect(data.tasks[0]?.drift).toContain("failed record is stale");
-          const shown = yield* collie(world, ["run", "show", started.runId]);
-          expect(
-            (yield* Schema.decodeUnknownEffect(Schema.Struct({ branchProgress: Schema.String }))(
-              shown.envelope.data,
-            ).pipe(Effect.orDie)).branchProgress,
-          ).toContain(head);
-          expect(
-            (yield* (yield* connect(world.state).pipe(Effect.orDie))
-              .run({ runId: started.runId })
-              .pipe(Effect.orDie))?.status.status,
-          ).toBe("failed");
-          expect(
-            (yield* hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`))).at(
-              -1,
-            )?.revision.head_sha,
-          ).toBe(ended);
-          const env = readEnv({
-            COLLIE_ROOT: world.install,
-            COLLIE_STATE_DIR: world.state,
-            COLLIE_USER_DIR: world.config,
-            HOME: world.home,
-            COLLIE_CWD: world.project,
-          });
-          const answer = yield* toolNamed("collie_run")!.call(env, { run: started.runId });
-          expect(answer).toContain(head);
-          expect(answer).toContain("failed record is stale");
-          let current = yield* connect(world.state).pipe(Effect.orDie);
-          expect(
-            (yield* current.offers({ runId: started.runId }).pipe(Effect.orDie))[0]?.title,
-          ).toContain("Review");
-          const reviewed = yield* current
-            .start({
-              project: world.project,
-              id: "historical-builder",
-              request: "review-advanced",
-              parent: started.runId,
-              task: finished!.task!,
-              input: { plan: "recover work" },
-              options: { workspace: cwd },
-            })
-            .pipe(Effect.orDie);
-          yield* until(
-            () => current.run({ runId: reviewed.runId }).pipe(Effect.orDie),
-            (view) => view?.status.status === "failed",
-          );
-          yield* stopHost(world.state);
-          current = yield* connect(world.state).pipe(Effect.orDie);
-          const offered = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
-          expect(offered[0]?.title).toContain("Checks");
-          const child = yield* current
-            .followUp({
-              runId: started.runId,
-              text: "recover work",
-              request: "recover-reviewed-head",
-            })
-            .pipe(Effect.orDie);
-          const checked = yield* until(
-            () => current.run({ runId: child.runId }).pipe(Effect.orDie),
-            (view) => view?.status.status === "complete" || view?.status.status === "failed",
-          );
-          expect(checked?.status).toMatchObject({
-            status: "complete",
-            value: "Checked existing head",
-          });
-          expect(checked?.branch).toBe(finished?.branch);
-          expect(checked?.cwd).toBe(cwd);
-          expect(yield* current.launches({ run: child.runId }).pipe(Effect.orDie)).toHaveLength(0);
-          const records = yield* hostRecords(
-            world.state,
-            readVerifications(`${world.state}/evidence/${child.runId}`),
-          );
-          expect(records[0]?.end.head_sha).toBe(head);
-          expect(
-            (yield* current.run({ runId: started.runId }).pipe(Effect.orDie))?.status.status,
-          ).toBe("failed");
-          expect(
-            (yield* hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`))).at(
-              -1,
-            )?.revision.head_sha,
-          ).toBe(ended);
-          const listed = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
-          expect(listed[0]?.title).toContain("Checks");
-          yield* exec(["git", "commit", "--allow-empty", "-qm", "work after the offer"], { cwd });
-          yield* exec(["git", "push", "-q", "origin", "HEAD"], { cwd });
-          const stale = yield* current
-            .invoke({
-              runId: started.runId,
-              offer: "recover",
-              input: {},
-              request: "recheck-stale-offer",
-            })
-            .pipe(Effect.orDie);
-          const refused = yield* until(
-            () => current.run({ runId: stale.runId }).pipe(Effect.orDie),
-            (view) => view?.status.status === "failed" || view?.status.status === "complete",
-          );
-          expect(refused?.status).toMatchObject({
-            status: "failed",
-            reason: "A review is required",
-          });
-          expect(
-            yield* hostRecords(
-              world.state,
-              readVerifications(`${world.state}/evidence/${stale.runId}`),
+test("a finished Run shows pushed branch movement without rewriting its failed record", () =>
+  proves(
+    "collie-board-moved-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const clean = {
+          verdict: "clean",
+          summary: "The requested work is complete.",
+          scope_met: true,
+          findings: [],
+          dropped: [],
+          fixed: [],
+        };
+        const outputs = `${world.home}/outputs.json`;
+        yield* fs.writeFileString(
+          outputs,
+          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([clean]),
+        );
+        yield* fs.writeFileString(
+          `${world.user}/historical-builder.workflow.ts`,
+          `export { default } from "${fixtures}/reviewed-parent.workflow.ts";\n`,
+        );
+        const origin = `${world.home}/origin.git`;
+        yield* exec(["git", "init", "--bare", "-q", origin], { cwd: world.project });
+        for (const args of [
+          ["init", "-q"],
+          ["config", "user.name", "test"],
+          ["config", "user.email", "test@example.com"],
+          ["remote", "add", "origin", origin],
+          ["remote", "add", "upstream", "https://gitlab.example.com/group/project.git"],
+          ["commit", "--allow-empty", "-qm", "base"],
+          ["push", "-qu", "origin", "HEAD"],
+          ["remote", "set-head", "origin", "-a"],
+        ])
+          yield* exec(["git", ...args], { cwd: world.project });
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const started = yield* client
+          .start({
+            project: world.project,
+            id: "recovery",
+            request: "failed",
+            taskLabel: "recover work",
+            input: { goal: "recover work" },
+            options: { branch: "feature" },
+            verify: [{ name: "unit", executable: "true", argv: [], cwd: "worktree" }],
+          })
+          .pipe(Effect.orDie);
+        const finished = yield* until(
+          () => client.run({ runId: started.runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "failed",
+        );
+        expect(finished?.branch).not.toBeNull();
+        const cards = yield* until(
+          () => hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`)),
+          (cards) => Arr.some(cards, (card) => card.kind === "final"),
+        );
+        const ended = cards.at(-1)!.revision.head_sha;
+        const cwd = finished!.cwd;
+        yield* exec(["git", "commit", "--allow-empty", "-qm", "finish after the Run"], { cwd });
+        yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd });
+        const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
+        yield* stopHost(world.state);
+        yield* connect(world.state).pipe(Effect.orDie);
+        const board = yield* collie(world, ["board"]);
+        const data = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            tasks: Schema.Array(
+              Schema.Struct({ state: Schema.String, drift: Schema.NullOr(Schema.String) }),
             ),
-          ).toHaveLength(0);
-        }),
-      ["recovery.workflow.ts"],
-    ),
-  120_000,
-);
+          }),
+        )(board.envelope.data).pipe(Effect.orDie);
+        expect(data.tasks[0]?.state).toBe("failed");
+        expect(data.tasks[0]?.drift).toContain(`1 commit past ${ended}`);
+        expect(data.tasks[0]?.drift).toContain(head);
+        expect(data.tasks[0]?.drift).toContain("failed record is stale");
+        const shown = yield* collie(world, ["run", "show", started.runId]);
+        expect(
+          (yield* Schema.decodeUnknownEffect(Schema.Struct({ branchProgress: Schema.String }))(
+            shown.envelope.data,
+          ).pipe(Effect.orDie)).branchProgress,
+        ).toContain(head);
+        expect(
+          (yield* (yield* connect(world.state).pipe(Effect.orDie))
+            .run({ runId: started.runId })
+            .pipe(Effect.orDie))?.status.status,
+        ).toBe("failed");
+        expect(
+          (yield* hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`))).at(
+            -1,
+          )?.revision.head_sha,
+        ).toBe(ended);
+        const env = readEnv({
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
+          COLLIE_USER_DIR: world.config,
+          HOME: world.home,
+          COLLIE_CWD: world.project,
+        });
+        const answer = yield* toolNamed("collie_run")!.call(env, { run: started.runId });
+        expect(answer).toContain(head);
+        expect(answer).toContain("failed record is stale");
+        let current = yield* connect(world.state).pipe(Effect.orDie);
+        expect(
+          (yield* current.offers({ runId: started.runId }).pipe(Effect.orDie))[0]?.title,
+        ).toContain("Review");
+        const reviewed = yield* current
+          .start({
+            project: world.project,
+            id: "historical-builder",
+            request: "review-advanced",
+            parent: started.runId,
+            task: finished!.task!,
+            input: { plan: "recover work" },
+            options: { workspace: cwd },
+          })
+          .pipe(Effect.orDie);
+        yield* until(
+          () => current.run({ runId: reviewed.runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "failed",
+        );
+        yield* stopHost(world.state);
+        current = yield* connect(world.state).pipe(Effect.orDie);
+        const offered = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
+        expect(offered[0]?.title).toContain("Checks");
+        const child = yield* current
+          .followUp({
+            runId: started.runId,
+            text: "recover work",
+            request: "recover-reviewed-head",
+          })
+          .pipe(Effect.orDie);
+        const checked = yield* until(
+          () => current.run({ runId: child.runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "complete" || view?.status.status === "failed",
+        );
+        expect(checked?.status).toMatchObject({
+          status: "complete",
+          value: "Checked existing head",
+        });
+        expect(checked?.branch).toBe(finished?.branch);
+        expect(checked?.cwd).toBe(cwd);
+        expect(yield* current.launches({ run: child.runId }).pipe(Effect.orDie)).toHaveLength(0);
+        const records = yield* hostRecords(
+          world.state,
+          readVerifications(`${world.state}/evidence/${child.runId}`),
+        );
+        expect(records[0]?.end.head_sha).toBe(head);
+        expect(
+          (yield* current.run({ runId: started.runId }).pipe(Effect.orDie))?.status.status,
+        ).toBe("failed");
+        expect(
+          (yield* hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`))).at(
+            -1,
+          )?.revision.head_sha,
+        ).toBe(ended);
+        const listed = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
+        expect(listed[0]?.title).toContain("Checks");
+        yield* exec(["git", "commit", "--allow-empty", "-qm", "work after the offer"], { cwd });
+        yield* exec(["git", "push", "-q", "origin", "HEAD"], { cwd });
+        const stale = yield* current
+          .invoke({
+            runId: started.runId,
+            offer: "recover",
+            input: {},
+            request: "recheck-stale-offer",
+          })
+          .pipe(Effect.orDie);
+        const refused = yield* until(
+          () => current.run({ runId: stale.runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "failed" || view?.status.status === "complete",
+        );
+        expect(refused?.status).toMatchObject({
+          status: "failed",
+          reason: "A review is required",
+        });
+        expect(
+          yield* hostRecords(
+            world.state,
+            readVerifications(`${world.state}/evidence/${stale.runId}`),
+          ),
+        ).toHaveLength(0);
+      }),
+    ["recovery.workflow.ts"],
+  ));
 
 function facts(over: Partial<Sentence> = {}) {
   const returned: Sentence = {
@@ -2833,27 +2829,23 @@ test("a Task named after a filesystem path reads as what the path points at", ()
     }),
   ));
 
-test(
-  "`collie --json board` prints the TaskView list, from the host's Runs",
-  () =>
-    proves(
-      "collie-board-cli-",
-      (world) =>
-        Effect.gen(function* () {
-          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
-          expect(started.envelope.ok).toBe(true);
-          const printed = yield* collie(world, ["board"]);
-          yield* stopHost(world.state);
-          expect(printed.envelope.ok).toBe(true);
-          const tasks = (yield* Schema.decodeUnknownEffect(
-            Schema.Struct({ tasks: Schema.Array(Schema.Struct({ name: Schema.String })) }),
-          )(printed.envelope.data).pipe(Effect.orDie)).tasks;
-          expect(Arr.map(tasks, (one) => one.name)).toEqual(["Hi"]);
-        }),
-      ["plain.workflow.ts"],
-    ),
-  60_000,
-);
+test("`collie --json board` prints the TaskView list, from the host's Runs", () =>
+  proves(
+    "collie-board-cli-",
+    (world) =>
+      Effect.gen(function* () {
+        const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
+        expect(started.envelope.ok).toBe(true);
+        const printed = yield* collie(world, ["board"]);
+        yield* stopHost(world.state);
+        expect(printed.envelope.ok).toBe(true);
+        const tasks = (yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ tasks: Schema.Array(Schema.Struct({ name: Schema.String })) }),
+        )(printed.envelope.data).pipe(Effect.orDie)).tasks;
+        expect(Arr.map(tasks, (one) => one.name)).toEqual(["Hi"]);
+      }),
+    ["plain.workflow.ts"],
+  ));
 
 const threeRepoPlan = Effect.fn("board.threeRepoPlan")(function* (runDir: string, root: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -4058,56 +4050,52 @@ test("a Verification recorded before passes were still reads, as a plain check",
     }),
   ));
 
-test(
-  "`collie --json run checks` lists the running pass and the finished ones",
-  () =>
-    proves(
-      "collie-run-checks-cli-",
-      (world) =>
-        Effect.gen(function* () {
-          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
-          const runId = (yield* Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(
-            started.envelope.data,
-          ).pipe(Effect.orDie)).runId;
-          const run = yield* madeRun(world.state, { id: runId });
-          yield* appendVerification(run.evidence, {
-            ...checked("lint", "abc"),
-            run: runId,
-            pass: "gate",
-          }).pipe(Effect.provide(recordsAt(world.state)));
-          yield* hostRunRecords(() => world.state).setControl(
-            VERIFYING,
-            runId,
-            encodeVerifying({
-              name: "test",
-              executable: "bun",
-              argv: ["test"],
-              pass: "fix",
-              round: 1,
-              revision: "abc",
-              base: null,
-              started: "2026-09-14T10:00:00Z",
-            }),
-          );
+test("`collie --json run checks` lists the running pass and the finished ones", () =>
+  proves(
+    "collie-run-checks-cli-",
+    (world) =>
+      Effect.gen(function* () {
+        const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
+        const runId = (yield* Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(
+          started.envelope.data,
+        ).pipe(Effect.orDie)).runId;
+        const run = yield* madeRun(world.state, { id: runId });
+        yield* appendVerification(run.evidence, {
+          ...checked("lint", "abc"),
+          run: runId,
+          pass: "gate",
+        }).pipe(Effect.provide(recordsAt(world.state)));
+        yield* hostRunRecords(() => world.state).setControl(
+          VERIFYING,
+          runId,
+          encodeVerifying({
+            name: "test",
+            executable: "bun",
+            argv: ["test"],
+            pass: "fix",
+            round: 1,
+            revision: "abc",
+            base: null,
+            started: "2026-09-14T10:00:00Z",
+          }),
+        );
 
-          const listed = yield* collie(world, ["run", "checks", runId]);
-          yield* stopHost(world.state);
-          expect(listed.envelope.ok).toBe(true);
-          expect(listed.envelope.data).toMatchObject({
-            run: runId,
-            running: { name: "test", pass: "fix", round: 1 },
-            done: [{ name: "lint", pass: "gate", result: "pass", revision: "abc" }],
-          });
-          expect(
-            (yield* Schema.decodeUnknownEffect(
-              Schema.Struct({ running: Schema.Struct({ sentence: Schema.String }) }),
-            )(listed.envelope.data).pipe(Effect.orDie)).running.sentence,
-          ).toStartWith("Running test after gate fix 1, ");
-        }),
-      ["plain.workflow.ts"],
-    ),
-  60_000,
-);
+        const listed = yield* collie(world, ["run", "checks", runId]);
+        yield* stopHost(world.state);
+        expect(listed.envelope.ok).toBe(true);
+        expect(listed.envelope.data).toMatchObject({
+          run: runId,
+          running: { name: "test", pass: "fix", round: 1 },
+          done: [{ name: "lint", pass: "gate", result: "pass", revision: "abc" }],
+        });
+        expect(
+          (yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ running: Schema.Struct({ sentence: Schema.String }) }),
+          )(listed.envelope.data).pipe(Effect.orDie)).running.sentence,
+        ).toStartWith("Running test after gate fix 1, ");
+      }),
+    ["plain.workflow.ts"],
+  ));
 
 const steerAt: (at: string, state?: Delivery["state"]) => Delivery = (at, state = "submitted") => ({
   id: `d-${at}`,
@@ -4219,77 +4207,73 @@ test("a steer sent before the Run finished does not reopen it", () =>
     }),
   ));
 
-test(
-  "`collie run checks --follow` prints a running check's output as it is written, and how it ended",
-  () =>
-    proves(
-      "collie-run-checks-follow-",
-      (world) =>
-        Effect.gen(function* () {
-          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
-          const runId = (yield* Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(
-            started.envelope.data,
-          ).pipe(Effect.orDie)).runId;
-          const fs = yield* FileSystem.FileSystem;
-          const run = yield* madeRun(world.state, { id: runId });
-          const log = `${run.evidence}/checks/unit.log`;
-          yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
-          yield* fs.writeFileString(log, "compiling\n");
-          const records = hostRunRecords(() => world.state);
-          yield* records.setControl(
-            VERIFYING,
-            runId,
-            encodeVerifying({
-              name: "unit",
-              executable: "bun",
-              argv: ["test"],
-              pass: "gate",
-              round: null,
-              revision: "abc",
-              base: null,
-              started: "2026-09-14T10:00:00Z",
-              log,
-            }),
-          );
-
-          let seen = "";
-          const following = yield* Effect.forkChild(
-            collie(world, ["run", "checks", runId, "--follow"], {}, (chunk) =>
-              Effect.sync(() => {
-                seen += chunk;
-              }),
-            ),
-          );
-          yield* until(
-            () => Effect.succeed(seen),
-            (out) => pipe(out, Str.includes("compiling\n")),
-          );
-          yield* fs.writeFileString(log, "1 pass\n", { flag: "a" });
-          yield* until(
-            () => Effect.succeed(seen),
-            (out) => pipe(out, Str.includes("1 pass\n")),
-          );
-          yield* appendVerification(run.evidence, {
-            ...checked("unit", "abc"),
-            run: runId,
+test("`collie run checks --follow` prints a running check's output as it is written, and how it ended", () =>
+  proves(
+    "collie-run-checks-follow-",
+    (world) =>
+      Effect.gen(function* () {
+        const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
+        const runId = (yield* Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(
+          started.envelope.data,
+        ).pipe(Effect.orDie)).runId;
+        const fs = yield* FileSystem.FileSystem;
+        const run = yield* madeRun(world.state, { id: runId });
+        const log = `${run.evidence}/checks/unit.log`;
+        yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
+        yield* fs.writeFileString(log, "compiling\n");
+        const records = hostRunRecords(() => world.state);
+        yield* records.setControl(
+          VERIFYING,
+          runId,
+          encodeVerifying({
+            name: "unit",
+            executable: "bun",
+            argv: ["test"],
+            pass: "gate",
+            round: null,
+            revision: "abc",
+            base: null,
+            started: "2026-09-14T10:00:00Z",
             log,
-          }).pipe(Effect.provide(recordsAt(world.state)));
-          yield* records.setControl(VERIFYING, runId, null);
-          const followed = yield* Fiber.join(following);
+          }),
+        );
 
-          const none = yield* collie(world, ["run", "checks", runId, "--follow"]);
-          yield* stopHost(world.state);
-          expect(followed.stderr).toContain("Running unit on the branch");
-          expect(
-            Option.getOrElse(pipe(followed.stderr, Str.indexOf("compiling")), () => -1),
-          ).toBeLessThan(Option.getOrElse(pipe(followed.stderr, Str.indexOf("1 pass")), () => -1));
-          expect(followed.envelope.data).toMatchObject({ ended: { name: "unit", result: "pass" } });
-          expect(none.envelope.data).toEqual({ run: runId, ended: null });
-        }),
-      ["plain.workflow.ts"],
-    ),
-  60_000,
-);
+        let seen = "";
+        const following = yield* Effect.forkChild(
+          collie(world, ["run", "checks", runId, "--follow"], {}, (chunk) =>
+            Effect.sync(() => {
+              seen += chunk;
+            }),
+          ),
+        );
+        yield* until(
+          () => Effect.succeed(seen),
+          (out) => pipe(out, Str.includes("compiling\n")),
+        );
+        yield* fs.writeFileString(log, "1 pass\n", { flag: "a" });
+        yield* until(
+          () => Effect.succeed(seen),
+          (out) => pipe(out, Str.includes("1 pass\n")),
+        );
+        yield* appendVerification(run.evidence, {
+          ...checked("unit", "abc"),
+          run: runId,
+          log,
+        }).pipe(Effect.provide(recordsAt(world.state)));
+        yield* records.setControl(VERIFYING, runId, null);
+        const followed = yield* Fiber.join(following);
+
+        const none = yield* collie(world, ["run", "checks", runId, "--follow"]);
+        yield* stopHost(world.state);
+        expect(followed.stderr).toContain("Running unit on the branch");
+        expect(
+          Option.getOrElse(pipe(followed.stderr, Str.indexOf("compiling")), () => -1),
+        ).toBeLessThan(Option.getOrElse(pipe(followed.stderr, Str.indexOf("1 pass")), () => -1));
+        expect(followed.envelope.data).toMatchObject({ ended: { name: "unit", result: "pass" } });
+        expect(none.envelope.data).toEqual({ run: runId, ended: null });
+      }),
+    ["plain.workflow.ts"],
+  ));
 
 test("work ready to release is never folded away, however long it has waited", () => {
   const now = epochMs("2026-09-16T12:00:00.000Z");

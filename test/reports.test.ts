@@ -483,58 +483,27 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
     ),
   );
 
-test(
-  "a Run started by an agent on another Machine reports back and closes",
-  () => story("delivered"),
-  180_000,
-);
-test(
-  "a report to a gone agent is recorded undelivered, still closes and is not sent again",
-  () => story("gone"),
-  180_000,
-);
-test("a report to an away Machine is bounded and recorded", () => story("away"), 180_000);
-test(
-  "a report to a Machine that comes back while the Run is closing is sent again once it closes",
-  () => story("away-close"),
-  180_000,
-);
-test(
-  "a host restarting after delivery records one report and closes",
-  () => story("restart"),
-  180_000,
-);
+test("a Run started by an agent on another Machine reports back and closes", () =>
+  story("delivered"));
+test("a report to a gone agent is recorded undelivered, still closes and is not sent again", () =>
+  story("gone"));
+test("a report to an away Machine is bounded and recorded", () => story("away"));
+test("a report to a Machine that comes back while the Run is closing is sent again once it closes", () =>
+  story("away-close"));
+test("a host restarting after delivery records one report and closes", () => story("restart"));
 
 for (const harness of ["codex", "pi", "opencode"])
-  test(
-    `a report reaches a ${harness} requester without immediate-delivery capability`,
-    () => story("delivered", harness),
-    180_000,
-  );
-test(
-  "a remote investigation cuts its checkout from upstream's fetched branch",
-  () => story("upstream"),
-  180_000,
-);
-test(
-  "a remote start refuses a stale local branch without replacing local work",
-  () => story("stale"),
-  180_000,
-);
-test(
-  "a finished sibling Run's live agent keeps the reported Run's workspace",
-  () => story("sibling"),
-  180_000,
-);
+  test(`a report reaches a ${harness} requester without immediate-delivery capability`, () =>
+    story("delivered", harness));
+test("a remote investigation cuts its checkout from upstream's fetched branch", () =>
+  story("upstream"));
+test("a remote start refuses a stale local branch without replacing local work", () =>
+  story("stale"));
+test("a finished sibling Run's live agent keeps the reported Run's workspace", () =>
+  story("sibling"));
 
-test(
-  "a failed remote Run reports its reason and closes without a launched agent",
-  () => story("failed"),
-  180_000,
-);
+test("a failed remote Run reports its reason and closes without a launched agent", () =>
+  story("failed"));
 
-test(
-  "a direct remote CLI start fetches in its named checkout instead of the caller directory",
-  () => story("cli-path"),
-  180_000,
-);
+test("a direct remote CLI start fetches in its named checkout instead of the caller directory", () =>
+  story("cli-path"));

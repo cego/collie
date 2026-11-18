@@ -156,5 +156,4 @@ test.each(["github", "gitlab"] as const)(
         }),
       ["plain.workflow.ts"],
     ),
-  60_000,
 );

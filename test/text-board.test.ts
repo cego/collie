@@ -92,73 +92,65 @@ const drawn = (written: ReadonlyArray<string>) =>
     (text) => pipe_(text, Str.includes(CLEAR)),
   );
 
-test(
-  "a board whose rebuild fails after a key hands the terminal back out of raw mode",
-  () =>
-    proves(
-      "collie-text-board-fails-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const stdin = yield* terminalStdin;
-          const written = yield* capturedStdout;
-          const reported = `${world.state}/${PRUNE_FILE}`;
-          let failing = false;
-          const failingFs: FileSystem.FileSystem = {
-            ...fs,
-            readFileString: (path, encoding) =>
-              failing && path === reported
-                ? Effect.die(new Error("the reported worktrees went away"))
-                : fs.readFileString(path, encoding),
-          };
+test("a board whose rebuild fails after a key hands the terminal back out of raw mode", () =>
+  proves(
+    "collie-text-board-fails-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const env = yield* currentEnv.pipe(Effect.orDie);
+        const stdin = yield* terminalStdin;
+        const written = yield* capturedStdout;
+        const reported = `${world.state}/${PRUNE_FILE}`;
+        let failing = false;
+        const failingFs: FileSystem.FileSystem = {
+          ...fs,
+          readFileString: (path, encoding) =>
+            failing && path === reported
+              ? Effect.die(new Error("the reported worktrees went away"))
+              : fs.readFileString(path, encoding),
+        };
 
-          const board = yield* Effect.forkChild(
-            workspaceFlow(new Herdr(env), env).pipe(
-              Effect.provideService(FileSystem.FileSystem, failingFs),
-              Effect.provide(recordsAt(env.stateDir)),
-            ),
-          );
-          yield* drawn(written);
-          failing = true;
-          stdin.send("l");
-          const exit = yield* Fiber.await(board).pipe(Effect.timeoutOption("10 seconds"));
+        const board = yield* Effect.forkChild(
+          workspaceFlow(new Herdr(env), env).pipe(
+            Effect.provideService(FileSystem.FileSystem, failingFs),
+            Effect.provide(recordsAt(env.stateDir)),
+          ),
+        );
+        yield* drawn(written);
+        failing = true;
+        stdin.send("l");
+        const exit = yield* Fiber.await(board).pipe(Effect.timeoutOption("10 seconds"));
 
-          expect(exit._tag === "Some" && Exit.isFailure(exit.value)).toBe(true);
-          expect(stdin.rawModes).toEqual([true, false]);
-        }),
-      [],
-    ),
-  60_000,
-);
+        expect(exit._tag === "Some" && Exit.isFailure(exit.value)).toBe(true);
+        expect(stdin.rawModes).toEqual([true, false]);
+      }),
+    [],
+  ));
 
-test(
-  "a key is acted on as it arrives, not on the board's next tick",
-  () =>
-    proves(
-      "collie-text-board-key-",
-      () =>
-        Effect.gen(function* () {
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const stdin = yield* terminalStdin;
-          const written = yield* capturedStdout;
-          yield* connect(env.stateDir).pipe(Effect.orDie);
-          const clock = yield* TestClock.make();
-          yield* clock.setTime(yield* Clock.currentTimeMillis);
+test("a key is acted on as it arrives, not on the board's next tick", () =>
+  proves(
+    "collie-text-board-key-",
+    () =>
+      Effect.gen(function* () {
+        const env = yield* currentEnv.pipe(Effect.orDie);
+        const stdin = yield* terminalStdin;
+        const written = yield* capturedStdout;
+        yield* connect(env.stateDir).pipe(Effect.orDie);
+        const clock = yield* TestClock.make();
+        yield* clock.setTime(yield* Clock.currentTimeMillis);
 
-          const board = yield* Effect.forkChild(
-            workspaceFlow(new Herdr(env), env).pipe(
-              Effect.provideService(Clock.Clock, clock),
-              Effect.provide(recordsAt(env.stateDir)),
-            ),
-          );
-          yield* drawn(written);
-          stdin.send("q");
-          const code = yield* Fiber.join(board).pipe(Effect.timeoutOption("5 seconds"));
+        const board = yield* Effect.forkChild(
+          workspaceFlow(new Herdr(env), env).pipe(
+            Effect.provideService(Clock.Clock, clock),
+            Effect.provide(recordsAt(env.stateDir)),
+          ),
+        );
+        yield* drawn(written);
+        stdin.send("q");
+        const code = yield* Fiber.join(board).pipe(Effect.timeoutOption("5 seconds"));
 
-          expect(Option.getOrNull(code)).toBe(0);
-        }),
-      [],
-    ),
-  60_000,
-);
+        expect(Option.getOrNull(code)).toBe(0);
+      }),
+    [],
+  ));

@@ -76,163 +76,149 @@ const reads = (forge: Forge, iid: string) =>
     new RegExp(`/merge_requests/${iid}(?:[/?]|$)`).test(decodeURIComponent(one.url)),
   ).length;
 
-test(
-  "a Run waits on its merge request with no agent, and resumes once on a new head after the quiet period, reading nothing more",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const forge = yield* gitlab;
-        yield* session(
-          forge,
-          Effect.gen(function* () {
-            const runId = yield* started("watches-mr", "w1", {
-              target: WATCHED,
-              head: H1,
-              cwd: rig.projectDir,
-            });
-            yield* started("targeted", "u1", { target: UNWATCHED });
+test("a Run waits on its merge request with no agent, and resumes once on a new head after the quiet period, reading nothing more", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const forge = yield* gitlab;
+      yield* session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* started("watches-mr", "w1", {
+            target: WATCHED,
+            head: H1,
+            cwd: rig.projectDir,
+          });
+          yield* started("targeted", "u1", { target: UNWATCHED });
+          yield* until(
+            () => watchOf(runId),
+            (row) => row !== null,
+          );
+          yield* watchingMerges;
+          yield* Effect.sleep("6 minutes");
+          expect((yield* status(runId))?.status.status).toBe("suspended");
+
+          yield* forge.set(PUSHED);
+          const seen = yield* until(
+            () => watchOf(runId),
+            (row) => row?.observed?.head === H2,
+          );
+          const done = yield* until(
+            () => status(runId),
+            (view) => view?.status.status === "complete",
+          );
+          const resumedAt = yield* Clock.currentTimeMillis;
+
+          expect(resumedAt - seen!.observed!.since).toBeGreaterThanOrEqual(QUIET_MS);
+          const value = done?.status.status === "complete" ? done.status.value : null;
+          expect(yield* decodeWoke(value)).toEqual({
+            _tag: "Changed",
+            change: {
+              head: H2,
+              previous: H1,
+              newHead: true,
+              comments: [],
+              pipeline: "passed",
+              forcePush: false,
+            },
+          });
+          expect(reads(forge, "7")).toBeGreaterThan(0);
+          expect(reads(forge, "7")).toBe(reads(forge, "8"));
+          expect(yield* agentStarts).toEqual([]);
+          expect(
             yield* until(
               () => watchOf(runId),
-              (row) => row !== null,
-            );
-            yield* watchingMerges;
-            yield* Effect.sleep("6 minutes");
-            expect((yield* status(runId))?.status.status).toBe("suspended");
+              (row) => row === null,
+            ),
+          ).toBeNull();
+        }),
+      );
+    }),
+  ));
 
-            yield* forge.set(PUSHED);
-            const seen = yield* until(
-              () => watchOf(runId),
-              (row) => row?.observed?.head === H2,
-            );
-            const done = yield* until(
-              () => status(runId),
-              (view) => view?.status.status === "complete",
-            );
-            const resumedAt = yield* Clock.currentTimeMillis;
+test("a host killed while a Run waits leaves it waiting, and the next host wakes it once, on time from what the first one saw", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const forge = yield* gitlab;
+      const { runId, since } = yield* session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* started("watches-mr", "w1", {
+            target: WATCHED,
+            head: H1,
+            cwd: rig.projectDir,
+          });
+          yield* until(
+            () => watchOf(runId),
+            (row) => row !== null,
+          );
+          yield* forge.set(PUSHED);
+          yield* watchingMerges;
+          const seen = yield* until(
+            () => watchOf(runId),
+            (row) => row?.observed?.head === H2,
+          );
+          return { runId, since: seen!.observed!.since };
+        }),
+      );
+      yield* Effect.sleep("3 minutes");
+      yield* session(
+        forge,
+        Effect.gen(function* () {
+          expect((yield* status(runId))?.status.status).toBe("suspended");
+          expect((yield* watchOf(runId))?.observed?.head).toBe(H2);
+          yield* watchingMerges;
+          const done = yield* until(
+            () => status(runId),
+            (view) => view?.status.status === "complete",
+          );
+          const resumedAt = yield* Clock.currentTimeMillis;
+          expect(resumedAt - since).toBeLessThan(QUIET_MS + 60_000);
+          const value = done?.status.status === "complete" ? done.status.value : null;
+          expect((yield* decodeWoke(value))._tag).toBe("Changed");
+          expect(yield* agentStarts).toEqual([]);
+        }),
+      );
+    }),
+  ));
 
-            expect(resumedAt - seen!.observed!.since).toBeGreaterThanOrEqual(QUIET_MS);
-            const value = done?.status.status === "complete" ? done.status.value : null;
-            expect(yield* decodeWoke(value)).toEqual({
-              _tag: "Changed",
-              change: {
-                head: H2,
-                previous: H1,
-                newHead: true,
-                comments: [],
-                pipeline: "passed",
-                forcePush: false,
-              },
-            });
-            expect(reads(forge, "7")).toBeGreaterThan(0);
-            expect(reads(forge, "7")).toBe(reads(forge, "8"));
-            expect(yield* agentStarts).toEqual([]);
-            expect(
-              yield* until(
-                () => watchOf(runId),
-                (row) => row === null,
-              ),
-            ).toBeNull();
-          }),
-        );
-      }),
-    ),
-  240_000,
-);
-
-test(
-  "a host killed while a Run waits leaves it waiting, and the next host wakes it once, on time from what the first one saw",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const forge = yield* gitlab;
-        const { runId, since } = yield* session(
-          forge,
-          Effect.gen(function* () {
-            const runId = yield* started("watches-mr", "w1", {
-              target: WATCHED,
-              head: H1,
-              cwd: rig.projectDir,
-            });
-            yield* until(
-              () => watchOf(runId),
-              (row) => row !== null,
-            );
-            yield* forge.set(PUSHED);
-            yield* watchingMerges;
-            const seen = yield* until(
-              () => watchOf(runId),
-              (row) => row?.observed?.head === H2,
-            );
-            return { runId, since: seen!.observed!.since };
-          }),
-        );
-        yield* Effect.sleep("3 minutes");
-        yield* session(
-          forge,
-          Effect.gen(function* () {
-            expect((yield* status(runId))?.status.status).toBe("suspended");
-            expect((yield* watchOf(runId))?.observed?.head).toBe(H2);
-            yield* watchingMerges;
-            const done = yield* until(
-              () => status(runId),
-              (view) => view?.status.status === "complete",
-            );
-            const resumedAt = yield* Clock.currentTimeMillis;
-            expect(resumedAt - since).toBeLessThan(QUIET_MS + 60_000);
-            const value = done?.status.status === "complete" ? done.status.value : null;
-            expect((yield* decodeWoke(value))._tag).toBe("Changed");
-            expect(yield* agentStarts).toEqual([]);
-          }),
-        );
-      }),
-    ),
-  240_000,
-);
-
-test(
-  "a Run waiting on its author for two days reads so on its card, is never overdue or Needs you, and its stop forgets the watch",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const forge = yield* gitlab;
-        const runId = yield* session(
-          forge,
-          Effect.gen(function* () {
-            const runId = yield* started("watches-mr", "w1", {
-              target: WATCHED,
-              head: H1,
-              cwd: rig.projectDir,
-            });
-            yield* until(
-              () => watchOf(runId),
-              (row) => row !== null,
-            );
-            return runId;
-          }),
-        );
-        yield* TestClock.adjust("48 hours");
-        yield* Effect.sleep("1 minute");
-        yield* session(
-          forge,
-          Effect.gen(function* () {
-            const { board } = yield* watchingMerges;
-            yield* Effect.sleep("6 minutes");
-            const { views } = yield* board;
-            const card = Arr.findFirst(views, (view) =>
-              Arr.some(view.runs, (one) => one === runId),
-            );
-            expect(Option.getOrThrow(card).sentence).toBe(
-              "Waiting for the author to change mk/collie!7.",
-            );
-            expect(sectionOf(Option.getOrThrow(card))).not.toBe("needs-you");
-            expect((yield* status(runId))?.status.status).toBe("suspended");
-            expect(Arr.filter(host.toasts, (title) => /needs you|opened/.test(title))).toEqual([]);
-            const registry = yield* Registry;
-            yield* registry.control({ runId, control: STOP, set: true });
-            expect(yield* watchOf(runId)).toBeNull();
-          }),
-        );
-      }),
-    ),
-  240_000,
-);
+test("a Run waiting on its author for two days reads so on its card, is never overdue or Needs you, and its stop forgets the watch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const forge = yield* gitlab;
+      const runId = yield* session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* started("watches-mr", "w1", {
+            target: WATCHED,
+            head: H1,
+            cwd: rig.projectDir,
+          });
+          yield* until(
+            () => watchOf(runId),
+            (row) => row !== null,
+          );
+          return runId;
+        }),
+      );
+      yield* TestClock.adjust("48 hours");
+      yield* Effect.sleep("1 minute");
+      yield* session(
+        forge,
+        Effect.gen(function* () {
+          const { board } = yield* watchingMerges;
+          yield* Effect.sleep("6 minutes");
+          const { views } = yield* board;
+          const card = Arr.findFirst(views, (view) => Arr.some(view.runs, (one) => one === runId));
+          expect(Option.getOrThrow(card).sentence).toBe(
+            "Waiting for the author to change mk/collie!7.",
+          );
+          expect(sectionOf(Option.getOrThrow(card))).not.toBe("needs-you");
+          expect((yield* status(runId))?.status.status).toBe("suspended");
+          expect(Arr.filter(host.toasts, (title) => /needs you|opened/.test(title))).toEqual([]);
+          const registry = yield* Registry;
+          yield* registry.control({ runId, control: STOP, set: true });
+          expect(yield* watchOf(runId)).toBeNull();
+        }),
+      );
+    }),
+  ));

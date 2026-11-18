@@ -22,52 +22,44 @@ const answeredRun = (client: HostClient, world: World, request: string) =>
     return runId;
   });
 
-test(
-  "a finished Run's toast reaches a connected Desktop with its Run id, and herdr is never asked to show one",
-  () =>
-    hosted("collie-toasts-", ({ world }) =>
-      Effect.gen(function* () {
-        const client = yield* connect(world.state);
-        const desktop = yield* client.toasts().pipe(
-          Stream.filter((toast) => toast.sound === "done"),
-          Stream.runHead,
-          Effect.forkScoped,
-        );
-        const runId = yield* answeredRun(client, world, "toasted");
-        const toast = yield* Fiber.join(desktop).pipe(Effect.timeout("20 seconds"));
-        expect(toast._tag === "Some" && toast.value).toMatchObject({
-          runId,
-          sound: "done",
-          title: expect.stringContaining("finished"),
-        });
-      }).pipe(Effect.orDie),
-    ),
-  60_000,
-);
+test("a finished Run's toast reaches a connected Desktop with its Run id, and herdr is never asked to show one", () =>
+  hosted("collie-toasts-", ({ world }) =>
+    Effect.gen(function* () {
+      const client = yield* connect(world.state);
+      const desktop = yield* client.toasts().pipe(
+        Stream.filter((toast) => toast.sound === "done"),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      const runId = yield* answeredRun(client, world, "toasted");
+      const toast = yield* Fiber.join(desktop).pipe(Effect.timeout("20 seconds"));
+      expect(toast._tag === "Some" && toast.value).toMatchObject({
+        runId,
+        sound: "done",
+        title: expect.stringContaining("finished"),
+      });
+    }).pipe(Effect.orDie),
+  ));
 
-test(
-  "with no Desktop connected a toast is dropped, the Run still finishes, and a Desktop that connects later is not sent it",
-  () =>
-    hosted("collie-toasts-none-", ({ world }) =>
-      Effect.gen(function* () {
-        const client = yield* connect(world.state);
-        const { runId: unseen } = yield* client.start({
-          project: world.project,
-          id: "hello",
-          request: "nobody-listening",
-          input: { name: "nobody" },
-        });
-        const ended = yield* until(
-          () => client.run({ runId: unseen }),
-          (view) => view !== null && isSettled(view),
-        );
-        expect(ended?.status.status).toBe("complete");
+test("with no Desktop connected a toast is dropped, the Run still finishes, and a Desktop that connects later is not sent it", () =>
+  hosted("collie-toasts-none-", ({ world }) =>
+    Effect.gen(function* () {
+      const client = yield* connect(world.state);
+      const { runId: unseen } = yield* client.start({
+        project: world.project,
+        id: "hello",
+        request: "nobody-listening",
+        input: { name: "nobody" },
+      });
+      const ended = yield* until(
+        () => client.run({ runId: unseen }),
+        (view) => view !== null && isSettled(view),
+      );
+      expect(ended?.status.status).toBe("complete");
 
-        const desktop = yield* client.toasts().pipe(Stream.runHead, Effect.forkScoped);
-        const later = yield* answeredRun(client, world, "later");
-        const toast = yield* Fiber.join(desktop).pipe(Effect.timeout("20 seconds"));
-        expect(toast._tag === "Some" && toast.value.runId).toBe(later);
-      }).pipe(Effect.orDie),
-    ),
-  60_000,
-);
+      const desktop = yield* client.toasts().pipe(Stream.runHead, Effect.forkScoped);
+      const later = yield* answeredRun(client, world, "later");
+      const toast = yield* Fiber.join(desktop).pipe(Effect.timeout("20 seconds"));
+      expect(toast._tag === "Some" && toast.value.runId).toBe(later);
+    }).pipe(Effect.orDie),
+  ));

@@ -253,73 +253,69 @@ const sendsSince = (calls: ReadonlyArray<Call>, from: number, cmd = "terminal.se
 
 const after = (argv: ReadonlyArray<string>, flag: string) => argv[argv.indexOf(flag) + 1];
 
-test(
-  "a dead owned server on core resumes its conversation once despite competing recovery, and later stop reaches its replacement",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* rig.startCore();
-        yield* rig.queueOutputs([null, null, null, null, null, null]);
-        let agents: typeof Agents.Service | undefined;
-        let recovering: string | null = null;
-        const competitions: Array<Fiber.Fiber<void>> = [];
-        class CompetingRecovery extends Herdr {
-          override terminalKill(address: string) {
-            return super.terminalKill(address).pipe(
-              Effect.tap(() => {
-                if (agents === undefined || recovering === null) return Effect.void;
-                return Effect.forkDetach(agents.resumeLost(recovering, runningNow)).pipe(
-                  Effect.tap((fiber) => Effect.sync(() => competitions.push(fiber))),
-                  Effect.asVoid,
-                );
-              }),
-            );
-          }
+test("a dead owned server on core resumes its conversation once despite competing recovery, and later stop reaches its replacement", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.startCore();
+      yield* rig.queueOutputs([null, null, null, null, null, null]);
+      let agents: typeof Agents.Service | undefined;
+      let recovering: string | null = null;
+      const competitions: Array<Fiber.Fiber<void>> = [];
+      class CompetingRecovery extends Herdr {
+        override terminalKill(address: string) {
+          return super.terminalKill(address).pipe(
+            Effect.tap(() => {
+              if (agents === undefined || recovering === null) return Effect.void;
+              return Effect.forkDetach(agents.resumeLost(recovering, runningNow)).pipe(
+                Effect.tap((fiber) => Effect.sync(() => competitions.push(fiber))),
+                Effect.asVoid,
+              );
+            }),
+          );
         }
-        const result = yield* hosted(
-          Effect.gen(function* () {
-            agents = yield* Agents;
-            const runId = yield* started("codex", "dead-owned-core");
-            const agent = agentName(runId, "codex", null, 1);
-            const session = yield* recordedSession(runId, "codex");
-            const old = (yield* readLaunches(runId))[0]!;
-            const control = (yield* readControl(dir(), agent))!;
-            const before = coreCalls(yield* rig.calls()).length;
-            recovering = runId;
-            process.kill(control.pid!, "SIGKILL");
-            yield* until(() => processAbsent(control.pid!), Boolean);
-            const again = yield* until(
-              () => Effect.flatMap(rig.calls(), (calls) => launchesSince(calls, before)),
-              (launches) => launches.length > 0,
-            );
-            yield* Fiber.joinAll(competitions);
-            yield* until(
-              () => deliveredTo(dir(), runId),
-              (receipts) => Arr.filter(receipts, (one) => one.cause.kind === "step").length === 2,
-            );
-            const now = (yield* readLaunches(runId))[0]!;
-            expect(now.terminalId).not.toBe(old.terminalId);
-            expect(again).toHaveLength(1);
-            expect(again[0]!.argv.slice(0, 3)).toEqual(["codex", "resume", session.value]);
-            expect(again[0]!.cwd).toBe(rig.projectDir);
-            yield* fs.writeFileString(now.output, '{"verdict":"recovered"}');
-            expect((yield* finished(runId))?.status.status).toBe("complete");
-            recovering = null;
-            const replacement = (yield* readControl(dir(), agent))!;
-            const halt = yield* agents.halt(runId);
-            expect(halt).toEqual({ stopped: [agent], left: [] });
-            expect(yield* processAbsent(replacement.pid!)).toBe(true);
-            expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(1);
-            return now;
-          }),
-          { ...hostOf(), herdr: new CompetingRecovery(env()) },
-        );
-        expect(result.agentSession).toEqual({ kind: "codex", value: THREAD });
-      }),
-    ),
-  120_000,
-);
+      }
+      const result = yield* hosted(
+        Effect.gen(function* () {
+          agents = yield* Agents;
+          const runId = yield* started("codex", "dead-owned-core");
+          const agent = agentName(runId, "codex", null, 1);
+          const session = yield* recordedSession(runId, "codex");
+          const old = (yield* readLaunches(runId))[0]!;
+          const control = (yield* readControl(dir(), agent))!;
+          const before = coreCalls(yield* rig.calls()).length;
+          recovering = runId;
+          process.kill(control.pid!, "SIGKILL");
+          yield* until(() => processAbsent(control.pid!), Boolean);
+          const again = yield* until(
+            () => Effect.flatMap(rig.calls(), (calls) => launchesSince(calls, before)),
+            (launches) => launches.length > 0,
+          );
+          yield* Fiber.joinAll(competitions);
+          yield* until(
+            () => deliveredTo(dir(), runId),
+            (receipts) => Arr.filter(receipts, (one) => one.cause.kind === "step").length === 2,
+          );
+          const now = (yield* readLaunches(runId))[0]!;
+          expect(now.terminalId).not.toBe(old.terminalId);
+          expect(again).toHaveLength(1);
+          expect(again[0]!.argv.slice(0, 3)).toEqual(["codex", "resume", session.value]);
+          expect(again[0]!.cwd).toBe(rig.projectDir);
+          yield* fs.writeFileString(now.output, '{"verdict":"recovered"}');
+          expect((yield* finished(runId))?.status.status).toBe("complete");
+          recovering = null;
+          const replacement = (yield* readControl(dir(), agent))!;
+          const halt = yield* agents.halt(runId);
+          expect(halt).toEqual({ stopped: [agent], left: [] });
+          expect(yield* processAbsent(replacement.pid!)).toBe(true);
+          expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(1);
+          return now;
+        }),
+        { ...hostOf(), herdr: new CompetingRecovery(env()) },
+      );
+      expect(result.agentSession).toEqual({ kind: "codex", value: THREAD });
+    }),
+  ));
 
 test.each([
   ["unknown", ""],
@@ -432,228 +428,211 @@ test("core recovery of a reused agent checks the receipts of its latest Step", (
     }),
   ));
 
-test(
-  "a core holder loss mid-Run starts each agent of the Run again in its own session, tells the one whose work is out to carry on, and the Run completes",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const core = yield* rig.startCore();
-        yield* rig.queueOutputs([
-          { verdict: "reviewed" },
-          { verdict: "planned" },
-          { verdict: "noted" },
-          null,
-          null,
-          null,
-          { verdict: "fixed" },
-        ]);
-        const result = yield* hosted(
-          Effect.gen(function* () {
-            const runId = yield* started("claude,codex,pi,opencode", "r1");
-            const named = (operation: string) => agentName(runId, operation, null, 1);
-            yield* until(
-              () => fs.exists(`${dir()}/agents/${runId}/opencode.status.js`),
-              (there) => there,
-            );
-            yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
-            yield* idleAfterItsStep(named("opencode"), "at launch");
-            yield* remindersSpent(runId);
-            const sessions = {
-              claude: yield* recordedSession(runId, "claude"),
-              codex: yield* recordedSession(runId, "codex"),
-              opencode: yield* recordedSession(runId, "opencode"),
-              pi: yield* recordedSession(runId, "pi"),
-            };
-            const before = coreCalls(yield* rig.calls()).length;
-
-            yield* core.lose;
-            const view = yield* finished(runId);
-            return { runId, named, sessions, before, view };
-          }),
-          { ...hostOf(), compactAtTokens: COMPACT_AT_TOKENS },
-        );
-        const { runId, named, sessions, before, view } = result;
-        expect(view?.status.status).toBe("complete");
-        expect(sessions.claude.kind).toBe("claude");
-        expect(sessions.codex).toEqual({ kind: "codex", value: THREAD });
-        expect(sessions.opencode).toEqual({ kind: "opencode", value: "ses_notes" });
-        expect(sessions.pi.kind).toBe("pi");
-
-        const calls = yield* rig.calls();
-        const again = yield* launchesSince(calls, before);
-        expect(Arr.map(again, (launch) => launch.name).sort()).toEqual(
-          Arr.map(["claude", "codex", "opencode", "pi"], named).sort(),
-        );
-        const of = (operation: string) =>
-          Option.getOrThrow(Arr.findFirst(again, (launch) => launch.name === named(operation)));
-        for (const operation of ["claude", "codex", "opencode", "pi"])
-          expect(of(operation).cwd).toBe(rig.projectDir);
-        expect(after(of("claude").argv, "--resume")).toBe(sessions.claude.value);
-        expect(of("claude").argv).not.toContain("--session-id");
-        expect(of("codex").argv.slice(0, 3)).toEqual(["codex", "resume", THREAD]);
-        expect(of("codex").argv).not.toContain("--approve-for-me");
-        expect(after(of("opencode").argv, "--session")).toBe("ses_notes");
-        expect(of("opencode").argv).not.toContain("--prompt");
-        expect(after(of("pi").argv, "--session-id")).toBe(sessions.pi.value);
-
-        expect(sendsSince(calls, before)).toEqual([]);
-        const posted = sendsSince(calls, before, "prompt_async");
-        expect(Arr.map(posted, (send) => send.terminal)).toEqual([named("opencode")]);
-        expect(posted[0]?.text).toContain("Carry on with your step from where you were");
-        expect(posted[0]?.text).toContain(`agents/${runId}/opencode.prompt.md`);
-        const ledger = yield* deliveredTo(dir(), runId);
-        const carried = Arr.filter(
-          ledger,
-          (delivery) =>
-            delivery.agent === named("opencode") &&
-            (posted[0]?.text ?? "").includes(`collie-delivery:${delivery.id}`),
-        );
-        expect(Arr.map(carried, (delivery) => [delivery.cause.kind, delivery.state])).toEqual([
-          ["step", "submitted"],
-        ]);
-      }),
-    ),
-  120_000,
-);
-
-test(
-  "a host started after core lost a running Run's agents starts each again in its own session, and none of a finished Run's",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const core = yield* rig.startCore();
-        yield* rig.queueOutputs([
-          { verdict: "reviewed" },
-          null,
-          null,
-          null,
-          { verdict: "done" },
-          { verdict: "fixed" },
-        ]);
-        const { running, done, named } = yield* hosted(
-          Effect.gen(function* () {
-            const running = yield* started("claude,pi", "r1");
-            const named = (runId: string, operation: string) =>
-              agentName(runId, operation, null, 1);
-            yield* idleAfterItsStep(named(running, "pi"));
-            yield* remindersSpent(running);
-            const done = yield* started("claude", "r2");
-            yield* finished(done);
-            return { running, done, named };
-          }),
-        );
-        const sessions = {
-          claude: yield* recordedSession(running, "claude"),
-          pi: yield* recordedSession(running, "pi"),
-        };
-        yield* core.lose;
-        const before = coreCalls(yield* rig.calls()).length;
-
-        const view = yield* hosted(finished(running));
-        expect(view?.status.status).toBe("complete");
-        const calls = yield* rig.calls();
-        const again = yield* launchesSince(calls, before);
-        expect(Arr.map(again, (launch) => launch.name).sort()).toEqual(
-          [named(running, "claude"), named(running, "pi")].sort(),
-        );
-        expect(Arr.some(again, (launch) => launch.name === named(done, "claude"))).toBe(false);
-        const of = (operation: string) =>
-          Option.getOrThrow(
-            Arr.findFirst(again, (launch) => launch.name === named(running, operation)),
+test("a core holder loss mid-Run starts each agent of the Run again in its own session, tells the one whose work is out to carry on, and the Run completes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const core = yield* rig.startCore();
+      yield* rig.queueOutputs([
+        { verdict: "reviewed" },
+        { verdict: "planned" },
+        { verdict: "noted" },
+        null,
+        null,
+        null,
+        { verdict: "fixed" },
+      ]);
+      const result = yield* hosted(
+        Effect.gen(function* () {
+          const runId = yield* started("claude,codex,pi,opencode", "r1");
+          const named = (operation: string) => agentName(runId, operation, null, 1);
+          yield* until(
+            () => fs.exists(`${dir()}/agents/${runId}/opencode.status.js`),
+            (there) => there,
           );
-        expect(of("claude").cwd).toBe(rig.projectDir);
-        expect(after(of("claude").argv, "--resume")).toBe(sessions.claude.value);
-        expect(after(of("pi").argv, "--session-id")).toBe(sessions.pi.value);
-        expect(Arr.map(sendsSince(calls, before), (send) => send.terminal)).toEqual([
-          named(running, "pi"),
-        ]);
-      }),
-    ),
-  120_000,
-);
+          yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
+          yield* idleAfterItsStep(named("opencode"), "at launch");
+          yield* remindersSpent(runId);
+          const sessions = {
+            claude: yield* recordedSession(runId, "claude"),
+            codex: yield* recordedSession(runId, "codex"),
+            opencode: yield* recordedSession(runId, "opencode"),
+            pi: yield* recordedSession(runId, "pi"),
+          };
+          const before = coreCalls(yield* rig.calls()).length;
 
-test(
-  "an OpenCode agent started again that never reports idle is not told to carry on, and its Run says so",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const core = yield* rig.startCore();
-        yield* rig.queueOutputs([null]);
-        const { runId, agent } = yield* hosted(
-          Effect.gen(function* () {
-            const runId = yield* started("opencode", "r1");
-            const agent = agentName(runId, "opencode", null, 1);
-            yield* until(
-              () => fs.exists(`${dir()}/agents/${runId}/opencode.status.js`),
-              (there) => there,
-            );
-            yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
-            yield* idleAfterItsStep(agent, "at launch");
-            yield* recordedSession(runId, "opencode");
-            return { runId, agent };
-          }),
-        );
-        core.startBlocked();
-        yield* core.lose;
-        const before = coreCalls(yield* rig.calls()).length;
+          yield* core.lose;
+          const view = yield* finished(runId);
+          return { runId, named, sessions, before, view };
+        }),
+        { ...hostOf(), compactAtTokens: COMPACT_AT_TOKENS },
+      );
+      const { runId, named, sessions, before, view } = result;
+      expect(view?.status.status).toBe("complete");
+      expect(sessions.claude.kind).toBe("claude");
+      expect(sessions.codex).toEqual({ kind: "codex", value: THREAD });
+      expect(sessions.opencode).toEqual({ kind: "opencode", value: "ses_notes" });
+      expect(sessions.pi.kind).toBe("pi");
 
-        const runLog = `${dir()}/agents/${runId}/agents.log`;
-        const logged = yield* hosted(
-          until(
-            () => fs.readFileString(runLog).pipe(Effect.orElseSucceed(() => "")),
-            Str.includes(`${agent}: not resumed`),
-          ),
-          { ...hostOf(), readyMs: 200 },
-        );
-        expect(logged).toContain("OpenCode reported no idle");
-        const calls = yield* rig.calls();
-        expect(Arr.map(yield* launchesSince(calls, before), (launch) => launch.name)).toEqual([
-          agent,
-        ]);
-        expect(sendsSince(calls, before)).toEqual([]);
-      }),
-    ),
-  120_000,
-);
+      const calls = yield* rig.calls();
+      const again = yield* launchesSince(calls, before);
+      expect(Arr.map(again, (launch) => launch.name).sort()).toEqual(
+        Arr.map(["claude", "codex", "opencode", "pi"], named).sort(),
+      );
+      const of = (operation: string) =>
+        Option.getOrThrow(Arr.findFirst(again, (launch) => launch.name === named(operation)));
+      for (const operation of ["claude", "codex", "opencode", "pi"])
+        expect(of(operation).cwd).toBe(rig.projectDir);
+      expect(after(of("claude").argv, "--resume")).toBe(sessions.claude.value);
+      expect(of("claude").argv).not.toContain("--session-id");
+      expect(of("codex").argv.slice(0, 3)).toEqual(["codex", "resume", THREAD]);
+      expect(of("codex").argv).not.toContain("--approve-for-me");
+      expect(after(of("opencode").argv, "--session")).toBe("ses_notes");
+      expect(of("opencode").argv).not.toContain("--prompt");
+      expect(after(of("pi").argv, "--session-id")).toBe(sessions.pi.value);
 
-test(
-  "an OpenCode agent started again with compaction off is told to carry on through core once it reports idle, and the Run completes",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const core = yield* rig.startCore();
-        yield* rig.queueOutputs([null, null, null, { verdict: "fixed" }]);
-        const { runId, agent, before } = yield* hosted(
-          Effect.gen(function* () {
-            const runId = yield* started("opencode", "r1");
-            const agent = agentName(runId, "opencode", null, 1);
-            yield* until(
-              () => fs.exists(`${dir()}/agents/${runId}/opencode.status.js`),
-              (there) => there,
-            );
-            yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
-            yield* idleAfterItsStep(agent, "at launch");
-            yield* remindersSpent(runId);
-            yield* until(
-              () => readLaunches(runId),
-              (launches) => Arr.some(launches, (one) => one.agentSession !== undefined),
-            );
-            return { runId, agent, before: coreCalls(yield* rig.calls()).length };
-          }),
+      expect(sendsSince(calls, before)).toEqual([]);
+      const posted = sendsSince(calls, before, "prompt_async");
+      expect(Arr.map(posted, (send) => send.terminal)).toEqual([named("opencode")]);
+      expect(posted[0]?.text).toContain("Carry on with your step from where you were");
+      expect(posted[0]?.text).toContain(`agents/${runId}/opencode.prompt.md`);
+      const ledger = yield* deliveredTo(dir(), runId);
+      const carried = Arr.filter(
+        ledger,
+        (delivery) =>
+          delivery.agent === named("opencode") &&
+          (posted[0]?.text ?? "").includes(`collie-delivery:${delivery.id}`),
+      );
+      expect(Arr.map(carried, (delivery) => [delivery.cause.kind, delivery.state])).toEqual([
+        ["step", "submitted"],
+      ]);
+    }),
+  ));
+
+test("a host started after core lost a running Run's agents starts each again in its own session, and none of a finished Run's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const core = yield* rig.startCore();
+      yield* rig.queueOutputs([
+        { verdict: "reviewed" },
+        null,
+        null,
+        null,
+        { verdict: "done" },
+        { verdict: "fixed" },
+      ]);
+      const { running, done, named } = yield* hosted(
+        Effect.gen(function* () {
+          const running = yield* started("claude,pi", "r1");
+          const named = (runId: string, operation: string) => agentName(runId, operation, null, 1);
+          yield* idleAfterItsStep(named(running, "pi"));
+          yield* remindersSpent(running);
+          const done = yield* started("claude", "r2");
+          yield* finished(done);
+          return { running, done, named };
+        }),
+      );
+      const sessions = {
+        claude: yield* recordedSession(running, "claude"),
+        pi: yield* recordedSession(running, "pi"),
+      };
+      yield* core.lose;
+      const before = coreCalls(yield* rig.calls()).length;
+
+      const view = yield* hosted(finished(running));
+      expect(view?.status.status).toBe("complete");
+      const calls = yield* rig.calls();
+      const again = yield* launchesSince(calls, before);
+      expect(Arr.map(again, (launch) => launch.name).sort()).toEqual(
+        [named(running, "claude"), named(running, "pi")].sort(),
+      );
+      expect(Arr.some(again, (launch) => launch.name === named(done, "claude"))).toBe(false);
+      const of = (operation: string) =>
+        Option.getOrThrow(
+          Arr.findFirst(again, (launch) => launch.name === named(running, operation)),
         );
-        yield* core.lose;
-        const view = yield* hosted(finished(runId));
-        expect(view?.status.status).toBe("complete");
-        const sent = sendsSince(yield* rig.calls(), before);
-        expect(Arr.map(sent, (send) => send.terminal)).toEqual([agent]);
-        expect(sent[0]?.text).toContain("Carry on with your step from where you were");
-      }),
-    ),
-  120_000,
-);
+      expect(of("claude").cwd).toBe(rig.projectDir);
+      expect(after(of("claude").argv, "--resume")).toBe(sessions.claude.value);
+      expect(after(of("pi").argv, "--session-id")).toBe(sessions.pi.value);
+      expect(Arr.map(sendsSince(calls, before), (send) => send.terminal)).toEqual([
+        named(running, "pi"),
+      ]);
+    }),
+  ));
+
+test("an OpenCode agent started again that never reports idle is not told to carry on, and its Run says so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const core = yield* rig.startCore();
+      yield* rig.queueOutputs([null]);
+      const { runId, agent } = yield* hosted(
+        Effect.gen(function* () {
+          const runId = yield* started("opencode", "r1");
+          const agent = agentName(runId, "opencode", null, 1);
+          yield* until(
+            () => fs.exists(`${dir()}/agents/${runId}/opencode.status.js`),
+            (there) => there,
+          );
+          yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
+          yield* idleAfterItsStep(agent, "at launch");
+          yield* recordedSession(runId, "opencode");
+          return { runId, agent };
+        }),
+      );
+      core.startBlocked();
+      yield* core.lose;
+      const before = coreCalls(yield* rig.calls()).length;
+
+      const runLog = `${dir()}/agents/${runId}/agents.log`;
+      const logged = yield* hosted(
+        until(
+          () => fs.readFileString(runLog).pipe(Effect.orElseSucceed(() => "")),
+          Str.includes(`${agent}: not resumed`),
+        ),
+        { ...hostOf(), readyMs: 200 },
+      );
+      expect(logged).toContain("OpenCode reported no idle");
+      const calls = yield* rig.calls();
+      expect(Arr.map(yield* launchesSince(calls, before), (launch) => launch.name)).toEqual([
+        agent,
+      ]);
+      expect(sendsSince(calls, before)).toEqual([]);
+    }),
+  ));
+
+test("an OpenCode agent started again with compaction off is told to carry on through core once it reports idle, and the Run completes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const core = yield* rig.startCore();
+      yield* rig.queueOutputs([null, null, null, { verdict: "fixed" }]);
+      const { runId, agent, before } = yield* hosted(
+        Effect.gen(function* () {
+          const runId = yield* started("opencode", "r1");
+          const agent = agentName(runId, "opencode", null, 1);
+          yield* until(
+            () => fs.exists(`${dir()}/agents/${runId}/opencode.status.js`),
+            (there) => there,
+          );
+          yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
+          yield* idleAfterItsStep(agent, "at launch");
+          yield* remindersSpent(runId);
+          yield* until(
+            () => readLaunches(runId),
+            (launches) => Arr.some(launches, (one) => one.agentSession !== undefined),
+          );
+          return { runId, agent, before: coreCalls(yield* rig.calls()).length };
+        }),
+      );
+      yield* core.lose;
+      const view = yield* hosted(finished(runId));
+      expect(view?.status.status).toBe("complete");
+      const sent = sendsSince(yield* rig.calls(), before);
+      expect(Arr.map(sent, (send) => send.terminal)).toEqual([agent]);
+      expect(sent[0]?.text).toContain("Carry on with your step from where you were");
+    }),
+  ));
 
 const runningNow: RunNow = {
   running: Effect.succeed(true),
@@ -666,119 +645,115 @@ for (const [hasSession, sessionOnlyAnchor, outcome] of [
   [false, false, "never borrows an earlier generation's session"],
   [true, true, "follows later work from a session-only anchor"],
 ] as const)
-  test(
-    `core recovery of collided legacy generations ${outcome}`,
-    () =>
-      runEffect(
-        Effect.gen(function* () {
-          const core = yield* rig.startCore();
-          yield* rig.queueOutputs([null, null, null, null]);
-          yield* Effect.gen(function* () {
-            const agents = yield* Agents;
-            const runId = "r-collided-generations";
-            const ask = {
-              runId,
-              operation: "review",
-              agent: "review",
-              role: "reviewer",
-              workflow: "agent-work",
-              harness: "claude",
-              model: "opus",
-              effort: null,
-              permissions: "auto",
-              task: null,
-              cwd: rig.projectDir,
-              prompt: "Review this work.",
-              output: `${launchDir(dir(), runId)}/review.json`,
-              skill: null,
-            };
-            const earlier = yield* agents.launch(ask);
-            yield* core.lose;
-            const latest = yield* agents.launch({ ...ask, sequence: 2 });
-            const reused = yield* agents.launch({
-              ...ask,
-              sequence: 2,
-              operation: "review-followup",
-              output: `${launchDir(dir(), runId)}/review-followup.json`,
+  test(`core recovery of collided legacy generations ${outcome}`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const core = yield* rig.startCore();
+        yield* rig.queueOutputs([null, null, null, null]);
+        yield* Effect.gen(function* () {
+          const agents = yield* Agents;
+          const runId = "r-collided-generations";
+          const ask = {
+            runId,
+            operation: "review",
+            agent: "review",
+            role: "reviewer",
+            workflow: "agent-work",
+            harness: "claude",
+            model: "opus",
+            effort: null,
+            permissions: "auto",
+            task: null,
+            cwd: rig.projectDir,
+            prompt: "Review this work.",
+            output: `${launchDir(dir(), runId)}/review.json`,
+            skill: null,
+          };
+          const earlier = yield* agents.launch(ask);
+          yield* core.lose;
+          const latest = yield* agents.launch({ ...ask, sequence: 2 });
+          const reused = yield* agents.launch({
+            ...ask,
+            sequence: 2,
+            operation: "review-followup",
+            output: `${launchDir(dir(), runId)}/review-followup.json`,
+          });
+          expect(earlier.terminalId).not.toBe(latest.terminalId);
+          expect(earlier.agentSession?.kind).toBe("claude");
+          expect(latest.agentSession?.kind).toBe("claude");
+          expect(earlier.agentSession?.value).not.toBe(latest.agentSession?.value);
+          expect(reused.reused).toBe(true);
+          expect(reused.terminalId).toBe(latest.terminalId);
+
+          const collided = "w01-public-text-is-chec-5hhdvh-r";
+          const historical = { ...earlier, agent: collided };
+          yield* recordLaunch(historical);
+          for (const one of [latest, reused]) {
+            const recorded = sessionOnlyAnchor
+              ? one === latest
+                ? Struct.omit(one, ["terminalId"])
+                : {
+                    ...one,
+                    agentSession: Option.getOrThrow(Option.fromNullishOr(latest.agentSession)),
+                  }
+              : one;
+            yield* recordLaunch({
+              ...(hasSession ? recorded : Struct.omit(recorded, ["agentSession"])),
+              agent: collided,
             });
-            expect(earlier.terminalId).not.toBe(latest.terminalId);
-            expect(earlier.agentSession?.kind).toBe("claude");
-            expect(latest.agentSession?.kind).toBe("claude");
-            expect(earlier.agentSession?.value).not.toBe(latest.agentSession?.value);
-            expect(reused.reused).toBe(true);
-            expect(reused.terminalId).toBe(latest.terminalId);
-
-            const collided = "w01-public-text-is-chec-5hhdvh-r";
-            const historical = { ...earlier, agent: collided };
-            yield* recordLaunch(historical);
-            for (const one of [latest, reused]) {
-              const recorded = sessionOnlyAnchor
-                ? one === latest
-                  ? Struct.omit(one, ["terminalId"])
-                  : {
-                      ...one,
-                      agentSession: Option.getOrThrow(Option.fromNullishOr(latest.agentSession)),
-                    }
-                : one;
-              yield* recordLaunch({
-                ...(hasSession ? recorded : Struct.omit(recorded, ["agentSession"])),
-                agent: collided,
-              });
-            }
-            const runRecords = yield* RunRecords;
-            if (sessionOnlyAnchor)
-              yield* runRecords.setControl(
-                RELAUNCH,
-                runId,
-                asJson({ ...Struct.omit(ask, ["prompt"]), sequence: 2 }),
-                latest.agent,
-              );
-            const moved = yield* runRecords.control(RELAUNCH, runId, latest.agent);
-            expect(moved).not.toBeNull();
-            yield* runRecords.setControl(RELAUNCH, runId, null, latest.agent);
-            yield* runRecords.setControl(RELAUNCH, runId, moved, collided);
-            yield* runRecords.setControl(RELAUNCH, runId, null, earlier.agent);
-            yield* core.lose;
-            const before = coreCalls(yield* rig.calls()).length;
-
-            yield* agents.resumeLost(runId, runningNow);
-            const resumed = yield* launchesSince(yield* rig.calls(), before);
-            expect(Arr.map(resumed, (one) => one.name)).toEqual([collided]);
-            expect(after(resumed[0]!.argv, "--resume")).not.toBe(earlier.agentSession?.value);
-            if (hasSession)
-              expect(after(resumed[0]!.argv, "--resume")).toBe(latest.agentSession?.value);
-            else {
-              expect(resumed[0]!.argv).not.toContain("--resume");
-              expect(resumed[0]!.argv).toContain("--session-id");
-            }
-            if (sessionOnlyAnchor) {
-              const sent = sendsSince(yield* rig.calls(), before);
-              expect(sent).toHaveLength(1);
-              expect(sent[0]!.text).toContain("review-followup.r2.prompt.md");
-              expect(sent[0]!.text).not.toContain("/review.r2.prompt.md");
-            }
-            const records = yield* readLaunches(runId);
-            expect(Arr.findFirst(records, (one) => (one.sequence ?? 1) === 1)).toEqual(
-              Option.some(historical),
+          }
+          const runRecords = yield* RunRecords;
+          if (sessionOnlyAnchor)
+            yield* runRecords.setControl(
+              RELAUNCH,
+              runId,
+              asJson({ ...Struct.omit(ask, ["prompt"]), sequence: 2 }),
+              latest.agent,
             );
-            const current = Arr.filter(records, (one) => one.sequence === 2);
-            expect(current).toHaveLength(2);
-            expect(current[0]!.terminalId).not.toBe(latest.terminalId);
-            expect(current[1]!.terminalId).toBe(current[0]!.terminalId);
-            yield* agents.resumeLost(runId, runningNow);
-            expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(1);
-          }).pipe(
-            Effect.provide(
-              agentsLayer(hostOf()).pipe(
-                Layer.provideMerge(foundationLayer({ dir: dir(), userDir: rig.userDir })),
-              ),
-            ),
-            Effect.scoped,
+          const moved = yield* runRecords.control(RELAUNCH, runId, latest.agent);
+          expect(moved).not.toBeNull();
+          yield* runRecords.setControl(RELAUNCH, runId, null, latest.agent);
+          yield* runRecords.setControl(RELAUNCH, runId, moved, collided);
+          yield* runRecords.setControl(RELAUNCH, runId, null, earlier.agent);
+          yield* core.lose;
+          const before = coreCalls(yield* rig.calls()).length;
+
+          yield* agents.resumeLost(runId, runningNow);
+          const resumed = yield* launchesSince(yield* rig.calls(), before);
+          expect(Arr.map(resumed, (one) => one.name)).toEqual([collided]);
+          expect(after(resumed[0]!.argv, "--resume")).not.toBe(earlier.agentSession?.value);
+          if (hasSession)
+            expect(after(resumed[0]!.argv, "--resume")).toBe(latest.agentSession?.value);
+          else {
+            expect(resumed[0]!.argv).not.toContain("--resume");
+            expect(resumed[0]!.argv).toContain("--session-id");
+          }
+          if (sessionOnlyAnchor) {
+            const sent = sendsSince(yield* rig.calls(), before);
+            expect(sent).toHaveLength(1);
+            expect(sent[0]!.text).toContain("review-followup.r2.prompt.md");
+            expect(sent[0]!.text).not.toContain("/review.r2.prompt.md");
+          }
+          const records = yield* readLaunches(runId);
+          expect(Arr.findFirst(records, (one) => (one.sequence ?? 1) === 1)).toEqual(
+            Option.some(historical),
           );
-        }),
-      ),
-    30_000,
-  );
+          const current = Arr.filter(records, (one) => one.sequence === 2);
+          expect(current).toHaveLength(2);
+          expect(current[0]!.terminalId).not.toBe(latest.terminalId);
+          expect(current[1]!.terminalId).toBe(current[0]!.terminalId);
+          yield* agents.resumeLost(runId, runningNow);
+          expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(1);
+        }).pipe(
+          Effect.provide(
+            agentsLayer(hostOf()).pipe(
+              Layer.provideMerge(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+            ),
+          ),
+          Effect.scoped,
+        );
+      }),
+    ));
 
 test("quota incident publication waits for an admitted core recovery", () =>
   runEffect(
@@ -984,22 +959,63 @@ test("core recovery resumes each agent only after its own quota wait clears", ()
     }),
   ));
 
-test(
-  "a host started over an agent recorded before core neither asks herdr about it nor starts it again",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const core = yield* rig.startCore();
-        yield* rig.queueOutputs([null]);
-        const { runId, agent } = yield* hosted(
-          Effect.gen(function* () {
-            const runId = yield* started("pi", "r1");
-            const agent = agentName(runId, "pi", null, 1);
-            yield* idleAfterItsStep(agent);
-            return { runId, agent };
-          }),
-        );
-        yield* registerAgent(scopeFor(rig.projectDir), {
+test("a host started over an agent recorded before core neither asks herdr about it nor starts it again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const core = yield* rig.startCore();
+      yield* rig.queueOutputs([null]);
+      const { runId, agent } = yield* hosted(
+        Effect.gen(function* () {
+          const runId = yield* started("pi", "r1");
+          const agent = agentName(runId, "pi", null, 1);
+          yield* idleAfterItsStep(agent);
+          return { runId, agent };
+        }),
+      );
+      yield* registerAgent(scopeFor(rig.projectDir), {
+        role: "pi",
+        agent,
+        paneId: "1-9",
+        workspaceId: "w1",
+        runId,
+        workflow: "relaunched",
+        at: "2026-09-09T09:00:00Z",
+        incarnation: { terminalId: agent, agentSession: null },
+      }).pipe(Effect.provide(recordsAt(dir())));
+      yield* hostRunRecords(dir).setControl(RELAUNCH, runId, null, agent);
+      yield* core.lose;
+      const before = coreCalls(yield* rig.calls()).length;
+
+      yield* hosted(
+        until(
+          () =>
+            hostRecords(
+              dir(),
+              RunRecords.use((records) => records.control(PARK_CAUSE, runId)),
+            ).pipe(Effect.orElseSucceed(() => null)),
+          (cause) => cause !== null,
+        ),
+      );
+      expect(yield* launchesSince(yield* rig.calls(), before)).toEqual([]);
+    }),
+  ));
+
+test("a host starts again an agent resumed on core, though its Herdr 1 register row remains", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const core = yield* rig.startCore();
+      yield* rig.queueOutputs([null]);
+      const { runId, agent } = yield* hosted(
+        Effect.gen(function* () {
+          const runId = yield* started("pi", "r1");
+          const agent = agentName(runId, "pi", null, 1);
+          yield* idleAfterItsStep(agent);
+          return { runId, agent };
+        }),
+      );
+      yield* registerAgent(
+        { session: `${rig.root}/herdr.sock`, workspaceId: "w1", cwd: rig.projectDir },
+        {
           role: "pi",
           agent,
           paneId: "1-9",
@@ -1008,188 +1024,131 @@ test(
           workflow: "relaunched",
           at: "2026-09-09T09:00:00Z",
           incarnation: { terminalId: agent, agentSession: null },
-        }).pipe(Effect.provide(recordsAt(dir())));
-        yield* hostRunRecords(dir).setControl(RELAUNCH, runId, null, agent);
-        yield* core.lose;
-        const before = coreCalls(yield* rig.calls()).length;
+        },
+      ).pipe(Effect.provide(recordsAt(dir())));
+      yield* hostRunRecords(dir).setControl(RELAUNCH, runId, null, agent);
+      yield* core.lose;
+      const before = coreCalls(yield* rig.calls()).length;
 
-        yield* hosted(
-          until(
-            () =>
-              hostRecords(
-                dir(),
-                RunRecords.use((records) => records.control(PARK_CAUSE, runId)),
-              ).pipe(Effect.orElseSucceed(() => null)),
-            (cause) => cause !== null,
-          ),
-        );
-        expect(yield* launchesSince(yield* rig.calls(), before)).toEqual([]);
-      }),
-    ),
-  120_000,
-);
+      yield* hosted(
+        until(
+          () => Effect.flatMap(rig.calls(), (calls) => launchesSince(calls, before)),
+          (launches) => Arr.some(launches, (one) => one.name === agent),
+        ),
+      );
+    }),
+  ));
 
-test(
-  "a host starts again an agent resumed on core, though its Herdr 1 register row remains",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const core = yield* rig.startCore();
-        yield* rig.queueOutputs([null]);
-        const { runId, agent } = yield* hosted(
-          Effect.gen(function* () {
-            const runId = yield* started("pi", "r1");
-            const agent = agentName(runId, "pi", null, 1);
-            yield* idleAfterItsStep(agent);
-            return { runId, agent };
-          }),
-        );
-        yield* registerAgent(
-          { session: `${rig.root}/herdr.sock`, workspaceId: "w1", cwd: rig.projectDir },
-          {
-            role: "pi",
-            agent,
-            paneId: "1-9",
-            workspaceId: "w1",
-            runId,
-            workflow: "relaunched",
-            at: "2026-09-09T09:00:00Z",
-            incarnation: { terminalId: agent, agentSession: null },
-          },
-        ).pipe(Effect.provide(recordsAt(dir())));
-        yield* hostRunRecords(dir).setControl(RELAUNCH, runId, null, agent);
-        yield* core.lose;
-        const before = coreCalls(yield* rig.calls()).length;
-
-        yield* hosted(
-          until(
-            () => Effect.flatMap(rig.calls(), (calls) => launchesSince(calls, before)),
-            (launches) => Arr.some(launches, (one) => one.name === agent),
-          ),
-        );
-      }),
-    ),
-  120_000,
-);
-
-test(
-  "an agent ended on purpose stays ended when core reports its exit before the end is done",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* rig.startCore();
-        yield* rig.queueOutputs([null]);
-        const { runId, launched } = yield* hosted(
-          Effect.gen(function* () {
-            const runId = yield* started("pi", "r1");
-            const agent = agentName(runId, "pi", null, 1);
-            yield* idleAfterItsStep(agent);
-            yield* recordedSession(runId, "pi");
-            const launched = Option.getOrThrow(
-              Arr.findLast(yield* readLaunches(runId), (one) => one.agent === agent),
-            );
-            return { runId, launched };
-          }),
-        );
-        const { ended, left } = yield* Effect.gen(function* () {
-          const agents = yield* Agents;
-          const recoveries: Array<Fiber.Fiber<void>> = [];
-          class ExitSeenWhileClosing extends Herdr {
-            override terminalKill(address: string) {
-              return super.terminalKill(address).pipe(
-                Effect.andThen(Effect.forkChild(agents.resumeLost(runId, runningNow))),
-                Effect.map((recovery) => {
-                  recoveries.push(recovery);
-                }),
-              );
-            }
-          }
-          const herdr = new ExitSeenWhileClosing(env());
-          const ended = yield* endAgent(
-            { herdr, stateDir: dir(), ports: {}, log: () => Effect.void },
-            launched,
-            "it ran out",
-            "close",
+test("an agent ended on purpose stays ended when core reports its exit before the end is done", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.startCore();
+      yield* rig.queueOutputs([null]);
+      const { runId, launched } = yield* hosted(
+        Effect.gen(function* () {
+          const runId = yield* started("pi", "r1");
+          const agent = agentName(runId, "pi", null, 1);
+          yield* idleAfterItsStep(agent);
+          yield* recordedSession(runId, "pi");
+          const launched = Option.getOrThrow(
+            Arr.findLast(yield* readLaunches(runId), (one) => one.agent === agent),
           );
-          yield* Fiber.joinAll(recoveries);
-          return { ended, left: yield* herdr.agentList() };
-        }).pipe(
-          Effect.provide(
-            agentsLayer(hostOf()).pipe(
-              Layer.provideMerge(foundationLayer({ dir: dir(), userDir: rig.userDir })),
-            ),
-          ),
-          Effect.scoped,
-        );
-        expect(ended).toEqual({ _tag: "Closed", ended: true });
-        expect(left).toEqual([]);
-      }),
-    ),
-  120_000,
-);
-
-test(
-  "an agent ended while core's recovery is starting it again stays ended",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const core = yield* rig.startCore();
-        yield* rig.queueOutputs([null]);
-        const launching = Deferred.makeUnsafe<void>();
-        const go = Deferred.makeUnsafe<void>();
-        let held = false;
-        class HeldLaunch extends Herdr {
-          override agentLaunch(opts: Parameters<Herdr["agentLaunch"]>[0]) {
-            if (!held) return super.agentLaunch(opts);
-            return Deferred.succeed(launching, undefined).pipe(
-              Effect.andThen(Deferred.await(go)),
-              Effect.andThen(super.agentLaunch(opts)),
+          return { runId, launched };
+        }),
+      );
+      const { ended, left } = yield* Effect.gen(function* () {
+        const agents = yield* Agents;
+        const recoveries: Array<Fiber.Fiber<void>> = [];
+        class ExitSeenWhileClosing extends Herdr {
+          override terminalKill(address: string) {
+            return super.terminalKill(address).pipe(
+              Effect.andThen(Effect.forkChild(agents.resumeLost(runId, runningNow))),
+              Effect.map((recovery) => {
+                recoveries.push(recovery);
+              }),
             );
           }
         }
-        const { ended, left } = yield* hosted(
-          Effect.gen(function* () {
-            const runId = yield* started("pi", "r1");
-            const agent = agentName(runId, "pi", null, 1);
-            yield* idleAfterItsStep(agent);
-            const launched = Option.getOrThrow(
-              Arr.findLast(yield* readLaunches(runId), (one) => one.agent === agent),
-            );
-            held = true;
-            yield* core.lose;
-            yield* Deferred.await(launching);
-            const herdr = new Herdr(env());
-            const ending = yield* Effect.forkChild(
-              endAgent(
-                {
-                  herdr,
-                  stateDir: dir(),
-                  ports: {},
-                  log: () => Effect.void,
-                },
-                launched,
-                "it ran out",
-                "close",
-              ),
-            );
-            yield* TestClock.withLive(Effect.sleep("500 millis"));
-            yield* Deferred.succeed(go, undefined);
-            const ended = yield* Fiber.join(ending);
-            yield* until(
-              () =>
-                fs
-                  .readFileString(`${dir()}/agents/${runId}/agents.log`)
-                  .pipe(Effect.orElseSucceed(() => "")),
-              Str.includes("started again on core"),
-            );
-            return { ended, left: yield* herdr.agentList() };
-          }),
-          { ...hostOf(), herdr: new HeldLaunch(env()) },
+        const herdr = new ExitSeenWhileClosing(env());
+        const ended = yield* endAgent(
+          { herdr, stateDir: dir(), ports: {}, log: () => Effect.void },
+          launched,
+          "it ran out",
+          "close",
         );
-        expect(ended).toEqual({ _tag: "Closed", ended: true });
-        expect(left).toEqual([]);
-      }),
-    ),
-  120_000,
-);
+        yield* Fiber.joinAll(recoveries);
+        return { ended, left: yield* herdr.agentList() };
+      }).pipe(
+        Effect.provide(
+          agentsLayer(hostOf()).pipe(
+            Layer.provideMerge(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          ),
+        ),
+        Effect.scoped,
+      );
+      expect(ended).toEqual({ _tag: "Closed", ended: true });
+      expect(left).toEqual([]);
+    }),
+  ));
+
+test("an agent ended while core's recovery is starting it again stays ended", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const core = yield* rig.startCore();
+      yield* rig.queueOutputs([null]);
+      const launching = Deferred.makeUnsafe<void>();
+      const go = Deferred.makeUnsafe<void>();
+      let held = false;
+      class HeldLaunch extends Herdr {
+        override agentLaunch(opts: Parameters<Herdr["agentLaunch"]>[0]) {
+          if (!held) return super.agentLaunch(opts);
+          return Deferred.succeed(launching, undefined).pipe(
+            Effect.andThen(Deferred.await(go)),
+            Effect.andThen(super.agentLaunch(opts)),
+          );
+        }
+      }
+      const { ended, left } = yield* hosted(
+        Effect.gen(function* () {
+          const runId = yield* started("pi", "r1");
+          const agent = agentName(runId, "pi", null, 1);
+          yield* idleAfterItsStep(agent);
+          const launched = Option.getOrThrow(
+            Arr.findLast(yield* readLaunches(runId), (one) => one.agent === agent),
+          );
+          held = true;
+          yield* core.lose;
+          yield* Deferred.await(launching);
+          const herdr = new Herdr(env());
+          const ending = yield* Effect.forkChild(
+            endAgent(
+              {
+                herdr,
+                stateDir: dir(),
+                ports: {},
+                log: () => Effect.void,
+              },
+              launched,
+              "it ran out",
+              "close",
+            ),
+          );
+          yield* TestClock.withLive(Effect.sleep("500 millis"));
+          yield* Deferred.succeed(go, undefined);
+          const ended = yield* Fiber.join(ending);
+          yield* until(
+            () =>
+              fs
+                .readFileString(`${dir()}/agents/${runId}/agents.log`)
+                .pipe(Effect.orElseSucceed(() => "")),
+            Str.includes("started again on core"),
+          );
+          return { ended, left: yield* herdr.agentList() };
+        }),
+        { ...hostOf(), herdr: new HeldLaunch(env()) },
+      );
+      expect(ended).toEqual({ _tag: "Closed", ended: true });
+      expect(left).toEqual([]);
+    }),
+  ));

@@ -399,138 +399,126 @@ test("the operations are the command tree's, not a list somebody kept up to date
   expect(Arr.filter(found, (leaf) => !covered.has(leaf))).toEqual([]);
 });
 
-test(
-  "every operation a human has, native chat has a route to",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-parity-" });
-        const env = readEnv({ ...process.env, COLLIE_STATE_DIR: stateDir, PATH: "" });
-        yield* registerRunExecutors();
-        const carried = new Set(registeredKinds());
-        const offered = encodeJson(toolNamed("collie_propose")!.input);
+test("every operation a human has, native chat has a route to", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-parity-" });
+      const env = readEnv({ ...process.env, COLLIE_STATE_DIR: stateDir, PATH: "" });
+      yield* registerRunExecutors();
+      const carried = new Set(registeredKinds());
+      const offered = encodeJson(toolNamed("collie_propose")!.input);
 
-        for (const [operation, route] of INVENTORY) {
-          if (route.route === "read") {
-            const tool = toolNamed(route.tool);
-            expect([operation, tool !== null]).toEqual([operation, true]);
-            const answer = yield* tool!.call(env, route.input ?? {});
-            expect([operation, answer.length > 0]).toEqual([operation, true]);
-            expect([
-              operation,
-              pipe_(answer, Str.startsWith("Collie could not read that")),
-            ]).toEqual([operation, false]);
-            continue;
-          }
-          if (route.route === "write") {
-            const tool = toolNamed(route.tool);
-            expect([operation, tool !== null]).toEqual([operation, true]);
-            expect([operation, tool!.readOnly]).toEqual([operation, false]);
-            continue;
-          }
-          if (route.route === "propose") {
-            expect([operation, pipe_(offered, Str.includes(`"${route.kind}"`))]).toEqual([
-              operation,
-              true,
-            ]);
-            const decoded = decodeAction(route.action) satisfies Action;
-            expect([operation, decoded.kind]).toEqual([operation, route.kind]);
-            expect([operation, carried.has(route.kind)]).toEqual([operation, true]);
-            continue;
-          }
+      for (const [operation, route] of INVENTORY) {
+        if (route.route === "read") {
+          const tool = toolNamed(route.tool);
+          expect([operation, tool !== null]).toEqual([operation, true]);
+          const answer = yield* tool!.call(env, route.input ?? {});
+          expect([operation, answer.length > 0]).toEqual([operation, true]);
+          expect([operation, pipe_(answer, Str.startsWith("Collie could not read that"))]).toEqual([
+            operation,
+            false,
+          ]);
+          continue;
         }
+        if (route.route === "write") {
+          const tool = toolNamed(route.tool);
+          expect([operation, tool !== null]).toEqual([operation, true]);
+          expect([operation, tool!.readOnly]).toEqual([operation, false]);
+          continue;
+        }
+        if (route.route === "propose") {
+          expect([operation, pipe_(offered, Str.includes(`"${route.kind}"`))]).toEqual([
+            operation,
+            true,
+          ]);
+          const decoded = decodeAction(route.action) satisfies Action;
+          expect([operation, decoded.kind]).toEqual([operation, route.kind]);
+          expect([operation, carried.has(route.kind)]).toEqual([operation, true]);
+          continue;
+        }
+      }
 
-        const kinds = Arr.flatMap(
-          decodeOffered(toolNamed("collie_propose")!.input).properties.actions.items.anyOf,
-          (one) => one.properties.kind.enum,
-        );
-        expect(kinds).toContain("start");
-        for (const forbidden of ["confirm", "decline", "reconcile", "verify", "grant", "authorize"])
-          expect([forbidden, kinds.includes(forbidden)]).toEqual([forbidden, false]);
-        expect(registeredKinds()).not.toContain("confirm");
-      }),
-    ),
-  120_000,
-);
+      const kinds = Arr.flatMap(
+        decodeOffered(toolNamed("collie_propose")!.input).properties.actions.items.anyOf,
+        (one) => one.properties.kind.enum,
+      );
+      expect(kinds).toContain("start");
+      for (const forbidden of ["confirm", "decline", "reconcile", "verify", "grant", "authorize"])
+        expect([forbidden, kinds.includes(forbidden)]).toEqual([forbidden, false]);
+      expect(registeredKinds()).not.toContain("confirm");
+    }),
+  ));
 
-test(
-  "chat lists a finished Run's offers and takes one, as run actions and run action do",
-  () =>
-    hosted("hw-parity-offer-", ({ world, env }) =>
-      Effect.gen(function* () {
-        yield* save(world.user, [
-          "offered.workflow.ts",
-          "graded.workflow.ts",
-          "capability.ts",
-          "house.ts",
-        ]);
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        const { runId } = yield* client
-          .start({
-            project: world.project,
-            id: "offered",
-            request: "req-offered",
-            input: { note: "the diff" },
-            task: "task-offering",
-          })
-          .pipe(Effect.orDie);
-        yield* until(
-          () => client.run({ runId }).pipe(Effect.orDie),
-          (view) => view?.status.status === "complete",
-        );
-        const said = (operation: string) => {
-          const route = Option.getOrUndefined(
-            Arr.findFirst(INVENTORY, ([one]) => one === operation),
-          )?.[1];
-          if (route?.route !== "offer") throw new Error(`${operation} is not an offer row`);
-          return toolNamed(route.tool)!.call(env, route.input(runId));
-        };
+test("chat lists a finished Run's offers and takes one, as run actions and run action do", () =>
+  hosted("hw-parity-offer-", ({ world, env }) =>
+    Effect.gen(function* () {
+      yield* save(world.user, [
+        "offered.workflow.ts",
+        "graded.workflow.ts",
+        "capability.ts",
+        "house.ts",
+      ]);
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const { runId } = yield* client
+        .start({
+          project: world.project,
+          id: "offered",
+          request: "req-offered",
+          input: { note: "the diff" },
+          task: "task-offering",
+        })
+        .pipe(Effect.orDie);
+      yield* until(
+        () => client.run({ runId }).pipe(Effect.orDie),
+        (view) => view?.status.status === "complete",
+      );
+      const said = (operation: string) => {
+        const route = Option.getOrUndefined(
+          Arr.findFirst(INVENTORY, ([one]) => one === operation),
+        )?.[1];
+        if (route?.route !== "offer") throw new Error(`${operation} is not an offer row`);
+        return toolNamed(route.tool)!.call(env, route.input(runId));
+      };
 
-        expect(yield* said("run actions")).toContain("grade-it  Grade what this found (graded)");
+      expect(yield* said("run actions")).toContain("grade-it  Grade what this found (graded)");
 
-        const taken = yield* said("run action");
-        expect(taken).toContain("take_offer: applied");
-        const child = yield* client
-          .run({ runId: /Started run (\S+) from/.exec(taken)?.[1] ?? "" })
-          .pipe(Effect.orDie);
-        expect(child?.parent).toBe(runId);
-        expect(child?.task).toBe("task-offering");
-      }),
-    ),
-  60_000,
-);
+      const taken = yield* said("run action");
+      expect(taken).toContain("take_offer: applied");
+      const child = yield* client
+        .run({ runId: /Started run (\S+) from/.exec(taken)?.[1] ?? "" })
+        .pipe(Effect.orDie);
+      expect(child?.parent).toBe(runId);
+      expect(child?.task).toBe("task-offering");
+    }),
+  ));
 
-test(
-  "chat taking an offer whose work is still going gets the refusal run action gets",
-  () =>
-    hosted("hw-parity-twice-", ({ world, env }) =>
-      Effect.gen(function* () {
-        yield* save(world.user, ["delivers.workflow.ts", "ships.workflow.ts"]);
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        const mr = "https://gitlab.cego.dk/cego/app/-/merge_requests/12";
-        const { runId } = yield* client
-          .start({ project: world.project, id: "delivers", request: "req-d", input: { mr } })
-          .pipe(Effect.orDie);
-        yield* until(
-          () => client.run({ runId }).pipe(Effect.orDie),
-          (view) => view?.status.status === "complete",
-        );
-        const first = yield* client
-          .invoke({ runId, offer: "ship", input: {}, request: "ship-1" })
-          .pipe(Effect.orDie);
+test("chat taking an offer whose work is still going gets the refusal run action gets", () =>
+  hosted("hw-parity-twice-", ({ world, env }) =>
+    Effect.gen(function* () {
+      yield* save(world.user, ["delivers.workflow.ts", "ships.workflow.ts"]);
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const mr = "https://gitlab.cego.dk/cego/app/-/merge_requests/12";
+      const { runId } = yield* client
+        .start({ project: world.project, id: "delivers", request: "req-d", input: { mr } })
+        .pipe(Effect.orDie);
+      yield* until(
+        () => client.run({ runId }).pipe(Effect.orDie),
+        (view) => view?.status.status === "complete",
+      );
+      const first = yield* client
+        .invoke({ runId, offer: "ship", input: {}, request: "ship-1" })
+        .pipe(Effect.orDie);
 
-        const typed = yield* collie(world, ["run", "action", runId, "ship"]);
-        const refused = typed.envelope.error?.message ?? "run action started a second Ship";
-        expect(refused).toContain(`is still going: ${first.runId}`);
-        const chat = yield* toolNamed("collie_do")!.call(env, {
-          actions: [{ kind: "take_offer", run: runId, offer: "ship" }],
-        });
-        expect(chat).toContain(refused);
-      }),
-    ),
-  60_000,
-);
+      const typed = yield* collie(world, ["run", "action", runId, "ship"]);
+      const refused = typed.envelope.error?.message ?? "run action started a second Ship";
+      expect(refused).toContain(`is still going: ${first.runId}`);
+      const chat = yield* toolNamed("collie_do")!.call(env, {
+        actions: [{ kind: "take_offer", run: runId, offer: "ship" }],
+      });
+      expect(chat).toContain(refused);
+    }),
+  ));
 
 test("nothing this build cannot carry out is offered as something to ask for", () =>
   runEffect(
@@ -758,37 +746,28 @@ test("the card, collie_run and collie_herd say the same of a Run waiting for mem
     }),
   ));
 
-test(
-  "collie_run carries the Flow Desktop draws for the Run, as run show does",
-  () =>
-    hosted("collie-parity-flow-", ({ world, env }) =>
-      Effect.gen(function* () {
-        const run = yield* hostedRun(world, "draw the work");
-        const door = yield* frontDoor(socketOf(world.state));
-        const detail = yield* until(
-          () =>
-            door
-              .runDetail({ runId: run.id, tail: false, pages: 1, refreshMr: false })
-              .pipe(
-                Stream.map(recordIn),
-                Stream.runHead,
-                Effect.map(Option.getOrNull),
-                Effect.orDie,
-              ),
-          (shown) => shown?.flow?.lanes[0]?.execution === "suspended",
-        );
-        const said = yield* toolNamed("collie_run")!.call(env, { run: run.id });
-        const block = /### Flow, as `run show --json` carries it\n\n```json\n(.*)\n```/s.exec(said);
-        expect(
-          yield* Schema.decodeEffect(Schema.fromJsonString(Flow))(block?.[1] ?? "").pipe(
-            Effect.orDie,
-          ),
-        ).toEqual(detail!.flow!);
-        expect(Arr.map(detail!.flow!.lanes, (lane) => lane.run)).toEqual([run.id]);
-      }).pipe(Effect.provide(recordsAt(world.state))),
-    ),
-  60_000,
-);
+test("collie_run carries the Flow Desktop draws for the Run, as run show does", () =>
+  hosted("collie-parity-flow-", ({ world, env }) =>
+    Effect.gen(function* () {
+      const run = yield* hostedRun(world, "draw the work");
+      const door = yield* frontDoor(socketOf(world.state));
+      const detail = yield* until(
+        () =>
+          door
+            .runDetail({ runId: run.id, tail: false, pages: 1, refreshMr: false })
+            .pipe(Stream.map(recordIn), Stream.runHead, Effect.map(Option.getOrNull), Effect.orDie),
+        (shown) => shown?.flow?.lanes[0]?.execution === "suspended",
+      );
+      const said = yield* toolNamed("collie_run")!.call(env, { run: run.id });
+      const block = /### Flow, as `run show --json` carries it\n\n```json\n(.*)\n```/s.exec(said);
+      expect(
+        yield* Schema.decodeEffect(Schema.fromJsonString(Flow))(block?.[1] ?? "").pipe(
+          Effect.orDie,
+        ),
+      ).toEqual(detail!.flow!);
+      expect(Arr.map(detail!.flow!.lanes, (lane) => lane.run)).toEqual([run.id]);
+    }).pipe(Effect.provide(recordsAt(world.state))),
+  ));
 
 test("collie_run answers from related Runs without polling unrelated live executions", () =>
   runEffect(
@@ -861,172 +840,153 @@ test("a Machine's Native chat and Desktop's Flock chat are given the same Standi
     }).pipe(Effect.scoped),
   ));
 
-test(
-  "chat's disposition is refused a superseded line naming its own Run, as the CLI's is",
-  () =>
-    hosted("collie-parity-self-", ({ world, env }) =>
-      Effect.gen(function* () {
-        const run = yield* settledRun(world, "retains");
-        const said = yield* toolNamed("collie_do")!.call(env, {
-          actions: [{ kind: "disposition", run: run.id, became: "superseded", ref: run.id }],
-        });
-        expect(said).toContain("disposition: failed");
-        expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
-        expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
-      }),
-    ),
-  60_000,
-);
+test("chat's disposition is refused a superseded line naming its own Run, as the CLI's is", () =>
+  hosted("collie-parity-self-", ({ world, env }) =>
+    Effect.gen(function* () {
+      const run = yield* settledRun(world, "retains");
+      const said = yield* toolNamed("collie_do")!.call(env, {
+        actions: [{ kind: "disposition", run: run.id, became: "superseded", ref: run.id }],
+      });
+      expect(said).toContain("disposition: failed");
+      expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
+      expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
+    }),
+  ));
 
 for (const answer of ["Keep F1 (no approval)", "Drop it (approve abc123)"])
-  test(
-    `chat answers the keep/drop Decision with ${answer}`,
-    () =>
-      hosted(
-        "collie-parity-dispute-",
-        ({ world, env }) =>
-          Effect.gen(function* () {
-            const { envelope } = yield* collie(world, [
-              "run",
-              "start",
-              "follows-mr",
-              "--input",
-              "target=worktree",
-              "--input",
-              "proves=dispute",
-            ]);
-            expect(envelope).toMatchObject({ ok: true });
-            const { runId } = yield* Schema.decodeUnknownEffect(
-              Schema.Struct({ runId: Schema.String }),
-            )(envelope.data).pipe(Effect.orDie);
-            const client = yield* connect(world.state).pipe(Effect.orDie);
-            const pending = yield* until(
-              () => client.run({ runId }).pipe(Effect.orDie),
-              (view) => (view?.waiting.length ?? 0) > 0,
-            );
-            expect(pending?.waiting[0]?.name).toBe("dispute-1");
-            const said = yield* toolNamed("collie_do")!.call(env, {
-              actions: [
-                {
-                  kind: "answer",
-                  run: runId,
-                  choiceId: "dispute-1",
-                  answer,
-                },
-              ],
-            });
-            expect(said).toContain("answer: applied");
-            const done = yield* until(
-              () => client.run({ runId }).pipe(Effect.orDie),
-              (view) => view?.status.status === "complete",
-            );
-            expect(done?.status.status === "complete" && done.status.value).toBe(answer);
-          }),
-        [...MODULES, "follows-mr.workflow.ts"],
-      ),
-    60_000,
-  );
-
-test(
-  "chat starts a followed merge request as the Run the CLI started, and answers its approval",
-  () =>
+  test(`chat answers the keep/drop Decision with ${answer}`, () =>
     hosted(
-      "collie-parity-follow-",
+      "collie-parity-dispute-",
       ({ world, env }) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          yield* fs
-            .writeFileString(
-              `${world.config}/config.json`,
-              `{"review": {"follow_through": true}}\n`,
-            )
-            .pipe(Effect.orDie);
-          const bin = yield* FakeBin.make(`${world.home}/bin`);
-          const gitlab = yield* forgeOnPath(bin, "gitlab", {
-            installed: true,
-            loggedIn: ["gitlab.example.com"],
-            login: "me",
-            mrs: [
-              {
-                project: "gitlab.example.com/mk/project",
-                iid: "7",
-                state: "open",
-                author: "ann",
-                head: "1234567890abcdef1234567890abcdef12345678",
-              },
-            ],
-          });
-          const COLLIE_FORGE_API = yield* serveForges(gitlab);
-          yield* bin.restore();
-          const target = "https://gitlab.example.com/mk/project/-/merge_requests/7";
-          const { envelope } = yield* collie(
-            world,
-            ["run", "start", "follows-mr", "--input", `target=${target}`, "--input", "proves=main"],
-            { PATH: `${bin.dir}:${Bun.env.PATH}`, COLLIE_FORGE_API },
-          );
+          const { envelope } = yield* collie(world, [
+            "run",
+            "start",
+            "follows-mr",
+            "--input",
+            "target=worktree",
+            "--input",
+            "proves=dispute",
+          ]);
           expect(envelope).toMatchObject({ ok: true });
           const { runId } = yield* Schema.decodeUnknownEffect(
             Schema.Struct({ runId: Schema.String }),
           )(envelope.data).pipe(Effect.orDie);
-
-          const again = yield* toolNamed("collie_do")!.call(env, {
-            actions: [
-              {
-                kind: "start",
-                workflow: "follows-mr",
-                workspace: world.project,
-                inputs: { target, proves: "feature" },
-              },
-            ],
-          });
-          expect(again).toContain(`${runId} already follows gitlab.example.com/mk/project!7`);
-
           const client = yield* connect(world.state).pipe(Effect.orDie);
-          yield* until(
+          const pending = yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
-            (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "approve-1"),
+            (view) => (view?.waiting.length ?? 0) > 0,
           );
-          const answered = yield* toolNamed("collie_do")!.call(env, {
+          expect(pending?.waiting[0]?.name).toBe("dispute-1");
+          const said = yield* toolNamed("collie_do")!.call(env, {
             actions: [
               {
                 kind: "answer",
                 run: runId,
-                choiceId: "approve-1",
-                answer: "Approve",
+                choiceId: "dispute-1",
+                answer,
               },
             ],
           });
-          expect(answered).toContain("answer: applied");
+          expect(said).toContain("answer: applied");
           const done = yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
             (view) => view?.status.status === "complete",
           );
-          expect(done?.status.status === "complete" && done.status.value).toBe("Approve");
+          expect(done?.status.status === "complete" && done.status.value).toBe(answer);
         }),
       [...MODULES, "follows-mr.workflow.ts"],
-    ),
-  60_000,
-);
+    ));
 
-test(
-  "a superseded line naming its own Run as <this machine>:<run> is refused as the bare id is",
-  () =>
-    hosted("collie-parity-self-qualified-", ({ world, env }) =>
+test("chat starts a followed merge request as the Run the CLI started, and answers its approval", () =>
+  hosted(
+    "collie-parity-follow-",
+    ({ world, env }) =>
       Effect.gen(function* () {
-        const run = yield* settledRun(world, "retains");
-        const said = yield* toolNamed("collie_do")!.call(env, {
-          actions: [
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs
+          .writeFileString(`${world.config}/config.json`, `{"review": {"follow_through": true}}\n`)
+          .pipe(Effect.orDie);
+        const bin = yield* FakeBin.make(`${world.home}/bin`);
+        const gitlab = yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: ["gitlab.example.com"],
+          login: "me",
+          mrs: [
             {
-              kind: "disposition",
-              run: run.id,
-              became: "superseded",
-              ref: `${machineName()}:${run.id}`,
+              project: "gitlab.example.com/mk/project",
+              iid: "7",
+              state: "open",
+              author: "ann",
+              head: "1234567890abcdef1234567890abcdef12345678",
             },
           ],
         });
-        expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
-        expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
+        const COLLIE_FORGE_API = yield* serveForges(gitlab);
+        yield* bin.restore();
+        const target = "https://gitlab.example.com/mk/project/-/merge_requests/7";
+        const { envelope } = yield* collie(
+          world,
+          ["run", "start", "follows-mr", "--input", `target=${target}`, "--input", "proves=main"],
+          { PATH: `${bin.dir}:${Bun.env.PATH}`, COLLIE_FORGE_API },
+        );
+        expect(envelope).toMatchObject({ ok: true });
+        const { runId } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ runId: Schema.String }),
+        )(envelope.data).pipe(Effect.orDie);
+
+        const again = yield* toolNamed("collie_do")!.call(env, {
+          actions: [
+            {
+              kind: "start",
+              workflow: "follows-mr",
+              workspace: world.project,
+              inputs: { target, proves: "feature" },
+            },
+          ],
+        });
+        expect(again).toContain(`${runId} already follows gitlab.example.com/mk/project!7`);
+
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "approve-1"),
+        );
+        const answered = yield* toolNamed("collie_do")!.call(env, {
+          actions: [
+            {
+              kind: "answer",
+              run: runId,
+              choiceId: "approve-1",
+              answer: "Approve",
+            },
+          ],
+        });
+        expect(answered).toContain("answer: applied");
+        const done = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "complete",
+        );
+        expect(done?.status.status === "complete" && done.status.value).toBe("Approve");
       }),
-    ),
-  60_000,
-);
+    [...MODULES, "follows-mr.workflow.ts"],
+  ));
+
+test("a superseded line naming its own Run as <this machine>:<run> is refused as the bare id is", () =>
+  hosted("collie-parity-self-qualified-", ({ world, env }) =>
+    Effect.gen(function* () {
+      const run = yield* settledRun(world, "retains");
+      const said = yield* toolNamed("collie_do")!.call(env, {
+        actions: [
+          {
+            kind: "disposition",
+            run: run.id,
+            became: "superseded",
+            ref: `${machineName()}:${run.id}`,
+          },
+        ],
+      });
+      expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
+      expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
+    }),
+  ));

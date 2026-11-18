@@ -46,80 +46,72 @@ const suspended = (client: Effect.Success<ReturnType<typeof hostWith>>, runId: s
     (status) => status.status === "suspended",
   );
 
-test(
-  "a stop set through collie run stop ends a reused agent's wait at its boundary, and types nothing",
-  () =>
-    proves(
-      "collie-stop-boundary-",
-      (world, core) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const outputs = `${world.home}/outputs.json`;
-          yield* fs.writeFileString(
-            outputs,
-            encode([{ writes: [], output: { verdict: "clean" }, status: "working" }]),
-          );
-          const client = yield* hostWith(world, {});
-          const { runId } = yield* client
-            .start({
-              project: world.project,
-              id: "reuses",
-              request: "start",
-              input: { work: "it" },
-            })
-            .pipe(Effect.orDie);
-          const log = `${world.state}/agents/${runId}/agents.log`;
-          yield* until(
-            () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
-            (text) => pipe_(text, Str.includes("second-step waits for its turn to end")),
-          );
+test("a stop set through collie run stop ends a reused agent's wait at its boundary, and types nothing", () =>
+  proves(
+    "collie-stop-boundary-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const outputs = `${world.home}/outputs.json`;
+        yield* fs.writeFileString(
+          outputs,
+          encode([{ writes: [], output: { verdict: "clean" }, status: "working" }]),
+        );
+        const client = yield* hostWith(world, {});
+        const { runId } = yield* client
+          .start({
+            project: world.project,
+            id: "reuses",
+            request: "start",
+            input: { work: "it" },
+          })
+          .pipe(Effect.orDie);
+        const log = `${world.state}/agents/${runId}/agents.log`;
+        yield* until(
+          () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
+          (text) => pipe_(text, Str.includes("second-step waits for its turn to end")),
+        );
 
-          const stopped = yield* collie(world, ["run", "stop", runId]);
-          expect(stopped.envelope.ok).toBe(true);
-          yield* suspended(client, runId);
-          const said = yield* fs.readFileString(log);
-          const calls = yield* fs.readFileString(core.logPath);
-          yield* stopHost(world.state);
-          expect(said).not.toContain("its turn ended");
-          expect(calls).not.toContain("second-step");
-        }).pipe(Effect.orDie),
-      ["reuses.workflow.ts"],
-    ),
-  120_000,
-);
+        const stopped = yield* collie(world, ["run", "stop", runId]);
+        expect(stopped.envelope.ok).toBe(true);
+        yield* suspended(client, runId);
+        const said = yield* fs.readFileString(log);
+        const calls = yield* fs.readFileString(core.logPath);
+        yield* stopHost(world.state);
+        expect(said).not.toContain("its turn ended");
+        expect(calls).not.toContain("second-step");
+      }).pipe(Effect.orDie),
+    ["reuses.workflow.ts"],
+  ));
 
-test(
-  "a hold set through collie run hold ends a Run's wait on its review",
-  () =>
-    proves(
-      "collie-hold-review-",
-      (world) =>
-        Effect.gen(function* () {
-          const client = yield* hostWith(world, {});
-          const { runId } = yield* client
-            .start({
-              project: world.project,
-              id: "awaits-review",
-              request: "start",
-              input: {
-                mr: "https://gitlab.example.com/group/app/-/merge_requests/1",
-                cwd: world.project,
-              },
-            })
-            .pipe(Effect.orDie);
-          yield* until(
-            () => awaiting(world, runId).pipe(Effect.orElseSucceed(() => false)),
-            (waiting) => waiting,
-          );
+test("a hold set through collie run hold ends a Run's wait on its review", () =>
+  proves(
+    "collie-hold-review-",
+    (world) =>
+      Effect.gen(function* () {
+        const client = yield* hostWith(world, {});
+        const { runId } = yield* client
+          .start({
+            project: world.project,
+            id: "awaits-review",
+            request: "start",
+            input: {
+              mr: "https://gitlab.example.com/group/app/-/merge_requests/1",
+              cwd: world.project,
+            },
+          })
+          .pipe(Effect.orDie);
+        yield* until(
+          () => awaiting(world, runId).pipe(Effect.orElseSucceed(() => false)),
+          (waiting) => waiting,
+        );
 
-          const held = yield* collie(world, ["run", "hold", runId]);
-          expect(held.envelope.ok).toBe(true);
-          yield* suspended(client, runId);
-          const waiting = yield* awaiting(world, runId);
-          yield* stopHost(world.state);
-          expect(waiting).toBe(false);
-        }).pipe(Effect.orDie),
-      ["awaits-review.workflow.ts"],
-    ),
-  120_000,
-);
+        const held = yield* collie(world, ["run", "hold", runId]);
+        expect(held.envelope.ok).toBe(true);
+        yield* suspended(client, runId);
+        const waiting = yield* awaiting(world, runId);
+        yield* stopHost(world.state);
+        expect(waiting).toBe(false);
+      }).pipe(Effect.orDie),
+    ["awaits-review.workflow.ts"],
+  ));

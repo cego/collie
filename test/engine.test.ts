@@ -29,139 +29,125 @@ const Problems = Schema.Record(Schema.String, Schema.Array(Schema.String));
 const asking = (reply: typeof HostReply.Type) => (reply.diagnostics ?? []).includes("decision");
 const complete = (reply: typeof HostReply.Type) => reply.status === "complete";
 
-test(
-  "a module outside the checkout runs on the binary and a restart reuses its completed work",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-restart-");
-        const first = yield* openHost(state);
-        const loaded = yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        expect(loaded.ok).toBe(true);
-        expect(loaded.id).toBe("proof");
-        expect(loaded.registration).toBe("proof@1");
+test("a module outside the checkout runs on the binary and a restart reuses its completed work", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-restart-");
+      const first = yield* openHost(state);
+      const loaded = yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+      expect(loaded.ok).toBe(true);
+      expect(loaded.id).toBe("proof");
+      expect(loaded.registration).toBe("proof@1");
 
-        yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "first" } });
-        yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        const started = yield* events(state, "r1");
-        expect(started).toHaveLength(2);
-        expect(started[0]).toMatch(/^launch note:first \d+$/);
-        expect(started[1]).toBe("wait");
-        yield* first.stop;
+      yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "first" } });
+      yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+      const started = yield* events(state, "r1");
+      expect(started).toHaveLength(2);
+      expect(started[0]).toMatch(/^launch note:first \d+$/);
+      expect(started[1]).toBe("wait");
+      yield* first.stop;
 
-        const second = yield* openHost(state);
-        const registrations = yield* second.ask({ op: "registrations" });
-        expect(registrations.registrations).toEqual(["proof@1"]);
-        yield* second.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "yes",
-        });
-        const done = yield* second.until({ op: "poll", id: "proof", runId: "r1" }, complete);
-        expect(done.value).toBe("note:first=yes");
-        yield* second.stop;
+      const second = yield* openHost(state);
+      const registrations = yield* second.ask({ op: "registrations" });
+      expect(registrations.registrations).toEqual(["proof@1"]);
+      yield* second.ask({
+        op: "answer",
+        id: "proof",
+        runId: "r1",
+        decision: "decision",
+        value: "yes",
+      });
+      const done = yield* second.until({ op: "poll", id: "proof", runId: "r1" }, complete);
+      expect(done.value).toBe("note:first=yes");
+      yield* second.stop;
 
-        const log = yield* events(state, "r1");
-        expect(Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch")))).toHaveLength(1);
-        expect(Arr.filter(log, (line) => line === "wait").length).toBeGreaterThan(1);
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+      const log = yield* events(state, "r1");
+      expect(Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch")))).toHaveLength(1);
+      expect(Arr.filter(log, (line) => line === "wait").length).toBeGreaterThan(1);
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a hold suspends at a boundary and release resumes the same run without launching again",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-hold-");
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "held" } });
-        yield* host.until({ op: "waiting", runId: "r1" }, asking);
-        yield* host.ask({ op: "hold", runId: "r1" });
-        yield* host.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "go",
-        });
-        const paused = yield* until(
-          () => events(state, "r1"),
-          (log) => log.includes("held"),
-        );
-        expect(paused[0]).toMatch(/^launch note:held /);
-        yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+test("a hold suspends at a boundary and release resumes the same run without launching again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-hold-");
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+      yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "held" } });
+      yield* host.until({ op: "waiting", runId: "r1" }, asking);
+      yield* host.ask({ op: "hold", runId: "r1" });
+      yield* host.ask({
+        op: "answer",
+        id: "proof",
+        runId: "r1",
+        decision: "decision",
+        value: "go",
+      });
+      const paused = yield* until(
+        () => events(state, "r1"),
+        (log) => log.includes("held"),
+      );
+      expect(paused[0]).toMatch(/^launch note:held /);
+      yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
 
-        yield* host.ask({ op: "release", id: "proof", runId: "r1" });
-        const done = yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete);
-        expect(done.value).toBe("note:held=go");
-        yield* host.stop;
+      yield* host.ask({ op: "release", id: "proof", runId: "r1" });
+      const done = yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete);
+      expect(done.value).toBe("note:held=go");
+      yield* host.stop;
 
-        const log = yield* events(state, "r1");
-        expect(Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch")))).toHaveLength(1);
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+      const log = yield* events(state, "r1");
+      expect(Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch")))).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a release that lands while a boundary is still suspending for its hold takes the Run up once it has",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { wf, state } = yield* workspace("collie-engine-release-race-");
-        const entry = `${wf}/proof.workflow.ts`;
-        yield* fs.writeFileString(
-          entry,
-          pipe_(
-            yield* fs.readFileString(entry),
-            Str.replace(
-              'yield* host.record(runId, "held");',
-              'yield* host.record(runId, "held");\n        yield* Effect.sleep("3 seconds");',
-            ),
+test("a release that lands while a boundary is still suspending for its hold takes the Run up once it has", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { wf, state } = yield* workspace("collie-engine-release-race-");
+      const entry = `${wf}/proof.workflow.ts`;
+      yield* fs.writeFileString(
+        entry,
+        pipe_(
+          yield* fs.readFileString(entry),
+          Str.replace(
+            'yield* host.record(runId, "held");',
+            'yield* host.record(runId, "held");\n        yield* Effect.sleep("3 seconds");',
           ),
-        );
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry });
-        yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "raced" } });
-        yield* host.until({ op: "waiting", runId: "r1" }, asking);
-        yield* host.ask({ op: "hold", runId: "r1" });
-        yield* host.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "go",
-        });
-        yield* until(
-          () => events(state, "r1"),
-          (log) => log.includes("held"),
-        );
-        yield* host.ask({ op: "release", id: "proof", runId: "r1" });
-        const done = yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete);
-        expect(done.value).toBe("note:raced=go");
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+        ),
+      );
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry });
+      yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "raced" } });
+      yield* host.until({ op: "waiting", runId: "r1" }, asking);
+      yield* host.ask({ op: "hold", runId: "r1" });
+      yield* host.ask({
+        op: "answer",
+        id: "proof",
+        runId: "r1",
+        decision: "decision",
+        value: "go",
+      });
+      yield* until(
+        () => events(state, "r1"),
+        (log) => log.includes("held"),
+      );
+      yield* host.ask({ op: "release", id: "proof", runId: "r1" });
+      const done = yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete);
+      expect(done.value).toBe("note:raced=go");
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a hold read where the Run does not suspend leaves a later wait on a question asleep",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { wf, state } = yield* workspace("collie-engine-hold-peek-");
-        const entry = `${wf}/peeks.workflow.ts`;
-        yield* fs.writeFileString(
-          entry,
-          `import { Host, Run, ask, defineWorkflow } from "collie";
+test("a hold read where the Run does not suspend leaves a later wait on a question asleep", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { wf, state } = yield* workspace("collie-engine-hold-peek-");
+      const entry = `${wf}/peeks.workflow.ts`;
+      yield* fs.writeFileString(
+        entry,
+        `import { Host, Run, ask, defineWorkflow } from "collie";
 import { Effect, Schedule, Schema } from "effect";
 
 export default defineWorkflow({
@@ -185,314 +171,288 @@ export default defineWorkflow({
     }),
 });
 `,
-        );
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry });
-        yield* host.ask({ op: "start", id: "peeks", runId: "r1", input: { note: "peek" } });
-        yield* host.until({ op: "waiting", runId: "r1" }, (reply) =>
-          (reply.diagnostics ?? []).includes("first"),
-        );
-        yield* host.ask({ op: "hold", runId: "r1" });
-        yield* host.ask({ op: "answer", id: "peeks", runId: "r1", decision: "first", value: "a" });
+      );
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry });
+      yield* host.ask({ op: "start", id: "peeks", runId: "r1", input: { note: "peek" } });
+      yield* host.until({ op: "waiting", runId: "r1" }, (reply) =>
+        (reply.diagnostics ?? []).includes("first"),
+      );
+      yield* host.ask({ op: "hold", runId: "r1" });
+      yield* host.ask({ op: "answer", id: "peeks", runId: "r1", decision: "first", value: "a" });
+      yield* until(
+        () => events(state, "r1"),
+        (log) => Arr.filter(log, (line) => line === "peeked").length >= 3,
+      );
+      yield* host.ask({ op: "release", id: "peeks", runId: "r1" });
+      yield* host.until({ op: "waiting", runId: "r1" }, (reply) =>
+        (reply.diagnostics ?? []).includes("second"),
+      );
+      yield* host.until({ op: "poll", id: "peeks", runId: "r1" }, suspended);
+      yield* Effect.sleep("2 seconds");
+      const log = yield* events(state, "r1");
+      expect(Arr.filter(log, (line) => line === "released")).toHaveLength(1);
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
+
+test("two stop and resume cycles keep the run's work and it still completes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-stop-");
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+      yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "stopped" } });
+      yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+
+      for (const cycle of [1, 2]) {
+        yield* host.ask({ op: "stop", id: "proof", runId: "r1" });
         yield* until(
           () => events(state, "r1"),
-          (log) => Arr.filter(log, (line) => line === "peeked").length >= 3,
+          (log) => stopsIn(log) === cycle,
         );
-        yield* host.ask({ op: "release", id: "peeks", runId: "r1" });
-        yield* host.until({ op: "waiting", runId: "r1" }, (reply) =>
-          (reply.diagnostics ?? []).includes("second"),
-        );
-        yield* host.until({ op: "poll", id: "peeks", runId: "r1" }, suspended);
-        yield* Effect.sleep("2 seconds");
-        const log = yield* events(state, "r1");
-        expect(Arr.filter(log, (line) => line === "released")).toHaveLength(1);
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
-
-test(
-  "two stop and resume cycles keep the run's work and it still completes",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-stop-");
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "stopped" } });
         yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+        yield* host.ask({ op: "resume", id: "proof", runId: "r1" });
+      }
 
-        for (const cycle of [1, 2]) {
-          yield* host.ask({ op: "stop", id: "proof", runId: "r1" });
-          yield* until(
-            () => events(state, "r1"),
-            (log) => stopsIn(log) === cycle,
-          );
-          yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-          yield* host.ask({ op: "resume", id: "proof", runId: "r1" });
-        }
+      yield* host.until({ op: "waiting", runId: "r1" }, asking);
+      yield* host.ask({
+        op: "answer",
+        id: "proof",
+        runId: "r1",
+        decision: "decision",
+        value: "done",
+      });
+      const done = yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete);
+      expect(done.value).toBe("note:stopped=done");
+      yield* host.stop;
 
-        yield* host.until({ op: "waiting", runId: "r1" }, asking);
-        yield* host.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "done",
-        });
-        const done = yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete);
-        expect(done.value).toBe("note:stopped=done");
-        yield* host.stop;
+      const log = yield* events(state, "r1");
+      expect(stopsIn(log)).toBe(2);
+      const launches = Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch")));
+      expect(launches).toHaveLength(1);
+      expect(launches[0]).toMatch(/^launch note:stopped /);
+    }).pipe(Effect.scoped),
+  ));
 
-        const log = yield* events(state, "r1");
-        expect(stopsIn(log)).toBe(2);
-        const launches = Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch")));
-        expect(launches).toHaveLength(1);
-        expect(launches[0]).toMatch(/^launch note:stopped /);
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+test("a module that is gone leaves its run pending and names the file, and another one still runs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { wf, state } = yield* workspace("collie-engine-missing-");
+      const first = yield* openHost(state);
+      yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+      yield* first.ask({ op: "load", entry: `${wf}/plain.workflow.ts` });
+      yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "orphan" } });
+      yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+      yield* first.stop;
 
-test(
-  "a module that is gone leaves its run pending and names the file, and another one still runs",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { wf, state } = yield* workspace("collie-engine-missing-");
-        const first = yield* openHost(state);
-        yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* first.ask({ op: "load", entry: `${wf}/plain.workflow.ts` });
-        yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "orphan" } });
-        yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        yield* first.stop;
-
-        yield* fs.remove(`${wf}/proof.workflow.ts`);
-        const second = yield* openHost(state);
-        const registrations = yield* second.ask({ op: "registrations" });
-        expect(registrations.registrations).toEqual(["plain@1"]);
-        expect(
-          Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(registrations.diagnostics), (present) =>
-              Arr.join(present, "\n"),
-            ),
+      yield* fs.remove(`${wf}/proof.workflow.ts`);
+      const second = yield* openHost(state);
+      const registrations = yield* second.ask({ op: "registrations" });
+      expect(registrations.registrations).toEqual(["plain@1"]);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(registrations.diagnostics), (present) =>
+            Arr.join(present, "\n"),
           ),
-        ).toContain("proof.workflow.ts");
+        ),
+      ).toContain("proof.workflow.ts");
 
-        const refused = yield* second.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "no",
-        });
-        expect(refused.ok).toBe(false);
-        expect(refused.detail).toContain("proof.workflow.ts");
+      const refused = yield* second.ask({
+        op: "answer",
+        id: "proof",
+        runId: "r1",
+        decision: "decision",
+        value: "no",
+      });
+      expect(refused.ok).toBe(false);
+      expect(refused.detail).toContain("proof.workflow.ts");
 
-        yield* second.ask({ op: "start", id: "plain", runId: "r2", input: { note: "fine" } });
-        const other = yield* second.until({ op: "poll", id: "plain", runId: "r2" }, complete);
-        expect(other.value).toBe("plain:fine");
-        yield* second.stop;
+      yield* second.ask({ op: "start", id: "plain", runId: "r2", input: { note: "fine" } });
+      const other = yield* second.until({ op: "poll", id: "plain", runId: "r2" }, complete);
+      expect(other.value).toBe("plain:fine");
+      yield* second.stop;
 
-        yield* fs.copyFile(`${fixtures}/proof.workflow.ts`, `${wf}/proof.workflow.ts`);
-        const third = yield* openHost(state);
-        yield* third.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "back",
-        });
-        const done = yield* third.until({ op: "poll", id: "proof", runId: "r1" }, complete);
-        expect(done.value).toBe("note:orphan=back");
-        yield* third.stop;
-        expect(
-          Arr.filter(yield* events(state, "r1"), (line) => pipe_(line, Str.startsWith("launch"))),
-        ).toHaveLength(1);
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+      yield* fs.copyFile(`${fixtures}/proof.workflow.ts`, `${wf}/proof.workflow.ts`);
+      const third = yield* openHost(state);
+      yield* third.ask({
+        op: "answer",
+        id: "proof",
+        runId: "r1",
+        decision: "decision",
+        value: "back",
+      });
+      const done = yield* third.until({ op: "poll", id: "proof", runId: "r1" }, complete);
+      expect(done.value).toBe("note:orphan=back");
+      yield* third.stop;
+      expect(
+        Arr.filter(yield* events(state, "r1"), (line) => pipe_(line, Str.startsWith("launch"))),
+      ).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "loading an entry again is a new generation beside the work already running on the old one",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { wf, state } = yield* workspace("collie-engine-generations-");
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* host.ask({ op: "start", id: "proof", runId: "old", input: { note: "before" } });
-        yield* host.until({ op: "poll", id: "proof", runId: "old" }, suspended);
+test("loading an entry again is a new generation beside the work already running on the old one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { wf, state } = yield* workspace("collie-engine-generations-");
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+      yield* host.ask({ op: "start", id: "proof", runId: "old", input: { note: "before" } });
+      yield* host.until({ op: "poll", id: "proof", runId: "old" }, suspended);
 
-        yield* fs.writeFileString(
-          `${wf}/helper.ts`,
-          "export const label = (note: string): string => `edited:${note}`;\n",
-        );
-        const reloaded = yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        expect(reloaded.registration).toBe("proof@2");
-        expect((yield* host.ask({ op: "registrations" })).registrations).toEqual([
-          "proof@1",
-          "proof@2",
-        ]);
+      yield* fs.writeFileString(
+        `${wf}/helper.ts`,
+        "export const label = (note: string): string => `edited:${note}`;\n",
+      );
+      const reloaded = yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+      expect(reloaded.registration).toBe("proof@2");
+      expect((yield* host.ask({ op: "registrations" })).registrations).toEqual([
+        "proof@1",
+        "proof@2",
+      ]);
 
-        const started = yield* host.ask({
-          op: "start",
-          id: "proof",
-          runId: "new",
-          input: { note: "after" },
-        });
-        expect(started.registration).toBe("proof@2");
-        yield* host.until({ op: "poll", id: "proof", runId: "new" }, suspended);
-        expect((yield* events(state, "new"))[0]).toContain("edited:after");
+      const started = yield* host.ask({
+        op: "start",
+        id: "proof",
+        runId: "new",
+        input: { note: "after" },
+      });
+      expect(started.registration).toBe("proof@2");
+      yield* host.until({ op: "poll", id: "proof", runId: "new" }, suspended);
+      expect((yield* events(state, "new"))[0]).toContain("edited:after");
 
-        for (const runId of ["old", "new"]) {
-          yield* host.ask({ op: "answer", id: "proof", runId, decision: "decision", value: "x" });
-        }
-        expect((yield* host.until({ op: "poll", id: "proof", runId: "old" }, complete)).value).toBe(
-          "note:before=x",
-        );
-        expect((yield* host.until({ op: "poll", id: "proof", runId: "new" }, complete)).value).toBe(
-          "edited:after=x",
-        );
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+      for (const runId of ["old", "new"]) {
+        yield* host.ask({ op: "answer", id: "proof", runId, decision: "decision", value: "x" });
+      }
+      expect((yield* host.until({ op: "poll", id: "proof", runId: "old" }, complete)).value).toBe(
+        "note:before=x",
+      );
+      expect((yield* host.until({ op: "poll", id: "proof", runId: "new" }, complete)).value).toBe(
+        "edited:after=x",
+      );
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "two hosts with their own state directories register the same workflow without meeting",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const one = yield* workspace("collie-engine-project-one-");
-        const two = yield* workspace("collie-engine-project-two-");
-        const hostOne = yield* openHost(one.state);
-        const hostTwo = yield* openHost(two.state);
-        yield* hostOne.ask({ op: "load", entry: `${one.wf}/proof.workflow.ts` });
-        yield* hostTwo.ask({ op: "load", entry: `${two.wf}/plain.workflow.ts` });
+test("two hosts with their own state directories register the same workflow without meeting", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const one = yield* workspace("collie-engine-project-one-");
+      const two = yield* workspace("collie-engine-project-two-");
+      const hostOne = yield* openHost(one.state);
+      const hostTwo = yield* openHost(two.state);
+      yield* hostOne.ask({ op: "load", entry: `${one.wf}/proof.workflow.ts` });
+      yield* hostTwo.ask({ op: "load", entry: `${two.wf}/plain.workflow.ts` });
 
-        expect((yield* hostOne.ask({ op: "registrations" })).registrations).toEqual(["proof@1"]);
-        expect((yield* hostTwo.ask({ op: "registrations" })).registrations).toEqual(["plain@1"]);
+      expect((yield* hostOne.ask({ op: "registrations" })).registrations).toEqual(["proof@1"]);
+      expect((yield* hostTwo.ask({ op: "registrations" })).registrations).toEqual(["plain@1"]);
 
-        yield* hostOne.ask({ op: "start", id: "proof", runId: "shared", input: { note: "one" } });
-        const elsewhere = yield* hostTwo.ask({ op: "poll", id: "proof", runId: "shared" });
-        expect(elsewhere.ok).toBe(false);
-        yield* hostOne.until({ op: "poll", id: "proof", runId: "shared" }, suspended);
-        yield* hostOne.stop;
-        yield* hostTwo.stop;
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+      yield* hostOne.ask({ op: "start", id: "proof", runId: "shared", input: { note: "one" } });
+      const elsewhere = yield* hostTwo.ask({ op: "poll", id: "proof", runId: "shared" });
+      expect(elsewhere.ok).toBe(false);
+      yield* hostOne.until({ op: "poll", id: "proof", runId: "shared" }, suspended);
+      yield* hostOne.stop;
+      yield* hostTwo.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "the provisioned toolchain typechecks every module against the declarations an author is given, and says where a broken one is wrong",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-toolchain-");
-        const fs = yield* FileSystem.FileSystem;
-        for (const name of ["heal.workflow.ts", "heal.md"])
-          yield* fs.copyFile(`${root}workflows/${name}`, `${wf}/${name}`).pipe(Effect.orDie);
-        const host = yield* openHost(state);
+test("the provisioned toolchain typechecks every module against the declarations an author is given, and says where a broken one is wrong", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-toolchain-");
+      const fs = yield* FileSystem.FileSystem;
+      for (const name of ["heal.workflow.ts", "heal.md"])
+        yield* fs.copyFile(`${root}workflows/${name}`, `${wf}/${name}`).pipe(Effect.orDie);
+      const host = yield* openHost(state);
 
-        const unprovisioned = yield* host.ask({
-          op: "check",
-          dir: wf,
-          entry: `${wf}/proof.workflow.ts`,
-        });
-        expect(unprovisioned.ok).toBe(false);
-        expect(unprovisioned.detail).toContain("provision it");
+      const unprovisioned = yield* host.ask({
+        op: "check",
+        dir: wf,
+        entry: `${wf}/proof.workflow.ts`,
+      });
+      expect(unprovisioned.ok).toBe(false);
+      expect(unprovisioned.detail).toContain("provision it");
 
-        const provisioned = yield* host.ask({ op: "provision", dir: wf });
-        expect(provisioned.ok).toBe(true);
+      const provisioned = yield* host.ask({ op: "provision", dir: wf });
+      expect(provisioned.ok).toBe(true);
 
-        const clean = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/proof.workflow.ts` });
-        expect(clean.ok).toBe(true);
-        expect(clean.diagnostics).toEqual([]);
+      const clean = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/proof.workflow.ts` });
+      expect(clean.ok).toBe(true);
+      expect(clean.diagnostics).toEqual([]);
 
-        const beside = [
-          "plain",
-          "hello",
-          "quiet",
-          "branches",
-          "delegates",
-          "declines",
-          "echo",
-          "unwired",
-          "agent",
-          "rally",
-          "reviewed",
-          "graded",
-          "roster",
-          "sweep",
-          "spread",
-          "share",
-          "offered",
-          "planned",
-          "measured",
-          "landing",
-          "plan",
-          "review",
-          "architecture",
-          "implement",
-          "renovate",
-          "release",
-          "general",
-          "tune-up",
-          "heal",
-        ];
-        const checked = yield* host.ask({
-          op: "checks",
-          entries: Arr.map(["broken", ...beside], (name) => `${wf}/${name}.workflow.ts`),
-        });
-        expect(checked.ok).toBe(true);
-        const problems = yield* Schema.decodeUnknownEffect(Problems)(checked.value).pipe(
-          Effect.orDie,
-        );
-        expect(
-          Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(problems[`${wf}/broken.workflow.ts`]), (present_) =>
-              Arr.join(present_, "\n"),
-            ),
+      const beside = [
+        "plain",
+        "hello",
+        "quiet",
+        "branches",
+        "delegates",
+        "declines",
+        "echo",
+        "unwired",
+        "agent",
+        "rally",
+        "reviewed",
+        "graded",
+        "roster",
+        "sweep",
+        "spread",
+        "share",
+        "offered",
+        "planned",
+        "measured",
+        "landing",
+        "plan",
+        "review",
+        "architecture",
+        "implement",
+        "renovate",
+        "release",
+        "general",
+        "tune-up",
+        "heal",
+      ];
+      const checked = yield* host.ask({
+        op: "checks",
+        entries: Arr.map(["broken", ...beside], (name) => `${wf}/${name}.workflow.ts`),
+      });
+      expect(checked.ok).toBe(true);
+      const problems = yield* Schema.decodeUnknownEffect(Problems)(checked.value).pipe(
+        Effect.orDie,
+      );
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(problems[`${wf}/broken.workflow.ts`]), (present_) =>
+            Arr.join(present_, "\n"),
           ),
-        ).toContain("broken.workflow.ts(");
-        for (const name of beside) {
-          expect([name, problems[`${wf}/${name}.workflow.ts`]]).toEqual([name, []]);
-        }
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  300_000,
-);
+        ),
+      ).toContain("broken.workflow.ts(");
+      for (const name of beside) {
+        expect([name, problems[`${wf}/${name}.workflow.ts`]]).toEqual([name, []]);
+      }
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a module on Effect's earlier workflow path runs on the host's own objects, beside the current one",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-paths-");
-        const host = yield* openHost(state);
-        const loaded = yield* host.ask({ op: "load", entry: `${wf}/paths.workflow.ts` });
-        expect(loaded.ok).toBe(true);
-        yield* host.ask({ op: "start", id: "paths", runId: "r1", input: { note: "n" } });
-        const done = yield* host.until({ op: "poll", id: "paths", runId: "r1" }, complete);
-        expect(done.value).toBe("n:before+after:same");
-        const ran = Arr.filter(
-          yield* events(state, "r1"),
-          (line) => !pipe_(line, Str.startsWith("aligned")),
-        );
-        expect(ran).toEqual(["before", "after"]);
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+test("a module on Effect's earlier workflow path runs on the host's own objects, beside the current one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-paths-");
+      const host = yield* openHost(state);
+      const loaded = yield* host.ask({ op: "load", entry: `${wf}/paths.workflow.ts` });
+      expect(loaded.ok).toBe(true);
+      yield* host.ask({ op: "start", id: "paths", runId: "r1", input: { note: "n" } });
+      const done = yield* host.until({ op: "poll", id: "paths", runId: "r1" }, complete);
+      expect(done.value).toBe("n:before+after:same");
+      const ran = Arr.filter(
+        yield* events(state, "r1"),
+        (line) => !pipe_(line, Str.startsWith("aligned")),
+      );
+      expect(ran).toEqual(["before", "after"]);
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
 const Manifest = Schema.fromJsonString(
   Schema.Struct({ dependencies: Schema.Struct({ effect: Schema.String }) }),
@@ -698,102 +658,90 @@ test("work an engine on upstream's 300 shards left waiting is finished by the on
     }).pipe(Effect.scoped),
   ));
 
-test(
-  "a host killed mid-run leaves the work suspended rather than failed, and the next one finishes it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-crash-");
-        const first = yield* openHost(state);
-        yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "crashed" } });
-        yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+test("a host killed mid-run leaves the work suspended rather than failed, and the next one finishes it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-crash-");
+      const first = yield* openHost(state);
+      yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+      yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "crashed" } });
+      yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
 
-        yield* first.child.kill({ killSignal: "SIGKILL" });
-        yield* first.child.exitCode.pipe(Effect.ignore);
+      yield* first.child.kill({ killSignal: "SIGKILL" });
+      yield* first.child.exitCode.pipe(Effect.ignore);
 
-        const second = yield* openHost(state);
-        expect((yield* second.ask({ op: "poll", id: "proof", runId: "r1" })).status).toBe(
-          "suspended",
-        );
-        yield* second.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "after",
-        });
-        const done = yield* second.until({ op: "poll", id: "proof", runId: "r1" }, complete);
-        expect(done.value).toBe("note:crashed=after");
-        yield* second.stop;
-        expect(
-          Arr.filter(yield* events(state, "r1"), (line) => pipe_(line, Str.startsWith("launch"))),
-        ).toHaveLength(1);
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+      const second = yield* openHost(state);
+      expect((yield* second.ask({ op: "poll", id: "proof", runId: "r1" })).status).toBe(
+        "suspended",
+      );
+      yield* second.ask({
+        op: "answer",
+        id: "proof",
+        runId: "r1",
+        decision: "decision",
+        value: "after",
+      });
+      const done = yield* second.until({ op: "poll", id: "proof", runId: "r1" }, complete);
+      expect(done.value).toBe("note:crashed=after");
+      yield* second.stop;
+      expect(
+        Arr.filter(yield* events(state, "r1"), (line) => pipe_(line, Str.startsWith("launch"))),
+      ).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a typed module registers, runs on a service of its own and returns its typed result",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-echo-");
-        const host = yield* openHost(state);
-        const loaded = yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
-        expect(loaded.ok).toBe(true);
+test("a typed module registers, runs on a service of its own and returns its typed result", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-echo-");
+      const host = yield* openHost(state);
+      const loaded = yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
+      expect(loaded.ok).toBe(true);
 
-        const declared = yield* host.ask({ op: "metadata", id: "echo" });
-        expect(declared.metadata).toMatchObject({
-          hints: { text: "work-source" },
-          selectable: ["feature", "docs"],
-          followUps: [{ id: "echo-again", workflow: "echo", when: "succeeded" }],
-          actions: [{ id: "echo-louder", title: "Echo it louder", workflow: "echo" }],
-        });
+      const declared = yield* host.ask({ op: "metadata", id: "echo" });
+      expect(declared.metadata).toMatchObject({
+        hints: { text: "work-source" },
+        selectable: ["feature", "docs"],
+        followUps: [{ id: "echo-again", workflow: "echo", when: "succeeded" }],
+        actions: [{ id: "echo-louder", title: "Echo it louder", workflow: "echo" }],
+      });
 
-        yield* host.ask({
-          op: "start",
-          id: "echo",
-          runId: "e1",
-          input: { text: "hi", times: 2 },
-        });
-        yield* host.until({ op: "poll", id: "echo", runId: "e1" }, suspended);
-        yield* host.ask({ op: "answer", id: "echo", runId: "e1", decision: "keep", value: "yes" });
-        const done = yield* host.until({ op: "poll", id: "echo", runId: "e1" }, complete);
-        expect(done.value).toBe("<hi>#1 <hi>#2|yes");
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+      yield* host.ask({
+        op: "start",
+        id: "echo",
+        runId: "e1",
+        input: { text: "hi", times: 2 },
+      });
+      yield* host.until({ op: "poll", id: "echo", runId: "e1" }, suspended);
+      yield* host.ask({ op: "answer", id: "echo", runId: "e1", decision: "keep", value: "yes" });
+      const done = yield* host.until({ op: "poll", id: "echo", runId: "e1" }, complete);
+      expect(done.value).toBe("<hi>#1 <hi>#2|yes");
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "an input the workflow's own schema rejects names the field, and starts nothing",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-invalid-");
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
-        const refused = yield* host.ask({
-          op: "start",
-          id: "echo",
-          runId: "e1",
-          input: { text: "hi", times: "two" },
-        });
-        expect(refused.ok).toBe(false);
-        expect(refused.detail).toContain("invalid_input");
-        expect(refused.detail).toContain("times");
+test("an input the workflow's own schema rejects names the field, and starts nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-invalid-");
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
+      const refused = yield* host.ask({
+        op: "start",
+        id: "echo",
+        runId: "e1",
+        input: { text: "hi", times: "two" },
+      });
+      expect(refused.ok).toBe(false);
+      expect(refused.detail).toContain("invalid_input");
+      expect(refused.detail).toContain("times");
 
-        const polled = yield* host.ask({ op: "poll", id: "echo", runId: "e1" });
-        expect(polled.ok).toBe(false);
-        expect(polled.detail).toContain('no run "e1" was started here');
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+      const polled = yield* host.ask({ op: "poll", id: "echo", runId: "e1" });
+      expect(polled.ok).toBe(false);
+      expect(polled.detail).toContain('no run "e1" was started here');
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
 const COUNTS = `
 import { defineWorkflow } from "collie";
@@ -810,95 +758,79 @@ export default defineWorkflow({
 });
 `;
 
-test(
-  "a structured result reaches a client as its own schema encodes it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-result-");
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(`${wf}/counts.workflow.ts`, COUNTS);
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry: `${wf}/counts.workflow.ts` });
-        yield* host.ask({ op: "start", id: "counts", runId: "c1", input: { items: ["a", "b"] } });
-        const done = yield* host.until({ op: "poll", id: "counts", runId: "c1" }, complete);
-        expect(done.value).toEqual({ count: 2, at: "1970-01-01T00:00:00.000Z" });
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+test("a structured result reaches a client as its own schema encodes it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-result-");
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${wf}/counts.workflow.ts`, COUNTS);
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry: `${wf}/counts.workflow.ts` });
+      yield* host.ask({ op: "start", id: "counts", runId: "c1", input: { items: ["a", "b"] } });
+      const done = yield* host.until({ op: "poll", id: "counts", runId: "c1" }, complete);
+      expect(done.value).toEqual({ count: 2, at: "1970-01-01T00:00:00.000Z" });
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a module that contradicts itself is refused at load, with every conflict named",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-conflicted-");
-        const host = yield* openHost(state);
-        const refused = yield* host.ask({ op: "load", entry: `${wf}/conflicted.workflow.ts` });
-        expect(refused.ok).toBe(false);
-        for (const conflict of [
-          "is not an identity",
-          'input "branch" collides with a host option',
-          "both claim work-source",
-          "either fixed or selectable",
-          'no outcome called "vibes"',
-          "is not an identity for an offer",
-        ]) {
-          expect(refused.detail).toContain(conflict);
-        }
-        expect((yield* host.ask({ op: "registrations" })).registrations).toEqual([]);
-        yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
-        expect((yield* host.ask({ op: "registrations" })).registrations).toEqual(["echo@1"]);
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+test("a module that contradicts itself is refused at load, with every conflict named", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-conflicted-");
+      const host = yield* openHost(state);
+      const refused = yield* host.ask({ op: "load", entry: `${wf}/conflicted.workflow.ts` });
+      expect(refused.ok).toBe(false);
+      for (const conflict of [
+        "is not an identity",
+        'input "branch" collides with a host option',
+        "both claim work-source",
+        "either fixed or selectable",
+        'no outcome called "vibes"',
+        "is not an identity for an offer",
+      ]) {
+        expect(refused.detail).toContain(conflict);
+      }
+      expect((yield* host.ask({ op: "registrations" })).registrations).toEqual([]);
+      yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
+      expect((yield* host.ask({ op: "registrations" })).registrations).toEqual(["echo@1"]);
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a refusal an Activity died of keeps its reason in the Run's failure",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-refuses-");
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.copyFile(`${fixtures}/refuses.workflow.ts`, `${wf}/refuses.workflow.ts`);
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry: `${wf}/refuses.workflow.ts` });
-        yield* host.ask({ op: "start", id: "refuses", runId: "r1", input: {} });
-        const failed = yield* host.until(
-          { op: "poll", id: "refuses", runId: "r1" },
-          (reply) => reply.status === "failed",
-        );
-        expect(failed.value).toContain('WorkflowError: nothing on PATH called "bun"');
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+test("a refusal an Activity died of keeps its reason in the Run's failure", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-refuses-");
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.copyFile(`${fixtures}/refuses.workflow.ts`, `${wf}/refuses.workflow.ts`);
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry: `${wf}/refuses.workflow.ts` });
+      yield* host.ask({ op: "start", id: "refuses", runId: "r1", input: {} });
+      const failed = yield* host.until(
+        { op: "poll", id: "refuses", runId: "r1" },
+        (reply) => reply.status === "failed",
+      );
+      expect(failed.value).toContain('WorkflowError: nothing on PATH called "bun"');
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a service a module never provided is reported against the file that asks for it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-unwired-");
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry: `${wf}/unwired.workflow.ts` });
-        yield* host.ask({ op: "start", id: "unwired", runId: "u1", input: { text: "x" } });
-        const failed = yield* host.until(
-          { op: "poll", id: "unwired", runId: "u1" },
-          (reply) => reply.status === "failed",
-        );
-        expect(failed.value).toContain("Service not found: unwired/Missing");
-        expect(failed.id).toContain("unwired.workflow.ts");
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+test("a service a module never provided is reported against the file that asks for it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-engine-unwired-");
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry: `${wf}/unwired.workflow.ts` });
+      yield* host.ask({ op: "start", id: "unwired", runId: "u1", input: { text: "x" } });
+      const failed = yield* host.until(
+        { op: "poll", id: "unwired", runId: "u1" },
+        (reply) => reply.status === "failed",
+      );
+      expect(failed.value).toContain("Service not found: unwired/Missing");
+      expect(failed.id).toContain("unwired.workflow.ts");
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
 test("the engine's count for an execution stands while it sleeps and moves when it is written to", () =>
   runEffect(

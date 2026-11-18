@@ -489,193 +489,181 @@ test("a rule constraint is spelled out, and a misspelled one says how", () => {
   });
 });
 
-test(
-  "a started Run has its Intent before its work runs, and one started from it inherits it",
-  () =>
-    hosted("hw-intent-seed-", ({ world }) =>
+test("a started Run has its Intent before its work runs, and one started from it inherits it", () =>
+  hosted("hw-intent-seed-", ({ world }) =>
+    Effect.gen(function* () {
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const uuid = (yield* SecureRandom.SecureRandom).uuidV4();
+      const human = { kind: "semantic", severity: "warn", source: "human" } as const;
+      const started = yield* client
+        .start({
+          project: world.project,
+          id: "hello",
+          request: yield* uuid,
+          input: { name: "seed" },
+          intent: {
+            goal: "greet whoever asks",
+            constraints: [{ ...human, id: "short", text: "keep it short" }],
+            defaults: {
+              constraints: [
+                {
+                  ...human,
+                  id: "tone",
+                  text: "stay polite",
+                  source: "workspace-default",
+                  since: 1,
+                },
+                {
+                  ...human,
+                  id: "short",
+                  text: "be brief",
+                  source: "workspace-default",
+                  since: 1,
+                },
+              ],
+              authority: { ...DEFAULT_AUTHORITY, auto_correct: true },
+            },
+          },
+        })
+        .pipe(Effect.orDie);
+      const seeded = yield* hostRecords(
+        world.state,
+        readIntent(runDir(world.state, started.runId)),
+      );
+      expect(seeded?.version).toBe(1);
+      expect(seeded?.goal).toBe("greet whoever asks");
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(seeded), (present) =>
+            Arr.map(present.constraints, (one) => `${one.id}: ${one.text}`),
+          ),
+        ),
+      ).toEqual(["tone: stay polite", "short: keep it short"]);
+      expect(seeded?.authority.auto_correct).toBe(true);
+
+      const child = yield* client
+        .start({
+          project: world.project,
+          id: "hello",
+          request: yield* uuid,
+          input: { name: "" },
+          parent: started.runId,
+        })
+        .pipe(Effect.orDie);
+      const inherited = yield* hostRecords(
+        world.state,
+        readIntent(runDir(world.state, child.runId)),
+      );
+      expect(inherited?.goal).toBe("greet whoever asks");
+      expect(inherited?.parent?.run).toBe(started.runId);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(inherited), (present_) =>
+            Arr.map(present_.constraints, (one) => `${one.source}:${one.id}`),
+          ),
+        ),
+      ).toEqual(["parent:tone", "parent:short"]);
+      yield* until(
+        () => client.run({ runId: child.runId }).pipe(Effect.orDie),
+        (view) => view !== null && isSettled(view),
+      );
+    }),
+  ));
+
+test("a Run's outcome kind is changed through its Intent, and an unknown kind is refused", () =>
+  hosted(
+    "hw-intent-outcome-",
+    ({ world }) =>
       Effect.gen(function* () {
         const client = yield* connect(world.state).pipe(Effect.orDie);
-        const uuid = (yield* SecureRandom.SecureRandom).uuidV4();
-        const human = { kind: "semantic", severity: "warn", source: "human" } as const;
         const started = yield* client
           .start({
             project: world.project,
             id: "hello",
-            request: yield* uuid,
-            input: { name: "seed" },
-            intent: {
-              goal: "greet whoever asks",
-              constraints: [{ ...human, id: "short", text: "keep it short" }],
-              defaults: {
-                constraints: [
-                  {
-                    ...human,
-                    id: "tone",
-                    text: "stay polite",
-                    source: "workspace-default",
-                    since: 1,
-                  },
-                  {
-                    ...human,
-                    id: "short",
-                    text: "be brief",
-                    source: "workspace-default",
-                    since: 1,
-                  },
-                ],
-                authority: { ...DEFAULT_AUTHORITY, auto_correct: true },
-              },
-            },
+            request: "start",
+            input: { name: "kind" },
+            options: { outcome: "migration" },
           })
           .pipe(Effect.orDie);
-        const seeded = yield* hostRecords(
-          world.state,
-          readIntent(runDir(world.state, started.runId)),
-        );
-        expect(seeded?.version).toBe(1);
-        expect(seeded?.goal).toBe("greet whoever asks");
-        expect(
-          Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(seeded), (present) =>
-              Arr.map(present.constraints, (one) => `${one.id}: ${one.text}`),
-            ),
-          ),
-        ).toEqual(["tone: stay polite", "short: keep it short"]);
-        expect(seeded?.authority.auto_correct).toBe(true);
+        const { runId } = started;
+        const setOutcome = (outcome: string | null, request: string) =>
+          client.changeIntent({
+            runId,
+            change: { kind: "set-outcome", outcome },
+            propagate: false,
+            request,
+          });
 
-        const child = yield* client
+        const changed = yield* setOutcome("feature", "feature").pipe(Effect.orDie);
+        expect(changed.version).toBe(2);
+        const intent = yield* hostRecords(world.state, readIntent(runDir(world.state, runId)));
+        expect(intent?.history.at(-1)?.change).toBe("outcome set to feature");
+        expect((yield* client.run({ runId }).pipe(Effect.orDie))?.outcome).toBe("feature");
+
+        const refused = yield* setOutcome("chore", "chore").pipe(Effect.flip);
+        expect(String(refused.reason)).toStartWith("invalid_input:");
+        expect(
+          (yield* hostRecords(world.state, readIntent(runDir(world.state, runId))))?.version,
+        ).toBe(2);
+
+        yield* setOutcome(null, "cleared").pipe(Effect.orDie);
+        expect((yield* client.run({ runId }).pipe(Effect.orDie))?.outcome).toBe("unspecified");
+
+        const review = yield* client
           .start({
             project: world.project,
-            id: "hello",
-            request: yield* uuid,
-            input: { name: "" },
-            parent: started.runId,
+            id: "offered",
+            request: "review",
+            input: { note: "x" },
           })
           .pipe(Effect.orDie);
-        const inherited = yield* hostRecords(
-          world.state,
-          readIntent(runDir(world.state, child.runId)),
-        );
-        expect(inherited?.goal).toBe("greet whoever asks");
-        expect(inherited?.parent?.run).toBe(started.runId);
-        expect(
-          Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(inherited), (present_) =>
-              Arr.map(present_.constraints, (one) => `${one.source}:${one.id}`),
-            ),
-          ),
-        ).toEqual(["parent:tone", "parent:short"]);
+        const fixed = yield* client
+          .changeIntent({
+            runId: review.runId,
+            change: { kind: "set-outcome", outcome: "feature" },
+            propagate: false,
+            request: "fixed",
+          })
+          .pipe(Effect.flip);
+        expect(String(fixed.reason)).toContain('"offered" always proves review');
         yield* until(
-          () => client.run({ runId: child.runId }).pipe(Effect.orDie),
+          () => client.run({ runId }).pipe(Effect.orDie),
           (view) => view !== null && isSettled(view),
         );
       }),
-    ),
-  60_000,
-);
+    [...MODULES, "offered.workflow.ts", "graded.workflow.ts"],
+  ));
 
-test(
-  "a Run's outcome kind is changed through its Intent, and an unknown kind is refused",
-  () =>
-    hosted(
-      "hw-intent-outcome-",
-      ({ world }) =>
-        Effect.gen(function* () {
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const started = yield* client
-            .start({
-              project: world.project,
-              id: "hello",
-              request: "start",
-              input: { name: "kind" },
-              options: { outcome: "migration" },
-            })
-            .pipe(Effect.orDie);
-          const { runId } = started;
-          const setOutcome = (outcome: string | null, request: string) =>
-            client.changeIntent({
-              runId,
-              change: { kind: "set-outcome", outcome },
-              propagate: false,
-              request,
-            });
-
-          const changed = yield* setOutcome("feature", "feature").pipe(Effect.orDie);
-          expect(changed.version).toBe(2);
-          const intent = yield* hostRecords(world.state, readIntent(runDir(world.state, runId)));
-          expect(intent?.history.at(-1)?.change).toBe("outcome set to feature");
-          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.outcome).toBe("feature");
-
-          const refused = yield* setOutcome("chore", "chore").pipe(Effect.flip);
-          expect(String(refused.reason)).toStartWith("invalid_input:");
-          expect(
-            (yield* hostRecords(world.state, readIntent(runDir(world.state, runId))))?.version,
-          ).toBe(2);
-
-          yield* setOutcome(null, "cleared").pipe(Effect.orDie);
-          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.outcome).toBe("unspecified");
-
-          const review = yield* client
-            .start({
-              project: world.project,
-              id: "offered",
-              request: "review",
-              input: { note: "x" },
-            })
-            .pipe(Effect.orDie);
-          const fixed = yield* client
-            .changeIntent({
-              runId: review.runId,
-              change: { kind: "set-outcome", outcome: "feature" },
-              propagate: false,
-              request: "fixed",
-            })
-            .pipe(Effect.flip);
-          expect(String(fixed.reason)).toContain('"offered" always proves review');
-          yield* until(
-            () => client.run({ runId }).pipe(Effect.orDie),
-            (view) => view !== null && isSettled(view),
-          );
-        }),
-      [...MODULES, "offered.workflow.ts", "graded.workflow.ts"],
-    ),
-  60_000,
-);
-
-test(
-  "implement started to prove performance is refused at the front door, naming the kinds it may be asked for",
-  () =>
-    hosted("hw-intent-performance-", ({ world }) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const shipped = `${import.meta.dir}/../workflows`;
-        for (const name of [
-          "implement.workflow.ts",
-          "implement.md",
-          "reviewing.ts",
-          "review.md",
-          "delivering.ts",
-          "connections.ts",
-          "measuring.ts",
-          "measuring.md",
-        ])
-          yield* fs.copyFile(`${shipped}/${name}`, `${world.user}/${name}`).pipe(Effect.orDie);
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        const refused = yield* client
-          .start({
-            project: world.project,
-            id: "implement",
-            request: "performance",
-            input: { plan: "make it faster" },
-            options: { outcome: "performance" },
-          })
-          .pipe(Effect.flip);
-        expect(String(refused.reason)).toStartWith("invalid_input:");
-        expect(String(refused.reason)).toContain('"performance"');
-        expect(String(refused.reason)).toContain(
-          "feature, bug, refactor, investigation, docs, migration",
-        );
-      }),
-    ),
-  60_000,
-);
+test("implement started to prove performance is refused at the front door, naming the kinds it may be asked for", () =>
+  hosted("hw-intent-performance-", ({ world }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const shipped = `${import.meta.dir}/../workflows`;
+      for (const name of [
+        "implement.workflow.ts",
+        "implement.md",
+        "reviewing.ts",
+        "review.md",
+        "delivering.ts",
+        "connections.ts",
+        "measuring.ts",
+        "measuring.md",
+      ])
+        yield* fs.copyFile(`${shipped}/${name}`, `${world.user}/${name}`).pipe(Effect.orDie);
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const refused = yield* client
+        .start({
+          project: world.project,
+          id: "implement",
+          request: "performance",
+          input: { plan: "make it faster" },
+          options: { outcome: "performance" },
+        })
+        .pipe(Effect.flip);
+      expect(String(refused.reason)).toStartWith("invalid_input:");
+      expect(String(refused.reason)).toContain('"performance"');
+      expect(String(refused.reason)).toContain(
+        "feature, bug, refactor, investigation, docs, migration",
+      );
+    }),
+  ));

@@ -88,17 +88,15 @@ test("the opener starts one master, says what it said, and answers the path once
     }),
   ));
 
-test(
-  "openers in separate processes that come together start one master between them",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { dir, state, ssh, fake } = yield* rig;
-        const opener = `${dir}/opener.ts`;
-        yield* fs.writeFileString(
-          opener,
-          `import * as BunServices from "${Bun.resolveSync("@effect/platform-bun/BunServices", root)}";
+test("openers in separate processes that come together start one master between them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { dir, state, ssh, fake } = yield* rig;
+      const opener = `${dir}/opener.ts`;
+      yield* fs.writeFileString(
+        opener,
+        `import * as BunServices from "${Bun.resolveSync("@effect/platform-bun/BunServices", root)}";
 import { Effect } from "${Bun.resolveSync("effect", root)}";
 import { openConnection } from "${root}src/ssh-connection.ts";
 const [state, ssh, out] = process.argv.slice(2);
@@ -110,40 +108,38 @@ const { opened } = await Effect.runPromise(
 );
 await Bun.write(out!, String(opened));
 `,
-        );
-        const codes = yield* Effect.all(
-          Arr.map([0, 1], (one) =>
-            Effect.promise(
-              () =>
-                Bun.spawn(
-                  [process.execPath, "--no-install", opener, state, ssh, `${dir}/opened-${one}`],
-                  {
-                    stdio: ["ignore", "ignore", "inherit"],
-                    env: { ...process.env, TMPDIR: dir },
-                  },
-                ).exited,
-            ),
+      );
+      const codes = yield* Effect.all(
+        Arr.map([0, 1], (one) =>
+          Effect.promise(
+            () =>
+              Bun.spawn(
+                [process.execPath, "--no-install", opener, state, ssh, `${dir}/opened-${one}`],
+                {
+                  stdio: ["ignore", "ignore", "inherit"],
+                  env: { ...process.env, TMPDIR: dir },
+                },
+              ).exited,
           ),
-          { concurrency: "unbounded" },
-        );
-        expect(codes).toEqual([0, 0]);
-        const opened = yield* Effect.forEach([0, 1], (one) =>
-          fs.readFileString(`${dir}/opened-${one}`),
-        );
-        expect(
-          Arr.sortWith(
-            opened,
-            (value) => value,
-            (a, b) => pipe(a, Str.localeCompare(b)),
-          ),
-        ).toEqual(["false", "true"]);
-        expect(
-          Arr.filter(yield* fake.calls, (line) => pipe(line, Str.startsWith("master"))),
-        ).toEqual(["master mk@vm-mk"]);
-      }),
-    ),
-  30_000,
-);
+        ),
+        { concurrency: "unbounded" },
+      );
+      expect(codes).toEqual([0, 0]);
+      const opened = yield* Effect.forEach([0, 1], (one) =>
+        fs.readFileString(`${dir}/opened-${one}`),
+      );
+      expect(
+        Arr.sortWith(
+          opened,
+          (value) => value,
+          (a, b) => pipe(a, Str.localeCompare(b)),
+        ),
+      ).toEqual(["false", "true"]);
+      expect(Arr.filter(yield* fake.calls, (line) => pipe(line, Str.startsWith("master")))).toEqual(
+        ["master mk@vm-mk"],
+      );
+    }),
+  ));
 
 test("a master that never answers within the opener's bound fails with what ssh said", () =>
   runEffect(

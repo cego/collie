@@ -189,57 +189,53 @@ test("a fresh Collie directory gets an empty user/ beside the release", () =>
     }),
   ));
 
-test(
-  "placements at once take turns, so the release is wholly one of them",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const other = `${rig.root}/other/release`;
-        yield* fs.copy(tree, other);
-        yield* write(`${other}/personas/extra.md`, "only in the other\n");
-        for (let file = 0; file < 1500; file++) {
-          yield* write(`${tree}/bulk/${file}.md`, `${file}\n`);
-          yield* write(`${other}/other/${file}.md`, `${file}\n`);
-        }
+test("placements at once take turns, so the release is wholly one of them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const other = `${rig.root}/other/release`;
+      yield* fs.copy(tree, other);
+      yield* write(`${other}/personas/extra.md`, "only in the other\n");
+      for (let file = 0; file < 1500; file++) {
+        yield* write(`${tree}/bulk/${file}.md`, `${file}\n`);
+        yield* write(`${other}/other/${file}.md`, `${file}\n`);
+      }
 
-        const both = yield* Effect.promise(() =>
-          Promise.all(
-            Arr.map(
-              [
-                [tree, "1.0.0"],
-                [other, "2.0.0"],
-              ],
-              ([from, version]) =>
-                Bun.spawn([
-                  "bun",
-                  `${import.meta.dir}/fixtures/place-release.ts`,
-                  from!,
-                  runner,
-                  collieDir,
-                  version!,
-                ]).exited,
-            ),
+      const both = yield* Effect.promise(() =>
+        Promise.all(
+          Arr.map(
+            [
+              [tree, "1.0.0"],
+              [other, "2.0.0"],
+            ],
+            ([from, version]) =>
+              Bun.spawn([
+                "bun",
+                `${import.meta.dir}/fixtures/place-release.ts`,
+                from!,
+                runner,
+                collieDir,
+                version!,
+              ]).exited,
           ),
-        );
+        ),
+      );
 
-        expect(both).toEqual([0, 0]);
-        const record = yield* Schema.decodeEffect(
-          Schema.fromJsonString(
-            Schema.Struct({ files: Schema.Record(Schema.String, Schema.String) }),
-          ),
-        )(yield* read(`${collieDir}/release/placed.json`));
-        const placed: string[] = [];
-        for (const name of yield* fs.readDirectory(`${collieDir}/release`, { recursive: true })) {
-          const file = (yield* fs.stat(`${collieDir}/release/${name}`)).type === "File";
-          if (file && name !== "placed.json") placed.push(name);
-        }
-        expect(placed.sort()).toEqual(Rec.keys(record.files).sort());
-        expect(yield* exists(`${collieDir}/release.new`)).toBe(false);
-      }),
-    ),
-  60_000,
-);
+      expect(both).toEqual([0, 0]);
+      const record = yield* Schema.decodeEffect(
+        Schema.fromJsonString(
+          Schema.Struct({ files: Schema.Record(Schema.String, Schema.String) }),
+        ),
+      )(yield* read(`${collieDir}/release/placed.json`));
+      const placed: string[] = [];
+      for (const name of yield* fs.readDirectory(`${collieDir}/release`, { recursive: true })) {
+        const file = (yield* fs.stat(`${collieDir}/release/${name}`)).type === "File";
+        if (file && name !== "placed.json") placed.push(name);
+      }
+      expect(placed.sort()).toEqual(Rec.keys(record.files).sort());
+      expect(yield* exists(`${collieDir}/release.new`)).toBe(false);
+    }),
+  ));
 
 test("placing the same version twice changes nothing and keeps nothing", () =>
   runEffect(

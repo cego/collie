@@ -62,7 +62,6 @@ test.skipIf(process.platform !== "linux")(
         if (Exit.isFailure(refused)) expect(Cause.pretty(refused.cause)).toContain(unowned);
       }),
     ),
-  120_000,
 );
 
 test("dependency resolution refuses missing libraries and leaves libc to the target system", () => {

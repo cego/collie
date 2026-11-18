@@ -51,58 +51,54 @@ test("a fixture command drains both pipes, keeps its exit code, and inherits the
     }).pipe(Effect.scoped),
   ));
 
-test(
-  "interrupting a fixture command ends its child and the child's process group",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-command-stop-" });
-        const pids = `${dir}/pids`;
-        const running = yield* Effect.forkScoped(
-          exec([
-            "/bin/sh",
-            "-c",
-            'sh -c \'trap "" TERM; touch "$1"; sleep 60\' sh "$1.ready" & trap "exit 0" TERM; printf "%s %s" "$$" "$!" > "$1"; wait',
-            "sh",
-            pids,
-          ]),
+test("interrupting a fixture command ends its child and the child's process group", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-command-stop-" });
+      const pids = `${dir}/pids`;
+      const running = yield* Effect.forkScoped(
+        exec([
+          "/bin/sh",
+          "-c",
+          'sh -c \'trap "" TERM; touch "$1"; sleep 60\' sh "$1.ready" & trap "exit 0" TERM; printf "%s %s" "$$" "$!" > "$1"; wait',
+          "sh",
+          pids,
+        ]),
+      );
+      yield* until(() => fs.exists(pids).pipe(Effect.orDie), Boolean);
+      const [parent, child = 0] = Arr.map(Str.split(yield* fs.readFileString(pids), " "), Number);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          try {
+            process.kill(-parent, "SIGKILL");
+          } catch {}
+        }),
+      );
+      yield* until(() => fs.exists(`${pids}.ready`).pipe(Effect.orDie), Boolean);
+      expect(alive(parent) && alive(child)).toBe(true);
+      yield* Fiber.interrupt(running);
+      yield* until(
+        () => Effect.sync(() => alive(parent)),
+        (live) => !live,
+      );
+      const executing = () =>
+        fs.readFileString(`/proc/${child}/stat`).pipe(
+          Effect.map((stat) => !/\) Z /.test(stat)),
+          Effect.orElseSucceed(() => false),
         );
-        yield* until(() => fs.exists(pids).pipe(Effect.orDie), Boolean);
-        const [parent, child = 0] = Arr.map(Str.split(yield* fs.readFileString(pids), " "), Number);
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            try {
-              process.kill(-parent, "SIGKILL");
-            } catch {}
-          }),
-        );
-        yield* until(() => fs.exists(`${pids}.ready`).pipe(Effect.orDie), Boolean);
-        expect(alive(parent) && alive(child)).toBe(true);
-        yield* Fiber.interrupt(running);
+      if (process.platform === "linux") {
+        yield* until(executing, (live) => !live).pipe(Effect.timeout("1 second"));
+        expect(yield* executing()).toBe(false);
+      } else {
         yield* until(
-          () => Effect.sync(() => alive(parent)),
+          () => Effect.sync(() => alive(child)),
           (live) => !live,
         );
-        const executing = () =>
-          fs.readFileString(`/proc/${child}/stat`).pipe(
-            Effect.map((stat) => !/\) Z /.test(stat)),
-            Effect.orElseSucceed(() => false),
-          );
-        if (process.platform === "linux") {
-          yield* until(executing, (live) => !live).pipe(Effect.timeout("1 second"));
-          expect(yield* executing()).toBe(false);
-        } else {
-          yield* until(
-            () => Effect.sync(() => alive(child)),
-            (live) => !live,
-          );
-          expect(alive(child)).toBe(false);
-        }
-      }).pipe(Effect.scoped),
-    ),
-  10_000,
-);
+        expect(alive(child)).toBe(false);
+      }
+    }).pipe(Effect.scoped),
+  ));
 
 test("a fixture command keeps a nonzero exit when a background child holds its output pipes open", () =>
   runEffect(

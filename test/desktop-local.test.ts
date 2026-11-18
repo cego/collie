@@ -51,112 +51,106 @@ const asCommand = flow(
   Result.getOrThrow,
 );
 
-test(
-  "Desktop sees Local's board through a bridge it started, a Run appears on it live, and what Desktop does there is recorded as Desktop's",
-  () =>
-    proves(
-      "collie-desktop-local-",
-      (world) =>
-        Effect.gen(function* () {
-          const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-          const collie = Option.isSome(binary)
-            ? [binary.value]
-            : [process.execPath, `${root}src/main.ts`];
-          const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
-            PATH: "/usr/bin:/bin",
-            HOME: world.home,
-            COLLIE_ROOT: world.install,
-            COLLIE_STATE_DIR: world.state,
-            COLLIE_USER_DIR: world.config,
-            COLLIE_HOST: asCommand(collie),
-            ...(yield* suiteEnv),
-            HC_SOCKET: Bun.env.HC_SOCKET ?? "",
-          });
-          const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: door };
-          const board = yield* machineBoard(
-            { profile: "local", name: "mk-pc" },
-            { board: door.board() },
-          ).pipe(Stream.toPull);
+test("Desktop sees Local's board through a bridge it started, a Run appears on it live, and what Desktop does there is recorded as Desktop's", () =>
+  proves(
+    "collie-desktop-local-",
+    (world) =>
+      Effect.gen(function* () {
+        const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+        const collie = Option.isSome(binary)
+          ? [binary.value]
+          : [process.execPath, `${root}src/main.ts`];
+        const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
+          PATH: "/usr/bin:/bin",
+          HOME: world.home,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
+          COLLIE_USER_DIR: world.config,
+          COLLIE_HOST: asCommand(collie),
+          ...(yield* suiteEnv),
+          HC_SOCKET: Bun.env.HC_SOCKET ?? "",
+        });
+        const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: door };
+        const board = yield* machineBoard(
+          { profile: "local", name: "mk-pc" },
+          { board: door.board() },
+        ).pipe(Stream.toPull);
 
-          const first = yield* board;
-          const snapshot = first[0].message;
-          expect(snapshot._tag).toBe("Snapshot");
-          const installation = snapshot._tag === "Snapshot" ? snapshot.installation : "";
-          expect(installation).not.toBe("");
-          expect(first[0].machine).toEqual({ installation, profile: "local", name: "mk-pc" });
+        const first = yield* board;
+        const snapshot = first[0].message;
+        expect(snapshot._tag).toBe("Snapshot");
+        const installation = snapshot._tag === "Snapshot" ? snapshot.installation : "";
+        expect(installation).not.toBe("");
+        expect(first[0].machine).toEqual({ installation, profile: "local", name: "mk-pc" });
 
-          const { runId } = yield* door.start({
-            project: world.project,
-            id: "proof",
-            request: "start-1",
-            input: { note: "from Desktop" },
-          });
-          let seen = false;
-          while (!seen) {
-            const next = yield* board;
-            seen = Arr.some(
-              next,
-              (item) => item.message._tag === "Upsert" && item.message.task.runs.includes(runId),
-            );
-          }
+        const { runId } = yield* door.start({
+          project: world.project,
+          id: "proof",
+          request: "start-1",
+          input: { note: "from Desktop" },
+        });
+        let seen = false;
+        while (!seen) {
+          const next = yield* board;
+          seen = Arr.some(
+            next,
+            (item) => item.message._tag === "Upsert" && item.message.task.runs.includes(runId),
+          );
+        }
 
-          expect(
-            yield* act(reached, "hold-1", {
-              _tag: "Control",
-              runId,
-              control: "hold",
-              set: true,
-            }),
-          ).not.toBe("");
+        expect(
           yield* act(reached, "hold-1", {
             _tag: "Control",
             runId,
             control: "hold",
             set: true,
-          });
-          const refused = yield* act(reached, "resume-x", {
-            _tag: "Resume",
-            runId: "r-nobody",
-          }).pipe(Effect.flip);
-          expect(refused.reason).toBe("no Run r-nobody");
+          }),
+        ).not.toBe("");
+        yield* act(reached, "hold-1", {
+          _tag: "Control",
+          runId,
+          control: "hold",
+          set: true,
+        });
+        const refused = yield* act(reached, "resume-x", {
+          _tag: "Resume",
+          runId: "r-nobody",
+        }).pipe(Effect.flip);
+        expect(refused.reason).toBe("no Run r-nobody");
 
-          const ended = yield* door.start({
-            project: world.project,
-            id: "plain",
-            request: "start-finished",
-            input: { note: "done" },
-          });
-          yield* door
-            .runDetail({ runId: ended.runId, tail: false, pages: 0, refreshMr: false })
-            .pipe(
-              Stream.map(recordIn),
-              Stream.filter((one) => one?.status === "succeeded"),
-              Stream.runHead,
-              Effect.orDie,
-            );
-          const noWork = yield* act(reached, "resume-finished", {
-            _tag: "Resume",
-            runId: ended.runId,
-          }).pipe(Effect.flip);
-          expect(noWork.reason).toContain("finished");
-          expect(noWork.reason).not.toContain("Resumed");
+        const ended = yield* door.start({
+          project: world.project,
+          id: "plain",
+          request: "start-finished",
+          input: { note: "done" },
+        });
+        yield* door.runDetail({ runId: ended.runId, tail: false, pages: 0, refreshMr: false }).pipe(
+          Stream.map(recordIn),
+          Stream.filter((one) => one?.status === "succeeded"),
+          Stream.runHead,
+          Effect.orDie,
+        );
+        const noWork = yield* act(reached, "resume-finished", {
+          _tag: "Resume",
+          runId: ended.runId,
+        }).pipe(Effect.flip);
+        expect(noWork.reason).toContain("finished");
+        expect(noWork.reason).not.toContain("Resumed");
 
-          const trail = yield* hostRecords(
-            world.state,
-            readAudit(runDir(world.state, runId)).pipe(
-              Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
-            ),
-          );
-          expect(Arr.map(trail, (line) => line.actor)).toEqual([
-            { origin: "desktop", requestId: "start-1", from: { client: "mk-pc" } },
-            { origin: "desktop", requestId: "hold-1", from: { client: "mk-pc" } },
-          ]);
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["proof.workflow.ts", "helper.ts", "notes.md", "plain.workflow.ts"],
-    ),
-  120_000,
-);
+        const trail = yield* hostRecords(
+          world.state,
+          readAudit(runDir(world.state, runId)).pipe(
+            Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
+          ),
+        );
+        expect(Arr.map(trail, (line) => line.actor)).toEqual([
+          { origin: "desktop", requestId: "start-1", from: { client: "mk-pc" } },
+          { origin: "desktop", requestId: "hold-1", from: { client: "mk-pc" } },
+        ]);
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["proof.workflow.ts", "helper.ts", "notes.md", "plain.workflow.ts"],
+  ));
 
 test("Desktop's main process never reaches Collie's own host client", () =>
   Effect.runPromise(

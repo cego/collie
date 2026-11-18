@@ -396,59 +396,55 @@ const withMachine = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.scoped,
   );
 
-test(
-  "the host merges the merge request a Run recorded, and its landing is a fact of the Run",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        expect((yield* exec(["git", "init", "--quiet", rig.projectDir])).exitCode).toBe(0);
-        const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        try {
-          const fake = yield* forgeOnPath(bin, "github", model("github"));
-          const forgeApi = yield* serveForges(fake);
-          yield* Effect.gen(function* () {
-            const registry = yield* Registry;
-            const generation = yield* registry.load(
-              new URL("./fixtures/workflows/merges.workflow.ts", import.meta.url).pathname,
-            );
-            const landed = yield* registry.start({
-              generation,
-              request: "lands",
-              project: rig.projectDir,
-              input: { mr: URL_OF.github, head: HEAD },
-              handsOver: true,
-            });
-            expect(yield* registry.result(landed.runId)).toEqual({ _tag: "Merged", sha: MERGED });
-            expect((yield* registry.view(landed.runId))?.landing).toMatchObject({
-              state: "landed",
-              mr: URL_OF.github,
-              head: HEAD,
-              sha: MERGED,
-            });
-
-            const none = yield* registry.start({
-              generation,
-              request: "none",
-              project: rig.projectDir,
-              input: { mr: "", head: HEAD },
-              handsOver: true,
-            });
-            const refused = yield* registry.result(none.runId).pipe(Effect.result);
-            expect(Result.isFailure(refused)).toBe(true);
-            if (Result.isFailure(refused))
-              expect(refused.failure.reason).toContain("no merge request");
-            expect((yield* registry.view(none.runId))?.landing).toBeNull();
-          }).pipe(
-            withMachine,
-            Effect.provide(
-              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
-            ),
+test("the host merges the merge request a Run recorded, and its landing is a fact of the Run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      expect((yield* exec(["git", "init", "--quiet", rig.projectDir])).exitCode).toBe(0);
+      const bin = yield* FakeBin.make(`${rig.root}/bin`);
+      try {
+        const fake = yield* forgeOnPath(bin, "github", model("github"));
+        const forgeApi = yield* serveForges(fake);
+        yield* Effect.gen(function* () {
+          const registry = yield* Registry;
+          const generation = yield* registry.load(
+            new URL("./fixtures/workflows/merges.workflow.ts", import.meta.url).pathname,
           );
-          expect((yield* fake.model()).merges).toHaveLength(1);
-        } finally {
-          yield* bin.restore();
-        }
-      }),
-    ),
-  30_000,
-);
+          const landed = yield* registry.start({
+            generation,
+            request: "lands",
+            project: rig.projectDir,
+            input: { mr: URL_OF.github, head: HEAD },
+            handsOver: true,
+          });
+          expect(yield* registry.result(landed.runId)).toEqual({ _tag: "Merged", sha: MERGED });
+          expect((yield* registry.view(landed.runId))?.landing).toMatchObject({
+            state: "landed",
+            mr: URL_OF.github,
+            head: HEAD,
+            sha: MERGED,
+          });
+
+          const none = yield* registry.start({
+            generation,
+            request: "none",
+            project: rig.projectDir,
+            input: { mr: "", head: HEAD },
+            handsOver: true,
+          });
+          const refused = yield* registry.result(none.runId).pipe(Effect.result);
+          expect(Result.isFailure(refused)).toBe(true);
+          if (Result.isFailure(refused))
+            expect(refused.failure.reason).toContain("no merge request");
+          expect((yield* registry.view(none.runId))?.landing).toBeNull();
+        }).pipe(
+          withMachine,
+          Effect.provide(
+            ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
+          ),
+        );
+        expect((yield* fake.model()).merges).toHaveLength(1);
+      } finally {
+        yield* bin.restore();
+      }
+    }),
+  ));

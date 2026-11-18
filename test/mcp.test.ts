@@ -125,58 +125,54 @@ const openServer = Effect.fn("McpTest.open")(function* (
   };
 });
 
-test(
-  "stdio MCP preserves discovery, tool responses, errors, and shutdown",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const server = yield* openServer();
-        const listed = yield* server.request("tools/list", {});
-        expect(listed).toMatchObject({
-          result: {
-            tools: Arr.map(TOOLS, (tool) => ({
-              name: tool.name,
-              title: tool.title,
-              description: tool.description,
-              inputSchema: tool.input,
-              annotations: { readOnlyHint: tool.readOnly },
-            })),
-          },
-        });
-        const called = yield* server.request("tools/call", {
-          name: "collie_run",
-          arguments: { run: "missing-run" },
-        });
-        expect(called.result).toMatchObject({
-          content: [
-            { type: "text", text: 'No Run "missing-run". collie_herd lists the ones there are.' },
-          ],
-        });
-        const invalid = yield* server.request("tools/call", {
-          name: "collie_hold",
-          arguments: { run: "missing-run", unexpected: true },
-        });
-        expect(invalid.result).toMatchObject({
-          content: [{ type: "text", text: expect.stringContaining("Nothing was done.") }],
-        });
+test("stdio MCP preserves discovery, tool responses, errors, and shutdown", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const server = yield* openServer();
+      const listed = yield* server.request("tools/list", {});
+      expect(listed).toMatchObject({
+        result: {
+          tools: Arr.map(TOOLS, (tool) => ({
+            name: tool.name,
+            title: tool.title,
+            description: tool.description,
+            inputSchema: tool.input,
+            annotations: { readOnlyHint: tool.readOnly },
+          })),
+        },
+      });
+      const called = yield* server.request("tools/call", {
+        name: "collie_run",
+        arguments: { run: "missing-run" },
+      });
+      expect(called.result).toMatchObject({
+        content: [
+          { type: "text", text: 'No Run "missing-run". collie_herd lists the ones there are.' },
+        ],
+      });
+      const invalid = yield* server.request("tools/call", {
+        name: "collie_hold",
+        arguments: { run: "missing-run", unexpected: true },
+      });
+      expect(invalid.result).toMatchObject({
+        content: [{ type: "text", text: expect.stringContaining("Nothing was done.") }],
+      });
 
-        const malformed = yield* server.request("tools/call", {
-          name: "collie_hold",
-          arguments: [],
-        });
-        expect(malformed.error).toMatchObject({ code: -32602 });
+      const malformed = yield* server.request("tools/call", {
+        name: "collie_hold",
+        arguments: [],
+      });
+      expect(malformed.error).toMatchObject({ code: -32602 });
 
-        const unknown = yield* server.request("tools/call", {
-          name: "not-a-collie-tool",
-          arguments: {},
-        });
-        expect(unknown.error).toMatchObject({ code: -32602 });
-        expect((yield* server.request("ping", {})).result).toEqual({});
-        yield* server.close;
-      }).pipe(Effect.scoped),
-    ),
-  15_000,
-);
+      const unknown = yield* server.request("tools/call", {
+        name: "not-a-collie-tool",
+        arguments: {},
+      });
+      expect(unknown.error).toMatchObject({ code: -32602 });
+      expect((yield* server.request("ping", {})).result).toEqual({});
+      yield* server.close;
+    }).pipe(Effect.scoped),
+  ));
 
 test("external interruption is not mistaken for clean MCP EOF", () =>
   runEffect(
@@ -203,78 +199,74 @@ test("a rebuilt binary that warns on stderr still answers", () =>
     }).pipe(Effect.scoped),
   ));
 
-test(
-  "a Run agent's stdio MCP records the launched address and refuses a forged sender",
-  () =>
-    runEffect(
-      twoMachines(
-        "collie-mcp-agent-",
-        (first) =>
-          Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
-            const outputs = `${first.world.home}/outputs.json`;
-            yield* fs.writeFileString(outputs, encodeValue([{ verdict: "done" }]));
-            const started = yield* first.cli(["run", "start", "attended", "--input", "work=MCP"]);
-            const { runId } = yield* Schema.decodeUnknownEffect(
-              Schema.Struct({ runId: Schema.String }),
-            )(started.envelope.data).pipe(Effect.orDie);
-            const host = yield* connect(first.world.state);
-            yield* until(
-              () => host.run({ runId }),
-              (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
-            );
-            const agent = Option.getOrUndefined(
-              Arr.findFirst(yield* registeredAt(first.world.state), (one) => one.runId === runId),
-            )!;
-            const server = yield* openServer({
-              ...first.env,
-              COLLIE_RUN: runId,
-              COLLIE_AGENT: agent.agent,
-            });
-            const actions = [
-              {
-                kind: "deliver",
-                run: runId,
-                agent: agent.agent,
-                text: "MCP words",
-                mode: "boundary",
-              },
-            ];
-            const forged = yield* server.request("tools/call", {
-              name: "collie_do",
-              arguments: { sender: "somebody else", actions },
-            });
-            expect(encodeValue(forged)).toContain("refus");
-            const before = Arr.filter(
-              yield* readAudit(runDir(first.world.state, runId)).pipe(
-                Effect.provide(recordsReadLayer(first.world.state)),
-              ),
-              (one) => one.operation === "deliver",
-            ).length;
-            const answer = yield* server.request("tools/call", {
-              name: "collie_do",
-              arguments: { actions },
-            });
-            expect(encodeValue(answer)).toContain("deliver: applied");
-            const trail = Arr.filter(
-              yield* readAudit(runDir(first.world.state, runId)).pipe(
-                Effect.provide(recordsReadLayer(first.world.state)),
-              ),
-              (one) => one.operation === "deliver",
-            );
-            expect(trail).toHaveLength(before + 1);
-            expect(trail.at(-1)?.actor).toMatchObject({
-              origin: "agent",
-              from: {
-                run: runId,
-                agent: agent.agent,
-                machine: { installation: expect.any(String) },
-              },
-            });
-            yield* server.close;
-          }),
-        ["attended.workflow.ts"],
-      ),
+test("a Run agent's stdio MCP records the launched address and refuses a forged sender", () =>
+  runEffect(
+    twoMachines(
+      "collie-mcp-agent-",
+      (first) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const outputs = `${first.world.home}/outputs.json`;
+          yield* fs.writeFileString(outputs, encodeValue([{ verdict: "done" }]));
+          const started = yield* first.cli(["run", "start", "attended", "--input", "work=MCP"]);
+          const { runId } = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ runId: Schema.String }),
+          )(started.envelope.data).pipe(Effect.orDie);
+          const host = yield* connect(first.world.state);
+          yield* until(
+            () => host.run({ runId }),
+            (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
+          );
+          const agent = Option.getOrUndefined(
+            Arr.findFirst(yield* registeredAt(first.world.state), (one) => one.runId === runId),
+          )!;
+          const server = yield* openServer({
+            ...first.env,
+            COLLIE_RUN: runId,
+            COLLIE_AGENT: agent.agent,
+          });
+          const actions = [
+            {
+              kind: "deliver",
+              run: runId,
+              agent: agent.agent,
+              text: "MCP words",
+              mode: "boundary",
+            },
+          ];
+          const forged = yield* server.request("tools/call", {
+            name: "collie_do",
+            arguments: { sender: "somebody else", actions },
+          });
+          expect(encodeValue(forged)).toContain("refus");
+          const before = Arr.filter(
+            yield* readAudit(runDir(first.world.state, runId)).pipe(
+              Effect.provide(recordsReadLayer(first.world.state)),
+            ),
+            (one) => one.operation === "deliver",
+          ).length;
+          const answer = yield* server.request("tools/call", {
+            name: "collie_do",
+            arguments: { actions },
+          });
+          expect(encodeValue(answer)).toContain("deliver: applied");
+          const trail = Arr.filter(
+            yield* readAudit(runDir(first.world.state, runId)).pipe(
+              Effect.provide(recordsReadLayer(first.world.state)),
+            ),
+            (one) => one.operation === "deliver",
+          );
+          expect(trail).toHaveLength(before + 1);
+          expect(trail.at(-1)?.actor).toMatchObject({
+            origin: "agent",
+            from: {
+              run: runId,
+              agent: agent.agent,
+              machine: { installation: expect.any(String) },
+            },
+          });
+          yield* server.close;
+        }),
+      ["attended.workflow.ts"],
     ),
-  180_000,
-);
+  ));

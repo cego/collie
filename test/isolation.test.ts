@@ -32,4 +32,4 @@ test("a fixture Run started from a pane-like environment writes nothing outside 
   ).finally(() => {
     delete Bun.env.HERDR_SOCKET_PATH;
   });
-}, 60_000);
+});

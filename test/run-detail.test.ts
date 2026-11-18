@@ -55,255 +55,230 @@ const started = (world: Parameters<typeof collie>[0], args: ReadonlyArray<string
     Effect.flatMap(({ envelope }) => runIdOf(envelope)),
   );
 
-test(
-  "a drawer's subscription follows the Run's log and evidence, and fetches them by reference",
-  () =>
-    proves(
-      "collie-detail-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const runId = yield* started(world, ["plain", "--input", "note=hi"]);
-          const dir = runDir(world.state, runId);
-          const door = yield* frontDoor(socketOf(world.state));
-          const seen: Array<RunDetail | null> = [];
-          const reading = yield* door
-            .runDetail({ runId, tail: true, pages: 1, refreshMr: false })
-            .pipe(
-              Stream.map(recordIn),
-              Stream.tap((detail) => Effect.sync(() => seen.push(detail))),
-              Stream.takeUntil(
-                (detail) =>
-                  detail !== null &&
-                  detail.tail?._tag === "Text" &&
-                  pipe_(detail.tail.text, Str.includes("later line")) &&
-                  Arr.some(detail.evidence, (one) => one.name === "shot.png"),
-              ),
-              Stream.runLast,
-              Effect.forkScoped,
-            );
-          yield* Effect.sleep("1 second");
-          yield* fs.writeFileString(`${dir}/log.txt`, "later line\n", { flag: "a" });
-          yield* fs.makeDirectory(`${world.state}/evidence/${runId}`, { recursive: true });
-          yield* fs.writeFile(
-            `${world.state}/evidence/${runId}/shot.png`,
-            new Uint8Array([1, 2, 3]),
+test("a drawer's subscription follows the Run's log and evidence, and fetches them by reference", () =>
+  proves(
+    "collie-detail-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const runId = yield* started(world, ["plain", "--input", "note=hi"]);
+        const dir = runDir(world.state, runId);
+        const door = yield* frontDoor(socketOf(world.state));
+        const seen: Array<RunDetail | null> = [];
+        const reading = yield* door
+          .runDetail({ runId, tail: true, pages: 1, refreshMr: false })
+          .pipe(
+            Stream.map(recordIn),
+            Stream.tap((detail) => Effect.sync(() => seen.push(detail))),
+            Stream.takeUntil(
+              (detail) =>
+                detail !== null &&
+                detail.tail?._tag === "Text" &&
+                pipe_(detail.tail.text, Str.includes("later line")) &&
+                Arr.some(detail.evidence, (one) => one.name === "shot.png"),
+            ),
+            Stream.runLast,
+            Effect.forkScoped,
           );
-          const last = yield* Fiber.await(reading).pipe(Effect.timeout("30 seconds"));
-          expect(seen[0]?.id).toBe(runId);
-          expect(last._tag).toBe("Success");
+        yield* Effect.sleep("1 second");
+        yield* fs.writeFileString(`${dir}/log.txt`, "later line\n", { flag: "a" });
+        yield* fs.makeDirectory(`${world.state}/evidence/${runId}`, { recursive: true });
+        yield* fs.writeFile(`${world.state}/evidence/${runId}/shot.png`, new Uint8Array([1, 2, 3]));
+        const last = yield* Fiber.await(reading).pipe(Effect.timeout("30 seconds"));
+        expect(seen[0]?.id).toBe(runId);
+        expect(last._tag).toBe("Success");
 
-          const log = yield* door.runFile({ runId, ref: "log" });
-          expect(log).toMatchObject({ encoding: "utf8" });
-          expect(log.content).toContain("later line");
-          const shot = yield* door.runFile({ runId, ref: "evidence:shot.png" });
-          expect(shot).toEqual({
-            ref: "evidence:shot.png",
-            encoding: "base64",
-            content: "AQID",
-            size: 3,
-          });
-          const part = yield* door.runFile({
-            runId,
-            ref: "evidence:shot.png",
-            offset: 1,
-            length: 1,
-          });
-          expect(part).toMatchObject({ content: "Ag==", size: 3 });
-          const outside = yield* door
-            .runFile({ runId, ref: "evidence:../../installation" })
-            .pipe(Effect.flip);
-          expect(outside._tag).toBe("HostRefused");
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+        const log = yield* door.runFile({ runId, ref: "log" });
+        expect(log).toMatchObject({ encoding: "utf8" });
+        expect(log.content).toContain("later line");
+        const shot = yield* door.runFile({ runId, ref: "evidence:shot.png" });
+        expect(shot).toEqual({
+          ref: "evidence:shot.png",
+          encoding: "base64",
+          content: "AQID",
+          size: 3,
+        });
+        const part = yield* door.runFile({
+          runId,
+          ref: "evidence:shot.png",
+          offset: 1,
+          length: 1,
+        });
+        expect(part).toMatchObject({ content: "Ag==", size: 3 });
+        const outside = yield* door
+          .runFile({ runId, ref: "evidence:../../installation" })
+          .pipe(Effect.flip);
+        expect(outside._tag).toBe("HostRefused");
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["plain.workflow.ts"],
+  ));
 
-test(
-  "the handoff notes a Run's agents leave are on its record, in run show and fetched by reference",
-  () =>
-    proves(
-      "collie-detail-handoffs-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const runId = yield* started(world, ["plain", "--input", "note=hi"]);
-          const handoffs = `${runDir(world.state, runId)}/handoffs`;
-          yield* fs.makeDirectory(`${handoffs}/review`, { recursive: true });
-          yield* fs.writeFileString(`${handoffs}/review/notes.md`, "for the reviewer\n");
+test("the handoff notes a Run's agents leave are on its record, in run show and fetched by reference", () =>
+  proves(
+    "collie-detail-handoffs-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const runId = yield* started(world, ["plain", "--input", "note=hi"]);
+        const handoffs = `${runDir(world.state, runId)}/handoffs`;
+        yield* fs.makeDirectory(`${handoffs}/review`, { recursive: true });
+        yield* fs.writeFileString(`${handoffs}/review/notes.md`, "for the reviewer\n");
 
-          const shown = yield* collie(world, ["run", "show", runId]);
-          expect(shown.envelope.data).toMatchObject({
-            handoffs: [{ path: `${handoffs}/review/notes.md`, bytes: 17 }],
-          });
+        const shown = yield* collie(world, ["run", "show", runId]);
+        expect(shown.envelope.data).toMatchObject({
+          handoffs: [{ path: `${handoffs}/review/notes.md`, bytes: 17 }],
+        });
 
-          const door = yield* frontDoor(socketOf(world.state));
-          const detail = yield* door
-            .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-            .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
-          expect(Option.getOrNull(detail)?.handoffFiles).toEqual([
-            { name: "review/notes.md", bytes: 17 },
-          ]);
-          const note = yield* door.runFile({ runId, ref: "handoff:review/notes.md" });
-          expect(note.content).toBe("for the reviewer\n");
-          const outside = yield* door
-            .runFile({ runId, ref: "handoff:../log.txt" })
-            .pipe(Effect.flip);
-          expect(outside._tag).toBe("HostRefused");
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+        const door = yield* frontDoor(socketOf(world.state));
+        const detail = yield* door
+          .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
+          .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
+        expect(Option.getOrNull(detail)?.handoffFiles).toEqual([
+          { name: "review/notes.md", bytes: 17 },
+        ]);
+        const note = yield* door.runFile({ runId, ref: "handoff:review/notes.md" });
+        expect(note.content).toBe("for the reviewer\n");
+        const outside = yield* door.runFile({ runId, ref: "handoff:../log.txt" }).pipe(Effect.flip);
+        expect(outside._tag).toBe("HostRefused");
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["plain.workflow.ts"],
+  ));
 
-test(
-  "the replies a Run posted to reviewers are on its record, in run show and the drawer",
-  () =>
-    proves(
-      "collie-detail-replies-",
-      (world) =>
-        Effect.gen(function* () {
-          const runId = yield* started(world, ["plain", "--input", "note=hi"]);
-          const mr = "https://github.com/acme/app/pull/7";
-          const replies = [
-            {
-              at: "2026-10-27T10:00:00Z",
-              mr,
-              comment: `${mr}#issuecomment-41`,
-              kind: "fixed" as const,
-              body: "Fixed in `c0ffee12`: renamed it",
-            },
-            {
-              at: "2026-10-27T10:01:00Z",
-              mr,
-              comment: `${mr}#issuecomment-42`,
-              kind: "disputed" as const,
-              body: "Not changed: a map costs more here",
-            },
-          ];
-          for (const reply of replies)
-            yield* recordReply(runDir(world.state, runId), reply).pipe(
-              Effect.provide(recordsAt(world.state)),
-            );
+test("the replies a Run posted to reviewers are on its record, in run show and the drawer", () =>
+  proves(
+    "collie-detail-replies-",
+    (world) =>
+      Effect.gen(function* () {
+        const runId = yield* started(world, ["plain", "--input", "note=hi"]);
+        const mr = "https://github.com/acme/app/pull/7";
+        const replies = [
+          {
+            at: "2026-10-27T10:00:00Z",
+            mr,
+            comment: `${mr}#issuecomment-41`,
+            kind: "fixed" as const,
+            body: "Fixed in `c0ffee12`: renamed it",
+          },
+          {
+            at: "2026-10-27T10:01:00Z",
+            mr,
+            comment: `${mr}#issuecomment-42`,
+            kind: "disputed" as const,
+            body: "Not changed: a map costs more here",
+          },
+        ];
+        for (const reply of replies)
+          yield* recordReply(runDir(world.state, runId), reply).pipe(
+            Effect.provide(recordsAt(world.state)),
+          );
 
-          const shown = yield* collie(world, ["run", "show", runId]);
-          expect(shown.envelope.data).toMatchObject({ replies });
+        const shown = yield* collie(world, ["run", "show", runId]);
+        expect(shown.envelope.data).toMatchObject({ replies });
 
-          const detail = yield* (yield* frontDoor(socketOf(world.state)))
-            .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-            .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
-          expect(Option.getOrNull(detail)?.replies).toEqual(replies);
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+        const detail = yield* (yield* frontDoor(socketOf(world.state)))
+          .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
+          .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
+        expect(Option.getOrNull(detail)?.replies).toEqual(replies);
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["plain.workflow.ts"],
+  ));
 
 const MR = "mr:gitlab.example.com/mk/project!7";
 
-test(
-  "the drawer's merge request panel is what the host's merge watch read",
-  () =>
-    proves(
-      "collie-detail-mr-",
-      (world) =>
-        Effect.gen(function* () {
-          const bin = yield* FakeBin.make(`${world.home}/bin`);
-          const gitlab = yield* forgeOnPath(bin, "gitlab", {
-            installed: true,
-            loggedIn: ["gitlab.example.com"],
-            login: "me",
-            mrs: [
-              { project: "gitlab.example.com/mk/project", iid: "7", state: "open", title: "Cards" },
-            ],
-          });
-          const COLLIE_FORGE_API = yield* serveForges(gitlab);
-          yield* bin.restore();
-          const runId = yield* started(world, ["targeted", "--input", `target=${MR}`], {
-            PATH: `${bin.dir}:/usr/bin:/bin`,
-            COLLIE_FORGE_API,
-          });
-          const door = yield* frontDoor(socketOf(world.state));
-          const detail = yield* door
-            .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-            .pipe(
-              Stream.map(recordIn),
-              Stream.filter((one) => one?.mr?._tag === "Details"),
-              Stream.runHead,
-              Effect.timeout("30 seconds"),
-            );
-          yield* stopHost(world.state);
-          const mr = Option.getOrNull(detail)?.mr;
-          expect(mr?._tag === "Details" && mr.title).toBe("Cards");
-        }).pipe(Effect.orDie),
-      ["targeted.workflow.ts"],
-    ),
-  120_000,
-);
+test("the drawer's merge request panel is what the host's merge watch read", () =>
+  proves(
+    "collie-detail-mr-",
+    (world) =>
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${world.home}/bin`);
+        const gitlab = yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: ["gitlab.example.com"],
+          login: "me",
+          mrs: [
+            { project: "gitlab.example.com/mk/project", iid: "7", state: "open", title: "Cards" },
+          ],
+        });
+        const COLLIE_FORGE_API = yield* serveForges(gitlab);
+        yield* bin.restore();
+        const runId = yield* started(world, ["targeted", "--input", `target=${MR}`], {
+          PATH: `${bin.dir}:/usr/bin:/bin`,
+          COLLIE_FORGE_API,
+        });
+        const door = yield* frontDoor(socketOf(world.state));
+        const detail = yield* door
+          .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
+          .pipe(
+            Stream.map(recordIn),
+            Stream.filter((one) => one?.mr?._tag === "Details"),
+            Stream.runHead,
+            Effect.timeout("30 seconds"),
+          );
+        yield* stopHost(world.state);
+        const mr = Option.getOrNull(detail)?.mr;
+        expect(mr?._tag === "Details" && mr.title).toBe("Cards");
+      }).pipe(Effect.orDie),
+    ["targeted.workflow.ts"],
+  ));
 
-test(
-  "the TUI drawer is what the host serves, and follows it",
-  () =>
-    proves(
-      "collie-detail-tui-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const runId = yield* started(world, ["plain", "--input", "note=hi"]);
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const changes = yield* Queue.unbounded<void>();
-          let notifications = 0;
-          const detailOf = yield* followRunDetail(env, () => {
-            notifications++;
-            Queue.offerUnsafe(changes, undefined);
-          });
-          const app = appState(
-            {
-              herdr: new Herdr(env),
-              ...scopeFor(env.cwd),
-              stateDir: env.stateDir,
-              userDir: env.userDir,
-              pluginRoot: env.pluginRoot,
-              tasksOf: () => Effect.succeed({ tasks: [], unreadable: null }),
-              detailOf,
-            },
-            env,
-          );
-          const looking = focus({ selected: runRowId(runId), tail: true });
-          const load = () => app.load(looking).pipe(Effect.provide(recordsReadLayer(world.state)));
-          expect((yield* load()).detail?.id).toBe(runId);
-          yield* Queue.takeAll(changes);
-          const before = notifications;
-          yield* fs.writeFileString(`${runDir(world.state, runId)}/log.txt`, "from the host\n", {
-            flag: "a",
-          });
-          yield* Stream.fromQueue(changes).pipe(
-            Stream.mapEffect(() => detailOf({ runId, tail: true, pages: 1, refreshMr: false })),
-            Stream.filter(
-              (detail) =>
-                detail?.tail?._tag === "Text" &&
-                pipe_(detail.tail.text, Str.includes("from the host")),
-            ),
-            Stream.take(1),
-            Stream.runDrain,
-            Effect.timeout("20 seconds"),
-          );
-          expect(notifications).toBeGreaterThan(before);
-          const after = yield* load();
-          yield* stopHost(world.state);
-          expect(after.detail?.tail).toMatchObject({
-            _tag: "Text",
-            text: expect.stringContaining("from the host"),
-          });
-        }),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+test("the TUI drawer is what the host serves, and follows it", () =>
+  proves(
+    "collie-detail-tui-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const runId = yield* started(world, ["plain", "--input", "note=hi"]);
+        const env = yield* currentEnv.pipe(Effect.orDie);
+        const changes = yield* Queue.unbounded<void>();
+        let notifications = 0;
+        const detailOf = yield* followRunDetail(env, () => {
+          notifications++;
+          Queue.offerUnsafe(changes, undefined);
+        });
+        const app = appState(
+          {
+            herdr: new Herdr(env),
+            ...scopeFor(env.cwd),
+            stateDir: env.stateDir,
+            userDir: env.userDir,
+            pluginRoot: env.pluginRoot,
+            tasksOf: () => Effect.succeed({ tasks: [], unreadable: null }),
+            detailOf,
+          },
+          env,
+        );
+        const looking = focus({ selected: runRowId(runId), tail: true });
+        const load = () => app.load(looking).pipe(Effect.provide(recordsReadLayer(world.state)));
+        expect((yield* load()).detail?.id).toBe(runId);
+        yield* Queue.takeAll(changes);
+        const before = notifications;
+        yield* fs.writeFileString(`${runDir(world.state, runId)}/log.txt`, "from the host\n", {
+          flag: "a",
+        });
+        yield* Stream.fromQueue(changes).pipe(
+          Stream.mapEffect(() => detailOf({ runId, tail: true, pages: 1, refreshMr: false })),
+          Stream.filter(
+            (detail) =>
+              detail?.tail?._tag === "Text" &&
+              pipe_(detail.tail.text, Str.includes("from the host")),
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.timeout("20 seconds"),
+        );
+        expect(notifications).toBeGreaterThan(before);
+        const after = yield* load();
+        yield* stopHost(world.state);
+        expect(after.detail?.tail).toMatchObject({
+          _tag: "Text",
+          text: expect.stringContaining("from the host"),
+        });
+      }),
+    ["plain.workflow.ts"],
+  ));
 
 test.skipIf(process.getuid?.() === 0)(
   "a defect in a drawer's stream is logged, and the stream follows the next details after it",
@@ -354,7 +329,6 @@ test.skipIf(process.getuid?.() === 0)(
         }),
       ["plain.workflow.ts"],
     ),
-  120_000,
 );
 
 const branched = Effect.gen(function* () {
@@ -731,30 +705,26 @@ test("a Run's record says who started it, from its start line, else from its par
   expect(startedBy([], top)).toBeUndefined();
 });
 
-test(
-  "a Run started from the CLI says so in its details and in run show",
-  () =>
-    proves(
-      "collie-started-by-",
-      (world) =>
-        Effect.gen(function* () {
-          const runId = yield* started(world, ["plain", "--input", "note=hi"]);
-          const door = yield* frontDoor(socketOf(world.state));
-          const detail = yield* door
-            .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-            .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
-          expect(Option.getOrNull(detail)?.startedBy).toBe("Started from the CLI");
-          const shown = yield* collie(world, ["run", "show", runId]);
-          expect(shown.envelope).toMatchObject({
-            ok: true,
-            data: { startedBy: "Started from the CLI" },
-          });
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+test("a Run started from the CLI says so in its details and in run show", () =>
+  proves(
+    "collie-started-by-",
+    (world) =>
+      Effect.gen(function* () {
+        const runId = yield* started(world, ["plain", "--input", "note=hi"]);
+        const door = yield* frontDoor(socketOf(world.state));
+        const detail = yield* door
+          .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
+          .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
+        expect(Option.getOrNull(detail)?.startedBy).toBe("Started from the CLI");
+        const shown = yield* collie(world, ["run", "show", runId]);
+        expect(shown.envelope).toMatchObject({
+          ok: true,
+          data: { startedBy: "Started from the CLI" },
+        });
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["plain.workflow.ts"],
+  ));
 
 const GITLAB = (repo: string, iid: number) =>
   `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`;

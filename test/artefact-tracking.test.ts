@@ -100,33 +100,29 @@ test("a stalled explicit refresh times out and releases catalogue writes while c
     }),
   ));
 
-test(
-  "the host returns a cold cached catalogue before discovery and bounds explicit refresh",
-  () =>
-    proves(
-      "collie-cold-catalogue-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=cold"]);
-          const { runId } = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({ runId: Schema.String }),
-          )(started.envelope.data);
-          yield* collie(world, ["run", "wait", runId]);
-          const dir = `${world.state}/runs/${runId}/handoffs`;
-          yield* fs.makeDirectory(dir, { recursive: true });
-          for (let n = 0; n < 24; n++)
-            yield* fs.writeFileString(`${dir}/${n}.md`, `# Finding ${n}\n`);
-          const door = yield* frontDoor(socketOf(world.state));
-          expect((yield* door.artefacts({ runId })).items.length).toBeLessThanOrEqual(8);
-          expect(
-            (yield* door.artefacts({ runId, refresh: true })).items.length,
-          ).toBeLessThanOrEqual(16);
-        }),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+test("the host returns a cold cached catalogue before discovery and bounds explicit refresh", () =>
+  proves(
+    "collie-cold-catalogue-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const started = yield* collie(world, ["run", "start", "plain", "--input", "note=cold"]);
+        const { runId } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ runId: Schema.String }),
+        )(started.envelope.data);
+        yield* collie(world, ["run", "wait", runId]);
+        const dir = `${world.state}/runs/${runId}/handoffs`;
+        yield* fs.makeDirectory(dir, { recursive: true });
+        for (let n = 0; n < 24; n++)
+          yield* fs.writeFileString(`${dir}/${n}.md`, `# Finding ${n}\n`);
+        const door = yield* frontDoor(socketOf(world.state));
+        expect((yield* door.artefacts({ runId })).items.length).toBeLessThanOrEqual(8);
+        expect((yield* door.artefacts({ runId, refresh: true })).items.length).toBeLessThanOrEqual(
+          16,
+        );
+      }),
+    ["plain.workflow.ts"],
+  ));
 
 test("background passes track finished Runs and label overdue cached observations", () =>
   runEffect(

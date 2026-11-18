@@ -174,48 +174,44 @@ test("a Task held is held until its holder is done, and only that Task", () =>
     }).pipe(Effect.provide(recordsAt(stateDir))),
   ));
 
-test(
-  "run hold --task holds every unfinished Run of that Task and none of another's",
-  () =>
-    proves(
-      "collie-tasks-hold-",
-      (world) =>
-        Effect.gen(function* () {
-          const Started = Schema.Struct({ runId: Schema.String });
-          const start = (...more: ReadonlyArray<string>) =>
-            collie(world, ["run", "start", "asks", "--input", "goal=hold them", ...more]).pipe(
-              Effect.flatMap(({ envelope }) => Schema.decodeUnknownEffect(Started)(envelope.data)),
-              Effect.map(({ runId }) => runId),
-              Effect.orDie,
-            );
-          const taskOf = (runId: string) =>
-            collie(world, ["run", "show", runId]).pipe(
-              Effect.flatMap(({ envelope }) =>
-                Schema.decodeUnknownEffect(
-                  Schema.Struct({ run: Schema.Struct({ task: Schema.String }) }),
-                )(envelope.data),
-              ),
-              Effect.map(({ run }) => run.task),
-              Effect.orDie,
-            );
-          const first = yield* start();
-          const task = yield* taskOf(first);
-          const second = yield* start("--task", task);
-          yield* start();
-
-          const held = yield* collie(world, ["run", "hold", "--task", task]);
-          yield* stopHost(world.state);
-          expect(held.envelope).toMatchObject({ ok: true, data: { task } });
-          expect(
-            Arr.sort(
-              (yield* Schema.decodeUnknownEffect(
-                Schema.Struct({ held: Schema.Array(Schema.String) }),
-              )(held.envelope.data).pipe(Effect.orDie)).held,
-              Order.String,
+test("run hold --task holds every unfinished Run of that Task and none of another's", () =>
+  proves(
+    "collie-tasks-hold-",
+    (world) =>
+      Effect.gen(function* () {
+        const Started = Schema.Struct({ runId: Schema.String });
+        const start = (...more: ReadonlyArray<string>) =>
+          collie(world, ["run", "start", "asks", "--input", "goal=hold them", ...more]).pipe(
+            Effect.flatMap(({ envelope }) => Schema.decodeUnknownEffect(Started)(envelope.data)),
+            Effect.map(({ runId }) => runId),
+            Effect.orDie,
+          );
+        const taskOf = (runId: string) =>
+          collie(world, ["run", "show", runId]).pipe(
+            Effect.flatMap(({ envelope }) =>
+              Schema.decodeUnknownEffect(
+                Schema.Struct({ run: Schema.Struct({ task: Schema.String }) }),
+              )(envelope.data),
             ),
-          ).toEqual(Arr.sort([first, second], Order.String));
-        }),
-      ["asks.workflow.ts"],
-    ),
-  120_000,
-);
+            Effect.map(({ run }) => run.task),
+            Effect.orDie,
+          );
+        const first = yield* start();
+        const task = yield* taskOf(first);
+        const second = yield* start("--task", task);
+        yield* start();
+
+        const held = yield* collie(world, ["run", "hold", "--task", task]);
+        yield* stopHost(world.state);
+        expect(held.envelope).toMatchObject({ ok: true, data: { task } });
+        expect(
+          Arr.sort(
+            (yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ held: Schema.Array(Schema.String) }),
+            )(held.envelope.data).pipe(Effect.orDie)).held,
+            Order.String,
+          ),
+        ).toEqual(Arr.sort([first, second], Order.String));
+      }),
+    ["asks.workflow.ts"],
+  ));

@@ -173,91 +173,83 @@ test("a bare tick reads none of a record's files and sends nothing; a change sen
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
-test(
-  "opening a record among 500 Runs reads no file of another Task's Runs",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { dir, runs } = yield* stateOf(500);
-        const reads: Array<string> = [];
-        const model = yield* loggedModel(dir, reads);
-        const run = runs[41]!;
-        const shown = yield* recordFrames(
-          sourcesOf(dir, model, runs),
-          { ...KEY, runId: run.id },
-          Stream.never,
-        ).pipe(Stream.takeUntil(isDone), Stream.runCollect);
-        const others = Arr.flatMap(
-          Arr.filter(runs, (one) => one.task !== run.task),
-          (one: RunFacts) => [
-            `${dir}/runs/${one.id}`,
-            `${dir}/agents/${one.id}`,
-            `${dir}/evidence/${one.id}`,
-          ],
-        );
-        const theirs = Arr.filter(reads, (path) =>
-          Arr.some(others, (other) => path === other || Str.startsWith(`${other}/`)(path)),
-        );
+test("opening a record among 500 Runs reads no file of another Task's Runs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, runs } = yield* stateOf(500);
+      const reads: Array<string> = [];
+      const model = yield* loggedModel(dir, reads);
+      const run = runs[41]!;
+      const shown = yield* recordFrames(
+        sourcesOf(dir, model, runs),
+        { ...KEY, runId: run.id },
+        Stream.never,
+      ).pipe(Stream.takeUntil(isDone), Stream.runCollect);
+      const others = Arr.flatMap(
+        Arr.filter(runs, (one) => one.task !== run.task),
+        (one: RunFacts) => [
+          `${dir}/runs/${one.id}`,
+          `${dir}/agents/${one.id}`,
+          `${dir}/evidence/${one.id}`,
+        ],
+      );
+      const theirs = Arr.filter(reads, (path) =>
+        Arr.some(others, (other) => path === other || Str.startsWith(`${other}/`)(path)),
+      );
 
-        expect(Arr.some(shown, isDone)).toBe(true);
-        expect(Arr.some(reads, Str.startsWith(run.dir))).toBe(true);
-        expect(theirs).toEqual([]);
-      }),
-    ),
-  60_000,
-);
+      expect(Arr.some(shown, isDone)).toBe(true);
+      expect(Arr.some(reads, Str.startsWith(run.dir))).toBe(true);
+      expect(theirs).toEqual([]);
+    }),
+  ));
 
-test(
-  "a record opened while a board pass over 500 Runs is held at a slice boundary is sent before the pass ends",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { dir, runs } = yield* stateOf(500);
-        const model = yield* makeRunModel(dir, "installation");
-        const foreground = yield* makeForeground;
-        const reached = yield* Deferred.make<void>();
-        const held = yield* Latch.make(false);
-        let boundaries = 0;
-        const pass = yield* buildBoard({
-          env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }),
-          runs,
-          registered: [],
-          offers: () => Effect.succeed([]),
-          cards: { revision: model.highest, kept: new Map() },
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, model.reading),
-          Effect.provideService(Foreground, {
-            ...foreground,
-            boundary: Effect.suspend(() =>
-              ++boundaries === 10
-                ? Effect.andThen(Deferred.succeed(reached, undefined), held.await)
-                : foreground.boundary,
-            ),
-          }),
-          Effect.forkScoped,
-        );
-        yield* Deferred.await(reached);
+test("a record opened while a board pass over 500 Runs is held at a slice boundary is sent before the pass ends", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, runs } = yield* stateOf(500);
+      const model = yield* makeRunModel(dir, "installation");
+      const foreground = yield* makeForeground;
+      const reached = yield* Deferred.make<void>();
+      const held = yield* Latch.make(false);
+      let boundaries = 0;
+      const pass = yield* buildBoard({
+        env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }),
+        runs,
+        registered: [],
+        offers: () => Effect.succeed([]),
+        cards: { revision: model.highest, kept: new Map() },
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, model.reading),
+        Effect.provideService(Foreground, {
+          ...foreground,
+          boundary: Effect.suspend(() =>
+            ++boundaries === 10
+              ? Effect.andThen(Deferred.succeed(reached, undefined), held.await)
+              : foreground.boundary,
+          ),
+        }),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(reached);
 
-        const first = yield* recordFrames(
-          sourcesOf(dir, model, runs),
-          { ...KEY, runId: runs[499]!.id },
-          Stream.never,
-        ).pipe(
-          Stream.runHead,
-          Effect.provideService(Foreground, foreground),
-          Effect.timeoutOption("10 seconds"),
-        );
+      const first = yield* recordFrames(
+        sourcesOf(dir, model, runs),
+        { ...KEY, runId: runs[499]!.id },
+        Stream.never,
+      ).pipe(
+        Stream.runHead,
+        Effect.provideService(Foreground, foreground),
+        Effect.timeoutOption("10 seconds"),
+      );
 
-        expect(first._tag === "Some" && first.value._tag === "Some").toBe(true);
-        expect(boundaries).toBe(10);
-        expect(pass.pollUnsafe()).toBeUndefined();
-        yield* held.open;
-        yield* Fiber.join(pass);
-        expect(boundaries).toBeGreaterThan(400);
-      }),
-    ),
-  60_000,
-);
+      expect(first._tag === "Some" && first.value._tag === "Some").toBe(true);
+      expect(boundaries).toBe(10);
+      expect(pass.pollUnsafe()).toBeUndefined();
+      yield* held.open;
+      yield* Fiber.join(pass);
+      expect(boundaries).toBeGreaterThan(400);
+    }),
+  ));
 
 test("a going Run's record shows an edit to its checkout on its next frame", () =>
   runEffect(

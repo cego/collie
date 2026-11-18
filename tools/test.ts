@@ -81,7 +81,7 @@ const TimingsJson = Schema.fromJsonString(
   }),
 );
 
-const suite = (targeted: boolean, kind: Kind, since: bigint, budget: Budget, seed: string) => {
+const runSuite = (targeted: boolean, kind: Kind, since: bigint, budget: Budget, seed: string) => {
   const request = requestOf(args, budget, targeted, kind);
   return turnFor(
     request,
@@ -161,7 +161,7 @@ BunRuntime.runMain(
     const path = yield* Path.Path;
     const seed = path.resolve(import.meta.dir, "test-timings.json");
     const [targeted, kind] = yield* Effect.all([isTargeted(args), kindOf(args, budget)]);
-    return yield* suite(targeted, kind, since, budget, seed);
+    return yield* runSuite(targeted, kind, since, budget, seed);
   }).pipe(
     Effect.tapCauseIf(
       (cause) => !Cause.hasInterruptsOnly(cause),

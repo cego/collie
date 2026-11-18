@@ -18,45 +18,41 @@ test("the token page uses the configured GitLab with Collie and both scopes pref
   );
 });
 
-test(
-  "Connection tables use the shipped declarations, including needs and local fallbacks",
-  () =>
-    hosted("desktop-connection-declarations-", ({ world, env }) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.copy(
-          new URL("../workflows", import.meta.url).pathname,
-          `${world.install}/workflows`,
-        );
-        const definitions = yield* readDefinitions(env);
-        const workflows = workflowConnections(definitions.workflows);
-        const gitlab = connectionUses("gitlab", workflows);
-        expect(Option.getOrUndefined(Arr.findFirst(gitlab, (row) => row.id === "review"))).toEqual({
-          id: "review",
-          declares: "uses",
-          with: "Reads and answers the merge request",
-          without: "Reviews the local diff only",
-        });
-        expect(Arr.some(gitlab, (row) => row.id === "plan")).toBe(false);
-        expect(definitions.connectionUses).toEqual([
-          {
-            id: "Notifications",
-            connections: {
-              uses: {
-                slack: { with: "Posts the toasts you keep on, as you", without: "Toasts only" },
-              },
+test("Connection tables use the shipped declarations, including needs and local fallbacks", () =>
+  hosted("desktop-connection-declarations-", ({ world, env }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.copy(
+        new URL("../workflows", import.meta.url).pathname,
+        `${world.install}/workflows`,
+      );
+      const definitions = yield* readDefinitions(env);
+      const workflows = workflowConnections(definitions.workflows);
+      const gitlab = connectionUses("gitlab", workflows);
+      expect(Option.getOrUndefined(Arr.findFirst(gitlab, (row) => row.id === "review"))).toEqual({
+        id: "review",
+        declares: "uses",
+        with: "Reads and answers the merge request",
+        without: "Reviews the local diff only",
+      });
+      expect(Arr.some(gitlab, (row) => row.id === "plan")).toBe(false);
+      expect(definitions.connectionUses).toEqual([
+        {
+          id: "Notifications",
+          connections: {
+            uses: {
+              slack: { with: "Posts the toasts you keep on, as you", without: "Toasts only" },
             },
           },
-        ]);
-        expect(
-          Option.getOrUndefined(
-            Arr.findFirst(connectionUses("helle", workflows), (row) => row.id === "release"),
-          ),
-        ).toMatchObject({ declares: "needs", without: "Does not start" });
-      }),
-    ),
-  30_000,
-);
+        },
+      ]);
+      expect(
+        Option.getOrUndefined(
+          Arr.findFirst(connectionUses("helle", workflows), (row) => row.id === "release"),
+        ),
+      ).toMatchObject({ declares: "needs", without: "Does not start" });
+    }),
+  ));
 
 test("a GitLab card offers one login to both lacking Machines and no action once all have it", () => {
   const readings = [

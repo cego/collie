@@ -149,71 +149,67 @@ const asCommand = flow(
 );
 
 describe("the main process reaches each Machine's host", () => {
-  test(
-    "it lists a Machine's Schedules, and its pause, resume and removal are recorded as Desktop's",
-    () =>
-      proves(
-        "collie-desktop-schedules-",
-        (world) =>
-          Effect.gen(function* () {
-            const added = yield* collie(world, [
-              "schedule",
-              "add",
-              "daily",
-              "hello",
-              "--cron",
-              "0 7 * * *",
-              "--input",
-              "name=world",
-              "--workspace",
-              world.project,
-            ]);
-            expect(added.envelope).toMatchObject({ ok: true });
-            const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-            const command = Option.isSome(binary)
-              ? [binary.value]
-              : [process.execPath, `${root}src/main.ts`];
-            const desktop = yield* openBridge(bridgeCommand(command, "mk-pc"), {
-              PATH: "/usr/bin:/bin",
-              HOME: world.home,
-              COLLIE_ROOT: world.install,
-              COLLIE_STATE_DIR: world.state,
-              COLLIE_USER_DIR: world.config,
-              COLLIE_HOST: asCommand(command),
-              ...(yield* suiteEnv),
-              HC_SOCKET: Bun.env.HC_SOCKET ?? "",
-            });
-            const listed = yield* schedulesOn(mkPc, desktop);
-            expect(listed).toMatchObject({
-              profile: "local",
-              name: "mk-pc",
-              problem: null,
-              unreachable: false,
-              schedules: [{ name: "daily", workflow: "hello", paused: false }],
-            });
-            const door = { machine: mkPc, desktop };
-            for (const change of ["pause", "resume", "remove"] as const)
-              yield* changeScheduleOn(door, { change, name: "daily" }, `desktop-${change}`);
-            expect((yield* schedulesOn(mkPc, desktop)).schedules).toEqual([]);
-            const trail = yield* readAudit(`${world.state}/schedules/daily`).pipe(
-              Effect.provide(memoryRecords),
-            );
-            expect(
-              Arr.map(
-                Arr.filter(trail, (line) => pipe_(line.request, Str.startsWith("desktop-"))),
-                (line) => [line.operation, line.actor.origin],
-              ),
-            ).toEqual([
-              ["pause", "desktop"],
-              ["resume", "desktop"],
-              ["remove", "desktop"],
-            ]);
-            yield* stopHost(world.state);
-          }).pipe(Effect.orDie),
-        ["hello.workflow.ts", "proof.workflow.ts", "helper.ts", "notes.md"],
-      ),
-    120_000,
-  );
+  test("it lists a Machine's Schedules, and its pause, resume and removal are recorded as Desktop's", () =>
+    proves(
+      "collie-desktop-schedules-",
+      (world) =>
+        Effect.gen(function* () {
+          const added = yield* collie(world, [
+            "schedule",
+            "add",
+            "daily",
+            "hello",
+            "--cron",
+            "0 7 * * *",
+            "--input",
+            "name=world",
+            "--workspace",
+            world.project,
+          ]);
+          expect(added.envelope).toMatchObject({ ok: true });
+          const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+          const command = Option.isSome(binary)
+            ? [binary.value]
+            : [process.execPath, `${root}src/main.ts`];
+          const desktop = yield* openBridge(bridgeCommand(command, "mk-pc"), {
+            PATH: "/usr/bin:/bin",
+            HOME: world.home,
+            COLLIE_ROOT: world.install,
+            COLLIE_STATE_DIR: world.state,
+            COLLIE_USER_DIR: world.config,
+            COLLIE_HOST: asCommand(command),
+            ...(yield* suiteEnv),
+            HC_SOCKET: Bun.env.HC_SOCKET ?? "",
+          });
+          const listed = yield* schedulesOn(mkPc, desktop);
+          expect(listed).toMatchObject({
+            profile: "local",
+            name: "mk-pc",
+            problem: null,
+            unreachable: false,
+            schedules: [{ name: "daily", workflow: "hello", paused: false }],
+          });
+          const door = { machine: mkPc, desktop };
+          for (const change of ["pause", "resume", "remove"] as const)
+            yield* changeScheduleOn(door, { change, name: "daily" }, `desktop-${change}`);
+          expect((yield* schedulesOn(mkPc, desktop)).schedules).toEqual([]);
+          const trail = yield* readAudit(`${world.state}/schedules/daily`).pipe(
+            Effect.provide(memoryRecords),
+          );
+          expect(
+            Arr.map(
+              Arr.filter(trail, (line) => pipe_(line.request, Str.startsWith("desktop-"))),
+              (line) => [line.operation, line.actor.origin],
+            ),
+          ).toEqual([
+            ["pause", "desktop"],
+            ["resume", "desktop"],
+            ["remove", "desktop"],
+          ]);
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["hello.workflow.ts", "proof.workflow.ts", "helper.ts", "notes.md"],
+    ));
 
   test("a host without the call asks for an upgrade rather than listing none", () =>
     Effect.runPromise(

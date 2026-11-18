@@ -332,129 +332,122 @@ const spend = (ms: number) =>
     yield* waitFor(Effect.map(Clock.currentTimeMillis, (now) => now >= until));
   });
 
-test(
-  "a pi agent on core asks with its question tool: two Decisions, its next step held, and one Delivery with both answers",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const core = yield* rig.startCore();
-        yield* quietConfig;
-        yield* fs.writeFileString(
-          hostLockOf(rig.pluginEnv().stateDir),
-          `{"pid":${process.pid},"start":null}`,
+test("a pi agent on core asks with its question tool: two Decisions, its next step held, and one Delivery with both answers", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const core = yield* rig.startCore();
+      yield* quietConfig;
+      yield* fs.writeFileString(
+        hostLockOf(rig.pluginEnv().stateDir),
+        `{"pid":${process.pid},"start":null}`,
+      );
+      yield* rig.queueOutputs([null, null, null, null, null]);
+      const agent = agentName("r1", "builder", null, 1);
+      const delivered = () =>
+        Effect.map(rig.calls(), (calls) =>
+          Arr.filter(
+            Arr.filter(coreCalls(calls), (call) => call.cmd === "terminal.send"),
+            (call) => !(isString(call.params?.text) && call.params.text.includes(".remind-")),
+          ),
         );
-        yield* rig.queueOutputs([null, null, null, null, null]);
-        const agent = agentName("r1", "builder", null, 1);
-        const delivered = () =>
-          Effect.map(rig.calls(), (calls) =>
-            Arr.filter(
-              Arr.filter(coreCalls(calls), (call) => call.cmd === "terminal.send"),
-              (call) => !(isString(call.params?.text) && call.params.text.includes(".remind-")),
-            ),
-          );
-        const sends = () =>
-          Effect.map(delivered(), (sent) =>
-            Arr.map(sent, (call) => (isString(call.params?.text) ? call.params.text : "")),
-          );
-        yield* session(
-          Effect.gen(function* () {
-            yield* piWork.execute({ runId: "r1", input: {} }, { discard: true });
-            yield* waitFor(Effect.map(sends(), (sent) => sent.length === 1));
-            const [run] = Arr.filter(
-              coreCalls(yield* rig.calls()),
-              (call) => call.cmd === "terminal.run",
-            );
-            const { argv } = yield* Schema.decodeUnknownEffect(PiLaunch)(run?.params);
-            expect(argv[0]).toBe("pi");
-            const launched = yield* launchedAt(dir, "r1", "review");
-            const chosen = argv[argv.indexOf("--session-id") + 1];
-            expect(chosen).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
-            expect(launched.agentSession).toEqual({ kind: "pi", value: chosen ?? "" });
-
-            const tools = yield* piTools(argv[argv.indexOf("-e") + 1] ?? "");
-            yield* waitFor(
-              Effect.map(TestClock.withLive(Clock.currentTimeMillis), (now) => now > launched.at!),
-            );
-            const told = yield* askWith(
-              tools,
-              "call_1",
-              [
-                {
-                  question: "Which database?",
-                  header: "Database",
-                  options: [
-                    { label: "Postgres (Recommended)" },
-                    { label: "SQLite" },
-                    { label: "JSONL" },
-                  ],
-                },
-                {
-                  question: "Which checks?",
-                  header: "Checks",
-                  options: [
-                    { label: "lint (Recommended)" },
-                    { label: "typecheck" },
-                    { label: "none" },
-                  ],
-                },
-              ],
-              launched.agentSession!.value,
-            );
-            expect(told).toContain("End your turn now");
-            const store = yield* Store;
-            yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length === 2));
-            expect(Arr.map(yield* store.asked("r1"), (asked) => asked.answer)).toEqual([
-              null,
-              null,
-            ]);
-
-            yield* Effect.forkChild(
-              (yield* Agents).launch({
-                runId: "r1",
-                operation: "fix",
-                role: "reviewer",
-                workflow: "core-pi",
-                task: null,
-                agent: "builder",
-                cwd: rig.projectDir,
-                prompt: "Fix it.",
-                output: `${dir}/agents/r1/fix.json`,
-                skill: null,
-                harness: "pi",
-                model: null,
-                effort: null,
-                permissions: null,
-              }),
-            );
-            yield* spend(30_000);
-            expect(yield* sends()).toHaveLength(1);
-
-            for (const [decision, value] of [
-              ["ask-review-1", "SQLite"],
-              ["ask-review-2", "lint and typecheck"],
-            ] as const)
-              yield* store.settle({ run: "r1", decision, value, request: "a" });
-            yield* waitFor(Effect.map(sends(), (sent) => sent.length === 3));
-            const [step, answers, next] = yield* sends();
-            expect(step).toContain("/review.prompt.md");
-            expect(answers).toContain(
-              "Your questions are answered: Database: SQLite; Checks: lint and typecheck",
-            );
-            expect(next).toContain("/fix.prompt.md");
-            expect(Arr.map(yield* delivered(), (call) => call.params?.terminal)).toEqual([
-              agent,
-              agent,
-              agent,
-            ]);
-          }),
-          coreOnly(core),
-          piBody,
+      const sends = () =>
+        Effect.map(delivered(), (sent) =>
+          Arr.map(sent, (call) => (isString(call.params?.text) ? call.params.text : "")),
         );
-      }),
-    ),
-  120_000,
-);
+      yield* session(
+        Effect.gen(function* () {
+          yield* piWork.execute({ runId: "r1", input: {} }, { discard: true });
+          yield* waitFor(Effect.map(sends(), (sent) => sent.length === 1));
+          const [run] = Arr.filter(
+            coreCalls(yield* rig.calls()),
+            (call) => call.cmd === "terminal.run",
+          );
+          const { argv } = yield* Schema.decodeUnknownEffect(PiLaunch)(run?.params);
+          expect(argv[0]).toBe("pi");
+          const launched = yield* launchedAt(dir, "r1", "review");
+          const chosen = argv[argv.indexOf("--session-id") + 1];
+          expect(chosen).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+          expect(launched.agentSession).toEqual({ kind: "pi", value: chosen ?? "" });
+
+          const tools = yield* piTools(argv[argv.indexOf("-e") + 1] ?? "");
+          yield* waitFor(
+            Effect.map(TestClock.withLive(Clock.currentTimeMillis), (now) => now > launched.at!),
+          );
+          const told = yield* askWith(
+            tools,
+            "call_1",
+            [
+              {
+                question: "Which database?",
+                header: "Database",
+                options: [
+                  { label: "Postgres (Recommended)" },
+                  { label: "SQLite" },
+                  { label: "JSONL" },
+                ],
+              },
+              {
+                question: "Which checks?",
+                header: "Checks",
+                options: [
+                  { label: "lint (Recommended)" },
+                  { label: "typecheck" },
+                  { label: "none" },
+                ],
+              },
+            ],
+            launched.agentSession!.value,
+          );
+          expect(told).toContain("End your turn now");
+          const store = yield* Store;
+          yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length === 2));
+          expect(Arr.map(yield* store.asked("r1"), (asked) => asked.answer)).toEqual([null, null]);
+
+          yield* Effect.forkChild(
+            (yield* Agents).launch({
+              runId: "r1",
+              operation: "fix",
+              role: "reviewer",
+              workflow: "core-pi",
+              task: null,
+              agent: "builder",
+              cwd: rig.projectDir,
+              prompt: "Fix it.",
+              output: `${dir}/agents/r1/fix.json`,
+              skill: null,
+              harness: "pi",
+              model: null,
+              effort: null,
+              permissions: null,
+            }),
+          );
+          yield* spend(30_000);
+          expect(yield* sends()).toHaveLength(1);
+
+          for (const [decision, value] of [
+            ["ask-review-1", "SQLite"],
+            ["ask-review-2", "lint and typecheck"],
+          ] as const)
+            yield* store.settle({ run: "r1", decision, value, request: "a" });
+          yield* waitFor(Effect.map(sends(), (sent) => sent.length === 3));
+          const [step, answers, next] = yield* sends();
+          expect(step).toContain("/review.prompt.md");
+          expect(answers).toContain(
+            "Your questions are answered: Database: SQLite; Checks: lint and typecheck",
+          );
+          expect(next).toContain("/fix.prompt.md");
+          expect(Arr.map(yield* delivered(), (call) => call.params?.terminal)).toEqual([
+            agent,
+            agent,
+            agent,
+          ]);
+        }),
+        coreOnly(core),
+        piBody,
+      );
+    }),
+  ));
 
 test("a send core refuses because its agent is blocked is held as herdr's agent_blocked is, and goes once it is idle", () =>
   runEffect(

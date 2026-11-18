@@ -107,216 +107,184 @@ const Shown = Schema.Struct({
   }),
 });
 
-test(
-  "what was inferred is shown before the start, and Esc starts nothing",
-  () =>
-    launching("collie-launch-inferred-", (world) =>
-      withMergeRequest(
-        world,
-        Effect.gen(function* () {
-          yield* onBranch(world, "feature/x");
-          const env = yield* currentEnv;
-
-          const cancelled = answering(["targeted", ""]);
-          expect(yield* pickFlow(new Herdr(env), env, cancelled.prompts)).toBe(0);
-          expect(cancelled.asked).toHaveLength(3);
-          expect((yield* runViews(env, null)).runs).toEqual([]);
-
-          const { prompts, asked, rows } = answering(["targeted", "", "start"]);
-          expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
-          expect(asked.slice(1)).toEqual([QUESTION, "A workflow pointed at a change"]);
-          expect(rows.at(-1)).toEqual({
-            id: "start",
-            title: `Starting in ${world.project}`,
-            subtitle:
-              "target = mr:gitlab.example.com/group/app!42 (inferred from branch feature/x's open merge request !42)",
-          });
-
-          const runs = (yield* runViews(env, null)).runs;
-          expect(runs).toHaveLength(1);
-          expect(runs[0]?.provenance).toEqual({ target: "inferred" });
-          const shown = yield* collie(world, ["run", "show", runs[0]?.runId ?? ""]);
-          const decoded = yield* Schema.decodeUnknownEffect(Shown)(shown.envelope);
-          expect(decoded.data.run.provenance).toEqual({ target: "inferred" });
-        }),
-      ),
-    ),
-  240_000,
-);
-
-test(
-  "the start says how far the Run goes, and the next launch offers that choice first",
-  () =>
-    launching("collie-launch-reach-", (world) =>
+test("what was inferred is shown before the start, and Esc starts nothing", () =>
+  launching("collie-launch-inferred-", (world) =>
+    withMergeRequest(
+      world,
       Effect.gen(function* () {
+        yield* onBranch(world, "feature/x");
         const env = yield* currentEnv;
-        yield* collie(world, [
-          "run",
-          "start",
-          "reached",
-          "--input",
-          "goal=typed",
-          "--input",
-          "then=ship",
-        ]);
 
-        const first = answering(["reached", "one registry", "reach:ship"]);
-        expect(yield* pickFlow(new Herdr(env), env, first.prompts)).toBe(0);
-        expect(first.asked.slice(1)).toEqual([QUESTION, "Go as far as asked"]);
-        expect(Arr.map(first.rows.slice(-2), (row) => [row.id, row.title])).toEqual([
-          ["reach:", "Ask at the end"],
-          ["reach:ship", "Ship it"],
-        ]);
-        expect(first.rows.at(-1)?.subtitle).toBe(
-          `Starting in ${world.project} · goal = one registry (given)`,
-        );
-
-        const second = answering(["reached", "another registry", "reach:ship"]);
-        expect(yield* pickFlow(new Herdr(env), env, second.prompts)).toBe(0);
-        expect(Arr.map(second.rows.slice(-2), (row) => row.id)).toEqual(["reach:ship", "reach:"]);
-
-        const runs = (yield* runViews(env, null)).runs;
-        const launched = Arr.map(
-          Arr.filter(runs, (run) => run.input.goal !== "typed"),
-          (run) => run.input,
-        );
-        expect(launched).toHaveLength(2);
-        // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
-        expect(launched).toContainEqual({ goal: "another registry", then: "ship" });
-        // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
-        expect(launched).toContainEqual({ goal: "one registry", then: "ship" });
-      }),
-    ),
-  240_000,
-);
-
-test(
-  "with nothing saved, the first row leaves how far it goes empty, as a launch did before",
-  () =>
-    launching("collie-launch-reach-unsaid-", () =>
-      Effect.gen(function* () {
-        const env = yield* currentEnv;
-        const { prompts, rows } = answering(["reached", "one registry", "reach:"]);
-        expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
-        const runs = (yield* runViews(env, null)).runs;
-        expect(Arr.map(rows.slice(-2), (row) => row.id)).toEqual(["reach:", "reach:ship"]);
-        // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
-        expect(runs[0]?.input).toEqual({ goal: "one registry", then: "" });
-      }),
-    ),
-  240_000,
-);
-
-test(
-  "a launch from the Home rooted at the Projects root remembers how far it goes for projects-root",
-  () =>
-    launching("collie-launch-reach-root-", (world) =>
-      Effect.gen(function* () {
-        const root = `${world.home}/projects`;
-        yield* (yield* FileSystem.FileSystem).makeDirectory(root, { recursive: true });
-        yield* writeConfigValue(world.config, "projects.root", root);
-        const home = yield* onTheBoard(world);
-
-        const first = answering(["reached", "one registry", "reach:ship"]);
-        expect(yield* pickFlow(new Herdr(home), home, first.prompts)).toBe(0);
-        expect(yield* savedReaches(home.userDir)).toEqual([
-          { workflow: "reached", project: "projects-root", value: "ship" },
-        ]);
-
-        const second = answering(["reached", "another registry", "reach:ship"]);
-        expect(yield* pickFlow(new Herdr(home), home, second.prompts)).toBe(0);
-        expect(Arr.map(second.rows.slice(-2), (row) => row.id)).toEqual(["reach:ship", "reach:"]);
-      }),
-    ),
-  240_000,
-);
-
-test(
-  "a goal from a checkout is two questions and no confirmation, and is recorded as said",
-  () =>
-    launching("collie-launch-goal-", (world) =>
-      Effect.gen(function* () {
-        const env = yield* currentEnv;
-        const { prompts, asked } = answering(["planned", "one registry"]);
-        expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
-        expect(asked).toHaveLength(2);
-        expect(asked[1]).toBe(QUESTION);
-        const runs = (yield* runViews(env, null)).runs;
-        expect(runs[0]).toMatchObject({
-          cwd: world.project,
-          input: { goal: "one registry" },
-          provenance: { goal: "typed" },
-          options: {},
-        });
-      }),
-    ),
-  240_000,
-);
-
-test(
-  "no checkout is asked for from the board: a goal starts at the Projects root",
-  () =>
-    launching("collie-launch-home-", (world) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const root = `${world.home}/projects`;
-        yield* fs.makeDirectory(`${root}/app/.git`, { recursive: true });
-        yield* writeConfigValue(world.config, "projects.root", root);
-        const env = yield* onTheBoard(world);
-
-        const { prompts, asked } = answering(["planned", "one registry"]);
-        expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
-        expect(asked.slice(1)).toEqual([QUESTION]);
-        const runs = (yield* runViews(env, null)).runs;
-        expect(runs[0]).toMatchObject({
-          cwd: root,
-          input: { goal: "one registry" },
-          options: { workspace: "projects-root" },
-        });
-      }),
-    ),
-  240_000,
-);
-
-test(
-  "words that are no plan directory or issue are the work source as text",
-  () =>
-    launching("collie-launch-source-", (world) =>
-      Effect.gen(function* () {
-        const env = yield* currentEnv;
-        const here = answering(["sourced", "make the board faster"]);
-        expect(yield* pickFlow(new Herdr(env), env, here.prompts)).toBe(0);
-        expect(here.asked).toHaveLength(2);
-        expect((yield* runViews(env, null)).runs[0]).toMatchObject({
-          cwd: world.project,
-          input: { plan: "make the board faster" },
-        });
-      }),
-    ),
-  240_000,
-);
-
-test(
-  "a review with nothing to infer is refused with the reason, and nothing more is asked",
-  () =>
-    launching("collie-launch-refused-", (world) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const plain = `${world.home}/plain`;
-        yield* fs.makeDirectory(plain, { recursive: true });
-        const env = { ...(yield* currentEnv), cwd: plain };
-
-        const { prompts, asked } = answering(["targeted", ""]);
-        expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
-        expect(asked).toHaveLength(3);
-        expect(asked[1]).toBe(QUESTION);
-        expect(asked[2]).toContain(`targeted needs "target"`);
-        expect(asked[2]).toContain(`nothing in ${plain} gave one`);
+        const cancelled = answering(["targeted", ""]);
+        expect(yield* pickFlow(new Herdr(env), env, cancelled.prompts)).toBe(0);
+        expect(cancelled.asked).toHaveLength(3);
         expect((yield* runViews(env, null)).runs).toEqual([]);
+
+        const { prompts, asked, rows } = answering(["targeted", "", "start"]);
+        expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
+        expect(asked.slice(1)).toEqual([QUESTION, "A workflow pointed at a change"]);
+        expect(rows.at(-1)).toEqual({
+          id: "start",
+          title: `Starting in ${world.project}`,
+          subtitle:
+            "target = mr:gitlab.example.com/group/app!42 (inferred from branch feature/x's open merge request !42)",
+        });
+
+        const runs = (yield* runViews(env, null)).runs;
+        expect(runs).toHaveLength(1);
+        expect(runs[0]?.provenance).toEqual({ target: "inferred" });
+        const shown = yield* collie(world, ["run", "show", runs[0]?.runId ?? ""]);
+        const decoded = yield* Schema.decodeUnknownEffect(Shown)(shown.envelope);
+        expect(decoded.data.run.provenance).toEqual({ target: "inferred" });
       }),
     ),
-  240_000,
-);
+  ));
+
+test("the start says how far the Run goes, and the next launch offers that choice first", () =>
+  launching("collie-launch-reach-", (world) =>
+    Effect.gen(function* () {
+      const env = yield* currentEnv;
+      yield* collie(world, [
+        "run",
+        "start",
+        "reached",
+        "--input",
+        "goal=typed",
+        "--input",
+        "then=ship",
+      ]);
+
+      const first = answering(["reached", "one registry", "reach:ship"]);
+      expect(yield* pickFlow(new Herdr(env), env, first.prompts)).toBe(0);
+      expect(first.asked.slice(1)).toEqual([QUESTION, "Go as far as asked"]);
+      expect(Arr.map(first.rows.slice(-2), (row) => [row.id, row.title])).toEqual([
+        ["reach:", "Ask at the end"],
+        ["reach:ship", "Ship it"],
+      ]);
+      expect(first.rows.at(-1)?.subtitle).toBe(
+        `Starting in ${world.project} · goal = one registry (given)`,
+      );
+
+      const second = answering(["reached", "another registry", "reach:ship"]);
+      expect(yield* pickFlow(new Herdr(env), env, second.prompts)).toBe(0);
+      expect(Arr.map(second.rows.slice(-2), (row) => row.id)).toEqual(["reach:ship", "reach:"]);
+
+      const runs = (yield* runViews(env, null)).runs;
+      const launched = Arr.map(
+        Arr.filter(runs, (run) => run.input.goal !== "typed"),
+        (run) => run.input,
+      );
+      expect(launched).toHaveLength(2);
+      // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+      expect(launched).toContainEqual({ goal: "another registry", then: "ship" });
+      // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+      expect(launched).toContainEqual({ goal: "one registry", then: "ship" });
+    }),
+  ));
+
+test("with nothing saved, the first row leaves how far it goes empty, as a launch did before", () =>
+  launching("collie-launch-reach-unsaid-", () =>
+    Effect.gen(function* () {
+      const env = yield* currentEnv;
+      const { prompts, rows } = answering(["reached", "one registry", "reach:"]);
+      expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
+      const runs = (yield* runViews(env, null)).runs;
+      expect(Arr.map(rows.slice(-2), (row) => row.id)).toEqual(["reach:", "reach:ship"]);
+      // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+      expect(runs[0]?.input).toEqual({ goal: "one registry", then: "" });
+    }),
+  ));
+
+test("a launch from the Home rooted at the Projects root remembers how far it goes for projects-root", () =>
+  launching("collie-launch-reach-root-", (world) =>
+    Effect.gen(function* () {
+      const root = `${world.home}/projects`;
+      yield* (yield* FileSystem.FileSystem).makeDirectory(root, { recursive: true });
+      yield* writeConfigValue(world.config, "projects.root", root);
+      const home = yield* onTheBoard(world);
+
+      const first = answering(["reached", "one registry", "reach:ship"]);
+      expect(yield* pickFlow(new Herdr(home), home, first.prompts)).toBe(0);
+      expect(yield* savedReaches(home.userDir)).toEqual([
+        { workflow: "reached", project: "projects-root", value: "ship" },
+      ]);
+
+      const second = answering(["reached", "another registry", "reach:ship"]);
+      expect(yield* pickFlow(new Herdr(home), home, second.prompts)).toBe(0);
+      expect(Arr.map(second.rows.slice(-2), (row) => row.id)).toEqual(["reach:ship", "reach:"]);
+    }),
+  ));
+
+test("a goal from a checkout is two questions and no confirmation, and is recorded as said", () =>
+  launching("collie-launch-goal-", (world) =>
+    Effect.gen(function* () {
+      const env = yield* currentEnv;
+      const { prompts, asked } = answering(["planned", "one registry"]);
+      expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
+      expect(asked).toHaveLength(2);
+      expect(asked[1]).toBe(QUESTION);
+      const runs = (yield* runViews(env, null)).runs;
+      expect(runs[0]).toMatchObject({
+        cwd: world.project,
+        input: { goal: "one registry" },
+        provenance: { goal: "typed" },
+        options: {},
+      });
+    }),
+  ));
+
+test("no checkout is asked for from the board: a goal starts at the Projects root", () =>
+  launching("collie-launch-home-", (world) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = `${world.home}/projects`;
+      yield* fs.makeDirectory(`${root}/app/.git`, { recursive: true });
+      yield* writeConfigValue(world.config, "projects.root", root);
+      const env = yield* onTheBoard(world);
+
+      const { prompts, asked } = answering(["planned", "one registry"]);
+      expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
+      expect(asked.slice(1)).toEqual([QUESTION]);
+      const runs = (yield* runViews(env, null)).runs;
+      expect(runs[0]).toMatchObject({
+        cwd: root,
+        input: { goal: "one registry" },
+        options: { workspace: "projects-root" },
+      });
+    }),
+  ));
+
+test("words that are no plan directory or issue are the work source as text", () =>
+  launching("collie-launch-source-", (world) =>
+    Effect.gen(function* () {
+      const env = yield* currentEnv;
+      const here = answering(["sourced", "make the board faster"]);
+      expect(yield* pickFlow(new Herdr(env), env, here.prompts)).toBe(0);
+      expect(here.asked).toHaveLength(2);
+      expect((yield* runViews(env, null)).runs[0]).toMatchObject({
+        cwd: world.project,
+        input: { plan: "make the board faster" },
+      });
+    }),
+  ));
+
+test("a review with nothing to infer is refused with the reason, and nothing more is asked", () =>
+  launching("collie-launch-refused-", (world) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const plain = `${world.home}/plain`;
+      yield* fs.makeDirectory(plain, { recursive: true });
+      const env = { ...(yield* currentEnv), cwd: plain };
+
+      const { prompts, asked } = answering(["targeted", ""]);
+      expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
+      expect(asked).toHaveLength(3);
+      expect(asked[1]).toBe(QUESTION);
+      expect(asked[2]).toContain(`targeted needs "target"`);
+      expect(asked[2]).toContain(`nothing in ${plain} gave one`);
+      expect((yield* runViews(env, null)).runs).toEqual([]);
+    }),
+  ));
 
 const projectsTree = Effect.fn("test.projectsTree")(function* (
   world: World,
@@ -413,85 +381,76 @@ test.each([
         );
       }),
     ),
-  240_000,
 );
 
-test(
-  "a start from the board is placed, never asked where: one routing call over every checkout, confirmed with Enter",
-  () =>
-    launching("collie-launch-routed-", (world) =>
-      Effect.gen(function* () {
-        const tree = yield* projectsTree(world);
-        const home = yield* onTheBoard(world);
-        yield* withRouter(world, { answer: "one", checkouts: [tree.app] }, (calls) =>
-          Effect.gen(function* () {
-            const words = "make the app board faster";
-            const cancelled = answering(["sourced", words, ""]);
-            expect(yield* pickFlow(new Herdr(home), home, cancelled.prompts)).toBe(0);
-            expect((yield* runViews(home, null)).runs).toEqual([]);
+test("a start from the board is placed, never asked where: one routing call over every checkout, confirmed with Enter", () =>
+  launching("collie-launch-routed-", (world) =>
+    Effect.gen(function* () {
+      const tree = yield* projectsTree(world);
+      const home = yield* onTheBoard(world);
+      yield* withRouter(world, { answer: "one", checkouts: [tree.app] }, (calls) =>
+        Effect.gen(function* () {
+          const words = "make the app board faster";
+          const cancelled = answering(["sourced", words, ""]);
+          expect(yield* pickFlow(new Herdr(home), home, cancelled.prompts)).toBe(0);
+          expect((yield* runViews(home, null)).runs).toEqual([]);
 
-            const { prompts, asked, rows } = answering(["sourced", words, "start"]);
-            expect(yield* pickFlow(new Herdr(home), home, prompts)).toBe(0);
-            expect(asked.slice(1)).toEqual([QUESTION, "Build from a work source"]);
-            expect(rows.at(-1)?.title).toBe(`Starting in ${tree.app}`);
+          const { prompts, asked, rows } = answering(["sourced", words, "start"]);
+          expect(yield* pickFlow(new Herdr(home), home, prompts)).toBe(0);
+          expect(asked.slice(1)).toEqual([QUESTION, "Build from a work source"]);
+          expect(rows.at(-1)?.title).toBe(`Starting in ${tree.app}`);
 
-            const packs = yield* calls;
-            expect(packs).toHaveLength(2);
-            for (const pack of packs) {
-              expect(pack).toContain(words);
-              expect(pack).toContain(tree.app);
-              expect(pack).toContain(tree.api);
-            }
-            const run = (yield* runViews(home, null)).runs[0];
-            expect(run).toMatchObject({
-              cwd: tree.app,
-              input: { plan: words },
-              provenance: { workspace: "inferred", plan: "typed" },
-            });
+          const packs = yield* calls;
+          expect(packs).toHaveLength(2);
+          for (const pack of packs) {
+            expect(pack).toContain(words);
+            expect(pack).toContain(tree.app);
+            expect(pack).toContain(tree.api);
+          }
+          const run = (yield* runViews(home, null)).runs[0];
+          expect(run).toMatchObject({
+            cwd: tree.app,
+            input: { plan: words },
+            provenance: { workspace: "inferred", plan: "typed" },
+          });
 
-            const budget = yield* readBudget(
-              yield* budgetPath(world.state, yield* machineHerd(home)),
-            );
-            const reserved = Arr.filter(budget, (line) => line.kind === "reserve");
-            expect(reserved).toHaveLength(2);
-            for (const line of reserved)
-              expect(line).toMatchObject({ model: "haiku", effort: "low" });
-          }),
-        );
-      }),
-    ),
-  240_000,
-);
+          const budget = yield* readBudget(
+            yield* budgetPath(world.state, yield* machineHerd(home)),
+          );
+          const reserved = Arr.filter(budget, (line) => line.kind === "reserve");
+          expect(reserved).toHaveLength(2);
+          for (const line of reserved)
+            expect(line).toMatchObject({ model: "haiku", effort: "low" });
+        }),
+      );
+    }),
+  ));
 
 for (const [what, route] of [
   ["several", { answer: "several", checkouts: ["/a", "/b"] }],
   ["none", { answer: "none", checkouts: [] }],
   ["an unavailable evaluator", null],
 ] as const) {
-  test(
-    `an answer of ${what} offers a plan at the Projects root instead`,
-    () =>
-      launching("collie-launch-instead-", (world) =>
-        Effect.gen(function* () {
-          const tree = yield* projectsTree(world);
-          const home = yield* onTheBoard(world);
-          yield* withRouter(world, route, () =>
-            Effect.gen(function* () {
-              const words = "one registry for every service";
-              const { prompts, rows } = answering(["sourced", words, "plan-instead"]);
-              expect(yield* pickFlow(new Herdr(home), home, prompts)).toBe(0);
-              expect(rows.at(-1)?.title).toBe("Plan it instead");
-              const run = (yield* runViews(home, null)).runs[0];
-              expect(run).toMatchObject({
-                workflow: "plans-it",
-                cwd: tree.root,
-                input: { goal: words },
-                options: { workspace: "projects-root" },
-              });
-            }),
-          );
-        }),
-      ),
-    240_000,
-  );
+  test(`an answer of ${what} offers a plan at the Projects root instead`, () =>
+    launching("collie-launch-instead-", (world) =>
+      Effect.gen(function* () {
+        const tree = yield* projectsTree(world);
+        const home = yield* onTheBoard(world);
+        yield* withRouter(world, route, () =>
+          Effect.gen(function* () {
+            const words = "one registry for every service";
+            const { prompts, rows } = answering(["sourced", words, "plan-instead"]);
+            expect(yield* pickFlow(new Herdr(home), home, prompts)).toBe(0);
+            expect(rows.at(-1)?.title).toBe("Plan it instead");
+            const run = (yield* runViews(home, null)).runs[0];
+            expect(run).toMatchObject({
+              workflow: "plans-it",
+              cwd: tree.root,
+              input: { goal: words },
+              options: { workspace: "projects-root" },
+            });
+          }),
+        );
+      }),
+    ));
 }

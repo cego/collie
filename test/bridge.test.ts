@@ -98,73 +98,69 @@ const environOf = (pid: number) =>
     Effect.map((text) => Str.split(text, "\0")),
   );
 
-test(
-  "a bridge starts the host it pipes without the Herdr 1 socket it inherited, and every operation on it is the front door it was started as",
-  () =>
-    proves(
-      "collie-bridge-",
-      (world) =>
-        Effect.gen(function* () {
-          const legacy = { HERDR_SOCKET_PATH: `${world.home}/../herdr.sock` };
-          expect(yield* ownerOf(world.state)).toBeNull();
-          const desktop = yield* bridged(world, ["--as", "desktop", "--client", "mk-pc"], {
-            ...legacy,
-            SSH_CONNECTION: "10.1.2.3 51234 10.0.0.2 22",
-          });
-          expect(
-            (yield* desktop.door.declare({ frontDoor: "board" }).pipe(Effect.flip)).reason,
-          ).toBe("this channel is already desktop");
+test("a bridge starts the host it pipes without the Herdr 1 socket it inherited, and every operation on it is the front door it was started as", () =>
+  proves(
+    "collie-bridge-",
+    (world) =>
+      Effect.gen(function* () {
+        const legacy = { HERDR_SOCKET_PATH: `${world.home}/../herdr.sock` };
+        expect(yield* ownerOf(world.state)).toBeNull();
+        const desktop = yield* bridged(world, ["--as", "desktop", "--client", "mk-pc"], {
+          ...legacy,
+          SSH_CONNECTION: "10.1.2.3 51234 10.0.0.2 22",
+        });
+        expect((yield* desktop.door.declare({ frontDoor: "board" }).pipe(Effect.flip)).reason).toBe(
+          "this channel is already desktop",
+        );
 
-          const host = yield* ownerOf(world.state);
-          expect(host).not.toBeNull();
-          const environ = yield* environOf(host!.pid);
-          expect(Arr.filter(environ, Str.startsWith("HERDR_SOCKET_PATH="))).toEqual([]);
-          expect(environ).toContain(`COLLIE_STATE_DIR=${world.state}`);
+        const host = yield* ownerOf(world.state);
+        expect(host).not.toBeNull();
+        const environ = yield* environOf(host!.pid);
+        expect(Arr.filter(environ, Str.startsWith("HERDR_SOCKET_PATH="))).toEqual([]);
+        expect(environ).toContain(`COLLIE_STATE_DIR=${world.state}`);
 
-          const { runId } = yield* desktop.door.start({
-            project: world.project,
-            id: "proof",
-            request: "start-1",
-            input: { note: "from afar" },
-          });
-          yield* desktop.door.control({ runId, control: "hold", set: true, request: "hold-1" });
+        const { runId } = yield* desktop.door.start({
+          project: world.project,
+          id: "proof",
+          request: "start-1",
+          input: { note: "from afar" },
+        });
+        yield* desktop.door.control({ runId, control: "hold", set: true, request: "hold-1" });
 
-          const chat = yield* bridged(world, ["--as", "chat"], legacy);
-          yield* chat.door.control({ runId, control: "hold", set: false, request: "unhold-1" });
+        const chat = yield* bridged(world, ["--as", "chat"], legacy);
+        yield* chat.door.control({ runId, control: "hold", set: false, request: "unhold-1" });
 
-          const trail = yield* hostRecords(
-            world.state,
-            readAudit(runDir(world.state, runId)).pipe(
-              Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
-            ),
-          );
-          expect(Arr.map(trail, (line) => [line.operation, line.actor])).toEqual([
-            [
-              "start",
-              {
-                origin: "desktop",
-                requestId: "start-1",
-                from: { client: "mk-pc", ssh: "10.1.2.3" },
-              },
-            ],
-            [
-              "hold",
-              {
-                origin: "desktop",
-                requestId: "hold-1",
-                from: { client: "mk-pc", ssh: "10.1.2.3" },
-              },
-            ],
-            ["unhold", { origin: "chat", requestId: "unhold-1" }],
-          ]);
-          expect(actorName({ origin: "desktop", requestId: "hold-1" })).toBe("human:hold-1");
+        const trail = yield* hostRecords(
+          world.state,
+          readAudit(runDir(world.state, runId)).pipe(
+            Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
+          ),
+        );
+        expect(Arr.map(trail, (line) => [line.operation, line.actor])).toEqual([
+          [
+            "start",
+            {
+              origin: "desktop",
+              requestId: "start-1",
+              from: { client: "mk-pc", ssh: "10.1.2.3" },
+            },
+          ],
+          [
+            "hold",
+            {
+              origin: "desktop",
+              requestId: "hold-1",
+              from: { client: "mk-pc", ssh: "10.1.2.3" },
+            },
+          ],
+          ["unhold", { origin: "chat", requestId: "unhold-1" }],
+        ]);
+        expect(actorName({ origin: "desktop", requestId: "hold-1" })).toBe("human:hold-1");
 
-          void desktop.child.stdin.end();
-          expect(yield* Effect.promise(() => desktop.child.exited)).toBe(0);
-          expect((yield* ownerOf(world.state))?.pid).toBe(host!.pid);
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["proof.workflow.ts", "helper.ts", "notes.md"],
-    ),
-  120_000,
-);
+        void desktop.child.stdin.end();
+        expect(yield* Effect.promise(() => desktop.child.exited)).toBe(0);
+        expect((yield* ownerOf(world.state))?.pid).toBe(host!.pid);
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["proof.workflow.ts", "helper.ts", "notes.md"],
+  ));

@@ -101,267 +101,243 @@ const answer = (world: World, runId: string) =>
     return yield* viewOf(world, runId, (view) => view !== null && isSettled(view));
   });
 
-test(
-  "a start's attachments are in the Run's directory and its first prompt before it runs, and on its audit line",
-  () =>
-    attending("collie-attach-start-", (world, cli) =>
-      Effect.gen(function* () {
-        const started = yield* cli([
-          "run",
-          "start",
-          "attended",
-          "--input",
-          "work=the picker",
-          "--attach",
-          "shot.png",
-          "--attach",
-          `${world.project}/notes.txt`,
-        ]);
-        expect(started.envelope.error).toBeUndefined();
-        const runId = payloadOf(started.envelope).runId!;
-        yield* viewOf(world, runId, asking);
-        const dir = `${runDir(world.state, runId)}/attachments`;
-        expect(yield* read(`${dir}/shot.png`)).toBe("a screenshot");
-        expect(yield* read(`${dir}/notes.txt`)).toBe("some notes");
-        const prompt = yield* read(`${world.state}/agents/${runId}/build.prompt.md`);
-        expect(prompt).toContain(`- shot.png (image/png, 12 bytes): ${dir}/shot.png`);
-        expect(prompt).toContain(`: ${dir}/notes.txt`);
+test("a start's attachments are in the Run's directory and its first prompt before it runs, and on its audit line", () =>
+  attending("collie-attach-start-", (world, cli) =>
+    Effect.gen(function* () {
+      const started = yield* cli([
+        "run",
+        "start",
+        "attended",
+        "--input",
+        "work=the picker",
+        "--attach",
+        "shot.png",
+        "--attach",
+        `${world.project}/notes.txt`,
+      ]);
+      expect(started.envelope.error).toBeUndefined();
+      const runId = payloadOf(started.envelope).runId!;
+      yield* viewOf(world, runId, asking);
+      const dir = `${runDir(world.state, runId)}/attachments`;
+      expect(yield* read(`${dir}/shot.png`)).toBe("a screenshot");
+      expect(yield* read(`${dir}/notes.txt`)).toBe("some notes");
+      const prompt = yield* read(`${world.state}/agents/${runId}/build.prompt.md`);
+      expect(prompt).toContain(`- shot.png (image/png, 12 bytes): ${dir}/shot.png`);
+      expect(prompt).toContain(`: ${dir}/notes.txt`);
 
-        const line = Option.getOrUndefined(
-          Arr.findFirst(
-            yield* trailOf(world.state, runId).pipe(Effect.orDie),
-            (one) => one.operation === "start",
-          ),
-        );
-        expect(line?.asked).toEqual({
-          attachments: [
-            { name: "shot.png", from: `${world.project}/shot.png` },
-            { name: "notes.txt", from: `${world.project}/notes.txt` },
+      const line = Option.getOrUndefined(
+        Arr.findFirst(
+          yield* trailOf(world.state, runId).pipe(Effect.orDie),
+          (one) => one.operation === "start",
+        ),
+      );
+      expect(line?.asked).toEqual({
+        attachments: [
+          { name: "shot.png", from: `${world.project}/shot.png` },
+          { name: "notes.txt", from: `${world.project}/notes.txt` },
+        ],
+      });
+    }),
+  ));
+
+test("a start naming a missing file is refused, naming it, and no Run exists", () =>
+  attending("collie-attach-missing-", (world, cli) =>
+    Effect.gen(function* () {
+      const refused = yield* cli([
+        "run",
+        "start",
+        "attended",
+        "--input",
+        "work=the picker",
+        "--attach",
+        "gone.png",
+      ]);
+      expect(refused.envelope.ok).toBe(false);
+      expect(refused.envelope.error?.message).toContain(`${world.project}/gone.png`);
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      expect(yield* client.runs({ task: null }).pipe(Effect.orDie)).toEqual([]);
+    }),
+  ));
+
+test("the same request with another file is a conflict, and with the same file is the same Run", () =>
+  attending("collie-attach-conflict-", (world, cli) =>
+    Effect.gen(function* () {
+      const started = yield* cli([
+        "run",
+        "start",
+        "attended",
+        "--input",
+        "work=the picker",
+        "--attach",
+        "shot.png",
+        "--request-id",
+        "req-attach",
+      ]);
+      expect(started.envelope.error).toBeUndefined();
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const start = (file: string) =>
+        client.start({
+          project: world.project,
+          id: "attended",
+          request: "req-attach",
+          input: { work: "the picker" },
+          attachments: [`${world.project}/${file}`],
+        });
+      const runId = payloadOf(started.envelope).runId!;
+      const again = yield* start("shot.png").pipe(Effect.orDie);
+      expect(again).toMatchObject({ runId, fresh: false });
+      const other = yield* start("notes.txt").pipe(Effect.flip, Effect.orDie);
+      expect(other._tag).toBe("RequestConflict");
+      yield* viewOf(world, runId, asking);
+    }),
+  ));
+
+test("an offer invoked from a Run with attachments gives the new Run copies of them beside its own", () =>
+  attending("collie-attach-invoke-", (world, cli) =>
+    Effect.gen(function* () {
+      const started = yield* cli([
+        "run",
+        "start",
+        "attended",
+        "--input",
+        "work=the picker",
+        "--attach",
+        "shot.png",
+      ]);
+      const parent = payloadOf(started.envelope).runId!;
+      yield* viewOf(world, parent, asking);
+      yield* answer(world, parent);
+
+      const invoked = yield* cli([
+        "run",
+        "action",
+        parent,
+        "carry-on",
+        "--input",
+        "work=more",
+        "--attach",
+        "notes.txt",
+      ]);
+      expect(invoked.envelope.error).toBeUndefined();
+      const child = payloadOf(invoked.envelope).run!;
+      yield* viewOf(world, child, asking);
+      const dir = `${runDir(world.state, child)}/attachments`;
+      expect(yield* read(`${dir}/shot.png`)).toBe("a screenshot");
+      expect(yield* read(`${dir}/notes.txt`)).toBe("some notes");
+      const prompt = yield* read(`${world.state}/agents/${child}/build.prompt.md`);
+      expect(prompt).toContain(`${dir}/shot.png`);
+      expect(prompt).toContain(`${dir}/notes.txt`);
+    }),
+  ));
+
+test("a steer's file is copied, named in what the agent is told, and listed in the next step's prompt", () =>
+  attending("collie-attach-steer-", (world, cli, core) =>
+    Effect.gen(function* () {
+      const started = yield* cli(["run", "start", "attended", "--input", "work=the picker"]);
+      const runId = payloadOf(started.envelope).runId!;
+      yield* viewOf(world, runId, asking);
+
+      const steered = yield* cli(["run", "steer", runId, "look at this", "--attach", "late.png"]);
+      expect(steered.envelope.error).toBeUndefined();
+      const copy = `${runDir(world.state, runId)}/attachments/late.png`;
+      expect(yield* read(copy)).toBe("arrived later");
+      const told = Option.getOrUndefined(
+        Arr.findLast(yield* sentBy(core), (text) =>
+          pipe(text, Str.includes("Their message is in")),
+        ),
+      );
+      const kept = /Their message is in (\S+)\./.exec(told ?? "")?.[1] ?? "";
+      expect(yield* read(kept)).toBe(`look at this\nAttached: ${copy}`);
+      const delivered = Option.getOrUndefined(
+        Arr.findFirst(
+          yield* trailOf(world.state, runId).pipe(Effect.orDie),
+          (one) => one.operation === "deliver",
+        ),
+      );
+      expect(delivered?.asked).toMatchObject({
+        attachments: [{ name: "late.png", from: `${world.project}/late.png` }],
+      });
+
+      const astray = yield* cli(["run", "steer", "no-such-run", "this", "--attach", "late.png"]);
+      expect(astray.envelope.error?.message).toContain(`Run "no-such-run" was not found`);
+      expect(
+        yield* Effect.promise(() => Bun.file(runDir(world.state, "no-such-run")).exists()),
+      ).toBe(false);
+
+      yield* answer(world, runId);
+      expect(yield* read(`${world.state}/agents/${runId}/check.prompt.md`)).toContain(copy);
+    }),
+  ));
+
+test("a message over the paste budget is kept whole in the Run, and the agent is told where", () =>
+  attending("collie-attach-long-", (world, cli, core) =>
+    Effect.gen(function* () {
+      const started = yield* cli(["run", "start", "attended", "--input", "work=the picker"]);
+      const runId = payloadOf(started.envelope).runId!;
+      yield* viewOf(world, runId, asking);
+      const dir = `${runDir(world.state, runId)}/attachments`;
+      const told = sentBy(core);
+      const fileFor = (words: string) =>
+        `${dir}/message-${pipe(new Bun.CryptoHasher("sha256").update(words).digest("hex"), Str.slice(0, 8))}.md`;
+      const steer = (words: string, ...more: ReadonlyArray<string>) =>
+        cli(["run", "steer", runId, words, "--operation", "build", ...more]);
+
+      const long = `Review:\n${pipe("é line of the review\n", Str.repeat(460))}`;
+      expect(Buffer.byteLength(long)).toBeGreaterThan(9 * 1024);
+      const first = yield* steer(long, "--request-id", "req-long");
+      expect(first.envelope.error).toBeUndefined();
+      expect(yield* read(fileFor(long))).toBe(long);
+      const said = Option.getOrUndefined(
+        Arr.findFirst(yield* told, (text) => pipe(text, Str.includes(fileFor(long)))),
+      );
+      expect(said).toBeDefined();
+      expect(said).toContain(`Their message is in ${fileFor(long)}. Read it whole`);
+      expect(said).not.toContain("line of the review");
+      const delivered = Option.getOrUndefined(
+        Arr.findFirst(
+          yield* trailOf(world.state, runId).pipe(Effect.orDie),
+          (one) => one.request === "req-long",
+        ),
+      );
+      expect(delivered?.asked).toMatchObject({ text: long });
+
+      const again = yield* steer(long, "--request-id", "req-long");
+      expect(again.envelope.error).toBeUndefined();
+      const kept = yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readDirectory(dir)).pipe(
+        Effect.orDie,
+      );
+      expect(Arr.filter(kept, (name) => pipe(name, Str.startsWith("message-")))).toHaveLength(1);
+
+      const atCap = Str.repeat(8 * 1024)("x");
+      expect((yield* steer(atCap)).envelope.error).toBeUndefined();
+      expect(Arr.some(yield* told, (text) => pipe(text, Str.includes(atCap)))).toBe(false);
+      expect(yield* read(fileFor(atCap))).toBe(atCap);
+
+      const withFile = `Also:\n${pipe("another line of it\n", Str.repeat(460))}`;
+      expect((yield* steer(withFile, "--attach", "late.png")).envelope.error).toBeUndefined();
+      const withLines = `${withFile}\nAttached: ${dir}/late.png`;
+      expect(yield* read(fileFor(withLines))).toBe(withLines);
+      expect(Arr.some(yield* told, (text) => pipe(text, Str.includes(fileFor(withLines))))).toBe(
+        true,
+      );
+
+      const viaAct = `From chat:\n${pipe("a line chat wrote\n", Str.repeat(500))}`;
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const acted = yield* client
+        .act({
+          actions: [
+            {
+              kind: "deliver",
+              run: runId,
+              agent: `${runId}-build-r1`,
+              text: viaAct,
+              mode: "boundary",
+            },
           ],
-        });
-      }),
-    ),
-  120_000,
-);
-
-test(
-  "a start naming a missing file is refused, naming it, and no Run exists",
-  () =>
-    attending("collie-attach-missing-", (world, cli) =>
-      Effect.gen(function* () {
-        const refused = yield* cli([
-          "run",
-          "start",
-          "attended",
-          "--input",
-          "work=the picker",
-          "--attach",
-          "gone.png",
-        ]);
-        expect(refused.envelope.ok).toBe(false);
-        expect(refused.envelope.error?.message).toContain(`${world.project}/gone.png`);
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        expect(yield* client.runs({ task: null }).pipe(Effect.orDie)).toEqual([]);
-      }),
-    ),
-  120_000,
-);
-
-test(
-  "the same request with another file is a conflict, and with the same file is the same Run",
-  () =>
-    attending("collie-attach-conflict-", (world, cli) =>
-      Effect.gen(function* () {
-        const started = yield* cli([
-          "run",
-          "start",
-          "attended",
-          "--input",
-          "work=the picker",
-          "--attach",
-          "shot.png",
-          "--request-id",
-          "req-attach",
-        ]);
-        expect(started.envelope.error).toBeUndefined();
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        const start = (file: string) =>
-          client.start({
-            project: world.project,
-            id: "attended",
-            request: "req-attach",
-            input: { work: "the picker" },
-            attachments: [`${world.project}/${file}`],
-          });
-        const runId = payloadOf(started.envelope).runId!;
-        const again = yield* start("shot.png").pipe(Effect.orDie);
-        expect(again).toMatchObject({ runId, fresh: false });
-        const other = yield* start("notes.txt").pipe(Effect.flip, Effect.orDie);
-        expect(other._tag).toBe("RequestConflict");
-        yield* viewOf(world, runId, asking);
-      }),
-    ),
-  120_000,
-);
-
-test(
-  "an offer invoked from a Run with attachments gives the new Run copies of them beside its own",
-  () =>
-    attending("collie-attach-invoke-", (world, cli) =>
-      Effect.gen(function* () {
-        const started = yield* cli([
-          "run",
-          "start",
-          "attended",
-          "--input",
-          "work=the picker",
-          "--attach",
-          "shot.png",
-        ]);
-        const parent = payloadOf(started.envelope).runId!;
-        yield* viewOf(world, parent, asking);
-        yield* answer(world, parent);
-
-        const invoked = yield* cli([
-          "run",
-          "action",
-          parent,
-          "carry-on",
-          "--input",
-          "work=more",
-          "--attach",
-          "notes.txt",
-        ]);
-        expect(invoked.envelope.error).toBeUndefined();
-        const child = payloadOf(invoked.envelope).run!;
-        yield* viewOf(world, child, asking);
-        const dir = `${runDir(world.state, child)}/attachments`;
-        expect(yield* read(`${dir}/shot.png`)).toBe("a screenshot");
-        expect(yield* read(`${dir}/notes.txt`)).toBe("some notes");
-        const prompt = yield* read(`${world.state}/agents/${child}/build.prompt.md`);
-        expect(prompt).toContain(`${dir}/shot.png`);
-        expect(prompt).toContain(`${dir}/notes.txt`);
-      }),
-    ),
-  120_000,
-);
-
-test(
-  "a steer's file is copied, named in what the agent is told, and listed in the next step's prompt",
-  () =>
-    attending("collie-attach-steer-", (world, cli, core) =>
-      Effect.gen(function* () {
-        const started = yield* cli(["run", "start", "attended", "--input", "work=the picker"]);
-        const runId = payloadOf(started.envelope).runId!;
-        yield* viewOf(world, runId, asking);
-
-        const steered = yield* cli(["run", "steer", runId, "look at this", "--attach", "late.png"]);
-        expect(steered.envelope.error).toBeUndefined();
-        const copy = `${runDir(world.state, runId)}/attachments/late.png`;
-        expect(yield* read(copy)).toBe("arrived later");
-        const told = Option.getOrUndefined(
-          Arr.findLast(yield* sentBy(core), (text) =>
-            pipe(text, Str.includes("Their message is in")),
-          ),
-        );
-        const kept = /Their message is in (\S+)\./.exec(told ?? "")?.[1] ?? "";
-        expect(yield* read(kept)).toBe(`look at this\nAttached: ${copy}`);
-        const delivered = Option.getOrUndefined(
-          Arr.findFirst(
-            yield* trailOf(world.state, runId).pipe(Effect.orDie),
-            (one) => one.operation === "deliver",
-          ),
-        );
-        expect(delivered?.asked).toMatchObject({
-          attachments: [{ name: "late.png", from: `${world.project}/late.png` }],
-        });
-
-        const astray = yield* cli(["run", "steer", "no-such-run", "this", "--attach", "late.png"]);
-        expect(astray.envelope.error?.message).toContain(`Run "no-such-run" was not found`);
-        expect(
-          yield* Effect.promise(() => Bun.file(runDir(world.state, "no-such-run")).exists()),
-        ).toBe(false);
-
-        yield* answer(world, runId);
-        expect(yield* read(`${world.state}/agents/${runId}/check.prompt.md`)).toContain(copy);
-      }),
-    ),
-  120_000,
-);
-
-test(
-  "a message over the paste budget is kept whole in the Run, and the agent is told where",
-  () =>
-    attending("collie-attach-long-", (world, cli, core) =>
-      Effect.gen(function* () {
-        const started = yield* cli(["run", "start", "attended", "--input", "work=the picker"]);
-        const runId = payloadOf(started.envelope).runId!;
-        yield* viewOf(world, runId, asking);
-        const dir = `${runDir(world.state, runId)}/attachments`;
-        const told = sentBy(core);
-        const fileFor = (words: string) =>
-          `${dir}/message-${pipe(new Bun.CryptoHasher("sha256").update(words).digest("hex"), Str.slice(0, 8))}.md`;
-        const steer = (words: string, ...more: ReadonlyArray<string>) =>
-          cli(["run", "steer", runId, words, "--operation", "build", ...more]);
-
-        const long = `Review:\n${pipe("é line of the review\n", Str.repeat(460))}`;
-        expect(Buffer.byteLength(long)).toBeGreaterThan(9 * 1024);
-        const first = yield* steer(long, "--request-id", "req-long");
-        expect(first.envelope.error).toBeUndefined();
-        expect(yield* read(fileFor(long))).toBe(long);
-        const said = Option.getOrUndefined(
-          Arr.findFirst(yield* told, (text) => pipe(text, Str.includes(fileFor(long)))),
-        );
-        expect(said).toBeDefined();
-        expect(said).toContain(`Their message is in ${fileFor(long)}. Read it whole`);
-        expect(said).not.toContain("line of the review");
-        const delivered = Option.getOrUndefined(
-          Arr.findFirst(
-            yield* trailOf(world.state, runId).pipe(Effect.orDie),
-            (one) => one.request === "req-long",
-          ),
-        );
-        expect(delivered?.asked).toMatchObject({ text: long });
-
-        const again = yield* steer(long, "--request-id", "req-long");
-        expect(again.envelope.error).toBeUndefined();
-        const kept = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
-          fs.readDirectory(dir),
-        ).pipe(Effect.orDie);
-        expect(Arr.filter(kept, (name) => pipe(name, Str.startsWith("message-")))).toHaveLength(1);
-
-        const atCap = Str.repeat(8 * 1024)("x");
-        expect((yield* steer(atCap)).envelope.error).toBeUndefined();
-        expect(Arr.some(yield* told, (text) => pipe(text, Str.includes(atCap)))).toBe(false);
-        expect(yield* read(fileFor(atCap))).toBe(atCap);
-
-        const withFile = `Also:\n${pipe("another line of it\n", Str.repeat(460))}`;
-        expect((yield* steer(withFile, "--attach", "late.png")).envelope.error).toBeUndefined();
-        const withLines = `${withFile}\nAttached: ${dir}/late.png`;
-        expect(yield* read(fileFor(withLines))).toBe(withLines);
-        expect(Arr.some(yield* told, (text) => pipe(text, Str.includes(fileFor(withLines))))).toBe(
-          true,
-        );
-
-        const viaAct = `From chat:\n${pipe("a line chat wrote\n", Str.repeat(500))}`;
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        const acted = yield* client
-          .act({
-            actions: [
-              {
-                kind: "deliver",
-                run: runId,
-                agent: `${runId}-build-r1`,
-                text: viaAct,
-                mode: "boundary",
-              },
-            ],
-            request: "req-act",
-          })
-          .pipe(Effect.orDie);
-        expect(acted).toMatchObject([{ kind: "deliver", state: "applied" }]);
-        expect(yield* read(fileFor(viaAct))).toBe(viaAct);
-      }),
-    ),
-  120_000,
-);
+          request: "req-act",
+        })
+        .pipe(Effect.orDie);
+      expect(acted).toMatchObject([{ kind: "deliver", state: "applied" }]);
+      expect(yield* read(fileFor(viaAct))).toBe(viaAct);
+    }),
+  ));

@@ -34,41 +34,35 @@ const taskOf = (world: World, runId: string) =>
     ),
   );
 
-test(
-  "seen is recorded once, as whoever asked, however often and under however many requests",
-  () =>
-    proves(
-      "collie-seen-",
-      (world) =>
-        Effect.gen(function* () {
-          const host = yield* connect(world.state);
-          const { runId } = yield* host.start({
-            project: world.project,
-            id: "plain",
-            request: "start-1",
-            input: { note: "hi" },
-          });
-          const door = yield* frontDoor(socketOf(world.state));
-          yield* door.declare({ frontDoor: "cli-tty" });
+test("seen is recorded once, as whoever asked, however often and under however many requests", () =>
+  proves(
+    "collie-seen-",
+    (world) =>
+      Effect.gen(function* () {
+        const host = yield* connect(world.state);
+        const { runId } = yield* host.start({
+          project: world.project,
+          id: "plain",
+          request: "start-1",
+          input: { note: "hi" },
+        });
+        const door = yield* frontDoor(socketOf(world.state));
+        yield* door.declare({ frontDoor: "cli-tty" });
 
-          const first = yield* door.seen({ runId, request: "seen-1" });
-          expect(first.by).toBe("human:seen-1");
-          expect(yield* door.seen({ runId, request: "seen-1" })).toEqual(first);
-          expect(yield* door.seen({ runId, request: "seen-2" })).toEqual(first);
-          expect(
-            yield* hostRecords(world.state, readSeen(runDir(world.state, runId))).pipe(
-              Effect.orDie,
-            ),
-          ).toEqual([first]);
-          expect(
-            (yield* door.seen({ runId: "r-nobody", request: "seen-3" }).pipe(Effect.flip)).reason,
-          ).toBe("no Run r-nobody");
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+        const first = yield* door.seen({ runId, request: "seen-1" });
+        expect(first.by).toBe("human:seen-1");
+        expect(yield* door.seen({ runId, request: "seen-1" })).toEqual(first);
+        expect(yield* door.seen({ runId, request: "seen-2" })).toEqual(first);
+        expect(
+          yield* hostRecords(world.state, readSeen(runDir(world.state, runId))).pipe(Effect.orDie),
+        ).toEqual([first]);
+        expect(
+          (yield* door.seen({ runId: "r-nobody", request: "seen-3" }).pipe(Effect.flip)).reason,
+        ).toBe("no Run r-nobody");
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["plain.workflow.ts"],
+  ));
 
 test("the moment seen began is written by a host's first start and kept by the next", () =>
   proves(
@@ -88,51 +82,40 @@ test("the moment seen began is written by a host's first start and kept by the n
     ["plain.workflow.ts"],
   ));
 
-test(
-  "a finished Run read by `run show` and `collie_run` is still unseen, and `run seen` sees it",
-  () =>
-    proves(
-      "collie-seen-read-",
-      (world) =>
-        Effect.gen(function* () {
-          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
-          const { runId } = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({ runId: Schema.String }),
-          )(started.envelope.data).pipe(Effect.orDie);
-          const finished = yield* until(
+test("a finished Run read by `run show` and `collie_run` is still unseen, and `run seen` sees it", () =>
+  proves(
+    "collie-seen-read-",
+    (world) =>
+      Effect.gen(function* () {
+        const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
+        const { runId } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ runId: Schema.String }),
+        )(started.envelope.data).pipe(Effect.orDie);
+        const finished = yield* until(
+          () => taskOf(world, runId),
+          (task) => task?.state === "done",
+        );
+        expect(finished?.unseen).toBe(true);
+
+        expect((yield* collie(world, ["run", "show", runId])).envelope.ok).toBe(true);
+        expect(
+          (yield* collie(world, ["tools", "call", "collie_run", "--input", asJson({ run: runId })]))
+            .envelope.ok,
+        ).toBe(true);
+        expect((yield* taskOf(world, runId))?.unseen).toBe(true);
+        expect(
+          yield* hostRecords(world.state, readSeen(runDir(world.state, runId))).pipe(Effect.orDie),
+        ).toEqual([]);
+
+        const seen = yield* collie(world, ["run", "seen", runId, "--request-id", "seen-cli"]);
+        expect(seen.envelope.ok).toBe(true);
+        expect(
+          (yield* until(
             () => taskOf(world, runId),
-            (task) => task?.state === "done",
-          );
-          expect(finished?.unseen).toBe(true);
-
-          expect((yield* collie(world, ["run", "show", runId])).envelope.ok).toBe(true);
-          expect(
-            (yield* collie(world, [
-              "tools",
-              "call",
-              "collie_run",
-              "--input",
-              asJson({ run: runId }),
-            ])).envelope.ok,
-          ).toBe(true);
-          expect((yield* taskOf(world, runId))?.unseen).toBe(true);
-          expect(
-            yield* hostRecords(world.state, readSeen(runDir(world.state, runId))).pipe(
-              Effect.orDie,
-            ),
-          ).toEqual([]);
-
-          const seen = yield* collie(world, ["run", "seen", runId, "--request-id", "seen-cli"]);
-          expect(seen.envelope.ok).toBe(true);
-          expect(
-            (yield* until(
-              () => taskOf(world, runId),
-              (task) => task?.unseen !== true,
-            ))?.unseen,
-          ).toBe(false);
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+            (task) => task?.unseen !== true,
+          ))?.unseen,
+        ).toBe(false);
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["plain.workflow.ts"],
+  ));

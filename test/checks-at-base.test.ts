@@ -59,103 +59,85 @@ const checksOf = (world: World, runId: string) =>
 const runIdOf = (started: { envelope: { data?: unknown } }) =>
   flow(Schema.decodeUnknownResult(Started), Result.getOrThrow)(started.envelope.data).runId;
 
-test(
-  "a start from a checkout behind its base is held to the base's checks, not those remembered for its remote",
-  () =>
-    proves(
-      "collie-checks-at-base-",
-      (world) =>
-        Effect.gen(function* () {
-          yield* behind(world, asJson(LEFT_TO_CI));
-          const started = yield* start(world, [
-            "placed",
-            "--input",
-            "work=one",
-            "--input",
-            "ending=succeed",
-          ]);
-          expect(started.envelope.error).toBeUndefined();
-          expect(yield* checksOf(world, runIdOf(started))).toEqual(LEFT_TO_CI);
-        }),
-      ["placed.workflow.ts"],
-    ),
-  120_000,
-);
+test("a start from a checkout behind its base is held to the base's checks, not those remembered for its remote", () =>
+  proves(
+    "collie-checks-at-base-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* behind(world, asJson(LEFT_TO_CI));
+        const started = yield* start(world, [
+          "placed",
+          "--input",
+          "work=one",
+          "--input",
+          "ending=succeed",
+        ]);
+        expect(started.envelope.error).toBeUndefined();
+        expect(yield* checksOf(world, runIdOf(started))).toEqual(LEFT_TO_CI);
+      }),
+    ["placed.workflow.ts"],
+  ));
 
-test(
-  "a Run with no checkout is held to its base's checks, and the Run it starts inherits them",
-  () =>
-    proves(
-      "collie-checks-at-base-plan-",
-      (world) =>
-        Effect.gen(function* () {
-          yield* behind(world, asJson(LEFT_TO_CI));
-          const started = yield* start(world, [
-            "chains-and-opens",
-            "--input",
-            "mr=https://gitlab.example.com/group/app/-/merge_requests/1",
-          ]);
-          expect(started.envelope.error).toBeUndefined();
-          const runId = runIdOf(started);
-          expect(yield* checksOf(world, runId)).toEqual(LEFT_TO_CI);
-          expect(yield* checksOf(world, `${runId}.build`)).toEqual(LEFT_TO_CI);
-        }),
-      ["chains-and-opens.workflow.ts", "opens.workflow.ts"],
-    ),
-  120_000,
-);
+test("a Run with no checkout is held to its base's checks, and the Run it starts inherits them", () =>
+  proves(
+    "collie-checks-at-base-plan-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* behind(world, asJson(LEFT_TO_CI));
+        const started = yield* start(world, [
+          "chains-and-opens",
+          "--input",
+          "mr=https://gitlab.example.com/group/app/-/merge_requests/1",
+        ]);
+        expect(started.envelope.error).toBeUndefined();
+        const runId = runIdOf(started);
+        expect(yield* checksOf(world, runId)).toEqual(LEFT_TO_CI);
+        expect(yield* checksOf(world, `${runId}.build`)).toEqual(LEFT_TO_CI);
+      }),
+    ["chains-and-opens.workflow.ts", "opens.workflow.ts"],
+  ));
 
-test(
-  "a checks file edited and not committed in the checkout a start is made from is not the Run's",
-  () =>
-    proves(
-      "collie-checks-at-base-dirty-",
-      (world) =>
-        Effect.gen(function* () {
-          yield* behind(world, asJson(LEFT_TO_CI));
-          const fs = yield* FileSystem.FileSystem;
-          yield* fs.makeDirectory(`${world.project}/.collie`, { recursive: true });
-          yield* fs.writeFileString(
-            `${world.project}/.collie/verify.json`,
-            asJson([{ name: "lint", executable: "true", argv: [], cwd: "worktree" }]),
-          );
-          const started = yield* start(world, [
-            "placed",
-            "--input",
-            "work=one",
-            "--input",
-            "ending=succeed",
-          ]);
-          expect(started.envelope.error).toBeUndefined();
-          expect(yield* checksOf(world, runIdOf(started))).toEqual(LEFT_TO_CI);
-        }).pipe(Effect.orDie),
-      ["placed.workflow.ts"],
-    ),
-  120_000,
-);
+test("a checks file edited and not committed in the checkout a start is made from is not the Run's", () =>
+  proves(
+    "collie-checks-at-base-dirty-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* behind(world, asJson(LEFT_TO_CI));
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(`${world.project}/.collie`, { recursive: true });
+        yield* fs.writeFileString(
+          `${world.project}/.collie/verify.json`,
+          asJson([{ name: "lint", executable: "true", argv: [], cwd: "worktree" }]),
+        );
+        const started = yield* start(world, [
+          "placed",
+          "--input",
+          "work=one",
+          "--input",
+          "ending=succeed",
+        ]);
+        expect(started.envelope.error).toBeUndefined();
+        expect(yield* checksOf(world, runIdOf(started))).toEqual(LEFT_TO_CI);
+      }).pipe(Effect.orDie),
+    ["placed.workflow.ts"],
+  ));
 
 for (const [whose, env] of [
   ["", LOGGED_IN],
   [", even where no login names the branch the Run would work on,", { GIT_SSH_COMMAND: "false" }],
 ] as const)
-  test(
-    `a base checks file that does not read is refused${whose} naming the ref and the file`,
-    () =>
-      proves(
-        "collie-checks-at-base-unread-",
-        (world) =>
-          Effect.gen(function* () {
-            yield* behind(world, '[{"name":');
-            const started = yield* start(
-              world,
-              ["placed", "--input", "work=one", "--input", "ending=succeed"],
-              env,
-            );
-            expect(started.envelope.error?.message).toContain(
-              ".collie/verify.json at origin/master",
-            );
-          }),
-        ["placed.workflow.ts"],
-      ),
-    120_000,
-  );
+  test(`a base checks file that does not read is refused${whose} naming the ref and the file`, () =>
+    proves(
+      "collie-checks-at-base-unread-",
+      (world) =>
+        Effect.gen(function* () {
+          yield* behind(world, '[{"name":');
+          const started = yield* start(
+            world,
+            ["placed", "--input", "work=one", "--input", "ending=succeed"],
+            env,
+          );
+          expect(started.envelope.error?.message).toContain(".collie/verify.json at origin/master");
+        }),
+      ["placed.workflow.ts"],
+    ));

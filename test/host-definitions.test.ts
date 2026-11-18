@@ -73,108 +73,101 @@ description: A Persona of my own
 Do it my way.
 `;
 
-test(
-  "a host reads its shipped and user Workflows and Personas in full, without a toolchain",
-  () =>
-    proves(
-      "collie-host-definitions-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          yield* fs.copy(`${root}workflows`, `${world.install}/workflows`);
-          yield* fs.copy(`${root}personas`, `${world.install}/personas`);
-          yield* fs.writeFileString(`${world.user}/general.workflow.ts`, OVERRIDE);
-          yield* fs.writeFileString(`${world.user}/general.md`, "My prompt.\n");
-          yield* fs.writeFileString(`${world.user}/unbuilt.workflow.ts`, UNBUILT);
-          yield* fs.writeFileString(`${world.user}/garbled.workflow.ts`, "export default 1;\n");
-          yield* fs.makeDirectory(`${world.config}/personas`);
-          yield* fs.writeFileString(`${world.config}/personas/mine.md`, PERSONA);
-          yield* fs.writeFileString(`${world.config}/personas/unloadable.md`, UNLOADABLE);
+test("a host reads its shipped and user Workflows and Personas in full, without a toolchain", () =>
+  proves(
+    "collie-host-definitions-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.copy(`${root}workflows`, `${world.install}/workflows`);
+        yield* fs.copy(`${root}personas`, `${world.install}/personas`);
+        yield* fs.writeFileString(`${world.user}/general.workflow.ts`, OVERRIDE);
+        yield* fs.writeFileString(`${world.user}/general.md`, "My prompt.\n");
+        yield* fs.writeFileString(`${world.user}/unbuilt.workflow.ts`, UNBUILT);
+        yield* fs.writeFileString(`${world.user}/garbled.workflow.ts`, "export default 1;\n");
+        yield* fs.makeDirectory(`${world.config}/personas`);
+        yield* fs.writeFileString(`${world.config}/personas/mine.md`, PERSONA);
+        yield* fs.writeFileString(`${world.config}/personas/unloadable.md`, UNLOADABLE);
 
-          yield* connect(world.state);
-          const door = yield* frontDoor(socketOf(world.state));
-          const read = yield* door.definitions();
+        yield* connect(world.state);
+        const door = yield* frontDoor(socketOf(world.state));
+        const read = yield* door.definitions();
 
-          const byId = new Map(Arr.map(read.workflows, (one) => [one.id, one]));
-          expect(Arr.map(read.workflows, (one) => one.id).sort()).toEqual(
-            [...SHIPPED, "unbuilt"].sort(),
-          );
-          for (const id of Arr.filter(SHIPPED, (one) => one !== "general")) {
-            expect(byId.get(id)).toMatchObject({ layer: "shipped", broken: null });
-            expect(byId.get(id)?.inputs.length).toBeGreaterThan(0);
-            expect(byId.get(id)?.metadata).toMatchObject({ hints: expect.any(Object) });
-          }
-          const shippedDir = `${world.install}/workflows`;
-          const named = (id: string) =>
-            Option.getOrUndefined(
-              Option.map(Option.fromNullishOr(byId.get(id)), (present) =>
-                Arr.map(present.files, (file) => file.path),
-              ),
-            );
-          expect(named("plan")).toEqual([
-            `${shippedDir}/plan.md`,
-            `${shippedDir}/plan.workflow.ts`,
-          ]);
-          expect(named("renovate")).toEqual([
-            `${shippedDir}/renovate.github.md`,
-            `${shippedDir}/renovate.gitlab.md`,
-            `${shippedDir}/renovate.workflow.ts`,
-          ]);
-          expect(named("review")).toEqual([
-            `${shippedDir}/review.md`,
-            `${shippedDir}/review.workflow.ts`,
-          ]);
-          expect(
-            Arr.map(
-              Arr.flatMap(read.workflows, (one) => one.files),
-              (file) => file.path,
+        const byId = new Map(Arr.map(read.workflows, (one) => [one.id, one]));
+        expect(Arr.map(read.workflows, (one) => one.id).sort()).toEqual(
+          [...SHIPPED, "unbuilt"].sort(),
+        );
+        for (const id of Arr.filter(SHIPPED, (one) => one !== "general")) {
+          expect(byId.get(id)).toMatchObject({ layer: "shipped", broken: null });
+          expect(byId.get(id)?.inputs.length).toBeGreaterThan(0);
+          expect(byId.get(id)?.metadata).toMatchObject({ hints: expect.any(Object) });
+        }
+        const shippedDir = `${world.install}/workflows`;
+        const named = (id: string) =>
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(byId.get(id)), (present) =>
+              Arr.map(present.files, (file) => file.path),
             ),
-          ).not.toContain(`${shippedDir}/reviewing.ts`);
-          const implement = byId.get("implement")?.files[0];
-          expect(implement?.text).toBe(yield* fs.readFileString(`${root}workflows/implement.md`));
-
-          expect(byId.get("general")).toMatchObject({
-            layer: "user",
-            title: "My general",
-            broken: null,
-          });
-          expect(named("general")).toEqual([
-            `${world.user}/general.md`,
-            `${world.user}/general.workflow.ts`,
-          ]);
-          expect(byId.get("general")?.files[0]?.text).toBe("My prompt.\n");
-
-          expect(byId.get("unbuilt")?.broken).toBe("this failure schema cannot be built");
-          expect(read.problems).toEqual([
-            expect.objectContaining({ id: "garbled", layer: "user", message: expect.any(String) }),
-          ]);
-
-          const personas = new Map(Arr.map(read.personas, (one) => [one.name, one]));
-          const shippedPersonas = Arr.filter(yield* fs.readDirectory(`${root}personas`), (name) =>
-            pipe_(name, Str.endsWith(".md")),
           );
-          expect(read.personas.length).toBe(shippedPersonas.length + 1);
-          for (const persona of Arr.filter(read.personas, (one) => one.name !== "mine")) {
-            expect(persona).toMatchObject({ layer: "baseline", extends: null });
-            expect(persona.body.length).toBeGreaterThan(0);
-          }
-          expect(personas.get("mine")).toMatchObject({
-            layer: "user",
-            description: "A Persona of my own",
-            body: expect.stringContaining("Do it my way."),
-          });
-          expect(read.errors).toEqual([expect.stringContaining("unloadable.md")]);
+        expect(named("plan")).toEqual([`${shippedDir}/plan.md`, `${shippedDir}/plan.workflow.ts`]);
+        expect(named("renovate")).toEqual([
+          `${shippedDir}/renovate.github.md`,
+          `${shippedDir}/renovate.gitlab.md`,
+          `${shippedDir}/renovate.workflow.ts`,
+        ]);
+        expect(named("review")).toEqual([
+          `${shippedDir}/review.md`,
+          `${shippedDir}/review.workflow.ts`,
+        ]);
+        expect(
+          Arr.map(
+            Arr.flatMap(read.workflows, (one) => one.files),
+            (file) => file.path,
+          ),
+        ).not.toContain(`${shippedDir}/reviewing.ts`);
+        const implement = byId.get("implement")?.files[0];
+        expect(implement?.text).toBe(yield* fs.readFileString(`${root}workflows/implement.md`));
 
-          const shown = yield* collie(world, ["persona", "show", "mine"]);
-          expect(shown.envelope.data).toEqual({ persona: personas.get("mine") });
+        expect(byId.get("general")).toMatchObject({
+          layer: "user",
+          title: "My general",
+          broken: null,
+        });
+        expect(named("general")).toEqual([
+          `${world.user}/general.md`,
+          `${world.user}/general.workflow.ts`,
+        ]);
+        expect(byId.get("general")?.files[0]?.text).toBe("My prompt.\n");
 
-          for (const dir of [world.user, `${world.install}/workflows`])
-            for (const made of ["package.json", "node_modules", "bun.lock"])
-              expect(yield* fs.exists(`${dir}/${made}`)).toBe(false);
+        expect(byId.get("unbuilt")?.broken).toBe("this failure schema cannot be built");
+        expect(read.problems).toEqual([
+          expect.objectContaining({ id: "garbled", layer: "user", message: expect.any(String) }),
+        ]);
 
-          expect(PROTOCOL).toBe(5);
-        }).pipe(Effect.orDie),
-      [],
-    ),
-  60_000,
-);
+        const personas = new Map(Arr.map(read.personas, (one) => [one.name, one]));
+        const shippedPersonas = Arr.filter(yield* fs.readDirectory(`${root}personas`), (name) =>
+          pipe_(name, Str.endsWith(".md")),
+        );
+        expect(read.personas.length).toBe(shippedPersonas.length + 1);
+        for (const persona of Arr.filter(read.personas, (one) => one.name !== "mine")) {
+          expect(persona).toMatchObject({ layer: "baseline", extends: null });
+          expect(persona.body.length).toBeGreaterThan(0);
+        }
+        expect(personas.get("mine")).toMatchObject({
+          layer: "user",
+          description: "A Persona of my own",
+          body: expect.stringContaining("Do it my way."),
+        });
+        expect(read.errors).toEqual([expect.stringContaining("unloadable.md")]);
+
+        const shown = yield* collie(world, ["persona", "show", "mine"]);
+        expect(shown.envelope.data).toEqual({ persona: personas.get("mine") });
+
+        for (const dir of [world.user, `${world.install}/workflows`])
+          for (const made of ["package.json", "node_modules", "bun.lock"])
+            expect(yield* fs.exists(`${dir}/${made}`)).toBe(false);
+
+        expect(PROTOCOL).toBe(5);
+      }).pipe(Effect.orDie),
+    [],
+  ));

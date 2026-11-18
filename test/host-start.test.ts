@@ -159,7 +159,6 @@ test.skipIf(process.platform !== "linux")(
         ).toContain("run-four");
       }),
     ),
-  60_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -180,5 +179,4 @@ test.skipIf(process.platform !== "linux")(
         ).toBe(true);
       }),
     ),
-  60_000,
 );

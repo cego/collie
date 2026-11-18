@@ -445,40 +445,36 @@ test("an outcome change made on an Intent amended since its version is refused f
     }),
   ));
 
-test(
-  "an outcome change that waits out a long-held Proposals journal lock is applied, not refused as busy",
-  () =>
-    inWorld(
-      Effect.gen(function* () {
-        const run = yield* aRun("add a picker");
-        const journal = KEY;
-        yield* ensureLockDir(journal);
-        const pending = yield* withLock(
-          `${journal}.lock`,
-          Effect.die("the Proposals journal's lock was already taken"),
-          Effect.gen(function* () {
-            const change = yield* call("collie_propose", {
-              interpretation: "change the kind",
-              actions: [
-                {
-                  kind: "update_intent",
-                  run: run.id,
-                  change: "set-outcome",
-                  patch: "bug",
-                  base_version: 1,
-                },
-              ],
-            }).pipe(Effect.forkScoped);
-            yield* Effect.sleep("3 seconds");
-            return change;
-          }),
-        );
-        expect(yield* Fiber.join(pending)).toContain("applied");
-        expect((yield* readIntent(run.dir))?.version).toBe(2);
-      }),
-    ),
-  60_000,
-);
+test("an outcome change that waits out a long-held Proposals journal lock is applied, not refused as busy", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const journal = KEY;
+      yield* ensureLockDir(journal);
+      const pending = yield* withLock(
+        `${journal}.lock`,
+        Effect.die("the Proposals journal's lock was already taken"),
+        Effect.gen(function* () {
+          const change = yield* call("collie_propose", {
+            interpretation: "change the kind",
+            actions: [
+              {
+                kind: "update_intent",
+                run: run.id,
+                change: "set-outcome",
+                patch: "bug",
+                base_version: 1,
+              },
+            ],
+          }).pipe(Effect.forkScoped);
+          yield* Effect.sleep("3 seconds");
+          return change;
+        }),
+      );
+      expect(yield* Fiber.join(pending)).toContain("applied");
+      expect((yield* readIntent(run.dir))?.version).toBe(2);
+    }),
+  ));
 
 test("retrying a chat request returns its receipt instead of applying it again", () =>
   inWorld(

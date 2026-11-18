@@ -487,29 +487,25 @@ test("a process the first stop noted is still the server's after the server has 
     }),
   ));
 
-test(
-  "a process of the session that ignores SIGTERM fails the stop by its pid, and gets no second signal",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* working({ child: "ignores" });
-        const child = Option.getOrUndefined(
-          Arr.findFirst(yield* events(), (one) => one.child !== undefined),
-        )!.child!;
-        const halt = yield* TestClock.withLive(halted({ stopMs: 5_000 }));
-        expect(halt.stopped).toEqual([]);
-        expect(Arr.join(halt.left, "\n")).toContain(`pid ${child}`);
-        expect(alive(child)).toBe(true);
-        const fs = yield* FileSystem.FileSystem;
-        expect(
-          Str.split(Str.trim(yield* fs.readFileString(`${eventsFile()}.child`)), "\n"),
-        ).toEqual(["TERM"]);
-        expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
-        expect(yield* panesClosed()).toBe(0);
-      }),
-    ),
-  30_000,
-);
+test("a process of the session that ignores SIGTERM fails the stop by its pid, and gets no second signal", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* working({ child: "ignores" });
+      const child = Option.getOrUndefined(
+        Arr.findFirst(yield* events(), (one) => one.child !== undefined),
+      )!.child!;
+      const halt = yield* TestClock.withLive(halted({ stopMs: 5_000 }));
+      expect(halt.stopped).toEqual([]);
+      expect(Arr.join(halt.left, "\n")).toContain(`pid ${child}`);
+      expect(alive(child)).toBe(true);
+      const fs = yield* FileSystem.FileSystem;
+      expect(Str.split(Str.trim(yield* fs.readFileString(`${eventsFile()}.child`)), "\n")).toEqual([
+        "TERM",
+      ]);
+      expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
+      expect(yield* panesClosed()).toBe(0);
+    }),
+  ));
 
 test("an agent whose terminal core no longer lists still has its server stopped", () =>
   runEffect(
@@ -795,80 +791,76 @@ const resumedToEnd = (over?: Partial<AgentHost>) =>
     over,
   );
 
-test(
-  "a restart beside a Codex turn that has not stopped parks, and starts its successor only once it has",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* serve({ ignoreInterrupt: true });
-        yield* rig.queueOutputs([null, { verdict: "clean", note: "restarted" }]);
-        yield* until(given);
+test("a restart beside a Codex turn that has not stopped parks, and starts its successor only once it has", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* serve({ ignoreInterrupt: true });
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "restarted" }]);
+      yield* until(given);
 
-        yield* stopFlag(true);
-        expect((yield* halted({ stopMs: 25_000 })).left).toHaveLength(1);
-        yield* closedByHand;
-        yield* stopFlag(false);
+      yield* stopFlag(true);
+      expect((yield* halted({ stopMs: 25_000 })).left).toHaveLength(1);
+      yield* closedByHand;
+      yield* stopFlag(false);
 
-        const restarted = agentStarts().pipe(
-          Effect.map((starts) => starts.length > 1),
-          Effect.orElseSucceed(() => false),
-        );
-        let reported = false;
-        const lossReported = Effect.suspend(() =>
-          reported
-            ? Effect.void
-            : ((reported = true),
-              Effect.flatMap(Agents, (agents) =>
-                agents.resumeLost("r1", {
-                  running: Effect.succeed(true),
-                  authority: Effect.succeed({ created: null, roaming: false, started: null }),
-                  questions: {
-                    ask: () => Effect.void,
-                    asked: Effect.succeed([]),
-                    close: () => Effect.void,
-                  },
-                }),
-              )),
-        );
-        yield* until(
-          Effect.andThen(
-            lossReported,
-            Effect.map(Effect.all([suspended, restarted]), (one) => Arr.some(one, Boolean)),
-          ),
-          { stopMs: 25_000 },
-          true,
-        );
-        expect(yield* agentStarts()).toEqual(["codex"]);
-        const why = yield* parkedWhy();
-        for (const fact of [agent, THREAD, TURN, "ws://127.0.0.1:", `pid ${yield* serverPid()}`])
-          expect(why).toContain(fact);
-        expect(yield* recorded()).not.toBeNull();
+      const restarted = agentStarts().pipe(
+        Effect.map((starts) => starts.length > 1),
+        Effect.orElseSucceed(() => false),
+      );
+      let reported = false;
+      const lossReported = Effect.suspend(() =>
+        reported
+          ? Effect.void
+          : ((reported = true),
+            Effect.flatMap(Agents, (agents) =>
+              agents.resumeLost("r1", {
+                running: Effect.succeed(true),
+                authority: Effect.succeed({ created: null, roaming: false, started: null }),
+                questions: {
+                  ask: () => Effect.void,
+                  asked: Effect.succeed([]),
+                  close: () => Effect.void,
+                },
+              }),
+            )),
+      );
+      yield* until(
+        Effect.andThen(
+          lossReported,
+          Effect.map(Effect.all([suspended, restarted]), (one) => Arr.some(one, Boolean)),
+        ),
+        { stopMs: 25_000 },
+        true,
+      );
+      expect(yield* agentStarts()).toEqual(["codex"]);
+      const why = yield* parkedWhy();
+      for (const fact of [agent, THREAD, TURN, "ws://127.0.0.1:", `pid ${yield* serverPid()}`])
+        expect(why).toContain(fact);
+      expect(yield* recorded()).not.toBeNull();
 
-        yield* release();
-        const old = yield* serverPid();
-        for (let tries = 0; !(yield* processAbsent(old)); tries++) {
-          if (tries === 3_000) return yield* Effect.die(new Error(`server ${old} never exited`));
-          yield* TestClock.withLive(Effect.sleep("10 millis"));
-        }
-        yield* serve({ threads: [{ id: SUB_THREAD, cwd: rig.projectDir }] });
-        const result = yield* resumedToEnd();
-        const atEnd = yield* sizeOf(written());
-        expect(result._tag === "Success" && result.success.note).toBe("restarted");
-        expect(yield* agentStarts()).toEqual(["codex", "codex"]);
-        expect(alive(yield* serverPid())).toBe(false);
-        yield* aWhile;
-        expect(yield* sizeOf(written())).toBe(atEnd);
-        const log = yield* agentsLog();
-        expect(
-          Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1),
-        ).toBeGreaterThan(-1);
-        expect(Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1)).toBeLessThan(
-          Option.getOrElse(pipe_(log, Str.lastIndexOf(`${agent}: codex in`)), () => -1),
-        );
-      }),
-    ),
-  120_000,
-);
+      yield* release();
+      const old = yield* serverPid();
+      for (let tries = 0; !(yield* processAbsent(old)); tries++) {
+        if (tries === 3_000) return yield* Effect.die(new Error(`server ${old} never exited`));
+        yield* TestClock.withLive(Effect.sleep("10 millis"));
+      }
+      yield* serve({ threads: [{ id: SUB_THREAD, cwd: rig.projectDir }] });
+      const result = yield* resumedToEnd();
+      const atEnd = yield* sizeOf(written());
+      expect(result._tag === "Success" && result.success.note).toBe("restarted");
+      expect(yield* agentStarts()).toEqual(["codex", "codex"]);
+      expect(alive(yield* serverPid())).toBe(false);
+      yield* aWhile;
+      expect(yield* sizeOf(written())).toBe(atEnd);
+      const log = yield* agentsLog();
+      expect(
+        Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1),
+      ).toBeGreaterThan(-1);
+      expect(Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1)).toBeLessThan(
+        Option.getOrElse(pipe_(log, Str.lastIndexOf(`${agent}: codex in`)), () => -1),
+      );
+    }),
+  ));
 
 const successor = agentName("r1", "build", null, 2);
 const fallback = { fallbacks: Effect.succeed(["claude"]) };

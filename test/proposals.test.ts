@@ -381,298 +381,270 @@ const inHerd = <A, E>(
     }),
   );
 
-test(
-  "a refused action fails the request and does not execute later actions",
-  () =>
-    inHerd(({ world, env, herdFile }) =>
-      Effect.gen(function* () {
-        const { id, dir } = yield* settledRun(world, "hello");
-        yield* writeIntent(dir, seedIntent(id, { goal: "a picker" }));
+test("a refused action fails the request and does not execute later actions", () =>
+  inHerd(({ world, env, herdFile }) =>
+    Effect.gen(function* () {
+      const { id, dir } = yield* settledRun(world, "hello");
+      yield* writeIntent(dir, seedIntent(id, { goal: "a picker" }));
 
-        const proposal = yield* record(herdFile, {
-          interpretation: "hold it",
-          targets: [{ run: id }],
-          actions: [
-            { kind: "hold", run: id },
-            {
-              kind: "update_intent",
-              run: id,
-              change: "set-goal",
-              patch: "must not happen",
-              base_version: 1,
-            },
-          ],
-          allowedNow: [],
-          intentVersions: { [id]: 1 },
-          by: "evaluator:call-1",
-        });
-
-        const out = yield* carryOutProposal(env, proposal.id, undefined, board);
-        expect(out.ok).toBe(false);
-        if (out.ok) return;
-        expect(out.error.code).toBe("operation_failed");
-        expect(out.error.message).toContain("no step left to hold");
-        expect(out.error.details).toMatchObject({ results: [{ kind: "hold", state: "skipped" }] });
-        expect((yield* readIntent(dir))?.goal).toBe("a picker");
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "an Intent nobody can decode refuses the confirmation instead of reading as no version",
-  () =>
-    inHerd(({ world, env, herdFile }) =>
-      Effect.gen(function* () {
-        const run = yield* hostedRun(world, "a picker");
-        const proposal = yield* record(herdFile, {
-          interpretation: "hold it",
-          targets: [{ run: run.id }],
-          actions: [{ kind: "hold", run: run.id }],
-          allowedNow: [],
-          intentVersions: { [run.id]: 1 },
-          by: "evaluator:call-1",
-        });
-
-        yield* RunRecords.use((records) => records.put(run.id, INTENT_FILE, "{ not json"));
-
-        const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
-        expect(out).toMatchObject({
-          ok: false,
-          error: {
-            details: {
-              results: [
-                { kind: "hold", state: "skipped", note: `${run.id}'s Intent cannot be read` },
-              ],
-            },
+      const proposal = yield* record(herdFile, {
+        interpretation: "hold it",
+        targets: [{ run: id }],
+        actions: [
+          { kind: "hold", run: id },
+          {
+            kind: "update_intent",
+            run: id,
+            change: "set-goal",
+            patch: "must not happen",
+            base_version: 1,
           },
-        });
-      }),
-    ),
-  60_000,
-);
+        ],
+        allowedNow: [],
+        intentVersions: { [id]: 1 },
+        by: "evaluator:call-1",
+      });
 
-test(
-  "chat's start names projects-root and every Input, or is told each one it left out",
-  () =>
-    inHerd(({ world, env, herdFile }) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const root = `${world.home}/projects`;
-        yield* fs.makeDirectory(`${root}/app/.git`, { recursive: true });
-        yield* writeConfigValue(world.config, "projects.root", root);
-        yield* save(world.user, ["branches.workflow.ts"]);
-        const carry = (action: Action) =>
-          Effect.gen(function* () {
-            const proposal = yield* record(herdFile, {
-              interpretation: "start it",
-              targets: [],
-              actions: [action],
-              allowedNow: [],
-              intentVersions: {},
-              by: "evaluator:call-1",
-            });
-            return yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+      const out = yield* carryOutProposal(env, proposal.id, undefined, board);
+      expect(out.ok).toBe(false);
+      if (out.ok) return;
+      expect(out.error.code).toBe("operation_failed");
+      expect(out.error.message).toContain("no step left to hold");
+      expect(out.error.details).toMatchObject({ results: [{ kind: "hold", state: "skipped" }] });
+      expect((yield* readIntent(dir))?.goal).toBe("a picker");
+    }),
+  ));
+
+test("an Intent nobody can decode refuses the confirmation instead of reading as no version", () =>
+  inHerd(({ world, env, herdFile }) =>
+    Effect.gen(function* () {
+      const run = yield* hostedRun(world, "a picker");
+      const proposal = yield* record(herdFile, {
+        interpretation: "hold it",
+        targets: [{ run: run.id }],
+        actions: [{ kind: "hold", run: run.id }],
+        allowedNow: [],
+        intentVersions: { [run.id]: 1 },
+        by: "evaluator:call-1",
+      });
+
+      yield* RunRecords.use((records) => records.put(run.id, INTENT_FILE, "{ not json"));
+
+      const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+      expect(out).toMatchObject({
+        ok: false,
+        error: {
+          details: {
+            results: [
+              { kind: "hold", state: "skipped", note: `${run.id}'s Intent cannot be read` },
+            ],
+          },
+        },
+      });
+    }),
+  ));
+
+test("chat's start names projects-root and every Input, or is told each one it left out", () =>
+  inHerd(({ world, env, herdFile }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = `${world.home}/projects`;
+      yield* fs.makeDirectory(`${root}/app/.git`, { recursive: true });
+      yield* writeConfigValue(world.config, "projects.root", root);
+      yield* save(world.user, ["branches.workflow.ts"]);
+      const carry = (action: Action) =>
+        Effect.gen(function* () {
+          const proposal = yield* record(herdFile, {
+            interpretation: "start it",
+            targets: [],
+            actions: [action],
+            allowedNow: [],
+            intentVersions: {},
+            by: "evaluator:call-1",
           });
-
-        const started = yield* carry({
-          kind: "start",
-          workflow: "proof",
-          workspace: "projects-root",
-          inputs: { note: "x" },
-        });
-        expect(started.ok).toBe(true);
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
-        expect(Arr.map(runs, (one) => one.cwd)).toEqual([root]);
-
-        const short = yield* carry({
-          kind: "start",
-          workflow: "branches",
-          workspace: "projects-root",
-          inputs: { size: "small" },
-        });
-        expect(short.ok).toBe(false);
-        if (short.ok) return;
-        expect(short.error.message).toContain('"goal"');
-        expect(short.error.message).toContain('as ""');
-
-        const nowhere = yield* carry({ kind: "start", workflow: "proof", inputs: { note: "x" } });
-        expect(nowhere.ok).toBe(false);
-        if (nowhere.ok) return;
-        expect(nowhere.error.message).toContain('"workspace"');
-        expect(nowhere.error.message).toContain("the action's workspace");
-        expect(nowhere.error.message).not.toContain("--input");
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "chat's start at projects-root remembers how far it goes for projects-root, not for chat's own directory",
-  () =>
-    inHerd(({ world, env, herdFile }) =>
-      Effect.gen(function* () {
-        const root = `${world.home}/projects`;
-        yield* FileSystem.FileSystem.pipe(
-          Effect.flatMap((fs) => fs.makeDirectory(root, { recursive: true })),
-        );
-        yield* writeConfigValue(world.config, "projects.root", root);
-        yield* save(world.user, ["reached.workflow.ts"]);
-        const proposal = yield* record(herdFile, {
-          interpretation: "start it",
-          targets: [],
-          actions: [
-            {
-              kind: "start",
-              workflow: "reached",
-              workspace: "projects-root",
-              // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
-              inputs: { goal: "x", then: "ship" },
-            },
-          ],
-          allowedNow: [],
-          intentVersions: {},
-          by: "evaluator:call-1",
-        });
-        const started = yield* carryOutProposal(env, proposal.id, proposal.content_hash, {
-          origin: "chat",
-          requestId: "req-3",
-        });
-        expect(started.ok).toBe(true);
-        expect(yield* savedReaches(env.userDir)).toEqual([
-          { workflow: "reached", project: "projects-root", value: "ship" },
-        ]);
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "a confirmed start goes through the same Input settling a typed one does",
-  () =>
-    inHerd(({ world, env, herdFile }) =>
-      Effect.gen(function* () {
-        const run = yield* hostedRun(world, "a picker");
-
-        const proposal = yield* record(herdFile, {
-          interpretation: "start one and hold the other",
-          targets: [{ run: run.id }],
-          actions: [
-            { kind: "start", workflow: "proof", inputs: {} },
-            { kind: "hold", run: run.id },
-          ],
-          allowedNow: [],
-          intentVersions: { [run.id]: 1 },
-          by: "evaluator:call-1",
+          return yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
         });
 
-        const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
-        expect(out.ok).toBe(false);
-        if (out.ok) return;
-        expect(out.error.details).toMatchObject({
-          results: [{ kind: "start", state: "failed" }, { kind: "hold" }],
-        });
-        expect(out.error.message).toContain("note");
-      }),
-    ),
-  60_000,
-);
+      const started = yield* carry({
+        kind: "start",
+        workflow: "proof",
+        workspace: "projects-root",
+        inputs: { note: "x" },
+      });
+      expect(started.ok).toBe(true);
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+      expect(Arr.map(runs, (one) => one.cwd)).toEqual([root]);
 
-test(
-  "a confirmed set_verification grants a running Run a check, and a later one withdraws it",
-  () =>
-    inHerd(({ world, env, herdFile }) =>
-      Effect.gen(function* () {
-        const run = yield* hostedRun(world, "a picker");
-        const confirm = (action: Action) =>
-          Effect.gen(function* () {
-            const version = (yield* readIntent(run.dir))?.version ?? 1;
-            const proposal = yield* record(herdFile, {
-              interpretation: "change what proves it",
-              targets: [{ run: run.id }],
-              actions: [action],
-              allowedNow: [],
-              intentVersions: { [run.id]: version },
-              by: "evaluator:call-1",
-            });
-            return yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+      const short = yield* carry({
+        kind: "start",
+        workflow: "branches",
+        workspace: "projects-root",
+        inputs: { size: "small" },
+      });
+      expect(short.ok).toBe(false);
+      if (short.ok) return;
+      expect(short.error.message).toContain('"goal"');
+      expect(short.error.message).toContain('as ""');
+
+      const nowhere = yield* carry({ kind: "start", workflow: "proof", inputs: { note: "x" } });
+      expect(nowhere.ok).toBe(false);
+      if (nowhere.ok) return;
+      expect(nowhere.error.message).toContain('"workspace"');
+      expect(nowhere.error.message).toContain("the action's workspace");
+      expect(nowhere.error.message).not.toContain("--input");
+    }),
+  ));
+
+test("chat's start at projects-root remembers how far it goes for projects-root, not for chat's own directory", () =>
+  inHerd(({ world, env, herdFile }) =>
+    Effect.gen(function* () {
+      const root = `${world.home}/projects`;
+      yield* FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.makeDirectory(root, { recursive: true })),
+      );
+      yield* writeConfigValue(world.config, "projects.root", root);
+      yield* save(world.user, ["reached.workflow.ts"]);
+      const proposal = yield* record(herdFile, {
+        interpretation: "start it",
+        targets: [],
+        actions: [
+          {
+            kind: "start",
+            workflow: "reached",
+            workspace: "projects-root",
+            // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+            inputs: { goal: "x", then: "ship" },
+          },
+        ],
+        allowedNow: [],
+        intentVersions: {},
+        by: "evaluator:call-1",
+      });
+      const started = yield* carryOutProposal(env, proposal.id, proposal.content_hash, {
+        origin: "chat",
+        requestId: "req-3",
+      });
+      expect(started.ok).toBe(true);
+      expect(yield* savedReaches(env.userDir)).toEqual([
+        { workflow: "reached", project: "projects-root", value: "ship" },
+      ]);
+    }),
+  ));
+
+test("a confirmed start goes through the same Input settling a typed one does", () =>
+  inHerd(({ world, env, herdFile }) =>
+    Effect.gen(function* () {
+      const run = yield* hostedRun(world, "a picker");
+
+      const proposal = yield* record(herdFile, {
+        interpretation: "start one and hold the other",
+        targets: [{ run: run.id }],
+        actions: [
+          { kind: "start", workflow: "proof", inputs: {} },
+          { kind: "hold", run: run.id },
+        ],
+        allowedNow: [],
+        intentVersions: { [run.id]: 1 },
+        by: "evaluator:call-1",
+      });
+
+      const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+      expect(out.ok).toBe(false);
+      if (out.ok) return;
+      expect(out.error.details).toMatchObject({
+        results: [{ kind: "start", state: "failed" }, { kind: "hold" }],
+      });
+      expect(out.error.message).toContain("note");
+    }),
+  ));
+
+test("a confirmed set_verification grants a running Run a check, and a later one withdraws it", () =>
+  inHerd(({ world, env, herdFile }) =>
+    Effect.gen(function* () {
+      const run = yield* hostedRun(world, "a picker");
+      const confirm = (action: Action) =>
+        Effect.gen(function* () {
+          const version = (yield* readIntent(run.dir))?.version ?? 1;
+          const proposal = yield* record(herdFile, {
+            interpretation: "change what proves it",
+            targets: [{ run: run.id }],
+            actions: [action],
+            allowedNow: [],
+            intentVersions: { [run.id]: version },
+            by: "evaluator:call-1",
           });
-
-        const granted = yield* confirm({
-          kind: "set_verification",
-          run: run.id,
-          name: "unit",
-          command: { executable: "true", argv: [], cwd: "worktree" },
+          return yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
         });
-        expect(granted.ok).toBe(true);
-        expect((yield* readIntent(run.dir))?.authority.run_verification).toEqual([
-          { name: "unit", executable: "true", argv: [], cwd: "worktree" },
-        ]);
 
-        const away = yield* confirm({
-          kind: "set_verification",
-          run: run.id,
-          name: "away",
-          command: { executable: "true", argv: [], cwd: "/" },
-        });
-        expect(away.ok).toBe(false);
-        if (!away.ok) expect(away.error.message).toContain(`is not inside run ${run.id}`);
-        expect((yield* readIntent(run.dir))?.authority.run_verification).toEqual([
-          { name: "unit", executable: "true", argv: [], cwd: "worktree" },
-        ]);
+      const granted = yield* confirm({
+        kind: "set_verification",
+        run: run.id,
+        name: "unit",
+        command: { executable: "true", argv: [], cwd: "worktree" },
+      });
+      expect(granted.ok).toBe(true);
+      expect((yield* readIntent(run.dir))?.authority.run_verification).toEqual([
+        { name: "unit", executable: "true", argv: [], cwd: "worktree" },
+      ]);
 
-        const withdrawn = yield* confirm({ kind: "set_verification", run: run.id, name: "unit" });
-        expect(withdrawn.ok).toBe(true);
-        expect((yield* readIntent(run.dir))?.authority.run_verification).toEqual([]);
-      }),
-    ),
-  60_000,
-);
+      const away = yield* confirm({
+        kind: "set_verification",
+        run: run.id,
+        name: "away",
+        command: { executable: "true", argv: [], cwd: "/" },
+      });
+      expect(away.ok).toBe(false);
+      if (!away.ok) expect(away.error.message).toContain(`is not inside run ${run.id}`);
+      expect((yield* readIntent(run.dir))?.authority.run_verification).toEqual([
+        { name: "unit", executable: "true", argv: [], cwd: "worktree" },
+      ]);
 
-test(
-  "remember_verification keeps a finished Run's checks for its repository, and overwrites only when told",
-  () =>
-    inHerd(({ world, env, herdFile }) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const unit = { name: "unit", executable: "true", argv: [], cwd: "worktree" };
-        const worktree = `${world.home}/worktree`;
-        yield* fs.makeDirectory(worktree, { recursive: true });
-        yield* exec(["git", "init", "-q"], { cwd: worktree });
-        for (const cwd of [world.project, worktree])
-          yield* exec(["git", "remote", "add", "origin", "git@example.test:team/app.git"], { cwd });
-        const run = yield* settledRun(world, "hello", { workspace: worktree });
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);
-        yield* writeIntent(run.dir, seedIntent(run.id, { runVerification: [unit] }));
-        const carry = (replace?: boolean) =>
-          Effect.gen(function* () {
-            const proposal = yield* record(herdFile, {
-              interpretation: "keep these checks for the repository",
-              targets: [{ run: run.id }],
-              actions: [
-                replace === undefined
-                  ? { kind: "remember_verification", run: run.id }
-                  : { kind: "remember_verification", run: run.id, replace },
-              ],
-              allowedNow: [],
-              intentVersions: {},
-              by: "chat",
-            });
-            return yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+      const withdrawn = yield* confirm({ kind: "set_verification", run: run.id, name: "unit" });
+      expect(withdrawn.ok).toBe(true);
+      expect((yield* readIntent(run.dir))?.authority.run_verification).toEqual([]);
+    }),
+  ));
+
+test("remember_verification keeps a finished Run's checks for its repository, and overwrites only when told", () =>
+  inHerd(({ world, env, herdFile }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const unit = { name: "unit", executable: "true", argv: [], cwd: "worktree" };
+      const worktree = `${world.home}/worktree`;
+      yield* fs.makeDirectory(worktree, { recursive: true });
+      yield* exec(["git", "init", "-q"], { cwd: worktree });
+      for (const cwd of [world.project, worktree])
+        yield* exec(["git", "remote", "add", "origin", "git@example.test:team/app.git"], { cwd });
+      const run = yield* settledRun(world, "hello", { workspace: worktree });
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);
+      yield* writeIntent(run.dir, seedIntent(run.id, { runVerification: [unit] }));
+      const carry = (replace?: boolean) =>
+        Effect.gen(function* () {
+          const proposal = yield* record(herdFile, {
+            interpretation: "keep these checks for the repository",
+            targets: [{ run: run.id }],
+            actions: [
+              replace === undefined
+                ? { kind: "remember_verification", run: run.id }
+                : { kind: "remember_verification", run: run.id, replace },
+            ],
+            allowedNow: [],
+            intentVersions: {},
+            by: "chat",
           });
+          return yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+        });
 
-        expect((yield* carry()).ok).toBe(true);
-        const file = `${world.config}/verify/example.test/team/app.json`;
-        expect(yield* fs.readFileString(file)).toContain('"executable": "true"');
-        yield* fs.remove(worktree, { recursive: true });
-        expect((yield* carry()).ok).toBe(false);
-        expect((yield* carry(true)).ok).toBe(true);
-      }),
-    ),
-  60_000,
-);
+      expect((yield* carry()).ok).toBe(true);
+      const file = `${world.config}/verify/example.test/team/app.json`;
+      expect(yield* fs.readFileString(file)).toContain('"executable": "true"');
+      yield* fs.remove(worktree, { recursive: true });
+      expect((yield* carry()).ok).toBe(false);
+      expect((yield* carry(true)).ok).toBe(true);
+    }),
+  ));
 
 test("a proposal is pending until it is answered or it expires", () => {
   const now = epochMs("2026-09-09T10:00:00Z");

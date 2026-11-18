@@ -145,452 +145,433 @@ const verdictOf = (measurement: Measurement, metric: string) =>
       )?.verdict ?? null)
     : null;
 
-test(
-  "collie measure and host.measure sample A B B A after a warmup and judge a lower counter a gain, an equal one no change",
-  () =>
-    proves(
-      "collie-measure-gain-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const extra = {};
-          const { base, harness, product, commit, write } = yield* project(world);
-          const ran = `${world.home}/ran`;
-          const plan = planOf(harness, "bench.sh", ran);
-          const runId = yield* asking(world, extra);
+test("collie measure and host.measure sample A B B A after a warmup and judge a lower counter a gain, an equal one no change", () =>
+  proves(
+    "collie-measure-gain-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const extra = {};
+        const { base, harness, product, commit, write } = yield* project(world);
+        const ran = `${world.home}/ran`;
+        const plan = planOf(harness, "bench.sh", ran);
+        const runId = yield* asking(world, extra);
 
-          const answered = yield* measuring(world, extra, runId, base, plan);
-          expect(answered.envelope.error).toBeUndefined();
-          expect(
-            (yield* Schema.decodeUnknownEffect(Answered)(answered.envelope.data).pipe(Effect.orDie))
-              .ran,
-          ).toBe(true);
-          const [measured] = yield* recorded(world, runId);
-          expect(measured).toBeDefined();
-          const cli = measured!;
-          expect(verdictOf(cli, "bench.counter")).toBe("gain");
-          expect(Arr.map(cli.samples, (one) => [one.tree, one.warmup])).toEqual([
-            ["base", true],
-            ["candidate", true],
-            ["base", false],
-            ["candidate", false],
-            ["candidate", false],
-            ["base", false],
-          ]);
-          expect(Arr.map(cli.samples, (one) => one.readings["bench.counter"])).toEqual([
-            10, 7, 10, 7, 7, 10,
-          ]);
-          const order = yield* linesOf(world, ran);
-          expect(Arr.map(order, (dir) => (dir === world.project ? "candidate" : "base"))).toEqual(
-            Arr.map(cli.samples, (one) => one.tree),
-          );
-          expect(cli.base.commit).toBe(base);
-          expect(cli.candidate.head_sha).toBe(product);
-          expect(cli.base.fingerprint).not.toBe("");
-          expect(cli.candidate.fingerprint).not.toBe("");
-          expect(cli.base.lockfiles).toEqual(cli.candidate.lockfiles);
-          expect(Rec.keys(cli.candidate.lockfiles)).toEqual(["bun.lock"]);
-          expect(cli.plan.commands).toEqual(plan.commands);
-          expect(Arr.every(cli.samples, (one) => one.load.length === 3)).toBe(true);
-          expect(cli.waited).toEqual({ memory: false, machine: [] });
+        const answered = yield* measuring(world, extra, runId, base, plan);
+        expect(answered.envelope.error).toBeUndefined();
+        expect(
+          (yield* Schema.decodeUnknownEffect(Answered)(answered.envelope.data).pipe(Effect.orDie))
+            .ran,
+        ).toBe(true);
+        const [measured] = yield* recorded(world, runId);
+        expect(measured).toBeDefined();
+        const cli = measured!;
+        expect(verdictOf(cli, "bench.counter")).toBe("gain");
+        expect(Arr.map(cli.samples, (one) => [one.tree, one.warmup])).toEqual([
+          ["base", true],
+          ["candidate", true],
+          ["base", false],
+          ["candidate", false],
+          ["candidate", false],
+          ["base", false],
+        ]);
+        expect(Arr.map(cli.samples, (one) => one.readings["bench.counter"])).toEqual([
+          10, 7, 10, 7, 7, 10,
+        ]);
+        const order = yield* linesOf(world, ran);
+        expect(Arr.map(order, (dir) => (dir === world.project ? "candidate" : "base"))).toEqual(
+          Arr.map(cli.samples, (one) => one.tree),
+        );
+        expect(cli.base.commit).toBe(base);
+        expect(cli.candidate.head_sha).toBe(product);
+        expect(cli.base.fingerprint).not.toBe("");
+        expect(cli.candidate.fingerprint).not.toBe("");
+        expect(cli.base.lockfiles).toEqual(cli.candidate.lockfiles);
+        expect(Rec.keys(cli.candidate.lockfiles)).toEqual(["bun.lock"]);
+        expect(cli.plan.commands).toEqual(plan.commands);
+        expect(Arr.every(cli.samples, (one) => one.load.length === 3)).toBe(true);
+        expect(cli.waited).toEqual({ memory: false, machine: [] });
 
-          const started = yield* collie(world, [
-            "run",
-            "start",
-            "measured",
-            "--input",
-            `base=${base}`,
-            "--input",
-            `plan=${encode(plan)}`,
-            "--input",
-            "pass=calibration",
-          ]);
-          const workflowRun = (yield* Schema.decodeUnknownEffect(Started)(
-            started.envelope.data,
-          ).pipe(Effect.orDie)).runId;
-          const finished = yield* collie(world, ["run", "wait", workflowRun]);
-          const status = (yield* Schema.decodeUnknownEffect(Waited)(finished.envelope.data).pipe(
-            Effect.orDie,
-          )).run.status;
-          expect(status.status).toBe("complete");
-          const [fromWorkflow] = yield* recorded(world, workflowRun);
-          const read = yield* Schema.decodeEffect(Read)(status.value).pipe(Effect.orDie);
-          expect(fromWorkflow?.id).toBe(read.id);
-          expect(read.withoutPatch).toBe(false);
-          expect(read.gaps).toContainEqual(expect.stringContaining("no `final` Measurement"));
-          const same = (one: Measurement) => ({
-            keys: Rec.keys(one).sort(),
-            pass: one.pass,
-            plan_digest: one.plan_digest,
-            base: {
-              commit: one.base.commit,
-              fingerprint: one.base.fingerprint,
-              lockfiles: one.base.lockfiles,
-            },
-            candidate: one.candidate,
-            environment: one.environment,
-            samples: Arr.map(one.samples, (sample) => [
-              sample.tree,
-              sample.warmup,
-              sample.readings["bench.counter"],
-            ]),
-            result: one.result,
-          });
-          expect(same(fromWorkflow!)).toEqual(same(cli));
+        const started = yield* collie(world, [
+          "run",
+          "start",
+          "measured",
+          "--input",
+          `base=${base}`,
+          "--input",
+          `plan=${encode(plan)}`,
+          "--input",
+          "pass=calibration",
+        ]);
+        const workflowRun = (yield* Schema.decodeUnknownEffect(Started)(started.envelope.data).pipe(
+          Effect.orDie,
+        )).runId;
+        const finished = yield* collie(world, ["run", "wait", workflowRun]);
+        const status = (yield* Schema.decodeUnknownEffect(Waited)(finished.envelope.data).pipe(
+          Effect.orDie,
+        )).run.status;
+        expect(status.status).toBe("complete");
+        const [fromWorkflow] = yield* recorded(world, workflowRun);
+        const read = yield* Schema.decodeEffect(Read)(status.value).pipe(Effect.orDie);
+        expect(fromWorkflow?.id).toBe(read.id);
+        expect(read.withoutPatch).toBe(false);
+        expect(read.gaps).toContainEqual(expect.stringContaining("no `final` Measurement"));
+        const same = (one: Measurement) => ({
+          keys: Rec.keys(one).sort(),
+          pass: one.pass,
+          plan_digest: one.plan_digest,
+          base: {
+            commit: one.base.commit,
+            fingerprint: one.base.fingerprint,
+            lockfiles: one.base.lockfiles,
+          },
+          candidate: one.candidate,
+          environment: one.environment,
+          samples: Arr.map(one.samples, (sample) => [
+            sample.tree,
+            sample.warmup,
+            sample.readings["bench.counter"],
+          ]),
+          result: one.result,
+        });
+        expect(same(fromWorkflow!)).toEqual(same(cli));
 
-          yield* write("value", "10\n");
-          yield* commit("back");
-          const level = yield* measuring(world, extra, runId, base, plan);
-          expect(level.envelope.ok).toBe(true);
-          expect(verdictOf((yield* recorded(world, runId)).at(-1)!, "bench.counter")).toBe(
-            "no-change",
-          );
+        yield* write("value", "10\n");
+        yield* commit("back");
+        const level = yield* measuring(world, extra, runId, base, plan);
+        expect(level.envelope.ok).toBe(true);
+        expect(verdictOf((yield* recorded(world, runId)).at(-1)!, "bench.counter")).toBe(
+          "no-change",
+        );
 
-          yield* exec(["git", "branch", "-M", "master"], { cwd: world.project });
-          const back = Str.trim(
-            (yield* exec(["git", "rev-parse", "HEAD"], {
-              cwd: world.project,
-            })).stdout,
-          );
-          const again = yield* collie(world, [
-            "run",
-            "start",
-            "measured",
-            "--input",
-            `base=${base}`,
-            "--input",
-            `plan=${encode(plan)}`,
-            "--input",
-            "pass=final",
-          ]);
-          const againRun = (yield* Schema.decodeUnknownEffect(Started)(again.envelope.data).pipe(
-            Effect.orDie,
-          )).runId;
-          const reread = yield* Schema.decodeEffect(Read)(
-            (yield* Schema.decodeUnknownEffect(Waited)(
-              (yield* collie(world, ["run", "wait", againRun])).envelope.data,
-            ).pipe(Effect.orDie)).run.status.value,
-          ).pipe(Effect.orDie);
-          expect(reread.withoutPatch).toBe(true);
-          expect(reread.gaps).toContainEqual(expect.stringContaining(`not the merge base ${back}`));
-          const shown = (yield* collie(world, ["run", "show", againRun])).envelope.data;
-          expect((yield* Schema.decodeUnknownEffect(Proves)(shown).pipe(Effect.orDie)).run).toEqual(
-            {
-              outcome: "performance",
-              measurement: expect.stringContaining(
-                `final Measurement ${reread.id}: bench.counter no-change`,
-              ),
-            },
-          );
-
-          const trees = `${world.state}/measurements/trees/${runId}`;
-          expect(yield* fs.readDirectory(trees)).toHaveLength(1);
-          yield* collie(world, ["run", "stop", runId]);
-          const swept = yield* collie(world, ["cleanup", "--apply", "--request-id", "sweep-1"]);
-          expect(swept.envelope.ok).toBe(true);
-          expect(yield* fs.exists(trees)).toBe(false);
-          const listed = yield* exec(["git", "worktree", "list", "--porcelain"], {
+        yield* exec(["git", "branch", "-M", "master"], { cwd: world.project });
+        const back = Str.trim(
+          (yield* exec(["git", "rev-parse", "HEAD"], {
             cwd: world.project,
-          });
-          expect(listed.stdout).not.toContain(trees);
-          yield* stopHost(world.state);
-        }),
-      ["asks.workflow.ts", "measured.workflow.ts"],
-    ),
-  240_000,
-);
+          })).stdout,
+        );
+        const again = yield* collie(world, [
+          "run",
+          "start",
+          "measured",
+          "--input",
+          `base=${base}`,
+          "--input",
+          `plan=${encode(plan)}`,
+          "--input",
+          "pass=final",
+        ]);
+        const againRun = (yield* Schema.decodeUnknownEffect(Started)(again.envelope.data).pipe(
+          Effect.orDie,
+        )).runId;
+        const reread = yield* Schema.decodeEffect(Read)(
+          (yield* Schema.decodeUnknownEffect(Waited)(
+            (yield* collie(world, ["run", "wait", againRun])).envelope.data,
+          ).pipe(Effect.orDie)).run.status.value,
+        ).pipe(Effect.orDie);
+        expect(reread.withoutPatch).toBe(true);
+        expect(reread.gaps).toContainEqual(expect.stringContaining(`not the merge base ${back}`));
+        const shown = (yield* collie(world, ["run", "show", againRun])).envelope.data;
+        expect((yield* Schema.decodeUnknownEffect(Proves)(shown).pipe(Effect.orDie)).run).toEqual({
+          outcome: "performance",
+          measurement: expect.stringContaining(
+            `final Measurement ${reread.id}: bench.counter no-change`,
+          ),
+        });
 
-test(
-  "a recorded comparison answers again without running; a new plan, a time limit, a stray harness path and a failed prepare each say so",
-  () =>
-    proves(
-      "collie-measure-once-",
-      (world) =>
-        Effect.gen(function* () {
-          const extra = {};
-          const { base, harness, commit, write } = yield* project(world);
-          const ran = `${world.home}/ran`;
-          const runId = yield* asking(world, extra);
+        const trees = `${world.state}/measurements/trees/${runId}`;
+        expect(yield* fs.readDirectory(trees)).toHaveLength(1);
+        yield* collie(world, ["run", "stop", runId]);
+        const swept = yield* collie(world, ["cleanup", "--apply", "--request-id", "sweep-1"]);
+        expect(swept.envelope.ok).toBe(true);
+        expect(yield* fs.exists(trees)).toBe(false);
+        const listed = yield* exec(["git", "worktree", "list", "--porcelain"], {
+          cwd: world.project,
+        });
+        expect(listed.stdout).not.toContain(trees);
+        yield* stopHost(world.state);
+      }),
+    ["asks.workflow.ts", "measured.workflow.ts"],
+  ));
 
-          const noisy = planOf(harness, "noisy.sh", ran);
-          const first = yield* measuring(world, extra, runId, base, noisy);
-          expect(first.envelope.ok).toBe(true);
-          const [inconclusive] = yield* recorded(world, runId);
-          expect(verdictOf(inconclusive!, "bench.counter")).toBe("inconclusive");
-          const runs = (yield* linesOf(world, ran)).length;
+test("a recorded comparison answers again without running; a new plan, a time limit, a stray harness path and a failed prepare each say so", () =>
+  proves(
+    "collie-measure-once-",
+    (world) =>
+      Effect.gen(function* () {
+        const extra = {};
+        const { base, harness, commit, write } = yield* project(world);
+        const ran = `${world.home}/ran`;
+        const runId = yield* asking(world, extra);
 
-          const again = yield* measuring(world, extra, runId, base, noisy, "cycle 1");
-          expect(
-            yield* Schema.decodeUnknownEffect(Answered)(again.envelope.data).pipe(Effect.orDie),
-          ).toEqual({
-            ran: false,
-            measurement: expect.objectContaining({ id: inconclusive!.id }),
-          });
-          expect((yield* linesOf(world, ran)).length).toBe(runs);
-          expect(yield* recorded(world, runId)).toEqual([inconclusive!]);
+        const noisy = planOf(harness, "noisy.sh", ran);
+        const first = yield* measuring(world, extra, runId, base, noisy);
+        expect(first.envelope.ok).toBe(true);
+        const [inconclusive] = yield* recorded(world, runId);
+        expect(verdictOf(inconclusive!, "bench.counter")).toBe("inconclusive");
+        const runs = (yield* linesOf(world, ran)).length;
 
-          const replanned = yield* measuring(
-            world,
-            extra,
-            runId,
-            base,
-            { ...noisy, samples: 3 },
-            "calibration",
-            "three samples a side",
-          );
-          expect(
-            (yield* Schema.decodeUnknownEffect(Answered)(replanned.envelope.data).pipe(
-              Effect.orDie,
-            )).ran,
-          ).toBe(true);
-          expect((yield* linesOf(world, ran)).length).toBeGreaterThan(runs);
-          expect(yield* recorded(world, runId)).toHaveLength(2);
-          expect((yield* recorded(world, runId)).at(-1)?.plan_reason).toBe("three samples a side");
+        const again = yield* measuring(world, extra, runId, base, noisy, "cycle 1");
+        expect(
+          yield* Schema.decodeUnknownEffect(Answered)(again.envelope.data).pipe(Effect.orDie),
+        ).toEqual({
+          ran: false,
+          measurement: expect.objectContaining({ id: inconclusive!.id }),
+        });
+        expect((yield* linesOf(world, ran)).length).toBe(runs);
+        expect(yield* recorded(world, runId)).toEqual([inconclusive!]);
 
-          const slow = yield* measuring(
-            world,
-            extra,
-            runId,
-            base,
-            planOf(harness, "gate.sh", ran, { limit: 1 }, [`${world.home}/never`]),
-            "calibration",
-            "a gated benchmark",
-          );
-          expect(slow.envelope.ok).toBe(true);
-          expect((yield* recorded(world, runId)).at(-1)?.result).toEqual({
-            _tag: "TimedOut",
-            tree: "base",
-            stage: "sample",
-            command: "bench",
-          });
+        const replanned = yield* measuring(
+          world,
+          extra,
+          runId,
+          base,
+          { ...noisy, samples: 3 },
+          "calibration",
+          "three samples a side",
+        );
+        expect(
+          (yield* Schema.decodeUnknownEffect(Answered)(replanned.envelope.data).pipe(Effect.orDie))
+            .ran,
+        ).toBe(true);
+        expect((yield* linesOf(world, ran)).length).toBeGreaterThan(runs);
+        expect(yield* recorded(world, runId)).toHaveLength(2);
+        expect((yield* recorded(world, runId)).at(-1)?.plan_reason).toBe("three samples a side");
 
-          yield* write("bench/more.sh", "true\n");
-          yield* write("README", "product\n");
-          const stray = yield* commit("stray harness");
-          const refused = yield* measuring(world, extra, runId, base, {
+        const slow = yield* measuring(
+          world,
+          extra,
+          runId,
+          base,
+          planOf(harness, "gate.sh", ran, { limit: 1 }, [`${world.home}/never`]),
+          "calibration",
+          "a gated benchmark",
+        );
+        expect(slow.envelope.ok).toBe(true);
+        expect((yield* recorded(world, runId)).at(-1)?.result).toEqual({
+          _tag: "TimedOut",
+          tree: "base",
+          stage: "sample",
+          command: "bench",
+        });
+
+        yield* write("bench/more.sh", "true\n");
+        yield* write("README", "product\n");
+        const stray = yield* commit("stray harness");
+        const refused = yield* measuring(world, extra, runId, base, {
+          ...planOf(harness, "bench.sh", ran),
+          harness: { commits: [harness, stray], paths: ["bench"] },
+        });
+        expect(refused.envelope.ok).toBe(false);
+        expect(refused.envelope.error?.message).toContain("README");
+        expect(refused.envelope.error?.message).not.toContain("bench/more.sh");
+
+        const before = (yield* recorded(world, runId)).length;
+        const prepared = yield* measuring(
+          world,
+          extra,
+          runId,
+          base,
+          {
             ...planOf(harness, "bench.sh", ran),
-            harness: { commits: [harness, stray], paths: ["bench"] },
-          });
-          expect(refused.envelope.ok).toBe(false);
-          expect(refused.envelope.error?.message).toContain("README");
-          expect(refused.envelope.error?.message).not.toContain("bench/more.sh");
-
-          const before = (yield* recorded(world, runId)).length;
-          const prepared = yield* measuring(
-            world,
-            extra,
-            runId,
-            base,
-            {
-              ...planOf(harness, "bench.sh", ran),
-              prepare: {
-                executable: "sh",
-                argv: ["-c", "echo preparing $(cat value); test $(cat value) != 10"],
-              },
+            prepare: {
+              executable: "sh",
+              argv: ["-c", "echo preparing $(cat value); test $(cat value) != 10"],
             },
-            "calibration",
-            "a prepare step",
-          );
-          expect(prepared.envelope.ok).toBe(true);
-          const failed = (yield* recorded(world, runId)).at(-1)!;
-          expect((yield* recorded(world, runId)).length).toBe(before + 1);
-          expect(failed.result).toMatchObject({ _tag: "Failed", tree: "base", stage: "prepare" });
-          expect(failed.prepare[0]?.output).toContain("preparing 10");
-          yield* stopHost(world.state);
-        }),
-      ["asks.workflow.ts"],
-    ),
-  240_000,
-);
+          },
+          "calibration",
+          "a prepare step",
+        );
+        expect(prepared.envelope.ok).toBe(true);
+        const failed = (yield* recorded(world, runId)).at(-1)!;
+        expect((yield* recorded(world, runId)).length).toBe(before + 1);
+        expect(failed.result).toMatchObject({ _tag: "Failed", tree: "base", stage: "prepare" });
+        expect(failed.prepare[0]?.output).toContain("preparing 10");
+        yield* stopHost(world.state);
+      }),
+    ["asks.workflow.ts"],
+  ));
 
-test(
-  "one Measurement holds the Machine while the next waits on its card, a Stop ends a wait, and a wait for memory is recorded",
-  () =>
-    proves(
-      "collie-measure-machine-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const proc = `${world.home}/proc`;
-          const memory = (availableGiB: number) =>
-            Effect.gen(function* () {
-              yield* fs.makeDirectory(proc, { recursive: true });
-              yield* fs.writeFileString(
-                `${proc}/meminfo`,
-                `MemTotal: ${100 * 1048576} kB\nMemAvailable: ${availableGiB * 1048576} kB\n`,
-              );
-            }).pipe(Effect.orDie);
-          yield* memory(50);
-          const extra = { COLLIE_PROC: proc, COLLIE_MEMORY_EVERY: "100 millis" };
-          const { base, harness } = yield* project(world);
-          const ran = `${world.home}/ran`;
-          const gate = `${world.home}/gate`;
-          const gated = planOf(harness, "gate.sh", ran, {}, [gate]);
-          const [holder, waiter, stopped] = [
-            yield* asking(world, extra),
-            yield* asking(world, extra),
-            yield* asking(world, extra),
-          ];
-          const shown = (runId: string) =>
-            collie(world, ["run", "show", runId], extra).pipe(
-              Effect.map((one) =>
-                flow(Schema.decodeUnknownResult(Shown), Result.getOrThrow)(one.envelope.data),
-              ),
+test("one Measurement holds the Machine while the next waits on its card, a Stop ends a wait, and a wait for memory is recorded", () =>
+  proves(
+    "collie-measure-machine-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const proc = `${world.home}/proc`;
+        const memory = (availableGiB: number) =>
+          Effect.gen(function* () {
+            yield* fs.makeDirectory(proc, { recursive: true });
+            yield* fs.writeFileString(
+              `${proc}/meminfo`,
+              `MemTotal: ${100 * 1048576} kB\nMemAvailable: ${availableGiB * 1048576} kB\n`,
             );
-
-          const holding = yield* Effect.forkChild(measuring(world, extra, holder, base, gated));
-          yield* until(
-            () => linesOf(world, ran),
-            (lines) => lines.length > 0,
-          );
-          const waiting = yield* Effect.forkChild(measuring(world, extra, waiter, base, gated));
-          const ending = yield* Effect.forkChild(measuring(world, extra, stopped, base, gated));
-          for (const runId of [waiter, stopped])
-            expect(
-              (yield* until(
-                () => shown(runId),
-                (one) => one.run.awaiting !== null,
-              )).run.awaiting?.on,
-            ).toContain(`Measurement ${holder}-measurement-`);
-
-          yield* collie(world, ["run", "stop", stopped], extra);
-          const ended = yield* Fiber.join(ending);
-          expect(ended.envelope.ok).toBe(false);
-          expect(ended.envelope.error?.code).toBe("invalid_state");
-          expect((yield* shown(stopped)).run.awaiting).toBeNull();
-          expect(yield* recorded(world, stopped)).toEqual([]);
-
-          yield* fs.writeFileString(gate, "").pipe(Effect.orDie);
-          expect((yield* Fiber.join(holding)).envelope.ok).toBe(true);
-          expect((yield* Fiber.join(waiting)).envelope.ok).toBe(true);
-          const [held] = yield* recorded(world, holder);
-          const [after] = yield* recorded(world, waiter);
-          expect(after?.waited.machine).toEqual([held!.id]);
-          expect(epochMs(after!.started)).toBeGreaterThanOrEqual(epochMs(held!.at));
-          expect((yield* shown(waiter)).run.awaiting).toBeNull();
-
-          yield* memory(2);
-          const short = yield* Effect.forkChild(
-            measuring(
-              world,
-              extra,
-              waiter,
-              base,
-              planOf(harness, "bench.sh", ran),
-              "calibration",
-              "an ungated benchmark",
+          }).pipe(Effect.orDie);
+        yield* memory(50);
+        const extra = { COLLIE_PROC: proc, COLLIE_MEMORY_EVERY: "100 millis" };
+        const { base, harness } = yield* project(world);
+        const ran = `${world.home}/ran`;
+        const gate = `${world.home}/gate`;
+        const gated = planOf(harness, "gate.sh", ran, {}, [gate]);
+        const [holder, waiter, stopped] = [
+          yield* asking(world, extra),
+          yield* asking(world, extra),
+          yield* asking(world, extra),
+        ];
+        const shown = (runId: string) =>
+          collie(world, ["run", "show", runId], extra).pipe(
+            Effect.map((one) =>
+              flow(Schema.decodeUnknownResult(Shown), Result.getOrThrow)(one.envelope.data),
             ),
           );
-          yield* until(
-            () =>
-              hostRecords(world.state, memoryWaitOf(waiter)).pipe(Effect.orElseSucceed(() => null)),
-            (one) => one !== null,
-          );
-          expect((yield* recorded(world, waiter)).length).toBe(1);
-          yield* memory(50);
-          expect((yield* Fiber.join(short)).envelope.ok).toBe(true);
-          expect((yield* recorded(world, waiter)).at(-1)?.waited.memory).toBe(true);
-          yield* stopHost(world.state);
-        }),
-      ["asks.workflow.ts"],
-    ),
-  240_000,
-);
 
-test(
-  "a candidate without the harness is measured with the harness applied in a scratch tree, and its checkout is left as it was; one that carries it is measured in place",
-  () =>
-    proves(
-      "collie-measure-cleaned-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const extra = {};
-          const { base, harness, product, commit } = yield* project(world);
-          const ran = `${world.home}/ran`;
-          const plan = planOf(harness, "bench.sh", ran);
-          const runId = yield* asking(world, extra);
-
-          expect((yield* measuring(world, extra, runId, base, plan, "cycle 1")).envelope.ok).toBe(
-            true,
-          );
-          const [inPlace] = yield* recorded(world, runId);
-          expect(inPlace!.candidate.head_sha).toBe(product);
-          expect(inPlace!.candidate.harness_applied).toBeUndefined();
+        const holding = yield* Effect.forkChild(measuring(world, extra, holder, base, gated));
+        yield* until(
+          () => linesOf(world, ran),
+          (lines) => lines.length > 0,
+        );
+        const waiting = yield* Effect.forkChild(measuring(world, extra, waiter, base, gated));
+        const ending = yield* Effect.forkChild(measuring(world, extra, stopped, base, gated));
+        for (const runId of [waiter, stopped])
           expect(
-            Arr.filter(yield* linesOf(world, ran), (dir) => dir === world.project).length,
-          ).toBe(3);
+            (yield* until(
+              () => shown(runId),
+              (one) => one.run.awaiting !== null,
+            )).run.awaiting?.on,
+          ).toContain(`Measurement ${holder}-measurement-`);
 
-          yield* exec(["git", "rm", "-rq", "bench"], { cwd: world.project });
-          const cleaned = yield* commit("cleanup");
-          const status = () =>
-            Effect.map(
-              exec(["git", "status", "--porcelain", "--untracked-files=all"], {
-                cwd: world.project,
-              }),
-              (got) => got.stdout,
-            );
-          const before = yield* linesOf(world, ran);
-          const answered = yield* measuring(world, extra, runId, base, plan, "final");
-          expect(answered.envelope.error).toBeUndefined();
-          const measured = (yield* recorded(world, runId)).at(-1)!;
-          expect(measured.pass).toBe("final");
-          expect(measured.candidate.cwd).toBe(world.project);
-          expect(measured.candidate.head_sha).toBe(cleaned);
-          expect(verdictOf(measured, "bench.counter")).toBe("gain");
-          expect(
-            Arr.map(
-              Arr.filter(measured.samples, (one) => !one.warmup),
-              (one) => [one.tree, one.readings["bench.counter"]],
-            ),
-          ).toEqual([
-            ["base", 10],
-            ["candidate", 7],
-            ["candidate", 7],
-            ["base", 10],
-          ]);
-          expect(measured.candidate.harness_applied).toEqual([harness]);
-          const sampled = Arr.drop(yield* linesOf(world, ran), before.length);
-          const scratch = Arr.filter(sampled, (dir) => dir !== measured.base.cwd);
-          expect(scratch).toHaveLength(3);
-          expect(new Set(scratch).size).toBe(1);
-          expect(scratch[0]).not.toBe(world.project);
-          expect(
-            Str.trim((yield* exec(["git", "rev-parse", "HEAD~1"], { cwd: scratch[0]! })).stdout),
-          ).toBe(cleaned);
+        yield* collie(world, ["run", "stop", stopped], extra);
+        const ended = yield* Fiber.join(ending);
+        expect(ended.envelope.ok).toBe(false);
+        expect(ended.envelope.error?.code).toBe("invalid_state");
+        expect((yield* shown(stopped)).run.awaiting).toBeNull();
+        expect(yield* recorded(world, stopped)).toEqual([]);
 
-          expect(
-            Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd: world.project })).stdout),
-          ).toBe(cleaned);
-          expect(yield* status()).toBe("");
-          expect(yield* fs.exists(`${world.project}/bench`)).toBe(false);
+        yield* fs.writeFileString(gate, "").pipe(Effect.orDie);
+        expect((yield* Fiber.join(holding)).envelope.ok).toBe(true);
+        expect((yield* Fiber.join(waiting)).envelope.ok).toBe(true);
+        const [held] = yield* recorded(world, holder);
+        const [after] = yield* recorded(world, waiter);
+        expect(after?.waited.machine).toEqual([held!.id]);
+        expect(epochMs(after!.started)).toBeGreaterThanOrEqual(epochMs(held!.at));
+        expect((yield* shown(waiter)).run.awaiting).toBeNull();
 
-          yield* fs.writeFileString(`${world.project}/value`, "6\n").pipe(Effect.orDie);
-          const dirty = yield* measuring(world, extra, runId, base, plan, "final");
-          expect(dirty.envelope.ok).toBe(false);
-          expect(dirty.envelope.error?.message).toContain("uncommitted");
-          yield* exec(["git", "checkout", "--", "value"], { cwd: world.project });
-
-          const again = yield* measuring(world, extra, runId, base, plan, "final");
-          expect(
-            yield* Schema.decodeUnknownEffect(Answered)(again.envelope.data).pipe(Effect.orDie),
-          ).toEqual({ ran: false, measurement: expect.objectContaining({ id: measured.id }) });
-
-          yield* exec(["git", "checkout", "-q", product], { cwd: world.project });
-          const partly = yield* measuring(
+        yield* memory(2);
+        const short = yield* Effect.forkChild(
+          measuring(
             world,
             extra,
-            runId,
+            waiter,
             base,
-            { ...plan, harness: { commits: [harness], paths: ["bench", "tools"] } },
-            "final",
-            "a second harness path",
+            planOf(harness, "bench.sh", ran),
+            "calibration",
+            "an ungated benchmark",
+          ),
+        );
+        yield* until(
+          () =>
+            hostRecords(world.state, memoryWaitOf(waiter)).pipe(Effect.orElseSucceed(() => null)),
+          (one) => one !== null,
+        );
+        expect((yield* recorded(world, waiter)).length).toBe(1);
+        yield* memory(50);
+        expect((yield* Fiber.join(short)).envelope.ok).toBe(true);
+        expect((yield* recorded(world, waiter)).at(-1)?.waited.memory).toBe(true);
+        yield* stopHost(world.state);
+      }),
+    ["asks.workflow.ts"],
+  ));
+
+test("a candidate without the harness is measured with the harness applied in a scratch tree, and its checkout is left as it was; one that carries it is measured in place", () =>
+  proves(
+    "collie-measure-cleaned-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const extra = {};
+        const { base, harness, product, commit } = yield* project(world);
+        const ran = `${world.home}/ran`;
+        const plan = planOf(harness, "bench.sh", ran);
+        const runId = yield* asking(world, extra);
+
+        expect((yield* measuring(world, extra, runId, base, plan, "cycle 1")).envelope.ok).toBe(
+          true,
+        );
+        const [inPlace] = yield* recorded(world, runId);
+        expect(inPlace!.candidate.head_sha).toBe(product);
+        expect(inPlace!.candidate.harness_applied).toBeUndefined();
+        expect(Arr.filter(yield* linesOf(world, ran), (dir) => dir === world.project).length).toBe(
+          3,
+        );
+
+        yield* exec(["git", "rm", "-rq", "bench"], { cwd: world.project });
+        const cleaned = yield* commit("cleanup");
+        const status = () =>
+          Effect.map(
+            exec(["git", "status", "--porcelain", "--untracked-files=all"], {
+              cwd: world.project,
+            }),
+            (got) => got.stdout,
           );
-          expect(partly.envelope.ok).toBe(false);
-          expect(partly.envelope.error?.message).toContain("tools");
-          yield* stopHost(world.state);
-        }),
-      ["asks.workflow.ts"],
-    ),
-  240_000,
-);
+        const before = yield* linesOf(world, ran);
+        const answered = yield* measuring(world, extra, runId, base, plan, "final");
+        expect(answered.envelope.error).toBeUndefined();
+        const measured = (yield* recorded(world, runId)).at(-1)!;
+        expect(measured.pass).toBe("final");
+        expect(measured.candidate.cwd).toBe(world.project);
+        expect(measured.candidate.head_sha).toBe(cleaned);
+        expect(verdictOf(measured, "bench.counter")).toBe("gain");
+        expect(
+          Arr.map(
+            Arr.filter(measured.samples, (one) => !one.warmup),
+            (one) => [one.tree, one.readings["bench.counter"]],
+          ),
+        ).toEqual([
+          ["base", 10],
+          ["candidate", 7],
+          ["candidate", 7],
+          ["base", 10],
+        ]);
+        expect(measured.candidate.harness_applied).toEqual([harness]);
+        const sampled = Arr.drop(yield* linesOf(world, ran), before.length);
+        const scratch = Arr.filter(sampled, (dir) => dir !== measured.base.cwd);
+        expect(scratch).toHaveLength(3);
+        expect(new Set(scratch).size).toBe(1);
+        expect(scratch[0]).not.toBe(world.project);
+        expect(
+          Str.trim((yield* exec(["git", "rev-parse", "HEAD~1"], { cwd: scratch[0]! })).stdout),
+        ).toBe(cleaned);
+
+        expect(
+          Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd: world.project })).stdout),
+        ).toBe(cleaned);
+        expect(yield* status()).toBe("");
+        expect(yield* fs.exists(`${world.project}/bench`)).toBe(false);
+
+        yield* fs.writeFileString(`${world.project}/value`, "6\n").pipe(Effect.orDie);
+        const dirty = yield* measuring(world, extra, runId, base, plan, "final");
+        expect(dirty.envelope.ok).toBe(false);
+        expect(dirty.envelope.error?.message).toContain("uncommitted");
+        yield* exec(["git", "checkout", "--", "value"], { cwd: world.project });
+
+        const again = yield* measuring(world, extra, runId, base, plan, "final");
+        expect(
+          yield* Schema.decodeUnknownEffect(Answered)(again.envelope.data).pipe(Effect.orDie),
+        ).toEqual({ ran: false, measurement: expect.objectContaining({ id: measured.id }) });
+
+        yield* exec(["git", "checkout", "-q", product], { cwd: world.project });
+        const partly = yield* measuring(
+          world,
+          extra,
+          runId,
+          base,
+          { ...plan, harness: { commits: [harness], paths: ["bench", "tools"] } },
+          "final",
+          "a second harness path",
+        );
+        expect(partly.envelope.ok).toBe(false);
+        expect(partly.envelope.error?.message).toContain("tools");
+        yield* stopHost(world.state);
+      }),
+    ["asks.workflow.ts"],
+  ));

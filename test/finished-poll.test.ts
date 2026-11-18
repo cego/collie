@@ -218,162 +218,146 @@ test("Run listings and related views given a reader still take intent and displa
     ),
   ));
 
-test(
-  "a completed Run is polled at most once across two listings, and its records are read on each",
-  () =>
-    runEffect(
-      hosted(
-        Effect.gen(function* () {
-          const registry = yield* Registry;
-          const quiet = yield* loaded("quiet");
-          const run = yield* started(quiet, "r1", {});
+test("a completed Run is polled at most once across two listings, and its records are read on each", () =>
+  runEffect(
+    hosted(
+      Effect.gen(function* () {
+        const registry = yield* Registry;
+        const quiet = yield* loaded("quiet");
+        const run = yield* started(quiet, "r1", {});
+        yield* settled(run.runId, "complete");
+        polls.delete(run.execution);
+
+        const first = Option.getOrUndefined(
+          Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
+        );
+        expect(first?.report).toBeUndefined();
+        expect(first?.controls).toEqual([]);
+
+        yield* (yield* Store).reported(run.runId, REPORT);
+        yield* RunRecords.use((records) =>
+          records.setControl(HOLD, run.runId, "2026-09-14T10:00:00Z"),
+        );
+        const second = Option.getOrUndefined(
+          Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
+        );
+
+        expect(polls.get(run.execution) ?? 0).toBeLessThanOrEqual(1);
+        expect(second?.status.status).toBe("complete");
+        expect(second?.report?.note).toBe("done");
+        expect(second?.controls).toEqual([HOLD]);
+      }),
+    ),
+  ));
+
+test("a failed Run is polled at most once, and says the claim it kept only while the file is there", () =>
+  runEffect(
+    hosted(
+      Effect.gen(function* () {
+        const registry = yield* Registry;
+        const retains = yield* loaded("retains");
+        const run = yield* started(retains, "r1", { note: "half-merged" });
+        yield* settled(run.runId, "failed");
+        polls.delete(run.execution);
+        const claim = `${runDir(dir(), run.runId)}/helle.json`;
+
+        yield* write(claim, '{"slug":"project","claim":"mine"}');
+        const held = Option.getOrUndefined(
+          Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
+        );
+        expect(held?.diagnostic).toContain("claim on project retained; recovery required");
+
+        yield* FileSystem.FileSystem.pipe(Effect.flatMap((fs) => fs.remove(claim)));
+        const gone = Option.getOrUndefined(
+          Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
+        );
+        expect(gone?.status.status).toBe("failed");
+        expect(gone?.diagnostic).toBeNull();
+        expect(polls.get(run.execution) ?? 0).toBeLessThanOrEqual(1);
+      }),
+    ),
+  ));
+
+test("a suspended Run is not polled again while the engine writes nothing for it, and reads complete once it finishes", () =>
+  runEffect(
+    hosted(
+      Effect.gen(function* () {
+        const registry = yield* Registry;
+        const echo = yield* loaded("echo");
+        const run = yield* started(echo, "r1", { text: "hi", times: 1 });
+        yield* settled(run.runId, "suspended");
+        polls.delete(run.execution);
+
+        yield* registry.views(null);
+        yield* registry.views(null);
+        expect(polls.get(run.execution)).toBeUndefined();
+
+        yield* registry.answer({
+          runId: run.runId,
+          decision: "keep",
+          value: "yes",
+          request: "a1",
+        });
+        const after = yield* until(
+          () => registry.views(null),
+          (views) => Arr.some(views, (view) => view.status.status === "complete"),
+        );
+        expect(
+          Option.getOrUndefined(Arr.findFirst(after, (view) => view.runId === run.runId))?.status
+            .status,
+        ).toBe("complete");
+      }),
+    ),
+  ));
+
+test("a listing keeps every Run, finished ones included, in the store's order", () =>
+  runEffect(
+    hosted(
+      Effect.gen(function* () {
+        const registry = yield* Registry;
+        const store = yield* Store;
+        yield* writeTask({
+          id: "task-1",
+          workspace: null,
+          label: "Project | Picker",
+          cwd: rig.projectDir,
+          created_at: "2026-10-15T00:00:00.000Z",
+        });
+        const quiet = yield* loaded("quiet");
+        const runs: string[] = [];
+        for (const [at, task] of [null, "task-1", null, "task-1"].entries()) {
+          const run = yield* started(quiet, `r${at}`, {}, task);
           yield* settled(run.runId, "complete");
-          polls.delete(run.execution);
+          runs.push(run.runId);
+        }
 
-          const first = Option.getOrUndefined(
-            Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
-          );
-          expect(first?.report).toBeUndefined();
-          expect(first?.controls).toEqual([]);
-
-          yield* (yield* Store).reported(run.runId, REPORT);
-          yield* RunRecords.use((records) =>
-            records.setControl(HOLD, run.runId, "2026-09-14T10:00:00Z"),
-          );
-          const second = Option.getOrUndefined(
-            Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
-          );
-
-          expect(polls.get(run.execution) ?? 0).toBeLessThanOrEqual(1);
-          expect(second?.status.status).toBe("complete");
-          expect(second?.report?.note).toBe("done");
-          expect(second?.controls).toEqual([HOLD]);
-        }),
-      ),
+        const rows = yield* store.runs;
+        const all = yield* registry.views(null);
+        expect(Arr.map(all, (view) => view.runId)).toEqual(Arr.map(rows, (row) => row.run));
+        expect(
+          Arr.sortWith(
+            Arr.map(all, (view) => view.runId),
+            (value) => value,
+            (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
+          ),
+        ).toEqual(
+          Arr.sortWith(
+            runs,
+            (value) => value,
+            (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
+          ),
+        );
+        const ofTask = yield* registry.views("task-1");
+        expect(Arr.map(ofTask, (view) => view.runId)).toEqual(
+          Arr.map(
+            Arr.filter(rows, (row) => row.task === "task-1"),
+            (row) => row.run,
+          ),
+        );
+        expect(ofTask).toHaveLength(2);
+      }),
     ),
-  120_000,
-);
-
-test(
-  "a failed Run is polled at most once, and says the claim it kept only while the file is there",
-  () =>
-    runEffect(
-      hosted(
-        Effect.gen(function* () {
-          const registry = yield* Registry;
-          const retains = yield* loaded("retains");
-          const run = yield* started(retains, "r1", { note: "half-merged" });
-          yield* settled(run.runId, "failed");
-          polls.delete(run.execution);
-          const claim = `${runDir(dir(), run.runId)}/helle.json`;
-
-          yield* write(claim, '{"slug":"project","claim":"mine"}');
-          const held = Option.getOrUndefined(
-            Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
-          );
-          expect(held?.diagnostic).toContain("claim on project retained; recovery required");
-
-          yield* FileSystem.FileSystem.pipe(Effect.flatMap((fs) => fs.remove(claim)));
-          const gone = Option.getOrUndefined(
-            Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
-          );
-          expect(gone?.status.status).toBe("failed");
-          expect(gone?.diagnostic).toBeNull();
-          expect(polls.get(run.execution) ?? 0).toBeLessThanOrEqual(1);
-        }),
-      ),
-    ),
-  120_000,
-);
-
-test(
-  "a suspended Run is not polled again while the engine writes nothing for it, and reads complete once it finishes",
-  () =>
-    runEffect(
-      hosted(
-        Effect.gen(function* () {
-          const registry = yield* Registry;
-          const echo = yield* loaded("echo");
-          const run = yield* started(echo, "r1", { text: "hi", times: 1 });
-          yield* settled(run.runId, "suspended");
-          polls.delete(run.execution);
-
-          yield* registry.views(null);
-          yield* registry.views(null);
-          expect(polls.get(run.execution)).toBeUndefined();
-
-          yield* registry.answer({
-            runId: run.runId,
-            decision: "keep",
-            value: "yes",
-            request: "a1",
-          });
-          const after = yield* until(
-            () => registry.views(null),
-            (views) => Arr.some(views, (view) => view.status.status === "complete"),
-          );
-          expect(
-            Option.getOrUndefined(Arr.findFirst(after, (view) => view.runId === run.runId))?.status
-              .status,
-          ).toBe("complete");
-        }),
-      ),
-    ),
-  120_000,
-);
-
-test(
-  "a listing keeps every Run, finished ones included, in the store's order",
-  () =>
-    runEffect(
-      hosted(
-        Effect.gen(function* () {
-          const registry = yield* Registry;
-          const store = yield* Store;
-          yield* writeTask({
-            id: "task-1",
-            workspace: null,
-            label: "Project | Picker",
-            cwd: rig.projectDir,
-            created_at: "2026-10-15T00:00:00.000Z",
-          });
-          const quiet = yield* loaded("quiet");
-          const runs: string[] = [];
-          for (const [at, task] of [null, "task-1", null, "task-1"].entries()) {
-            const run = yield* started(quiet, `r${at}`, {}, task);
-            yield* settled(run.runId, "complete");
-            runs.push(run.runId);
-          }
-
-          const rows = yield* store.runs;
-          const all = yield* registry.views(null);
-          expect(Arr.map(all, (view) => view.runId)).toEqual(Arr.map(rows, (row) => row.run));
-          expect(
-            Arr.sortWith(
-              Arr.map(all, (view) => view.runId),
-              (value) => value,
-              (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
-            ),
-          ).toEqual(
-            Arr.sortWith(
-              runs,
-              (value) => value,
-              (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
-            ),
-          );
-          const ofTask = yield* registry.views("task-1");
-          expect(Arr.map(ofTask, (view) => view.runId)).toEqual(
-            Arr.map(
-              Arr.filter(rows, (row) => row.task === "task-1"),
-              (row) => row.run,
-            ),
-          );
-          expect(ofTask).toHaveLength(2);
-        }),
-      ),
-    ),
-  120_000,
-);
+  ));
 
 let built: Array<string | null>;
 
@@ -408,38 +392,34 @@ const asker: RequestedBy = {
   machine: { installation: "this-machine", name: "here" },
 };
 
-test(
-  "the reports sweep builds a view only for the Run an agent started, and never delivers its closed report again",
-  () =>
-    runEffect(
-      hosted(
-        Effect.gen(function* () {
-          const quiet = yield* loaded("quiet");
-          const asked = yield* started(quiet, "r0", {}, null, asker);
-          yield* settled(asked.runId, "complete");
-          for (const request of ["r1", "r2"])
-            yield* settled((yield* started(quiet, request, {})).runId, "complete");
-          const store = yield* Store;
-          yield* store.reported(asked.runId, REPORT);
-          const waiting = yield* started(
-            yield* loaded("asks"),
-            "waiting",
-            { goal: "still going" },
-            null,
-            asker,
-          );
-          yield* settled(waiting.runId, "suspended");
+test("the reports sweep builds a view only for the Run an agent started, and never delivers its closed report again", () =>
+  runEffect(
+    hosted(
+      Effect.gen(function* () {
+        const quiet = yield* loaded("quiet");
+        const asked = yield* started(quiet, "r0", {}, null, asker);
+        yield* settled(asked.runId, "complete");
+        for (const request of ["r1", "r2"])
+          yield* settled((yield* started(quiet, request, {})).runId, "complete");
+        const store = yield* Store;
+        yield* store.reported(asked.runId, REPORT);
+        const waiting = yield* started(
+          yield* loaded("asks"),
+          "waiting",
+          { goal: "still going" },
+          null,
+          asker,
+        );
+        yield* settled(waiting.runId, "suspended");
 
-          yield* sweeping;
-          yield* until(
-            () => Effect.succeed(built),
-            (views) => Arr.filter(views, (run) => run === waiting.runId).length >= 2,
-          );
+        yield* sweeping;
+        yield* until(
+          () => Effect.succeed(built),
+          (views) => Arr.filter(views, (run) => run === waiting.runId).length >= 2,
+        );
 
-          expect(new Set(built)).toEqual(new Set([waiting.runId]));
-          expect((yield* (yield* Registry).view(asked.runId))?.report).toEqual(REPORT);
-        }),
-      ),
+        expect(new Set(built)).toEqual(new Set([waiting.runId]));
+        expect((yield* (yield* Registry).view(asked.runId))?.report).toEqual(REPORT);
+      }),
     ),
-  120_000,
-);
+  ));

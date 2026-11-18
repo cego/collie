@@ -1954,56 +1954,52 @@ test("the Home board draws its sections in the board's one order", () =>
     }),
   ));
 
-test(
-  "the Home draws a card the host serves, with no board built here",
-  () =>
-    proves(
-      "collie-home-drawn-",
-      (world, core) =>
-        Effect.gen(function* () {
-          const started = yield* collie(world, [
-            "run",
-            "start",
-            "agent",
-            "--input",
-            "target=worktree",
-            "--input",
-            `cwd=${world.project}`,
-            "--input",
-            "skip=false",
-          ]);
-          expect(started.envelope.ok).toBe(true);
-          yield* blockedAtItsPrompt(core);
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const home = homeState(
-            {
-              herdr: new Herdr(env),
-              ...scopeFor(env.cwd),
-              stateDir: env.stateDir,
-              userDir: env.userDir,
-              pluginRoot: env.pluginRoot,
-              tasksOf: yield* followBoard(env),
-            },
-            env,
-          );
-          const state = yield* home.load(focus()).pipe(
-            Effect.repeat({
-              until: (loaded) => loaded.tasks[0]?.state === "blocked",
-              schedule: Schedule.spaced("250 millis"),
-              times: 40,
-            }),
-            Effect.provide(recordsReadLayer(env.stateDir)),
-          );
-          const app = yield* mount(state);
-          const said = app.said();
-          expect(said).toContain("One task is waiting on you.");
-          expect(said).toContain("Needs you");
-          expect(said).toContain("Waiting for you in");
-        }),
-      ["agent.workflow.ts", "notes.md"],
-    ),
-  120_000,
-);
+test("the Home draws a card the host serves, with no board built here", () =>
+  proves(
+    "collie-home-drawn-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const started = yield* collie(world, [
+          "run",
+          "start",
+          "agent",
+          "--input",
+          "target=worktree",
+          "--input",
+          `cwd=${world.project}`,
+          "--input",
+          "skip=false",
+        ]);
+        expect(started.envelope.ok).toBe(true);
+        yield* blockedAtItsPrompt(core);
+        const env = yield* currentEnv.pipe(Effect.orDie);
+        const home = homeState(
+          {
+            herdr: new Herdr(env),
+            ...scopeFor(env.cwd),
+            stateDir: env.stateDir,
+            userDir: env.userDir,
+            pluginRoot: env.pluginRoot,
+            tasksOf: yield* followBoard(env),
+          },
+          env,
+        );
+        const state = yield* home.load(focus()).pipe(
+          Effect.repeat({
+            until: (loaded) => loaded.tasks[0]?.state === "blocked",
+            schedule: Schedule.spaced("250 millis"),
+            times: 40,
+          }),
+          Effect.provide(recordsReadLayer(env.stateDir)),
+        );
+        const app = yield* mount(state);
+        const said = app.said();
+        expect(said).toContain("One task is waiting on you.");
+        expect(said).toContain("Needs you");
+        expect(said).toContain("Waiting for you in");
+      }),
+    ["agent.workflow.ts", "notes.md"],
+  ));
 
 test("a newer release is said in the board's header, with the command", () =>
   runEffect(

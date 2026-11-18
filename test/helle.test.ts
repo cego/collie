@@ -1448,79 +1448,64 @@ const giveBack = (state: string, runId: string) =>
     );
   });
 
-test(
-  "a claim through Desktop's Helle tool leaves a stopped Run's record, so its give-back releases none of it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { state, dir, runId, said } = yield* claimedThroughDesktop(
-          "collie-helle-claimed-",
-          "happytiger",
-        );
-        expect(yield* fs.readFileString(`${dir}/helle.json`)).toBe(
-          `[{"slug":"spilnu","claim":"mine"}]`,
-        );
-        fake.calls = [];
-        expect(yield* giveBack(state, runId)).toEqual([]);
-        expect(fake.calls).toEqual(["POST /api/v1/projects/spilnu/release"]);
-        expect(said).toBe(
-          `Claimed happytiger in Helle: you hold it.\nvm-mk:${runId} will no longer give happytiger back.`,
-        );
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+test("a claim through Desktop's Helle tool leaves a stopped Run's record, so its give-back releases none of it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { state, dir, runId, said } = yield* claimedThroughDesktop(
+        "collie-helle-claimed-",
+        "happytiger",
+      );
+      expect(yield* fs.readFileString(`${dir}/helle.json`)).toBe(
+        `[{"slug":"spilnu","claim":"mine"}]`,
+      );
+      fake.calls = [];
+      expect(yield* giveBack(state, runId)).toEqual([]);
+      expect(fake.calls).toEqual(["POST /api/v1/projects/spilnu/release"]);
+      expect(said).toBe(
+        `Claimed happytiger in Helle: you hold it.\nvm-mk:${runId} will no longer give happytiger back.`,
+      );
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a claim of a project no Run recorded changes no Run's record",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { state, dir, said } = yield* claimedThroughDesktop(
-          "collie-helle-unrecorded-",
-          "docs",
-        );
-        expect(said).toBe("Claimed docs in Helle: you hold it.");
-        expect(yield* fs.readFileString(`${dir}/helle.json`)).toBe(RECORDED);
-        const asked = yield* readAudit(`${state}/helle`);
-        expect(Arr.map(asked, (line) => [line.operation, line.asked, line.result])).toEqual([
-          ["helle_claimed", { slug: "docs" }, []],
-        ]);
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+test("a claim of a project no Run recorded changes no Run's record", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { state, dir, said } = yield* claimedThroughDesktop("collie-helle-unrecorded-", "docs");
+      expect(said).toBe("Claimed docs in Helle: you hold it.");
+      expect(yield* fs.readFileString(`${dir}/helle.json`)).toBe(RECORDED);
+      const asked = yield* readAudit(`${state}/helle`);
+      expect(Arr.map(asked, (line) => [line.operation, line.asked, line.result])).toEqual([
+        ["helle_claimed", { slug: "docs" }, []],
+      ]);
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "dropping a claim from Runs' records is recorded as the chat that asked, on the host and the Run",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { state, dir, runId } = yield* claimedThroughDesktop(
-          "collie-helle-actor-",
-          "happytiger",
-        );
-        const [onHost] = yield* readAudit(`${state}/helle`);
-        expect(onHost).toMatchObject({
-          operation: "helle_claimed",
-          actor: { origin: "chat", conversation: "flock@mk-pc", said: SAID },
-          result: [runId],
-        });
-        const onRun = Arr.filter(
-          yield* readAudit(dir).pipe(Effect.provide(recordsReadLayer(state))),
-          (line) => line.operation === "helle_claimed",
-        );
-        const { requested: _, ...asked } = onHost!;
-        expect(onRun).toEqual([
-          {
-            ...asked,
-            at: onRun[0]!.at,
-            result: "happytiger",
-          },
-        ]);
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+test("dropping a claim from Runs' records is recorded as the chat that asked, on the host and the Run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { state, dir, runId } = yield* claimedThroughDesktop(
+        "collie-helle-actor-",
+        "happytiger",
+      );
+      const [onHost] = yield* readAudit(`${state}/helle`);
+      expect(onHost).toMatchObject({
+        operation: "helle_claimed",
+        actor: { origin: "chat", conversation: "flock@mk-pc", said: SAID },
+        result: [runId],
+      });
+      const onRun = Arr.filter(
+        yield* readAudit(dir).pipe(Effect.provide(recordsReadLayer(state))),
+        (line) => line.operation === "helle_claimed",
+      );
+      const { requested: _, ...asked } = onHost!;
+      expect(onRun).toEqual([
+        {
+          ...asked,
+          at: onRun[0]!.at,
+          result: "happytiger",
+        },
+      ]);
+    }).pipe(Effect.scoped),
+  ));

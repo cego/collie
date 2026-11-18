@@ -202,85 +202,71 @@ const blocker = (title: string) => ({
   detail: "it goes wrong when the list is empty",
 });
 
-test(
-  "three tickets are three pieces of work, in order, each told what the ones before it left",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* ticket("01-api.md", "Serve the thing");
-        yield* ticket("02-ui.md", "Show the thing");
-        yield* ticket("03-docs.md", "Say what it does");
-        yield* rig.queueOutputs([built("api"), built("ui"), built("docs")]);
+test("three tickets are three pieces of work, in order, each told what the ones before it left", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* ticket("01-api.md", "Serve the thing");
+      yield* ticket("02-ui.md", "Show the thing");
+      yield* ticket("03-docs.md", "Say what it does");
+      yield* rig.queueOutputs([built("api"), built("ui"), built("docs")]);
 
-        const result = yield* worked("r-three");
-        expect(said(result)).toBe(
-          "3 of 3: 01-api.md=api+02-ui.md=ui+03-docs.md=docs, 0 finding(s)",
-        );
-        expect(yield* starts()).toHaveLength(1);
-        const asked = yield* prompts();
-        expect(asked).toHaveLength(3);
-        const third = yield* promptFile("r-three", "03-docs.md");
-        expect(third).toContain("item 3 of 3");
-        expect(third).toContain("- 01-api.md — Serve the thing");
-        expect(third).toContain("    api");
-        expect(third).toContain("- 02-ui.md — Show the thing");
-        expect(yield* events(dir, "r-three")).toEqual([]);
-      }),
-    ),
-  120_000,
-);
+      const result = yield* worked("r-three");
+      expect(said(result)).toBe("3 of 3: 01-api.md=api+02-ui.md=ui+03-docs.md=docs, 0 finding(s)");
+      expect(yield* starts()).toHaveLength(1);
+      const asked = yield* prompts();
+      expect(asked).toHaveLength(3);
+      const third = yield* promptFile("r-three", "03-docs.md");
+      expect(third).toContain("item 3 of 3");
+      expect(third).toContain("- 01-api.md — Serve the thing");
+      expect(third).toContain("    api");
+      expect(third).toContain("- 02-ui.md — Show the thing");
+      expect(yield* events(dir, "r-three")).toEqual([]);
+    }),
+  ));
 
-test(
-  "findings do not stop the list: they are carried to the end, and the end asks a human",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* ticket("01-api.md", "Serve the thing");
-        yield* ticket("02-ui.md", "Show the thing");
-        yield* rig.queueOutputs([built("api", [blocker("empty list")]), built("ui")]);
+test("findings do not stop the list: they are carried to the end, and the end asks a human", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* ticket("01-api.md", "Serve the thing");
+      yield* ticket("02-ui.md", "Show the thing");
+      yield* rig.queueOutputs([built("api", [blocker("empty list")]), built("ui")]);
 
-        const asking = yield* parked("r-findings");
-        expect(Arr.map(asking, (row) => row.prompt)).toEqual(["Findings were raised. Carry on?"]);
-        expect(yield* prompts()).toHaveLength(2);
+      const asking = yield* parked("r-findings");
+      expect(Arr.map(asking, (row) => row.prompt)).toEqual(["Findings were raised. Carry on?"]);
+      expect(yield* prompts()).toHaveLength(2);
 
-        const done = yield* answered("r-findings", "yes");
-        expect(said(done)).toBe("2 of 2: 01-api.md=api+02-ui.md=ui, 1 finding(s)");
-        expect(yield* prompts()).toHaveLength(2);
-      }),
-    ),
-  120_000,
-);
+      const done = yield* answered("r-findings", "yes");
+      expect(said(done)).toBe("2 of 2: 01-api.md=api+02-ui.md=ui, 1 finding(s)");
+      expect(yield* prompts()).toHaveLength(2);
+    }),
+  ));
 
-test(
-  "a plan edited between attempts does what is left, and gives nobody else's result away",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* ticket("01-api.md", "Serve the thing");
-        yield* ticket("02-ui.md", "Show the thing");
-        yield* ticket("03-docs.md", "Say what it does");
-        yield* rig.queueOutputs([
-          built("api", [blocker("empty list")]),
-          built("ui"),
-          built("docs"),
-          built("late"),
-        ]);
-        yield* parked("r-edited");
-        expect(yield* prompts()).toHaveLength(3);
+test("a plan edited between attempts does what is left, and gives nobody else's result away", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* ticket("01-api.md", "Serve the thing");
+      yield* ticket("02-ui.md", "Show the thing");
+      yield* ticket("03-docs.md", "Say what it does");
+      yield* rig.queueOutputs([
+        built("api", [blocker("empty list")]),
+        built("ui"),
+        built("docs"),
+        built("late"),
+      ]);
+      yield* parked("r-edited");
+      expect(yield* prompts()).toHaveLength(3);
 
-        yield* ticket("04-late.md", "Think again");
-        yield* ticket("01-api.md", "Serve the thing", { blockedBy: "03" });
+      yield* ticket("04-late.md", "Think again");
+      yield* ticket("01-api.md", "Serve the thing", { blockedBy: "03" });
 
-        const done = yield* answered("r-edited", "yes");
-        expect(said(done)).toBe(
-          "4 of 4: 02-ui.md=ui+03-docs.md=docs+04-late.md=late+01-api.md=api, 1 finding(s)",
-        );
-        expect(yield* prompts()).toHaveLength(4);
-        expect(yield* starts()).toHaveLength(1);
-      }),
-    ),
-  120_000,
-);
+      const done = yield* answered("r-edited", "yes");
+      expect(said(done)).toBe(
+        "4 of 4: 02-ui.md=ui+03-docs.md=docs+04-late.md=late+01-api.md=api, 1 finding(s)",
+      );
+      expect(yield* prompts()).toHaveLength(4);
+      expect(yield* starts()).toHaveLength(1);
+    }),
+  ));
 
 test("a plan with no tickets in it is no work at all", () =>
   runEffect(
@@ -292,24 +278,20 @@ test("a plan with no tickets in it is no work at all", () =>
     }),
   ));
 
-test(
-  "a ticket nothing would prove is skipped with a reason, and no agent is opened for it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* ticket("01-api.md", "Serve the thing", { checks: "None" });
-        yield* ticket("02-ui.md", "Show the thing");
-        yield* rig.queueOutputs([built("ui")]);
+test("a ticket nothing would prove is skipped with a reason, and no agent is opened for it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* ticket("01-api.md", "Serve the thing", { checks: "None" });
+      yield* ticket("02-ui.md", "Show the thing");
+      yield* rig.queueOutputs([built("ui")]);
 
-        const result = yield* worked("r-skipped");
-        expect(said(result)).toBe("1 of 2: 02-ui.md=ui, 0 finding(s)");
-        expect(yield* events(dir, "r-skipped")).toEqual(["skipped 01-api.md: it names no checks"]);
-        expect(yield* prompts()).toHaveLength(1);
-        expect(yield* starts()).toHaveLength(1);
-      }),
-    ),
-  120_000,
-);
+      const result = yield* worked("r-skipped");
+      expect(said(result)).toBe("1 of 2: 02-ui.md=ui, 0 finding(s)");
+      expect(yield* events(dir, "r-skipped")).toEqual(["skipped 01-api.md: it names no checks"]);
+      expect(yield* prompts()).toHaveLength(1);
+      expect(yield* starts()).toHaveLength(1);
+    }),
+  ));
 
 const parkedAt = (runId: string, entry = "roster.workflow.ts") =>
   session(
@@ -342,70 +324,62 @@ const resumed = (runId: string, entry = "roster.workflow.ts") =>
     }),
   );
 
-test(
-  "an Output still unusable after its repair parks the list at its item, and a resume goes on from it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* ticket("01-api.md", "Serve the thing");
-        yield* ticket("02-ui.md", "Show the thing");
-        yield* ticket("03-docs.md", "Say what it does");
-        yield* rig.queueOutputs([
-          built("api"),
-          { verdict: "maybe" },
-          { verdict: "maybe" },
-          built("docs"),
-        ]);
+test("an Output still unusable after its repair parks the list at its item, and a resume goes on from it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* ticket("01-api.md", "Serve the thing");
+      yield* ticket("02-ui.md", "Show the thing");
+      yield* ticket("03-docs.md", "Say what it does");
+      yield* rig.queueOutputs([
+        built("api"),
+        { verdict: "maybe" },
+        { verdict: "maybe" },
+        built("docs"),
+      ]);
 
-        yield* parkedAt("r-unusable");
-        expect(yield* prompts()).toHaveLength(3);
-        const why = yield* hostRunRecords(() => dir).control(PARKED, "r-unusable");
-        expect(why).toContain(`${dir}/agents/r-unusable/02-ui.md.json`);
-        expect(toasts).toEqual([expect.stringMatching(/^request\|.* needs you\|/)]);
-        expect(toasts[0]).toEndWith(`|${why}`);
+      yield* parkedAt("r-unusable");
+      expect(yield* prompts()).toHaveLength(3);
+      const why = yield* hostRunRecords(() => dir).control(PARKED, "r-unusable");
+      expect(why).toContain(`${dir}/agents/r-unusable/02-ui.md.json`);
+      expect(toasts).toEqual([expect.stringMatching(/^request\|.* needs you\|/)]);
+      expect(toasts[0]).toEndWith(`|${why}`);
 
-        yield* fs.writeFileString(
-          `${dir}/agents/r-unusable/02-ui.md.json`,
-          `{"verdict":"clean","fixed":[{"title":"ui"}],"findings":[],"checks":[{"name":"test"}]}`,
-        );
-        const done = yield* resumed("r-unusable");
-        expect(said(done)).toBe("3 of 3: 01-api.md=api+02-ui.md=ui+03-docs.md=docs, 0 finding(s)");
-        expect(yield* prompts()).toHaveLength(4);
-        expect(yield* starts()).toHaveLength(1);
-      }),
-    ),
-  120_000,
-);
+      yield* fs.writeFileString(
+        `${dir}/agents/r-unusable/02-ui.md.json`,
+        `{"verdict":"clean","fixed":[{"title":"ui"}],"findings":[],"checks":[{"name":"test"}]}`,
+      );
+      const done = yield* resumed("r-unusable");
+      expect(said(done)).toBe("3 of 3: 01-api.md=api+02-ui.md=ui+03-docs.md=docs, 0 finding(s)");
+      expect(yield* prompts()).toHaveLength(4);
+      expect(yield* starts()).toHaveLength(1);
+    }),
+  ));
 
-test(
-  "the same list of work under a name that shares nothing with it does the same thing",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* ticket("01-api.md", "Serve the thing", { checks: "None" });
-        yield* ticket("02-ui.md", "Show the thing");
-        yield* rig.queueOutputs([
-          built("ui", [blocker("empty list")]),
-          built("ui", [blocker("empty list")]),
-        ]);
+test("the same list of work under a name that shares nothing with it does the same thing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* ticket("01-api.md", "Serve the thing", { checks: "None" });
+      yield* ticket("02-ui.md", "Show the thing");
+      yield* rig.queueOutputs([
+        built("ui", [blocker("empty list")]),
+        built("ui", [blocker("empty list")]),
+      ]);
 
-        const under = (entry: string, runId: string) =>
-          Effect.gen(function* () {
-            yield* parked(runId, entry);
-            const done = yield* answered(runId, "yes", entry);
-            return { said: said(done), events: yield* events(dir, runId) };
-          });
-        const roster = yield* under("roster.workflow.ts", "r-roster");
-        const sweep = yield* under("sweep.workflow.ts", "r-sweep");
+      const under = (entry: string, runId: string) =>
+        Effect.gen(function* () {
+          yield* parked(runId, entry);
+          const done = yield* answered(runId, "yes", entry);
+          return { said: said(done), events: yield* events(dir, runId) };
+        });
+      const roster = yield* under("roster.workflow.ts", "r-roster");
+      const sweep = yield* under("sweep.workflow.ts", "r-sweep");
 
-        expect(sweep).toEqual(roster);
-        expect(roster.said).toBe("1 of 2: 02-ui.md=ui, 1 finding(s)");
-        expect(roster.events).toEqual([
-          "skipped 01-api.md: it names no checks",
-          "skipped 01-api.md: it names no checks",
-        ]);
-      }),
-    ),
-  120_000,
-);
+      expect(sweep).toEqual(roster);
+      expect(roster.said).toBe("1 of 2: 02-ui.md=ui, 1 finding(s)");
+      expect(roster.events).toEqual([
+        "skipped 01-api.md: it names no checks",
+        "skipped 01-api.md: it names no checks",
+      ]);
+    }),
+  ));

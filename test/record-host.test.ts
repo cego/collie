@@ -56,103 +56,91 @@ const framesOf = (
 const isDone = (frame: Sent | null) =>
   frame !== null && frame._tag === undefined && frame.pending?.length === 0;
 
-test(
-  "a record's first frame is its Flow at a revision, and its diff and log tail come after",
-  () =>
-    proves(
-      "collie-record-first-",
-      (world) =>
-        Effect.gen(function* () {
-          const runId = yield* finished(world);
-          const frames = yield* (yield* framesOf(world, runId, { parts: true })).pipe(
-            Stream.takeUntil(isDone),
-            Stream.runCollect,
+test("a record's first frame is its Flow at a revision, and its diff and log tail come after", () =>
+  proves(
+    "collie-record-first-",
+    (world) =>
+      Effect.gen(function* () {
+        const runId = yield* finished(world);
+        const frames = yield* (yield* framesOf(world, runId, { parts: true })).pipe(
+          Stream.takeUntil(isDone),
+          Stream.runCollect,
+          Effect.timeout("30 seconds"),
+          Effect.orDie,
+        );
+        const [first, ...later] = frames;
+
+        expect(first?.flow).toBeDefined();
+        expect(first?.revision).toBeDefined();
+        expect(first?.diff ?? null).toBeNull();
+        expect(first?.tail ?? null).toBeNull();
+        expect(first?.pending).toEqual(expect.arrayContaining(["diff", "tail"]));
+        const tailed = Arr.findFirst(later, (one) => (one?.tail ?? null) !== null);
+        expect(tailed._tag === "Some" && tailed.value?.revision !== undefined).toBe(true);
+        const diffed = Arr.findFirst(later, (one) => !(one?.pending ?? []).includes("diff"));
+        expect(diffed._tag === "Some" && diffed.value?.revision !== undefined).toBe(true);
+      }),
+    ["plain.workflow.ts"],
+  ));
+
+test("a caller holding the current revision is told Unchanged; an older one, or another host's, is sent the record", () =>
+  proves(
+    "collie-record-resume-",
+    (world) =>
+      Effect.gen(function* () {
+        const runId = yield* finished(world);
+        const opened = (held: Revision) =>
+          framesOf(world, runId, { parts: true, held }).pipe(
+            Effect.flatMap(Stream.runHead),
+            Effect.map((head) => (head._tag === "Some" ? head.value : null)),
             Effect.timeout("30 seconds"),
             Effect.orDie,
           );
-          const [first, ...later] = frames;
+        const done = yield* (yield* framesOf(world, runId, { parts: true })).pipe(
+          Stream.filter(isDone),
+          Stream.runHead,
+          Effect.timeout("30 seconds"),
+          Effect.orDie,
+        );
+        const held = done._tag === "Some" ? done.value!.revision! : { epoch: "", seq: 0 };
 
-          expect(first?.flow).toBeDefined();
-          expect(first?.revision).toBeDefined();
-          expect(first?.diff ?? null).toBeNull();
-          expect(first?.tail ?? null).toBeNull();
-          expect(first?.pending).toEqual(expect.arrayContaining(["diff", "tail"]));
-          const tailed = Arr.findFirst(later, (one) => (one?.tail ?? null) !== null);
-          expect(tailed._tag === "Some" && tailed.value?.revision !== undefined).toBe(true);
-          const diffed = Arr.findFirst(later, (one) => !(one?.pending ?? []).includes("diff"));
-          expect(diffed._tag === "Some" && diffed.value?.revision !== undefined).toBe(true);
-        }),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+        const same = yield* opened(held);
+        const older = yield* opened({ ...held, seq: held.seq - 1 });
+        yield* stopHost(world.state);
+        yield* collie(world, ["run", "show", runId]);
+        const restarted = yield* opened(held);
 
-test(
-  "a caller holding the current revision is told Unchanged; an older one, or another host's, is sent the record",
-  () =>
-    proves(
-      "collie-record-resume-",
-      (world) =>
-        Effect.gen(function* () {
-          const runId = yield* finished(world);
-          const opened = (held: Revision) =>
-            framesOf(world, runId, { parts: true, held }).pipe(
-              Effect.flatMap(Stream.runHead),
-              Effect.map((head) => (head._tag === "Some" ? head.value : null)),
-              Effect.timeout("30 seconds"),
-              Effect.orDie,
-            );
-          const done = yield* (yield* framesOf(world, runId, { parts: true })).pipe(
-            Stream.filter(isDone),
-            Stream.runHead,
-            Effect.timeout("30 seconds"),
-            Effect.orDie,
-          );
-          const held = done._tag === "Some" ? done.value!.revision! : { epoch: "", seq: 0 };
+        expect(same).toEqual({ _tag: "Unchanged", revision: held });
+        expect(older?._tag).toBeUndefined();
+        expect(older?.flow).toBeDefined();
+        expect(older?.revision).toEqual(held);
+        expect(restarted?._tag).toBeUndefined();
+        expect(restarted?.flow).toBeDefined();
+        expect(restarted?.revision?.epoch).not.toBe(held.epoch);
+      }),
+    ["plain.workflow.ts"],
+  ));
 
-          const same = yield* opened(held);
-          const older = yield* opened({ ...held, seq: held.seq - 1 });
-          yield* stopHost(world.state);
-          yield* collie(world, ["run", "show", runId]);
-          const restarted = yield* opened(held);
-
-          expect(same).toEqual({ _tag: "Unchanged", revision: held });
-          expect(older?._tag).toBeUndefined();
-          expect(older?.flow).toBeDefined();
-          expect(older?.revision).toEqual(held);
-          expect(restarted?._tag).toBeUndefined();
-          expect(restarted?.flow).toBeDefined();
-          expect(restarted?.revision?.epoch).not.toBe(held.epoch);
-        }),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
-
-test(
-  "a caller that sends no revision fields is sent a record the base's schema decodes",
-  () =>
-    proves(
-      "collie-record-compat-",
-      (world) =>
-        Effect.gen(function* () {
-          const runId = yield* finished(world);
-          const first = yield* (yield* framesOf(world, runId, {})).pipe(
-            Stream.runHead,
-            Effect.timeout("30 seconds"),
-            Effect.orDie,
-          );
-          expect(first._tag).toBe("Some");
-          const sent = yield* Schema.encodeEffect(Schema.NullOr(RunDetail))(
-            // WARNING: an ask without `held` is answered with a record or null, never Unchanged.
-            first._tag === "Some" ? (first.value as RunDetail | null) : null,
-          ).pipe(Effect.orDie);
-          const decoded = yield* Schema.decodeEffect(Schema.NullOr(baseRunDetail), {
-            onExcessProperty: "error",
-          })(sent).pipe(Effect.exit);
-          expect(decoded._tag).toBe("Success");
-        }),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+test("a caller that sends no revision fields is sent a record the base's schema decodes", () =>
+  proves(
+    "collie-record-compat-",
+    (world) =>
+      Effect.gen(function* () {
+        const runId = yield* finished(world);
+        const first = yield* (yield* framesOf(world, runId, {})).pipe(
+          Stream.runHead,
+          Effect.timeout("30 seconds"),
+          Effect.orDie,
+        );
+        expect(first._tag).toBe("Some");
+        const sent = yield* Schema.encodeEffect(Schema.NullOr(RunDetail))(
+          // WARNING: an ask without `held` is answered with a record or null, never Unchanged.
+          first._tag === "Some" ? (first.value as RunDetail | null) : null,
+        ).pipe(Effect.orDie);
+        const decoded = yield* Schema.decodeEffect(Schema.NullOr(baseRunDetail), {
+          onExcessProperty: "error",
+        })(sent).pipe(Effect.exit);
+        expect(decoded._tag).toBe("Success");
+      }),
+    ["plain.workflow.ts"],
+  ));

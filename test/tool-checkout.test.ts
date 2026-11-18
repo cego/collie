@@ -66,56 +66,48 @@ const settled = Effect.fn("ToolCheckoutTest.settled")(function* (
   return { parent, child, worktree: `${world.home}/tool/worktrees/collie-try` };
 });
 
-test(
-  "a child works in the tool's worktree on its branch, which Collie did not make and never prunes",
-  () =>
-    proves(
-      "collie-tool-checkout-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const { parent, child, worktree } = yield* settled(world, "succeed");
+test("a child works in the tool's worktree on its branch, which Collie did not make and never prunes", () =>
+  proves(
+    "collie-tool-checkout-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { parent, child, worktree } = yield* settled(world, "succeed");
 
-          expect(parent?.status).toEqual({ status: "complete", value: worktree });
-          expect(child?.cwd).toBe(worktree);
-          expect(child?.worktree).toMatchObject({
-            path: worktree,
-            branch: "collie-try",
-            created_by_collie: false,
-          });
-          expect(yield* toolLog(world)).toEqual(["up", "down"]);
+        expect(parent?.status).toEqual({ status: "complete", value: worktree });
+        expect(child?.cwd).toBe(worktree);
+        expect(child?.worktree).toMatchObject({
+          path: worktree,
+          branch: "collie-try",
+          created_by_collie: false,
+        });
+        expect(yield* toolLog(world)).toEqual(["up", "down"]);
 
-          const listed = Listed((yield* collie(world, ["cleanup"])).envelope.data);
-          expect(
-            Arr.filter(listed.remove, (item) => pipe_(item.target, Str.startsWith(worktree))),
-          ).toEqual([]);
-          yield* collie(world, ["cleanup", "--apply", "--request-id", "sweep-1"]);
-          expect(yield* fs.exists(worktree)).toBe(true);
-          yield* stopHost(world.state);
-        }),
-      MODULES,
-    ),
-  300_000,
-);
+        const listed = Listed((yield* collie(world, ["cleanup"])).envelope.data);
+        expect(
+          Arr.filter(listed.remove, (item) => pipe_(item.target, Str.startsWith(worktree))),
+        ).toEqual([]);
+        yield* collie(world, ["cleanup", "--apply", "--request-id", "sweep-1"]);
+        expect(yield* fs.exists(worktree)).toBe(true);
+        yield* stopHost(world.state);
+      }),
+    MODULES,
+  ));
 
-test(
-  "the tool's down runs once after a child that failed, and the parent fails with it",
-  () =>
-    proves(
-      "collie-tool-checkout-failed-",
-      (world) =>
-        Effect.gen(function* () {
-          const { parent, child } = yield* settled(world, "fail");
+test("the tool's down runs once after a child that failed, and the parent fails with it", () =>
+  proves(
+    "collie-tool-checkout-failed-",
+    (world) =>
+      Effect.gen(function* () {
+        const { parent, child } = yield* settled(world, "fail");
 
-          expect(child?.status.status).toBe("failed");
-          expect(parent?.status).toMatchObject({
-            status: "failed",
-            reason: expect.stringContaining("failed in"),
-          });
-          expect(yield* toolLog(world)).toEqual(["up", "down"]);
-          yield* stopHost(world.state);
-        }),
-      MODULES,
-    ),
-  300_000,
-);
+        expect(child?.status.status).toBe("failed");
+        expect(parent?.status).toMatchObject({
+          status: "failed",
+          reason: expect.stringContaining("failed in"),
+        });
+        expect(yield* toolLog(world)).toEqual(["up", "down"]);
+        yield* stopHost(world.state);
+      }),
+    MODULES,
+  ));

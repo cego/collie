@@ -493,123 +493,119 @@ test("the Flock's search keeps Machines' Runs apart, refuses an ambiguous bare i
     }),
   ));
 
-test(
-  "a Task's earlier Run off the board, its active Run and a Run with no Task card are all found once reconciled",
-  () =>
-    proves(
-      "collie-artefact-search-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          yield* writeTask({
-            id: "task-1",
-            workspace: "w1",
-            label: "project | Find material",
-            cwd: world.project,
-            created_at: "2026-10-01T09:00:00Z",
-          }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
-          const runIdOf = flow(
-            Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String })),
-            Effect.map(({ runId }) => runId),
-            Effect.orDie,
-          );
-          for (const name of ["old", "active", "loose"])
-            yield* fs.writeFileString(`${world.project}/${name}-findings.md`, `# ${name}\n`);
-          const attach = (name: string) => ["--attach", `${world.project}/${name}-findings.md`];
-          const old = yield* runIdOf(
-            (yield* collie(world, [
-              "run",
-              "start",
-              "plain",
-              "--task",
-              "task-1",
-              ...attach("old"),
-              "--input",
-              "note=old",
-            ])).envelope.data,
-          );
-          yield* collie(world, ["run", "wait", old]);
-          const active = yield* runIdOf(
-            (yield* collie(world, [
-              "run",
-              "start",
-              "asks",
-              "--task",
-              "task-1",
-              ...attach("active"),
-              "--input",
-              "goal=now",
-            ])).envelope.data,
-          );
-          const loose = yield* runIdOf(
-            (yield* collie(world, [
-              "run",
-              "start",
-              "plain",
-              ...attach("loose"),
-              "--input",
-              "note=loose",
-            ])).envelope.data,
-          );
-          yield* collie(world, ["run", "wait", loose]);
-          const door = yield* connect(world.state).pipe(Effect.orDie);
-          const looseTask = (yield* door.run({ runId: loose }).pipe(Effect.orDie))?.task;
-          if (looseTask != null)
-            yield* removeTask(looseTask).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
+test("a Task's earlier Run off the board, its active Run and a Run with no Task card are all found once reconciled", () =>
+  proves(
+    "collie-artefact-search-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* writeTask({
+          id: "task-1",
+          workspace: "w1",
+          label: "project | Find material",
+          cwd: world.project,
+          created_at: "2026-10-01T09:00:00Z",
+        }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
+        const runIdOf = flow(
+          Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String })),
+          Effect.map(({ runId }) => runId),
+          Effect.orDie,
+        );
+        for (const name of ["old", "active", "loose"])
+          yield* fs.writeFileString(`${world.project}/${name}-findings.md`, `# ${name}\n`);
+        const attach = (name: string) => ["--attach", `${world.project}/${name}-findings.md`];
+        const old = yield* runIdOf(
+          (yield* collie(world, [
+            "run",
+            "start",
+            "plain",
+            "--task",
+            "task-1",
+            ...attach("old"),
+            "--input",
+            "note=old",
+          ])).envelope.data,
+        );
+        yield* collie(world, ["run", "wait", old]);
+        const active = yield* runIdOf(
+          (yield* collie(world, [
+            "run",
+            "start",
+            "asks",
+            "--task",
+            "task-1",
+            ...attach("active"),
+            "--input",
+            "goal=now",
+          ])).envelope.data,
+        );
+        const loose = yield* runIdOf(
+          (yield* collie(world, [
+            "run",
+            "start",
+            "plain",
+            ...attach("loose"),
+            "--input",
+            "note=loose",
+          ])).envelope.data,
+        );
+        yield* collie(world, ["run", "wait", loose]);
+        const door = yield* connect(world.state).pipe(Effect.orDie);
+        const looseTask = (yield* door.run({ runId: loose }).pipe(Effect.orDie))?.task;
+        if (looseTask != null)
+          yield* removeTask(looseTask).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
 
-          const search = door.artefactSearch({ query: "findings" }).pipe(Effect.orDie);
-          let searched = yield* search;
-          for (
-            let tries = 0;
-            searched.coverage.indexed < searched.coverage.runs && tries < 200;
-            tries++
-          )
-            searched = yield* search;
-          expect(searched.coverage.indexed).toBe(searched.coverage.runs);
-          expect(searched.coverage.runs).toBeGreaterThanOrEqual(3);
-          const byRow = Order.mapInput(Order.String, (row: ReadonlyArray<string>) =>
-            Arr.join(row, ","),
-          );
-          expect(
-            Arr.sort(
-              Arr.map(searched.items, (item) => [item.run, item.title]),
-              byRow,
-            ),
-          ).toEqual(
-            Arr.sort(
-              [
-                [old, "old-findings.md"],
-                [active, "active-findings.md"],
-                [loose, "loose-findings.md"],
-              ],
-              byRow,
-            ),
-          );
+        const search = door.artefactSearch({ query: "findings" }).pipe(Effect.orDie);
+        let searched = yield* search;
+        for (
+          let tries = 0;
+          searched.coverage.indexed < searched.coverage.runs && tries < 200;
+          tries++
+        )
+          searched = yield* search;
+        expect(searched.coverage.indexed).toBe(searched.coverage.runs);
+        expect(searched.coverage.runs).toBeGreaterThanOrEqual(3);
+        const byRow = Order.mapInput(Order.String, (row: ReadonlyArray<string>) =>
+          Arr.join(row, ","),
+        );
+        expect(
+          Arr.sort(
+            Arr.map(searched.items, (item) => [item.run, item.title]),
+            byRow,
+          ),
+        ).toEqual(
+          Arr.sort(
+            [
+              [old, "old-findings.md"],
+              [active, "active-findings.md"],
+              [loose, "loose-findings.md"],
+            ],
+            byRow,
+          ),
+        );
 
-          const cli = yield* collie(world, ["artefacts", "--query", "findings"]);
-          expect(cli.envelope.ok).toBe(true);
-          expect(cli.envelope.data).toMatchObject({ complete: true, next: null });
-          const listed = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({
-              items: Schema.Array(
-                Schema.Struct({
-                  installation: Schema.String,
-                  item: Schema.Struct({ run: Schema.String, title: Schema.String }),
-                }),
-              ),
-            }),
-          )(cli.envelope.data);
-          const installation = Str.trim(yield* fs.readFileString(`${world.state}/installation`));
-          expect(Arr.map(listed.items, (one) => one.installation)).toEqual([
-            installation,
-            installation,
-            installation,
-          ]);
-        }),
-      ["plain.workflow.ts", "asks.workflow.ts"],
-    ),
-  120_000,
-);
+        const cli = yield* collie(world, ["artefacts", "--query", "findings"]);
+        expect(cli.envelope.ok).toBe(true);
+        expect(cli.envelope.data).toMatchObject({ complete: true, next: null });
+        const listed = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            items: Schema.Array(
+              Schema.Struct({
+                installation: Schema.String,
+                item: Schema.Struct({ run: Schema.String, title: Schema.String }),
+              }),
+            ),
+          }),
+        )(cli.envelope.data);
+        const installation = Str.trim(yield* fs.readFileString(`${world.state}/installation`));
+        expect(Arr.map(listed.items, (one) => one.installation)).toEqual([
+          installation,
+          installation,
+          installation,
+        ]);
+      }),
+    ["plain.workflow.ts", "asks.workflow.ts"],
+  ));
 
 test("an unavailable Run lookup is bounded and reported alongside another Machine's results", () =>
   runEffect(

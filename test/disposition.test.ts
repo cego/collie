@@ -53,64 +53,60 @@ const line: (over?: Partial<Disposition>) => Disposition = (over = {}) => ({
   ...over,
 });
 
-test(
-  "the CLI records a disposition and leaves the Run's status as it was",
-  () =>
-    hosted("hw-disposition-", ({ world }) =>
-      Effect.gen(function* () {
-        const env = {
-          COLLIE_ROOT: world.install,
-          COLLIE_STATE_DIR: world.state,
-          COLLIE_USER_DIR: world.config,
-          HOME: world.home,
-        };
-        const run = yield* settledRun(world, "retains");
-        const failed = "failed: merge: picker";
+test("the CLI records a disposition and leaves the Run's status as it was", () =>
+  hosted("hw-disposition-", ({ world }) =>
+    Effect.gen(function* () {
+      const env = {
+        COLLIE_ROOT: world.install,
+        COLLIE_STATE_DIR: world.state,
+        COLLIE_USER_DIR: world.config,
+        HOME: world.home,
+      };
+      const run = yield* settledRun(world, "retains");
+      const failed = "failed: merge: picker";
 
-        const empty = yield* cli(["--json", "run", "disposition", run.id], env);
-        expect(empty.exit).toBe(0);
-        expect(yield* parseEnvelope(empty.stdout)).toMatchObject({
-          ok: true,
-          data: { status: failed, disposition: null },
-        });
-        expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
+      const empty = yield* cli(["--json", "run", "disposition", run.id], env);
+      expect(empty.exit).toBe(0);
+      expect(yield* parseEnvelope(empty.stdout)).toMatchObject({
+        ok: true,
+        data: { status: failed, disposition: null },
+      });
+      expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
 
-        const record = [
-          "--json",
-          "run",
-          "disposition",
-          run.id,
-          "--as",
-          "merged",
-          "--ref",
-          "cego/collie!43",
-          "--request-id",
-          "req-1",
-        ];
-        const recorded = yield* cli(record, env);
-        expect(recorded.exit).toBe(0);
-        expect(yield* parseEnvelope(recorded.stdout)).toMatchObject({
-          ok: true,
-          data: { status: failed, disposition: { kind: "merged", ref: "cego/collie!43" } },
-        });
-        expect((yield* hostRecords(world.state, readDispositions(run.dir))).length).toBe(1);
+      const record = [
+        "--json",
+        "run",
+        "disposition",
+        run.id,
+        "--as",
+        "merged",
+        "--ref",
+        "cego/collie!43",
+        "--request-id",
+        "req-1",
+      ];
+      const recorded = yield* cli(record, env);
+      expect(recorded.exit).toBe(0);
+      expect(yield* parseEnvelope(recorded.stdout)).toMatchObject({
+        ok: true,
+        data: { status: failed, disposition: { kind: "merged", ref: "cego/collie!43" } },
+      });
+      expect((yield* hostRecords(world.state, readDispositions(run.dir))).length).toBe(1);
 
-        const replay = yield* cli(record, env);
-        expect(replay.exit).toBe(0);
-        expect(yield* parseEnvelope(replay.stdout)).toMatchObject({ ok: true });
-        expect((yield* hostRecords(world.state, readDispositions(run.dir))).length).toBe(1);
+      const replay = yield* cli(record, env);
+      expect(replay.exit).toBe(0);
+      expect(yield* parseEnvelope(replay.stdout)).toMatchObject({ ok: true });
+      expect((yield* hostRecords(world.state, readDispositions(run.dir))).length).toBe(1);
 
-        expect(
-          yield* parseEnvelope((yield* cli(["--json", "run", "disposition", run.id], env)).stdout),
-        ).toMatchObject({ ok: true, data: { status: failed } });
+      expect(
+        yield* parseEnvelope((yield* cli(["--json", "run", "disposition", run.id], env)).stdout),
+      ).toMatchObject({ ok: true, data: { status: failed } });
 
-        const shown = yield* cli(["run", "show", run.id], env);
-        expect(shown.exit).toBe(0);
-        expect(shown.stdout).toContain(`${failed} · merged cego/collie!43`);
-      }),
-    ),
-  60_000,
-);
+      const shown = yield* cli(["run", "show", run.id], env);
+      expect(shown.exit).toBe(0);
+      expect(shown.stdout).toContain(`${failed} · merged cego/collie!43`);
+    }),
+  ));
 
 test("a correction is a new line, so what people believed before is still there", () =>
   runEffect(
@@ -128,38 +124,34 @@ test("a correction is a new line, so what people believed before is still there"
     }),
   ));
 
-test(
-  "a superseded line naming the Run it would be recorded on is refused, and a free-text one is not",
-  () =>
-    hosted("hw-disposition-self-", ({ world }) =>
-      Effect.gen(function* () {
-        const env = {
-          COLLIE_ROOT: world.install,
-          COLLIE_STATE_DIR: world.state,
-          COLLIE_USER_DIR: world.config,
-          HOME: world.home,
-        };
-        const run = yield* settledRun(world, "retains");
-        const supersede = (ref: string) =>
-          cli(["--json", "run", "disposition", run.id, "--as", "superseded", "--ref", ref], env);
+test("a superseded line naming the Run it would be recorded on is refused, and a free-text one is not", () =>
+  hosted("hw-disposition-self-", ({ world }) =>
+    Effect.gen(function* () {
+      const env = {
+        COLLIE_ROOT: world.install,
+        COLLIE_STATE_DIR: world.state,
+        COLLIE_USER_DIR: world.config,
+        HOME: world.home,
+      };
+      const run = yield* settledRun(world, "retains");
+      const supersede = (ref: string) =>
+        cli(["--json", "run", "disposition", run.id, "--as", "superseded", "--ref", ref], env);
 
-        const refused = yield* supersede(`${run.id}; restarted clean`);
-        expect(refused.exit).toBe(2);
-        expect(yield* parseEnvelope(refused.stdout)).toMatchObject({
-          ok: false,
-          error: { code: "invalid_input" },
-        });
-        expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
+      const refused = yield* supersede(`${run.id}; restarted clean`);
+      expect(refused.exit).toBe(2);
+      expect(yield* parseEnvelope(refused.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input" },
+      });
+      expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
 
-        const taken = yield* supersede("restarted clean");
-        expect(taken.exit).toBe(0);
-        expect(
-          Arr.map(yield* hostRecords(world.state, readDispositions(run.dir)), (one) => one.ref),
-        ).toEqual(["restarted clean"]);
-      }),
-    ),
-  60_000,
-);
+      const taken = yield* supersede("restarted clean");
+      expect(taken.exit).toBe(0);
+      expect(
+        Arr.map(yield* hostRecords(world.state, readDispositions(run.dir)), (one) => one.ref),
+      ).toEqual(["restarted clean"]);
+    }),
+  ));
 
 test("a Run nobody recorded a disposition for reads exactly as it always did", () =>
   runEffect(

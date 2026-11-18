@@ -95,87 +95,75 @@ const answer = (world: World, runId: string, decision: string) =>
     Effect.orDie,
   );
 
-test(
-  "a child that finished under its recorded execution is not run again when its parent resumes",
-  () =>
-    proves(
-      "collie-child-finished-",
-      (world) =>
-        Effect.gen(function* () {
-          const parent = yield* parked(world, { notes: "one", waits: "" });
-          const child = `${parent}.pace-one`;
-          yield* handedOverAsBefore(world, parent);
-          yield* status(world, child, "complete");
-          yield* stopHost(world.state);
+test("a child that finished under its recorded execution is not run again when its parent resumes", () =>
+  proves(
+    "collie-child-finished-",
+    (world) =>
+      Effect.gen(function* () {
+        const parent = yield* parked(world, { notes: "one", waits: "" });
+        const child = `${parent}.pace-one`;
+        yield* handedOverAsBefore(world, parent);
+        yield* status(world, child, "complete");
+        yield* stopHost(world.state);
 
-          yield* answer(world, parent, "go");
-          const done = yield* status(world, parent, "complete");
-          expect(done?.status).toEqual({ status: "complete", value: "paced one" });
-          expect(yield* ran(world, child)).toEqual(["ran one"]);
-          expect(yield* executionsOf(world, child)).toEqual([`legacy-${child}`]);
-        }),
-      MODULES,
-    ),
-  300_000,
-);
+        yield* answer(world, parent, "go");
+        const done = yield* status(world, parent, "complete");
+        expect(done?.status).toEqual({ status: "complete", value: "paced one" });
+        expect(yield* ran(world, child)).toEqual(["ran one"]);
+        expect(yield* executionsOf(world, child)).toEqual([`legacy-${child}`]);
+      }),
+    MODULES,
+  ));
 
-test(
-  "a child still suspended under its recorded execution finishes with its parent, once",
-  () =>
-    proves(
-      "collie-child-suspended-",
-      (world) =>
-        Effect.gen(function* () {
-          const parent = yield* parked(world, { notes: "one", waits: "one" });
-          const child = `${parent}.pace-one`;
-          yield* recordedAsBefore(world, parent);
-          yield* answer(world, parent, "go");
-          yield* until(
-            () =>
-              connect(world.state).pipe(
-                Effect.orDie,
-                Effect.flatMap((client) => client.run({ runId: child }).pipe(Effect.orDie)),
-              ),
-            (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "release"),
-          );
-          yield* stopHost(world.state);
+test("a child still suspended under its recorded execution finishes with its parent, once", () =>
+  proves(
+    "collie-child-suspended-",
+    (world) =>
+      Effect.gen(function* () {
+        const parent = yield* parked(world, { notes: "one", waits: "one" });
+        const child = `${parent}.pace-one`;
+        yield* recordedAsBefore(world, parent);
+        yield* answer(world, parent, "go");
+        yield* until(
+          () =>
+            connect(world.state).pipe(
+              Effect.orDie,
+              Effect.flatMap((client) => client.run({ runId: child }).pipe(Effect.orDie)),
+            ),
+          (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "release"),
+        );
+        yield* stopHost(world.state);
 
-          yield* answer(world, child, "release");
-          const done = yield* status(world, parent, "complete");
-          expect(done?.status).toEqual({ status: "complete", value: "paced one" });
-          expect((yield* status(world, child, "complete"))?.status.status).toBe("complete");
-          expect(yield* ran(world, child)).toEqual(["ran one"]);
-          expect(yield* executionsOf(world, child)).toEqual([`legacy-${child}`]);
-        }),
-      MODULES,
-    ),
-  300_000,
-);
+        yield* answer(world, child, "release");
+        const done = yield* status(world, parent, "complete");
+        expect(done?.status).toEqual({ status: "complete", value: "paced one" });
+        expect((yield* status(world, child, "complete"))?.status.status).toBe("complete");
+        expect(yield* ran(world, child)).toEqual(["ran one"]);
+        expect(yield* executionsOf(world, child)).toEqual([`legacy-${child}`]);
+      }),
+    MODULES,
+  ));
 
-test(
-  "two children collected concurrently under their recorded executions each run once",
-  () =>
-    proves(
-      "collie-child-concurrent-",
-      (world) =>
-        Effect.gen(function* () {
-          const parent = yield* parked(world, { notes: "one,two", waits: "" });
-          yield* handedOverAsBefore(world, parent);
-          for (const note of ["one", "two"])
-            yield* status(world, `${parent}.pace-${note}`, "complete");
-          yield* stopHost(world.state);
+test("two children collected concurrently under their recorded executions each run once", () =>
+  proves(
+    "collie-child-concurrent-",
+    (world) =>
+      Effect.gen(function* () {
+        const parent = yield* parked(world, { notes: "one,two", waits: "" });
+        yield* handedOverAsBefore(world, parent);
+        for (const note of ["one", "two"])
+          yield* status(world, `${parent}.pace-${note}`, "complete");
+        yield* stopHost(world.state);
 
-          yield* answer(world, parent, "go");
-          const done = yield* status(world, parent, "complete");
-          expect(done?.status).toEqual({ status: "complete", value: "paced one+paced two" });
-          for (const note of ["one", "two"]) {
-            expect(yield* ran(world, `${parent}.pace-${note}`)).toEqual([`ran ${note}`]);
-            expect(yield* executionsOf(world, `${parent}.pace-${note}`)).toEqual([
-              `legacy-${parent}.pace-${note}`,
-            ]);
-          }
-        }),
-      MODULES,
-    ),
-  300_000,
-);
+        yield* answer(world, parent, "go");
+        const done = yield* status(world, parent, "complete");
+        expect(done?.status).toEqual({ status: "complete", value: "paced one+paced two" });
+        for (const note of ["one", "two"]) {
+          expect(yield* ran(world, `${parent}.pace-${note}`)).toEqual([`ran ${note}`]);
+          expect(yield* executionsOf(world, `${parent}.pace-${note}`)).toEqual([
+            `legacy-${parent}.pace-${note}`,
+          ]);
+        }
+      }),
+    MODULES,
+  ));

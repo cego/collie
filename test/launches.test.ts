@@ -119,57 +119,53 @@ test("a Fallback's launch says what it fell back from and why, and an earlier on
     }),
   ));
 
-test(
-  "a Run's detail and run show carry its agents",
-  () =>
-    hosted("collie-launches-", ({ world, env }) =>
-      Effect.gen(function* () {
-        const run = yield* settledRun(world, "hello");
-        yield* seed(twoAgents(run.id)).pipe(Effect.provide(recordsAt(world.state)));
+test("a Run's detail and run show carry its agents", () =>
+  hosted("collie-launches-", ({ world, env }) =>
+    Effect.gen(function* () {
+      const run = yield* settledRun(world, "hello");
+      yield* seed(twoAgents(run.id)).pipe(Effect.provide(recordsAt(world.state)));
 
-        const detail = yield* (yield* frontDoor(socketOf(world.state)))
-          .runDetail({ runId: run.id, tail: false, pages: 1, refreshMr: false })
-          .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
-        expect(
-          Option.getOrUndefined(
-            Option.flatMap(Option.fromNullishOr(Option.getOrNull(detail)), (present) =>
-              Option.map(Option.fromNullishOr(present.agents), (present_) =>
-                Arr.map(present_, (one) => one.operation),
-              ),
+      const detail = yield* (yield* frontDoor(socketOf(world.state)))
+        .runDetail({ runId: run.id, tail: false, pages: 1, refreshMr: false })
+        .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
+      expect(
+        Option.getOrUndefined(
+          Option.flatMap(Option.fromNullishOr(Option.getOrNull(detail)), (present) =>
+            Option.map(Option.fromNullishOr(present.agents), (present_) =>
+              Arr.map(present_, (one) => one.operation),
             ),
           ),
-        ).toEqual(["review", "build", "re-review"]);
+        ),
+      ).toEqual(["review", "build", "re-review"]);
 
-        const facts = yield* runFacts(env, (yield* findRun(env, run.id))!).pipe(
-          Effect.provide(recordsReadLayer(world.state)),
-        );
-        expect(facts).toContain(`### Agents\n\n- review: codex/gpt-5 as ${run.id}-review-r1`);
+      const facts = yield* runFacts(env, (yield* findRun(env, run.id))!).pipe(
+        Effect.provide(recordsReadLayer(world.state)),
+      );
+      expect(facts).toContain(`### Agents\n\n- review: codex/gpt-5 as ${run.id}-review-r1`);
 
-        const shown = yield* collie(world, ["run", "show", run.id]);
-        expect(shown.exit).toBe(0);
-        expect(shown.envelope.data).toMatchObject({
-          agents: [
-            { operation: "review", harness: "codex" },
-            { operation: "build", model: "opus", effort: "xhigh" },
-            { operation: "re-review", agent: `${run.id}-review-r1` },
-          ],
-        });
+      const shown = yield* collie(world, ["run", "show", run.id]);
+      expect(shown.exit).toBe(0);
+      expect(shown.envelope.data).toMatchObject({
+        agents: [
+          { operation: "review", harness: "codex" },
+          { operation: "build", model: "opus", effort: "xhigh" },
+          { operation: "re-review", agent: `${run.id}-review-r1` },
+        ],
+      });
 
-        const human = yield* exec([...(yield* collieCommand), "run", "show", run.id], {
-          cwd: world.project,
-          env: {
-            PATH: "/usr/bin:/bin",
-            HOME: world.home,
-            COLLIE_ROOT: world.install,
-            COLLIE_STATE_DIR: world.state,
-            COLLIE_USER_DIR: world.config,
-            ...(yield* suiteEnv),
-          },
-        });
-        expect(human.stdout).toContain(
-          `\n  review  ${run.id}-review-r1  codex/gpt-5\n  build  ${run.id}-build-r1  claude/opus xhigh\n`,
-        );
-      }),
-    ),
-  60_000,
-);
+      const human = yield* exec([...(yield* collieCommand), "run", "show", run.id], {
+        cwd: world.project,
+        env: {
+          PATH: "/usr/bin:/bin",
+          HOME: world.home,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
+          COLLIE_USER_DIR: world.config,
+          ...(yield* suiteEnv),
+        },
+      });
+      expect(human.stdout).toContain(
+        `\n  review  ${run.id}-review-r1  codex/gpt-5\n  build  ${run.id}-build-r1  claude/opus xhigh\n`,
+      );
+    }),
+  ));

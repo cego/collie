@@ -11,31 +11,27 @@ import { proves } from "./support/world";
 
 const isReach = ({ key }: { readonly key: string }) => pipe(key, Str.startsWith("launch_reach."));
 
-test(
-  "a saved reach has no row in Settings, among its remembered values or the Machine's own",
-  () =>
-    proves(
-      "collie-reach-settings-",
-      (world) =>
-        Effect.gen(function* () {
-          yield* writeConfigValue(world.config, reachKey("plan", "projects-root"), "implement");
-          yield* writeConfigValue(
-            world.config,
-            reachKey("implement", "gitlab.example.com/group/app"),
-            "finish",
-          );
-          yield* writeConfigValue(world.config, "gitlab.assignee", "mk");
-          const env = { ...(yield* currentEnv), userDir: world.config };
+test("a saved reach has no row in Settings, among its remembered values or the Machine's own", () =>
+  proves(
+    "collie-reach-settings-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* writeConfigValue(world.config, reachKey("plan", "projects-root"), "implement");
+        yield* writeConfigValue(
+          world.config,
+          reachKey("implement", "gitlab.example.com/group/app"),
+          "finish",
+        );
+        yield* writeConfigValue(world.config, "gitlab.assignee", "mk");
+        const env = { ...(yield* currentEnv), userDir: world.config };
 
-          const settings = yield* buildSettings(env);
-          expect(settings.remembered).toContainEqual({ key: "gitlab.assignee", value: "mk" });
-          expect(Arr.filter(settings.remembered, isReach)).toEqual([]);
+        const settings = yield* buildSettings(env);
+        expect(settings.remembered).toContainEqual({ key: "gitlab.assignee", value: "mk" });
+        expect(Arr.filter(settings.remembered, isReach)).toEqual([]);
 
-          const own = yield* buildMachineOwn(env);
-          expect(own.remembered).toContainEqual({ key: "gitlab.assignee", value: "mk" });
-          expect(Arr.filter(own.remembered, isReach)).toEqual([]);
-        }),
-      [],
-    ),
-  60_000,
-);
+        const own = yield* buildMachineOwn(env);
+        expect(own.remembered).toContainEqual({ key: "gitlab.assignee", value: "mk" });
+        expect(Arr.filter(own.remembered, isReach)).toEqual([]);
+      }),
+    [],
+  ));

@@ -109,73 +109,63 @@ const journalOf = (world: World) =>
       .pipe(Effect.orElseSucceed(() => ""));
   });
 
-test(
-  "cleanup lists a generation unused for a week as removable, and keeps one used yesterday",
-  () =>
-    proves(
-      "collie-cleanup-list-",
-      (world) =>
-        Effect.gen(function* () {
-          const stale = yield* generation(world, "stale", 8);
-          const used = yield* generation(world, "used", 1);
+test("cleanup lists a generation unused for a week as removable, and keeps one used yesterday", () =>
+  proves(
+    "collie-cleanup-list-",
+    (world) =>
+      Effect.gen(function* () {
+        const stale = yield* generation(world, "stale", 8);
+        const used = yield* generation(world, "used", 1);
 
-          const listed = yield* collie(world, ["cleanup"]);
-          expect(listed.envelope).toMatchObject({ ok: true });
-          const report = Listed(listed.envelope.data);
-          const removable = Arr.filter(report.remove, (item) => item.kind === "generation");
-          expect(Arr.map(removable, (item) => item.target)).toEqual([stale]);
-          expect(removable[0]?.bytes).toBeGreaterThanOrEqual(8192);
-          expect(removable[0]?.reason).toBe("unused for 8 days");
-          expect(report.keep).toContainEqual({
-            kind: "generation",
-            target: used,
-            reason: "used 1 day(s) ago",
-          });
-          expect(report.bytes).toBe(Arr.reduce(report.remove, 0, (sum, item) => sum + item.bytes));
-          expect(yield* (yield* FileSystem.FileSystem).exists(stale)).toBe(true);
-        }),
-      [],
-    ),
-  60_000,
-);
+        const listed = yield* collie(world, ["cleanup"]);
+        expect(listed.envelope).toMatchObject({ ok: true });
+        const report = Listed(listed.envelope.data);
+        const removable = Arr.filter(report.remove, (item) => item.kind === "generation");
+        expect(Arr.map(removable, (item) => item.target)).toEqual([stale]);
+        expect(removable[0]?.bytes).toBeGreaterThanOrEqual(8192);
+        expect(removable[0]?.reason).toBe("unused for 8 days");
+        expect(report.keep).toContainEqual({
+          kind: "generation",
+          target: used,
+          reason: "used 1 day(s) ago",
+        });
+        expect(report.bytes).toBe(Arr.reduce(report.remove, 0, (sum, item) => sum + item.bytes));
+        expect(yield* (yield* FileSystem.FileSystem).exists(stale)).toBe(true);
+      }),
+    [],
+  ));
 
-test(
-  "cleanup --apply removes exactly what it listed, and journals it as the CLI's",
-  () =>
-    proves(
-      "collie-cleanup-apply-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const stale = yield* generation(world, "stale", 8);
-          const used = yield* generation(world, "used", 1);
+test("cleanup --apply removes exactly what it listed, and journals it as the CLI's", () =>
+  proves(
+    "collie-cleanup-apply-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stale = yield* generation(world, "stale", 8);
+        const used = yield* generation(world, "used", 1);
 
-          const swept = yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
-          expect(swept.envelope).toMatchObject({ ok: true });
-          const report = Listed(swept.envelope.data);
-          expect(Arr.map(report.remove, (item) => item.target)).toEqual([stale]);
-          expect(report.bytes).toBeGreaterThanOrEqual(8192);
-          expect(yield* fs.exists(stale)).toBe(false);
-          expect(yield* fs.exists(used)).toBe(true);
+        const swept = yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
+        expect(swept.envelope).toMatchObject({ ok: true });
+        const report = Listed(swept.envelope.data);
+        expect(Arr.map(report.remove, (item) => item.target)).toEqual([stale]);
+        expect(report.bytes).toBeGreaterThanOrEqual(8192);
+        expect(yield* fs.exists(stale)).toBe(false);
+        expect(yield* fs.exists(used)).toBe(true);
 
-          const lines = Str.split(Str.trim(yield* journalOf(world)), "\n");
-          expect(lines).toHaveLength(1);
-          expect(parsed(lines[0] ?? "{}")).toMatchObject({
-            by: { origin: "cli", request: "c-1" },
-            kind: "generation",
-            target: stale,
-            reason: "unused for 8 days",
-          });
+        const lines = Str.split(Str.trim(yield* journalOf(world)), "\n");
+        expect(lines).toHaveLength(1);
+        expect(parsed(lines[0] ?? "{}")).toMatchObject({
+          by: { origin: "cli", request: "c-1" },
+          kind: "generation",
+          target: stale,
+          reason: "unused for 8 days",
+        });
 
-          const again = yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
-          expect(Arr.map(Listed(again.envelope.data).remove, (item) => item.target)).toEqual([
-            stale,
-          ]);
-        }),
-      [],
-    ),
-  60_000,
-);
+        const again = yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
+        expect(Arr.map(Listed(again.envelope.data).remove, (item) => item.target)).toEqual([stale]);
+      }),
+    [],
+  ));
 
 test("a sweep asked again under its request while it runs waits for it and answers with its report", () =>
   runEffect(
@@ -343,80 +333,72 @@ test("loading a module whose generation is already staged counts as using it", (
     }),
   ));
 
-test(
-  "chat's cleanup action sweeps through the same host operation, and says what it removed",
-  () =>
-    proves(
-      "collie-cleanup-chat-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const stale = yield* generation(world, "stale", 8);
-          const file = "some-herd";
-          const proposal = yield* recordProposal(file, {
-            interpretation: "free some disk",
-            targets: [],
-            actions: [{ kind: "cleanup" }],
-            allowedNow: [],
-            intentVersions: {},
-            by: "evaluator:e-1",
-          }).pipe(Effect.provide(recordsAt(world.state)));
-          yield* collie(world, ["cleanup"]);
-          const client = yield* connect(world.state);
-          yield* client.declare({ frontDoor: "chat" });
-          const answered = yield* client.confirm({
-            proposal: proposal.id,
-            hash: proposal.content_hash,
-            request: "r-1",
-          });
-          expect(answered.results).toMatchObject([{ index: 0, kind: "cleanup", state: "applied" }]);
-          expect(answered.results[0]?.note).toStartWith("removed 1 item(s)");
-          expect(yield* fs.exists(stale)).toBe(false);
-          expect(parsed(Str.trim(yield* journalOf(world)))).toMatchObject({
-            by: { origin: "chat" },
-            target: stale,
-          });
-        }).pipe(Effect.orDie),
-      [],
-    ),
-  60_000,
-);
+test("chat's cleanup action sweeps through the same host operation, and says what it removed", () =>
+  proves(
+    "collie-cleanup-chat-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stale = yield* generation(world, "stale", 8);
+        const file = "some-herd";
+        const proposal = yield* recordProposal(file, {
+          interpretation: "free some disk",
+          targets: [],
+          actions: [{ kind: "cleanup" }],
+          allowedNow: [],
+          intentVersions: {},
+          by: "evaluator:e-1",
+        }).pipe(Effect.provide(recordsAt(world.state)));
+        yield* collie(world, ["cleanup"]);
+        const client = yield* connect(world.state);
+        yield* client.declare({ frontDoor: "chat" });
+        const answered = yield* client.confirm({
+          proposal: proposal.id,
+          hash: proposal.content_hash,
+          request: "r-1",
+        });
+        expect(answered.results).toMatchObject([{ index: 0, kind: "cleanup", state: "applied" }]);
+        expect(answered.results[0]?.note).toStartWith("removed 1 item(s)");
+        expect(yield* fs.exists(stale)).toBe(false);
+        expect(parsed(Str.trim(yield* journalOf(world)))).toMatchObject({
+          by: { origin: "chat" },
+          target: stale,
+        });
+      }).pipe(Effect.orDie),
+    [],
+  ));
 
-test(
-  "doctor's low-disk warning says what a sweep would free",
-  () =>
-    proves(
-      "collie-cleanup-doctor-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          yield* generation(world, "stale", 8, 64 * 1024);
-          yield* collie(world, ["cleanup"]);
-          const bin = `${world.home}/bin`;
-          yield* fs.makeDirectory(bin);
-          yield* fs.writeFileString(
-            `${bin}/df`,
-            "#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/sda1 104857600 96468992 8388608 92%% /\\n'\n",
-            { mode: 0o755 },
-          );
+test("doctor's low-disk warning says what a sweep would free", () =>
+  proves(
+    "collie-cleanup-doctor-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* generation(world, "stale", 8, 64 * 1024);
+        yield* collie(world, ["cleanup"]);
+        const bin = `${world.home}/bin`;
+        yield* fs.makeDirectory(bin);
+        yield* fs.writeFileString(
+          `${bin}/df`,
+          "#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/sda1 104857600 96468992 8388608 92%% /\\n'\n",
+          { mode: 0o755 },
+        );
 
-          const doctor = yield* collie(world, ["doctor"], { PATH: `${bin}:/usr/bin:/bin` });
-          const checks = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({
-              checks: Schema.Array(Schema.Struct({ name: Schema.String, detail: Schema.String })),
-            }),
-          )(doctor.envelope.data ?? doctor.envelope.error?.details).pipe(Effect.orDie);
-          const disk = Option.getOrUndefined(
-            Arr.findFirst(checks.checks, (check) => check.name === "disk"),
-          );
-          expect(disk?.detail).toMatch(
-            /^\/ has 8\.0 GiB free \(8%\); `collie cleanup` would free \d/,
-          );
-        }),
-      [],
-    ),
-  60_000,
-);
+        const doctor = yield* collie(world, ["doctor"], { PATH: `${bin}:/usr/bin:/bin` });
+        const checks = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            checks: Schema.Array(Schema.Struct({ name: Schema.String, detail: Schema.String })),
+          }),
+        )(doctor.envelope.data ?? doctor.envelope.error?.details).pipe(Effect.orDie);
+        const disk = Option.getOrUndefined(
+          Arr.findFirst(checks.checks, (check) => check.name === "disk"),
+        );
+        expect(disk?.detail).toMatch(
+          /^\/ has 8\.0 GiB free \(8%\); `collie cleanup` would free \d/,
+        );
+      }),
+    [],
+  ));
 
 test.skipIf(process.platform !== "linux")(
   "doctor warns while a check no host is collecting runs, and passes once cleanup ends it",
@@ -461,56 +443,51 @@ test.skipIf(process.platform !== "linux")(
         }),
       [],
     ),
-  60_000,
 );
 
-test(
-  "cleanup keeps the compaction controls of an agent core starts while the host runs",
-  () =>
-    proves(
-      "collie-cleanup-late-",
-      (world, core) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const controls = `${world.state}/compaction/impl`;
-          yield* fs.makeDirectory(controls, { recursive: true });
-          yield* fs.writeFileString(
-            `${controls}/control.json`,
-            asJson({
-              agent: "impl",
-              harness: "codex",
+test("cleanup keeps the compaction controls of an agent core starts while the host runs", () =>
+  proves(
+    "collie-cleanup-late-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const controls = `${world.state}/compaction/impl`;
+        yield* fs.makeDirectory(controls, { recursive: true });
+        yield* fs.writeFileString(
+          `${controls}/control.json`,
+          asJson({
+            agent: "impl",
+            harness: "codex",
+            cwd: world.project,
+            dir: controls,
+            endpoint: null,
+            pid: null,
+            command: null,
+            attempt: null,
+          }),
+        );
+        const before = Listed((yield* collie(world, ["cleanup"])).envelope.data);
+        expect(Arr.map(before.remove, (item) => item.target)).toContain(controls);
+
+        yield* Effect.scoped(
+          Effect.flatMap(connectCore(core.socketPath), (hc) =>
+            hc.call("terminal.run", {
+              name: "impl",
+              argv: ["codex"],
               cwd: world.project,
-              dir: controls,
-              endpoint: null,
-              pid: null,
-              command: null,
-              attempt: null,
+              labels: { run: "r0" },
+              [SETUP]: true,
             }),
-          );
-          const before = Listed((yield* collie(world, ["cleanup"])).envelope.data);
-          expect(Arr.map(before.remove, (item) => item.target)).toContain(controls);
-
-          yield* Effect.scoped(
-            Effect.flatMap(connectCore(core.socketPath), (hc) =>
-              hc.call("terminal.run", {
-                name: "impl",
-                argv: ["codex"],
-                cwd: world.project,
-                labels: { run: "r0" },
-                [SETUP]: true,
-              }),
-            ),
-          );
-          const listed = yield* collie(world, ["cleanup"]);
-          expect(listed.envelope.ok).toBe(true);
-          expect(Arr.map(Listed(listed.envelope.data).remove, (item) => item.target)).not.toContain(
-            controls,
-          );
-        }),
-      [],
-    ),
-  60_000,
-);
+          ),
+        );
+        const listed = yield* collie(world, ["cleanup"]);
+        expect(listed.envelope.ok).toBe(true);
+        expect(Arr.map(Listed(listed.envelope.data).remove, (item) => item.target)).not.toContain(
+          controls,
+        );
+      }),
+    [],
+  ));
 
 test.skipIf(process.platform !== "linux")(
   "cleanup lists a check no host is collecting and --apply ends it, leaving another installation's and an unmarked process alone",
@@ -552,7 +529,6 @@ test.skipIf(process.platform !== "linux")(
         }),
       [],
     ),
-  60_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -651,7 +627,6 @@ test.skipIf(process.platform !== "linux")(
         }),
       ["checking.workflow.ts"],
     ),
-  60_000,
 );
 
 const runInCheckout = (
@@ -711,67 +686,59 @@ const cacheItems = (listed: { readonly envelope: { readonly data?: unknown } }) 
 const cacheListing = (world: World, judged: (items: ReturnType<typeof cacheItems>) => boolean) =>
   until(() => Effect.map(collie(world, ["cleanup"]), cacheItems), judged);
 
-test(
-  "cleanup lists the build cache of a checkout whose only Run failed, and --apply removes it alone",
-  () =>
-    proves(
-      "collie-cleanup-build-cache-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const { checkout, cache } = yield* runInCheckout(
-            world,
-            ["placed", "--input", "work=one", "--input", "ending=fail"],
-            (status) => status === "failed",
-          );
+test("cleanup lists the build cache of a checkout whose only Run failed, and --apply removes it alone", () =>
+  proves(
+    "collie-cleanup-build-cache-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { checkout, cache } = yield* runInCheckout(
+          world,
+          ["placed", "--input", "work=one", "--input", "ending=fail"],
+          (status) => status === "failed",
+        );
 
-          const listed = yield* cacheListing(world, (items) => items.remove.length > 0);
-          expect(Arr.map(listed.remove, (item) => [item.target, item.reason])).toEqual([
-            [cache, "no live Run works in this checkout"],
-          ]);
-          expect(listed.remove[0]?.bytes).toBeGreaterThanOrEqual(8192);
+        const listed = yield* cacheListing(world, (items) => items.remove.length > 0);
+        expect(Arr.map(listed.remove, (item) => [item.target, item.reason])).toEqual([
+          [cache, "no live Run works in this checkout"],
+        ]);
+        expect(listed.remove[0]?.bytes).toBeGreaterThanOrEqual(8192);
 
-          yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
-          expect(yield* fs.exists(cache)).toBe(false);
-          expect(yield* fs.exists(`${checkout}/README.md`)).toBe(true);
-          expect(yield* fs.exists(`${checkout}/node_modules/index.js`)).toBe(true);
-          const journal = Arr.map(
-            Arr.filter(Str.split(Str.trim(yield* journalOf(world)), "\n"), (line) => line !== ""),
-            (line) => parsed(line),
-          );
-          expect(journal).toContainEqual(
-            expect.objectContaining({ kind: "build-cache", target: cache }),
-          );
-        }),
-      ["placed.workflow.ts"],
-    ),
-  120_000,
-);
+        yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
+        expect(yield* fs.exists(cache)).toBe(false);
+        expect(yield* fs.exists(`${checkout}/README.md`)).toBe(true);
+        expect(yield* fs.exists(`${checkout}/node_modules/index.js`)).toBe(true);
+        const journal = Arr.map(
+          Arr.filter(Str.split(Str.trim(yield* journalOf(world)), "\n"), (line) => line !== ""),
+          (line) => parsed(line),
+        );
+        expect(journal).toContainEqual(
+          expect.objectContaining({ kind: "build-cache", target: cache }),
+        );
+      }),
+    ["placed.workflow.ts"],
+  ));
 
-test(
-  "cleanup keeps the build cache of a checkout a live Run works in, naming that Run",
-  () =>
-    proves(
-      "collie-cleanup-build-cache-live-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const { runId, cache } = yield* runInCheckout(
-            world,
-            ["waits", "--input", "work=one"],
-            (status) => status === "suspended",
-          );
+test("cleanup keeps the build cache of a checkout a live Run works in, naming that Run", () =>
+  proves(
+    "collie-cleanup-build-cache-live-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { runId, cache } = yield* runInCheckout(
+          world,
+          ["waits", "--input", "work=one"],
+          (status) => status === "suspended",
+        );
 
-          const listed = yield* cacheListing(world, (items) => items.keep.length > 0);
-          expect(listed.remove).toEqual([]);
-          expect(listed.keep).toEqual([
-            { kind: "build-cache", target: cache, reason: `${runId} still works in this checkout` },
-          ]);
+        const listed = yield* cacheListing(world, (items) => items.keep.length > 0);
+        expect(listed.remove).toEqual([]);
+        expect(listed.keep).toEqual([
+          { kind: "build-cache", target: cache, reason: `${runId} still works in this checkout` },
+        ]);
 
-          yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
-          expect(yield* fs.exists(cache)).toBe(true);
-        }),
-      ["waits.workflow.ts"],
-    ),
-  120_000,
-);
+        yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
+        expect(yield* fs.exists(cache)).toBe(true);
+      }),
+    ["waits.workflow.ts"],
+  ));

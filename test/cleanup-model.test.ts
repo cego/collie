@@ -96,96 +96,92 @@ test("cleanup settles hidden history without looking for an interactive host", (
     }),
   ));
 
-test(
-  "the sweep judges from the model as from disk, reading only the files of Runs it removes",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const dir = rig.stateDir;
-        const now = yield* Clock.currentTimeMillis;
-        const tasks: TaskRecord[] = [];
-        const runs: RunFacts[] = [];
-        const views: TaskView[] = [];
-        for (const n of Arr.range(1, RUNS)) {
-          const record: TaskRecord = {
-            id: `task-${n}`,
-            workspace: `w${n}`,
-            label: `project | Work ${n}`,
-            cwd: "/project",
-            created_at: "2026-09-01T00:00:00.000Z",
-          };
-          yield* writeTask(record);
-          const run = yield* madeRun(dir, { id: `r${n}`, task: record.id, state: "succeeded" });
-          const agents = `${dir}/agents/${run.id}`;
-          yield* fs.makeDirectory(agents, { recursive: true });
-          for (const at of [run.dir, agents, run.evidence])
-            yield* fs.writeFileString(`${at}/notes.txt`, "kept\n");
-          tasks.push(record);
-          runs.push(run);
-          views.push(
-            view({
-              id: record.id,
-              state: "done",
-              landed: true,
-              ended: now - (n <= OLD ? 40 : 3) * DAY_MS,
-            }),
-          );
-        }
-        const quiet = DateTime.toDateUtc(DateTime.makeUnsafe(now - 2 * DAY_MS));
-        yield* fs.makeDirectory(`${dir}/runs/ghost`);
-        yield* fs.utimes(`${dir}/runs/ghost`, quiet, quiet);
-        const sweepers = [
-          stateSweeper(dir, new Set(Arr.map(runs, (run) => run.id))),
-          retentionSweeper({
-            stateDir: dir,
-            sessions: [new Herdr(rig.pluginEnv())],
-            facts: Effect.succeed({ tasks, views, runs }),
-            retire: Effect.succeed,
-          }),
-        ];
-
-        const reads: Array<string> = [];
-        const logged = (path: string) => Effect.sync(() => reads.push(path));
-        const model = yield* makeRunModel(dir, "installation").pipe(
-          Effect.provideService(FileSystem.FileSystem, {
-            ...fs,
-            readFileString: (path, encoding) =>
-              logged(path).pipe(Effect.andThen(fs.readFileString(path, encoding))),
-            readDirectory: (path, options) =>
-              logged(path).pipe(Effect.andThen(fs.readDirectory(path, options))),
-            exists: (path) => logged(path).pipe(Effect.andThen(fs.exists(path))),
-            stat: (path) => logged(path).pipe(Effect.andThen(fs.stat(path))),
+test("the sweep judges from the model as from disk, reading only the files of Runs it removes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = rig.stateDir;
+      const now = yield* Clock.currentTimeMillis;
+      const tasks: TaskRecord[] = [];
+      const runs: RunFacts[] = [];
+      const views: TaskView[] = [];
+      for (const n of Arr.range(1, RUNS)) {
+        const record: TaskRecord = {
+          id: `task-${n}`,
+          workspace: `w${n}`,
+          label: `project | Work ${n}`,
+          cwd: "/project",
+          created_at: "2026-09-01T00:00:00.000Z",
+        };
+        yield* writeTask(record);
+        const run = yield* madeRun(dir, { id: `r${n}`, task: record.id, state: "succeeded" });
+        const agents = `${dir}/agents/${run.id}`;
+        yield* fs.makeDirectory(agents, { recursive: true });
+        for (const at of [run.dir, agents, run.evidence])
+          yield* fs.writeFileString(`${at}/notes.txt`, "kept\n");
+        tasks.push(record);
+        runs.push(run);
+        views.push(
+          view({
+            id: record.id,
+            state: "done",
+            landed: true,
+            ended: now - (n <= OLD ? 40 : 3) * DAY_MS,
           }),
         );
-        yield* buildBoard({
-          env: rig.pluginEnv(),
-          runs,
-          registered: [],
-          offers: () => Effect.succeed([]),
-        }).pipe(Effect.provideService(FileSystem.FileSystem, model.reading));
-        const boardRead = reads.length;
+      }
+      const quiet = DateTime.toDateUtc(DateTime.makeUnsafe(now - 2 * DAY_MS));
+      yield* fs.makeDirectory(`${dir}/runs/ghost`);
+      yield* fs.utimes(`${dir}/runs/ghost`, quiet, quiet);
+      const sweepers = [
+        stateSweeper(dir, new Set(Arr.map(runs, (run) => run.id))),
+        retentionSweeper({
+          stateDir: dir,
+          sessions: [new Herdr(rig.pluginEnv())],
+          facts: Effect.succeed({ tasks, views, runs }),
+          retire: Effect.succeed,
+        }),
+      ];
 
-        const fromDisk = yield* judge(sweepers);
-        const fromModel = yield* judge(Arr.map(sweepers, sweepingWith(model.reading)));
-        const removed = Arr.map(fromModel.remove, (item) => item.target);
-        const gone = new Set(["ghost", ...Arr.map(Arr.range(1, OLD), (n) => `r${n}`)]);
-        const keptRunFiles = Arr.filter(reads.slice(boardRead), (path) => {
-          const [top, run] = Str.split(Str.slice(dir.length + 1)(path), "/");
-          return (
-            (top === "runs" || top === "agents" || top === "evidence") &&
-            run !== undefined &&
-            !gone.has(run)
-          );
-        });
+      const reads: Array<string> = [];
+      const logged = (path: string) => Effect.sync(() => reads.push(path));
+      const model = yield* makeRunModel(dir, "installation").pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          readFileString: (path, encoding) =>
+            logged(path).pipe(Effect.andThen(fs.readFileString(path, encoding))),
+          readDirectory: (path, options) =>
+            logged(path).pipe(Effect.andThen(fs.readDirectory(path, options))),
+          exists: (path) => logged(path).pipe(Effect.andThen(fs.exists(path))),
+          stat: (path) => logged(path).pipe(Effect.andThen(fs.stat(path))),
+        }),
+      );
+      yield* buildBoard({
+        env: rig.pluginEnv(),
+        runs,
+        registered: [],
+        offers: () => Effect.succeed([]),
+      }).pipe(Effect.provideService(FileSystem.FileSystem, model.reading));
+      const boardRead = reads.length;
 
-        expect(removed).toEqual([
-          `${dir}/runs/ghost`,
-          ...Arr.map(Arr.range(1, OLD), (n) => `task-${n}`),
-        ]);
-        expect(fromModel).toEqual(fromDisk);
-        expect(keptRunFiles).toEqual([]);
-      }),
-    ),
-  60_000,
-);
+      const fromDisk = yield* judge(sweepers);
+      const fromModel = yield* judge(Arr.map(sweepers, sweepingWith(model.reading)));
+      const removed = Arr.map(fromModel.remove, (item) => item.target);
+      const gone = new Set(["ghost", ...Arr.map(Arr.range(1, OLD), (n) => `r${n}`)]);
+      const keptRunFiles = Arr.filter(reads.slice(boardRead), (path) => {
+        const [top, run] = Str.split(Str.slice(dir.length + 1)(path), "/");
+        return (
+          (top === "runs" || top === "agents" || top === "evidence") &&
+          run !== undefined &&
+          !gone.has(run)
+        );
+      });
+
+      expect(removed).toEqual([
+        `${dir}/runs/ghost`,
+        ...Arr.map(Arr.range(1, OLD), (n) => `task-${n}`),
+      ]);
+      expect(fromModel).toEqual(fromDisk);
+      expect(keptRunFiles).toEqual([]);
+    }),
+  ));

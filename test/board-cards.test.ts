@@ -125,53 +125,49 @@ const planners = (count: number, finished = "2026-10-27T10:00:00Z") =>
     return { dir, env, runs };
   });
 
-test(
-  "a change to one Run derives its Task's card alone, and a minute of ticks derives none",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* TestClock.setTime(NOW);
-        const { dir, env, runs } = yield* planners(RUNS);
-        const model = yield* makeRunModel(dir, "installation");
-        const derived: Array<string> = [];
-        const built = yield* Queue.unbounded<number>();
-        const kept = new Map();
-        const build = buildBoard({
-          env,
-          runs,
-          registered: [],
-          offers: (run) => Effect.sync(() => (derived.push(run), [])),
-          cards: { revision: model.inputsAt, kept },
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, model.reading),
-          Effect.tap(() => Queue.offer(built, derived.length)),
-        );
-        const poked = yield* Queue.unbounded<void>();
-        yield* shareBoard({
-          build,
-          changed: Stream.fromQueue(poked),
-          refresh: Stream.tick("5 seconds"),
-        });
-        yield* Effect.replicateEffect(Queue.take(built), 2);
-        expect(derived.length).toBe(RUNS);
+test("a change to one Run derives its Task's card alone, and a minute of ticks derives none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const { dir, env, runs } = yield* planners(RUNS);
+      const model = yield* makeRunModel(dir, "installation");
+      const derived: Array<string> = [];
+      const built = yield* Queue.unbounded<number>();
+      const kept = new Map();
+      const build = buildBoard({
+        env,
+        runs,
+        registered: [],
+        offers: (run) => Effect.sync(() => (derived.push(run), [])),
+        cards: { revision: model.inputsAt, kept },
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, model.reading),
+        Effect.tap(() => Queue.offer(built, derived.length)),
+      );
+      const poked = yield* Queue.unbounded<void>();
+      yield* shareBoard({
+        build,
+        changed: Stream.fromQueue(poked),
+        refresh: Stream.tick("5 seconds"),
+      });
+      yield* Effect.replicateEffect(Queue.take(built), 2);
+      expect(derived.length).toBe(RUNS);
 
-        const before = derived.length;
-        for (const _ of Arr.range(1, 12)) {
-          yield* TestClock.withLive(Effect.sleep("20 millis"));
-          yield* TestClock.adjust("5 seconds");
-          yield* Queue.take(built);
-        }
-        expect(derived.slice(before)).toEqual([]);
-
-        const changed = runs[41]!;
-        yield* model.writing.writeFileString(`${changed.dir}/handoff.md`, "next\n");
-        yield* Queue.offer(poked, undefined);
+      const before = derived.length;
+      for (const _ of Arr.range(1, 12)) {
+        yield* TestClock.withLive(Effect.sleep("20 millis"));
+        yield* TestClock.adjust("5 seconds");
         yield* Queue.take(built);
-        expect(derived.slice(before)).toEqual([changed.id]);
-      }).pipe(Effect.provide(TestClock.layer())),
-    ),
-  60_000,
-);
+      }
+      expect(derived.slice(before)).toEqual([]);
+
+      const changed = runs[41]!;
+      yield* model.writing.writeFileString(`${changed.dir}/handoff.md`, "next\n");
+      yield* Queue.offer(poked, undefined);
+      yield* Queue.take(built);
+      expect(derived.slice(before)).toEqual([changed.id]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
 
 test("stamping a card's age or record keeps its derivation until source facts change", () =>
   runEffect(

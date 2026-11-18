@@ -22,55 +22,51 @@ const Frame = Schema.fromJsonString(
 );
 
 describe.skipIf(process.platform !== "linux")("the compiled main process", () => {
-  test(
-    "answers the shell over stdio after its Hello, with a fake bridge for collie",
-    () =>
-      runEffect(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-core-" });
-          yield* compileCore(`${dir}/collie-core`);
-          yield* fs.writeFileString(`${dir}/fake-bridge`, "#!/bin/sh\nexec cat >/dev/null\n");
-          yield* fs.chmod(`${dir}/fake-bridge`, 0o755);
-          const core = yield* Effect.acquireRelease(
-            Effect.sync(() =>
-              Bun.spawn([`${dir}/collie-core`], {
-                env: {
-                  PATH: "/usr/bin:/bin",
-                  HOME: dir,
-                  SHELL: "/bin/sh",
-                  XDG_STATE_HOME: `${dir}/state`,
-                  COLLIE_RUNE_USER_DATA: `${dir}/data`,
-                  COLLIE_DESKTOP_COLLIE: `["${dir}/fake-bridge"]`,
-                },
-                stdin: "pipe",
-                stdout: "pipe",
-                stderr: "ignore",
-              }),
-            ),
-            (child) => Effect.sync(() => child.kill("SIGKILL")),
-          );
-          void core.stdin.write('{"_tag":"Hello"}\n');
-          void core.stdin.write(
-            '{"_tag":"Request","id":"0","tag":"syncNow","payload":{"profile":"nobody"},"headers":[]}\n',
-          );
-          void core.stdin.flush();
-          const answer = yield* Stream.fromReadableStream({
-            evaluate: () => core.stdout,
-            onError: String,
-          }).pipe(
-            Stream.decodeText(),
-            Stream.splitLines,
-            Stream.mapEffect((line) => Schema.decodeEffect(Frame)(line)),
-            Stream.filter((frame) => frame._tag === "Exit"),
-            Stream.runHead,
-            Effect.timeout("60 seconds"),
-          );
-          expect(Option.getOrUndefined(answer)).toEqual({ _tag: "Exit", requestId: "0" });
-        }),
-      ),
-    120_000,
-  );
+  test("answers the shell over stdio after its Hello, with a fake bridge for collie", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-core-" });
+        yield* compileCore(`${dir}/collie-core`);
+        yield* fs.writeFileString(`${dir}/fake-bridge`, "#!/bin/sh\nexec cat >/dev/null\n");
+        yield* fs.chmod(`${dir}/fake-bridge`, 0o755);
+        const core = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            Bun.spawn([`${dir}/collie-core`], {
+              env: {
+                PATH: "/usr/bin:/bin",
+                HOME: dir,
+                SHELL: "/bin/sh",
+                XDG_STATE_HOME: `${dir}/state`,
+                COLLIE_RUNE_USER_DATA: `${dir}/data`,
+                COLLIE_DESKTOP_COLLIE: `["${dir}/fake-bridge"]`,
+              },
+              stdin: "pipe",
+              stdout: "pipe",
+              stderr: "ignore",
+            }),
+          ),
+          (child) => Effect.sync(() => child.kill("SIGKILL")),
+        );
+        void core.stdin.write('{"_tag":"Hello"}\n');
+        void core.stdin.write(
+          '{"_tag":"Request","id":"0","tag":"syncNow","payload":{"profile":"nobody"},"headers":[]}\n',
+        );
+        void core.stdin.flush();
+        const answer = yield* Stream.fromReadableStream({
+          evaluate: () => core.stdout,
+          onError: String,
+        }).pipe(
+          Stream.decodeText(),
+          Stream.splitLines,
+          Stream.mapEffect((line) => Schema.decodeEffect(Frame)(line)),
+          Stream.filter((frame) => frame._tag === "Exit"),
+          Stream.runHead,
+          Effect.timeout("60 seconds"),
+        );
+        expect(Option.getOrUndefined(answer)).toEqual({ _tag: "Exit", requestId: "0" });
+      }),
+    ));
 });
 
 const filesUnder = (dir: string) =>

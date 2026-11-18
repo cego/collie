@@ -44,88 +44,84 @@ const written = (path: string, text: string, days: number) =>
     yield* aged(path, days);
   });
 
-test(
-  "cleanup removes state no Run's row owns once it is a day quiet, and keeps what it does not know",
-  () =>
-    hosted("collie-cleanup-state-", ({ world }) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const state = world.state;
-        const real = yield* settledRun(world, "hello");
-        yield* written(`${state}/runs/old-x/run.json`, "{}", 2);
-        yield* aged(`${state}/runs/old-x`, 2);
-        yield* written(`${state}/runs/new-x/run.json`, "{}", 0);
-        yield* written(`${state}/events.run-x.log`, "", 2);
-        yield* written(`${state}/plans/p/plan.md`, "", 2);
-        yield* aged(`${state}/plans`, 2);
-        yield* written(`${state}/runs/.seq`, "7", 2);
-        yield* written(`${state}/notes.txt`, "mine", 2);
-        yield* written(`${state}/stop.run-deadbeef`, "", 2);
-        yield* written(`${state}/stop.${real.id}`, "", 2);
-        yield* written(`${state}/agents/abc123/deliveries.jsonl`, '{"run":"run-deadbeef"}\n', 2);
-        yield* aged(`${state}/agents/abc123`, 2);
-        yield* written(
-          `${state}/agents/def456/deliveries.jsonl`,
-          `{"run":"run-deadbeef"}\n{"run":"${real.id}"}\n`,
-          2,
-        );
-        yield* aged(`${state}/agents/def456`, 2);
-        yield* written(`${state}/requests/run-start/old.json`, "{}", 31);
-        yield* written(`${state}/requests/run-start/new.json`, "{}", 1);
-        yield* written(`${state}/schedules/daily/schedule.json`, "{}", 2);
-        yield* aged(`${state}/schedules`, 2);
+test("cleanup removes state no Run's row owns once it is a day quiet, and keeps what it does not know", () =>
+  hosted("collie-cleanup-state-", ({ world }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = world.state;
+      const real = yield* settledRun(world, "hello");
+      yield* written(`${state}/runs/old-x/run.json`, "{}", 2);
+      yield* aged(`${state}/runs/old-x`, 2);
+      yield* written(`${state}/runs/new-x/run.json`, "{}", 0);
+      yield* written(`${state}/events.run-x.log`, "", 2);
+      yield* written(`${state}/plans/p/plan.md`, "", 2);
+      yield* aged(`${state}/plans`, 2);
+      yield* written(`${state}/runs/.seq`, "7", 2);
+      yield* written(`${state}/notes.txt`, "mine", 2);
+      yield* written(`${state}/stop.run-deadbeef`, "", 2);
+      yield* written(`${state}/stop.${real.id}`, "", 2);
+      yield* written(`${state}/agents/abc123/deliveries.jsonl`, '{"run":"run-deadbeef"}\n', 2);
+      yield* aged(`${state}/agents/abc123`, 2);
+      yield* written(
+        `${state}/agents/def456/deliveries.jsonl`,
+        `{"run":"run-deadbeef"}\n{"run":"${real.id}"}\n`,
+        2,
+      );
+      yield* aged(`${state}/agents/def456`, 2);
+      yield* written(`${state}/requests/run-start/old.json`, "{}", 31);
+      yield* written(`${state}/requests/run-start/new.json`, "{}", 1);
+      yield* written(`${state}/schedules/daily/schedule.json`, "{}", 2);
+      yield* aged(`${state}/schedules`, 2);
 
-        const listed = Listed((yield* collie(world, ["cleanup"])).envelope.data);
-        const removable = Arr.map(
-          Arr.filter(listed.remove, (item) => item.kind === "state"),
-          (item) => pipe(item.target, Str.slice(state.length + 1)),
-        ).sort();
-        expect(removable).toEqual([
-          "events.run-x.log",
-          "plans",
-          "requests/run-start/old.json",
-          "runs/.seq",
-          "runs/old-x",
-          "stop.run-deadbeef",
-        ]);
-        expect(listed.keep).toContainEqual({
-          kind: "state",
-          target: `${state}/runs/new-x`,
-          reason: "changed in the last day",
-        });
-        expect(listed.keep).toContainEqual({
-          kind: "state",
-          target: `${state}/notes.txt`,
-          reason: "not a kind Collie knows",
-        });
-        expect(listed.keep).toContainEqual({
-          kind: "state",
-          target: `${state}/schedules`,
-          reason: "the Schedules this host fires",
-        });
+      const listed = Listed((yield* collie(world, ["cleanup"])).envelope.data);
+      const removable = Arr.map(
+        Arr.filter(listed.remove, (item) => item.kind === "state"),
+        (item) => pipe(item.target, Str.slice(state.length + 1)),
+      ).sort();
+      expect(removable).toEqual([
+        "events.run-x.log",
+        "plans",
+        "requests/run-start/old.json",
+        "runs/.seq",
+        "runs/old-x",
+        "stop.run-deadbeef",
+      ]);
+      expect(listed.keep).toContainEqual({
+        kind: "state",
+        target: `${state}/runs/new-x`,
+        reason: "changed in the last day",
+      });
+      expect(listed.keep).toContainEqual({
+        kind: "state",
+        target: `${state}/notes.txt`,
+        reason: "not a kind Collie knows",
+      });
+      expect(listed.keep).toContainEqual({
+        kind: "state",
+        target: `${state}/schedules`,
+        reason: "the Schedules this host fires",
+      });
 
-        const swept = yield* collie(world, ["cleanup", "--apply"]);
-        expect(swept.envelope).toMatchObject({ ok: true });
-        for (const gone of removable)
-          expect([gone, yield* fs.exists(`${state}/${gone}`)]).toEqual([gone, false]);
-        for (const kept of [
-          "notes.txt",
-          "runs/new-x",
-          `stop.${real.id}`,
-          "agents/abc123",
-          "agents/def456",
-          "requests/run-start/new.json",
-          "schedules/daily/schedule.json",
-          `runs/${real.id}`,
-          "host.db",
-        ])
-          expect([kept, yield* fs.exists(`${state}/${kept}`)]).toEqual([kept, true]);
-        const shown = yield* collie(world, ["run", "show", real.id]);
-        expect(shown.envelope).toMatchObject({ ok: true });
-      }),
-    ),
-  60_000,
-);
+      const swept = yield* collie(world, ["cleanup", "--apply"]);
+      expect(swept.envelope).toMatchObject({ ok: true });
+      for (const gone of removable)
+        expect([gone, yield* fs.exists(`${state}/${gone}`)]).toEqual([gone, false]);
+      for (const kept of [
+        "notes.txt",
+        "runs/new-x",
+        `stop.${real.id}`,
+        "agents/abc123",
+        "agents/def456",
+        "requests/run-start/new.json",
+        "schedules/daily/schedule.json",
+        `runs/${real.id}`,
+        "host.db",
+      ])
+        expect([kept, yield* fs.exists(`${state}/${kept}`)]).toEqual([kept, true]);
+      const shown = yield* collie(world, ["run", "show", real.id]);
+      expect(shown.envelope).toMatchObject({ ok: true });
+    }),
+  ));
 
 test("cleanup lists nothing of a running check's record, fresh or a day old", () =>
   hosted("collie-cleanup-checks-", ({ world }) =>

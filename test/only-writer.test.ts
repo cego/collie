@@ -32,270 +32,252 @@ const auditAt = (state: string, dir: string) =>
 const answers = (lines: ReadonlyArray<{ readonly kind: string }>) =>
   Arr.filter(lines, (line) => line.kind === "confirmed" || line.kind === "declined");
 
-test(
-  "a proposal is confirmed or declined by the host, by its id and hash, once per request",
-  () =>
-    proves(
-      "collie-writer-proposal-",
-      (world) =>
-        Effect.gen(function* () {
-          const file = "some-herd";
-          const proposed = (why: string) =>
-            recordProposal(file, {
-              interpretation: why,
-              targets: [],
-              actions: [{ kind: "none", why }],
-              allowedNow: [],
-              intentVersions: {},
-              by: "evaluator:e-1",
-            }).pipe(Effect.provide(recordsAt(world.state)));
-          const first = yield* proposed("nothing to do");
-          const second = yield* proposed("still nothing");
-          const client = yield* connect(world.state);
-          yield* client.declare({ frontDoor: "chat" });
-
-          const wrong = yield* client
-            .confirm({ proposal: first.id, hash: "not-it", request: "r-0" })
-            .pipe(Effect.flip);
-          expect(wrong).toMatchObject({ _tag: "ProposalRefused", refused: "hash_mismatch" });
-
-          const yes = { proposal: first.id, hash: first.content_hash, request: "r-1" };
-          const done = yield* client.confirm(yes);
-          const changed = yield* client.confirm({ ...yes, hash: "other" }).pipe(Effect.flip);
-          expect(changed).toMatchObject({ _tag: "ProposalRefused", refused: "hash_mismatch" });
-          expect(done.results).toEqual([
-            { index: 0, kind: "none", state: "applied", note: "nothing to do", run: null },
-          ]);
-          expect(yield* client.confirm(yes)).toEqual(done);
-          const conflict = yield* client
-            .decline({ proposal: second.id, hash: second.content_hash, request: "r-1" })
-            .pipe(Effect.flip);
-          expect(conflict._tag).toBe("RequestConflict");
-
-          yield* client.decline({ proposal: second.id, hash: second.content_hash, request: "r-2" });
-          expect(answers(yield* hostRecords(world.state, readProposals(file)))).toMatchObject([
-            { kind: "confirmed", id: first.id, by: "chat:r-1" },
-            { kind: "declined", id: second.id, by: "chat:r-2" },
-          ]);
-          const missing = yield* client
-            .decline({ proposal: "p-none", hash: "x", request: "r-3" })
-            .pipe(Effect.flip);
-          expect(missing).toMatchObject({ _tag: "ProposalRefused", refused: "not_found" });
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      [],
-    ),
-  120_000,
-);
-
-test(
-  "a confirm retried while its carry-out still runs answers what it came to",
-  () =>
-    proves(
-      "collie-writer-inflight-",
-      (world, core) =>
-        Effect.gen(function* () {
-          const release = core.hold("terminal.list");
-          yield* Effect.addFinalizer(() => Effect.sync(release));
-          const file = "some-herd";
-          const proposal = yield* recordProposal(file, {
-            interpretation: "clean up finished work",
+test("a proposal is confirmed or declined by the host, by its id and hash, once per request", () =>
+  proves(
+    "collie-writer-proposal-",
+    (world) =>
+      Effect.gen(function* () {
+        const file = "some-herd";
+        const proposed = (why: string) =>
+          recordProposal(file, {
+            interpretation: why,
             targets: [],
-            actions: [{ kind: "cleanup" }],
+            actions: [{ kind: "none", why }],
             allowedNow: [],
             intentVersions: {},
             by: "evaluator:e-1",
           }).pipe(Effect.provide(recordsAt(world.state)));
-          const yes = { proposal: proposal.id, hash: proposal.content_hash, request: "r-1" };
-          const first = yield* Effect.forkChild(
-            Effect.scoped(Effect.flatMap(connect(world.state), (client) => client.confirm(yes))),
-          );
-          yield* until(
-            () => hostRecords(world.state, readProposals(file)),
-            (lines) => Arr.some(lines, (line) => line.kind === "step" && line.state === "started"),
-          );
-          yield* Fiber.interrupt(first);
-          const client = yield* connect(world.state);
-          const other = yield* client.confirm({ ...yes, request: "r-2" }).pipe(Effect.flip);
-          expect(other).toMatchObject({ _tag: "ProposalRefused", refused: "not_pending" });
-          const retried = yield* Effect.forkChild(client.confirm(yes));
-          yield* Effect.sleep("1 second");
-          release();
-          const answered = yield* Fiber.join(retried);
-          expect(answered.results).toMatchObject([{ index: 0, kind: "cleanup", state: "applied" }]);
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      [],
-    ),
-  120_000,
-);
+        const first = yield* proposed("nothing to do");
+        const second = yield* proposed("still nothing");
+        const client = yield* connect(world.state);
+        yield* client.declare({ frontDoor: "chat" });
 
-test(
-  "what chat asks for is recorded and carried out by the host, once per request",
-  () =>
-    proves(
-      "collie-writer-propose-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const file = "some-herd";
-          const client = yield* connect(world.state);
-          yield* client.declare({ frontDoor: "chat" });
-          const asked = {
-            herd: "some-herd",
-            interpretation: "nothing, on purpose",
-            actions: [{ kind: "none", why: "nothing to do" }],
-            request: "q-1",
-          };
+        const wrong = yield* client
+          .confirm({ proposal: first.id, hash: "not-it", request: "r-0" })
+          .pipe(Effect.flip);
+        expect(wrong).toMatchObject({ _tag: "ProposalRefused", refused: "hash_mismatch" });
 
-          const said = yield* client.propose(asked);
-          expect(said.ok).toBe(true);
-          expect(yield* client.propose(asked)).toEqual(said);
-          const lines = yield* hostRecords(world.state, readProposals(file));
-          expect(Arr.filter(lines, (line) => line.kind === "proposal")).toMatchObject([
-            { by: "chat:q-1" },
-          ]);
-          expect(answers(lines)).toMatchObject([{ kind: "confirmed", by: "chat:q-1" }]);
+        const yes = { proposal: first.id, hash: first.content_hash, request: "r-1" };
+        const done = yield* client.confirm(yes);
+        const changed = yield* client.confirm({ ...yes, hash: "other" }).pipe(Effect.flip);
+        expect(changed).toMatchObject({ _tag: "ProposalRefused", refused: "hash_mismatch" });
+        expect(done.results).toEqual([
+          { index: 0, kind: "none", state: "applied", note: "nothing to do", run: null },
+        ]);
+        expect(yield* client.confirm(yes)).toEqual(done);
+        const conflict = yield* client
+          .decline({ proposal: second.id, hash: second.content_hash, request: "r-1" })
+          .pipe(Effect.flip);
+        expect(conflict._tag).toBe("RequestConflict");
 
-          const unknown = yield* client.propose({
-            ...asked,
-            actions: [{ kind: "rm-rf" }],
-            request: "q-2",
-          });
-          expect(unknown).toMatchObject({ ok: false, code: "invalid_input" });
-          const escaped = yield* client.propose({ ...asked, herd: "../../x", request: "q-6" });
-          expect(escaped).toMatchObject({ ok: false, code: "invalid_input" });
-          expect(yield* fs.exists(`${world.state}/../x`)).toBe(false);
-          const acted = yield* client
-            .act({ actions: [{ kind: "rm-rf" }], request: "q-3" })
-            .pipe(Effect.flip);
-          expect(acted._tag).toBe("HostRefused");
-          expect(acted).toMatchObject({
-            reason: 'invalid_input: actions[0] has kind "rm-rf", which is not a kind Collie takes',
-          });
-          expect(unknown.human).toContain('actions[0] has kind "rm-rf"');
-          const textless = [
-            { kind: "stop", run: "r-1" },
-            { kind: "deliver", run: "r-1" },
-          ];
-          const untold = yield* client.act({ actions: textless, request: "q-7" }).pipe(Effect.flip);
-          expect(untold).toMatchObject({
-            _tag: "HostRefused",
-            reason: 'invalid_input: actions[1] (kind "deliver"): Missing key at ["text"]',
-          });
-          const proposed = yield* client.propose({ ...asked, actions: textless, request: "q-8" });
-          expect(proposed).toMatchObject({ ok: false, code: "invalid_input" });
-          expect(proposed.human).toContain('actions[1] (kind "deliver"): Missing key at ["text"]');
-          const nobody = yield* client
-            .reconcile({ proposal: "p-none", index: 0, as: "applied", request: "q-4" })
-            .pipe(Effect.flip);
-          expect(nobody).toMatchObject({ _tag: "ProposalRefused", refused: "not_found" });
-          const other = yield* client.propose({ ...asked, interpretation: "something else" });
-          expect(other).toMatchObject({ ok: false, code: "invalid_input" });
-          const unasked = yield* client
-            .act({ actions: [{ kind: "home_cleanup" }], request: "q-5" })
-            .pipe(Effect.flip);
-          expect(unasked._tag).toBe("HostRefused");
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      [],
-    ),
-  120_000,
-);
+        yield* client.decline({ proposal: second.id, hash: second.content_hash, request: "r-2" });
+        expect(answers(yield* hostRecords(world.state, readProposals(file)))).toMatchObject([
+          { kind: "confirmed", id: first.id, by: "chat:r-1" },
+          { kind: "declined", id: second.id, by: "chat:r-2" },
+        ]);
+        const missing = yield* client
+          .decline({ proposal: "p-none", hash: "x", request: "r-3" })
+          .pipe(Effect.flip);
+        expect(missing).toMatchObject({ _tag: "ProposalRefused", refused: "not_found" });
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    [],
+  ));
 
-test(
-  "what became of a Run and its follow-up are the host's to write, stamped with who asked",
-  () =>
-    proves(
-      "collie-writer-run-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const client = yield* connect(world.state);
-          yield* client.declare({ frontDoor: "board" });
-          const started = yield* client.start({
-            project: world.project,
-            id: "followed",
-            request: "s-1",
-            input: { text: "first" },
-          });
-          const runId = started.runId;
-          yield* until(
-            () => client.run({ runId }),
-            (view) => view?.status.status === "complete",
-          );
+test("a confirm retried while its carry-out still runs answers what it came to", () =>
+  proves(
+    "collie-writer-inflight-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const release = core.hold("terminal.list");
+        yield* Effect.addFinalizer(() => Effect.sync(release));
+        const file = "some-herd";
+        const proposal = yield* recordProposal(file, {
+          interpretation: "clean up finished work",
+          targets: [],
+          actions: [{ kind: "cleanup" }],
+          allowedNow: [],
+          intentVersions: {},
+          by: "evaluator:e-1",
+        }).pipe(Effect.provide(recordsAt(world.state)));
+        const yes = { proposal: proposal.id, hash: proposal.content_hash, request: "r-1" };
+        const first = yield* Effect.forkChild(
+          Effect.scoped(Effect.flatMap(connect(world.state), (client) => client.confirm(yes))),
+        );
+        yield* until(
+          () => hostRecords(world.state, readProposals(file)),
+          (lines) => Arr.some(lines, (line) => line.kind === "step" && line.state === "started"),
+        );
+        yield* Fiber.interrupt(first);
+        const client = yield* connect(world.state);
+        const other = yield* client.confirm({ ...yes, request: "r-2" }).pipe(Effect.flip);
+        expect(other).toMatchObject({ _tag: "ProposalRefused", refused: "not_pending" });
+        const retried = yield* Effect.forkChild(client.confirm(yes));
+        yield* Effect.sleep("1 second");
+        release();
+        const answered = yield* Fiber.join(retried);
+        expect(answered.results).toMatchObject([{ index: 0, kind: "cleanup", state: "applied" }]);
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    [],
+  ));
 
-          const followUp = {
-            actions: [{ kind: "followup", run: runId, text: "more" }],
-            request: "a-1",
-          };
-          const acted = yield* client.act(followUp);
-          expect(yield* client.act(followUp)).toEqual(acted);
-          const children = Arr.filter(
-            yield* client.runs({ task: null }),
-            (one) => one.parent === runId,
-          );
-          expect(children).toHaveLength(1);
-          const proposed = {
-            ...followUp,
-            herd: "some-herd",
-            interpretation: "more",
-            request: "p-1",
-          };
-          yield* client.propose(proposed);
-          yield* fs.remove(`${world.state}/herd/some-herd/operations.jsonl`);
-          yield* client.propose(proposed);
-          const afterPropose = Arr.filter(
-            yield* client.runs({ task: null }),
-            (one) => one.parent === runId,
-          );
-          expect(afterPropose).toHaveLength(2);
+test("what chat asks for is recorded and carried out by the host, once per request", () =>
+  proves(
+    "collie-writer-propose-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const file = "some-herd";
+        const client = yield* connect(world.state);
+        yield* client.declare({ frontDoor: "chat" });
+        const asked = {
+          herd: "some-herd",
+          interpretation: "nothing, on purpose",
+          actions: [{ kind: "none", why: "nothing to do" }],
+          request: "q-1",
+        };
 
-          const child = yield* client.followUp({ runId, text: "what is left", request: "f-1" });
-          expect((yield* client.run({ runId: child.runId }))?.parent).toBe(runId);
-          expect(
-            (yield* client.followUp({ runId, text: "what is left", request: "f-1" })).runId,
-          ).toBe(child.runId);
-          const unknown = yield* client
-            .followUp({ runId: "run-none", text: "x", request: "f-2" })
-            .pipe(Effect.flip);
-          expect(unknown._tag).toBe("HostRefused");
+        const said = yield* client.propose(asked);
+        expect(said.ok).toBe(true);
+        expect(yield* client.propose(asked)).toEqual(said);
+        const lines = yield* hostRecords(world.state, readProposals(file));
+        expect(Arr.filter(lines, (line) => line.kind === "proposal")).toMatchObject([
+          { by: "chat:q-1" },
+        ]);
+        expect(answers(lines)).toMatchObject([{ kind: "confirmed", by: "chat:q-1" }]);
 
-          const asked = { runId, kind: "merged", ref: "mr!7", note: null, request: "d-1" } as const;
-          const line = yield* client.dispose(asked);
-          expect(line).toMatchObject({ kind: "merged", ref: "mr!7", by: "human:d-1" });
-          expect(yield* client.dispose(asked)).toEqual(line);
-          const otherwise = yield* client
-            .dispose({ ...asked, kind: "abandoned" })
-            .pipe(Effect.flip);
-          expect(otherwise._tag).toBe("RequestConflict");
-          expect(yield* client.focus({ runId, request: "fo-1" }).pipe(Effect.flip)).toMatchObject({
-            _tag: "HostRefused",
-            reason: `${runId} has no live agent on core`,
-          });
-          yield* client.grant({ runId, name: "lint", command: null, request: "g-1" });
-          const dir = runDir(world.state, runId);
-          expect(yield* hostRecords(world.state, readDispositions(dir))).toEqual([line]);
-          expect(
-            Arr.map(yield* auditAt(world.state, dir), (one) => [
-              one.operation,
-              one.actor.origin,
-              one.request,
-            ]),
-          ).toEqual([
-            ["start", "board", "s-1"],
-            ["followup", "board", "a-1:0"],
-            ["followup", "board", "p-1:0"],
-            ["followup", "board", "f-1"],
-            ["disposition", "board", "d-1"],
-            ["grant", "board", "g-1"],
-          ]);
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["followed.workflow.ts"],
-    ),
-  120_000,
-);
+        const unknown = yield* client.propose({
+          ...asked,
+          actions: [{ kind: "rm-rf" }],
+          request: "q-2",
+        });
+        expect(unknown).toMatchObject({ ok: false, code: "invalid_input" });
+        const escaped = yield* client.propose({ ...asked, herd: "../../x", request: "q-6" });
+        expect(escaped).toMatchObject({ ok: false, code: "invalid_input" });
+        expect(yield* fs.exists(`${world.state}/../x`)).toBe(false);
+        const acted = yield* client
+          .act({ actions: [{ kind: "rm-rf" }], request: "q-3" })
+          .pipe(Effect.flip);
+        expect(acted._tag).toBe("HostRefused");
+        expect(acted).toMatchObject({
+          reason: 'invalid_input: actions[0] has kind "rm-rf", which is not a kind Collie takes',
+        });
+        expect(unknown.human).toContain('actions[0] has kind "rm-rf"');
+        const textless = [
+          { kind: "stop", run: "r-1" },
+          { kind: "deliver", run: "r-1" },
+        ];
+        const untold = yield* client.act({ actions: textless, request: "q-7" }).pipe(Effect.flip);
+        expect(untold).toMatchObject({
+          _tag: "HostRefused",
+          reason: 'invalid_input: actions[1] (kind "deliver"): Missing key at ["text"]',
+        });
+        const proposed = yield* client.propose({ ...asked, actions: textless, request: "q-8" });
+        expect(proposed).toMatchObject({ ok: false, code: "invalid_input" });
+        expect(proposed.human).toContain('actions[1] (kind "deliver"): Missing key at ["text"]');
+        const nobody = yield* client
+          .reconcile({ proposal: "p-none", index: 0, as: "applied", request: "q-4" })
+          .pipe(Effect.flip);
+        expect(nobody).toMatchObject({ _tag: "ProposalRefused", refused: "not_found" });
+        const other = yield* client.propose({ ...asked, interpretation: "something else" });
+        expect(other).toMatchObject({ ok: false, code: "invalid_input" });
+        const unasked = yield* client
+          .act({ actions: [{ kind: "home_cleanup" }], request: "q-5" })
+          .pipe(Effect.flip);
+        expect(unasked._tag).toBe("HostRefused");
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    [],
+  ));
+
+test("what became of a Run and its follow-up are the host's to write, stamped with who asked", () =>
+  proves(
+    "collie-writer-run-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const client = yield* connect(world.state);
+        yield* client.declare({ frontDoor: "board" });
+        const started = yield* client.start({
+          project: world.project,
+          id: "followed",
+          request: "s-1",
+          input: { text: "first" },
+        });
+        const runId = started.runId;
+        yield* until(
+          () => client.run({ runId }),
+          (view) => view?.status.status === "complete",
+        );
+
+        const followUp = {
+          actions: [{ kind: "followup", run: runId, text: "more" }],
+          request: "a-1",
+        };
+        const acted = yield* client.act(followUp);
+        expect(yield* client.act(followUp)).toEqual(acted);
+        const children = Arr.filter(
+          yield* client.runs({ task: null }),
+          (one) => one.parent === runId,
+        );
+        expect(children).toHaveLength(1);
+        const proposed = {
+          ...followUp,
+          herd: "some-herd",
+          interpretation: "more",
+          request: "p-1",
+        };
+        yield* client.propose(proposed);
+        yield* fs.remove(`${world.state}/herd/some-herd/operations.jsonl`);
+        yield* client.propose(proposed);
+        const afterPropose = Arr.filter(
+          yield* client.runs({ task: null }),
+          (one) => one.parent === runId,
+        );
+        expect(afterPropose).toHaveLength(2);
+
+        const child = yield* client.followUp({ runId, text: "what is left", request: "f-1" });
+        expect((yield* client.run({ runId: child.runId }))?.parent).toBe(runId);
+        expect(
+          (yield* client.followUp({ runId, text: "what is left", request: "f-1" })).runId,
+        ).toBe(child.runId);
+        const unknown = yield* client
+          .followUp({ runId: "run-none", text: "x", request: "f-2" })
+          .pipe(Effect.flip);
+        expect(unknown._tag).toBe("HostRefused");
+
+        const asked = { runId, kind: "merged", ref: "mr!7", note: null, request: "d-1" } as const;
+        const line = yield* client.dispose(asked);
+        expect(line).toMatchObject({ kind: "merged", ref: "mr!7", by: "human:d-1" });
+        expect(yield* client.dispose(asked)).toEqual(line);
+        const otherwise = yield* client.dispose({ ...asked, kind: "abandoned" }).pipe(Effect.flip);
+        expect(otherwise._tag).toBe("RequestConflict");
+        expect(yield* client.focus({ runId, request: "fo-1" }).pipe(Effect.flip)).toMatchObject({
+          _tag: "HostRefused",
+          reason: `${runId} has no live agent on core`,
+        });
+        yield* client.grant({ runId, name: "lint", command: null, request: "g-1" });
+        const dir = runDir(world.state, runId);
+        expect(yield* hostRecords(world.state, readDispositions(dir))).toEqual([line]);
+        expect(
+          Arr.map(yield* auditAt(world.state, dir), (one) => [
+            one.operation,
+            one.actor.origin,
+            one.request,
+          ]),
+        ).toEqual([
+          ["start", "board", "s-1"],
+          ["followup", "board", "a-1:0"],
+          ["followup", "board", "p-1:0"],
+          ["followup", "board", "f-1"],
+          ["disposition", "board", "d-1"],
+          ["grant", "board", "g-1"],
+        ]);
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["followed.workflow.ts"],
+  ));
 
 const CLAUDE_HELP = Arr.join(
   [
@@ -312,226 +294,203 @@ const CLAUDE_HELP = Arr.join(
   " ",
 );
 
-test(
-  "a steer from the command line is the host's: it asks, records and carries out",
-  () =>
-    proves(
-      "collie-writer-steer-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const bin = `${world.home}/bin`;
-          yield* fs.makeDirectory(bin, { recursive: true });
-          const env = {
-            PATH: `${bin}:/usr/bin:/bin`,
-          };
-          const started = yield* collie(
-            world,
-            ["run", "start", "plain", "--input", "note=hi"],
-            env,
-          );
-          const { runId } = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({ runId: Schema.String }),
-          )(started.envelope.data);
-          const answer = `{"interpretation":"nothing needs doing","targets":[{"run":"${runId}"}],"actions":[{"kind":"none","why":"it is fine"}],"confidence":1}`;
-          yield* fs.writeFileString(
-            `${bin}/claude`,
-            `#!/bin/sh\n[ "$1" = --help ] && echo '${CLAUDE_HELP}' && exit 0\ncat >/dev/null\necho '${answer}'\n`,
-            { mode: 0o755 },
-          );
+test("a steer from the command line is the host's: it asks, records and carries out", () =>
+  proves(
+    "collie-writer-steer-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = `${world.home}/bin`;
+        yield* fs.makeDirectory(bin, { recursive: true });
+        const env = {
+          PATH: `${bin}:/usr/bin:/bin`,
+        };
+        const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"], env);
+        const { runId } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ runId: Schema.String }),
+        )(started.envelope.data);
+        const answer = `{"interpretation":"nothing needs doing","targets":[{"run":"${runId}"}],"actions":[{"kind":"none","why":"it is fine"}],"confidence":1}`;
+        yield* fs.writeFileString(
+          `${bin}/claude`,
+          `#!/bin/sh\n[ "$1" = --help ] && echo '${CLAUDE_HELP}' && exit 0\ncat >/dev/null\necho '${answer}'\n`,
+          { mode: 0o755 },
+        );
 
-          const said = yield* collie(
-            world,
-            ["steer", "is it all right?", "--target", `run:${runId}`],
-            env,
-          );
-          expect(said.envelope).toMatchObject({ ok: true });
-          const audit = yield* auditAt(world.state, runDir(world.state, runId));
-          expect(Arr.map(audit, (one) => [one.operation, one.actor.origin])).toContainEqual([
-            "steer",
-            "cli",
-          ]);
-          const client = yield* connect(world.state);
-          const again = { runId, text: "and now?", from: null, dryRun: false, request: "st-1" };
-          const first = yield* client.steerAbout(again);
-          expect(first.ok).toBe(true);
-          yield* fs.writeFileString(`${bin}/claude`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-          expect(yield* client.steerAbout(again)).toEqual(first);
-          const journal = yield* hostRecords(world.state, everyProposal);
-          expect(answers(journal)).toMatchObject([{ kind: "confirmed" }, { kind: "confirmed" }]);
-          const other = `${world.state}/other.sock`;
-          const defaults = pipe_(
-            answer,
-            Str.replace(
-              '{"kind":"none","why":"it is fine"}',
-              `{"kind":"update_defaults","change":"add-constraint","workspace":"${world.project}","text":"no rebase"}`,
+        const said = yield* collie(
+          world,
+          ["steer", "is it all right?", "--target", `run:${runId}`],
+          env,
+        );
+        expect(said.envelope).toMatchObject({ ok: true });
+        const audit = yield* auditAt(world.state, runDir(world.state, runId));
+        expect(Arr.map(audit, (one) => [one.operation, one.actor.origin])).toContainEqual([
+          "steer",
+          "cli",
+        ]);
+        const client = yield* connect(world.state);
+        const again = { runId, text: "and now?", from: null, dryRun: false, request: "st-1" };
+        const first = yield* client.steerAbout(again);
+        expect(first.ok).toBe(true);
+        yield* fs.writeFileString(`${bin}/claude`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+        expect(yield* client.steerAbout(again)).toEqual(first);
+        const journal = yield* hostRecords(world.state, everyProposal);
+        expect(answers(journal)).toMatchObject([{ kind: "confirmed" }, { kind: "confirmed" }]);
+        const other = `${world.state}/other.sock`;
+        const defaults = pipe_(
+          answer,
+          Str.replace(
+            '{"kind":"none","why":"it is fine"}',
+            `{"kind":"update_defaults","change":"add-constraint","workspace":"${world.project}","text":"no rebase"}`,
+          ),
+        );
+        yield* fs.writeFileString(
+          `${bin}/claude`,
+          `#!/bin/sh\n[ "$1" = --help ] && echo '${CLAUDE_HELP}' && exit 0\ncat >/dev/null\necho '${defaults}'\n`,
+          { mode: 0o755 },
+        );
+        const elsewhere = yield* connect(world.state);
+        yield* elsewhere.declare({ frontDoor: "cli", session: other });
+        const steered = yield* elsewhere.steerAbout({ ...again, request: "st-2" });
+        expect(steered.ok).toBe(true);
+        const theirs = yield* defaultsPath(
+          world.state,
+          scopeKey({ session: null, workspaceId: null, cwd: world.project }),
+        );
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(yield* readDefaults(theirs)), (present) =>
+              Arr.map(present.constraints, (c) => c.text),
             ),
-          );
-          yield* fs.writeFileString(
-            `${bin}/claude`,
-            `#!/bin/sh\n[ "$1" = --help ] && echo '${CLAUDE_HELP}' && exit 0\ncat >/dev/null\necho '${defaults}'\n`,
-            { mode: 0o755 },
-          );
-          const elsewhere = yield* connect(world.state);
-          yield* elsewhere.declare({ frontDoor: "cli", session: other });
-          const steered = yield* elsewhere.steerAbout({ ...again, request: "st-2" });
-          expect(steered.ok).toBe(true);
-          const theirs = yield* defaultsPath(
-            world.state,
-            scopeKey({ session: null, workspaceId: null, cwd: world.project }),
-          );
-          expect(
-            Option.getOrUndefined(
-              Option.map(Option.fromNullishOr(yield* readDefaults(theirs)), (present) =>
-                Arr.map(present.constraints, (c) => c.text),
-              ),
-            ),
-          ).toEqual(["no rebase"]);
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+          ),
+        ).toEqual(["no rebase"]);
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["plain.workflow.ts"],
+  ));
 
-test(
-  "a Run parked at the old evidence gate refuses that answer, and goes on once a check is named and it is resumed",
-  () =>
-    proves(
-      "collie-writer-old-gate-",
-      (world) =>
-        Effect.gen(function* () {
-          const client = yield* connect(world.state);
-          const started = yield* client.start({
-            project: world.project,
-            id: "gated",
-            request: "g-0",
-            input: { note: "x" },
-          });
-          const runId = started.runId;
-          yield* until(
-            () => client.run({ runId }),
-            (view) => (view?.parked ?? "") !== "" && view?.status.status === "suspended",
-          );
-          const fs = yield* FileSystem.FileSystem;
-          yield* fs.makeDirectory(`${world.project}/.collie`, { recursive: true });
-          yield* fs.writeFileString(
-            `${world.project}/.collie/verify.json`,
-            '[{"name":"true","executable":"true","argv":[],"cwd":"worktree"}]',
-          );
-          const answered = yield* client
-            .answer({ runId, decision: "evidence-gate", value: "approve", request: "g-1" })
-            .pipe(Effect.flip);
-          expect(answered).toMatchObject({
-            _tag: "HostRefused",
-            reason: `run "${runId}" is not waiting on a decision called "evidence-gate"`,
-          });
-          expect((yield* client.run({ runId }))?.status.status).toBe("suspended");
-          expect(
-            Arr.map(
-              yield* auditAt(world.state, runDir(world.state, runId)),
-              (one) => one.operation,
-            ),
-          ).not.toContain("grant");
+test("a Run parked at the old evidence gate refuses that answer, and goes on once a check is named and it is resumed", () =>
+  proves(
+    "collie-writer-old-gate-",
+    (world) =>
+      Effect.gen(function* () {
+        const client = yield* connect(world.state);
+        const started = yield* client.start({
+          project: world.project,
+          id: "gated",
+          request: "g-0",
+          input: { note: "x" },
+        });
+        const runId = started.runId;
+        yield* until(
+          () => client.run({ runId }),
+          (view) => (view?.parked ?? "") !== "" && view?.status.status === "suspended",
+        );
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(`${world.project}/.collie`, { recursive: true });
+        yield* fs.writeFileString(
+          `${world.project}/.collie/verify.json`,
+          '[{"name":"true","executable":"true","argv":[],"cwd":"worktree"}]',
+        );
+        const answered = yield* client
+          .answer({ runId, decision: "evidence-gate", value: "approve", request: "g-1" })
+          .pipe(Effect.flip);
+        expect(answered).toMatchObject({
+          _tag: "HostRefused",
+          reason: `run "${runId}" is not waiting on a decision called "evidence-gate"`,
+        });
+        expect((yield* client.run({ runId }))?.status.status).toBe("suspended");
+        expect(
+          Arr.map(yield* auditAt(world.state, runDir(world.state, runId)), (one) => one.operation),
+        ).not.toContain("grant");
 
-          yield* client.grant({
-            runId,
-            name: "true",
-            command: { executable: "true", argv: [], cwd: "worktree" },
-            request: "g-2",
-          });
-          yield* client.resume({ runId, request: "g-3" });
-          const done = yield* until(
-            () => client.run({ runId }),
-            (view) => view?.status.status === "complete",
-          );
-          expect(done?.status).toMatchObject({ value: "true" });
-          expect(done?.parked ?? "").toBe("");
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["gated.workflow.ts"],
-    ),
-  120_000,
-);
+        yield* client.grant({
+          runId,
+          name: "true",
+          command: { executable: "true", argv: [], cwd: "worktree" },
+          request: "g-2",
+        });
+        yield* client.resume({ runId, request: "g-3" });
+        const done = yield* until(
+          () => client.run({ runId }),
+          (view) => view?.status.status === "complete",
+        );
+        expect(done?.status).toMatchObject({ value: "true" });
+        expect(done?.parked ?? "").toBe("");
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["gated.workflow.ts"],
+  ));
 
-test(
-  "a conversation can take every pending item and settle only the ones it delivered",
-  () =>
-    proves(
-      "collie-writer-news-keys-",
-      (world) =>
-        Effect.gen(function* () {
-          const file = yield* newsPath(world.state, "some-herd");
-          yield* appendNews(file, {
-            key: "r1:ended:failed",
-            run: "r1",
-            text: "r1 failed.",
-            significance: "consequential",
-          });
-          yield* appendNews(file, {
-            key: "r2:asking:x",
-            run: "r2",
-            text: "r2 asks.",
-            significance: "decision",
-          });
-          const client = yield* connect(world.state);
-          yield* client.declare({ frontDoor: "chat" });
-          const asked = { herd: "some-herd", conversation: "flock@pc", as: "read" as const };
-          const peeked = yield* client.news({ ...asked, request: "k-1", keys: [] });
-          expect(Arr.map(peeked.items, ({ key, significance }) => [key, significance])).toEqual([
-            ["r1:ended:failed", "consequential"],
-            ["r2:asking:x", "decision"],
-          ]);
-          yield* client.news({ ...asked, request: "k-2", keys: ["r2:asking:x"] });
-          const left = yield* client.news({ ...asked, request: "k-3", keys: [] });
-          yield* stopHost(world.state);
-          expect(Arr.map(left.items, ({ key }) => key)).toEqual(["r1:ended:failed"]);
-        }),
-      [],
-    ),
-  120_000,
-);
+test("a conversation can take every pending item and settle only the ones it delivered", () =>
+  proves(
+    "collie-writer-news-keys-",
+    (world) =>
+      Effect.gen(function* () {
+        const file = yield* newsPath(world.state, "some-herd");
+        yield* appendNews(file, {
+          key: "r1:ended:failed",
+          run: "r1",
+          text: "r1 failed.",
+          significance: "consequential",
+        });
+        yield* appendNews(file, {
+          key: "r2:asking:x",
+          run: "r2",
+          text: "r2 asks.",
+          significance: "decision",
+        });
+        const client = yield* connect(world.state);
+        yield* client.declare({ frontDoor: "chat" });
+        const asked = { herd: "some-herd", conversation: "flock@pc", as: "read" as const };
+        const peeked = yield* client.news({ ...asked, request: "k-1", keys: [] });
+        expect(Arr.map(peeked.items, ({ key, significance }) => [key, significance])).toEqual([
+          ["r1:ended:failed", "consequential"],
+          ["r2:asking:x", "decision"],
+        ]);
+        yield* client.news({ ...asked, request: "k-2", keys: ["r2:asking:x"] });
+        const left = yield* client.news({ ...asked, request: "k-3", keys: [] });
+        yield* stopHost(world.state);
+        expect(Arr.map(left.items, ({ key }) => key)).toEqual(["r1:ended:failed"]);
+      }),
+    [],
+  ));
 
-test(
-  "a conversation's News receipts are the host's, once per request, and that conversation's alone",
-  () =>
-    proves(
-      "collie-writer-news-",
-      (world) =>
-        Effect.gen(function* () {
-          const file = yield* newsPath(world.state, "some-herd");
-          yield* appendNews(file, { key: "r1:ended:failed", run: "r1", text: "r1 failed." });
-          const client = yield* connect(world.state);
-          yield* client.declare({ frontDoor: "chat" });
-          const asked = {
-            herd: "some-herd",
-            conversation: "flock@pc",
-            as: "read" as const,
-            request: "n-1",
-          };
-          const first = yield* client.news(asked);
-          expect(Arr.map(first.items, (item) => item.key)).toEqual(["r1:ended:failed"]);
-          expect(yield* client.news(asked)).toEqual(first);
-          expect((yield* client.news({ ...asked, request: "n-2" })).items).toEqual([]);
-          const sent = yield* client.news({ ...asked, as: "sent" }).pipe(Effect.flip);
-          expect(sent._tag).toBe("RequestConflict");
-          const lines = yield* readNews(file);
-          expect(pending(lines, NATIVE).items).toHaveLength(1);
-          const trail = yield* newsTrail(world.state, "some-herd");
-          const audit = yield* auditAt(world.state, trail);
-          expect(Arr.map(audit, (one) => [one.operation, one.actor.origin, one.request])).toEqual([
-            ["news", "chat", "n-1"],
-            ["news", "chat", "n-2"],
-          ]);
-          for (let n = 0; n < NEWS_TRAIL + 5; n++)
-            yield* client.news({ ...asked, request: `more-${n}` });
-          const kept = yield* auditAt(world.state, trail);
-          yield* stopHost(world.state);
-          expect(kept).toHaveLength(NEWS_TRAIL);
-          expect(kept.at(-1)?.request).toBe(`more-${NEWS_TRAIL + 4}`);
-          expect(yield* auditAt(world.state, yield* herdDir(world.state, "some-herd"))).toEqual([]);
-        }),
-      [],
-    ),
-  120_000,
-);
+test("a conversation's News receipts are the host's, once per request, and that conversation's alone", () =>
+  proves(
+    "collie-writer-news-",
+    (world) =>
+      Effect.gen(function* () {
+        const file = yield* newsPath(world.state, "some-herd");
+        yield* appendNews(file, { key: "r1:ended:failed", run: "r1", text: "r1 failed." });
+        const client = yield* connect(world.state);
+        yield* client.declare({ frontDoor: "chat" });
+        const asked = {
+          herd: "some-herd",
+          conversation: "flock@pc",
+          as: "read" as const,
+          request: "n-1",
+        };
+        const first = yield* client.news(asked);
+        expect(Arr.map(first.items, (item) => item.key)).toEqual(["r1:ended:failed"]);
+        expect(yield* client.news(asked)).toEqual(first);
+        expect((yield* client.news({ ...asked, request: "n-2" })).items).toEqual([]);
+        const sent = yield* client.news({ ...asked, as: "sent" }).pipe(Effect.flip);
+        expect(sent._tag).toBe("RequestConflict");
+        const lines = yield* readNews(file);
+        expect(pending(lines, NATIVE).items).toHaveLength(1);
+        const trail = yield* newsTrail(world.state, "some-herd");
+        const audit = yield* auditAt(world.state, trail);
+        expect(Arr.map(audit, (one) => [one.operation, one.actor.origin, one.request])).toEqual([
+          ["news", "chat", "n-1"],
+          ["news", "chat", "n-2"],
+        ]);
+        for (let n = 0; n < NEWS_TRAIL + 5; n++)
+          yield* client.news({ ...asked, request: `more-${n}` });
+        const kept = yield* auditAt(world.state, trail);
+        yield* stopHost(world.state);
+        expect(kept).toHaveLength(NEWS_TRAIL);
+        expect(kept.at(-1)?.request).toBe(`more-${NEWS_TRAIL + 4}`);
+        expect(yield* auditAt(world.state, yield* herdDir(world.state, "some-herd"))).toEqual([]);
+      }),
+    [],
+  ));

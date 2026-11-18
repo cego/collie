@@ -451,40 +451,36 @@ const mkPc = { profile: "local", name: "mk-pc" };
 type Rpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 
 describe("the main process asks each Machine's host", () => {
-  test(
-    "a host that answers gives its readings, each saying why it has no numbers",
-    () =>
-      proves(
-        "collie-desktop-usage-",
-        (world) =>
-          Effect.gen(function* () {
-            const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-            const collie = Option.isSome(binary)
-              ? [binary.value]
-              : [process.execPath, `${root}src/main.ts`];
-            const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
-              PATH: "/usr/bin:/bin",
-              HOME: world.home,
-              COLLIE_ROOT: world.install,
-              COLLIE_STATE_DIR: world.state,
-              COLLIE_USER_DIR: world.config,
-              COLLIE_HOST: asCommand(collie),
-              ...(yield* suiteEnv),
-              HC_SOCKET: Bun.env.HC_SOCKET ?? "",
-            });
-            const read = yield* usageOn(mkPc, door);
-            expect(read).toMatchObject({ profile: "local", name: "mk-pc", problem: null });
-            expect(Arr.map(read.readings, ({ subscription }) => subscription)).toEqual([
-              "claude",
-              "chatgpt",
-            ]);
-            expect(Arr.every(read.readings, ({ problem }) => problem !== null)).toBe(true);
-            yield* stopHost(world.state);
-          }).pipe(Effect.orDie),
-        [],
-      ),
-    120_000,
-  );
+  test("a host that answers gives its readings, each saying why it has no numbers", () =>
+    proves(
+      "collie-desktop-usage-",
+      (world) =>
+        Effect.gen(function* () {
+          const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+          const collie = Option.isSome(binary)
+            ? [binary.value]
+            : [process.execPath, `${root}src/main.ts`];
+          const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
+            PATH: "/usr/bin:/bin",
+            HOME: world.home,
+            COLLIE_ROOT: world.install,
+            COLLIE_STATE_DIR: world.state,
+            COLLIE_USER_DIR: world.config,
+            COLLIE_HOST: asCommand(collie),
+            ...(yield* suiteEnv),
+            HC_SOCKET: Bun.env.HC_SOCKET ?? "",
+          });
+          const read = yield* usageOn(mkPc, door);
+          expect(read).toMatchObject({ profile: "local", name: "mk-pc", problem: null });
+          expect(Arr.map(read.readings, ({ subscription }) => subscription)).toEqual([
+            "claude",
+            "chatgpt",
+          ]);
+          expect(Arr.every(read.readings, ({ problem }) => problem !== null)).toBe(true);
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      [],
+    ));
 
   test("a host without the call asks for an upgrade rather than showing nothing", () =>
     Effect.runPromise(

@@ -18,168 +18,160 @@ for (const [name, action] of [
   ["github", "post"],
   ["github", "approval"],
 ] as const)
-  test(
-    `the shipped host recovers a ${name} review accepted before its Activity recorded the ${action}`,
-    () =>
-      runEffect(
-        Effect.gen(function* () {
-          const rig = yield* Rig.scoped();
-          const { state, wf } = yield* workspace(`collie-review-recovery-${name}-`);
-          const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (bin) =>
-            bin.restore(),
-          );
-          const forge = yield* forgeOnPath(bin, name, {
-            installed: true,
-            loggedIn: [FORGE_HOST[name]],
-            login: "tester",
-            mrs: [{ project: PROJECT[name], iid: "30", state: "open", author: "ann", head: HEAD }],
-          });
-          const accepted = Promise.withResolvers<void>();
-          const release = Promise.withResolvers<void>();
-          let held = false;
-          const approvalRoute = name === "gitlab" ? "/approve" : "/reviews";
-          const api = yield* serveForges({
-            forge: name,
-            face: (url, init) =>
-              forge.face(url, init).then((response) => {
-                if (
-                  init?.method !== "POST" ||
-                  !Str.endsWith(
-                    action === "approval"
-                      ? approvalRoute
-                      : name === "gitlab"
-                        ? "/notes"
-                        : "/comments",
-                  )(url) ||
-                  held
-                )
-                  return response;
-                held = true;
-                accepted.resolve();
-                return release.promise.then(() => response);
-              }),
-          });
-          yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
-          const env = {
-            ...rig.env(),
-            PATH: `${bin.dir}:${rig.env().PATH}`,
-            COLLIE_STATE_DIR: state,
-            COLLIE_USER_DIR: `${wf}/..`,
-            COLLIE_ROOT: `${wf}/../..`,
-            COLLIE_FORGE_API: api,
-          };
-          const first = yield* openHost(state, { env });
-          expect(
-            (yield* first.ask({ op: "load", entry: `${wf}/posted-review.workflow.ts` })).ok,
-          ).toBe(true);
-          expect(
-            (yield* first.ask({
-              op: "start",
-              id: "posted-review",
-              runId: "r1",
-              input: {
-                target: mrTarget(PROJECT[name], "30"),
-                head: HEAD,
-                approve: action === "approval",
-              },
-            })).ok,
-          ).toBe(true);
-          yield* Effect.promise(() => accepted.promise).pipe(Effect.timeout("30 seconds"));
-          expect(Rec.values((yield* forge.model()).notes ?? {}).flat()).toHaveLength(1);
-          if (action === "approval") expect((yield* forge.model()).approved).toHaveLength(1);
-          yield* first.child.kill({ killSignal: "SIGKILL" });
-          yield* first.child.exitCode.pipe(Effect.ignore);
-          release.resolve();
-          const next = yield* openHost(state, { env });
-          expect(next.child.pid).not.toBe(first.child.pid);
-          const completed = yield* next.until(
-            { op: "poll", id: "posted-review", runId: "r1" },
-            (reply) => reply.status === "complete" || reply.status === "failed",
-          );
-          if (action === "approval") {
-            expect(
-              Arr.filter(
-                forge.requests(),
-                (one) => one.method === "POST" && Str.endsWith(approvalRoute)(one.url),
-              ),
-            ).toHaveLength(1);
-            expect(completed.status).toBe("failed");
-            expect(completed.value).toContain("uncertain");
-          } else {
-            expect(completed.status).toBe("complete");
-            expect(completed.value).toContain("posted the review");
-          }
-          const runId = Str.split(yield* runDirOf(state, "r1"), "/").at(-1);
-          const notes = Rec.values((yield* forge.model()).notes ?? {}).flat();
-          expect(notes).toHaveLength(1);
-          expect(Str.split(notes[0] ?? "", "\n").at(-1)).toBe(
-            `<!-- collie:${runId} round 1 at ${HEAD} by tester -->`,
-          );
-          expect(
-            Arr.filter(
-              forge.requests(),
-              (one) =>
-                one.method === "POST" &&
-                Str.endsWith(name === "gitlab" ? "/notes" : "/comments")(one.url),
-            ),
-          ).toHaveLength(1);
-          yield* next.stop;
-        }),
-      ),
-    180_000,
-  );
-
-test(
-  "a second approval Activity in the same Run is not taken for an interrupted first",
-  () =>
+  test(`the shipped host recovers a ${name} review accepted before its Activity recorded the ${action}`, () =>
     runEffect(
       Effect.gen(function* () {
         const rig = yield* Rig.scoped();
-        const { state, wf } = yield* workspace("collie-review-approve-twice-");
+        const { state, wf } = yield* workspace(`collie-review-recovery-${name}-`);
         const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (bin) =>
           bin.restore(),
         );
-        const forge = yield* forgeOnPath(bin, "gitlab", {
+        const forge = yield* forgeOnPath(bin, name, {
           installed: true,
-          loggedIn: [FORGE_HOST.gitlab],
+          loggedIn: [FORGE_HOST[name]],
           login: "tester",
-          mrs: [{ project: PROJECT.gitlab, iid: "30", state: "open", author: "ann", head: HEAD }],
+          mrs: [{ project: PROJECT[name], iid: "30", state: "open", author: "ann", head: HEAD }],
         });
-        const api = yield* serveForges({ forge: "gitlab", face: forge.face });
-        const host = yield* openHost(state, {
-          env: {
-            ...rig.env(),
-            PATH: `${bin.dir}:${rig.env().PATH}`,
-            COLLIE_STATE_DIR: state,
-            COLLIE_USER_DIR: `${wf}/..`,
-            COLLIE_ROOT: `${wf}/../..`,
-            COLLIE_FORGE_API: api,
-          },
+        const accepted = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let held = false;
+        const approvalRoute = name === "gitlab" ? "/approve" : "/reviews";
+        const api = yield* serveForges({
+          forge: name,
+          face: (url, init) =>
+            forge.face(url, init).then((response) => {
+              if (
+                init?.method !== "POST" ||
+                !Str.endsWith(
+                  action === "approval"
+                    ? approvalRoute
+                    : name === "gitlab"
+                      ? "/notes"
+                      : "/comments",
+                )(url) ||
+                held
+              )
+                return response;
+              held = true;
+              accepted.resolve();
+              return release.promise.then(() => response);
+            }),
         });
-        expect((yield* host.ask({ op: "load", entry: `${wf}/posted-review.workflow.ts` })).ok).toBe(
-          true,
-        );
+        yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
+        const env = {
+          ...rig.env(),
+          PATH: `${bin.dir}:${rig.env().PATH}`,
+          COLLIE_STATE_DIR: state,
+          COLLIE_USER_DIR: `${wf}/..`,
+          COLLIE_ROOT: `${wf}/../..`,
+          COLLIE_FORGE_API: api,
+        };
+        const first = yield* openHost(state, { env });
         expect(
-          (yield* host.ask({
+          (yield* first.ask({ op: "load", entry: `${wf}/posted-review.workflow.ts` })).ok,
+        ).toBe(true);
+        expect(
+          (yield* first.ask({
             op: "start",
             id: "posted-review",
             runId: "r1",
             input: {
-              target: mrTarget(PROJECT.gitlab, "30"),
+              target: mrTarget(PROJECT[name], "30"),
               head: HEAD,
-              approve: true,
-              again: true,
+              approve: action === "approval",
             },
           })).ok,
         ).toBe(true);
-        const completed = yield* host.until(
+        yield* Effect.promise(() => accepted.promise).pipe(Effect.timeout("30 seconds"));
+        expect(Rec.values((yield* forge.model()).notes ?? {}).flat()).toHaveLength(1);
+        if (action === "approval") expect((yield* forge.model()).approved).toHaveLength(1);
+        yield* first.child.kill({ killSignal: "SIGKILL" });
+        yield* first.child.exitCode.pipe(Effect.ignore);
+        release.resolve();
+        const next = yield* openHost(state, { env });
+        expect(next.child.pid).not.toBe(first.child.pid);
+        const completed = yield* next.until(
           { op: "poll", id: "posted-review", runId: "r1" },
           (reply) => reply.status === "complete" || reply.status === "failed",
         );
-        expect(completed.value).toContain("approved");
-        expect(completed.status).toBe("complete");
-        yield* host.stop;
+        if (action === "approval") {
+          expect(
+            Arr.filter(
+              forge.requests(),
+              (one) => one.method === "POST" && Str.endsWith(approvalRoute)(one.url),
+            ),
+          ).toHaveLength(1);
+          expect(completed.status).toBe("failed");
+          expect(completed.value).toContain("uncertain");
+        } else {
+          expect(completed.status).toBe("complete");
+          expect(completed.value).toContain("posted the review");
+        }
+        const runId = Str.split(yield* runDirOf(state, "r1"), "/").at(-1);
+        const notes = Rec.values((yield* forge.model()).notes ?? {}).flat();
+        expect(notes).toHaveLength(1);
+        expect(Str.split(notes[0] ?? "", "\n").at(-1)).toBe(
+          `<!-- collie:${runId} round 1 at ${HEAD} by tester -->`,
+        );
+        expect(
+          Arr.filter(
+            forge.requests(),
+            (one) =>
+              one.method === "POST" &&
+              Str.endsWith(name === "gitlab" ? "/notes" : "/comments")(one.url),
+          ),
+        ).toHaveLength(1);
+        yield* next.stop;
       }),
-    ),
-  180_000,
-);
+    ));
+
+test("a second approval Activity in the same Run is not taken for an interrupted first", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const rig = yield* Rig.scoped();
+      const { state, wf } = yield* workspace("collie-review-approve-twice-");
+      const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (bin) =>
+        bin.restore(),
+      );
+      const forge = yield* forgeOnPath(bin, "gitlab", {
+        installed: true,
+        loggedIn: [FORGE_HOST.gitlab],
+        login: "tester",
+        mrs: [{ project: PROJECT.gitlab, iid: "30", state: "open", author: "ann", head: HEAD }],
+      });
+      const api = yield* serveForges({ forge: "gitlab", face: forge.face });
+      const host = yield* openHost(state, {
+        env: {
+          ...rig.env(),
+          PATH: `${bin.dir}:${rig.env().PATH}`,
+          COLLIE_STATE_DIR: state,
+          COLLIE_USER_DIR: `${wf}/..`,
+          COLLIE_ROOT: `${wf}/../..`,
+          COLLIE_FORGE_API: api,
+        },
+      });
+      expect((yield* host.ask({ op: "load", entry: `${wf}/posted-review.workflow.ts` })).ok).toBe(
+        true,
+      );
+      expect(
+        (yield* host.ask({
+          op: "start",
+          id: "posted-review",
+          runId: "r1",
+          input: {
+            target: mrTarget(PROJECT.gitlab, "30"),
+            head: HEAD,
+            approve: true,
+            again: true,
+          },
+        })).ok,
+      ).toBe(true);
+      const completed = yield* host.until(
+        { op: "poll", id: "posted-review", runId: "r1" },
+        (reply) => reply.status === "complete" || reply.status === "failed",
+      );
+      expect(completed.value).toContain("approved");
+      expect(completed.status).toBe("complete");
+      yield* host.stop;
+    }),
+  ));

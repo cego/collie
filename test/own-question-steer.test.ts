@@ -40,123 +40,115 @@ const asked = encode({
   },
 });
 
-test(
-  "a human's message closes the agent's own question: nothing asks it again, a later answer goes nowhere, and its next step is sent",
-  () =>
-    proves(
-      "collie-own-question-",
-      (world, core) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const outputs = `${world.home}/outputs.json`;
-          yield* fs
-            .writeFileString(outputs, encode([null, { verdict: "built" }]))
-            .pipe(Effect.orDie);
-          const set = {
-            COLLIE_STATE_DIR: world.state,
-            COLLIE_USER_DIR: world.config,
-          };
-          yield* Effect.acquireRelease(
-            Effect.sync(() => {
-              const before = Rec.fromEntries(
-                Arr.map(Rec.keys(set), (key) => [key, Bun.env[key]] as const),
-              );
-              Object.assign(Bun.env, set);
-              return before;
-            }),
-            (before) =>
-              Effect.sync(() => {
-                for (const [key, value] of Rec.toEntries(before))
-                  if (value === undefined) delete Bun.env[key];
-                  else Bun.env[key] = value;
-              }),
-          );
-          resetExecutors();
-          const env = readEnv({
-            COLLIE_ROOT: world.install,
-            COLLIE_STATE_DIR: world.state,
-            COLLIE_USER_DIR: world.config,
-            HOME: world.home,
-            COLLIE_CWD: world.project,
-            HC_SOCKET: core.socketPath,
-          });
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const { runId } = yield* client
-            .start({
-              project: world.project,
-              id: "reuses",
-              request: "start",
-              input: { work: "it" },
-            })
-            .pipe(Effect.orDie);
-          const launched = (yield* until(
-            () => launchOf(world.state, runId, "first-step"),
-            (one) => one !== undefined,
-          ))!;
-          yield* until(
-            () => deliveredTo(world.state, runId),
-            (lines) =>
-              Arr.some(lines, (one) => one.cause.kind === "step" && SENT_STATES.has(one.state)),
-          );
-          yield* recordClaudeEvent(yield* controlDir(world.state, launched.agent), asked).pipe(
-            Effect.orDie,
-          );
-          const waiting = () =>
-            client.run({ runId }).pipe(
-              Effect.orDie,
-              Effect.map((view) => view?.waiting ?? []),
+test("a human's message closes the agent's own question: nothing asks it again, a later answer goes nowhere, and its next step is sent", () =>
+  proves(
+    "collie-own-question-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const outputs = `${world.home}/outputs.json`;
+        yield* fs.writeFileString(outputs, encode([null, { verdict: "built" }])).pipe(Effect.orDie);
+        const set = {
+          COLLIE_STATE_DIR: world.state,
+          COLLIE_USER_DIR: world.config,
+        };
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const before = Rec.fromEntries(
+              Arr.map(Rec.keys(set), (key) => [key, Bun.env[key]] as const),
             );
-          const [question] = yield* until(waiting, (rows) => rows.length === 1);
-          const name = question!.name;
-
-          const [steered] = yield* carryOutAsked(
-            env,
-            [
-              {
-                kind: "deliver",
-                run: runId,
-                agent: launched.agent,
-                text: "Use SQLite and carry on",
-                mode: "boundary",
-              },
-            ],
-            { origin: "desktop", requestId: "desktop-1" },
-          );
-          expect(steered).toMatchObject({ kind: "deliver", state: "applied" });
-          const [row] = yield* waiting();
-          expect(row).toMatchObject({ name, answer: null });
-          expect(row?.superseded ?? null).not.toBeNull();
-
-          const printed = yield* collie(world, ["board"]);
-          const { tasks } = yield* Schema.decodeUnknownEffect(Board)(printed.envelope.data).pipe(
+            Object.assign(Bun.env, set);
+            return before;
+          }),
+          (before) =>
+            Effect.sync(() => {
+              for (const [key, value] of Rec.toEntries(before))
+                if (value === undefined) delete Bun.env[key];
+                else Bun.env[key] = value;
+            }),
+        );
+        resetExecutors();
+        const env = readEnv({
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
+          COLLIE_USER_DIR: world.config,
+          HOME: world.home,
+          COLLIE_CWD: world.project,
+          HC_SOCKET: core.socketPath,
+        });
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const { runId } = yield* client
+          .start({
+            project: world.project,
+            id: "reuses",
+            request: "start",
+            input: { work: "it" },
+          })
+          .pipe(Effect.orDie);
+        const launched = (yield* until(
+          () => launchOf(world.state, runId, "first-step"),
+          (one) => one !== undefined,
+        ))!;
+        yield* until(
+          () => deliveredTo(world.state, runId),
+          (lines) =>
+            Arr.some(lines, (one) => one.cause.kind === "step" && SENT_STATES.has(one.state)),
+        );
+        yield* recordClaudeEvent(yield* controlDir(world.state, launched.agent), asked).pipe(
+          Effect.orDie,
+        );
+        const waiting = () =>
+          client.run({ runId }).pipe(
             Effect.orDie,
+            Effect.map((view) => view?.waiting ?? []),
           );
-          const card = Arr.findFirst(tasks, (task) => task.run === runId);
-          expect(card._tag === "Some" ? card.value.decision : "no card").toBeNull();
+        const [question] = yield* until(waiting, (rows) => rows.length === 1);
+        const name = question!.name;
 
-          const answered = yield* collie(world, [
-            "run",
-            "answer",
-            runId,
-            "Postgres",
-            "--decision",
-            name,
-          ]);
-          expect(answered.envelope.ok).toBe(false);
+        const [steered] = yield* carryOutAsked(
+          env,
+          [
+            {
+              kind: "deliver",
+              run: runId,
+              agent: launched.agent,
+              text: "Use SQLite and carry on",
+              mode: "boundary",
+            },
+          ],
+          { origin: "desktop", requestId: "desktop-1" },
+        );
+        expect(steered).toMatchObject({ kind: "deliver", state: "applied" });
+        const [row] = yield* waiting();
+        expect(row).toMatchObject({ name, answer: null });
+        expect(row?.superseded ?? null).not.toBeNull();
 
-          yield* fs
-            .writeFileString(launched.output, encode({ verdict: "built" }))
-            .pipe(Effect.orDie);
-          const done = yield* until(
-            () => client.run({ runId }).pipe(Effect.orDie),
-            (one) => one !== null && isSettled(one),
-          );
-          expect(done?.status.status).toBe("complete");
-          expect(Arr.filter(done?.waiting ?? [], (one) => one.revises === name)).toEqual([]);
-          const log = yield* fs.readFileString(core.logPath);
-          expect(Str.includes("is answered")(log)).toBe(false);
-        }).pipe(Effect.provide(recordsAt(world.state)), Effect.ensuring(stopHost(world.state))),
-      ["reuses.workflow.ts"],
-    ),
-  120_000,
-);
+        const printed = yield* collie(world, ["board"]);
+        const { tasks } = yield* Schema.decodeUnknownEffect(Board)(printed.envelope.data).pipe(
+          Effect.orDie,
+        );
+        const card = Arr.findFirst(tasks, (task) => task.run === runId);
+        expect(card._tag === "Some" ? card.value.decision : "no card").toBeNull();
+
+        const answered = yield* collie(world, [
+          "run",
+          "answer",
+          runId,
+          "Postgres",
+          "--decision",
+          name,
+        ]);
+        expect(answered.envelope.ok).toBe(false);
+
+        yield* fs.writeFileString(launched.output, encode({ verdict: "built" })).pipe(Effect.orDie);
+        const done = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (one) => one !== null && isSettled(one),
+        );
+        expect(done?.status.status).toBe("complete");
+        expect(Arr.filter(done?.waiting ?? [], (one) => one.revises === name)).toEqual([]);
+        const log = yield* fs.readFileString(core.logPath);
+        expect(Str.includes("is answered")(log)).toBe(false);
+      }).pipe(Effect.provide(recordsAt(world.state)), Effect.ensuring(stopHost(world.state))),
+    ["reuses.workflow.ts"],
+  ));

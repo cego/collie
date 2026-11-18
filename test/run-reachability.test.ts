@@ -264,215 +264,202 @@ const task = (one: string) => ({
   created_at: "2026-10-15T10:00:00Z",
 });
 
-test(
-  "show, wait and metrics refuse a Run of another Task than the selected one, naming its Task and workspace, unless it is on another Machine",
-  () =>
-    world(({ state, collie }) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(`${state}/host.db`, "");
-        const here = yield* hostOf(socketOf(state), state, [view("in-b", "task-b")], {}, [
-          task("a"),
-          task("b"),
-        ]);
-        const peerSocket = `${state}/m2-host.sock`;
-        yield* hostOf(peerSocket, "/m2", [view("away", "task-b")]);
-        yield* fs.writeFileString(
-          `${state}/peers.json`,
-          `[{"installation":"m2","name":"m2","dials":"out","secret":"s"}]`,
+test("show, wait and metrics refuse a Run of another Task than the selected one, naming its Task and workspace, unless it is on another Machine", () =>
+  world(({ state, collie }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${state}/host.db`, "");
+      const here = yield* hostOf(socketOf(state), state, [view("in-b", "task-b")], {}, [
+        task("a"),
+        task("b"),
+      ]);
+      const peerSocket = `${state}/m2-host.sock`;
+      yield* hostOf(peerSocket, "/m2", [view("away", "task-b")]);
+      yield* fs.writeFileString(
+        `${state}/peers.json`,
+        `[{"installation":"m2","name":"m2","dials":"out","secret":"s"}]`,
+      );
+      yield* relayTo(state, "m2", peerSocket);
+
+      const doors = [
+        ["run", "show"],
+        ["run", "wait"],
+        ["run", "metrics"],
+      ] as const;
+      const asked = (door: (typeof doors)[number], workspace: string | null, run = "in-b") =>
+        collie(workspace, run === "away" ? ["--machine", "m2", ...door, run] : [...door, run]).pipe(
+          Effect.map((said) => ({ door, workspace, run, said })),
         );
-        yield* relayTo(state, "m2", peerSocket);
+      const answers = yield* Effect.all(
+        Arr.flatMap(doors, (door) => [
+          asked(door, "ws-a"),
+          asked(door, null),
+          asked(door, "ws-b"),
+          asked(door, "ws-a", "away"),
+        ]),
+        { concurrency: "unbounded" },
+      );
+      for (const { door, workspace, run, said } of answers)
+        expect({ door, workspace, run, said }).toEqual({
+          door,
+          workspace,
+          run,
+          said:
+            workspace === "ws-a" && run === "in-b"
+              ? {
+                  ok: false,
+                  error: {
+                    code: "run_outside_task",
+                    message: `Run "in-b" is in task "task-b", not task "task-a": \`--workspace ws-b\` reaches it.`,
+                    details: { run: "in-b", task: "task-b", workspace: "ws-b" },
+                  },
+                }
+              : { ok: true },
+        });
 
-        const doors = [
-          ["run", "show"],
-          ["run", "wait"],
-          ["run", "metrics"],
-        ] as const;
-        const asked = (door: (typeof doors)[number], workspace: string | null, run = "in-b") =>
-          collie(
-            workspace,
-            run === "away" ? ["--machine", "m2", ...door, run] : [...door, run],
-          ).pipe(Effect.map((said) => ({ door, workspace, run, said })));
-        const answers = yield* Effect.all(
-          Arr.flatMap(doors, (door) => [
-            asked(door, "ws-a"),
-            asked(door, null),
-            asked(door, "ws-b"),
-            asked(door, "ws-a", "away"),
-          ]),
-          { concurrency: "unbounded" },
-        );
-        for (const { door, workspace, run, said } of answers)
-          expect({ door, workspace, run, said }).toEqual({
-            door,
-            workspace,
-            run,
-            said:
-              workspace === "ws-a" && run === "in-b"
-                ? {
-                    ok: false,
-                    error: {
-                      code: "run_outside_task",
-                      message: `Run "in-b" is in task "task-b", not task "task-a": \`--workspace ws-b\` reaches it.`,
-                      details: { run: "in-b", task: "task-b", workspace: "ws-b" },
-                    },
-                  }
-                : { ok: true },
-          });
+      here.run = 0;
+      yield* collie("ws-b", ["run", "show", "in-b"]);
+      expect(here.run).toBe(2);
+      here.run = 0;
+      yield* collie("ws-b", ["run", "wait", "in-b"]);
+      expect(here.run).toBe(2);
+    }),
+  ));
 
-        here.run = 0;
-        yield* collie("ws-b", ["run", "show", "in-b"]);
-        expect(here.run).toBe(2);
-        here.run = 0;
-        yield* collie("ws-b", ["run", "wait", "in-b"]);
-        expect(here.run).toBe(2);
-      }),
-    ),
-  60_000,
-);
+test("an agent reaches a Run of another Task its Run started or was asked about, and is told where any other one is", () =>
+  world(({ state, collie, shownRun }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${state}/host.db`, "");
+      const here = yield* hostOf(
+        socketOf(state),
+        state,
+        [
+          view("run-a", "task-a", { input: { goal: "Find out why run-c failed" } }),
+          view("run-b", "task-b", {
+            requestedBy: {
+              run: "run-a",
+              agent: "run-a-agent",
+              machine: { installation: "here", name: "here" },
+            },
+          }),
+          view("run-p", "task-p", { parent: "run-a" }),
+          view("run-c", "task-c"),
+          view("run-d", "task-d"),
+          view("run-e", "task-e"),
+          view("run-f", "task-f"),
+        ],
+        {},
+        Arr.map(["a", "b", "c", "d", "e", "f", "p"], task),
+      );
+      yield* fs.makeDirectory(`${state}/runs/run-a`, { recursive: true });
+      yield* writeIntent(
+        `${state}/runs/run-a`,
+        seedIntent("run-a", { goal: "Find out why run-c and run-f failed" }),
+      ).pipe(Effect.provide(recordsAt(state)));
+      yield* recordAudit(`${state}/runs/run-a`, {
+        operation: "deliver",
+        request: "steer-1",
+        origin: "agent",
+        asked: { text: "Compare it with run-d", operation: null, agent: null, mode: null },
+        result: Schema.Struct({}),
+        value: {},
+      }).pipe(Effect.provide(recordsAt(state)));
 
-test(
-  "an agent reaches a Run of another Task its Run started or was asked about, and is told where any other one is",
-  () =>
-    world(({ state, collie, shownRun }) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(`${state}/host.db`, "");
-        const here = yield* hostOf(
-          socketOf(state),
-          state,
-          [
-            view("run-a", "task-a", { input: { goal: "Find out why run-c failed" } }),
-            view("run-b", "task-b", {
-              requestedBy: {
-                run: "run-a",
-                agent: "run-a-agent",
-                machine: { installation: "here", name: "here" },
-              },
-            }),
-            view("run-p", "task-p", { parent: "run-a" }),
-            view("run-c", "task-c"),
-            view("run-d", "task-d"),
-            view("run-e", "task-e"),
-            view("run-f", "task-f"),
-          ],
-          {},
-          Arr.map(["a", "b", "c", "d", "e", "f", "p"], task),
-        );
-        yield* fs.makeDirectory(`${state}/runs/run-a`, { recursive: true });
-        yield* writeIntent(
-          `${state}/runs/run-a`,
-          seedIntent("run-a", { goal: "Find out why run-c and run-f failed" }),
-        ).pipe(Effect.provide(recordsAt(state)));
-        yield* recordAudit(`${state}/runs/run-a`, {
-          operation: "deliver",
-          request: "steer-1",
-          origin: "agent",
-          asked: { text: "Compare it with run-d", operation: null, agent: null, mode: null },
-          result: Schema.Struct({}),
-          value: {},
-        }).pipe(Effect.provide(recordsAt(state)));
-
-        const doors = [
-          ["run", "show"],
-          ["run", "wait"],
-          ["run", "metrics"],
-        ] as const;
-        const answers = yield* Effect.all(
-          Arr.flatMap(doors, (door) =>
-            Arr.map(["run-b", "run-p", "run-c", "run-d", "run-e", "run-f", "run-none"], (run) =>
-              collie("ws-a", [...door, run], "run-a").pipe(
-                Effect.map((said) => ({ door, run, said })),
-              ),
+      const doors = [
+        ["run", "show"],
+        ["run", "wait"],
+        ["run", "metrics"],
+      ] as const;
+      const answers = yield* Effect.all(
+        Arr.flatMap(doors, (door) =>
+          Arr.map(["run-b", "run-p", "run-c", "run-d", "run-e", "run-f", "run-none"], (run) =>
+            collie("ws-a", [...door, run], "run-a").pipe(
+              Effect.map((said) => ({ door, run, said })),
             ),
           ),
-          { concurrency: "unbounded" },
-        );
-        for (const { door, run, said } of answers)
-          expect({ door, run, said }).toEqual({
-            door,
-            run,
-            said:
-              run === "run-e"
+        ),
+        { concurrency: "unbounded" },
+      );
+      for (const { door, run, said } of answers)
+        expect({ door, run, said }).toEqual({
+          door,
+          run,
+          said:
+            run === "run-e"
+              ? {
+                  ok: false,
+                  error: {
+                    code: "run_outside_task",
+                    message: `Run "run-e" is in task "task-e", not task "task-a": \`--workspace ws-e\` reaches it.`,
+                    details: { run: "run-e", task: "task-e", workspace: "ws-e" },
+                  },
+                }
+              : run === "run-none"
                 ? {
                     ok: false,
-                    error: {
-                      code: "run_outside_task",
-                      message: `Run "run-e" is in task "task-e", not task "task-a": \`--workspace ws-e\` reaches it.`,
-                      details: { run: "run-e", task: "task-e", workspace: "ws-e" },
-                    },
-                  }
-                : run === "run-none"
-                  ? {
-                      ok: false,
-                      error: expect.objectContaining({ code: "run_not_found" }),
-                    }
-                  : { ok: true },
-          });
-
-        expect(yield* shownRun("ws-a", "run-b", "run-a")).toBe("run-b");
-        expect(yield* shownRun("ws-e", "run-e", "run-a")).toBe("run-e");
-        const runCalls = (caller?: string) =>
-          Effect.sync(() => (here.run = 0)).pipe(
-            Effect.andThen(collie("ws-a", ["run", "show", "run-e"], caller)),
-            Effect.map(() => here.run),
-          );
-        expect(yield* runCalls("run-a")).toBe((yield* runCalls()) + 1);
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "an agent known by COLLIE_AGENT, with no COLLIE_RUN, reaches a Run its Run started and no other Task's",
-  () =>
-    world(({ state, collie }) =>
-      Effect.gen(function* () {
-        yield* Effect.provide(Effect.void, recordsAt(state));
-        yield* hostOf(
-          socketOf(state),
-          state,
-          [
-            view("run-a", "task-a"),
-            view("run-b", "task-b", {
-              requestedBy: {
-                run: "run-a",
-                agent: "run-a-agent",
-                machine: { installation: "here", name: "here" },
-              },
-            }),
-            view("run-e", "task-e"),
-          ],
-          { "run-a-agent": "run-a" },
-          Arr.map(["a", "b", "e"], task),
-        );
-        const answers = yield* Effect.all(
-          Arr.flatMap([["run", "show"] as const, ["run", "wait"] as const], (door) =>
-            Arr.map(["run-b", "run-e"], (run) =>
-              collie("ws-a", [...door, run], undefined, { COLLIE_AGENT: "run-a-agent" }).pipe(
-                Effect.map((said) => ({ door, run, said })),
-              ),
-            ),
-          ),
-          { concurrency: "unbounded" },
-        );
-        for (const { door, run, said } of answers)
-          expect({ door, run, said }).toEqual({
-            door,
-            run,
-            said:
-              run === "run-e"
-                ? {
-                    ok: false,
-                    error: {
-                      code: "run_outside_task",
-                      message: `Run "run-e" is in task "task-e", not task "task-a": \`--workspace ws-e\` reaches it.`,
-                      details: { run: "run-e", task: "task-e", workspace: "ws-e" },
-                    },
+                    error: expect.objectContaining({ code: "run_not_found" }),
                   }
                 : { ok: true },
-          });
-      }),
-    ),
-  60_000,
-);
+        });
+
+      expect(yield* shownRun("ws-a", "run-b", "run-a")).toBe("run-b");
+      expect(yield* shownRun("ws-e", "run-e", "run-a")).toBe("run-e");
+      const runCalls = (caller?: string) =>
+        Effect.sync(() => (here.run = 0)).pipe(
+          Effect.andThen(collie("ws-a", ["run", "show", "run-e"], caller)),
+          Effect.map(() => here.run),
+        );
+      expect(yield* runCalls("run-a")).toBe((yield* runCalls()) + 1);
+    }),
+  ));
+
+test("an agent known by COLLIE_AGENT, with no COLLIE_RUN, reaches a Run its Run started and no other Task's", () =>
+  world(({ state, collie }) =>
+    Effect.gen(function* () {
+      yield* Effect.provide(Effect.void, recordsAt(state));
+      yield* hostOf(
+        socketOf(state),
+        state,
+        [
+          view("run-a", "task-a"),
+          view("run-b", "task-b", {
+            requestedBy: {
+              run: "run-a",
+              agent: "run-a-agent",
+              machine: { installation: "here", name: "here" },
+            },
+          }),
+          view("run-e", "task-e"),
+        ],
+        { "run-a-agent": "run-a" },
+        Arr.map(["a", "b", "e"], task),
+      );
+      const answers = yield* Effect.all(
+        Arr.flatMap([["run", "show"] as const, ["run", "wait"] as const], (door) =>
+          Arr.map(["run-b", "run-e"], (run) =>
+            collie("ws-a", [...door, run], undefined, { COLLIE_AGENT: "run-a-agent" }).pipe(
+              Effect.map((said) => ({ door, run, said })),
+            ),
+          ),
+        ),
+        { concurrency: "unbounded" },
+      );
+      for (const { door, run, said } of answers)
+        expect({ door, run, said }).toEqual({
+          door,
+          run,
+          said:
+            run === "run-e"
+              ? {
+                  ok: false,
+                  error: {
+                    code: "run_outside_task",
+                    message: `Run "run-e" is in task "task-e", not task "task-a": \`--workspace ws-e\` reaches it.`,
+                    details: { run: "run-e", task: "task-e", workspace: "ws-e" },
+                  },
+                }
+              : { ok: true },
+        });
+    }),
+  ));

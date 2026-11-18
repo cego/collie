@@ -95,176 +95,147 @@ const measuring = (
 
 const resultOf = (measurement: Measurement) => measurement.result;
 
-test(
-  "a command's own JSON never replaces the readings the host took",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { root, repo, base, harness } = yield* project;
-        const measured = yield* measuring(root, {
-          base,
-          cwd: repo,
-          plan: planOf(harness, sh("claims.sh")),
-        });
-        for (const sample of measured.samples) {
-          expect(sample.readings["bench.wall_ms"]).toBeGreaterThan(100);
-          expect(sample.readings["bench.cpu_ms"]).toBeGreaterThan(0);
-          expect(sample.readings["bench.peak_kb"]).toBeGreaterThan(0);
-        }
-      }),
-    ),
-  30_000,
-);
+test("a command's own JSON never replaces the readings the host took", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, repo, base, harness } = yield* project;
+      const measured = yield* measuring(root, {
+        base,
+        cwd: repo,
+        plan: planOf(harness, sh("claims.sh")),
+      });
+      for (const sample of measured.samples) {
+        expect(sample.readings["bench.wall_ms"]).toBeGreaterThan(100);
+        expect(sample.readings["bench.cpu_ms"]).toBeGreaterThan(0);
+        expect(sample.readings["bench.peak_kb"]).toBeGreaterThan(0);
+      }
+    }),
+  ));
 
-test(
-  "a sample without a declared metric's reading leaves the Measurement unjudged, naming it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { root, repo, base, harness } = yield* project;
-        const measured = yield* measuring(root, {
-          base,
-          cwd: repo,
-          plan: planOf(harness, sh("gaps.sh", `${root}/runs`), { samples: 3 }),
-        });
-        expect(measured.samples).toHaveLength(6);
-        expect(resultOf(measured)).toEqual({
-          _tag: "Unjudged",
-          reason: expect.stringContaining("bench.counter"),
-        });
-      }),
-    ),
-  30_000,
-);
+test("a sample without a declared metric's reading leaves the Measurement unjudged, naming it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, repo, base, harness } = yield* project;
+      const measured = yield* measuring(root, {
+        base,
+        cwd: repo,
+        plan: planOf(harness, sh("gaps.sh", `${root}/runs`), { samples: 3 }),
+      });
+      expect(measured.samples).toHaveLength(6);
+      expect(resultOf(measured)).toEqual({
+        _tag: "Unjudged",
+        reason: expect.stringContaining("bench.counter"),
+      });
+    }),
+  ));
 
-test(
-  "the time limit is one sample's, however many commands it runs",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { root, repo, base, harness } = yield* project;
-        const twice: Plan["commands"] = [
-          { name: "one", executable: "sh", argv: ["bench/slow.sh"] },
-          { name: "two", executable: "sh", argv: ["bench/slow.sh"] },
-        ];
-        const measured = yield* measuring(root, {
-          base,
-          cwd: repo,
-          plan: planOf(harness, twice, {
-            limit: 1,
-            metrics: [{ name: "one.counter", direction: "lower", role: "primary" }],
-          }),
-        });
-        expect(resultOf(measured)).toEqual({
-          _tag: "TimedOut",
-          tree: "base",
-          stage: "sample",
-          command: "two",
-        });
-      }),
-    ),
-  30_000,
-);
+test("the time limit is one sample's, however many commands it runs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, repo, base, harness } = yield* project;
+      const twice: Plan["commands"] = [
+        { name: "one", executable: "sh", argv: ["bench/slow.sh"] },
+        { name: "two", executable: "sh", argv: ["bench/slow.sh"] },
+      ];
+      const measured = yield* measuring(root, {
+        base,
+        cwd: repo,
+        plan: planOf(harness, twice, {
+          limit: 1,
+          metrics: [{ name: "one.counter", direction: "lower", role: "primary" }],
+        }),
+      });
+      expect(resultOf(measured)).toEqual({
+        _tag: "TimedOut",
+        tree: "base",
+        stage: "sample",
+        command: "two",
+      });
+    }),
+  ));
 
-test(
-  "a tree its prepare changes is unjudged, even where its samples restore it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { root, repo, base, harness } = yield* project;
-        const measured = yield* measuring(root, {
-          base,
-          cwd: repo,
-          plan: planOf(harness, sh("restores.sh"), {
-            prepare: { executable: "sh", argv: ["bench/inflates.sh"] },
-          }),
-        });
-        expect(resultOf(measured)).toEqual({
-          _tag: "Unjudged",
-          reason: expect.stringMatching(/base and candidate trees changed/),
-        });
-        expect(measured.samples).toEqual([]);
-      }),
-    ),
-  30_000,
-);
+test("a tree its prepare changes is unjudged, even where its samples restore it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, repo, base, harness } = yield* project;
+      const measured = yield* measuring(root, {
+        base,
+        cwd: repo,
+        plan: planOf(harness, sh("restores.sh"), {
+          prepare: { executable: "sh", argv: ["bench/inflates.sh"] },
+        }),
+      });
+      expect(resultOf(measured)).toEqual({
+        _tag: "Unjudged",
+        reason: expect.stringMatching(/base and candidate trees changed/),
+      });
+      expect(measured.samples).toEqual([]);
+    }),
+  ));
 
-test(
-  "a tree one sample changes is unjudged, even where a later sample restores it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { root, repo, base, harness } = yield* project;
-        const measured = yield* measuring(root, {
-          base,
-          cwd: repo,
-          plan: planOf(harness, sh("toggles.sh")),
-        });
-        expect(resultOf(measured)).toEqual({
-          _tag: "Unjudged",
-          reason: expect.stringMatching(/base tree changed/),
-        });
-        expect(measured.samples).toHaveLength(1);
-      }),
-    ),
-  30_000,
-);
+test("a tree one sample changes is unjudged, even where a later sample restores it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, repo, base, harness } = yield* project;
+      const measured = yield* measuring(root, {
+        base,
+        cwd: repo,
+        plan: planOf(harness, sh("toggles.sh")),
+      });
+      expect(resultOf(measured)).toEqual({
+        _tag: "Unjudged",
+        reason: expect.stringMatching(/base tree changed/),
+      });
+      expect(measured.samples).toHaveLength(1);
+    }),
+  ));
 
-test(
-  "the time limit counts the time its benchmark takes to be recorded and spawned",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { root, repo, base, harness } = yield* project;
-        const plain = yield* CheckProcesses;
-        const measured = yield* measuring(root, {
-          base,
-          cwd: repo,
-          plan: planOf(harness, sh("bench.sh"), { limit: 0.3 }),
-        }).pipe(
-          Effect.provideService(CheckProcesses, {
-            ...plain,
-            adopt: (check, spawn, say) =>
-              Effect.delay(plain.adopt(check, spawn, say), "500 millis"),
-          }),
-        );
-        expect(resultOf(measured)).toEqual({
-          _tag: "TimedOut",
-          tree: "base",
-          stage: "sample",
-          command: "bench",
-        });
-      }),
-    ),
-  30_000,
-);
+test("the time limit counts the time its benchmark takes to be recorded and spawned", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, repo, base, harness } = yield* project;
+      const plain = yield* CheckProcesses;
+      const measured = yield* measuring(root, {
+        base,
+        cwd: repo,
+        plan: planOf(harness, sh("bench.sh"), { limit: 0.3 }),
+      }).pipe(
+        Effect.provideService(CheckProcesses, {
+          ...plain,
+          adopt: (check, spawn, say) => Effect.delay(plain.adopt(check, spawn, say), "500 millis"),
+        }),
+      );
+      expect(resultOf(measured)).toEqual({
+        _tag: "TimedOut",
+        tree: "base",
+        stage: "sample",
+        command: "bench",
+      });
+    }),
+  ));
 
-test(
-  "a benchmark still being recorded is ended at its time limit, so it does nothing after",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { root, repo, base, harness } = yield* project;
-        const plain = yield* CheckProcesses;
-        const marker = `${root}/late`;
-        const measured = yield* measuring(root, {
-          base,
-          cwd: repo,
-          plan: planOf(harness, sh("marks.sh", marker), { limit: 0.3 }),
-        }).pipe(
-          Effect.provideService(CheckProcesses, {
-            ...plain,
-            adopt: (check, spawn, say) =>
-              plain.adopt(check, spawn, say).pipe(Effect.tap(() => Effect.sleep("900 millis"))),
-          }),
-        );
-        expect(resultOf(measured)).toMatchObject({ _tag: "TimedOut", tree: "base" });
-        expect(yield* fs.exists(marker)).toBe(false);
-      }),
-    ),
-  30_000,
-);
+test("a benchmark still being recorded is ended at its time limit, so it does nothing after", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { root, repo, base, harness } = yield* project;
+      const plain = yield* CheckProcesses;
+      const marker = `${root}/late`;
+      const measured = yield* measuring(root, {
+        base,
+        cwd: repo,
+        plan: planOf(harness, sh("marks.sh", marker), { limit: 0.3 }),
+      }).pipe(
+        Effect.provideService(CheckProcesses, {
+          ...plain,
+          adopt: (check, spawn, say) =>
+            plain.adopt(check, spawn, say).pipe(Effect.tap(() => Effect.sleep("900 millis"))),
+        }),
+      );
+      expect(resultOf(measured)).toMatchObject({ _tag: "TimedOut", tree: "base" });
+      expect(yield* fs.exists(marker)).toBe(false);
+    }),
+  ));
 
 test.skipIf(process.platform !== "linux")(
   "a benchmark its host ends as it stops records nothing, so the next host measures afresh",
@@ -299,64 +270,56 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* readMeasurements(`${root}/evidence`)).toEqual([]);
       }),
     ),
-  30_000,
 );
 
-test(
-  "a base tree left without its harness commits is made again, not sampled",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { root, repo, base, harness, write, commit } = yield* project;
-        const plan = planOf(harness, sh("bench.sh"));
-        expect(resultOf(yield* measuring(root, { base, cwd: repo, plan }))._tag).toBe("Judged");
-        const trees = `${root}/state/measurements/trees/run-1`;
-        const [made] = yield* fs.readDirectory(trees);
-        yield* exec(["git", "reset", "-q", "--hard", base], { cwd: `${trees}/${made}` });
-        yield* write("value", "8\n");
-        yield* commit("another product");
+test("a base tree left without its harness commits is made again, not sampled", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { root, repo, base, harness, write, commit } = yield* project;
+      const plan = planOf(harness, sh("bench.sh"));
+      expect(resultOf(yield* measuring(root, { base, cwd: repo, plan }))._tag).toBe("Judged");
+      const trees = `${root}/state/measurements/trees/run-1`;
+      const [made] = yield* fs.readDirectory(trees);
+      yield* exec(["git", "reset", "-q", "--hard", base], { cwd: `${trees}/${made}` });
+      yield* write("value", "8\n");
+      yield* commit("another product");
 
-        const again = yield* measuring(root, { base, cwd: repo, plan });
-        expect(resultOf(again)._tag).toBe("Judged");
-        expect(
-          Option.getOrUndefined(Arr.findFirst(again.samples, (one) => one.tree === "base"))
-            ?.readings["bench.counter"],
-        ).toBe(10);
-      }),
-    ),
-  30_000,
-);
+      const again = yield* measuring(root, { base, cwd: repo, plan });
+      expect(resultOf(again)._tag).toBe("Judged");
+      expect(
+        Option.getOrUndefined(Arr.findFirst(again.samples, (one) => one.tree === "base"))?.readings[
+          "bench.counter"
+        ],
+      ).toBe(10);
+    }),
+  ));
 
-test(
-  "a base that already holds its repaired harness is sampled as it is, with nothing applied",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { root, repo, harness, write, commit } = yield* project;
-        yield* exec(["git", "reset", "-q", "--hard", harness], { cwd: repo });
-        yield* write("bench/bench.sh", 'echo "{\\"counter\\": $(( $(cat value) * 2 ))}"\n');
-        const repair = yield* commit("repair");
-        yield* write("value", "7\n");
-        yield* commit("product");
-        const plan = planOf(harness, sh("bench.sh"), {
-          harness: { commits: [harness, repair], paths: ["bench"] },
-        });
-        const measured = yield* measuring(root, { base: repair, cwd: repo, plan });
-        expect(resultOf(measured)._tag).toBe("Judged");
-        expect(measured.base.commit).toBe(repair);
-        expect(measured.base.head_sha).toBe(repair);
-        const readings = (tree: string) =>
-          Arr.map(
-            Arr.filter(measured.samples, (one) => one.tree === tree),
-            (one) => one.readings["bench.counter"],
-          );
-        expect(readings("base")).toEqual([20, 20]);
-        expect(readings("candidate")).toEqual([14, 14]);
-      }),
-    ),
-  30_000,
-);
+test("a base that already holds its repaired harness is sampled as it is, with nothing applied", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, repo, harness, write, commit } = yield* project;
+      yield* exec(["git", "reset", "-q", "--hard", harness], { cwd: repo });
+      yield* write("bench/bench.sh", 'echo "{\\"counter\\": $(( $(cat value) * 2 ))}"\n');
+      const repair = yield* commit("repair");
+      yield* write("value", "7\n");
+      yield* commit("product");
+      const plan = planOf(harness, sh("bench.sh"), {
+        harness: { commits: [harness, repair], paths: ["bench"] },
+      });
+      const measured = yield* measuring(root, { base: repair, cwd: repo, plan });
+      expect(resultOf(measured)._tag).toBe("Judged");
+      expect(measured.base.commit).toBe(repair);
+      expect(measured.base.head_sha).toBe(repair);
+      const readings = (tree: string) =>
+        Arr.map(
+          Arr.filter(measured.samples, (one) => one.tree === tree),
+          (one) => one.readings["bench.counter"],
+        );
+      expect(readings("base")).toEqual([20, 20]);
+      expect(readings("candidate")).toEqual([14, 14]);
+    }),
+  ));
 
 const DOUBLED = 'echo "{\\"counter\\": $(( $(cat value) * 2 ))}"\n';
 
@@ -384,120 +347,100 @@ const repairedProject = Effect.gen(function* () {
 });
 
 for (const squashed of [false, true])
-  test(
-    `a base that holds ${squashed ? "one squashed commit" : "carried copies"} of its repaired harness, under other SHAs, is sampled as it is`,
-    () =>
-      runEffect(
-        Effect.gen(function* () {
-          const { root, repo, harness, repair, plan, git, write, commit, readings } =
-            yield* repairedProject;
-          if (squashed) yield* git("merge", "--squash", repair);
-          else yield* git("cherry-pick", harness, repair);
-          const carried = squashed
-            ? yield* commit("squashed")
-            : Str.trim((yield* git("rev-parse", "HEAD")).stdout);
-          yield* write("value", "7\n");
-          yield* commit("product");
-          const measured = yield* measuring(root, { base: carried, cwd: repo, plan });
-          expect(resultOf(measured)._tag).toBe("Judged");
-          expect(measured.base.head_sha).toBe(carried);
-          expect(readings(measured, "base")).toEqual([20, 20]);
-          expect(readings(measured, "candidate")).toEqual([14, 14]);
-        }),
-      ),
-    30_000,
-  );
-
-test(
-  "a base that holds a copy of only the first harness commit gets the rest applied",
-  () =>
+  test(`a base that holds ${squashed ? "one squashed commit" : "carried copies"} of its repaired harness, under other SHAs, is sampled as it is`, () =>
     runEffect(
       Effect.gen(function* () {
-        const { root, repo, harness, plan, git, write, commit, readings } = yield* repairedProject;
-        yield* git("cherry-pick", harness);
-        const carried = Str.trim((yield* git("rev-parse", "HEAD")).stdout);
+        const { root, repo, harness, repair, plan, git, write, commit, readings } =
+          yield* repairedProject;
+        if (squashed) yield* git("merge", "--squash", repair);
+        else yield* git("cherry-pick", harness, repair);
+        const carried = squashed
+          ? yield* commit("squashed")
+          : Str.trim((yield* git("rev-parse", "HEAD")).stdout);
         yield* write("value", "7\n");
         yield* commit("product");
         const measured = yield* measuring(root, { base: carried, cwd: repo, plan });
         expect(resultOf(measured)._tag).toBe("Judged");
-        const applied = yield* git("rev-list", "--count", `${carried}..${measured.base.head_sha}`);
-        expect(Str.trim(applied.stdout)).toBe("1");
+        expect(measured.base.head_sha).toBe(carried);
         expect(readings(measured, "base")).toEqual([20, 20]);
+        expect(readings(measured, "candidate")).toEqual([14, 14]);
       }),
-    ),
-  30_000,
-);
+    ));
 
-test(
-  "a base whose own edit to a script the harness edits merges cleanly is refused, not sampled with that edit",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { root, repo, base, git, write, commit } = yield* project;
-        yield* git("reset", "-q", "--hard", base);
-        yield* exec(["mkdir", "bench"], { cwd: repo });
-        const script = (first: string, last: string) =>
-          write("bench/edited.sh", `${first}\n:\n:\n:\n:\n${last}\n`);
-        yield* script("x=1", 'echo "{\\"counter\\": $(cat value)}"');
-        const before = yield* commit("a benchmark script before the harness");
-        yield* script("x=2", 'echo "{\\"counter\\": $(cat value)}"');
-        const harness = yield* commit("harness");
-        yield* git("reset", "-q", "--hard", before);
-        yield* script("x=1", "echo '{\"counter\": 1}'");
-        const diverged = yield* commit("an edit the plan never wrote");
-        yield* write("value", "7\n");
-        yield* commit("product");
-        const plan = planOf(harness, sh("edited.sh"));
-        const refused = yield* Effect.flip(measuring(root, { base: diverged, cwd: repo, plan }));
-        expect(refused.why).toContain(`the harness commits do not apply on ${diverged}`);
-      }),
-    ),
-  30_000,
-);
+test("a base that holds a copy of only the first harness commit gets the rest applied", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, repo, harness, plan, git, write, commit, readings } = yield* repairedProject;
+      yield* git("cherry-pick", harness);
+      const carried = Str.trim((yield* git("rev-parse", "HEAD")).stdout);
+      yield* write("value", "7\n");
+      yield* commit("product");
+      const measured = yield* measuring(root, { base: carried, cwd: repo, plan });
+      expect(resultOf(measured)._tag).toBe("Judged");
+      const applied = yield* git("rev-list", "--count", `${carried}..${measured.base.head_sha}`);
+      expect(Str.trim(applied.stdout)).toBe("1");
+      expect(readings(measured, "base")).toEqual([20, 20]);
+    }),
+  ));
 
-test(
-  "a base whose history holds the harness but whose harness files were changed since is refused, not sampled as holding it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { root, repo, repair, plan, git, write, commit } = yield* repairedProject;
-        yield* git("reset", "-q", "--hard", repair);
-        yield* write("bench/bench.sh", 'echo "{\\"counter\\": 1}"\n');
-        const changed = yield* commit("an edit outside the plan");
-        yield* write("value", "7\n");
-        yield* commit("product");
-        const refused = yield* Effect.flip(measuring(root, { base: changed, cwd: repo, plan }));
-        expect(refused.why).toContain(`the harness commits do not apply on ${changed}`);
-      }),
-    ),
-  30_000,
-);
+test("a base whose own edit to a script the harness edits merges cleanly is refused, not sampled with that edit", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, repo, base, git, write, commit } = yield* project;
+      yield* git("reset", "-q", "--hard", base);
+      yield* exec(["mkdir", "bench"], { cwd: repo });
+      const script = (first: string, last: string) =>
+        write("bench/edited.sh", `${first}\n:\n:\n:\n:\n${last}\n`);
+      yield* script("x=1", 'echo "{\\"counter\\": $(cat value)}"');
+      const before = yield* commit("a benchmark script before the harness");
+      yield* script("x=2", 'echo "{\\"counter\\": $(cat value)}"');
+      const harness = yield* commit("harness");
+      yield* git("reset", "-q", "--hard", before);
+      yield* script("x=1", "echo '{\"counter\": 1}'");
+      const diverged = yield* commit("an edit the plan never wrote");
+      yield* write("value", "7\n");
+      yield* commit("product");
+      const plan = planOf(harness, sh("edited.sh"));
+      const refused = yield* Effect.flip(measuring(root, { base: diverged, cwd: repo, plan }));
+      expect(refused.why).toContain(`the harness commits do not apply on ${diverged}`);
+    }),
+  ));
 
-test(
-  "a Run's new plan is measured only with its reason, which its Measurement keeps",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { root, repo, base, harness } = yield* project;
-        const plan = planOf(harness, sh("bench.sh"));
-        expect((yield* measuring(root, { base, cwd: repo, plan })).plan_reason).toBeNull();
+test("a base whose history holds the harness but whose harness files were changed since is refused, not sampled as holding it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, repo, repair, plan, git, write, commit } = yield* repairedProject;
+      yield* git("reset", "-q", "--hard", repair);
+      yield* write("bench/bench.sh", 'echo "{\\"counter\\": 1}"\n');
+      const changed = yield* commit("an edit outside the plan");
+      yield* write("value", "7\n");
+      yield* commit("product");
+      const refused = yield* Effect.flip(measuring(root, { base: changed, cwd: repo, plan }));
+      expect(refused.why).toContain(`the harness commits do not apply on ${changed}`);
+    }),
+  ));
 
-        const more = { ...plan, samples: 3 };
-        const refused = yield* Effect.flip(measuring(root, { base, cwd: repo, plan: more }));
-        expect(refused.why).toContain("reason");
+test("a Run's new plan is measured only with its reason, which its Measurement keeps", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, repo, base, harness } = yield* project;
+      const plan = planOf(harness, sh("bench.sh"));
+      expect((yield* measuring(root, { base, cwd: repo, plan })).plan_reason).toBeNull();
 
-        const replanned = yield* measuring(root, {
-          base,
-          cwd: repo,
-          plan: more,
-          reason: "three samples a side",
-        });
-        expect(replanned.plan_reason).toBe("three samples a side");
-        expect(replanned.samples).toHaveLength(6);
-      }),
-    ),
-  30_000,
-);
+      const more = { ...plan, samples: 3 };
+      const refused = yield* Effect.flip(measuring(root, { base, cwd: repo, plan: more }));
+      expect(refused.why).toContain("reason");
+
+      const replanned = yield* measuring(root, {
+        base,
+        cwd: repo,
+        plan: more,
+        reason: "three samples a side",
+      });
+      expect(replanned.plan_reason).toBe("three samples a side");
+      expect(replanned.samples).toHaveLength(6);
+    }),
+  ));
 
 test.skipIf(process.platform !== "linux")(
   "a benchmark a dead host left running is ended before the next Measurement takes a sample",
@@ -552,5 +495,4 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* stillRunning(left)).toBe(false);
       }).pipe(Effect.scoped),
     ),
-  30_000,
 );

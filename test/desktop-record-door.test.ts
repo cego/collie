@@ -7,27 +7,23 @@ import { flowNode, mainFlow } from "./support/flow";
 
 const bridge = [process.execPath, `${import.meta.dir}/fixtures/endless-board-bridge.ts`];
 
-test(
-  "a record frame reaches Desktop while its Machine's board stream is stalled",
-  () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const opened = yield* openDoors({ profile: "vm", name: "vm-mk" }, () => bridge);
-        yield* opened.board.pipe(
-          Stream.runForEach(() => Effect.never),
-          Effect.forkScoped,
-        );
-        const doors = new DoorMap<typeof opened>();
-        doors.set("i-1", opened);
-        const first = yield* recordEvents(doors, "i-1", "r-1").pipe(
-          Stream.runHead,
-          Effect.timeoutOption("5 seconds"),
-        );
-        expect(Option.flatten(first)).toEqual(Option.some({ _tag: "Frame", detail: null }));
-      }).pipe(Effect.scoped),
-    ),
-  15_000,
-);
+test("a record frame reaches Desktop while its Machine's board stream is stalled", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const opened = yield* openDoors({ profile: "vm", name: "vm-mk" }, () => bridge);
+      yield* opened.board.pipe(
+        Stream.runForEach(() => Effect.never),
+        Effect.forkScoped,
+      );
+      const doors = new DoorMap<typeof opened>();
+      doors.set("i-1", opened);
+      const first = yield* recordEvents(doors, "i-1", "r-1").pipe(
+        Stream.runHead,
+        Effect.timeoutOption("5 seconds"),
+      );
+      expect(Option.flatten(first)).toEqual(Option.some({ _tag: "Frame", detail: null }));
+    }).pipe(Effect.scoped),
+  ));
 
 test("a record's later frames reach the view without a Flow it already has", () =>
   Effect.runPromise(

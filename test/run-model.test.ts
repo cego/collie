@@ -46,77 +46,73 @@ const card: (over?: Partial<TaskView>) => TaskView = (over = {}) => ({
   ...over,
 });
 
-test(
-  "a change to one Run re-reads only that Run's files, and the board still equals one read from disk",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
-        const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
-        const runs = yield* Effect.forEach(Arr.range(1, RUNS), (n) =>
-          Effect.gen(function* () {
-            const task = `task-${n}`;
-            yield* writeTask({
-              id: task,
-              workspace: "w1",
-              label: `project | Work ${n}`,
-              cwd: "/project",
-              created_at: "2026-10-30T09:00:00Z",
-            });
-            const run = yield* madeRun(dir, {
-              id: `r${n}`,
-              task,
-              state: n % 2 === 0 ? "succeeded" : "running",
-              created: "2026-10-30T09:00:00Z",
-            });
-            yield* fs.writeFileString(`${run.dir}/log.txt`, "started\n");
-            return run;
-          }),
-        );
-        const reads: string[] = [];
-        const logged = (path: string) => Effect.sync(() => reads.push(path));
-        const model = yield* makeRunModel(dir, "installation").pipe(
-          Effect.provideService(FileSystem.FileSystem, {
-            ...fs,
-            readFileString: (path, encoding) =>
-              logged(path).pipe(Effect.andThen(fs.readFileString(path, encoding))),
-            readDirectory: (path, options) =>
-              logged(path).pipe(Effect.andThen(fs.readDirectory(path, options))),
-            exists: (path) => logged(path).pipe(Effect.andThen(fs.exists(path))),
-            stat: (path) => logged(path).pipe(Effect.andThen(fs.stat(path))),
-          }),
-        );
-        const now = epochMs("2026-10-30T10:00:00Z");
-        const build = (through: FileSystem.FileSystem) =>
-          buildBoard({
-            env,
-            runs,
-            now,
-            registered: [],
-            offers: () => Effect.succeed([]),
-          }).pipe(Effect.provideService(FileSystem.FileSystem, through));
-        yield* build(model.reading);
-        expect(reads.length).toBeGreaterThan(RUNS);
+test("a change to one Run re-reads only that Run's files, and the board still equals one read from disk", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
+      const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const runs = yield* Effect.forEach(Arr.range(1, RUNS), (n) =>
+        Effect.gen(function* () {
+          const task = `task-${n}`;
+          yield* writeTask({
+            id: task,
+            workspace: "w1",
+            label: `project | Work ${n}`,
+            cwd: "/project",
+            created_at: "2026-10-30T09:00:00Z",
+          });
+          const run = yield* madeRun(dir, {
+            id: `r${n}`,
+            task,
+            state: n % 2 === 0 ? "succeeded" : "running",
+            created: "2026-10-30T09:00:00Z",
+          });
+          yield* fs.writeFileString(`${run.dir}/log.txt`, "started\n");
+          return run;
+        }),
+      );
+      const reads: string[] = [];
+      const logged = (path: string) => Effect.sync(() => reads.push(path));
+      const model = yield* makeRunModel(dir, "installation").pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          readFileString: (path, encoding) =>
+            logged(path).pipe(Effect.andThen(fs.readFileString(path, encoding))),
+          readDirectory: (path, options) =>
+            logged(path).pipe(Effect.andThen(fs.readDirectory(path, options))),
+          exists: (path) => logged(path).pipe(Effect.andThen(fs.exists(path))),
+          stat: (path) => logged(path).pipe(Effect.andThen(fs.stat(path))),
+        }),
+      );
+      const now = epochMs("2026-10-30T10:00:00Z");
+      const build = (through: FileSystem.FileSystem) =>
+        buildBoard({
+          env,
+          runs,
+          now,
+          registered: [],
+          offers: () => Effect.succeed([]),
+        }).pipe(Effect.provideService(FileSystem.FileSystem, through));
+      yield* build(model.reading);
+      expect(reads.length).toBeGreaterThan(RUNS);
 
-        reads.length = 0;
-        const changed = runs[41]!;
-        yield* model.writing.makeDirectory(`${changed.dir}/plan/issues`, { recursive: true });
-        yield* model.writing.writeFileString(`${changed.dir}/plan/issues/01-next.md`, "# Next\n");
-        const fromModel = yield* build(model.reading);
+      reads.length = 0;
+      const changed = runs[41]!;
+      yield* model.writing.makeDirectory(`${changed.dir}/plan/issues`, { recursive: true });
+      yield* model.writing.writeFileString(`${changed.dir}/plan/issues/01-next.md`, "# Next\n");
+      const fromModel = yield* build(model.reading);
 
-        const own = [changed.dir, changed.evidence, `${dir}/agents/${changed.id}`];
-        const elsewhere = Arr.filter(
-          reads,
-          (path) => !Arr.some(own, (mine) => path === mine || Str.startsWith(`${mine}/`)(path)),
-        );
-        expect(elsewhere).toEqual([]);
-        expect(Arr.some(reads, Str.startsWith(changed.dir))).toBe(true);
-        expect(fromModel).toEqual(yield* build(fs));
-      }),
-    ),
-  60_000,
-);
+      const own = [changed.dir, changed.evidence, `${dir}/agents/${changed.id}`];
+      const elsewhere = Arr.filter(
+        reads,
+        (path) => !Arr.some(own, (mine) => path === mine || Str.startsWith(`${mine}/`)(path)),
+      );
+      expect(elsewhere).toEqual([]);
+      expect(Arr.some(reads, Str.startsWith(changed.dir))).toBe(true);
+      expect(fromModel).toEqual(yield* build(fs));
+    }),
+  ));
 
 test("a Task written moves the Revision of its Runs, and no other Run's", () =>
   runEffect(

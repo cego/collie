@@ -361,70 +361,58 @@ test("a core that answers passes with its version", () =>
     }),
   ));
 
-test(
-  "an agent registered on Herdr 1, or before incarnations, is reported; one on core is not",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* healthy();
-        yield* registered("builder-a", "1-7");
-        yield* registered("reviewer-a", "t1", "core");
-        yield* registered("builder-legacy", "1-4", "legacy");
+test("an agent registered on Herdr 1, or before incarnations, is reported; one on core is not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* registered("builder-a", "1-7");
+      yield* registered("reviewer-a", "t1", "core");
+      yield* registered("builder-legacy", "1-4", "legacy");
 
-        yield* openHost(rig.stateDir);
-        const result = yield* report();
+      yield* openHost(rig.stateDir);
+      const result = yield* report();
 
-        expect(check(result, "herdr 1")).toMatchObject({
-          ok: true,
-          detail:
-            "registered on Herdr 1, which Collie no longer reaches: builder-a (run run-builder-a), builder-legacy (run run-builder-legacy)",
-          fix: "collie run resume <run> starts its agents again on core",
-        });
-      }),
-    ),
-  30_000,
-);
+      expect(check(result, "herdr 1")).toMatchObject({
+        ok: true,
+        detail:
+          "registered on Herdr 1, which Collie no longer reaches: builder-a (run run-builder-a), builder-legacy (run run-builder-legacy)",
+        fix: "collie run resume <run> starts its agents again on core",
+      });
+    }),
+  ));
 
-test(
-  "a host doctor cannot ask is a warning, never reported as nothing on Herdr 1",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* healthy();
-        yield* registered("builder-a", "1-7");
+test("a host doctor cannot ask is a warning, never reported as nothing on Herdr 1", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* registered("builder-a", "1-7");
 
-        const result = yield* report();
+      const result = yield* report();
 
-        expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
-        expect(check(result, "herdr 1").detail).toContain(
-          "could not ask this Machine's host which agents it registered",
-        );
-      }),
-    ),
-  30_000,
-);
+      expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
+      expect(check(result, "herdr 1").detail).toContain(
+        "could not ask this Machine's host which agents it registered",
+      );
+    }),
+  ));
 
-test(
-  "with nothing registered on Herdr 1, doctor reports none",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* healthy();
-        yield* registered("reviewer-a", "t1", "core");
+test("with nothing registered on Herdr 1, doctor reports none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* registered("reviewer-a", "t1", "core");
 
-        yield* openHost(rig.stateDir);
-        const result = yield* report();
+      yield* openHost(rig.stateDir);
+      const result = yield* report();
 
-        expect(check(result, "herdr 1")).toEqual({
-          name: "herdr 1",
-          ok: true,
-          detail: "nothing on this Machine is registered on Herdr 1",
-          fix: "",
-        });
-      }),
-    ),
-  30_000,
-);
+      expect(check(result, "herdr 1")).toEqual({
+        name: "herdr 1",
+        ok: true,
+        detail: "nothing on this Machine is registered on Herdr 1",
+        fix: "",
+      });
+    }),
+  ));
 
 test("a filesystem Collie writes to with under a tenth free is a warning, with the fix", () =>
   runEffect(

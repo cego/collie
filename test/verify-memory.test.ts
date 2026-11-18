@@ -25,163 +25,155 @@ const Ran = Schema.Struct({
   verification: Schema.Struct({ exit: Schema.Finite }),
 });
 
-test(
-  "a verify waits while the Machine is short, pausing only its own agent's budget; nothing a human frees memory with waits, and nothing running is stopped",
-  () =>
-    proves(
-      "collie-verify-memory-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const outputs = `${world.home}/outputs.json`;
-          const proc = `${world.home}/proc`;
-          const memory = (availableGiB: number) =>
-            Effect.gen(function* () {
-              yield* fs.makeDirectory(proc, { recursive: true });
-              yield* fs.writeFileString(
-                `${proc}/meminfo`,
-                `MemTotal: ${100 * 1048576} kB\nMemAvailable: ${availableGiB * 1048576} kB\n`,
-              );
-            }).pipe(Effect.orDie);
-          yield* memory(50);
-          yield* fs.writeFileString(outputs, encode([null])).pipe(Effect.orDie);
-          yield* fs.writeFileString(`${world.project}/thing.txt`, "one\n").pipe(Effect.orDie);
-          yield* exec(["git", "add", "-A"], { cwd: world.project });
-          yield* exec(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "one"],
-            { cwd: world.project },
-          );
-          const set = {
-            COLLIE_STATE_DIR: world.state,
-            COLLIE_USER_DIR: world.config,
-            COLLIE_PROC: proc,
-            COLLIE_MEMORY_EVERY: "100 millis",
-          };
-          yield* Effect.acquireRelease(
+test("a verify waits while the Machine is short, pausing only its own agent's budget; nothing a human frees memory with waits, and nothing running is stopped", () =>
+  proves(
+    "collie-verify-memory-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const outputs = `${world.home}/outputs.json`;
+        const proc = `${world.home}/proc`;
+        const memory = (availableGiB: number) =>
+          Effect.gen(function* () {
+            yield* fs.makeDirectory(proc, { recursive: true });
+            yield* fs.writeFileString(
+              `${proc}/meminfo`,
+              `MemTotal: ${100 * 1048576} kB\nMemAvailable: ${availableGiB * 1048576} kB\n`,
+            );
+          }).pipe(Effect.orDie);
+        yield* memory(50);
+        yield* fs.writeFileString(outputs, encode([null])).pipe(Effect.orDie);
+        yield* fs.writeFileString(`${world.project}/thing.txt`, "one\n").pipe(Effect.orDie);
+        yield* exec(["git", "add", "-A"], { cwd: world.project });
+        yield* exec(
+          ["git", "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "one"],
+          { cwd: world.project },
+        );
+        const set = {
+          COLLIE_STATE_DIR: world.state,
+          COLLIE_USER_DIR: world.config,
+          COLLIE_PROC: proc,
+          COLLIE_MEMORY_EVERY: "100 millis",
+        };
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const before = Rec.fromEntries(
+              Arr.map(Rec.keys(set), (key) => [key, Bun.env[key]] as const),
+            );
+            Object.assign(Bun.env, set);
+            return before;
+          }),
+          (before) =>
             Effect.sync(() => {
-              const before = Rec.fromEntries(
-                Arr.map(Rec.keys(set), (key) => [key, Bun.env[key]] as const),
-              );
-              Object.assign(Bun.env, set);
-              return before;
+              for (const [key, value] of Rec.toEntries(before))
+                if (value === undefined) delete Bun.env[key];
+                else Bun.env[key] = value;
             }),
-            (before) =>
-              Effect.sync(() => {
-                for (const [key, value] of Rec.toEntries(before))
-                  if (value === undefined) delete Bun.env[key];
-                  else Bun.env[key] = value;
-              }),
+        );
+        resetExecutors();
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const { runId } = yield* client
+          .start({
+            project: world.project,
+            id: "attended",
+            request: "start",
+            input: { work: "it" },
+          })
+          .pipe(Effect.orDie);
+        const launched = (yield* until(
+          () => launchOf(world.state, runId, "build"),
+          (one) => one !== undefined,
+        ))!;
+        const agent = Option.getOrUndefined(
+          Arr.findFirst(yield* registeredAt(world.state), (entry) => entry.runId === runId),
+        )!.agent;
+        const verify = (name: string, agent: string) =>
+          collie(
+            world,
+            ["verify", "--run", runId, "--cwd", world.project, "--name", name, "--", "/bin/true"],
+            { COLLIE_AGENT: agent },
           );
-          resetExecutors();
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const { runId } = yield* client
-            .start({
-              project: world.project,
-              id: "attended",
-              request: "start",
-              input: { work: "it" },
-            })
-            .pipe(Effect.orDie);
-          const launched = (yield* until(
-            () => launchOf(world.state, runId, "build"),
-            (one) => one !== undefined,
-          ))!;
-          const agent = Option.getOrUndefined(
-            Arr.findFirst(yield* registeredAt(world.state), (entry) => entry.runId === runId),
-          )!.agent;
-          const verify = (name: string, agent: string) =>
-            collie(
-              world,
-              ["verify", "--run", runId, "--cwd", world.project, "--name", name, "--", "/bin/true"],
-              { COLLIE_AGENT: agent },
-            );
-          const waiting = () => waitAt(world.state, runId);
-          const ran = () =>
-            hostRecords(world.state, readVerifications(evidenceDir(world.state, runId))).pipe(
-              Effect.orElseSucceed(() => []),
-              Effect.map((all) => all.length),
-            );
-
-          yield* memory(2);
-          for (const [name, as, pauses] of [
-            ["as-agent", agent, true],
-            ["as-human", "not-an-agent", false],
-          ] as const) {
-            const asked = yield* Effect.forkChild(verify(name, as));
-            const wait = yield* until(waiting, (one) => one !== null);
-            expect(wait?.sentence).toMatch(
-              /^waiting for memory on .+: 2\.0 of 100\.0 GB available$/,
-            );
-            expect(yield* hostRecords(world.state, holdsBudgetOf(runId, launched.agent))).toBe(
-              pauses,
-            );
-            const shown = yield* collie(world, ["run", "show", runId]);
-            expect(
-              (yield* Schema.decodeUnknownEffect(Shown)(shown.envelope.data).pipe(Effect.orDie))
-                .memory,
-            ).toBe(waitLine(wait!));
-            const before = yield* ran();
-            yield* memory(50);
-            const done = yield* Fiber.join(asked);
-            expect(done.exit).toBe(0);
-            expect(done.stderr).toContain("waiting for memory on ");
-            expect(
-              yield* Schema.decodeUnknownEffect(Ran)(done.envelope.data).pipe(Effect.orDie),
-            ).toEqual({
-              ran: true,
-              verification: expect.objectContaining({ exit: 0 }),
-            });
-            expect(yield* ran()).toBe(before + 1);
-            expect(
-              Arr.filter(yield* deliveredTo(world.state, runId), (one) =>
-                pipe_(one.cause.ref, Str.startsWith("verify-")),
-              ),
-            ).toHaveLength(1);
-            expect(yield* waiting()).toBeNull();
-            yield* memory(2);
-          }
-
-          expect(Arr.some(yield* registeredAt(world.state), (one) => one.runId === runId)).toBe(
-            true,
+        const waiting = () => waitAt(world.state, runId);
+        const ran = () =>
+          hostRecords(world.state, readVerifications(evidenceDir(world.state, runId))).pipe(
+            Effect.orElseSucceed(() => []),
+            Effect.map((all) => all.length),
           );
 
-          const second = yield* client
-            .start({
-              project: world.project,
-              id: "attended",
-              request: "start-2",
-              input: { work: "more" },
-            })
-            .pipe(Effect.orDie);
-          expect(yield* client.run({ runId: second.runId }).pipe(Effect.orDie)).not.toBeNull();
-          yield* until(
-            () => waitAt(world.state, second.runId),
-            (one) => one !== null,
+        yield* memory(2);
+        for (const [name, as, pauses] of [
+          ["as-agent", agent, true],
+          ["as-human", "not-an-agent", false],
+        ] as const) {
+          const asked = yield* Effect.forkChild(verify(name, as));
+          const wait = yield* until(waiting, (one) => one !== null);
+          expect(wait?.sentence).toMatch(/^waiting for memory on .+: 2\.0 of 100\.0 GB available$/);
+          expect(yield* hostRecords(world.state, holdsBudgetOf(runId, launched.agent))).toBe(
+            pauses,
           );
-          yield* client
-            .steer({ runId, text: "Carry on.", request: "steer-short" })
-            .pipe(Effect.orDie);
-          for (const set of [true, false])
-            yield* client
-              .control({ runId, control: "hold", set, request: `hold-${set}` })
-              .pipe(Effect.orDie);
-          yield* client.sweep({ request: "sweep-short" }).pipe(Effect.orDie);
-          yield* client
-            .control({ runId: second.runId, control: "stop", set: true, request: "stop-short" })
-            .pipe(Effect.orDie);
-          yield* until(
-            () => waitAt(world.state, second.runId),
-            (one) => one === null,
-          );
+          const shown = yield* collie(world, ["run", "show", runId]);
+          expect(
+            (yield* Schema.decodeUnknownEffect(Shown)(shown.envelope.data).pipe(Effect.orDie))
+              .memory,
+          ).toBe(waitLine(wait!));
+          const before = yield* ran();
           yield* memory(50);
-          yield* Effect.sleep("3 seconds");
-          const agentsDir = `${world.state}/agents/${second.runId}`;
-          expect(yield* launchOf(world.state, second.runId, "build")).toBeUndefined();
-          expect(yield* fs.readFileString(`${agentsDir}/agents.log`)).toContain(
-            "stopped after waiting",
-          );
-        }).pipe(Effect.ensuring(stopHost(world.state))),
-      ["attended.workflow.ts"],
-    ),
-  120_000,
-);
+          const done = yield* Fiber.join(asked);
+          expect(done.exit).toBe(0);
+          expect(done.stderr).toContain("waiting for memory on ");
+          expect(
+            yield* Schema.decodeUnknownEffect(Ran)(done.envelope.data).pipe(Effect.orDie),
+          ).toEqual({
+            ran: true,
+            verification: expect.objectContaining({ exit: 0 }),
+          });
+          expect(yield* ran()).toBe(before + 1);
+          expect(
+            Arr.filter(yield* deliveredTo(world.state, runId), (one) =>
+              pipe_(one.cause.ref, Str.startsWith("verify-")),
+            ),
+          ).toHaveLength(1);
+          expect(yield* waiting()).toBeNull();
+          yield* memory(2);
+        }
+
+        expect(Arr.some(yield* registeredAt(world.state), (one) => one.runId === runId)).toBe(true);
+
+        const second = yield* client
+          .start({
+            project: world.project,
+            id: "attended",
+            request: "start-2",
+            input: { work: "more" },
+          })
+          .pipe(Effect.orDie);
+        expect(yield* client.run({ runId: second.runId }).pipe(Effect.orDie)).not.toBeNull();
+        yield* until(
+          () => waitAt(world.state, second.runId),
+          (one) => one !== null,
+        );
+        yield* client
+          .steer({ runId, text: "Carry on.", request: "steer-short" })
+          .pipe(Effect.orDie);
+        for (const set of [true, false])
+          yield* client
+            .control({ runId, control: "hold", set, request: `hold-${set}` })
+            .pipe(Effect.orDie);
+        yield* client.sweep({ request: "sweep-short" }).pipe(Effect.orDie);
+        yield* client
+          .control({ runId: second.runId, control: "stop", set: true, request: "stop-short" })
+          .pipe(Effect.orDie);
+        yield* until(
+          () => waitAt(world.state, second.runId),
+          (one) => one === null,
+        );
+        yield* memory(50);
+        yield* Effect.sleep("3 seconds");
+        const agentsDir = `${world.state}/agents/${second.runId}`;
+        expect(yield* launchOf(world.state, second.runId, "build")).toBeUndefined();
+        expect(yield* fs.readFileString(`${agentsDir}/agents.log`)).toContain(
+          "stopped after waiting",
+        );
+      }).pipe(Effect.ensuring(stopHost(world.state))),
+    ["attended.workflow.ts"],
+  ));
