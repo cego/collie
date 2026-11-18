@@ -29,6 +29,7 @@ import {
   mrLabel,
   watch,
   formatFindings,
+  findingKey,
   findingsIn,
   leaveReview,
   forgeOfRef,
@@ -59,6 +60,7 @@ import {
   DEFAULT_BASE,
   FIX_PROMPT,
   HEAD_MOVED,
+  followUp,
   MR_ENDED,
   IMPLEMENTER,
   NO_MR,
@@ -211,6 +213,18 @@ export default defineWorkflow({
           execute: host.reviewedHead({ target: asked.target, cwd: place.cwd }),
         });
       let head = kind === "mr" ? yield* headAt(1) : "";
+      // A local target's head, read in the checkout its fixes land in, for a follow-up round's delta.
+      const local = kind !== "mr" && place.features?.review_delta === true;
+      const checkout = Effect.map(host.place(run.id), (now) => now.cwd);
+      const localHeadAt = (round: number) =>
+        Activity.make({
+          name: `reviewed-head-${round}`,
+          success: Schema.String,
+          execute: Effect.flatMap(checkout, (cwd) =>
+            host.reviewedHead({ target: asked.target, cwd }),
+          ),
+        });
+      let localHead = local ? yield* localHeadAt(1) : "";
 
       // The extra axes and the earlier review are the host's own — a caller attaches them
       // to the work rather than declaring them here, and `previous` names the Run whose
@@ -699,12 +713,30 @@ export default defineWorkflow({
       // The fix and the review after it are one round of a rally, as in implement: a fix
       // Collie ran is reviewed again at once, and one handed to an agent Collie does not
       // watch waits for the human to say it is ready to look at.
-      const reviewedAgain = (at: number, answered: string) =>
+      const reviewedAgain = (
+        at: number,
+        answered: string,
+        fixedNow: ReadonlyArray<Pick<Finding, "file" | "title">> = [],
+      ) =>
         Effect.gen(function* () {
           ledger = synthesis.findings;
           const earlier = head;
           head = kind === "mr" ? yield* headAt(at) : "";
           const changes = yield* changesAt(at, earlier);
+          const earlierLocal = localHead;
+          localHead = local ? yield* localHeadAt(at) : "";
+          const settled = new Set(Arr.map([...fixedNow, ...disputed], findingKey));
+          const delta =
+            earlierLocal === "" || localHead === ""
+              ? ""
+              : yield* followUp({
+                  name: `review-changes-${at}`,
+                  target: asked.target,
+                  cwd: checkout,
+                  head: earlierLocal,
+                  now: localHead,
+                  open: Arr.filter(synthesis.findings, (one) => !settled.has(findingKey(one))),
+                });
           const last = yield* fs
             .readFileString(`${place.dir}/${REVIEW_FILE}`)
             .pipe(Effect.orElseSucceed(() => ""));
@@ -718,6 +750,7 @@ export default defineWorkflow({
               ledger: kind === "mr" ? ledger : undefined,
               head,
               changes,
+              delta,
               answered,
               risks: place.options.risks ?? "",
               at,
@@ -1011,7 +1044,11 @@ export default defineWorkflow({
             (one) => !Arr.some(disputed, (old) => sameFinding(old, one)),
           ),
         ];
-        synthesis = yield* reviewedAgain((reviews += 1), agents.outputFor(run.id, operation));
+        synthesis = yield* reviewedAgain(
+          (reviews += 1),
+          agents.outputFor(run.id, operation),
+          fixed.fixed,
+        );
       }
     }),
 });
