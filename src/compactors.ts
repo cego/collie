@@ -84,6 +84,7 @@ import {
 } from "./processes";
 import { holderLives, hostLockOf, lockHolder, withLock } from "./lock";
 import { carriedDelivery } from "./dispatcher";
+import { epochMs } from "./time";
 
 /**
  * A compaction request, through the Dispatcher's channel. `Unsubmitted` is reserved for
@@ -642,6 +643,9 @@ const pi: CompactionPort = {
   // The human's channel, so a refusal from herdr is a request that never left.
   request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
   poll: (ctx, requestId) => outcomeOf(ctx.dir, requestId),
+  // Its session file records each compaction as an entry of its own.
+  reconcile: (ctx, since) =>
+    transcriptCompacted(ctx.dir, since, (line) => line.type === "compaction"),
 };
 
 /**
@@ -1230,6 +1234,42 @@ export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
   );
 });
 
+/**
+ * Whether the transcript this agent's harness last named has a line `boundary` takes for a
+ * compaction, stamped at or after `since`: what settles a request whose completion was lost.
+ */
+const transcriptCompacted = Effect.fn("Compactors.transcriptCompacted")(function* (
+  dir: string,
+  since: number,
+  boundary: (line: { readonly type?: string; readonly subtype?: string }) => boolean,
+) {
+  const transcript = Option.getOrUndefined(
+    Arr.findLast(yield* readEvents(dir), (event) => event.transcript !== undefined),
+  )?.transcript;
+  if (transcript === undefined)
+    return { kind: "failure", reason: "it never said where its transcript is" } as const;
+  const text = yield* (yield* FileSystem.FileSystem).readFileString(transcript);
+  for (const line of Str.split(text, "\n")) {
+    const entry = Option.getOrUndefined(decodeTranscriptLine(line));
+    if (entry !== undefined && boundary(entry) && epochMs(entry.timestamp) >= since)
+      return { kind: "success" } as const;
+  }
+  return {
+    kind: "failure",
+    reason: "its transcript shows no compaction since it was asked for",
+  } as const;
+});
+
+const decodeTranscriptLine = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      type: Schema.optionalKey(Schema.String),
+      subtype: Schema.optionalKey(Schema.String),
+      timestamp: Schema.String,
+    }),
+  ),
+);
+
 const claude: CompactionPort = {
   gate: gateVersion("claude"),
   install: (ctx) =>
@@ -1252,8 +1292,14 @@ const claude: CompactionPort = {
     submitCompaction(ctx, requestId, `/compact ${claudeInstructions(requestId)}`),
   // No documented compact-failed hook exists, so `poll` can only ever return success
   // or nothing: a missing PostCompact is an unresolved outcome, which the shared
-  // policy pauses on, and never a confirmed failure.
+  // policy pauses on until `reconcile` reads the transcript.
   poll: (ctx, requestId) => claudeOutcome(ctx.dir, requestId),
+  reconcile: (ctx, since) =>
+    transcriptCompacted(
+      ctx.dir,
+      since,
+      (line) => line.type === "system" && line.subtype === "compact_boundary",
+    ),
 };
 
 /** Replaces a started server's own budget; a fast-forwarded test clock gives it none. */

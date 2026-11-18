@@ -18,7 +18,7 @@ import {
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ensureLockDir, withLock } from "./lock";
-import { RanOn, type RunAgent, type RunStep } from "./board-model";
+import { type AgentFallback, choiceSaid, RanOn, type RunAgent, type RunStep } from "./board-model";
 import { StepPlace } from "./steps";
 import { ClaudeSubagents } from "./subagents";
 import { StoreWrites } from "./store-writes";
@@ -67,6 +67,8 @@ export const Launched = Schema.Struct({
   /** What this work fell back from, and why, where it did. */
   from: Schema.optionalKey(RanOn),
   why: Schema.optionalKey(Schema.String),
+  /** Where a Fallback would move this work, as its launch worked it out. */
+  next: Schema.optionalKey(RanOn),
   /** herdr's id for the process given this work: the name alone is reused by the next one. */
   terminalId: Schema.optionalKey(Schema.String),
   /** The harness session herdr reported for it, which a pane herdr restores resumes. */
@@ -389,6 +391,31 @@ export const agentOfLaunch = (one: Launched): RunAgent => ({
   why: one.why ?? null,
   at: one.at === undefined ? null : DateTime.formatIso(DateTime.makeUnsafe(one.at)),
 });
+
+/** Each live agent's latest launch that names where a Fallback would move its work. */
+export const fallbacksOf = (
+  launches: ReadonlyArray<Launched>,
+  live: ReadonlySet<string>,
+): ReadonlyArray<AgentFallback> => {
+  const latest = new Map<string, Launched>();
+  for (const one of launches) if (live.has(one.agent)) latest.set(one.agent, one);
+  return Arr.flatMap([...latest.values()], (one) =>
+    one.next === undefined
+      ? []
+      : [
+          {
+            run: one.runId,
+            agent: one.agent,
+            on: choiceSaid({
+              harness: one.harness,
+              model: one.model ?? null,
+              effort: one.effort ?? null,
+            }),
+            next: choiceSaid(one.next),
+          },
+        ],
+  );
+};
 
 /** A Run's agents in launch order, with what each ran on. */
 export const runAgents = (runId: string) =>

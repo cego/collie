@@ -3945,6 +3945,19 @@ test("work whose Subscription is Exhausted starts on the first chain entry with 
     }),
   ));
 
+test("work on an agent with room records where a Fallback would move it, before any does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { fallbacks: Effect.succeed(["codex"]) });
+
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["claude"]);
+      const launched = yield* launchOf("r1");
+      expect(launched.from).toBeUndefined();
+      expect(launched.next).toEqual({ harness: "codex", model: "default", effort: null });
+    }),
+  ));
+
 test("on a harness with no persona flag, the first prompt opens with the persona and the every-agent text", () =>
   runEffect(
     Effect.gen(function* () {
