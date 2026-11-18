@@ -743,6 +743,7 @@ const prepare = Effect.fn("Verify.prepare")(function* (
 const isolate = Effect.fn("Verify.isolate")(function* (
   what: Collected & { readonly isolated: NonNullable<Collected["isolated"]> },
   { start, absolute }: Prepared,
+  request: string,
 ): Effect.fn.Return<Placed, VerifyRefused, Services> {
   const path = yield* Path.Path;
   const refused = (why: string) =>
@@ -762,7 +763,7 @@ const isolate = Effect.fn("Verify.isolate")(function* (
   const made = yield* baseTree(what.isolated.checkouts, root, start.head_sha, {
     tree: start.fingerprint,
     check: what.name,
-    command: JSON.stringify([absolute, what.argv, what.isolated.prepare ?? null]),
+    request,
   }).pipe(Effect.mapError((cause) => refused(cause.why)));
   const checkout = path.join(made, path.relative(root, what.cwd));
   const there = yield* fingerprint(checkout);
@@ -1017,7 +1018,8 @@ export const collect = (
   Effect.gen(function* () {
     const prepared = yield* prepare(what);
     const key = sharedRunOf(runDir, what, prepared);
-    if (key === null) return yield* collectPrepared(runDir, what, prepared, echo);
+    if (key === null)
+      return yield* collectPrepared(runDir, what, prepared, crypto.randomUUID(), echo);
     for (;;) {
       const running = underWay.get(key);
       if (running === undefined) break;
@@ -1034,7 +1036,7 @@ export const collect = (
       if (underWay.get(key) === entry) underWay.delete(key);
       return entry.joined;
     });
-    return yield* collectPrepared(runDir, what, prepared, echo, close).pipe(
+    return yield* collectPrepared(runDir, what, prepared, key, echo, close).pipe(
       Effect.onExit((exit) => Effect.andThen(close, Deferred.done(entry.done, exit))),
     );
   }).pipe(Effect.withSpan("Verify.collect"));
@@ -1043,6 +1045,8 @@ const collectPrepared = (
   runDir: string,
   what: Collected,
   prepared: Prepared,
+  /** Identifies the run, so requests not sharing one never share an isolated checkout. */
+  request: string,
   echo?: Echo,
   /** Takes the identical requests that joined it, after which none more do. */
   close: Effect.Effect<ReadonlyArray<Asker>> = Effect.succeed([]),
@@ -1051,7 +1055,7 @@ const collectPrepared = (
     const placed =
       what.isolated === undefined
         ? undefined
-        : yield* isolate({ ...what, isolated: what.isolated }, prepared);
+        : yield* isolate({ ...what, isolated: what.isolated }, prepared, request);
     const ready: Prepared = placed === undefined ? prepared : { ...prepared, placed };
     if (placed?.prepare !== undefined && placed.prepare.exit !== 0)
       return yield* settleCheck(

@@ -1327,6 +1327,34 @@ test("two different isolated commands under one name, run at once, do not share 
     }),
   ));
 
+test("one isolated command run at once from the repository and a directory in it does not share a checkout", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { notes, checkouts } = yield* isolation;
+      yield* fs.makeDirectory(`${repo}/sub`);
+      yield* fs.writeFileString(`${repo}/sub/here`, "");
+      const ran = (cwd: string) =>
+        collect(`${notes}/run`, {
+          run: "r1",
+          name: "isolated",
+          executable: "sh",
+          argv: [
+            "-c",
+            `if [ -f here ]; then echo x > made.txt; else touch ${notes}/started; while [ ! -f ${notes}/go ]; do sleep 0.02; done; fi`,
+          ],
+          cwd,
+          by: "agent",
+          isolated: { checkouts },
+        });
+      const held = yield* Effect.forkScoped(ran(repo));
+      yield* until(() => fs.exists(`${notes}/started`), Boolean);
+      expect((yield* ran(`${repo}/sub`)).result).toBe("unstable");
+      yield* fs.writeFileString(`${notes}/go`, "");
+      expect((yield* Fiber.join(held)).result).toBe("pass");
+    }),
+  ));
+
 test("an isolated command that writes an untracked file into its own checkout is unstable", () =>
   inRepository(
     Effect.gen(function* () {

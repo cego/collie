@@ -21,14 +21,14 @@ const AS_COLLIE = ["-c", "user.name=Collie", "-c", "user.email=collie@localhost"
 
 /**
  * Its commit's harness commits, or a Git tree written in `repository`, checked out as its own
- * commit for one check's command, so two commands never share a checkout.
+ * commit for one request, so two requests not sharing a run never share a checkout.
  */
 export type TreeOf =
   | { readonly harness: ReadonlyArray<string> }
-  | { readonly tree: string; readonly check: string; readonly command: string };
+  | { readonly tree: string; readonly check: string; readonly request: string };
 
 const keyOf = (commit: string, on: TreeOf) =>
-  "tree" in on ? [commit, `tree ${on.tree}`, on.check, on.command] : [commit, ...on.harness];
+  "tree" in on ? [commit, `tree ${on.tree}`, on.check, on.request] : [commit, ...on.harness];
 
 /** Whether the tree at `dir` is still exactly what it was made as. */
 const complete = (dir: string, commit: string, on: TreeOf) =>
