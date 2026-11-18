@@ -22,6 +22,7 @@ import {
   resolveExecutable,
   resultOf,
   recordFor,
+  recordedFor,
   reliedFor,
   runApproved,
   sameTree,
@@ -1161,6 +1162,20 @@ test("a check collected before this host started is not reused, and says so", ()
         record: null,
         miss: { reason: "before-host", record: passed.id },
       });
+    }),
+  ));
+
+test("a command whose latest record on the tree expected red is not reused because of it, naming that record", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });
+      const executable = yield* tool(runDir, "exit 1");
+      const command = { name: "unit", executable, argv: [], cwd: repo };
+      const red = yield* collect(runDir, { ...command, run: "r1", by: "agent", expect: "fail" });
+      expect(
+        yield* recordedFor(runDir, { ...command, expect: "pass" }, "2000-01-01T00:00:00.000Z"),
+      ).toEqual({ record: null, miss: { reason: "unstable", record: red.id } });
     }),
   ));
 

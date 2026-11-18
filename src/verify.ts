@@ -1384,7 +1384,7 @@ export const recordedFor = Effect.fn("Verify.recordedFor")(function* (
   return latestRecord(
     Arr.filter(
       yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => [])),
-      (one) => one.name === wanted.name && one.expect === wanted.expect,
+      (one) => one.name === wanted.name,
     ),
     {
       ...wanted,
