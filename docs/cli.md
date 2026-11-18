@@ -1804,6 +1804,7 @@ Like metrics, the report is data: no number in it is a threshold, and it refuses
 collie verify -- bun test
 collie --json verify --run <run-id> -- bun test
 collie verify --name typecheck --cwd <path> -- bun run typecheck
+collie verify --isolated --prepare 'bun install' -- bun test
 ```
 
 From a Run's agent pane, `--run` can be left out: the Run is the one whose agent the pane
@@ -1827,6 +1828,29 @@ as `added`, `modified`, `deleted` or `type-changed`, and classed `tracked` (in t
 `untracked`, or `lockfile` (a dependency lockfile such as `bun.lock`, either way). The
 answer and a check's gap name the first five and how many more, with the verification id
 that lists them all, and the Run's verification metric counts them by class.
+Where a run in the checkout itself is `unstable` and a moved path is source, `tracked` or
+`untracked`, the answer adds how to verify while editing: `collie verify --isolated`.
+
+`--isolated` runs the command in a detached checkout of the tree it starts on, so edits
+made in the checkout meanwhile cannot move it. That start tree already holds the untracked
+files git is not ignoring, so untracked source is in the isolated checkout, and ignored
+files such as `node_modules` are not. `--prepare '<command>'` runs first in that checkout,
+such as an install of what the tree ignores. Its words are split on spaces, with no shell,
+and it implies `--isolated`. The checkout is made under the Run's state as a Measurement's
+base tree is (`git worktree add --detach`, of a commit of exactly that tree), one per
+check and tree, and reused while it is clean. Cleanup removes it once the Run has ended.
+The record names the checkout and the prepare's command, exit status and seconds as
+`isolated`. A failing prepare records the check `fail` at `stage: "prepare"`, with the
+prepare's exit status and output, and never runs the command; that is never a pass, even
+under `--expect fail`. The record proves the start tree, as every record does: its
+directory is the one asked, its `start` is that checkout's tree at the start, and the gate
+relies on it on that tree like any other. The isolated checkout's own trees are still
+compared, so a command or a prepare that writes a file git does not ignore into it is
+`unstable`. A tree too large to fingerprint, unmeasured, outside git or with changed
+submodules cannot run isolated, and the verify is refused saying why. A Check runs
+isolated where its `verify.json` entry says `"isolated": true`, after its
+`"prepare": { "executable": …, "argv": [ … ] }` where it names one. Nothing is isolated
+unless asked.
 
 While a Check Collie runs itself collects proof on a checkout, the host holds deliveries to
 that Run's agents working there, for the human's steer and an agent's message alike: a steer
@@ -1849,13 +1873,15 @@ Command displays preserve argument boundaries: `echo 'a b'` reads differently fr
 `echo a b`. Control characters appear as escapes, so displayed commands containing them
 are for reading; the recorded argv retains the original values.
 
-| Flag       | What it does                                                                                                                                                         |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--run`    | The run this is a verification of, and whose tree is snapshotted. Defaults to the Run whose agent this pane is.                                                      |
-| `--cwd`    | Where to run it. Must be inside the run's checkout, including one it was given later — a review's fix moves it to the reviewed branch's; defaults to it.             |
-| `--name`   | What to call it on a card. By default the script it runs (`bun run typecheck` is `typecheck`), else the tool and its subcommand (`bun test`), else the tool (`tsc`). |
-| `--expect` | What a pass looks like: `pass` (default), or `fail` for a reproduction.                                                                                              |
-| `--again`  | Run it even where this tree already has a record of it, to look for a flake. Never runs one of the Run's checks.                                                     |
+| Flag         | What it does                                                                                                                                                         |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--run`      | The run this is a verification of, and whose tree is snapshotted. Defaults to the Run whose agent this pane is.                                                      |
+| `--cwd`      | Where to run it. Must be inside the run's checkout, including one it was given later — a review's fix moves it to the reviewed branch's; defaults to it.             |
+| `--name`     | What to call it on a card. By default the script it runs (`bun run typecheck` is `typecheck`), else the tool and its subcommand (`bun test`), else the tool (`tsc`). |
+| `--expect`   | What a pass looks like: `pass` (default), or `fail` for a reproduction.                                                                                              |
+| `--again`    | Run it even where this tree already has a record of it, to look for a flake. Never runs one of the Run's checks.                                                     |
+| `--isolated` | Run it in a detached checkout of the tree it starts on, so edits made meanwhile cannot move it. Its record still proves that tree.                                   |
+| `--prepare`  | A command run first in that checkout, split on spaces with no shell, such as `bun install`. Implies `--isolated`.                                                    |
 
 Every record carries the **environment** it ran in: a digest of the executable's real path
 and content, the `node` and `bun` that `PATH` resolves to, again by path and content, and
@@ -1865,7 +1891,10 @@ checkout: the entries of the `node_modules` of every directory holding a tracked
 Installing, removing or replacing a package makes an earlier record stale, and the command
 runs again. A gate relies on an earlier pass only where this
 matches, so an upgraded toolchain is a fresh run. A record from before environments were
-recorded has none, and is never relied on.
+recorded has none, and is never relied on. A record run isolated names, instead of what is
+installed in the checkout, that it ran isolated and the prepare it ran after, since that
+prepare is what installed its dependencies. So an isolated record answers an isolated check
+with the same prepare, and never one run in the checkout itself.
 
 A command that is exactly one of the Run's checks — the executable as resolved, its
 arguments and its directory — is never run by `collie verify`: only the gate runs a Run's
@@ -1958,7 +1987,8 @@ Run from a Run's agent pane — the pane `--run` defaults from — `collie verif
 stream the command's output. It answers when the command ends with:
 
 - the result and exit status, and for an `unstable` result why: the tree it ran on moved,
-  from which fingerprint to which, or could not be measured;
+  from which fingerprint to which, or could not be measured, and where source moved, how to
+  verify while editing with `--isolated`;
 - `failed`, each failed test bun's output names as `<file> > <name>`, the first 50, and
   `more`, how many others;
 - the record's `tail`, the last 4 KB of each stream;

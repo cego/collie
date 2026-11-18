@@ -28,7 +28,7 @@ import {
   staleAgainst,
 } from "../src/verify";
 import type { VerifySpec } from "../src/intent";
-import type { Verification } from "../src/verify-model";
+import { isolatedHint, type Verification } from "../src/verify-model";
 import { fileTime } from "../src/time";
 import { noteVerification, readMetrics } from "../src/metrics";
 import { FakeBin, loggedGit } from "./support/bin";
@@ -1161,5 +1161,131 @@ test("a check collected before this host started is not reused, and says so", ()
         record: null,
         miss: { reason: "before-host", record: passed.id },
       });
+    }),
+  ));
+
+/** Isolated runs of commands in `repo`, their checkouts and a notes directory outside both. */
+const isolation = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const notes = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-notes-" });
+  const checkouts = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-checkouts-" });
+  const ran = (
+    script: string,
+    isolated: {
+      readonly prepare?: { executable: string; argv: ReadonlyArray<string> };
+    } | null = {},
+    expect: "pass" | "fail" = "pass",
+  ) =>
+    collect(`${notes}/run`, {
+      run: "r1",
+      name: "isolated",
+      executable: "sh",
+      argv: ["-c", script],
+      cwd: repo,
+      by: "agent",
+      expect,
+      ...(isolated !== null && { isolated: { checkouts, ...isolated } }),
+    });
+  return { notes, checkouts, ran };
+});
+
+test("a command held while a tracked file is edited passes isolated, bound to its start tree, and is unstable in the Worktree", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { notes, ran } = yield* isolation;
+      const editedWhileHeld = (isolated: boolean) =>
+        Effect.gen(function* () {
+          yield* fs.remove(`${notes}/started`, { force: true });
+          yield* fs.remove(`${notes}/go`, { force: true });
+          yield* fs.writeFileString(`${repo}/tracked.txt`, "one\n");
+          const start = yield* fingerprint(repo);
+          const running = yield* Effect.forkScoped(
+            ran(
+              `touch ${notes}/started; while [ ! -f ${notes}/go ]; do sleep 0.02; done`,
+              isolated ? {} : null,
+            ),
+          );
+          yield* until(() => fs.exists(`${notes}/started`), Boolean);
+          yield* fs.writeFileString(`${repo}/tracked.txt`, "edited\n");
+          yield* fs.writeFileString(`${notes}/go`, "");
+          return { start, record: yield* Fiber.join(running) };
+        });
+
+      const inWorktree = yield* editedWhileHeld(false);
+      expect(inWorktree.record.result).toBe("unstable");
+
+      const isolated = yield* editedWhileHeld(true);
+      expect(isolated.record.result).toBe("pass");
+      expect(isolated.record.start).toEqual(isolated.start);
+      expect(isolated.record.end.fingerprint).toBe(isolated.start.fingerprint);
+      expect(isolated.record.cwd).toBe(repo);
+    }),
+  ));
+
+test("an isolated checkout has the Worktree's untracked files and none of its ignored ones", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { notes, checkouts, ran } = yield* isolation;
+      yield* fs.writeFileString(`${repo}/untracked.txt`, "new\n");
+      yield* fs.makeDirectory(`${repo}/ignored`);
+      yield* fs.writeFileString(`${repo}/ignored/dep.txt`, "installed\n");
+      const record = yield* ran(
+        `pwd > ${notes}/where; test -f untracked.txt && test ! -e ignored/dep.txt`,
+      );
+      expect(record.result).toBe("pass");
+      const where = Str.trim(yield* fs.readFileString(`${notes}/where`));
+      expect(pipe_(where, Str.startsWith(`${checkouts}/`))).toBe(true);
+    }),
+  ));
+
+test("an isolated check's prepare runs first in its checkout and is recorded with it", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { ran } = yield* isolation;
+      const prepare = { executable: "sh", argv: ["-c", "mkdir -p ignored && touch ignored/dep"] };
+      const record = yield* ran("test -f ignored/dep", { prepare });
+      expect(record.result).toBe("pass");
+      expect(record.isolated?.prepare).toMatchObject({ ...prepare, exit: 0 });
+      expect(record.stage).toBeUndefined();
+    }),
+  ));
+
+test("a failing prepare records the check failed at stage prepare, without running it, even where a failure was expected", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { notes, ran } = yield* isolation;
+      const prepare = { executable: "sh", argv: ["-c", "exit 3"] };
+      for (const expect_ of ["pass", "fail"] as const) {
+        const record = yield* ran(`touch ${notes}/ran`, { prepare }, expect_);
+        expect(record.result).toBe("fail");
+        expect(record.stage).toBe("prepare");
+        expect(record.exit).toBe(3);
+        expect(record.isolated?.prepare?.exit).toBe(3);
+      }
+      expect(yield* fs.exists(`${notes}/ran`)).toBe(false);
+    }),
+  ));
+
+test("an isolated command that writes an untracked file into its own checkout is unstable", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { ran } = yield* isolation;
+      const record = yield* ran("echo x > made.txt");
+      expect(record.result).toBe("unstable");
+      expect(record.moved).toEqual([{ path: "made.txt", change: "added", class: "untracked" }]);
+    }),
+  ));
+
+test("an unstable result under a source edit names --isolated in its answer, and one under a lockfile does not", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const edited = yield* movedBy("edits", "echo two > tracked.txt");
+      expect(isolatedHint(edited)).toContain("--isolated");
+      const installed = yield* movedBy("installs", "echo y > bun.lock");
+      expect(installed.result).toBe("unstable");
+      expect(isolatedHint(installed)).not.toContain("--isolated");
     }),
   ));

@@ -31,7 +31,7 @@ import { boundProcesses, groupOf, startedOf, stillRunning } from "./processes";
 import { StepPlace } from "./steps";
 import { RUNNING_CHECK, RunRecords, type RunRecordsApi } from "./run-records";
 import { epochMs, nowIso } from "./time";
-import { FailedTestSchema, VerificationSchema } from "./verify-model";
+import { FailedTestSchema, IsolatedSchema, VerificationSchema } from "./verify-model";
 
 export const CHECK_INSTALLATION = "COLLIE_CHECK_INSTALLATION";
 export const CHECK_ID = "COLLIE_CHECK_ID";
@@ -59,6 +59,8 @@ const SpecSchema = Schema.Struct({
   test: Schema.optionalKey(FailedTestSchema),
   own: VerificationSchema.fields.own,
   environment: Schema.optionalKey(Schema.String),
+  /** Where it runs in an isolated checkout, the directory its record names instead. */
+  isolated: Schema.optionalKey(Schema.Struct({ ...IsolatedSchema.fields, cwd: Schema.String })),
 });
 type CheckSpec = typeof SpecSchema.Type;
 

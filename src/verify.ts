@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import {
+  Clock,
   Data,
   Deferred,
   Effect,
@@ -29,6 +30,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect's file info has no ctime.
 import { lstat } from "node:fs/promises";
+import { baseTree } from "./base-tree";
 import { CheckProcesses, type CheckOf } from "./check-processes";
 import { logged } from "./check-supervisor";
 import type { VerifySpec } from "./intent";
@@ -44,6 +46,7 @@ import {
   VerificationSchema,
   type FailedTest,
   type MovedPath,
+  type Prepare,
   type Snapshot,
 } from "./verify-model";
 
@@ -512,18 +515,21 @@ const installedAt = Effect.fn("Verify.installedAt")(function* (root: string) {
 
 /**
  * The environment a check runs in: the executable's real path and content, the runtimes
- * on PATH, `TOOLCHAIN_VARIABLES`, and the dependencies installed in `cwd`'s checkout. Null
- * where any of them cannot be read, which no record can be reused under.
+ * on PATH, `TOOLCHAIN_VARIABLES`, and the dependencies installed in `cwd`'s checkout, or for
+ * one run isolated, the prepare that installs them in its own. Null where any of them cannot
+ * be read, which no record can be reused under.
  */
 export const environmentOf = Effect.fn("Verify.environmentOf")(
-  function* (absolute: string, cwd: string) {
+  function* (absolute: string, cwd: string, isolated?: Isolation | undefined) {
     const parts = [yield* identityOf(absolute)];
     for (const runtime of TOOLCHAIN_RUNTIMES) {
       const found = Bun.which(runtime, { PATH: Bun.env.PATH ?? "" });
       parts.push(`${runtime}=${found === null ? "" : yield* identityOf(found)}`);
     }
     for (const name of TOOLCHAIN_VARIABLES) parts.push(`${name}=${Bun.env[name] ?? ""}`);
-    for (const root of yield* packageRoots(cwd)) parts.push(yield* installedAt(root));
+    if (isolated === undefined)
+      for (const root of yield* packageRoots(cwd)) parts.push(yield* installedAt(root));
+    else parts.push(`isolated after ${JSON.stringify(isolated.prepare ?? null)}`);
     return Bun.hash(Arr.join(parts, "\n")).toString(16);
   },
   Effect.orElseSucceed(() => null),
@@ -673,6 +679,13 @@ export interface Collected {
    */
   readonly test?: FailedTest;
   readonly own?: boolean;
+  /** Run in a detached checkout of its start tree under `checkouts`, after its prepare there. */
+  readonly isolated?: Isolation & { readonly checkouts: string };
+}
+
+/** What a check run isolated is run after. */
+export interface Isolation {
+  readonly prepare?: Prepare | undefined;
 }
 
 /** A check `startCheck` started, finished by `finishCheck` once `exit` is known. */
@@ -699,6 +712,15 @@ interface Prepared {
   readonly absolute: string;
   readonly environment: string | null;
   readonly start: Snapshot;
+  /** Its isolated checkout, once made. */
+  readonly placed?: Placed;
+}
+
+/** Where an isolated check runs, and how its prepare ended there. */
+interface Placed {
+  readonly checkout: string;
+  readonly prepare?: { readonly exit: number; readonly seconds: number } & Prepare;
+  readonly output?: { readonly stdout: string; readonly stderr: string };
 }
 
 const prepare = Effect.fn("Verify.prepare")(function* (
@@ -709,18 +731,61 @@ const prepare = Effect.fn("Verify.prepare")(function* (
     return yield* new VerifyRefused({ why: `nothing on PATH called "${what.executable}"` });
   return {
     absolute,
-    environment: yield* environmentOf(absolute, what.cwd),
+    environment: yield* environmentOf(absolute, what.cwd, what.isolated),
     start: yield* fingerprint(what.cwd),
+  };
+});
+
+/**
+ * A detached checkout of `start`, which already holds the Worktree's untracked files and none
+ * of its ignored ones, and the prepare run there first.
+ */
+const isolate = Effect.fn("Verify.isolate")(function* (
+  what: Collected & { readonly isolated: NonNullable<Collected["isolated"]> },
+  start: Snapshot,
+): Effect.fn.Return<Placed, VerifyRefused, Services> {
+  const path = yield* Path.Path;
+  const refused = (why: string) =>
+    new VerifyRefused({ why: `"${what.name}" cannot run isolated: ${why}` });
+  if (
+    start.fingerprint === "" ||
+    start.fingerprint === TOO_LARGE ||
+    start.fingerprint === UNMEASURED ||
+    Str.includes(" ")(start.fingerprint)
+  )
+    return yield* refused(
+      start.unmeasured ??
+        "its tree is too large, has changed submodules or is not in a git checkout",
+    );
+  const top = yield* git(["rev-parse", "--show-toplevel"], what.cwd);
+  const root = Str.trim(top.stdout);
+  const made = yield* baseTree(what.isolated.checkouts, root, start.head_sha, {
+    tree: start.fingerprint,
+    check: what.name,
+  }).pipe(Effect.mapError((cause) => refused(cause.why)));
+  const checkout = path.join(made, path.relative(root, what.cwd));
+  const there = yield* fingerprint(checkout);
+  if (!sameTree(there, start))
+    return yield* refused(`its checkout ${made} is not the tree it started on`);
+  const prepare = what.isolated.prepare;
+  if (prepare === undefined) return { checkout };
+  const began = yield* Clock.currentTimeMillis;
+  // ponytail: outside CheckProcesses, so a host replaced while it runs does not take it over.
+  const ran = yield* shell(prepare.executable, [...prepare.argv], checkout);
+  const seconds = ((yield* Clock.currentTimeMillis) - began) / 1000;
+  return {
+    checkout,
+    prepare: { ...prepare, argv: [...prepare.argv], exit: ran.code, seconds },
+    output: { stdout: ran.stdout, stderr: ran.stderr ?? "" },
   };
 });
 
 const startPrepared = Effect.fn("Verify.startPrepared")(function* (
   runDir: string,
   what: Collected,
-  { absolute, environment, start }: Prepared,
+  prepared: Prepared,
   echo?: Echo,
 ): Effect.fn.Return<StartedCheck, VerifyRefused, Services | Scope.Scope> {
-  const began = yield* nowIso;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   let already = 0;
@@ -738,33 +803,11 @@ const startPrepared = Effect.fn("Verify.startPrepared")(function* (
       ? Effect.void
       : fs.writeFileString(what.log, next.text, { flag: "a" }).pipe(Effect.ignore);
   };
-  const atStep = yield* CurrentStep;
-  const step = what.step === undefined ? atStep : { step: what.step, place: what.place ?? null };
   const checks = yield* CheckProcesses;
   // No shell, and the argument list whole: a verification's value is that what ran is
   // what was written down, and a shell string is a second language in between.
   const handle = yield* checks
-    .run(
-      { run: what.run, name: what.name, by: what.by, ...(what.pass && { pass: what.pass }) },
-      {
-        executable: absolute,
-        argv: what.argv,
-        cwd: what.cwd,
-        spec: {
-          evidence: runDir,
-          asked: what.executable,
-          start,
-          began,
-          expect: what.expect ?? "pass",
-          step,
-          ...(what.log !== undefined && { log: what.log }),
-          ...(what.test !== undefined && { test: what.test }),
-          ...(what.own !== undefined && { own: what.own }),
-          ...(environment !== null && { environment }),
-        },
-      },
-      echo?.said,
-    )
+    .run(checkOf(what), yield* toRun(runDir, what, prepared), echo?.said)
     .pipe(
       Effect.catch((cause) =>
         cause._tag === "CheckRefused"
@@ -806,6 +849,46 @@ const startPrepared = Effect.fn("Verify.startPrepared")(function* (
         ),
       )
       .pipe(Effect.map(([, , exit]) => exit)),
+  };
+});
+
+const checkOf = (what: Collected) => ({
+  run: what.run,
+  name: what.name,
+  by: what.by,
+  ...(what.pass && { pass: what.pass }),
+});
+
+/** What a check runs, where, and what finishing its record takes. */
+const toRun = Effect.fn("Verify.toRun")(function* (
+  runDir: string,
+  what: Collected,
+  { absolute, environment, start, placed }: Prepared,
+) {
+  const atStep = yield* CurrentStep;
+  return {
+    executable: absolute,
+    argv: what.argv,
+    cwd: placed?.checkout ?? what.cwd,
+    spec: {
+      evidence: runDir,
+      asked: what.executable,
+      start,
+      began: yield* nowIso,
+      expect: what.expect ?? "pass",
+      step: what.step === undefined ? atStep : { step: what.step, place: what.place ?? null },
+      ...(what.log !== undefined && { log: what.log }),
+      ...(what.test !== undefined && { test: what.test }),
+      ...(what.own !== undefined && { own: what.own }),
+      ...(environment !== null && { environment }),
+      ...(placed !== undefined && {
+        isolated: {
+          cwd: what.cwd,
+          checkout: placed.checkout,
+          ...(placed.prepare !== undefined && { prepare: placed.prepare }),
+        },
+      }),
+    },
   };
 });
 
@@ -857,6 +940,7 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
       ? null
       : failedTests(yield* fs.readFileString(spec.log).pipe(Effect.orElseSucceed(() => "")));
 
+  const prepareFailed = spec.isolated?.prepare !== undefined && spec.isolated.prepare.exit !== 0;
   const record: Verification = {
     id: `${check.run}-${check.name}-${epochMs(at)}`,
     run: check.run,
@@ -864,17 +948,24 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
     executable: command.executable,
     asked: spec.asked,
     argv: [...command.argv],
-    cwd: command.cwd,
+    cwd: spec.isolated?.cwd ?? command.cwd,
     start: spec.start,
     end,
     exit,
     seconds: Math.max(0, (epochMs(at) - epochMs(spec.began)) / 1000),
     tail: { stdout, stderr },
     expect: spec.expect,
-    result: resultOf(spec.start, end, judged, spec.expect),
+    result: prepareFailed ? "fail" : resultOf(spec.start, end, judged, spec.expect),
     at,
     by: check.by,
     ...passFields(passOf(check.pass)),
+    ...(spec.isolated !== undefined && {
+      isolated: {
+        checkout: spec.isolated.checkout,
+        ...(spec.isolated.prepare !== undefined && { prepare: spec.isolated.prepare }),
+      },
+    }),
+    ...(prepareFailed && { stage: "prepare" as const }),
   };
   const moved =
     record.result === "unstable" ? yield* movedBetween(command.cwd, spec.start, end) : [];
@@ -951,18 +1042,55 @@ const collectPrepared = (
   /** Takes the identical requests that joined it, after which none more do. */
   close: Effect.Effect<ReadonlyArray<Asker>> = Effect.succeed([]),
 ) =>
-  startPrepared(runDir, what, prepared, echo).pipe(
-    Effect.flatMap((started) =>
-      Effect.flatMap(started.exit, (exit) =>
-        Effect.map(readCheck(started.id, what.name), (read) => [read, exit] as const),
+  Effect.gen(function* () {
+    const placed =
+      what.isolated === undefined
+        ? undefined
+        : yield* isolate({ ...what, isolated: what.isolated }, prepared.start);
+    const ready: Prepared = placed === undefined ? prepared : { ...prepared, placed };
+    if (placed?.prepare !== undefined && placed.prepare.exit !== 0)
+      return yield* settleCheck(
+        yield* unprepared(runDir, what, ready, placed.output ?? { stdout: "", stderr: "" }),
+        placed.prepare.exit,
+        yield* close,
+      );
+    return yield* startPrepared(runDir, what, ready, echo).pipe(
+      Effect.flatMap((started) =>
+        Effect.flatMap(started.exit, (exit) =>
+          Effect.map(readCheck(started.id, what.name), (read) => [read, exit] as const),
+        ),
       ),
-    ),
-    // Its Scope ends what is left of it before the tree is looked at again.
-    Effect.scoped,
-    Effect.flatMap(([read, exit]) =>
-      Effect.flatMap(close, (joined) => settleCheck(read, exit, joined)),
-    ),
-  );
+      // Its Scope ends what is left of it before the tree is looked at again.
+      Effect.scoped,
+      Effect.flatMap(([read, exit]) =>
+        Effect.flatMap(close, (joined) => settleCheck(read, exit, joined)),
+      ),
+    );
+  });
+
+/** A check whose prepare failed, finished from the prepare's output without running it. */
+const unprepared = Effect.fn("Verify.unprepared")(function* (
+  runDir: string,
+  what: Collected,
+  prepared: Prepared,
+  output: { readonly stdout: string; readonly stderr: string },
+) {
+  const command = yield* toRun(runDir, what, prepared);
+  if (what.log !== undefined) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    yield* fs.makeDirectory(path.dirname(what.log), { recursive: true }).pipe(Effect.ignore);
+    yield* fs
+      .writeFileString(what.log, `${output.stdout}${output.stderr}`, { flag: "a" })
+      .pipe(Effect.ignore);
+  }
+  return {
+    check: checkOf(what),
+    command,
+    output,
+    tail: { stdout: tail(output.stdout), stderr: tail(output.stderr) },
+  };
+});
 
 interface UnderWay {
   readonly done: Deferred.Deferred<Verification, VerifyRefused>;
@@ -1010,7 +1138,13 @@ export type CheckRun = {
   readonly id: string;
   readonly cwd: string;
   readonly worktree: string | null;
+  /** Where its isolated checks' checkouts are made, under its state. */
+  readonly checkouts?: string;
 };
+
+/** How a check marked isolated is run; undefined for one that is not. */
+export const isolationOf = (spec: VerifySpec): Isolation | undefined =>
+  spec.isolated === true ? { prepare: spec.prepare } : undefined;
 
 /**
  * A verification Collie runs itself, which it does only for one of the Run's checks —
@@ -1038,6 +1172,15 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
   const cwd = yield* checkCwd(run, spec);
   if (!(yield* insideRun(cwd, run)))
     return yield* new VerifyRefused({ why: `"${cwd}" is not inside run ${run.id}` });
+  const isolation = isolationOf(spec);
+  const isolated =
+    isolation === undefined || run.checkouts === undefined
+      ? undefined
+      : { ...isolation, checkouts: run.checkouts };
+  if (isolation !== undefined && isolated === undefined)
+    return yield* new VerifyRefused({
+      why: `"${spec.name}" is isolated and run ${run.id} names nowhere to check it out`,
+    });
   return yield* collect(runDir, {
     run: run.id,
     name: spec.name,
@@ -1048,6 +1191,7 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
     expect,
     pass,
     log,
+    ...(isolated !== undefined && { isolated }),
   });
 });
 
@@ -1212,7 +1356,7 @@ export const recordFor = Effect.fn("Verify.recordFor")(function* (
       executable,
       argv: spec.argv,
       cwd,
-      environment: yield* environmentOf(executable, cwd),
+      environment: yield* environmentOf(executable, cwd, isolationOf(spec)),
       ...(expect !== undefined && { expect }),
     },
     yield* fingerprint(cwd),
@@ -1222,7 +1366,9 @@ export const recordFor = Effect.fn("Verify.recordFor")(function* (
 
 export const recordedFor = Effect.fn("Verify.recordedFor")(function* (
   runDir: string,
-  wanted: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect">,
+  wanted: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect"> & {
+    readonly isolated?: Isolation | undefined;
+  },
   since: string,
 ) {
   return latestRecord(
@@ -1230,7 +1376,10 @@ export const recordedFor = Effect.fn("Verify.recordedFor")(function* (
       yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => [])),
       (one) => one.name === wanted.name && one.expect === wanted.expect,
     ),
-    { ...wanted, environment: yield* environmentOf(wanted.executable, wanted.cwd) },
+    {
+      ...wanted,
+      environment: yield* environmentOf(wanted.executable, wanted.cwd, wanted.isolated),
+    },
     yield* fingerprint(wanted.cwd),
     since,
   );

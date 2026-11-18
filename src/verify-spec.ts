@@ -15,6 +15,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { CommandLine } from "effect/process";
 import { addressOf, RunRecords } from "./run-records";
+import { PrepareSchema } from "./verify-model";
 
 /**
  * Exactly what Collie runs for a check, bound argument by argument: the wrapper is part
@@ -28,6 +29,10 @@ export const VerifySpecSchema = Schema.Struct({
   cwd: Schema.String,
   /** The merge request pipeline job that proves it: nobody runs it locally (ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job). */
   ci: Schema.optionalKey(Schema.String),
+  /** Run in a detached checkout of its start tree, so edits in the Worktree cannot move it. */
+  isolated: Schema.optionalKey(Schema.Boolean),
+  /** Run first in that checkout, recorded with the check. */
+  prepare: Schema.optionalKey(PrepareSchema),
 });
 export type VerifySpec = Schema.Schema.Type<typeof VerifySpecSchema>;
 

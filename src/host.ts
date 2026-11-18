@@ -3429,13 +3429,19 @@ const frontDoorHandlers = (
               );
             }),
           ),
-        verify: ({ runId, name, executable, argv, cwd, expect, again }, { client }) =>
+        verify: (
+          { runId, name, executable, argv, cwd, expect, again, isolated, prepare },
+          { client },
+        ) =>
           Stream.unwrap(
             Effect.gen(function* () {
               const view = yield* known(runId);
               const { collect, insideRun, missSaid } = yield* Effect.promise(
                 () => import("./verify"),
               );
+              const { baseTreesDir } = yield* Effect.promise(() => import("./base-tree"));
+              const isolation =
+                isolated === true || prepare !== undefined ? { prepare } : undefined;
               const { noteVerification } = yield* Effect.promise(() => import("./metrics"));
               const where = cwd ?? view.cwd;
               if (!(yield* insideRun(where, { cwd: view.cwd, worktree: null })))
@@ -3468,6 +3474,7 @@ const frontDoorHandlers = (
                       argv,
                       cwd: where,
                       expect,
+                      ...(isolation !== undefined && { isolated: isolation }),
                     });
               const recorded = found?.record ?? null;
               if (recorded !== null) {
@@ -3540,6 +3547,12 @@ const frontDoorHandlers = (
                           log,
                           step: step?.step,
                           place: step?.place,
+                          ...(isolation !== undefined && {
+                            isolated: {
+                              ...isolation,
+                              checkouts: baseTreesDir(env.stateDir, runId),
+                            },
+                          }),
                         },
                         {
                           stdout: echo("stdout"),

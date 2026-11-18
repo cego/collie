@@ -130,6 +130,7 @@ import type { UsageReading } from "./usage-model";
 import { currentEnv } from "./env";
 import { waitForMemory } from "./memory-wait";
 import { measure, readMeasurements } from "./measurement";
+import { baseTreesDir } from "./base-tree";
 import { finalMeasurementLine, type Measurement } from "./measurement-model";
 import { PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
 import { gitDirOf, publicationCheckouts, throughAliases, remoteOf } from "./issue-privacy";
@@ -376,6 +377,7 @@ import {
   missSaid,
   recordFor,
   recordedFor,
+  type Isolation,
   reliedFor,
   type Reuse,
   rerunTest,
@@ -3860,7 +3862,9 @@ export class Reliance extends Context.Service<
     /** The record that answers a command that is none of the Run's Checks, or why it runs. */
     readonly recorded: (
       runId: string,
-      command: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect">,
+      command: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect"> & {
+        readonly isolated?: Isolation;
+      },
     ) => Effect.Effect<Reuse>;
   }
 >()("collie/Reliance") {}
@@ -4438,7 +4442,7 @@ export const hostLayer = (options: {
                   rerun === undefined
                     ? runApproved(
                         journal,
-                        { ...own, cwd: asked.cwd },
+                        { ...own, cwd: asked.cwd, checkouts: baseTreesDir(dir, asked.runId) },
                         approved,
                         spec,
                         asked.expect ?? "pass",

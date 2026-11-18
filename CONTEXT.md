@@ -341,7 +341,10 @@ before and after. A tree is its content: committing exactly the bytes a Verifica
 leaves it on the same tree, and changing any of them does not. A result whose snapshots
 differ is `unstable`, never `pass`, and names the paths that moved, each classed tracked,
 untracked or lockfile. While Collie collects one itself on a checkout, deliveries to the
-Run's agents working there are held until it ends. One recorded with `--expect fail` reproduces a failure
+Run's agents working there are held until it ends. One run **isolated** (`--isolated`, or
+`isolated: true` on a Check) runs in a detached checkout of the tree it starts on, after an
+optional recorded `prepare`, so edits in the Worktree cannot move it. Its record still
+proves that start tree, and a failed `prepare` records it failed at stage `prepare`. One recorded with `--expect fail` reproduces a failure
 and is never a pass: on the current tree it proves no Check, and on an earlier tree it is
 history, so the Check still owes a pass on the final tree. An agent's statement about tests
 is a **claim**, and is shown as one.

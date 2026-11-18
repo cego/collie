@@ -3557,6 +3557,16 @@ pub struct VerifyItem {
     pub cwd: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepare: Option<Prepare>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Prepare {
+    pub executable: String,
+    pub argv: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

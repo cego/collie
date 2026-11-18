@@ -7,7 +7,7 @@ import { err } from "../operations";
 import { refusal, verifyRun } from "../lifecycle";
 import { FrontDoor, HostRefused } from "../board-model";
 import { type Echo } from "../verify";
-import { movedLine, type Verification } from "../verify-model";
+import { isolatedHint, movedLine, type Verification } from "../verify-model";
 import { checkNameOf } from "../verify-spec";
 import { NAMED_FAILURES, failureReader } from "../bun-tests";
 import { printResult } from "../envelope";
@@ -64,6 +64,7 @@ const bounded = (record: Verification, ran: boolean, failures: ReadonlyArray<str
       [
         `${record.name}: ${record.result} (exit ${record.exit})${ran ? "" : `, not run again: verification ${record.id} on this tree`}`,
         ...(record.result === "unstable" ? [`unstable: ${unstableWhy(record)}`] : []),
+        ...(isolatedHint(record) === "" ? [] : [isolatedHint(record)]),
         ...(failures.length === 0
           ? []
           : [
@@ -118,16 +119,38 @@ export const verify = Command.make(
       ),
       Flag.withDefault(false),
     ),
+    isolated: Flag.Boolean("isolated").pipe(
+      Flag.withDescription(
+        "Run it in a detached checkout of this tree, so edits made meanwhile cannot move it; its record still proves this tree",
+      ),
+      Flag.withDefault(false),
+    ),
+    prepare: Flag.String("prepare").pipe(
+      Flag.withDescription(
+        "A command to run first in that checkout, such as an install of what the tree ignores; its words split on spaces, with no shell. Implies --isolated",
+      ),
+      Flag.optional,
+    ),
     command: Argument.String("command").pipe(
       Argument.withDescription("The executable and its arguments, after `--`"),
       Argument.variadic({ min: 1 }),
     ),
   },
-  ({ runId, cwd, name, expect, again, command }) => {
+  ({ runId, cwd, name, expect, again, isolated, prepare, command }) => {
     const [executable, ...argv] = command;
     if (executable === undefined)
       return printResult(err("invalid_input", "verify needs a command to run."), true);
     const wanted = Option.getOrElse(expect, () => "pass");
+    // ponytail: split on spaces, so a prepare that needs a quoted word goes in a script.
+    const [prepareWith, ...prepareArgv] = Arr.filter(
+      Str.split(
+        Option.getOrElse(prepare, () => ""),
+        " ",
+      ),
+      Str.isNonEmpty,
+    );
+    const prepared =
+      prepareWith === undefined ? undefined : { executable: prepareWith, argv: prepareArgv };
     if (wanted !== "pass" && wanted !== "fail")
       return printResult(
         err("invalid_input", `--expect is "pass" or "fail", not "${wanted}".`),
@@ -149,6 +172,8 @@ export const verify = Command.make(
             argv,
             expect: wanted,
             again,
+            ...(isolated && { isolated }),
+            ...(prepared !== undefined && { prepare: prepared }),
           } satisfies Parameters<typeof verifyRun>[1];
           const where = Option.getOrUndefined(cwd);
           const opened = yield* verifyRun(
@@ -207,7 +232,7 @@ export const verify = Command.make(
             ok: true as const,
             data: { verification: record, ran },
             human: ran
-              ? `${record.name}: ${record.result} (exit ${record.exit})${movedLine(record) === "" ? "" : `; moved under it: ${movedLine(record)}`}`
+              ? `${record.name}: ${record.result} (exit ${record.exit})${movedLine(record) === "" ? "" : `; moved under it: ${movedLine(record)}`}${isolatedHint(record) === "" ? "" : `; ${isolatedHint(record)}`}`
               : `${record.name}: ${record.result} (exit ${record.exit}), not run again: verification ${record.id} on this tree${record.log === undefined ? "" : `; its log is ${record.log}`}`,
           };
         }),
@@ -232,6 +257,11 @@ export const verify = Command.make(
     {
       command: "collie verify --name regression --expect fail -- bun test test/bug.test.ts",
       description: "Prove a bug exists: the record passes because the command failed",
+    },
+    {
+      command: "collie verify --isolated --prepare 'bun install' -- bun test",
+      description:
+        "Keep editing while it runs: it runs in a checkout of this tree, after the install there",
     },
     {
       command: "collie verify --again -- bun test test/flaky.test.ts",

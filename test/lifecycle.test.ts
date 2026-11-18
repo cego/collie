@@ -13,6 +13,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Option, Schema, Scope, Stream } from "effect";
+import { VerificationSchema } from "../src/verify-model";
 import type { PlatformServices } from "../src/platform";
 import { writeConfigValue } from "../src/config";
 import { currentEnv } from "../src/env";
@@ -1186,6 +1187,45 @@ test(
           expect(again.stderr).toContain(
             `running it: the tree differs from verification ${first.verification.id}'s`,
           );
+          yield* stopHost(world.state);
+        }),
+      ["checked.workflow.ts"],
+    ),
+  240_000,
+);
+
+test(
+  "collie verify --isolated --prepare runs the prepare and the command in a checkout of the Run's tree",
+  () =>
+    provesWith(
+      "collie-lifecycle-verify-isolated-",
+      (world) =>
+        Effect.gen(function* () {
+          const runId = yield* checkedRun(world, "checked", ["true"]);
+          const ran = yield* collie(world, [
+            "verify",
+            "--run",
+            runId,
+            "--isolated",
+            "--prepare",
+            "sh -c true",
+            "--",
+            "sh",
+            "-c",
+            "pwd",
+          ]);
+          const { verification } = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ verification: VerificationSchema }),
+          )(ran.envelope.data).pipe(Effect.orDie);
+          expect(verification.result).toBe("pass");
+          expect(verification.cwd).toBe(world.project);
+          expect(verification.isolated?.prepare).toMatchObject({
+            executable: "sh",
+            argv: ["-c", "true"],
+            exit: 0,
+          });
+          expect(verification.tail.stdout).toContain(verification.isolated?.checkout ?? "-");
+          expect(verification.isolated?.checkout).not.toBe(world.project);
           yield* stopHost(world.state);
         }),
       ["checked.workflow.ts"],
