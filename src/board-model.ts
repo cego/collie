@@ -231,6 +231,8 @@ export const BoardAgent = Schema.Struct({
   /** Its pane's terminal title, or null for none: what the harness shows, not the step. */
   now: Schema.NullOr(Schema.String),
   run: Schema.String,
+  /** Where a Fallback would move its work, `codex/gpt-5.5 high`; absent where nowhere would. */
+  fallback: Schema.optionalKey(Schema.String),
 });
 export type BoardAgent = typeof BoardAgent.Type;
 
@@ -831,7 +833,16 @@ export const RunAgent = Schema.Struct({
 });
 export type RunAgent = typeof RunAgent.Type;
 
-const choiceSaid = (on: {
+/** A Run's agent at work, and where a Fallback would move that work before any does. */
+export const AgentFallback = Schema.Struct({
+  run: Schema.String,
+  agent: Schema.String,
+  on: Schema.String,
+  next: Schema.String,
+});
+export type AgentFallback = typeof AgentFallback.Type;
+
+export const choiceSaid = (on: {
   readonly harness: string;
   readonly model: string | null;
   readonly effort: string | null;
@@ -1776,6 +1787,12 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: RunFile,
     error: HostRefused,
   }),
+  /** A Run agent's Output for the step it is on, handed in by `collie_submit`. */
+  Rpc.make("submitOutput", {
+    payload: { runId: Schema.String, output: Schema.Json },
+    success: Schema.String,
+    error: HostRefused,
+  }),
   Rpc.make("artefactRegister", {
     payload: { runId: Schema.String, request: Schema.String, ...RegisterArtefact.fields },
     success: ArtefactRegistered,
@@ -2038,6 +2055,8 @@ export const FrontDoorRpcs = RpcGroup.make(
   }),
   /** This Machine's Usage readings, one per Subscription (ADR-0049). */
   Rpc.make("usage", { success: Schema.Array(UsageReading), error: HostRefused }),
+  /** Where a Fallback would move each unfinished Run's work now. */
+  Rpc.make("fallbacks", { success: Schema.Array(AgentFallback), error: HostRefused }),
   /** This Machine's Harness catalogue, one per installed harness. */
   Rpc.make("models", { success: Schema.Array(HarnessCatalogue), error: HostRefused }),
   Rpc.make("connections", { success: HostConnections, error: HostRefused }),

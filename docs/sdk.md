@@ -338,6 +338,19 @@ const verdict =
   and every issue with it is reported at once. Leave `output` out and the agent answers in
   plain text, which is what you are handed; a schema is how you opt into a structured,
   validated answer.
+- **An agent hands its Output in one of two ways.** It writes the file, or, under the
+  setting `output_submit: tool` (default `file`), it may submit it with the `collie_submit`
+  Collie tool instead. Both go through one decoder: a submit is decoded exactly as the file
+  is, and is answered at once with every issue, writing nothing, or with "accepted", which
+  writes the file the step is collecting. So collection, the reminders, the repairs and the
+  park below are the same either way, and a second submit of the same Output is collected
+  once. Under `tool` the prompt names the tool instead of the file's path and keeps the
+  whole contract, every field's description included; the reminders and repairs still name
+  the file, which stays valid. The tool is offered when an agent is launched, so an agent a
+  later step reuses is told the way it was launched with, whatever the setting is by then.
+  Pi has no Collie MCP server, so its agents reach the tool
+  through `collie tools call collie_submit`. An Output that decodes is never proof of the
+  work: the gate still reads the Run's journal ([proving it](#proving-it-rather-than-saying-so)).
 - **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
   schema's own issues. A rewrite the schema still refuses is judged once the agent's turn
   has ended, so a file caught half rewritten is not the answer; one still unusable then parks
@@ -697,6 +710,8 @@ const place = yield * host.place((yield * Run).id);
 //                   so on: whose agents `askRoute` and `handOffWork` may reach
 // place.authority — the branch this Run created, whether it roams, and the human door and
 //                   words that started it: what a Claude agent's auto mode is told
+// place.features  — what its workflow does, fixed when it started: `review_delta` where its
+//                   follow-up review rounds are given a delta; absent on a Run started earlier
 ```
 
 `place.cwd` is decided before your body runs. A workflow that
@@ -738,7 +753,8 @@ an earlier Run to compare against is doing it there, and this is where you read 
 `outcome` is the one that can change while the Run is live, with `run intent set-outcome`:
 read it again, inside an `Activity`, wherever the kind decides something.
 
-`host.reviewedHead({ target, cwd })` reads the head before review; journal it in an Activity.
+`host.reviewedHead({ target, cwd })` reads the head before review: a merge request's, a
+`branch:` target's head, or else the checkout's `HEAD`. Journal it in an Activity.
 Pass that head, the Run id, and the round to `host.post` alongside the file, target, and cwd.
 It ends the note with a hidden marker, `<!-- collie:<run> round <n> at <head> by <login> -->`,
 and reads that marker back before posting, so a replay sends no second note.
@@ -747,8 +763,11 @@ merge request, no CLI or login for its forge, or one assigned to whoever is runn
 whose findings are theirs to fix rather than to post to themselves.
 On success, its `signature` identifies the posted note for the findings ledger.
 
-`host.reviewChanges({ target, cwd, previous, head })` reads the interdiff from the previous
-reviewed head when the new head descends from it. Otherwise it reads the full diff.
+`host.reviewChanges({ target, cwd, previous, head, base })` reads a merge request's
+interdiff from the previous reviewed head when the new head descends from it, and otherwise
+its full diff. For any other target it lists the checkout's commits and files from
+`previous` to `head`, with the git command that shows their diff rather than the diff; a
+`base` (the default branch merged in since) is left out of that list.
 Journal it in an Activity with `error: WorkflowError`; an unreadable forge fails the read.
 
 `host.approveReview({ runId, attempt, target, cwd, head })` requests approval of that reviewed head, independently of posting.
@@ -1542,6 +1561,22 @@ rally converges, stands on a dispute and runs out of rounds where these decide.
 The shipped workflows' rally is one such loop, `rally` in
 [`workflows/reviewing.ts`](../workflows/reviewing.ts): `implement` and `tune-up` both call
 it, each with its own fix. A module of your own can import it the same way.
+
+From round 2 on, `rally` tells each round's reviewers what the round before it reviewed,
+through `followUp`: that round's head, the commits and files changed since it as
+`host.reviewChanges` lists them for the checkout, leaving out what the default branch merged
+in between rounds brought, with the git command that shows them rather than the diff itself
+(or that the head has not moved), and the findings still open after the
+fix beside those disputed. The reviewer checks each of those findings against the change and
+reads the changed files in full, going further only where the change reaches into code it did
+not touch or the round's criteria require it. Round 1, and the review of the integrated tree
+that `implement` makes after its rallies, still read the whole change against its base. The
+review workflow's "Fix findings" on a local target is told the same; on a merge request its
+rounds are given the forge's interdiff, as before.
+
+Whether a Run's rounds are told this is fixed when the Run starts, as `Place.features`. A Run with
+no record started on an earlier release and keeps that release's rounds, so its replay meets
+no Activity it did not record.
 
 `ReviewOutputSchema`, `FixOutputSchema` and `SynthesisSchema` are the shapes those steps
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the

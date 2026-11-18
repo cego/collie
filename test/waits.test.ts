@@ -501,3 +501,30 @@ test("a Codex usage replay that lands just before the deadline is used, not drop
       expect(yield* Fiber.join(fiber)).toBe(400_000);
     }),
   ));
+
+test("a compaction waits for room before it is asked for, and a stop in that wait asks nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stateDir = yield* controlled(null);
+      const said: string[] = [];
+      const due = yield* atBoundary(
+        {
+          ...deps(
+            stateDir,
+            port({
+              usage: () => Effect.succeed(5000),
+              request: () => Effect.sync(() => void said.push("request")).pipe(Effect.as(null)),
+            }),
+          ),
+          room: () => Effect.sync(() => said.push("room")).pipe(Effect.as("stopped" as const)),
+        },
+        { agent: "build-r1", run: "r1", step: "02-ui" },
+        submitting,
+      );
+      expect(said).toEqual(["room"]);
+      expect(due).toEqual({
+        dispatch: false,
+        reason: "build-r1: the Run was stopped while its compaction waited for disk",
+      });
+    }),
+  ));

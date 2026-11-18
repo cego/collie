@@ -11,6 +11,8 @@ import * as AiError from "effect/ai/AiError";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 import { ActionSchema } from "./actions";
+import { DEFAULT_LIMIT, ListState } from "./run-list";
+import { DEFAULT_LINES } from "./text-lines";
 import { RegisterArtefact } from "./artefact-model";
 import {
   ASKED_KINDS,
@@ -49,6 +51,63 @@ const TrialInput = Schema.Struct({
   against: specs("The second set's Runs, as compare takes them"),
   audit: specs("<run>=<review-run>: the review Run of that Run's final tree"),
   plant: specs("<case>=<file>:<line>: a regression planted in that case"),
+});
+
+const LinesFields = {
+  start: Schema.optionalKey(
+    Schema.Int.annotate({
+      description: "The first line, counted from 1; a search looks from here",
+    }),
+  ),
+  count: Schema.optionalKey(
+    Schema.Int.annotate({
+      description: `How many lines, or matches with search; ${DEFAULT_LINES} by default`,
+    }),
+  ),
+  search: Schema.optionalKey(
+    Schema.String.annotate({
+      description: "A regular expression: each matching line, with the line either side",
+    }),
+  ),
+};
+const RefField = Schema.optionalKey(
+  Schema.String.annotate({
+    description:
+      "A reference of the Run's to read by line or search: log, review, diff:<path>, evidence:<name>, plan:<file>, verification:<id>, or the one collie verify named",
+  }),
+);
+
+export const RunListInput = Schema.Struct({
+  run: Schema.optionalKey(
+    Schema.String.annotate({
+      description: "The Run id, as collie_herd lists it; omit for the board's selection",
+    }),
+  ),
+  list: Schema.optionalKey(
+    Schema.Boolean.annotate({ description: "List Runs instead of answering about one" }),
+  ),
+  status: Schema.optionalKey(
+    Schema.Array(ListState).annotate({ description: "With list: only Runs in these states" }),
+  ),
+  limit: Schema.optionalKey(
+    Schema.Int.annotate({
+      description: `With list: at most this many, ${DEFAULT_LIMIT} by default`,
+    }),
+  ),
+  fields: Schema.optionalKey(
+    Schema.Literals(["summary", "full"]).annotate({
+      description: "With list: summary (the default) or each Run's whole view",
+    }),
+  ),
+  after: Schema.optionalKey(
+    Schema.String.annotate({ description: "With list: a page's `next`, given alone" }),
+  ),
+  since: Schema.optionalKey(
+    Schema.String.annotate({ description: "With list: only Runs changed after a page's `cursor`" }),
+  ),
+  ref: RefField,
+  ...LinesFields,
+  ...TrialInput.fields,
 });
 export const HoldInput = Schema.Struct({
   run: Schema.optionalKey(Schema.String.annotate({ description: "The Run to hold" })),
@@ -253,7 +312,7 @@ export const CollieTools = Toolkit.make(
     readOnly: true,
     title: "A Run's retained material",
     description:
-      "List a Run's attachments, plan, evidence and handoffs without marking them seen. Without run, or with query, kind, role, unseen, cursor or limit, search retained material across Runs and Machines instead: by words in a title, description, URL or source path (not file contents); run then filters to one Run, as <installation>:<run> or <machine>:<run> where the bare id is on two Machines; a page names each Machine not searched and Runs not yet indexed, and next is the cursor for more. Give id to inspect metadata; give id and revision to read an immutable part as base64. refresh reconciles source files. Use collie_do artefact_seen with the inspected revision or artefact_unseen to change the receipt. To hand over a file you made, collie_do artefact_register with run and an absolute path: the host keeps a copy and follows later changes; a retry with the same path returns the same artefact.",
+      "List a Run's attachments, plan, evidence and handoffs without marking them seen. Without run, or with query, kind, role, unseen, cursor or limit, search retained material across Runs and Machines instead: by words in a title, description, URL or source path (not file contents); run then filters to one Run, as <installation>:<run> or <machine>:<run> where the bare id is on two Machines; a page names each Machine not searched and Runs not yet indexed, and next is the cursor for more. Give id to inspect metadata; give id and revision to read that revision: a text one by line (start, count, or search for matching lines with one line either side), anything else, or with offset, an immutable part as base64. Give run and ref to read one of the Run's references (log, review, diff:<path>, evidence:<name>, plan:<file>, verification:<id>) the same way. A read by line states total, from and to, complete, and next: the start that reads on. refresh reconciles source files. Use collie_do artefact_seen with the inspected revision or artefact_unseen to change the receipt. To hand over a file you made, collie_do artefact_register with run and an absolute path: the host keeps a copy and follows later changes; a retry with the same path returns the same artefact.",
     parameters: Schema.Struct({
       run: Schema.optionalKey(Schema.String),
       id: Schema.optionalKey(Schema.String),
@@ -266,6 +325,8 @@ export const CollieTools = Toolkit.make(
       unseen: Schema.optionalKey(Schema.Boolean),
       cursor: Schema.optionalKey(Schema.String),
       limit: Schema.optionalKey(Schema.Int),
+      ref: RefField,
+      ...LinesFields,
     }),
   }),
   collieTool("collie_herd", {
@@ -275,10 +336,18 @@ export const CollieTools = Toolkit.make(
       "The board as the human sees it, card for card: its header sentence, then every " +
       "card under Needs you, Working, Waiting on you and Finished with its run id, state, " +
       "merge request or branch, agents and sentence. Herd-wide and never narrowed by what " +
-      "the board is filtered to or which card is open; where more cards exist than fit, " +
-      "the answer says how many were left out. Read this before answering anything about " +
+      "the board is filtered to or which card is open. It ends with `complete`; where more " +
+      "cards exist than fit, it says how many were left out and the `next` to give back as " +
+      "`after` for the rest. Read this before answering anything about " +
       "the flock, and again when the answer has to be current.",
-    parameters: Schema.Struct({ machine: Schema.optionalKey(Schema.String) }),
+    parameters: Schema.Struct({
+      machine: Schema.optionalKey(Schema.String),
+      after: Schema.optionalKey(
+        Schema.String.annotate({
+          description: "A previous answer's `next`, for the cards after it",
+        }),
+      ),
+    }),
   }),
   collieTool("collie_run", {
     readOnly: true,
@@ -294,13 +363,15 @@ export const CollieTools = Toolkit.make(
       "and any drift nobody has settled. Use it when a question is about a particular Run " +
       "rather than the flock. " +
       "Name the Run; with no `run` it answers about whatever the board has selected, and " +
-      "says which that was.",
-    parameters: RunInput.mapFields((fields) => ({
-      run: fields.run.annotate({
-        description: "The Run id, as collie_herd lists it; omit for the board's selection",
-      }),
-      ...TrialInput.fields,
-    })),
+      "says which that was. With `list: true` it lists the flock's Runs instead, as " +
+      "`collie run list` does: a page of summaries, newest first, with `complete`, `next` " +
+      "(give it back as `after` for the rest) and `cursor` (give it back as `since` for what " +
+      "changed after it). With `run` and `ref` it reads one of the Run's references by line " +
+      "instead: `start` and `count`, or `search` for the matching lines with one line either " +
+      "side; the answer states `total`, `from`, `to`, `complete` and `next`, the `start` " +
+      "that reads on. With `compare` and `against` it compares two sets of Runs instead, " +
+      "as `collie run metrics --compare … --against …` does.",
+    parameters: RunListInput,
   }),
   collieTool("collie_workspaces", {
     readOnly: true,
@@ -469,12 +540,32 @@ export const CollieTools = Toolkit.make(
 
 export type ToolName = keyof typeof CollieTools.tools;
 
+export const SubmitInput = Schema.Struct({ output: Schema.Json });
+
+/** A Run agent's Output, offered under `output_submit: tool` and never to the chat, which has none. */
+export const SubmitTool = collieTool("collie_submit", {
+  readOnly: false,
+  title: "Hand in your Output",
+  description:
+    "Submit the Output your step's contract describes, as `output`: the same JSON you would " +
+    'write to its file. It is decoded as the file is, and answers "accepted" or every problem ' +
+    "it found, with nothing written: correct them and submit again. Writing the file still works.",
+  parameters: SubmitInput,
+});
+
+/** The tools a role is offered under `role_tools: role`. A role not here, and the chat, get every tool. */
+export const ROLE_TOOLS = new Map<string, ReadonlyArray<ToolName>>([
+  ["implementer", ["collie_run", "collie_artefacts", "collie_report", "collie_do"]],
+  ["reviewer", ["collie_run", "collie_artefacts", "collie_report"]],
+  ["healer", ["collie_do", "collie_artefacts", "collie_report", "collie_run"]],
+]);
+
 /** What each tool says it takes when it refuses what it was given. */
 export const TAKES: Record<ToolName, string> = {
   collie_artefacts:
-    'It takes {"run":"<run id>","id":"<optional artefact id>","revision":1,"offset":0,"refresh":false}, or to search {"query":"<words>","run":"<optional run>","kind":"<optional>","role":"<optional>","unseen":true,"cursor":"<optional>","limit":50}.',
-  collie_herd: 'It takes nothing, or {"machine": "<name>"}.',
-  collie_run: `It takes {"run": "<run id>"}, or nothing at all for the board's selection, or {"compare": [...], "against": [...]} with optional "audit" and "plant" to compare two sets of Runs.`,
+    'It takes {"run":"<run id>","id":"<optional artefact id>","revision":1,"offset":0,"refresh":false}, {"run":"<run id>","ref":"log","start":1,"count":200,"search":"<optional pattern>"}, or to search {"query":"<words>","run":"<optional run>","kind":"<optional>","role":"<optional>","unseen":true,"cursor":"<optional>","limit":50}.',
+  collie_herd: 'It takes nothing, or {"machine": "<name>"} and {"after": "<next>"}.',
+  collie_run: `It takes {"run": "<run id>"}, nothing at all for the board's selection, {"list": true} with "status", "limit", "fields", "since", or "after" alone, {"run": "<run id>", "ref": "log"} with "start", "count" or "search", or {"compare": [...], "against": [...]} with optional "audit" and "plant" to compare two sets of Runs.`,
   collie_workspaces: "It takes nothing.",
   collie_receipts: `It takes {"run": "<run id>"}, or nothing at all for the board's selection.`,
   collie_report: 'It takes nothing, or {"since": "<ISO date>"}.',
@@ -523,19 +614,30 @@ function cardLine(view: TaskView): string {
   return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${shippingLabel(view)}${view.sentence}${view.drift === null ? "" : ` ${view.drift}`}${offers.length === 0 ? "" : ` Offers: ${Arr.join(offers, "; ")}.`}`;
 }
 
-/** The board as chat reads it: the header, then each section's cards in the board's order. */
-export function herdLines(views: ReadonlyArray<TaskView>, now: number): string {
+/**
+ * The board as chat reads it: the header, then each section's cards in the board's order,
+ * from the `after`th card on, ending with whether that was all and where the rest start.
+ */
+export function herdLines(views: ReadonlyArray<TaskView>, now: number, after = 0): string {
   if (views.length === 0) return "- (no Runs in this Herd)";
   const lines = [headerSentence(views, now).text];
+  let skip = after;
   let room = HERD_CARDS;
   for (const [section, title] of SECTIONS) {
     const cards = Arr.filter(views, (view) => sectionOf(view) === section);
-    if (cards.length === 0) continue;
-    lines.push("", `## ${title} · ${cards.length}`, ...Arr.map(cards.slice(0, room), cardLine));
-    room = Math.max(0, room - cards.length);
+    const shown = cards.slice(skip, skip + room);
+    skip = Math.max(0, skip - cards.length);
+    room -= shown.length;
+    if (shown.length > 0)
+      lines.push("", `## ${title} · ${cards.length}`, ...Arr.map(shown, cardLine));
   }
-  const left = views.length - HERD_CARDS;
-  if (left > 0) lines.push("", `- (${left} more card(s) not listed here)`);
+  const left = views.length - after - (HERD_CARDS - room);
+  lines.push(
+    "",
+    left > 0
+      ? `- (${left} more card(s) not listed here) complete: false, next: "${views.length - left}" — give it as "after"`
+      : "- complete: true",
+  );
   return Arr.join(lines, "\n");
 }
 

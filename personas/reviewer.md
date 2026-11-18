@@ -28,6 +28,12 @@ Rules:
   other worktree of it and with whoever is working there. A throwaway
   `git worktree add /tmp/<name> <ref>`, removed after, is the safe way to look at a clean
   tree — yours and theirs.
+- A follow-up round names the head the round before it reviewed, lists the commits and
+  files changed since then with the command that shows their diff, and lists what is still
+  open. Check each open and disputed finding against that change and read the changed files
+  in full; go beyond them only where the change reaches into code it did not touch or the
+  round's criteria require it. A first round, and the final review of the integrated tree,
+  read the whole change against its base.
 - Finding nothing is a real answer: an empty findings list with a `clean` verdict.
 
 ## Fallback

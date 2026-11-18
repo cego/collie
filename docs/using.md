@@ -2747,7 +2747,10 @@ older items it left out, and those stay waiting rather than being replaced by a 
 latest-status line. News whose cause has gone — a halted Run resumed, a question
 answered, a finished Run whose work has a disposition (merged, abandoned or superseded) — is dropped from
 the next batch rather than told late, and stays in the journal. What one conversation
-has read is still news to any other about the same Herd.
+has read is still news to any other about the same Herd. A Run's agent that calls
+`collie_news` reads as itself, its Run and agent, so it settles only its own receipts: what
+the Native chat has not read stays unread for it, and the chat reading its own news is what
+settles the chat's.
 
 **How it reaches the conversation depends on the harness, and `collie chat status` says
 which:**
@@ -3285,7 +3288,11 @@ out and no fallback has room, Collie checks again each minute while waiting for 
 Adding a usable fallback then moves the unfinished work to it automatically. The Run's record and
 `collie run show` say which agent each step landed on, as in
 `codex/default (fell back from claude/opus: session 100%, resets 15:45)`, and the Run's log
-gets a line when it happens. The agent that ran out is stopped first, listed by core or
+gets a line when it happens. Before anything moves, each launch also works out, by the same
+chain, where its work would go were its Subscription spent then: a card names it under its
+sentence, `Falls back to codex/gpt-5.5 high`, and `collie usage` adds a line per live agent
+of an unfinished Run, `fallback <agent> of <run> is on claude/opus xhigh, falls back to codex/default`
+(`fallbacks` under `--json`). Nowhere to go, and nothing is named. The agent that ran out is stopped first, listed by core or
 not, and its successor starts only once it is **Quiet**; one that will not stop parks the
 work, naming its thread, turn and server, and a resume tries again. Usage never refuses,
 holds or delays work: only an agent that may still be writing does.
@@ -3342,6 +3349,13 @@ See [What Collie's agents get](#what-collies-agents-get).
 
 `claude_subagents` controls native Claude delegation for managed Run agents.
 See [Claude subagents](#claude-subagents).
+
+`role_tools` says which of Collie's tools each agent is offered: `all`, the default, or
+`role`. See [Collie's tools per role](#collies-tools-per-role).
+
+`output_submit` says how an agent hands in its Output: `file`, the default, or `tool`, which
+also offers it the `collie_submit` tool. See
+[Having an agent do the work](sdk.md#having-an-agent-do-the-work).
 
 `gitlab_host` is the one GitLab this Machine works against, `gitlab.cego.dk` unless you
 change it under Settings, which refuses anything that is not a host name. `collie doctor`
@@ -3453,6 +3467,36 @@ chat is given it after its own prompt. It says that work which cannot be wrong, 
 **Tautology**, proves nothing: a builder makes none, and a reviewer or judge raises each one
 it finds. It also holds the code comment rules. Fork it like any persona to change what
 every agent is told; [authoring](authoring.md#every-agent) says how.
+
+### Collie's tools per role
+
+The shared **Collie tools per role** setting, `role_tools`, is `all` until you change it:
+every agent Collie launches is offered all of Collie's tools. Under `role`, an agent is
+offered only the tools its role uses:
+
+| Role                             | Collie tools                                                   |
+| -------------------------------- | -------------------------------------------------------------- |
+| `implementer` (builds and fixes) | `collie_run`, `collie_artefacts`, `collie_report`, `collie_do` |
+| `reviewer`                       | `collie_run`, `collie_artefacts`, `collie_report`              |
+| `healer`                         | `collie_do`, `collie_artefacts`, `collie_report`, `collie_run` |
+| any other role                   | every tool, as under `all`                                     |
+
+`collie_do` is offered whole: none of its actions is taken from a role that has it. The Home
+chat keeps every tool under both values. On Claude Code, Codex and OpenCode the role
+reaches Collie's tool server in the entry Collie gives the harness, and the server lists
+and accepts only that role's tools: a call to one it left out is refused with the tool and
+the role named. Pi has no Collie tool server, so its extension lists only the role's tools
+and one left out is simply absent. No harness flag is added, so your own MCP servers,
+plugins and skills, and your `agent_profile`, reach the agent exactly as under `all`.
+
+A tool left out is still reached on the command line, `collie tools call <tool>`, through
+the same checks. Each agent's start line in its Run's `agents.log` says what the setting did: the
+role and how many tools it has, or every tool for a role without a list. It takes effect
+for agents started after the change.
+
+```sh
+collie settings set role_tools role
+```
 
 ### Claude subagents
 
@@ -3633,8 +3677,9 @@ Two things to know about the Claude one. It borrows your status line, so it prin
 context percentage there and Claude stops showing most of its own footer hints; if that
 is not a trade you want, `"compact_at_tokens": 0`. And Claude has no documented
 compact-failed hook, so a compaction of its that fails is an unresolved outcome — the
-last row of the table above — rather than a confirmed failure. Collie will not call a
-missing `PostCompact` a failure it did not see.
+last rows of the table above — rather than a confirmed failure. Collie will not call a
+missing `PostCompact` a failure until it has read Claude's transcript, ten minutes after
+it asked.
 
 Claude's compaction also has no request id of its own, so Collie puts a token in
 `/compact`'s instructions and reads it back out of `PreCompact`, which is the only hook
@@ -3690,6 +3735,7 @@ What happens at a boundary:
 | No usable sample — the harness has not measured this context, or the read failed | Warns, sends the work, and asks for no compaction from a guess.                    |
 | The harness confirms the compaction failed                                       | Warns and sends the work anyway.                                                   |
 | Five minutes with neither a completion nor a failure                             | Keeps waiting, shows the Run needs you, and sends the work by itself once it does. |
+| Ten minutes, on Claude or Pi, with neither                                       | Reads the harness's transcript: a compaction since the ask is done, none failed.   |
 
 The last row is the one to know about. An acknowledgement, an idle pane, an unrelated
 compaction and a dropped connection all establish nothing, so Collie will not call the
@@ -3702,9 +3748,17 @@ and the work is sent, with no resume. A steer still reaches the agent while it w
 a stop ends the wait with nothing sent. Nothing will send that agent work while the attempt
 is still in the air, `collie run resume` included.
 
+Claude and Pi say a compaction finished through a hook or an extension writing to the
+agent's control directory, and that record can be lost: a full disk, a hook that never
+fired. So ten minutes after Collie asked, an attempt still unresolved on either is settled
+against the harness's own transcript, the one its status line or extension last named. A
+compaction entry stamped since the ask (Claude's `compact_boundary`, Pi's `compaction`)
+resolves it as done; none, or no transcript to read, resolves it as failed, which warns
+and sends the work. Codex and OpenCode are asked their own server already, so they are
+never reconciled.
+
 So look at the pane, and decide. If the compaction did finish and the harness simply
-never said so — Claude has no compact-failed hook, so a `PostCompact` that never arrives
-is unresolved for ever — the attempt is released by deleting that agent's control
+never said so, the attempt is released by deleting that agent's control
 directory, `<state>/compaction/<agent>/`, where `<state>` is
 `COLLIE_STATE_DIR`, or `~/.local/state/herdr/plugins/cego.collie` when unset. Collie reads a missing record as an agent it
 does not manage, so the next boundary measures the agent again from scratch. Killing the
@@ -4132,6 +4186,16 @@ runs the command, and its result is the command's. A `collie verify` an agent as
 that waits for memory does not spend that agent's Output budget, as an open question of
 its does not; once the command starts, the budget runs again.
 
+A Machine is **Short of disk** while a filesystem holding the state directory or the Run's
+checkout has under a tenth of its size or under 5 GiB free: the reading and threshold of
+`collie doctor`'s `disk` check, with no setting of its own. The same three starts wait for
+it, as does a compaction Collie is about to ask a reused agent for, so a full disk cannot
+eat the record that a compaction finished. A compaction waits for disk alone: it adds no
+memory. The wait reads again every 15 seconds and the card reads
+`Short of disk on vm-mk, waiting for space: / has 2.0 GiB free (2%).`; the Run's log says
+`waited 15s for disk`. Free space with `collie cleanup --apply` or by removing what fills
+the disk, and the work starts at the next read.
+
 To free memory, stop a Run you can spare, whose waits end with it and which then launches
 and runs nothing. Finished Runs' retained agents also need an explicit Stop. You can
 also take down whatever else holds memory, such as a stack an agent left running in a
@@ -4150,7 +4214,9 @@ Each Machine's host reads how much of its Claude and ChatGPT **Subscriptions** i
 session, the week, and a model's own week where the plan has one. `collie usage` prints it,
 the Control Plane's header names each Subscription's busiest window, Desktop's Usage page shows
 it across the Flock, one entry per account ([Collie Desktop](#collie-desktop)), and chat runs the command
-when you ask how much is left.
+when you ask how much is left. `collie usage` also names, for each unfinished Run's agent,
+where a Fallback would move its work, as each card does
+([`fallbacks`](#settings)).
 
 The numbers come from where the harnesses' own `/usage` and `/status` get them:
 

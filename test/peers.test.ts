@@ -1157,6 +1157,15 @@ test(
             )).runId;
             const listed = yield* second.cli(["run", "list"]);
             expect(encode(listed.envelope.data)).toContain(other);
+            yield* writeTask({
+              id: "task-here",
+              workspace: "w-here",
+              label: "collie | here",
+              cwd: first.world.project,
+              created_at: "2026-10-23T07:00:00.000Z",
+            }).pipe(Effect.provide(recordsAt(first.world.state)), Effect.orDie);
+            const inTask = yield* first.cli(["--workspace", "w-here", "run", "list"]);
+            expect(encode(inTask.envelope.data)).toContain(other);
 
             const stopped = yield* first.cli(["run", "stop", other]);
             expect(stopped.envelope.error).toBeUndefined();
