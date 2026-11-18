@@ -1877,7 +1877,8 @@ its time.
 - **The board is a projection** (`src/card-rows.ts`,
   [ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs](adr/draft-the-board-is-a-projection-of-facts-the-host-syncs.md)).
   Each Task's card is a row in `collie_cards` with the digest of what it was derived from.
-  A host's first Snapshot is those rows, `confirmed: false`; its first pass confirms each
+  A host's first Snapshot is those rows, `confirmed: false`, which the door thread answers
+  from its own read-only connection until the engine serves; the first pass confirms each
   whose digest still holds and sends an Upsert for the rest, and `host.log` says how many
   it confirmed. A card's derivation reads only the Run model and rows the syncers keep:
   the Merge watch's `collie_merge_requests` and forge logins, git sync's `collie_branches`

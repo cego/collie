@@ -2,7 +2,8 @@
 // Host start to first Snapshot on this tree's copy of the snapshot
 // (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs): a first host leaves its
 // board's projection, and a second is timed from its spawn to the first board message.
-// Fails above `LIMIT_MS`. Run `prepare.ts` first.
+// Fails above `LIMIT_MS`. Run `prepare.ts` first. Give it the executable a release ships,
+// `bun run build`'s `bin/collie`, to time what runs; without one it runs this tree's source.
 import { Effect, Schedule, Stream } from "effect";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { frontDoor, socketOf } from "../../src/host";
@@ -28,26 +29,50 @@ const env = {
   HC_SOCKET: `${work}/no-core.sock`,
 };
 
-const host = () =>
-  Bun.spawn(["bun", `${root}src/main.ts`, "host", "--dir", state], {
+const spawned: Array<Bun.Subprocess> = [];
+const executable = Bun.argv[2];
+const host = () => {
+  const command = executable === undefined ? ["bun", `${root}src/main.ts`] : [executable];
+  const made = Bun.spawn([...command, "host", "--dir", state], {
     cwd: state,
     env,
     stdio: ["ignore", "ignore", "ignore"],
   });
+  spawned.push(made);
+  return made;
+};
+// A host left on the copy would answer the next run's door in place of its own.
+process.on("exit", () => {
+  for (const one of spawned) one.kill("SIGKILL");
+});
+const stop = (one: Bun.Subprocess) =>
+  Effect.runPromise(
+    Effect.sync(() => one.kill("SIGTERM")).pipe(
+      Effect.andThen(Effect.promise(() => one.exited)),
+      Effect.timeout("10 seconds"),
+      Effect.catch(() =>
+        Effect.sync(() => one.kill("SIGKILL")).pipe(
+          Effect.andThen(Effect.promise(() => one.exited)),
+        ),
+      ),
+    ),
+  );
 
 /** The first board message a host on the copy sends, and how long after `from` it came. */
 const firstMessage = (from: number) =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const door = yield* frontDoor(socketOf(state)).pipe(
-          Effect.retry({ times: 2_000, schedule: Schedule.spaced("10 millis") }),
-          Effect.orDie,
-        );
-        yield* Stream.runHead(door.board());
-        return performance.now() - from;
+        const door = yield* frontDoor(socketOf(state));
+        return yield* Stream.runHead(door.board());
       }),
-    ).pipe(Effect.provide(platformLayer)),
+    ).pipe(
+      // The socket opens on the first call, which fails until the host listens.
+      Effect.retry({ times: 12_000, schedule: Schedule.spaced("10 millis") }),
+      Effect.orDie,
+      Effect.map(() => performance.now() - from),
+      Effect.provide(platformLayer),
+    ),
   );
 
 const log = () =>
@@ -67,18 +92,15 @@ const filled = await Effect.runPromise(
   ),
 );
 if (!filled) {
-  first.kill("SIGKILL");
   console.error("board-reads: the first host never finished its first pass");
   process.exit(1);
 }
-first.kill("SIGTERM");
-await first.exited;
+await stop(first);
 rmSync(`${state}/host.log`, { force: true });
 
 const started = performance.now();
 const second = host();
 const first_snapshot_ms = Math.round(await firstMessage(started));
-second.kill("SIGTERM");
-await second.exited;
+await stop(second);
 console.log(JSON.stringify({ first_snapshot_ms, limit_ms: LIMIT_MS }));
 if (first_snapshot_ms > LIMIT_MS) process.exit(1);

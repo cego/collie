@@ -39,7 +39,9 @@ every other input the card read, including the forge, git, Connection and module
 previous host's cards, each with `confirmed: false` and the `asOf` time it was written. As the
 first pass derives each Task's digest, a card whose digest still matches is confirmed without
 deriving it. A changed one is derived and sent as an Upsert. The Run model itself stays memory
-only.
+only. The engine answers the front door only once it has started its Runs, which takes seconds,
+so until it serves the door thread answers a board itself: a Snapshot of the rows,
+read over its own read-only connection, followed by whatever the engine sends.
 
 **D3. A card's derivation reads only the Run model and `host.db`.** Syncers keep the outside
 world as rows, and each write names what it moved through Reactivity:
@@ -76,9 +78,9 @@ agents read the boards this host derived, never the rows a previous host left.
 
 ## Consequences
 
-- A host's first Snapshot no longer waits on the forge, git or module trees. The bench gate
-  `bench/board-reads/first.ts` measures host start to first Snapshot on a snapshot and fails
-  above 1 s.
+- A host's first Snapshot no longer waits on the forge, git, module trees or the engine's
+  start. The bench gate `bench/board-reads/first.ts` measures spawn to first Snapshot on a
+  snapshot and fails above 1 s: on vm-mk's state (11-18), the release binary took 439–558 ms.
 - A card can show the forge, git or a module as the syncer last read them: at most a minute
   for a merge request on a card, and 5 minutes for a change made entirely outside Collie.
 - A state directory an older host left has no rows. Its first start derives every card before

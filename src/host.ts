@@ -4942,80 +4942,93 @@ const own = (
           Effect.provideContext(bun),
         ),
     });
-    return yield* Layer.launch(
-      RpcServer.layer(AllRpcs.middleware(SlowRpcs)).pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            handlers(dir, installation, development, declared, peers),
-            frontDoorHandlers(
-              dir,
-              installation,
-              development,
-              panels,
-              declared,
-              stamp,
-              toasted,
-              Ref.get(reconnects),
-              peers.userDirMoved,
-            ),
-            sideJobsLayer(panels),
-            doorFeedLayer(door, panels),
-            questionsLayer,
-            slowRpcsLayer,
-            Layer.effectDiscard(
-              Effect.gen(function* () {
-                const { reportsLayer } = yield* Effect.promise(() => import("./reports"));
-                yield* Layer.build(
-                  reportsLayer({ env, installation, stamp, crashAt, linked, live: peers.live }),
-                );
-              }),
-            ),
-          ).pipe(
-            Layer.provide(sharedBoardLayer(dir)),
+    // Scoped as Layer.launch is, so a stop ends the server before the rest of the host.
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(
+          RpcServer.layer(AllRpcs.middleware(SlowRpcs)).pipe(
             Layer.provide(
               Layer.mergeAll(
-                schedulesLayer({ dir, env: { ...env, stateDir: dir }, installation, seconds }).pipe(
-                  Layer.provideMerge(
-                    registryLayer(dir, {
-                      catalogue,
-                      locate: locateIn(env),
-                      userDir: env.userDir,
-                      crashAt,
-                      supersedeGraceMs: graceMs,
-                      namesTasks: true,
-                      placing: { herdr, env: { ...env, stateDir: dir } },
-                      keep:
-                        runModel === undefined
-                          ? undefined
-                          : { revision: runModel.factsAt, reading: runModel.reading },
-                    }),
+                handlers(dir, installation, development, declared, peers),
+                frontDoorHandlers(
+                  dir,
+                  installation,
+                  development,
+                  panels,
+                  declared,
+                  stamp,
+                  toasted,
+                  Ref.get(reconnects),
+                  peers.userDirMoved,
+                ),
+                sideJobsLayer(panels),
+                doorFeedLayer(door, panels),
+                questionsLayer,
+                slowRpcsLayer,
+                Layer.effectDiscard(
+                  Effect.gen(function* () {
+                    const { reportsLayer } = yield* Effect.promise(() => import("./reports"));
+                    yield* Layer.build(
+                      reportsLayer({ env, installation, stamp, crashAt, linked, live: peers.live }),
+                    );
+                  }),
+                ),
+              ).pipe(
+                Layer.provide(sharedBoardLayer(dir)),
+                Layer.provide(
+                  Layer.mergeAll(
+                    schedulesLayer({
+                      dir,
+                      env: { ...env, stateDir: dir },
+                      installation,
+                      seconds,
+                    }).pipe(
+                      Layer.provideMerge(
+                        registryLayer(dir, {
+                          catalogue,
+                          locate: locateIn(env),
+                          userDir: env.userDir,
+                          crashAt,
+                          supersedeGraceMs: graceMs,
+                          namesTasks: true,
+                          placing: { herdr, env: { ...env, stateDir: dir } },
+                          keep:
+                            runModel === undefined
+                              ? undefined
+                              : { revision: runModel.factsAt, reading: runModel.reading },
+                        }),
+                      ),
+                    ),
+                    Layer.succeed(Usage, usage),
+                    Layer.succeed(HarnessCatalogues, harnesses),
                   ),
                 ),
-                Layer.succeed(Usage, usage),
-                Layer.succeed(HarnessCatalogues, harnesses),
               ),
             ),
-          ),
-        ),
-        Layer.provide(door.protocol),
-        Layer.provide(
-          (yield* configuredAgents(dir, usage.readings, catalogue)).pipe(
-            Layer.provideMerge(
-              foundationLayer({
-                dir,
-                userDir: env.userDir,
-                toast: (title, body, sound, runId) =>
-                  PubSub.publish(toasted, { runId, title, body, sound }).pipe(Effect.asVoid),
-                herd: { socketPath: herdSocket, pluginRoot: env.pluginRoot },
-                readings: usage.readings,
-                messagePoll: seconds ? "1 second" : undefined,
-              }).pipe(Layer.provideMerge(Layer.succeed(CheckProcesses, checks))),
+            Layer.provide(door.protocol),
+            Layer.provide(
+              (yield* configuredAgents(dir, usage.readings, catalogue)).pipe(
+                Layer.provideMerge(
+                  foundationLayer({
+                    dir,
+                    userDir: env.userDir,
+                    toast: (title, body, sound, runId) =>
+                      PubSub.publish(toasted, { runId, title, body, sound }).pipe(Effect.asVoid),
+                    herd: { socketPath: herdSocket, pluginRoot: env.pluginRoot },
+                    readings: usage.readings,
+                    messagePoll: seconds ? "1 second" : undefined,
+                  }).pipe(Layer.provideMerge(Layer.succeed(CheckProcesses, checks))),
+                ),
+              ),
             ),
+            Layer.provide(forgeHttpLayer),
+            Layer.tap(() => Effect.forkScoped(onceAnswering)),
           ),
-        ),
-        Layer.provide(forgeHttpLayer),
-        Layer.tap(() => Effect.forkScoped(onceAnswering)),
-      ),
+        );
+        // From now on the engine answers a board; until now the door answered one from the projection.
+        door.post({ _tag: "Serving" });
+        return yield* Effect.never;
+      }),
     );
   }).pipe(Effect.provide([usageLayer, catalogueLayer(dir)]), Effect.orDie);
 
