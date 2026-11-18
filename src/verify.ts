@@ -683,7 +683,6 @@ export interface Collected {
   readonly isolated?: Isolation & { readonly checkouts: string };
 }
 
-/** What a check run isolated is run after. */
 export interface Isolation {
   readonly prepare?: Prepare | undefined;
 }
@@ -712,7 +711,6 @@ interface Prepared {
   readonly absolute: string;
   readonly environment: string | null;
   readonly start: Snapshot;
-  /** Its isolated checkout, once made. */
   readonly placed?: Placed;
 }
 
@@ -931,7 +929,6 @@ const askerOf = (what: Pick<Collected, "by" | "pass">): Asker => ({
 const settleCheck = Effect.fn("Verify.settleCheck")(function* (
   { check, command, tail: { stdout, stderr } }: Effect.Success<ReturnType<typeof readCheck>>,
   exit: number,
-  /** The identical requests it answered beside its own. */
   joined: ReadonlyArray<Asker> = [],
 ): Effect.fn.Return<Verification, VerifyRefused, Services> {
   const { spec } = command;
