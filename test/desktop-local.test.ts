@@ -195,7 +195,7 @@ test("Desktop's main process never reaches Collie's own host client", () =>
     }),
   ));
 
-const snapshot = (installation: string): BoardSnapshot => ({
+const snapshot: (installation: string) => BoardSnapshot = (installation) => ({
   _tag: "Snapshot",
   installation,
   build: "0.31.0",
@@ -209,11 +209,11 @@ interface Fake {
   readonly board: Stream.Stream<BoardMessage, { readonly message: string }>;
   readonly toasts?: Stream.Stream<Toasted, unknown>;
 }
-const fakeRoute = (
+const fakeRoute: (
   name: string,
   board: Stream.Stream<BoardMessage>,
-  closed: string[] = [],
-): Route<Fake> => ({
+  closed?: string[],
+) => Route<Fake> = (name, board, closed = []) => ({
   machine: { profile: `p-${name}`, name, target: `mk@${name}` },
   open: () =>
     Effect.acquireRelease(Effect.succeed<Fake>({ name, board: Stream.suspend(() => board) }), () =>
@@ -742,7 +742,7 @@ test("a failed upgrade is tried again when the Machine next connects, and only o
       const flaky: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
-          Effect.sync((): Fake => {
+          Effect.sync(() => {
             connections++;
             const drop = Deferred.makeUnsafe<void>();
             drops.push(drop);
@@ -800,7 +800,7 @@ test("an upgrade cut off by its connection dropping is tried again when the Mach
       const dropping: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
-          Effect.sync((): Fake => {
+          Effect.sync(() => {
             const drop = Deferred.makeUnsafe<void>();
             drops.push(drop);
             return {
@@ -842,7 +842,7 @@ test("Sync now on a Machine behind on its version reopens its route, which asks 
       const behind: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
-          Effect.sync((): Fake => {
+          Effect.sync(() => {
             connections++;
             return {
               name: "vm",
@@ -900,7 +900,7 @@ test("Sync now while a Machine's upgrade runs leaves the upgrade to finish", () 
       const behind: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
-          Effect.sync((): Fake => {
+          Effect.sync(() => {
             connections++;
             return {
               name: "vm",

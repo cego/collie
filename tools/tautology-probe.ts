@@ -154,23 +154,26 @@ export const journal = (
 ) => {
   const final = { head_sha: trees.head, fingerprint: "fixture" };
   const earlier = { head_sha: trees.base, fingerprint: "fixture-base" };
-  const verifications = Arr.map(readJournal(raw), (one, n): Verification => ({
-    id: `fixture-${n}`,
-    run: "tautology-probe",
-    name: one.name,
-    executable: one.command[0],
-    argv: one.command.slice(1),
-    cwd,
-    start: one.tree === "earlier" ? earlier : final,
-    end: one.tree === "earlier" ? earlier : final,
-    exit: one.result === "pass" ? 0 : 1,
-    seconds: 1,
-    tail: { stdout: "", stderr: "" },
-    expect: "pass",
-    result: one.result,
-    at,
-    by: one.by,
-  }));
+  const verifications = Arr.map(readJournal(raw), (one, n) => {
+    const returned: Verification = {
+      id: `fixture-${n}`,
+      run: "tautology-probe",
+      name: one.name,
+      executable: one.command[0],
+      argv: one.command.slice(1),
+      cwd,
+      start: one.tree === "earlier" ? earlier : final,
+      end: one.tree === "earlier" ? earlier : final,
+      exit: one.result === "pass" ? 0 : 1,
+      seconds: 1,
+      tail: { stdout: "", stderr: "" },
+      expect: "pass",
+      result: one.result,
+      at,
+      by: one.by,
+    };
+    return returned;
+  });
   return renderRecordedChecks({ verifications, final });
 };
 

@@ -69,7 +69,7 @@ export const takeFrom = (
   const settings = { ...flock.settings };
   const first = !flock.synced.includes(machine);
   const held = (edits: FlockSettings["settings"]) =>
-    Arr.map(Rec.toEntries(edits), ([key, { value, at }]): SharedSetting => ({ key, value, at }));
+    Arr.map(Rec.toEntries(edits), ([key, { value, at }]) => ({ key, value, at }));
   const takeable = Arr.filter(
     has,
     ({ key, value }) => key !== GIVEN_ONLY && !("refused" in parseShared(key, value)),

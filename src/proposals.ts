@@ -29,7 +29,6 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { Action, ActionKind } from "./actions";
 import { ActionSchema } from "./actions";
-import type { HumanDoor } from "./steering";
 import { nowIso, epochMs } from "./time";
 
 /** How long a proposal stands. After this the world has moved and it is re-asked. */
@@ -105,7 +104,7 @@ const encodeLine = flow(Schema.encodeResult(LineJson), Result.getOrThrow);
 export function contentHash(
   targets: ReadonlyArray<{ readonly run: string }>,
   actions: ReadonlyArray<Action>,
-): string {
+) {
   // Encoded through the schema rather than stringified as it arrived: the schema decides
   // the field order, so the same proposal always hashes the same way — and a changed
   // action always hashes differently, which is the half that matters.
@@ -153,7 +152,7 @@ export const proposalsLayer = Layer.effect(Proposals)(
     const told = Option.getOrUndefined(yield* Effect.serviceOption(StoreWrites));
     // ponytail: one lock for every journal; one per journal if confirmations contend.
     const lock = Semaphore.makeUnsafe(1);
-    return {
+    const returned: ProposalsApi = {
       lines: (journal) =>
         sql<{ readonly line: string }>`
           SELECT line FROM collie_proposals WHERE journal = ${journal} ORDER BY seq
@@ -187,7 +186,8 @@ export const proposalsLayer = Layer.effect(Proposals)(
           yield* reactivity.invalidate([PROPOSALS]);
         }).pipe(Effect.orDie),
       atomically: lock.withPermits(1),
-    } satisfies ProposalsApi;
+    };
+    return returned;
   }),
 );
 
@@ -278,7 +278,7 @@ export interface Voice {
 export type Asker = Omit<Actor, "requestId">;
 
 /** Just the voice of anything that carries one, with no key for what it lacks. */
-export function voiceOf({ conversation, said, attachments }: Voice): Voice {
+export function voiceOf({ conversation, said, attachments }: Voice) {
   let voice: Voice = {};
   if (conversation !== undefined) voice = { ...voice, conversation };
   if (said !== undefined) voice = { ...voice, said };
@@ -286,23 +286,23 @@ export function voiceOf({ conversation, said, attachments }: Voice): Voice {
   return voice;
 }
 
-export function isHuman(actor: Pick<Actor, "origin">): boolean {
+export function isHuman(actor: Pick<Actor, "origin">) {
   return actor.origin === "cli-tty" || actor.origin === "board" || actor.origin === "desktop";
 }
 
 /** A door a human types into, or chat carrying the human's own words of that turn. */
-export const speaksForHuman = (actor: Asker): boolean =>
+export const speaksForHuman = (actor: Asker) =>
   isHuman(actor) || (actor.origin === "chat" && actor.said !== undefined);
 
 /** Who a Delivery of a human's words came from, as its ledger keeps it; null for anyone else's. */
-export function humanOf(actor: Asker | undefined): HumanDoor | null {
+export function humanOf(actor: Asker | undefined) {
   if (actor === undefined || !speaksForHuman(actor)) return null;
   return actor.conversation === undefined
     ? { origin: actor.origin }
     : { origin: actor.origin, conversation: actor.conversation };
 }
 
-export function actorName(actor: Actor): string {
+export function actorName(actor: Actor) {
   return `${isHuman(actor) ? "human" : actor.origin}:${actor.requestId}`;
 }
 
@@ -325,7 +325,7 @@ export interface Confirmed {
  * is only allowed to answer one of these: settling an index that never ran would write a
  * human's word about something that did not happen.
  */
-function unsettled(lines: ReadonlyArray<ProposalLine>, id: string): number[] {
+function unsettled(lines: ReadonlyArray<ProposalLine>, id: string) {
   const indices: number[] = [];
   for (const line of lines) {
     if (line.kind !== "step" || line.proposal !== id || line.state !== "started") continue;
@@ -348,10 +348,7 @@ function unsettled(lines: ReadonlyArray<ProposalLine>, id: string): number[] {
  * and a board that only asked `pendingFor` would let them expire unseen at the one front
  * door that is meant to confirm them.
  */
-export function pendingHerdWide(
-  lines: ReadonlyArray<ProposalLine>,
-  nowMs: number,
-): ProposalRecord[] {
+export function pendingHerdWide(lines: ReadonlyArray<ProposalLine>, nowMs: number) {
   return Arr.filter(unanswered(lines, nowMs), (line) => line.targets.length === 0);
 }
 
@@ -359,11 +356,7 @@ export function pendingHerdWide(
  * Proposals about this Run that a human has neither answered nor let expire. What makes
  * a card `decision` rather than something to read: somebody is being waited on.
  */
-export function pendingFor(
-  lines: ReadonlyArray<ProposalLine>,
-  run: string,
-  nowMs: number,
-): ProposalRecord[] {
+export function pendingFor(lines: ReadonlyArray<ProposalLine>, run: string, nowMs: number) {
   return Arr.filter(unanswered(lines, nowMs), (line) =>
     Arr.some(line.targets, (target) => target.run === run),
   );
@@ -379,10 +372,7 @@ const lastUnanswered = new WeakMap<
 >();
 
 /** Proposals nobody has answered and nothing has expired, whatever they are about. */
-function unanswered(
-  lines: ReadonlyArray<ProposalLine>,
-  nowMs: number,
-): ReadonlyArray<ProposalRecord> {
+function unanswered(lines: ReadonlyArray<ProposalLine>, nowMs: number) {
   const kept = lastUnanswered.get(lines);
   if (kept?.nowMs === nowMs) return kept.records;
   const answered = new Set(
@@ -413,14 +403,20 @@ export function judgeConfirmation(
   _actor: Actor,
   nowMs: number,
   currentVersions: ReadonlyMap<string, number>,
-): Confirmed | { readonly refused: ConfirmRefusal; readonly detail: string } {
+) {
   const found = Option.getOrUndefined(
     Arr.findFirst(
       lines,
       (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
     ),
   );
-  if (!found) return { refused: "not_found", detail: `no proposal "${id}"` };
+  if (!found) {
+    const returned: Confirmed | { readonly refused: ConfirmRefusal; readonly detail: string } = {
+      refused: "not_found",
+      detail: `no proposal "${id}"`,
+    };
+    return returned;
+  }
 
   const settled = Option.getOrUndefined(
     Arr.findFirst(
@@ -428,11 +424,17 @@ export function judgeConfirmation(
       (line) => (line.kind === "confirmed" || line.kind === "declined") && line.id === id,
     ),
   );
-  if (settled) return { refused: "not_pending", detail: `"${id}" is already ${settled.kind}` };
+  if (settled) {
+    const returned: Confirmed | { readonly refused: ConfirmRefusal; readonly detail: string } = {
+      refused: "not_pending",
+      detail: `"${id}" is already ${settled.kind}`,
+    };
+    return returned;
+  }
 
   const waiting = unsettled(lines, id);
-  if (waiting.length > 0)
-    return {
+  if (waiting.length > 0) {
+    const returned: Confirmed | { readonly refused: ConfirmRefusal; readonly detail: string } = {
       refused: "reconcile_required",
       detail: `action ${Arr.join(
         Arr.map(waiting, (part) =>
@@ -441,23 +443,38 @@ export function judgeConfirmation(
         ", ",
       )} started and never settled; reconcile it before confirming again`,
     };
+    return returned;
+  }
 
-  if (epochMs(found.expires_at) <= nowMs)
-    return { refused: "expired", detail: `"${id}" expired at ${found.expires_at}` };
-  if (found.content_hash !== hash)
-    return {
+  if (epochMs(found.expires_at) <= nowMs) {
+    const returned: Confirmed | { readonly refused: ConfirmRefusal; readonly detail: string } = {
+      refused: "expired",
+      detail: `"${id}" expired at ${found.expires_at}`,
+    };
+    return returned;
+  }
+  if (found.content_hash !== hash) {
+    const returned: Confirmed | { readonly refused: ConfirmRefusal; readonly detail: string } = {
       refused: "hash_mismatch",
       detail: `"${id}" is ${found.content_hash}, not ${hash}`,
     };
+    return returned;
+  }
   for (const [run, version] of Rec.toEntries(found.intent_versions)) {
     const now = currentVersions.get(run);
-    if (now !== undefined && now !== version)
-      return {
+    if (now !== undefined && now !== version) {
+      const returned: Confirmed | { readonly refused: ConfirmRefusal; readonly detail: string } = {
         refused: "intent_moved",
         detail: `run ${run}'s Intent is v${now}, not v${version}`,
       };
+      return returned;
+    }
   }
-  return { proposal: found, actions: found.actions };
+  const returned: Confirmed | { readonly refused: ConfirmRefusal; readonly detail: string } = {
+    proposal: found,
+    actions: found.actions,
+  };
+  return returned;
 }
 
 export const confirm = Effect.fn("Proposals.confirm")(function* (
@@ -502,7 +519,7 @@ export interface Settled {
   readonly id: string;
 }
 
-function settledAs(refused: ConfirmRefusal | null, detail: string, id: string): Settled {
+function settledAs(refused: ConfirmRefusal | null, detail: string, id: string) {
   return { refused, detail, id };
 }
 
@@ -533,10 +550,7 @@ export const decline = Effect.fn("Proposals.decline")(function* (
 });
 
 /** The yes or no this request already gave, so a retried answer is the one answer. */
-export function answeredBy(
-  lines: ReadonlyArray<ProposalLine>,
-  request: string,
-): { readonly kind: "confirmed" | "declined"; readonly id: string } | undefined {
+export function answeredBy(lines: ReadonlyArray<ProposalLine>, request: string) {
   return Option.getOrUndefined(
     Arr.findFirst(
       lines,
@@ -694,7 +708,7 @@ const NOT_ABOUT_A_RUN: ReadonlySet<ActionKind> = new Set([
  * asked again. Time passes between a human reading a proposal and confirming it, and an
  * action that was right then can be wrong now.
  */
-export function admit(action: Action, ctx: AdmissionContext): string | null {
+export function admit(action: Action, ctx: AdmissionContext) {
   if (NOT_ABOUT_A_RUN.has(action.kind)) return null;
   if (!ctx.run) return "the run is gone";
 

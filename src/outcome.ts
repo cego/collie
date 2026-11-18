@@ -111,14 +111,14 @@ export interface Collected {
  * Whether the latest result for this check, on the tree in front of us, passed — a pass a
  * later fail contradicts is not one — or it is left to CI.
  */
-function lastPassedAtFinal(got: Collected, name: string): boolean {
+function lastPassedAtFinal(got: Collected, name: string) {
   return owesNothingHere(checkProof(got, name));
 }
 
 const TEXT_SEARCHES = new Set(["grep", "egrep", "fgrep", "rg", "ag", "ack"]);
 
 /** Whether a command only searches text, also as a `sh -c` or `bash -c` script's first word. */
-function textSearch(executable: string, argv: ReadonlyArray<string>): boolean {
+function textSearch(executable: string, argv: ReadonlyArray<string>) {
   const program = Str.split(executable, "/").at(-1) ?? "";
   if (TEXT_SEARCHES.has(program)) return true;
   if (program === "git") return argv[0] === "grep";
@@ -131,7 +131,7 @@ function textSearch(executable: string, argv: ReadonlyArray<string>): boolean {
 }
 
 /** A script's words as the shell reads them, its quotes, escapes and line continuations removed. */
-function shellWords(script: string): ReadonlyArray<string> {
+function shellWords(script: string) {
   const words: string[] = [];
   let word = "";
   let started = false;
@@ -171,12 +171,12 @@ function shellWords(script: string): ReadonlyArray<string> {
  * Whether a name's latest result on this tree passed, a passing text search not counting:
  * it shows the text is there, not that anything works. A Run's Check is the project's own.
  */
-function provedAtFinal(got: Collected, name: string): "passed" | "searched" | "unproved" {
+function provedAtFinal(got: Collected, name: string) {
   if (lastPassedAtFinal(withoutSearches(got, name), name)) return "passed";
   return lastPassedAtFinal(got, name) ? "searched" : "unproved";
 }
 
-function withoutSearches(got: Collected, name: string): Collected {
+function withoutSearches(got: Collected, name: string) {
   const ownCheck = Arr.some([...got.approved, ...(got.commands ?? [])], (one) => one.name === name);
   if (ownCheck) return got;
   const searched = (v: Verification) =>
@@ -187,7 +187,7 @@ function withoutSearches(got: Collected, name: string): Collected {
 const onlySearched = (what: string) =>
   `${what}, whose only pass on this tree is a text search, which proves nothing`;
 
-function passedOnlyBefore(got: Collected, name: string): Verification | undefined {
+function passedOnlyBefore(got: Collected, name: string) {
   const proof = checkProof(withoutSearches(got, name), name);
   return proof.state === "earlier" ? proof.runs.at(-1) : undefined;
 }
@@ -261,12 +261,12 @@ function rerunOf(got: Journal, last: Verification | undefined) {
 }
 
 /** Whether a check's latest run on this tree failed only on Flakes and tests that fail at the base too. */
-function settledUnpassed(got: Journal, name: string): boolean {
+function settledUnpassed(got: Journal, name: string) {
   return rerunOf(got, runsOf(got, name).last)?.own.length === 0;
 }
 
 /** The Run's checks settled without a pass: every test each failed on was a Flake or fails at the base too. */
-export function settledChecks(got: Journal & Pick<Collected, "approved">): string[] {
+export function settledChecks(got: Journal & Pick<Collected, "approved">) {
   return Arr.map(
     Arr.filter(got.approved, (spec) => settledUnpassed(got, spec.name)),
     (spec) => spec.name,
@@ -277,9 +277,7 @@ export function settledChecks(got: Journal & Pick<Collected, "approved">): strin
  * Each Flake on this tree: a failed test of one of the Run's checks that passed when run again
  * alone. Never a pass, so the merge request names them.
  */
-export function flakesOf(
-  got: Journal & Pick<Collected, "approved">,
-): Array<FailedTest & { readonly check: string }> {
+export function flakesOf(got: Journal & Pick<Collected, "approved">) {
   return Arr.flatMap(
     got.approved,
     (spec) =>
@@ -295,9 +293,7 @@ export function flakesOf(
 }
 
 /** Each still-failing test that also fails where this branch leaves the default branch, at that revision. */
-export function baseFailuresOf(
-  got: Journal & Pick<Collected, "approved">,
-): Array<FailedTest & { readonly check: string; readonly at: string }> {
+export function baseFailuresOf(got: Journal & Pick<Collected, "approved">) {
   return Arr.flatMap(
     got.approved,
     (spec) =>
@@ -313,9 +309,7 @@ export function baseFailuresOf(
 }
 
 /** Each test of a check's latest run on this tree that failed again alone, and the base has not been asked about since. */
-export function baselinesOwed(
-  got: Journal & Pick<Collected, "approved">,
-): Array<{ readonly check: string; readonly test: FailedTest }> {
+export function baselinesOwed(got: Journal & Pick<Collected, "approved">) {
   return Arr.flatMap(
     got.approved,
     (spec) =>
@@ -331,9 +325,7 @@ export function baselinesOwed(
 }
 
 /** Each failed test of a check's latest run on this tree that has not been run again alone yet. */
-export function rerunsOwed(
-  got: Journal & Pick<Collected, "approved">,
-): Array<{ readonly check: string; readonly test: FailedTest }> {
+export function rerunsOwed(got: Journal & Pick<Collected, "approved">) {
   return Arr.flatMap(
     got.approved,
     (spec) =>
@@ -352,7 +344,7 @@ export function rerunsOwed(
  * The checks only a whole run can tell about: those whose latest run on this tree failed
  * without naming its tests, or with no run of their command on it, as after a re-grant.
  */
-export function wholeRunsOwed(got: Journal & Pick<Collected, "approved">): string[] {
+export function wholeRunsOwed(got: Journal & Pick<Collected, "approved">) {
   return Arr.map(
     Arr.filter(got.approved, (spec) => {
       const { last } = runsOf(got, spec.name);
@@ -366,7 +358,7 @@ export function wholeRunsOwed(got: Journal & Pick<Collected, "approved">): strin
  * The checks the proof runs whole once more: those a whole run is owed by that have had no
  * `recheck` of their command on this tree (ADR-0034, amended 2026-10-19).
  */
-export function recheckOwed(got: Journal & Pick<Collected, "approved">): string[] {
+export function recheckOwed(got: Journal & Pick<Collected, "approved">) {
   return Arr.filter(
     wholeRunsOwed(got),
     (name) =>
@@ -375,7 +367,7 @@ export function recheckOwed(got: Journal & Pick<Collected, "approved">): string[
 }
 
 /** Whether this kind of result is proved by Collie's own run of the Run's checks. */
-export function needsChecks(kind: Outcome): boolean {
+export function needsChecks(kind: Outcome) {
   return kind !== "investigation" && kind !== "plan" && kind !== "review";
 }
 
@@ -387,7 +379,7 @@ export const noCheckNamed =
  * Every check, passing, on this exact tree. An empty set is a gap rather than a pass: it
  * would make this gate say yes to anything.
  */
-function approvedSetGaps(got: Collected): string[] {
+function approvedSetGaps(got: Collected) {
   if (got.approved.length === 0) return [noCheckNamed];
   const gaps: string[] = [];
   for (const spec of owedLocally(got.approved)) {
@@ -418,7 +410,7 @@ function approvedSetGaps(got: Collected): string[] {
 }
 
 /** The first Output that has this key at all, so a caller need not know which step wrote it. */
-function anyField(got: Collected, key: string): YamlValue | undefined {
+function anyField(got: Collected, key: string) {
   for (const output of got.outputs.values()) {
     if (isYamlMap(output) && key in output) return output[key];
   }
@@ -426,7 +418,7 @@ function anyField(got: Collected, key: string): YamlValue | undefined {
 }
 
 /** The same, restricted to the Outputs a reviewer wrote. */
-function reviewerField(got: Collected, key: string): YamlValue | undefined {
+function reviewerField(got: Collected, key: string) {
   for (const [id, output] of got.outputs) {
     if (!got.reviewed.has(id)) continue;
     if (isYamlMap(output) && key in output) return output[key];
@@ -434,13 +426,13 @@ function reviewerField(got: Collected, key: string): YamlValue | undefined {
   return undefined;
 }
 
-function reviewerSays(got: Collected, key: string): boolean {
+function reviewerSays(got: Collected, key: string) {
   const value = reviewerField(got, key);
   return isBoolean(value) && value;
 }
 
 /** Whether a verification ran on a tree other than the one in front of us. */
-function earlierTree(v: Verification, final: Snapshot): boolean {
+function earlierTree(v: Verification, final: Snapshot) {
   return !sameTree(v.end, final);
 }
 
@@ -457,7 +449,7 @@ const shown = (v: Verification) => {
   )}" in ${v.cwd}`;
 };
 
-function names(value: YamlValue | undefined): string[] {
+function names(value: YamlValue | undefined) {
   return Arr.isArray(value) ? Arr.filter(value, isString) : [];
 }
 
@@ -465,7 +457,7 @@ function names(value: YamlValue | undefined): string[] {
  * The directories a reference a Run's Outputs give may point inside: its own, its
  * checkout, and, where it builds another Run's plan, that Run's.
  */
-export function evidenceRoots(own: string, cwd: string, workSource: string): string[] {
+export function evidenceRoots(own: string, cwd: string, workSource: string) {
   const planned =
     planRunOf(workSource) === null ? [] : [pipe(workSource, Str.replace(/\/plan\/?$/, ""))];
   return [own, cwd, ...planned];
@@ -476,7 +468,7 @@ export function evidenceRoots(own: string, cwd: string, workSource: string): str
  * one does by construction; an absolute one has to be under a root the Run holds, and a
  * `..` in either is a path nobody can answer for.
  */
-export function refInside(roots: ReadonlyArray<string>, ref: string): boolean {
+export function refInside(roots: ReadonlyArray<string>, ref: string) {
   const value = Str.trim(ref);
   if (value === "" || pipe(value, Str.includes(".."))) return false;
   if (!pipe(value, Str.startsWith("/"))) return true;
@@ -490,7 +482,7 @@ export function refInside(roots: ReadonlyArray<string>, ref: string): boolean {
  * What is missing before this Run can claim its outcome. Empty means the evidence is
  * there; every entry is one sentence a human can act on.
  */
-export function evidenceGaps(kind: Outcome, got: Collected): string[] {
+export function evidenceGaps(kind: Outcome, got: Collected) {
   return Arr.map(gapsOf(kind, got), (gap) => gap.text);
 }
 
@@ -498,7 +490,7 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
  * The gaps a verification on this tree could close: what a fix may be handed. The rest
  * are a reviewer's judgement or an Output's claim, and no command moves them.
  */
-export function checkGaps(kind: Outcome, got: Collected): string[] {
+export function checkGaps(kind: Outcome, got: Collected) {
   return Arr.map(
     Arr.filter(gapsOf(kind, got), (gap) => gap.by === "check"),
     (gap) => gap.text,
@@ -506,7 +498,7 @@ export function checkGaps(kind: Outcome, got: Collected): string[] {
 }
 
 /** The gaps a fresh review could close: a reviewer's judgement the Outputs do not report. */
-export function reviewGaps(kind: Outcome, got: Collected): string[] {
+export function reviewGaps(kind: Outcome, got: Collected) {
   return Arr.map(
     Arr.filter(gapsOf(kind, got), (gap) => gap.by === "review"),
     (gap) => gap.text,
@@ -516,7 +508,7 @@ export function reviewGaps(kind: Outcome, got: Collected): string[] {
 /** Who can close a gap: a verification, a reviewer, a new Measurement, or nobody short of new work. */
 type GapCloser = "check" | "review" | "measure" | "claim";
 
-function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapCloser }> {
+function gapsOf(kind: Outcome, got: Collected) {
   const gaps: Array<{ text: string; by: GapCloser }> = [];
   const check = (text: string) => gaps.push({ text, by: "check" });
   const claim = (text: string) => gaps.push({ text, by: "claim" });
@@ -663,7 +655,7 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapClo
 
 const isFinal = (tree: Snapshot, final: Snapshot) => sameTree(tree, final);
 
-function reviewerSaysOfThisTree(got: Collected, key: string): boolean {
+function reviewerSaysOfThisTree(got: Collected, key: string) {
   for (const [id, output] of got.outputs) {
     const tree = got.reviewedOn?.get(id);
     if (!got.reviewed.has(id) || tree === undefined || !isFinal(tree, got.final)) continue;
@@ -672,7 +664,7 @@ function reviewerSaysOfThisTree(got: Collected, key: string): boolean {
   return false;
 }
 
-function finalMeasurementGaps(got: Collected): string[] {
+function finalMeasurementGaps(got: Collected) {
   const finals = Arr.filter(got.measurements ?? [], (one) => one.pass === "final");
   const here = Arr.filter(finals, (one) => isFinal(one.candidate, got.final));
   const proving = Option.getOrUndefined(
@@ -716,7 +708,7 @@ function finalMeasurementGaps(got: Collected): string[] {
  * An investigation says so beside a conclusion and references that hold it up; a
  * performance Run is so when its tree is its latest base tree again, whatever it says.
  */
-export function endsWithoutPatch(kind: Outcome, got: Collected): boolean {
+export function endsWithoutPatch(kind: Outcome, got: Collected) {
   if (kind === "investigation") return anyField(got, "patch") === false;
   if (kind !== "performance") return false;
   const base = got.measurements?.at(-1)?.base;
@@ -732,7 +724,7 @@ export function endsWithoutPatch(kind: Outcome, got: Collected): boolean {
 export function renderEvidence(
   got: Pick<Collected, "verifications" | "final" | "measurements">,
   audience: "internal" | "public" = "internal",
-): string {
+) {
   const latest = new Map<string, Verification>();
   const command = (v: Verification) => CommandLine.display([v.asked ?? v.executable, ...v.argv]);
   for (const v of got.verifications) if (!ranOneTest(v)) latest.set(`${v.name}:${v.by}`, v);
@@ -763,7 +755,7 @@ export interface LeftToCiState {
 export function renderRecordedChecks(
   got: Pick<Collected, "verifications" | "final">,
   leftToCi: ReadonlyArray<LeftToCiState> = [],
-): string {
+) {
   const latest = new Map<string, Verification>();
   const baseline = new Map<string, Verification>();
   for (const v of Arr.filter(got.verifications, (one) => !ranOneTest(one)))

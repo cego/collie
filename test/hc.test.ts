@@ -6,7 +6,7 @@ import { runEffect } from "./support/effect";
 import { jsonText } from "./support/hc-schema";
 import { Rig } from "./support/recorder";
 
-const terminal = (address: string, fields: Partial<HcTerminal> = {}): HcTerminal => ({
+const terminal = (address: string, fields: Partial<HcTerminal> = {}) => ({
   address,
   labels: {},
   argv: ["sh"],
@@ -18,7 +18,12 @@ const terminal = (address: string, fields: Partial<HcTerminal> = {}): HcTerminal
   ...fields,
 });
 
-const event = (seq: number, type: string, at: string, data: Schema.Json): HcNote => ({
+const event: (seq: number, type: string, at: string, data: Schema.Json) => HcNote = (
+  seq,
+  type,
+  at,
+  data,
+) => ({
   method: "event",
   params: { seq, type, terminal: at, data },
 });

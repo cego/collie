@@ -18,7 +18,7 @@ import {
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as PlatformError from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/process";
-import type { RunRevision, TaskView } from "./board-model";
+import type { TaskView } from "./board-model";
 import { readBranchHead } from "./board";
 import { shell } from "./mr";
 import type { RunFacts } from "./runs";
@@ -65,7 +65,7 @@ const kept = <A>(
     | { readonly value: A }
     | { readonly failed: Parameters<typeof PlatformError.systemError>[0] };
   const reads = new Map<string, Read>();
-  return (key: string): Effect.Effect<A, PlatformError.PlatformError> =>
+  return (key: string) =>
     Effect.suspend(() => {
       const hit = reads.get(key);
       if (hit !== undefined)
@@ -231,7 +231,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     direct: Effect.Effect<A, E>,
     cached: (group: ReturnType<typeof readsOf>) => Effect.Effect<A, E>,
   ) => {
-    const attempt = (): Effect.Effect<A, E> => {
+    const attempt: () => Effect.Effect<A, E> = () => {
       const group = groupOf(path);
       if (!enabled || group === null) return direct;
       const before = generation;
@@ -365,14 +365,14 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     });
 
   /** The Runs that share a plan with this one: the one that wrote it, and those built from it. */
-  const planned = (run: string): ReadonlyArray<string> => {
+  const planned = (run: string) => {
     const plan = keys.get(run)?.byPlan ?? `${dir}/runs/${run}/plan`;
     const owner = /^runs\/([^/]+)\/plan$/.exec(Str.slice(dir.length + 1)(plan))?.[1];
     return [...(indexes.byPlan.get(plan) ?? []), ...(owner === undefined ? [] : [owner])];
   };
 
   // Unwatched, nothing says what moved: every read is a revision no reader has seen.
-  const revision = (run: string): RunRevision => ({
+  const revision = (run: string) => ({
     epoch,
     seq: enabled ? (revisions.get(run) ?? 0) : next(),
   });
@@ -394,12 +394,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
    * A Run's record at the highest revision of the Runs it reads. A record that moved while
    * none of them did, as one an agent or a merge request moves does, moves its own Run.
    */
-  const stampRecord = (
-    key: string,
-    run: string,
-    runs: ReadonlyArray<string>,
-    text: string,
-  ): RunRevision => {
+  const stampRecord = (key: string, run: string, runs: ReadonlyArray<string>, text: string) => {
     const was = records.get(key);
     if (was !== undefined && was.text !== text && highest([run, ...runs]) === was.seq) touch(run);
     const seq = highest([run, ...runs]);
@@ -408,7 +403,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   };
 
   /** Each card with the highest revision of its Runs; a card that moved while none of them did moves its leading Run. */
-  const stamp = (views: ReadonlyArray<TaskView>): ReadonlyArray<TaskView> =>
+  const stamp = (views: ReadonlyArray<TaskView>) =>
     Arr.map(views, (view) => {
       const was = cards.get(view.id);
       if (was?.from === view && highest(view.runs) === was.seq) return was.to;
@@ -542,7 +537,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     checkout,
     /** Each time a watched checkout moved. */
     moved: Stream.fromPubSub(moves),
-    indexes: (): Indexes => indexes,
+    indexes: () => indexes,
   };
 });
 

@@ -102,7 +102,7 @@ const humanMessage = (content: Parameters<typeof textOf>[0]) => {
 };
 
 /** The human's messages and the answers, each answer one message however many model turns it took. */
-export const transcriptOf = (entries: ReadonlyArray<unknown>): ReadonlyArray<ChatMessage> => {
+export const transcriptOf = (entries: ReadonlyArray<unknown>) => {
   const messages: Array<{
     id: string;
     role: ChatMessage["role"];
@@ -139,23 +139,25 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>): ReadonlyArray<Cha
         );
       continue;
     }
-    const parts = Arr.flatMap(entry.message.content, (block): Part[] =>
-      "text" in block
-        ? [{ type: "text", content: block.text }]
-        : "thinking" in block
-          ? [{ type: "thinking", content: block.thinking }]
-          : "input" in block
-            ? [
-                {
-                  type: "tool-call",
-                  id: block.id,
-                  name: block.name,
-                  arguments: JSON.stringify(block.input ?? {}),
-                  state: "complete",
-                },
-              ]
-            : [],
-    );
+    const parts = Arr.flatMap(entry.message.content, (block) => {
+      const returned: Part[] =
+        "text" in block
+          ? [{ type: "text", content: block.text }]
+          : "thinking" in block
+            ? [{ type: "thinking", content: block.thinking }]
+            : "input" in block
+              ? [
+                  {
+                    type: "tool-call",
+                    id: block.id,
+                    name: block.name,
+                    arguments: JSON.stringify(block.input ?? {}),
+                    state: "complete",
+                  },
+                ]
+              : [];
+      return returned;
+    });
     const last = messages.at(-1);
     if (last?.role === "assistant") last.parts.push(...parts);
     else messages.push({ id: entry.uuid, role: "assistant", parts });

@@ -72,10 +72,10 @@ const build = {
   route: "ssh" as const,
 };
 
-const snapshot = (
+const snapshot: (
   machine: typeof local | typeof build,
   tasks: ReadonlyArray<ReturnType<typeof task>>,
-): FlockItem => ({
+) => FlockItem = (machine, tasks) => ({
   machine,
   message: {
     _tag: "Snapshot",

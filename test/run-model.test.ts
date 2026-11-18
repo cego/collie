@@ -19,7 +19,7 @@ import { madeRun, recordsAt, runFacts } from "./support/records";
 const RUNS = 500;
 
 /** A card as the board draws one, for what the model stamps on it. */
-const card = (over: Partial<TaskView> = {}): TaskView => ({
+const card: (over?: Partial<TaskView>) => TaskView = (over = {}) => ({
   id: "t1",
   name: "Work",
   project: "project",

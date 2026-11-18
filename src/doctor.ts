@@ -56,7 +56,6 @@ import {
   runnable,
   warned,
   type Check,
-  type Outcome,
 } from "./doctor-check";
 import { gitlabChecks } from "./forge/gitlab-checks";
 import { connect, coreSocket } from "./hc";
@@ -68,7 +67,7 @@ export type { Check } from "./doctor-check";
 export { onPath } from "./doctor-check";
 
 /** An optional integration, as doctor reports it: absent is a note, broken is a warning. */
-const optional = (probe: ConnectionReading): Outcome =>
+const optional = (probe: ConnectionReading) =>
   probe.state === "ok"
     ? passed(probe.detail)
     : probe.state === "absent"
@@ -205,8 +204,7 @@ interface Known {
   behind: number | null;
 }
 const known = new Map<string, Known>();
-const knownOf = (root: string): Known =>
-  known.get(root) ?? { fetchedAt: 0, countedAt: 0, behind: null };
+const knownOf = (root: string) => known.get(root) ?? { fetchedAt: 0, countedAt: 0, behind: null };
 
 export const behindRemote = Effect.fn("Doctor.behindRemote")(function* (
   root: string,
@@ -586,7 +584,7 @@ export const memoryOutcome = (
   memory: Memory,
   short: boolean,
   closing: ReadonlyArray<string> | null,
-): Outcome => {
+) => {
   if (!memory.known) return warned(`memory could not be read from ${memory.from}`, "");
   if (!short) return passed(memorySaid(memory));
   const closes =
@@ -682,7 +680,7 @@ export const doctorOn = Effect.fn("Doctor.doctorOn")(function* (
 });
 
 /** One line per check, and under it the command to run where there is one. */
-function render(checks: Check[]): string {
+function render(checks: Check[]) {
   return Arr.join(
     Arr.flatMap(checks, (check) => [
       `  ${check.ok ? (check.warn ? "!" : "✓") : "✗"} ${pipe(check.name, Str.padEnd(16))}${check.detail}`,

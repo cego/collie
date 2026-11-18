@@ -37,7 +37,7 @@ test("a record's later frames reach the view without a Flow it already has", () 
     Effect.gen(function* () {
       // SAFETY: the test reads only a frame's title and Flow.
       const bare = (title: string) => ({ title }) as RunDetail;
-      const sent = (title: string, said: string): RunDetail => ({
+      const sent = (title: string, said: string) => ({
         ...bare(title),
         flow: mainFlow([flowNode("child", { said })]),
       });

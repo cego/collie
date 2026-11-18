@@ -432,7 +432,7 @@ export interface MachineToAdd {
 }
 
 /** What Add Machine sends, trimmed, once every field is filled. */
-export const machineToAdd = (typed: MachineToAdd): MachineToAdd | null => {
+export const machineToAdd = (typed: MachineToAdd) => {
   const [target, label] = Arr.map([typed.target, typed.label], (one) => Str.trim(one));
   return target && label ? { target, label } : null;
 };
@@ -907,7 +907,7 @@ export const EMPTY_FLOCK: Flock = {
  * reopened route dims the Machine it was showing; a merged one is no longer lost; a saved board
  * stands in until its Machine is live; anything newer is skipped.
  */
-const removed = (flock: Flock, profile: string): Flock => {
+const removed = (flock: Flock, profile: string) => {
   const without = <V>(map: ReadonlyMap<string, V>) => {
     const kept = new Map(map);
     kept.delete(profile);
@@ -930,7 +930,7 @@ const removed = (flock: Flock, profile: string): Flock => {
   };
 };
 
-export const applyItem = (flock: Flock, item: FlockItem): Flock => {
+export const applyItem = (flock: Flock, item: FlockItem) => {
   if ("_tag" in item && item._tag === "Notice")
     return { ...flock, notices: [...flock.notices, item.text] };
   if ("_tag" in item && item._tag === "Routed")
@@ -1115,7 +1115,7 @@ const samePlace = (one: PlacedTask, other: Omit<PlacedTask, "task">) =>
  * is more than one, and its Herd only when its Machine runs several. A Task placed as it was
  * in `before` is the same object, so what draws it is not drawn again.
  */
-export const flockCards = (flock: Flock, before?: FlockCards): FlockCards => {
+export const flockCards = (flock: Flock, before?: FlockCards) => {
   const names = shownNames(flock);
   const placed = new Map<TaskView, PlacedTask>();
   const byKey = new Map<string, PlacedTask>();
@@ -1194,7 +1194,7 @@ export type ChatBoard =
  */
 export const chatBoards = (flock: Flock, since: ReadonlyMap<string, number>) => {
   const names = shownNames(flock);
-  const waiting = (profile: string): ChatBoard => {
+  const waiting: (profile: string) => ChatBoard = (profile) => {
     const lost = flock.lost.get(profile);
     return lost === undefined
       ? { _tag: "Connecting", since: since.get(profile) ?? null }
@@ -1302,7 +1302,7 @@ const WAITS_SAID =
  * server added but not logged in); or that onboarding where it is newer or doctor has not
  * answered.
  */
-const standing = (onboarding?: OnboardRun, doctor?: OnboardRun): OnboardRun | null => {
+const standing = (onboarding?: OnboardRun, doctor?: OnboardRun) => {
   if (doctor === undefined || (onboarding !== undefined && onboarding.at > doctor.at))
     return onboarding ?? null;
   const skipped = new Set(
@@ -1342,7 +1342,7 @@ export const notLiveOf = (flock: Flock, installation: string) => {
 };
 
 /** Every route, in the order Desktop opened them. */
-export const machineRows = (flock: Flock): ReadonlyArray<MachineRow> =>
+export const machineRows: (flock: Flock) => ReadonlyArray<MachineRow> = (flock) =>
   Arr.map([...flock.routes.values()], ({ profile, name, target }) => {
     const seen = Arr.filter(
       [...flock.machines.values()],

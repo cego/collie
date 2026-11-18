@@ -50,7 +50,7 @@ export const passedOver = (facts: {
   /** It has a Hold, a Stop or an open Decision. */
   readonly waitsOnYou: boolean;
   readonly recoveries: ReadonlyArray<Metric>;
-}): string | null => {
+}) => {
   const entry = PARK_CAUSES[facts.cause];
   if (entry.kind !== "asks-agent" && entry.neverHeals === true)
     return entry.kind === "needs-you"

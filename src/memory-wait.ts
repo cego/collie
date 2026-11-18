@@ -5,8 +5,7 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import { Clock, Config, Duration, Effect, FileSystem, Option, Path, Random, Schema } from "effect";
-import type { ChildProcessSpawner } from "effect/process";
+import { Clock, Config, Duration, Effect, FileSystem, Option, Random, Schema } from "effect";
 import type { PluginEnv } from "./env";
 import { launchDir } from "./launches";
 import { machineMemory, PRESSURE_SHORT, type Memory } from "./memory";
@@ -82,11 +81,7 @@ export const waitForMemory = (opts: {
   readonly stopped?: Effect.Effect<boolean, never, FileSystem.FileSystem>;
   /** Told the sentence once, as the wait begins. */
   readonly say?: (sentence: string) => Effect.Effect<void>;
-}): Effect.Effect<
-  "free" | "waited" | "stopped",
-  never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | RunRecords
-> =>
+}) =>
   Effect.gen(function* () {
     const read = machineMemory(opts.env).pipe(
       Effect.orElseSucceed(() => ({ memory: null, short: false })),

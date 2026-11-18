@@ -66,10 +66,10 @@ export interface ClaudeCode<Server> {
 const TurnResult = Schema.Struct({ type: Schema.Literal("result"), ...TurnCost.fields });
 const decodeTurnResult = Schema.decodeUnknownOption(TurnResult);
 
-export const claudeDriver = <Server>(
+export const claudeDriver: <Server>(
   claude: ClaudeCode<Server>,
   opts: DriverContext,
-): ChatDriver => {
+) => ChatDriver = <Server>(claude: ClaudeCode<Server>, opts: DriverContext) => {
   const server = claude.server(opts.flock, opts.run);
   return {
     // The SDK carries a Claude Code of its own where none is on PATH.

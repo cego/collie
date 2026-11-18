@@ -52,7 +52,7 @@ const machine = (
   asked: Asked[],
   protocol = PROTOCOL,
   files = true,
-): Reached => {
+) => {
   const note = <P>(op: string, payload: P) => asked.push({ machine: name, op, payload });
   const door: ChatDoor & { readonly board: () => Stream.Stream<never> } = {
     // The chat reads the board Desktop follows, never one of its own.
@@ -305,15 +305,16 @@ const machine = (
         return [];
       }),
   };
-  return {
+  const returned: Reached = {
     name,
     door,
     board: { _tag: "Live", herds: [{ id: "h1" }], tasks, protocol, files },
   };
+  return returned;
 };
 
 /** A Machine the window shows with no live board, and no channel to reach it by. */
-const unread = (name: string, board: ChatBoard): ChatMachine => ({ name, board });
+const unread = (name: string, board: ChatBoard) => ({ name, board });
 
 /** What a fake Machine's files hold: a media type and the bytes. */
 /** A PNG's header, as a string of bytes, for an image of that size. */
@@ -370,7 +371,7 @@ const flockOf = (asked: Asked[]) => ({
     model: chat.chatModel,
     effort: chat.chatEffort,
   }),
-  chatChoices: Effect.sync((): ChatChoices => ({
+  chatChoices: Effect.sync(() => ({
     heldOn: "claude",
     runsOn: { harness: "claude", model: "opus", effort: "medium" },
     turning: false,
@@ -2024,7 +2025,7 @@ const holding = (
   asked: Asked[],
   runs: ReadonlyArray<string>,
   answer?: ChatDoor["progress"],
-): Reached => {
+) => {
   const reached = machine(name, [], asked);
   const progress: ChatDoor["progress"] =
     answer ??

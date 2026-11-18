@@ -37,7 +37,7 @@ const KEYS = [
   },
 ] as const;
 
-const refusalOf = (variable: string, privateKey: string, publicKey: string): string | null => {
+const refusalOf = (variable: string, privateKey: string, publicKey: string) => {
   if (privateKey === "") return `${variable} is not set; a release is never published unsigned`;
   try {
     return Str.trim(publicKeyOf(privateKey)) === Str.trim(publicKey)

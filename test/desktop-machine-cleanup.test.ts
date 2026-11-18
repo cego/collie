@@ -24,7 +24,7 @@ import { type CleanupReport, FrontDoorRpcs, HostRefused } from "../src/board-mod
 
 type Rpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 
-const report = (bytes: number): CleanupReport => ({
+const report = (bytes: number) => ({
   remove: [{ kind: "worktree", target: "/w/run-1", bytes, reason: "its Run ended" }],
   keep: [],
   bytes,
@@ -65,7 +65,7 @@ const fakeHost = (answer: Effect.Effect<CleanupReport, HostRefused> | "older") =
   });
 
 const vm = { profile: "p-vm", name: "vm" };
-const reachedOver = (desktop: Partial<Door>): Reached => ({
+const reachedOver = (desktop: Partial<Door>) => ({
   machine: vm,
   // SAFETY: each test calls only what its door answers.
   desktop: desktop as Door,
@@ -215,14 +215,25 @@ describe("the main process reads one Machine's cleanup listing over its door", (
 });
 
 type Shown = Parameters<typeof cleanupView>[0][number];
-const live = (name: string): Shown => ({ profile: `p-${name}`, name, state: "live", reason: null });
+const live: (name: string) => Shown = (name) => ({
+  profile: `p-${name}`,
+  name,
+  state: "live",
+  reason: null,
+});
 type Read = readonly [string, CleanupRead];
-const listed = (name: string, report: CleanupReport): Read => [
+const listed: (name: string, report: CleanupReport) => Read = (name, report) => [
   `p-${name}`,
   { state: "listed", installation: `i-${name}`, report },
 ];
-const failed = (name: string, problem: string): Read => [`p-${name}`, { state: "failed", problem }];
-const reading = (name: string, since: number): Read => [`p-${name}`, { state: "reading", since }];
+const failed: (name: string, problem: string) => Read = (name, problem) => [
+  `p-${name}`,
+  { state: "failed", problem },
+];
+const reading: (name: string, since: number) => Read = (name, since) => [
+  `p-${name}`,
+  { state: "reading", since },
+];
 const reads = (...each: ReadonlyArray<Read>) => new Map(each);
 const item = (kind: string, target: string, bytes: number) => ({
   kind,

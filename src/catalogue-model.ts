@@ -30,11 +30,11 @@ export const HarnessCatalogue = Schema.Struct({
 });
 export type HarnessCatalogue = typeof HarnessCatalogue.Type;
 
-const entry = (
+const entry: (
   model: string,
   label: string,
-  rest: Partial<Omit<CatalogueEntry, "model" | "label">> = {},
-): CatalogueEntry => ({
+  rest?: Partial<Omit<CatalogueEntry, "model" | "label">>,
+) => CatalogueEntry = (model, label, rest = {}) => ({
   model,
   label,
   description: null,
@@ -58,7 +58,7 @@ export const ClaudeModels = Schema.Array(
 export type ClaudeModels = typeof ClaudeModels.Type;
 
 /** Claude Code's models, but its `default`, which is Collie's own `default`. */
-export const claudeEntries = (models: ClaudeModels): ReadonlyArray<CatalogueEntry> =>
+export const claudeEntries = (models: ClaudeModels) =>
   Arr.map(
     Arr.filter(models, ({ value }) => value !== DEFAULT_MODEL),
     (model) =>
@@ -84,7 +84,7 @@ export const CodexModelList = Schema.Struct({
 });
 export type CodexModelList = typeof CodexModelList.Type;
 
-export const codexEntries = ({ data }: CodexModelList): ReadonlyArray<CatalogueEntry> =>
+export const codexEntries = ({ data }: CodexModelList) =>
   Arr.map(data, (model) =>
     entry(model.id, model.displayName, {
       description: model.description ?? null,
@@ -96,7 +96,7 @@ export const codexEntries = ({ data }: CodexModelList): ReadonlyArray<CatalogueE
   );
 
 /** `pi --list-models`: a table whose thinking column says only yes or no. */
-export const piEntries = (text: string): ReadonlyArray<CatalogueEntry> | null => {
+export const piEntries = (text: string) => {
   const [header, ...rows] = Arr.map(Str.split(text, "\n"), (line) =>
     Str.split(Str.trim(line), /\s+/),
   );
@@ -113,7 +113,7 @@ export const piEntries = (text: string): ReadonlyArray<CatalogueEntry> | null =>
 };
 
 /** `opencode models`: one `provider/model` a line, and nothing about effort. */
-export const opencodeEntries = (text: string): ReadonlyArray<CatalogueEntry> | null => {
+export const opencodeEntries = (text: string) => {
   const lines = Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "");
   const ids = Arr.filter(lines, (line) => /^[^\s/]+\/\S+$/.test(line));
   if (ids.length === 0 || ids.length < lines.length) return null;
@@ -123,7 +123,7 @@ export const opencodeEntries = (text: string): ReadonlyArray<CatalogueEntry> | n
 };
 
 /** Collie's own table for a harness, where the harness itself could not be read. */
-export const tableEntries = (harness: string): ReadonlyArray<CatalogueEntry> => {
+export const tableEntries = (harness: string) => {
   const table = HARNESS_MODELS[harness];
   return Arr.map(table?.models ?? [], (model) =>
     entry(model, model, { efforts: table?.efforts ?? [], from: "table" }),
@@ -131,10 +131,7 @@ export const tableEntries = (harness: string): ReadonlyArray<CatalogueEntry> => 
 };
 
 /** Explicit additions expose hidden models and append models the harness did not list. */
-export const withAdded = (
-  catalogue: HarnessCatalogue,
-  added: ReadonlyArray<string>,
-): HarnessCatalogue => {
+export const withAdded = (catalogue: HarnessCatalogue, added: ReadonlyArray<string>) => {
   const listed = new Set(Arr.map(catalogue.entries, (one) => one.model));
   const fresh = Arr.filter(added, (model) => !listed.has(model));
   const efforts = HARNESS_MODELS[catalogue.harness]?.efforts ?? [];
@@ -154,7 +151,7 @@ export const withAdded = (
 const PAD = 10;
 
 /** One line per entry, after its harness's line where that is on Collie's table; `only` keeps one. */
-export function modelsLines(catalogues: ReadonlyArray<HarnessCatalogue>, only?: string): string {
+export function modelsLines(catalogues: ReadonlyArray<HarnessCatalogue>, only?: string) {
   const kept = Arr.filter(catalogues, (one) => only === undefined || one.harness === only);
   if (kept.length === 0) return `${only ?? "No harness"} is not installed on this Machine.`;
   return Arr.join(

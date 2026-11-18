@@ -147,7 +147,7 @@ export interface HcSnapshot {
   readonly terminals: ReadonlyMap<string, HcTerminal>;
 }
 
-export const snapshotOf = (reply: HcReply<"events.subscribe">): HcSnapshot => ({
+export const snapshotOf: (reply: HcReply<"events.subscribe">) => HcSnapshot = (reply) => ({
   seq: reply.seq,
   terminals: new Map(Arr.map(reply.terminals, (terminal) => [terminal.address, terminal])),
 });
@@ -159,7 +159,7 @@ const decodeOr = <S extends Schema.Decoder<unknown>>(schema: S, data: Schema.Jso
   Option.getOrUndefined(Schema.decodeOption(schema)(data));
 
 /** The snapshot after `note`, as API.md §Events says to apply it. */
-export function applyNote(snapshot: HcSnapshot, note: HcNote): HcSnapshot {
+export function applyNote(snapshot: HcSnapshot, note: HcNote) {
   if (note.method === "missed") return snapshotOf(note.params);
   if (note.method === "heartbeat" || note.params.seq <= snapshot.seq) return snapshot;
   const { seq, type, terminal: at = "", data } = note.params;
@@ -389,5 +389,6 @@ export const connectOver = Effect.fn("Hc.connectOver")(function* (
   const send = (id: number, kind: number, payload: Uint8Array = new Uint8Array(0)) =>
     write(frame(id, kind, payload));
 
-  return { call, notes, channel, send } satisfies HcConnection;
+  const returned: HcConnection = { call, notes, channel, send };
+  return returned;
 });

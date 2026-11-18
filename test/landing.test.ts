@@ -34,7 +34,10 @@ const URL_OF = {
   github: `https://${PROJECT.github}/pull/30`,
 } as const;
 
-const model = (forge: "gitlab" | "github", over: Partial<FakeMr> = {}): ForgeModel => ({
+const model: (forge: "gitlab" | "github", over?: Partial<FakeMr>) => ForgeModel = (
+  forge,
+  over = {},
+) => ({
   installed: true,
   loggedIn: [FORGE_HOST[forge]],
   login: "me",
@@ -76,7 +79,10 @@ const landing = Effect.fn("landing.landing")(function* (
   return { runDir, fake, seen, merge };
 });
 
-const attempt = (forge: "gitlab" | "github", over: Partial<Landing> = {}): Landing => ({
+const attempt: (forge: "gitlab" | "github", over?: Partial<Landing>) => Landing = (
+  forge,
+  over = {},
+) => ({
   state: "attempt",
   mr: URL_OF[forge],
   head: HEAD,

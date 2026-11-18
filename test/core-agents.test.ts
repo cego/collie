@@ -141,7 +141,7 @@ const quietConfig = Effect.gen(function* () {
   );
 });
 
-const hostOf = (env: Record<string, string>): AgentHost => ({
+const hostOf: (env: Record<string, string>) => AgentHost = (env) => ({
   dir,
   env: rig.pluginEnv(env),
   herdr: new Herdr(rig.pluginEnv(env)),
@@ -301,10 +301,12 @@ test("an OpenCode agent on core is launched with its reporter and its first prom
       expect(content.plugin).toHaveLength(2);
       expect(content.plugin[0]).toBe("their-plugin");
       yield* fs.remove(sessionFile);
-      const reporter = yield* Effect.promise(
-        (): Promise<OpenCodePlugin> =>
-          import(pipe(content.plugin[1] ?? "", Str.replace("file://", ""))),
-      );
+      const reporter = yield* Effect.promise(() => {
+        const returned: Promise<OpenCodePlugin> = import(
+          pipe(content.plugin[1] ?? "", Str.replace("file://", ""))
+        );
+        return returned;
+      });
       const hooks = yield* Effect.promise(() => reporter.CollieStatus());
       yield* Effect.promise(() =>
         hooks.event({

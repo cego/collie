@@ -58,7 +58,7 @@ const Report = Schema.Struct({
 
 /** The host's own options for a child, with the ones nobody settled left out: absent
  *  rather than empty, exactly as a front door passes them. */
-const launch = (options: Record<string, string>): Record<string, string> =>
+const launch = (options: Record<string, string>) =>
   Rec.fromEntries(Arr.filter(Rec.toEntries(options), ([, value]) => value !== ""));
 
 const IMPLEMENT = "Implement now";

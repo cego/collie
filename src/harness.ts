@@ -50,7 +50,7 @@ export function isPermissionMode(value: string | undefined): value is Permission
  * fallback is `auto`, so a dropped `permissions: false` would start an agent that
  * approves its own calls; kept as text, validation names it instead.
  */
-export function permissionsAsWritten(value: YamlValue | undefined): string | undefined {
+export function permissionsAsWritten(value: YamlValue | undefined) {
   if (value === undefined) return undefined;
   return isString(value) ? value : JSON.stringify(value);
 }
@@ -73,7 +73,7 @@ export const claudeForbidsBypass = Effect.fn("Harness.claudeForbidsBypass")(func
   const fs = yield* FileSystem.FileSystem;
   const dropIns = yield* fs
     .readDirectory(`${dir}/managed-settings.d`)
-    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    .pipe(Effect.orElseSucceed(() => []));
   const files = [
     `${dir}/managed-settings.json`,
     ...Arr.map(
@@ -333,7 +333,7 @@ export function startArgs(
   effort?: string,
   permissions: PermissionMode = "auto",
   autoCompactWindow?: AutoCompactWindow,
-): string[] {
+) {
   const selectedModel = model === DEFAULT_MODEL ? harness.defaultModel : model;
   return [
     ...(selectedModel ? harness.modelArgs(selectedModel) : []),
@@ -380,7 +380,7 @@ export const autoCompactWindowFor = Effect.fn("Harness.autoCompactWindowFor")(fu
 });
 
 /** Persona text to prepend to the first prompt when the harness has no flag for it. */
-export function personaPrefix(harness: HarnessAdapter, persona: string): string {
+export function personaPrefix(harness: HarnessAdapter, persona: string) {
   return harness.personaArgs ? "" : persona;
 }
 
@@ -397,7 +397,7 @@ export interface SessionArgs {
 }
 
 /** How each harness is started in `session`. */
-export const sessionArgs = (harness: string, session: StartSession): SessionArgs => {
+export const sessionArgs = (harness: string, session: StartSession) => {
   const { id } = session;
   if (!session.resumed) return { lead: [], tail: ["--session-id", id] };
   switch (harness) {

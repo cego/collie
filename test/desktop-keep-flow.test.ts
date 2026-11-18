@@ -3,7 +3,7 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import type { Flow, FlowNode } from "../src/board-model";
+import type { FlowNode } from "../src/board-model";
 import { keepFlow } from "../desktop/src/shared/flow";
 import { flowNode, mainFlow } from "./support/flow";
 
@@ -13,7 +13,7 @@ const child = (said: string) =>
     said,
     notes: [{ id: "n", by: "mk", at: "2026-11-04T10:00:00Z", text: "t", read: null }],
   });
-const sent = (said: string, extra: ReadonlyArray<FlowNode> = []): Flow =>
+const sent = (said: string, extra: ReadonlyArray<FlowNode> = []) =>
   mainFlow([child(said), ...extra]);
 /** The lane `mainFlow` puts extra Steps in. */
 const BUILD = 1;

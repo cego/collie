@@ -12,7 +12,7 @@ import { current, resetPhrase, type UsageReading } from "../usage-model";
 import { answering, cliDoor } from "./shared";
 
 /** One line per window, then the reading's age and source, or its problem. */
-export function usageLines(readings: ReadonlyArray<UsageReading>, now: number): string {
+export function usageLines(readings: ReadonlyArray<UsageReading>, now: number) {
   return Arr.join(
     Arr.flatMap(readings, (reading) => {
       const who = Arr.join(

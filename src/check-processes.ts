@@ -323,7 +323,7 @@ const exitIn = (fs: FileSystem.FileSystem, stateDir: string, id: string) =>
     .readFileString(outputsOf(stateDir, id).exit)
     .pipe(Effect.map((text) => Number(Str.trim(text))));
 
-const checkOfRecord = (record: CheckRecord): CheckOf => ({
+const checkOfRecord: (record: CheckRecord) => CheckOf = (record) => ({
   run: record.run,
   name: record.name,
   ...(record.pass !== undefined && {
@@ -352,7 +352,7 @@ interface Kept {
   stdout: Uint8Array;
   stderr: Uint8Array;
 }
-const nothingKept = (): Kept => ({ stdout: new Uint8Array(), stderr: new Uint8Array() });
+const nothingKept = () => ({ stdout: new Uint8Array(), stderr: new Uint8Array() });
 const textOf = (kept: Kept) => ({
   stdout: new TextDecoder().decode(kept.stdout),
   stderr: new TextDecoder().decode(kept.stderr),
@@ -380,7 +380,7 @@ const runningOf = (
   kept: Kept,
   store: (name: keyof Kept, bytes: Uint8Array) => Effect.Effect<void>,
   collected: RunningCheck["collected"],
-): RunningCheck => ({
+) => ({
   id,
   pid: Effect.succeed(handle.pid),
   stdout: keptOf(handle.stdout, kept, "stdout", store),
@@ -664,7 +664,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     ).pipe(Effect.provideContext(services));
 
   /** A taken-over check's exit status, once its supervisor has written it. */
-  const exitOf = (record: CheckRecord): Effect.Effect<number, PlatformError> =>
+  const exitOf = (record: CheckRecord) =>
     Effect.gen(function* () {
       for (;;) {
         const running = yield* stillRunning(record.leader);
@@ -885,17 +885,15 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       );
     }).pipe(Effect.provideContext(services));
 
-  const collectedOf =
-    (entry: Collecting): RunningCheck["collected"] =>
-    (collecting) =>
-      collecting.pipe(
-        Effect.exit,
-        Effect.flatMap((exit) => {
-          if (entry.ended || entry.handed) return Effect.never;
-          entry.settled = true;
-          return exit;
-        }),
-      );
+  const collectedOf: (entry: Collecting) => RunningCheck["collected"] = (entry) => (collecting) =>
+    collecting.pipe(
+      Effect.exit,
+      Effect.flatMap((exit) => {
+        if (entry.ended || entry.handed) return Effect.never;
+        entry.settled = true;
+        return exit;
+      }),
+    );
 
   const run: CheckProcessesApi["run"] = (check, command, say = () => Effect.void) =>
     Effect.gen(function* () {
@@ -1093,7 +1091,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     yield* takeOver(options.handedOver).pipe(Effect.provideContext(services));
   if (options.sweep)
     yield* Effect.forEach(yield* left, endLeftover, { concurrency: "unbounded", discard: true });
-  return {
+  const returned: CheckProcessesApi = {
     run,
     finished,
     adopt,
@@ -1106,7 +1104,8 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     left,
     stillRuns,
     endLeftover,
-  } satisfies CheckProcessesApi;
+  };
+  return returned;
 });
 
 /** How long past its grace a stop waits for its SIGKILL and the last look after it: under the host's stop slack. */

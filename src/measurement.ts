@@ -19,12 +19,10 @@ import {
   Schema,
   Stream,
 } from "effect";
-import type { ChildProcessSpawner } from "effect/process";
 import { AwaitingJson } from "./awaiting";
 import { CheckProcesses, type CheckOf } from "./check-processes";
 import type { PluginEnv } from "./env";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
-import type { RunRecords } from "./run-records";
 import type { Control } from "./controls";
 import { ensureLockDir, withLock } from "./lock";
 import { judge, MeasurementRefused } from "./measurement-verdict";
@@ -101,12 +99,6 @@ export interface MeasureAsk {
   /** Why the plan changed: needed where the Run was measured under another. */
   readonly reason?: string;
 }
-
-type Services =
-  | FileSystem.FileSystem
-  | Path.Path
-  | ChildProcessSpawner.ChildProcessSpawner
-  | RunRecords;
 
 const git = (args: ReadonlyArray<string>, cwd: string) => shell("git", [...args], cwd);
 
@@ -313,9 +305,9 @@ const runOnce = (
       { concurrency: "unbounded" },
     ).pipe(
       Effect.flatMap(([stdout, stderr, exit]) =>
-        Effect.map(Clock.currentTimeNanos, (now): Ended => {
+        Effect.map(Clock.currentTimeNanos, (now) => {
           const usage = spawned.resourceUsage();
-          return {
+          const returned: Ended = {
             _tag: "Exited",
             exit,
             stdout,
@@ -326,6 +318,7 @@ const runOnce = (
             // the host's size as a floor; a clean peak needs a small launcher between them.
             peak: Number(usage?.maxRSS ?? 0) / 1024,
           };
+          return returned;
         }),
       ),
       Effect.timeoutOption(Duration.millis(left)),
@@ -348,7 +341,7 @@ const reportedBy = (stdout: string) => {
 };
 
 /** A B B A …: base first, then each pair turned round, so drift falls on both sides alike. */
-export const sampleOrder = (samples: number): ReadonlyArray<"base" | "candidate"> =>
+export const sampleOrder = (samples: number) =>
   Array.from({ length: samples }, (_, at) =>
     at % 2 === 0 ? (["base", "candidate"] as const) : (["candidate", "base"] as const),
   ).flat();
@@ -399,13 +392,7 @@ export interface Measuring {
  * Machine runs no other: `ran` says which. `stopped` where the Run's Stop ended it first,
  * which records nothing.
  */
-export const measure = Effect.fn("Measurement.measure")(function* (
-  opts: Measuring,
-): Effect.fn.Return<
-  { readonly measurement: Measurement; readonly ran: boolean } | "stopped",
-  MeasureRefused,
-  Services
-> {
+export const measure = Effect.fn("Measurement.measure")(function* (opts: Measuring) {
   const { ask } = opts;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

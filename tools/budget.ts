@@ -36,7 +36,7 @@ export type Admission =
   | { readonly _tag: "admit"; readonly workers: number; readonly fewer: string | null }
   | { readonly _tag: "wait"; readonly behind: ReadonlyArray<Entry> };
 
-export const budgetOf = (cores: number, override?: string): Budget => {
+export const budgetOf = (cores: number, override?: string) => {
   const given = Number(override);
   const total =
     Number.isInteger(given) && given > 0 ? given : Math.max(2, Math.floor((2 * cores) / 3));
@@ -49,11 +49,11 @@ const pooled = (budget: Budget) => budget.total - budget.reserve < 2;
 export const shareOf = (budget: Budget, kind: Kind) =>
   pooled(budget) ? budget.total : kind === "whole" ? budget.total - budget.reserve : budget.reserve;
 
-export const admission = (
+export const admission: (
   budget: Budget,
   entries: ReadonlyArray<Entry>,
   request: Entry,
-): Admission => {
+) => Admission = (budget, entries, request) => {
   const share = shareOf(budget, request.kind);
   const classOf = Arr.filter(
     entries,
@@ -123,7 +123,7 @@ export const ownProcess = Effect.gen(function* () {
 });
 
 export const processOf = (pid: number) =>
-  Effect.map(processStartTime(pid), (start): Process => ({ pid, start }));
+  Effect.map(processStartTime(pid), (start) => ({ pid, start }));
 
 const alive = (one: Stored) =>
   Effect.map(Effect.forEach(one.processes, holderLives), (each) => each.includes(true));
@@ -139,7 +139,7 @@ const modify = <A>(dir: string, change: (state: State) => readonly [State, A]) =
       Effect.die(new Error(`${dir}/budget.lock could not be taken`)),
       Effect.gen(function* () {
         const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-        const read = Option.getOrElse(decodeState(raw), (): State => ({ next: 0, entries: [] }));
+        const read = Option.getOrElse(decodeState(raw), () => ({ next: 0, entries: [] }));
         const entries = yield* Effect.filter(read.entries, alive);
         const [next, result] = change({ ...read, entries });
         const tmp = `${file}.${process.pid}.tmp`;
@@ -179,7 +179,7 @@ type Looked =
 
 /** One look: admits the ticket when it may go, and otherwise says whom it waits behind. */
 export const look = (dir: string, budget: Budget, id: string) =>
-  modify(dir, (state): readonly [State, Looked] => {
+  modify(dir, (state) => {
     const mine = Option.getOrUndefined(Arr.findFirst(state.entries, (one) => one.id === id));
     if (mine === undefined) throw new Error(`ticket ${id} is not in the budget's store`);
     const decided = admission(budget, state.entries, mine);
@@ -187,12 +187,14 @@ export const look = (dir: string, budget: Budget, id: string) =>
       const behind = Arr.map(decided.behind, (one) =>
         Option.getOrUndefined(Arr.findFirst(state.entries, (it) => it.id === one.id))!,
       );
-      return [state, { _tag: "wait", behind }];
+      const returned: readonly [State, Looked] = [state, { _tag: "wait", behind }];
+      return returned;
     }
     const entries = Arr.map(state.entries, (one) =>
       one.id === id ? { ...one, state: "held" as const, workers: decided.workers } : one,
     );
-    return [{ ...state, entries }, decided];
+    const returned: readonly [State, Looked] = [{ ...state, entries }, decided];
+    return returned;
   });
 
 export const leave = (dir: string, id: string) =>

@@ -26,7 +26,7 @@ export const isFocusKey = (key: Key) =>
  * Ctrl+C does while there is one; is left to the browser, whose paste xterm.js sends
  * as one bracketed paste where the pane asked for that; or toggles Focus.
  */
-export const keyAction = (key: Key, hasSelection: boolean): "pane" | "copy" | "paste" | "focus" => {
+export const keyAction = (key: Key, hasSelection: boolean) => {
   if (isFocusKey(key)) return "focus";
   const letter = Str.toLowerCase(key.key);
   if (letter === "c" && (key.metaKey || (key.ctrlKey && (key.shiftKey || hasSelection))))

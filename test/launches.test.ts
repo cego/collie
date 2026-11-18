@@ -17,7 +17,7 @@ import { recordIn } from "../src/board-model";
 import { recordsAt } from "./support/records";
 import { recordsReadLayer } from "../src/records";
 
-const launched = (runId: string, over: Partial<Launched>): Launched => ({
+const launched: (runId: string, over: Partial<Launched>) => Launched = (runId, over) => ({
   agent: `${runId}-build-r1`,
   output: "/dev/null",
   reused: false,

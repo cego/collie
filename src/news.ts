@@ -86,7 +86,7 @@ export const newsTrail = Effect.fn("News.trail")(function* (stateDir: string, ke
 });
 
 export const read = (file: string) =>
-  readJournal(file, LineJson).pipe(Effect.orElseSucceed((): ReadonlyArray<Line> => []));
+  readJournal(file, LineJson).pipe(Effect.orElseSucceed(() => []));
 
 /** A batch as it is handed over: what is in it, and how much it left behind. */
 export interface Batch {
@@ -101,11 +101,7 @@ export interface Batch {
  * a conversation received it, and the one thing this must not do is call something
  * delivered because it was handed over.
  */
-export function pending(
-  lines: ReadonlyArray<Line>,
-  conversation = NATIVE,
-  bound = NEWS_BATCH,
-): Batch {
+export function pending(lines: ReadonlyArray<Line>, conversation = NATIVE, bound = NEWS_BATCH) {
   const all = Arr.map(
     Arr.filter(live(lines), (entry) => !entry.read.has(conversation)),
     (entry) => entry.item,
@@ -125,7 +121,7 @@ interface Entry {
  * Every item not superseded, newest last, with its receipts. A key written again after it
  * was superseded is a new item with none.
  */
-function live(lines: ReadonlyArray<Line>): ReadonlyArray<Entry> {
+function live(lines: ReadonlyArray<Line>) {
   const entries = new Map<string, Entry>();
   for (const line of lines) {
     if (line.kind === "item") {
@@ -148,7 +144,7 @@ function live(lines: ReadonlyArray<Line>): ReadonlyArray<Entry> {
  * Keys whose last item was superseded: a cause that holds again under one of these is
  * new news, whatever has been said before.
  */
-export function retired(lines: ReadonlyArray<Line>): ReadonlySet<string> {
+export function retired(lines: ReadonlyArray<Line>) {
   const alive = new Set(Arr.map(live(lines), (entry) => entry.item.key));
   return new Set(
     Arr.flatMap(lines, (line) =>
@@ -158,10 +154,7 @@ export function retired(lines: ReadonlyArray<Line>): ReadonlySet<string> {
 }
 
 /** Items a send could not be accounted for, which stay a human's to look at. */
-export function uncertain(
-  lines: ReadonlyArray<Line>,
-  conversation = NATIVE,
-): ReadonlyArray<string> {
+export function uncertain(lines: ReadonlyArray<Line>, conversation = NATIVE) {
   return Arr.flatMap(live(lines), (entry) =>
     entry.uncertain.has(conversation) && !entry.read.has(conversation) ? [entry.item.key] : [],
   );
@@ -244,7 +237,7 @@ const trim = Effect.fn("News.trim")(function* (file: string) {
  * the items themselves — there is no second model between the record and these words, so
  * what a human reads is what Collie actually knows.
  */
-export function asText(batch: Batch): string {
+export function asText(batch: Batch) {
   if (batch.items.length === 0) return "Nothing has happened that you have not seen.";
   return Arr.join(
     [

@@ -40,7 +40,11 @@ test("a tail beginning inside a Step shows what it holds and says where earlier 
   });
 });
 test("the Step's evidence excludes other Steps and narrows to a picked Slice", () => {
-  const check = (id: string, step?: string, item?: string): VerificationView => ({
+  const check: (id: string, step?: string, item?: string) => VerificationView = (
+    id,
+    step?,
+    item?,
+  ) => ({
     id,
     name: id,
     result: "pass",

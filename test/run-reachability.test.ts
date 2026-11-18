@@ -70,7 +70,11 @@ const Asked = RpcGroup.make(
   Rpc.make("tasks", { success: Schema.Array(TaskSchema) }),
 );
 
-const view = (runId: string, task: string, more: Partial<RunView> = {}): RunView => ({
+const view: (runId: string, task: string, more?: Partial<RunView>) => RunView = (
+  runId,
+  task,
+  more = {},
+) => ({
   ...more,
   runId,
   workflow: "builds",
@@ -257,7 +261,7 @@ const world = <A, E>(
     }).pipe(Effect.scoped),
   );
 
-const task = (one: string): TaskRecord => ({
+const task = (one: string) => ({
   id: `task-${one}`,
   workspace: `ws-${one}`,
   label: `task-${one}`,

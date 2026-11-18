@@ -11,7 +11,7 @@ import { installBaseline } from "../support/engine";
 import { installFakeSkills } from "../support/defs";
 import { FakeBin, gitWorktreeCases } from "../support/bin";
 import { runEffect } from "../support/effect";
-import { runCommand, type ControlSession } from "../../src/flows";
+import { runCommand } from "../../src/flows";
 import type { Jump } from "../../src/ui/state";
 import { Herdr } from "../../src/herdr";
 import { registerAgent, scopeFor } from "../../src/registry";
@@ -74,7 +74,7 @@ afterEach(() =>
   ),
 );
 
-function session(): ControlSession {
+function session() {
   const env = rig.pluginEnv();
   return {
     herdr: new Herdr(env),

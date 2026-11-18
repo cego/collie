@@ -58,11 +58,7 @@ const RETRY: Minutes = "5 minutes";
 /** Whether this Desktop updates itself: a release build does, and one from a checkout never. */
 const released = (port: UpdaterPort) => Effect.map(port.channel, (channel) => channel === "stable");
 
-const within = <A>(
-  effect: Effect.Effect<A, string>,
-  duration: Minutes,
-  what: string,
-): Effect.Effect<A, string> =>
+const within = <A>(effect: Effect.Effect<A, string>, duration: Minutes, what: string) =>
   Effect.timeoutOrElse(effect, {
     duration,
     orElse: () => Effect.fail(`${what} had no answer in ${duration}`),

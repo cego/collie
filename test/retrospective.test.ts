@@ -9,7 +9,7 @@ import {
   type AskingRun,
 } from "../workflows/retrospective";
 
-const asking = (over: Partial<AskingRun> & { runId: string }): AskingRun => ({
+const asking: (over: Partial<AskingRun> & { runId: string }) => AskingRun = (over) => ({
   workflow: "implement",
   status: "complete",
   mr: null,

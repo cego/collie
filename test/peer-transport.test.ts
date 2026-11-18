@@ -6,7 +6,7 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { createServer, type Server } from "node:net";
-import { Effect, FileSystem, Option, type Scope } from "effect";
+import { Effect, FileSystem, Option } from "effect";
 import { openPeer, type Way } from "../src/peer-transport";
 import { certificateFor, keyOf } from "../src/peers";
 import type { Peer } from "../src/peers-model";
@@ -70,27 +70,22 @@ const rig = Effect.gen(function* () {
   const far = yield* listener(peerDir);
   const handle = yield* sshConnection(state, vm, ssh);
   const connect = openConnection(state, vm, { ssh, said: () => Effect.void });
-  const peerAt = (port: number, certificate = far.certificate): Peer => ({
-    installation: "vm-install",
-    name: vm.label,
-    dials: "out",
-    url: `wss://127.0.0.1:${port}`,
-    certificate,
-    secret: SECRET,
-  });
+  const peerAt = (port: number, certificate = far.certificate) => {
+    const returned: Peer = {
+      installation: "vm-install",
+      name: vm.label,
+      dials: "out",
+      url: `wss://127.0.0.1:${port}`,
+      certificate,
+      secret: SECRET,
+    };
+    return returned;
+  };
   return { dir, fake, far, handle, connect, peerAt };
 });
 
 /** Opens `/control` on the peer and answers the way it went and the first thing it heard. */
-const reached = (
-  peer: Peer,
-  connection: Effect.Success<typeof rig>["handle"] | null,
-  way?: Way,
-): Effect.Effect<
-  { way: Way; direct: string | null; heard: string },
-  Effect.Error<ReturnType<typeof openPeer>>,
-  Scope.Scope
-> =>
+const reached = (peer: Peer, connection: Effect.Success<typeof rig>["handle"] | null, way?: Way) =>
   Effect.gen(function* () {
     const opened = yield* openPeer(peer, () => "/control", Effect.succeed(connection), way);
     const heard = yield* Effect.callback<string>((resume) =>

@@ -3,7 +3,7 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import type { Flow, FlowNode } from "../../src/board-model";
 
-export const flowNode = (id: string, over: Partial<FlowNode> = {}): FlowNode => ({
+export const flowNode: (id: string, over?: Partial<FlowNode>) => FlowNode = (id, over = {}) => ({
   id,
   title: Str.toUpperCase(id[0]!) + pipe(id, Str.slice(1)),
   kind: "agent",
@@ -25,7 +25,7 @@ export const flowNode = (id: string, over: Partial<FlowNode> = {}): FlowNode => 
   ...over,
 });
 
-export const mainFlow = (extra: ReadonlyArray<FlowNode> = []): Flow => ({
+export const mainFlow: (extra?: ReadonlyArray<FlowNode>) => Flow = (extra = []) => ({
   lanes: [
     {
       run: "plan-run",

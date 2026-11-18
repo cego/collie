@@ -77,7 +77,7 @@ export function offersFrom(
   declared: ReadonlyArray<Declared>,
   facts: ActionFacts,
   options: OfferOptions = {},
-): Offer[] {
+) {
   const offers: Offer[] = [];
   for (const one of declared) {
     const refused = options.refused?.get(one.id);
@@ -115,10 +115,7 @@ const asJsonRecord = Schema.decodeUnknownOption(Schema.Record(Schema.String, Sch
 const isNames = Schema.is(Schema.Array(Schema.String));
 
 /** Drawn arguments without `names`, which are not the caller's to give; null once none are left. */
-export function argumentsWithout(
-  drawn: Schema.Json | null,
-  names: ReadonlySet<string>,
-): Schema.Json | null {
+export function argumentsWithout(drawn: Schema.Json | null, names: ReadonlySet<string>) {
   const document = Option.getOrUndefined(asJsonRecord(drawn));
   const drawnProperties = Option.getOrUndefined(asJsonRecord(document?.properties));
   if (document === undefined || drawnProperties === undefined) return drawn;
@@ -135,7 +132,7 @@ export function argumentsWithout(
  * author's code: one that throws takes its own offer off the card rather than the whole
  * card off the board.
  */
-function refusal(offer: Declared, facts: ActionFacts): string | null {
+function refusal(offer: Declared, facts: ActionFacts) {
   try {
     return offer.eligible(facts) ? null : "its conditions are not met";
   } catch (cause) {
@@ -205,7 +202,7 @@ export type OfferFacts = ActionFacts;
  * Whether one fact is there. A caller that has no record of a fact at all answers no to
  * it: an offer is made on what is known, never on what is missing.
  */
-const met = (need: Need, facts: ActionFacts): boolean => {
+const met = (need: Need, facts: ActionFacts) => {
   switch (need) {
     case "findings":
       return facts.openFindings > 0;
@@ -223,8 +220,8 @@ const met = (need: Need, facts: ActionFacts): boolean => {
 };
 
 /** A definition's declared offers, as offers. The needs are the eligibility. */
-export function declaredIn(offers: ReadonlyArray<OfferDef>): Declared[] {
-  return Arr.map(offers, (one) => ({
+export function declaredIn(offers: ReadonlyArray<OfferDef>) {
+  const returned: Declared[] = Arr.map(offers, (one) => ({
     id: one.id,
     title: one.title,
     workflow: one.workflow,
@@ -233,6 +230,7 @@ export function declaredIn(offers: ReadonlyArray<OfferDef>): Declared[] {
     inputs: one.inputs,
     eligible: (facts) => Arr.every(one.needs, (need) => met(need, facts)),
   }));
+  return returned;
 }
 
 /** What an offer passes, filled from the Run it is being made about. */
@@ -249,7 +247,7 @@ export function inputsFor(
   },
 ) {
   /** Undefined where there is nothing to pass; a null the Run was started with is a value. */
-  const value = (source: Source, name: string): Schema.Json | undefined => {
+  const value = (source: Source, name: string) => {
     switch (source) {
       case "run-id":
         return from.runId;
@@ -294,7 +292,7 @@ export function taskOffers<
     readonly named: string;
     readonly offers: ReadonlyArray<O>;
   }>,
-): Array<O & { readonly run?: string }> {
+) {
   const listed: Array<O & { readonly run?: string }> = [
     ...(Arr.some(owned, (one) => one.run === asked) ? [] : own),
     ...Arr.flatMap(owned, ({ run, named, offers }) =>

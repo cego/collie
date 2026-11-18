@@ -353,15 +353,20 @@ export const doctorOn = (route: Pick<Route, "collie">, gitlabHost?: string) =>
       Effect.flatMap(({ out }) => Schema.decodeEffect(DoctorSaid)(Str.trim(out))),
       Effect.map((said) => ("data" in said ? said.data : said.error.details).checks),
       Effect.flatMap((checks) =>
-        Effect.map(Clock.currentTimeMillis, (at): OnboardRun => {
-          const steps = Arr.flatMap(checks, ({ name, ok, detail, fix, warn }): OnboardStep[] => {
+        Effect.map(Clock.currentTimeMillis, (at) => {
+          const steps = Arr.flatMap(checks, ({ name, ok, detail, fix, warn }) => {
             const byDefault = DEFAULT_STEPS.get(name);
-            if (byDefault !== undefined && (!ok || warn === true || fix !== ""))
-              return [
+            if (byDefault !== undefined && (!ok || warn === true || fix !== "")) {
+              const returned: OnboardStep[] = [
                 { step: byDefault, title: name, status: "needs_human", detail, command: fix },
               ];
-            if (ok) return [];
-            return [
+              return returned;
+            }
+            if (ok) {
+              const returned: OnboardStep[] = [];
+              return returned;
+            }
+            const returned: OnboardStep[] = [
               {
                 step: pipe_(name, Str.replaceAll(" ", "-")),
                 title: name,
@@ -370,6 +375,7 @@ export const doctorOn = (route: Pick<Route, "collie">, gitlabHost?: string) =>
                 command: fix,
               },
             ];
+            return returned;
           });
           return { steps, ready: steps.length === 0, reason: null, at };
         }),

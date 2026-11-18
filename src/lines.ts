@@ -32,13 +32,13 @@ export interface Line {
   depth: number;
 }
 
-const line = (text: string, tone: Tone = "dim", depth = 0): Line => ({ text, tone, depth });
+const line = (text: string, tone: Tone = "dim", depth = 0) => ({ text, tone, depth });
 
 /** A short revision: enough to say which tree a card is about without filling its header. */
 const short = (sha: string) => pipe(sha, Str.slice(0, 7));
 
 /** Where a piece of evidence is, in the words a human would use to go and look. */
-export function refText(ref: Ref): string {
+export function refText(ref: Ref) {
   const where = Arr.join(
     Arr.map([ref.path, ref.line === undefined ? "" : `:${ref.line}`], (part) =>
       part === null || part === undefined ? "" : globalThis.String(part),
@@ -52,18 +52,18 @@ export function refText(ref: Ref): string {
 }
 
 /** What a verification's result asks for. A pass takes none: plain text reads as ordinary. */
-function resultTone(result: Card["verifications"][number]["result"]): Tone {
+function resultTone(result: Card["verifications"][number]["result"]) {
   if (result === "fail") return "bad";
   return result === "pass" ? "plain" : "dim";
 }
 
 /** Why a result that is neither a pass nor a fail is neither, said in words. */
-function resultNote(result: Card["verifications"][number]["result"]): string {
+function resultNote(result: Card["verifications"][number]["result"]) {
   if (result === "stale") return " (against an older tree)";
   return result === "unstable" ? " (not repeatable)" : "";
 }
 
-export function cardLines(card: Card): Line[] {
+export function cardLines(card: Card) {
   const lines: Line[] = [
     line(
       `${card.kind} · ${card.step} · ${short(card.revision.head_sha)} · ${card.significance}`,
@@ -119,7 +119,7 @@ export function cardLines(card: Card): Line[] {
  * already finished when it was judged: never written to that Run's inbox, because there
  * is nothing there to act on it (SPEC §9.5).
  */
-export function driftLines(report: DriftReport, undelivered = false): Line[] {
+export function driftLines(report: DriftReport, undelivered = false) {
   const lines = [
     line(
       `${undelivered ? "pending report (undelivered) · " : ""}${report.severity} ${report.constraint} · ${report.resolution}`,
@@ -133,7 +133,7 @@ export function driftLines(report: DriftReport, undelivered = false): Line[] {
   return lines;
 }
 
-export function deliveryLine(delivery: Delivery): Line {
+export function deliveryLine(delivery: Delivery) {
   return line(
     `→ ${delivery.agent} ${delivery.state} · ${delivery.mode} · ${delivery.cause.kind}`,
     "dim",
@@ -147,7 +147,7 @@ export function deliveryLine(delivery: Delivery): Line {
  * it waiting rather than find out by asking. An item nobody can account for having sent
  * is said separately: it is not the same as one that has not gone yet.
  */
-export function newsLines(news: { waiting: number; uncertain: number }): Line[] {
+export function newsLines(news: { waiting: number; uncertain: number }) {
   if (news.waiting === 0) return [];
   return [
     line(
@@ -164,7 +164,7 @@ export function newsLines(news: { waiting: number; uncertain: number }): Line[] 
 // oxlint-disable-next-line effecttsgo/prefer-effect-string -- Effect repeat would remove RangeError validation for negative indentation.
 export const asText = (entry: Line) => `${"  ".repeat(entry.depth)}${entry.text}`;
 
-function everyNewRunIn(workspace: string): string {
+function everyNewRunIn(workspace: string) {
   return `what every new Run in workspace ${workspace} begins with`;
 }
 
@@ -182,7 +182,7 @@ const named = (fields: Record<string, string>) =>
  * it, because the board draws the same preview and a board that described an action its
  * own way would be a second opinion about what a human is being asked to consent to.
  */
-export function describeAction(action: Action): string {
+export function describeAction(action: Action) {
   switch (action.kind) {
     case "deliver":
       return `deliver to ${recipientOf(action)} (${action.mode}): ${action.text}`;
@@ -296,7 +296,7 @@ const MARKS: ReadonlyArray<readonly [keyof RunMarks, string]> = [
  * herdr's tab strip show these too — and `⚠ manual` is words as well as a glyph because
  * a human sending to an agent behind Collie's back is what stops corrections.
  */
-export function marksOf(marks: RunMarks): string {
+export function marksOf(marks: RunMarks) {
   return Arr.join(
     Arr.map(
       Arr.filter(MARKS, ([key]) => marks[key]),
@@ -307,7 +307,7 @@ export function marksOf(marks: RunMarks): string {
 }
 
 /** The marks a group row inherits: the worst of what is under it. */
-export function worstOf(marks: ReadonlyArray<RunMarks>): string {
+export function worstOf(marks: ReadonlyArray<RunMarks>) {
   for (const [key, glyph] of MARKS) {
     if (Arr.some(marks, (mark) => mark[key])) return glyph;
   }
@@ -317,5 +317,5 @@ export function worstOf(marks: ReadonlyArray<RunMarks>): string {
 /** What a producer hands the rows: one entry per Run it found anything about. */
 export type Marks = Readonly<Record<string, RunMarks>>;
 
-export const markFor = (marks: Marks | undefined, runId: string | null): RunMarks =>
+export const markFor = (marks: Marks | undefined, runId: string | null) =>
   (runId === null ? undefined : marks?.[runId]) ?? NO_MARKS;

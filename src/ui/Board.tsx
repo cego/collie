@@ -484,7 +484,7 @@ function Grid(props: {
  * what earns one.
  */
 /** `…` at the end of what will not fit, so a name never pushes the age off its card. */
-function clipped(text: string, room: number): string {
+function clipped(text: string, room: number) {
   return text.length <= room ? text : `${pipe(text, Str.slice(0, Math.max(0, room - 1)))}…`;
 }
 

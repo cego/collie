@@ -65,11 +65,7 @@ export class ForgeHttp extends Context.Service<
 const library = () => import("forges");
 
 /** Why a call failed, from the library's typed error. */
-const reasonOf = (
-  forges: Awaited<ReturnType<typeof library>>,
-  display: string,
-  error: Error,
-): string => {
+const reasonOf = (forges: Awaited<ReturnType<typeof library>>, display: string, error: Error) => {
   if (error instanceof forges.RateLimitedError)
     return `${display} answered ${error.status}: rate limited${error.resetAt === undefined ? "" : `, until ${error.resetAt.toISOString()}`}`;
   if (error instanceof forges.ForgeApiError) {
@@ -160,7 +156,7 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
       login: ForgeLogin,
       cwd: string,
       call: (provider: Provider, signal: AbortSignal) => Promise<A>,
-    ): Effect.Effect<Answered<A>> =>
+    ) =>
       Effect.gen(function* () {
         const slot = slotOf(login.key);
         const send = (token: string) =>
@@ -168,9 +164,12 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
             try: (signal) => providerOf(login, slot).then((provider) => call(provider, signal)),
             catch: (error) => new Cause.UnknownError(error),
           }).pipe(
-            Effect.map((value): Sent<A> => ({ sent: { ok: true, value }, refused: false })),
+            Effect.map((value) => {
+              const returned: Sent<A> = { sent: { ok: true, value }, refused: false };
+              return returned;
+            }),
             Effect.catch((failed) =>
-              Effect.map(Effect.promise(library), (forges): Sent<A> => {
+              Effect.map(Effect.promise(library), (forges) => {
                 const error =
                   failed.cause instanceof Error ? failed.cause : new Error(String(failed.cause));
                 const refused = error instanceof forges.ForgeApiError && error.status === 401;
@@ -184,13 +183,14 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
                   (error instanceof forges.ForgeApiError &&
                     error.status >= 500 &&
                     error.status < 600);
-                return {
+                const returned: Sent<A> = {
                   sent:
                     error instanceof forges.ForgeApiError
                       ? { ok: false, reason, status: error.status, transient }
                       : { ok: false, reason, transient },
                   refused,
                 };
+                return returned;
               }),
             ),
           );
@@ -214,11 +214,15 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
   });
 
 /** Whether the forge takes the CLI's login, by asking who it is: only a refusal needs a human. */
-export const loginReadiness = <R>(
+export const loginReadiness: <R>(
   login: ForgeLogin,
   cwd: string,
   run: Runner<R>,
-): Effect.Effect<Readiness, never, R | ForgeHttp> =>
+) => Effect.Effect<Readiness, never, R | ForgeHttp> = <R>(
+  login: ForgeLogin,
+  cwd: string,
+  run: Runner<R>,
+) =>
   Effect.gen(function* () {
     const http = yield* ForgeHttp;
     const me = yield* http.ask(login, cwd, (provider, signal) => provider.users.me({ signal }));
@@ -260,12 +264,19 @@ export const requestText = (login: ForgeLogin, cwd: string, path: string) =>
 /** Reads `body` as `schema`, or says what was asked was answered in another shape. */
 const decodedAs =
   <S extends Schema.Decoder<unknown>>(schema: S, login: ForgeLogin, what: string) =>
-  (answer: Answered<unknown>): Answered<S["Type"]> => {
-    if (!answer.ok) return answer;
+  (answer: Answered<unknown>) => {
+    if (!answer.ok) {
+      const returned: Answered<S["Type"]> = answer;
+      return returned;
+    }
     const read = Schema.decodeUnknownOption(schema)(answer.value);
-    return Option.isSome(read)
+    const returned: Answered<S["Type"]> = Option.isSome(read)
       ? { ok: true, value: read.value }
-      : { ok: false, reason: `${login.display} answered ${what} in a shape Collie does not read` };
+      : {
+          ok: false,
+          reason: `${login.display} answered ${what} in a shape Collie does not read`,
+        };
+    return returned;
   };
 
 /** A GraphQL query's `data`, read as `schema`, or why not. */
@@ -275,7 +286,7 @@ export const graphqlAs = <S extends Schema.Decoder<unknown>>(
   cwd: string,
   query: string,
   variables: Record<string, string | number | null>,
-): Effect.Effect<Answered<S["Type"]>, never, ForgeHttp> =>
+) =>
   Effect.flatMap(ForgeHttp, (http) =>
     http.ask(login, cwd, (provider, signal) =>
       provider.graphql === undefined
@@ -290,16 +301,22 @@ export const requestAs = <S extends Schema.Decoder<unknown>>(
   login: ForgeLogin,
   cwd: string,
   path: string,
-): Effect.Effect<Answered<S["Type"]>, never, ForgeHttp> =>
-  Effect.map(request(login, cwd, "GET", path), decodedAs(schema, login, path));
+) => Effect.map(request(login, cwd, "GET", path), decodedAs(schema, login, path));
 
 /** Every page of a list at `path`, its items read as `schema`, or why not. */
-export const pagesAs = <S extends Schema.Decoder<unknown>>(
+export const pagesAs: <S extends Schema.Decoder<unknown>>(
   item: S,
   login: ForgeLogin,
   cwd: string,
   path: string,
-): Effect.Effect<Answered<Array<S["Type"]>>, never, ForgeHttp> =>
+) => Effect.Effect<Answered<Array<S["Type"]>>, never, ForgeHttp> = <
+  S extends Schema.Decoder<unknown>,
+>(
+  item: S,
+  login: ForgeLogin,
+  cwd: string,
+  path: string,
+) =>
   Effect.gen(function* () {
     const items: Array<S["Type"]> = [];
     const pages = Schema.Array(item);

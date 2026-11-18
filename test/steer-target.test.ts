@@ -2,15 +2,15 @@
 
 import { expect, test } from "bun:test";
 import { agentName, launchedAs } from "../src/naming";
-import { steerTarget, type Candidate } from "../src/steer-target";
+import { steerTarget } from "../src/steer-target";
 
-const builder = (done: boolean): Candidate => ({
+const builder = (done: boolean) => ({
   agent: "r1-build-r1",
   operation: "02-b.md",
   role: "implementer",
   done,
 });
-const reviewer = (done: boolean): Candidate => ({
+const reviewer = (done: boolean) => ({
   agent: "r1-review-r1",
   operation: "review-1",
   role: "reviewer",

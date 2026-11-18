@@ -74,7 +74,7 @@ export interface Judgement {
   readonly observed: Observed;
 }
 
-export const collieRunOf = (body: string): string | null => {
+export const collieRunOf = (body: string) => {
   const last = Arr.last(Arr.filter(Str.split(Str.trimEnd(body), "\n"), (line) => line !== ""));
   if (last._tag === "None") return null;
   for (const signature of SIGNATURES) {
@@ -98,7 +98,7 @@ export function judge(options: {
   readonly now: number;
   readonly descends?: boolean;
   readonly run?: string;
-}): Judgement {
+}) {
   const { cursor, reading, now } = options;
   const before = options.observed?.head === reading.head ? options.observed : null;
   const running = reading.pipeline === "running";
@@ -107,8 +107,10 @@ export function judge(options: {
     since: before?.since ?? now,
     running: running ? (before?.running ?? now) : null,
   };
-  if (reading.state !== "open")
-    return { verdict: { _tag: "Ended", state: reading.state }, observed };
+  if (reading.state !== "open") {
+    const returned: Judgement = { verdict: { _tag: "Ended", state: reading.state }, observed };
+    return returned;
+  }
   const newHead = reading.head !== "" && reading.head !== cursor.head;
   const comments = cursor.headOnly
     ? []
@@ -126,14 +128,19 @@ export function judge(options: {
     !cursor.headOnly &&
     TERMINAL.has(reading.pipeline) &&
     (newHead || reading.pipeline !== cursor.pipeline);
-  if (!newHead && comments.length === 0 && !ended)
-    return { verdict: { _tag: "NoChange" }, observed };
+  if (!newHead && comments.length === 0 && !ended) {
+    const returned: Judgement = { verdict: { _tag: "NoChange" }, observed };
+    return returned;
+  }
   const until = Math.max(
     newHead ? observed.since + QUIET_MS : now,
     observed.running === null ? now : observed.running + PIPELINE_CAP_MS,
   );
-  if (until > now) return { verdict: { _tag: "NotYet", until }, observed };
-  return {
+  if (until > now) {
+    const returned: Judgement = { verdict: { _tag: "NotYet", until }, observed };
+    return returned;
+  }
+  const returned: Judgement = {
     verdict: {
       _tag: "Changed",
       change: {
@@ -147,4 +154,5 @@ export function judge(options: {
     },
     observed,
   };
+  return returned;
 }

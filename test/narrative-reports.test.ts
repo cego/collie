@@ -23,7 +23,7 @@ beforeEach(() =>
 );
 afterEach(() => runEffect(rig.close()));
 
-const legacyCard = (run: string, id: string): Card => ({
+const legacyCard: (run: string, id: string) => Card = (run, id) => ({
   id,
   run,
   kind: "slice",

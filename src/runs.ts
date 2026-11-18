@@ -111,10 +111,10 @@ export interface RunFacts {
 
 const isText = Schema.is(Schema.String);
 
-export const textOf = (value: Schema.Json): string =>
+export const textOf: (value: Schema.Json) => string = (value) =>
   isText(value) ? value : JSON.stringify(value);
 
-const stateOf = (view: RunView): RunState => {
+const stateOf: (view: RunView) => RunState = (view) => {
   const stopped = view.controls.includes(STOP);
   switch (view.status.status) {
     case "ended":
@@ -134,7 +134,7 @@ const stateOf = (view: RunView): RunState => {
   }
 };
 
-export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
+export const factsOfView: (stateDir: string, view: RunView) => RunFacts = (stateDir, view) => ({
   narratives: view.narratives,
   id: view.runId,
   requestedBy: view.requestedBy,
@@ -225,12 +225,12 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
  * An ended Run's workflow asks nothing: a stop leaves its question open in the engine for a
  * resume. Its agent still asks after a steer, unless a stop closed it (ADR-0041).
  */
-const isAsking = (view: RunView, one: RunView["waiting"][number]): boolean => {
+const isAsking: (view: RunView, one: RunView["waiting"][number]) => boolean = (view, one) => {
   const state = stateOf(view);
   return isUnanswered(one) && (!settled({ state }) || (one.asker != null && state !== "stopped"));
 };
 
-const executionOf = (view: RunView): Execution => {
+const executionOf: (view: RunView) => Execution = (view) => {
   if (view.controls.includes(STOP)) return "stopped";
   if (view.diagnostic !== null && view.status.status === "pending") return "died";
   switch (view.status.status) {
@@ -257,29 +257,29 @@ export const listRuns = Effect.fn("Runs.list")(function* (env: PluginEnv) {
   return newestFirst(Arr.map(live.runs, (view) => factsOfView(env.stateDir, view)));
 });
 
-export const newestFirst = (runs: ReadonlyArray<RunFacts>): RunFacts[] =>
+export const newestFirst: (runs: ReadonlyArray<RunFacts>) => RunFacts[] = (runs) =>
   [...runs].sort((a, b) => pipe_(b.created, Str.localeCompare(a.created)));
 
 /** One Run by id, or null where there is none. */
-export const findRun = (
+export const findRun: (
   env: PluginEnv,
   id: string,
-): Effect.Effect<RunFacts | null, never, Client> =>
+) => Effect.Effect<RunFacts | null, never, Client> = (env, id) =>
   runView(env, id).pipe(
     Effect.map((view) => (view === null || "ok" in view ? null : factsOfView(env.stateDir, view))),
   );
 
 /** Whether a Run has ended, which a question it is waiting on is not. */
-export const settled = (run: Pick<RunFacts, "state">): boolean =>
+export const settled: (run: Pick<RunFacts, "state">) => boolean = (run) =>
   run.state === "succeeded" ||
   run.state === "ended" ||
   run.state === "failed" ||
   run.state === "stopped";
 
 /** Where this Machine's live Runs work, or null where the host could not be asked. */
-export const liveCheckouts = (
+export const liveCheckouts: (
   env: PluginEnv,
-): Effect.Effect<ReadonlyArray<string> | null, never, Client> =>
+) => Effect.Effect<ReadonlyArray<string> | null, never, Client> = (env) =>
   runViews(env, null).pipe(
     Effect.map(({ runs, unreadable }) =>
       unreadable !== null

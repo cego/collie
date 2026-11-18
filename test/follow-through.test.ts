@@ -51,7 +51,7 @@ beforeEach(() =>
 
 afterEach(() => runLive(rig.close()));
 
-const mr = (head: string, over: Partial<FakeMr> = {}): FakeMr => ({
+const mr: (head: string, over?: Partial<FakeMr>) => FakeMr = (head, over = {}) => ({
   project: PROJECT,
   iid: "7",
   state: "open",
@@ -62,7 +62,7 @@ const mr = (head: string, over: Partial<FakeMr> = {}): FakeMr => ({
   ...over,
 });
 
-const model = (head: string, over: Partial<ForgeModel> = {}): ForgeModel => ({
+const model = (head: string, over: Partial<ForgeModel> = {}) => ({
   installed: true,
   loggedIn: ["gitlab.cego.dk"],
   login: "mk",

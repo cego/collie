@@ -43,7 +43,7 @@ const registry = new Map<ActionKind, AnyExecutor>();
  * a programming error rather than a last-one-wins: two owners of one action kind is two
  * answers to "what does confirming this do".
  */
-export function registerExecutor<K extends ActionKind>(kind: K, run: Executor<K>): void {
+export function registerExecutor<K extends ActionKind>(kind: K, run: Executor<K>) {
   if (registry.has(kind)) throw new Error(`two executors registered for "${kind}"`);
   registry.set(kind, (action, by, env) => {
     // SAFETY: `executorFor` is only ever asked for the kind an action carries, so the
@@ -52,16 +52,16 @@ export function registerExecutor<K extends ActionKind>(kind: K, run: Executor<K>
   });
 }
 
-export function executorFor(kind: ActionKind): AnyExecutor | undefined {
+export function executorFor(kind: ActionKind) {
   return registry.get(kind);
 }
 
 /** Which kinds this build can carry out, for an envelope that has to say what it skipped. */
-export function registeredKinds(): ActionKind[] {
+export function registeredKinds() {
   return [...registry.keys()].sort();
 }
 
 /** Empty it, so a test that registers its own executors leaves none for the next file. */
-export function resetExecutors(): void {
+export function resetExecutors() {
   registry.clear();
 }

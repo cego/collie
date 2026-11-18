@@ -22,7 +22,6 @@ import {
   Option,
   Order,
   Schedule,
-  type Scope,
   Schema,
   Semaphore,
   Stream,
@@ -154,13 +153,13 @@ export type DecisionRow = typeof Decision.Type;
 export const isUnanswered = (one: {
   readonly answer: string | null;
   readonly superseded?: string | null | undefined;
-}): boolean => one.answer === null && (one.superseded ?? null) === null;
+}) => one.answer === null && (one.superseded ?? null) === null;
 
 /** Set aside by a human's message, and not answered since. */
 export const isSuperseded = (one: {
   readonly answer: string | null;
   readonly superseded?: string | null | undefined;
-}): boolean => one.answer === null && (one.superseded ?? null) !== null;
+}) => one.answer === null && (one.superseded ?? null) !== null;
 
 /** A Workflow's question set aside and not yet asked again: no Decision while its work runs. */
 export const isSetAside = <
@@ -174,7 +173,7 @@ export const isSetAside = <
 >(
   all: ReadonlyArray<A>,
   one: A,
-): boolean =>
+) =>
   isSuperseded(one) &&
   (one.asker ?? null) === null &&
   !Arr.some(all, (r) => r.revises === one.name);
@@ -183,7 +182,7 @@ export const supersededReason = (one: {
   readonly name: string;
   readonly superseded?: string | null | undefined;
   readonly cause?: string | null | undefined;
-}): string => `"${one.name}" was superseded at ${one.superseded} by ${one.cause}`;
+}) => `"${one.name}" was superseded at ${one.superseded} by ${one.cause}`;
 
 export type Superseded =
   | { readonly _tag: "accepted"; readonly row: DecisionRow }
@@ -386,13 +385,7 @@ export interface StoreApi {
 export class Store extends Context.Service<Store, StoreApi>()("collie/Store") {}
 
 /** Over `host.db`; given the state directory, the files its first migration imports too. */
-export const storeLayer = (
-  stateDir?: string,
-): Layer.Layer<
-  Store,
-  never,
-  SqlClient.SqlClient | Reactivity.Reactivity | FileSystem.FileSystem | Path.Path
-> => Layer.effect(Store)(makeStore(stateDir));
+export const storeLayer = (stateDir?: string) => Layer.effect(Store)(makeStore(stateDir));
 
 /** What a committed write invalidates, and what a subscriber is listening for. */
 const RUNS = ["collie/runs"];
@@ -700,13 +693,7 @@ const migrations = (imports: {
 /** How often a commit by another connection, another process's, is looked for. */
 const ELSEWHERE_EVERY = "250 millis";
 
-function makeStore(
-  stateDir: string | undefined,
-): Effect.Effect<
-  StoreApi,
-  never,
-  SqlClient.SqlClient | Reactivity.Reactivity | Scope.Scope | FileSystem.FileSystem | Path.Path
-> {
+function makeStore(stateDir: string | undefined) {
   return Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const reactivity = yield* Reactivity.Reactivity;
@@ -939,7 +926,7 @@ function makeStore(
       read?.at === written ? Effect.succeed(read.rows) : refreshing.withPermit(refresh),
     );
 
-    return {
+    const returned: StoreApi = {
       remember: (generation: GenerationRow) =>
         Effect.gen(function* () {
           const at = yield* nowIso;
@@ -1310,7 +1297,8 @@ function makeStore(
           Effect.map((rows) => rows.length > 0),
           Effect.orDie,
         ),
-    } satisfies StoreApi;
+    };
+    return returned;
   });
 }
 
@@ -1335,9 +1323,7 @@ const watchRowOf = (row: {
       row.woke === null
         ? Effect.succeed(null)
         : Schema.decodeEffect(Schema.fromJsonString(Woke))(row.woke),
-  }).pipe(
-    Effect.map((decoded): WatchRow => ({ run: row.run, mr: row.mr, name: row.name, ...decoded })),
-  );
+  }).pipe(Effect.map((decoded) => ({ run: row.run, mr: row.mr, name: row.name, ...decoded })));
 
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Json));
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
@@ -1351,9 +1337,9 @@ const answererText = flow(
  * The same arguments written the same way, so a retry is compared rather than guessed at:
  * two objects that differ only in the order their keys arrived are one request.
  */
-const canonical = (value: Schema.Json): string => asJsonText(ordered(value));
+const canonical = (value: Schema.Json) => asJsonText(ordered(value));
 
-const ordered = (value: Schema.Json): Schema.Json => {
+const ordered: (value: Schema.Json) => Schema.Json = (value) => {
   if (Arr.isArray<typeof value>(value)) return Arr.map(value, ordered);
   if (!isRecord(value)) return value;
   return Rec.fromEntries(

@@ -103,7 +103,7 @@ echo '{"ok":true,"data":{"root":"'"$COLLIE_DIR"'/release","checkout":false,"rele
 const run = (cmd: string, args: string[], cwd: string) => {
   if (cmd === "git") return Effect.succeed<Ran>({ code: 128, stdout: "", stderr: "not a git" });
   if (cmd !== "sh") return shell(cmd, args, cwd);
-  return Effect.sync((): Ran => {
+  return Effect.sync(() => {
     prepared.push(`${cmd} ${Arr.join(args, " ")} in ${cwd}`);
     return { code: 0, stdout: "prepare: runner: already in place\n" };
   });

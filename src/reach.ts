@@ -35,13 +35,13 @@ const Drawn = Schema.Struct({
   enum: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
-const titled = (value: string, title: string | undefined): ReachChoice => ({
+const titled = (value: string, title: string | undefined) => ({
   value,
   title: title ?? (value === "" ? "Ask" : value),
 });
 
 /** The choices a drawn schema offers: titled literals, or a plain closed set. */
-function choicesOf(schema: Declared["schema"]): ReadonlyArray<ReachChoice> {
+function choicesOf(schema: Declared["schema"]) {
   const drawn = Schema.decodeUnknownOption(Drawn)(schema);
   if (Option.isNone(drawn)) return [];
   if (drawn.value.enum !== undefined)
@@ -54,7 +54,7 @@ function choicesOf(schema: Declared["schema"]): ReadonlyArray<ReachChoice> {
   );
 }
 
-export function reachOf(inputs: ReadonlyArray<Declared>): Reach | null {
+export function reachOf(inputs: ReadonlyArray<Declared>) {
   const field = Option.getOrUndefined(Arr.findFirst(inputs, (one) => one.strategy === REACH));
   if (field === undefined) return null;
   const choices = choicesOf(field.schema);
@@ -70,7 +70,7 @@ export const reachKey = (workflow: string, project: string) =>
 export const isReachKey = (key: string) => /^launch_reach\.[a-z][a-z0-9-]*\.[^.]+$/.test(key);
 
 /** The choices with the saved one first, so Enter takes it; the rest keep the module's order. */
-export function savedFirst(reach: Reach, saved: string | null): ReadonlyArray<ReachChoice> {
+export function savedFirst(reach: Reach, saved: string | null) {
   const first = Arr.filter(reach.choices, (one) => one.value === saved);
   return [...first, ...Arr.filter(reach.choices, (one) => one.value !== saved)];
 }

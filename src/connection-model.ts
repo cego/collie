@@ -62,7 +62,7 @@ export const HOST_CONNECTION_USES: ReadonlyArray<typeof ConnectionUse.Type> = [
   },
 ];
 
-export const connectionsLines = (connections: ReadonlyArray<Connection>): string =>
+export const connectionsLines = (connections: ReadonlyArray<Connection>) =>
   Arr.join(
     Arr.map(
       connections,

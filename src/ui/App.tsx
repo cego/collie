@@ -23,7 +23,6 @@ import {
   type Keypress,
   type MenuItem,
   type Row,
-  type ViewName,
 } from "./state";
 import { usagePhrase } from "../usage-model";
 import { headerSentence, sectionsOf, type Question, type TaskView } from "../board-model";
@@ -224,7 +223,7 @@ export function App(props: AppProps) {
   };
 
   /** Which of Workflows and Settings is filling the pane, or null for the board. */
-  const pane = (): ViewName | null => {
+  const pane = () => {
     const view = props.state().view;
     return view === "runs" ? null : view;
   };
@@ -340,7 +339,7 @@ export function App(props: AppProps) {
   };
 
   /** The question the keyboard is in, while the board is still asking it. */
-  const typingInto = (): Question | null => {
+  const typingInto = () => {
     const at = typingTo();
     if (at === null) return null;
     for (const view of tasks()) {

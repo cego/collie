@@ -45,7 +45,7 @@ import {
   type Line as Evidence,
   type Tone,
 } from "../lines";
-import { dispositionsFor, menuFor, type Command, type MenuItem } from "./state";
+import { dispositionsFor, menuFor, type Command } from "./state";
 import { styledMarkdown } from "./markdown";
 import { C, stateGlyph, stepGlyph } from "./sections";
 import { handoffsDir } from "../handoffs";
@@ -106,7 +106,7 @@ export function Drawer(props: DrawerProps) {
   const took = () =>
     new Map(Arr.map(props.detail?.steps ?? [], (step) => [step.id, step.took ?? ""]));
 
-  const intent = (): Line[] => {
+  const intent = () => {
     const held = props.detail?.intent;
     if (!held) return [{ text: "no intent recorded for this run", fg: C.dim }];
     return [
@@ -118,7 +118,7 @@ export function Drawer(props: DrawerProps) {
     ];
   };
 
-  const steps = (): Line[] =>
+  const steps = () =>
     Arr.map(props.view.steps, (step) => ({
       text: step.name,
       mark: stepGlyph(step.state).glyph,
@@ -127,7 +127,7 @@ export function Drawer(props: DrawerProps) {
       fg: step.state === "todo" ? C.dim : C.text,
     }));
 
-  const requester = (): Line[] => {
+  const requester = () => {
     const who = props.detail?.requestedBy;
     const started = props.detail?.startedBy;
     return [
@@ -135,14 +135,14 @@ export function Drawer(props: DrawerProps) {
       ...(who === undefined ? [] : [{ text: requestedByLine(who) }]),
     ];
   };
-  const report = (): Line[] => {
+  const report = () => {
     const report = props.detail?.report;
     return report === undefined
       ? []
       : [{ text: `${report.state}: ${report.note}` }, { text: report.closure ?? "" }];
   };
 
-  const agents = (): Line[] =>
+  const agents = () =>
     props.view.agents.length === 0
       ? [{ text: "no live agent: the host holds this run", fg: C.dim }]
       : Arr.map(props.view.agents, (agent) => ({
@@ -151,14 +151,14 @@ export function Drawer(props: DrawerProps) {
           markFg: C.blue,
         }));
 
-  const ranOnLines = (): Line[] =>
+  const ranOnLines = () =>
     Arr.map(props.detail?.agents ?? [], (agent) => ({
       text: `${agent.operation}  ${ranOn(agent)}`,
       right: agent.agent,
       fg: C.muted,
     }));
 
-  const held = (): Line[] =>
+  const held = () =>
     props.view.heldBy === null
       ? []
       : [
@@ -169,7 +169,7 @@ export function Drawer(props: DrawerProps) {
           },
         ];
 
-  const parked = (): Line[] => {
+  const parked = () => {
     const park = props.view.park;
     if (park == null) return [];
     const entry = PARK_CAUSES[park.cause];
@@ -180,7 +180,7 @@ export function Drawer(props: DrawerProps) {
   };
 
   /** What a yes on this card would name, where the record is open beside it. */
-  const proposed = (): Line[] => {
+  const proposed = () => {
     const decision = props.view.decision;
     if (decision?.kind !== "proposal") return [];
     return [
@@ -195,7 +195,7 @@ export function Drawer(props: DrawerProps) {
   };
 
   /** What the Run was given, where its agents read it. */
-  const attached = (): Line[] =>
+  const attached = () =>
     Arr.map(props.detail?.attachments ?? [], (file) => ({
       text: `${props.detail!.dir}/attachments/${file.name}`,
       mark: "•",
@@ -203,14 +203,14 @@ export function Drawer(props: DrawerProps) {
     }));
 
   /** What its agents left for whoever comes next. */
-  const handedOn = (): Line[] =>
+  const handedOn = () =>
     Arr.map(props.detail?.handoffFiles ?? [], (file) => ({
       text: `${handoffsDir(props.detail!.dir)}/${file.name}`,
       mark: "•",
       right: `${file.bytes} bytes`,
     }));
 
-  const replied = (): Line[] =>
+  const replied = () =>
     Arr.flatMap(props.detail?.replies ?? [], (reply) => [
       { text: replyLine(reply), mark: reply.kind === "disputed" ? "!" : "•" },
       ...Arr.map(Str.split(reply.body, "\n"), (text) => ({
@@ -220,7 +220,7 @@ export function Drawer(props: DrawerProps) {
       })),
     ]);
 
-  const branch = (): Line[] => [
+  const branch = () => [
     { text: props.view.branch ?? "no branch of its own", mark: "⎇", markFg: C.dim },
   ];
 
@@ -236,7 +236,7 @@ export function Drawer(props: DrawerProps) {
     return one === undefined ? null : mrReadiness(one, mrs);
   };
 
-  const findings = (): Line[] =>
+  const findings = () =>
     Arr.map(props.detail?.findings ?? [], (finding) => ({
       text: finding.title,
       mark: "•",
@@ -247,26 +247,26 @@ export function Drawer(props: DrawerProps) {
     }));
 
   /** The Run's branch against its merge base, one line per file, as plain text. */
-  const changed = (): Line[] =>
+  const changed = () =>
     Arr.map(props.detail?.diff?.files ?? [], (file) => ({
       text: file.path,
       mark: file.status === "added" ? "+" : file.status === "deleted" ? "-" : "~",
       right: file.added === null ? "binary" : `+${file.added} -${file.removed}`,
     }));
 
-  const verified = (): Line[] =>
+  const verified = () =>
     Arr.map(props.detail?.verifications ?? [], (one) => {
       const held = one.result === one.expect;
       return { text: one.name, mark: held ? "✓" : "✗", markFg: held ? C.green : C.red };
     });
 
-  const card = (): Line[] => {
+  const card = () => {
     const newest = props.live?.cards[0];
     return newest === undefined ? [] : Arr.map(cardLines(newest), (line) => ({ text: line.text }));
   };
 
   /** The card's own menu, as buttons, without the one that opens what is already open. */
-  const buttons = (): MenuItem[] => [
+  const buttons = () => [
     ...Arr.filter(menuFor(props.view), (item) => item.command._tag !== "OpenRecord"),
     ...dispositionsFor(props.view),
   ];
@@ -608,7 +608,7 @@ function Document(props: { title: string; panel: Panel | null; markdown?: boolea
 }
 
 /** What a panel shows: the text it read, or the one line saying why it has none. */
-function panelLine(panel: Panel): string {
+function panelLine(panel: Panel) {
   return panel._tag === "Text" ? panel.text : panel.reason;
 }
 

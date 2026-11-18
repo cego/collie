@@ -42,11 +42,7 @@ export const installation = Effect.fn("release.installation")(function* (
   collieDir: string,
   version: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
-): Effect.fn.Return<
-  Installation,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
-> {
+) {
   const git = (...args: string[]) => run("git", args, root);
   if (!(yield* isCheckout(root, run))) return RELEASED;
   if (yield* atCollieDir(root, collieDir)) return RELEASED;
@@ -83,7 +79,7 @@ export interface Carried {
 export const carriedRelease = (
   modulePath: string = import.meta.path,
   execPath: string = process.execPath,
-): Carried | null =>
+) =>
   pipe_(modulePath, Str.startsWith("/$bunfs/")) ? { tree: CARRIED_TREE, runner: execPath } : null;
 
 const Placed = Schema.fromJsonString(
@@ -142,7 +138,10 @@ export const placeRelease = Effect.fn("release.place")(function* (
     const recorded = yield* fs.readFileString(path.join(current, RECORD)).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(Placed)),
       Effect.map((record) => record.files),
-      Effect.orElseSucceed((): Record<string, string> => ({})),
+      Effect.orElseSucceed(() => {
+        const returned: Record<string, string> = {};
+        return returned;
+      }),
     );
     const when = pipe_(yield* nowIso, Str.replace(/:/g, "-"));
     for (const name of yield* filesUnder(current)) {

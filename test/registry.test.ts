@@ -45,7 +45,7 @@ afterEach(() =>
 const here: RegistryScope = { session: "/run/herdr.sock", workspaceId: "w1", cwd: "/project" };
 const there: RegistryScope = { session: "/run/herdr.sock", workspaceId: "w2", cwd: "/project" };
 
-const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
+const entry: (over?: Partial<AgentEntry>) => AgentEntry = (over = {}) => ({
   role: "implementer",
   agent: "impl-1",
   paneId: "1-9",
@@ -57,7 +57,7 @@ const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
   ...over,
 });
 
-const live = (of: AgentEntry): AgentInfo => ({
+const live: (of: AgentEntry) => AgentInfo = (of) => ({
   name: of.agent,
   paneId: of.paneId,
   status: "idle",

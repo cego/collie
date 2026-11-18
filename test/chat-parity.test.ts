@@ -346,14 +346,17 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     },
   ],
   ["schedule list", { route: "read", tool: "collie_installation" }],
-  ...Arr.map(["pause", "resume", "remove"] as const, (change): readonly [string, Route] => [
-    `schedule ${change}`,
-    {
-      route: "propose",
-      kind: `schedule_${change}`,
-      action: { kind: `schedule_${change}`, name: "daily" },
-    },
-  ]),
+  ...Arr.map(["pause", "resume", "remove"] as const, (change) => {
+    const returned: readonly [string, Route] = [
+      `schedule ${change}`,
+      {
+        route: "propose",
+        kind: `schedule_${change}`,
+        action: { kind: `schedule_${change}`, name: "daily" },
+      },
+    ];
+    return returned;
+  }),
   ["schedule move", { route: "shell" }],
   ["chat status", { route: "read", tool: "collie_installation" }],
   ["chat harness", { route: "shell" }],
@@ -422,12 +425,16 @@ type CommandNode = (typeof app.subcommands)[number]["commands"][number];
  * than remembered. A group contributes its leaves and not itself: `collie run` alone is
  * a help page, and what a person runs is `collie run stop`.
  */
-function leaves(node: CommandNode, path: ReadonlyArray<string> = []): string[] {
+function leaves(node: CommandNode, path: ReadonlyArray<string> = []) {
   const here = [...path, node.name];
   const children = Arr.flatMap(node.subcommands ?? [], (group) => group.commands ?? []);
   // The root's own name is not part of what a person types after `collie`.
-  if (children.length === 0) return [Arr.join(here.slice(1), " ")];
-  return Arr.flatMap(children, (child) => leaves(child, here));
+  if (children.length === 0) {
+    const returned: string[] = [Arr.join(here.slice(1), " ")];
+    return returned;
+  }
+  const returned: string[] = Arr.flatMap(children, (child) => leaves(child, here));
+  return returned;
 }
 
 test("the operations are the command tree's, not a list somebody kept up to date", () => {

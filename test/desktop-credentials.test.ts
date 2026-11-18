@@ -47,7 +47,11 @@ const executable = (path: string, text: string) =>
   });
 
 /** A Machine reached as Local is, in a home of the test's own with `bin` first on PATH. */
-const machineIn = (home: string, bin: string, forwarded: number[] = []): ShellRoute => ({
+const machineIn: (home: string, bin: string, forwarded?: number[]) => ShellRoute = (
+  home,
+  bin,
+  forwarded = [],
+) => ({
   ...localRoute([], "pc"),
   sh: (script) =>
     Effect.succeed([
@@ -409,7 +413,7 @@ test("Helle's credentials are written on every Machine, readable by its owner al
   ));
 
 /** A keyring in memory, holding what `held` says. */
-const keyringOf = (held: Partial<Record<KeyringEntry, string>>): Keyring => ({
+const keyringOf: (held: Partial<Record<KeyringEntry, string>>) => Keyring = (held) => ({
   lookup: (key) => Effect.sync(() => held[key] ?? null),
   store: (key, _label, value) => Effect.sync(() => void (held[key] = value)),
   clear: (key) => Effect.sync(() => void delete held[key]),

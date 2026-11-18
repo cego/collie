@@ -58,7 +58,7 @@ const STARTED_FROM: Partial<Record<FrontDoor, string>> = {
 export const startedBy = (
   lines: ReadonlyArray<AuditLine>,
   run: { readonly id: string; readonly parent: string | null },
-): string | undefined => {
+) => {
   const actor = Option.getOrUndefined(
     Arr.findFirst(lines, (line) => line.operation === "start"),
   )?.actor;
@@ -74,7 +74,7 @@ export const startedBy = (
 };
 
 /** Who did something, in the words a Flow says it: the agent's name, or the front door a human used. */
-export const whoActed = (actor: AuditLine["actor"]): string =>
+export const whoActed = (actor: AuditLine["actor"]) =>
   actor.from?.agent ?? STARTED_FROM[actor.origin] ?? actor.origin;
 
 const AuditJson = Schema.fromJsonString(AuditLine);
@@ -128,7 +128,7 @@ export const actorOf = (
     readonly schedule?: ScheduledBy | undefined;
   },
   request: string,
-): AuditLine["actor"] => {
+) => {
   const voiced = { origin: who.origin, requestId: request, ...voiceOf(who) };
   const spoken = who.schedule === undefined ? voiced : { ...voiced, schedule: who.schedule };
   return who.from === undefined ? spoken : { ...spoken, from: who.from };

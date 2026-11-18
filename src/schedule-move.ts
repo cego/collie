@@ -40,14 +40,21 @@ const why = (failure: DoorFailure) => ("reason" in failure ? failure.reason : fa
  * `request`, so a retried move repeats nothing. A move whose source no longer has it reads
  * it from the target, where an earlier attempt put it.
  */
-export const moveSchedule = Effect.fn("ScheduleMove.move")(function* (asked: {
+export const moveSchedule: (asked: {
   readonly from: ScheduleDoor;
   readonly to: ScheduleDoor;
   readonly name: string;
   /** The checkout on the target, where it is not the same path as on the source. */
   readonly checkout?: string | undefined;
   readonly request: string;
-}): Effect.fn.Return<Moved> {
+}) => Effect.Effect<Moved> = Effect.fn("ScheduleMove.move")(function* (asked: {
+  readonly from: ScheduleDoor;
+  readonly to: ScheduleDoor;
+  readonly name: string;
+  /** The checkout on the target, where it is not the same path as on the source. */
+  readonly checkout?: string | undefined;
+  readonly request: string;
+}) {
   const { from, to, name, request } = asked;
   const listed = yield* Effect.all(
     Arr.map([from, to], (door) =>

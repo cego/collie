@@ -18,7 +18,7 @@ let path: Path.Path;
 let dir: string;
 
 /** Whether a pid is still there, which is what a stopped server is not. */
-function alive(pid: number): boolean {
+function alive(pid: number) {
   try {
     process.kill(pid, 0);
     return true;

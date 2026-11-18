@@ -35,11 +35,11 @@ export interface Root {
  * rather than inside its shipped assets, because those are a git checkout an upgrade
  * fast-forwards and a file in it would be somebody else's to move.
  */
-export const searchPath = (where: {
+export const searchPath: (where: {
   readonly pluginRoot: string;
   readonly userDir: string;
   readonly project: string;
-}): ReadonlyArray<Root> => [
+}) => ReadonlyArray<Root> = (where) => [
   { layer: "project", dir: `${where.project}/.collie/workflows` },
   { layer: "user", dir: `${where.userDir}/workflows` },
   { layer: "shipped", dir: `${where.pluginRoot}/workflows` },
@@ -50,7 +50,7 @@ export const savedModules = (where: {
   readonly pluginRoot: string;
   readonly userDir: string;
   readonly cwd: string;
-}): Effect.Effect<Catalogued, never, FileSystem.FileSystem> =>
+}) =>
   discover(
     searchPath({ pluginRoot: where.pluginRoot, userDir: where.userDir, project: where.cwd }),
   );
@@ -167,7 +167,7 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
 });
 
 /** What one module declares it takes, in the order a front door should ask for it. */
-export const declaredBy = (entry: WorkflowEntry): ReadonlyArray<Declared> =>
+export const declaredBy = (entry: WorkflowEntry) =>
   Arr.map(Rec.toEntries(entry.input), ([name, field]) => {
     const drawn = jsonSchemaFor(field);
     return {
@@ -179,18 +179,14 @@ export const declaredBy = (entry: WorkflowEntry): ReadonlyArray<Declared> =>
     };
   });
 
-const byId = (claims: ReadonlyArray<Claim>): ReadonlyMap<string, ReadonlyArray<Claim>> => {
+const byId = (claims: ReadonlyArray<Claim>) => {
   const grouped = new Map<string, Array<Claim>>();
   for (const claim of claims) grouped.set(claim.id, [...(grouped.get(claim.id) ?? []), claim]);
   return grouped;
 };
 
 /** Two files, one id: each is told about the other rather than one of them being picked. */
-const ambiguous = (
-  id: string,
-  layer: EntryLayer,
-  claimants: ReadonlyArray<Claim>,
-): ReadonlyArray<Fault> =>
+const ambiguous = (id: string, layer: EntryLayer, claimants: ReadonlyArray<Claim>) =>
   Arr.map(claimants, (claim) => ({
     id,
     layer,
@@ -206,7 +202,7 @@ const ambiguous = (
 
 const entryFiles = Effect.fn("Discovery.entryFiles")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
-  const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed((): Array<string> => []));
+  const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
   return Arr.map(
     Arr.filter(names, (name) => pipe_(name, Str.endsWith(ENTRY_SUFFIX))).sort(),
     (name) => `${dir}/${name}`,

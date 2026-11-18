@@ -16,10 +16,10 @@ import {
   type ElectionLine,
   staleSince,
 } from "../src/drift";
-import { DEFAULT_AUTHORITY, seedIntent, type Authority, type Intent } from "../src/intent";
+import { DEFAULT_AUTHORITY, seedIntent, type Authority } from "../src/intent";
 import type { DriftReport } from "../src/evaluator";
 
-const report = (over: Partial<DriftReport> = {}): DriftReport => ({
+const report: (over?: Partial<DriftReport>) => DriftReport = (over = {}) => ({
   id: "d1",
   at: "2026-09-09T10:00:00Z",
   run: "r1",
@@ -33,7 +33,7 @@ const report = (over: Partial<DriftReport> = {}): DriftReport => ({
   ...over,
 });
 
-function intentWith(authority: Partial<Authority> = {}): Intent {
+function intentWith(authority: Partial<Authority> = {}) {
   return {
     ...seedIntent("r1", {
       constraints: [
@@ -44,7 +44,7 @@ function intentWith(authority: Partial<Authority> = {}): Intent {
   };
 }
 
-const ctx = (over: Partial<CorrectionContext> = {}): CorrectionContext => ({
+const ctx: (over?: Partial<CorrectionContext>) => CorrectionContext = (over = {}) => ({
   overridden: false,
   attributable: true,
   held: false,

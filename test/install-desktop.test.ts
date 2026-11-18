@@ -163,7 +163,7 @@ const hdiutilLog = (dir: string) =>
     Effect.map((text) =>
       Arr.map(Str.split(Str.trim(text), "\n"), (line) => Str.split(line, " ")[0]),
     ),
-    Effect.orElseSucceed((): string[] => []),
+    Effect.orElseSucceed(() => []),
   );
 
 test("on Apple silicon a signed DMG's app is copied into ~/Applications, replacing an older one", () =>

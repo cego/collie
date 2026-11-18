@@ -17,7 +17,7 @@ export interface Watches {
 }
 
 /** What the merge watch read of a merge request, as a watch judges it. */
-export const readingOf = (panel: MrDetails): MrReading => {
+export const readingOf: (panel: MrDetails) => MrReading = (panel) => {
   const state = Str.toLowerCase(panel.state);
   return {
     state: state === "merged" ? "merged" : state === "closed" ? "closed" : "open",

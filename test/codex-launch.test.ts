@@ -81,7 +81,7 @@ const eventsFile = () => `${rig.root}/codex-server.events`;
 const server = () => `bun ${SERVER} ${config()}`;
 const agent = agentName("r1", "build", null, 1);
 
-const hostOf = (): AgentHost => ({
+const hostOf: () => AgentHost = () => ({
   dir,
   env: rig.pluginEnv(),
   herdr: new Herdr(rig.pluginEnv()),

@@ -83,7 +83,7 @@ const body = work.toLayer((payload) =>
 const SERVER = `${import.meta.dir}/support/codex-server.ts`;
 const config = () => `${rig.root}/codex-server.json`;
 
-const hostOf = (compactAtTokens = 1_000_000): AgentHost => ({
+const hostOf: (compactAtTokens?: number) => AgentHost = (compactAtTokens = 1_000_000) => ({
   dir,
   env: rig.pluginEnv(),
   herdr: new Herdr(rig.pluginEnv()),

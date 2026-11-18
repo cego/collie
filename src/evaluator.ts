@@ -96,7 +96,7 @@ const SCHEMAS = {
 export type EvaluationKind = keyof typeof SCHEMAS;
 
 /** The JSON Schema handed to `--json-schema`, so the model is constrained at its own end too. */
-export function jsonSchemaFor(kind: EvaluationKind): string {
+export function jsonSchemaFor(kind: EvaluationKind) {
   const document = Schema.toJsonSchemaDocument(SCHEMAS[kind]);
   return encodeJson({ ...document.schema, $defs: document.definitions });
 }
@@ -146,7 +146,7 @@ export function argvFor(
   /** The JSON Schema itself: the CLI takes the text, not a path to it. */
   schema: string,
   systemPromptFile: string,
-): string[] {
+) {
   return [
     "-p",
     "--output-format",
@@ -180,7 +180,7 @@ export function structuredFrom<A, I>(
   raw: string,
   /** The closed schema the model was given, which is what says which node is the payload. */
   schema: Schema.Codec<A, I, never>,
-): A | { readonly error: string } {
+) {
   const decode = Schema.decodeUnknownOption(schema);
   const parse = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
   const envelope = parse(raw);
@@ -223,7 +223,7 @@ export interface EvaluatorDeps {
  * or folded into a neighbour's — claude 2.1.268 lists `--append-system-prompt[-file]` and
  * takes both spellings — so a bracketed suffix is read as naming both.
  */
-export function missingFlags(help: string): string[] {
+export function missingFlags(help: string) {
   const named = pipe_(help, Str.replace(/(--[a-z-]+)\[(-[a-z-]+)\]/g, "$1 $1$2"));
   return Arr.filter(REQUIRED_FLAGS, (flag) => !pipe_(named, Str.includes(flag)));
 }
@@ -288,7 +288,7 @@ const capped = <E, R>(stream: Stream.Stream<Uint8Array, E, R>, cap: number) =>
   stream.pipe(
     Stream.decodeText(),
     Stream.runFold(
-      (): Captured => ({ text: "", bytes: 0 }),
+      () => ({ text: "", bytes: 0 }),
       (all: Captured, chunk: string) => {
         const bytes = all.bytes + Buffer.byteLength(chunk, "utf8");
         return { text: bytes > cap ? all.text : all.text + chunk, bytes };
@@ -370,7 +370,7 @@ export const call = Effect.fn("Evaluator.call")(function* (
  * to decide anything.
  */
 const CostEnvelope = Schema.Struct({ total_cost_usd: Schema.Finite });
-const costOf = (stdout: string): number | undefined =>
+const costOf = (stdout: string) =>
   Schema.decodeOption(Schema.fromJsonString(Schema.Unknown))(stdout).pipe(
     Option.flatMap((json) => Schema.decodeUnknownOption(CostEnvelope)(json)),
     Option.map((envelope) => envelope.total_cost_usd),
@@ -444,7 +444,7 @@ export interface Validated {
  * goes back to that human, because the grant was for correcting drift, not for doing
  * whatever the conversation turned up.
  */
-function granted(action: Action, authority: Authority): boolean {
+function granted(action: Action, authority: Authority) {
   switch (action.kind) {
     case "deliver":
       if (!authority.auto_correct) return false;
@@ -460,7 +460,7 @@ function granted(action: Action, authority: Authority): boolean {
   }
 }
 
-function runOf(action: Action): string | null {
+function runOf(action: Action) {
   return "run" in action ? action.run : null;
 }
 
@@ -470,7 +470,7 @@ function runOf(action: Action): string | null {
  * asked a question, and "I proposed something about a Run that does not exist" is an
  * answer they need to see.
  */
-export function validate(proposal: Proposal, ctx: ValidationContext): Validated[] {
+export function validate(proposal: Proposal, ctx: ValidationContext) {
   return Arr.map(proposal.actions, (action) => {
     const refused = refusalFor(action, ctx);
     if (refused !== null)
@@ -486,7 +486,7 @@ export function validate(proposal: Proposal, ctx: ValidationContext): Validated[
   });
 }
 
-function refusalFor(action: Action, ctx: ValidationContext): string | null {
+function refusalFor(action: Action, ctx: ValidationContext) {
   const run = runOf(action);
   if (run !== null && !ctx.runs.has(run))
     return `I proposed ${action.kind} for run "${run}", which was not among the runs I was shown.`;

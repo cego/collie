@@ -221,7 +221,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
         };
       }),
     );
-    const link = (counter: SharedArrayBuffer, epoch: string): ModelLink => ({
+    const link: (counter: SharedArrayBuffer, epoch: string) => ModelLink = (counter, epoch) => ({
       counter: new Int32Array(counter),
       epoch,
       touched: (run, seq, facts) => port.post({ _tag: "Touched", run, seq, facts }),
@@ -269,7 +269,7 @@ export const relatedOf = (
   order: ReadonlyArray<string>,
   runId: string,
   also: ReadonlyArray<string>,
-): ReadonlyArray<RunFacts> | null => {
+) => {
   const self = facts.get(runId);
   const known = Arr.flatMap(order, (id) => {
     const fact = facts.get(id);
@@ -378,7 +378,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
       readonly frame: RpcMessage.FromServerEncoded;
     }>();
 
-    const told = (message: ToDoor): Effect.Effect<unknown> => {
+    const told = (message: ToDoor) => {
       switch (message._tag) {
         case "Response":
           return Queue.offer(engineFrames, message);
@@ -406,10 +406,9 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           });
         case "Wrote":
           return PubSub.publish(writes, undefined);
-        case "Answer": {
+        case "Answer":
           const answer = answers.get(message.ask);
           return answer === undefined ? Effect.void : Deferred.succeed(answer, message.value);
-        }
         case "Open":
           return Effect.void;
       }

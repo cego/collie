@@ -15,7 +15,7 @@ import {
   flow,
   Result,
 } from "effect";
-import { readEnv, type PluginEnv } from "../../src/env";
+import { readEnv } from "../../src/env";
 import { connect } from "../../src/hc";
 import { SETUP, serveFakeHc, type FakeHc } from "./fake-hc";
 import { armTripwire, untripped, type Tripwire } from "./herdr-tripwire";
@@ -31,26 +31,11 @@ const CallSchema = Schema.Struct({
 });
 const CallString = Schema.fromJsonString(CallSchema);
 
-type RigServices = FileSystem.FileSystem | Path.Path;
 export type RigError =
   | PlatformError.PlatformError
   | PlatformError.BadArgument
   | Config.ConfigError
   | Schema.SchemaError;
-
-interface RigEnv {
-  [key: string]: string;
-  HOME: string;
-  PATH: string;
-  HERDR_BIN_PATH: string;
-  HERDR_SOCKET_PATH: string;
-  COLLIE_ROOT: string;
-  COLLIE_USER_DIR: string;
-  COLLIE_CLAUDE_MANAGED_DIR: string;
-  COLLIE_STATE_DIR: string;
-  COLLIE_CWD: string;
-  HC_SOCKET: string;
-}
 
 export const UNREACHABLE_RELEASES = "http://127.0.0.1:9";
 
@@ -87,7 +72,7 @@ export class Rig {
     this.coreSocket = path.join(root, "hc.sock");
   }
 
-  static make(): Effect.Effect<Rig, RigError, RigServices> {
+  static make() {
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -100,11 +85,11 @@ export class Rig {
   }
 
   /** A Rig closed when its scope is, whatever the test did. */
-  static scoped(): Effect.Effect<Rig, RigError, RigServices | Scope.Scope> {
+  static scoped() {
     return Effect.acquireRelease(Rig.make(), (rig) => Effect.ignore(rig.close()));
   }
 
-  private setup(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  private setup() {
     const dirs = [this.stateDir, this.userDir, this.baselineDir, this.projectDir];
     const memory = this.memory(50);
     return Effect.gen(function* () {
@@ -114,15 +99,12 @@ export class Rig {
     });
   }
 
-  get procDir(): string {
+  get procDir() {
     return this.path.join(this.root, "proc");
   }
 
   /** This Machine's memory from now on: `availableGiB` of 100 GiB, under `pressure`. */
-  memory(
-    availableGiB: number,
-    pressure = 0,
-  ): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  memory(availableGiB: number, pressure = 0) {
     const proc = this.procDir;
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -139,9 +121,7 @@ export class Rig {
   }
 
   /** Stands in for the agents: each queue entry is written for the next prompt. */
-  queueOutputs(
-    items: ReadonlyArray<Schema.Json>,
-  ): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  queueOutputs(items: ReadonlyArray<Schema.Json>) {
     const outputsPath = this.path.join(this.root, "outputs.json");
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -189,7 +169,7 @@ export class Rig {
     ).pipe(Effect.asVoid);
   }
 
-  env(overrides: RigEnvInput = {}): RigEnv {
+  env(overrides: RigEnvInput = {}) {
     return {
       HOME: this.root,
       PATH: `${this.tripwire.binDir}:${this.pathValue}`,
@@ -213,11 +193,11 @@ export class Rig {
     };
   }
 
-  pluginEnv(overrides: RigEnvInput = {}): PluginEnv {
+  pluginEnv(overrides: RigEnvInput = {}) {
     return readEnv(this.env(overrides));
   }
 
-  calls(): Effect.Effect<Call[], RigError, FileSystem.FileSystem> {
+  calls() {
     const logPath = this.logPath;
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -232,12 +212,12 @@ export class Rig {
     });
   }
 
-  cmds(): Effect.Effect<string[], RigError, FileSystem.FileSystem> {
+  cmds() {
     return this.calls().pipe(Effect.map((calls) => Arr.map(calls, (call) => call.cmd)));
   }
 
   /** Stops the fake core and removes the rig, failing where anything called Herdr 1. */
-  close(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  close() {
     const coreScope = this.coreScope;
     const root = this.root;
     const tripwire = this.tripwire;

@@ -29,9 +29,14 @@ import {
   viewedFiles,
 } from "../desktop/src/shared/diff-view";
 
-const file = (path: string): DiffFile => ({ path, status: "modified", added: 1, removed: 0 });
+const file: (path: string) => DiffFile = (path) => ({
+  path,
+  status: "modified",
+  added: 1,
+  removed: 0,
+});
 
-const depthFirst = (nodes: ReadonlyArray<DiffTreeNode>): ReadonlyArray<string> =>
+const depthFirst: (nodes: ReadonlyArray<DiffTreeNode>) => ReadonlyArray<string> = (nodes) =>
   Arr.flatMap(nodes, (node) => (node.kind === "file" ? [node.key] : depthFirst(node.children)));
 
 describe("the diff's tree", () => {
@@ -52,7 +57,7 @@ describe("the diff's tree", () => {
 });
 
 describe("the diff's tree, merging folder chains", () => {
-  const labelled = (nodes: ReadonlyArray<DiffTreeNode>): ReadonlyArray<unknown> =>
+  const labelled: (nodes: ReadonlyArray<DiffTreeNode>) => ReadonlyArray<unknown> = (nodes) =>
     Arr.map(nodes, (node) =>
       node.kind === "file"
         ? node.label
@@ -395,7 +400,11 @@ describe("a tree row clicked", () => {
 });
 
 describe("whether a file is open", () => {
-  const counted = (path: string, added: number, removed: number): DiffFile => ({
+  const counted: (path: string, added: number, removed: number) => DiffFile = (
+    path,
+    added,
+    removed,
+  ) => ({
     path,
     status: "modified",
     added,
@@ -643,7 +652,10 @@ interface Drawn {
   readonly depth: number;
   readonly node: DiffTreeNode;
 }
-const rows = (nodes: ReadonlyArray<DiffTreeNode>, depth = 0): ReadonlyArray<Drawn> =>
+const rows: (nodes: ReadonlyArray<DiffTreeNode>, depth?: number) => ReadonlyArray<Drawn> = (
+  nodes: ReadonlyArray<DiffTreeNode>,
+  depth = 0,
+) =>
   Arr.flatMap(nodes, (node) => [
     { depth, node },
     ...(node.kind === "folder" ? rows(node.children, depth + 1) : []),
@@ -654,7 +666,11 @@ const room = ({ depth, node }: Drawn, pane: number, viewed: boolean, drafts: num
     : rowRoom({ depth, pane });
 
 describe("the tree's layout over a monorepo change", () => {
-  const changed = (path: string, added: number, removed: number): DiffFile => ({
+  const changed: (path: string, added: number, removed: number) => DiffFile = (
+    path,
+    added,
+    removed,
+  ) => ({
     path,
     status: "modified",
     added,

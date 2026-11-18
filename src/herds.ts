@@ -5,7 +5,7 @@ import * as Arr from "effect/Array";
 import { Effect, Stream } from "effect";
 import type { PaneAt } from "./board-model";
 import type { PluginEnv } from "./env";
-import type { AgentInfo, Herdr } from "./herdr";
+import type { Herdr } from "./herdr";
 import { verifyIncarnation, type AgentEntry } from "./registry";
 import { machineHerd } from "./steering";
 
@@ -36,7 +36,7 @@ export const focusPane = Effect.fn("Herds.focusPane")(function* (
   agents: ReadonlyArray<AgentEntry>,
 ) {
   for (const { herdr } of sessions) {
-    const live = yield* herdr.agentList().pipe(Effect.orElseSucceed((): AgentInfo[] => []));
+    const live = yield* herdr.agentList().pipe(Effect.orElseSucceed(() => []));
     for (const entry of agents) {
       const identified = verifyIncarnation(entry, live);
       if (!identified.ok) continue;
@@ -58,7 +58,7 @@ export const focusPane = Effect.fn("Herds.focusPane")(function* (
 export const agentsIn = (sessions: ReadonlyArray<LiveHerd>) =>
   Effect.forEach(
     sessions,
-    (session) => session.herdr.agentList().pipe(Effect.orElseSucceed((): AgentInfo[] => [])),
+    (session) => session.herdr.agentList().pipe(Effect.orElseSucceed(() => [])),
     { concurrency: "unbounded" },
   ).pipe(Effect.map((each) => ({ alive: Arr.flatten(each) })));
 

@@ -33,12 +33,12 @@ export interface Requested {
 }
 
 /** The host's `Requested`, over its store's claims and its registry. */
-export const requestedOver = (
+export const requestedOver: (
   claimed: Requested["claimed"],
   registry: RegistryApi,
   env: PluginEnv,
   hosted: Context.Context<HostServices>,
-): Requested => ({
+) => Requested = (claimed, registry, env, hosted) => ({
   claimed,
   start: (project, id, target, title) =>
     Effect.gen(function* () {

@@ -45,7 +45,7 @@ const KEY = /^("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_][A-Za-z0-9_./-]*)\s*:(?:[ \
  * back as null, and `1_000` as 1000, which core does not do. Frontmatter uses none of
  * those, and this is the parser's behaviour rather than a promise we make.
  */
-export function parseYaml(src: string): YamlValue {
+export function parseYaml(src: string) {
   let parsed: YamlValue;
   try {
     // SAFETY: the parser yields nulls, booleans, numbers and strings in maps and
@@ -64,11 +64,11 @@ const BARE = /^[A-Za-z0-9_](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
  * otherwise. BARE rules out the punctuation that changes the line's meaning; the round
  * trip through the parser rules out the words that are not strings (`true`, `5`, `~`).
  */
-export function yamlScalar(value: string): string {
+export function yamlScalar(value: string) {
   return BARE.test(value) && parseYaml(value) === value ? value : JSON.stringify(value);
 }
 
-function unquote(raw: string): string {
+function unquote(raw: string) {
   if (pipe(raw, Str.startsWith('"')) && pipe(raw, Str.endsWith('"')) && raw.length > 1) {
     return pipe(raw, Str.slice(1, -1), Str.replace(/\\(.)/g, "$1"));
   }
@@ -88,7 +88,7 @@ function unquote(raw: string): string {
  * a line only closes the block where `parseDocument` would also end it, so a `---` inside
  * a block scalar cannot hide an existing key and get a duplicate written above it.
  */
-export function setFrontmatterKey(text: string, key: string, value: string): string {
+export function setFrontmatterKey(text: string, key: string, value: string) {
   const lines = Str.split(text, "\n");
   const written = `${key}: ${yamlScalar(value)}`;
   if (!FENCE.test(withoutBom(lines[0] ?? ""))) return `---\n${written}\n---\n\n${text}`;
@@ -107,7 +107,7 @@ export function setFrontmatterKey(text: string, key: string, value: string): str
 }
 
 /** The key a frontmatter line sets, or null for anything nested or not a mapping. */
-function topLevelKey(line: string): string | null {
+function topLevelKey(line: string) {
   if (/^\s/.test(line)) return null;
   const m = KEY.exec(Str.trim(line));
   return m ? unquote(m[1]!) : null;
@@ -124,12 +124,12 @@ export interface Document {
  */
 const FENCE = /^---[ \t]*\r?$/;
 
-function withoutBom(line: string): string {
+function withoutBom(line: string) {
   return pipe(line, Str.replace(/^﻿/, ""));
 }
 
 /** Splits `---` frontmatter from the markdown body. */
-export function parseDocument(text: string): Document {
+export function parseDocument(text: string) {
   const normalised = withoutBom(text);
   const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(normalised);
   if (!m) return { data: {}, body: Str.trim(normalised) };

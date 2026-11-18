@@ -33,11 +33,11 @@ export interface Pending {
 }
 
 /** Each of this Run's judged Heals whose Collie defect is not yet filed, linked or set aside. */
-export const pendingIn = (run: string, lines: ReadonlyArray<Metric>): ReadonlyArray<Pending> => {
+export const pendingIn = (run: string, lines: ReadonlyArray<Metric>) => {
   const latest = new Map<string, Metric>();
   for (const line of lines)
     if (line.kind === "report" && line.heal !== undefined) latest.set(line.heal, line);
-  return Arr.flatMap(recoveriesIn(lines), (line): ReadonlyArray<Pending> => {
+  return Arr.flatMap(recoveriesIn(lines), (line) => {
     if (
       line.action !== "healed" ||
       line.heal === undefined ||
@@ -66,7 +66,7 @@ export const pendingIn = (run: string, lines: ReadonlyArray<Metric>): ReadonlyAr
 };
 
 /** Each key filed or linked from these lines, with its issue. */
-export const knownIn = (lines: ReadonlyArray<Metric>): ReadonlyArray<readonly [string, string]> =>
+export const knownIn = (lines: ReadonlyArray<Metric>) =>
   Arr.flatMap(lines, (line) =>
     line.kind === "report" &&
     line.issue !== undefined &&
@@ -152,11 +152,7 @@ export interface Reported {
  * named, else an open one carrying its key, else one `known` for its key. Lists first every
  * time, so a filing whose answer was lost is found by its marker rather than filed again.
  */
-export const report = (
-  host: HostApi,
-  item: Pending,
-  known: ReadonlyMap<string, string>,
-): Effect.Effect<Reported> =>
+export const report = (host: HostApi, item: Pending, known: ReadonlyMap<string, string>) =>
   Effect.gen(function* () {
     const why = setAside(item);
     if (why !== null) return { publication: "not-filed", note: why } satisfies Reported;

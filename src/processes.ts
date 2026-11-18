@@ -87,7 +87,7 @@ const ps = (args: ReadonlyArray<string>) => readPs(args).pipe(Effect.orElseSucce
 const PS_COLUMNS = "pid=,ppid=,stat=,lstart=,command=";
 
 /** `pid ppid stat lstart…` rows, where `lstart` is five words; a zombie has exited, as in `proc`. */
-const psRows = (text: string): ProcessInfo[] =>
+const psRows = (text: string) =>
   Arr.map(
     Arr.filter(
       Arr.map(Str.split(text, "\n"), (line) => Str.split(Str.trim(line), /\s+/)),

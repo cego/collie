@@ -9,7 +9,7 @@ interface DirectoryAlias {
   readonly to: string;
 }
 
-export function remoteOf(url: string): { project: string; path: string } | null {
+export function remoteOf(url: string) {
   const raw = Str.trim(url);
   const parsed = pipe_(raw, Str.includes("://")) ? URL.parse(raw) : null;
   const scp = parsed === null ? /^(?:[^@\s]+@)?([^:/\s]+)[:/](.+)$/.exec(raw) : null;
@@ -135,7 +135,7 @@ export const gitDirOf = Effect.fn("Issues.gitDirOf")(function* (dir: string) {
   return (yield* fs.exists(`${gitDir}/HEAD`)) ? gitDir : null;
 });
 
-export function throughAliases(text: string, aliases: ReadonlyArray<DirectoryAlias>): string {
+export function throughAliases(text: string, aliases: ReadonlyArray<DirectoryAlias>) {
   let expanded = text;
   for (let pass = 0; pass <= text.length; pass++) {
     let next = expanded;

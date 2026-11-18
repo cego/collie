@@ -12,7 +12,6 @@ import {
   atBoundary,
   awaitReady,
   Unsubmitted,
-  type CompactionDeps,
   type CompactionPort,
   type CompactionOutcome,
 } from "../src/compaction";
@@ -49,7 +48,7 @@ const timed = <A, E, R>(wait: (ask: Effect.Effect<number>) => Effect.Effect<A, E
 const every = (interval: number, from: number, to: number) =>
   Array.from({ length: (to - from) / interval + 1 }, (_, at) => from + at * interval);
 
-const port = (over: Partial<CompactionPort>): CompactionPort => ({
+const port = (over: Partial<CompactionPort>) => ({
   gate: Effect.void,
   install: () => Effect.die(new Error("not installed here")),
   usage: () => Effect.succeed(null),
@@ -77,7 +76,7 @@ const controlled = (attempt: { readonly deadline: number } | null) =>
     return stateDir;
   });
 
-const deps = (stateDir: string, claude: CompactionPort): CompactionDeps => ({
+const deps = (stateDir: string, claude: CompactionPort) => ({
   ports: { claude },
   stateDir,
   configured: 1000,
@@ -136,9 +135,7 @@ test("a readiness ask still running at the budget is waited for, and its yes is 
     }),
   ));
 
-const submitting = <A, E, R>(
-  _body: (channel: Channel) => Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | Unsubmitted, R> =>
+const submitting = <A, E, R>(_body: (channel: Channel) => Effect.Effect<A, E, R>) =>
   Effect.fail(new Unsubmitted({ message: "nothing is submitted here" }));
 
 test("an unresolved compaction is polled at its interval and last at its recorded deadline", () =>
@@ -275,10 +272,10 @@ const ROOT = 4_194_400;
 const CHILD = 4_194_401;
 
 /** `/proc` showing one process of `ROOT`'s session, `CHILD`, while each listing says it is there. */
-const session = (
+const session: (
   fs: FileSystem.FileSystem,
   listed: Effect.Effect<boolean>,
-): FileSystem.FileSystem => {
+) => FileSystem.FileSystem = (fs, listed) => {
   const fields = Array<string>(20).fill("0");
   fields[0] = "S";
   fields[3] = String(ROOT);

@@ -7,11 +7,8 @@ import { PLUGIN_ID } from "../../../src/env";
 import { ownInventory, readOwnWords } from "../../../src/own-words";
 import type { OwnInventory, OwnWords } from "../../../src/own-words-model";
 import procedure from "../../../prompts/standing-direction-setup.md" with { type: "text" };
-import type { AguiEvent } from "../shared/agui";
 import type { ActionFailed, DesktopSettingsChange, OnboardRun } from "../shared/flock";
 import {
-  type ComputerStores,
-  type ComputerWords,
   declined,
   type OfferFacts,
   offersSetup,
@@ -31,7 +28,7 @@ export interface Place {
 export const setupInventory = (places: ReadonlyArray<Place>) =>
   Effect.forEach(
     places,
-    ({ computer, inventory }): Effect.Effect<ComputerStores> =>
+    ({ computer, inventory }) =>
       inventory.pipe(
         Effect.map(({ stores }) => ({ computer, stores })),
         Effect.catch((problem) => Effect.succeed({ computer, stores: [], problem })),
@@ -44,7 +41,7 @@ export const setUp = (
   choice: SetupChoice,
   places: ReadonlyArray<Place>,
   chat: Pick<FlockConversation, "reopen" | "send">,
-): Stream.Stream<AguiEvent> =>
+) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const read =
@@ -52,7 +49,7 @@ export const setUp = (
           ? null
           : yield* Effect.forEach(
               places,
-              ({ computer, read }): Effect.Effect<ComputerWords> =>
+              ({ computer, read }) =>
                 read.pipe(
                   Effect.map((words) => ({ computer, words })),
                   Effect.catch((problem) => Effect.succeed({ computer, problem })),
@@ -101,7 +98,7 @@ export const setupOffer = Effect.fn("StandingSetup.offer")(function* (opts: {
 });
 
 /** Desktop's own computer, read in-process, where it is no Machine of the Flock. */
-export const thisComputer = (home: string): Place => {
+export const thisComputer = (home: string) => {
   const places = { home, stateDir: `${home}/.local/state/herdr/plugins/${PLUGIN_ID}` };
   return {
     computer: "this computer",

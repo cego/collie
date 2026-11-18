@@ -24,13 +24,13 @@ import { runEffect } from "./support/effect";
 
 const nothing: LiveNames = { workspaces: [], tabs: [], panes: [] };
 
-const live = (workspaces: string[], tabs: string[] = [], panes: string[] = []): LiveNames => ({
+const live = (workspaces: string[], tabs: string[] = [], panes: string[] = []) => ({
   workspaces,
   tabs,
   panes,
 });
 
-const work = (over: Partial<TaskContext> = {}): TaskContext => ({
+const work = (over: Partial<TaskContext> = {}) => ({
   workflow: "plan",
   named: "/home/dana/work/collie/tasks/task-workspaces",
   short: "task-workspaces",

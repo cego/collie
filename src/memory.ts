@@ -25,13 +25,13 @@ export const PROC_ENV = "COLLIE_PROC";
 export const PRESSURE_SHORT = 10;
 
 /** `hold` is `memory_hold`, a percent of total; 0 is never short, pressure included. */
-export const shortOfMemory = (memory: Memory, hold: number): boolean =>
+export const shortOfMemory = (memory: Memory, hold: number) =>
   hold > 0 &&
   memory.known &&
   (memory.available < (memory.total * hold) / 100 ||
     (memory.pressure !== null && memory.pressure >= PRESSURE_SHORT));
 
-const unknown = (from: string): Memory => ({ known: false, from });
+const unknown: (from: string) => Memory = (from) => ({ known: false, from });
 
 const kB = (meminfo: string, field: string) => {
   const found = new RegExp(`^${field}:\\s+(\\d+) kB$`, "m").exec(meminfo);

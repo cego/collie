@@ -84,7 +84,7 @@ export const ArtefactRegistered = Schema.Struct({
 const dateLine = (date: Artefact["created"]) =>
   date == null ? "unknown" : `${date.at} (${date.provenance})`;
 /** What a terminal shows of one artefact, ending with how to open it. */
-export const artefactLines = (run: string, item: Artefact): ReadonlyArray<string> => {
+export const artefactLines = (run: string, item: Artefact) => {
   const seen =
     item.seen?.revision === item.revision ? "Seen" : item.seen === null ? "Unseen" : "Updated";
   const held = item.digest === "" ? item.kind : `${item.mediaType} · ${item.size} bytes`;

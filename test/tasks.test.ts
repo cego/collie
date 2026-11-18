@@ -42,7 +42,7 @@ afterEach(() =>
   ),
 );
 
-const task = (over: Partial<TaskRecord> = {}): TaskRecord => ({
+const task = (over: Partial<TaskRecord> = {}) => ({
   id: "task-1",
   workspace: "w1",
   label: "Project | Picker",

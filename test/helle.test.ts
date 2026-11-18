@@ -130,7 +130,7 @@ const envFile = Effect.fn("test.envFile")(function* (token = "token-abc") {
   return file;
 });
 
-const project = (slug: string, group?: string, shorthand?: string[]): HelleProject => {
+const project = (slug: string, group?: string, shorthand?: string[]) => {
   const named: HelleProject = { slug, group: group ?? null };
   return shorthand === undefined ? named : { ...named, shorthand };
 };

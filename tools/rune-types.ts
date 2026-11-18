@@ -223,7 +223,11 @@ const generator = () => {
 
   const isNullable = (schema: Json) => Arr.some(schema.anyOf ?? [], ({ type }) => type === "null");
 
-  const typeOf = (schema: Json, wanted: string, within: string): string => {
+  const typeOf: (schema: Json, wanted: string, within: string) => string = (
+    schema,
+    wanted,
+    within,
+  ) => {
     if (schema.$ref !== undefined) {
       const definition = pipe(schema.$ref, Str.replace("#/$defs/", ""));
       return typeOf(

@@ -58,7 +58,7 @@ const HOST_OPTIONS = Arr.map(Rec.toEntries(RESERVED_INPUTS), ([name, meaning]) =
  * and failure schemas, which is what `make` is for — a Layer is described by it, never
  * built, and nothing of the author's body runs.
  */
-export function describeModule(entry: WorkflowEntry, where: Where): Described {
+export function describeModule(entry: WorkflowEntry, where: Where) {
   const built = construct(entry);
   return {
     id: entry.id,
@@ -141,11 +141,8 @@ export const readDefinitions = Effect.fn("Authoring.readDefinitions")(function* 
 });
 
 /** What `make` gave back, or the sentence it threw instead. One of the two is always null. */
-type Constructed =
-  | { readonly workflow: HostWorkflow; readonly broken: null }
-  | { readonly workflow: null; readonly broken: string };
 
-const construct = (entry: WorkflowEntry): Constructed => {
+const construct = (entry: WorkflowEntry) => {
   try {
     // Typed for the author, not for us: an untyped module's `make` can return anything.
     const workflow: HostWorkflow | undefined = entry.make(entry.id).workflow;
@@ -218,7 +215,7 @@ export const checkModule: (
 });
 
 /** Each place a drawing of this module says less than the module does, named by where. */
-const limitsOf = (described: Described): ReadonlyArray<string> => [
+const limitsOf = (described: Described) => [
   ...Arr.flatMap(described.inputs, (input) =>
     Arr.map(input.limits, (limit) => `input "${input.name}": ${limit}`),
   ),
@@ -287,7 +284,7 @@ export const forkEntry: (options: {
  * where they do not: a fork in a project of a module in the installation is otherwise a
  * climb to the root and back down, which resolves but tells the reader nothing.
  */
-const importOf = (path: Path.Path, dir: string, parent: string): string => {
+const importOf = (path: Path.Path, dir: string, parent: string) => {
   const relative = path.relative(dir, parent);
   const near = pipe_(relative, Str.startsWith(".")) ? relative : `./${relative}`;
   return near.length <= parent.length ? near : parent;

@@ -49,7 +49,7 @@ const GITLAB = "gitlab.cego.dk/mk/collie";
 const latest = new Map<"gitlab" | "github", { readonly run: Runner; readonly fetch: FetchLike }>();
 
 /** The shared fake of a forge, with its calls and requests also kept in `log`. */
-function forge(name: "gitlab" | "github", over: Partial<ForgeModel>, log: string[] = []): Runner {
+function forge(name: "gitlab" | "github", over: Partial<ForgeModel>, log: string[] = []) {
   const fake = fakeForge(name, {
     installed: true,
     loggedIn: [name === "gitlab" ? "gitlab.cego.dk" : "github.com"],
@@ -81,7 +81,7 @@ const runWithForge = <A, E>(
   effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | PlatformServices | Records>,
 ) => runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttp))));
 
-const mr65 = (over: Partial<FakeMr>): FakeMr => ({
+const mr65: (over: Partial<FakeMr>) => FakeMr = (over) => ({
   project: GITLAB,
   iid: "65",
   state: "open",
@@ -535,7 +535,7 @@ test("a closed merge request is news, not a verdict, and a fresh answer is not a
   ));
 
 /** A GitLab whose merge landed and whose deploy jobs have taken it as far as `live` says. */
-function deployed(live: { stage: string; prod: string | null }, log: string[] = []): Runner {
+function deployed(live: { stage: string; prod: string | null }, log: string[] = []) {
   const merged = "35ae2cea5e5848602729dbc0e8a87ed0d9049c46";
   return forge(
     "gitlab",
@@ -928,7 +928,10 @@ const URL115 = {
 } as const;
 
 /** #115 from the Task's branch, opened after the Task's first Run. */
-const fromBranch = (name: "gitlab" | "github", over: Partial<FakeMr> = {}): FakeMr => ({
+const fromBranch: (name: "gitlab" | "github", over?: Partial<FakeMr>) => FakeMr = (
+  name,
+  over = {},
+) => ({
   project: REPO[name].project,
   iid: "115",
   state: "open",
@@ -1519,7 +1522,7 @@ const RELEASE: ReadonlyArray<Partial<RunFacts>> = [
     ...ON_65,
   },
 ];
-const attempt = (over: Partial<Landing> = {}): Landing => ({
+const attempt: (over?: Partial<Landing>) => Landing = (over = {}) => ({
   state: "attempt",
   mr: MR,
   head: LANDED_HEAD,
@@ -1718,7 +1721,7 @@ test("a card whose Run ended is still followed while its Reopened agent works or
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
 
 /** A GitLab whose merge request is open with its head pipeline `state`. */
-const piped = (state: Check["state"]): Runner =>
+const piped = (state: Check["state"]) =>
   forge("gitlab", { mrs: [mr65({ head: HEAD, checks: [{ name: "build", state }] })] });
 
 const PR = "https://github.com/cego/collie/pull/30";
@@ -1728,7 +1731,7 @@ const github = (
   state: FakeMr["state"],
   checks: ReadonlyArray<Check>,
   over: Partial<ForgeModel> = {},
-): Runner =>
+) =>
   forge("github", {
     mrs: [
       {
@@ -2220,7 +2223,7 @@ const apiMerged = Effect.fn("merges.apiMerged")(function* (
       runDir(stateDir, lander),
       attempt({ state: "landed", sha: "m1", mr: API3 }),
     );
-  const mr = (project: string, iid: string, state: FakeMr["state"]): FakeMr => ({
+  const mr = (project: string, iid: string, state: FakeMr["state"]) => ({
     project: `gitlab.cego.dk/cego/${project}`,
     iid,
     title: project,

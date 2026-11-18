@@ -34,7 +34,7 @@ export class Drift extends Data.TaggedError("Drift")<{
   }
 }
 
-export const drift = (rendered: string, golden: string): Option.Option<Drift> => {
+export const drift = (rendered: string, golden: string) => {
   if (rendered === golden) return Option.none();
   const ours = Str.split(rendered, "\n");
   const theirs = Str.split(golden, "\n");

@@ -8,7 +8,7 @@ import { probeGitlab, probeGithub, probeLinearMcp } from "../src/connection-prob
 import { ConnectionReading } from "../src/connection-model";
 import { writeConfigValue } from "../src/config";
 import { parseYaml } from "../src/yaml";
-import { type Ran, type Runner } from "../src/mr";
+import { type Runner } from "../src/mr";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 
@@ -27,7 +27,7 @@ test("GitLab is read on the host Collie works against, never glab's default, and
       ).pipe(Effect.orDie);
       const asked: string[] = [];
       const run: Runner = (cmd, args) =>
-        Effect.sync((): Ran => {
+        Effect.sync(() => {
           const said = Arr.join(args, " ");
           asked.push(said);
           if (said === "config get host --global") return { code: 0, stdout: glab.host };

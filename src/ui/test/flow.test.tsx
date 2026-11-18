@@ -54,13 +54,14 @@ const mount = Effect.fn("flow.mount")(function* (ask: Pending["ask"], width = 80
   };
 });
 
-function menu(): Pending["ask"] {
-  return {
+function menu() {
+  const returned: Pending["ask"] = {
     _tag: "Menu",
     header: "Workflows — /w/collie",
     footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
     items: WORKFLOWS,
   };
+  return returned;
 }
 
 test("a name prefix beats a substring, which beats characters in order", () => {

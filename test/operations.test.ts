@@ -174,7 +174,11 @@ OUT`,
 
 const shaOf = (digit: string) => Arr.join(Arr.replicate(digit, 40), "");
 
-const taskMr = (repo: string, iid: number, over: Partial<TaskMr> = {}): TaskMr => ({
+const taskMr: (repo: string, iid: number, over?: Partial<TaskMr>) => TaskMr = (
+  repo,
+  iid,
+  over = {},
+) => ({
   id: `gitlab.cego.dk/cego/${repo}!${iid}`,
   mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
   label: `cego/${repo}!${iid}`,

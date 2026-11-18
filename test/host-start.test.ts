@@ -66,16 +66,19 @@ const answered = (state: string) =>
 /** A filesystem whose listing of /proc waits for `open`, and tells `listed` it was asked. */
 const holdingProc =
   (open: Deferred.Deferred<void>, listed: Deferred.Deferred<void>) =>
-  (fs: FileSystem.FileSystem): FileSystem.FileSystem => ({
-    ...fs,
-    readDirectory: (path, options) =>
-      path === "/proc"
-        ? Deferred.succeed(listed, undefined).pipe(
-            Effect.andThen(Deferred.await(open)),
-            Effect.andThen(fs.readDirectory(path, options)),
-          )
-        : fs.readDirectory(path, options),
-  });
+  (fs: FileSystem.FileSystem) => {
+    const returned: FileSystem.FileSystem = {
+      ...fs,
+      readDirectory: (path, options) =>
+        path === "/proc"
+          ? Deferred.succeed(listed, undefined).pipe(
+              Effect.andThen(Deferred.await(open)),
+              Effect.andThen(fs.readDirectory(path, options)),
+            )
+          : fs.readDirectory(path, options),
+    };
+    return returned;
+  };
 
 test.skipIf(process.platform !== "linux")(
   "a host answers while its sweep of an earlier host's check waits on /proc, then ends that check on its Run",

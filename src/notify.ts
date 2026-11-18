@@ -9,7 +9,7 @@ import { Context, type Effect } from "effect";
 import { mrWords, parseMrUrl } from "./board-model";
 
 /** What an opened merge request's notification names it by: `!42`, or `#30` for a pull request. */
-export function openedSubject(url: string): string | undefined {
+export function openedSubject(url: string) {
   const mr = parseMrUrl(url);
   return mr === null ? undefined : `${mrWords(mr).sign}${mr.iid}`;
 }
@@ -87,7 +87,7 @@ const HEADLINE = {
 } satisfies Record<NotificationKind, (subject?: string) => string>;
 
 /** One Herd runs several checkouts, so the repo is part of every title. */
-function repoOf(cwd: string): string {
+function repoOf(cwd: string) {
   return Str.split(pipe(cwd, Str.replace(/\/+$/, "")), "/").pop() ?? cwd;
 }
 
@@ -97,14 +97,14 @@ export function notificationTitle(
   slug: string,
   /** What this one is about, where the kind names it: a step id, an MR's `!<iid>`. */
   subject?: string,
-): string {
+) {
   return `${repoOf(cwd)} · ${slug} ${HEADLINE[kind](subject)}`;
 }
 
 /** Which kinds are wanted; a kind absent from the map is on. */
 export type NotificationSettings = Readonly<Record<string, boolean>>;
 
-export function wanted(settings: NotificationSettings, kind: NotificationKind): boolean {
+export function wanted(settings: NotificationSettings, kind: NotificationKind) {
   return settings[kind] !== false;
 }
 

@@ -76,12 +76,17 @@ const SOURCE = { claude: "claude-usage", chatgpt: "codex-app-server" } as const;
 
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
-const problem = (
+const problem: (
   subscription: Subscription,
   at: number,
   text: string,
-  login: Login = { account: null, accountLabel: null, plan: null },
-): UsageReading => ({
+  login?: Login,
+) => UsageReading = (
+  subscription,
+  at,
+  text,
+  login = { account: null, accountLabel: null, plan: null },
+) => ({
   subscription,
   ...login,
   windows: [],
@@ -110,14 +115,17 @@ const paced = Effect.fn("Usage.paced")(function* (
         const asked = yield* ask.pipe(
           Effect.timeoutOption(USAGE_CALL_MS),
           Effect.map(
-            Option.getOrElse((): Asked => ({
-              reading: problem(
-                subscription,
-                now,
-                `${SOURCE[subscription]} did not answer within ${USAGE_CALL_MS / 1000}s`,
-              ),
-              called: true,
-            })),
+            Option.getOrElse(() => {
+              const returned: Asked = {
+                reading: problem(
+                  subscription,
+                  now,
+                  `${SOURCE[subscription]} did not answer within ${USAGE_CALL_MS / 1000}s`,
+                ),
+                called: true,
+              };
+              return returned;
+            }),
           ),
         );
         if (asked.reading.problem === null) good = asked.reading;
@@ -136,12 +144,17 @@ const paced = Effect.fn("Usage.paced")(function* (
 });
 
 /** Claude's reading, with a status-line sample newer than it in place of its session and weekly. */
-function withSample(reading: UsageReading, sample: StatusSample | null): UsageReading {
-  if (sample === null) return reading;
+function withSample(reading: UsageReading, sample: StatusSample | null) {
+  if (sample === null) {
+    const returned: UsageReading = reading;
+    return returned;
+  }
   const fresh = statusLineWindows(sample.limits);
-  if (fresh.length === 0 || (reading.windows.length > 0 && sample.at <= epochMs(reading.at)))
-    return reading;
-  return {
+  if (fresh.length === 0 || (reading.windows.length > 0 && sample.at <= epochMs(reading.at))) {
+    const returned: UsageReading = reading;
+    return returned;
+  }
+  const returned: UsageReading = {
     ...reading,
     windows: [
       ...fresh,
@@ -153,6 +166,7 @@ function withSample(reading: UsageReading, sample: StatusSample | null): UsageRe
     at: iso(sample.at),
     source: "claude-status-line",
   };
+  return returned;
 }
 
 export const makeUsage = Effect.fn("Usage.make")(function* (sources: UsageSources) {
@@ -234,23 +248,24 @@ export const claudeLoginSource = (env: PluginEnv) =>
       process.platform === "darwin"
         ? keychain(configDir)
         : readText(path.join(dir, ".credentials.json"));
-    return {
+    const returned: ClaudeLoginSource = {
       credentials: Effect.provideContext(credentials, services),
       claudeJson: readText(
         configDir === undefined
           ? path.join(env.home, ".claude.json")
           : path.join(configDir, ".claude.json"),
       ).pipe(Effect.provideContext(services)),
-    } satisfies ClaudeLoginSource;
+    };
+    return returned;
   });
 
 /**
  * Asks Claude's usage endpoint with the login Claude Code keeps, read and never refreshed
  * or written: a refresh rotates the token and signs Claude Code out.
  */
-export const askClaude = (
+export const askClaude: (
   login: ClaudeLoginSource,
-): Effect.Effect<Asked, never, HttpClient.HttpClient> =>
+) => Effect.Effect<Asked, never, HttpClient.HttpClient> = (login) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const stored = Option.getOrNull(
@@ -265,11 +280,14 @@ export const askClaude = (
       Option.getOrNull(decodeClaudeJson((yield* login.claudeJson) ?? "")),
       stored.subscriptionType ?? null,
     );
-    const failed = (text: string, retryAfterMs?: number | null): Asked => ({
-      reading: problem("claude", now, text, account),
-      called: true,
-      retryAfterMs,
-    });
+    const failed = (text: string, retryAfterMs?: number | null) => {
+      const returned: Asked = {
+        reading: problem("claude", now, text, account),
+        called: true,
+        retryAfterMs,
+      };
+      return returned;
+    };
     if (stored.expiresAt != null && stored.expiresAt <= now)
       return {
         reading: problem(
@@ -328,7 +346,7 @@ export interface CodexAnswers {
 /** A Codex app server for one exchange: a running agent's own, else one over stdio. */
 export type CodexAsk = Effect.Effect<CodexAnswers, CodexError | Cause.UnknownError>;
 
-export const codexReading = (ask: CodexAsk): Effect.Effect<Asked> =>
+export const codexReading: (ask: CodexAsk) => Effect.Effect<Asked> = (ask) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const answered = yield* Effect.result(ask);
@@ -390,7 +408,7 @@ const runningCodex = (stateDir: string) =>
     return null;
   });
 
-const viaEndpoint = (endpoint: string): CodexAsk =>
+const viaEndpoint: (endpoint: string) => CodexAsk = (endpoint) =>
   withCodex(endpoint, (client) =>
     Effect.all({
       rateLimits: client.call(RATE_LIMITS, {}),
@@ -500,14 +518,15 @@ export const liveSources = (env: PluginEnv) =>
       ),
       Effect.provideContext(services),
     );
-    return {
+    const returned: UsageSources = {
       claude: askClaude(login).pipe(Effect.provide(FetchHttpClient.layer)),
       chatgpt: codexReading(codex),
       statusLine: (yield* rateLimitsReader(env.stateDir)).newest.pipe(
         Effect.orElseSucceed(() => null),
         Effect.provideContext(services),
       ),
-    } satisfies UsageSources;
+    };
+    return returned;
   });
 
 /** This Machine's one reader of its usage, on the environment this process runs in. */

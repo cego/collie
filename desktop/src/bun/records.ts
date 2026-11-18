@@ -40,10 +40,10 @@ const weighed = (detail: RunDetail | null) =>
  * Each frame without a Flow the view already has, which it keeps: each later part of a record
  * carries the whole Flow again, and decoding a large one again costs the view a frame.
  */
-const newFlowsOnly = (
+const newFlowsOnly: (
   shown: Flow | undefined,
   record: KeptRecord,
-): readonly [Flow | undefined, ReadonlyArray<KeptRecord>] => {
+) => readonly [Flow | undefined, ReadonlyArray<KeptRecord>] = (shown, record) => {
   const { detail } = record;
   if (detail === null) return [undefined, [record]];
   if (detail.flow === undefined) return [shown, [record]];
@@ -52,7 +52,7 @@ const newFlowsOnly = (
   return [shown, [{ ...record, detail: rest }]];
 };
 
-const apply = (told: Told, event: RecordEvent, now: number): Told => {
+const apply = (told: Told, event: RecordEvent, now: number) => {
   switch (event._tag) {
     case "Frame":
       return {
@@ -136,7 +136,7 @@ export const recordKeeper = (doors: DoorMap<RecordDoor>) =>
 
     return {
       /** A record for as long as the view holds it, which the view keeps after closing it. */
-      open: (installation: string, runId: string): Stream.Stream<KeptRecord, ActionFailed> =>
+      open: (installation: string, runId: string) =>
         Stream.unwrap(
           Effect.gen(function* () {
             const key = keyOf(installation, runId);
@@ -151,7 +151,7 @@ export const recordKeeper = (doors: DoorMap<RecordDoor>) =>
                   detail === undefined ? Stream.empty : Stream.make({ detail, asOf, bytes });
                 return failure === null ? shown : Stream.concat(shown, Stream.fail(failure));
               }),
-              Stream.mapAccum((): Flow | undefined => undefined, newFlowsOnly),
+              Stream.mapAccum(() => undefined, newFlowsOnly),
               markFirst("desktop:serve", runId),
               Stream.ensuring(
                 Effect.suspend(() => {

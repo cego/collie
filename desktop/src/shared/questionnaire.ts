@@ -83,7 +83,7 @@ export interface Stepped {
   readonly does: Effect | null;
 }
 
-export const questionnaire = (question: Question): Questionnaire => ({
+export const questionnaire: (question: Question) => Questionnaire = (question) => ({
   question,
   checked: null,
   focus: 0,
@@ -103,7 +103,7 @@ interface Row {
   readonly why: string | null;
 }
 
-const rowsOf = (question: Question): ReadonlyArray<Row> => [
+const rowsOf = (question: Question) => [
   ...Arr.map(question.options, (option) => ({
     id: option.id,
     title: option.title,
@@ -158,7 +158,7 @@ const sent = (state: Questionnaire, sends: string, answer: string | null, reques
   } as const;
 };
 
-const actionFor = (state: Questionnaire, value: string): DesktopAction =>
+const actionFor: (state: Questionnaire, value: string) => DesktopAction = (state, value) =>
   value === HOLD
     ? {
         _tag: "Control",
@@ -205,7 +205,10 @@ const lastEnabled = (rows: ReadonlyArray<Row>) =>
     () => 0,
   );
 
-const keyed = (state: Questionnaire, event: Extract<Event, { kind: "key" }>): Stepped => {
+const keyed: (state: Questionnaire, event: Extract<Event, { kind: "key" }>) => Stepped = (
+  state,
+  event,
+) => {
   if (event.key === "Escape") return { state, does: { kind: "close" } };
   if (event.where === "steer")
     return event.key === "Enter"
@@ -269,7 +272,7 @@ const replied = (state: Questionnaire, event: Extract<Event, { kind: "replied" }
   };
 };
 
-const seen = (state: Questionnaire, question: Question | null): Questionnaire => {
+const seen = (state: Questionnaire, question: Question | null) => {
   if (question === null) return { ...state, onBoard: false };
   if (question.run !== state.question.run || question.id !== state.question.id)
     return questionnaire(question);
@@ -284,7 +287,7 @@ const seen = (state: Questionnaire, question: Question | null): Questionnaire =>
   };
 };
 
-export const stepped = (state: Questionnaire, event: Event): Stepped => {
+export const stepped: (state: Questionnaire, event: Event) => Stepped = (state, event) => {
   switch (event.kind) {
     case "seen":
       return { state: seen(state, event.question), does: null };

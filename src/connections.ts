@@ -8,7 +8,7 @@ import {
   type Path,
   type PlatformError,
 } from "effect";
-import type { Connection, ConnectionId, ConnectionReading } from "./connection-model";
+import type { ConnectionId, ConnectionReading } from "./connection-model";
 import type { PluginEnv } from "./env";
 import {
   helleEnvPath,
@@ -62,7 +62,7 @@ export const readConnections = <R, E>(probes: ReadonlyArray<ConnectionProbe<R, E
                   fix,
                 }),
           ),
-          Effect.map((reading): Connection => ({ id, reading })),
+          Effect.map((reading) => ({ id, reading })),
         ),
       { concurrency: "unbounded" },
     );

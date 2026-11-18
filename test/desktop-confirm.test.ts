@@ -131,7 +131,7 @@ test("a card action Desktop does not send says why, and is logged as not sent", 
     }),
   ));
 
-const delivering = (): Door => {
+const delivering = () => {
   const fake: Partial<Door> = {
     act: () =>
       // SAFETY: `Deliver` never asks to discard the reply, so it is the results.
@@ -212,7 +212,7 @@ test("board and chat writers ending at once at the rotation boundary keep every 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-actions-log-" });
-      const line = (request: string): Attempted => ({
+      const line: (request: string) => Attempted = (request) => ({
         door: "board",
         machine: "vm-mk",
         request,

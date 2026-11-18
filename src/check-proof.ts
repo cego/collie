@@ -42,11 +42,7 @@ export interface CheckProof {
  */
 export type Unmatched = "anyone" | "collie";
 
-export function checkProof(
-  got: Journal,
-  name: string,
-  unmatched: Unmatched = "anyone",
-): CheckProof {
+export function checkProof(got: Journal, name: string, unmatched: Unmatched = "anyone") {
   const command = Option.getOrUndefined(
     Option.map(Option.fromNullishOr(got.commands), (present) =>
       Option.getOrUndefined(Arr.findFirst(present, (one) => one.name === name)),
@@ -78,7 +74,12 @@ export function checkProof(
         (v) => v.end.head_sha === got.final.head_sha && !staleAgainst(v, got.final) && passed(v),
       ),
     );
-    return { state: proof === undefined ? "waiting" : "proved", runs: jobs, last: proof };
+    const returned: CheckProof = {
+      state: proof === undefined ? "waiting" : "proved",
+      runs: jobs,
+      last: proof,
+    };
+    return returned;
   }
   const runs = Arr.filter(
     got.verifications,
@@ -89,7 +90,8 @@ export function checkProof(
         : ranCommand(v, command)),
   );
   const last = Option.getOrUndefined(Arr.findLast(runs, (v) => !staleAgainst(v, got.final)));
-  return { state: stateOf(runs, last), runs, last };
+  const returned: CheckProof = { state: stateOf(runs, last), runs, last };
+  return returned;
 }
 
 function stateOf(runs: ReadonlyArray<Verification>, last: Verification | undefined) {
@@ -106,11 +108,11 @@ export const owesNothingHere = (proof: CheckProof) =>
   proof.state === "passed" || proof.state === "waiting" || proof.state === "proved";
 
 /** The Checks a Run runs itself: all but those left to CI. */
-export const owedLocally = <C extends LeftToCi>(checks: ReadonlyArray<C>): ReadonlyArray<C> =>
+export const owedLocally = <C extends LeftToCi>(checks: ReadonlyArray<C>) =>
   Arr.filter(checks, (check) => check.ci === undefined);
 
 /** Why a check is unstable: git's first line where its latest unstable record kept why it could not measure the tree. */
-export function unstableWhy(runs: ReadonlyArray<Verification>): string {
+export function unstableWhy(runs: ReadonlyArray<Verification>) {
   const latest = Option.getOrUndefined(Arr.findLast(runs, (v) => v.result === "unstable"));
   const reason = latest?.end.unmeasured ?? latest?.start.unmeasured ?? "";
   return Option.match(Arr.findFirst(Arr.map(Str.split(reason, "\n"), Str.trim), Str.isNonEmpty), {

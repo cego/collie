@@ -148,7 +148,7 @@ export const attachCore = Effect.fn("Desktop.attachCore")(function* (
           Effect.andThen(hc.send(one.channel, Kind.CREDIT, u32(one.bytes))),
           Effect.ignore,
         );
-  const send = (command: TerminalCommand): Effect.Effect<void> => {
+  const send = (command: TerminalCommand) => {
     switch (command.type) {
       case "terminal.input":
         return hc
@@ -181,7 +181,7 @@ export const openTerminal = Effect.fn("Desktop.openTerminal")(function* (
   if (at.core === undefined)
     return {
       events: Stream.succeed<TerminalEvent>({ _tag: "NoPane", at }),
-      send: (): Effect.Effect<void> => Effect.void,
+      send: () => Effect.void,
     };
   const local = route.machine.profile === "local";
   const command = yield* (local ? route : localRoute([], ""))
@@ -218,7 +218,7 @@ export const inTerminal = (
   command: ReadonlyArray<string>,
   platform: NodeJS.Platform,
   which: (name: string) => string | null,
-): ReadonlyArray<string> | null => {
+) => {
   if (platform === "darwin")
     return [
       "osascript",

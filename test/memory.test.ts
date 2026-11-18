@@ -10,7 +10,11 @@ import { linuxMemory, macMemory, shortOfMemory, type Memory } from "../src/memor
 import { shell } from "../src/mr";
 
 const GiB = 1024 ** 3;
-const known = (available: number, total: number, pressure: number | null = null): Memory => ({
+const known: (available: number, total: number, pressure?: number | null) => Memory = (
+  available,
+  total,
+  pressure = null,
+) => ({
   known: true,
   available,
   total,

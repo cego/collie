@@ -35,7 +35,6 @@ import {
   type KeyContext,
   type MenuItem,
   type Keypress,
-  type AppState,
   type Row,
 } from "../../src/ui/state";
 import { NO_MARKS } from "../../src/lines";
@@ -52,7 +51,7 @@ const NOW = epochMs("2026-09-02T12:00:00.000Z");
 /** `ago` takes an ISO string and `agoShort` epoch millis; this is the one clock in both. */
 const FIXED_ISO = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
-function board(over: Partial<WorkspaceView> = {}): WorkspaceView {
+function board(over: Partial<WorkspaceView> = {}) {
   return {
     repo: "collie",
     cwd: "/w/collie",
@@ -249,7 +248,7 @@ test("an agent whose run is not on the board goes in a group of its own", () => 
 });
 
 /** One workspace of the wide board: what is in it, and what its group row says. */
-function group(label: string, over: Partial<WideGroup> = {}): WideGroup {
+function group(label: string, over: Partial<WideGroup> = {}) {
   return {
     workspaceId: `w${label.length}`,
     label,
@@ -264,7 +263,7 @@ function group(label: string, over: Partial<WideGroup> = {}): WideGroup {
   };
 }
 
-function wideView(groups: WideGroup[], quiet: string[] = []): WideView {
+function wideView(groups: WideGroup[], quiet: string[] = []) {
   return { groups, quiet, now: NOW };
 }
 
@@ -1038,8 +1037,8 @@ const HERE: Filter = { kind: "workspace", id: "w1" };
 const EVERYWHERE: Filter = { kind: "all" };
 
 /** The board as the keyboard sees it, with only what a test cares about set. */
-function keys(over: Partial<KeyContext> = {}): KeyContext {
-  return {
+function keys(over: Partial<KeyContext> = {}) {
+  const returned: KeyContext = {
     on: { _tag: "Board" },
     view: "runs",
     filter: HERE,
@@ -1053,10 +1052,11 @@ function keys(over: Partial<KeyContext> = {}): KeyContext {
     mrs: [],
     ...over,
   };
+  return returned;
 }
 
 /** The whole of what the app draws, with everything a test does not care about empty. */
-function state(): AppState {
+function state() {
   return {
     view: "runs",
     filter: { kind: "all" },

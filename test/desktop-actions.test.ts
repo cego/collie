@@ -47,7 +47,7 @@ test("a try refused over a Step that finished since tells its caller which Step"
   ));
 
 test("an offer a Task's other merge request makes is chosen apart from the Run's own, and invoked on its owner", () => {
-  const offer = (over: Partial<OfferView>): OfferView => ({
+  const offer: (over: Partial<OfferView>) => OfferView = (over) => ({
     id: "release",
     title: "Release",
     workflow: "release",

@@ -10,7 +10,7 @@ import {
   type Metric,
 } from "../src/metrics";
 
-const failure = (over: Partial<FailureLike> = {}): FailureLike => ({
+const failure = (over: Partial<FailureLike> = {}) => ({
   name: "tests",
   result: "fail",
   exit: 1,
@@ -18,7 +18,7 @@ const failure = (over: Partial<FailureLike> = {}): FailureLike => ({
   ...over,
 });
 
-const line = (over: Partial<Metric> & { kind: Metric["kind"] }): Metric => ({
+const line = (over: Partial<Metric> & { kind: Metric["kind"] }) => ({
   at: "2026-09-11T10:00:00.000Z",
   subject: "",
   value: 0,

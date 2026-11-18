@@ -116,7 +116,7 @@ export const openPeer = (
   path: (way: Way, direct: string | null) => string,
   connection: Effect.Effect<SshConnection | null>,
   way?: Way,
-): Effect.Effect<Opened, MachineUnreachable, Scope.Scope> =>
+) =>
   Effect.gen(function* () {
     const url = peer.url ?? "";
     const direct =
@@ -126,7 +126,10 @@ export const openPeer = (
             refused: `${url} refused the connection`,
             silent: `no answer from ${url} within ${REACH_BOUND}`,
           }).pipe(
-            Effect.map((opened): Opened => ({ ...opened, way: "direct", direct: null })),
+            Effect.map((opened) => {
+              const returned: Opened = { ...opened, way: "direct", direct: null };
+              return returned;
+            }),
             Effect.flip,
             Effect.result,
           );

@@ -13,8 +13,8 @@ const FINAL = { head_sha: "abc123", fingerprint: "tree-1" };
 const TESTS: VerifySpec = { name: "tests", executable: "bun", argv: ["test"], cwd: "/repo" };
 const COMMAND: CheckCommand = { ...TESTS, executable: "/usr/bin/bun" };
 
-function record(over: Partial<Verification> = {}): Verification {
-  return {
+function record(over: Partial<Verification> = {}) {
+  const returned: Verification = {
     id: "tests-1",
     run: "r1",
     name: "tests",
@@ -32,6 +32,7 @@ function record(over: Partial<Verification> = {}): Verification {
     by: "collie",
     ...over,
   };
+  return returned;
 }
 
 const proofOf = (
@@ -226,10 +227,7 @@ test("no gap decider counts a check left to CI's missing local pass", () => {
   expect(evidenceGaps("unspecified", collected([], { approved: [NUXI] }))).toEqual([]);
 });
 
-function collected(
-  verifications: ReadonlyArray<Verification>,
-  over: Partial<Collected> = {},
-): Collected {
+function collected(verifications: ReadonlyArray<Verification>, over: Partial<Collected> = {}) {
   return {
     verifications,
     final: FINAL,

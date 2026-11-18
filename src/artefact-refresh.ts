@@ -19,7 +19,7 @@ export const refreshJobs = () => {
   });
   const due = <R>(job: RefreshJob<R>, now: number) =>
     now >= (checked.get(job.key)?.due ?? job.observed + 30_000);
-  const refresh = <R>(job: RefreshJob<R>): Effect.Effect<boolean, never, R> =>
+  const refresh = <R>(job: RefreshJob<R>) =>
     Effect.gen(function* () {
       const running = pending.get(job.key);
       if (running !== undefined) return yield* Deferred.await(running);

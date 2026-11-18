@@ -15,7 +15,7 @@ const WEB_URL = /^https?:\/\/\S+$/i;
 /** Inside these a `file:line` is something else's text. */
 const LEFT_ALONE = new Set(["pre", "a", "code", "file-ref"]);
 
-const referencesIn = (text: string): Array<Node> => {
+const referencesIn = (text: string) => {
   const nodes: Array<Node> = [];
   let from = 0;
   for (const found of pipe(text, Str.matchAll(FILE_LINE))) {
@@ -52,36 +52,50 @@ const decoded = (href: string) => {
   }
 };
 
-const confine =
-  (referenced: boolean) =>
-  (node: Node): Array<Node> => {
-    if (!Arr.isArray<typeof node>(node)) return referenced ? referencesIn(node) : [node];
-    const [tag, attributes, ...children] = node;
-    if (tag === null) return [node];
-    // A style could lay an overlay across the whole window; a popover, or a dialog a command
-    // opens, is drawn above it.
-    for (const name of Struct.keys(attributes))
-      if (/^:?(style|popover\w*|command\w*|closedby)$/i.test(name) || scripted(attributes, name))
-        delete attributes[name];
-    const [only] = children;
-    const text = children.length === 1 && !Arr.isArray<typeof only>(only) ? (only ?? "") : null;
-    const whole = referenced && tag === "code" && text !== null ? WHOLE_FILE_LINE.exec(text) : null;
-    if (whole !== null) return [["file-ref", { file: whole[1], line: whole[2] }, whole[0]]];
-    const href = String(attributes.href);
-    if (tag === "a" && text !== null && WEB_URL.test(href) && [href, decoded(href)].includes(text))
-      return [["a", { ...attributes, title: href }, shortUrl(text)]];
-    if (referenced && tag === "code" && text !== null && WEB_URL.test(text))
-      return [["a", { href: text, title: text }, ["code", {}, shortUrl(text)]]];
-    return [
-      [tag, attributes, ...Arr.flatMap(children, confine(referenced && !LEFT_ALONE.has(tag)))],
+const confine = (referenced: boolean) => (node: Node) => {
+  if (!Arr.isArray<typeof node>(node)) {
+    const returned: Array<Node> = referenced ? referencesIn(node) : [node];
+    return returned;
+  }
+  const [tag, attributes, ...children] = node;
+  if (tag === null) {
+    const returned: Array<Node> = [node];
+    return returned;
+  }
+  // A style could lay an overlay across the whole window; a popover, or a dialog a command
+  // opens, is drawn above it.
+  for (const name of Struct.keys(attributes))
+    if (/^:?(style|popover\w*|command\w*|closedby)$/i.test(name) || scripted(attributes, name))
+      delete attributes[name];
+  const [only] = children;
+  const text = children.length === 1 && !Arr.isArray<typeof only>(only) ? (only ?? "") : null;
+  const whole = referenced && tag === "code" && text !== null ? WHOLE_FILE_LINE.exec(text) : null;
+  if (whole !== null) {
+    const returned: Array<Node> = [["file-ref", { file: whole[1], line: whole[2] }, whole[0]]];
+    return returned;
+  }
+  const href = String(attributes.href);
+  if (tag === "a" && text !== null && WEB_URL.test(href) && [href, decoded(href)].includes(text)) {
+    const returned: Array<Node> = [["a", { ...attributes, title: href }, shortUrl(text)]];
+    return returned;
+  }
+  if (referenced && tag === "code" && text !== null && WEB_URL.test(text)) {
+    const returned: Array<Node> = [
+      ["a", { href: text, title: text }, ["code", {}, shortUrl(text)]],
     ];
-  };
+    return returned;
+  }
+  const returned: Array<Node> = [
+    [tag, attributes, ...Arr.flatMap(children, confine(referenced && !LEFT_ALONE.has(tag)))],
+  ];
+  return returned;
+};
 
 /**
  * Strips every style, popover, command and script URL; turns each `file:line` outside code
  * and links into a `file-ref`; shortens a link that is its own URL; links inline-code URLs.
  */
-export const confined = (): ComarkPlugin => ({
+export const confined: () => ComarkPlugin = () => ({
   name: "confined",
   post: ({ tree }) => {
     tree.nodes = Arr.flatMap(tree.nodes, confine(true));

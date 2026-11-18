@@ -4,7 +4,7 @@ import { type BoardMessage, type BoardSnapshot, PROTOCOL } from "../src/board-mo
 import { flockStream, type Route, type RouteChange } from "../desktop/src/bun/machine";
 import type { FlockItem } from "../desktop/src/shared/flock";
 
-const snapshot = (installation: string): BoardSnapshot => ({
+const snapshot: (installation: string) => BoardSnapshot = (installation) => ({
   _tag: "Snapshot",
   installation,
   build: "1.0.5",
@@ -87,7 +87,7 @@ test("startup read connection: removing an alias keeps another route to the same
         const readDoors = new Map<string, Opening>();
         const changes = yield* Queue.unbounded<RouteChange<Opening>>();
         let subscribed = 0;
-        const route = (profile: string): Route<Opening> => ({
+        const route = (profile: string) => ({
           machine: { profile, name: profile },
           open: () =>
             Effect.succeed({

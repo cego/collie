@@ -212,13 +212,19 @@ export type SettingValue = typeof SettingValue.Type;
 
 type Explained = Pick<Setting, "group" | "label" | "description" | "unit" | "machine">;
 
-const choice = (
+const choice: (
   key: string,
   choices: ReadonlyArray<string>,
   fallback: string,
   explained: Explained,
-): Setting => ({ key, kind: "choice", choices, fallback, ...explained });
-const of = (key: string, kind: SettingKind, fallback: string, explained: Explained): Setting => ({
+) => Setting = (key, choices, fallback, explained) => ({
+  key,
+  kind: "choice",
+  choices,
+  fallback,
+  ...explained,
+});
+const of = (key: string, kind: SettingKind, fallback: string, explained: Explained) => ({
   key,
   kind,
   choices: [],
@@ -467,7 +473,7 @@ export const SETTINGS: ReadonlyArray<Setting> = [
 ];
 
 /** Why a `fallbacks` entry is refused: a harness Collie has, then optionally `/model`. */
-function fallbackProblem(entry: string): string | null {
+function fallbackProblem(entry: string) {
   const at = Option.getOrElse(pipe(entry, Str.indexOf("/")), () => -1);
   const harness = at === -1 ? entry : pipe(entry, Str.slice(0, at));
   if (!Arr.some(HARNESS_NAMES, (name) => name === harness))
@@ -476,20 +482,25 @@ function fallbackProblem(entry: string): string | null {
 }
 
 /** A window as Claude Code takes it, or why it would not. */
-export function autoCompactWindowOf(
-  typed: string,
-): { readonly window: AutoCompactWindow } | { readonly refused: string } {
+export function autoCompactWindowOf(typed: string) {
   const said = Str.trim(typed);
-  if (said === "auto") return { window: "auto" };
+  if (said === "auto") {
+    const returned: { readonly window: AutoCompactWindow } | { readonly refused: string } = {
+      window: "auto",
+    };
+    return returned;
+  }
   const tokens = /^\d+$/.test(said) ? Number(said) : NaN;
-  return tokens >= AUTO_COMPACT_LEAST && tokens <= AUTO_COMPACT_MOST
-    ? { window: tokens }
-    : {
-        refused: `claude_auto_compact_window has to be a whole number of tokens from ${AUTO_COMPACT_LEAST} to ${AUTO_COMPACT_MOST}, or auto, not "${typed}"`,
-      };
+  const returned: { readonly window: AutoCompactWindow } | { readonly refused: string } =
+    tokens >= AUTO_COMPACT_LEAST && tokens <= AUTO_COMPACT_MOST
+      ? { window: tokens }
+      : {
+          refused: `claude_auto_compact_window has to be a whole number of tokens from ${AUTO_COMPACT_LEAST} to ${AUTO_COMPACT_MOST}, or auto, not "${typed}"`,
+        };
+  return returned;
 }
 
-const reachSetting = (key: string): Setting =>
+const reachSetting = (key: string) =>
   of(key, "text", "", {
     group: "Runs",
     label: "How far a launch goes",
@@ -506,10 +517,7 @@ export const settingOf = (key: string) =>
  * an empty string is a configured value, and an empty `harness` fails every Run. A
  * number arrives as one, because `loadDefaults` ignores a string where it reads one.
  */
-export function parseSetting(
-  key: string,
-  typed: string,
-): { readonly value: SettingValue | null } | { readonly refused: string } {
+export function parseSetting(key: string, typed: string) {
   const setting = settingOf(key);
   if (setting === undefined) return { refused: `${key} is not one of Collie's settings` };
   const said = Str.trim(typed);
@@ -567,16 +575,13 @@ export function parseSetting(
 const msPer = (key: string) => (settingOf(key)?.unit === "minutes" ? 60_000 : undefined);
 
 /** A stored value as typed in its unit: a duration in minutes, decimals only where needed. */
-export function settingShown(key: string, stored: string): string {
+export function settingShown(key: string, stored: string) {
   const per = msPer(key);
   return per === undefined || Str.trim(stored) === "" ? stored : String(Number(stored) / per);
 }
 
 /** A value typed in its unit as the text `parseSetting` takes: a duration in whole milliseconds. */
-export function settingStored(
-  key: string,
-  typed: string,
-): { readonly stored: string } | { readonly refused: string } {
+export function settingStored(key: string, typed: string) {
   const per = msPer(key);
   const said = Str.trim(typed);
   if (per === undefined || said === "") return { stored: said };
@@ -587,7 +592,7 @@ export function settingStored(
 }
 
 /** A setting's value as one line of text, which `parseSetting` reads back to the same value. */
-export function settingText(value: SettingValue | null): string {
+export function settingText(value: SettingValue | null) {
   if (value === null) return "";
   if (isString(value)) return value;
   return Arr.isArray<typeof value>(value)
@@ -601,10 +606,7 @@ export function settingText(value: SettingValue | null): string {
 }
 
 /** A value one Machine shares for `key`, checked as an edit of it would be. */
-export function parseShared(
-  key: string,
-  value: Schema.Json | null,
-): { readonly value: SettingValue | null } | { readonly refused: string } {
+export function parseShared(key: string, value: Schema.Json | null) {
   const typed = Schema.decodeUnknownOption(Schema.NullOr(SettingValue))(value);
   return Option.isSome(typed)
     ? parseSetting(key, settingText(typed.value))

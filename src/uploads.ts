@@ -43,9 +43,12 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
     return yield* refused(`${part.name} is larger than ${ATTACHMENT_BYTES / 1024 / 1024} MB`);
   const dir = path.join(uploadsDir(stateDir), part.sha256);
   const whole = path.join(dir, part.name);
-  const entries = yield* fs
-    .readDirectory(dir)
-    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+  const entries = yield* fs.readDirectory(dir).pipe(
+    Effect.orElseSucceed(() => {
+      const returned: ReadonlyArray<string> = [];
+      return returned;
+    }),
+  );
   const held = Option.getOrUndefined(Arr.findFirst(entries, (entry) => entry !== ".partial"));
   if (held !== undefined) {
     // The same bytes asked for under another name are that name here too.

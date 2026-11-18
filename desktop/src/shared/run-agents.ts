@@ -11,7 +11,7 @@ export interface AgentRow {
   readonly agent: string;
 }
 
-export const agentRows = (agents: ReadonlyArray<RunAgent>): ReadonlyArray<AgentRow> =>
+export const agentRows = (agents: ReadonlyArray<RunAgent>) =>
   Arr.map(agents, (agent, at) => ({
     key: `${at}:${agent.agent}`,
     operation: agent.operation,

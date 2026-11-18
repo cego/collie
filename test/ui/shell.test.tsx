@@ -12,8 +12,8 @@ import { StoppedDrawing } from "../../src/ui/bridge";
 import type { AppState, Command } from "../../src/ui/state";
 import { epochMs } from "../../src/time";
 
-function appState(over: Partial<AppState> = {}): AppState {
-  return {
+function appState(over: Partial<AppState> = {}) {
+  const returned: AppState = {
     view: "runs",
     filter: { kind: "all" },
     tasks: [],
@@ -29,6 +29,7 @@ function appState(over: Partial<AppState> = {}): AppState {
     stopping: [],
     ...over,
   };
+  return returned;
 }
 
 const mount = Effect.fn("shell.mount")(function* (initial: AppState) {

@@ -54,7 +54,7 @@ const older = (build: string, than: string) => {
   return at !== -1 && a![at]! < b![at]!;
 };
 
-const lags = (row: MachineRow, desktop: DesktopHolds): ReadonlyArray<Lag> => {
+const lags = (row: MachineRow, desktop: DesktopHolds) => {
   const { build, development, onboarded } = row;
   const version: ReadonlyArray<Lag> =
     build !== null &&
@@ -108,23 +108,27 @@ const lags = (row: MachineRow, desktop: DesktopHolds): ReadonlyArray<Lag> => {
             steps: [],
           },
         ];
-  const credentials = Arr.flatMap(desktop.credentials, (credential): ReadonlyArray<Lag> => {
+  const credentials = Arr.flatMap(desktop.credentials, (credential) => {
     const held = row.credentials[credential];
-    if (held === undefined || held.given) return [];
+    if (held === undefined || held.given) {
+      const returned: ReadonlyArray<Lag> = [];
+      return returned;
+    }
     const lacks = `Lacks ${CREDENTIAL_SAID[credential].lacks}`;
-    return [
+    const returned: ReadonlyArray<Lag> = [
       {
         part: "credentials",
         said: held.failed === null ? lacks : `${lacks}: ${held.failed}`,
         steps: [],
       },
     ];
+    return returned;
   });
   return [...version, ...settings, ...definitions, ...credentials, ...onboarding];
 };
 
 /** A part not known yet is not behind. */
-export const inSync = (row: MachineRow, desktop: DesktopHolds): InSync => {
+export const inSync: (row: MachineRow, desktop: DesktopHolds) => InSync = (row, desktop) => {
   if (row.state !== "live") return { state: row.state, behind: [] };
   const behind = lags(row, desktop);
   return { state: behind.length === 0 ? "in-sync" : "behind", behind };

@@ -9,7 +9,7 @@ import { DEFAULT_MODEL, HARNESS_MODELS } from "../../../src/harness-choice";
 import { isString } from "../../../src/schema";
 import { type Attached, attachedIn } from "./attachments";
 import { About, harnessName } from "./chat-view";
-import type { DesktopSettings, DesktopSettingsChange } from "./flock";
+import type { DesktopSettings } from "./flock";
 import { DEFAULT_CHAT_HARNESS } from "./flock-settings";
 
 /** A harness, model and effort as a session is opened on them; `default` is the harness's own model. */
@@ -81,7 +81,7 @@ export const effortsOf = (
   harness: string,
   model: string,
   offered: ReadonlyArray<Pick<Offered, "id" | "efforts">>,
-): ReadonlyArray<string> =>
+) =>
   Option.getOrUndefined(Arr.findFirst(offered, ({ id }) => id === model))?.efforts ??
   HARNESS_MODELS[harness]?.efforts ??
   [];
@@ -93,7 +93,7 @@ const unsetModel = (harness: string, pi: PiConfig) =>
       : DEFAULT_MODEL
     : (HARNESS_MODELS[harness]?.defaultModel ?? DEFAULT_MODEL);
 
-const piLevel = (configured: string, available: ReadonlyArray<string>): string | null => {
+const piLevel = (configured: string, available: ReadonlyArray<string>) => {
   if (available.includes(configured)) return configured;
   const order = HARNESS_MODELS.pi?.efforts ?? [];
   const at = order.indexOf(configured);
@@ -111,7 +111,7 @@ export const runsAs = (
   set: SetChoice,
   offered: ReadonlyArray<Pick<Offered, "id" | "efforts">>,
   pi: PiConfig,
-): Resolved => {
+) => {
   const model =
     set.model === undefined || set.model === DEFAULT_MODEL
       ? unsetModel(set.harness, pi)
@@ -132,7 +132,7 @@ export const runsAs = (
 };
 
 /** What a set choice runs as, by the resolver's answers in what its harness offers. */
-export const runsAsOffered = (set: SetChoice, offer: Offer): Resolved => {
+export const runsAsOffered = (set: SetChoice, offer: Offer) => {
   const model =
     set.model === undefined || set.model === DEFAULT_MODEL ? offer.unset.model : set.model;
   return {
@@ -185,7 +185,7 @@ const select = (
   label: string,
   options: ReadonlyArray<ChoiceOption>,
   note: string | null,
-): ChoiceSelect => ({ value, label, name: `${name}: ${label}`, options, note, disabled: false });
+) => ({ value, label, name: `${name}: ${label}`, options, note, disabled: false });
 
 /** The harness, model and effort selects, as the settings and the chat's account have them. */
 export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | null) => {
@@ -304,7 +304,7 @@ export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | nu
 };
 
 /** A typed id offered to save, where it is not already an option. */
-export const typedEntry = (search: string, model: ChoiceSelect): ChoiceOption | null => {
+export const typedEntry = (search: string, model: ChoiceSelect) => {
   const id = Str.trim(search);
   return id === "" || Arr.some(model.options, ({ value }) => value === id)
     ? null
@@ -330,7 +330,7 @@ export const modelMenu = (search: string, model: ChoiceSelect) => {
 export const refusalSaid = (reason: string) =>
   `${pipe(reason, Str.replace(/\.$/, ""))}. Nothing was saved.`;
 
-const setChoice = (settings: DesktopSettings): SetChoice => ({
+const setChoice = (settings: DesktopSettings) => ({
   harness: settings.chatHarness ?? DEFAULT_CHAT_HARNESS,
   model: settings.chatModel,
   effort: settings.chatEffort,
@@ -341,7 +341,7 @@ export const rememberChoice = (
   remembered: SetChoice | null,
   settings: DesktopSettings,
   choices: ChatChoices | null,
-): SetChoice | null => {
+) => {
   if (choices === null) return remembered;
   const set = setChoice(settings);
   return set.harness === choices.heldOn
@@ -352,10 +352,7 @@ export const rememberChoice = (
 };
 
 /** The ordinary settings change Stay sends through the choice check. */
-export const stayOn = (
-  choices: ChatChoices,
-  remembered: SetChoice | null,
-): DesktopSettingsChange => ({
+export const stayOn = (choices: ChatChoices, remembered: SetChoice | null) => ({
   chatHarness: choices.heldOn,
   ...(remembered?.harness === choices.heldOn && {
     chatModel: remembered.model ?? "",
@@ -458,7 +455,7 @@ const decodeAbout = Schema.decodeUnknownOption(About);
 export const stopDraft = (
   queue: ReadonlyArray<Pick<QueuedMessage, "content">>,
   draft: ChatDraft,
-): ChatDraft => {
+) => {
   const words: string[] = [];
   const files: Attached[] = [];
   let about = draft.about;

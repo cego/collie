@@ -58,7 +58,7 @@ export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
         Effect.map((text) =>
           Arr.filter(Str.split(text, "\n"), (line) => line !== "").slice(-count),
         ),
-        Effect.orElseSucceed((): ReadonlyArray<string> => []),
+        Effect.orElseSucceed(() => []),
       );
 
 /**
@@ -90,7 +90,7 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (
 });
 
 const readOrNone = (run: RunFacts) =>
-  readVerifications(run.evidence).pipe(Effect.orElseSucceed((): ReadonlyArray<Verification> => []));
+  readVerifications(run.evidence).pipe(Effect.orElseSucceed(() => []));
 
 /** A record keeps the executable as PATH resolved it, an approved spec as it was written. */
 const commandOf = (executable: string) => Str.split(executable, "/").at(-1) ?? executable;
@@ -218,7 +218,7 @@ export const followLog = Effect.fn("Checks.followLog")(function* (
 export const donePasses = Effect.fn("Checks.done")(function* (run: RunFacts) {
   return Arr.map(
     Arr.filter(yield* readOrNone(run), (record) => record.by === "collie"),
-    (record): DonePass => ({
+    (record) => ({
       name: record.name,
       pass: record.pass ?? "check",
       round: record.round ?? null,
@@ -235,7 +235,7 @@ export const donePasses = Effect.fn("Checks.done")(function* (run: RunFacts) {
 function doing(
   check: Pick<RunningCheck, "name" | "pass" | "round" | "base"> &
     Partial<Pick<RunningCheck, "revision" | "job">>,
-): string {
+) {
   const running = `Running ${check.name}`;
   switch (check.pass) {
     case "gate":
@@ -265,7 +265,7 @@ const amount = (ms: number) =>
 const unit = (ms: number) => (inMinutes(ms) ? "min" : "s");
 
 /** How long it has run, against how long it usually takes. */
-function timing(elapsed: number, usual: number | null): string {
+function timing(elapsed: number, usual: number | null) {
   const ran = `${amount(elapsed)} ${unit(elapsed)}`;
   if (usual === null) return ran;
   // The usual time is bare where it shares the elapsed time's unit: "4 min of a usual 20".
@@ -282,7 +282,7 @@ export function checkSentence(
     "name" | "pass" | "round" | "base" | "elapsedMs" | "usualMs" | "others"
   > &
     Partial<Pick<RunningCheck, "revision" | "job">>,
-): string {
+) {
   const when = check.elapsedMs === null ? "" : `, ${timing(check.elapsedMs, check.usualMs)}`;
   const others =
     check.others === 0

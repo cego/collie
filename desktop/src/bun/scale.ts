@@ -4,11 +4,11 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { type BrowserWindow, Screen } from "../../core/platform";
 import { Effect, Queue, Stream } from "effect";
-import { type Drawn, type MonitorScale, monitorOf, zoomFor } from "../shared/scale";
+import { type MonitorScale, monitorOf, zoomFor } from "../shared/scale";
 import { output } from "./machine";
 
 // ponytail: Hyprland only; GNOME and KDE are read once someone runs Desktop there (ADR-0047).
-const monitorScale = (title: string): Effect.Effect<MonitorScale> =>
+const monitorScale: (title: string) => Effect.Effect<MonitorScale> = (title) =>
   Bun.env.HYPRLAND_INSTANCE_SIGNATURE === undefined
     ? Effect.succeed({ _tag: "Unknown", reason: "This is not a Hyprland session" })
     : Effect.all([
@@ -16,10 +16,13 @@ const monitorScale = (title: string): Effect.Effect<MonitorScale> =>
         output(["hyprctl", "-j", "monitors"]),
       ]).pipe(
         Effect.map(([clients, monitors]) => monitorOf(clients, monitors, process.pid, title)),
-        Effect.orElseSucceed((): MonitorScale => ({
-          _tag: "Unknown",
-          reason: "hyprctl could not be run",
-        })),
+        Effect.orElseSucceed(() => {
+          const returned: MonitorScale = {
+            _tag: "Unknown",
+            reason: "hyprctl could not be run",
+          };
+          return returned;
+        }),
       );
 
 /** The scale Electrobun renders the window at: its display's, the one holding its centre. */
@@ -42,7 +45,7 @@ const renderedScale = (window: BrowserWindow) => {
 
 /** Zooms `window` for its monitor and `preference`, and says how it is now drawn. */
 export const zoomWindow = (window: BrowserWindow, title: string, preference: number) =>
-  Effect.map(monitorScale(title), (monitor): Drawn => {
+  Effect.map(monitorScale(title), (monitor) => {
     const rendered = renderedScale(window);
     const zoom = zoomFor(preference, monitor, rendered);
     window.setPageZoom(zoom);

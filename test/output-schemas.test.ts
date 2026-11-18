@@ -31,7 +31,7 @@ import { jsonSchemaFor } from "../src/sdk";
 
 type Readable = Schema.Codec<unknown, unknown, never, never>;
 
-const accepts = (schema: Readable, text: string): boolean =>
+const accepts = (schema: Readable, text: string) =>
   Schema.decodeExit(schema)(flow(Schema.decodeResult(YamlValueJsonSchema), Result.getOrThrow)(text))
     ._tag === "Success";
 

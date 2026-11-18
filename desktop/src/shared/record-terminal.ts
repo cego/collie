@@ -28,10 +28,7 @@ export interface AgentTab {
  * The card's live agents, and the one `shown` kept while it is shown though it has ended.
  * Each is its role, numbered where several share one; its agent name where it has none.
  */
-export const agentTabs = (
-  agents: ReadonlyArray<BoardAgent>,
-  shown: BoardAgent | null,
-): AgentTab[] => {
+export const agentTabs = (agents: ReadonlyArray<BoardAgent>, shown: BoardAgent | null) => {
   const ended = shown !== null && !Arr.some(agents, (one) => one.name === shown.name);
   const listed = ended ? [...agents, shown] : agents;
   const roleOf = (agent: BoardAgent) => agent.role ?? agent.name;
@@ -56,7 +53,7 @@ export const agentTabs = (
 export const recipients = (
   launches: ReadonlyArray<{ readonly agent: string }> | undefined,
   live: ReadonlyArray<BoardAgent>,
-): AgentTab[] => {
+) => {
   const tabs = new Map(Arr.map(agentTabs(live, null), (tab) => [tab.name, tab]));
   const names = Arr.map(launches ?? [], (launch) => launch.agent);
   const latest = Arr.filter(names, (name, at) => names.lastIndexOf(name) === at);
@@ -78,7 +75,7 @@ export interface Address {
 }
 
 /** A delivery's addressee, with only the fields it names. */
-export const addressOf = (who: Readonly<Address>): Address => {
+export const addressOf = (who: Readonly<Address>) => {
   const address: Address = {};
   if (who.agent !== undefined) address.agent = who.agent;
   if (who.to !== undefined) address.to = who.to;
@@ -97,7 +94,7 @@ export const deliveryChoices = (
   live: ReadonlyArray<BoardAgent>,
   protocol: number | null,
   preferred?: "planner",
-): DeliveryChoice[] => {
+) => {
   const tabs = recipients(launches, live);
   const byName = Arr.map(tabs, (tab) => ({ key: tab.name, label: tab.label, agent: tab.name }));
   if (tabs.length === 0) return [];
@@ -148,7 +145,7 @@ export const shownAgent = (
   agents: ReadonlyArray<BoardAgent>,
   focused: string | undefined,
   before: BoardAgent | null,
-): BoardAgent | null =>
+) =>
   Option.getOrUndefined(Arr.findFirst(agents, (one) => one.name === focused)) ??
   (before?.name === focused ? before : null);
 
@@ -156,7 +153,7 @@ export const shownAgent = (
  * The agent the tab opens on: one `blocked`, else one `working`, of the card's own Run first
  * and then the last listed; null where none is either.
  */
-export const atWork = (agents: ReadonlyArray<BoardAgent>, run: string): BoardAgent | null => {
+export const atWork = (agents: ReadonlyArray<BoardAgent>, run: string) => {
   const blocked = Arr.filter(agents, (one) => one.status === "blocked");
   const candidates =
     blocked.length > 0 ? blocked : Arr.filter(agents, (one) => one.status === "working");
@@ -170,7 +167,7 @@ export const askedFor = (
   run: string,
   picked: AgentTab | null,
   requested?: string,
-): AgentTab | null => {
+) => {
   if (picked !== null) return picked;
   if (requested !== undefined)
     return (

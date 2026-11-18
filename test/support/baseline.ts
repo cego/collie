@@ -247,7 +247,7 @@ const once = (name: string, body: () => Promise<void>, timeout?: number) => {
 };
 
 /** The installation is this checkout, so the shipped personas are the ones found. */
-const hostOf = (): AgentHost => ({
+const hostOf: () => AgentHost = () => ({
   dir,
   env: rig.pluginEnv({ COLLIE_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab }),
   herdr: new Herdr(rig.pluginEnv({ COLLIE_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab })),
@@ -743,10 +743,11 @@ const solutionsOf = (
   );
 
 /** The ids a question takes, as the store keeps them: the options are JSON on the row. */
-const optionsOf = (
+const optionsOf: (
   rows: ReadonlyArray<{ readonly decision: string; readonly options: string }>,
   decision: string,
-): ReadonlyArray<string> => Arr.map(solutionsOf(rows, decision), (one) => one.id);
+) => ReadonlyArray<string> = (rows, decision) =>
+  Arr.map(solutionsOf(rows, decision), (one) => one.id);
 
 /** The id a question recommends, and what keeps it short of standard; null for none. */
 const recommendedOf = (
@@ -1950,7 +1951,9 @@ const ticketed = (
   }).pipe(Effect.orDie);
 
 /** A benchmark plan as a planner writes one: the harness's paths, and no commits yet. */
-const speedUp = (metrics: typeof BenchmarkPlan.Encoded.metrics): typeof BenchmarkPlan.Encoded => ({
+const speedUp: (metrics: typeof BenchmarkPlan.Encoded.metrics) => typeof BenchmarkPlan.Encoded = (
+  metrics,
+) => ({
   harness: { commits: [], paths: ["bench"] },
   commands: [
     { name: "bench", executable: "sh", argv: ["bench/bench.sh", `${rig.root}/bench-runs`] },
@@ -3833,7 +3836,7 @@ scenario(
 scenario("what a finished Run of each shipped module offers is the module's own declaration", () =>
   runEffect(
     Effect.gen(function* () {
-      const facts = (over: Partial<ActionFacts>): ActionFacts => ({
+      const facts: (over: Partial<ActionFacts>) => ActionFacts = (over) => ({
         outcome: "review",
         succeeded: true,
         branch: null,
@@ -7378,7 +7381,7 @@ scenario(
 );
 
 /** The host, with the Run's checkout on `branch`, as placement leaves a Change run's. */
-const placedOn = (branch: string): HostOverride =>
+const placedOn: (branch: string) => HostOverride = (branch) =>
   Layer.effect(Host)(
     Effect.gen(function* () {
       const host = yield* Host;
@@ -8967,12 +8970,12 @@ const CI_BASE = pipe("b", Str.repeat(40));
 const CI_LOG = (id: number) => `glab ci trace ${id} --repo ${PROJECT.gitlab}`;
 
 /** The merge request on `head` into `target`, its `nuxi-job` as given, and that job at the base as given. */
-const ciOn = (
+const ciOn: (head: string, job: FakeJob, base?: FakeJob["state"], target?: string) => ForgeModel = (
   head: string,
   job: FakeJob,
   base?: FakeJob["state"],
   target = "main",
-): ForgeModel => ({
+) => ({
   installed: true,
   loggedIn: [FORGE_HOST.gitlab],
   login: "tester",
@@ -9152,11 +9155,11 @@ scenario(
 
 const CI_PULL = `https://${PROJECT.github}/pull/31`;
 
-const ciOnGithub = (
+const ciOnGithub: (
   head: string,
   jobs: ReadonlyArray<FakeJob>,
-  base: ReadonlyArray<FakeJob> = [],
-): ForgeModel => ({
+  base?: ReadonlyArray<FakeJob>,
+) => ForgeModel = (head, jobs, base = []) => ({
   installed: true,
   loggedIn: [FORGE_HOST.github],
   login: "tester",
@@ -10803,10 +10806,13 @@ scenario(
           file: "src/a.ts",
           detail: "it breaks",
         });
-        const round = (title: string): Schema.Json[] => [
-          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker(title)] },
-          { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
-        ];
+        const round = (title: string) => {
+          const returned: Schema.Json[] = [
+            { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker(title)] },
+            { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
+          ];
+          return returned;
+        };
         yield* rig.queueOutputs([
           BUILT,
           { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker("one"), blocker("B")] },
@@ -10876,10 +10882,13 @@ scenario(
           file: "src/a.ts",
           detail: "it breaks",
         });
-        const round = (title: string): Schema.Json[] => [
-          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [found(title)] },
-          { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
-        ];
+        const round = (title: string) => {
+          const returned: Schema.Json[] = [
+            { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [found(title)] },
+            { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
+          ];
+          return returned;
+        };
         yield* rig.queueOutputs([
           BUILT,
           // A dispute from an early round that nobody answers is still the human's to settle.
@@ -11233,7 +11242,7 @@ for (const name of ["gitlab", "github"] as const) {
     120_000,
   );
 
-  const autoMerging = (autoMerge: boolean): ForgeModel["mrs"] => [
+  const autoMerging: (autoMerge: boolean) => ForgeModel["mrs"] = (autoMerge) => [
     { project: PROJECT[name], iid: "31", state: "open", sourceBranch: "master", autoMerge },
   ];
   const notPushed = `not pushed: auto-merge is on for ${
@@ -12417,7 +12426,10 @@ scenario(
  * the work is done — is what these tests are about.
  */
 const claimed: string[] = [];
-const helleAnswers = (claim: "held" | "none", production: "deployed" | "read"): HostOverride =>
+const helleAnswers: (claim: "held" | "none", production: "deployed" | "read") => HostOverride = (
+  claim,
+  production,
+) =>
   Layer.effect(Host)(
     Effect.gen(function* () {
       const host = yield* Host;
@@ -13360,23 +13372,27 @@ const PACKAGED = {
 const TAGGED = { verdict: "clean", tag: "v1.2.0", version: "1.2.0" };
 
 /** The merge request as a forge reads it approved by alice, green and mergeable at `head`. */
-const readyMr = (name: MrForge, head: string, merged: string, over: Partial<FakeMr> = {}) =>
-  ({
-    project: PROJECT[name],
-    iid: "30",
-    state: "open",
-    head,
-    mergedSha: merged,
-    sourceBranch: "feature",
-    targetBranch: "main",
-    checks: [{ name: "build", state: "passed" }],
-    ...(name === "gitlab"
-      ? { approvers: ["alice"], required: 1 }
-      : {
-          reviews: [{ id: 1, author: "alice", state: "APPROVED", at: "2026-10-20T10:00:00Z" }],
-        }),
-    ...over,
-  }) satisfies FakeMr;
+const readyMr: (name: MrForge, head: string, merged: string, over?: Partial<FakeMr>) => FakeMr = (
+  name,
+  head,
+  merged,
+  over = {},
+) => ({
+  project: PROJECT[name],
+  iid: "30",
+  state: "open",
+  head,
+  mergedSha: merged,
+  sourceBranch: "feature",
+  targetBranch: "main",
+  checks: [{ name: "build", state: "passed" }],
+  ...(name === "gitlab"
+    ? { approvers: ["alice"], required: 1 }
+    : {
+        reviews: [{ id: 1, author: "alice", state: "APPROVED", at: "2026-10-20T10:00:00Z" }],
+      }),
+  ...over,
+});
 
 /** The merge request's pipeline still running at its head, as GitLab says "ci still running". */
 const STILL_RUNNING = {
@@ -13471,7 +13487,11 @@ const releasable = (name: MrForge, over: Partial<FakeMr> = {}, tagged = true) =>
   });
 
 /** A host whose merge happens just after `before` changes the forge, as a merge landing elsewhere first. */
-const mergingAfter = <E>(before: Effect.Effect<void, E, FileSystem.FileSystem>): HostOverride =>
+const mergingAfter: <E>(before: Effect.Effect<void, E, FileSystem.FileSystem>) => HostOverride = <
+  E,
+>(
+  before: Effect.Effect<void, E, FileSystem.FileSystem>,
+) =>
   Layer.effect(Host)(
     Effect.gen(function* () {
       const host = yield* Host;
@@ -13782,7 +13802,7 @@ const commentUrl = (name: MrForge, id: number) =>
 
 /** What each forge reads as approved by nobody yet, and as approved by `who`. */
 const UNAPPROVED = { gitlab: { approvers: [], required: 1 }, github: { reviews: [] } } as const;
-const approvedBy = (name: MrForge, who: string): Partial<FakeMr> =>
+const approvedBy: (name: MrForge, who: string) => Partial<FakeMr> = (name, who) =>
   name === "gitlab"
     ? { approvers: [who], required: 1 }
     : { reviews: [{ id: 2, author: who, state: "APPROVED", at: "2026-10-20T12:10:00Z" }] };
@@ -14213,11 +14233,12 @@ const setOnForge = (mrs: ReadonlyArray<Member>) =>
     return { bin, merged };
   });
 
-const startedChild = (one: Member, workflow: "release" | "stage"): ChildAsk => ({
-  invocation: one.invocation(workflow),
-  workflow: "self",
-  input: workflow === "release" ? { mr: one.ref, merge_only: true } : { mr: one.ref },
-});
+const startedChild = (one: Member, workflow: "release" | "stage") => {
+  const input: ChildAsk["input"] =
+    workflow === "release" ? { mr: one.ref, merge_only: true } : { mr: one.ref };
+  const asked: ChildAsk = { invocation: one.invocation(workflow), workflow: "self", input };
+  return asked;
+};
 
 const startedTag = (one: Member) => ({
   invocation: one.invocation("tag"),
@@ -14646,7 +14667,10 @@ scenario(
           Effect.map((described) => declaredByModule(described.metadata)),
           Effect.orDie,
         );
-        const facts = (diffTarget: string, succeeded: boolean): ActionFacts => ({
+        const facts: (diffTarget: string, succeeded: boolean) => ActionFacts = (
+          diffTarget,
+          succeeded,
+        ) => ({
           outcome: "feature",
           succeeded,
           branch: null,
@@ -14953,7 +14977,7 @@ const checkedOutThenAssessed = (runId: string) =>
     ).toEqual(["checkout", "assess"]);
   });
 
-const refusingCheckout = (refused: string): HostOverride =>
+const refusingCheckout: (refused: string) => HostOverride = (refused) =>
   Layer.effect(Host)(
     Effect.gen(function* () {
       const host = yield* Host;
@@ -14966,10 +14990,10 @@ const refusingCheckout = (refused: string): HostOverride =>
  * or its parent implement Run's **Release**, answered at `answered`'s door. `afterStart`
  * happens once the Run has read the merge request at its start, as a push landing then.
  */
-const goGiven = (
+const goGiven: (
   given: { readonly started?: "board"; readonly answered?: "board" | "agent" },
-  afterStart: Effect.Effect<void, never, FileSystem.FileSystem> = Effect.void,
-): HostOverride =>
+  afterStart?: Effect.Effect<void, never, FileSystem.FileSystem>,
+) => HostOverride = (given, afterStart = Effect.void) =>
   Layer.effect(Host)(
     Effect.gen(function* () {
       const host = yield* Host;
@@ -20096,11 +20120,11 @@ for (const name of ["gitlab", "github"] as const) {
     };
     yield* made.forge.set(model);
     const staged = [live(made.head), live(made.base)];
-    const onStage = (happytiger: Deployments): ForgeModel => ({
+    const onStage: (happytiger: Deployments) => ForgeModel = (happytiger) => ({
       ...model,
       environments: environments(staged, happytiger),
     });
-    const rolledBack = (happytiger: Deployments): ForgeModel => ({
+    const rolledBack: (happytiger: Deployments) => ForgeModel = (happytiger) => ({
       ...model,
       environments: environments([live(made.base), ...staged], happytiger),
     });
@@ -20248,7 +20272,7 @@ for (const name of ["gitlab", "github"] as const) {
           claimed.length = 0;
           const runId = `r-release-moved-env-${name}`;
           const later = yield* pushedBySomebody(head);
-          const changed = (model: ForgeModel): ForgeModel => ({
+          const changed: (model: ForgeModel) => ForgeModel = (model) => ({
             ...model,
             mrs: Arr.map(model.mrs, (mr) => ({ ...mr, head: later })),
             checksAt: { [head]: model.mrs[0]?.jobs ?? [] },
@@ -20368,18 +20392,21 @@ for (const name of ["gitlab", "github"] as const) {
         { ...UNAPPROVED[name], comments: [unresolved], ...over },
         false,
       );
-      const withJobs = (on: ForgeModel, head: string, e2eNow: "running" | "failed" | "passed") =>
-        ({
-          ...on,
-          mrs: Arr.map(on.mrs, (one) => ({
-            ...one,
-            head,
-            jobs: Arr.map(MR_JOBS, (job) => ({
-              name: job,
-              state: job === "e2e-stage" ? e2eNow : ("passed" as const),
-            })),
+      const withJobs: (
+        on: ForgeModel,
+        head: string,
+        e2eNow: "running" | "failed" | "passed",
+      ) => ForgeModel = (on, head, e2eNow) => ({
+        ...on,
+        mrs: Arr.map(on.mrs, (one) => ({
+          ...one,
+          head,
+          jobs: Arr.map(MR_JOBS, (job) => ({
+            name: job,
+            state: job === "e2e-stage" ? e2eNow : ("passed" as const),
           })),
-        }) satisfies ForgeModel;
+        })),
+      });
       const model: ForgeModel = {
         ...withJobs(yield* made.forge.model(), made.head, e2e),
         environments: deploys(made.base, made.base),
@@ -20594,7 +20621,7 @@ for (const name of ["gitlab", "github"] as const) {
           const runId = `r-stage-moved-env-${name}`;
           const later = yield* pushedBySomebody(head);
           const model = onStage(later);
-          const at = (newLive: string): ForgeModel => ({
+          const at: (newLive: string) => ForgeModel = (newLive) => ({
             ...model,
             checksAt: { [head]: model.mrs[0]?.jobs ?? [] },
             environments: [
@@ -21009,7 +21036,7 @@ for (const name of ["gitlab", "github"] as const) {
     readonly events?: string[];
     unresolved?: string;
   }
-  const busyHost = (helle: BusyHelle): HostOverride =>
+  const busyHost: (helle: BusyHelle) => HostOverride = (helle) =>
     Layer.effect(Host)(
       Effect.gen(function* () {
         const host = yield* Host;
@@ -21083,7 +21110,9 @@ for (const name of ["gitlab", "github"] as const) {
       const start = (app: string) =>
         busy.includes(app) ? [sameHead ? made.head : TEAMMATE] : [made.base];
       const before = yield* made.forge.model();
-      const at = (deployed: Partial<Record<string, ReadonlyArray<string>>>): ForgeModel => ({
+      const at: (deployed: Partial<Record<string, ReadonlyArray<string>>>) => ForgeModel = (
+        deployed,
+      ) => ({
         ...before,
         mrs: Arr.map(before.mrs, (one) => ({
           ...one,
@@ -21153,9 +21182,12 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   const DANNS = Arr.filter(APPS, (app) => app !== "playground");
-  const dann = (): BusyHelle & { holders: Record<string, string | null> } => ({
+  const dann: () => BusyHelle & { holders: Record<string, string | null> } = () => ({
     holders: Rec.fromEntries(
-      Arr.map(DANNS, (app): [string, string | null] => [app, "Dann"] as const),
+      Arr.map(DANNS, (app) => {
+        const returned: [string, string | null] = [app, "Dann"] as const;
+        return returned;
+      }),
     ),
   });
 
@@ -21742,7 +21774,7 @@ const saidBy = (result: Result.Result<unknown, unknown>) =>
 const refusedWith = (result: Result.Result<unknown, unknown>) =>
   Result.isFailure(result) && Schema.is(WorkflowError)(result.failure) ? result.failure.reason : "";
 
-const finding = (over: Partial<Finding> & Pick<Finding, "key">): Finding => ({
+const finding: (over: Partial<Finding> & Pick<Finding, "key">) => Finding = (over) => ({
   category: "navigation",
   title: `Project ${over.key}`,
   body: `What the Runs did: ${over.key}.`,
@@ -23801,11 +23833,11 @@ scenario(
 
 /** A clock two hours ahead once `marker` holds anything, as a Cycle that ran long would leave it. */
 const lateOnce = (marker: string) =>
-  Effect.map(Clock.Clock, (clock): Clock.Clock => {
+  Effect.map(Clock.Clock, (clock) => {
     const ahead = () => (Bun.file(marker).size > 0 ? 2 * 60 * 60 * 1000 : 0);
     const millis = () => clock.currentTimeMillisUnsafe() + ahead();
     const nanos = () => clock.currentTimeNanosUnsafe() + BigInt(ahead()) * 1_000_000n;
-    return {
+    const returned: Clock.Clock = {
       currentTimeMillisUnsafe: millis,
       currentTimeMillis: Effect.sync(millis),
       currentTimeNanosUnsafe: nanos,
@@ -23814,6 +23846,7 @@ const lateOnce = (marker: string) =>
       monotonicTimeNanos: clock.monotonicTimeNanos,
       sleep: (duration) => clock.sleep(duration),
     };
+    return returned;
   });
 
 scenario(
@@ -24310,9 +24343,9 @@ scenario(
   120_000,
 );
 
-const blockedThenFixed = (round: number): ReadonlyArray<Schema.Json> => {
+const blockedThenFixed = (round: number) => {
   const title = `round ${round}: search drops a result`;
-  return [
+  const rounds: ReadonlyArray<Schema.Json> = [
     {
       ...TUNE_REVIEWED,
       verdict: "findings",
@@ -24324,6 +24357,7 @@ const blockedThenFixed = (round: number): ReadonlyArray<Schema.Json> => {
       output: { ...GATE_FIX, fixed: [{ title, file: "count" }], checks: [{ name: "nuxi" }] },
     },
   ];
+  return rounds;
 };
 
 scenario(
@@ -24776,10 +24810,10 @@ const FILED = () => ({
   output: { url: ISSUE },
 });
 
-const withExternal = (
+const withExternal: (
   turn: ReturnType<typeof tried>,
   external: ReadonlyArray<Schema.Json>,
-): Schema.Json => ({ ...turn, output: { ...turn.output, external } });
+) => Schema.Json = (turn, external) => ({ ...turn, output: { ...turn.output, external } });
 
 /** Each search, create and recheck an external finding's Post asked for, in order. */
 const externalPrompts = (runId: string) =>
@@ -25319,7 +25353,10 @@ export const SHARES = 12;
 
 /** Splits names into `of` shares by a hash of each name, so that adding one moves no other. */
 export const split = (names: ReadonlyArray<string>, of: number) => {
-  const shares = Array.from({ length: of }, (): string[] => []);
+  const shares = Array.from({ length: of }, () => {
+    const returned: string[] = [];
+    return returned;
+  });
   for (const name of names) shares[Bun.hash.crc32(name) % of]!.push(name);
   return shares;
 };

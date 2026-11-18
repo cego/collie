@@ -45,7 +45,7 @@ export const MAX_FILES = 20;
 /** Files whose *contents* are never quoted, however relevant they look. */
 const SECRET_FILES = [/(^|\/)\.env($|\.)/, /\.pem$/, /\.key$/, /token/i, /secret/i, /credential/i];
 
-export function looksSecret(path: string): boolean {
+export function looksSecret(path: string) {
   return Arr.some(SECRET_FILES, (looksLike) => looksLike.test(path));
 }
 
@@ -73,13 +73,13 @@ export const appendDrift = Effect.fn("Drift.append")(function* (runDir: string, 
 });
 
 /** Only reports, newest state per id: the journal is append-only, so the last line wins. */
-export function currentReports(lines: ReadonlyArray<DriftLine>): DriftReport[] {
+export function currentReports(lines: ReadonlyArray<DriftLine>) {
   const newest = new Map<string, DriftReport>();
   for (const line of lines) if (line.kind !== "skipped") newest.set(line.id, line);
   return [...newest.values()];
 }
 
-export function openReports(lines: ReadonlyArray<DriftLine>): DriftReport[] {
+export function openReports(lines: ReadonlyArray<DriftLine>) {
   return Arr.filter(
     currentReports(lines),
     (report) => report.resolution === "open" || report.resolution === "correction_submitted",
@@ -92,7 +92,7 @@ export function openReports(lines: ReadonlyArray<DriftLine>): DriftReport[] {
  * looking at a list of eight identical findings learns nothing they did not learn from
  * the first.
  */
-export function findingKey(constraint: string, evidence: ReadonlyArray<Ref>): string {
+export function findingKey(constraint: string, evidence: ReadonlyArray<Ref>) {
   return Bun.hash(
     `${constraint}\n${Arr.join(
       Arr.map(evidence, (ref) => `${ref.kind}:${ref.path ?? ""}:${ref.line ?? ""}`),
@@ -117,7 +117,7 @@ export interface RuleFacts {
 }
 
 /** `src/**` against `src/a/b.ts`, without pulling in a matcher for it. */
-export function matchesGlob(glob: string, path: string): boolean {
+export function matchesGlob(glob: string, path: string) {
   const pattern = Arr.join(
     Arr.map(Str.split(glob, "**"), (part) =>
       Arr.join(
@@ -172,8 +172,8 @@ function violation(
   intentVersion: number,
   at_: string,
   { evidence, truncated }: Breach,
-): DriftReport {
-  return {
+) {
+  const returned: DriftReport = {
     id: `d-${findingKey(constraint.id, evidence)}`,
     at: at_,
     run,
@@ -185,6 +185,7 @@ function violation(
     evidence_truncated: truncated,
     resolution: "open",
   };
+  return returned;
 }
 
 /**
@@ -195,7 +196,7 @@ function violation(
  * A `command_exit` whose verification is missing is a violation, not a pass. "Nobody ran
  * it" and "it passed" are different, and only one of them is evidence.
  */
-export function checkRules(intent: Intent, facts: RuleFacts, at_: string): DriftReport[] {
+export function checkRules(intent: Intent, facts: RuleFacts, at_: string) {
   const found: DriftReport[] = [];
   for (const constraint of intent.constraints) {
     if (constraint.kind !== "rule" || constraint.rule === undefined) continue;
@@ -212,10 +213,10 @@ interface Breach {
   readonly truncated: boolean;
 }
 
-const whole = (evidence: ReadonlyArray<Ref> | null): Breach | null =>
+const whole = (evidence: ReadonlyArray<Ref> | null) =>
   evidence === null ? null : { evidence, truncated: false };
 
-function breachOf(rule: RuleSpec, facts: RuleFacts): Breach | null {
+function breachOf(rule: RuleSpec, facts: RuleFacts) {
   if (rule.kind !== "protected_paths") return whole(refsOf(rule, facts));
   // Not "these paths may not change": the globs are where change is allowed, and what
   // is reported is every file outside them.
@@ -231,31 +232,46 @@ function breachOf(rule: RuleSpec, facts: RuleFacts): Breach | null {
       };
 }
 
-function refsOf(
-  rule: Exclude<RuleSpec, { kind: "protected_paths" }>,
-  facts: RuleFacts,
-): Ref[] | null {
+function refsOf(rule: Exclude<RuleSpec, { kind: "protected_paths" }>, facts: RuleFacts) {
   switch (rule.kind) {
     case "branch_is":
-      return facts.branch === rule.name
-        ? null
-        : [{ kind: "git", excerpt: `on ${facts.branch ?? "no branch"}, not ${rule.name}` }];
+      const returned: Ref[] | null =
+        facts.branch === rule.name
+          ? null
+          : [{ kind: "git", excerpt: `on ${facts.branch ?? "no branch"}, not ${rule.name}` }];
+      return returned;
     case "mr_target": {
       const target = facts.mrTarget;
-      if (target === null) return [{ kind: "record", excerpt: "no merge request recorded" }];
-      if (target.project !== rule.project)
-        return [{ kind: "record", excerpt: `targets ${target.project}, not ${rule.project}` }];
-      if (rule.iid !== undefined && target.iid !== rule.iid)
-        return [{ kind: "record", excerpt: `is !${target.iid ?? "?"}, not !${rule.iid}` }];
-      return null;
+      if (target === null) {
+        const returned: Ref[] | null = [{ kind: "record", excerpt: "no merge request recorded" }];
+        return returned;
+      }
+      if (target.project !== rule.project) {
+        const returned: Ref[] | null = [
+          { kind: "record", excerpt: `targets ${target.project}, not ${rule.project}` },
+        ];
+        return returned;
+      }
+      if (rule.iid !== undefined && target.iid !== rule.iid) {
+        const returned: Ref[] | null = [
+          { kind: "record", excerpt: `is !${target.iid ?? "?"}, not !${rule.iid}` },
+        ];
+        return returned;
+      }
+      const returned: Ref[] | null = null;
+      return returned;
     }
     case "output_field": {
       const output = facts.outputs[rule.step];
-      if (output === undefined)
-        return [{ kind: "output", path: rule.step, excerpt: "no Output recorded" }];
+      if (output === undefined) {
+        const returned: Ref[] | null = [
+          { kind: "output", path: rule.step, excerpt: "no Output recorded" },
+        ];
+        return returned;
+      }
       const value = output[rule.path] ?? "";
       const holds = rule.op === "eq" ? value === rule.value : value !== rule.value;
-      return holds
+      const returned: Ref[] | null = holds
         ? null
         : [
             {
@@ -264,22 +280,29 @@ function refsOf(
               excerpt: `is ${JSON.stringify(value)}`,
             },
           ];
+      return returned;
     }
     case "command_exit": {
       const verification = facts.verifications[rule.name];
       // Nobody ran it is not the same as it passed, and only one of those is evidence.
-      if (verification === undefined)
-        return [{ kind: "verification", path: rule.name, excerpt: "no verification of that name" }];
-      return verification.exit === rule.expect
-        ? null
-        : [
-            {
-              kind: "verification",
-              path: rule.name,
-              sha: verification.ref,
-              excerpt: `exited ${verification.exit}, wanted ${rule.expect}`,
-            },
-          ];
+      if (verification === undefined) {
+        const returned: Ref[] | null = [
+          { kind: "verification", path: rule.name, excerpt: "no verification of that name" },
+        ];
+        return returned;
+      }
+      const returned: Ref[] | null =
+        verification.exit === rule.expect
+          ? null
+          : [
+              {
+                kind: "verification",
+                path: rule.name,
+                sha: verification.ref,
+                excerpt: `exited ${verification.exit}, wanted ${rule.expect}`,
+              },
+            ];
+      return returned;
     }
   }
 }
@@ -353,7 +376,7 @@ export const evidenceFor = Effect.fn("Drift.evidenceFor")(function* (
 });
 
 /** One unified diff, per file, each cut to the cap and each secret file named only. */
-export function splitDiff(diff: string): EvidenceBlock[] {
+export function splitDiff(diff: string) {
   const blocks: EvidenceBlock[] = [];
   let path: string | null = null;
   let lines: string[] = [];
@@ -435,10 +458,7 @@ export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: stri
  * many times it is looked at. One found again at a newer Intent version is the open
  * report moved to it, so a correction can still follow it.
  */
-export function newReports(
-  found: ReadonlyArray<DriftReport>,
-  existing: ReadonlyArray<DriftLine>,
-): DriftReport[] {
+export function newReports(found: ReadonlyArray<DriftReport>, existing: ReadonlyArray<DriftLine>) {
   const known = new Map(
     Arr.map(openReports(existing), (report) => [
       findingKey(report.constraint, report.evidence),
@@ -458,7 +478,7 @@ export function newReports(
 }
 
 /** What was found again, under the id and correction state of the report on file. */
-function movedTo(open: DriftReport, found: DriftReport): DriftReport {
+function movedTo(open: DriftReport, found: DriftReport) {
   const moved = { ...found, id: open.id, resolution: open.resolution };
   return open.correction === undefined ? moved : { ...moved, correction: open.correction };
 }
@@ -527,7 +547,7 @@ export interface JudgementDeps {
 }
 
 /** Which files a judgement is about: what the semantic constraints name, else everything. */
-export function judgementPaths(intent: Intent): string[] {
+export function judgementPaths(intent: Intent) {
   const named = pipe(
     intent.constraints,
     Arr.filter((constraint) => constraint.kind === "semantic"),
@@ -557,7 +577,7 @@ export function judgementPack(
     readonly outputs: ReadonlyArray<ShownOutput>;
     readonly truncated: boolean;
   },
-): string {
+) {
   const semantic = Arr.filter(intent.constraints, (constraint) => constraint.kind === "semantic");
   return Arr.join(
     Arr.filter(
@@ -599,17 +619,15 @@ export interface ShownWork {
  * The reference as it cites work the pack showed, or null where it cites none. A file
  * may be named under `worktree`, and is kept as the pack named it.
  */
-export const citedIn =
-  (shown: ShownWork, worktree: string) =>
-  (ref: Ref): Ref | null => {
-    if (ref.path === undefined) return null;
-    if (ref.kind === "output") return shown.outputs.includes(ref.path) ? ref : null;
-    if (ref.kind !== "diff") return null;
-    const file = pipe(ref.path, Str.startsWith(`${worktree}/`))
-      ? pipe(ref.path, Str.slice(worktree.length + 1))
-      : ref.path;
-    return shown.files.includes(file) ? { ...ref, path: file } : null;
-  };
+export const citedIn = (shown: ShownWork, worktree: string) => (ref: Ref) => {
+  if (ref.path === undefined) return null;
+  if (ref.kind === "output") return shown.outputs.includes(ref.path) ? ref : null;
+  if (ref.kind !== "diff") return null;
+  const file = pipe(ref.path, Str.startsWith(`${worktree}/`))
+    ? pipe(ref.path, Str.slice(worktree.length + 1))
+    : ref.path;
+  return shown.files.includes(file) ? { ...ref, path: file } : null;
+};
 
 /**
  * One report as Collie will keep it, whatever the model returned. The model says which
@@ -627,13 +645,13 @@ export function judgedReport(
   roots: ReadonlyArray<string>,
   truncated: boolean,
   cited: (ref: Ref) => Ref | null = () => null,
-): DriftReport {
+) {
   const evidence = Arr.flatMap(report.evidence, (ref) => {
     const work = cited(ref);
     if (work !== null) return [work];
     return ref.path === undefined || insideKnown(ref.path, roots) ? [ref] : [];
   });
-  return {
+  const returned: DriftReport = {
     id: `d-${findingKey(report.constraint, evidence)}`,
     at: at_,
     run: intent.run,
@@ -645,6 +663,7 @@ export function judgedReport(
     evidence_truncated: truncated,
     resolution: "open",
   };
+  return returned;
 }
 
 /** A Judgement that was made, or the reason there is none to read. */
@@ -653,7 +672,7 @@ export interface Asked {
   readonly reports: ReadonlyArray<DriftReport>;
 }
 
-const notAsked = (refused: string): Asked => ({ refused, reports: [] });
+const notAsked = (refused: string) => ({ refused, reports: [] });
 
 /**
  * One paid Judgement: the evaluator's flags, a reservation, the call, and the settlement
@@ -824,7 +843,7 @@ export function decideCorrections(
   intent: Intent,
   open: ReadonlyArray<DriftReport>,
   ctx: CorrectionContext,
-): Correction[] {
+) {
   const authority = intent.authority;
   if (!authority.auto_correct) return [];
   if (ctx.held) return [];
@@ -855,11 +874,7 @@ export function decideCorrections(
  * conflicts with the goal will pick one, silently; told to say so instead, it hands the
  * conflict back to the person who can settle it.
  */
-export function correctionText(
-  deliveryId: string,
-  constraint: Constraint,
-  report: DriftReport,
-): string {
+export function correctionText(deliveryId: string, constraint: Constraint, report: DriftReport) {
   const evidence = Arr.join(
     Arr.map(
       report.evidence,
@@ -906,10 +921,7 @@ export interface Alignment {
 }
 
 /** Why a judgement was skipped, once per reason, leaving out what a later judgement answered. */
-export function standingSkips(
-  lines: ReadonlyArray<DriftLine>,
-  judged: Pick<Judged, "at">,
-): string[] {
+export function standingSkips(lines: ReadonlyArray<DriftLine>, judged: Pick<Judged, "at">) {
   const answered = (line: Schema.Schema.Type<typeof SkippedSchema>) =>
     line.check === undefined && judged.at !== undefined && line.at < judged.at;
   const reasons = Arr.flatMap(lines, (line) =>
@@ -918,29 +930,58 @@ export function standingSkips(
   return [...new Set(reasons)];
 }
 
-export function alignment(
-  intent: Intent | null,
-  lines: ReadonlyArray<DriftLine>,
-  judged: Judged,
-): Alignment {
-  if (intent === null) return { aligned: "unverified", why: "the Run has no Intent to compare to" };
-  if (intent.constraints.length === 0) return { aligned: "unverified", why: "nothing was judged" };
+export function alignment(intent: Intent | null, lines: ReadonlyArray<DriftLine>, judged: Judged) {
+  if (intent === null) {
+    const returned: Alignment = {
+      aligned: "unverified",
+      why: "the Run has no Intent to compare to",
+    };
+    return returned;
+  }
+  if (intent.constraints.length === 0) {
+    const returned: Alignment = { aligned: "unverified", why: "nothing was judged" };
+    return returned;
+  }
   const open = openReports(lines);
-  if (Arr.some(open, (report) => report.severity === "block"))
-    return { aligned: "false", why: `${open.length} open report(s), at least one blocking` };
+  if (Arr.some(open, (report) => report.severity === "block")) {
+    const returned: Alignment = {
+      aligned: "false",
+      why: `${open.length} open report(s), at least one blocking`,
+    };
+    return returned;
+  }
   const skippedReasons = standingSkips(lines, judged);
-  if (skippedReasons.length > 0)
-    return {
+  if (skippedReasons.length > 0) {
+    const returned: Alignment = {
       aligned: "unverified",
       why: `a judgement was skipped: ${skippedReasons.at(-1) ?? ""}`,
     };
+    return returned;
+  }
   const hasSemantic = Arr.some(intent.constraints, (c) => c.kind === "semantic");
-  if (hasSemantic && !judged.semantic)
-    return { aligned: "unverified", why: "the semantic constraints were never judged" };
-  if (judged.truncated)
-    return { aligned: "unverified", why: "the evidence a judgement saw was truncated" };
-  if (open.length > 0) return { aligned: "unverified", why: `${open.length} open warning(s)` };
-  return { aligned: "true", why: "every constraint was checked and none is open" };
+  if (hasSemantic && !judged.semantic) {
+    const returned: Alignment = {
+      aligned: "unverified",
+      why: "the semantic constraints were never judged",
+    };
+    return returned;
+  }
+  if (judged.truncated) {
+    const returned: Alignment = {
+      aligned: "unverified",
+      why: "the evidence a judgement saw was truncated",
+    };
+    return returned;
+  }
+  if (open.length > 0) {
+    const returned: Alignment = { aligned: "unverified", why: `${open.length} open warning(s)` };
+    return returned;
+  }
+  const returned: Alignment = {
+    aligned: "true",
+    why: "every constraint was checked and none is open",
+  };
+  return returned;
 }
 
 // ---------------------------------------------------------------------------
@@ -952,7 +993,7 @@ export function alignment(
  * (SPEC §9.4). Left open, one keeps a finished Run `aligned: false` about something nobody
  * asks for, and its correction argues for the old text.
  */
-export function supersededBy(reports: ReadonlyArray<DriftReport>, intent: Intent): DriftReport[] {
+export function supersededBy(reports: ReadonlyArray<DriftReport>, intent: Intent) {
   const live = new Set(Arr.map(intent.constraints, (constraint) => constraint.id));
   return Arr.filter(
     reports,
@@ -1014,7 +1055,7 @@ export const appendElection = (file: string, line: ElectionLine) =>
  * Without it, an evaluation nobody could finish would wait for a Driver that has a
  * parent, which may never run again.
  */
-export function shouldStand(lines: ReadonlyArray<ElectionLine>, hasSiblings: boolean): boolean {
+export function shouldStand(lines: ReadonlyArray<ElectionLine>, hasSiblings: boolean) {
   if (hasSiblings) return true;
   return pendingEvaluation(lines) !== null;
 }
@@ -1024,7 +1065,7 @@ export function shouldStand(lines: ReadonlyArray<ElectionLine>, hasSiblings: boo
  * open now. Nothing when none is open: an ordinary election is a fresh event each time,
  * and every candidate for it is worth writing down.
  */
-export function alreadyStood(lines: ReadonlyArray<ElectionLine>, run: string): boolean {
+export function alreadyStood(lines: ReadonlyArray<ElectionLine>, run: string) {
   const pending = pendingEvaluation(lines);
   if (pending === null) return false;
   return Arr.some(
@@ -1040,7 +1081,7 @@ export function alreadyStood(lines: ReadonlyArray<ElectionLine>, run: string): b
  * Without this a mark stood for ever, and every Driver in the Herd stood — and paid —
  * at every boundary for a question that had been answered.
  */
-export function pendingEvaluation(lines: ReadonlyArray<ElectionLine>): PendingEvaluation | null {
+export function pendingEvaluation(lines: ReadonlyArray<ElectionLine>) {
   let latest: PendingEvaluation | null = null;
   for (const line of lines) {
     if (line.kind === "pending") latest = line;
@@ -1055,7 +1096,7 @@ export function pendingEvaluation(lines: ReadonlyArray<ElectionLine>): PendingEv
 }
 
 /** Whether something moved in the Herd after this snapshot: a loser's `dirty` newer than it. */
-export function staleSince(lines: ReadonlyArray<ElectionLine>, snapshotAt: string): boolean {
+export function staleSince(lines: ReadonlyArray<ElectionLine>, snapshotAt: string) {
   return Arr.some(lines, (line) => line.kind === "dirty" && line.at > snapshotAt);
 }
 
@@ -1069,7 +1110,7 @@ export const EXTRA_PASSES = 2;
  * count. Without this a card said `none` — "there was nothing to check" — about a check
  * that had happened.
  */
-export function evaluatedFor(lines: ReadonlyArray<ElectionLine>, run: string): boolean {
+export function evaluatedFor(lines: ReadonlyArray<ElectionLine>, run: string) {
   let answered = false;
   for (const line of lines) {
     if (line.kind === "evaluated") answered = line.runs.includes(run);

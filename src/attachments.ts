@@ -89,7 +89,7 @@ export const copyInto = Effect.fn("attachments.copyInto")(function* (
   const named = yield* namesIn(dir, sources);
   yield* fs.makeDirectory(dir, { recursive: true });
   for (const { name, bytes } of named) yield* fs.writeFile(path.join(dir, name), bytes);
-  return Arr.map(named, ({ name, from }): Attached => ({ name, from }));
+  return Arr.map(named, ({ name, from }) => ({ name, from }));
 });
 
 /** Keeps words too long to type as a file in `dir`, named by digest so a retry keeps one. */

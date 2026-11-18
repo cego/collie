@@ -234,12 +234,12 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
     Effect.mapError(String),
     Effect.andThen(running(app)),
     Effect.match({
-      onFailure: (reason): DesktopStep => ({
+      onFailure: (reason) => ({
         step: "desktop",
         state: "failed",
         detail: `Desktop ${to} was not staged: ${reason}`,
       }),
-      onSuccess: (live): DesktopStep => ({
+      onSuccess: (live) => ({
         step: "desktop",
         state: "done",
         detail: `Desktop ${from} → ${target} ${live ? "applies when you restart Desktop" : "installs when Desktop next starts"}`,

@@ -129,7 +129,7 @@ const serve = (over: Partial<StandIn> = {}) =>
     Effect.orDie,
   );
 
-const hostOf = (over?: Partial<AgentHost>): AgentHost => ({
+const hostOf: (over?: Partial<AgentHost>) => AgentHost = (over?) => ({
   dir,
   env: rig.pluginEnv(),
   herdr: new Herdr(rig.pluginEnv()),
@@ -969,9 +969,11 @@ class StopsAfter extends Herdr {
   }
   override agentLaunch(options: Parameters<Herdr["agentLaunch"]>[0]) {
     const started = super.agentLaunch(options);
-    return this.after === "launch" && options.name === successor
-      ? started.pipe(Effect.tap(() => stopFlag(true)))
-      : started;
+    const returned: ReturnType<Herdr["agentLaunch"]> =
+      this.after === "launch" && options.name === successor
+        ? started.pipe(Effect.tap(() => stopFlag(true)))
+        : started;
+    return returned;
   }
 }
 
@@ -1162,16 +1164,15 @@ class NeverAdmits extends Herdr {
   constructor() {
     super(rig.pluginEnv());
   }
-  override agentLaunch(
-    _options: Parameters<Herdr["agentLaunch"]>[0],
-  ): ReturnType<Herdr["agentLaunch"]> {
-    return Effect.fail(
+  override agentLaunch(_options: Parameters<Herdr["agentLaunch"]>[0]) {
+    const refused: ReturnType<Herdr["agentLaunch"]> = Effect.fail(
       new HerdrError({
         message: "core terminal.run failed",
         detail: "timed out waiting for agent startup",
         answered: true,
       }),
     );
+    return refused;
   }
 }
 const neverAdmits = () => new NeverAdmits();
@@ -1362,11 +1363,12 @@ class StoppedWhileStarting extends NeverAdmits {
   halts: Array<{ readonly stopped: ReadonlyArray<string>; readonly left: ReadonlyArray<string> }> =
     [];
   override agentLaunch(options: Parameters<Herdr["agentLaunch"]>[0]) {
-    return stopFlag(true).pipe(
+    const launched: ReturnType<Herdr["agentLaunch"]> = stopFlag(true).pipe(
       Effect.andThen(halted({ herdr: neverAdmits() })),
       Effect.tap((halt) => Effect.sync(() => this.halts.push(halt))),
       Effect.andThen(super.agentLaunch(options)),
     );
+    return launched;
   }
 }
 

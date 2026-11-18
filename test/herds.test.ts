@@ -22,7 +22,7 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-const registered = (agent: string, terminal: string): AgentEntry => ({
+const registered: (agent: string, terminal: string) => AgentEntry = (agent, terminal) => ({
   role: "implementer",
   agent,
   paneId: terminal,

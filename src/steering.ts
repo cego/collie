@@ -68,7 +68,7 @@ export const toldLine = (agent: string, text: string) =>
   `${agent}: told "${Str.split(text, "\n")[0] ?? ""}"`;
 
 /** The first line of the newest message `log` says `agent` was told, or null for none. */
-export function toldIn(log: string, agent: string): string | null {
+export function toldIn(log: string, agent: string) {
   const prefix = `${agent}: told "`;
   const line = Option.getOrUndefined(
     Arr.findLast(
@@ -76,7 +76,9 @@ export function toldIn(log: string, agent: string): string | null {
       (one) => pipe_(one, Str.startsWith(prefix)) && pipe_(one, Str.endsWith('"')),
     ),
   );
-  return line === undefined ? null : pipe_(line, Str.slice(prefix.length, -1));
+  const returned: string | null =
+    line === undefined ? null : pipe_(line, Str.slice(prefix.length, -1));
+  return returned;
 }
 
 /** States nothing follows: a causal key with one of these is free for a new delivery. */
@@ -137,12 +139,14 @@ function isDelivery(line: LedgerLine): line is Delivery {
 }
 
 /** A short stable digest for a key or a body. Not a security property; a name. */
-function digest(value: string): string {
-  return Bun.hash(value).toString(16);
+function digest(value: string) {
+  const returned: string = Bun.hash(value).toString(16);
+  return returned;
 }
 
-export function textHash(text: string): string {
-  return digest(text);
+export function textHash(text: string) {
+  const returned: string = digest(text);
+  return returned;
 }
 
 /**
@@ -151,15 +155,19 @@ export function textHash(text: string): string {
  * words about different work, and two corrections for one constraint are the same work
  * in different words. What must not happen twice is the work.
  */
-export function causalKey(run: string, cause: Cause, intentVersion: number): string {
-  return digest(`${run}\u0000${cause.kind}\u0000${cause.ref}\u0000${intentVersion}`);
+export function causalKey(run: string, cause: Cause, intentVersion: number) {
+  const returned: string = digest(
+    `${run}\u0000${cause.kind}\u0000${cause.ref}\u0000${intentVersion}`,
+  );
+  return returned;
 }
 
 export const LEDGER_FILE = "deliveries.jsonl";
 
 /** The key an incarnation's ledger is kept under, from herdr's own identity for it. */
-export function incarnationKey(terminalId: string): string {
-  return digest(terminalId);
+export function incarnationKey(terminalId: string) {
+  const returned: string = digest(terminalId);
+  return returned;
 }
 
 type HumanSubmit = Delivery & { readonly human: HumanDoor };
@@ -222,7 +230,7 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
       ) ON seq = last
       ORDER BY first
     `;
-    return {
+    const returned: DeliveriesApi = {
       append: (line) =>
         Effect.gen(function* () {
           const ledger = incarnationKey(line.incarnation);
@@ -319,7 +327,8 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
           `;
           yield* reactivity.invalidate([DELIVERIES]);
         }).pipe(Effect.orDie),
-    } satisfies DeliveriesApi;
+    };
+    return returned;
   }),
 );
 
@@ -339,10 +348,11 @@ export const readLedgerWhole = (incarnation: string) =>
   Deliveries.use((ledgers) => ledgers.ledger(incarnation));
 
 /** The newest line for each delivery id, which is that delivery's current state. */
-export function newestById(lines: ReadonlyArray<LedgerLine>): Map<string, Delivery> {
+export function newestById(lines: ReadonlyArray<LedgerLine>) {
   const newest = new Map<string, Delivery>();
   for (const line of lines) if (isDelivery(line)) newest.set(line.id, line);
-  return newest;
+  const returned: Map<string, Delivery> = newest;
+  return returned;
 }
 
 /** `deliveries` for one pass over these Runs, as `readAhead` reads their records. */
@@ -352,13 +362,14 @@ export const deliveriesAhead = Effect.fn("Steering.deliveriesAhead")(function* (
 ) {
   const ids = new Set(runs);
   const all = yield* Effect.cached(deliveries.newestOf(runs));
-  return {
+  const returned: DeliveriesApi = {
     ...deliveries,
     ofRun: (run) =>
       ids.has(run)
         ? Effect.map(all, (got) => deliveriesIn(Arr.map(got.get(run) ?? [], (line) => ({ line }))))
         : deliveries.ofRun(run),
-  } satisfies DeliveriesApi;
+  };
+  return returned;
 });
 
 export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (run: string) {
@@ -386,7 +397,7 @@ export function blocked(
   causal_key: string,
   /** The delivery being sent: its own `deferred` line is its retry, not another copy. */
   resending?: string,
-): Delivery | null {
+) {
   let found: Delivery | null = null;
   for (const delivery of newestById(lines).values()) {
     if (delivery.causal_key !== causal_key) continue;
@@ -394,7 +405,8 @@ export function blocked(
     if (delivery.id === resending && delivery.state === "deferred") continue;
     if (found === null || delivery.at > found.at) found = delivery;
   }
-  return found;
+  const returned: Delivery | null = found;
+  return returned;
 }
 
 /**
@@ -428,7 +440,7 @@ export function settleStaleReservations(
   nowMs: number,
   submitTimeoutMs: number,
   at: string,
-): Delivery[] {
+) {
   const settled: Delivery[] = [];
   for (const delivery of newestById(lines).values()) {
     if (delivery.state !== "reserved") continue;
@@ -441,17 +453,19 @@ export function settleStaleReservations(
       note: "reserved and never settled (crash or lost result)",
     });
   }
-  return settled;
+  const returned: Delivery[] = settled;
+  return returned;
 }
 
 /** Whether this incarnation is under manual override: the last word on it wins. */
-export function overrideActive(lines: ReadonlyArray<LedgerLine>): boolean {
+export function overrideActive(lines: ReadonlyArray<LedgerLine>) {
   let active = false;
   for (const line of lines) {
     if (isDelivery(line)) continue;
     active = line.kind === "manual_override";
   }
-  return active;
+  const returned: boolean = active;
+  return returned;
 }
 
 /** Sent, with nothing to show the harness took it. */
@@ -473,17 +487,27 @@ export function reconcile(
   as: "sent" | "not-sent",
   by: string,
   at: string,
-): Delivery | { readonly error: string } {
+) {
   const delivery = newestById(lines).get(id);
-  if (!delivery) return { error: `no delivery "${id}" in this ledger` };
-  if (delivery.state !== "unknown" && !isUnobserved(delivery))
-    return { error: `delivery "${id}" is ${delivery.state}` };
-  return {
+  if (!delivery) {
+    const returned: Delivery | { readonly error: string } = {
+      error: `no delivery "${id}" in this ledger`,
+    };
+    return returned;
+  }
+  if (delivery.state !== "unknown" && !isUnobserved(delivery)) {
+    const returned: Delivery | { readonly error: string } = {
+      error: `delivery "${id}" is ${delivery.state}`,
+    };
+    return returned;
+  }
+  const returned: Delivery | { readonly error: string } = {
     ...delivery,
     at,
     state: "superseded",
     note: `reconciled as ${as} by ${by}`,
   };
+  return returned;
 }
 
 // ---------------------------------------------------------------------------
@@ -582,18 +606,26 @@ export interface CallLimits {
  * with it still happened and still counts; leaving it unsettled would make the record
  * say fewer calls were made than were.
  */
-function staleSettlements(
-  lines: ReadonlyArray<BudgetLine>,
-  nowMs: number,
-  at: string,
-): BudgetLine[] {
+function staleSettlements(lines: ReadonlyArray<BudgetLine>, nowMs: number, at: string) {
   const settled = new Set(Arr.flatMap(lines, (l) => (l.kind === "settle" ? [l.id] : [])));
-  return Arr.flatMap(lines, (line): BudgetLine[] => {
-    if (line.kind !== "reserve" || settled.has(line.id)) return [];
+  const answer: BudgetLine[] = Arr.flatMap(lines, (line) => {
+    if (line.kind !== "reserve" || settled.has(line.id)) {
+      const returned: BudgetLine[] = [];
+      return returned;
+    }
     const startedAt = epochMs(line.at);
-    if (Number.isNaN(startedAt) || nowMs - startedAt < 2 * line.max_seconds * 1000) return [];
-    return [{ kind: "settle", id: line.id, at, outcome: "failed", seconds: 0, bytes: 0 }];
+    if (Number.isNaN(startedAt) || nowMs - startedAt < 2 * line.max_seconds * 1000) {
+      const returned: BudgetLine[] = [];
+      return returned;
+    }
+    {
+      const returned: BudgetLine[] = [
+        { kind: "settle", id: line.id, at, outcome: "failed", seconds: 0, bytes: 0 },
+      ];
+      return returned;
+    }
   });
+  return answer;
 }
 
 /**

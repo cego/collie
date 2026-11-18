@@ -78,7 +78,7 @@ const ticket = (
     Effect.orDie,
   );
 
-const hostOf = (): AgentHost => ({
+const hostOf: () => AgentHost = () => ({
   dir,
   env: rig.pluginEnv(),
   herdr: new Herdr(rig.pluginEnv()),

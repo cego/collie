@@ -7,7 +7,6 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Effect, Schema } from "effect";
 import { FORGES, forgeOfHost } from "./forge/forge";
-import type { ForgeHttp } from "./forge/http";
 import { projectFromRemote, type Runner } from "./mr";
 import { redact, scrub } from "./redact";
 
@@ -30,11 +29,19 @@ export function startedOf(
   said: string | undefined,
   input: Readonly<Record<string, Schema.Json>>,
   text: Readonly<Record<string, string>> | undefined,
-): Started | undefined {
-  if (origin === "chat") return said === undefined ? undefined : { door: "chat", words: said };
-  if (!isHumanDoor(origin)) return undefined;
+) {
+  if (origin === "chat") {
+    const returned: Started | undefined =
+      said === undefined ? undefined : { door: "chat", words: said };
+    return returned;
+  }
+  if (!isHumanDoor(origin)) {
+    const returned: Started | undefined = undefined;
+    return returned;
+  }
   const words = [...Rec.values(text ?? {}), ...Arr.filter(Rec.values(input), isText)];
-  return { door: origin, words: Arr.join(words, "\n") };
+  const returned: Started | undefined = { door: origin, words: Arr.join(words, "\n") };
+  return returned;
 }
 
 /** A branch a Run made: in which checkout, and on which origin, credentials removed. */
@@ -90,7 +97,7 @@ export const autoModeFacts = <R>(
   own: RunAuthority,
   run: Runner<R>,
   gitlabHost?: string,
-): Effect.Effect<AutoModeFacts, never, R | ForgeHttp> =>
+) =>
   Effect.gen(function* () {
     const remote = yield* run("git", ["remote", "get-url", "origin"], session.cwd);
     const url = remote.code === 0 ? Str.trim(remote.stdout) || null : null;
@@ -140,7 +147,7 @@ const quoted = (words: string) => {
     : `"${pipe(text, Str.slice(0, WORDS_MAX))}" (cut at 2,000 characters)`;
 };
 
-export function autoModeBlock(facts: AutoModeFacts): AutoModeBlock {
+export function autoModeBlock(facts: AutoModeFacts) {
   const origin = facts.origin ?? "none";
   const unprotected = facts.created && facts.protected === false;
   const branch = facts.roaming

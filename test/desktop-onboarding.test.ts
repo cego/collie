@@ -21,7 +21,7 @@ import {
 } from "effect";
 import type { BoardMessage, BoardSnapshot } from "../src/board-model";
 import { signRelease } from "../src/signing";
-import { flockStream, localRoute, type Route, type ShellRoute } from "../desktop/src/bun/machine";
+import { flockStream, localRoute, type ShellRoute } from "../desktop/src/bun/machine";
 import {
   doctorOn,
   onboardThrough,
@@ -280,10 +280,10 @@ const BINARY = new Uint8Array([
  * A paired Machine at `home`: its link carries stdin as text, as a bridge's shell request
  * does, and says what it was given; `sh` is its SSH command.
  */
-const paired = (
+const paired: (
   home: string,
-  sh: ShellRoute["sh"] = localSh(home),
-): ShellRoute & { readonly carried: Uint8Array[] } => {
+  sh?: ShellRoute["sh"],
+) => ShellRoute & { readonly carried: Uint8Array[] } = (home, sh = localSh(home)) => {
   const carried: Uint8Array[] = [];
   return {
     ...localRoute([], "vm-mk"),
@@ -396,7 +396,7 @@ test("an SSH connection that fails while the runner is on its way is said in its
 const localSh = (home: string) => (script: string) =>
   Effect.succeed(["/usr/bin/env", `HOME=${home}`, "/bin/sh", "-c", script]);
 
-const snapshot = (installation: string): BoardSnapshot => ({
+const snapshot: (installation: string) => BoardSnapshot = (installation) => ({
   _tag: "Snapshot",
   installation,
   build: "0.31.0",
@@ -419,7 +419,7 @@ test("a route added while Desktop runs shows its Machine, one removed stops, and
       const told: string[] = [];
       const closed: string[] = [];
       let installed = false;
-      const route = (name: string): Route<Fake> => ({
+      const route = (name: string) => ({
         machine: { profile: `p-${name}`, name, target: `mk@${name}` },
         open: () =>
           installed || name !== "bare"
@@ -496,7 +496,7 @@ test.each([
     run(
       Effect.gen(function* () {
         const told: string[] = [];
-        const route = (name: string): Route<Fake> => ({
+        const route = (name: string) => ({
           machine: { profile: `p-${name}`, name, target: `mk@${name}` },
           open: () =>
             Effect.succeed<Fake>({
@@ -675,7 +675,7 @@ test("Helle and the Linear MCP count toward onboarded though doctor passes them,
       expect(Arr.map(doctored.steps, ({ step, status }) => [step, status])).toEqual([
         ["helle", "needs_human"],
       ]);
-      const onboarding = (status: OnboardStep["status"]): OnboardRun => ({
+      const onboarding = (status: OnboardStep["status"]) => ({
         steps: [{ step: "helle", title: "Helle's credentials", status }],
 
         ready: status === "skipped",

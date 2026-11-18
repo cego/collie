@@ -134,13 +134,16 @@ export type OpResult =
     }
   | Failure;
 
-export const err = (
-  code: ExpectedError["code"],
-  message: string,
-  details: YamlMap = {},
-): Failure => ({ ok: false, error: ExpectedError.make({ code, message, details }) });
+export const err: (code: ExpectedError["code"], message: string, details?: YamlMap) => Failure = (
+  code,
+  message,
+  details = {},
+) => ({ ok: false, error: ExpectedError.make({ code, message, details }) });
 
-const ok = <A extends object>(data: A, human: string): OpResult => ({
+const ok: <A extends object>(data: A, human: string) => OpResult = <A extends object>(
+  data: A,
+  human: string,
+) => ({
   ok: true,
   data,
   human,
@@ -156,13 +159,15 @@ export const newRequestId = Effect.fn("operations.newRequestId")(function* () {
  * root. `null` is a request that named none. An error is a name that matches nothing or
  * more than one thing: a launch aimed at a guess is a Run in a repository nobody asked for.
  */
-export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
+export const workspaceNamed: (
   env: PluginEnv,
   named: string | undefined,
-): Effect.fn.Return<WorkspaceNamed, never, PlatformServices> {
+) => Effect.Effect<WorkspaceNamed, never, PlatformServices> = Effect.fn(
+  "operations.workspaceNamed",
+)(function* (env: PluginEnv, named: string | undefined) {
   if (named === undefined || Str.trim(named) === "") return null;
   const wanted = Str.trim(named);
-  const refused = (error: string): WorkspaceNamed => ({ error });
+  const refused: (error: string) => WorkspaceNamed = (error) => ({ error });
   const opened = yield* workspaceForDirectory(env, wanted);
   if (opened !== null) return opened;
   const repository = yield* repositoryCheckout(env, wanted).pipe(Effect.orElseSucceed(() => null));
@@ -235,10 +240,12 @@ const checkoutsNamed = Effect.fn("operations.checkoutsNamed")(function* (
  * checkout, or a new one opened there. `null` is a name that is not a directory at all,
  * which is the caller's "matches nothing".
  */
-const workspaceForDirectory = Effect.fn("operations.workspaceForDirectory")(function* (
+const workspaceForDirectory: (
   env: PluginEnv,
   named: string,
-): Effect.fn.Return<WorkspaceNamed, never, PlatformServices> {
+) => Effect.Effect<WorkspaceNamed, never, PlatformServices> = Effect.fn(
+  "operations.workspaceForDirectory",
+)(function* (env: PluginEnv, named: string) {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const expanded = pipe(named, Str.startsWith("~/"))
@@ -650,18 +657,21 @@ const prepareAndDesktop = Effect.fn("operations.prepareAndDesktop")(function* (
  */
 const PREPARE_LINE = /^prepare: ([a-z-]+): (done|already in place|skipped|failed)(?: — (.*))?$/;
 
-export function prepareSteps(
-  output: string,
-): Array<{ step: string; state: string; detail: string }> {
-  return Arr.flatMap(Str.split(output, "\n"), (line) => {
-    const match = PREPARE_LINE.exec(Str.trim(line));
-    return match ? [{ step: match[1]!, state: match[2]!, detail: match[3] ?? "" }] : [];
-  });
+export function prepareSteps(output: string) {
+  const returned: Array<{ step: string; state: string; detail: string }> = Arr.flatMap(
+    Str.split(output, "\n"),
+    (line) => {
+      const match = PREPARE_LINE.exec(Str.trim(line));
+      return match ? [{ step: match[1]!, state: match[2]!, detail: match[3] ?? "" }] : [];
+    },
+  );
+  return returned;
 }
 
 /** `git rev-parse` prints one line; anything else means it did not answer. */
-function short(result: { code: number; stdout: string }): string {
-  return result.code === 0 ? Str.trim(result.stdout) : "";
+function short(result: { code: number; stdout: string }) {
+  const returned: string = result.code === 0 ? Str.trim(result.stdout) : "";
+  return returned;
 }
 
 /**
@@ -822,8 +832,9 @@ const incarnationsFor = Effect.fn("operations.incarnationsFor")(function* (
 });
 
 /** The tree a card was written against, as the one string a confirmation compares. */
-function revisionOf(revision: { readonly head_sha: string; readonly fingerprint: string }): string {
-  return `${revision.head_sha}:${revision.fingerprint}`;
+function revisionOf(revision: { readonly head_sha: string; readonly fingerprint: string }) {
+  const returned: string = `${revision.head_sha}:${revision.fingerprint}`;
+  return returned;
 }
 
 /**
@@ -1007,8 +1018,8 @@ export const steer = Effect.fn("operations.steer")(function* (
   );
 });
 
-function previewOf(interpretation: string, checked: ReadonlyArray<Validated>): string {
-  return Arr.join(
+function previewOf(interpretation: string, checked: ReadonlyArray<Validated>) {
+  const returned: string = Arr.join(
     [
       interpretation,
       ...Arr.map(
@@ -1018,6 +1029,7 @@ function previewOf(interpretation: string, checked: ReadonlyArray<Validated>): s
     ],
     "\n",
   );
+  return returned;
 }
 
 /**
@@ -1085,7 +1097,10 @@ export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: Plugi
 });
 
 /** The agents registered for one Run, by name. */
-const agentsOf = (registered: ReadonlyArray<AgentEntry>, run: string): Set<string> =>
+const agentsOf: (registered: ReadonlyArray<AgentEntry>, run: string) => Set<string> = (
+  registered,
+  run,
+) =>
   new Set(
     Arr.map(
       Arr.filter(registered, (entry) => entry.runId === run),
@@ -1106,11 +1121,14 @@ const actionText = flow(
 );
 
 /** The `collie_do` action that answers `choiceId` on `run`. */
-export const answerAction = (run: string, choiceId: string, answer: string): string =>
-  actionText({ kind: "answer", run, choiceId, answer });
+export const answerAction: (run: string, choiceId: string, answer: string) => string = (
+  run,
+  choiceId,
+  answer,
+) => actionText({ kind: "answer", run, choiceId, answer });
 
 /** The Choice a Run is waiting on, every option, and the `collie_do` action that answers it. */
-export const choiceLines = (run: string, asked: Asked): string[] => [
+export const choiceLines: (run: string, asked: Asked) => string[] = (run, asked) => [
   `Waiting on the Choice "${asked.name}": ${asked.prompt}`,
   asked.options.length === 0
     ? "It has no options: it is answered in words."
@@ -1128,7 +1146,7 @@ export const choiceLines = (run: string, asked: Asked): string[] => [
 const decodeAnswered = Schema.decodeUnknownOption(Answered);
 
 /** Who an answer came from, in the words a human uses for the place they answered. */
-const answererOf = (actor: AuditLine["actor"]): string => {
+const answererOf: (actor: AuditLine["actor"]) => string = (actor) => {
   const { origin, from, conversation } = actor;
   const door = (() => {
     switch (origin) {

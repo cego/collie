@@ -20,7 +20,7 @@ import {
   flow as Schemaflow,
   Result,
 } from "effect";
-import type { Flow, FlowLane, FlowNode } from "../src/board-model";
+import type { Flow } from "../src/board-model";
 import { recordIn } from "../src/board-model";
 import { readStepLines } from "../src/steps";
 import { writeTask } from "../src/task";
@@ -137,8 +137,8 @@ const until_ = (world: World, runId: string, wanted: (flow: Flow) => boolean) =>
     (flow) => flow !== null && wanted(flow),
   ).pipe(Effect.map((flow) => flow!));
 
-const laneOf = (flow: Flow): FlowLane => flow.lanes[0]!;
-const nodeOf = (flow: Flow, id: string): FlowNode | undefined =>
+const laneOf = (flow: Flow) => flow.lanes[0]!;
+const nodeOf = (flow: Flow, id: string) =>
   Option.getOrUndefined(Arr.findFirst(laneOf(flow).nodes, (node) => node.id === id));
 const statesOf = (flow: Flow) =>
   Arr.map(laneOf(flow).nodes, (node) => ({ id: node.id, state: node.state }));

@@ -9,8 +9,12 @@ import { sectionOf, type TaskView } from "../board-model";
 import { boardSnapshot } from "../lifecycle";
 import { answering } from "./shared";
 
-function line(view: TaskView): string {
-  return Arr.join([sectionOf(view), view.state, view.project, view.name, view.sentence], "\t");
+function line(view: TaskView) {
+  const returned: string = Arr.join(
+    [sectionOf(view), view.state, view.project, view.name, view.sentence],
+    "\t",
+  );
+  return returned;
 }
 
 /** The renderer arrives through dynamic imports, so the rest of the CLI never loads it. */

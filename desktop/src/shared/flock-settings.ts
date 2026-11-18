@@ -31,7 +31,6 @@ export {
   takeFrom,
 } from "../../../src/flock-settings";
 import type { FlockSettings } from "../../../src/flock-settings";
-import type { StandingDirection } from "../../../src/standing-direction";
 import { isString } from "../../../src/schema";
 
 const valueOf = (value: Schema.Json | null) =>
@@ -39,7 +38,7 @@ const valueOf = (value: Schema.Json | null) =>
 const GIVEN_ONLY = "gitlab_host";
 
 /** The Flock's Standing direction and its last edit, or undefined while it is empty. */
-export const standingDirectionOf = (flock: FlockSettings): StandingDirection | undefined => {
+export const standingDirectionOf = (flock: FlockSettings) => {
   const held = flock.settings.standing_direction;
   return held !== undefined && isString(held.value) && held.value !== ""
     ? { text: held.value, at: held.at }
@@ -47,12 +46,7 @@ export const standingDirectionOf = (flock: FlockSettings): StandingDirection | u
 };
 
 /** An edit made in Desktop's Settings, checked as the TUI checks one, at `now`. */
-export const editSetting = (
-  flock: FlockSettings,
-  key: string,
-  typed: string,
-  now: string,
-): FlockSettings | { readonly refused: string } => {
+export const editSetting = (flock: FlockSettings, key: string, typed: string, now: string) => {
   const parsed = parseSetting(key, typed);
   if ("refused" in parsed) return parsed;
   return {
@@ -68,7 +62,7 @@ export const editSettings = (
   flock: FlockSettings,
   changes: ReadonlyArray<{ readonly key: string; readonly value: string }>,
   now: string,
-): FlockSettings | { readonly refused: string } => {
+) => {
   let edited = flock;
   for (const { key, value } of changes) {
     const next = editSetting(edited, key, value, now);
@@ -154,7 +148,7 @@ const subRank = (sub: string) =>
   );
 
 /** What setting Desktop's own `key` to `typed` changes; empty sets it back to its default. */
-export const desktopChange = (key: string, typed: string): DesktopSettingsChange => {
+export const desktopChange = (key: string, typed: string) => {
   const setting = Option.getOrUndefined(Arr.findFirst(DESKTOP_SETTINGS, (one) => one.key === key))!;
   return setting.change(typed || setting.fallback);
 };
@@ -191,7 +185,7 @@ export interface SettingSection {
   readonly rows: ReadonlyArray<SettingRow>;
 }
 
-const consequenceOf = (key: string, value: string): string | null => {
+const consequenceOf = (key: string, value: string) => {
   if (key === "permissions" && value === "bypass")
     return "No one reviews an agent's tool calls: every Machine's agents run what they choose.";
   if (key === "compact_at_tokens" && value === "0")
@@ -217,7 +211,7 @@ const flockRow = (
   setting: Setting,
   now: number,
   timeZone: string | undefined,
-): SettingRow => {
+) => {
   const held = flock.settings[setting.key];
   const value = held === undefined ? "" : settingText(valueOf(held.value));
   const edit =
@@ -270,9 +264,9 @@ export const settingSections = (
   desktop: DesktopSettings,
   now: number,
   timeZone?: string,
-): ReadonlyArray<SettingSection> => {
+) => {
   const rows = [
-    ...Arr.map(DESKTOP_SETTINGS, (setting): SettingRow => {
+    ...Arr.map(DESKTOP_SETTINGS, (setting) => {
       const value = setting.read(desktop);
       const set = value !== setting.fallback;
       return {
@@ -328,10 +322,7 @@ const reachedOf = (machines: ReadonlyArray<Reached>) => {
  * How far an edit of the Flock's settings reached, from each Machine's latest sync, or why
  * it is not sent: one made while the Flock's settings cannot be read would be made blind.
  */
-export const flockReach = (
-  readable: boolean,
-  machines: ReadonlyArray<Reached>,
-): Said | { readonly refused: string } => {
+export const flockReach = (readable: boolean, machines: ReadonlyArray<Reached>) => {
   if (!readable) return { refused: "Not set: the Flock's settings could not be read" };
   const { behind, all, of } = reachedOf(machines);
   if (all) return { said: `Given to all ${machines.length} Machines`, tone: "ok" };
@@ -342,7 +333,7 @@ export const flockReach = (
   };
 };
 
-export const syncPill = (readable: boolean, machines: ReadonlyArray<Reached>): Said => {
+export const syncPill = (readable: boolean, machines: ReadonlyArray<Reached>) => {
   if (!readable) return { said: "Showing the Flock's settings as last read", tone: "warn" };
   const { behind, all, of } = reachedOf(machines);
   if (all) return { said: `In sync with all ${machines.length} Machines`, tone: "ok" };

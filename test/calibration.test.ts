@@ -15,19 +15,19 @@ const Recorded = Schema.Struct({
 });
 const recorded: Calibrated = Effect.runSync(Schema.decodeUnknownEffect(Recorded)(ff23b932));
 
-const plan = (metrics: Measurement["plan"]["metrics"]): Measurement["plan"] => ({
+const plan = (metrics: Measurement["plan"]["metrics"]) => ({
   ...recorded.plan,
   metrics,
 });
-const judged = (...verdicts: ReadonlyArray<Judgement>): Measurement["result"] => ({
+const judged: (...verdicts: ReadonlyArray<Judgement>) => Measurement["result"] = (...verdicts) => ({
   _tag: "Judged",
   verdicts,
 });
-const verdict = (
-  metric: string,
-  interval: readonly [number, number],
-  held: boolean,
-): Judgement => ({
+const verdict: (metric: string, interval: readonly [number, number], held: boolean) => Judgement = (
+  metric,
+  interval,
+  held,
+) => ({
   metric,
   ratio: 1,
   interval,

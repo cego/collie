@@ -4,7 +4,7 @@ import { Effect } from "effect";
 import type { ScheduleChange, ScheduleChanged, ScheduleEntry } from "../src/schedule-model";
 import { moveSchedule, type ScheduleDoor } from "../src/schedule-move";
 
-const entry = (machine: string, over: Partial<ScheduleEntry> = {}): ScheduleEntry => ({
+const entry = (machine: string, over: Partial<ScheduleEntry> = {}) => ({
   machine: { installation: `i-${machine}`, hostname: machine },
   name: "daily",
   workflow: "proof",

@@ -487,7 +487,7 @@ export default defineWorkflow({
               kept ||= decision.answer === keep;
               if (decision.answer === drop) {
                 droppedByHuman.add(identity);
-                ledger = Arr.map(ledger ?? [], (one): Finding =>
+                ledger = Arr.map(ledger ?? [], (one) =>
                   (one.id ?? one.title) === identity
                     ? {
                         ...one,
@@ -1020,7 +1020,7 @@ const reviewNote = (
   review: SynthesisReport,
   previous: ReadonlyArray<Finding> | undefined,
   head: string,
-): string => {
+) => {
   if (previous === undefined) return renderPublicReview(review);
   const published = Arr.filter(previous, (one) => Boolean(one.note));
   if (previous.length > 0 && published.length === 0) return renderPublicReview(review);

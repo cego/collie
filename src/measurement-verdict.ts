@@ -83,7 +83,7 @@ export const judge = (
   measurement: string,
   samples: MetricSamples,
   { threshold, tolerance, absolute = 0, exact = false }: Limits,
-): Effect.Effect<Judgement, MeasurementRefused> =>
+) =>
   Effect.gen(function* () {
     const reason = refusal(samples);
     if (reason !== null) return yield* new MeasurementRefused({ metric: samples.metric, reason });
@@ -110,7 +110,7 @@ export const judge = (
       ratios.push(ratioOf(candidate, base));
       differences.push(candidate - base);
     }
-    const bounds = (values: Array<number>): [number, number] => {
+    const bounds: (values: Array<number>) => [number, number] = (values) => {
       values.sort((a, b) => a - b);
       return [values[Math.floor(RESAMPLES * 0.025)]!, values[Math.ceil(RESAMPLES * 0.975) - 1]!];
     };

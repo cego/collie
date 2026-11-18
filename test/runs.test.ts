@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { RunView } from "../src/engine";
 import { factsOfView } from "../src/runs";
 
-const view = (over: Partial<RunView> = {}): RunView => ({
+const view: (over?: Partial<RunView>) => RunView = (over = {}) => ({
   runId: "r1",
   workflow: "builds",
   project: "/project",

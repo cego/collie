@@ -96,7 +96,7 @@ export interface AguiState {
   readonly blocks: ReadonlyMap<number, Open>;
 }
 
-export const startState = (thread: string): AguiState => ({
+export const startState: (thread: string) => AguiState = (thread) => ({
   thread,
   turns: 0,
   run: null,
@@ -113,10 +113,10 @@ const textOf = (content: typeof ToolResult.Type.content) =>
       );
 
 /** What one SDK message adds to the stream, and the state after it. */
-export const step = (
+export const step: (
   state: AguiState,
   message: SdkMessage,
-): readonly [AguiState, ReadonlyArray<AguiEvent>] => {
+) => readonly [AguiState, ReadonlyArray<AguiEvent>] = (state, message) => {
   const known = decodeKnown(message);
   if (Option.isNone(known)) return [state, []];
   const read = known.value;
@@ -145,13 +145,16 @@ export const step = (
         now,
         [
           ...begun,
-          ...Arr.map(results, (result): AguiEvent => ({
-            type: "TOOL_CALL_RESULT",
-            toolCallId: result.tool_use_id,
-            messageId: `${result.tool_use_id}:result`,
-            content: textOf(result.content),
-            role: "tool",
-          })),
+          ...Arr.map(results, (result) => {
+            const returned: AguiEvent = {
+              type: "TOOL_CALL_RESULT",
+              toolCallId: result.tool_use_id,
+              messageId: `${result.tool_use_id}:result`,
+              content: textOf(result.content),
+              role: "tool",
+            };
+            return returned;
+          }),
         ],
       ];
     }

@@ -119,7 +119,10 @@ const NamesJson = Schema.fromJsonString(Names);
 const readNames = (fs: FileSystem.FileSystem, file: string) =>
   fs.readFileString(file).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(NamesJson)),
-    Effect.orElseSucceed((): Names => ({ runs: {}, told: [] })),
+    Effect.orElseSucceed(() => {
+      const returned: Names = { runs: {}, told: [] };
+      return returned;
+    }),
   );
 
 const writeNames = (fs: FileSystem.FileSystem, file: string, names: Names) =>
@@ -150,7 +153,7 @@ const Refusal = Schema.Union([
   Schema.Struct({ reason: Schema.String }),
   Schema.Struct({ message: Schema.String }),
 ]);
-const sentenceOf = (cause: unknown): string => {
+const sentenceOf = (cause: unknown) => {
   const said = Schema.decodeUnknownOption(Refusal)(cause);
   if (Option.isNone(said)) return String(cause);
   return "reason" in said.value ? said.value.reason : said.value.message;
@@ -247,7 +250,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
       return { ok: op !== "resume" || done.success.applied, op, detail: done.success.detail };
     });
 
-  const ask = (request: HostRequest): Effect.Effect<HostReply> =>
+  const ask: (request: HostRequest) => Effect.Effect<HostReply> = (request) =>
     Effect.gen(function* () {
       switch (request.op) {
         case "load": {
@@ -453,7 +456,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
       }),
     );
 
-  return {
+  const returned: Host = {
     ask,
     tell: (request: HostRequest) =>
       Effect.gen(function* () {
@@ -485,7 +488,8 @@ export const openHost = Effect.fn("HostTest.open")(function* (
       Effect.asVoid,
       Effect.provideService(FileSystem.FileSystem, fs),
     ),
-  } satisfies Host;
+  };
+  return returned;
 });
 
 /**
@@ -639,16 +643,13 @@ const hostLogEnd = Effect.gen(function* () {
   const log = `${yield* Config.String("COLLIE_STATE_DIR").pipe(Config.withDefault(""))}/host.log`;
   const text = yield* Effect.tryPromise(() => Bun.file(log).text());
   return [`end of ${log}:`, ...Str.split(Str.trimEnd(text), "\n").slice(-40)];
-}).pipe(Effect.orElseSucceed((): Array<string> => []));
+}).pipe(Effect.orElseSucceed(() => []));
 
 /**
  * Retries a read until what it says is what the test is waiting for. Running out names the
  * wait, what it last read and the end of the host's log, so a one-off failure says why.
  */
-export const until = <A, E, R>(
-  read: () => Effect.Effect<A, E, R>,
-  wanted: (value: A) => boolean,
-): Effect.Effect<A, E, R> =>
+export const until = <A, E, R>(read: () => Effect.Effect<A, E, R>, wanted: (value: A) => boolean) =>
   Effect.suspend(read).pipe(
     Effect.filterOrFail(wanted, (value) => new NotYet(value)),
     Effect.retry({ times: 1_000, schedule: Schedule.spaced("20 millis") }),

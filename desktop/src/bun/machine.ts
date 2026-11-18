@@ -70,18 +70,15 @@ import {
   type DesktopAction,
   type FlockItem,
   type KnownMachine,
-  type Machine,
   type MachineMerged,
   type MachineMessage,
   type MachineOwnRead,
   type NotLive,
 } from "../shared/flock";
 import { CREDENTIAL_SAID, type Lag } from "../shared/in-sync";
-import { type MachineUsage, UPGRADE_SAID } from "../shared/usage";
-import type { MachineCatalogue } from "../shared/settings-agents";
-import type { OwnReading } from "../shared/machine-own";
+import { UPGRADE_SAID } from "../shared/usage";
 import { type MachineSchedules, SCHEDULES_UPGRADE_SAID } from "../shared/schedules";
-import { CLEANUP_UPGRADE_SAID, type CleanupListing } from "../shared/machine-cleanup";
+import { CLEANUP_UPGRADE_SAID } from "../shared/machine-cleanup";
 import type { ScheduleChange } from "../../../src/schedule-model";
 import type { ActionSchema } from "../../../src/actions";
 import type { Mutable } from "effect/Types";
@@ -181,7 +178,7 @@ export interface RouteFailure {
   readonly reason: string;
 }
 
-const unreachable = (reason: string): RouteFailure => ({
+const unreachable: (reason: string) => RouteFailure = (reason) => ({
   state: "unreachable",
   reason,
 });
@@ -389,7 +386,7 @@ export const openDoors = (
           orElse: () =>
             Effect.fail(unreachable("the host did not identify itself within 5 seconds")),
         }),
-        Effect.map((identity): Doors => ({
+        Effect.map((identity) => ({
           machine,
           identity,
           desktop,
@@ -430,7 +427,7 @@ export const machineBoard = (known: KnownMachine, door: BoardSource) =>
   door.board.pipe(
     Stream.mapError((error) => error.message),
     Stream.mapAccum(
-      (): Machine => ({ ...known, installation: "" }),
+      () => ({ ...known, installation: "" }),
       (machine, message) => {
         const now =
           message._tag === "Snapshot"
@@ -709,11 +706,11 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
 });
 
 /** Local, reached through a bridge it starts without SSH. */
-export const localRoute = (
+export const localRoute: (
   collie: ReadonlyArray<string>,
   name: string,
-  shell: ReadonlyArray<string> = [Bun.env.SHELL ?? "/bin/sh", "-lc"],
-): ShellRoute => {
+  shell?: ReadonlyArray<string>,
+) => ShellRoute = (collie, name, shell = [Bun.env.SHELL ?? "/bin/sh", "-lc"]) => {
   const machine = { profile: "local", name };
   return {
     machine,
@@ -738,7 +735,7 @@ export const pairedMachines = (collie: ReadonlyArray<string>) =>
       ),
     ),
     Effect.map(({ data }) => data.machines),
-    Effect.orElseSucceed((): ReadonlyArray<PeerView> => []),
+    Effect.orElseSucceed(() => []),
   );
 
 export const linkRoute = (
@@ -748,7 +745,7 @@ export const linkRoute = (
   client: string,
   env = childEnv(),
   initiallyPaired = true,
-): ShellRoute => {
+) => {
   let paired = initiallyPaired;
   const machine: KnownMachine = { ...fallback.machine, route: "link" };
   let doors: Doors | undefined;
@@ -779,7 +776,7 @@ export const linkRoute = (
         return { code, out: stdout, err: stderr };
       }).pipe(Effect.provide(BunCrypto.layerSecureRandom)),
     );
-  return {
+  const returned: ShellRoute = {
     machine,
     open: (waiting) =>
       (paired
@@ -854,6 +851,7 @@ export const linkRoute = (
       ),
     ),
   };
+  return returned;
 };
 
 const RELEASE = /^\d+\.\d+\.\d+$/;
@@ -924,7 +922,7 @@ export const flockStream = <D extends BoardSource>(
   changes: Stream.Stream<RouteChange<D>> = Stream.empty,
   show: (notification: Notification) => void = () => {},
   readDoors?: Map<string, D>,
-): Stream.Stream<FlockItem> =>
+) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const owners = yield* Ref.make(
@@ -977,7 +975,7 @@ export const flockStream = <D extends BoardSource>(
           }
           return owner === at;
         });
-      const tooNew = (route: Route<D>, build: string): RouteFailure => ({
+      const tooNew: (route: Route<D>, build: string) => RouteFailure = (route, build) => ({
         state: "update-desktop",
         reason: `${route.machine.name} runs collie ${build}, whose board this Desktop (${version}) cannot read.`,
       });
@@ -1045,11 +1043,13 @@ export const flockStream = <D extends BoardSource>(
                   ? Effect.fail(tooNew(route, item.message.build))
                   : Effect.succeed(item),
               ),
-              Stream.mapEffect((item): Effect.Effect<MachineMessage | MachineMerged> =>
-                Effect.map(owns(at, item), (mine) =>
-                  mine ? item : { _tag: "Merged", machine: route.machine },
-                ),
-              ),
+              Stream.mapEffect((item) => {
+                const returned: Effect.Effect<MachineMessage | MachineMerged> = Effect.map(
+                  owns(at, item),
+                  (mine) => (mine ? item : { _tag: "Merged", machine: route.machine }),
+                );
+                return returned;
+              }),
               Stream.takeUntil((item) => "_tag" in item),
               Stream.tap((item) =>
                 Effect.gen(function* () {
@@ -1115,7 +1115,7 @@ export const flockStream = <D extends BoardSource>(
             );
           }),
         );
-      const notice = (route: Route<D>, text: string): FlockItem => ({
+      const notice: (route: Route<D>, text: string) => FlockItem = (route, text) => ({
         _tag: "Notice",
         machine: route.machine,
         text,
@@ -1148,17 +1148,20 @@ export const flockStream = <D extends BoardSource>(
           ),
         );
       const lostItem = (route: Route<D>, state: NotLive, reason: string) =>
-        Effect.map(Clock.currentTimeMillis, (now): FlockItem => ({
-          _tag: "Lost",
-          machine: route.machine,
-          state,
-          reason,
-          at: now,
-        }));
+        Effect.map(Clock.currentTimeMillis, (now) => {
+          const returned: FlockItem = {
+            _tag: "Lost",
+            machine: route.machine,
+            state,
+            reason,
+            at: now,
+          };
+          return returned;
+        });
       const tries = (route: Route<D>, at: number, notices: Queue.Queue<FlockItem>) => {
         const waitingOnSso = (reason: string) =>
           Effect.flatMap(lostItem(route, "sso", reason), (item) => Queue.offer(notices, item));
-        const afterFailures = (failures: number): Stream.Stream<FlockItem> =>
+        const afterFailures: (failures: number) => Stream.Stream<FlockItem> = (failures) =>
           Stream.suspend(() => {
             let reached = false;
             return live(route, at, waitingOnSso).pipe(
@@ -1227,7 +1230,7 @@ export const flockStream = <D extends BoardSource>(
           );
         });
       const removedAt = (place: number) => places.get(routeAt[place]!.machine.profile) !== place;
-      const changed = (change: RouteChange<D>): Stream.Stream<FlockItem> => {
+      const changed = (change: RouteChange<D>) => {
         if (change._tag === "Add")
           return places.has(change.route.machine.profile)
             ? Stream.empty
@@ -1271,10 +1274,11 @@ export const flockStream = <D extends BoardSource>(
             });
             yield* Deferred.succeed(removed[at]!, undefined);
             yield* Deferred.await(ended[at]!);
-            return {
+            const returned: FlockItem = {
               _tag: "Removed",
               machine: routeAt[at]!.machine,
-            } satisfies FlockItem;
+            };
+            return returned;
           }),
         ).pipe(Stream.ensuring(Deferred.succeed(change.done, undefined)));
         // A route that merged into this one's Machine shows it now, as a route added afresh.
@@ -1298,7 +1302,10 @@ export const flockStream = <D extends BoardSource>(
         return removal.pipe(Stream.concat(again));
       };
       return Stream.fromIterable(routes).pipe(
-        Stream.map((route): RouteChange<D> => ({ _tag: "Add", route })),
+        Stream.map((route) => {
+          const returned: RouteChange<D> = { _tag: "Add", route };
+          return returned;
+        }),
         Stream.concat(changes),
         Stream.flatMap(changed, { concurrency: "unbounded" }),
       );
@@ -1340,11 +1347,7 @@ const formatIssue = SchemaIssue.makeFormatterDefault();
  * payload or reply not fitting the call a failure naming the Machine. The caller's own
  * interrupt is not caught.
  */
-const over = <A, R>(
-  { machine }: Reached,
-  call: Effect.Effect<A, Refused, R>,
-  request?: string,
-): Effect.Effect<A, ActionFailed, R> =>
+const over = <A, R>({ machine }: Reached, call: Effect.Effect<A, Refused, R>, request?: string) =>
   call.pipe(
     Effect.mapError(refusal(request)),
     Effect.catchCause((cause) => {
@@ -1601,10 +1604,10 @@ export const actOn = (
 };
 
 /** The door to the Machine an installation id names, while Desktop shows it. */
-export const doorTo = <D>(
+export const doorTo: <D>(
   doors: ReadonlyMap<string, D>,
   installation: string,
-): Effect.Effect<D, ActionFailed> => {
+) => Effect.Effect<D, ActionFailed> = <D>(doors: ReadonlyMap<string, D>, installation: string) => {
   const door = doors.get(installation);
   return door === undefined
     ? Effect.fail(new ActionFailed({ reason: "that Machine is not connected" }))
@@ -1663,7 +1666,11 @@ export class DoorMap<D> extends Map<string, D> {
 }
 
 /** The Machine's door once it has one other than `last`. */
-const nextDoor = <D>(doors: DoorMap<D>, installation: string, last?: D): Effect.Effect<D> =>
+const nextDoor: <D>(doors: DoorMap<D>, installation: string, last?: D) => Effect.Effect<D> = <D>(
+  doors: DoorMap<D>,
+  installation: string,
+  last?: D,
+) =>
   Effect.suspend(() => {
     const changed = doors.changed;
     const door = doors.get(installation);
@@ -1694,7 +1701,7 @@ export const recordEvents = (
   runId: string,
   held: Effect.Effect<RunRevision | undefined> = Effect.undefined,
 ) => {
-  const after = (last?: RecordDoor): Stream.Stream<RecordEvent, ActionFailed> =>
+  const after: (last?: RecordDoor) => Stream.Stream<RecordEvent, ActionFailed> = (last?) =>
     Stream.unwrap(
       Effect.flatMap(nextDoor(doors, installation, last), (door) =>
         Effect.map(held, (revision) => {
@@ -1703,9 +1710,11 @@ export const recordEvents = (
             .runDetail(revision === undefined ? asked : { ...asked, held: revision })
             .pipe(
               markFirst("desktop:read", runId),
-              Stream.map((value): RecordEvent =>
-                value !== null && "_tag" in value ? UNCHANGED : { _tag: "Frame", detail: value },
-              ),
+              Stream.map((value) => {
+                const returned: RecordEvent =
+                  value !== null && "_tag" in value ? UNCHANGED : { _tag: "Frame", detail: value };
+                return returned;
+              }),
               // A broken connection's door is replaced soon after; one that stays was not.
               Stream.catchTag("RpcClientError", (error) =>
                 Stream.concat(
@@ -1764,7 +1773,10 @@ interface Searched {
   };
 }
 
-export const searchDoorOn = (installation: string, door: Searched): SearchDoor => ({
+export const searchDoorOn: (installation: string, door: Searched) => SearchDoor = (
+  installation,
+  door,
+) => ({
   installation,
   search: (asked) => awayFrom(door.desktop.artefactSearch(asked)),
   has: (run) =>
@@ -1860,10 +1872,7 @@ export const artefactSeenOn = (
   );
 
 /** What a Machine's host read of its Usage; a host too old to have the call asks for an upgrade. */
-export const usageOn = (
-  { profile, name }: KnownMachine,
-  door: Pick<Door, "usage">,
-): Effect.Effect<MachineUsage> =>
+export const usageOn = ({ profile, name }: KnownMachine, door: Pick<Door, "usage">) =>
   door.usage().pipe(
     Effect.map((readings) => ({ profile, name, readings, problem: null })),
     Effect.mapError(refusal()),
@@ -1889,7 +1898,7 @@ export const usageOn = (
 export const cataloguesOn = (
   { profile, name }: Pick<KnownMachine, "profile" | "name">,
   door: Pick<Door, "models">,
-): Effect.Effect<MachineCatalogue> =>
+) =>
   door.models().pipe(
     Effect.map((catalogues) => ({ profile, name, catalogues, problem: null })),
     Effect.timeoutOrElse({
@@ -1910,14 +1919,14 @@ export const cataloguesOn = (
     }),
   );
 
-export const machineOwnOn = (
+export const machineOwnOn: (
   machine: KnownMachine,
   door: Pick<Door, "machineOwn">,
-): Effect.Effect<MachineOwnRead> =>
+) => Effect.Effect<MachineOwnRead> = (machine, door) =>
   Effect.gen(function* () {
     const at = yield* Clock.currentTimeMillis;
     const reading = yield* door.machineOwn().pipe(
-      Effect.map((values): OwnReading => ({
+      Effect.map((values) => ({
         values,
         at,
         problem: null,
@@ -1951,8 +1960,8 @@ export const machineOwnOn = (
 export const schedulesOn = (
   { installation, profile, name }: KnownMachine & { readonly installation: string },
   door: Pick<Door, "schedules">,
-): Effect.Effect<MachineSchedules> => {
-  const read = (over: Partial<MachineSchedules>): MachineSchedules => ({
+) => {
+  const read = (over: Partial<MachineSchedules>) => ({
     installation,
     profile,
     name,
@@ -2001,10 +2010,7 @@ export const schedulesOn = (
  * over the next one whenever a door closes or breaks under the call, for 2 minutes in all. A
  * host too old to have the call asks for an upgrade.
  */
-export const cleanupOn = (
-  doors: DoorMap<Reached>,
-  profile: string,
-): Effect.Effect<CleanupListing, ActionFailed> =>
+export const cleanupOn = (doors: DoorMap<Reached>, profile: string) =>
   Effect.suspend(() => {
     const failed = (reason: string) => Effect.fail(new ActionFailed({ reason }));
     const found = Option.getOrUndefined(
@@ -2013,7 +2019,7 @@ export const cleanupOn = (
     if (found === undefined) return failed("That Machine isn't connected.");
     const [installation, first] = found;
     let waiting = false;
-    const askOver = (door: Reached): Effect.Effect<CleanupReport, ActionFailed> =>
+    const askOver: (door: Reached) => Effect.Effect<CleanupReport, ActionFailed> = (door) =>
       Effect.suspend(() => {
         waiting = false;
         return Effect.exit(door.desktop.cleanup());
@@ -2066,7 +2072,7 @@ export const sweepOn = (
   { installation, machine }: { readonly installation: string; readonly machine: string },
   request: string,
   log: ActionsLog,
-): Effect.Effect<CleanupReport, ActionFailed> =>
+) =>
   Effect.suspend(() => {
     const door = doors.get(installation);
     const name = door?.machine.name ?? machine;
@@ -2096,7 +2102,7 @@ export const sweepOn = (
       );
     let attempt = 0;
     let waiting = false;
-    const sendOver = (door: Reached): Effect.Effect<CleanupReport, ActionFailed> =>
+    const sendOver: (door: Reached) => Effect.Effect<CleanupReport, ActionFailed> = (door) =>
       Effect.suspend(() => {
         attempt += 1;
         waiting = false;
@@ -2142,7 +2148,7 @@ export const sweepOn = (
 export const changeScheduleOn = (door: Reached, change: ScheduleChange, request: string) =>
   over(door, door.desktop.changeSchedule({ change, request }), request);
 
-const scheduleDoor = (door: Reached): ScheduleDoor => ({
+const scheduleDoor: (door: Reached) => ScheduleDoor = (door) => ({
   name: door.machine.name,
   schedules: door.desktop.schedules(),
   changeSchedule: (asked) => door.desktop.changeSchedule(asked),

@@ -171,7 +171,7 @@ export const messages = Effect.fn("OpenCode.messages")(function* (base: string, 
  * both cache components. `reasoning` is deliberately not added — the native predicate
  * does not add it, and this is meant to be the same number it compares.
  */
-export function contextTokens(message: OpenCodeMessage): number | null {
+export function contextTokens(message: OpenCodeMessage) {
   const tokens = message.info.tokens;
   if (!tokens) return null;
   return tokens.total ?? tokens.input + tokens.output + tokens.cache.read + tokens.cache.write;
@@ -190,7 +190,7 @@ export function contextTokens(message: OpenCodeMessage): number | null {
  * OpenCode is usually still closing its last message, so reading the newest message
  * alone made every OpenCode boundary an unavailable sample.
  */
-export function currentContext(all: ReadonlyArray<OpenCodeMessage>): number | null {
+export function currentContext(all: ReadonlyArray<OpenCodeMessage>) {
   for (const message of [...all].reverse()) {
     if (message.info.role !== "assistant") continue;
     if (message.info.mode === COMPACTION_MODE) return null;
@@ -201,9 +201,7 @@ export function currentContext(all: ReadonlyArray<OpenCodeMessage>): number | nu
 }
 
 /** The model the session is working with, which is what summarizing has to be asked in. */
-export function sessionModel(
-  all: ReadonlyArray<OpenCodeMessage>,
-): { providerID: string; modelID: string } | null {
+export function sessionModel(all: ReadonlyArray<OpenCodeMessage>) {
   for (const message of [...all].reverse()) {
     const { providerID, modelID } = message.info;
     if (providerID && modelID) return { providerID, modelID };
@@ -262,23 +260,35 @@ export type CompactionState =
  * evidence — a bare 200 and an idle session are not — and the documented error state
  * on that message is the terminal failure, including a context too large to compact.
  */
-export function compactionAfter(
-  all: ReadonlyArray<OpenCodeMessage>,
-  before: ReadonlySet<string>,
-): CompactionState {
+export function compactionAfter(all: ReadonlyArray<OpenCodeMessage>, before: ReadonlySet<string>) {
   const mine = Arr.filter(
     all,
     (message) => message.info.mode === COMPACTION_MODE && !before.has(message.info.id),
   ).at(-1);
-  if (!mine) return { kind: "none" };
+  if (!mine) {
+    const returned: CompactionState = { kind: "none" };
+    return returned;
+  }
   const { id, error, finish } = mine.info;
   if (error !== undefined && error !== null) {
-    return { kind: "failed", id, reason: describe(error) };
+    const returned: CompactionState = { kind: "failed", id, reason: describe(error) };
+    return returned;
   }
-  if (finish === "error") return { kind: "failed", id, reason: "the compaction finished in error" };
+  if (finish === "error") {
+    const returned: CompactionState = {
+      kind: "failed",
+      id,
+      reason: "the compaction finished in error",
+    };
+    return returned;
+  }
   // Still being written: it has neither finished nor failed, so nothing is established.
-  if (!finish) return { kind: "none" };
-  return { kind: "done", id };
+  if (!finish) {
+    const returned: CompactionState = { kind: "none" };
+    return returned;
+  }
+  const returned: CompactionState = { kind: "done", id };
+  return returned;
 }
 
 /** What every one of the documented message errors carries: a name and a message. */
@@ -289,14 +299,14 @@ const MessageError = Schema.Struct({
 const decodeMessageError = Schema.decodeUnknownOption(MessageError);
 
 /** What a message's error says, as a line a human can read off the Run. */
-function describe(error: OpenCodeMessage["info"]["error"]): string {
+function describe(error: OpenCodeMessage["info"]["error"]) {
   const named = decodeMessageError(error);
   if (named._tag === "None") return "the compaction reported an error";
   return named.value.data?.message ?? named.value.name ?? "the compaction reported an error";
 }
 
 /** Every compaction this session already has, by message id. */
-export function compactionIds(all: ReadonlyArray<OpenCodeMessage>): string[] {
+export function compactionIds(all: ReadonlyArray<OpenCodeMessage>) {
   return Arr.map(
     Arr.filter(all, (message) => message.info.mode === COMPACTION_MODE),
     (message) => message.info.id,

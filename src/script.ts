@@ -2,7 +2,7 @@ import { Result } from "effect";
 import { CommandLine } from "effect/process";
 
 /** `command` under a pseudo-terminal of `script`'s, as a login that wants one is run. */
-export const scriptCommand = (command: string, platform: NodeJS.Platform): [string, ...string[]] =>
+export const scriptCommand = (command: string, platform: NodeJS.Platform) =>
   platform === "darwin"
     ? ["script", "-q", "/dev/null", "/bin/sh", "-c", command]
     : ["script", "-qefc", command, "/dev/null"];

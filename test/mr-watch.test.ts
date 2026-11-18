@@ -38,7 +38,7 @@ beforeEach(() =>
 
 afterEach(() => runLive(rig.close()));
 
-const mr = (iid: string, over: Partial<FakeMr> = {}): FakeMr => ({
+const mr: (iid: string, over?: Partial<FakeMr>) => FakeMr = (iid, over = {}) => ({
   project: PROJECT,
   iid,
   state: "open",

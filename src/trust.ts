@@ -38,11 +38,11 @@ const paths = Effect.fn("Trust.paths")(function* (cwd: string) {
   return real === cwd ? [cwd] : [cwd, real];
 });
 
-function projects(config: YamlMap): YamlMap {
+function projects(config: YamlMap) {
   return isYamlMap(config.projects) ? config.projects : {};
 }
 
-function trustedIn(config: YamlMap, cwds: ReadonlyArray<string>): boolean {
+function trustedIn(config: YamlMap, cwds: ReadonlyArray<string>) {
   const entries = projects(config);
   return Arr.some(cwds, (path) => {
     const entry = entries[path];
@@ -54,7 +54,7 @@ function trustedIn(config: YamlMap, cwds: ReadonlyArray<string>): boolean {
 const GRANT_ATTEMPTS = 3;
 const CHANGED = "changed" as const;
 
-export function claudeTrust(home: string, backupDir: string): Trust {
+export function claudeTrust(home: string, backupDir: string) {
   const configPath = `${home}/.claude.json`;
 
   /** The file as claude last wrote it, or null when it is not there or cannot be read. */

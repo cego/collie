@@ -3,7 +3,7 @@
 // client can tell it missed nothing.
 
 import * as Arr from "effect/Array";
-import { Cause, Clock, Effect, Option, type Scope, Stream, SubscriptionRef } from "effect";
+import { Cause, Clock, Effect, Option, Stream, SubscriptionRef } from "effect";
 import type { BoardMessage, BoardSnapshot, TaskView } from "./board-model";
 import { recordMarks } from "./record-marks";
 import { Foreground } from "./foreground";
@@ -29,11 +29,7 @@ export const shareBoard = <A, E, R, R2>(options: {
   readonly build: Effect.Effect<A, E, R>;
   readonly changed: Stream.Stream<unknown, never, R2>;
   readonly refresh?: Stream.Stream<unknown, never, R2>;
-}): Effect.Effect<
-  { readonly boards: Stream.Stream<A>; readonly latest: Effect.Effect<A> },
-  never,
-  Scope.Scope | R | R2
-> =>
+}) =>
   Effect.gen(function* () {
     const mark = yield* recordMarks;
     let seen = 0;
@@ -111,12 +107,12 @@ export const shareBoard = <A, E, R, R2>(options: {
 export const boardMessages = <R>(options: {
   readonly head: Omit<BoardSnapshot, "_tag" | "tasks" | "seq">;
   readonly boards: Stream.Stream<ReadonlyArray<TaskView>, never, R>;
-}): Stream.Stream<BoardMessage, never, R> =>
+}) =>
   Stream.unwrap(
     Effect.sync(() => {
       let seq = 0;
       let told: Map<string, { readonly view: TaskView; readonly text: string }> | null = null;
-      const changesTo = (views: ReadonlyArray<TaskView>): BoardMessage[] => {
+      const changesTo = (views: ReadonlyArray<TaskView>) => {
         const now = new Map(
           Arr.map(views, (view) => {
             const was = told?.get(view.id);
@@ -138,7 +134,7 @@ export const boardMessages = <R>(options: {
         return out;
       };
       return options.boards.pipe(
-        Stream.flatMap((views): Stream.Stream<BoardMessage> => {
+        Stream.flatMap((views) => {
           if (told !== null) return Stream.fromIterable(changesTo(views));
           changesTo(views);
           return Stream.make({ _tag: "Snapshot", ...options.head, tasks: views, seq });

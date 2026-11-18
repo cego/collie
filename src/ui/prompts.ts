@@ -40,7 +40,7 @@ const QUESTION_FOOTER = "type an answer · Enter send · Esc cancel";
  * of `menu`/`ask` calls drive a component tree without either half knowing about the
  * other.
  */
-export function signalPrompts(): Prompting {
+export function signalPrompts() {
   const [pending, setPending] = createSignal<Pending | null>(null);
 
   const waitFor = (ask: Ask) =>
@@ -60,7 +60,7 @@ export function signalPrompts(): Prompting {
       );
     });
 
-  return {
+  const returned: Prompting = {
     pending,
     prompts: {
       menu: (items, opts) =>
@@ -80,4 +80,5 @@ export function signalPrompts(): Prompting {
         waitFor({ _tag: "Question", header: question, footer: QUESTION_FOOTER, initial: "" }),
     },
   };
+  return returned;
 }

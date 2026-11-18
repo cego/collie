@@ -61,7 +61,7 @@ const PHRASES: ReadonlyArray<{ readonly pattern: RegExp; readonly reason: string
 ];
 
 /** Each phrase in `text` that names Collie or its process, once, in the order of the list. */
-export const leaksIn = (text: string): ReadonlyArray<Leak> =>
+export const leaksIn: (text: string) => ReadonlyArray<Leak> = (text) =>
   Arr.dedupeWith(
     Arr.flatMap(PHRASES, ({ pattern, reason }) =>
       Arr.map(Arr.fromIterable(pipe(text, Str.matchAll(pattern))), (match) => ({

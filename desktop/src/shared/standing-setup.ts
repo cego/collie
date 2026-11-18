@@ -7,7 +7,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { Schema } from "effect";
 import { OwnStore, type OwnWords, withinCaps } from "../../../src/own-words-model";
 import type { StandingDirection } from "../../../src/standing-direction";
-import type { DesktopSettings, DesktopSettingsChange } from "./flock";
+import type { DesktopSettings } from "./flock";
 
 /** "Read my messages", or "Ask me five questions instead". */
 export const SetupChoice = Schema.Literals(["read", "ask"]);
@@ -28,7 +28,7 @@ export const offersSetup = ({ direction, connected, version, settings }: OfferFa
   settings.setupNotNow !== version;
 
 /** "Don't ask again", or "Not now", which holds until Desktop's next version. */
-export const declined = (forGood: boolean, version: string): DesktopSettingsChange =>
+export const declined = (forGood: boolean, version: string) =>
   forGood ? { setupNever: true } : { setupNotNow: version };
 
 /** Where one computer keeps the human's sessions, or why it could not say. */

@@ -84,7 +84,7 @@ const isoAgo = (ms: number) =>
 const finished = (ms: number, over: Partial<RunFacts> = {}) =>
   Effect.map(isoAgo(ms), (at) => runFacts({ id: "r1", state: "succeeded", finished: at, ...over }));
 
-const idleFor = (ms: number) => Effect.map(ago(ms), (at): IdleSince => new Map([[TERMINAL, at]]));
+const idleFor = (ms: number) => Effect.map(ago(ms), (at) => new Map([[TERMINAL, at]]));
 
 const sweeper = (
   runs: ReadonlyArray<RunFacts>,
@@ -632,7 +632,7 @@ test("an agent whose turn does not stop is kept with the reason, and tried again
   ));
 
 test("the host keeps when it first saw each agent idle or done, and anything else clears it", () => {
-  const agent = (name: string, status: AgentInfo["status"]): AgentInfo => ({
+  const agent = (name: string, status: AgentInfo["status"]) => ({
     name,
     paneId: `t-${name}`,
     status,

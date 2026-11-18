@@ -17,7 +17,7 @@ const SEMVER = new RegExp(
 );
 
 /** The valid semantic version hc's `--version` output names as its first numeric word, or null. */
-export const hcVersion = (said: string): string | null => {
+export const hcVersion = (said: string) => {
   const word = Arr.findFirst(Str.split(said, /\s+/), (one) => /^\d/.test(one));
   if (Option.isNone(word)) return null;
   const parts = SEMVER.exec(word.value);
@@ -30,7 +30,7 @@ export const hcVersion = (said: string): string | null => {
  * Whether hc's `--version` output names a version at or above `min` by semver precedence,
  * so a prerelease is older than its release. Output naming none does not.
  */
-export const hcMeets = (said: string, min: string): boolean => {
+export const hcMeets = (said: string, min: string) => {
   const version = hcVersion(said);
   return version !== null && Bun.semver.order(version, min) >= 0;
 };
@@ -88,7 +88,7 @@ export const placeHc = Effect.fn("HcInstall.place")(function* (
       } satisfies HcStep;
   }
 
-  const failed = (detail: string): HcStep => ({ step: "hc", state: "failed", detail });
+  const failed = (detail: string) => ({ step: "hc", state: "failed", detail });
   const unpacked = yield* fs.makeTempDirectoryScoped({ prefix: "collie-hc-" });
   const untar = yield* run("tar", ["-xzf", archive, "-C", unpacked, "herdr-core"], root);
   if (untar.code !== 0)

@@ -87,7 +87,7 @@ export const marked = (
   root: string,
   bindings: Readonly<Record<string, string>> = {},
   proc = "/proc",
-): ReadonlyArray<{ pid: number; command: string }> => {
+) => {
   let pids: Array<string>;
   try {
     pids = Arr.filter(readdirSync(proc), (name) => /^\d+$/.test(name));
@@ -135,7 +135,7 @@ export const marked = (
  * Removes every `collie-test-<pid>-*` root in `dir` whose pid is dead, and kills what still
  * carries its marker. A live pid's root is another suite's and is left alone.
  */
-export const sweepDeadRoots = (dir: string): ReadonlyArray<string> =>
+export const sweepDeadRoots = (dir: string) =>
   Arr.flatMap(readdirSync(dir), (name) => {
     const pid = Number(
       Option.getOrUndefined(
@@ -163,7 +163,7 @@ export const sweepEveryBase = (memory = MEMORY_BASE) =>
  * leftover is no reason not to run the suite.
  */
 /** `dir` and every directory under it, writable by its owner again. */
-const writable = (dir: string): void => {
+const writable = (dir: string) => {
   try {
     chmodSync(dir, 0o700);
     for (const entry of readdirSync(dir, { withFileTypes: true }))

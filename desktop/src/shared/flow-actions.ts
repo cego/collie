@@ -15,7 +15,7 @@ import type {
 import type { DesktopAction } from "./flock";
 
 /** A hold or a note with the record revision it was pressed at, which the host checks it against. */
-export const shownAt = (action: DesktopAction, revision: RunRevision | undefined): DesktopAction =>
+export const shownAt = (action: DesktopAction, revision: RunRevision | undefined) =>
   revision !== undefined && (action._tag === "Control" || action._tag === "Deliver")
     ? { ...action, shown: revision }
     : action;
@@ -61,9 +61,9 @@ const shown = (
   effect: FlowEffect,
   color: FlowActionView["color"] = "neutral",
   caption?: string,
-): FlowActionView => ({ label, icon, effect, color, caption });
+) => ({ label, icon, effect, color, caption });
 
-export const retryCaption = (lane: FlowLane, node: FlowRun): string => {
+export const retryCaption = (lane: FlowLane, node: FlowRun) => {
   const kept = Arr.map(
     Arr.filter(lane.nodes, (one) => one.state === "done" && one.id !== node.id),
     (one) => one.title,
@@ -80,7 +80,7 @@ export const desktopFlowAction = (
   lane: FlowLane,
   installation: string,
   live: boolean,
-): FlowActionView | null => {
+) => {
   if (!live || (node.primary !== kind && !node.actions?.includes(kind))) return null;
   const runId = lane.run;
   const stepId =
@@ -243,7 +243,7 @@ export const desktopLaneAction = (
   lane: FlowLane,
   installation: string,
   live: boolean,
-): FlowActionView | null => {
+) => {
   if (!live || !lane.actions?.includes(kind)) return null;
   const runId = lane.run;
   switch (kind) {

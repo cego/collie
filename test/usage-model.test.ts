@@ -26,7 +26,7 @@ const NOW = epochMs("2026-10-08T08:00:00Z");
 const AFTER_RESET = epochMs("2026-10-08T11:00:00Z");
 const isoOfSeconds = (seconds: number) => DateTime.formatIso(DateTime.makeUnsafe(seconds * 1000));
 
-const window = (over: Partial<UsageWindow>): UsageWindow => ({
+const window: (over: Partial<UsageWindow>) => UsageWindow = (over) => ({
   kind: "session",
   label: "Session",
   model: null,
@@ -36,7 +36,7 @@ const window = (over: Partial<UsageWindow>): UsageWindow => ({
   ...over,
 });
 
-const reading = (over: Partial<UsageReading>): UsageReading => ({
+const reading: (over: Partial<UsageReading>) => UsageReading = (over) => ({
   subscription: "claude",
   account: "org:acct",
   accountLabel: "me@example.com",

@@ -108,7 +108,7 @@ const takesFields = Schema.decodeUnknownOption(
  * The input a follow-up's words go to, whatever it is called: its one required argument,
  * or its one argument where none is required. Otherwise why there is none.
  */
-export function followUpField(drawn: Schema.Json | null): { field: string } | { refused: string } {
+export function followUpField(drawn: Schema.Json | null) {
   const takes = Option.getOrUndefined(takesFields(drawn));
   const open = Rec.keys(takes?.properties ?? {});
   const required = takes?.required ?? [];
@@ -126,8 +126,8 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   // Once per process. A front door calls this before it looks an executor up, and two
   // calls in one process would be the same module claiming an action kind twice.
   if (registeredKinds().length > 0) return;
-  const failed = (note: string): ExecutionResult => ({ state: "failed", note });
-  const settled = (result: OpResult | Failure): ExecutionResult =>
+  const failed: (note: string) => ExecutionResult = (note) => ({ state: "failed", note });
+  const settled: (result: OpResult | Failure) => ExecutionResult = (result) =>
     result.ok ? { state: "applied", note: result.human } : failed(result.error.message);
   const carry = (
     what: Effect.Effect<OpResult | Failure, PlatformError, PlatformServices | Records>,
@@ -526,7 +526,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       machine,
       `use collie schedule --machine ${machine} for another Machine`,
       changeSchedule(env, { door: by, change, request: by.requestId }).pipe(
-        Effect.map((done): ExecutionResult =>
+        Effect.map((done) =>
           done.ok
             ? {
                 state: "applied",
@@ -753,7 +753,7 @@ export const carriedBefore = Effect.fn("runActions.carriedBefore")(function* (
 });
 
 /** One step's own request, so carrying the same request out again is one operation per step. */
-const stepOf = (actor: Actor, step: string | number): Actor => ({
+const stepOf = (actor: Actor, step: string | number) => ({
   ...actor,
   requestId: `${actor.requestId}:${step}`,
 });
@@ -823,7 +823,7 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
   });
 });
 
-function emptyAdmission(): Parameters<typeof admit>[1] {
+function emptyAdmission() {
   return {
     run: null,
     pendingChoice: null,

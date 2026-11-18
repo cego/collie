@@ -18,7 +18,7 @@ import {
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ensureLockDir, withLock } from "./lock";
-import { RanOn, type RunAgent, type RunStep } from "./board-model";
+import { RanOn, type RunStep } from "./board-model";
 import { StepPlace } from "./steps";
 import { ClaudeSubagents } from "./subagents";
 import { StoreWrites } from "./store-writes";
@@ -379,7 +379,7 @@ export const recordSession = (launched: Launched, session: AgentSession) =>
   Launches.use((launches) => launches.session(launched, session));
 
 /** A Run's agent as its launch recorded it, with what it ran on. */
-export const agentOfLaunch = (one: Launched): RunAgent => ({
+export const agentOfLaunch = (one: Launched) => ({
   operation: one.operation,
   agent: one.agent,
   harness: one.harness,

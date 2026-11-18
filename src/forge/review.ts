@@ -77,7 +77,7 @@ export function judgeComments(
   comments: ReadonlyArray<ForgeComment>,
   login: string,
   resolved: ReadonlySet<string>,
-): ReadonlyArray<ReviewComment> {
+) {
   const timed = Arr.map(comments, (comment, at) => ({ comment, at, ms: epochMs(comment.at) }));
   const sorted = Arr.sortWith(
     timed,
@@ -103,6 +103,6 @@ export function judgeComments(
 }
 
 /** `body` names `url` whole: `#note_1` is not linked by `#note_12`. */
-export function links(body: string, url: string): boolean {
+export function links(body: string, url: string) {
   return url !== "" && new RegExp(`${RegExp.escape(url)}(?!\\w)`).test(body);
 }

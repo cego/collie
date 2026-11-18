@@ -13,7 +13,7 @@ import { runEffect } from "./support/effect";
 const ROOT = `${import.meta.dir}/..`;
 
 /** Where a relative link points, from the document that wrote it. Repository-only. */
-function resolve(from: string, link: string): string {
+function resolve(from: string, link: string) {
   const parts = Str.split(`${Arr.join(Str.split(from, "/").slice(0, -1), "/")}/${link}`, "/");
   const out: string[] = [];
   for (const part of parts) {
@@ -25,7 +25,7 @@ function resolve(from: string, link: string): string {
 }
 
 /** GitHub's heading slug, near enough for the headings this repository writes. */
-function slugs(markdown: string): ReadonlySet<string> {
+function slugs(markdown: string) {
   const found = new Set<string>();
   for (const [, heading] of pipe(markdown, Str.matchAll(/^#+ (.+)$/gm))) {
     found.add(

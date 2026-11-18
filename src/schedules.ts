@@ -150,7 +150,7 @@ export const schedulesLayer = (options: {
       const read = (name: string) =>
         fs.readFileString(recordOf(dir, name)).pipe(
           Effect.flatMap(decodeRecord),
-          Effect.orElseSucceed((): ScheduleRecord | null => null),
+          Effect.orElseSucceed(() => null),
         );
       const write = (record: ScheduleRecord) =>
         Effect.gen(function* () {
@@ -219,7 +219,7 @@ export const schedulesLayer = (options: {
       const list = Effect.gen(function* () {
         const names = yield* fs
           .readDirectory(schedulesDir(dir))
-          .pipe(Effect.orElseSucceed((): Array<string> => []));
+          .pipe(Effect.orElseSucceed(() => Arr.empty<string>()));
         const entries: Array<ScheduleEntry> = [];
         for (const name of names.sort()) {
           const record = yield* read(name);
@@ -362,13 +362,13 @@ export const schedulesLayer = (options: {
         name: string,
         epoch: string,
         occurrence: string,
-      ): Effect.fn.Return<OccurrenceOutcome> {
+      ) {
         yield* herdrAnswers(name, occurrence);
         const refused = (why: string) => ({ kind: "refused" as const, reason: why });
         // Under the write lock from the read to the recorded Run, so a pause, resume or
         // removal lands wholly before the start or after its Run is the Schedule's.
         return yield* writing.withPermits(1)(
-          Effect.gen(function* (): Effect.fn.Return<OccurrenceOutcome> {
+          Effect.gen(function* () {
             const record = yield* read(name);
             if (record === null) return refused("the Schedule was removed");
             if (record.epoch !== epoch) return refused("the Schedule was resumed");
@@ -544,7 +544,7 @@ export const schedulesLayer = (options: {
         const done = (schedule: ScheduleRecord | null) =>
           Effect.map(
             schedule === null ? Effect.succeed<ScheduleEntry | null>(null) : entryOf(schedule),
-            (entry): ScheduleChanged => ({
+            (entry) => ({
               machine,
               change: change.change,
               name: change.name,
@@ -666,7 +666,7 @@ export const schedulesLayer = (options: {
         Effect.gen(function* () {
           const names = yield* fs
             .readDirectory(schedulesDir(dir))
-            .pipe(Effect.orElseSucceed((): Array<string> => []));
+            .pipe(Effect.orElseSucceed(() => []));
           for (const name of names) {
             const record = yield* read(name);
             if (record === null || record.paused) continue;

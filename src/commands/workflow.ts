@@ -57,11 +57,11 @@ const workflowList = Command.make("list", {}, () =>
 ).pipe(Command.withDescription("List every Workflow, with its Inputs and the Layer it came from"));
 
 /** Every id a saved module answers for, whether it loaded or refused its own file. */
-const claimedIds = (saved: Catalogued): ReadonlySet<string> =>
+const claimedIds = (saved: Catalogued) =>
   new Set(Arr.map([...saved.entries, ...saved.problems], (one) => one.id));
 
 /** Where the modules an author writes are saved, by Layer. */
-const moduleDir = (env: PluginEnv, layer: EntryLayer): string =>
+const moduleDir = (env: PluginEnv, layer: EntryLayer) =>
   Option.getOrUndefined(
     Arr.findFirst(
       searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project: env.cwd }),
@@ -70,7 +70,7 @@ const moduleDir = (env: PluginEnv, layer: EntryLayer): string =>
   )!.dir;
 
 /** One module as a human reads it: what it takes, what it gives back, and where it is. */
-function describeForHuman(one: Described): string {
+function describeForHuman(one: Described) {
   return Arr.join(
     [
       one.title,
@@ -97,7 +97,7 @@ const asJson = (value: Schema.Json) =>
   flow(Schema.encodeResult(UnknownJson), Result.getOrThrow)(value);
 
 /** Where a drawing says less than the module does. The schema itself still holds. */
-const limitLines = (one: Described): ReadonlyArray<string> =>
+const limitLines = (one: Described) =>
   one.success.limits.length + one.error.limits.length === 0
     ? []
     : [
@@ -127,7 +127,7 @@ const BRANCH_HELP = Arr.join(
  * One module as `check` reports it. Not typechecked is said out loud: silence there
  * would read as a module the compiler was happy with, and nothing compiled it.
  */
-function moduleReport(item: ModuleCheck): string {
+function moduleReport(item: ModuleCheck) {
   return Arr.join(
     [
       `${item.id}\t${item.layer}\t${
@@ -145,7 +145,7 @@ function moduleReport(item: ModuleCheck): string {
 }
 
 /** Why nothing in a directory was typechecked, once per directory rather than per module. */
-const toolchainNotes = (modules: ReadonlyArray<ModuleCheck>): ReadonlyArray<string> =>
+const toolchainNotes = (modules: ReadonlyArray<ModuleCheck>) =>
   Arr.map(
     [
       ...new Set(

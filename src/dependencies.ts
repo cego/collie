@@ -16,7 +16,7 @@ export type Installed =
 export const installDependencies = Effect.fn("dependencies.installDependencies")(function* <R>(
   run: Runner<R>,
   checkout: string,
-): Effect.fn.Return<Installed, never, R | FileSystem.FileSystem | Path.Path> {
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   // From this head, not the base `verify.json` is read from: its lockfile is the one to satisfy.

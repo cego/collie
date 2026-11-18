@@ -38,7 +38,7 @@ afterEach(() =>
   ),
 );
 
-const launch = (over: Partial<Launched> = {}): Launched => ({
+const launch = (over: Partial<Launched> = {}) => ({
   agent: "run-a-implementer",
   output: "/state/agents/run-a/implement.json",
   reused: false,

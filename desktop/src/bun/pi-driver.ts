@@ -32,12 +32,17 @@ const TOKEN_ENV = "COLLIE_CHAT_MCP_TOKEN";
 const SERVERS_ENV = "COLLIE_CHAT_MCP_SERVERS";
 const TOOL_TIMEOUT = 24 * 60 * 60;
 
-export const piDriver = (
+export const piDriver: (
   context: DriverContext,
   endpoint: ChatEndpoint,
   userServers: () => Promise<UserMcpServers>,
-  command: ReadonlyArray<string> | null = which("pi") === null ? null : [which("pi")!],
-): ChatDriver => {
+  command?: ReadonlyArray<string> | null,
+) => ChatDriver = (
+  context,
+  endpoint,
+  userServers,
+  command = which("pi") === null ? null : [which("pi")!],
+) => {
   const sessions = `${context.dir}/pi-sessions`;
   const read = Effect.promise(() => context.run(piSessions(sessions)));
   return {

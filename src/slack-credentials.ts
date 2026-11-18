@@ -51,33 +51,32 @@ const signedInAs = (env: Pick<PluginEnv, "home" | "raw">, api: typeof slackApi) 
       return yield* broken(`token is for team ${owner.team_id}, not ${team}`);
     return { token, owner, scopes: field("SLACK_USER_SCOPES") };
   }).pipe(
-    Effect.mapError((reason): ConnectionReading =>
-      isString(reason) ? { state: "broken", detail: reason, fix: SLACK_FIX } : reason,
-    ),
+    Effect.mapError((reason) => {
+      const returned: ConnectionReading = isString(reason)
+        ? { state: "broken", detail: reason, fix: SLACK_FIX }
+        : reason;
+      return returned;
+    }),
   );
 
-export const probeSlack = (
-  env: Pick<PluginEnv, "home" | "raw">,
-  api = slackApi,
-): Effect.Effect<ConnectionReading, never, FileSystem.FileSystem> =>
+export const probeSlack = (env: Pick<PluginEnv, "home" | "raw">, api = slackApi) =>
   signedInAs(env, api).pipe(
-    Effect.map(({ owner, scopes }): ConnectionReading =>
-      missingSlackScopes(scopes).length > 0
-        ? {
-            state: "broken",
-            detail: `Slack needs ${Arr.join(missingSlackScopes(scopes), ", ")}`,
-            fix: "Sign in again to Slack in Desktop Settings › Connections",
-          }
-        : { state: "ok", account: owner.team, detail: `Posts as ${owner.user} in ${owner.team}` },
-    ),
+    Effect.map(({ owner, scopes }) => {
+      const returned: ConnectionReading =
+        missingSlackScopes(scopes).length > 0
+          ? {
+              state: "broken",
+              detail: `Slack needs ${Arr.join(missingSlackScopes(scopes), ", ")}`,
+              fix: "Sign in again to Slack in Desktop Settings › Connections",
+            }
+          : { state: "ok", account: owner.team, detail: `Posts as ${owner.user} in ${owner.team}` };
+      return returned;
+    }),
     Effect.catch(Effect.succeed),
   );
 
 /** The human's user token, only once Slack says it is theirs; otherwise why not. */
-export const slackUserToken = (
-  env: Pick<PluginEnv, "home" | "raw">,
-  api = slackApi,
-): Effect.Effect<string, string, FileSystem.FileSystem> =>
+export const slackUserToken = (env: Pick<PluginEnv, "home" | "raw">, api = slackApi) =>
   signedInAs(env, api).pipe(
     Effect.map(({ token }) => token),
     Effect.mapError((reading) => reading.detail),

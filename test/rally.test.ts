@@ -60,7 +60,7 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-const hostOf = (): AgentHost => ({
+const hostOf: () => AgentHost = () => ({
   dir,
   env: rig.pluginEnv(),
   herdr: new Herdr(rig.pluginEnv()),

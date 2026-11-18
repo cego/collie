@@ -143,7 +143,7 @@ export const AuthoredSolution = Schema.Union([
 ]);
 
 /** The recommended solution first, the rest in the order they were authored. */
-export const recommendedFirst = (solutions: ReadonlyArray<Solution>): ReadonlyArray<Solution> => [
+export const recommendedFirst = (solutions: ReadonlyArray<Solution>) => [
   ...Arr.filter(solutions, (one) => one.recommended === true),
   ...Arr.filter(solutions, (one) => one.recommended !== true),
 ];
@@ -155,10 +155,10 @@ export const boardOption = (solution: Solution) => ({
 });
 
 /** A solution's title as text front doors print it. */
-export const solutionTitle = (solution: Solution): string =>
+export const solutionTitle = (solution: Solution) =>
   solution.recommended === true ? `${solution.title} (Recommended)` : solution.title;
 
-export const holdReason = (decision: string): string => `held at question ${decision}`;
+export const holdReason = (decision: string) => `held at question ${decision}`;
 
 /**
  * Hold the Run as a workflow Choice's third path where its authors gave fewer than three
@@ -167,7 +167,7 @@ export const holdReason = (decision: string): string => `held at question ${deci
 export const holdPath = (
   question: { readonly options: ReadonlyArray<unknown>; readonly asker?: string | null },
   held: boolean,
-): { readonly offered: boolean; readonly why: string | null } | undefined => {
+) => {
   if (question.asker != null || question.options.length === 0 || question.options.length >= 3)
     return undefined;
   return held ? { offered: false, why: "Run already held" } : { offered: true, why: null };
@@ -341,7 +341,7 @@ export interface ReleaseFacts {
  * Collie's checks and CI passed at its head, no blocking finding is open, and the forge
  * says it can merge. The board, `run show` and `run wait` all ask this.
  */
-export function readyToRelease(facts: ReleaseFacts): ReadyToRelease {
+export function readyToRelease(facts: ReleaseFacts) {
   const missing: MissingFact[] = [];
   const lack = (fact: MissingFact["fact"], said: string, settling = false) =>
     missing.push({ fact, said, settling });
@@ -450,7 +450,7 @@ export const TaskMr = Schema.Struct({
 export type TaskMr = typeof TaskMr.Type;
 
 /** One of a Task's merge requests: its state, whether it is ready to release at which head, and what it waits on. */
-export const mrReadiness = (one: TaskMr, mrs: ReadonlyArray<TaskMr>): string => {
+export const mrReadiness = (one: TaskMr, mrs: ReadonlyArray<TaskMr>) => {
   const shortOf = new Map(Arr.map(mrs, (other) => [other.id, other.short]));
   const waits = Arr.map(one.waitsOn, (id) => shortOf.get(id) ?? id);
   const head = one.head === null ? "" : ` at ${pipe(one.head, Str.slice(0, 8))}`;
@@ -1112,7 +1112,7 @@ export const RecordUnchanged = Schema.TaggedStruct("Unchanged", { revision: RunR
 export type RecordUnchanged = typeof RecordUnchanged.Type;
 
 /** The record a `runDetail` value carries; `Unchanged` carries none. */
-export const recordIn = (value: RunDetail | RecordUnchanged | null): RunDetail | null =>
+export const recordIn = (value: RunDetail | RecordUnchanged | null) =>
   value === null || "_tag" in value ? null : value;
 
 /** One offer as a front door shows it, over the wire. */
@@ -1173,13 +1173,9 @@ export const RunProgress = Schema.Struct({
 export type RunProgress = typeof RunProgress.Type;
 
 /** Ready to release as one Run reads it: its card's, where it leads that card. */
-export function readinessOfRun(
-  runId: string,
-  card: TaskView | undefined,
-  ended: boolean,
-): ReadyToRelease {
-  if (card === undefined)
-    return {
+export function readinessOfRun(runId: string, card: TaskView | undefined, ended: boolean) {
+  if (card === undefined) {
+    const returned: ReadyToRelease = {
       ready: false,
       missing: [
         ended
@@ -1187,12 +1183,17 @@ export function readinessOfRun(
           : { fact: "leads", said: "it is on no card yet", settling: true },
       ],
     };
-  if (card.run !== runId)
-    return {
+    return returned;
+  }
+  if (card.run !== runId) {
+    const returned: ReadyToRelease = {
       ready: false,
       missing: [{ fact: "leads", said: `${card.run} leads its Task now`, settling: false }],
     };
-  return card.readiness ?? { ready: card.ready ?? false, missing: [] };
+    return returned;
+  }
+  const returned: ReadyToRelease = card.readiness ?? { ready: card.ready ?? false, missing: [] };
+  return returned;
 }
 
 /**
@@ -1330,7 +1331,7 @@ export const Controlled = Schema.Struct({
  * What every door says of a control that left something running, or null where it left
  * nothing: a stop that could not make an agent Quiet is a failed operation, never "Stopped".
  */
-export const leftSaid = (done: typeof Controlled.Type): string | null => {
+export const leftSaid = (done: typeof Controlled.Type) => {
   if (done.left.length === 0) return null;
   if (done.closed !== undefined)
     return `${done.runId} has finished, but ${Arr.join(done.left, "; ")}.`;
@@ -2180,7 +2181,7 @@ export interface MrRef {
 /** Which forge a merge request is on: GitHub on `github.com`, GitLab on any other host. */
 export type MrForge = "gitlab" | "github";
 
-export function forgeOfRef(ref: MrRef): MrForge {
+export function forgeOfRef(ref: MrRef) {
   return Option.getOrUndefined(
     Option.flatMap(Option.fromNullishOr(ref.project), (present__) =>
       Option.map(Option.fromNullishOr(Str.split(present__, "/")[0]), (present___) =>
@@ -2201,10 +2202,7 @@ const MR_URL =
  * request URL, GitHub's `owner/repo#30`, and, where `typedIn` says which checkout it was typed in, `!42`, `#42` or
  * `42`. Null for anything else.
  */
-export function readMrRef(
-  text: string,
-  typedIn?: { readonly project: string | null },
-): MrRef | null {
+export function readMrRef(text: string, typedIn?: { readonly project: string | null }) {
   const said = Str.trim(text);
   const target = MR_TARGET.exec(said);
   if (target) {
@@ -2223,23 +2221,23 @@ export function readMrRef(
 }
 
 /** A merge request or pull request URL, the whole of `text`, and never a shorthand. */
-export function readMrUrl(text: string): MrRef | null {
+export function readMrUrl(text: string) {
   const url = MR_URL.exec(Str.trim(text));
   return url ? { project: (url[1] ?? url[2])!, iid: url[3]! } : null;
 }
 
 /** `mr:gitlab.example.com/group/project!42`, `mr:github.com/owner/repo#30` or the bare `mr:42`. */
-export function parseMrTarget(target: string): MrRef | null {
+export function parseMrTarget(target: string) {
   return pipe(target, Str.startsWith("mr:")) ? readMrRef(target) : null;
 }
 
 /** A merge request or pull request URL, the way a forge reports what it opened. */
-export function parseMrUrl(url: string): MrRef | null {
+export function parseMrUrl(url: string) {
   return pipe(Str.trim(url), Str.startsWith("mr:")) ? null : readMrRef(url);
 }
 
 /** `group/project` of `host/group/project`: the host is where, not what. */
-export function mrPath(ref: MrRef): string {
+export function mrPath(ref: MrRef) {
   const project = ref.project ?? "";
   return /^[^/]+\.[^/]+\/(.+)$/.exec(project)?.[1] ?? project;
 }
@@ -2271,42 +2269,54 @@ export function mrWords(ref: MrRef) {
  * `spilnu/app!42`, `app!42`) is resolved only against the project `typedIn` names. Null
  * where no host can be told.
  */
-export function mrId(text: string, typedIn?: { readonly project: string | null }): string | null {
+export function mrId(text: string, typedIn?: { readonly project: string | null }) {
   const said = Str.trim(text);
   const ref =
     readMrRef(said, typedIn) ??
     (pipe(said, Str.startsWith("mr:")) ? null : readMrRef(`mr:${said}`));
-  if (ref === null) return null;
+  if (ref === null) {
+    const returned: string | null = null;
+    return returned;
+  }
   const here = typedIn?.project ?? null;
   const named = ref.project;
   const project = named === null || (!hosted(named) && endsIn(here, named)) ? here : named;
-  if (project === null || !hosted(project)) return null;
-  return Str.toLowerCase(`${project}${mrWords({ project, iid: ref.iid }).sign}${ref.iid}`);
+  if (project === null || !hosted(project)) {
+    const returned: string | null = null;
+    return returned;
+  }
+  const returned: string | null = Str.toLowerCase(
+    `${project}${mrWords({ project, iid: ref.iid }).sign}${ref.iid}`,
+  );
+  return returned;
 }
 
 /** `host/group/project` of an MR id. */
 export const mrIdProject = (id: string) => pipe(id, Str.replace(/[!#]\d+$/, ""));
 
 /** The references a set is named by, separated by spaces or commas. */
-export const mrRefsIn = (text: string): ReadonlyArray<string> =>
+export const mrRefsIn = (text: string) =>
   Arr.filter(Str.split(Str.trim(text), /[\s,]+/), Str.isNonEmpty);
 
 /**
  * The merge requests a set names, each once by MR id, or the first reference naming none.
  * Null where it names one or none, which is no set.
  */
-export function mrSet(text: string):
-  | {
-      readonly mrs: ReadonlyArray<{
-        readonly id: string;
-        readonly target: string;
-        readonly url: string;
-      }>;
-    }
-  | { readonly unresolved: string }
-  | null {
+export function mrSet(text: string) {
   const said = mrRefsIn(text);
-  if (said.length < 2) return null;
+  if (said.length < 2) {
+    const returned:
+      | {
+          readonly mrs: ReadonlyArray<{
+            readonly id: string;
+            readonly target: string;
+            readonly url: string;
+          }>;
+        }
+      | { readonly unresolved: string }
+      | null = null;
+    return returned;
+  }
   const named = new Map<
     string,
     { readonly id: string; readonly target: string; readonly url: string }
@@ -2315,10 +2325,32 @@ export function mrSet(text: string):
     const id = mrId(one);
     const ref = readMrRef(one);
     const words = ref === null ? null : mrWords(ref);
-    if (id === null || words === null || words.url === null) return { unresolved: one };
+    if (id === null || words === null || words.url === null) {
+      const returned:
+        | {
+            readonly mrs: ReadonlyArray<{
+              readonly id: string;
+              readonly target: string;
+              readonly url: string;
+            }>;
+          }
+        | { readonly unresolved: string }
+        | null = { unresolved: one };
+      return returned;
+    }
     if (!named.has(id)) named.set(id, { id, target: words.target, url: words.url });
   }
-  return { mrs: [...named.values()] };
+  const returned:
+    | {
+        readonly mrs: ReadonlyArray<{
+          readonly id: string;
+          readonly target: string;
+          readonly url: string;
+        }>;
+      }
+    | { readonly unresolved: string }
+    | null = { mrs: [...named.values()] };
+  return returned;
 }
 
 /**
@@ -2329,7 +2361,7 @@ export function waitsOnOf(
   id: string,
   ids: ReadonlyArray<string>,
   branches: ReadonlyMap<string, { readonly source?: string; readonly target?: string }>,
-): string[] {
+) {
   const target = branches.get(id)?.target ?? "";
   if (target === "") return [];
   const sources = Arr.filter(
@@ -2345,7 +2377,7 @@ const hosted = (project: string) => mrPath({ project, iid: "" }) !== project;
 const endsIn = (project: string | null, path: string) =>
   project !== null && pipe(Str.toLowerCase(project), Str.endsWith(`/${Str.toLowerCase(path)}`));
 
-export function mrTarget(project: string | null, iid: string): string {
+export function mrTarget(project: string | null, iid: string) {
   return mrWords({ project: project || null, iid }).target;
 }
 
@@ -2378,7 +2410,7 @@ export type OfferInput =
   | { readonly _tag: "Invalid"; readonly errors: { [name: string]: string } };
 
 /** The fields an offer's arguments name, each with the control its schema draws. */
-export const offerFields = (drawn: Schema.Json | null): ReadonlyArray<OfferField> => {
+export const offerFields = (drawn: Schema.Json | null) => {
   const takes = decodeArguments(drawn);
   if (takes._tag === "None") return [];
   const required = takes.value.required ?? [];
@@ -2403,10 +2435,10 @@ export const offerFields = (drawn: Schema.Json | null): ReadonlyArray<OfferField
 };
 
 /** What a form's entries send, every field read as its control takes it. */
-export const offerInput = (
+export const offerInput: (
   drawn: Schema.Json | null,
   typed: Readonly<Record<string, string>>,
-): OfferInput => {
+) => OfferInput = (drawn, typed) => {
   const input: { [name: string]: Schema.Json } = {};
   const errors: { [name: string]: string } = {};
   for (const field of offerFields(drawn)) {
@@ -2426,7 +2458,7 @@ export const offerInput = (
 export const givenOfferInput = (
   drawn: Schema.Json | null,
   given: Readonly<Record<string, string>>,
-): { [name: string]: Schema.Json } => {
+) => {
   const fields = new Map(Arr.map(offerFields(drawn), (field) => [field.name, field] as const));
   return Rec.fromEntries(
     Arr.map(Rec.toEntries(given), ([name, text]) => {
@@ -2448,7 +2480,7 @@ export interface OfferChoice {
 }
 
 /** The choices an enum or a boolean field is picked from, unset first where it is optional. */
-export const offerChoices = (field: OfferField): ReadonlyArray<OfferChoice> => {
+export const offerChoices = (field: OfferField) => {
   const unset: ReadonlyArray<OfferChoice> = field.required
     ? []
     : [{ key: "unset", label: "Not set", entry: undefined }];
@@ -2497,7 +2529,7 @@ const EMPTY_OPTION = "(empty)";
 const decodeField = Schema.decodeUnknownOption(DrawnField);
 const isText = Schema.is(Schema.String);
 
-const controlOf = (field: DrawnField): OfferControl => {
+const controlOf: (field: DrawnField) => OfferControl = (field) => {
   if (field.enum !== undefined) return { kind: "enum", options: field.enum };
   const anyOf = field.anyOf ?? [];
   if (Arr.isReadonlyArrayNonEmpty(anyOf) && Arr.every(anyOf, (one) => one.enum !== undefined))
@@ -2522,7 +2554,7 @@ const controlOf = (field: DrawnField): OfferControl => {
 };
 const JSON_ANY: OfferControl = { kind: "json", holds: null };
 
-const optionEntries = (options: ReadonlyArray<Schema.Json>): ReadonlyArray<string> => {
+const optionEntries = (options: ReadonlyArray<Schema.Json>) => {
   const plain = Arr.map(options, (option) => (isText(option) ? option : encodeJson(option)));
   return new Set(plain).size === plain.length
     ? plain
@@ -2533,7 +2565,7 @@ const optionLabel = (entry: string) => (entry === "" ? EMPTY_OPTION : entry);
 const labelOf = (name: string) =>
   pipe(name, Str.replaceAll("_", " "), Str.replaceAll("-", " "), Str.capitalize);
 
-const entryOf = (control: OfferControl, value: Schema.Json): string => {
+const entryOf = (control: OfferControl, value: Schema.Json) => {
   if (control.kind === "list" && Arr.isArray(value) && Arr.every(value, isText))
     return Arr.join(value, "\n");
   if (control.kind === "enum") {
@@ -2549,7 +2581,7 @@ type Entry =
   | { readonly _tag: "Read"; readonly value: Schema.Json }
   | { readonly _tag: "Refused"; readonly why: string };
 
-const readEntry = (field: OfferField, entry: string | undefined): Entry => {
+const readEntry: (field: OfferField, entry: string | undefined) => Entry = (field, entry) => {
   if (entry === undefined) return { _tag: "Unset" };
   const { control } = field;
   if (control.kind === "enum") {
@@ -2557,8 +2589,8 @@ const readEntry = (field: OfferField, entry: string | undefined): Entry => {
     return Option.match(
       Arr.findFirstIndex(entries, (one) => one === entry),
       {
-        onSome: (at): Entry => ({ _tag: "Read", value: control.options[at]! }),
-        onNone: (): Entry => ({
+        onSome: (at) => ({ _tag: "Read", value: control.options[at]! }),
+        onNone: () => ({
           _tag: "Refused",
           why: `must be one of: ${Arr.join(Arr.map(entries, optionLabel), ", ")}`,
         }),
@@ -2595,7 +2627,10 @@ const readEntry = (field: OfferField, entry: string | undefined): Entry => {
   }
 };
 
-const holdsRefusal = (holds: "object" | "array" | null, value: Schema.Json): Entry | null => {
+const holdsRefusal: (holds: "object" | "array" | null, value: Schema.Json) => Entry | null = (
+  holds,
+  value,
+) => {
   if (holds === "object" && !isJsonObject(value))
     return { _tag: "Refused", why: "must be a JSON object" };
   if (holds === "array" && !Arr.isArray(value))
@@ -2617,12 +2652,12 @@ const encodeJson = flow(
 );
 
 /** Nothing is driving it any more, so there is nothing to stop, steer or answer. */
-export function isSettled(state: TaskState): boolean {
+export function isSettled(state: TaskState) {
   return state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
 }
 
 /** It ended without finishing, so it can be taken up again where it stopped. */
-export function canResume(state: TaskState): boolean {
+export function canResume(state: TaskState) {
   return state === "failed" || state === "stopped" || state === "abandoned";
 }
 
@@ -2635,8 +2670,8 @@ export function flowActions(
   flow: Flow,
   view: TaskView,
   runs: ReadonlyMap<string, FlowActionFacts> = new Map(),
-): Flow {
-  const factsOf = (lane: FlowLane): FlowActionFacts =>
+) {
+  const factsOf = (lane: FlowLane) =>
     runs.get(lane.run) ?? {
       canResume:
         lane.execution !== "failed" &&
@@ -2647,7 +2682,7 @@ export function flowActions(
       held: lane.run === view.run && view.held !== null,
       proposal: lane.run === view.run && view.decision?.kind === "proposal" ? view.decision : null,
     };
-  const offered = (node: FlowRun, lane: FlowLane, facts: FlowActionFacts): FlowRun => {
+  const offered = (node: FlowRun, lane: FlowLane, facts: FlowActionFacts) => {
     let primary: FlowAction | null = null;
     const actions: FlowAction[] = [];
     const live = node.agent != null && Arr.some(view.agents, (one) => one.name === node.agent);
@@ -2733,7 +2768,7 @@ export function flowActions(
       proposal: node.wait === "proposal" ? proposal : undefined,
     };
   };
-  const lanes = Arr.map(flow.lanes, (lane): FlowLane => {
+  const lanes = Arr.map(flow.lanes, (lane) => {
     const facts = factsOf(lane);
     const settled =
       lane.run === view.run
@@ -2746,7 +2781,7 @@ export function flowActions(
     return {
       ...lane,
       actions,
-      nodes: Arr.map(lane.nodes, (node): FlowNode => ({
+      nodes: Arr.map(lane.nodes, (node) => ({
         ...offered(node, lane, facts),
         runs: Arr.map(node.runs, (one) => offered(one, lane, facts)),
         links: Option.getOrUndefined(
@@ -2761,7 +2796,7 @@ export function flowActions(
   const releaseOf = (nodes: ReadonlyArray<FlowNode>) =>
     leading === undefined
       ? nodes
-      : Arr.map(nodes, (node): FlowNode => ({
+      : Arr.map(nodes, (node) => ({
           ...offered(node, leading, factsOf(leading)),
           runs: node.runs,
         }));
@@ -2772,12 +2807,12 @@ export function flowActions(
 }
 
 /** However the Task names its merge request: the URL one opened, or the target one was pointed at. */
-export function mrRefOf(mr: string | null): MrRef | null {
+export function mrRefOf(mr: string | null) {
   return mr === null ? null : readMrRef(mr);
 }
 
 /** Where a merge request is read in a browser, where its target says which project. */
-export function mrUrlOf(ref: MrRef): string | null {
+export function mrUrlOf(ref: MrRef) {
   return mrWords(ref).url;
 }
 
@@ -2808,23 +2843,29 @@ export type CardAction =
 type DisposeAction = Extract<CardAction, { kind: "dispose" }>;
 
 /** `collie!151` or `collie#30` rather than the whole URL: a disposition's ref ends up in the card's sentence. */
-const dispose = (view: TaskView, disposition: DispositionKind): DisposeAction => {
+const dispose: (view: TaskView, disposition: DispositionKind) => DisposeAction = (
+  view,
+  disposition,
+) => {
   const mr = mrRefOf(view.mr);
   const ref = disposition === "abandoned" || mr === null ? "" : mrWords(mr).short;
   return { kind: "dispose", disposition, ref };
 };
 
 /** A Task's merge requests where it has several, each acted on by itself; none otherwise. */
-const severalOf = (view: TaskView): ReadonlyArray<TaskMr> =>
+const severalOf = (view: TaskView) =>
   view.mrs !== undefined && view.mrs.length > 1 ? view.mrs : [];
 
-const openEach = (one: TaskMr): CardAction => {
+const openEach: (one: TaskMr) => CardAction = (one) => {
   const recorded = readMrRef(one.mr);
   const mr = recorded?.project ? recorded : readMrRef(`mr:${one.id}`)!;
   return { kind: "open-mr", mr, named: one.short };
 };
 
-const disposeEach = (one: TaskMr, disposition: DispositionKind): DisposeAction => ({
+const disposeEach: (one: TaskMr, disposition: DispositionKind) => DisposeAction = (
+  one,
+  disposition,
+) => ({
   kind: "dispose",
   disposition,
   ref: one.id,
@@ -2832,27 +2873,27 @@ const disposeEach = (one: TaskMr, disposition: DispositionKind): DisposeAction =
 });
 
 /** "merge request", or "pull request" for one on GitHub, however it is named. */
-export function mrNounOf(mr: string): string {
+export function mrNounOf(mr: string) {
   const ref = readMrRef(mr);
   return ref === null ? "merge request" : mrWords(ref).noun;
 }
 
 /** The Open action's label, in the merge request's own forge's words. */
-export function openMrLabel(mr: MrRef, primary: boolean, named?: string): string {
+export function openMrLabel(mr: MrRef, primary: boolean, named?: string) {
   const github = forgeOfRef(mr) === "github";
   if (named !== undefined) return `${github ? "Open PR" : "Open MR"} ${named}`;
   if (primary) return github ? "Open PR" : "Open MR";
   return github ? "Open pull request" : "Open merge request";
 }
 
-export function disposeLabel(action: DisposeAction): string {
+export function disposeLabel(action: DisposeAction) {
   return action.named === undefined
     ? `Mark ${action.disposition}`
     : `Mark ${action.disposition} ${action.named}`;
 }
 
 /** A Task's menu actions, including unavailable Offers with their reasons. */
-export function cardActions(view: TaskView): CardAction[] {
+export function cardActions(view: TaskView) {
   const actions: CardAction[] = [{ kind: "go-to-tab" }];
   if (!isSettled(view.state)) actions.push({ kind: "steer" }, { kind: "attach" });
   const several = severalOf(view);
@@ -2878,39 +2919,69 @@ export function cardActions(view: TaskView): CardAction[] {
  * Acknowledge; any other finished or decision card has none — its buttons are the
  * decision's own, or the menu's.
  */
-export function primaryAction(view: TaskView): CardAction | null {
-  if (view.decision !== null) return null;
-  if (view.state === "active" || view.state === "quiet") return { kind: "go-to-tab" };
-  if (view.unseen === true) return { kind: "acknowledge" };
-  if (view.landed) return null;
-  if (view.shipping === "merge" && view.offer !== null) return { kind: "offer", offer: view.offer };
+export function primaryAction(view: TaskView) {
+  if (view.decision !== null) {
+    const returned: CardAction | null = null;
+    return returned;
+  }
+  if (view.state === "active" || view.state === "quiet") {
+    const returned: CardAction | null = { kind: "go-to-tab" };
+    return returned;
+  }
+  if (view.unseen === true) {
+    const returned: CardAction | null = { kind: "acknowledge" };
+    return returned;
+  }
+  if (view.landed) {
+    const returned: CardAction | null = null;
+    return returned;
+  }
+  if (view.shipping === "merge" && view.offer !== null) {
+    const returned: CardAction | null = { kind: "offer", offer: view.offer };
+    return returned;
+  }
   // Whatever the plan's module offers first, under its own title; none, no button.
-  if (view.planReady) return view.offer === null ? null : { kind: "offer", offer: view.offer };
-  if (canResume(view.state)) return { kind: "resume" };
+  if (view.planReady) {
+    const returned: CardAction | null =
+      view.offer === null ? null : { kind: "offer", offer: view.offer };
+    return returned;
+  }
+  if (canResume(view.state)) {
+    const returned: CardAction | null = { kind: "resume" };
+    return returned;
+  }
   const several = severalOf(view);
   if (several.length > 0) {
     const closed = Arr.findFirst(
       several,
       (one) => one.state === "closed" && one.disposition === null,
     );
-    if (Option.isSome(closed)) return disposeEach(closed.value, "superseded");
-    return openEach(
+    if (Option.isSome(closed)) {
+      const returned: CardAction | null = disposeEach(closed.value, "superseded");
+      return returned;
+    }
+    const returned: CardAction | null = openEach(
       Option.getOrElse(
         Arr.findFirst(several, (one) => one.ready),
         () => several[0]!,
       ),
     );
+    return returned;
   }
-  if (view.mrState === "closed") return dispose(view, "superseded");
+  if (view.mrState === "closed") {
+    const returned: CardAction | null = dispose(view, "superseded");
+    return returned;
+  }
   const mr = mrRefOf(view.mr);
-  return mr === null ? null : { kind: "open-mr", mr };
+  const returned: CardAction | null = mr === null ? null : { kind: "open-mr", mr };
+  return returned;
 }
 
 /**
  * What became of the work, for any settled Task: a Run that failed and was finished by
  * hand is what a disposition is for. Superseded where its merge request was closed.
  */
-export function dispositionActions(view: TaskView): DisposeAction[] {
+export function dispositionActions(view: TaskView) {
   if (!isSettled(view.state)) return [];
   const several = severalOf(view);
   if (several.length > 0)
@@ -2934,13 +3005,13 @@ export function dispositionActions(view: TaskView): DisposeAction[] {
 export type Section = "needs-you" | "ready-to-ship" | "working" | "waiting" | "finished";
 
 /** What a Ready to ship card's line opens with: a merge's Release offer under its own title. */
-export function shippingLabel(view: Pick<TaskView, "shipping" | "offer">): string {
+export function shippingLabel(view: Pick<TaskView, "shipping" | "offer">) {
   if (view.shipping == null) return "";
   if (view.shipping === "merge") return `${view.offer?.title ?? "Merge"}: `;
   return view.shipping === "stage" ? "Stage: " : "Deploy: ";
 }
 
-export function sectionOf(view: Pick<TaskView, "state" | "landed" | "shipping">): Section {
+export function sectionOf(view: Pick<TaskView, "state" | "landed" | "shipping">) {
   // Read off the state alone, because a Decision is not the only way to stop for a
   // human: an agent at its harness's own dialog is one too, and a section derived from
   // the Decision could not see it. `stateOf` is where the two become one word.
@@ -2965,7 +3036,7 @@ const STATE_RANK = new Map<TaskState, number>(Arr.map(STATE_ORDER, (state, at) =
  * then whatever changed last. Nothing else is
  * ranked — a board that reordered itself on every tick is one a human cannot point at.
  */
-export function sortBoard(views: ReadonlyArray<TaskView>): TaskView[] {
+export function sortBoard(views: ReadonlyArray<TaskView>) {
   return [...views].sort(
     (a, b) =>
       SECTION_ORDER.get(sectionOf(a))! - SECTION_ORDER.get(sectionOf(b))! ||
@@ -3006,7 +3077,7 @@ export function foldFinished(finished: ReadonlyArray<TaskView>) {
 }
 
 /** What a search is matched against: what a human remembers about a Task, and no ids. */
-function haystack(view: TaskView): string {
+function haystack(view: TaskView) {
   return Str.toLowerCase(
     Arr.join(
       [
@@ -3020,7 +3091,7 @@ function haystack(view: TaskView): string {
   );
 }
 
-export function matchesTask(view: TaskView, query: string): boolean {
+export function matchesTask(view: TaskView, query: string) {
   const wanted = Str.toLowerCase(Str.trim(query));
   return wanted === "" || pipe(haystack(view), Str.includes(wanted));
 }
@@ -3030,7 +3101,7 @@ export function matchesTask(view: TaskView, query: string): boolean {
  * board's own order. The search narrows them all the same way: a Task hidden from one
  * section must not be visible in another.
  */
-export function sectionsOf(views: ReadonlyArray<TaskView>, query: string): Sections {
+export function sectionsOf(views: ReadonlyArray<TaskView>, query: string) {
   const found = Arr.filter(views, (view) => matchesTask(view, query));
   return {
     needs: Arr.filter(found, (view) => sectionOf(view) === "needs-you"),
@@ -3052,7 +3123,7 @@ export interface HeaderSentence {
  * you counts the week's endings; what the fold holds is counted on the fold's own line,
  * because a header that says 56 over four cards worth a look reads as 56 obligations.
  */
-export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): HeaderSentence {
+export function headerSentence(views: ReadonlyArray<TaskView>, now?: number) {
   const needs = Arr.filter(views, (view) => sectionOf(view) === "needs-you").length;
   const working = Arr.filter(views, (view) => sectionOf(view) === "working");
   const quiet = Arr.filter(working, (view) => view.state === "quiet").length;
@@ -3078,7 +3149,7 @@ export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): He
  * `group/project!42` or `owner/repo#30` for a merge request, however it is named; anything
  * else as it is.
  */
-export function mrLabel(mr: string): string {
+export function mrLabel(mr: string) {
   const ref = readMrRef(mr);
   if (ref) return mrWords(ref).label;
   const bare = pipe(mr, Str.startsWith("mr:")) ? pipe(mr, Str.slice(3)) : mr;

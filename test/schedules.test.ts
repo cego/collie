@@ -39,7 +39,7 @@ const scheduled = (world: World, name: string) =>
     const fs = yield* FileSystem.FileSystem;
     const runs = yield* fs
       .readDirectory(`${world.state}/runs`)
-      .pipe(Effect.orElseSucceed((): Array<string> => []));
+      .pipe(Effect.orElseSucceed(() => []));
     const found: Array<{ run: string; occurrence: string; line: unknown }> = [];
     for (const run of runs) {
       const start = Option.getOrUndefined(

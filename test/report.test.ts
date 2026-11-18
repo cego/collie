@@ -6,14 +6,13 @@ import { runEffect } from "./support/effect";
 import { Effect, FileSystem, Schema } from "effect";
 import type * as Types from "effect/Types";
 import { HOLD, STOP, type RunView } from "../src/engine";
-import type { Metrics } from "../src/board-model";
 import { reportLines, reportOf } from "../src/report";
 import { resumesIn, type OutcomeRecords } from "../src/outcomes";
 import { once, readAudit } from "../src/audit";
 import { nowIso } from "../src/time";
 import type { Metric } from "../src/metrics";
 
-const view = (over: Partial<RunView> & { runId: string }): RunView => ({
+const view: (over: Partial<RunView> & { runId: string }) => RunView = (over) => ({
   workflow: "implement",
   project: "/p",
   task: null,
@@ -41,7 +40,7 @@ const view = (over: Partial<RunView> & { runId: string }): RunView => ({
   ...over,
 });
 
-const metrics = (rework: number, pass: number, fail: number, unstable: number): Metrics => ({
+const metrics = (rework: number, pass: number, fail: number, unstable: number) => ({
   timeToFirstEvidence: null,
   verifications: { pass, fail, unstable, byCollie: 0 },
   slices: { done: 0, total: 0 },
@@ -206,7 +205,7 @@ test("a completed value that is not a string is shown as JSON, oldest first", ()
   ]);
 });
 
-const records = (over: Partial<OutcomeRecords> = {}): OutcomeRecords => ({
+const records = (over: Partial<OutcomeRecords> = {}) => ({
   rounds: [],
   disposition: null,
   steering: [],
@@ -225,7 +224,7 @@ const check = (over: Partial<OutcomeRecords["verifications"][number]> = {}) => (
   ...over,
 });
 
-const line = (kind: Metric["kind"], subject: string, value: number, note = ""): Metric => ({
+const line = (kind: Metric["kind"], subject: string, value: number, note = "") => ({
   at: "2026-09-30T10:00:00.000Z",
   kind,
   subject,
@@ -398,7 +397,7 @@ test("a check named only by its executable is counted, wherever the executable w
   expect(report.measures.verifications.executableOnly).toEqual({ count: 1, runs: ["a"] });
 });
 
-const halt = (at: string, cause?: Metric["cause"]): Metric => {
+const halt = (at: string, cause?: Metric["cause"]) => {
   const line: Types.Mutable<Metric> = { at, kind: "halt", subject: "", value: 0, note: "parked" };
   if (cause !== undefined) line.cause = cause;
   return line;
@@ -532,7 +531,10 @@ test("the Step progress a human resume makes while it runs still counts that res
     }),
   ));
 
-const reminded = (outcome: NonNullable<Metric["outcome"]>, waitedMs: number): Metric => ({
+const reminded: (outcome: NonNullable<Metric["outcome"]>, waitedMs: number) => Metric = (
+  outcome,
+  waitedMs,
+) => ({
   at: "2026-09-30T10:00:00.000Z",
   kind: "recovery",
   subject: "a-build",
@@ -600,7 +602,7 @@ test("a reminder outcome update counts the same reminder once", () => {
 });
 
 test("automatic resumes count false recoveries and time the next Step from the park", () => {
-  const resumed = (runId: string): Metric[] => {
+  const resumed = (runId: string) => {
     const claim: Metric = {
       at: "2026-09-30T10:01:00.000Z",
       kind: "recovery",

@@ -10,11 +10,11 @@ export const CHAT_WIDTH = {
 } as const;
 
 /** The widest the chat is drawn in a window `window` wide. */
-export const chatWidthMax = (window: number): number =>
+export const chatWidthMax = (window: number) =>
   Math.max(CHAT_WIDTH.min, window - CHAT_WIDTH.boardMin);
 
 /** The chat's drawn width: the chosen one, or the start where none is, within its least and greatest. */
-export const chatWidth = (chosen: number | undefined, window: number): number =>
+export const chatWidth = (chosen: number | undefined, window: number) =>
   Math.max(
     CHAT_WIDTH.min,
     Math.min(
@@ -28,7 +28,7 @@ export const dragged = (from: { x: number; width: number }, x: number, window: n
   chatWidth(from.width + from.x - x, window);
 
 /** The width `key` chooses, stepped from the drawn width, or null for a key that does not size it. */
-export const nudged = (chosen: number | undefined, window: number, key: string): number | null => {
+export const nudged = (chosen: number | undefined, window: number, key: string) => {
   const by = key === "ArrowLeft" ? 1 : key === "ArrowRight" ? -1 : null;
   return by === null ? null : chatWidth(chatWidth(chosen, window) + by * CHAT_WIDTH.step, window);
 };
@@ -65,7 +65,7 @@ export const chatWidthControl = (
       if (from !== null) view.chosen.value = dragged(from, x, window);
     },
     /** False for a key that does not size the chat. */
-    nudge: (key: string, window: number): boolean => {
+    nudge: (key: string, window: number) => {
       const width = nudged(view.chosen.value, window, key);
       if (width === null) return false;
       begin();
@@ -73,13 +73,13 @@ export const chatWidthControl = (
       return true;
     },
     /** Ends a drag or a run of nudges, saving the width if it changed. */
-    settle: (): Promise<void> => {
+    settle: () => {
       view.dragging.value = null;
       const from = before;
       before = null;
       return from !== null && from.chosen !== view.chosen.value ? keep() : Promise.resolve();
     },
-    reset: (): Promise<void> => {
+    reset: () => {
       before = null;
       view.dragging.value = null;
       view.chosen.value = undefined;

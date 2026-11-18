@@ -11,7 +11,7 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { identityProblem, renderProgress, type Handed } from "../src/slices";
 
-const handed = (over: Partial<Handed>): Handed => ({
+const handed = (over: Partial<Handed>) => ({
   item: "01-api.md",
   title: "Serve the thing",
   commits: ["Serve the thing"],

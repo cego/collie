@@ -7,7 +7,7 @@
 import { expect, test } from "bun:test";
 import { filed, standingOf, type WorkFacts } from "../src/standing";
 
-const facts = (over: Partial<WorkFacts> = {}): WorkFacts => ({
+const facts = (over: Partial<WorkFacts> = {}) => ({
   settled: true,
   succeeded: true,
   branch: null,

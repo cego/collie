@@ -23,7 +23,7 @@ const HOOK = "(unnamed)";
  * outside any test, a failure has no file or is a hook's, which no test run alone proves,
  * or there are over `MAX_FAILED`.
  */
-export function failedTests(output: string): ReadonlyArray<FailedTest> | null {
+export function failedTests(output: string) {
   const lines = Str.split(output, "\n");
   const found = new Map<string, FailedTest>();
   let file: string | null = null;
@@ -51,19 +51,19 @@ export function failedTests(output: string): ReadonlyArray<FailedTest> | null {
  * A path, not a filter: bare, bun runs every file whose path contains it. `-t` matches a
  * nested name with its parts joined by one space, where bun prints ` > `.
  */
-export function rerunArgv(test: FailedTest): ReadonlyArray<string> {
+export function rerunArgv(test: FailedTest) {
   const joined = Arr.join(Str.split(test.name, " > "), " ");
   const file = pipe(test.file, Str.startsWith("/")) ? test.file : `./${test.file}`;
   return ["test", file, "-t", `^${pipe(joined, Str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))}$`];
 }
 
 /** Whether a rerun ran exactly one test and it passed; "matched 0 tests" and two of that name do not. */
-export function ranAlone(exit: number, output: string): boolean {
+export function ranAlone(exit: number, output: string) {
   return exit === 0 && /^\s*1 pass$/m.test(output) && /^\s*0 fail$/m.test(output);
 }
 
 /** Whether bun ran that one test in one file and named it failing: a test it did not find is not failing there. */
-export function failedAlone(exit: number, output: string, test: FailedTest): boolean {
+export function failedAlone(exit: number, output: string, test: FailedTest) {
   return (
     exit !== 0 &&
     /^\s*0 pass$/m.test(output) &&

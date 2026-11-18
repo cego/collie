@@ -45,7 +45,7 @@ const approvedAt = (evidenceDir: string) => {
 const decodeOrNone = (raw: string | null) =>
   raw === null
     ? Effect.succeed<ReadonlyArray<VerifySpec>>([])
-    : decodeApproved(raw).pipe(Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []));
+    : decodeApproved(raw).pipe(Effect.orElseSucceed(() => []));
 
 /** The checks a Run was started with, frozen with its evidence; none where unreadable. */
 export const approvedIn = (evidenceDir: string) =>
@@ -69,22 +69,25 @@ export const updateApproved = (
   }).pipe(Effect.flatMap(decodeOrNone));
 
 /** `--verify` values, each one verify.json entry as JSON; the first that is not one is named. */
-export function givenVerifications(
-  values: ReadonlyArray<string>,
-):
-  | { readonly ok: true; readonly specs: ReadonlyArray<VerifySpec> }
-  | { readonly ok: false; readonly error: string } {
+export function givenVerifications(values: ReadonlyArray<string>) {
   const specs: VerifySpec[] = [];
   for (const value of values) {
     const decoded = decodeGiven(value);
-    if (decoded._tag === "Failure")
-      return {
+    if (decoded._tag === "Failure") {
+      const returned:
+        | { readonly ok: true; readonly specs: ReadonlyArray<VerifySpec> }
+        | { readonly ok: false; readonly error: string } = {
         ok: false,
         error: `--verify ${value} is not a verification: ${String(decoded.failure)}`,
       };
+      return returned;
+    }
     specs.push(decoded.success);
   }
-  return { ok: true, specs };
+  const returned:
+    | { readonly ok: true; readonly specs: ReadonlyArray<VerifySpec> }
+    | { readonly ok: false; readonly error: string } = { ok: true, specs };
+  return returned;
 }
 
 /** A file that is there and is not a list of verifications. Named, never read as empty. */
@@ -110,7 +113,7 @@ export const USER_FILE = "verify.json";
  * A repository's own list in the user's config, by its remote: `verify/<host>/<path>.json`.
  * Null for a remote whose path would leave `verify/`.
  */
-export const rememberedFile = (userDir: string, project: string): string | null =>
+export const rememberedFile = (userDir: string, project: string) =>
   Arr.some(Str.split(project, "/"), (part) => part === "" || part === "." || part === "..")
     ? null
     : `${userDir}/verify/${project}.json`;
@@ -173,12 +176,12 @@ export const approvedFrom = Effect.fn("VerifySpec.approvedFrom")(function* (laye
 export function approvedFor(
   seeded: ReadonlyArray<VerifySpec>,
   intent: { readonly authority: { readonly run_verification: ReadonlyArray<VerifySpec> } } | null,
-): ReadonlyArray<VerifySpec> {
+) {
   return intent === null ? seeded : intent.authority.run_verification;
 }
 
 /** A Run's checks as the commands a human would type, for a prompt to name them. */
-export function renderApproved(approved: ReadonlyArray<VerifySpec>): string {
+export function renderApproved(approved: ReadonlyArray<VerifySpec>) {
   if (approved.length === 0) return "(no check is named for this Run yet)";
   return Arr.join(
     Arr.map(approved, (spec) =>
@@ -196,7 +199,7 @@ const PACKAGE_MANAGERS = new Set(["bun", "npm", "pnpm", "yarn", "deno"]);
  * What a check is called where nobody named it: the script a package manager runs, else
  * the manager and its subcommand, else the tool.
  */
-export function checkNameOf(executable: string, argv: ReadonlyArray<string>): string {
+export function checkNameOf(executable: string, argv: ReadonlyArray<string>) {
   const tool = Str.split(executable, "/").at(-1) ?? executable;
   const passed = argv.indexOf("--");
   // A flag's value is a plain word too, so a script is the last one before `--`.

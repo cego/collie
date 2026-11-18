@@ -16,8 +16,6 @@ import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { Effect, Schema } from "effect";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
-import type { RunRecords } from "./run-records";
-import type { Metrics } from "./board-model";
 import { epochMs } from "./time";
 import { ParkCause } from "./park-cause";
 import { ProducerReport } from "./narrative-model";
@@ -117,10 +115,7 @@ export const METRICS_FILE = "metrics.jsonl";
 
 export const metricsPath = (runDir: string) => runJournal(runDir, METRICS_FILE);
 
-export const appendMetric = Effect.fn("Metrics.append")(function* (
-  runDir: string,
-  line: Metric,
-): Effect.fn.Return<void, never, RunRecords> {
+export const appendMetric = Effect.fn("Metrics.append")(function* (runDir: string, line: Metric) {
   yield* appendRunJournal(metricsPath(runDir), MetricJson, line);
 });
 
@@ -137,7 +132,7 @@ export const noteVerification = (
     readonly result: string;
     readonly by: "agent" | "collie";
   },
-): Effect.Effect<void, never, RunRecords> =>
+) =>
   appendMetric(runDir, {
     at: record.at,
     kind: "verification",
@@ -208,10 +203,7 @@ export interface FailureLike {
  * be inventing a limit nobody asked for. What stops a false claim of success is the
  * evidence gate reading collected results, not this.
  */
-export function repeatedFailure(
-  records: ReadonlyArray<FailureLike>,
-  n: number,
-): { name: string; times: number; exit: number; line: string } | null {
+export function repeatedFailure(records: ReadonlyArray<FailureLike>, n: number) {
   if (n < 2) return null;
   const byName = new Map<string, FailureLike[]>();
   for (const record of records) {
@@ -233,7 +225,7 @@ export function repeatedFailure(
 }
 
 /** The last line that says anything, which is what a failure is usually recognised by. */
-function lastLine(text: string): string {
+function lastLine(text: string) {
   const lines = Arr.filter(
     Arr.map(Str.split(text, "\n"), (line) => Str.trim(line)),
     (line) => line !== "",
@@ -242,12 +234,7 @@ function lastLine(text: string): string {
 }
 
 /** The obstacle a repeated failure is, in the words a human and an agent both get. */
-export function obstacleOf(found: {
-  name: string;
-  times: number;
-  exit: number;
-  line: string;
-}): string {
+export function obstacleOf(found: { name: string; times: number; exit: number; line: string }) {
   const said = found.line === "" ? "" : `: ${found.line}`;
   return (
     `${found.name} has failed ${found.times} times in a row the same way (exit ${found.exit})${said}. ` +
@@ -255,7 +242,7 @@ export function obstacleOf(found: {
   );
 }
 
-export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metrics {
+export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string) {
   const created = epochMs(createdAt);
   const first = Option.getOrUndefined(Arr.findFirst(lines, (line) => line.kind === "verification"));
   const verifications = { pass: 0, fail: 0, unstable: 0, byCollie: 0 };

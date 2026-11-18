@@ -10,7 +10,7 @@ import { ActionFailed } from "./flock";
 const RENEWED = "the connection was renewed before this finished";
 
 /** An `ActionFailed`'s reason, another error's message, or that its connection was renewed. */
-export const saidOf = (cause: Cause.Cause<Error | string>): string => {
+export const saidOf = (cause: Cause.Cause<Error | string>) => {
   const failed = Option.getOrUndefined(Arr.findFirst(cause.reasons, Cause.isFailReason));
   if (failed !== undefined) {
     const { error } = failed;

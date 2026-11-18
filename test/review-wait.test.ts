@@ -8,7 +8,7 @@ import { reviewWaitOf, settleAnswers, standingOf, waitsOnApproval } from "../src
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
 const MOVED = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
 
-const read = (over: Partial<Extract<ReviewRead, { ok: true }>> = {}): ReviewRead => ({
+const read: (over?: Partial<Extract<ReviewRead, { ok: true }>>) => ReviewRead = (over = {}) => ({
   ok: true,
   login: "collie",
   state: "open",
@@ -24,7 +24,7 @@ const read = (over: Partial<Extract<ReviewRead, { ok: true }>> = {}): ReviewRead
   ...over,
 });
 
-const comment = (id: string, over: Partial<ReviewComment> = {}): ReviewComment => ({
+const comment: (id: string, over?: Partial<ReviewComment>) => ReviewComment = (id, over = {}) => ({
   id,
   url: `https://gitlab.example.com/group/app/-/merge_requests/30#note_${id}`,
   thread: null,

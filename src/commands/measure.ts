@@ -74,17 +74,15 @@ export const measure = Command.make(
           if (!opened.ok) return opened;
           const stdio = yield* Stdio.Stdio;
           type Answered = { measurement: Measurement; ran: boolean };
-          const answered = yield* Stream.runFoldEffect(
-            opened.events,
-            (): Answered | null => null,
-            (last, event) =>
-              event._tag === "Said"
-                ? Stream.make(`${event.text}\n`).pipe(
-                    Stream.run(stdio.stderr({ endOnDone: false })),
-                    Effect.ignore,
-                    Effect.as(last),
-                  )
-                : Effect.succeed({ measurement: event.measurement, ran: event.ran }),
+          const nothingYet: () => Answered | null = () => null;
+          const answered = yield* Stream.runFoldEffect(opened.events, nothingYet, (last, event) =>
+            event._tag === "Said"
+              ? Stream.make(`${event.text}\n`).pipe(
+                  Stream.run(stdio.stderr({ endOnDone: false })),
+                  Effect.ignore,
+                  Effect.as(last),
+                )
+              : Effect.succeed({ measurement: event.measurement, ran: event.ran }),
           ).pipe(
             Effect.catch((cause) =>
               Effect.succeed(

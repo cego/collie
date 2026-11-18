@@ -162,7 +162,7 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
 });
 
 /** What a field is for: the schema's own description, else what its strategy means. */
-function meaningOf(field: Found["inputs"][number]): string {
+function meaningOf(field: Found["inputs"][number]) {
   const described = Option.getOrUndefined(describedIn(field.schema))?.description ?? "";
   if (described !== "") return described;
   return field.strategy === null ? "" : strategyMeaning(field.strategy);

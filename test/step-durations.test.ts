@@ -37,10 +37,13 @@ const ran = (run: string, workflow: string, lines: ReadonlyArray<StepLine>) =>
     yield* (yield* RunRecords).append(run, STEPS_FILE, Arr.map(lines, encodeStepLine));
   });
 
-const took = (step: string, from: number, to: number, key = step): ReadonlyArray<StepLine> => [
-  { kind: "enter", key, step: meta(step), place: null, at: at(from) },
-  { kind: "leave", key, at: at(to) },
-];
+const took = (step: string, from: number, to: number, key = step) => {
+  const returned: ReadonlyArray<StepLine> = [
+    { kind: "enter", key, step: meta(step), place: null, at: at(from) },
+    { kind: "leave", key, at: at(to) },
+  ];
+  return returned;
+};
 
 test("a Step's usual time is the median of its latest ten runs, from first entry to last leaving", () =>
   runEffect(

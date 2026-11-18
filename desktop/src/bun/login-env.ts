@@ -110,7 +110,12 @@ export const agentState = (
         : code.value === 2
           ? "gone"
           : "unknown";
-  }).pipe(Effect.orElseSucceed((): AgentState => "unknown"));
+  }).pipe(
+    Effect.orElseSucceed(() => {
+      const returned: AgentState = "unknown";
+      return returned;
+    }),
+  );
 
 /**
  * Whether the login shell's SSH agent replaces the one Desktop was started with. An rc file

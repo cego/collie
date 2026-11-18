@@ -57,7 +57,7 @@ export const loggedGit = (dir: string, log: string) =>
     return yield* Effect.succeed(
       Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(log)).pipe(
         Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
-        Effect.orElseSucceed((): string[] => []),
+        Effect.orElseSucceed(() => []),
       ),
     );
   });

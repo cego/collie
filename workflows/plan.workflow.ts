@@ -113,7 +113,7 @@ const Offloaded = Schema.Struct({
 
 /** The host's own options for a child, with the ones nobody settled left out: absent
  *  rather than empty, exactly as a front door passes them. */
-const launch = (options: Record<string, string>): Record<string, string> =>
+const launch = (options: Record<string, string>) =>
   Rec.fromEntries(Arr.filter(Rec.toEntries(options), ([, value]) => value !== ""));
 
 /** What a planner rooted at the Projects root is told about it, and nothing elsewhere. */

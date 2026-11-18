@@ -54,7 +54,7 @@ const decodeHttp = Schema.decodeUnknownOption(
 );
 const decodeOAuth = Schema.decodeUnknownOption(PiOAuth);
 
-const asPi = (server: UserMcpServer): Result.Result<PiServer, string> => {
+const asPi: (server: UserMcpServer) => Result.Result<PiServer, string> = (server) => {
   if ("headersHelper" in server) return Result.fail("its headersHelper runs only in Claude Code");
   if (server.type === "sse") return Result.fail("Pi does not speak SSE");
   const stdio = Option.getOrUndefined(decodeStdio(server));
@@ -79,9 +79,9 @@ const NONE: PiServers = { given: {}, left: [] };
 const piName = (name: string) => pipe(name, Str.replaceAll("-", "_"));
 
 /** Each server Pi can run, and each it cannot with why; Pi reads `-` and `_` alike in a name. */
-export const piServers = (servers: UserMcpServers): PiServers =>
+export const piServers = (servers: UserMcpServers) =>
   Arr.reduce(Rec.toEntries(servers), NONE, (so, [name, server]) => {
-    const leave = (why: string): PiServers => ({ ...so, left: [...so.left, { name, why }] });
+    const leave = (why: string) => ({ ...so, left: [...so.left, { name, why }] });
     if (name === "collie") return leave("the name of Collie's own server");
     if (!PI_NAME.test(name))
       return leave("Pi takes only letters, digits, _ and - in a server's name");

@@ -195,10 +195,7 @@ const onCollie = <A, E>(
     }).pipe(Effect.scoped),
   );
 
-const pending = (
-  finding: Partial<Pending["finding"]> = {},
-  more: Partial<Pending> = {},
-): Pending => ({
+const pending = (finding: Partial<Pending["finding"]> = {}, more: Partial<Pending> = {}) => ({
   run: "run-parked",
   heal: "run-heal",
   judged: "escalated",
@@ -288,11 +285,11 @@ test("a new defect is filed once with observation apart from diagnosis; the next
 test("a non-defect is never pending, and a false recovery or a finding without its fix is not filed", () =>
   onCollie({}, (host, forge) =>
     Effect.gen(function* () {
-      const healed = (
+      const healed: (
         heal: string,
         finding: Partial<HealFinding>,
         outcome: Metric["outcome"],
-      ): Metric => ({
+      ) => Metric = (heal, finding, outcome) => ({
         at: "2026-11-13T10:00:00Z",
         kind: "recovery",
         subject: "run-parked",
@@ -327,7 +324,7 @@ test("a non-defect is never pending, and a false recovery or a finding without i
     }),
   ));
 
-const reportLine = (publication: Metric["publication"]): Metric => ({
+const reportLine: (publication: Metric["publication"]) => Metric = (publication) => ({
   at: "2026-11-13T10:00:01Z",
   kind: "report",
   subject: FINDING.key,
@@ -336,7 +333,7 @@ const reportLine = (publication: Metric["publication"]): Metric => ({
   heal: "run-heal",
   publication,
 });
-const reportedAs = (publication: Metric["publication"], issue: string): Metric => ({
+const reportedAs = (publication: Metric["publication"], issue: string) => ({
   ...reportLine(publication),
   issue,
 });

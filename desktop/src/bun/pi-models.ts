@@ -1,7 +1,6 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { Effect, Fiber, Option, Queue, Schema, Stream, flow, Result } from "effect";
-import type { Offered } from "../shared/chat-choices";
 import type { FlockSettings } from "../shared/flock-settings";
 import { childEnv, which } from "./login-env";
 
@@ -34,7 +33,7 @@ export const readPiModels = (
   _flock: FlockSettings,
   dir: string,
   command: ReadonlyArray<string> | null = which("pi") === null ? null : [which("pi")!],
-): Effect.Effect<ReadonlyArray<Omit<Offered, "unsetEffort">>, string> =>
+) =>
   Effect.acquireUseRelease(
     Effect.try({
       try: () =>

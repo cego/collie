@@ -17,8 +17,8 @@ import type { ProposalRecord } from "../../proposals";
 
 const REVISION = { branch: "main", head_sha: "abc1234def5678", fingerprint: "f1", dirty: false };
 
-function card(over: Partial<Card> = {}): Card {
-  return {
+function card(over: Partial<Card> = {}) {
+  const returned: Card = {
     id: "c1",
     run: "r1",
     kind: "slice",
@@ -43,9 +43,10 @@ function card(over: Partial<Card> = {}): Card {
     significance: "try-it",
     ...over,
   };
+  return returned;
 }
 
-function live(over: Partial<Live> = {}): Live {
+function live(over: Partial<Live> = {}) {
   return {
     run: "r1",
     cards: [],

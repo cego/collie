@@ -16,7 +16,7 @@ import {
   stepped,
 } from "../desktop/src/shared/questionnaire";
 
-const choice = (overrides: Partial<Question> = {}): Question => ({
+const choice: (overrides?: Partial<Question>) => Question = (overrides = {}) => ({
   kind: "question",
   run: "r-1",
   id: "pick",
@@ -63,7 +63,11 @@ const NO_AGENT = choice({
   },
 });
 
-const key = (name: string, mod = false, where: "group" | "steer" | "answer" = "group"): Event => ({
+const key: (name: string, mod?: boolean, where?: "group" | "steer" | "answer") => Event = (
+  name: string,
+  mod = false,
+  where: "group" | "steer" | "answer" = "group",
+) => ({
   kind: "key",
   key: name,
   mod,

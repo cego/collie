@@ -77,7 +77,6 @@ import {
   type StepKind,
   type StepMeta,
   type StepNote,
-  type StepPlace,
 } from "./steps";
 import type { Asker } from "./proposals";
 import type { UsageReading } from "./usage-model";
@@ -342,10 +341,7 @@ const isStruct = (schema: unknown): schema is { readonly fields: Schema.Struct.F
   Predicate.hasProperty(schema, "fields") && Predicate.isObject(schema.fields);
 
 /** Whether `path` names a declared field, or one a field that is a map may hold. */
-const declares = (
-  fields: Schema.Struct.Fields,
-  [head = "", ...rest]: ReadonlyArray<string>,
-): boolean => {
+const declares = (fields: Schema.Struct.Fields, [head = "", ...rest]: ReadonlyArray<string>) => {
   const field = fields[head];
   if (field === undefined) return false;
   if (rest.length === 0) return true;
@@ -359,10 +355,7 @@ const declares = (
  * declare is refused here, so a template made where a module loads is checked by every
  * load of it — `collie doctor` and `collie workflow check` among them.
  */
-export function template<const Fields extends Schema.Struct.Fields>(
-  text: string,
-  fields: Fields,
-): Template<Schema.Struct<Fields>["Type"]> {
+export function template<const Fields extends Schema.Struct.Fields>(text: string, fields: Fields) {
   const undeclared = Arr.filter(
     expressionsIn(text),
     (name) => !(GIVEN.has(name) || declares(fields, Str.split(name, "."))),
@@ -373,7 +366,8 @@ export function template<const Fields extends Schema.Struct.Fields>(
       `this template names ${Arr.join(wrong, ", ")}, which nothing fills: declare ${wrong.length === 1 ? "it" : "them"} among what it takes, or remove ${wrong.length === 1 ? "it" : "them"}`,
     );
   }
-  return new Template(text);
+  const returned: Template<Schema.Struct<Fields>["Type"]> = new Template(text);
+  return returned;
 }
 
 /** What agents are told, read from Markdown: see `contentOf`. */
@@ -394,7 +388,7 @@ export interface Content {
  * entry per `## name` section below it. Front matter is refused: what a workflow takes
  * and does is its definition's, where it is checked, and a second copy here would drift.
  */
-export function contentOf(markdown: string): Content {
+export function contentOf(markdown: string) {
   if (FRONT_MATTER.test(markdown)) {
     throw new Error(
       "this Markdown has front matter, and a workflow's inputs, steps and questions belong in its definition: keep only what agents are told here",
@@ -413,7 +407,7 @@ export function contentOf(markdown: string): Content {
       "\n\n",
     );
   };
-  return {
+  const returned: Content = {
     preamble,
     sections,
     prompt,
@@ -428,6 +422,7 @@ export function contentOf(markdown: string): Content {
       }
     },
   };
+  return returned;
 }
 
 const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -440,7 +435,7 @@ const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
  * an Output is only ever a claim — what decides a check is the journal, bound to the
  * tree in front of it.
  */
-export function evidenceGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
+export function evidenceGapsOf(options: EvidenceAsk) {
   return evidenceGaps(options.kind, collectedOf(options));
 }
 
@@ -448,12 +443,12 @@ export function evidenceGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
  * The gaps among those a verification on this tree could close: what a fix may be
  * handed. A reviewer's judgement and an Output's claim are not moved by running anything.
  */
-export function checkGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
+export function checkGapsOf(options: EvidenceAsk) {
   return checkGaps(options.kind, collectedOf(options));
 }
 
 /** The gaps among those a fresh review could close: what is worth paying a reviewer for. */
-export function reviewGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
+export function reviewGapsOf(options: EvidenceAsk) {
   return reviewGaps(options.kind, collectedOf(options));
 }
 
@@ -461,7 +456,7 @@ export function reviewGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
  * Whether the Run is done with no patch to deliver, which is an outcome and not a failure:
  * an investigation that says so, or a performance Run whose tree is its latest base tree again.
  */
-export function endsWithoutPatchOf(options: EvidenceAsk): boolean {
+export function endsWithoutPatchOf(options: EvidenceAsk) {
   return endsWithoutPatch(options.kind, collectedOf(options));
 }
 
@@ -584,7 +579,7 @@ const isPanel = (seats: Seat | ReadonlyArray<Seat>): seats is ReadonlyArray<Seat
  * The panel this workflow's definition seats for a role: every seat it names, or one that
  * prefers nothing of its own where it names none. Work given a seat sits at it.
  */
-export const panelOf = (role: string): Effect.Effect<readonly [Seat, ...Seat[]]> =>
+export const panelOf: (role: string) => Effect.Effect<readonly [Seat, ...Seat[]]> = (role) =>
   Effect.gen(function* () {
     const given = (yield* WorkflowAgents)?.roles?.[role];
     const [first = {}, ...rest] = given === undefined ? [] : isPanel(given) ? given : [given];
@@ -597,7 +592,7 @@ export const panelOf = (role: string): Effect.Effect<readonly [Seat, ...Seat[]]>
  */
 export const withAgents =
   (preferences: AgentPreferences) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.gen(function* () {
       const scopes = yield* AgentScopes;
       return yield* Effect.provideService(effect, AgentScopes, [...scopes, preferences]);
@@ -706,10 +701,10 @@ export const defineWorkflow = <
   Provided = never,
 >(
   definition: Definition<Fields, Output, Err, Provided>,
-): Definition<Fields, Output, Err, Provided> => definition;
+) => definition;
 
 /** A definition with its defaults filled in. */
-export const definitionOf = (written: WrittenDefinition): WorkflowDefinition => ({
+export const definitionOf = (written: WrittenDefinition) => ({
   ...written,
   title: written.title ?? written.id,
   description: written.description ?? "",
@@ -1581,7 +1576,7 @@ export interface DecisionSpec {
 /** One answer an `ask` takes: a bare string is its id and title. */
 export type AskOption = typeof AuthoredSolution.Encoded;
 
-const recommendationShortfall = (solutions: ReadonlyArray<Solution>): string | null => {
+const recommendationShortfall = (solutions: ReadonlyArray<Solution>) => {
   const recommended = Arr.filter(solutions, (one) => one.recommended === true).length;
   if (solutions.length === 0 || recommended === 1) return null;
   return recommended === 0
@@ -1598,7 +1593,7 @@ const recommendationShortfall = (solutions: ReadonlyArray<Solution>): string | n
  * cannot show the question, cannot refuse an answer to one nobody asked, and cannot tell
  * a second answer from the first.
  */
-export const ask = (question: Question): Effect.Effect<string, never, Asking> =>
+export const ask = (question: Question) =>
   opened(question).pipe(
     Effect.andThen(
       DurableDeferred.await(DurableDeferred.make(question.name, { success: Schema.String })),
@@ -1617,10 +1612,8 @@ interface Question {
   readonly options?: ReadonlyArray<AskOption>;
 }
 
-type Asking = Run | Host | WorkflowEngine | WorkflowInstance;
-
 /** Tells the host the question is open, without waiting for its answer. */
-const opened = (question: Question): Effect.Effect<void, never, Asking> =>
+const opened = (question: Question) =>
   Effect.gen(function* () {
     const shipping =
       question.shipping === undefined
@@ -1658,7 +1651,7 @@ const opened = (question: Question): Effect.Effect<void, never, Asking> =>
  * and no forge read beyond the merge watch's own. `name` is its identity, as an `ask`'s is.
  * A new head is then read once for whether it descends from the cursor's.
  */
-export const watch = (options: Watching): Effect.Effect<Woke, WorkflowError, Asking> =>
+export const watch = (options: Watching) =>
   Effect.gen(function* () {
     yield* watched(options, false);
     const woke = yield* DurableDeferred.await(
@@ -1672,10 +1665,7 @@ export const watch = (options: Watching): Effect.Effect<Woke, WorkflowError, Ask
  * first, its answer or a change that matters, is what this returns, and the other is gone. A
  * change closes the question unanswered.
  */
-export const askWhileWatching = (
-  question: Omit<Question, "name">,
-  options: Watching,
-): Effect.Effect<Woke | Answered, WorkflowError, Asking> =>
+export const askWhileWatching = (question: Omit<Question, "name">, options: Watching) =>
   Effect.gen(function* () {
     yield* watched(options, true);
     yield* opened({ ...question, name: options.name });
@@ -1793,7 +1783,7 @@ export class Children extends Context.Service<Children, ChildrenApi>()("collie/C
  * One child workflow, started and waited on. Anything else is Effect's own operators. It
  * prefers the agents its parent prefers where it is started, unless its options say else.
  */
-export const child = (ask: ChildAsk): Effect.Effect<unknown, WorkflowError, Children> =>
+export const child = (ask: ChildAsk) =>
   Effect.gen(function* () {
     const children = yield* Children;
     return yield* children.result(yield* children.start(ask));
@@ -1828,7 +1818,7 @@ export interface Step extends StepMeta {
 /** Calls of each Step made without a place, per execution, so each is a run of its own. */
 const unplaced = new WeakMap<object, Map<string, number>>();
 
-const placeOf = (place: StepCall | undefined): StepPlace | null =>
+const placeOf = (place: StepCall | undefined) =>
   place === undefined
     ? null
     : "item" in place
@@ -1839,7 +1829,7 @@ const placeOf = (place: StepCall | undefined): StepPlace | null =>
  * A Step, made where its work is written (ADR-draft-a-step-is-declared-where-its-work-is-written).
  * Its records are Activities, so a replay records nothing twice.
  */
-export const step = (declared: StepDeclaration): Step => {
+export const step: (declared: StepDeclaration) => Step = (declared) => {
   const meta: StepMeta = {
     id: declared.id,
     title: declared.title,
@@ -1891,7 +1881,7 @@ const Said = Schema.Union([
 ]);
 
 /** Why a Step's work failed: a `WorkflowError`'s reason, an error's message, or what it is. */
-const failureOf = (cause: Cause.Cause<unknown>): string => {
+const failureOf = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
   const said = Schema.decodeUnknownOption(Said)(error);
   if (said._tag === "None") return String(error);
@@ -1902,7 +1892,7 @@ const failureOf = (cause: Cause.Cause<unknown>): string => {
  * Records that the Step the work is in failed, where the Run parks to be resumed rather than
  * ending: the Step is drawn failed, saying why, until a resume enters it again.
  */
-export const stepFailed = (why: string): Effect.Effect<void, never, Run | Host> =>
+export const stepFailed = (why: string) =>
   Effect.gen(function* () {
     const at = yield* CurrentStep;
     if (at === null) return;
@@ -1916,7 +1906,7 @@ const forecasts = new WeakMap<object, number>();
  * The path from here, once the Run knows which branch it takes. The Flow forecasts from
  * the latest one; it is never a precondition.
  */
-export const forecast = (path: ReadonlyArray<Step>): Effect.Effect<void, never, Recording> =>
+export const forecast = (path: ReadonlyArray<Step>) =>
   Effect.gen(function* () {
     const host = yield* Host;
     const runId = (yield* Run).id;
@@ -1930,9 +1920,7 @@ export const forecast = (path: ReadonlyArray<Step>): Effect.Effect<void, never, 
   });
 
 /** The ids a path lists more than once: a Step is known by its id, so each is one Step. */
-export const repeatedIds = (
-  path: ReadonlyArray<{ readonly id: string }>,
-): ReadonlyArray<string> => {
+export const repeatedIds = (path: ReadonlyArray<{ readonly id: string }>) => {
   const ids = Arr.map(path, (one) => one.id);
   return Arr.dedupe(
     Arr.filter(ids, (id, at) => Arr.some(Arr.take(ids, at), (before) => before === id)),
@@ -2123,7 +2111,7 @@ export const RESERVED_INPUTS = {
 const IDENTITY = /^[a-z][a-z0-9-]*$/;
 
 /** What a public id may be, so a command that writes one can refuse before the file exists. */
-export const isWorkflowId = (id: string): boolean => IDENTITY.test(id);
+export const isWorkflowId = (id: string) => IDENTITY.test(id);
 
 const isReserved = (name: string): name is keyof typeof RESERVED_INPUTS => name in RESERVED_INPUTS;
 const reservedMeaning = (name: string) => (isReserved(name) ? RESERVED_INPUTS[name] : "");
@@ -2192,7 +2180,7 @@ const readMetadata = Schema.decodeUnknownResult(DeclaredMetadata, { errors: "all
  * Empty means it may be registered. The host calls this at load, before anything of the
  * author's runs and long before a Run, a worktree or an agent exists.
  */
-export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
+export function checkEntry(entry: WorkflowEntry) {
   const problems: string[] = [];
   if (!IDENTITY.test(entry.id)) {
     problems.push(`workflow id "${entry.id}" is not an identity: lower case, digits and dashes`);
@@ -2240,10 +2228,7 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
   return problems;
 }
 
-function hintProblems(
-  hints: Readonly<Record<string, InputStrategy>>,
-  fields: ReadonlySet<string>,
-): ReadonlyArray<string> {
+function hintProblems(hints: Readonly<Record<string, InputStrategy>>, fields: ReadonlySet<string>) {
   const problems: string[] = [];
   for (const [field, strategy] of Rec.toEntries(hints)) {
     if (!fields.has(field)) problems.push(`hint for "${field}", which is not an input`);
@@ -2257,7 +2242,7 @@ function hintProblems(
   return problems;
 }
 
-function outcomeProblems(outcome: OutcomeContract | undefined): ReadonlyArray<string> {
+function outcomeProblems(outcome: OutcomeContract | undefined) {
   if (!outcome) return [];
   const problems: string[] = [];
   if (outcome.fixed !== undefined && outcome.selectable !== undefined) {
@@ -2276,10 +2261,7 @@ function outcomeProblems(outcome: OutcomeContract | undefined): ReadonlyArray<st
   return problems;
 }
 
-function offerProblems(
-  metadata: WorkflowMetadata | undefined,
-  workflow: string,
-): ReadonlyArray<string> {
+function offerProblems(metadata: WorkflowMetadata | undefined, workflow: string) {
   const problems: string[] = [];
   const seen = new Set<string>();
   for (const offer of [...(metadata?.actions ?? []), ...(metadata?.followUps ?? [])]) {
@@ -2311,7 +2293,7 @@ function offerProblems(
  * projection of each action's argument schema. The eligibility closures and the schema
  * values themselves stay here — presentation travels, behaviour does not.
  */
-export function describeMetadata(metadata: WorkflowMetadata | undefined): Schema.Json {
+export function describeMetadata(metadata: WorkflowMetadata | undefined) {
   const described = {
     hints: { ...metadata?.hints },
     outcome: metadata?.outcome?.fixed ?? null,
@@ -2366,7 +2348,7 @@ export interface Projection {
   readonly limits: ReadonlyArray<string>;
 }
 
-export function jsonSchemaFor(schema: Schema.Constraint): Projection {
+export function jsonSchemaFor(schema: Schema.Constraint) {
   try {
     const drawn = SchemaRepresentation.toJsonSchemaDocument(
       withPatterns(SchemaRepresentation.toRepresentation(Schema.toCodecJson(schema).ast)),
@@ -2384,12 +2366,16 @@ export function jsonSchemaFor(schema: Schema.Constraint): Projection {
  * Effect draws a pattern only for a RegExp with the `u` flag, which a JSON Schema pattern
  * implies; any other whose source is known to match the same strings under it is drawn too.
  */
-function withPatterns<T>(node: T): T {
+function withPatterns<T>(node: T) {
   if (isList(node)) {
     // SAFETY: the same list, each element copied with its own type.
-    return Arr.map(node, withPatterns) as T;
+    const returned: T = Arr.map(node, withPatterns) as T;
+    return returned;
   }
-  if (!isNode(node)) return node;
+  if (!isNode(node)) {
+    const returned: T = node;
+    return returned;
+  }
   const copied = Rec.fromEntries(
     Arr.map(
       Rec.toEntries(node),
@@ -2398,7 +2384,8 @@ function withPatterns<T>(node: T): T {
   );
   const annotations = isPatternCheck(node) ? drawn(node) : null;
   // SAFETY: the same node, with at most a pattern check's annotations replaced.
-  return (annotations === null ? copied : { ...copied, annotations }) as T;
+  const returned: T = (annotations === null ? copied : { ...copied, annotations }) as T;
+  return returned;
 }
 
 const isList = Schema.is(Schema.Array(Schema.Unknown));
@@ -2435,15 +2422,27 @@ function sameUnderUnicode(source: string) {
 }
 
 /** Where the drawn document says nothing at all, which the schema itself still does. */
-function unconstrained(node: Schema.Json, at: string): ReadonlyArray<string> {
+function unconstrained(node: Schema.Json, at: string) {
   if (Arr.isArray<typeof node>(node)) {
-    return Arr.flatMap(node, (item, index) => unconstrained(item, `${at}[${index}]`));
+    const returned: ReadonlyArray<string> = Arr.flatMap(node, (item, index) =>
+      unconstrained(item, `${at}[${index}]`),
+    );
+    return returned;
   }
   const object = asObject(node);
-  if (Result.isFailure(object)) return [];
+  if (Result.isFailure(object)) {
+    const returned: ReadonlyArray<string> = [];
+    return returned;
+  }
   const entries = Rec.toEntries(object.success);
-  if (entries.length === 0) return [`${at || "the schema"} projects to nothing`];
-  return Arr.flatMap(entries, ([key, value]) => unconstrained(value, at ? `${at}.${key}` : key));
+  if (entries.length === 0) {
+    const returned: ReadonlyArray<string> = [`${at || "the schema"} projects to nothing`];
+    return returned;
+  }
+  const returned: ReadonlyArray<string> = Arr.flatMap(entries, ([key, value]) =>
+    unconstrained(value, at ? `${at}.${key}` : key),
+  );
+  return returned;
 }
 
 const asObject = Schema.decodeUnknownResult(Schema.Record(Schema.String, Schema.Json));

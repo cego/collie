@@ -16,8 +16,7 @@ import type { Metric, RecoveryAction } from "./metrics";
 
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 const isText = Schema.is(Schema.String);
-export const resultText = (value: Schema.Json): string =>
-  isText(value) ? value : asJsonText(value);
+export const resultText = (value: Schema.Json) => (isText(value) ? value : asJsonText(value));
 
 export interface WorkflowTally {
   readonly workflow: string;
@@ -93,7 +92,7 @@ export function reportOf(
   metrics: ReadonlyMap<string, Metrics>,
   since: string | null,
   recorded: ReadonlyMap<string, Recorded> = new Map(),
-): Report {
+) {
   const from = since === null ? -Infinity : epochMs(since);
   const recent = Arr.filter(views, (view) => epochMs(view.created) >= from);
   const kept = Arr.sortWith(
@@ -184,7 +183,7 @@ export function reportOf(
   return { since, total: kept.length, runs, workflows, failed, completed, stopped, measures };
 }
 
-const capped = (lines: ReadonlyArray<string>, cap = 20): string[] =>
+const capped = (lines: ReadonlyArray<string>, cap = 20) =>
   lines.length > cap ? [...lines.slice(0, cap), `  …and ${lines.length - cap} more`] : [...lines];
 
 const percent = (share: number | null) => (share === null ? "" : ` (${Math.round(share * 100)}%)`);
@@ -204,7 +203,7 @@ const citing = (runs: ReadonlyArray<string>, cap = 10) =>
     : `: ${Arr.join(runs.slice(0, cap), ", ")}${runs.length > cap ? ` …and ${runs.length - cap} more` : ""}`;
 
 /** The measures, as `run report` prints them under the tallies. */
-const measureLines = (measures: Measures): string[] => {
+const measureLines = (measures: Measures) => {
   const { rounds, dispositions, steering, verifications, parks, recoveries, peakContext } =
     measures;
   const recorded = Arr.filter(peakContext, (one) => one.tokens !== null);
@@ -269,7 +268,7 @@ const measureLines = (measures: Measures): string[] => {
 };
 
 /** `run report` in words, which chat reads too. */
-export const reportLines = (report: Report, unreadable: string | null): string => {
+export const reportLines = (report: Report, unreadable: string | null) => {
   const unread = unreadable === null ? [] : [`runs: ${unreadable}`];
   if (report.total === 0) return Arr.join([...unread, "No runs found."], "\n");
   return Arr.join(

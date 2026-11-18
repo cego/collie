@@ -69,7 +69,7 @@ export type Threshold =
   | { readonly off: true }
   | { readonly bad: string };
 
-export function threshold(configured: number): Threshold {
+export function threshold(configured: number) {
   if (configured === COMPACTION_OFF) return { off: true };
   if (!Number.isSafeInteger(configured) || configured < 0) {
     return {
@@ -605,7 +605,7 @@ const stopRecord = Effect.fn("Compaction.stopRecord")(function* (
   return { ...reached, target } satisfies StopReached;
 });
 
-const targetOf = (record: ControlRecord): StopTarget | null => {
+const targetOf = (record: ControlRecord) => {
   const { endpoint, pid, command } = record;
   if (endpoint === null || pid === null || command === null) return null;
   return {
@@ -689,7 +689,7 @@ export const serversOfRun = Effect.fn("Compaction.serversOfRun")(function* (
   const unread: string[] = [];
   const root = path.join(stateDir, CONTROL_DIR);
   const names = yield* fs.readDirectory(root).pipe(
-    Effect.map((found): ReadonlyArray<string> => found),
+    Effect.map((found) => found),
     Effect.catchTag("PlatformError", (error) =>
       error.reason._tag === "NotFound" ? Effect.succeed([]) : Effect.fail(error),
     ),
@@ -1037,7 +1037,7 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
  * The channel a reading or a poll is given: it runs in no transaction, so a steer is never
  * refused behind it, and it may send nothing.
  */
-const sendsNothing = (agent: string): Channel => ({
+const sendsNothing: (agent: string) => Channel = (agent) => ({
   agent,
   submit: () =>
     Effect.succeed({

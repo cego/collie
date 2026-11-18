@@ -28,7 +28,7 @@ import hcPin from "../hc-pin.json";
  * decided which native renderer to embed, so a musl machine building from source got a
  * glibc-linked executable it could not run, which is not what it asked for.
  */
-function bunTarget(name: string, libc: "musl" | "glibc"): string {
+function bunTarget(name: string, libc: "musl" | "glibc") {
   const full = Str.startsWith("bun-")(name) ? name : `bun-${name}`;
   return libc === "musl" && Str.includes("-linux-")(full) && !Str.endsWith("-musl")(full)
     ? `${full}-musl`
@@ -76,7 +76,7 @@ const Target = Schema.Union([
  * below is the name the bundler registers the embedded library under, so its presence in
  * the artifact is the proof; it appears in no other target's binary.
  */
-function nativeMarker(target: string, libc: "musl" | "glibc"): string {
+function nativeMarker(target: string, libc: "musl" | "glibc") {
   const [, platform = "", arch = ""] = Str.split(target, "-");
   if (platform === "darwin") return `@opentui/core-darwin-${arch}/libopentui.dylib`;
   const suffix = platform === "linux" && libc === "musl" ? "-musl" : "";

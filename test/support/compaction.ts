@@ -9,8 +9,8 @@ import type { Channel, SubmitOutcome } from "../../src/dispatcher";
 export function fakeChannel(
   prompted: string[],
   outcome: SubmitOutcome = { ok: true, id: "compaction-1" },
-): Channel {
-  return {
+) {
+  const returned: Channel = {
     agent: "test",
     submit: (text) =>
       Effect.sync(() => {
@@ -18,4 +18,5 @@ export function fakeChannel(
         return outcome;
       }),
   };
+  return returned;
 }

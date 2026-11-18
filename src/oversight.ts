@@ -7,7 +7,6 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
-import type { PlatformServices } from "./platform";
 import { Cause, Clock, Context, Effect, FileSystem, Path, Schema } from "effect";
 import * as MutableRef from "effect/MutableRef";
 import { appendLogLine } from "./run-log";
@@ -47,7 +46,6 @@ import {
   splitDiff,
   staleSince,
   type EvidenceBlock,
-  type Judged,
   type JudgementDeps,
   gitOutput,
   merging,
@@ -157,7 +155,7 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     readonly next_action?: string;
     readonly report?: Card["report"];
   },
-): Effect.fn.Return<Card, never, Services> {
+) {
   // Every read of the checkout at once: only the two that name the base wait for it.
   const facts = baseOf(at.cwd).pipe(
     Effect.flatMap((base) =>
@@ -271,7 +269,7 @@ const JUDGED = "steering/judged.json";
 const judgedOf = (at: Watched) =>
   RunRecords.use((records) => records.fact(runOfDir(at.runDir), JUDGED)).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(JudgedJson)),
-    Effect.orElseSucceed((): Judged => NOT_JUDGED),
+    Effect.orElseSucceed(() => NOT_JUDGED),
   );
 
 /** What a rule check compares against: the tree, every Output, and what was verified. */
@@ -304,13 +302,14 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
   for (const one of verified)
     if (!ranOneTest(one)) verifications[one.name] = { exit: one.exit, ref: one.id };
   const mr = parseMrUrl(at.mr ?? "");
-  return {
+  const returned: RuleFacts = {
     changedFiles: [...new Set(lines(`${changed}\n${untracked}`))],
     branch: branch.code === 0 ? Str.trim(branch.stdout) : null,
     mrTarget: mr?.project == null ? null : { project: mrPath(mr), iid: mr.iid },
     outputs,
     verifications,
-  } satisfies RuleFacts;
+  };
+  return returned;
 });
 
 /** The half Collie establishes itself: what the rules say about the evidence, recorded. */
@@ -563,7 +562,7 @@ export const checkDrift = Effect.fn("Oversight.checkDrift")(function* (
   judging: "none" | "boundary" | "finish",
   deps: JudgementDeps | null,
   to: Correcting | null,
-): Effect.fn.Return<Corrected, never, PlatformServices | Records> {
+) {
   yield* followRunPlan(at);
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return NOTHING_CORRECTED;
@@ -606,20 +605,18 @@ interface CrossRunTarget {
 }
 
 /** The change `head` made since it left the default branch, read in its own Run's checkout. */
-const committedWork = Effect.fn("Oversight.committedWork")(function* (
-  cwd: string,
-  head: string,
-): Effect.fn.Return<CrossRunDiff, never, Services> {
-  if (head === "") return { kind: "unread", why: "its card names no commit" };
-  const base = yield* baseOf(cwd, head);
-  const ran = yield* shell("git", ["diff", `${base}..${head}`, "--unified=3"], cwd);
-  if (ran.code !== 0)
-    return {
-      kind: "unread",
-      why: Str.split(Str.trim(ran.stderr ?? ""), "\n")[0] || `git diff exited ${ran.code}`,
-    };
-  return { kind: "shown", blocks: splitDiff(ran.stdout) };
-});
+const committedWork: (cwd: string, head: string) => Effect.Effect<CrossRunDiff, never, Services> =
+  Effect.fn("Oversight.committedWork")(function* (cwd: string, head: string) {
+    if (head === "") return { kind: "unread", why: "its card names no commit" };
+    const base = yield* baseOf(cwd, head);
+    const ran = yield* shell("git", ["diff", `${base}..${head}`, "--unified=3"], cwd);
+    if (ran.code !== 0)
+      return {
+        kind: "unread",
+        why: Str.split(Str.trim(ran.stderr ?? ""), "\n")[0] || `git diff exited ${ran.code}`,
+      };
+    return { kind: "shown", blocks: splitDiff(ran.stdout) };
+  });
 
 /** The merge request a Run opened or was given. */
 export const MERGE_REQUEST = "merge-request";
@@ -659,7 +656,10 @@ export const familyOf = Effect.fn("Oversight.familyOf")(function* (
   const namedBy = (runId: string) =>
     readIntent(dirOf(runId)).pipe(
       Effect.map((intent) => namedIn(intent?.goal ?? null)),
-      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+      Effect.orElseSucceed(() => {
+        const returned: ReadonlyArray<string> = [];
+        return returned;
+      }),
     );
   const recorded = yield* recordedBy(row.run);
   const about = new Set([...(recorded === null ? [] : [recorded]), ...(yield* namedBy(row.run))]);
@@ -868,7 +868,7 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
   where: string,
   leaving: boolean,
   deps: JudgementDeps | null,
-): Effect.fn.Return<void, never, PlatformServices | Records> {
+) {
   const key = at.herd;
   if (key === null) {
     if (at.family.length > 1)
@@ -1015,7 +1015,7 @@ const CARDED = "steering/carded";
 export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* (
   at: Watched,
   step: string,
-): Effect.fn.Return<ReadonlyArray<Card>, never, Services> {
+) {
   const records = yield* RunRecords;
   const run = runOfDir(at.runDir);
   const found = yield* readCheckpoints(at.runDir).pipe(Effect.orElseSucceed(() => []));

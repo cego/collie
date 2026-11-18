@@ -713,7 +713,7 @@ test("a Run's own plan directory typed by hand names no branch either", () =>
   ));
 
 /** A historical registration, updated to its actual core address when arranged. */
-const agentIn = (runId: string, paneId: string): AgentEntry => ({
+const agentIn = (runId: string, paneId: string) => ({
   role: "implementer",
   agent: `impl-${paneId}`,
   paneId,
@@ -3962,18 +3962,22 @@ const servedLeftover = (worktreePath: string, state: Stopped["state"]) =>
         usage: () => Effect.die("unused"),
         stop: (target) =>
           Effect.gen(function* () {
-            const cmds = yield* rig
-              .cmds()
-              .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+            const cmds = yield* rig.cmds().pipe(
+              Effect.orElseSucceed(() => {
+                const none: ReadonlyArray<string> = [];
+                return none;
+              }),
+            );
             stops.push({ agent: target.agent, tabClosed: cmds.includes("terminal.kill") });
-            return {
+            const returned: Stopped = {
               state,
               turns: [{ thread: "th-1", turn: "tu-1", transcript: null }],
               reason: state === "quiet" ? null : "turn tu-1 still running after 30s",
               signalled: [],
               left: [],
               noted: [],
-            } satisfies Stopped;
+            };
+            return returned;
           }),
       },
     };

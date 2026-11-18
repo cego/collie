@@ -89,7 +89,7 @@ const McpConfig = Schema.Struct({
 type McpConfig = Schema.Schema.Type<typeof McpConfig>;
 const decodeMcpConfig = flow(Schema.decodeUnknownResult(McpConfig), Result.getOrThrow);
 
-const linearAmong = (servers: Servers | undefined): string | null => {
+const linearAmong = (servers: Servers | undefined) => {
   for (const [name, server] of Rec.toEntries(servers ?? {})) {
     if (server.enabled !== false && (/linear/i.test(name) || /linear/i.test(server.url ?? "")))
       return name;

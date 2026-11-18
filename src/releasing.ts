@@ -36,7 +36,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   readonly run: Runner<R>;
 }) {
   const git = (args: string[]) => opts.run("git", args, opts.cwd);
-  const refused = (why: string): FastForward => ({ _tag: "Refused", why });
+  const refused: (why: string) => FastForward = (why) => ({ _tag: "Refused", why });
   if (opts.branch !== undefined) {
     const branch = yield* git(["symbolic-ref", "--quiet", "--short", "HEAD"]);
     if (branch.code !== 0 || Str.trim(branch.stdout) !== opts.branch)
@@ -193,15 +193,18 @@ export const readMergeRequest = Effect.fn("Releasing.readMergeRequest")(function
   readonly run: Runner<R>;
 }) {
   const panel = yield* forgeOf(opts.ref).details(opts.ref, opts.cwd, opts.run);
-  if (panel._tag !== "Details")
-    return { _tag: "Unreadable", why: panel.reason } satisfies MergeRequestRead;
-  return {
+  if (panel._tag !== "Details") {
+    const returned: MergeRequestRead = { _tag: "Unreadable", why: panel.reason };
+    return returned;
+  }
+  const returned: MergeRequestRead = {
     _tag: "Read",
     state: panel.state,
     source: panel.sourceBranch,
     target: panel.targetBranch,
     merged: panel.mergedSha,
-  } satisfies MergeRequestRead;
+  };
+  return returned;
 });
 
 /**
@@ -216,15 +219,7 @@ export function stackOrder(
     readonly target: string;
     readonly wave?: PlanWave;
   }>,
-):
-  | {
-      readonly _tag: "Ordered";
-      readonly order: ReadonlyArray<{
-        readonly id: string;
-        readonly waitsOn: ReadonlyArray<string>;
-      }>;
-    }
-  | { readonly _tag: "Cycle"; readonly ids: ReadonlyArray<string> } {
+) {
   const ids = Arr.map(mrs, (one) => one.id);
   const branches = new Map(Arr.map(mrs, (one) => [one.id, one] as const));
   const earlier = (one: (typeof mrs)[number]) =>
@@ -251,11 +246,37 @@ export function stackOrder(
   while (left.length > 0) {
     const placed = new Set(Arr.map(order, (one) => one.id));
     const ready = Arr.filter(left, (id) => Arr.every(waits.get(id) ?? [], (on) => placed.has(on)));
-    if (ready.length === 0) return { _tag: "Cycle", ids: left };
+    if (ready.length === 0) {
+      const returned:
+        | {
+            readonly _tag: "Ordered";
+            readonly order: ReadonlyArray<{
+              readonly id: string;
+              readonly waitsOn: ReadonlyArray<string>;
+            }>;
+          }
+        | { readonly _tag: "Cycle"; readonly ids: ReadonlyArray<string> } = {
+        _tag: "Cycle",
+        ids: left,
+      };
+      return returned;
+    }
     for (const id of ready) order.push({ id, waitsOn: waits.get(id) ?? [] });
     left = Arr.filter(left, (id) => !ready.includes(id));
   }
-  return { _tag: "Ordered", order };
+  const returned:
+    | {
+        readonly _tag: "Ordered";
+        readonly order: ReadonlyArray<{
+          readonly id: string;
+          readonly waitsOn: ReadonlyArray<string>;
+        }>;
+      }
+    | { readonly _tag: "Cycle"; readonly ids: ReadonlyArray<string> } = {
+    _tag: "Ordered",
+    order,
+  };
+  return returned;
 }
 
 const failing = new Set(["failed", "cancelled"]);
@@ -383,7 +404,7 @@ export const readTag = Effect.fn("Releasing.readTag")(function* <R>(opts: {
   readonly run: Runner<R>;
 }) {
   const git = gitOf(opts);
-  const unproved = (why: string): TagRead => ({ _tag: "Unproved", why });
+  const unproved: (why: string) => TagRead = (why) => ({ _tag: "Unproved", why });
   const tagged = yield* tagOn(git, opts.tag, opts.merged);
   if (!tagged.ok) return unproved(tagged.why);
   if (opts.ref === null)
@@ -485,7 +506,7 @@ export const readProduction = Effect.fn("Releasing.readProduction")(function* <R
   readonly jobs: ReadonlyArray<string>;
   readonly run: Runner<R>;
 }) {
-  const unproved = (why: string): ProductionRead => ({ _tag: "Unproved", why });
+  const unproved: (why: string) => ProductionRead = (why) => ({ _tag: "Unproved", why });
   if (yield* inProduction(opts)) return { _tag: "Carried" } satisfies ProductionRead;
   const tagged = yield* tagOn(gitOf(opts), opts.tag, opts.merged);
   if (!tagged.ok) return unproved(tagged.why);
@@ -527,7 +548,10 @@ export const readStage = Effect.fn("Releasing.readStage")(function* <R>(opts: {
   readonly jobs: ReadonlyArray<string>;
   readonly run: Runner<R>;
 }) {
-  const failed = (why: string, environments?: ReadonlyArray<string>): StageRead =>
+  const failed: (why: string, environments?: ReadonlyArray<string>) => StageRead = (
+    why,
+    environments?,
+  ) =>
     environments === undefined ? { _tag: "Failed", why } : { _tag: "Failed", why, environments };
   if (opts.jobs.length === 0)
     return failed("no stage job of the merge request's pipeline was named");
@@ -595,7 +619,7 @@ export const readRollback = Effect.fn("Releasing.readRollback")(function* <R>(op
   readonly environments?: ReadonlyArray<string>;
   readonly run: Runner<R>;
 }) {
-  const unshown = (why: string): RollbackRead => ({ _tag: "Unshown", why });
+  const unshown: (why: string) => RollbackRead = (why) => ({ _tag: "Unshown", why });
   const git = gitOf(opts);
   const lives: Array<{ readonly where: string; readonly live: string | null }> = [];
   if (opts.environments === undefined) {

@@ -119,7 +119,7 @@ const standIn = () => `${rig.root}/codex-server.json`;
 const env = () => rig.pluginEnv({ HC_SOCKET: `${rig.root}/hc.sock` });
 const dir = () => env().stateDir;
 
-const hostOf = (): AgentHost => ({
+const hostOf: () => AgentHost = () => ({
   dir: dir(),
   env: env(),
   herdr: new Herdr(env()),

@@ -12,7 +12,7 @@ import type { ActionFacts } from "../src/sdk";
 import reviewWorkflow from "../workflows/review.workflow";
 import { declaredByModule } from "../src/engine";
 
-const facts = (over: Partial<ActionFacts> = {}): ActionFacts => ({
+const facts: (over?: Partial<ActionFacts>) => ActionFacts = (over = {}) => ({
   outcome: "feature",
   succeeded: true,
   branch: "mk/thing",
@@ -25,7 +25,7 @@ const facts = (over: Partial<ActionFacts> = {}): ActionFacts => ({
   ...over,
 });
 
-const offer = (over: Partial<Declared> = {}): Declared => ({
+const offer: (over?: Partial<Declared>) => Declared = (over = {}) => ({
   id: "fix-open",
   title: "Fix what is open",
   workflow: "implement",

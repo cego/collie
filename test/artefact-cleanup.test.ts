@@ -5,7 +5,7 @@ import { Artefacts } from "../src/artefacts";
 import { sha256Hex } from "../src/attachments";
 import { retentionSweeper, sweep, uploadsSweeper } from "../src/cleanup";
 import { Store } from "../src/store";
-import { writeTask, type TaskRecord } from "../src/task";
+import { writeTask } from "../src/task";
 import { receive } from "../src/uploads";
 import { memoryRecords, runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
@@ -84,7 +84,7 @@ test("Run cleanup removes only its own catalogue and copies, and upload cleanup 
       expect(Arr.map(uploads.remove, (one) => one.kind)).toEqual(["upload"]);
       expect(yield* fs.exists(upload.path!)).toBe(false);
 
-      const record = (id: string): TaskRecord => ({
+      const record = (id: string) => ({
         id,
         workspace: null,
         label: id,

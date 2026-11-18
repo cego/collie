@@ -80,7 +80,7 @@ const parkNotices = (world: World, runId: string) =>
         (line) => pipe(line, Str.includes(":parked:")),
       ),
     ),
-    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    Effect.orElseSucceed(() => []),
   );
 
 test(

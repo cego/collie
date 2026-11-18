@@ -43,7 +43,7 @@ const decodeJson = flow(
 const KEY = "herd-abc";
 let stateDir: string;
 
-const record = (over: Partial<ChatRecord> = {}): ChatRecord => ({
+const record: (over?: Partial<ChatRecord>) => ChatRecord = (over = {}) => ({
   harness: "claude",
   agent: "collie-chat",
   sessions: { claude: "abcd1234-0000-4000-8000-000000000000" },

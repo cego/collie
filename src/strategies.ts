@@ -40,7 +40,7 @@ export interface SettledInput {
 export function fieldsWithStrategy(
   inputs: Readonly<Record<string, InputStrategy>>,
   strategy: InputStrategy,
-): ReadonlyArray<string> {
+) {
   return Arr.filter(Rec.keys(inputs), (name) => inputs[name] === strategy).sort();
 }
 
@@ -52,7 +52,7 @@ export type TargetKind = "mr" | "branch" | "worktree";
  * Empty for any other shape, which is a target nobody normalised, never the working tree.
  * An `mr:` is one `parseMrTarget` reads, on either forge, so `mr:group/app` is none.
  */
-export function targetKind(value: string): TargetKind | "" {
+export function targetKind(value: string) {
   if (parseMrTarget(value) !== null) return "mr";
   if (pipe(value, Str.startsWith("branch:"))) return "branch";
   return Str.trim(value) === "worktree" ? "worktree" : "";
@@ -63,7 +63,7 @@ export function targetKind(value: string): TargetKind | "" {
  * left it empty. Validation allows one field per exclusive strategy, so the first is the
  * only one.
  */
-export function settledBy(where: Settled, strategy: InputStrategy): SettledInput | null {
+export function settledBy(where: Settled, strategy: InputStrategy) {
   const name = fieldsWithStrategy(where.strategies ?? {}, strategy)[0];
   if (name === undefined) return null;
   const value =
@@ -85,7 +85,7 @@ export function settledBy(where: Settled, strategy: InputStrategy): SettledInput
  * worked out from the text — telling a plan directory from a review directory means
  * looking at both — so that one is whatever settling it recorded.
  */
-function kindOf(strategy: InputStrategy, name: string, where: Settled): string {
+function kindOf(strategy: InputStrategy, name: string, where: Settled) {
   if (strategy === "diff-target") return targetKind(where.inputs[name] ?? "");
   if (strategy === "plan-dir") return "plan-dir";
   return where.inputs[`${name}_kind`] ?? "";
@@ -100,7 +100,7 @@ export const workSourceOf = (where: Settled) =>
   settledBy(where, "work-source") ?? settledBy(where, "plan-dir");
 
 /** The Run whose own plan directory this path is, and null where it is none. */
-export const planRunOf = (value: string): string | null =>
+export const planRunOf = (value: string) =>
   /(?:^|\/)runs\/([^/]+)\/plan\/?$/.exec(value)?.[1] ?? null;
 
 /** The change this Run is reviewing, and null for a workflow that reviews nothing. */
@@ -110,8 +110,7 @@ export const diffTargetOf = (where: Settled) => settledBy(where, "diff-target");
 const OLD_NAMES = new Map<InputStrategy, InputStrategy>([["gitlab-repository", "repository"]]);
 
 /** A strategy under its current name. */
-export const strategyNamed = (strategy: InputStrategy): InputStrategy =>
-  OLD_NAMES.get(strategy) ?? strategy;
+export const strategyNamed = (strategy: InputStrategy) => OLD_NAMES.get(strategy) ?? strategy;
 
 /** The repository a roaming Run is cut from, and null for the one it was started in. */
 export const repositoryOf = (where: Settled) =>
@@ -139,7 +138,7 @@ const named = (hints: Readonly<Record<string, InputStrategy>>) =>
 export function launchInputProblem(
   fields: ReadonlyArray<string>,
   given: Readonly<Record<string, InputStrategy>>,
-): string | null {
+) {
   if (fields.length === 0) return null;
   const hints = named(given);
   const launch = Arr.filter(Rec.keys(hints), (name) =>
@@ -160,9 +159,7 @@ export function launchInputProblem(
 }
 
 /** Every exclusive strategy two fields both claim, one sentence each. */
-export function exclusiveClashes(
-  given: Readonly<Record<string, InputStrategy>>,
-): ReadonlyArray<string> {
+export function exclusiveClashes(given: Readonly<Record<string, InputStrategy>>) {
   const inputs = named(given);
   return Arr.flatMap(EXCLUSIVE_STRATEGIES, (strategy) => {
     const owners = fieldsWithStrategy(inputs, strategy);
@@ -200,15 +197,14 @@ const STRATEGY_MEANINGS = new Map<InputStrategy, string>([
   ["internal", "Set by the workflow that starts this one, never asked"],
 ]);
 
-export const strategyMeaning = (strategy: InputStrategy): string =>
-  STRATEGY_MEANINGS.get(strategy) ?? "";
+export const strategyMeaning = (strategy: InputStrategy) => STRATEGY_MEANINGS.get(strategy) ?? "";
 
 /** A Run record's Inputs, as every reader above takes them. */
 export const recorded = (record: {
   readonly inputs: Readonly<Record<string, string>>;
   readonly input_strategies: Readonly<Record<string, string>>;
   readonly input_sources?: Readonly<Record<string, string>>;
-}): Settled => ({
+}) => ({
   inputs: record.inputs,
   strategies: record.input_strategies,
   sources: record.input_sources,

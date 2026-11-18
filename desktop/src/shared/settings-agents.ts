@@ -24,7 +24,7 @@ export const rememberCatalogues = (
   held: ReadonlyArray<MachineCatalogue>,
   fresh: ReadonlyArray<MachineCatalogue>,
   machines: ReadonlyArray<Pick<MachineRow, "profile" | "name" | "state">>,
-): ReadonlyArray<MachineCatalogue> =>
+) =>
   Arr.map(machines, ({ profile, name, state }) => {
     const read = Option.getOrUndefined(Arr.findFirst(fresh, (one) => one.profile === profile));
     const before = Option.getOrUndefined(Arr.findFirst(held, (one) => one.profile === profile));
@@ -261,7 +261,7 @@ export const agentSettingChanges = (
   current: AgentSettings,
   key: "harness" | "model" | "effort",
   value: string,
-): ReadonlyArray<{ readonly key: string; readonly value: string }> => {
+) => {
   let next = {
     ...current,
     model: current.model ?? DEFAULT_MODEL,
@@ -285,7 +285,7 @@ export const changeFallbacks = (
   action:
     | { readonly add: string }
     | { readonly at: number; readonly move: "up" | "down" | "remove" },
-): string => {
+) => {
   const values = fallbackValues(value);
   if ("add" in action) {
     if (action.add !== "" && !values.includes(action.add)) values.push(action.add);

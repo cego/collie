@@ -20,7 +20,6 @@ import * as Activity from "effect/workflow/Activity";
 import markdown from "./self-improve.md" with { type: "text" };
 import {
   type Outcome,
-  type Starting,
   Ended,
   FAILED_TO_START,
   Finding,
@@ -377,7 +376,12 @@ export default defineWorkflow({
                         "\n\n",
                       ),
                     })
-                    .pipe(Effect.map((filed): Outcome => ({ kind: "filed", ...filed })))
+                    .pipe(
+                      Effect.map((filed) => {
+                        const returned: Outcome = { kind: "filed", ...filed };
+                        return returned;
+                      }),
+                    )
                 : host
                     .commentIssue({
                       runId: run.id,
@@ -409,10 +413,10 @@ export default defineWorkflow({
         const outcome = outcomes.get(key);
         return outcome?.kind === "filed" ? [outcome.number] : [];
       };
-      const fresh = Arr.map(
-        chosen(triaged.improvements, outcomes, bound),
-        ({ name, keys }): Starting => ({ name, issues: Arr.flatMap(keys, filedNumber) }),
-      );
+      const fresh = Arr.map(chosen(triaged.improvements, outcomes, bound), ({ name, keys }) => ({
+        name,
+        issues: Arr.flatMap(keys, filedNumber),
+      }));
       const starting = [
         ...Arr.filter(restarts, ({ name }) => !Arr.some(fresh, (one) => one.name === name)),
         ...fresh,

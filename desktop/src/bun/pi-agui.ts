@@ -116,7 +116,7 @@ export const piEvents = (thread: string) => {
   };
   const runId = () => `${thread}:${turn}`;
   const messageId = (index: number) => `${thread}:${message}:${index}`;
-  const tool = (id: string, name: string, args?: Schema.Json): AguiEvent[] => {
+  const tool = (id: string, name: string, args?: Schema.Json) => {
     const events: AguiEvent[] = [];
     if (!tools.has(id)) {
       tools.add(id);
@@ -134,7 +134,7 @@ export const piEvents = (thread: string) => {
       );
     return events;
   };
-  const step = (record: PiRecord): ReadonlyArray<AguiEvent> => {
+  const step: (record: PiRecord) => ReadonlyArray<AguiEvent> = (record) => {
     switch (record.type) {
       case "agent_start":
         // Pi may start another low-level run while recovering; it is still this message.
@@ -235,7 +235,7 @@ export const piEvents = (thread: string) => {
   };
   return {
     /** A turn of one of Pi's own commands has Pi's notices as its reply. */
-    begin: (isCommand = false): AguiEvent => {
+    begin: (isCommand = false) => {
       turn++;
       command = isCommand;
       error = undefined;
@@ -246,7 +246,8 @@ export const piEvents = (thread: string) => {
         cache_read_input_tokens: 0,
         cache_creation_input_tokens: 0,
       };
-      return { type: "RUN_STARTED", threadId: thread, runId: runId() };
+      const returned: AguiEvent = { type: "RUN_STARTED", threadId: thread, runId: runId() };
+      return returned;
     },
     step,
     usage: () => ({ ...usage }),

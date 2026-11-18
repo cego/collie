@@ -76,7 +76,10 @@ const notified = (world: World, runId: string) =>
     RunRecords.use((records) => records.controlsOf(NOTIFIED, runId)),
   ).pipe(
     Effect.map(Arr.map((row) => row.key)),
-    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    Effect.orElseSucceed(() => {
+      const returned: ReadonlyArray<string> = [];
+      return returned;
+    }),
   );
 
 /** Until `wanted` holds, over the minute an agent's reminders take at the host's own poll. */

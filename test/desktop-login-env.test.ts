@@ -189,10 +189,8 @@ test("Desktop adopts the interactive PATH and preserves it in local scripts", ()
     }),
   ));
 
-const states =
-  (known: Record<string, AgentState>) =>
-  (socket: string): Effect.Effect<AgentState> =>
-    Effect.succeed(known[socket] ?? "gone");
+const states = (known: Record<string, AgentState>) => (socket: string) =>
+  Effect.succeed(known[socket] ?? "gone");
 
 test("the login shell's SSH agent is taken where it holds keys, or Desktop's holds none", () =>
   runEffect(

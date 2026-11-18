@@ -42,18 +42,18 @@ export const Drawn = Schema.Struct({
 });
 export type Drawn = typeof Drawn.Type;
 
-const unknown = (reason: string): MonitorScale => ({ _tag: "Unknown", reason });
+const unknown: (reason: string) => MonitorScale = (reason) => ({ _tag: "Unknown", reason });
 
 /**
  * The monitor of Desktop's window titled `title`, from `hyprctl -j clients` and `monitors`;
  * any window of Desktop's where none has that title.
  */
-export const monitorOf = (
+export const monitorOf: (
   clients: string,
   monitors: string,
   pid: number,
   title: string,
-): MonitorScale => {
+) => MonitorScale = (clients, monitors, pid, title) => {
   const listed = Schema.decodeOption(HyprClients)(clients);
   const shown = Schema.decodeOption(HyprMonitors)(monitors);
   if (Option.isNone(listed) || Option.isNone(shown))

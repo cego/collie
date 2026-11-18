@@ -82,19 +82,21 @@ export type Settled =
  * merge queue it was added to, at its head no earlier than it was written is the merge it made; any
  * other merge is someone else's.
  */
-export function settleAttempt(
-  attempt: Landing,
-  read: Extract<ReviewRead, { readonly ok: true }>,
-): Settled {
-  if (read.state !== "merged" || read.merged === null) return { _tag: "Unmerged" };
+export function settleAttempt(attempt: Landing, read: Extract<ReviewRead, { readonly ok: true }>) {
+  if (read.state !== "merged" || read.merged === null) {
+    const returned: Settled = { _tag: "Unmerged" };
+    return returned;
+  }
   const { sha, by, at } = read.merged;
   const ref = mrRefOf(attempt.mr);
   const queue = ref !== null && forgeOfRef(ref) === "github" && QUEUE_MERGERS.has(by);
-  return (by === read.login || queue) &&
+  const returned: Settled =
+    (by === read.login || queue) &&
     read.head === attempt.head &&
     epochMs(at) >= epochMs(attempt.at) - CLOCK_SKEW_MS
-    ? { _tag: "Landed", sha }
-    : { _tag: "Outside", sha, by, at };
+      ? { _tag: "Landed", sha }
+      : { _tag: "Outside", sha, by, at };
+  return returned;
 }
 
 /** Settles an attempt an earlier process left, and records what the forge's word made it. */
@@ -175,21 +177,33 @@ export const land = Effect.fn("Landing.land")(function* <R>(opts: {
     switch (answer._tag) {
       case "Merged":
         yield* writeLanding(opts.runDir, { ...attempt, state: "landed", sha: answer.merged });
-        return { _tag: "Merged", sha: answer.merged } satisfies MergeOutcome;
+        {
+          const returned: MergeOutcome = { _tag: "Merged", sha: answer.merged };
+          return returned;
+        }
       case "HeadMoved":
         yield* withdraw(attempt, `the head moved to ${answer.head}`);
-        return { _tag: "HeadMoved", head: answer.head } satisfies MergeOutcome;
+        {
+          const returned: MergeOutcome = { _tag: "HeadMoved", head: answer.head };
+          return returned;
+        }
       case "AlreadyMerged":
         yield* withdraw(attempt, outside(answer.by));
-        return {
-          _tag: "MergedOutside",
-          sha: answer.merged,
-          by: answer.by,
-          at: answer.at,
-        } satisfies MergeOutcome;
+        {
+          const returned: MergeOutcome = {
+            _tag: "MergedOutside",
+            sha: answer.merged,
+            by: answer.by,
+            at: answer.at,
+          };
+          return returned;
+        }
       case "Refused":
         yield* withdraw(attempt, answer.reason);
-        return { _tag: "Refused", reason: answer.reason } satisfies MergeOutcome;
+        {
+          const returned: MergeOutcome = { _tag: "Refused", reason: answer.reason };
+          return returned;
+        }
     }
   }).pipe(Effect.ensuring(Effect.sync(() => landingNow.delete(opts.runDir))));
 });
@@ -232,7 +246,7 @@ export const takeOver = Effect.fn("Landing.takeOver")(function* <R>(opts: {
       reason: "this Run has recorded no merge request to recover",
     });
   const mr = opts.mr;
-  const refused = (why: string): Takeover => ({ _tag: "Refused", why });
+  const refused: (why: string) => Takeover = (why) => ({ _tag: "Refused", why });
   const ended = (runId: string) =>
     Option.getOrUndefined(Arr.findFirst(opts.runs, (one) => one.runId === runId))?.ended ?? null;
   const own = yield* readLanding(opts.runDir);

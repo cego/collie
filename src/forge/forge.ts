@@ -487,12 +487,12 @@ export const FORGES: Readonly<Record<MrForge, Forge>> = {
 };
 
 /** The forge a pipeline or Actions run's URL is on: GitHub on github.com, GitLab elsewhere. */
-export function forgeOfUrl(url: string): Forge {
+export function forgeOfUrl(url: string) {
   return /^https?:\/\/github\.com\//i.test(Str.trim(url)) ? github : gitlab;
 }
 
 /** The forge a merge request is on. */
-export function forgeOf(ref: MrRef): Forge {
+export function forgeOf(ref: MrRef) {
   return FORGES[forgeOfRef(ref)];
 }
 
@@ -500,7 +500,7 @@ export function forgeOf(ref: MrRef): Forge {
  * The forge a host is on (ADR-0050 D2): GitHub on `github.com`, GitLab on the Flock's
  * GitLab host or any host whose name says `gitlab`, and none anywhere else.
  */
-export function forgeOfHost(host: string, gitlabHost?: string): MrForge | null {
+export function forgeOfHost(host: string, gitlabHost?: string) {
   const name = Str.toLowerCase(host);
   if (name === "github.com") return "github";
   if (

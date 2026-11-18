@@ -404,7 +404,7 @@ export const ROUNDS = 4;
 type Needs = Run | Agents | Host | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem;
 
 /** Each blocking dispute left standing, as the merge request lists it for the human. */
-const disputesOf = (findings: ReadonlyArray<Finding>): string[] =>
+const disputesOf = (findings: ReadonlyArray<Finding>) =>
   Arr.map(
     Arr.filter(findings, isBlocking),
     (one) =>
@@ -449,7 +449,7 @@ export const rally = (ask: {
     readonly proves: string;
     readonly findings: string;
   }) => Effect.Effect<typeof FixOutputSchema.Type, WorkflowError, Needs>;
-}): Effect.Effect<Rallied, WorkflowError, Needs> =>
+}) =>
   Effect.gen(function* () {
     const host = yield* Host;
     const agents = yield* Agents;

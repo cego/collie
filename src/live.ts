@@ -103,7 +103,7 @@ export interface MarkedRun extends LiveRun {
 export function markedOf(
   run: Pick<RunFacts, "id" | "dir" | "held">,
   registered: ReadonlyArray<AgentEntry>,
-): MarkedRun {
+) {
   const harnesses = Arr.flatMap(registered, (entry) =>
     entry.runId === run.id && entry.incarnation?.agentSession
       ? [entry.incarnation.agentSession.kind]

@@ -160,7 +160,7 @@ const decodeServer = Schema.decodeUnknownOption(UserMcpServer);
  * The servers the human added to Claude Code at user scope, from its `.claude.json`. A
  * session with no setting sources loads none of them itself; one it cannot run is left out.
  */
-export const userMcpServers = (claudeJson: string): UserMcpServers =>
+export const userMcpServers: (claudeJson: string) => UserMcpServers = (claudeJson) =>
   Rec.fromEntries(
     Arr.flatMap(
       Rec.toEntries(
@@ -316,22 +316,29 @@ export const sessionOptions = <Server>(opts: {
         readonly toolUseID: string;
         readonly mcpServer?: { readonly name: string; readonly source: string };
       },
-    ): Promise<Permission<Input>> =>
-      name === "AskUserQuestion"
-        ? opts.ask(toolUseID, signal).then((answers): Permission<Input> =>
-            answers === null
-              ? {
-                  behavior: "deny",
-                  message: NO_HUMAN,
-                }
-              : { behavior: "allow", updatedInput: { ...input, answers } },
-          )
-        : BUILT_IN.includes(name) || mcpServer !== undefined || ofUserServer(name)
-          ? Promise.resolve({ behavior: "allow" as const, updatedInput: input })
-          : Promise.resolve({
-              behavior: "deny" as const,
-              message: `${name} is not available in Desktop's chat.`,
-            }),
+    ) => {
+      const returned: Promise<Permission<Input>> =
+        name === "AskUserQuestion"
+          ? opts.ask(toolUseID, signal).then(
+              (answers) =>
+                (answers === null
+                  ? {
+                      behavior: "deny",
+                      message: NO_HUMAN,
+                    }
+                  : {
+                      behavior: "allow",
+                      updatedInput: { ...input, answers },
+                    }) satisfies Permission<Input>,
+            )
+          : BUILT_IN.includes(name) || mcpServer !== undefined || ofUserServer(name)
+            ? Promise.resolve({ behavior: "allow" as const, updatedInput: input })
+            : Promise.resolve({
+                behavior: "deny" as const,
+                message: `${name} is not available in Desktop's chat.`,
+              });
+      return returned;
+    },
     hooks: {
       PreToolUse: [{ hooks: [refusedSessions] }],
       UserPromptSubmit: [

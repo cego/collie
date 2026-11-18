@@ -179,7 +179,7 @@ const open = (url: string) =>
 export const withCodex = <A, E, R>(
   url: string,
   use: (client: CodexClient) => Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | CodexError, R> =>
+) =>
   Effect.acquireUseRelease(
     open(url),
     (live) =>
@@ -190,7 +190,7 @@ export const withCodex = <A, E, R>(
   );
 
 /** Whether the App Server can accept a WebSocket connection. */
-export const codexReachable = (url: string): Effect.Effect<void, CodexError> =>
+export const codexReachable = (url: string) =>
   Effect.acquireUseRelease(
     open(url),
     () => Effect.void,
@@ -362,7 +362,7 @@ export const compactionItems = Effect.fn("Codex.compactionItems")(function* (
   );
   return Arr.map(
     Arr.filter(items.data, (entry) => entry.item.type === "contextCompaction"),
-    (entry): CompactionItem => ({ id: entry.item.id, turnId: entry.turnId }),
+    (entry) => ({ id: entry.item.id, turnId: entry.turnId }),
   );
 });
 

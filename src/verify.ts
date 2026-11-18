@@ -13,7 +13,7 @@ import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
-import { Data, Effect, FileSystem, Path, Schema, flow, Result, type Scope } from "effect";
+import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect's file info has no ctime.
@@ -100,7 +100,7 @@ const git = (args: string[], cwd: string) => shell("git", args, cwd);
  * Untracked content is included deliberately. A test run that passed because of a file
  * nobody committed passed on a tree that is not the one anybody will get.
  */
-export const fingerprint = (cwd: string): Effect.Effect<Snapshot, never, Services> =>
+export const fingerprint = (cwd: string) =>
   Effect.map(treeOf(cwd), ({ head_sha, fingerprint, unmeasured }) =>
     unmeasured === undefined ? { head_sha, fingerprint } : { head_sha, fingerprint, unmeasured },
   );
@@ -276,7 +276,7 @@ const placeOf = Effect.fn("Verify.placeOf")(function* (cwd: string) {
 /** A written tree, or why git could not write one. */
 type Measured = { readonly tree: string; readonly unmeasured?: string };
 
-const unmeasuredBy = (verb: string, ran: Ran): Measured => ({
+const unmeasuredBy: (verb: string, ran: Ran) => Measured = (verb, ran) => ({
   tree: UNMEASURED,
   unmeasured: tail(Str.trim(ran.stderr ?? "")) || `git ${verb} exited ${ran.code}`,
 });
@@ -348,7 +348,7 @@ export function resultOf(
   end: Snapshot,
   exit: number,
   expect: Verification["expect"] = "pass",
-): Verification["result"] {
+) {
   if (!sameTree(start, end)) return "unstable";
   // Never `(exit === 0) === wanted` on its own: an unstable tree says nothing about
   // either expectation, and the rule above has to come first for both.
@@ -412,7 +412,7 @@ const installedAt = Effect.fn("Verify.installedAt")(function* (root: string) {
   const path = yield* Path.Path;
   const modules = path.join(root, "node_modules");
   const names = yield* fs.readDirectory(modules).pipe(
-    Effect.map((found): ReadonlyArray<string> | null => found),
+    Effect.map((found) => found),
     Effect.catchTag("PlatformError", (error) =>
       error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
     ),
@@ -454,7 +454,7 @@ export const environmentOf = Effect.fn("Verify.environmentOf")(
  * is bound to the tree it ran on, so any byte changed since makes it history — no time
  * component, because a verification does not go off, it is superseded.
  */
-export function staleAgainst(record: Verification, now: Snapshot): boolean {
+export function staleAgainst(record: Verification, now: Snapshot) {
   return !sameTree(record.end, now);
 }
 
@@ -495,11 +495,11 @@ const VerifyingJson = Schema.fromJsonString(VerifyingSchema);
 export const encodeVerifying = flow(Schema.encodeResult(VerifyingJson), Result.getOrThrow);
 
 /** The check a `verifying` control's value names, or null for none. */
-export const decodeVerifying = (data: string | null): Verifying | null =>
+export const decodeVerifying = (data: string | null) =>
   data === null ? null : Option.getOrNull(Schema.decodeOption(VerifyingJson)(data));
 
 /** The check running for the Run, or null when none is. */
-export const verifyingOf = (runId: string): Effect.Effect<Verifying | null, never, RunRecords> =>
+export const verifyingOf = (runId: string) =>
   Effect.map(
     RunRecords.use((records) => records.control(VERIFYING, runId)),
     decodeVerifying,
@@ -558,7 +558,7 @@ export const resolveExecutable = Effect.fn("Verify.resolveExecutable")(function*
   return Bun.which(executable, { PATH: Bun.env.PATH ?? "" });
 });
 
-function tail(text: string): string {
+function tail(text: string) {
   return text.length <= TAIL_BYTES ? text : pipe(text, Str.slice(-TAIL_BYTES));
 }
 
@@ -608,7 +608,7 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   what: Collected,
   /** Where each stream is shown as it arrives, for a caller watching the command run. */
   echo?: Echo,
-): Effect.fn.Return<StartedCheck, VerifyRefused, Services | Scope.Scope> {
+) {
   const absolute = yield* resolveExecutable(what.executable, what.cwd);
   if (absolute === null)
     return yield* new VerifyRefused({ why: `nothing on PATH called "${what.executable}"` });
@@ -625,7 +625,7 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
     yield* fs.writeFileString(what.log, "", { flag: "a" }).pipe(Effect.orDie);
   }
   /** One chunk into the log, in the order the two streams delivered them. */
-  const toLog = (chunk: string): Effect.Effect<void> => {
+  const toLog = (chunk: string) => {
     if (what.log === undefined || handle.logged) return Effect.void;
     const next = logged(chunk, already);
     already = next.logged;
@@ -726,7 +726,7 @@ const readCheck = Effect.fn("Verify.readCheck")(function* (id: string, name: str
 const settleCheck = Effect.fn("Verify.settleCheck")(function* (
   { check, command, tail: { stdout, stderr } }: Effect.Success<ReturnType<typeof readCheck>>,
   exit: number,
-): Effect.fn.Return<Verification, VerifyRefused, Services> {
+) {
   const { spec } = command;
   const fs = yield* FileSystem.FileSystem;
   const end = yield* fingerprint(command.cwd);
@@ -796,7 +796,7 @@ export const collect = (
   what: Collected,
   /** Where each stream is shown as it arrives, for a caller watching the command run. */
   echo?: Echo,
-): Effect.Effect<Verification, VerifyRefused, Services> =>
+) =>
   startCheck(runDir, what, echo).pipe(
     Effect.flatMap((started) =>
       Effect.flatMap(started.exit, (exit) =>
@@ -810,7 +810,7 @@ export const collect = (
   );
 
 /** A record's pass, where it is one a Verification keeps. */
-function passOf(given: CheckOf["pass"]): CheckPass | undefined {
+function passOf(given: CheckOf["pass"]) {
   if (given === undefined || !Schema.is(Pass)(given.pass)) return undefined;
   return given.round === undefined
     ? { pass: given.pass }
@@ -818,7 +818,7 @@ function passOf(given: CheckOf["pass"]): CheckPass | undefined {
 }
 
 /** The pass and round a record keeps, with nothing where no pass was given. */
-function passFields(given: CheckPass | undefined): Pick<Verification, "pass" | "round"> {
+function passFields(given: CheckPass | undefined) {
   if (given === undefined) return {};
   if (given.round === undefined) return { pass: given.pass };
   return { pass: given.pass, round: given.round };
@@ -845,7 +845,7 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
   expect: "pass" | "fail" = "pass",
   pass?: CheckPass,
   log?: string,
-): Effect.fn.Return<Verification, VerifyRefused, Services> {
+) {
   const match = Option.getOrUndefined(
     Arr.findFirst(approved, (entry) => entry.name === spec.name && sameCommand(entry, spec)),
   );
@@ -881,7 +881,7 @@ export const rerunTest = Effect.fn("Verify.rerunTest")(function* (
   test: FailedTest,
   pass: { readonly pass: "rerun"; readonly own: boolean } | { readonly pass: "baseline" },
   log?: string,
-): Effect.fn.Return<Verification, VerifyRefused, Services> {
+) {
   const cwd = yield* checkCwd(run, spec);
   if (!(yield* insideRun(cwd, run)))
     return yield* new VerifyRefused({ why: `"${cwd}" is not inside run ${run.id}` });
@@ -950,7 +950,7 @@ function latestRecord(
   },
   now: Snapshot,
   since: string,
-): Verification | null {
+) {
   const latest = Option.getOrUndefined(
     Arr.findLast(records, (one) => sameCommand(one, wanted) && !staleAgainst(one, now)),
   );

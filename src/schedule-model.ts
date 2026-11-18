@@ -184,7 +184,7 @@ export const parseSchedule = (
   expression: string,
   tz: string,
   allow: { readonly seconds: boolean },
-): Result.Result<Cron.Cron, string> => {
+) => {
   const fields = Str.split(Str.trim(expression), /\s+/).length;
   if (fields !== 5 && !(allow.seconds && fields === 6))
     return Result.fail(
@@ -198,10 +198,10 @@ export const parseSchedule = (
 };
 
 /** An occurrence as it is recorded and named in a request id. */
-export const isoOf = (ms: number): string => DateTime.formatIso(DateTime.makeUnsafe(ms));
+export const isoOf = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
 /** The latest cron time at or before `now`, in epoch milliseconds. */
-const latestAtOrBefore = (cron: Cron.Cron, now: number): number => {
+const latestAtOrBefore = (cron: Cron.Cron, now: number) => {
   // `prev` is strict, so it is asked from just past now.
   const found = Cron.prev(cron, now + 1000).getTime();
   return found > now ? Cron.prev(cron, found).getTime() : found;
@@ -216,13 +216,13 @@ export type Wake =
  * End where the Schedule is gone, paused or under another epoch; otherwise start the
  * latest occurrence due, so a clock delivered late starts one Run for all it missed.
  */
-export const onWake = (o: {
+export const onWake: (o: {
   readonly cron: Cron.Cron;
   readonly schedule: { readonly paused: boolean; readonly epoch: string } | null;
   readonly epoch: string;
   readonly occurrence: number;
   readonly now: number;
-}): Wake => {
+}) => Wake = (o) => {
   if (o.schedule === null) return { _tag: "end", why: "removed" };
   if (o.schedule.paused) return { _tag: "end", why: "paused" };
   if (o.schedule.epoch !== o.epoch) return { _tag: "end", why: "superseded" };
@@ -233,7 +233,7 @@ export const onWake = (o: {
  * The occurrence after `dealt`: one that fell since, at once, else the next cron time.
  * A resume passes now as `dealt`, which is what keeps it from catching up.
  */
-export const nextOccurrence = (cron: Cron.Cron, dealt: number, now: number): number => {
+export const nextOccurrence = (cron: Cron.Cron, dealt: number, now: number) => {
   const latest = latestAtOrBefore(cron, now);
   return latest > dealt ? latest : Cron.next(cron, now).getTime();
 };

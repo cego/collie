@@ -38,8 +38,8 @@ const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
 
 const TESTS: VerifySpec = { name: "tests", executable: "bun", argv: ["test"], cwd: "." };
 
-function record(over: Partial<Verification> & { name: string }): Verification {
-  return {
+function record(over: Partial<Verification> & { name: string }) {
+  const returned: Verification = {
     id: `${over.name}-1`,
     run: "r1",
     executable: "/usr/bin/true",
@@ -56,9 +56,10 @@ function record(over: Partial<Verification> & { name: string }): Verification {
     by: "collie",
     ...over,
   };
+  return returned;
 }
 
-function collected(over: Partial<Collected> = {}): Collected {
+function collected(over: Partial<Collected> = {}) {
   return {
     verifications: [record({ name: "tests" })],
     final: FINAL,
@@ -1129,8 +1130,12 @@ function measured(over: {
   readonly primary?: Verdict;
   readonly guardrail?: { readonly verdict: Verdict; readonly held: boolean };
   readonly result?: Measurement["result"];
-}): Measurement {
-  const judged = (metric: string, verdict: Verdict, held: boolean): Judgement => ({
+}) {
+  const judged: (metric: string, verdict: Verdict, held: boolean) => Judgement = (
+    metric,
+    verdict,
+    held,
+  ) => ({
     metric,
     ratio: 0.8,
     interval: [0.75, 0.85],
@@ -1139,7 +1144,7 @@ function measured(over: {
   });
   const guardrail = over.guardrail ?? { verdict: "no-change", held: true };
   const tree = { cwd: "/repo", lockfiles: {} };
-  return {
+  const returned: Measurement = {
     id: over.id ?? "r1-measurement-1",
     run: "r1",
     pass: over.pass ?? "final",
@@ -1181,6 +1186,7 @@ function measured(over: {
     started: "2026-10-28T10:00:00.000Z",
     at: "2026-10-28T10:05:00.000Z",
   };
+  return returned;
 }
 
 /** A performance Run with every piece of its proof in place, each of which a test takes away. */

@@ -36,7 +36,11 @@ const onTestClock = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices |
     effect.pipe(Effect.scoped, Effect.provide([BunServices.layer, TestClock.layer()])),
   );
 
-const read = (subscription: "claude" | "chatgpt", at: number, percent: number): UsageReading => ({
+const read: (subscription: "claude" | "chatgpt", at: number, percent: number) => UsageReading = (
+  subscription,
+  at,
+  percent,
+) => ({
   subscription,
   account: "acct",
   accountLabel: "me@example.com",

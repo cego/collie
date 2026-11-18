@@ -41,8 +41,8 @@ import type { UsageReading } from "../../src/usage-model";
 
 const NOW = epochMs("2026-09-16T12:00:00.000Z");
 
-function appState(over: Partial<AppState> = {}): AppState {
-  return {
+function appState(over: Partial<AppState> = {}) {
+  const returned: AppState = {
     view: "runs",
     filter: { kind: "all" },
     tasks: [],
@@ -58,6 +58,7 @@ function appState(over: Partial<AppState> = {}): AppState {
     stopping: [],
     ...over,
   };
+  return returned;
 }
 
 const mount = Effect.fn("board.mount")(function* (
@@ -85,7 +86,7 @@ const mount = Effect.fn("board.mount")(function* (
     commands,
     /** The card containing this unique name, for checking renderer ownership. */
     cardNode(name: string) {
-      const find = (node: BaseRenderable): BaseRenderable | undefined => {
+      const find: (node: BaseRenderable) => BaseRenderable | undefined = (node) => {
         if (node instanceof TextRenderable && node.plainText === name) return node;
         for (const child of node.getChildren()) {
           const found = find(child);
@@ -520,7 +521,10 @@ test("the search narrows the sections and offers a way back", () =>
     }),
   ));
 
-const reading = (subscription: "claude" | "chatgpt", usedPercent: number): UsageReading => ({
+const reading: (subscription: "claude" | "chatgpt", usedPercent: number) => UsageReading = (
+  subscription,
+  usedPercent,
+) => ({
   subscription,
   account: null,
   accountLabel: null,
@@ -1272,8 +1276,8 @@ const MR_PANEL = {
   url: "https://gitlab.cego.dk/mk/collie/-/merge_requests/151",
 };
 
-function record(over: Partial<RunDetail> = {}): RunDetail {
-  return {
+function record(over: Partial<RunDetail> = {}) {
+  const returned: RunDetail = {
     id: "r1",
     dir: "/state/runs/r1",
     title: "Implement · Strapi prod seeder",
@@ -1307,6 +1311,7 @@ function record(over: Partial<RunDetail> = {}): RunDetail {
     diff: null,
     ...over,
   };
+  return returned;
 }
 
 const CARD: Card = {
@@ -1334,7 +1339,7 @@ const CARD: Card = {
   significance: "try-it",
 };
 
-function liveOf(over: Partial<Live> = {}): Live {
+function liveOf(over: Partial<Live> = {}) {
   return {
     run: "r1",
     cards: [],
@@ -1389,7 +1394,11 @@ test("a record of several merge requests has a section for each, and Open opens 
         title,
         url: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
       });
-      const entry = (repo: string, iid: number, over: Partial<TaskMr>): TaskMr => ({
+      const entry: (repo: string, iid: number, over: Partial<TaskMr>) => TaskMr = (
+        repo,
+        iid,
+        over,
+      ) => ({
         id: `gitlab.cego.dk/cego/${repo}!${iid}`,
         mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
         label: `cego/${repo}!${iid}`,

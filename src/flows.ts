@@ -39,7 +39,7 @@ import { liveFor, markedOf, type Ledgers } from "./live";
 import { RunRecords } from "./run-records";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
 import type { PluginEnv } from "./env";
-import { Herdr, type AgentInfo } from "./herdr";
+import { Herdr } from "./herdr";
 import { inferInput, type InputPrompts, type PickItem } from "./inputs";
 import type { Found } from "./discovery";
 import {
@@ -151,7 +151,7 @@ const fromBoard = Effect.fn("Flows.fromBoard")(function* (env: PluginEnv) {
   return key !== null && env.cwd === (yield* herdDir(env.stateDir, key));
 });
 
-function banner(defs: Definitions): string | undefined {
+function banner(defs: Definitions) {
   if (defs.errors.length === 0) return undefined;
   return Arr.join(
     ["Definitions with errors (skipped):", ...Arr.map(defs.errors, (e) => `  ${e}`)],
@@ -585,7 +585,7 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
 });
 
 /** The layer a definition came from, and whether a full copy has fallen behind. */
-function layerOf(def: Provenance): string {
+function layerOf(def: Provenance) {
   const parts = [`[${def.layer}]`];
   if (def.extends) parts.push(`extends ${def.extends}`);
   // A full copy whose parent has moved on is not the fork you took.
@@ -762,10 +762,7 @@ const whyNoRenderer = Effect.fn("Flows.whyNoRenderer")(function* () {
  * a build renames a new binary over the old one, so an upgrade is a new inode under the
  * same path. That never completes where the file cannot be read, as under `bun src/main.ts`.
  */
-export const replacedOnDisk = (
-  file: string,
-  every: Duration.Input = "2 seconds",
-): Effect.Effect<Effect.Effect<void>, never, FileSystem.FileSystem> =>
+export const replacedOnDisk = (file: string, every: Duration.Input = "2 seconds") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const inode = fs.stat(file).pipe(
@@ -898,11 +895,12 @@ const detailRead = (session: ControlSession, env: PluginEnv, key: DetailKey) =>
 const boardRead = (session: ControlSession, env: PluginEnv) =>
   session.tasksOf?.() ??
   boardSnapshot(env).pipe(
-    Effect.map((read): BoardRead =>
-      read.ok
+    Effect.map((read) => {
+      const returned: BoardRead = read.ok
         ? { tasks: read.value.tasks, unreadable: null }
-        : { tasks: [], unreadable: read.error.message },
-    ),
+        : { tasks: [], unreadable: read.error.message };
+      return returned;
+    }),
   );
 
 /** Everything the app draws, for whatever it is looking at. */
@@ -1502,7 +1500,7 @@ export const stopRun = Effect.fn("Flows.stopRun")(function* (env: PluginEnv, run
 const attachLine = (agent: string) => `attach to ${agent} with: hc attach ${agent}`;
 
 /** The host's ledgers, asked of it: a board that cannot reach it marks nothing. */
-const ledgersOf = (env: PluginEnv): Ledgers => ({
+const ledgersOf: (env: PluginEnv) => Ledgers = (env) => ({
   overridden: asks(env, (client) => client.overridden()).pipe(
     Effect.map((read) => new Set(read.ok ? read.value : [])),
   ),
@@ -1561,10 +1559,11 @@ const scan = Effect.fn("Flows.scan")(function* (
   env: PluginEnv,
   from: Pick<ControlSession, "runsOf" | "recordsOf">,
 ) {
-  return {
+  const returned: Scanned = {
     runs: yield* (from.runsOf ?? listRuns)(env),
     ...(yield* (from.recordsOf ?? hostRecordsOf)(env)),
-  } satisfies Scanned;
+  };
+  return returned;
 });
 
 const boardOf = Effect.fn("Flows.boardOf")(function* (session: ControlSession, scanned: Scanned) {
@@ -1573,7 +1572,7 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (session: ControlSession, s
     stateDir: session.stateDir,
     workspaceLabel: null,
     // A core that will not answer means "nothing verified live", not a crash.
-    alive: yield* session.herdr.agentList().pipe(Effect.orElseSucceed((): AgentInfo[] => [])),
+    alive: yield* session.herdr.agentList().pipe(Effect.orElseSucceed(() => [])),
     worktrees: yield* reportedWorktrees(session.stateDir),
     pluginRoot: session.pluginRoot,
     ...(session.releases && { releases: session.releases }),
@@ -1595,7 +1594,7 @@ const boardRelease = Effect.fn("Flows.boardRelease")(function* (session: Control
 });
 
 /** A banner above a question: definition load errors, above the list they were skipped from. */
-function headed(header: string, banner?: string): string {
+function headed(header: string, banner?: string) {
   return banner ? `${banner}\n\n${header}` : header;
 }
 

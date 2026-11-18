@@ -193,7 +193,7 @@ const ORIGIN = {
 };
 
 for (const name of ["gitlab", "github"] as const) {
-  const checkout = (over: Partial<ForgeModel> = {}): ForgeModel => ({
+  const checkout: (over?: Partial<ForgeModel>) => ForgeModel = (over = {}) => ({
     installed: true,
     loggedIn: [FORGE_HOST[name]],
     login: "me",

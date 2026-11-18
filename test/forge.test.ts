@@ -45,7 +45,7 @@ import * as Layer from "effect/Layer";
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
 const MERGED = "35ae2cea5e5848602729dbc0e8a87ed0d9049c46";
 
-const mr = (forge: MrForge, over: Partial<FakeMr> = {}): FakeMr => ({
+const mr: (forge: MrForge, over?: Partial<FakeMr>) => FakeMr = (forge, over = {}) => ({
   project: PROJECT[forge],
   iid: "30",
   state: "open",
@@ -53,7 +53,7 @@ const mr = (forge: MrForge, over: Partial<FakeMr> = {}): FakeMr => ({
   ...over,
 });
 
-const model = (forge: MrForge, over: Partial<ForgeModel> = {}): ForgeModel => ({
+const model = (forge: MrForge, over: Partial<ForgeModel> = {}) => ({
   installed: true,
   loggedIn: [FORGE_HOST[forge]],
   login: "me",
@@ -3581,7 +3581,7 @@ describe("GitHub's merge where the base branch requires a merge queue", () => {
       }
       return yield* Fiber.join(merging);
     }).pipe(Effect.provide(Layer.merge(fake.layer, TestClock.layer())));
-  const mergedByQueue = (pull: FakeMr): FakeMr => {
+  const mergedByQueue: (pull: FakeMr) => FakeMr = (pull) => {
     const { queued: _, ...rest } = pull;
     return {
       ...rest,

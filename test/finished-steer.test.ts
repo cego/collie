@@ -66,7 +66,12 @@ interface Agent {
 /** The agents core has, by name and terminal address. */
 const coreAgents = Effect.suspend(() => coreHerdr().agentList()).pipe(
   Effect.orElseSucceed(() => []),
-  Effect.map(Arr.map((one): Agent => ({ name: one.name, address: one.paneId }))),
+  Effect.map(
+    Arr.map((one) => {
+      const returned: Agent = { name: one.name, address: one.paneId };
+      return returned;
+    }),
+  ),
 );
 
 /** What core was asked to type, to which terminal, in order. */
@@ -874,7 +879,7 @@ test(
 );
 
 /** The board's prompts, answering the one question with `typed`. */
-const typing = (typed: string): FlowPrompts => ({
+const typing: (typed: string) => FlowPrompts = (typed) => ({
   menu: () => Effect.succeed(null),
   ask: () => Effect.succeed(typed),
 });

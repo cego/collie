@@ -29,7 +29,7 @@ import { runEffect } from "./support/effect";
 
 const revision = { branch: "feat/picker", head_sha: "abc", fingerprint: "f1", dirty: false };
 
-const facts = (over: Partial<SignificanceFacts> = {}): SignificanceFacts => ({
+const facts: (over?: Partial<SignificanceFacts>) => SignificanceFacts = (over = {}) => ({
   readiness: "claimed",
   mrTouched: false,
   pendingChoice: false,
@@ -43,7 +43,7 @@ const facts = (over: Partial<SignificanceFacts> = {}): SignificanceFacts => ({
   ...over,
 });
 
-const verification = (over: Partial<Verification> = {}): Verification => ({
+const verification: (over?: Partial<Verification>) => Verification = (over = {}) => ({
   id: "v1",
   run: "r1",
   name: "tests",
@@ -242,7 +242,7 @@ test("the newest card per slice is what a reader sees, and the journal keeps the
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-cards-" });
-      const base = (over: Partial<Card>): Card => ({
+      const base: (over: Partial<Card>) => Card = (over) => ({
         id: "c1",
         run: "r1",
         kind: "slice",

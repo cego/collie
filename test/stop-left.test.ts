@@ -10,7 +10,7 @@ import type { Controlled } from "../src/board-model";
 const LEFT =
   "build-r1 is not stopped: acknowledged, its server is still up after 30s — thread t-1 turn u-1; server ws://127.0.0.1:4000 pid 42";
 
-const answer = (over: { closed?: ReadonlyArray<string> } = {}): typeof Controlled.Type => ({
+const answer = (over: { closed?: ReadonlyArray<string> } = {}) => ({
   runId: "r-1",
   control: "stop",
   set: true,

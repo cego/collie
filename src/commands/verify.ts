@@ -18,10 +18,11 @@ const echoed = Effect.fn("collie.verify.echoed")(function* () {
   const json = (yield* root).json;
   const to = (stream: "stdout" | "stderr") => (text: string) =>
     Stream.make(text).pipe(Stream.run(stdio[stream]({ endOnDone: false })), Effect.ignore);
-  return {
+  const returned: Echo = {
     stdout: to(json ? "stderr" : "stdout"),
     stderr: to("stderr"),
-  } satisfies Echo;
+  };
+  return returned;
 });
 
 /**
@@ -104,15 +105,13 @@ export const verify = Command.make(
           if (!opened.ok) return opened;
           const echo = yield* echoed();
           type Answered = { verification: import("../verify-model").Verification; ran: boolean };
-          const answered = yield* Stream.runFoldEffect(
-            opened.events,
-            (): Answered | null => null,
-            (last, event) =>
-              event._tag === "Output"
-                ? echo[event.stream](event.text).pipe(Effect.as(last))
-                : event._tag === "Started"
-                  ? Effect.succeed(last)
-                  : Effect.succeed({ verification: event.verification, ran: event.ran ?? true }),
+          const nothingYet: () => Answered | null = () => null;
+          const answered = yield* Stream.runFoldEffect(opened.events, nothingYet, (last, event) =>
+            event._tag === "Output"
+              ? echo[event.stream](event.text).pipe(Effect.as(last))
+              : event._tag === "Started"
+                ? Effect.succeed(last)
+                : Effect.succeed({ verification: event.verification, ran: event.ran ?? true }),
           ).pipe(
             Effect.catch((cause) =>
               Effect.succeed(

@@ -28,11 +28,11 @@ export const engineTouchesLayer = Layer.sync(EngineTouches)(() => {
 });
 
 /** `inner`, telling `touches` of each write it makes, by the execution it is for. */
-export const touching = (
+export const touching: (
   inner: MessageStorage.MessageStorage["Service"],
   sql: SqlClient.SqlClient,
   touches: EngineTouches["Service"],
-): MessageStorage.MessageStorage["Service"] => {
+) => MessageStorage.MessageStorage["Service"] = (inner, sql, touches) => {
   // A reply names only its request; the request named its entity when it was saved.
   const owners = new Map<string, string>();
   const ownerOf = (requestId: bigint) => {

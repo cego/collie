@@ -57,7 +57,7 @@ export type Filter =
  * the one place that vocabulary belongs, and every key set that used to be handed a
  * `Scope` was answering this one question about the filter.
  */
-export function sessionLocal(filter: Filter): boolean {
+export function sessionLocal(filter: Filter) {
   return filter.kind !== "all";
 }
 
@@ -367,40 +367,64 @@ export function changesFocusOnly(command: Command): command is FocusCommand {
  * `FocusCommand`, so a new one of those is a type error here rather than a command the
  * bridge takes and does nothing with.
  */
-export function retarget(at: Focus, command: FocusCommand): Focus {
+export function retarget(at: Focus, command: FocusCommand) {
   switch (command._tag) {
-    case "ShowView":
-      return {
+    case "ShowView": {
+      const returned: Focus = {
         ...at,
         view: command.view,
         shown: at.shown.includes(command.view) ? at.shown : [...at.shown, command.view],
       };
-    case "ToggleTail":
-      return { ...at, tail: !at.tail };
-    case "ToggleArtefacts":
-      return { ...at, artefacts: !at.artefacts };
+      return returned;
+    }
+    case "ToggleTail": {
+      const returned: Focus = { ...at, tail: !at.tail };
+      return returned;
+    }
+    case "ToggleArtefacts": {
+      const returned: Focus = { ...at, artefacts: !at.artefacts };
+      return returned;
+    }
     // A row of one filter is not a row of the other, so the Selection starts again:
     // `clampSelection` then lands it on the first row of the board that arrives.
-    case "ToggleFilter":
-      return retarget(at, { _tag: "SetFilter", filter: widened(at) });
-    case "SetFilter":
-      return { ...at, filter: command.filter, selected: null, previewing: null };
+    case "ToggleFilter": {
+      const returned: Focus = retarget(at, { _tag: "SetFilter", filter: widened(at) });
+      return returned;
+    }
+    case "SetFilter": {
+      const returned: Focus = { ...at, filter: command.filter, selected: null, previewing: null };
+      return returned;
+    }
     // Not a change in the world: a preview is what was already read, drawn.
-    case "ShowOlder":
-      return at.shown.includes("history") ? at : { ...at, shown: [...at.shown, "history"] };
-    case "Preview":
-      return { ...at, previewing: command.id };
-    case "MoreReview":
-      return { ...at, reviewPages: at.reviewPages + 1 };
+    case "ShowOlder": {
+      const returned: Focus = at.shown.includes("history")
+        ? at
+        : { ...at, shown: [...at.shown, "history"] };
+      return returned;
+    }
+    case "Preview": {
+      const returned: Focus = { ...at, previewing: command.id };
+      return returned;
+    }
+    case "MoreReview": {
+      const returned: Focus = { ...at, reviewPages: at.reviewPages + 1 };
+      return returned;
+    }
     // From the first page again: how far the last Selection had been paged says nothing
     // about this one.
-    case "Select":
-      return { ...at, selected: command.id, reviewPages: 1 };
-    case "Refresh":
-      return { ...at, nonce: at.nonce + 1 };
+    case "Select": {
+      const returned: Focus = { ...at, selected: command.id, reviewPages: 1 };
+      return returned;
+    }
+    case "Refresh": {
+      const returned: Focus = { ...at, nonce: at.nonce + 1 };
+      return returned;
+    }
     // The bridge answers the close before this; there is no focus after it.
-    case "Quit":
-      return at;
+    case "Quit": {
+      const returned: Focus = at;
+      return returned;
+    }
   }
 }
 
@@ -426,7 +450,7 @@ const sameViews = (a: ReadonlyArray<ViewName>, b: ReadonlyArray<ViewName>) =>
  * field added to Focus without a decision here is how a cursor move starts re-reading
  * every run directory again — or worse, reuses a board it should not.
  */
-export function rereads(last: Focus | null, next: Focus): Rereads {
+export function rereads(last: Focus | null, next: Focus) {
   if (last === null) return { reuse: false, forceMr: false };
   // A Refresh, and the read after a command: posting a review is the obvious case, and
   // a panel still showing the merge request as it was before would be lying.
@@ -456,9 +480,13 @@ const sameFilter = (a: Filter, b: Filter) =>
  * origin has nothing to narrow to, so it stays where it is rather than narrowing to a
  * workspace nobody named.
  */
-function widened(at: Focus): Filter {
-  if (at.filter.kind !== "all" || at.origin === null) return { kind: "all" };
-  return { kind: "workspace", id: at.origin };
+function widened(at: Focus) {
+  if (at.filter.kind !== "all" || at.origin === null) {
+    const returned: Filter = { kind: "all" };
+    return returned;
+  }
+  const returned: Filter = { kind: "workspace", id: at.origin };
+  return returned;
 }
 
 /** The fields every row shares, so each builder below only states what it differs in. */
@@ -485,8 +513,8 @@ const BLANK = {
  * last of a run's agents closes the group — and the run named by the row above it is not
  * named again here.
  */
-function agentRow(a: AgentRow, connector: string, marks?: Marks): Row {
-  return {
+function agentRow(a: AgentRow, connector: string, marks?: Marks) {
+  const returned: Row = {
     ...BLANK,
     id: `agent:${a.agent}`,
     kind: "agent",
@@ -505,6 +533,7 @@ function agentRow(a: AgentRow, connector: string, marks?: Marks): Row {
     // By name: `agent.focus` selects the workspace, the tab and the pane in one call.
     jump: { kind: "agent", agent: a.agent, label: a.name },
   };
+  return returned;
 }
 
 /**
@@ -512,7 +541,7 @@ function agentRow(a: AgentRow, connector: string, marks?: Marks): Row {
  * publishes as the pane's terminal title where there is one. Claude Code puts the task
  * it is on there, and it comes back on the same `agent list` the statuses do.
  */
-function doingLine(a: AgentRow, ...rest: string[]): string {
+function doingLine(a: AgentRow, ...rest: string[]) {
   return Arr.join(
     Arr.filter([a.status, a.now ?? "", ...rest], (part) => part !== ""),
     " · ",
@@ -523,7 +552,7 @@ function doingLine(a: AgentRow, ...rest: string[]): string {
  * One agent in the trailing group. It has no run above it, so its own row is the only
  * place left to say which run it names.
  */
-function orphanRow(a: AgentRow, connector: string, marks?: Marks): Row {
+function orphanRow(a: AgentRow, connector: string, marks?: Marks) {
   return { ...agentRow(a, connector, marks), detail: doingLine(a, a.run) };
 }
 
@@ -536,7 +565,7 @@ function agentGroup(
   agents: readonly AgentRow[],
   row: (a: AgentRow, connector: string, marks?: Marks) => Row,
   marks?: Marks,
-): Row[] {
+) {
   return Arr.map(agents, (a, at) => row(a, at === agents.length - 1 ? "└" : "├", marks));
 }
 
@@ -548,19 +577,19 @@ const RUN_ROW = "run:";
  * id is this module's own — it mints them — and the producers ask rather than parse: a
  * second `startsWith("run:")` elsewhere is a format two modules have to agree on.
  */
-export function runIdOf(rowId: string | null): string | null {
+export function runIdOf(rowId: string | null) {
   return rowId !== null && pipe(rowId, Str.startsWith(RUN_ROW))
     ? pipe(rowId, Str.slice(RUN_ROW.length))
     : null;
 }
 
 /** The row id a Run is selected by, minted here because `runIdOf` reads it back. */
-export function runRowId(runId: string): string {
+export function runRowId(runId: string) {
   return `${RUN_ROW}${runId}`;
 }
 
-function runRow(r: RunRow, now: number, kind: "active" | "recent" | "history", marks?: Marks): Row {
-  return {
+function runRow(r: RunRow, now: number, kind: "active" | "recent" | "history", marks?: Marks) {
+  const returned: Row = {
     ...BLANK,
     id: `${RUN_ROW}${r.id}`,
     kind,
@@ -578,10 +607,11 @@ function runRow(r: RunRow, now: number, kind: "active" | "recent" | "history", m
     // over for a week — so there is nowhere for Enter to go.
     jump: kind === "history" ? null : { kind: "run", runId: r.id, label: r.title },
   };
+  return returned;
 }
 
-function definitionRow(d: DefinitionRow): Row {
-  return {
+function definitionRow(d: DefinitionRow) {
+  const returned: Row = {
     ...BLANK,
     id: `workflow:${d.name}`,
     kind: "definition",
@@ -597,6 +627,7 @@ function definitionRow(d: DefinitionRow): Row {
     ),
     definition: d,
   };
+  return returned;
 }
 
 /**
@@ -612,9 +643,9 @@ function settingRow(
   writable: boolean,
   shared?: string,
   multiline = false,
-): Row {
+) {
   const shown = value === "" ? "(unset)" : value;
-  return {
+  const returned: Row = {
     ...BLANK,
     id: `setting:${id}`,
     kind: "setting",
@@ -622,6 +653,7 @@ function settingRow(
     detail: shared === undefined ? shown : `${shown} · ${shared}`,
     setting: { key, value, writable, multiline },
   };
+  return returned;
 }
 
 /**
@@ -635,7 +667,7 @@ function settingRow(
  * was started for, and filing it under "no run here" while its Run sat two rows above
  * was the board contradicting itself.
  */
-export function rowsOf(board: WorkspaceView, marks?: Marks): Row[] {
+export function rowsOf(board: WorkspaceView, marks?: Marks) {
   const rows: Row[] = [];
   const onBoard = [...board.active, ...board.recent];
   /** The rows this board has, by id: what a child id and an agent's run resolve against. */
@@ -647,7 +679,11 @@ export function rowsOf(board: WorkspaceView, marks?: Marks): Row[] {
    * One run, its children, and each of their agents — a run that fanned out into one
    * run per repository is one thing on the board, not several beside each other.
    */
-  const under = (run: RunRow, kind: "active" | "recent", depth = 0): Row[] => [
+  const under: (run: RunRow, kind: "active" | "recent", depth?: number) => Row[] = (
+    run: RunRow,
+    kind: "active" | "recent",
+    depth = 0,
+  ) => [
     nested(runRow(run, board.now, kind, marks), depth),
     // An agent sits at its run's own depth: the connector is what joins it, and the
     // gutter is what says which run is inside which.
@@ -687,7 +723,7 @@ export function rowsOf(board: WorkspaceView, marks?: Marks): Row[] {
  * one flat list the way the local board is — the depth is in the gutter, so title,
  * detail and age start in the same column at every level.
  */
-export function wideRows(wide: WideView, marks?: Marks): Row[] {
+export function wideRows(wide: WideView, marks?: Marks) {
   const rows: Row[] = [];
   for (const [at, group] of wide.groups.entries()) {
     // A blank line between workspaces. Groups of one-line rows with nothing between
@@ -706,7 +742,11 @@ export function wideRows(wide: WideView, marks?: Marks): Row[] {
      */
     const inGroup = [...group.active, ...group.recent];
     const byId = new Map(Arr.map(inGroup, (r) => [r.id, r]));
-    const under = (run: RunRow, kind: "active" | "recent", depth = 1): Row[] => {
+    const under: (run: RunRow, kind: "active" | "recent", depth?: number) => Row[] = (
+      run: RunRow,
+      kind: "active" | "recent",
+      depth = 1,
+    ) => {
       const row = runRow(run, wide.now, kind, marks);
       const children = Arr.getSomes(
         Arr.map(run.children, (id) => Option.fromUndefinedOr(byId.get(id))),
@@ -761,7 +801,7 @@ export function wideRows(wide: WideView, marks?: Marks): Row[] {
  * — the digit has to name the row it is drawn on. Nine of them, as on the local board;
  * the tenth agent onwards keeps its row and loses its digit.
  */
-function keyedInOrder(rows: readonly Row[]): Row[] {
+function keyedInOrder(rows: readonly Row[]) {
   let digit = 0;
   return Arr.map(rows, (row) => {
     if (row.kind !== "agent") return row;
@@ -774,7 +814,7 @@ function keyedInOrder(rows: readonly Row[]): Row[] {
  * A row in a workspace this session no longer has. Its panes are somewhere this herdr
  * cannot select, so Enter says so rather than failing at a tab that is not there.
  */
-const unreachable = (row: Row): Row => ({
+const unreachable: (row: Row) => Row = (row) => ({
   ...row,
   jump: row.jump === null ? null : { kind: "none", label: row.jump.label },
 });
@@ -782,10 +822,10 @@ const unreachable = (row: Row): Row => ({
 const ELSEWHERE = "elsewhere";
 
 /** A blank line. A header, so the arrows step over it and nothing can select it. */
-const spacer = (id: string): Row => ({ ...BLANK, id, kind: "header", title: "" });
+const spacer: (id: string) => Row = (id) => ({ ...BLANK, id, kind: "header", title: "" });
 
 /** One row inside a group, at its depth in the tree. */
-function nested(row: Row, depth: number): Row {
+function nested(row: Row, depth: number) {
   return { ...row, depth };
 }
 
@@ -794,7 +834,7 @@ function nested(row: Row, depth: number): Row {
  * says what the workspace is for, and the run's own detail and age are what tell two
  * runs of it apart.
  */
-const unqualified = (row: Row): Row => ({ ...row, title: Str.split(row.title, " · ")[0]! });
+const unqualified = (row: Row) => ({ ...row, title: Str.split(row.title, " · ")[0]! });
 
 /**
  * One workspace. Selectable and bold: its own line is where the eye stops, and the
@@ -804,8 +844,8 @@ const unqualified = (row: Row): Row => ({ ...row, title: Str.split(row.title, " 
  * the footer counts and what a run row is ordered by, and a workspace counted beside
  * its own waiting run made "1 run(s) need you" read as two.
  */
-function groupRow(group: WideGroup, marks?: Marks): Row {
-  return {
+function groupRow(group: WideGroup, marks?: Marks) {
+  const returned: Row = {
     ...BLANK,
     id: `group:${group.workspaceId ?? ELSEWHERE}`,
     kind: "group",
@@ -817,6 +857,7 @@ function groupRow(group: WideGroup, marks?: Marks): Row {
       ? { kind: "workspace", workspaceId: group.workspaceId, label: group.label }
       : { kind: "none", label: group.label },
   };
+  return returned;
 }
 
 /**
@@ -824,9 +865,12 @@ function groupRow(group: WideGroup, marks?: Marks): Row {
  * workspaces Collie has never run anything in; naming them here is what keeps them out
  * of the list without hiding them.
  */
-function quietRow(wide: WideView): Row[] {
-  if (wide.quiet.length === 0) return [];
-  return [
+function quietRow(wide: WideView) {
+  if (wide.quiet.length === 0) {
+    const returned: Row[] = [];
+    return returned;
+  }
+  const returned: Row[] = [
     spacer("gap:quiet"),
     {
       ...BLANK,
@@ -836,6 +880,7 @@ function quietRow(wide: WideView): Row[] {
       detail: `nothing of Collie's in them · ${Arr.join(wide.quiet, " · ")}`,
     },
   ];
+  return returned;
 }
 
 /**
@@ -846,8 +891,9 @@ function quietRow(wide: WideView): Row[] {
 /** The header over the runs that have stopped for the human. */
 export const NEEDS_YOU = "Needs you";
 
-function headerRow(title: string): Row {
-  return { ...BLANK, id: `header:${title}`, kind: "header", title };
+function headerRow(title: string) {
+  const returned: Row = { ...BLANK, id: `header:${title}`, kind: "header", title };
+  return returned;
 }
 
 /**
@@ -855,7 +901,7 @@ function headerRow(title: string): Row {
  * question itself is already on screen under the row, so the count would only be telling
  * the human about what they are looking at.
  */
-export function needsYouStatus(rows: readonly Row[], selected: string | null): string | null {
+export function needsYouStatus(rows: readonly Row[], selected: string | null) {
   const waiting = Arr.filter(rows, (row) => row.needsYou);
   if (waiting.length === 0 || Arr.some(waiting, (row) => row.id === selected)) return null;
   return `${waiting.length} run(s) need you`;
@@ -867,7 +913,7 @@ export function needsYouStatus(rows: readonly Row[], selected: string | null): s
  * with an inert row selected and the detail panel titled after a heading. Rendering still
  * draws every row — this is only about where the Selection can rest.
  */
-export function selectableRows(rows: readonly Row[]): Row[] {
+export function selectableRows(rows: readonly Row[]) {
   return Arr.filter(rows, (row) => row.kind !== "header");
 }
 
@@ -891,7 +937,7 @@ interface RunRowsState {
   marks: Marks;
 }
 
-export function runsRows(state: RunRowsState): Row[] {
+export function runsRows(state: RunRowsState) {
   const filter = state.filter;
   if (filter.kind === "run") return onlyRun(everyRow(state), filter.id);
   if (filter.kind === "workspace" && state.wide) {
@@ -907,7 +953,7 @@ export function runsRows(state: RunRowsState): Row[] {
 }
 
 /** The Herd's whole board, and this board's own until the wide one has been read. */
-function everyRow(state: RunRowsState): Row[] {
+function everyRow(state: RunRowsState) {
   return state.wide ? wideRows(state.wide, state.marks) : rowsOf(state.board, state.marks);
 }
 
@@ -920,7 +966,7 @@ function everyRow(state: RunRowsState): Row[] {
  * run with nothing under it. An agent is kept when it names this run, and a deeper row
  * when it is nested under what has been kept so far.
  */
-function onlyRun(rows: readonly Row[], runId: string): Row[] {
+function onlyRun(rows: readonly Row[], runId: string) {
   const at = Option.getOrElse(
     Arr.findFirstIndex(rows, (row) => row.kind !== "agent" && row.runId === runId),
     () => -1,
@@ -940,7 +986,7 @@ function onlyRun(rows: readonly Row[], runId: string): Row[] {
   return kept;
 }
 
-export function viewRows(state: AppState): Row[] {
+export function viewRows(state: AppState) {
   switch (state.view) {
     case "runs":
       // Tasks are cards, not rows in the auxiliary pane.
@@ -980,7 +1026,7 @@ export function viewRows(state: AppState): Row[] {
 }
 
 /** What to say when a View has nothing in it, so an empty list is not a dead end. */
-export function emptyStateOf(view: ViewName): string {
+export function emptyStateOf(view: ViewName) {
   switch (view) {
     case "runs":
       return "Nothing running here — p runs a workflow";
@@ -1002,7 +1048,7 @@ export function clampSelection(
   selected: string | null,
   before: readonly Row[],
   after: readonly Row[],
-): string | null {
+) {
   if (after.length === 0) return null;
   if (selected !== null && Arr.some(after, (r) => r.id === selected)) return selected;
   const was =
@@ -1031,29 +1077,41 @@ export interface Action {
  * every workspace would start one against the wrong repository. They are offered on a
  * local board only, the way `s` is.
  */
-export function actionsFor(row: Row | null, filter: Filter): Action[] {
-  if (!row) return [];
+export function actionsFor(row: Row | null, filter: Filter) {
+  if (!row) {
+    const returned: Action[] = [];
+    return returned;
+  }
   // A workspace is somewhere to go and nothing else: Enter on it is the jump, which
   // `keyIntent` answers from the row for every kind of row alike.
-  if (row.kind === "group") return [];
+  if (row.kind === "group") {
+    const returned: Action[] = [];
+    return returned;
+  }
   if (row.kind === "agent") {
-    return row.key && row.agent
-      ? [{ key: row.key, label: "focus", command: { _tag: "FocusAgent", agent: row.agent } }]
-      : [];
+    const returned: Action[] =
+      row.key && row.agent
+        ? [{ key: row.key, label: "focus", command: { _tag: "FocusAgent", agent: row.agent } }]
+        : [];
+    return returned;
   }
   if (row.kind === "definition") {
     const definition = row.definition;
-    if (!definition) return [];
+    if (!definition) {
+      const returned: Action[] = [];
+      return returned;
+    }
     // Every definition row is a Workflow: a persona is instructions injected into an
     // agent, so there is nothing to run on its own and the view stopped listing them.
-    return [
+    const returned: Action[] = [
       { key: "\r", label: "run", command: { _tag: "RunWorkflow", workflow: definition.name } },
     ];
+    return returned;
   }
   if (row.kind === "setting") {
     // A remembered value is a Run's own note to itself; the defaults are what a human
     // sets, so only those are offered for editing.
-    return row.setting?.writable
+    const returned: Action[] = row.setting?.writable
       ? [
           {
             key: "\r",
@@ -1066,10 +1124,14 @@ export function actionsFor(row: Row | null, filter: Filter): Action[] {
           },
         ]
       : [];
+    return returned;
   }
 
   const runId = row.runId;
-  if (runId === null) return [];
+  if (runId === null) {
+    const returned: Action[] = [];
+    return returned;
+  }
   const actions: Action[] = [{ key: "l", label: "log", command: { _tag: "OpenLog", runId } }];
   // A finished run has no driver left to stop, so the key is not offered for one.
   if (row.kind === "active") {
@@ -1093,7 +1155,8 @@ export function actionsFor(row: Row | null, filter: Filter): Action[] {
       });
     }
   }
-  return actions;
+  const returned: Action[] = actions;
+  return returned;
 }
 
 /**
@@ -1129,7 +1192,7 @@ export function keyboardOn(at: {
   filtering: boolean;
   /** A Settings row being given a new value. */
   setting: { key: string; value: string } | null;
-}): Keyboarding {
+}) {
   if (at.flow) return { _tag: "Flow" };
   if (at.proposal) return { _tag: "Proposal", proposal: at.proposal };
   if (at.choice) return { _tag: "Choice", choice: at.choice };
@@ -1149,7 +1212,7 @@ const PASTED = new TextDecoder();
  * all: a newline is the submit key, and a pasted value has to be readable before it is
  * sent. Non-ASCII letters survive — a pasted branch name keeps them.
  */
-export function pasteInto(value: string, bytes: Uint8Array): string {
+export function pasteInto(value: string, bytes: Uint8Array) {
   return value + pipe(PASTED.decode(bytes), Str.replace(/\p{C}/gu, ""));
 }
 
@@ -1159,7 +1222,7 @@ export function pasteInto(value: string, bytes: Uint8Array): string {
  * it belongs to keeps rows of its own, and an option the cursor is on but nobody can see
  * is one nobody can knowingly press Enter on.
  */
-export function optionWindow<T>(items: readonly T[], at: number, room: number): Windowed<T> {
+export function optionWindow<T>(items: readonly T[], at: number, room: number) {
   if (items.length <= room) return { shown: items, hidden: 0 };
   // The window ends one past the cursor at the earliest, and stops at the last option.
   const end = Math.min(items.length, Math.max(room, at + 1));
@@ -1181,7 +1244,7 @@ export interface MrChoice {
 }
 
 /** The answers to a `ChooseMr` in the card's order, keyed 1 to 9; past nine, 9 is "More…". */
-export const mrChoices = (command: Extract<Command, { readonly _tag: "ChooseMr" }>): MenuItem[] => {
+export const mrChoices = (command: Extract<Command, { readonly _tag: "ChooseMr" }>) => {
   const usable = Arr.filter(command.mrs, (one) =>
     command.copy ? one.url !== null : readMrRef(one.target) !== null,
   );
@@ -1197,20 +1260,22 @@ export const mrChoices = (command: Extract<Command, { readonly _tag: "ChooseMr" 
         ]
       : [];
   return [
-    ...Arr.map(shown, (one, at): MenuItem => {
+    ...Arr.map(shown, (one, at) => {
       const key = String(at + 1);
       const ref = readMrRef(one.target);
-      return command.copy || ref === null
-        ? {
-            key,
-            label: `Copy ${one.short}'s link`,
-            command: { _tag: "CopyLink", url: one.url ?? "" },
-          }
-        : {
-            key,
-            label: openMrLabel(ref, false, one.short),
-            command: { _tag: "OpenMr", target: one.target, runId: one.runId },
-          };
+      const returned: MenuItem =
+        command.copy || ref === null
+          ? {
+              key,
+              label: `Copy ${one.short}'s link`,
+              command: { _tag: "CopyLink", url: one.url ?? "" },
+            }
+          : {
+              key,
+              label: openMrLabel(ref, false, one.short),
+              command: { _tag: "OpenMr", target: one.target, runId: one.runId },
+            };
+      return returned;
     }),
     ...more,
   ];
@@ -1225,72 +1290,130 @@ export interface MenuItem {
 }
 
 /** A card's action as this board draws it: the key beside it, its label, and its command. */
-function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem {
+function itemFor(view: TaskView, action: CardAction, primary: boolean) {
   const runId = view.run;
   switch (action.kind) {
-    case "go-to-tab":
-      return { key: "g", label: primary ? "Go to tab" : "Go to its tab", command: goToTab(view) };
-    case "steer":
-      return { key: "s", label: "Steer…", command: { _tag: "OpenSteer", id: view.id } };
-    case "attach":
-      return { key: "a", label: "Attach files…", command: { _tag: "AttachFiles", runId } };
-    case "open-mr":
-      return {
+    case "go-to-tab": {
+      const returned: MenuItem = {
+        key: "g",
+        label: primary ? "Go to tab" : "Go to its tab",
+        command: goToTab(view),
+      };
+      return returned;
+    }
+    case "steer": {
+      const returned: MenuItem = {
+        key: "s",
+        label: "Steer…",
+        command: { _tag: "OpenSteer", id: view.id },
+      };
+      return returned;
+    }
+    case "attach": {
+      const returned: MenuItem = {
+        key: "a",
+        label: "Attach files…",
+        command: { _tag: "AttachFiles", runId },
+      };
+      return returned;
+    }
+    case "open-mr": {
+      const returned: MenuItem = {
         // One key cannot say which of several merge requests it opens.
         key: action.named === undefined ? "w" : "",
         label: openMrLabel(action.mr, primary, action.named),
         command: { _tag: "OpenMr", target: mrTarget(action.mr.project, action.mr.iid), runId },
       };
-    case "offer":
-      return {
+      return returned;
+    }
+    case "offer": {
+      const returned: MenuItem = {
         key: primary || (view.offers?.length ?? 0) < 2 ? "i" : "",
         label: `${action.offer.title}${action.offer.unavailable === undefined ? "" : ` — ${action.offer.unavailable}`}`,
         disabled: action.offer.unavailable === undefined ? undefined : true,
         command: { _tag: "InvokeOffer", runId: action.offer.run ?? runId, offer: action.offer.id },
       };
-    case "check-output":
-      return { key: "c", label: "Open check output", command: { _tag: "OpenCheckOutput", runId } };
-    case "offers":
-      return { key: "o", label: "What it offers…", command: { _tag: "ChooseOffer", runId } };
-    case "resume":
-      return {
+      return returned;
+    }
+    case "check-output": {
+      const returned: MenuItem = {
+        key: "c",
+        label: "Open check output",
+        command: { _tag: "OpenCheckOutput", runId },
+      };
+      return returned;
+    }
+    case "offers": {
+      const returned: MenuItem = {
+        key: "o",
+        label: "What it offers…",
+        command: { _tag: "ChooseOffer", runId },
+      };
+      return returned;
+    }
+    case "resume": {
+      const returned: MenuItem = {
         key: "u",
         label: primary ? "Resume" : "Resume run",
         command: { _tag: "ResumeRun", runId },
       };
-    case "follow-up":
-      return { key: "x", label: "Follow-up run", command: { _tag: "FollowUp", runId } };
-    case "hold":
-      return {
+      return returned;
+    }
+    case "follow-up": {
+      const returned: MenuItem = {
+        key: "x",
+        label: "Follow-up run",
+        command: { _tag: "FollowUp", runId },
+      };
+      return returned;
+    }
+    case "hold": {
+      const returned: MenuItem = {
         key: "h",
         label: action.set ? "Hold run" : "Release hold",
         command: { _tag: "HoldRun", runId, set: action.set },
       };
-    case "stop":
-      return { key: "k", label: "Stop run", command: { _tag: "StopRun", runId } };
-    case "dispose":
-      return {
+      return returned;
+    }
+    case "stop": {
+      const returned: MenuItem = {
+        key: "k",
+        label: "Stop run",
+        command: { _tag: "StopRun", runId },
+      };
+      return returned;
+    }
+    case "dispose": {
+      const returned: MenuItem = {
         key: action.named === undefined ? DISPOSITION_KEYS[action.disposition] : "",
         label: disposeLabel(action),
         command: { _tag: "RecordDisposition", runId, kind: action.disposition, ref: action.ref },
       };
-    case "acknowledge":
-      return { key: "", label: "Acknowledge", command: { _tag: "Acknowledge", runId } };
+      return returned;
+    }
+    case "acknowledge": {
+      const returned: MenuItem = {
+        key: "",
+        label: "Acknowledge",
+        command: { _tag: "Acknowledge", runId },
+      };
+      return returned;
+    }
   }
 }
 
 const DISPOSITION_KEYS = { merged: "M", abandoned: "A", superseded: "S" } as const;
 
 /** The one action that ends a card's wait, drawn first on the card. */
-export function primaryFor(view: TaskView): MenuItem | null {
+export function primaryFor(view: TaskView) {
   const action = primaryAction(view);
   return action === null ? null : itemFor(view, action, true);
 }
 
 /** What this Task can be asked for, in the order the menu shows it, its record first. */
-export function menuFor(view: TaskView): MenuItem[] {
+export function menuFor(view: TaskView) {
   const actions = cardActions(view);
-  const mrs = Arr.flatMap(actions, (action): MrChoice[] =>
+  const mrs = Arr.flatMap(actions, (action) =>
     action.kind === "open-mr" && action.named !== undefined
       ? [
           {
@@ -1302,7 +1425,7 @@ export function menuFor(view: TaskView): MenuItem[] {
         ]
       : [],
   );
-  return [
+  const returned: MenuItem[] = [
     { key: "enter", label: "Open record", command: { _tag: "OpenRecord", id: view.id } },
     ...Arr.map(actions, (action) => itemFor(view, action, false)),
     ...(mrs.length < 2
@@ -1320,10 +1443,11 @@ export function menuFor(view: TaskView): MenuItem[] {
           },
         ]),
   ];
+  return returned;
 }
 
 /** What became of the work, for work that is over. */
-export function dispositionsFor(view: TaskView): MenuItem[] {
+export function dispositionsFor(view: TaskView) {
   return Arr.map(dispositionActions(view), (action) => itemFor(view, action, false));
 }
 
@@ -1346,7 +1470,7 @@ export function olderFinished(
   finished: ReadonlyArray<TaskView>,
   pages: number,
   batch = OLDER_BATCH,
-): Older {
+) {
   if (history === null) return { rows: [], more: true };
   const carded = new Set(Arr.flatMap(finished, (view) => view.runs));
   const rest = Arr.filter(history, (row) => !carded.has(row.id));
@@ -1355,8 +1479,12 @@ export function olderFinished(
 }
 
 /** Where this Task's work is. Which tab that is stays for the handler to resolve. */
-export function goToTab(view: TaskView): Command {
-  return { _tag: "Jump", jump: { kind: "run", runId: view.run, label: view.name } };
+export function goToTab(view: TaskView) {
+  const returned: Command = {
+    _tag: "Jump",
+    jump: { kind: "run", runId: view.run, label: view.name },
+  };
+  return returned;
 }
 
 /**
@@ -1394,7 +1522,7 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
  * rather than behind `?` because it is the one thing about this board that is not
  * visible on it — and the key names where it goes, not where it is.
  */
-const globalKeys = (filter: Filter): ReadonlyArray<string> => [
+const globalKeys = (filter: Filter) => [
   `g ${sessionLocal(filter) ? "all" : "local"}`,
   // Starting a run is this Session's, so it is not offered from a board of every
   // workspace; `g local` above is how you get back to somewhere it means something.
@@ -1412,7 +1540,7 @@ export function footerKeys(opts: {
   panel: ReadonlyArray<string>;
   on: Keyboarding;
   filter: Filter;
-}): string {
+}) {
   if (opts.on._tag === "Choice") return "↑↓ move · Enter choose · Esc leave the run open";
   if (opts.on._tag === "Setting") return "type a value · Enter set it · Esc leave it";
   // The filter has the keys too, so the board's own are as much a lie here as the
@@ -1515,7 +1643,7 @@ const NEXT_QUESTION = "n";
  * never be read out of one — the character belongs to the answer, the filter or the
  * value — which is what keeps `n` from jumping while a free-text question is open.
  */
-function takesText(on: Keyboarding): boolean {
+function takesText(on: Keyboarding) {
   if (on._tag === "Filter" || on._tag === "Setting") return true;
   return on._tag === "Choice" && on.choice.kind === "ask";
 }
@@ -1528,7 +1656,7 @@ function takesText(on: Keyboarding): boolean {
  * A Selection that is not on this board starts the search at the top, so the first
  * question is not skipped. `null` means there is no question anywhere.
  */
-export function nextQuestionId(rows: readonly Row[], selected: string | null): string | null {
+export function nextQuestionId(rows: readonly Row[], selected: string | null) {
   const list = selectableRows(rows);
   const at = Option.getOrElse(
     Arr.findFirstIndex(list, (row) => row.id === selected),
@@ -1550,7 +1678,7 @@ const SESSION_MODES = new Map<string, Mode>([
   ["f", "fork"],
 ]);
 
-const doing = (command: Command): KeyIntent => ({ _tag: "Do", command });
+const doing: (command: Command) => KeyIntent = (command) => ({ _tag: "Do", command });
 
 /**
  * What one keypress means, given what is on screen. One ordered cascade, and the order
@@ -1563,7 +1691,7 @@ const doing = (command: Command): KeyIntent => ({ _tag: "Do", command });
  * all. `Do` carries the commands unchanged, so a key and a click on the same row button
  * still cannot mean different things.
  */
-export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
+export function keyIntent(at: KeyContext, key: Keypress) {
   // The overlay is the whole screen and every key behind it acts on something nobody
   // can see, so any key closes it and does nothing else. First, because that is the
   // order App draws them in: it hides the Flow behind the overlay, so giving a flow the
@@ -1722,7 +1850,7 @@ export interface Answered {
  * One keystroke against a pending question. Pure, so the app and the text fallback
  * answer a question identically rather than each having their own idea of Esc.
  */
-export function answerFor(choice: PendingChoice, asking: Asking, key: string): Answered {
+export function answerFor(choice: PendingChoice, asking: Asking, key: string) {
   if (key === "\x1b" || key === "\x03") return { asking, value: "" };
   if (key === "\r" || key === "\n") {
     const value = choice.kind === "ask" ? asking.typed : (choice.items[asking.index]?.id ?? null);
@@ -1752,7 +1880,7 @@ export function answerFor(choice: PendingChoice, asking: Asking, key: string): A
  * glyph is what the text fallback and herdr's tab strip show, and not everyone can see
  * the colour — so this only ever restates what the glyph already says.
  */
-export function statusColour(glyph: string): string | undefined {
+export function statusColour(glyph: string) {
   switch (glyph) {
     case GLYPH.running:
       return "#7aa2f7";
@@ -1767,7 +1895,7 @@ export function statusColour(glyph: string): string | undefined {
   }
 }
 
-function subsequence(needle: string, hay: string): boolean {
+function subsequence(needle: string, hay: string) {
   let at = 0;
   for (const character of hay) {
     if (character === needle[at]) at += 1;
@@ -1782,7 +1910,7 @@ function subsequence(needle: string, hay: string): boolean {
  * `implement` before it finds a run whose detail mentions "improved", and the fuzzy
  * pass is what makes a half-remembered name findable at all.
  */
-export function filterItems<T>(items: readonly T[], query: string, hay: (item: T) => string): T[] {
+export function filterItems<T>(items: readonly T[], query: string, hay: (item: T) => string) {
   const needle = Str.toLowerCase(Str.trim(query));
   if (needle === "") return [...items];
   const prefix: T[] = [];
@@ -1807,7 +1935,7 @@ export function filterItems<T>(items: readonly T[], query: string, hay: (item: T
  * The order is the board's own, not the order the matches were ranked in. Ranking is
  * what a pick list wants; here it would lift an agent above the run it hangs off.
  */
-export function matching(rows: readonly Row[], query: string): Row[] {
+export function matching(rows: readonly Row[], query: string) {
   if (Str.trim(query) === "") return [...rows];
   // A header is not something to look for: it says what the group under it is, so it is
   // never a match of its own — a heading kept over a group that was filtered out is a
@@ -1829,7 +1957,7 @@ export function matching(rows: readonly Row[], query: string): Row[] {
  * runs in it, not one row saying its name. Local rows are all at depth 0 and have no
  * such row above them, so this only ever answers in the tree.
  */
-function underAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>): boolean {
+function underAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>) {
   let depth = rows[at]!.depth;
   for (let above = at - 1; above >= 0 && depth > 0; above--) {
     const over = rows[above]!;
@@ -1853,7 +1981,7 @@ const opensAGroup = (row: Row) =>
  * come along with them. A workspace's group is everything indented under it, which is
  * how a filtered wide board keeps the row that says which workspace a run is in.
  */
-function groupHasAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>): boolean {
+function groupHasAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>) {
   const opener = rows[at]!;
   const nested = (under: Row) =>
     under.kind === "agent" ||
@@ -1867,11 +1995,11 @@ function groupHasAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<strin
 }
 
 /** What a row is matched against: everything on it a human might type at. */
-export function rowHay(row: Row): string {
+export function rowHay(row: Row) {
   return `${row.title} ${row.detail}`;
 }
 
 /** And what a pick item is matched against; its id is the name the prefix pass finds. */
-export function itemHay(item: PickItem): string {
+export function itemHay(item: PickItem) {
   return `${item.id} ${item.title} ${item.subtitle ?? ""}`;
 }

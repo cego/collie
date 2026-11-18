@@ -13,27 +13,27 @@ class FakeInput {
   paused = 0;
   listener: ((buffer: Buffer) => void) | null = null;
 
-  setRawMode(enabled: boolean): void {
+  setRawMode(enabled: boolean) {
     this.rawModes.push(enabled);
   }
 
-  resume(): void {
+  resume() {
     this.resumed += 1;
   }
 
-  pause(): void {
+  pause() {
     this.paused += 1;
   }
 
-  on(_event: "data", listener: (buffer: Buffer) => void): void {
+  on(_event: "data", listener: (buffer: Buffer) => void) {
     this.listener = listener;
   }
 
-  off(_event: "data", listener: (buffer: Buffer) => void): void {
+  off(_event: "data", listener: (buffer: Buffer) => void) {
     if (this.listener === listener) this.listener = null;
   }
 
-  send(key: string): void {
+  send(key: string) {
     this.listener?.(Buffer.from(key));
   }
 }

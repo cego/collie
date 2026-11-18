@@ -25,7 +25,10 @@ import { madeRun } from "./support/records";
 import { runEffect } from "./support/effect";
 
 /** `records` with every read of it counted. */
-const counted = (records: RunRecordsApi, calls: { n: number }): RunRecordsApi => {
+const counted: (records: RunRecordsApi, calls: { n: number }) => RunRecordsApi = (
+  records,
+  calls,
+) => {
   const count = <A>(read: A) => {
     calls.n++;
     return read;

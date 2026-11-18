@@ -159,7 +159,7 @@ const atQuestion = <A, E>(
     ["stepped.workflow.ts"],
   );
 
-const desktop = (requestId: string): Actor => ({ origin: "desktop", requestId });
+const desktop: (requestId: string) => Actor = (requestId) => ({ origin: "desktop", requestId });
 
 const tell = (at: AtQuestion, text: string, by: Actor, agent = at.agent) =>
   Effect.map(
@@ -196,7 +196,10 @@ const notified = (at: AtQuestion) =>
     RunRecords.use((records) => records.controlsOf(NOTIFIED, at.runId)),
   ).pipe(
     Effect.map(Arr.map((row) => row.key)),
-    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    Effect.orElseSucceed(() => {
+      const returned: ReadonlyArray<string> = [];
+      return returned;
+    }),
   );
 
 const cardOf = (at: AtQuestion) =>

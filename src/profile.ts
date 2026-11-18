@@ -44,50 +44,91 @@ const decodeProfile = Schema.decodeUnknownExit(AgentProfile);
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Every reason this text is not a profile, the first of them; an empty text is none. */
-export function parseProfile(
-  text: string,
-): { readonly profile: AgentProfile } | { readonly refused: string } {
-  if (Str.trim(text) === "") return { profile: {} };
+export function parseProfile(text: string) {
+  if (Str.trim(text) === "") {
+    const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
+      profile: {},
+    };
+    return returned;
+  }
   const json = AnyJson(text);
-  if (Option.isNone(json)) return { refused: "agent_profile is not JSON" };
+  if (Option.isNone(json)) {
+    const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
+      refused: "agent_profile is not JSON",
+    };
+    return returned;
+  }
   const roles = Roles(json.value);
-  if (Option.isNone(roles))
-    return { refused: "agent_profile is an object of roles, each an object of env and claude" };
+  if (Option.isNone(roles)) {
+    const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
+      refused: "agent_profile is an object of roles, each an object of env and claude",
+    };
+    return returned;
+  }
   for (const [role, given] of Rec.toEntries(roles.value)) {
     for (const key of Struct.keys(given))
-      if (key !== "env" && key !== "claude")
-        return { refused: `${role}.${key} is neither env nor claude` };
+      if (key !== "env" && key !== "claude") {
+        const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
+          refused: `${role}.${key} is neither env nor claude`,
+        };
+        return returned;
+      }
     const claude = Fields(given.claude ?? {});
-    if (Option.isNone(claude)) return { refused: `${role}.claude is an object of settings` };
+    if (Option.isNone(claude)) {
+      const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
+        refused: `${role}.claude is an object of settings`,
+      };
+      return returned;
+    }
     for (const key of Struct.keys(claude.value)) {
-      if (key === "disableAllHooks")
-        return { refused: `${role}.claude.disableAllHooks would switch off Collie's own hooks` };
-      if (!Arr.some(CLAUDE_KEYS, (name) => name === key))
-        return {
+      if (key === "disableAllHooks") {
+        const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
+          refused: `${role}.claude.disableAllHooks would switch off Collie's own hooks`,
+        };
+        return returned;
+      }
+      if (!Arr.some(CLAUDE_KEYS, (name) => name === key)) {
+        const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
           refused: `${role}.claude.${key} is not one Collie merges: ${Arr.join(CLAUDE_KEYS, ", ")}`,
         };
+        return returned;
+      }
     }
   }
   const decoded = decodeProfile(json.value);
-  if (decoded._tag === "Failure")
-    return { refused: `agent_profile does not fit its shape: ${String(decoded.cause)}` };
+  if (decoded._tag === "Failure") {
+    const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
+      refused: `agent_profile does not fit its shape: ${String(decoded.cause)}`,
+    };
+    return returned;
+  }
   for (const [role, one] of Rec.toEntries(decoded.value))
     for (const [name, value] of Rec.toEntries(one.env ?? {})) {
-      if (!ENV_NAME.test(name)) return { refused: `"${name}" is not an environment variable name` };
+      if (!ENV_NAME.test(name)) {
+        const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
+          refused: `"${name}" is not an environment variable name`,
+        };
+        return returned;
+      }
       if (!isLiteral(value)) continue;
       const removed = scrub(`${name}=${value}`).removed;
-      if (removed.length > 0)
-        return {
+      if (removed.length > 0) {
+        const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
           refused: `${role}.env.${name} looks like a credential (${Arr.join([...new Set(removed)], ", ")}): it would be shared with every Machine, so hold it in a 0600 file and give {"file": "<path>"}`,
         };
+        return returned;
+      }
     }
-  return { profile: decoded.value };
+  const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
+    profile: decoded.value,
+  };
+  return returned;
 }
 
 const isLiteral = Schema.is(Schema.String);
 
 /** A role's own overlay, else `*`'s, else none. */
-export const roleProfile = (profile: AgentProfile, role: string): RoleProfile =>
+export const roleProfile = (profile: AgentProfile, role: string) =>
   profile[role] ?? profile["*"] ?? {};
 
 const expand = (path: string, home: string) =>
@@ -101,7 +142,7 @@ const expand = (path: string, home: string) =>
  * The pane lines that set `env` before the harness starts. A file's value is read by the
  * shell itself, so what is typed is its path and never the value.
  */
-export const envLines = (env: Env, home: string): ReadonlyArray<string> =>
+export const envLines = (env: Env, home: string) =>
   Arr.map(Rec.toEntries(env), ([name, value]) =>
     isLiteral(value)
       ? `export ${name}=${Result.getOrThrow(CommandLine.quote(value))}`
@@ -146,12 +187,12 @@ type ClaudeHooks = typeof ClaudeHooks.Type;
 const decodeHooks = Schema.decodeUnknownOption(ClaudeHooks);
 
 /** Collie's settings with the overlay merged in: its hooks come first and always stay. */
-export function mergeClaudeSettings(
-  collie: ClaudeSettings,
-  overlay: ClaudeOverlay,
-): ClaudeSettings {
+export function mergeClaudeSettings(collie: ClaudeSettings, overlay: ClaudeOverlay) {
   const { hooks: added = {}, ...rest } = overlay;
-  const own = Option.getOrElse(decodeHooks(collie.hooks), (): ClaudeHooks => ({}));
+  const own = Option.getOrElse(decodeHooks(collie.hooks), () => {
+    const returned: ClaudeHooks = {};
+    return returned;
+  });
   const events = new Set([...Struct.keys(own), ...Struct.keys(added)]);
   const hooks: ClaudeHooks = Rec.fromEntries(
     Arr.map(

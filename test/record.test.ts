@@ -75,12 +75,12 @@ const loggedModel = (dir: string, reads: Array<string>) =>
   });
 
 /** A record's sources over these Runs; each build of it says when it starts with `started`. */
-const sourcesOf = (
+const sourcesOf: (
   dir: string,
   model: Effect.Success<ReturnType<typeof makeRunModel>>,
   runs: ReadonlyArray<RunFacts>,
-  started: Effect.Effect<void> = Effect.void,
-): RecordSources => ({
+  started?: Effect.Effect<void>,
+) => RecordSources = (dir, model, runs, started = Effect.void) => ({
   env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }),
   model,
   related: (runId, also) => {

@@ -15,4 +15,4 @@ const COLUMNS = new Map<string, Column>([
 ]);
 
 /** A record's tab, or a page, by the column it is laid out in; anything else reads. */
-export const columnOf = (tabOrPage: string): Column => COLUMNS.get(tabOrPage) ?? "reading";
+export const columnOf = (tabOrPage: string) => COLUMNS.get(tabOrPage) ?? "reading";

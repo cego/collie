@@ -39,7 +39,7 @@ export const railStepped = (drawn: number, room: number, by: 1 | -1) =>
   sized(RAIL, drawn + by * RAIL.step, room);
 
 /** What a key does to the workspace, ahead of the Flow's own keys. */
-export const workspaceKey = (key: Key, focusing: boolean): "focus" | "restore" | null => {
+export const workspaceKey = (key: Key, focusing: boolean) => {
   if (isFocusKey(key)) return focusing ? "restore" : "focus";
   return key.key === "Escape" && focusing ? "restore" : null;
 };

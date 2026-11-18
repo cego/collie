@@ -17,7 +17,10 @@ import { task } from "./support/task";
 
 const machine = { installation: "inst-pc", profile: "local", name: "mk-pc" };
 const vm = { installation: "inst-vm", profile: "p-vm", name: "vm-mk", target: "mk@vm" };
-const snapshot = (on: typeof machine, tasks: ReadonlyArray<TaskView>): FlockItem => ({
+const snapshot: (on: typeof machine, tasks: ReadonlyArray<TaskView>) => FlockItem = (
+  on,
+  tasks,
+) => ({
   machine: on,
   message: {
     _tag: "Snapshot",
@@ -29,7 +32,7 @@ const snapshot = (on: typeof machine, tasks: ReadonlyArray<TaskView>): FlockItem
     seq: 0,
   },
 });
-const upsert = (one: TaskView, seq: number): FlockItem => ({
+const upsert: (one: TaskView, seq: number) => FlockItem = (one, seq) => ({
   machine,
   message: { _tag: "Upsert", seq, task: one },
 });

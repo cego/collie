@@ -7,8 +7,8 @@ import type { TaskMr, TaskView } from "../../src/board-model";
 import { epochMs } from "../../src/time";
 
 /** One Task, with the parts a test does not care about at rest. */
-export function task(over: Partial<TaskView> = {}): TaskView {
-  return {
+export function task(over: Partial<TaskView> = {}) {
+  const returned: TaskView = {
     id: "t1",
     name: "Strapi prod seeder",
     project: "content",
@@ -45,13 +45,14 @@ export function task(over: Partial<TaskView> = {}): TaskView {
     at: epochMs("2026-09-16T12:00:00.000Z"),
     ...over,
   };
+  return returned;
 }
 
 /** One of a Task's merge requests on `gitlab.cego.dk`, open and not ready unless said. */
-export function taskMr(project: string, iid: number, over: Partial<TaskMr> = {}): TaskMr {
+export function taskMr(project: string, iid: number, over: Partial<TaskMr> = {}) {
   const url = `https://gitlab.cego.dk/${project}/-/merge_requests/${iid}`;
   const short = `${Arr.lastNonEmpty(Str.split(project, "/"))}!${iid}`;
-  return {
+  const returned: TaskMr = {
     id: `gitlab.cego.dk/${project}!${iid}`,
     mr: url,
     label: `${project}!${iid}`,
@@ -66,4 +67,5 @@ export function taskMr(project: string, iid: number, over: Partial<TaskMr> = {})
     waitsOn: [],
     ...over,
   };
+  return returned;
 }

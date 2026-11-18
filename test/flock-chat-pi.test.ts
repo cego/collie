@@ -747,10 +747,12 @@ test("Pi's file tools and shell are refused where the human's sessions are kept"
       const session = yield* driver.open("pi-closed", "openai-codex/gpt-6.1-sol", "medium");
       yield* Effect.addFinalizer(() => session.close);
       const handlers = new Map<string, ToolCallHandler>();
-      const extension = yield* Effect.promise(
-        (): Promise<{ readonly default: (pi: PiApi) => void }> =>
-          import(`${context.dir}/pi-collie.ts`),
-      );
+      const extension = yield* Effect.promise(() => {
+        const returned: Promise<{ readonly default: (pi: PiApi) => void }> = import(
+          `${context.dir}/pi-collie.ts`
+        );
+        return returned;
+      });
       extension.default({
         registerMcpServer: () => undefined,
         on: (event, handler) => handlers.set(event, handler),
@@ -791,10 +793,7 @@ const configured: UserMcpServers = {
   refused: { command: "refused-mcp" },
 };
 
-const withServers = <A, E>(
-  servers: UserMcpServers,
-  body: Parameters<typeof withPi<A, E>>[0],
-): Promise<A> => {
+const withServers = <A, E>(servers: UserMcpServers, body: Parameters<typeof withPi<A, E>>[0]) => {
   userServers = servers;
   return withPi(body).finally(() => {
     userServers = {};
@@ -857,7 +856,10 @@ interface LoadedPi {
 }
 
 /** Pi as the extension meets it, refusing the server named `refused` as Pi refuses a name. */
-const refusingPi = (registered: Registered[], started: SessionStart[]): LoadedPi => ({
+const refusingPi: (registered: Registered[], started: SessionStart[]) => LoadedPi = (
+  registered,
+  started,
+) => ({
   registerMcpServer: (name, config) => {
     if (name === "refused") throw new Error("names registered by another extension throw");
     registered.push([name, config]);
@@ -875,10 +877,7 @@ test("Collie's extension registers its server and the human's, survives one Pi r
       Bun.env.COLLIE_CHAT_MCP_SERVERS = servers;
       const registered: Registered[] = [];
       const started: SessionStart[] = [];
-      const extension = yield* Effect.promise(
-        (): Promise<{ readonly default: (pi: LoadedPi) => void }> =>
-          import(`${context.dir}/pi-collie.ts`),
-      );
+      const extension = yield* Effect.promise(() => import(`${context.dir}/pi-collie.ts`));
       extension.default(refusingPi(registered, started));
       expect(Bun.env.COLLIE_CHAT_MCP_SERVERS).toBeUndefined();
       expect(registered[0]).toEqual([

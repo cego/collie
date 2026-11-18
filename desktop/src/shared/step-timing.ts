@@ -6,7 +6,7 @@ import { epochMs, minutes } from "../../../src/time";
 export const stepTiming = (
   node: FlowRun & { readonly runs?: ReadonlyArray<FlowRun> },
   now: number,
-): string | null => {
+) => {
   if (node.started === null) return node.usual == null ? null : `usually ${minutes(node.usual)}`;
   const elapsed =
     node.ended === null

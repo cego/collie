@@ -75,10 +75,13 @@ const fromSecretTool = (tool: string) =>
  * whole, as glab, gh and Helle keep the same tokens on every Machine. Until it exists, what
  * an earlier Desktop left in the Secret Service is read and copied into it.
  */
-export const credentialsFile = (
+export const credentialsFile: (
+  dir: string,
+  secretTool?: string,
+) => Keyring & { readonly forgetSlackBot: Effect.Effect<void, string> } = (
   dir: string,
   secretTool = "secret-tool",
-): Keyring & { readonly forgetSlackBot: Effect.Effect<void, string> } => {
+) => {
   const file = `${dir}/credentials`;
   const lock = Semaphore.makeUnsafe(1);
   const write = (values: ReadonlyMap<string, string>) =>

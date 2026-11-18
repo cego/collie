@@ -112,7 +112,7 @@ test("a held record's frame over the cap lets the least recently opened go, neve
 test("a kept record's frame sent without the Flow it already had keeps that Flow", () => {
   // SAFETY: the test reads only a frame's title and Flow.
   const bare = (title: string) => ({ title }) as RunDetail;
-  const record = (detail: RunDetail): KeptRecord => ({ detail, asOf: null, bytes: 1 });
+  const record = (detail: RunDetail) => ({ detail, asOf: null, bytes: 1 });
   const head = record({ ...bare("head"), flow: mainFlow() });
   const later = withFlowKept(Option.some(head), record(bare("later")));
   expect(later.detail?.title).toBe("later");

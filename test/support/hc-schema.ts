@@ -50,7 +50,7 @@ export const jsonText = flow(
   Result.getOrThrow,
 );
 
-const resultOf = (method: string): Node => {
+const resultOf = (method: string) => {
   const found = Arr.findFirst(doc.methods, (m) => m.name === method);
   if (found._tag === "None") throw new Error(`${pin.schema} has no method ${method}`);
   return found.value.result.schema;
@@ -58,7 +58,7 @@ const resultOf = (method: string): Node => {
 
 export const hasMethod = (method: string) => Arr.some(doc.methods, (m) => m.name === method);
 
-const component = (ref: string): [string, Node] => {
+const component: (ref: string) => [string, Node] = (ref) => {
   const name = pipe(ref, Str.replace("#/components/schemas/", ""));
   const found = doc.components.schemas[name];
   if (!found) throw new Error(`${pin.schema} has no component ${name}`);
@@ -71,59 +71,95 @@ const ANY: ReadonlyArray<Schema.Json> = [null, false, 0, "s", [], {}];
  * Replies a node allows: each alternative at each position at least once, and each object
  * both with only its required properties and with all of them.
  */
-function samples(node: Node, seen: ReadonlyArray<string> = []): ReadonlyArray<Schema.Json> {
+function samples(node: Node, seen: ReadonlyArray<string> = []) {
   if (node.$ref !== undefined) {
     const [name, target] = component(node.$ref);
     // WaitResult nests itself: one level of it is sampled.
-    return seen.includes(name) ? [] : samples(target, [...seen, name]);
+    const answer: ReadonlyArray<Schema.Json> = seen.includes(name)
+      ? []
+      : samples(target, [...seen, name]);
+    return answer;
   }
-  if (node.anyOf) return Arr.flatMap(node.anyOf, (branch) => samples(branch, seen));
-  if (node.enum) return node.enum;
-  if (node.type !== undefined && !isString(node.type))
-    return Arr.flatMap(node.type, (type) => samples({ ...node, type }, seen));
+  if (node.anyOf) {
+    const answer: ReadonlyArray<Schema.Json> = Arr.flatMap(node.anyOf, (branch) =>
+      samples(branch, seen),
+    );
+    return answer;
+  }
+  if (node.enum) {
+    const answer: ReadonlyArray<Schema.Json> = node.enum;
+    return answer;
+  }
+  if (node.type !== undefined && !isString(node.type)) {
+    const answer: ReadonlyArray<Schema.Json> = Arr.flatMap(node.type, (type) =>
+      samples({ ...node, type }, seen),
+    );
+    return answer;
+  }
   switch (node.type) {
-    case "null":
-      return [null];
-    case "boolean":
-      return [false, true];
-    case "integer":
-      return [node.minimum ?? 0, ...(node.maximum === undefined ? [] : [node.maximum])];
-    case "number":
-      return [0, 1.5];
-    case "string":
-      return ["s"];
+    case "null": {
+      const answer: ReadonlyArray<Schema.Json> = [null];
+      return answer;
+    }
+    case "boolean": {
+      const answer: ReadonlyArray<Schema.Json> = [false, true];
+      return answer;
+    }
+    case "integer": {
+      const answer: ReadonlyArray<Schema.Json> = [
+        node.minimum ?? 0,
+        ...(node.maximum === undefined ? [] : [node.maximum]),
+      ];
+      return answer;
+    }
+    case "number": {
+      const answer: ReadonlyArray<Schema.Json> = [0, 1.5];
+      return answer;
+    }
+    case "string": {
+      const answer: ReadonlyArray<Schema.Json> = ["s"];
+      return answer;
+    }
     case "array": {
       const items = node.items ? samples(node.items, seen) : ANY;
       const length = Math.max(node.minItems ?? 0, 1);
-      return [
+      const answer: ReadonlyArray<Schema.Json> = [
         ...(node.minItems ? [] : [[]]),
         ...Arr.map(items, (item) => Arr.makeBy(length, () => item)),
       ];
+      return answer;
     }
     case "object": {
       const properties = Rec.toEntries(node.properties ?? {});
       if (properties.length === 0) {
         const values = node.additionalProperties ? samples(node.additionalProperties, seen) : ANY;
-        return [{}, ...Arr.map(values, (value) => ({ key: value }))];
+        const answer: ReadonlyArray<Schema.Json> = [
+          {},
+          ...Arr.map(values, (value) => ({ key: value })),
+        ];
+        return answer;
       }
       const required = node.required ?? [];
       const options = Arr.map(
         properties,
         ([name, schema]) => [name, samples(schema, seen)] as const,
       );
-      const first = Arr.map(options, ([name, values]): [string, Schema.Json] => [
-        name,
-        values[0] ?? null,
-      ]);
+      const first = Arr.map(options, ([name, values]) => {
+        const returned: [string, Schema.Json] = [name, values[0] ?? null];
+        return returned;
+      });
       const full = Rec.fromEntries(first);
       const minimal = Rec.fromEntries(Arr.filter(first, ([name]) => Arr.contains(required, name)));
       const variants = Arr.flatMap(options, ([name, values]) =>
         Arr.map(values.slice(1), (value) => ({ ...full, [name]: value })),
       );
-      return [minimal, full, ...variants];
+      const answer: ReadonlyArray<Schema.Json> = [minimal, full, ...variants];
+      return answer;
     }
-    default:
-      return ANY;
+    default: {
+      const answer: ReadonlyArray<Schema.Json> = ANY;
+      return answer;
+    }
   }
 }
 
@@ -139,7 +175,7 @@ const definitions = Rec.map(
 const allowed = new Map<string, Schema.Top>();
 
 /** Why the pinned schema forbids `reply` to `method`, or undefined where it allows it. */
-export function replyViolation(method: string, reply: Schema.Json): string | undefined {
+export function replyViolation(method: string, reply: Schema.Json) {
   let schema = allowed.get(method);
   if (!schema) {
     schema = SchemaRepresentation.fromJsonSchemaDocument({

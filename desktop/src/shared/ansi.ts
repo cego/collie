@@ -44,7 +44,7 @@ const CLEARS = new Map<number, ReadonlyArray<string>>([
   [49, ["backgroundColor"]],
 ]);
 
-export const ansiSpans = (output: string): ReadonlyArray<AnsiSpan> => {
+export const ansiSpans = (output: string) => {
   const text = pipe(output, Str.replace(OTHER, ""));
   const spans: AnsiSpan[] = [];
   let style: AnsiSpan["style"] = {};
@@ -87,7 +87,7 @@ export const ansiSpans = (output: string): ReadonlyArray<AnsiSpan> => {
 };
 
 /** The spans of each line, with a colour still on carried to the lines after it. */
-export const ansiLines = (text: string): ReadonlyArray<ReadonlyArray<AnsiSpan>> => {
+export const ansiLines = (text: string) => {
   const lines: AnsiSpan[][] = [[]];
   for (const span of ansiSpans(text))
     Arr.forEach(Str.split(span.text, "\n"), (part, at) => {

@@ -18,7 +18,12 @@ import {
   removeDraft,
 } from "../review-comments";
 
-const plan = (id: string, file: string, quote: string, text: string): Draft => ({
+const plan: (id: string, file: string, quote: string, text: string) => Draft = (
+  id,
+  file,
+  quote,
+  text,
+) => ({
   id,
   anchor: { _tag: "Plan", file, quote },
   text,
@@ -198,7 +203,7 @@ test("a line is in the hunks only where the patch shows it, on the side asked", 
 });
 
 test("a diff draft is located by its path and lines, and by the side as it was for removed ones", () => {
-  const diff = (id: string, range: Parameters<typeof diffAnchor>[1]): Draft => ({
+  const diff = (id: string, range: Parameters<typeof diffAnchor>[1]) => ({
     id,
     anchor: diffAnchor("src/a.ts", range, changed),
     text: id,

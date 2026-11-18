@@ -55,7 +55,7 @@ export const waitingForIO: ForegroundApi["wait"] = (effect) =>
   );
 
 /** Wrap the physical service before host components capture it. */
-export const foregroundFileSystem = (fs: FileSystem.FileSystem): FileSystem.FileSystem => {
+export const foregroundFileSystem = (fs: FileSystem.FileSystem) => {
   const operation =
     <Self, Args extends unknown[], A, E, R>(
       self: Self,
@@ -63,7 +63,7 @@ export const foregroundFileSystem = (fs: FileSystem.FileSystem): FileSystem.File
     ) =>
     (...args: Args) =>
       waitingForIO(method.apply(self, args));
-  const file = (handle: FileSystem.File): FileSystem.File => ({
+  const file: (handle: FileSystem.File) => FileSystem.File = (handle) => ({
     [FileSystem.FileTypeId]: FileSystem.FileTypeId,
     stat: waitingForIO(handle.stat),
     sync: waitingForIO(handle.sync),

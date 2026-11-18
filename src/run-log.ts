@@ -61,14 +61,14 @@ export const appendLogLine = Effect.fn("RunLog.append")(function* (dir: string, 
   return first;
 }, writing.withPermits(1));
 
-export const readLogTail = Effect.fn("RunLog.tail")(function* (
+export const readLogTail: (
   dir: string,
   cap: number,
-): Effect.fn.Return<
+) => Effect.Effect<
   LogTail | null,
   import("effect/PlatformError").PlatformError,
   FileSystem.FileSystem
-> {
+> = Effect.fn("RunLog.tail")(function* (dir: string, cap: number) {
   const fs = yield* FileSystem.FileSystem;
   if (!(yield* fs.exists(`${dir}/log.txt`))) return null;
   const index = yield* indexOf(dir);
@@ -84,8 +84,9 @@ export const readLogTail = Effect.fn("RunLog.tail")(function* (
         : "";
   const shown =
     text === "" ? 0 : Str.split(text, "\n").length - Number(pipe_(text, Str.endsWith("\n")));
-  return {
+  const tail: LogTail = {
     panel: { _tag: "Text", text, truncated: from > 0 },
     firstLine: index.lines + Number(!index.ended) - shown + 1,
   };
+  return tail;
 }, writing.withPermits(1));

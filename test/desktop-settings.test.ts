@@ -18,7 +18,7 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
-import { HostRefused, type SharedSetting, type SharedSettings } from "../src/board-model";
+import { HostRefused, type SharedSetting } from "../src/board-model";
 import {
   desktopChange,
   editSetting,
@@ -53,7 +53,7 @@ import {
 } from "../desktop/src/bun/settings";
 
 const at = (hour: number) => `2026-10-07T${pipe_(String(hour), Str.padStart(2, "0"))}:00:00.000Z`;
-const set = (key: string, value: SharedSetting["value"], hour: number): SharedSetting => ({
+const set = (key: string, value: SharedSetting["value"], hour: number) => ({
   key,
   value,
   at: at(hour),
@@ -418,7 +418,7 @@ test("the agent profile is one shared JSON text: an edit is checked, synced as w
 const machine = (name: string, held: ReadonlyArray<SharedSetting>, meanwhile = Effect.void) => {
   const asked: Array<ReadonlyArray<SharedSetting>> = [];
   let has = [...held];
-  const answer = (): SharedSettings => ({ settings: has, flock: null });
+  const answer = () => ({ settings: has, flock: null });
   const door = {
     settings: meanwhile.pipe(Effect.map(answer)),
     setSettings: ({ settings }: { settings: ReadonlyArray<SharedSetting> }) =>
@@ -652,7 +652,7 @@ const definer = (name: string, held: ReadonlyArray<SharedDefinition>, refused?: 
 };
 type Definer = ReturnType<typeof definer>;
 
-const defined = (path: string, base64: string | null, hour: number): SharedDefinition => ({
+const defined = (path: string, base64: string | null, hour: number) => ({
   path,
   base64,
   at: at(hour),

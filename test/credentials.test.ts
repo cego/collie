@@ -33,7 +33,7 @@ const holding = (dir: string, values: ReadonlyArray<string>) =>
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const found: string[] = [];
-    const walk = (at: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
+    const walk: (at: string) => Effect.Effect<void, never, FileSystem.FileSystem> = (at) =>
       Effect.gen(function* () {
         for (const name of yield* fs.readDirectory(at).pipe(Effect.orElseSucceed(() => []))) {
           const file = path.join(at, name);

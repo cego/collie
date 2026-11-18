@@ -60,13 +60,13 @@ export const readSelection = Effect.fn("Selection.read")(function* (file: string
  * message and never when they click: a card opened and never asked about costs the
  * conversation nothing.
  */
-export function promptLine(on: Selection | null): string {
+export function promptLine(on: Selection | null) {
   return on === null
     ? ""
     : `Board: "${on.name}" is open (run ${on.run}). "It", "this one" and the like mean this card; a Herd-wide question is still Herd-wide.`;
 }
 
 /** The line under the chat prompt: what "it" means right now, for both halves of the Home. */
-export function selectionLine(on: Selection | null): string {
+export function selectionLine(on: Selection | null) {
   return on === null ? "board selection: none · whole herd" : `board selection: ${on.name}`;
 }

@@ -155,7 +155,10 @@ test("History alone reads the full Run list, and later reads include newly finis
     }),
   ));
 
-const proposal = (id: string, targets: ProposalRecord["targets"]): ProposalRecord => ({
+const proposal: (id: string, targets: ProposalRecord["targets"]) => ProposalRecord = (
+  id,
+  targets,
+) => ({
   kind: "proposal",
   id,
   content_hash: id,

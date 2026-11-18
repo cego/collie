@@ -85,7 +85,7 @@ const asks = (
   inputs: Record<string, string>,
   strategies: Record<string, string>,
   extra: Partial<BranchAsk> = {},
-): BranchAsk => ({
+) => ({
   cwd: rig.projectDir,
   name: "Add a picker",
   inputs,

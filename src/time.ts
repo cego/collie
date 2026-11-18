@@ -9,7 +9,7 @@ const parsed = new Map<string, number>();
 const PARSED_KEPT = 100_000;
 
 /** A recorded timestamp in epoch milliseconds, and `NaN` for one that is not a time. */
-export function epochMs(iso: string): number {
+export function epochMs(iso: string) {
   const known = parsed.get(iso);
   if (known !== undefined) return known;
   const ms = Option.match(DateTime.make(iso), {
@@ -49,7 +49,7 @@ const UNITS = [
  * A negative span is `0s`: the two ends come from different clocks (a step's own stamp
  * against this machine's now), and a duration counting backwards is worse than a zero.
  */
-export function took(ms: number): string {
+export function took(ms: number) {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
@@ -62,7 +62,7 @@ export function took(ms: number): string {
  * wants where `took`'s `49h` is a code to expand — a card saying "silent for 49h" reads
  * as a measurement, and "silent for 49 hours" reads as the problem it is.
  */
-export function spanned(ms: number): string {
+export function spanned(ms: number) {
   const seconds = Math.max(0, Math.round(ms / 1000));
   for (const { unit, size } of UNITS) {
     const n = Math.floor(seconds / size);
@@ -75,12 +75,12 @@ export function spanned(ms: number): string {
  * How long ago, in the coarsest unit that still says something. A menu line and a
  * prompt both want "2 days ago", not a timestamp to subtract in your head.
  */
-export function ago(iso: string, nowMs: number): string {
+export function ago(iso: string, nowMs: number) {
   const then = epochMs(iso);
   return Number.isNaN(then) ? iso : agoMs(then, nowMs);
 }
 
-export function agoMs(thenMs: number, nowMs: number): string {
+export function agoMs(thenMs: number, nowMs: number) {
   const span = spanned(nowMs - thenMs);
   return span === "" ? "just now" : `${span} ago`;
 }
@@ -94,7 +94,7 @@ export function agoMs(thenMs: number, nowMs: number): string {
  * Epoch milliseconds rather than an ISO string, because that is what a row carries;
  * `0` is "nothing recorded when", which shows no time at all rather than 1970.
  */
-export function agoShort(atMs: number, nowMs: number): string {
+export function agoShort(atMs: number, nowMs: number) {
   if (atMs <= 0) return "";
   const seconds = Math.floor((nowMs - atMs) / 1000);
   if (seconds < 5) return "now";
@@ -107,7 +107,7 @@ export function agoShort(atMs: number, nowMs: number): string {
 }
 
 /** How long, as a Flow's fact line says it: `12 min`, `2 h`, `1 h 5 min`. */
-export function minutes(ms: number): string {
+export function minutes(ms: number) {
   const whole = Math.floor(Math.max(0, ms) / 60_000);
   if (whole < 1) return "under a minute";
   if (whole < 60) return `${whole} min`;
@@ -116,7 +116,7 @@ export function minutes(ms: number): string {
 }
 
 /** A time of day on this Machine's clock: `15:45`. */
-export function clockTime(ms: number): string {
+export function clockTime(ms: number) {
   const iso = DateTime.formatIsoOffset(
     DateTime.makeZonedUnsafe(ms, { timeZone: DateTime.zoneMakeLocal() }),
   );

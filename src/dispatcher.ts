@@ -20,14 +20,7 @@ import {
   Predicate,
   Result,
 } from "effect";
-import {
-  HerdrError,
-  herdrFailureReason,
-  isSettled,
-  type AgentInfo,
-  type Herdr,
-  type Submission,
-} from "./herdr";
+import { HerdrError, herdrFailureReason, isSettled, type Herdr, type Submission } from "./herdr";
 import { verifyIncarnation, type AgentEntry, type Incarnation } from "./registry";
 import {
   appendLine,
@@ -69,7 +62,7 @@ const HUMAN_DOORS: Partial<Record<FrontDoor, string>> = {
 };
 
 /** The host's local time to the minute, with its offset: `2026-10-16 14:02 +02:00`. */
-const localMinute = (at: number): string => {
+const localMinute = (at: number) => {
   const iso = DateTime.formatIsoOffset(
     DateTime.makeZonedUnsafe(at, { timeZone: DateTime.zoneMakeLocal() }),
   );
@@ -80,7 +73,7 @@ const localMinute = (at: number): string => {
  * Whose words a Delivery carries, or null for Collie's own. A chat's `said` of "" is one
  * kept in a file, so its line names the human without quoting them.
  */
-const senderLine = (actor: Asker | undefined, at: number): string | null => {
+const senderLine = (actor: Asker | undefined, at: number) => {
   if (actor === undefined) return null;
   if (actor.origin === "agent" || actor.origin === "host") {
     const sender = actor.from;
@@ -103,7 +96,7 @@ export const deliveryText = (
   actor: Asker | undefined,
   at: number,
   workflowNotice?: string,
-): string => {
+) => {
   const line = senderLine(actor, at);
   const heading = Arr.join(
     Arr.filter([line, workflowNotice], (one) => one != null),
@@ -305,7 +298,7 @@ const modeRank = (mode: string) => MODE_ORDER[mode as Delivery["mode"]] ?? LAST;
 /** Due messages, worst-waited first. Exported because ordering is a rule, not a detail. */
 export function dispatchOrder<
   T extends { readonly mode: string; readonly cause: { readonly kind: string } },
->(due: ReadonlyArray<T>): T[] {
+>(due: ReadonlyArray<T>) {
   return [...due].sort(
     (a, b) =>
       modeRank(a.mode) - modeRank(b.mode) || causeRank(a.cause.kind) - causeRank(b.cause.kind),
@@ -404,12 +397,13 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
   }).pipe(Effect.ensuring(Effect.sync(() => open.delete(terminalId))));
 });
 
-function refuse(id: string | null, reason: Refusal, detail: string): SubmitOutcome {
-  return { ok: false, id, reason, detail };
+function refuse(id: string | null, reason: Refusal, detail: string) {
+  const returned: SubmitOutcome = { ok: false, id, reason, detail };
+  return returned;
 }
 
 const agentsNow = (deps: DispatcherDeps) =>
-  deps.herdr.agentList().pipe(Effect.orElseSucceed((): AgentInfo[] => []));
+  deps.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
 
 /**
  * One message: reserved, sent, settled. The reservation is appended **before** herdr is
@@ -427,7 +421,7 @@ function deliveryOf(
   draft: DeliveryDraft,
   at: string,
   state: Delivery["state"],
-): Delivery {
+) {
   let line: Delivery = {
     id: `${draft.requestId}-${draft.attempt}`,
     at,
@@ -691,7 +685,7 @@ export const DELIVERY_TOKEN = "collie-delivery:";
  * herdr's view of a prompt box is its first few hundred bytes, and a slash command has to
  * keep its first line. The harness's submit hook reads the same token back.
  */
-export function marked(text: string, id: string): string {
+export function marked(text: string, id: string) {
   const token = `${DELIVERY_TOKEN}${id}`;
   if (Str.split(text, "\n").includes(token)) return text;
   if (!pipe_(text, Str.startsWith("/"))) return `${token}\n${text}`;
@@ -700,7 +694,7 @@ export function marked(text: string, id: string): string {
 }
 
 /** The delivery a submitted prompt carried: its first token, which is the one `marked` adds. */
-export function carriedDelivery(prompt: string): string | null {
+export function carriedDelivery(prompt: string) {
   return new RegExp(`${DELIVERY_TOKEN}(\\S+)`).exec(prompt)?.[1] ?? null;
 }
 

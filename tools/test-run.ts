@@ -217,9 +217,10 @@ const ranked = (lines: ReadonlyArray<string>, top: number, indent = 0) => {
 export const startsSummary = (starts: string) => {
   const lines = Arr.map(
     Arr.filter(Str.split(starts, "\n"), (line) => line !== ""),
-    (line): [string, string?] => {
+    (line) => {
       const [source, file] = Str.split(line, "\t");
-      return [source, file];
+      const returned: [string, string?] = [source, file];
+      return returned;
     },
   );
   const byFile = Map.groupBy(lines, ([, file]) => file);
@@ -266,7 +267,7 @@ export const pressureAt = (path = "/proc/pressure/cpu") =>
       return avg60 === undefined ? null : Number(avg60);
     }),
     Effect.orElseSucceed(() => null),
-    Effect.map((psi): Pressure => ({ psi, load: loadavg()[0]! })),
+    Effect.map((psi) => ({ psi, load: loadavg()[0]! })),
   );
 
 const seconds = (value: number) => `${value.toFixed(2)} s`;

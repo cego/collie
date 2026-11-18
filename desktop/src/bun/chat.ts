@@ -139,7 +139,11 @@ const LOOK_AGAIN = "2 minutes";
 /** How many earlier conversations the history offers. */
 const HISTORY = 10;
 
-export const refusal = (message: string): AguiEvent => ({ type: "RUN_ERROR", runId: "", message });
+export const refusal: (message: string) => AguiEvent = (message) => ({
+  type: "RUN_ERROR",
+  runId: "",
+  message,
+});
 
 /** The largest PDF handed over as a document, and text as text; anything larger goes by name. */
 const PDF_BYTES = 4 * 1024 * 1024;
@@ -593,7 +597,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
         })),
       ),
     ).pipe(
-      Effect.map((harnesses): ChatChoices => ({ ...now, harnesses })),
+      Effect.map((harnesses) => ({ ...now, harnesses })),
       Effect.provideContext(services),
     );
 

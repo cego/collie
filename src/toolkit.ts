@@ -34,8 +34,7 @@ export const STRICT = { onExcessProperty: "error", errors: "all" } as const;
 
 export const decodeStrict = <S extends Schema.ConstraintDecoder<unknown, never>>(schema: S) => {
   const decode = Schema.decodeUnknownResult(schema, STRICT);
-  return (input: JsonObject): Result.Result<S["Type"], string> =>
-    Result.mapError(decode(input), (error) => error.message);
+  return (input: JsonObject) => Result.mapError(decode(input), (error) => error.message);
 };
 
 export const RunInput = Schema.Struct({ run: Schema.optionalKey(Schema.String) });
@@ -154,7 +153,7 @@ const DoInput = Schema.Struct({
  * member's own complaint — never the whole union spelled out. Empty where the trouble is
  * elsewhere, and the schema's own message stands.
  */
-function wrongActions(input: JsonObject): string[] {
+function wrongActions(input: JsonObject) {
   const loose = decodeLoose(input);
   if (loose._tag === "None") return [];
   return Arr.flatMap(loose.value.actions, (action, at) => {
@@ -482,7 +481,7 @@ export const TAKES: Record<ToolName, string> = {
 const HERD_CARDS = 40;
 
 /** One card as chat reads it: what the human sees on it, plus the id an action needs. */
-function cardLine(view: TaskView): string {
+function cardLine(view: TaskView) {
   const project = view.project === "" ? "" : ` (${view.project})`;
   const mrs = view.mrs ?? [];
   const where =
@@ -512,7 +511,7 @@ function cardLine(view: TaskView): string {
 }
 
 /** The board as chat reads it: the header, then each section's cards in the board's order. */
-export function herdLines(views: ReadonlyArray<TaskView>, now: number): string {
+export function herdLines(views: ReadonlyArray<TaskView>, now: number) {
   if (views.length === 0) return "- (no Runs in this Herd)";
   const lines = [headerSentence(views, now).text];
   let room = HERD_CARDS;
@@ -534,13 +533,13 @@ const LooseActions = Schema.Struct({
 export const decodeLoose = Schema.decodeUnknownOption(LooseActions);
 
 /** The JSON Schema a harness is given, generated from the schema the call is decoded with. */
-export const jsonSchemaOf = (schema: Schema.Top): JsonObject => {
+export const jsonSchemaOf = (schema: Schema.Top) => {
   const document = Schema.toJsonSchemaDocument(schema, { onExcessProperty: "error" });
   // SAFETY: a JSON Schema document is JSON, which is what JsonObject says.
   return { ...document.schema, $defs: document.definitions } as JsonObject;
 };
 
-export const inputSchemaOf = (tool: Tool.Any): JsonObject => jsonSchemaOf(tool.parametersSchema);
+export const inputSchemaOf = (tool: Tool.Any) => jsonSchemaOf(tool.parametersSchema);
 
 export const isToolName = (name: string): name is ToolName =>
   Arr.some(Struct.keys(CollieTools.tools), (key) => key === name);

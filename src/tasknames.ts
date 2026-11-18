@@ -21,7 +21,7 @@ import { askOnce, budgetedDeps, type BudgetedDeps, type TaskName } from "./evalu
 import { oneLine, taskWorkspaceLabel } from "./naming";
 import type { RunFacts } from "./runs";
 
-import { listTasks, readTask, Tasks, withTaskLockIfFree, writeTask, type TaskRecord } from "./task";
+import { listTasks, readTask, Tasks, withTaskLockIfFree, writeTask } from "./task";
 
 /** The names this person already has, as herdr reports them. Read-only context. */
 export interface LiveNames {
@@ -47,12 +47,12 @@ export interface TaskContext {
 const PREFIXED = /^(.+?)\s\|\s(.+)$/;
 
 /** Letters and digits only, for judging whether two names are the same word. */
-function normal(text: string): string {
+function normal(text: string) {
   return pipe_(Str.toLowerCase(text), Str.replace(/[^a-z0-9]+/g, ""));
 }
 
 /** The repository this work is in, which is the last component of its directory. */
-export function repositoryOf(cwd: string): string {
+export function repositoryOf(cwd: string) {
   return Arr.filter(Str.split(cwd, "/"), (part) => part !== "").at(-1) ?? "";
 }
 
@@ -61,7 +61,7 @@ export function repositoryOf(cwd: string): string {
  * the `<project> |` half of a live workspace label whose project names the same thing the
  * repository does. Spelled exactly as they spell it, because the point is recognition.
  */
-export function establishedProject(live: LiveNames, repo: string): string | null {
+export function establishedProject(live: LiveNames, repo: string) {
   const wanted = normal(repo);
   if (wanted === "") return null;
   for (const prefix of prefixesIn(live)) if (names(normal(prefix), wanted)) return prefix;
@@ -69,7 +69,7 @@ export function establishedProject(live: LiveNames, repo: string): string | null
 }
 
 /** Every `<project> |` prefix on the person's live workspaces, as they spelled it. */
-function prefixesIn(live: LiveNames): string[] {
+function prefixesIn(live: LiveNames) {
   return Arr.flatMap(live.workspaces, (label) => {
     const prefix = Option.getOrUndefined(
       Option.flatMap(Option.fromNullishOr(PREFIXED.exec(oneLine(label))), (present) =>
@@ -117,7 +117,7 @@ const DANGLING = new Set([
  * when there is no evaluator to ask, or when it answered with nothing usable. A start
  * never fails because a name could not be inferred.
  */
-export function fallbackName(context: TaskContext, live: LiveNames): TaskName {
+export function fallbackName(context: TaskContext, live: LiveNames) {
   const repo = repositoryOf(context.cwd);
   const from = oneLine(context.short || context.goal || context.named || context.workflow);
   const words = /\s/.test(from)
@@ -159,7 +159,7 @@ const FILLER = new Set([
  * Whether a title names only the workflow it runs and words like "new work": `Plan new
  * work` and `Implement plan` say nothing two Tasks of one workflow do not both say.
  */
-export function isGenericTitle(title: string, workflow: string): boolean {
+export function isGenericTitle(title: string, workflow: string) {
   const said = (word: string) => FILLER.has(word) || own.has(word);
   const own = new Set(Str.split(Str.toLowerCase(workflow), /[^\p{L}\p{N}]+/u));
   return Arr.every(
@@ -171,7 +171,7 @@ export function isGenericTitle(title: string, workflow: string): boolean {
 const isText = Schema.is(Schema.String);
 
 /** The most descriptive Input a start was given, whatever it is called or where it came. */
-export function workNamedIn(inputs: Readonly<Record<string, Schema.Json>>): string {
+export function workNamedIn(inputs: Readonly<Record<string, Schema.Json>>) {
   return Arr.reduce(
     Arr.flatMap(Rec.values(inputs), (value) => (isText(value) ? [Str.trim(value)] : [])),
     "",
@@ -215,12 +215,12 @@ export const objectiveOf = Effect.fn("tasknames.objectiveOf")(function* (
 });
 
 /** A slug read as a phrase: what a person would have written, capitalised once. */
-function sentence(text: string): string {
+function sentence(text: string) {
   return text === "" ? "" : `${Str.toUpperCase(text[0]!)}${pipe_(text, Str.slice(1))}`;
 }
 
 /** One list of the person's own names, quoted so a label cannot end the block. */
-function listed(heading: string, names: ReadonlyArray<string>): string {
+function listed(heading: string, names: ReadonlyArray<string>) {
   const lines = [...new Set(Arr.filter(Arr.map(names, oneLine), (name) => name !== ""))];
   return Arr.join(
     [`### ${heading}`, ...(lines.length === 0 ? ["(none)"] : Arr.map(lines, (n) => `- ${n}`))],
@@ -229,7 +229,7 @@ function listed(heading: string, names: ReadonlyArray<string>): string {
 }
 
 /** Everything the namer is shown, and it is all data. */
-export function namePack(context: TaskContext, live: LiveNames): string {
+export function namePack(context: TaskContext, live: LiveNames) {
   return Arr.join(
     [
       "## The work being started",
@@ -258,7 +258,7 @@ export function namePack(context: TaskContext, live: LiveNames): string {
  * by what the stand-in would have said. A model that answered with nothing has not named
  * the Task, and the stand-in is what a Task with no name would have been called anyway.
  */
-export function cleanName(answer: TaskName, context: TaskContext, live: LiveNames): TaskName {
+export function cleanName(answer: TaskName, context: TaskContext, live: LiveNames) {
   const otherwise = fallbackName(context, live);
   // A prefix the person already uses belongs to the repository it names: borrowed for
   // another one, it files this work under somebody else's project on the board.
@@ -302,20 +302,20 @@ export const nameTask = Effect.fn("tasknames.nameTask")(function* (
  * The Tasks' labels are naming context; a failed read must not prevent a start. The host
  * reads its own; anything else asks it, and asking from inside it would start another.
  */
-const liveNames = Effect.fn("tasknames.liveNames")(function* (
-  env: PluginEnv,
-): Effect.fn.Return<LiveNames, never, PlatformServices> {
+const liveNames: (env: PluginEnv) => Effect.Effect<LiveNames, never, PlatformServices> = Effect.fn(
+  "tasknames.liveNames",
+)(function* (env: PluginEnv) {
   const own = yield* Effect.serviceOption(Tasks);
   // Lazily: lifecycle imports the host, which imports this.
   const { hostTasks } = yield* Effect.promise(() => import("./lifecycle"));
   const tasks = yield* (Option.isSome(own) ? own.value.list : hostTasks(env)).pipe(
-    Effect.orElseSucceed((): ReadonlyArray<TaskRecord> => []),
+    Effect.orElseSucceed(() => []),
   );
   return {
     workspaces: Arr.map(tasks, (task) => task.label),
     tabs: [],
     panes: [],
-  } satisfies LiveNames;
+  };
 });
 
 /** What a start is about, as its caller gave it. */

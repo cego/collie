@@ -53,7 +53,7 @@ export const BrowserView = {
   defineRPC: (rpc: {
     readonly maxRequestTime: number;
     readonly handlers: Rpc["handlers"] & { readonly requests: {} };
-  }): Rpc => ({ ...rpc, send: { frame: (_frame: Frame) => {} } }),
+  }) => ({ ...rpc, send: { frame: (_frame: Frame) => {} } }),
 };
 
 export class BrowserWindow {
@@ -92,11 +92,12 @@ export const Utils = {
   showNotification,
   clipboardReadText: () => "",
   clipboardWriteText: (_text: string) => {},
-  clipboardAvailableFormats: (): string[] => [],
-  openFileDialog: (_options: {
-    canChooseDirectory: boolean;
-    allowsMultipleSelection: boolean;
-  }): Promise<string[]> => Promise.resolve([]),
+  clipboardAvailableFormats: () => {
+    const returned: string[] = [];
+    return returned;
+  },
+  openFileDialog: (_options: { canChooseDirectory: boolean; allowsMultipleSelection: boolean }) =>
+    Promise.resolve([]),
 };
 
 /** A bundle's own version.json, as `desktop/scripts/bundle.ts` writes it. */

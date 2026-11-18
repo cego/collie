@@ -885,7 +885,7 @@ test.skipIf(process.platform !== "linux")(
 const refusal = () => Object.assign(new Error("kill EPERM"), { code: "EPERM" });
 
 /** `/proc` as it shows one marked process `pid`, through `fs`, with its stat and environment as given. */
-const fakeProc = (
+const fakeProc: (
   fs: FileSystem.FileSystem,
   pid: number,
   show: {
@@ -893,7 +893,7 @@ const fakeProc = (
     readonly environ: () => string;
     readonly list?: Effect.Effect<void>;
   },
-): FileSystem.FileSystem => ({
+) => FileSystem.FileSystem = (fs, pid, show) => ({
   ...fs,
   exists: (path) => (path === "/proc/self/stat" ? Effect.succeed(true) : fs.exists(path)),
   readDirectory: (path, options) =>

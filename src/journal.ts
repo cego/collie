@@ -18,7 +18,7 @@ export interface Journal<A> {
 
 const textsOf = (raw: string) => Arr.filter(Str.split(raw, "\n"), (text) => Str.trim(text) !== "");
 
-const tally = <A>(decoded: ReadonlyArray<Option.Option<A>>): Journal<A> => {
+const tally = <A>(decoded: ReadonlyArray<Option.Option<A>>) => {
   const lines: A[] = [];
   let corrupt = 0;
   for (const [at, one] of decoded.entries()) {
@@ -31,7 +31,7 @@ const tally = <A>(decoded: ReadonlyArray<Option.Option<A>>): Journal<A> => {
 export const readJournalWhole = Effect.fn("Journal.readWhole")(function* <A>(
   file: string,
   json: Schema.Codec<A, string, never, never>,
-): Effect.fn.Return<Journal<A>, never, FileSystem.FileSystem> {
+) {
   const fs = yield* FileSystem.FileSystem;
   const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
   const decode = Schema.decodeUnknownOption(json);
@@ -39,10 +39,7 @@ export const readJournalWhole = Effect.fn("Journal.readWhole")(function* <A>(
   return tally(yield* Effect.forEach(textsOf(raw), (text) => Effect.sync(() => decode(text))));
 });
 
-export const journalOf = <A>(
-  raw: string,
-  json: Schema.Codec<A, string, never, never>,
-): Journal<A> => {
+export const journalOf = <A>(raw: string, json: Schema.Codec<A, string, never, never>) => {
   const decode = Schema.decodeUnknownOption(json);
   return tally(Arr.map(textsOf(raw), (text) => decode(text)));
 };
@@ -92,7 +89,7 @@ export interface RunJournal {
 }
 
 /** The journal `path` of the Run whose directory is `dir`, as an older build kept it there. */
-export const runJournal = (dir: string, path: string): RunJournal => {
+export const runJournal = (dir: string, path: string) => {
   const at = addressOf(dir);
   return { run: at.run, name: `${at.prefix}${path}` };
 };
@@ -102,7 +99,7 @@ const textsAt = (at: RunJournal) => RunRecords.use((records) => records.lines(at
 export const readRunJournalWhole = Effect.fn("Journal.readRunWhole")(function* <A>(
   at: RunJournal,
   json: Schema.Codec<A, string, never, never>,
-): Effect.fn.Return<Journal<A>, never, RunRecords> {
+) {
   const decode = Schema.decodeUnknownOption(json);
   // A line at a time, so a long journal is read in the scheduler's turns.
   return tally(

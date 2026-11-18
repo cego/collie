@@ -86,7 +86,7 @@ export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
   const verifications = yield* readVerifications(evidenceDir(stateDir, runId)).pipe(
     Effect.orElseSucceed(() => []),
   );
-  return {
+  const returned: OutcomeRecords = {
     rounds,
     disposition:
       latest(yield* readDispositions(dir).pipe(Effect.orElseSucceed(() => [])))?.kind ?? null,
@@ -104,7 +104,8 @@ export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
       line.kind === "enter" || line.kind === "leave" ? [line.at] : [],
     ),
     resumes: resumesIn(trail),
-  } satisfies OutcomeRecords;
+  };
+  return returned;
 });
 
 /** The Runs a measure counts, so an issue can cite them. */
@@ -117,7 +118,7 @@ export const ORIGINS = ["human", "chat", "agent", "host"] as const;
 export type Origin = (typeof ORIGINS)[number];
 
 /** Which kind of asker a front door is: a person at it, chat, an agent's CLI, or Collie. */
-export const originOf = (door: string): Origin => {
+export const originOf = (door: string) => {
   switch (door) {
     case "cli-tty":
     case "board":
@@ -199,12 +200,12 @@ export interface Measures {
   }>;
 }
 
-const counted = (runs: ReadonlyArray<string>): Counted => ({
+const counted = (runs: ReadonlyArray<string>) => ({
   count: runs.length,
   runs: [...new Set(runs)],
 });
 
-const median = (values: ReadonlyArray<number>): number | null => {
+const median = (values: ReadonlyArray<number>) => {
   if (values.length === 0) return null;
   const sorted = Arr.sortWith(
     values,
@@ -218,7 +219,7 @@ const median = (values: ReadonlyArray<number>): number | null => {
 const COLLECT_EXPIRY = "has written nothing";
 
 /** A park's reason without what names one Run, pane, path or command, so like counts with like. */
-export const reasonOf = (note: string): string =>
+export const reasonOf = (note: string) =>
   pipe(
     note,
     Str.replace(/`[^`]*`/g, "<command>"),
@@ -235,7 +236,7 @@ export function measuresOf(
     readonly records: OutcomeRecords | null;
     readonly metrics: ReadonlyArray<Metric>;
   }>,
-): Measures {
+) {
   const rounds: Array<{ runId: string; reached: number; cap: number }> = [];
   const dispositions: Record<"merged" | "superseded" | "abandoned", string[]> = {
     merged: [],
@@ -409,7 +410,7 @@ export function measuresOf(
     Arr.filter(rounds, (one) => one.reached >= one.cap),
     (one) => one.runId,
   );
-  return {
+  const returned: Measures = {
     rounds: {
       runs: rounds,
       median: median(Arr.map(rounds, (one) => one.reached)),
@@ -485,4 +486,5 @@ export function measuresOf(
     },
     peakContext,
   };
+  return returned;
 }

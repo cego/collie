@@ -130,7 +130,7 @@ export { savedModules } from "./discovery";
  * and retry with the same request id. Each carries what it will take, so a caller that
  * has never seen the module can still answer it.
  */
-export const neededInputs = (entry: Found, given: Given): Failure | null => {
+export const neededInputs: (entry: Found, given: Given) => Failure | null = (entry, given) => {
   const missing = Arr.filter(
     entry.inputs,
     (field) =>
@@ -165,10 +165,10 @@ export const neededInputs = (entry: Found, given: Given): Failure | null => {
  * will not, and null where no module claims it. A broken module is a file to fix rather
  * than nothing.
  */
-export const moduleFor = (
+export const moduleFor: (
   env: PluginEnv,
   id: string,
-): Effect.Effect<Found | Fault | null, never, FileSystem.FileSystem> =>
+) => Effect.Effect<Found | Fault | null, never, FileSystem.FileSystem> = (env, id) =>
   savedModules(env).pipe(
     Effect.map(
       (found) =>
@@ -187,7 +187,9 @@ export const moduleFor = (
  * of it: no rows, no host worth starting, and a caller that asked is told so rather than
  * waiting on one that has nothing to say.
  */
-export const anyRuns = (env: PluginEnv): Effect.Effect<boolean, never, FileSystem.FileSystem> =>
+export const anyRuns: (env: PluginEnv) => Effect.Effect<boolean, never, FileSystem.FileSystem> = (
+  env,
+) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.exists(`${env.stateDir}/host.db`)),
     Effect.orElseSucceed(() => false),
@@ -206,7 +208,7 @@ type HostFailure =
 type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
 
 /** A refusal as the front doors say one, with the host's own sentence inside it. */
-export const refusal = (cause: HostFailure): Failure => {
+export const refusal: (cause: HostFailure) => Failure = (cause) => {
   const failure = refused(cause);
   return cause._tag === "HostUnavailable" ||
     cause._tag === "MachineUnreachable" ||
@@ -215,7 +217,7 @@ export const refusal = (cause: HostFailure): Failure => {
     : failure;
 };
 
-const refused = (cause: HostFailure): Failure => {
+const refused: (cause: HostFailure) => Failure = (cause) => {
   switch (cause._tag) {
     case "HostRefused":
       // The host says so first where the input is why, and that is exit 2, not exit 1.
@@ -260,7 +262,7 @@ export type Door = FrontDoor | Asker;
 
 const isFrontDoor = Schema.is(FrontDoor);
 
-const declaring = (door: Door, stamp?: string): Declaration => {
+const declaring: (door: Door, stamp?: string) => Declaration = (door, stamp?) => {
   if (isFrontDoor(door)) return { frontDoor: door };
   let declared: Declaration = { frontDoor: door.origin, ...voiceOf(door) };
   if (door.from !== undefined) declared = { ...declared, from: door.from };
@@ -312,7 +314,10 @@ const notListed = (name: string) =>
 /** This Machine's Machines, as core lists them, or none where it could not say. */
 const herdrMachines = (env: PluginEnv) =>
   new Herdr(env).machineList().pipe(
-    Effect.orElseSucceed((): ReadonlyArray<HerdrMachine> => []),
+    Effect.orElseSucceed(() => {
+      const returned: ReadonlyArray<HerdrMachine> = [];
+      return returned;
+    }),
     Effect.provide(Path.layer),
   );
 
@@ -366,11 +371,15 @@ const openAndWake = (
  * `reaching` the Machine `name`, and where its link waits on an SSH connection, the same
  * once more after opening one: only for a front door that can show its login.
  */
-export const riding = <A, E, R>(
+export const riding: <A, E, R>(
   env: PluginEnv,
   name: string,
   reaching: Effect.Effect<A, E | MachineUnreachable, R>,
-): Effect.Effect<A, E | MachineUnreachable | HostRefused, R | Client> =>
+) => Effect.Effect<A, E | MachineUnreachable | HostRefused, R | Client> = <A, E, R>(
+  env: PluginEnv,
+  name: string,
+  reaching: Effect.Effect<A, E | MachineUnreachable, R>,
+) =>
   reaching.pipe(
     Effect.catchIf(
       (cause): cause is MachineUnreachable =>
@@ -382,7 +391,7 @@ export const riding = <A, E, R>(
   );
 
 /** The front door a relay header names, for a door a channel would declare. */
-const relayHeader = (door: Door | undefined, stamp?: string): RelayHeader => {
+const relayHeader: (door: Door | undefined, stamp?: string) => RelayHeader = (door, stamp?) => {
   let header: RelayHeader = {
     as: door === undefined ? "cli" : isFrontDoor(door) ? door : door.origin,
     client: machineName(),
@@ -402,11 +411,11 @@ const relayHeader = (door: Door | undefined, stamp?: string): RelayHeader => {
  * This Machine's host, or the named peer's over its relay, opened as `door`: a relay's
  * header names it, so nothing is declared over one.
  */
-const reach = (
+const reach: (
   env: PluginEnv,
   machine: string | null,
   door?: Door,
-): Effect.Effect<HostClient, HostFailure, Client | Scope.Scope> =>
+) => Effect.Effect<HostClient, HostFailure, Client | Scope.Scope> = (env, machine, door?) =>
   machine === null
     ? connect(env.stateDir).pipe(
         Effect.tap((client) =>
@@ -431,11 +440,15 @@ type Answered<A> = { readonly ok: true; readonly value: A; readonly machine: str
  * names — asked on its own connection. An operation names the front door asking, which the
  * channel declares before anything else.
  */
-export const asks = <A>(
+export const asks: <A>(
   env: PluginEnv,
   question: (client: HostClient) => Effect.Effect<A, HostFailure>,
   door?: Door,
-): Effect.Effect<Answered<A> | Failure, never, Client> =>
+) => Effect.Effect<Answered<A> | Failure, never, Client> = <A>(
+  env: PluginEnv,
+  question: (client: HostClient) => Effect.Effect<A, HostFailure>,
+  door?: Door,
+) =>
   Effect.scoped(
     reach(env, env.machine ?? null, door).pipe(
       Effect.flatMap(question),
@@ -444,10 +457,13 @@ export const asks = <A>(
     ),
   );
 
-const hostRead = <A>(
+const hostRead: <A>(
   env: PluginEnv,
   question: (client: HostClient) => Effect.Effect<A, HostFailure>,
-): Effect.Effect<A, HostUnread, Client> =>
+) => Effect.Effect<A, HostUnread, Client> = <A>(
+  env: PluginEnv,
+  question: (client: HostClient) => Effect.Effect<A, HostFailure>,
+) =>
   asks({ ...env, machine: undefined }, question).pipe(
     Effect.flatMap((answered) =>
       answered.ok
@@ -457,36 +473,36 @@ const hostRead = <A>(
   );
 
 /** This Machine's Tasks, newest first, as its host keeps them. */
-export const hostTasks = (
+export const hostTasks: (
   env: PluginEnv,
-): Effect.Effect<ReadonlyArray<TaskRecord>, HostUnread, Client> =>
+) => Effect.Effect<ReadonlyArray<TaskRecord>, HostUnread, Client> = (env) =>
   hostRead(env, (client) => client.tasks());
 
 /** Every agent this Machine's host has registered. */
-export const hostRegistered = (
+export const hostRegistered: (
   env: PluginEnv,
-): Effect.Effect<ReadonlyArray<AgentEntry>, HostUnread, Client> =>
+) => Effect.Effect<ReadonlyArray<AgentEntry>, HostUnread, Client> = (env) =>
   hostRead(env, (client) => client.registered());
 
 /** A Run's launches, as this Machine's host keeps them. */
-export const hostLaunches = (
+export const hostLaunches: (
   env: PluginEnv,
   run: string,
-): Effect.Effect<ReadonlyArray<Launched>, HostUnread, Client> =>
+) => Effect.Effect<ReadonlyArray<Launched>, HostUnread, Client> = (env, run) =>
   hostRead(env, (client) => client.launches({ run }));
 
 /** A Herd's proposals journal, as this Machine's host keeps it. */
-export const hostProposals = (
+export const hostProposals: (
   env: PluginEnv,
   herd: string,
-): Effect.Effect<ReadonlyArray<ProposalLine>, HostUnread, Client> =>
+) => Effect.Effect<ReadonlyArray<ProposalLine>, HostUnread, Client> = (env, herd) =>
   hostRead(env, (client) => client.proposals({ herd }));
 
 /** Every line about a proposal that names this Run, as this Machine's host keeps them. */
-export const hostRunProposals = (
+export const hostRunProposals: (
   env: PluginEnv,
   run: string,
-): Effect.Effect<ReadonlyArray<ProposalLine>, HostUnread, Client> =>
+) => Effect.Effect<ReadonlyArray<ProposalLine>, HostUnread, Client> = (env, run) =>
   hostRead(env, (client) => client.runProposals({ run }));
 
 /** The Task this Machine's host keeps in that workspace, which is what "the current Task" means. */
@@ -502,12 +518,17 @@ export const hostTaskOf = (env: PluginEnv, workspace: string | null) =>
  * peer, then each machine herdr lists that is not paired yet, paired on the way. A Run id
  * names one Run, so where it is is never asked of the caller.
  */
-export const asksRun = <A>(
+export const asksRun: <A>(
   env: PluginEnv,
   runId: string,
   question: (client: HostClient) => Effect.Effect<A, HostFailure>,
   door?: Door,
-): Effect.Effect<Answered<A> | Failure, never, Client> =>
+) => Effect.Effect<Answered<A> | Failure, never, Client> = <A>(
+  env: PluginEnv,
+  runId: string,
+  question: (client: HostClient) => Effect.Effect<A, HostFailure>,
+  door?: Door,
+) =>
   Effect.gen(function* () {
     if (env.machine !== undefined) return yield* asks(env, question, door);
     const asked: Array<string> = [];
@@ -692,10 +713,10 @@ export interface RunListing {
 }
 
 /** One Run as a front door shows it, or null where the host has none by that id. */
-export const runView = (
+export const runView: (
   env: PluginEnv,
   runId: string,
-): Effect.Effect<RunView | Failure | null, never, Client> =>
+) => Effect.Effect<RunView | Failure | null, never, Client> = (env, runId) =>
   anyRuns(env).pipe(
     Effect.flatMap((any) =>
       any || env.machine !== undefined
@@ -727,17 +748,17 @@ export const runProgress = (env: PluginEnv, runId: string) =>
  * verification collected anywhere else would bind a real result to a tree nobody is
  * looking at.
  */
-export const treeOf = (view: RunView): string => view.cwd;
+export const treeOf: (view: RunView) => string = (view) => view.cwd;
 
 /**
  * Every Run this state directory has rows for, and why they could not be read
  * where they could not be: a host that will not start costs the caller those Runs,
  * never the listing it asked for.
  */
-export const runViews = (
+export const runViews: (
   env: PluginEnv,
   task: string | null,
-): Effect.Effect<RunListing, never, Client> =>
+) => Effect.Effect<RunListing, never, Client> = (env, task) =>
   anyRuns(env).pipe(
     Effect.flatMap((any) =>
       any || env.machine !== undefined
@@ -851,11 +872,15 @@ export const asksArtefactRun = <A>(
  * away — a board that was closed, a wait that was interrupted — reads the truth instead
  * of waiting for an update that has already been and gone.
  */
-export const watchRun = <R>(
+export const watchRun: <R>(
   env: PluginEnv,
   runId: string,
   each: (view: RunView) => Effect.Effect<boolean, never, R>,
-): Effect.Effect<Failure | null, never, R | Client | Scope.Scope> =>
+) => Effect.Effect<Failure | null, never, R | Client | Scope.Scope> = <R>(
+  env: PluginEnv,
+  runId: string,
+  each: (view: RunView) => Effect.Effect<boolean, never, R>,
+) =>
   Effect.gen(function* () {
     // Where the Run is, which a Run on no Machine leaves here, to be said not found.
     const found = yield* asksRun(env, runId, () => Effect.void);
@@ -886,9 +911,13 @@ const boardStream = (env: PluginEnv) =>
   });
 
 /** The board as the host serves it now: the first message of its stream. */
-export const boardSnapshot = (
+export const boardSnapshot: (
   env: PluginEnv,
-): Effect.Effect<{ readonly ok: true; readonly value: BoardSnapshot } | Failure, never, Client> =>
+) => Effect.Effect<
+  { readonly ok: true; readonly value: BoardSnapshot } | Failure,
+  never,
+  Client
+> = (env) =>
   Effect.scoped(
     Effect.gen(function* () {
       const first = yield* Stream.runHead(yield* boardStream(env));
@@ -966,8 +995,8 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (
     ),
   );
   yield* Effect.forkScoped(follow.pipe(Effect.repeat(Schedule.spaced("1 second"))));
-  return (): Effect.Effect<BoardRead> =>
-    Deferred.await(first).pipe(
+  return () => {
+    const returned: Effect.Effect<BoardRead> = Deferred.await(first).pipe(
       Effect.timeoutOption(waited ? 0 : FIRST_BOARD_WAIT),
       Effect.map((arrived) => {
         waited = true;
@@ -983,6 +1012,8 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (
         };
       }),
     );
+    return returned;
+  };
 });
 
 /** Which of a Run's details a drawer is showing. */
@@ -1006,10 +1037,10 @@ const detailStream = (env: PluginEnv, key: DetailKey) =>
   });
 
 /** A Run's details as the host has them now, for a caller that follows nothing. */
-export const runDetailNow = (
+export const runDetailNow: (
   env: PluginEnv,
   key: DetailKey,
-): Effect.Effect<RunDetail | null, never, Client> =>
+) => Effect.Effect<RunDetail | null, never, Client> = (env, key) =>
   Effect.scoped(
     Effect.flatMap(detailStream(env, key), Stream.runHead).pipe(
       Effect.map(Option.getOrNull),
@@ -1037,8 +1068,8 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
     readonly fiber: Fiber.Fiber<unknown>;
     latest: RunDetail | null;
   } | null = null;
-  return (key: DetailKey | null): Effect.Effect<RunDetail | null> =>
-    Effect.gen(function* () {
+  return (key: DetailKey | null) => {
+    const returned: Effect.Effect<RunDetail | null> = Effect.gen(function* () {
       if (key === null) {
         if (open !== null) yield* Fiber.interrupt(open.fiber);
         open = null;
@@ -1077,6 +1108,8 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
       yield* Deferred.await(showing.first).pipe(Effect.timeoutOption(FIRST_DETAIL_WAIT));
       return showing.latest;
     }).pipe(Effect.provideContext(services));
+    return returned;
+  };
 });
 
 /**
@@ -1084,22 +1117,34 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
  * then says where this Run is. A file that was missing and has been put back is picked up
  * by this rather than by restarting the host.
  */
-export const recoverRun = (env: PluginEnv, runId: string): Effect.Effect<OpResult, never, Client> =>
+export const recoverRun: (
+  env: PluginEnv,
+  runId: string,
+) => Effect.Effect<OpResult, never, Client> = (env, runId) =>
   asksRun(env, runId, (client) =>
     client.recover().pipe(Effect.andThen(client.run({ runId }))),
   ).pipe(Effect.map(shown(runId)));
 
 const shown =
   (runId: string) =>
-  (answered: { readonly ok: true; readonly value: RunView | null } | Failure): OpResult => {
-    if (!answered.ok) return answered;
+  (answered: { readonly ok: true; readonly value: RunView | null } | Failure) => {
+    if (!answered.ok) {
+      const returned: OpResult = answered;
+      return returned;
+    }
     const view = answered.value;
-    if (view === null) return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
-    return {
+    if (view === null) {
+      const returned: OpResult = err("run_not_found", `Run "${runId}" was not found.`, {
+        run: runId,
+      });
+      return returned;
+    }
+    const returned: OpResult = {
       ok: true as const,
       data: { run: view },
       human: Arr.join(describeRun(view), "\n"),
     };
+    return returned;
   };
 
 /**
@@ -1107,7 +1152,7 @@ const shown =
  * knows which one, and null where it means "the one it is waiting on" — the host refuses
  * that where it is not exactly one, rather than choosing for anybody.
  */
-export const answerRun = (
+export const answerRun: (
   env: PluginEnv,
   options: {
     readonly door: Door;
@@ -1116,7 +1161,7 @@ export const answerRun = (
     readonly value: string;
     readonly request: string;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asksRun(
     env,
     options.runId,
@@ -1150,7 +1195,7 @@ export const answerRun = (
  * not apply says so: work no host is running is held in intent, and calling that done
  * would be a confirmation nobody can stand behind.
  */
-export const controlRun = (
+export const controlRun: (
   env: PluginEnv,
   options: {
     readonly door: Door;
@@ -1161,7 +1206,7 @@ export const controlRun = (
     readonly reason?: string | undefined;
     readonly before?: string | undefined;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asksRun(
     env,
     options.runId,
@@ -1178,9 +1223,9 @@ export const controlRun = (
   ).pipe(Effect.map(controlled));
 
 /** What a control's answer is, at the CLI, in chat and on the TUI board. */
-export const controlled = (
+export const controlled: (
   answered: { readonly ok: true; readonly value: typeof Controlled.Type } | Failure,
-): OpResult => {
+) => OpResult = (answered) => {
   if (!answered.ok) return answered;
   const done = answered.value;
   const left = leftSaid(done);
@@ -1234,22 +1279,23 @@ export const publishRun = (
       }),
     options.door,
   ).pipe(
-    Effect.map((answer): OpResult =>
-      answer.ok
+    Effect.map((answer) => {
+      const returned: OpResult = answer.ok
         ? {
             ok: true,
             data: options.pushOnly ? { pushed: true } : { mr_url: answer.value.url, pushed: true },
             human: options.pushOnly ? "Branch pushed." : answer.value.url,
           }
-        : answer,
-    ),
+        : answer;
+      return returned;
+    }),
   );
 
 /** Picks a Run up again from any door: recovered first, then its stop cleared, so what wakes can run. */
-export const resumeRun = (
+export const resumeRun: (
   env: PluginEnv,
   options: { readonly door: Door; readonly runId: string; readonly request: string },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asksRun(
     env,
     options.runId,
@@ -1289,7 +1335,7 @@ export const changeIntentRun = (
   );
 
 /** Names one of a Run's checks, or withdraws it, through the host. */
-export const grantRun = (
+export const grantRun: (
   env: PluginEnv,
   options: {
     readonly runId: string;
@@ -1298,7 +1344,7 @@ export const grantRun = (
     readonly request: string;
     readonly door: Door;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asksRun(
     env,
     options.runId,
@@ -1379,10 +1425,10 @@ export const rememberChecks = Effect.fn("lifecycle.rememberChecks")(function* (
   return result;
 });
 
-export const withdrawNoteRun = (
+export const withdrawNoteRun: (
   env: PluginEnv,
   options: { runId: string; note: string; request: string; door: Door },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asksRun(
     env,
     options.runId,
@@ -1398,7 +1444,7 @@ export const withdrawNoteRun = (
   );
 
 /** Says something of a human's to the agent a Run has, through the host. */
-export const steerRun = (
+export const steerRun: (
   env: PluginEnv,
   options: {
     readonly runId: string;
@@ -1412,7 +1458,7 @@ export const steerRun = (
     readonly attachments?: ReadonlyArray<string> | undefined;
     readonly door: Door;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asksRun(
     env,
     options.runId,
@@ -1486,12 +1532,12 @@ export const steerRun = (
  * A delivery as a front door says it: observed and how, or sent and not seen taken, with
  * where to look. Never "told" on the strength of a send alone.
  */
-export const deliveredLine = (sent: {
+export const deliveredLine: (sent: {
   readonly agent: string;
   readonly observed?: boolean;
   readonly how?: string;
   readonly pane?: string;
-}): string =>
+}) => string = (sent) =>
   sent.observed === true
     ? `Delivered to ${sent.agent} (observed: ${sent.how ?? "taken"}).`
     : `Sent to ${sent.agent}, not observed. Go to pane: \`hc attach ${sent.pane ?? sent.agent}\`.`;
@@ -1500,16 +1546,19 @@ export const deliveredLine = (sent: {
  * What carries a request on to a finished Run whose agent is gone: its follow-up offer
  * with the message as its input, else a new Run on its branch. Collie starts neither.
  */
-const followUpRoute = (
+const followUpRoute: (
   client: HostClient,
   options: { readonly runId: string; readonly text: string },
-): Effect.Effect<string | null> =>
+) => Effect.Effect<string | null> = (client, options) =>
   Effect.gen(function* () {
     const view = yield* client.run({ runId: options.runId });
     if (view === null) return null;
-    const offers = yield* client
-      .offers({ runId: options.runId })
-      .pipe(Effect.orElseSucceed((): ReadonlyArray<OfferView> => []));
+    const offers = yield* client.offers({ runId: options.runId }).pipe(
+      Effect.orElseSucceed(() => {
+        const returned: ReadonlyArray<OfferView> = [];
+        return returned;
+      }),
+    );
     const offered = Option.getOrUndefined(
       Arr.findFirst(offers, (one) => one.kind === "follow-up" && one.run === undefined),
     );
@@ -1519,7 +1568,10 @@ const followUpRoute = (
   }).pipe(Effect.orElseSucceed(() => null));
 
 /** A carried-out proposal as a front door prints it: one line per action, failing on the first that did not apply. */
-export const carriedResult = ({ proposal, results }: ProposalCarried): OpResult => {
+export const carriedResult: ({ proposal, results }: ProposalCarried) => OpResult = ({
+  proposal,
+  results,
+}) => {
   const message = Arr.join(
     Arr.map(results, (r) => `${r.index} ${r.kind}: ${r.state}${r.note ? ` — ${r.note}` : ""}`),
     "\n",
@@ -1538,7 +1590,7 @@ const capitalised = (text: string) =>
   Str.toUpperCase(Option.getOrElse(Str.charAt(text, 0), () => "")) + pipe_(text, Str.slice(1));
 
 /** A Run as a human reads one: what it is, where its module is, and what is wrong. */
-export const describeRun = (view: RunView): ReadonlyArray<string> => [
+export const describeRun: (view: RunView) => ReadonlyArray<string> = (view) => [
   `${view.runId}\t${statusOf(view)}\t${view.workflow}`,
   view.entry,
   `proves ${view.outcome}${view.measurement ? `; ${view.measurement}` : ""}`,
@@ -1551,7 +1603,7 @@ export const describeRun = (view: RunView): ReadonlyArray<string> => [
 ];
 
 /** The questions a Run is still waiting on, with what each will take and why. */
-export const describeWaiting = (view: RunView): ReadonlyArray<string> =>
+export const describeWaiting: (view: RunView) => ReadonlyArray<string> = (view) =>
   Arr.flatMap(Arr.filter(view.waiting, isUnanswered), (one: OpenDecision) => {
     const hold = holdPath(one, view.controls.includes(HOLD));
     return [
@@ -1571,11 +1623,11 @@ export const describeWaiting = (view: RunView): ReadonlyArray<string> =>
   });
 
 /** The question an answer would settle next: the oldest still open. */
-export const nextAction = (view: RunView): string | null =>
+export const nextAction: (view: RunView) => string | null = (view) =>
   Option.getOrNull(Arr.findFirst(view.waiting, isUnanswered))?.name ?? null;
 
 /** The one word a listing gives a Run, and the sentence behind it where there is one. */
-export const statusOf = (view: RunView): string => {
+export const statusOf: (view: RunView) => string = (view) => {
   switch (view.status.status) {
     case "ended":
       return `ended at ${view.status.at}; outcome unavailable`;
@@ -1591,14 +1643,17 @@ export const statusOf = (view: RunView): string => {
 export { resultText } from "./report";
 
 /** Whether the engine can still change this Run's state. */
-export const isSettled = (view: RunView): boolean => terminalStatus(view.status);
+export const isSettled: (view: RunView) => boolean = (view) => terminalStatus(view.status);
 
 /**
  * What a Run offers to do next. The host answers, because only it holds the module
  * that declared them: an offer is the author's own eligibility asked of the facts as they
  * are now, and a Run whose module has gone is readable with its offers refused by name.
  */
-export const showOffers = (env: PluginEnv, runId: string): Effect.Effect<OpResult, never, Client> =>
+export const showOffers: (
+  env: PluginEnv,
+  runId: string,
+) => Effect.Effect<OpResult, never, Client> = (env, runId) =>
   asksRun(env, runId, (client) => client.offers({ runId })).pipe(
     Effect.map((answered) =>
       answered.ok
@@ -1613,15 +1668,15 @@ export const showOffers = (env: PluginEnv, runId: string): Effect.Effect<OpResul
   );
 
 /** The offers themselves, for a caller that has to choose one rather than print them. */
-export const offersOf = (
+export const offersOf: (
   env: PluginEnv,
   runId: string,
-): Effect.Effect<ReadonlyArray<OfferView> | Failure, never, Client> =>
+) => Effect.Effect<ReadonlyArray<OfferView> | Failure, never, Client> = (env, runId) =>
   asksRun(env, runId, (client) => client.offers({ runId })).pipe(
     Effect.map((answered) => (answered.ok ? answered.value : answered)),
   );
 
-export const describeOffers = (offers: ReadonlyArray<OfferView>): string =>
+export const describeOffers: (offers: ReadonlyArray<OfferView>) => string = (offers) =>
   Arr.join(
     Arr.map(offers, (offer) => {
       const why = offer.unavailable === null ? "" : ` — unavailable: ${offer.unavailable}`;
@@ -1632,7 +1687,7 @@ export const describeOffers = (offers: ReadonlyArray<OfferView>): string =>
   );
 
 /** Carries out one of them, under the caller's own claim so a retry is one Run. */
-export const invokeOffer = (
+export const invokeOffer: (
   env: PluginEnv,
   options: {
     readonly door: Door;
@@ -1642,7 +1697,7 @@ export const invokeOffer = (
     readonly request: string;
     readonly attachments?: ReadonlyArray<string> | undefined;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asksRun(
     env,
     options.runId,
@@ -1676,12 +1731,12 @@ export const invokeOffer = (
   );
 
 /** An offer taken with its arguments as text, each read as the offer declares it. */
-export const invokeTypedOffer = (
+export const invokeTypedOffer: (
   env: PluginEnv,
   options: Omit<Parameters<typeof invokeOffer>[1], "input"> & {
     readonly input: Readonly<Record<string, string>>;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   Effect.flatMap(offersOf(env, options.runId), (listed) => {
     const offer =
       "ok" in listed
@@ -1696,7 +1751,7 @@ export const invokeTypedOffer = (
   });
 
 /** A yes to a proposal, carried out by the host under the front door asking. */
-export const confirmProposed = (
+export const confirmProposed: (
   env: PluginEnv,
   options: {
     readonly door: Door;
@@ -1704,7 +1759,7 @@ export const confirmProposed = (
     readonly hash: string;
     readonly request: string;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asks(
     env,
     (client) =>
@@ -1716,7 +1771,7 @@ export const confirmProposed = (
     options.door,
   ).pipe(Effect.map((answered) => (answered.ok ? carriedResult(answered.value) : answered)));
 
-export const declineProposed = (
+export const declineProposed: (
   env: PluginEnv,
   options: {
     readonly door: Door;
@@ -1724,7 +1779,7 @@ export const declineProposed = (
     readonly hash: string;
     readonly request: string;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asks(
     env,
     (client) =>
@@ -1743,7 +1798,7 @@ export const declineProposed = (
   );
 
 /** What became of a Run's work, written by the host; the line it wrote, or why not. */
-export const disposeRun = (
+export const disposeRun: (
   env: PluginEnv,
   options: {
     readonly door: Door;
@@ -1753,7 +1808,10 @@ export const disposeRun = (
     readonly note: string | null;
     readonly request: string;
   },
-): Effect.Effect<{ readonly ok: true; readonly value: Disposition } | Failure, never, Client> =>
+) => Effect.Effect<{ readonly ok: true; readonly value: Disposition } | Failure, never, Client> = (
+  env,
+  options,
+) =>
   asksRun(
     env,
     options.runId,
@@ -1769,10 +1827,13 @@ export const disposeRun = (
   );
 
 /** A finished Run opened or acknowledged, recorded once by its host; the first line, or why not. */
-export const seeRun = (
+export const seeRun: (
   env: PluginEnv,
   options: { readonly door: Door; readonly runId: string; readonly request: string },
-): Effect.Effect<{ readonly ok: true; readonly value: Seen } | Failure, never, Client> =>
+) => Effect.Effect<{ readonly ok: true; readonly value: Seen } | Failure, never, Client> = (
+  env,
+  options,
+) =>
   asksRun(
     env,
     options.runId,
@@ -1878,12 +1939,13 @@ export const scheduleDoorOn = Effect.fn("Lifecycle.scheduleDoorOn")(function* (
       Effect.mapError((failure) => ({ reason: failure.error.message })),
       Effect.provideContext(context),
     );
-  return {
+  const returned: ScheduleDoor = {
     name: machine ?? machineName(),
     schedules: ask((client) => client.schedules()),
     changeSchedule: (asked: { readonly change: ScheduleChange; readonly request: string }) =>
       ask((client) => client.changeSchedule(asked)),
-  } satisfies ScheduleDoor;
+  };
+  return returned;
 });
 
 /** Adds, pauses, resumes or removes one of this Machine's Schedules, under the caller's request. */
@@ -1904,7 +1966,7 @@ export const sweepNow = (
 ) => asks(env, (client) => client.sweep({ request: options.request }), options.door);
 
 /** Free words about one Run, which the host has the evaluator turn into what to do. */
-export const steerAbout = (
+export const steerAbout: (
   env: PluginEnv,
   options: {
     readonly door: Door;
@@ -1914,7 +1976,7 @@ export const steerAbout = (
     readonly dryRun: boolean;
     readonly request: string;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asksRun(
     env,
     options.runId,
@@ -1930,7 +1992,7 @@ export const steerAbout = (
   ).pipe(Effect.map((answered) => (answered.ok ? opResultOf(answered.value) : answered)));
 
 /** An outcome the host sent back, as the result every front door prints. */
-const opResultOf = (said: SteerOutcome): OpResult => {
+const opResultOf: (said: SteerOutcome) => OpResult = (said) => {
   if (said.ok)
     return {
       ok: true,
@@ -1948,7 +2010,7 @@ const opResultOf = (said: SteerOutcome): OpResult => {
 };
 
 /** Actions chat was asked for, which the host records as a proposal and carries out. */
-export const proposeActions = (
+export const proposeActions: (
   env: PluginEnv,
   options: {
     readonly door: Door;
@@ -1957,7 +2019,7 @@ export const proposeActions = (
     readonly actions: ReadonlyArray<Action>;
     readonly request: string;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asks(
     env,
     (client) =>
@@ -1994,14 +2056,14 @@ export const settleNewsFor = (
   );
 
 /** The board's own actions, asked for by name and carried out by the host. */
-export const actAsked = (
+export const actAsked: (
   env: PluginEnv,
   options: {
     readonly door: Door;
     readonly actions: ReadonlyArray<Action>;
     readonly request: string;
   },
-): Effect.Effect<ReadonlyArray<ActionResult>, never, Client> =>
+) => Effect.Effect<ReadonlyArray<ActionResult>, never, Client> = (env, options) =>
   (options.actions.length === 1 &&
   options.actions[0]!.kind === "start" &&
   options.actions[0]!.machine !== undefined
@@ -2035,7 +2097,7 @@ export const actAsked = (
   );
 
 /** A proposal step nobody can account for, settled as what actually happened. */
-export const reconcileProposed = (
+export const reconcileProposed: (
   env: PluginEnv,
   options: {
     readonly door: Door;
@@ -2044,7 +2106,7 @@ export const reconcileProposed = (
     readonly as: "applied" | "not-applied";
     readonly request: string;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asks(
     env,
     (client) =>
@@ -2056,19 +2118,20 @@ export const reconcileProposed = (
       }),
     options.door,
   ).pipe(
-    Effect.map((answered): OpResult =>
-      answered.ok
+    Effect.map((answered) => {
+      const returned: OpResult = answered.ok
         ? {
             ok: true,
             data: { proposal: options.proposal, index: options.index, as: options.as },
             human: `Settled action ${options.index} as ${options.as}.`,
           }
-        : answered,
-    ),
+        : answered;
+      return returned;
+    }),
   );
 
 /** A message nobody knows reached its agent, settled as what actually happened. */
-export const reconcileDelivered = (
+export const reconcileDelivered: (
   env: PluginEnv,
   options: {
     readonly door: Door;
@@ -2077,7 +2140,7 @@ export const reconcileDelivered = (
     readonly as: "sent" | "not-sent";
     readonly request: string;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asksRun(
     env,
     options.runId,
@@ -2090,19 +2153,20 @@ export const reconcileDelivered = (
       }),
     options.door,
   ).pipe(
-    Effect.map((answered): OpResult =>
-      answered.ok
+    Effect.map((answered) => {
+      const returned: OpResult = answered.ok
         ? {
             ok: true,
             data: { delivery: answered.value },
             human: `Reconciled ${options.delivery} as ${options.as}.`,
           }
-        : answered,
-    ),
+        : answered;
+      return returned;
+    }),
   );
 
 /** A child Run on a finished one, carrying on with what is left in these words. */
-export const followUpRun = (
+export const followUpRun: (
   env: PluginEnv,
   options: {
     readonly door: Door;
@@ -2111,7 +2175,7 @@ export const followUpRun = (
     readonly request: string;
     readonly attachments?: ReadonlyArray<string> | undefined;
   },
-): Effect.Effect<OpResult, never, Client> =>
+) => Effect.Effect<OpResult, never, Client> = (env, options) =>
   asksRun(
     env,
     options.runId,
@@ -2143,13 +2207,16 @@ export const followUpRun = (
   );
 
 /** Replaces the host that owns `dir` with this install's, as `collie host restart` and the herdr action do. */
-export const restartHostAt = (dir: string): Effect.Effect<OpResult, never, Client> =>
+export const restartHostAt: (dir: string) => Effect.Effect<OpResult, never, Client> = (dir) =>
   restartHost(dir).pipe(
-    Effect.map((restarted): OpResult => ({
-      ok: true,
-      data: { dir, ...restarted },
-      human: restartSaid(dir, restarted),
-    })),
+    Effect.map((restarted) => {
+      const returned: OpResult = {
+        ok: true,
+        data: { dir, ...restarted },
+        human: restartSaid(dir, restarted),
+      };
+      return returned;
+    }),
     Effect.catch((cause) => Effect.succeed(refusal(cause))),
   );
 
@@ -2182,7 +2249,10 @@ export const machinesListed = (env: PluginEnv) =>
 
 const answered = <A>(effect: Effect.Effect<A, HostFailure, Client | FileSystem.FileSystem>) =>
   effect.pipe(
-    Effect.map((value) => ({ ok: true as const, value, machine: null }) satisfies Answered<A>),
+    Effect.map((value) => {
+      const returned: Answered<A> = { ok: true as const, value, machine: null };
+      return returned;
+    }),
     Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause))),
   );
 
@@ -2318,9 +2388,12 @@ export const reportFor = Effect.fn("Report.for")(function* (env: PluginEnv, sinc
     const asked = yield* asksRun(env, view.runId, (client) =>
       Effect.all({
         metrics: client.runMetrics({ runId: view.runId }),
-        records: client
-          .runOutcomes({ runId: view.runId })
-          .pipe(Effect.orElseSucceed((): OutcomeRecords | null => null)),
+        records: client.runOutcomes({ runId: view.runId }).pipe(
+          Effect.orElseSucceed(() => {
+            const returned: OutcomeRecords | null = null;
+            return returned;
+          }),
+        ),
       }),
     );
     if (!asked.ok) return asked;

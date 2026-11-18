@@ -24,7 +24,6 @@ import {
 } from "./settings";
 import type { SharedSetting, SharedSettings } from "./board-model";
 import { isReachKey, REACH_SETTING, reachKey } from "./reach";
-import type { StandingDirection } from "./standing-direction";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
 
 export { type Defaults, FALLBACK_DEFAULTS } from "./settings";
@@ -45,7 +44,7 @@ export const readConfig = Effect.fn("Config.readConfig")(function* (userDir: str
   );
 });
 
-export function configValue(raw: YamlMap, dotted: string): YamlValue | undefined {
+export function configValue(raw: YamlMap, dotted: string) {
   let node: YamlValue = raw;
   for (const key of Str.split(dotted, ".")) {
     if (!isYamlMap(node)) return undefined;
@@ -107,7 +106,10 @@ export const readSettingsSet = Effect.fn("Config.readSettingsSet")(function* (us
   const paths = yield* Path.Path;
   return yield* fs.readFileString(paths.join(userDir, SET_FILE)).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(SettingsSetJson)),
-    Effect.orElseSucceed((): SettingsSet => ({ set: {} })),
+    Effect.orElseSucceed(() => {
+      const returned: SettingsSet = { set: {} };
+      return returned;
+    }),
   );
 });
 
@@ -170,7 +172,7 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
     ),
     ...new Set([...reachKeysIn(raw), ...Arr.filter(Rec.keys(stamps.set), isReachKey)]),
   ];
-  const settings = Arr.flatMap(shared, (key): ReadonlyArray<SharedSetting> => {
+  const settings = Arr.flatMap(shared, (key) => {
     const value = configValue(raw, key) ?? null;
     const at = stamps.set[key] ?? (value === null ? undefined : written);
     return at === undefined ? [] : [{ key, value, at }];
@@ -185,10 +187,11 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
         ...Rec.fromEntries(Arr.map(unstamped, ({ key, at }) => [key, at] as const)),
       },
     });
-  return { settings, flock: stamps.flock ?? null } satisfies SharedSettings;
+  const returned: SharedSettings = { settings, flock: stamps.flock ?? null };
+  return returned;
 });
 
-function reachKeysIn(raw: YamlMap): ReadonlyArray<string> {
+function reachKeysIn(raw: YamlMap) {
   const held = raw[REACH_SETTING];
   if (held === undefined || !isYamlMap(held)) return [];
   return Arr.flatMap(Rec.toEntries(held), ([workflow, projects]) =>
@@ -228,7 +231,7 @@ export const sharedSettings = (userDir: string) => settingsLocked(userDir, readS
 /** This Machine's Standing direction and its last edit, or undefined while it is empty. */
 export const standingDirectionOn = (userDir: string) =>
   sharedSettings(userDir).pipe(
-    Effect.map(({ settings }): StandingDirection | undefined => {
+    Effect.map(({ settings }) => {
       const held = Arr.findFirst(settings, ({ key }) => key === "standing_direction");
       return Option.match(held, {
         onNone: () => undefined,
@@ -301,7 +304,7 @@ export const gitlabHostOf = Effect.fn("Config.gitlabHostOf")(function* (env: {
 });
 
 /** The configured window as written, kept as text where it is neither a number nor text. */
-export function autoCompactWindowAsWritten(value: YamlValue | undefined): number | string {
+export function autoCompactWindowAsWritten(value: YamlValue | undefined) {
   if (value === undefined) return FALLBACK_DEFAULTS.claudeAutoCompactWindow;
   return isNumber(value) || isString(value) ? value : JSON.stringify(value);
 }

@@ -16,7 +16,7 @@ import { type CleanupReport, FrontDoorRpcs, HostRefused } from "../src/board-mod
 
 type Rpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 
-const report = (bytes: number): CleanupReport => ({
+const report = (bytes: number) => ({
   remove: [{ kind: "worktree", target: "/w/run-1", bytes, reason: "its Run ended" }],
   keep: [{ kind: "worktree", target: "/w/run-2", reason: "its Run is live" }],
   bytes,
@@ -58,12 +58,7 @@ const logged = () => {
   return { lines, log: (line: Attempted) => Effect.sync(() => void lines.push(line)) };
 };
 
-const line = (
-  request: string,
-  ended: Attempted["ended"],
-  reason?: string,
-  attempt = 1,
-): Attempted => {
+const line = (request: string, ended: Attempted["ended"], reason?: string, attempt = 1) => {
   const sent: Attempted = {
     door: "board",
     machine: "vm-mk",

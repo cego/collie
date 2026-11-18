@@ -465,11 +465,17 @@ const Loaded = Schema.Struct({
 /** A result that says what kind of credential-shaped value was taken out of its asking. */
 const saying =
   (removed: ReadonlyArray<string>) =>
-  <A extends object>(result: A): A & { readonly redacted?: ReadonlyArray<string> } =>
-    removed.length === 0 ? result : { ...result, redacted: [...removed] };
+  <A extends object>(result: A) => {
+    const returned: A & { readonly redacted?: ReadonlyArray<string> } =
+      removed.length === 0 ? result : { ...result, redacted: [...removed] };
+    return returned;
+  };
 
 /** A steer's outcome, telling its asker what kind of credential-shaped value was taken out. */
-const outcomeSaying = (removed: ReadonlyArray<string>, outcome: SteerOutcome): SteerOutcome => {
+const outcomeSaying: (removed: ReadonlyArray<string>, outcome: SteerOutcome) => SteerOutcome = (
+  removed,
+  outcome,
+) => {
   const notice = removedNotice(removed);
   return notice === null
     ? outcome
@@ -699,11 +705,11 @@ const serveAnswer = <A, E, R>(
 };
 
 /** Serves each answer first, timing streams only until their first value. */
-export const timingFirstValues = <
+export const timingFirstValues: <
   H extends Record<string, (...args: ReadonlyArray<never>) => object>,
 >(
   handlers: H,
-): H =>
+) => H = <H extends Record<string, (...args: ReadonlyArray<never>) => object>>(handlers: H) =>
   // SAFETY: each handler is replaced by one taking its arguments and answering its type.
   Rec.map(handlers, (handler, name) => (...args: ReadonlyArray<never>) => {
     const answer = handler(...args);
@@ -904,9 +910,11 @@ const handlers = (
 
       const record = <A, E, R>(runId: string, read: Effect.Effect<A, E, R>) =>
         registry.view(runId).pipe(
-          Effect.flatMap((view): Effect.Effect<A, E | HostRefused, R> =>
-            view === null ? Effect.fail(new HostRefused({ reason: `No Run "${runId}".` })) : read,
-          ),
+          Effect.flatMap((view) => {
+            const returned: Effect.Effect<A, E | HostRefused, R> =
+              view === null ? Effect.fail(new HostRefused({ reason: `No Run "${runId}".` })) : read;
+            return returned;
+          }),
           Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
         );
       return HostRpcs.of({
@@ -1335,7 +1343,7 @@ const ACTED_KINDS = new Set<string>([...ASKED_KINDS, "hold"]);
 const ACT_REVISIONS_KEPT = 1024;
 
 /** An operation's result as the front doors print it: a failure carries its code. */
-const outcomeOf = (result: OpResult): SteerOutcome =>
+const outcomeOf: (result: OpResult) => SteerOutcome = (result) =>
   result.ok
     ? { ok: true, code: null, human: result.human, data: fromText(toText(result.data)) }
     : {
@@ -1820,7 +1828,10 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
         return held !== undefined && factsOf(held.view) === run ? held.revision : null;
       };
       const listed = (runs: ReadonlyArray<RunFacts>) =>
-        Arr.map(runs, (fact): Listed => ({ fact, seq: readAt(fact) }));
+        Arr.map(runs, (fact) => {
+          const returned: Listed = { fact, seq: readAt(fact) };
+          return returned;
+        });
       const posted = new Map<string, RunFacts>();
       let order: ReadonlyArray<string> = [];
       yield* Effect.forkScoped(
@@ -2069,7 +2080,7 @@ const frontDoorHandlers = (
       const stampOf = (client: { readonly id: number }) => stampIn(declared, client);
       const doorOf = (client: { readonly id: number }) => stampOf(client).origin;
       /** Who asks on a channel: its front door, and a chat's voice. */
-      const askerOf = (client: { readonly id: number }): Asker => ({
+      const askerOf: (client: { readonly id: number }) => Asker = (client) => ({
         origin: doorOf(client),
         ...declared.get(client.id)?.voice,
       });
@@ -2209,7 +2220,10 @@ const frontDoorHandlers = (
         if (mrs.length < 2) return own;
         const owned = yield* Effect.forEach(mrs, (one) =>
           registry.offers(one.owner).pipe(
-            Effect.orElseSucceed((): ReadonlyArray<Offer> => []),
+            Effect.orElseSucceed(() => {
+              const returned: ReadonlyArray<Offer> = [];
+              return returned;
+            }),
             Effect.map((offers) => ({ run: one.owner, named: one.short, offers })),
           ),
         );
@@ -4359,7 +4373,9 @@ const endCiWaits = Effect.gen(function* () {
  * Losing the lock is not a failure. It means a host is already here, which is what the
  * caller wanted; the client that started this one connects to that host instead.
  */
-export const serve = (named: string): Effect.Effect<void, never, PlatformServices | Scope.Scope> =>
+export const serve: (
+  named: string,
+) => Effect.Effect<void, never, PlatformServices | Scope.Scope> = (named) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(named, { recursive: true });
@@ -4594,8 +4610,8 @@ const orphaned = (dir: string) =>
  * is given this rather than reaching for discovery itself, so a parent starting a child
  * selects in the parent's own project exactly as a start from a front door does.
  */
-const locateIn =
-  (install: { readonly pluginRoot: string; readonly userDir: string }): Locate =>
+const locateIn: (install: { readonly pluginRoot: string; readonly userDir: string }) => Locate =
+  (install) =>
   ({ project, id }) =>
     discover(searchPath({ ...install, project })).pipe(
       Effect.flatMap((found) => {
@@ -4728,7 +4744,10 @@ const own = (
       stamp,
       socket: socketOf(dir),
       machines: herdr.machineList().pipe(
-        Effect.map((machines): ReadonlyArray<SshMachine> => machines),
+        Effect.map((machines) => {
+          const returned: ReadonlyArray<SshMachine> = machines;
+          return returned;
+        }),
         Effect.orElseSucceed(() => null),
         Effect.provideContext(bun),
       ),
@@ -4830,18 +4849,18 @@ const own = (
  * leave the two apart. A host newer than it is reported rather than talked to — the client is what is
  * stale, and it must not take the host back down to its own build.
  */
-export const connect = (
+export const connect: (
   dir: string,
   options?: {
     readonly build?: string;
     /** More of the environment a host started from here is given, over this process's own. */
     readonly hostEnv?: Readonly<Record<string, string>>;
   },
-): Effect.Effect<
+) => Effect.Effect<
   HostClient,
   HostUnavailable | HostVersionMismatch,
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
-> =>
+> = (dir, options?) =>
   Effect.gen(function* () {
     const build = options?.build ?? BUILD;
     const hostEnv = options?.hostEnv ?? {};
@@ -4963,11 +4982,15 @@ type Followed<E, D> = E | D | HostRefused | HostUnavailable | RpcClientError.Rpc
  * A verify's events, followed to its result on whichever host took its check over where the
  * one running it was replaced. That host may be a newer build: it is only asked for a result.
  */
-export const followVerify = <E, R, D>(
+export const followVerify: <E, R, D>(
   dir: string,
   events: Stream.Stream<VerifyEventOf, E, R>,
   declare: (client: HostClient) => Effect.Effect<unknown, D>,
-): Stream.Stream<VerifyEventOf, Followed<E, D>, R> =>
+) => Stream.Stream<VerifyEventOf, Followed<E, D>, R> = <E, R, D>(
+  dir: string,
+  events: Stream.Stream<VerifyEventOf, E, R>,
+  declare: (client: HostClient) => Effect.Effect<unknown, D>,
+) =>
   Stream.suspend(() => {
     let check: string | null = null;
     return events.pipe(
@@ -4976,9 +4999,10 @@ export const followVerify = <E, R, D>(
           if (event._tag === "Started") check = event.check;
         }),
       ),
-      Stream.catchCause((cause): Stream.Stream<VerifyEventOf, Followed<E, D>> => {
+      Stream.catchCause((cause) => {
         const taken = check;
-        return taken === null || Option.exists(Cause.findErrorOption(cause), Schema.is(HostRefused))
+        const returned: Stream.Stream<VerifyEventOf, Followed<E, D>> = taken === null ||
+        Option.exists(Cause.findErrorOption(cause), Schema.is(HostRefused))
           ? Stream.failCause(cause)
           : Stream.unwrap(
               open(dir).pipe(
@@ -4990,6 +5014,7 @@ export const followVerify = <E, R, D>(
                 Schedule.spaced("500 millis").pipe(Schedule.upTo({ duration: FOLLOW_FOR })),
               ),
             );
+        return returned;
       }),
     );
   });
@@ -5076,16 +5101,16 @@ const encodeHeader = Schemaflow(Schema.encodeResult(RelayHeaderJson), Result.get
  * A client of a peer's host, over this Machine's relay to it. It is asked who it is and
  * never started or stopped from here (ADR-0057 D6): another build is refused, naming both.
  */
-export const connectPeer = (
+export const connectPeer: (
   stateDir: string,
   name: string,
   header: RelayHeader,
   options?: { readonly build?: string },
-): Effect.Effect<
+) => Effect.Effect<
   HostClient,
   HostUnavailable | HostVersionMismatch | MachineUnreachable,
   Scope.Scope
-> => {
+> = (stateDir, name, header, options?) => {
   const build = options?.build ?? BUILD;
   let mismatch: HostVersionMismatch | undefined;
   return Effect.gen(function* () {
@@ -5168,9 +5193,10 @@ export const herdOfHost = Effect.fn("Host.herdOfHost")(function* (dir: string) {
 });
 
 /** Which process owns this directory, or null when none does. */
-export const ownerOf = (
+export const ownerOf: (
   dir: string,
-): Effect.Effect<LockHolder | null, never, FileSystem.FileSystem> => lockHolder(lockOf(dir));
+) => Effect.Effect<LockHolder | null, never, FileSystem.FileSystem> = (dir) =>
+  lockHolder(lockOf(dir));
 
 /** The owner of this directory while it lives; a claim a dead host left is nobody's. */
 const liveOwner = (dir: string) =>

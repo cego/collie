@@ -28,7 +28,7 @@ beforeEach(() =>
 afterEach(() => runEffect(rig.close()));
 
 /** A Codex-like harness whose work runs in a server, stopped to `state`. */
-const served = (state: Stopped["state"], stops: string[]): CompactionPorts => ({
+const served: (state: Stopped["state"], stops: string[]) => CompactionPorts = (state, stops) => ({
   served: {
     gate: Effect.void,
     install: () => Effect.succeed({ args: [] }),
@@ -38,14 +38,15 @@ const served = (state: Stopped["state"], stops: string[]): CompactionPorts => ({
     stop: (target) =>
       Effect.sync(() => {
         stops.push(target.agent);
-        return {
+        const returned: Stopped = {
           state,
           turns: [{ thread: "th-1", turn: "tu-1", transcript: null }],
           reason: state === "quiet" ? null : "turn tu-1 still running after 30s",
           signalled: [],
           left: [],
           noted: [],
-        } satisfies Stopped;
+        };
+        return returned;
       }),
   },
 });

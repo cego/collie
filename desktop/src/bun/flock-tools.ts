@@ -325,10 +325,13 @@ const unanswered = (name: string, cause: Cause.Cause<unknown>) => {
 };
 
 /** A host's answer within `ANSWER_WITHIN`, or why it gave none. */
-const answered = <A, E>(
+const answered: <A, E>(
   machine: ChatMachine,
   asking: Effect.Effect<A, E>,
-): Effect.Effect<Result.Result<A, string>> =>
+) => Effect.Effect<Result.Result<A, string>> = <A, E>(
+  machine: ChatMachine,
+  asking: Effect.Effect<A, E>,
+) =>
   asking.pipe(
     Effect.timeoutOption(ANSWER_WITHIN),
     Effect.map(
@@ -341,10 +344,7 @@ const answered = <A, E>(
   );
 
 /** The Machine's live board and channel, or why it has none. */
-const reachedAt = (
-  { name, board, door }: ChatMachine,
-  now: number,
-): Result.Result<Reached, string> =>
+const reachedAt = ({ name, board, door }: ChatMachine, now: number) =>
   board._tag !== "Live"
     ? Result.fail(unreadBecause(name, board, now))
     : door === undefined
@@ -400,7 +400,7 @@ export const place = (
     readonly unread: string | null;
   }>,
   what: string,
-): Result.Result<Placed, string> => {
+) => {
   const colon = Option.getOrElse(pipe(named, Str.indexOf(":")), () => -1);
   const prefixed =
     colon > 0
@@ -857,10 +857,7 @@ export const flockNewsText = (batch: FlockBatch) =>
  * What a turn nobody asked for would be about: the decisions and consequential items not yet
  * spoken of, or null. Everything else waits for the human's next message.
  */
-export const worthSpeaking = (
-  batch: FlockBatch,
-  spoken: ReadonlySet<string>,
-): FlockBatch | null => {
+export const worthSpeaking = (batch: FlockBatch, spoken: ReadonlySet<string>) => {
   const items = Arr.filter(
     batch.items,
     (placed) =>
@@ -994,9 +991,7 @@ const textAt = (action: JsonObject, key: string) => {
 };
 
 /** The field an action names its Machine in, and the name. */
-const machineRef = (
-  action: JsonObject,
-): { readonly field: string; readonly name: string } | null => {
+const machineRef = (action: JsonObject) => {
   for (const field of ["run", "workspace"]) {
     const value = action[field];
     if (isString(value)) return { field, name: value };
@@ -1005,10 +1000,7 @@ const machineRef = (
 };
 
 /** The Machine an action's `machine` field names, or null where it names none. */
-const machineField = (
-  action: JsonObject,
-  known: Boards,
-): Result.Result<ChatMachine | null, string> => {
+const machineField = (action: JsonObject, known: Boards) => {
   const explicit = textAt(action, "machine");
   if (explicit === "") return Result.succeed(null);
   const found = Option.getOrUndefined(Arr.findFirst(known, (one) => one.machine.name === explicit));
@@ -1033,11 +1025,7 @@ interface Localized {
   readonly action: JsonObject;
 }
 
-const placeOne = Effect.fnUntraced(function* (
-  action: JsonObject,
-  known: Boards,
-  flock: FlockChat,
-): Effect.fn.Return<Result.Result<Localized, string>> {
+const placeOne = Effect.fnUntraced(function* (action: JsonObject, known: Boards, flock: FlockChat) {
   const kind = textAt(action, "kind");
   if (kind === "cleanup" || kind === "home_cleanup") {
     const named = machineField(action, known);
@@ -1176,20 +1164,21 @@ const withFiles = (flock: FlockChat, machine: Reached, action: JsonObject) => {
     // Only a path on the Run's own Machine stays tracked; any other is sent as a snapshot.
     const path = action.path;
     return carriedPaths(flock, machine, [path]).pipe(
-      Effect.map((paths): JsonObject => ({
-        ...action,
-        path: paths?.[0] ?? path,
-        snapshot: action.snapshot === true || !Str.startsWith(`${machine.name}:`)(path),
-      })),
+      Effect.map((paths) => {
+        const returned: JsonObject = {
+          ...action,
+          path: paths?.[0] ?? path,
+          snapshot: action.snapshot === true || !Str.startsWith(`${machine.name}:`)(path),
+        };
+        return returned;
+      }),
     );
   }
   if (!CARRIES.has(textAt(action, "kind"))) return Effect.succeed(action);
   const named = action["attachments"];
   const given = Arr.isArray<typeof named>(named) ? Arr.filter(named, isString) : undefined;
   return carriedPaths(flock, machine, given).pipe(
-    Effect.map((paths): JsonObject =>
-      paths === undefined ? action : { ...action, attachments: paths },
-    ),
+    Effect.map((paths) => (paths === undefined ? action : { ...action, attachments: paths })),
   );
 };
 
@@ -1357,7 +1346,7 @@ const moveScheduleBetween = Effect.fn("FlockTools.moveSchedule")(function* (
   );
   yield* declareVoice(flock, source!);
   yield* declareVoice(flock, target!);
-  const door = (machine: Reached): ScheduleDoor => ({
+  const door: (machine: Reached) => ScheduleDoor = (machine) => ({
     name: machine.name,
     schedules: machine.door.schedules(),
     changeSchedule: (asked) => machine.door.changeSchedule(asked),

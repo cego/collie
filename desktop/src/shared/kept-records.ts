@@ -25,7 +25,7 @@ export const EMPTY_KEPT: KeptSet = {
   bytes: new Map(),
 };
 
-export const opened = (set: KeptSet, key: string): KeptSet =>
+export const opened = (set: KeptSet, key: string) =>
   trimmed({
     ...closed(set),
     open: key,
@@ -33,7 +33,7 @@ export const opened = (set: KeptSet, key: string): KeptSet =>
     prefetched: set.prefetched === key ? null : set.prefetched,
   });
 
-export const closed = (set: KeptSet): KeptSet =>
+export const closed = (set: KeptSet) =>
   set.open === null
     ? set
     : trimmed({
@@ -43,11 +43,11 @@ export const closed = (set: KeptSet): KeptSet =>
       });
 
 /** The card the human points at now, or null for none. */
-export const pointed = (set: KeptSet, key: string | null, now: number): KeptSet =>
+export const pointed = (set: KeptSet, key: string | null, now: number) =>
   key === set.pointing?.key ? set : { ...set, pointing: key === null ? null : { key, since: now } };
 
 /** The card pointed at long enough becomes the one prefetched. */
-export const settled = (set: KeptSet, now: number): KeptSet =>
+export const settled = (set: KeptSet, now: number) =>
   set.pointing === null ||
   now - set.pointing.since < POINT_MS ||
   keptKeys(set).has(set.pointing.key)
@@ -55,10 +55,10 @@ export const settled = (set: KeptSet, now: number): KeptSet =>
     : trimmed({ ...set, prefetched: set.pointing.key });
 
 /** The encoded size of a kept record's latest frame. */
-export const sized = (set: KeptSet, key: string, bytes: number): KeptSet =>
+export const sized = (set: KeptSet, key: string, bytes: number) =>
   keptKeys(set).has(key) ? trimmed({ ...set, bytes: new Map(set.bytes).set(key, bytes) }) : set;
 
-export const keptKeys = (set: KeptSet): ReadonlySet<string> =>
+export const keptKeys = (set: KeptSet) =>
   new Set([
     ...(set.open === null ? [] : [set.open]),
     ...set.recent,
@@ -69,7 +69,7 @@ const total = (set: KeptSet) =>
   Arr.reduce([...keptKeys(set)], 0, (sum, key) => sum + (set.bytes.get(key) ?? 0));
 
 /** Past eight recent or over the cap, the prefetched one and then the least recently opened go. */
-const trimmed = (set: KeptSet): KeptSet => {
+const trimmed = (set: KeptSet) => {
   let kept: KeptSet = { ...set, recent: Arr.take(set.recent, RECENT) };
   while (total(kept) > CAP_BYTES && (kept.prefetched !== null || kept.recent.length > 0))
     kept =
@@ -91,7 +91,7 @@ export interface Standing extends NotLive {
 }
 
 /** What a record says of itself while it is not its host's current one; null while it is. */
-export const recordStanding = (asOf: number | null, notLive: NotLive | null): Standing | null =>
+export const recordStanding = (asOf: number | null, notLive: NotLive | null) =>
   notLive !== null
     ? { ...notLive, asOf }
     : asOf === null
@@ -160,7 +160,7 @@ export const keptHolder = (
 };
 
 /** A frame Desktop sent without the Flow the view holds, which it left out as unchanged. */
-export const withFlowKept = (held: Option.Option<KeptRecord>, record: KeptRecord): KeptRecord => {
+export const withFlowKept = (held: Option.Option<KeptRecord>, record: KeptRecord) => {
   const flow = Option.getOrUndefined(held)?.detail?.flow;
   return record.detail === null || record.detail.flow !== undefined || flow === undefined
     ? record

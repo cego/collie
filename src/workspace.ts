@@ -177,7 +177,7 @@ export interface WideView {
 }
 
 /** Where a Run lives: a workspace of its own, else its Task's; null where neither says. */
-function workspaceOf(run: RunFacts, tasks: ReadonlyMap<string, TaskRecord>): string | null {
+function workspaceOf(run: RunFacts, tasks: ReadonlyMap<string, TaskRecord>) {
   return run.workspace ?? (run.task === null ? null : (tasks.get(run.task)?.workspace ?? null));
 }
 
@@ -192,7 +192,7 @@ function belongs(
   key: SessionKey,
   agentsHere: ReadonlyArray<AgentEntry>,
   grouped: boolean,
-): boolean {
+) {
   if (where === null) return !grouped && agentsHere.length > 0;
   return where === key.workspaceId;
 }
@@ -267,7 +267,7 @@ export const NO_OUTCOME = {
 } as const;
 
 /** What a Run is for, what is in its way, and the one thing to do about it. */
-function outcomeOf(run: RunFacts): Pick<RunRow, "outcome" | "gaps" | "obstacle" | "next"> {
+function outcomeOf(run: RunFacts) {
   return {
     // Null where nobody classified it: the row says nothing rather than inventing one.
     outcome: run.outcome === "unspecified" ? null : run.outcome,
@@ -289,14 +289,14 @@ const deliveredOf = Effect.fn("deliveredOf")(function* (run: RunFacts) {
   return line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
 });
 
-function recentDetail(run: RunFacts): string {
+function recentDetail(run: RunFacts) {
   const parts: string[] = [run.state];
   if (run.state !== "succeeded" && run.note !== null) parts.push(run.note);
   if (run.mr !== null) parts.push(run.mr);
   return Arr.join(parts, " · ");
 }
 
-function glyphFor(run: RunFacts): string {
+function glyphFor(run: RunFacts) {
   switch (run.state) {
     case "succeeded":
     case "ended":
@@ -459,11 +459,11 @@ const indent = (line: string) => `  ${line}`;
  * it and the text board says it, with room for different amounts of sentence around
  * it — the nav row is a fixed width and the board's line has itself to spread into.
  */
-export function commitsBehind(behind: number): string {
+export function commitsBehind(behind: number) {
   return `${behind} commit${behind === 1 ? "" : "s"} behind`;
 }
 
-function section(name: string, rows: string[], empty: string): string[] {
+function section(name: string, rows: string[], empty: string) {
   return ["", name, ...(rows.length > 0 ? rows : [`  (${empty})`])];
 }
 
@@ -474,7 +474,7 @@ export interface Asking {
   typed: string;
 }
 
-function askingRows(choice: PendingChoice, asking: Asking): string[] {
+function askingRows(choice: PendingChoice, asking: Asking) {
   const rows = [`      ${choice.header}`];
   if (choice.kind === "ask") {
     rows.push(`      > ${asking.typed}`, "      type an answer · Enter send · Esc leave it");
@@ -493,7 +493,7 @@ function askingRows(choice: PendingChoice, asking: Asking): string[] {
  * maps each one's tone to a colour and this joins the text — because a human on a pane too
  * narrow for the app must not be shown a shorter, more reassuring version of a card.
  */
-function liveLines(live: Live): string[] {
+function liveLines(live: Live) {
   const lines: Line[] = [
     ...newsLines(live.news),
     ...Arr.flatMap(live.cards, cardLines),
@@ -505,7 +505,7 @@ function liveLines(live: Live): string[] {
 }
 
 /** The run whose question is being answered, if any: the first one asking. */
-export function askingRun(view: WorkspaceView): RunRow | null {
+export function askingRun(view: WorkspaceView) {
   return Option.getOrUndefined(Arr.findFirst(view.active, (r) => Boolean(r.choice))) ?? null;
 }
 
@@ -519,7 +519,7 @@ export function renderWorkspace(
   asking: Asking = { index: 0, typed: "" },
   /** The board's Tasks, and what has been happening. */
   steering: { live?: Live | null; tasks?: ReadonlyArray<TaskView> } = {},
-): string {
+) {
   const lines = [`${COLLIE_TAB} — ${view.repo}`, view.cwd];
   if (view.behind !== null && view.behind > 0) {
     lines.push(`Collie is ${commitsBehind(view.behind)} its remote — \`collie upgrade\``);
@@ -569,6 +569,6 @@ export function renderWorkspace(
   return Arr.join(lines, "\n");
 }
 
-export function agentForKey(view: WorkspaceView, key: string): AgentRow | null {
+export function agentForKey(view: WorkspaceView, key: string) {
   return Option.getOrUndefined(Arr.findFirst(view.agents, (a) => a.key === key)) ?? null;
 }

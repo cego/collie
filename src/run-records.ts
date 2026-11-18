@@ -242,7 +242,10 @@ const stepSamplesOf = `WITH leaves AS (
  * values or activity for any of them reads it for all of them, in one query, and the pass
  * reads that.
  */
-export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): RunRecordsApi => {
+export const readAhead: (records: RunRecordsApi, runs: ReadonlyArray<string>) => RunRecordsApi = (
+  records,
+  runs,
+) => {
   const ids = new Set(runs);
   const once = <A>(read: (name: string) => Effect.Effect<A>) => {
     const reads = new Map<string, Effect.Effect<A>>();
@@ -374,7 +377,7 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
             ON CONFLICT (run, name) DO UPDATE SET data = excluded.data
           `
       ).pipe(Effect.andThen(worked(run, name)));
-    return {
+    const returned: RunRecordsApi = {
       lines: (run, journal) =>
         sql<{ readonly line: string }>`
           SELECT line FROM collie_run_lines WHERE run = ${run} AND journal = ${journal} ORDER BY seq
@@ -511,7 +514,7 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
               SELECT run, control, key, data FROM collie_controls WHERE run IN ${sql.in(runs)}
             `.pipe(
               Effect.map((rows) =>
-                grouped(rows, (row): ControlRow => ({
+                grouped(rows, (row) => ({
                   control: row.control,
                   key: row.key,
                   data: row.data,
@@ -527,6 +530,7 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
               ON CONFLICT (control, run, key) DO UPDATE SET data = excluded.data
             `
         ).pipe(Effect.andThen(moved(run)), Effect.orDie),
-    } satisfies RunRecordsApi;
+    };
+    return returned;
   }),
 );

@@ -15,6 +15,6 @@ import { pasteInto } from "./state";
  * `append` is what the pasted text does to whatever the field already holds, so a caller
  * hands over its setter and never sees a byte.
  */
-export function usePasteInto(into: (append: (was: string) => string) => void): void {
+export function usePasteInto(into: (append: (was: string) => string) => void) {
   usePaste((event) => into((was) => pasteInto(was, event.bytes)));
 }

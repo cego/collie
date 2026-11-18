@@ -98,7 +98,7 @@ export class TurnScheduler implements Scheduler.Scheduler {
     // Background work steps aside while a served fiber's task waits.
     return this.now() - this.since > TURN_MS || (this.dispatcher.front.length > 0 && !this.first());
   }
-  makeDispatcher(): Scheduler.SchedulerDispatcher {
+  makeDispatcher() {
     return this.dispatcher;
   }
 }

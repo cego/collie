@@ -67,7 +67,7 @@ export const listedIn = (
   catalogues: ReadonlyArray<HarnessCatalogue>,
   harness: string,
   keep: (model: string) => boolean = () => true,
-): Result.Result<ReadonlyArray<ListedModel>, string> => {
+) => {
   const catalogue = Option.getOrUndefined(
     Arr.findFirst(catalogues, (one) => one.harness === harness),
   );

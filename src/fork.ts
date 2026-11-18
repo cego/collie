@@ -125,7 +125,7 @@ export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
  * would otherwise be its grandparent's — and answers to its own name, since the parent's
  * frontmatter name would make the copy shadow it instead of being found as the fork.
  */
-function copied(text: string, hash: string, source: string, target: string): string {
+function copied(text: string, hash: string, source: string, target: string) {
   const stamped = setFrontmatterKey(text, "forked_from_hash", hash);
   return source === target ? stamped : setFrontmatterKey(stamped, "name", target);
 }
@@ -134,7 +134,7 @@ function copied(text: string, hash: string, source: string, target: string): str
  * The smallest file that changes one thing. Everything not named here is still the
  * parent's, so the stub is what the fork is actually for, and nothing else.
  */
-function stub(name: string, parent: string, kind: DefinitionKind, opts: ForkOptions): string {
+function stub(name: string, parent: string, kind: DefinitionKind, opts: ForkOptions) {
   const head = ["---", `name: ${yamlScalar(name)}`, `extends: ${yamlScalar(parent)}`];
   const body: string[] = [];
   if (kind === "workflows" && opts.step) {

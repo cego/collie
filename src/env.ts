@@ -41,7 +41,7 @@ export interface PluginEnv {
   pairs?: boolean;
 }
 
-function first(env: Record<string, string | undefined>, ...keys: string[]): string | null {
+function first(env: Record<string, string | undefined>, ...keys: string[]) {
   for (const k of keys) {
     const v = env[k];
     if (v !== undefined && v !== "") return v;
@@ -59,7 +59,7 @@ export function ownRoot(
   modulePath: string = import.meta.path,
   execPath: string = process.execPath,
   collieDir: string | null = null,
-): string | null {
+) {
   if (!pipe(modulePath, Str.startsWith("/$bunfs/"))) return null;
   const at = Option.getOrElse(pipe(execPath, Str.lastIndexOf("/bin/")), () => -1);
   // A downloaded runner upgrades the installation, never the caller's stale PWD.
@@ -82,14 +82,14 @@ export function selfCommand(
   modulePath: string = import.meta.path,
   execPath: string = process.execPath,
   script: string = Bun.argv[1] ?? "",
-): string[] {
+) {
   return pipe(modulePath, Str.startsWith("/$bunfs/")) ? [execPath] : [execPath, script];
 }
 
 export function readEnv(
   env: Readonly<Record<string, string | undefined>>,
   installRoot: string | null = null,
-): PluginEnv {
+) {
   const home = env.HOME ?? "/tmp";
   const collieDir = first(env, "COLLIE_DIR") ?? `${home}/.collie`;
   const pluginRoot =
@@ -107,7 +107,7 @@ export function readEnv(
     if (value !== undefined) raw[key] = value;
   }
 
-  return {
+  const returned: PluginEnv = {
     pluginRoot,
     home,
     collieDir,
@@ -124,6 +124,7 @@ export function readEnv(
     cwdExplicit: explicitCwd !== null,
     raw,
   };
+  return returned;
 }
 
 const environmentKeys = [

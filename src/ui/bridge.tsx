@@ -11,7 +11,6 @@ import {
   Fiber,
   FileSystem,
   Queue,
-  Scope,
   Stream,
   SubscriptionRef,
 } from "effect";
@@ -104,9 +103,7 @@ export const closeRenderer = (renderer: Pick<CliRenderer, "destroy" | "closed">)
  * Scoped, so the pane gets its terminal back whether the flow finished, cancelled or was
  * killed.
  */
-export function runFlow<A, E, R>(
-  body: (prompts: InputPrompts) => Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> {
+export function runFlow<A, E, R>(body: (prompts: InputPrompts) => Effect.Effect<A, E, R>) {
   return Effect.gen(function* () {
     const { prompts, pending } = signalPrompts();
     const renderer = yield* Effect.acquireRelease(
@@ -185,9 +182,7 @@ export interface Driven {
  *
  * Forks into the caller's scope, so `runApp`'s scope is what ends both fibers.
  */
-export function driveBridge<E, R>(
-  bridge: Bridge<E, R>,
-): Effect.Effect<Driven, E, R | FileSystem.FileSystem | Scope.Scope> {
+export function driveBridge<E, R>(bridge: Bridge<E, R>) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     // The tab asks its questions through the same components the popup does; this is the
@@ -391,9 +386,7 @@ export function driveBridge<E, R>(
  * Runs the Collie tab until it is closed or interrupted. Scoped, so the renderer gives
  * the terminal back even when the pane is killed rather than quit.
  */
-export function runApp<E, R>(
-  bridge: Bridge<E, R>,
-): Effect.Effect<void, E, R | FileSystem.FileSystem> {
+export function runApp<E, R>(bridge: Bridge<E, R>) {
   return Effect.gen(function* () {
     const driven = yield* driveBridge(bridge);
     bridge.onReady?.(driven.dispatch);

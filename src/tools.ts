@@ -907,7 +907,7 @@ const asJson = Schemaflow(
 );
 
 /** One module as the tool says it: what it takes, what it gives back, and what is wrong. */
-const moduleFacts = (one: Described, checked: ModuleCheck): string =>
+const moduleFacts: (one: Described, checked: ModuleCheck) => string = (one, checked) =>
   Arr.join(
     [
       `${one.id} (${one.layer}): ${one.title}`,

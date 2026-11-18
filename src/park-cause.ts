@@ -94,7 +94,7 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
   unknown: { kind: "needs-you", reason: "nothing names why it parked" },
 };
 
-export const parkOf = (cause: ParkCause): Park => ({ cause, kind: PARK_CAUSES[cause].kind });
+export const parkOf = (cause: ParkCause) => ({ cause, kind: PARK_CAUSES[cause].kind });
 
 export const recoveryLine = (line: Metric) =>
   `${line.at}: ${line.action} ${line.outcome} — ${line.note}`;
@@ -103,7 +103,7 @@ export const recoveryLine = (line: Metric) =>
 export const healInFlight = (line: Metric) =>
   line.action === "healed" && (line.outcome === "claimed" || line.outcome === "started");
 
-export const parkWithRecovery = (park: Park, actions: ReadonlyArray<Metric>): Park => {
+export const parkWithRecovery = (park: Park, actions: ReadonlyArray<Metric>) => {
   const same = Arr.filter(actions, (line) => line.cause === park.cause);
   const tries = Arr.filter(same, (line) => line.action === "resumed" && line.outcome !== "skipped");
   const exhausted = tries.length >= 3 && Arr.every(tries, (line) => line.park !== park.id);
@@ -134,7 +134,7 @@ const KIND_SAID: Readonly<Record<ParkKind, string>> = {
   "needs-you": "needs you",
 };
 
-export const parkLine = (park: Park): string =>
+export const parkLine = (park: Park) =>
   park.healing === undefined
     ? `Parked: ${park.cause} · ${KIND_SAID[park.kind]}`
     : `Parked: ${park.cause} · being healed by ${park.healing}`;

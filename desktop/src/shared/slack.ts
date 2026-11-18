@@ -33,10 +33,10 @@ export const slackDestinationRow = (key: string, value: string, yours: Channels 
   return { disabled: yours === null, hint: yours === null ? SIGN_IN_TO_PICK : null, options };
 };
 
-export const pickSlackDestination = (
+export const pickSlackDestination: (
   value: string,
   yours: Channels | null,
-): { readonly refused: string } | { readonly value: string } => {
+) => { readonly refused: string } | { readonly value: string } = (value, yours) => {
   if (yours === null) return { refused: SIGN_IN_TO_PICK };
   return value === "" || Arr.some(yours, (channel) => channel.id === value)
     ? { value }

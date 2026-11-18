@@ -44,11 +44,6 @@ const pair = () => {
 
 const TAR = new TextEncoder().encode("the 0.33.0 bundle");
 
-interface Fake {
-  readonly port: UpdaterPort;
-  readonly calls: string[];
-}
-
 /** What a check finds, which a test changes as releases are published or the network goes. */
 interface Feed {
   version: string;
@@ -81,11 +76,11 @@ const fakeUpdater = (
     /** A signature request that never answers while `hangs` holds. */
     readonly signatureHangs?: { hangs: boolean };
   },
-): Effect.Effect<Fake, never, FileSystem.FileSystem> =>
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const calls: string[] = [];
-    const preparedOf = (version: string): Prepared => {
+    const preparedOf = (version: string) => {
       const hash = version === "0.33.0" ? "abc" : `h${version}`;
       return {
         version,

@@ -26,7 +26,7 @@ export type Answerer<E> = (
 ) => Effect.Effect<Answer, E>;
 
 /** How a shim starts the forwarder: what `bun run test` compiled of it, or else its source. */
-export const forwarderCommand = (compiled: string): string[] =>
+export const forwarderCommand = (compiled: string) =>
   compiled === ""
     ? [process.execPath, new URL("./forwarder.ts", import.meta.url).pathname]
     : [compiled];
@@ -42,7 +42,7 @@ const Call = Schema.fromJsonString(
 const ANSWERER = "COLLIE_FAKE_ANSWERER";
 const answerers = new Map<string, Answerer<never>>();
 
-const failedAnswer = <E>(cause: Cause.Cause<E>): Effect.Effect<Answer> =>
+const failedAnswer = <E>(cause: Cause.Cause<E>) =>
   Effect.succeed({ code: 70, stdout: "", stderr: `${Cause.pretty(cause)}\n` });
 
 /** The environments of the calls this process is answering now. */
@@ -53,7 +53,7 @@ const inFlight = new Set<Readonly<Record<string, string>>>();
  * `bindings`. An answer outlives the forwarder that asked once its host has stopped, and
  * still writes where it was asked to.
  */
-export const answering = (bindings: Readonly<Record<string, string>>): number =>
+export const answering = (bindings: Readonly<Record<string, string>>) =>
   Arr.filter(Arr.fromIterable(inFlight), (env) =>
     Arr.every(Rec.toEntries(bindings), ([key, value]) => env[key] === value),
   ).length;

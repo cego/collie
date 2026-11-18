@@ -50,7 +50,7 @@ import { isString } from "../src/schema";
 
 type Item = (typeof NewsBatch.Type)["items"][number];
 
-const item = (key: string, significance: Significance): Item => ({
+const item: (key: string, significance: Significance) => Item = (key, significance) => ({
   key,
   run: Str.split(key, ":")[0] ?? key,
   text: `${key} happened.`,
@@ -59,11 +59,11 @@ const item = (key: string, significance: Significance): Item => ({
 });
 
 /** A Machine whose one Herd has this News until it is settled read. */
-const machine = (
+const machine: (
   items: ReadonlyArray<Item>,
   read: string[],
-  declared: Declaration[] = [],
-): ChatMachine => {
+  declared?: Declaration[],
+) => ChatMachine = (items, read, declared = []) => {
   const door: Partial<ChatDoor> = {
     declare: (payload) => Effect.sync(() => void declared.push(payload)),
     news: ({ as, keys }) =>
@@ -115,12 +115,12 @@ const SAID = { type: "stream_event", parent_tool_use_id: null };
  * Claude Code answering each message with `reply`'s messages; one `holds` names answers only
  * once it is interrupted.
  */
-const scripted = (
+const scripted: (
   seen: Seen,
   reply: (text: string) => ReadonlyArray<SdkMessage>,
-  holds: (text: string) => boolean = () => false,
+  holds?: (text: string) => boolean,
   gate?: Deferred.Deferred<void>,
-): ClaudeCode<string> => ({
+) => ClaudeCode<string> = (seen, reply, holds = () => false, gate?) => ({
   query: ({ prompt, options }) => {
     const id = "resume" in options ? options.resume : options.sessionId;
     seen.servers.push(Rec.keys(options.mcpServers));
@@ -227,7 +227,10 @@ const eventually = (check: () => boolean) =>
   });
 
 /** Claude Code whose first `failed` sessions fail as they start, as one not logged in does. */
-const failingFirst = (claude: ClaudeCode<string>, failed: number): ClaudeCode<string> => {
+const failingFirst: (claude: ClaudeCode<string>, failed: number) => ClaudeCode<string> = (
+  claude,
+  failed,
+) => {
   let started = 0;
   return {
     ...claude,
@@ -273,7 +276,7 @@ const fakeDriver = (
   return { driver, opened };
 };
 
-const said = (id: string, text: string): ChatMessage => ({
+const said: (id: string, text: string) => ChatMessage = (id, text) => ({
   id,
   role: "user",
   parts: [{ type: "text", content: text }],

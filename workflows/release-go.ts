@@ -12,7 +12,7 @@ export const GivenGo = Schema.Struct({
 export type GivenGo = typeof GivenGo.Type;
 
 /** The go at `head`, with whoever the forge named as approving, however far from ready it is. */
-export const givenAt = (head: string, standing: ReviewStanding | null): GivenGo => ({
+export const givenAt = (head: string, standing: ReviewStanding | null) => ({
   head,
   approvers: standing !== null && "approvers" in standing ? (standing.approvers ?? []) : [],
 });

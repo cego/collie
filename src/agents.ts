@@ -749,16 +749,21 @@ const untilPushable = (operation: string, cwd: string) =>
  * comes back to an Output it has already had repaired finds the repair recorded, not a
  * fresh allowance. Only a resume of the park that follows gives one more.
  */
-export const agentWork = <
+export const agentWork: <
   Output extends OutputContract = typeof Schema.String,
   Input extends Readonly<Record<string, Schema.Json>> = never,
 >(
   given: AgentWork<Output, Input>,
-): Effect.Effect<
+) => Effect.Effect<
   Output["Type"],
   WorkflowError,
   Run | Agents | Host | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
-> =>
+> = <
+  Output extends OutputContract = typeof Schema.String,
+  Input extends Readonly<Record<string, Schema.Json>> = never,
+>(
+  given: AgentWork<Output, Input>,
+) =>
   Effect.gen(function* () {
     const agents = yield* Agents;
     const host = yield* Host;
@@ -1417,7 +1422,7 @@ const fellBack = (
  * Whether what is asked for here is what an agent already running is, or, for one that
  * took over from an agent that ran out, what that agent was.
  */
-const agrees = (held: ChosenAgent, requested: Preferences): boolean => {
+const agrees: (held: ChosenAgent, requested: Preferences) => boolean = (held, requested) => {
   const subagents =
     requested.claudeSubagents?.model === DEFAULT_MODEL
       ? { ...requested.claudeSubagents, model: HARNESSES.claude?.defaultModel ?? DEFAULT_MODEL }
@@ -1452,16 +1457,16 @@ const agrees = (held: ChosenAgent, requested: Preferences): boolean => {
  * from: the agent it reached, or null where there is none to take it. One nobody can say
  * arrived parks the Run.
  */
-export const handOffWork = (given: {
+export const handOffWork: (given: {
   readonly operation: string;
   readonly role: string;
   readonly text: string;
   readonly lineage?: ReadonlyArray<string>;
-}): Effect.Effect<
+}) => Effect.Effect<
   string | null,
   WorkflowError,
   Run | Agents | Host | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
-> =>
+> = (given) =>
   Effect.gen(function* () {
     const agents = yield* Agents;
     const host = yield* Host;
@@ -1494,11 +1499,15 @@ export const handOffWork = (given: {
  * so a resume runs it again: the launch finds the agent it started, or its workspace
  * again, and the same delivery goes out.
  */
-const parkedWhenStuck = <A>(
+const parkedWhenStuck: <A>(
   sending: Effect.Effect<A, AgentUncertain | AgentParked>,
   host: HostApi,
   runId: string,
-): Effect.Effect<A, AgentUncertain, WorkflowEngine.WorkflowInstance> =>
+) => Effect.Effect<A, AgentUncertain, WorkflowEngine.WorkflowInstance> = <A>(
+  sending: Effect.Effect<A, AgentUncertain | AgentParked>,
+  host: HostApi,
+  runId: string,
+) =>
   sending.pipe(
     Effect.tap(() => host.parked(runId, null)),
     Effect.catchTag("AgentParked", (parked) =>
@@ -1517,12 +1526,17 @@ const parkedWhenStuck = <A>(
  * would have nothing to re-enter. The launch is a separate Activity and is already
  * recorded, so what comes back reattaches instead of starting a second agent.
  */
-const stoppable = <A, E>(
+const stoppable: <A, E>(
   collecting: Effect.Effect<A, E, WorkflowEngine.WorkflowInstance>,
   host: HostApi,
   runId: string,
   pollMs: number,
-): Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance> =>
+) => Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance> = <A, E>(
+  collecting: Effect.Effect<A, E, WorkflowEngine.WorkflowInstance>,
+  host: HostApi,
+  runId: string,
+  pollMs: number,
+) =>
   Effect.gen(function* () {
     const wait = yield* WorkflowEngine.WorkflowInstance;
     const raced = yield* Effect.raceFirst(
@@ -1565,21 +1579,29 @@ export function decodeOutput<Output extends OutputContract>(
   text: string,
   /** Read the file as the text it is rather than as JSON. */
   plain = false,
-): Read<Output["Type"]> {
+) {
   if (plain) {
     const decoded = Schema.decodeResult(contract)(Str.trim(text));
-    return decoded._tag === "Success"
-      ? { ok: true, value: decoded.success }
-      : { ok: false, problem: decoded.failure.message };
+    const returned: Read<Output["Type"]> =
+      decoded._tag === "Success"
+        ? { ok: true, value: decoded.success }
+        : { ok: false, problem: decoded.failure.message };
+    return returned;
   }
   const parsed = asJson(text);
   if (parsed._tag === "Failure") {
-    return { ok: false, problem: `it is not JSON: ${parsed.failure.message}` };
+    const returned: Read<Output["Type"]> = {
+      ok: false,
+      problem: `it is not JSON: ${parsed.failure.message}`,
+    };
+    return returned;
   }
   const decoded = Schema.decodeResult(contract, { errors: "all" })(parsed.success);
-  return decoded._tag === "Success"
-    ? { ok: true, value: decoded.success }
-    : { ok: false, problem: decoded.failure.message };
+  const returned: Read<Output["Type"]> =
+    decoded._tag === "Success"
+      ? { ok: true, value: decoded.success }
+      : { ok: false, problem: decoded.failure.message };
+  return returned;
 }
 
 /** Everything a prompt is built from, none of which is an Activity. */
@@ -1606,8 +1628,9 @@ export interface PromptParts {
  * never builds a different one. The role is the persona, injected at launch, and
  * reaches a body here as `{{role}}`.
  */
-export function promptFor(parts: PromptParts): string {
-  return renderPrompt(parts).text;
+export function promptFor(parts: PromptParts) {
+  const returned: string = renderPrompt(parts).text;
+  return returned;
 }
 
 /** The prompt, and every expression in the instructions nothing filled. */
@@ -1646,17 +1669,21 @@ export function handover(ranOut: {
   readonly on: AgentChoice;
   readonly why: string;
   readonly transcript: string | null;
-}): string {
+}) {
   const where =
     ranOut.transcript === null
       ? ""
       : ` Its conversation is at ${ranOut.transcript}; read it if you need what it was told or decided.`;
-  return `Another agent (${said(ranOut.on)}) started this work and stopped because its subscription ran out (${ranOut.why}). Whatever it changed is in the checkout: read \`git status\` and \`git diff\` before you start, and carry on rather than start over.${where}`;
+  const returned: string = `Another agent (${said(ranOut.on)}) started this work and stopped because its subscription ran out (${ranOut.why}). Whatever it changed is in the checkout: read \`git status\` and \`git diff\` before you start, and carry on rather than start over.${where}`;
+  return returned;
 }
 
-function attachmentsSection(attachments: ReadonlyArray<Attachment>): string {
-  if (attachments.length === 0) return "";
-  return Arr.join(
+function attachmentsSection(attachments: ReadonlyArray<Attachment>) {
+  if (attachments.length === 0) {
+    const returned: string = "";
+    return returned;
+  }
+  const returned: string = Arr.join(
     [
       "Files given to this Run, which you can open like any other:",
       ...Arr.map(
@@ -1666,6 +1693,7 @@ function attachmentsSection(attachments: ReadonlyArray<Attachment>): string {
     ],
     "\n",
   );
+  return returned;
 }
 
 /**
@@ -1673,15 +1701,17 @@ function attachmentsSection(attachments: ReadonlyArray<Attachment>): string {
  * are the author's own words about each field, and they are the judgment the agent is
  * being asked for — so they travel with the drawing rather than being summarised away.
  */
-function contractSection(contract: Projection): string {
+function contractSection(contract: Projection) {
   const limits =
     contract.limits.length === 0
       ? ""
       : `\n\nThe drawing says less than the contract does at: ${Arr.join(contract.limits, "; ")}. Those are still checked.`;
   if (contract.document === null) {
-    return `That file is checked against a schema this build cannot draw${limits || "."}`;
+    const returned: string = `That file is checked against a schema this build cannot draw${limits || "."}`;
+    return returned;
   }
-  return `That file must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.\n\n\`\`\`json\n${JSON.stringify(contract.document, null, 2)}\n\`\`\`${limits}`;
+  const returned: string = `That file must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.\n\n\`\`\`json\n${JSON.stringify(contract.document, null, 2)}\n\`\`\`${limits}`;
+  return returned;
 }
 
 /** What one delivery and its confirmation ask of core. */
@@ -1740,7 +1770,7 @@ const DEFAULT_POLL_MS = 2000;
 const READING_EVERY_MS = 60_000;
 
 /** What a launch ran on, as a choice. */
-const choiceOfLaunch = (launched: Launched): AgentChoice => {
+const choiceOfLaunch: (launched: Launched) => AgentChoice = (launched) => {
   const choice: Types.Mutable<AgentChoice> = {
     harness: launched.harness,
     model: launched.model ?? DEFAULT_MODEL,
@@ -1854,9 +1884,9 @@ const DEFAULT_COLLECT_MS = 2 * 60 * 60 * 1000;
  * controls and permissions the operator configured. The host's own services are captured
  * here, so a workflow asks for an agent without asking for a filesystem.
  */
-export const agentsLayer = (
+export const agentsLayer: (
   host: AgentHost,
-): Layer.Layer<Agents | Collecting, never, AgentServices> =>
+) => Layer.Layer<Agents | Collecting, never, AgentServices> = (host) =>
   Layer.effect(Agents)(
     Effect.gen(function* () {
       const services = yield* Effect.context<AgentServices>();
@@ -1868,7 +1898,11 @@ export const agentsLayer = (
 
 type Under = <A, E>(effect: Effect.Effect<A, E, AgentServices>) => Effect.Effect<A, E>;
 
-const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
+const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => AgentsApi = (
+  host,
+  under,
+  collecting,
+) => {
   const dirFor = (runId: string) => launchDir(host.dir, runId);
   const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
   // A recovery already admitted finishes before its quota incident is published. Once
@@ -2406,7 +2440,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     // Read at each start rather than kept from the host's: a host outlives the
     // Settings change that flips this, and every agent after it has to see the change.
     const config = yield* readConfig(host.env.userDir).pipe(
-      Effect.orElseSucceed((): YamlMap => ({})),
+      Effect.orElseSucceed(() => {
+        const returned: YamlMap = {};
+        return returned;
+      }),
     );
     const written = permissionsAsWritten(config.permissions);
     const asked = isPermissionMode(wanted)
@@ -2660,11 +2697,15 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     );
 
   /** `fresh` starts again an agent gone at delivery, closing the pane herdr still lists it in. */
-  const launch = (
+  const launch: (
+    ask: AgentAsk,
+    fresh?: boolean,
+    note?: (why: string | null) => Effect.Effect<void>,
+  ) => Effect.Effect<Launched, AgentUncertain | AgentParked> = (
     ask: AgentAsk,
     fresh = false,
     note: (why: string | null) => Effect.Effect<void> = () => Effect.void,
-  ): Effect.Effect<Launched, AgentUncertain | AgentParked> =>
+  ) =>
     Effect.gen(function* () {
       const agent = yield* nameFor(ask);
       const out = yield* Deferred.make<void>();
@@ -2680,12 +2721,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return Deferred.succeed(out, undefined);
     });
 
-  const launching = (
+  const launching: (
     ask: AgentAsk,
     fresh: boolean,
     note: (why: string | null) => Effect.Effect<void>,
     agent: string,
-  ): Effect.Effect<Launched, AgentUncertain | AgentParked> =>
+  ) => Effect.Effect<Launched, AgentUncertain | AgentParked> = (ask, fresh, note, agent) =>
     under(
       Effect.gen(function* () {
         const listedAt = yield* nowIso;
@@ -3497,7 +3538,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
    * its work is still out, is handed back to go once every lost agent of the Run is back.
    */
   /** The host's core, but prompting an OpenCode agent's own server instead of its TUI. */
-  const posting = (base: string, session: string): DeliveringHerdr => ({
+  const posting: (base: string, session: string) => DeliveringHerdr = (base, session) => ({
     agentList: () => host.herdr.agentList(),
     agentSendKeys: (target, keys) => host.herdr.agentSendKeys(target, keys),
     agentStatus: (target) => host.herdr.agentStatus(target),
@@ -3994,7 +4035,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       }).pipe(Effect.orDie),
     );
 
-  const endsOf = (runId: string): EndDeps => ({
+  const endsOf: (runId: string) => EndDeps = (runId) => ({
     ...compactionDeps(host, runId),
     herdr: host.herdr,
     stopMs: host.stopMs,
@@ -4469,7 +4510,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 };
 
 /** A steer that went out, with whether it was seen taken. */
-const receipt = (
+const receipt: (
   agent: string,
   sent: {
     readonly id?: string | undefined;
@@ -4477,7 +4518,7 @@ const receipt = (
     readonly pane?: string;
     readonly kept?: string | null;
   },
-): Steered => {
+) => Steered = (agent, sent) => {
   const how = sent.observed ?? null;
   const steered: Types.Mutable<Steered> = {
     agent,
@@ -4513,7 +4554,7 @@ const stepPointer = (file: string) =>
 /** The longest a step's joined Clearance may be, before its prefix. */
 const CLEARANCE_CHARS = 400;
 
-const clearanceProblem = (clears: ReadonlyArray<string>): string | null => {
+const clearanceProblem: (clears: ReadonlyArray<string>) => string | null = (clears) => {
   if (Arr.some(clears, (one) => /[\r\n]/.test(one)))
     return "a Clearance is one line, and this one has a line break";
   const joined = Array.from(Arr.join(clears, "; ")).length;
@@ -4564,7 +4605,7 @@ const isParked = Schema.is(AgentParked);
 /** Anything a launch failed on, said as what it means: nobody can be sure what happened. */
 const isUncertain = Schema.is(AgentUncertain);
 const isNotQuiet = (cause: unknown): cause is NotQuiet => Predicate.isTagged(cause, "NotQuiet");
-const asUncertain = (operation: string, cause: unknown): AgentUncertain =>
+const asUncertain: (operation: string, cause: unknown) => AgentUncertain = (operation, cause) =>
   isUncertain(cause) ? cause : new AgentUncertain({ operation, reason: herdrFailureReason(cause) });
 
 /** A persona's own front matter, which its definition reads and its agent is not told. */
@@ -4651,7 +4692,7 @@ const roleBody = (role: string) => `You are the ${role}.`;
 
 const OUTPUT_REMINDERS = 2;
 
-const reminderText = (output: string): string =>
+const reminderText: (output: string) => string = (output) =>
   `Your turn ended without writing your Output. A chat message is not the Output: write ${output}, the JSON the contract described and nothing else.\nOUTPUT_PATH: ${output}`;
 
 /**
@@ -4659,10 +4700,10 @@ const reminderText = (output: string): string =>
  * reason. It is still in its pane holding the work; starting the work again would throw a
  * whole round away over a write.
  */
-export const repairText = (output: string, problem: string): string =>
+export const repairText: (output: string, problem: string) => string = (output, problem) =>
   `Your Output file is not usable: ${problem}\n\nWrite ${output} again — the JSON the contract described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${output}`;
 
-const compactionDeps = (host: AgentHost, runId: string): CompactionDeps => ({
+const compactionDeps: (host: AgentHost, runId: string) => CompactionDeps = (host, runId) => ({
   ports: host.ports ?? COMPACTION_PORTS,
   stateDir: host.env.stateDir,
   configured: host.compactAtTokens,
@@ -4749,11 +4790,11 @@ const NO_AUTHORITY: RunAuthority = { created: null, roaming: false, started: nul
  * inside it: Claude reads every ancestor's, and a clone install's `@AGENTS.md` is an external
  * import it asks about in each new worktree.
  */
-const withoutCollieInstructions = (
+const withoutCollieInstructions: (
   overlay: ClaudeOverlay,
   cwd: string,
   given: string,
-): ClaudeOverlay => {
+) => ClaudeOverlay = (overlay, cwd, given) => {
   const collieDir = pipe(given, Str.replace(/\/+$/, ""));
   return pipe(cwd, Str.startsWith(`${collieDir}/`))
     ? {

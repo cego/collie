@@ -68,7 +68,7 @@ afterEach(() =>
   ),
 );
 
-const delivery = (over: Partial<Delivery> = {}): Delivery => ({
+const delivery: (over?: Partial<Delivery>) => Delivery = (over = {}) => ({
   id: "d1",
   at: "2026-09-09T10:00:00Z",
   run: "r1",
@@ -85,7 +85,7 @@ const delivery = (over: Partial<Delivery> = {}): Delivery => ({
   ...over,
 });
 
-const live = (over: Partial<AgentInfo> = {}): AgentInfo => ({
+const live: (over?: Partial<AgentInfo>) => AgentInfo = (over = {}) => ({
   name: "impl-1",
   paneId: "1-9",
   status: "idle",
@@ -97,7 +97,7 @@ const live = (over: Partial<AgentInfo> = {}): AgentInfo => ({
 
 const scope = { session: null, workspaceId: "w1", cwd: "/project" };
 
-const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
+const entry: (over?: Partial<AgentEntry>) => AgentEntry = (over = {}) => ({
   role: "implementer",
   agent: "impl-1",
   paneId: "1-9",
@@ -365,7 +365,7 @@ test("the call record counts every call, settles the abandoned, and refuses none
 
   // A hundred calls already made this hour, every one of them a failure. Usage is data:
   // the record grows, and nothing in it is a reason to refuse the next call.
-  const call = (id: string, when: string): BudgetLine[] => [
+  const call: (id: string, when: string) => BudgetLine[] = (id, when) => [
     { kind: "reserve", id, run: "r1", at: when, max_seconds: 120, max_output_bytes: 1 },
     { kind: "settle", id, at: when, outcome: "failed", seconds: 1, bytes: 0 },
   ];

@@ -51,7 +51,11 @@ export const shortUrl = (url: string) => {
     : shown;
 };
 
-const cardOf = (url: string, given: string | undefined, mr: MrDetails | null): LinkCard => {
+const cardOf: (url: string, given: string | undefined, mr: MrDetails | null) => LinkCard = (
+  url,
+  given,
+  mr,
+) => {
   if (url === mr?.url) return { kind: "mr", url, title: mr.title, status: mr.state };
   if (mr !== null && url === checksUrl(mr)) {
     const heading = mrHeading(mr);
@@ -80,7 +84,7 @@ export const webLinks = ({
 }: {
   readonly texts: ReadonlyArray<string>;
   readonly mr: MrPanel | null;
-}): ReadonlyArray<LinkCard> => {
+}) => {
   const details = mr?._tag === "Details" ? mr : null;
   const own =
     details === null ? [] : [details.url, details.pipeline === "" ? "" : checksUrl(details)];

@@ -15,9 +15,9 @@ type SuiteReadings = typeof SuiteReadings.Type;
 const ms = (seconds: string) => Math.round(Number(seconds) * 1000);
 
 /** The runner's `test: queued …` line and Bun's summary; a missing one is an error, never a zero. */
-export const suiteReadings = (
+export const suiteReadings: (
   output: string,
-): { ok: true; readings: SuiteReadings } | { ok: false; error: string } => {
+) => { ok: true; readings: SuiteReadings } | { ok: false; error: string } = (output) => {
   const timed = /^test: queued ([\d.]+) s, built ([\d.]+) s, ran ([\d.]+) s$/m.exec(output);
   if (timed === null)
     return { ok: false, error: "no `test: queued …, built …, ran …` line in the suite's output" };

@@ -13,7 +13,7 @@ import type { DesktopSettings } from "../shared/flock";
 import { CHAT_HARNESSES, DEFAULT_CHAT_HARNESS, type FlockSettings } from "../shared/flock-settings";
 import { childEnv } from "./login-env";
 import type { HarnessList, HarnessLists } from "./harness-lists";
-import { chatChoice, extraModels, type Offers } from "./settings";
+import { chatChoice, extraModels } from "./settings";
 
 /** Pi's configuration as it is now; nothing where it has none or it cannot be read. */
 export const readPiConfig = Effect.fn("PiConfig.read")(function* (dir: string) {
@@ -26,17 +26,17 @@ export const readPiConfig = Effect.fn("PiConfig.read")(function* (dir: string) {
       : Str.replace(/^~(?=\/|$)/, homedir())(configured);
   return yield* fs.readFileString(path.resolve(dir, agent, "settings.json")).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(PiConfig))),
-    Effect.orElseSucceed((): PiConfig => ({})),
+    Effect.orElseSucceed(() => ({})),
   );
 });
 
 /** Table models plus valid Flock extras and the set model. */
-export const tableOffer = (
+export const tableOffer: (
   harness: string,
   settings: DesktopSettings,
   flock: FlockSettings,
   pi: PiConfig,
-): Offer => {
+) => Offer = (harness, settings, flock, pi) => {
   const set =
     (settings.chatHarness ?? DEFAULT_CHAT_HARNESS) === harness ? settings.chatModel : undefined;
   const efforts = HARNESS_MODELS[harness]?.efforts ?? [];
@@ -68,12 +68,12 @@ export const tableOffer = (
 const configFor = <R>(harness: string, pi: Effect.Effect<PiConfig, never, R>) =>
   harness === "pi" ? pi : Effect.succeed<PiConfig>({});
 
-const withList = (
+const withList: (
   table: Offer,
   list: HarnessList | undefined,
   pi: PiConfig,
   settings: DesktopSettings,
-): Offer => {
+) => Offer = (table, list, pi, settings) => {
   if (list?.from === "table") return { ...table, why: list.why };
   if (list?.from !== "harness") return table;
   const harness = table.unset.harness;
@@ -135,7 +135,7 @@ export const offersOf = <R>(
           ] as const,
       ),
     ),
-  ).pipe(Effect.map((offered): Offers => Rec.fromEntries(offered)));
+  ).pipe(Effect.map((offered) => Rec.fromEntries(offered)));
 
 /** The checked session choice, with Pi's configuration read afresh. */
 export const opensOn = <R>(
@@ -172,7 +172,7 @@ export const opensOn = <R>(
 export const retelling = (
   settings: Stream.Stream<DesktopSettings>,
   flock: Stream.Stream<FlockSettings>,
-): Stream.Stream<unknown> =>
+) =>
   Stream.merge(
     Stream.drop(settings, 1),
     flock.pipe(

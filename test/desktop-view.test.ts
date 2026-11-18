@@ -256,11 +256,11 @@ test("a Flock that has heard nothing draws no board, not an empty one", () =>
     }),
   ));
 
-const snapshot = (
+const snapshot: (
   machine: Machine,
   tasks: ReadonlyArray<typeof asking>,
-  herds: ReadonlyArray<{ id: string; name?: string }> = [{ id: "default" }],
-): MachineMessage => ({
+  herds?: ReadonlyArray<{ id: string; name?: string }>,
+) => MachineMessage = (machine, tasks, herds = [{ id: "default" }]) => ({
   machine,
   message: {
     _tag: "Snapshot",
@@ -395,7 +395,10 @@ test("an Unseen Finished Task is drawn outside the collapsed list, a seen one on
   expect(finished).toHaveLength(2);
 });
 
-const lostVm = (state: "unreachable" | "sso" | "no-collie", at = 1_000): FlockItem => ({
+const lostVm: (state: "unreachable" | "sso" | "no-collie", at?: number) => FlockItem = (
+  state: "unreachable" | "sso" | "no-collie",
+  at = 1_000,
+) => ({
   _tag: "Lost",
   machine: { profile: vm.profile, name: vm.name, target: vm.target },
   state,
@@ -478,7 +481,11 @@ test("a Machine without Collie is known by its herdr profile until its host name
   expect([...merged.machines.keys()]).toEqual(["inst-pc"]);
 });
 
-const built = (machine: Machine, build: string, development: string): MachineMessage => ({
+const built: (machine: Machine, build: string, development: string) => MachineMessage = (
+  machine,
+  build,
+  development,
+) => ({
   machine,
   message: {
     _tag: "Snapshot",
@@ -491,13 +498,13 @@ const built = (machine: Machine, build: string, development: string): MachineMes
     seq: 0,
   },
 });
-const routed = (machine: Machine): FlockItem => ({
+const routed: (machine: Machine) => FlockItem = (machine) => ({
   _tag: "Routed",
   machine: { profile: machine.profile, name: machine.name, target: machine.target },
 });
 
 /** `vm`'s paired link, as `collie machine list` says it, with only the fields given. */
-const linked = (fields: Partial<typeof PeerView.Encoded>): FlockItem => ({
+const linked: (fields: Partial<typeof PeerView.Encoded>) => FlockItem = (fields) => ({
   _tag: "Linked",
   machine: { profile: vm.profile, name: vm.name, target: vm.target },
   link: flow(
@@ -647,7 +654,7 @@ test("a Machine's build is kept from its Snapshot, and a saved board's stands in
   });
 });
 
-const row = (over: Partial<MachineRow> = {}): MachineRow => ({
+const row: (over?: Partial<MachineRow>) => MachineRow = (over = {}) => ({
   profile: "p-vm",
   name: "vm-mk",
   target: "mk@vm-mk",

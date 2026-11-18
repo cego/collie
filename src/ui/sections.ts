@@ -10,7 +10,7 @@ import type { Density } from "../settings";
 /** Below this two columns are two unreadable half-cards rather than one readable one. */
 const TWO_COLUMN_MIN = 80;
 
-export function columnsFor(width: number, density: Density): number {
+export function columnsFor(width: number, density: Density) {
   if (width < TWO_COLUMN_MIN) return 1;
   return density === "compact" ? 3 : 2;
 }
@@ -67,7 +67,7 @@ export function stepGlyph(state: StepState) {
  * The one cell of colour down a card's left edge, or none. Only the states worth
  * interrupting a human for get one — an edge on every card is an edge on none.
  */
-export function cardEdge(view: TaskView): string | null {
+export function cardEdge(view: TaskView) {
   // Only a decision colours the whole border: a quiet or failed card already says so in
   // its glyph and its sentence, and a board of coloured boxes is a board nobody reads.
   if (view.decision !== null) return view.decision.kind === "proposal" ? C.red : C.amber;
@@ -75,7 +75,7 @@ export function cardEdge(view: TaskView): string | null {
 }
 
 /** The colour of a card's sentence: the state it is about, where that state is loud. */
-export function sentenceColour(view: TaskView): string {
+export function sentenceColour(view: TaskView) {
   if (view.decision !== null) return C.text;
   if (view.state === "quiet") return C.purple;
   if (view.state === "failed") return C.red;

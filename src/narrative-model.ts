@@ -30,7 +30,7 @@ export const NarrativeReport = Schema.Struct({
 });
 export type NarrativeReport = typeof NarrativeReport.Type;
 
-export const concise = (text: string): string => {
+export const concise = (text: string) => {
   const words = Str.trim(Str.replace(/\s+/gu, " ")(text));
   const sentences = Str.trim(
     Arr.join(

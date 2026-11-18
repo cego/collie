@@ -7,7 +7,6 @@ import {
   mrWords,
   openMrLabel,
   readMrRef,
-  type TaskMr,
   type TaskView,
 } from "../../../src/board-model";
 import type { FlockCards } from "./flock";
@@ -30,7 +29,7 @@ export interface FlockMr extends CardMr {
 }
 
 /** An older host's single merge request, as the list would have named it. */
-const scalarOf = (task: TaskView): ReadonlyArray<TaskMr> => {
+const scalarOf = (task: TaskView) => {
   const ref = task.mr === null ? null : readMrRef(task.mr);
   if (ref === null || task.mr === null) return [];
   const words = mrWords(ref);
@@ -52,7 +51,7 @@ const scalarOf = (task: TaskView): ReadonlyArray<TaskMr> => {
   ];
 };
 
-export const cardMrs = (task: TaskView): ReadonlyArray<CardMr> => {
+export const cardMrs = (task: TaskView) => {
   const mrs = task.mrs ?? scalarOf(task);
   const several = mrs.length > 1;
   return Arr.map(mrs, (one) => {
@@ -74,7 +73,7 @@ export const cardMrs = (task: TaskView): ReadonlyArray<CardMr> => {
  * drawn once, on the first of their cards in board order, with a link to each; a card draws
  * its own only where it has several or another Machine holds one too.
  */
-export const flockMrs = (cards: FlockCards): ReadonlyMap<string, ReadonlyArray<FlockMr>> => {
+export const flockMrs = (cards: FlockCards) => {
   const shown = new Map<string, { readonly mr: CardMr; readonly links: Array<MrLink> }>();
   const firstOn = new Map<string, Array<string>>();
   const held = new Map<string, number>();
@@ -93,7 +92,7 @@ export const flockMrs = (cards: FlockCards): ReadonlyMap<string, ReadonlyArray<F
   }
   const drawn = new Map<string, ReadonlyArray<FlockMr>>();
   for (const [key, ids] of firstOn) {
-    const rows = Arr.map(ids, (id): FlockMr => {
+    const rows = Arr.map(ids, (id) => {
       // SAFETY: every id in `firstOn` was put in `shown` with it.
       const { mr, links } = shown.get(id)!;
       return { ...mr, links };

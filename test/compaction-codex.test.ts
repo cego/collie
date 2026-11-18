@@ -19,7 +19,7 @@ import { fakeChannel } from "./support/compaction";
 import { reason } from "../src/naming";
 import { atLeast, COMPACTION_PORTS, VERIFIED_VERSIONS } from "../src/compactors";
 import { boundThread, withCodex } from "../src/codex";
-import { Unsubmitted, type AgentContext } from "../src/compaction";
+import { Unsubmitted } from "../src/compaction";
 
 let rig: Rig;
 let fs: FileSystem.FileSystem;
@@ -68,7 +68,7 @@ type Answer = Schema.Schema.Type<typeof Schema.Json>;
  * release's own schema declares, which the contract checks at the bottom of this file
  * assert separately.
  */
-function serve(): FakeServer {
+function serve() {
   const listening = Bun.serve({
     port: 0,
     fetch: (request, self) =>
@@ -161,11 +161,11 @@ function serve(): FakeServer {
 }
 
 /** Why a read failed, as a human would read it off the Run. */
-function why<A, E>(result: Result.Result<A, E>): string {
+function why<A, E>(result: Result.Result<A, E>) {
   return Result.isFailure(result) ? reason(result.failure) : "";
 }
 
-const ctx = (): AgentContext => ({
+const ctx = () => ({
   agent: "build-r1",
   run: "run-1",
   harness: "codex",

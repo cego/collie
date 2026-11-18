@@ -18,7 +18,7 @@ export const MEDIA_PLUGINS = [
   "libav",
 ] as const;
 
-export const mediaDependencies = (stdout: string): ReadonlyArray<string> => {
+export const mediaDependencies = (stdout: string) => {
   if (/=>\s+not found/.test(stdout))
     throw new Error("The Linux media runtime has unresolved libraries");
   const found = Arr.map(

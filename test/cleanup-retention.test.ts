@@ -1,7 +1,7 @@
 // A Task and every one of its Runs are forgotten together 30 days after its last Run ended,
 // and only once nothing could still need them (ADR-0045 D5).
 
-import { recordLaunch, type Launched } from "../src/launches";
+import { recordLaunch } from "../src/launches";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Clock, Effect, FileSystem } from "effect";
@@ -69,7 +69,7 @@ const sweeper = (
       }),
   });
 
-const launchOn = (runId: string, terminalId: string): Launched => ({
+const launchOn = (runId: string, terminalId: string) => ({
   agent: "impl",
   output: "out.json",
   reused: false,
@@ -106,7 +106,7 @@ test("a Task whose last Run ended 31 days ago is forgotten: its rows, then its f
     }),
   ));
 
-const deliveredTo = (run: string, incarnation: string): Delivery => ({
+const deliveredTo: (run: string, incarnation: string) => Delivery = (run, incarnation) => ({
   id: `d-${run}-${incarnation}`,
   at: "2026-09-01T00:00:00.000Z",
   run,

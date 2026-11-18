@@ -199,7 +199,7 @@ const KINDS: ReadonlySet<unknown> = new Set(
 );
 
 /** Why the first of `actions` that is not Collie's is refused, by its place and kind; null where all are. */
-export const refusedAction = (actions: ReadonlyArray<unknown>): string | null => {
+export const refusedAction = (actions: ReadonlyArray<unknown>) => {
   for (const [at, action] of actions.entries()) {
     const decoded = Schema.decodeUnknownResult(ActionSchema)(action);
     if (Result.isSuccess(decoded)) continue;
@@ -212,5 +212,5 @@ export const refusedAction = (actions: ReadonlyArray<unknown>): string | null =>
 };
 
 /** Who a `deliver` is for, as a sentence names it. */
-export const recipientOf = (action: Extract<Action, { kind: "deliver" }>): string =>
+export const recipientOf = (action: Extract<Action, { kind: "deliver" }>) =>
   action.agent ?? action.to ?? "the agent at work";

@@ -12,7 +12,6 @@ import {
   mrLabel,
   ranOn,
   type Flow,
-  type FlowStrip,
   type ForgeChecks,
   type MrState,
   type FlowLink,
@@ -24,7 +23,6 @@ import {
   type FlowRun,
   type FlowState,
   type RequestedBy,
-  type RunAgent,
 } from "./board-model";
 import type { Launched } from "./launches";
 import type { RunState } from "./runs";
@@ -140,7 +138,7 @@ const firstLine = (text: string) =>
     ),
   ) ?? "";
 
-const agentOf = (launch: Launched): RunAgent => ({
+const agentOf = (launch: Launched) => ({
   operation: launch.operation,
   agent: launch.agent,
   harness: launch.harness,
@@ -159,7 +157,7 @@ const askerOf = (name: string) => AGENT_QUESTION.exec(name)?.[1] ?? null;
 const placeSaid = (place: StepPlace | null) =>
   place === null ? null : "item" in place ? place.item : `Round ${place.round}`;
 
-const flowQuestion = (one: AskedFact): FlowQuestion => ({
+const flowQuestion = (one: AskedFact) => ({
   id: one.name,
   open: one.open,
   text: one.text,
@@ -171,7 +169,7 @@ const flowQuestion = (one: AskedFact): FlowQuestion => ({
 });
 
 /** One Run's row of Steps. */
-export function laneOf(facts: LaneFacts): FlowLane {
+export function laneOf(facts: LaneFacts) {
   const { run, now } = facts;
   const ended = !going(run.state);
   const forecasts: Array<{
@@ -288,7 +286,7 @@ export function laneOf(facts: LaneFacts): FlowLane {
     return Arr.join(Str.split(one.failed?.why ?? run.note ?? "Failed", "\n").slice(0, 20), "\n");
   };
 
-  const stateOfRun = (one: StepRun): FlowState => {
+  const stateOfRun = (one: StepRun) => {
     if (one.left !== null) return "done";
     const retried = one.attempts.at(-1)!.at;
     if (one.failed !== null && one.failed.at >= retried) return "failed";
@@ -300,7 +298,7 @@ export function laneOf(facts: LaneFacts): FlowLane {
     return "running";
   };
 
-  const factOf = (state: FlowState, one: StepRun, said: string | null): string | null => {
+  const factOf = (state: FlowState, one: StepRun, said: string | null) => {
     switch (state) {
       case "done":
         return one.left === null ? "Done" : minutes(epochMs(one.left) - epochMs(one.entered));
@@ -328,7 +326,7 @@ export function laneOf(facts: LaneFacts): FlowLane {
   const withAttempts = (said: string | null, attempts: number) =>
     said !== null && attempts > 1 ? `${said} · ${ordinal(attempts)} attempt` : said;
 
-  const runNode = (one: StepRun, offPath: boolean): FlowRun => {
+  const runNode: (one: StepRun, offPath: boolean) => FlowRun = (one, offPath) => {
     const state = stateOfRun(one);
     return {
       id: one.key,
@@ -362,7 +360,7 @@ export function laneOf(facts: LaneFacts): FlowLane {
   };
 
   /** A Step none of whose runs is known yet, or one the Run ended without. */
-  const unreached = (meta: StepMeta, id: string, title: string, place: string | null): FlowRun => {
+  const unreached = (meta: StepMeta, id: string, title: string, place: string | null) => {
     const state: FlowState = ended ? "not-run" : "expected";
     return {
       id,
@@ -393,7 +391,7 @@ export function laneOf(facts: LaneFacts): FlowLane {
   const callsOf = new Map<string, StepRun[]>();
   for (const one of runs.values())
     callsOf.set(one.meta.id, [...(callsOf.get(one.meta.id) ?? []), one]);
-  const stepNode = (id: string): FlowNode => {
+  const stepNode: (id: string) => FlowNode = (id) => {
     const calls = callsOf.get(id) ?? [];
     const meta = calls.at(-1)!.meta;
     const first = calls[0]!;
@@ -563,7 +561,7 @@ export { flowNotice } from "./flow-timing";
  * The path's nodes in its order, and each node off it after the one that happened before it:
  * `happened` is every node that ran, oldest first, and `path` the forecast's.
  */
-function inPathOrder(happened: ReadonlyArray<FlowNode>, path: ReadonlyArray<FlowNode>): FlowNode[] {
+function inPathOrder(happened: ReadonlyArray<FlowNode>, path: ReadonlyArray<FlowNode>) {
   if (path.length === 0) return [...happened];
   const ordered = [...path];
   Arr.forEach(happened, (node, at) => {
@@ -584,7 +582,7 @@ function undeclaredNodes(
   questionKey: (name: string) => string | undefined,
   childIn: ReadonlyMap<string, string>,
   ended: boolean,
-): ReadonlyArray<{ readonly at: string; readonly node: FlowNode }> {
+) {
   const { run } = facts;
   const base = {
     description: "",
@@ -702,7 +700,7 @@ function undeclaredNodes(
   return nodes;
 }
 
-const linkRun = (child: ChildFact): FlowRun => ({
+const linkRun: (child: ChildFact) => FlowRun = (child) => ({
   id: child.id,
   title: child.title,
   kind: "link",
@@ -724,7 +722,7 @@ const linkRun = (child: ChildFact): FlowRun => ({
   link: child.link,
 });
 
-const toComeRun = (repo: { readonly repo: string; readonly wave: number }): FlowRun => ({
+const toComeRun: (repo: { readonly repo: string; readonly wave: number }) => FlowRun = (repo) => ({
   id: `repo:${repo.repo}`,
   title: repo.repo,
   kind: "link",
@@ -746,7 +744,7 @@ const toComeRun = (repo: { readonly repo: string; readonly wave: number }): Flow
   link: { run: null, machine: null, state: "expected", said: null },
 });
 
-const fanState = (runs: ReadonlyArray<FlowRun>, ended: boolean): FlowState => {
+const fanState = (runs: ReadonlyArray<FlowRun>, ended: boolean) => {
   const states = Arr.map(runs, (one) => one.state);
   for (const state of ["needs-you", "running", "waiting", "failed", "stopped"] as const)
     if (states.includes(state)) return state;
@@ -754,7 +752,7 @@ const fanState = (runs: ReadonlyArray<FlowRun>, ended: boolean): FlowState => {
 };
 
 /** Where a wait sits: the Step going, else the next the path expects, else the last that ran. */
-const heldUp = (nodes: ReadonlyArray<FlowNode>): number => {
+const heldUp = (nodes: ReadonlyArray<FlowNode>) => {
   const going = Option.getOrElse(
     Arr.findLastIndex(
       nodes,
@@ -799,7 +797,9 @@ function withReadiness(nodes: FlowNode[], readiness: string | null) {
   if (at >= 0) nodes[at] = { ...nodes[at]!, said: readiness };
 }
 
-const offerNode = (offer: { readonly id: string; readonly title: string }): FlowNode => ({
+const offerNode: (offer: { readonly id: string; readonly title: string }) => FlowNode = (
+  offer,
+) => ({
   id: `offer:${offer.id}`,
   title: offer.title,
   kind: "offer",
@@ -825,7 +825,7 @@ function undeclaredSaid(
   started: string | null,
   asked: ReadonlyArray<AskedFact>,
   facts: LaneFacts,
-): string | null {
+) {
   switch (state) {
     case "done":
       return "Done";
@@ -845,7 +845,7 @@ function undeclaredSaid(
 }
 
 /** Where the work is: the last node of a Run still going that is not done or to come. */
-export function currentOf(lane: FlowLane): { readonly run: string; readonly node: string } | null {
+export function currentOf(lane: FlowLane) {
   if (lane.execution !== "running" && lane.execution !== "suspended") return null;
   const at = Option.getOrUndefined(
     Arr.findLast(
@@ -889,24 +889,37 @@ export interface WaitFacts {
 const PANE = "Waiting for you in its pane";
 
 /** The one wait that holds a Run up, other than a question or a timer, in its card's words. */
-export function laneWaitOf(facts: WaitFacts): LaneWait | null {
-  if (facts.proposals > 0)
-    return {
+export function laneWaitOf(facts: WaitFacts) {
+  if (facts.proposals > 0) {
+    const returned: LaneWait | null = {
       wait: "proposal",
       needsYou: true,
       said: "Collie proposes a correction",
     };
-  if (facts.blocked) return { wait: "stalled", needsYou: true, said: PANE };
-  if (facts.heldBy !== null)
-    return { wait: "hold", needsYou: false, said: `Held by ${facts.heldBy}` };
-  if (facts.memory)
-    return {
+    return returned;
+  }
+  if (facts.blocked) {
+    const returned: LaneWait | null = { wait: "stalled", needsYou: true, said: PANE };
+    return returned;
+  }
+  if (facts.heldBy !== null) {
+    const returned: LaneWait | null = {
+      wait: "hold",
+      needsYou: false,
+      said: `Held by ${facts.heldBy}`,
+    };
+    return returned;
+  }
+  if (facts.memory) {
+    const returned: LaneWait | null = {
       wait: "memory",
       needsYou: false,
       said: `${facts.machine} is short of memory`,
     };
-  if (facts.usage !== null)
-    return {
+    return returned;
+  }
+  if (facts.usage !== null) {
+    const returned: LaneWait | null = {
       wait: "usage",
       needsYou: false,
       said:
@@ -914,24 +927,33 @@ export function laneWaitOf(facts: WaitFacts): LaneWait | null {
           ? `${facts.usage.account}'s usage ran out`
           : `${facts.usage.account}'s session resets ${clockTime(epochMs(facts.usage.resetsAt))}`,
     };
+    return returned;
+  }
   if (facts.check !== null) {
     const { name, elapsedMs, usualMs } = facts.check;
     const elapsed = elapsedMs === null ? "" : ` · ${since(facts.now - elapsedMs)}`;
     const usual = usualMs === null || elapsedMs === null ? "" : `, usually ${minutes(usualMs)}`;
-    return {
+    const returned: LaneWait | null = {
       wait: "check",
       needsYou: false,
       said: `${name}${elapsed}${usual}`,
     };
+    return returned;
   }
-  if (facts.awaiting) return { wait: "ci", needsYou: false, said: "Still running" };
-  if (facts.parked !== null && !facts.sleeping)
-    return {
+  if (facts.awaiting) {
+    const returned: LaneWait | null = { wait: "ci", needsYou: false, said: "Still running" };
+    return returned;
+  }
+  if (facts.parked !== null && !facts.sleeping) {
+    const returned: LaneWait | null = {
       wait: "parked",
       needsYou: true,
       said: facts.parked.reason ?? PANE,
     };
-  return null;
+    return returned;
+  }
+  const returned: LaneWait | null = null;
+  return returned;
 }
 
 /** `!12` of a merge request's label, or the label where it has no number. */
@@ -954,7 +976,7 @@ export function linkSaid(child: {
   readonly mrState: MrState | null;
   /** Its current node's fact line, while it is going. */
   readonly current: string | null;
-}): string | null {
+}) {
   if (child.mr !== null) return `${mrNumber(child.mr)} ${child.mrState ?? "open"}`;
   if (going(child.state)) return child.current;
   if (child.state === "failed") return firstLine(child.note ?? "") || "Failed";
@@ -962,7 +984,7 @@ export function linkSaid(child: {
   return minutes(epochMs(child.finished) - epochMs(child.created));
 }
 
-export const linkState = (state: RunState): FlowState => {
+export const linkState: (state: RunState) => FlowState = (state) => {
   switch (state) {
     case "succeeded":
     case "ended":
@@ -980,13 +1002,13 @@ export const linkState = (state: RunState): FlowState => {
 
 const LANDED: ReadonlySet<MrState> = new Set(["merged", "on-stage", "in-prod"]);
 
-const releaseNode = (
+const releaseNode: (
   id: string,
   title: string,
   state: FlowState,
   said: string | null,
-  wait: FlowWait | null = null,
-): FlowNode => ({
+  wait?: FlowWait | null,
+) => FlowNode = (id, title, state, said, wait = null) => ({
   id,
   title,
   kind: "release",
@@ -1012,7 +1034,7 @@ export function releaseRow(facts: {
   readonly mrState: MrState | null;
   readonly ci: ForgeChecks | null;
   readonly mrUrl?: string | null;
-}): ReadonlyArray<FlowNode> {
+}) {
   const landed = facts.mrState !== null && LANDED.has(facts.mrState);
   const ci = landed
     ? releaseNode("ci", "CI", "done", null)
@@ -1048,7 +1070,7 @@ export function stripOf(
   flow: Flow,
   leader: string,
   shipping: { readonly id: string; readonly title: string } | null = null,
-): FlowStrip {
+) {
   const lane = Option.getOrUndefined(Arr.findFirst(flow.lanes, (one) => one.run === leader));
   const release = flow.release ?? [];
   const at =

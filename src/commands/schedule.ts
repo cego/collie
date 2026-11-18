@@ -33,27 +33,28 @@ const SCHEDULE_CHECKOUT_FIX = `Name the checkout with --workspace <absolute path
  * checkout the command runs in. A workspace's id or label is its checkout's path, since
  * the workspace may be gone by the time the Schedule fires.
  */
-const checkoutOf = Effect.fn("schedule.checkoutOf")(function* (
+type CheckoutOf = { readonly path: string | null } | { readonly error: OpResult };
+
+const checkoutOf: (
   env: PluginEnv,
   given: string,
-): Effect.fn.Return<
-  { readonly path: string | null } | { readonly error: OpResult },
-  never,
-  PlatformServices
-> {
-  const named = Str.trim(given);
-  if (named === SCHEDULE_PROJECTS_ROOT || pipe_(named, Str.startsWith("/"))) return { path: named };
-  if (named === "") return { path: (yield* insideCheckout(env.cwd)) ? env.cwd : null };
-  const where = yield* workspaceNamed(env, named);
-  if (where === null || "error" in where)
-    return {
-      error: err(
-        "invalid_input",
-        `${where === null ? `nothing is named "${named}"` : where.error}. ${SCHEDULE_CHECKOUT_FIX}`,
-      ),
-    };
-  return { path: where.found.cwd };
-});
+) => Effect.Effect<CheckoutOf, never, PlatformServices> = Effect.fn("schedule.checkoutOf")(
+  function* (env: PluginEnv, given: string) {
+    const named = Str.trim(given);
+    if (named === SCHEDULE_PROJECTS_ROOT || pipe_(named, Str.startsWith("/")))
+      return { path: named };
+    if (named === "") return { path: (yield* insideCheckout(env.cwd)) ? env.cwd : null };
+    const where = yield* workspaceNamed(env, named);
+    if (where === null || "error" in where)
+      return {
+        error: err(
+          "invalid_input",
+          `${where === null ? `nothing is named "${named}"` : where.error}. ${SCHEDULE_CHECKOUT_FIX}`,
+        ),
+      };
+    return { path: where.found.cwd };
+  },
+);
 
 const nameArg = Argument.String("name").pipe(
   Argument.withDescription(
@@ -136,7 +137,7 @@ const scheduleAdd = Command.make(
             ...Rec.toEntries(parsed.given.text),
             ...Arr.map(
               Rec.toEntries(parsed.given.json),
-              ([key, value]): [string, string] => [key, asOptionText(value)] as const,
+              ([key, value]) => [key, asOptionText(value)] as const,
             ),
           ]);
           // The shared `--workspace` names the checkout: a path, a workspace, or the Projects root.

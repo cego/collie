@@ -94,13 +94,14 @@ export interface Sweeper {
 }
 
 /** `sweeper`, judging and removing through `fs`. */
-export const sweepingWith =
-  (fs: FileSystem.FileSystem) =>
-  (sweeper: Sweeper): Sweeper => ({
+export const sweepingWith = (fs: FileSystem.FileSystem) => (sweeper: Sweeper) => {
+  const returned: Sweeper = {
     kind: sweeper.kind,
     judge: Effect.provideService(sweeper.judge, FileSystem.FileSystem, fs),
     remove: (item) => Effect.provideService(sweeper.remove(item), FileSystem.FileSystem, fs),
-  });
+  };
+  return returned;
+};
 
 const DAY_MS = 24 * 60 * 60_000;
 const GENERATION_UNUSED_MS = 7 * DAY_MS;
@@ -218,7 +219,8 @@ export const judge = <E = never, R = never>(sweepers: Sweepers<E, R>) =>
         remove.push(...judged.remove);
         keep.push(...judged.keep);
       }
-      return { remove, keep, bytes: total(remove) } satisfies CleanupReport;
+      const returned: CleanupReport = { remove, keep, bytes: total(remove) };
+      return returned;
     }),
   );
 
@@ -278,7 +280,8 @@ export const sweep = <E = never, R = never>(
         }
       }
       yield* trimJournal(journal);
-      return { remove: removed, keep, bytes: total(removed) } satisfies CleanupReport;
+      const returned: CleanupReport = { remove: removed, keep, bytes: total(removed) };
+      return returned;
     }),
   );
 
@@ -330,7 +333,7 @@ export const generationsDir = () => `${collieCache()}/entries/generations`;
  * Staged module generations, each gone 7 days after it was last used: a cache hit touches
  * it, and one that is needed again is staged again.
  */
-export const generationsSweeper = (dir: string): Sweeper => {
+export const generationsSweeper: (dir: string) => Sweeper = (dir) => {
   const kind = "generation";
   /** How long ago `target` was last used, or null where it is gone. */
   const unusedFor = (target: string) =>
@@ -459,7 +462,7 @@ export const settlingOf = (opts: {
       if (task !== undefined && isOpen(task))
         taskHolds.set(run.worktree.path, "its Task is still open");
     }
-    return {
+    const returned: Settling = {
       owedAt,
       owedOn,
       landedAt,
@@ -467,11 +470,12 @@ export const settlingOf = (opts: {
       openOn,
       taskHolds,
       protect: new Set(opts.protect),
-    } satisfies Settling;
+    };
+    return returned;
   });
 
 /** Worktrees Collie made, judged by the settled rule in `worktree.ts`. */
-export const worktreesSweeper = (opts: {
+export const worktreesSweeper: (opts: {
   herdr: Herdr;
   stateDir: string;
   runs: ReadonlyArray<RunFacts>;
@@ -479,7 +483,7 @@ export const worktreesSweeper = (opts: {
   cwd: string;
   /** Read when it judges, so a Task closed earlier in the same sweep counts as closed. */
   settling?: Effect.Effect<Settling, never, PlatformServices | Records>;
-}): Sweeper => {
+}) => Sweeper = (opts) => {
   const kind = "worktree";
   return {
     kind,
@@ -565,7 +569,10 @@ const DEAD = /^(?:events\..*\.log|plans)$/;
  * changed for a day, and CLI receipts 30 days on. An entry of a kind Collie does not know
  * is kept and said.
  */
-export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweeper => {
+export const stateSweeper: (stateDir: string, rows: ReadonlySet<string>) => Sweeper = (
+  stateDir,
+  rows,
+) => {
   const kind = "state";
   /** A child's files are its root Run's as well. */
   const owned = (run: string) => rows.has(run) || rows.has(Str.split(run, ".")[0] ?? run);
@@ -577,9 +584,11 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
   const rowless = "no Run has a row for it";
 
   /** What becomes of one entry, or null where it is not this sweeper's to judge. */
-  const verdict = (
+  const verdict: (
     target: string,
-  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> =>
+  ) => Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> = (
+    target,
+  ) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const rel = Str.split(pipe(target, Str.slice(stateDir.length + 1)), "/");
@@ -615,9 +624,12 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
       if (owned(name)) return null;
       if (top === "agents") {
         if (pipe(name, Str.endsWith(".json")) || name === "deliveries.log") return null;
-        const inside = yield* fs
-          .readDirectory(target)
-          .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+        const inside = yield* fs.readDirectory(target).pipe(
+          Effect.orElseSucceed(() => {
+            const returned: ReadonlyArray<string> = [];
+            return returned;
+          }),
+        );
         // Imported into host.db, and left for a later release to delete (D5).
         if (inside.includes(LEDGER_FILE)) return null;
       }
@@ -630,7 +642,10 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
     const list = (dir: string) =>
       fs.readDirectory(dir).pipe(
         Effect.map((names) => Arr.map(names, (name) => `${dir}/${name}`)),
-        Effect.orElseSucceed((): Array<string> => []),
+        Effect.orElseSucceed(() => {
+          const returned: Array<string> = [];
+          return returned;
+        }),
       );
     const out = yield* list(stateDir);
     for (const dir of ["runs", "agents", "evidence"])
@@ -658,7 +673,7 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
 };
 
 /** Uploads not asked for in a week: a Run given one holds its own copy (ADR-0046). */
-export const uploadsSweeper = (stateDir: string): Sweeper => {
+export const uploadsSweeper: (stateDir: string) => Sweeper = (stateDir) => {
   const kind = "upload";
   const root = uploadsDir(stateDir);
   const verdict = (target: string) =>
@@ -709,12 +724,12 @@ const removeIf = (
  * state removed, or kept with why while it is not Quiet, to be stopped again next sweep.
  * Nothing is judged where core will not list its agents.
  */
-export const compactionSweeper = (
+export const compactionSweeper: (
   stateDir: string,
   sessions: ReadonlyArray<Herdr>,
-  ports: CompactionPorts = COMPACTION_PORTS,
+  ports?: CompactionPorts,
   stopMs?: number,
-): Sweeper => {
+) => Sweeper = (stateDir, sessions, ports = COMPACTION_PORTS, stopMs?) => {
   const kind = "compaction";
   const root = `${stateDir}/${CONTROL_DIR}`;
   /** Every agent any session lists, or null where one would not say. */
@@ -773,7 +788,7 @@ export const compactionSweeper = (
 };
 
 /** Runner copies under `~/.cache/collie/runners`, but the running version's and the newest. */
-export const runnersSweeper = (dir: string, running: string): Sweeper => {
+export const runnersSweeper: (dir: string, running: string) => Sweeper = (dir, running) => {
   const kind = "runner";
   const versionOf = (name: string) => /^collie-(.+)$/.exec(name)?.[1] ?? null;
   const verdicts = Effect.gen(function* () {
@@ -840,17 +855,17 @@ const SECTION_SAID: Record<Section, string> = {
  * (ADR-0045 D3). `seen` is when each Task was first seen Finished, kept by the host across
  * sweeps; a host restart only delays a close.
  */
-export const tasksSweeper = (opts: {
+export const tasksSweeper: (opts: {
   tasks: ReadonlyArray<TaskRecord>;
   views: ReadonlyArray<TaskView>;
   seen: Map<string, number>;
-}): Sweeper => {
+}) => Sweeper = (opts) => {
   const kind = "workspace";
 
   /** How long a Task has been Finished, or why it is not. */
-  const finishedFor = (
+  const finishedFor: (
     task: TaskRecord,
-  ): Effect.Effect<{ keep: string } | { ms: number; said: string } | null> =>
+  ) => Effect.Effect<{ keep: string } | { ms: number; said: string } | null> = (task) =>
     Effect.gen(function* () {
       const view = Option.getOrUndefined(Arr.findFirst(opts.views, (one) => one.id === task.id));
       if (view === undefined) return null;
@@ -865,7 +880,7 @@ export const tasksSweeper = (opts: {
       return { ms: now - since, said: `Finished ${Math.floor((now - since) / 60_000)} min ago` };
     });
 
-  const closing = (task: TaskRecord): Effect.Effect<{ keep: string } | { remove: string } | null> =>
+  const closing = (task: TaskRecord) =>
     Effect.gen(function* () {
       if (task.closed_at !== undefined) return null;
       const finished = yield* finishedFor(task);
@@ -943,7 +958,7 @@ const QUEUED: ReadonlySet<string> = new Set(["reserved", "deferred"]);
  * since the Run finished, unless something still needs it
  * (ADR-draft-a-finished-runs-idle-agent-is-closed).
  */
-export const idleAgentsSweeper = (opts: {
+export const idleAgentsSweeper: (opts: {
   stateDir: string;
   sessions: ReadonlyArray<{ readonly herd: string | null; readonly herdr: Herdr }>;
   runs: ReadonlyArray<RunFacts>;
@@ -958,7 +973,7 @@ export const idleAgentsSweeper = (opts: {
    * cannot say yet, so by default every agent is kept.
    */
   unattended?: (at: AgentInfo) => Effect.Effect<boolean>;
-}): Sweeper => {
+}) => Sweeper = (opts) => {
   const kind = "idle-agent";
   const unattended = opts.unattended ?? (() => Effect.succeed(false));
   const targetOf = (agent: string, runId: string) => `${agent} of ${runId}`;
@@ -981,7 +996,7 @@ export const idleAgentsSweeper = (opts: {
       Effect.option(session.herdr.agentList()).pipe(
         Effect.map((agents) => ({
           session,
-          live: Option.getOrElse(agents, (): ReadonlyArray<AgentInfo> => []),
+          live: Option.getOrElse(agents, () => []),
           listed: Option.isSome(agents),
         })),
       ),
@@ -1031,9 +1046,11 @@ export const idleAgentsSweeper = (opts: {
   type Candidate = Effect.Success<typeof candidates>[number];
 
   /** Why `one` stays, or how long it has been idle since its Run finished. */
-  const verdict = (
+  const verdict: (
     one: Candidate,
-  ): Effect.Effect<{ keep: string } | { idleFor: number }, never, PlatformServices | Records> =>
+  ) => Effect.Effect<{ keep: string } | { idleFor: number }, never, PlatformServices | Records> = (
+    one,
+  ) =>
     Effect.gen(function* () {
       if (!IDLE.has(one.at.status)) return { keep: one.at.status ?? "unknown" };
       const now = yield* Clock.currentTimeMillis;
@@ -1143,7 +1160,10 @@ export const idleAgentsSweeper = (opts: {
  * Renovate's clones in the state directory, each removed once no Run with a row cut a
  * checkout from it and no checkout cut from it is left on disk.
  */
-export const renovateClonesSweeper = (stateDir: string, runs: ReadonlyArray<RunFacts>): Sweeper => {
+export const renovateClonesSweeper: (stateDir: string, runs: ReadonlyArray<RunFacts>) => Sweeper = (
+  stateDir,
+  runs,
+) => {
   const kind = "renovate-clone";
   const root = `${stateDir}/renovate-repositories`;
   const used = new Set(
@@ -1152,9 +1172,11 @@ export const renovateClonesSweeper = (stateDir: string, runs: ReadonlyArray<RunF
       return repository === "" ? [] : [Bun.hash(repository).toString(16)];
     }),
   );
-  const verdict = (
+  const verdict: (
     target: string,
-  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> =>
+  ) => Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> = (
+    target,
+  ) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       if (!(yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)))) return null;
@@ -1201,10 +1223,10 @@ export const renovateClonesSweeper = (stateDir: string, runs: ReadonlyArray<RunF
  * The base trees a Run's Measurements were taken on, each removed with git's record of it
  * once its Run has ended or has no row and no Measurement is running on this Machine.
  */
-export const measurementTreesSweeper = (
+export const measurementTreesSweeper: (
   stateDir: string,
   runs: ReadonlyArray<RunFacts>,
-): Sweeper => {
+) => Sweeper = (stateDir, runs) => {
   const kind = "measurement-tree";
   const root = `${stateDir}/measurements/trees`;
   const lock = machineLockOf(stateDir);
@@ -1215,9 +1237,11 @@ export const measurementTreesSweeper = (
       (run) => run.id,
     ),
   );
-  const verdict = (
+  const verdict: (
     target: string,
-  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> =>
+  ) => Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> = (
+    target,
+  ) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       if (!(yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)))) return null;
@@ -1288,9 +1312,9 @@ const CACHE_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55";
  * Build caches in checkouts Collie made: git-ignored directories holding a signed
  * `CACHEDIR.TAG`, each removed once no live Run works in its checkout (ADR-0045 D1, D5).
  */
-export const buildCachesSweeper = (
+export const buildCachesSweeper: (
   runs: Effect.Effect<ReadonlyArray<RunFacts>, never, PlatformServices>,
-): Sweeper => {
+) => Sweeper = (runs) => {
   const kind = "build-cache";
   const checkouts = Effect.gen(function* () {
     const all = yield* runs;
@@ -1324,7 +1348,7 @@ export const buildCachesSweeper = (
         }
       return caches;
     });
-  const reasonOf = (live: string | undefined): { remove: string } | { keep: string } =>
+  const reasonOf: (live: string | undefined) => { remove: string } | { keep: string } = (live) =>
     live === undefined
       ? { remove: "no live Run works in this checkout" }
       : { keep: `${live} still works in this checkout` };
@@ -1368,7 +1392,7 @@ export interface RetentionFacts {
  * Run ended 30 days ago (ADR-0045 D5): the rows in one transaction through `retire`, then
  * the files, which a failure between leaves for the state sweeper's no-row rule.
  */
-export const retentionSweeper = (opts: {
+export const retentionSweeper: (opts: {
   stateDir: string;
   sessions: ReadonlyArray<Herdr>;
   /** Read for every judgement, so a Run started since the last one is seen. */
@@ -1376,7 +1400,7 @@ export const retentionSweeper = (opts: {
   retire: (
     runs: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyArray<string>, never, PlatformServices>;
-}): Sweeper => {
+}) => Sweeper = (opts) => {
   const kind = "task";
   const filesOf = (ids: ReadonlyArray<string>) =>
     Arr.flatMap(ids, (id) =>
@@ -1414,15 +1438,15 @@ export const retentionSweeper = (opts: {
     return terminals;
   });
 
-  const verdict = (
+  const verdict: (
     task: TaskRecord,
     facts: RetentionFacts,
     open: typeof openNow,
-  ): Effect.Effect<
+  ) => Effect.Effect<
     { keep: string } | { remove: string; ids: ReadonlyArray<string> } | null,
     never,
     PlatformServices | Records
-  > =>
+  > = (task, facts, open) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const view = Option.getOrUndefined(Arr.findFirst(facts.views, (one) => one.id === task.id));
@@ -1552,19 +1576,24 @@ const DesktopInstalled = Schema.fromJsonString(
  * Desktop's own files on this computer, by the rule Desktop applies at its start; none where
  * Desktop has no data folder here. A tar is kept wherever the running bundle is not known.
  */
-export const desktopSweeper = (root: string, state: string, installedPath: string): Sweeper => {
+export const desktopSweeper: (root: string, state: string, installedPath: string) => Sweeper = (
+  root,
+  state,
+  installedPath,
+) => {
   const kind = "desktop";
   const own = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const installed = yield* fs
       .readFileString(installedPath)
       .pipe(Effect.flatMap(Schema.decodeUnknownEffect(DesktopInstalled)), Effect.option);
-    return {
+    const returned: DesktopOwn = {
       root,
       state,
       hash: Option.match(installed, { onNone: () => null, onSome: (one) => one.hash ?? null }),
       version: Option.match(installed, { onNone: () => null, onSome: (one) => one.version }),
-    } satisfies DesktopOwn;
+    };
+    return returned;
   });
   const verdicts = Effect.flatMap(own, desktopVerdicts).pipe(
     Effect.orElseSucceed(() => ({ remove: [], keep: [], usage: null })),
@@ -1605,7 +1634,7 @@ export const desktopSweeper = (root: string, state: string, installedPath: strin
 };
 
 /** Check processes no host is collecting (ADR-draft-a-check-ends-with-the-host-that-runs-it D7). */
-export const checksSweeper = (checks: CheckProcessesApi): Sweeper => {
+export const checksSweeper: (checks: CheckProcessesApi) => Sweeper = (checks) => {
   const kind = "check";
   const collecting = "this host is collecting it";
   const reasonOf = (leftover: Leftover) =>

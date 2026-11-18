@@ -38,11 +38,7 @@ const withOne = <A>(map: ReadonlyMap<string, A>, key: string, value: A) =>
   new Map(map).set(key, value);
 
 /** A new answer to a question, sending, which replaces any earlier one to it. */
-export const answerSent = (
-  state: Answering,
-  key: string,
-  sent: Omit<InFlight, "confirmed">,
-): Answering => ({
+export const answerSent = (state: Answering, key: string, sent: Omit<InFlight, "confirmed">) => ({
   ...state,
   answers: withOne(state.answers, key, { ...sent, confirmed: false }),
   latest: withOne(state.latest, key, sent.send),
@@ -54,7 +50,7 @@ export const answerTried = (
   key: string,
   sent: Omit<InFlight, "confirmed">,
   done: boolean | null,
-): Answering => {
+) => {
   if (state.latest.get(key) !== sent.send) return state;
   if (done === false) return { ...state, answers: without(state.answers, key) };
   return {
@@ -67,7 +63,7 @@ export const answerTried = (
 export const answersSettled = (
   state: Answering,
   board: ReadonlyArray<{ readonly installation: string; readonly task: QuestionsOf }>,
-): Answering => {
+) => {
   const open = new Set(
     Arr.flatMap(board, ({ installation, task }) =>
       Arr.map(openQuestions(task), (asked) => answerKey(installation, asked.run, asked.id)),
@@ -86,7 +82,7 @@ export const answersSettled = (
 type QuestionsOf = Pick<TaskView, "decision"> & { readonly questions?: ReadonlyArray<Question> };
 
 /** A card's open questions; an older host lists none, so its question decision stands alone. */
-export const openQuestions = (task: QuestionsOf): ReadonlyArray<Question> =>
+export const openQuestions = (task: QuestionsOf) =>
   task.questions ?? (task.decision?.kind === "question" ? [task.decision] : []);
 
 const sendingSaid = (answer: InFlight) =>
@@ -158,7 +154,7 @@ export interface Now {
 const sameQuestion = (one: Question, other: Question) =>
   one.run === other.run && one.id === other.id;
 
-const conditionOf = (entry: SittingEntry, now: Now): Condition => {
+const conditionOf: (entry: SittingEntry, now: Now) => Condition = (entry, now) => {
   const open = Arr.some(now.open, (asked) => sameQuestion(asked, entry.question));
   const answer = now.answering.answers.get(
     answerKey(now.installation, entry.question.run, entry.question.id),
@@ -181,10 +177,13 @@ const refreshed = (entries: ReadonlyArray<SittingEntry>, now: Now) =>
           now.open,
           (asked) => !Arr.some(entries, (entry) => sameQuestion(entry.question, asked)),
         ),
-        (question): SittingEntry => ({ question, seen: null, was: "gone" }),
+        (question) => {
+          const returned: SittingEntry = { question, seen: null, was: "gone" };
+          return returned;
+        },
       ),
     ],
-    (entry): SittingEntry => {
+    (entry) => {
       const question = Option.getOrUndefined(
         Arr.findFirst(now.open, (asked) => sameQuestion(asked, entry.question)),
       );
@@ -207,7 +206,7 @@ const settledWas = (entries: ReadonlyArray<SittingEntry>, now: Now) =>
   Arr.map(entries, (entry) => ({ ...entry, was: conditionOf(entry, now).kind }));
 
 /** The card's open questions, on the first that is unanswered. */
-export const sittingStarts = (now: Now): Sitting => {
+export const sittingStarts: (now: Now) => Sitting = (now) => {
   const entries = settledWas(refreshed([], now), now);
   return {
     entries,
@@ -225,7 +224,7 @@ export const sittingStarts = (now: Now): Sitting => {
  * The board or the answers changed: arrivals join, and from a question it cannot answer the
  * dialog moves to the first that has just become answerable.
  */
-export const sittingSees = (sitting: Sitting, now: Now): Sitting => {
+export const sittingSees = (sitting: Sitting, now: Now) => {
   const entries = refreshed(sitting.entries, now);
   const current = entries[sitting.cursor];
   const answerable = (entry: SittingEntry) =>
@@ -238,7 +237,7 @@ export const sittingSees = (sitting: Sitting, now: Now): Sitting => {
 };
 
 /** The question at the cursor was just answered: on to the next unanswered, wrapping round. */
-export const sittingAnswered = (sitting: Sitting, now: Now): Sitting => {
+export const sittingAnswered = (sitting: Sitting, now: Now) => {
   const entries = settledWas(refreshed(sitting.entries, now), now);
   const order = Arr.map(entries, (_, at) => (sitting.cursor + 1 + at) % entries.length);
   const next = Option.getOrUndefined(
@@ -248,7 +247,7 @@ export const sittingAnswered = (sitting: Sitting, now: Now): Sitting => {
 };
 
 /** Back (-1) or Next (1), which never wrap. */
-export const sittingMoved = (sitting: Sitting, by: number): Sitting => ({
+export const sittingMoved = (sitting: Sitting, by: number) => ({
   ...sitting,
   cursor: Math.min(Math.max(sitting.cursor + by, 0), Math.max(sitting.entries.length - 1, 0)),
 });

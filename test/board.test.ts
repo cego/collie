@@ -281,8 +281,8 @@ test(
   120_000,
 );
 
-function facts(over: Partial<Sentence> = {}): Sentence {
-  return {
+function facts(over: Partial<Sentence> = {}) {
+  const returned: Sentence = {
     state: "active",
     decision: null,
     step: { id: "build", round: null },
@@ -305,6 +305,7 @@ function facts(over: Partial<Sentence> = {}): Sentence {
     stalled: null,
     ...over,
   };
+  return returned;
 }
 
 const FORMS: Array<[string, Sentence, string]> = [
@@ -441,8 +442,8 @@ test("a held Task carries its own line under the sentence", () => {
 // The three sections the board draws, the one sentence over them, and the same thing
 // as text for a pane whose renderer will not start.
 
-function task(over: Partial<TaskView> = {}): TaskView {
-  return {
+function task(over: Partial<TaskView> = {}) {
+  const returned: TaskView = {
     id: "t1",
     name: "Strapi prod seeder",
     project: "content",
@@ -479,6 +480,7 @@ function task(over: Partial<TaskView> = {}): TaskView {
     at: 0,
     ...over,
   };
+  return returned;
 }
 
 const QUESTION: TaskView["decision"] = {
@@ -702,13 +704,21 @@ const TASK: TaskRecord = {
 };
 
 /** What core says about a terminal, which is all the board ever knows about one. */
-function agent(name: string, status: AgentInfo["status"]): AgentInfo {
-  return { name, paneId: "t-1", status, terminalId: "t-1", cwd: "/project", foregroundCwd: null };
+function agent(name: string, status: AgentInfo["status"]) {
+  const returned: AgentInfo = {
+    name,
+    paneId: "t-1",
+    status,
+    terminalId: "t-1",
+    cwd: "/project",
+    foregroundCwd: null,
+  };
+  return returned;
 }
 
 /** The register's word that an agent works for a Run. */
-function registered(agent: string, runId: string): AgentEntry {
-  return {
+function registered(agent: string, runId: string) {
+  const returned: AgentEntry = {
     role: "implementer",
     agent,
     paneId: "p-1",
@@ -717,6 +727,7 @@ function registered(agent: string, runId: string): AgentEntry {
     workflow: "implement",
     at: "2026-09-14T10:00:00Z",
   };
+  return returned;
 }
 
 const board = Effect.fn("board.build")(function* (
@@ -1998,12 +2009,12 @@ test("Ready to ship takes the offer that declares it releases before one that on
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const { second } = yield* supersededChain(dir);
-      const offer = (
+      const offer: (
         id: string,
         title: string,
         ships: "merge" | "release",
-        kind: OfferView["kind"] = "follow-up",
-      ): OfferView => ({
+        kind?: OfferView["kind"],
+      ) => OfferView = (id, title, ships, kind = "follow-up") => ({
         id,
         title,
         workflow: "delivery",
@@ -2815,7 +2826,7 @@ test("the board reads every Herd's proposals, not only the one its host came fro
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const run = yield* madeRun(dir, { id: "r1", task: "task-1" });
-      const proposal = (id: string): ProposalLine => ({
+      const proposal: (id: string) => ProposalLine = (id) => ({
         kind: "proposal",
         id,
         created_at: "2026-09-14T09:00:00Z",
@@ -3746,7 +3757,11 @@ test("the header names what is ready to release before what else waits on you", 
 });
 
 /** A Collie-collected check of `name` at `head`. */
-const checked = (name: string, head: string, result: "pass" | "fail" = "pass"): Verification => ({
+const checked: (name: string, head: string, result?: "pass" | "fail") => Verification = (
+  name,
+  head,
+  result = "pass",
+) => ({
   id: `v-${name}-${head}`,
   run: "r1",
   name,
@@ -4181,7 +4196,7 @@ test(
 // A finished Run Reopened by a steer to its live agent (ADR-0038 D5): derived from the
 // ledger and herdr's word on the agent, never stored.
 
-const steerAt = (at: string, state: Delivery["state"] = "submitted"): Delivery => ({
+const steerAt: (at: string, state?: Delivery["state"]) => Delivery = (at, state = "submitted") => ({
   id: `d-${at}`,
   at,
   run: "r1",
@@ -4575,7 +4590,11 @@ test("chat's line for a card names its merge request as the board does", () => {
 });
 
 test("chat's line for a card of several merge requests names each, with its state, readiness and wait", () => {
-  const entry = (repo: string, iid: number, over: Partial<TaskMr>): TaskMr => ({
+  const entry: (repo: string, iid: number, over: Partial<TaskMr>) => TaskMr = (
+    repo,
+    iid,
+    over,
+  ) => ({
     id: idOf(repo, iid),
     mr: GITLAB(repo, iid),
     label: `cego/${repo}!${iid}`,
@@ -4632,7 +4651,7 @@ test("an expected failure of a check's command is not a pass, whether it failed 
 });
 
 /** A Step as a module declares it. */
-const declared = (id: string, over: Partial<StepMeta> = {}): StepMeta => ({
+const declared: (id: string, over?: Partial<StepMeta>) => StepMeta = (id, over = {}) => ({
   id,
   title: id,
   description: "",
@@ -5526,7 +5545,7 @@ test("a Task whose Runs were stopped is not waiting on you, though an earlier on
           { id: "Release", title: "Release" },
         ],
       };
-      const engineView = (runId: string, over: Partial<RunView>): RunView => ({
+      const engineView: (runId: string, over: Partial<RunView>) => RunView = (runId, over) => ({
         runId,
         workflow: "implement",
         project: "/project",

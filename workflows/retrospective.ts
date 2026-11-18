@@ -71,11 +71,11 @@ const MARKER = /<!-- collie-finding: ([a-z0-9-]+) -->/g;
 
 export const markerOf = (key: string) => `<!-- collie-finding: ${key} -->`;
 
-export const keysIn = (body: string): ReadonlyArray<string> =>
+export const keysIn = (body: string) =>
   Arr.map([...pipe(body, Str.matchAll(MARKER))], (match) => match[1] ?? "");
 
 /** The open issue a finding is about: the one it names, else the one carrying its key. */
-export const targetOf = (finding: Finding, open: ReadonlyArray<OpenIssue>): OpenIssue | null =>
+export const targetOf = (finding: Finding, open: ReadonlyArray<OpenIssue>) =>
   Option.getOrUndefined(Arr.findFirst(open, (one) => one.number === finding.issue)) ??
   Option.getOrUndefined(Arr.findFirst(open, (one) => one.keys.includes(finding.key))) ??
   null;
@@ -116,7 +116,7 @@ export const chosen = (
   improvements: ReadonlyArray<Improvement>,
   outcomes: ReadonlyMap<string, Outcome>,
   bound: number,
-): ReadonlyArray<Improvement> =>
+) =>
   Arr.filter(
     improvements,
     ({ keys }) => keys.length > 0 && Arr.every(keys, (key) => outcomes.get(key)?.kind === "filed"),
@@ -170,7 +170,7 @@ export const restartsOf = (
   earlier: ReadonlyArray<{ readonly created: string; readonly ended: ReadonlyArray<Ended> }>,
   since: ReadonlyArray<{ readonly created: string; readonly closes: ReadonlyArray<number> }>,
   open: ReadonlyArray<{ readonly number: number }>,
-): ReadonlyArray<Starting> => {
+) => {
   const at = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
   const seen = new Set<string>();
   const restarts: Starting[] = [];
@@ -231,7 +231,7 @@ export type QuestionMeasures = typeof QuestionMeasures.Type;
  * Questions per merge request that landed, and how many implement Runs reached theirs
  * without failing, of those that reached one or ended.
  */
-export const questionMeasures = (runs: ReadonlyArray<AskingRun>): QuestionMeasures => {
+export const questionMeasures = (runs: ReadonlyArray<AskingRun>) => {
   const asked = Arr.reduce(runs, 0, (sum, run) => sum + run.questions.length);
   const landed = new Set(Arr.flatMap(runs, ({ mr, merged }) => (merged && mr !== null ? [mr] : [])))
     .size;
@@ -283,7 +283,7 @@ const slug = (text: string) =>
  * Each class of question answered the same at least nine times in ten over at least ten
  * answers: an answer Collie already knows, so asking it is Collie's defect.
  */
-export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>): ReadonlyArray<Finding> => {
+export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>) => {
   const classes = new Map<
     string,
     { workflow: string; name: string; answers: string[]; runs: string[] }

@@ -38,7 +38,7 @@ export interface Tab {
   readonly loading?: true;
 }
 
-export const recordTabs = (facts: TabFacts): Array<Tab> => {
+export const recordTabs = (facts: TabFacts) => {
   const loaded = facts.loaded;
   const coming = (part: RecordPart) => loaded && (facts.pending ?? []).includes(part);
   const present: ReadonlyArray<readonly [boolean, Tab, RecordPart?]> = [
@@ -66,7 +66,7 @@ export const recordTabs = (facts: TabFacts): Array<Tab> => {
 };
 
 /** A tab per merge request where the record has several, by its MR id; none otherwise. */
-export const mrTabsOf = (mrs: RunDetail["mrs"]): ReadonlyArray<Tab> =>
+export const mrTabsOf = (mrs: RunDetail["mrs"]) =>
   mrs === undefined || mrs.length < 2
     ? []
     : Arr.map(mrs, ({ id, mr }) => {
@@ -78,7 +78,7 @@ export const mrTabsOf = (mrs: RunDetail["mrs"]): ReadonlyArray<Tab> =>
       });
 
 /** The chosen tab while it is present, else the first. */
-export const tabShown = (tabs: ReadonlyArray<Tab>, chosen: string | undefined): string =>
+export const tabShown = (tabs: ReadonlyArray<Tab>, chosen: string | undefined) =>
   (Option.getOrUndefined(Arr.findFirst(tabs, ({ value }) => value === chosen)) ?? tabs[0]!).value;
 
 /** Each tab's scroll position, by the tab's value, while the record is open. */
@@ -87,19 +87,18 @@ export type ScrollMemory = ReadonlyMap<string, number>;
 /** Terminal fills the record and has no position of its own. */
 const UNSCROLLED = "terminal";
 
-export const rememberScroll = (memory: ScrollMemory, tab: string, position: number): ScrollMemory =>
+export const rememberScroll = (memory: ScrollMemory, tab: string, position: number) =>
   tab === UNSCROLLED ? memory : new Map(memory).set(tab, position);
 
 /** The position to show a tab at, 0 on its first visit; null for Terminal. */
-export const scrollToRestore = (memory: ScrollMemory, tab: string): number | null =>
+export const scrollToRestore = (memory: ScrollMemory, tab: string) =>
   tab === UNSCROLLED ? null : (memory.get(tab) ?? 0);
 
 /** Every tab visited, kept mounted so what was opened in it is there on return. */
-export const tabsKept = (kept: ReadonlySet<string>, shown: string): ReadonlySet<string> =>
+export const tabsKept = (kept: ReadonlySet<string>, shown: string) =>
   shown === UNSCROLLED || shown === "log" || kept.has(shown) ? kept : new Set(kept).add(shown);
 
-export const videoPlays = (tab: string | undefined): boolean =>
-  tab === "evidence" || tab === "artefacts";
+export const videoPlays = (tab: string | undefined) => tab === "evidence" || tab === "artefacts";
 
 /** Where the Log's own lines are scrolled, kept while the record is open. */
 export interface LogPlace {
@@ -118,9 +117,9 @@ export const logPlaceOf = ({
   readonly scrollTop: number;
   readonly clientHeight: number;
   readonly scrollHeight: number;
-}): LogPlace => ({ top: scrollTop, following: scrollTop + clientHeight >= scrollHeight - 2 });
+}) => ({ top: scrollTop, following: scrollTop + clientHeight >= scrollHeight - 2 });
 
-export const logScrollTop = (place: LogPlace, scrollHeight: number): number =>
+export const logScrollTop = (place: LogPlace, scrollHeight: number) =>
   place.following ? scrollHeight : place.top;
 
 export type Landing =
@@ -137,7 +136,7 @@ export type Landing =
 export const landingOf = (
   { file, line }: { readonly file: string; readonly line: number | null },
   diff: ReadonlyArray<string> | null,
-): Landing => {
+) => {
   if (diff === null) return { tab: "review", at: "source", file, line };
   if (!diff.includes(file)) return { tab: "diff", at: "source", file, line };
   return line === null
@@ -146,7 +145,7 @@ export const landingOf = (
 };
 
 /** The tab one step from the one shown, skipping Terminal, whose pane keeps the keys. */
-export const tabBeside = (tabs: ReadonlyArray<Tab>, shown: string, step: 1 | -1): string | null => {
+export const tabBeside = (tabs: ReadonlyArray<Tab>, shown: string, step: 1 | -1) => {
   const stops = Arr.filter(tabs, ({ value }) => value !== UNSCROLLED || value === shown);
   const at = Option.getOrElse(
     Arr.findFirstIndex(stops, ({ value }) => value === shown),
@@ -168,7 +167,7 @@ export interface KeyFacts {
 
 export type KeyAction = "previous-tab" | "next-tab" | "next-file" | "previous-file";
 
-export const keyAction = (facts: KeyFacts): KeyAction | null => {
+export const keyAction = (facts: KeyFacts) => {
   if (facts.ctrlOrMeta || facts.inField || facts.overlay || !facts.inRecord) return null;
   if (facts.tab === UNSCROLLED) return null;
   const onDiff = facts.tab === "diff";
@@ -190,7 +189,7 @@ export const keyAction = (facts: KeyFacts): KeyAction | null => {
  * The element a key was typed in, from the event's composed path with each entry that is not an
  * element as null: inside a shadow root the event's target is only its host.
  */
-export const typedIn = (composedPath: ReadonlyArray<Target>): Target => composedPath[0] ?? null;
+export const typedIn = (composedPath: ReadonlyArray<Target>) => composedPath[0] ?? null;
 
 export type SummaryFacts = Pick<
   RunDetail,
@@ -217,7 +216,7 @@ const saysSomething = ({ kind, gaps, obstacle, next, delivered, measurement }: O
   Arr.some([kind, obstacle, next, delivered, measurement ?? null], (said) => said !== null);
 
 /** In order, each left out when it has nothing to say; the status always says something. */
-export const summaryOf = (detail: SummaryFacts): ReadonlyArray<SummarySection> => {
+export const summaryOf = (detail: SummaryFacts) => {
   const { kind, gaps, obstacle, next, delivered } = detail.outcome;
   const measurement = detail.outcome.measurement ?? null;
   const { category, explanation } = detail.attention;

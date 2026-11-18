@@ -26,7 +26,7 @@ import {
   RegisterArtefact,
 } from "./artefact-model";
 import { ATTACHMENT_BYTES, mediaTypeOf, sha256Hex } from "./attachments";
-import { HostRefused, PART_BYTES, RequestConflict, type RunFile } from "./board-model";
+import { HostRefused, PART_BYTES, RequestConflict } from "./board-model";
 import { AuditLine } from "./audit";
 import type { RunFacts } from "./runs";
 import { epochMs, isoAt, nowIso } from "./time";
@@ -89,7 +89,7 @@ const safeUrl = (url: string) =>
 const sourceDate = (at: string | undefined) =>
   at === undefined || !ISO.test(at) || Number.isNaN(epochMs(at)) ? undefined : isoAt(epochMs(at));
 /** Why `input` cannot be registered, checked before anything is read or written. */
-const invalid = (input: RegisterArtefact): string | undefined => {
+const invalid = (input: RegisterArtefact) => {
   const provider = input.provider;
   if (
     input.path === undefined &&
@@ -862,7 +862,7 @@ const make = Effect.gen(function* () {
     id: string,
     revision: number,
     offset: number,
-  ): Effect.fn.Return<RunFile, HostRefused, FileSystem.FileSystem> {
+  ) {
     const fs = yield* FileSystem.FileSystem;
     if (
       !Number.isSafeInteger(revision) ||

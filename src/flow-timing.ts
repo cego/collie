@@ -8,7 +8,7 @@ import { epochMs, minutes } from "./time";
 export const stepElapsed = (
   node: FlowRun & { readonly runs?: ReadonlyArray<FlowRun> },
   now: number,
-): number => {
+) => {
   const active =
     Option.getOrUndefined(
       Option.map(Option.fromNullishOr(node.runs), (present) =>
@@ -18,7 +18,7 @@ export const stepElapsed = (
   return active.started === null ? 0 : Math.max(0, now - epochMs(active.started));
 };
 
-export const flowNotice = (flow: Flow, now: number): string | null => {
+export const flowNotice = (flow: Flow, now: number) => {
   const lane = Arr.findFirst(flow.lanes, (one) => one.run === flow.current?.run);
   const node = Option.getOrUndefined(
     Option.flatMap(lane, (present) =>
@@ -46,7 +46,7 @@ export interface Said {
 }
 
 /** A fact line said at `now`, with the clock it is said from where it counts minutes. */
-export const settledSaid = (said: string | null, now: number): Said => {
+export const settledSaid = (said: string | null, now: number) => {
   const found = said === null ? null : MARKED.exec(said);
   if (said === null || found === null) return { said };
   const clock = {
@@ -59,10 +59,10 @@ export const settledSaid = (said: string | null, now: number): Said => {
 
 const isRun = (one: Said): one is Said & FlowRun => "state" in one;
 
-const eachSaid = (flow: Flow, run: <A extends Said>(one: A) => A): Flow => {
+const eachSaid = (flow: Flow, run: <A extends Said>(one: A) => A) => {
   const link = (one: FlowLink | undefined) => (one === undefined ? undefined : run(one));
-  const ofRun = <A extends FlowRun>(one: A): A => ({ ...run(one), link: link(one.link) });
-  const ofNode = (node: FlowNode): FlowNode => ({
+  const ofRun = <A extends FlowRun>(one: A) => ({ ...run(one), link: link(one.link) });
+  const ofNode = (node: FlowNode) => ({
     ...ofRun(node),
     runs: Arr.map(node.runs, ofRun),
     links: node.links === undefined ? undefined : Arr.map(node.links, ofRun),
@@ -78,19 +78,19 @@ const eachSaid = (flow: Flow, run: <A extends Said>(one: A) => A): Flow => {
 };
 
 /** The Flow as built, its minutes said at `now` and each one's clock kept beside it. */
-export const settleFlow = (flow: Flow, now: number): Flow => {
+export const settleFlow = (flow: Flow, now: number) => {
   const settled = eachSaid(flow, (one) => ({ ...one, ...settledSaid(one.said, now) }));
   return { ...settled, notice: flowNotice(settled, now) };
 };
 
 /** The Flow with nothing said that only time moves: a record's, to send once per change. */
-export const timeless = (flow: Flow): Flow => ({
+export const timeless = (flow: Flow) => ({
   ...eachSaid(flow, (one) => (one.clock === undefined ? one : { ...one, said: null })),
   notice: null,
 });
 
 /** The Flow as it reads at `now`: what a front door draws from a timeless one. */
-export const timedFlow = (flow: Flow, now: number): Flow => {
+export const timedFlow = (flow: Flow, now: number) => {
   const timed = eachSaid(flow, (one) => {
     const said = one.clock === undefined ? one.said : saidAt(one.clock, now);
     if (!isRun(one) || one.state !== "running" || one.usual == null) return { ...one, said };

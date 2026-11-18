@@ -192,7 +192,7 @@ export const listing = (files: ReadonlyArray<Staged>) =>
   );
 
 /** The files a block of Desktop's lists, or null for any other text. */
-export const fromListing = (text: string): ReadonlyArray<Attached> | null => {
+export const fromListing = (text: string) => {
   const [first, ...lines] = Str.split(text, "\n");
   if (first !== ATTACHED) return null;
   return Arr.flatMap(lines, (line) => {
@@ -219,7 +219,7 @@ export const AttachmentPart = Schema.Struct({
 });
 export type AttachmentPart = typeof AttachmentPart.Type;
 
-export const attachmentPart = (file: Attached): AttachmentPart => ({
+export const attachmentPart: (file: Attached) => AttachmentPart = (file) => ({
   type: "document",
   id: file.id,
   source: { type: "file", value: file.id, mimeType: file.mediaType },
@@ -229,7 +229,7 @@ export const attachmentPart = (file: Attached): AttachmentPart => ({
 const decodePart = Schema.decodeUnknownOption(AttachmentPart);
 
 /** The file a message part is, where it is one. */
-export const attachedIn = (part: { readonly type: string }): Option.Option<Attached> =>
+export const attachedIn = (part: { readonly type: string }) =>
   Option.map(decodePart(part), ({ id, source, metadata }) => ({
     id,
     name: metadata.name,

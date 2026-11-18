@@ -719,7 +719,11 @@ const SRC_ONLY: Constraint = {
 };
 
 /** The Run as the host would describe it, working in the host's own directory. */
-const watchedAt = (runId: string, held = false, worktree: string | null = null): Watched => ({
+const watchedAt: (runId: string, held?: boolean, worktree?: string | null) => Watched = (
+  runId: string,
+  held = false,
+  worktree: string | null = null,
+) => ({
   runId,
   stateDir: dir,
   runDir: runDir(dir, runId),
@@ -737,7 +741,7 @@ const watchedAt = (runId: string, held = false, worktree: string | null = null):
 });
 
 /** An agent to correct, whose sender records what it was handed. */
-const recipient = (sent: string[]): Correcting => ({
+const recipient: (sent: string[]) => Correcting = (sent) => ({
   agent: { agent: "r1-build", harness: "claude", terminalId: "term-1" },
   send: (correction) => Effect.sync(() => sent.push(correction.text)).pipe(Effect.as(true)),
 });

@@ -252,9 +252,8 @@ test("a Release parked on its target's failure takes the target, retries where i
   ));
 
 /** Its runner, committing in the checkout on every call, as a commit made while the job is read. */
-const committing =
-  (asked: { readonly cwd: string; readonly run: Runner }): Runner =>
-  (cmd, args, where) =>
+const committing: (asked: { readonly cwd: string; readonly run: Runner }) => Runner =
+  (asked) => (cmd, args, where) =>
     Effect.andThen(
       exec(
         [

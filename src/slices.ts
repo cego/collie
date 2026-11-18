@@ -20,7 +20,7 @@ export interface Handed {
 }
 
 /** What the items before this one left behind: their work, their commits, their evidence. */
-export function renderProgress(done: ReadonlyArray<Handed>): string {
+export function renderProgress(done: ReadonlyArray<Handed>) {
   if (done.length === 0) return "(this is the first ticket)";
   return Arr.join(
     Arr.map(done, (entry) => {
@@ -45,7 +45,7 @@ export function renderProgress(done: ReadonlyArray<Handed>): string {
  * a name of its own — it becomes a directory entry and an agent's work — and no two items
  * may share one.
  */
-export function identityProblem(keys: ReadonlyArray<string>): string | null {
+export function identityProblem(keys: ReadonlyArray<string>) {
   const seen = new Set<string>();
   for (const key of keys) {
     const unsafe = unsafePathComponent(key);

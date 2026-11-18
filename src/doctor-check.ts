@@ -27,12 +27,12 @@ export interface Check {
  */
 export type Outcome = Omit<Check, "name">;
 
-export const passed = (detail: string): Outcome => ({ ok: true, detail, fix: "" });
-export const failed = (detail: string, fix: string): Outcome => ({ ok: false, detail, fix });
+export const passed = (detail: string) => ({ ok: true, detail, fix: "" });
+export const failed = (detail: string, fix: string) => ({ ok: false, detail, fix });
 /** Nothing is wrong, but there is still something a reader may want to run. */
-export const noted = (detail: string, fix: string): Outcome => ({ ok: true, detail, fix });
+export const noted = (detail: string, fix: string) => ({ ok: true, detail, fix });
 /** Configured and broken, for something no Run needs by default: not a failure, but not a ✓. */
-export const warned = (detail: string, fix: string): Outcome => ({
+export const warned = (detail: string, fix: string) => ({
   ok: true,
   detail,
   fix,
@@ -51,7 +51,7 @@ export const answered = (
   command: Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner>,
 ) =>
   Effect.timeoutOption(command, FETCH_LIMIT).pipe(
-    Effect.map(Option.getOrElse((): Ran => ({ code: 124, stdout: "", stderr: "timed out" }))),
+    Effect.map(Option.getOrElse(() => ({ code: 124, stdout: "", stderr: "timed out" }))),
   );
 
 /**

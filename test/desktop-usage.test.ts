@@ -14,7 +14,6 @@ import { FrontDoorRpcs } from "../src/board-model";
 import { epochMs } from "../src/time";
 import type { UsageReading, UsageWindow } from "../src/usage-model";
 import {
-  type MachineUsage,
   UPGRADE_SAID,
   usageDue,
   usageAccounts,
@@ -27,7 +26,7 @@ import { proves } from "./support/world";
 
 const NOW = epochMs("2026-10-08T08:00:00Z");
 
-const window = (over: Partial<UsageWindow>): UsageWindow => ({
+const window: (over: Partial<UsageWindow>) => UsageWindow = (over) => ({
   kind: "session",
   label: "Session",
   model: null,
@@ -37,7 +36,7 @@ const window = (over: Partial<UsageWindow>): UsageWindow => ({
   ...over,
 });
 
-const reading = (over: Partial<UsageReading>): UsageReading => ({
+const reading: (over: Partial<UsageReading>) => UsageReading = (over) => ({
   subscription: "claude",
   account: "org:acct",
   accountLabel: "me@example.com",
@@ -49,7 +48,7 @@ const reading = (over: Partial<UsageReading>): UsageReading => ({
   ...over,
 });
 
-const machine = (name: string, readings: ReadonlyArray<UsageReading>): MachineUsage => ({
+const machine = (name: string, readings: ReadonlyArray<UsageReading>) => ({
   profile: `p-${name}`,
   name,
   readings,

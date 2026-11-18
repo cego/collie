@@ -30,7 +30,7 @@ export const fakeAdapters: HarnessAdapters = {
 };
 
 /** Every harness answering as recorded, but for the ones a test replaces. */
-export const fakeSources = (replaced: Partial<CatalogueSources> = {}): CatalogueSources => ({
+export const fakeSources = (replaced: Partial<CatalogueSources> = {}) => ({
   ...sourcesOf(fakeAdapters),
   ...replaced,
 });

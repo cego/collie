@@ -109,7 +109,7 @@ export const applyChange = (
   settings: DesktopSettings,
   change: DesktopSettingsChange,
   offers: Offers = {},
-): DesktopSettings => {
+) => {
   const { chatModel, chatEffort, chatWidth, ...rest } = { ...settings, ...change };
   const otherHarness =
     change.chatHarness !== undefined &&
@@ -138,9 +138,7 @@ export const applyChange = (
 };
 
 /** Extra models per harness, from the Flock's `models.<harness>`. */
-export const extraModels = (
-  flock: FlockSettings,
-): Readonly<Record<string, ReadonlyArray<string>>> =>
+export const extraModels = (flock: FlockSettings) =>
   Rec.fromEntries(
     Arr.flatMap(Rec.toEntries(flock.settings), ([key, { value }]) =>
       pipe_(key, Str.startsWith("models.")) && Arr.isArray(value) && Arr.every(value, isString)
@@ -206,7 +204,7 @@ export const changeSettings = (
   flock: FlockSettings,
   change: DesktopSettingsChange,
   offers: Offers = {},
-): DesktopSettings | { readonly refused: string } => {
+) => {
   const changed = applyChange(settings, change, offers);
   if (
     change.chatHarness === undefined &&

@@ -40,7 +40,7 @@ afterEach(() =>
 );
 
 /** A Run as the board has already read it; nothing here reads a file. */
-const record = (over: Partial<RunFacts> & { id: string }): RunFacts =>
+const record = (over: Partial<RunFacts> & { id: string }) =>
   runFacts({ project: "/repo", created: "2026-09-11T10:00:00.000Z", ...over });
 
 const asking = { name: "scope", prompt: "Which repository?", options: [] };

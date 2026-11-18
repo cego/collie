@@ -40,7 +40,7 @@ export const armTripwire = Effect.fn("Tripwire.arm")(function* (dir: string) {
   });
   const tripped = fs.readFileString(log).pipe(
     Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
-    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    Effect.orElseSucceed(() => []),
     Effect.map((calls) => [...calls, ...used]),
   );
   return {

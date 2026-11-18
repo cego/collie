@@ -27,8 +27,8 @@ import { leaksIn } from "../src/public-text";
 // verification name; whether it passed is read from here, never from the fix's Output.
 const FINAL = { head_sha: "abc123", fingerprint: "tree-1" };
 const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
-function record(over: Partial<Verification> & { name: string }): Verification {
-  return {
+function record(over: Partial<Verification> & { name: string }) {
+  const returned: Verification = {
     id: `${over.name}-1`,
     run: "r1",
     executable: "/usr/bin/bun",
@@ -45,6 +45,7 @@ function record(over: Partial<Verification> & { name: string }): Verification {
     by: "agent",
     ...over,
   };
+  return returned;
 }
 const PASSED = { verifications: [record({ name: "bun test" })], final: FINAL };
 
@@ -473,7 +474,7 @@ const MAJOR_NEW = {
   severity: "major",
   title: "Rejection unhandled",
 };
-const fixJson = (extra: YamlMap): YamlMap => ({
+const fixJson = (extra: YamlMap) => ({
   verdict: "clean",
   findings: [],
   ...extra,
@@ -702,7 +703,7 @@ test("a serious dispute the latest review left out still blocks the last fix", (
 });
 
 test("substantiation asks a blocker where and why, and nothing of a minor", () => {
-  const blocker = (over: Partial<Finding> = {}): Finding => ({
+  const blocker = (over: Partial<Finding> = {}) => ({
     severity: "blocker",
     title: "something",
     file: "src/a.ts",

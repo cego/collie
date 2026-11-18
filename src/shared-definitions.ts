@@ -96,7 +96,7 @@ const readSeen = Effect.fn("SharedDefinitions.readSeen")(function* (userDir: str
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.readFileString(`${userDir}/${SEEN_FILE}`).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Seen)),
-    Effect.orElseSucceed((): Seen => ({})),
+    Effect.orElseSucceed(() => ({})),
   );
 });
 
@@ -123,7 +123,7 @@ const locked = <A, E, R>(userDir: string, effect: Effect.Effect<A, E, R>) =>
 const readShared = Effect.fn("SharedDefinitions.read")(function* (userDir: string, now: string) {
   const present = yield* onDisk(userDir);
   const seen = yield* readSeen(userDir);
-  const gone = Arr.flatMap(Rec.toEntries(seen), ([path, last]): SharedDefinition[] =>
+  const gone = Arr.flatMap(Rec.toEntries(seen), ([path, last]) =>
     Arr.some(present, (one) => one.path === path)
       ? []
       : [{ path, base64: null, at: last.removed ? last.at : now }],

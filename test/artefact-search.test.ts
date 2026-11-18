@@ -268,12 +268,7 @@ test("search filters by name, description, URL, path, Run, kind, role and unseen
     }),
   ));
 
-const found = (
-  installation: string,
-  run: string,
-  id: string,
-  detectedAt: string,
-): ArtefactMatches["items"][number] => ({
+const found = (installation: string, run: string, id: string, detectedAt: string) => ({
   id,
   run,
   kind: "file",

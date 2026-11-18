@@ -73,23 +73,36 @@ export function standingOf(
     readonly returnConflicts?: boolean;
     readonly returnFailedCi?: boolean;
   },
-): ReviewStanding {
-  if (!read.ok) return { _tag: "Unreadable", reason: read.reason };
-  if (read.state === "merged")
-    return {
+) {
+  if (!read.ok) {
+    const returned: ReviewStanding = { _tag: "Unreadable", reason: read.reason };
+    return returned;
+  }
+  if (read.state === "merged") {
+    const returned: ReviewStanding = {
       _tag: "Merged",
       sha: read.merged?.sha ?? "",
       by: read.merged?.by ?? "",
       at: read.merged?.at ?? "",
     };
-  if (read.state === "closed") return { _tag: "Closed" };
-  if (against.returnConflicts === true && conflictsWithTarget(read.mergeable))
-    return { _tag: "Conflicting", head: read.head };
-  if (read.head !== against.proved) return { _tag: "Moved", head: read.head };
+    return returned;
+  }
+  if (read.state === "closed") {
+    const returned: ReviewStanding = { _tag: "Closed" };
+    return returned;
+  }
+  if (against.returnConflicts === true && conflictsWithTarget(read.mergeable)) {
+    const returned: ReviewStanding = { _tag: "Conflicting", head: read.head };
+    return returned;
+  }
+  if (read.head !== against.proved) {
+    const returned: ReviewStanding = { _tag: "Moved", head: read.head };
+    return returned;
+  }
   const open = Arr.filter(read.comments, (one) => one.external && !one.answered);
   const fresh = Arr.filter(open, (one) => !against.seen.includes(one.id));
-  if (fresh.length > 0)
-    return {
+  if (fresh.length > 0) {
+    const returned: ReviewStanding = {
       _tag: "Unanswered",
       head: read.head,
       comments: Arr.map(fresh, ({ id, url, author, at, body, thread, file, line }) => ({
@@ -104,13 +117,17 @@ export function standingOf(
       })),
       approvers: read.approvers,
     };
-  if (against.returnFailedCi === true && read.pipeline.state === "failed")
-    return {
+    return returned;
+  }
+  if (against.returnFailedCi === true && read.pipeline.state === "failed") {
+    const returned: ReviewStanding = {
       _tag: "FailedCi",
       head: read.head,
       name: read.pipeline.name,
       ...(read.pipeline.url !== undefined && { url: read.pipeline.url }),
     };
+    return returned;
+  }
   const short = pipe(read.head, Str.slice(0, 8));
   const why = [
     ...(read.approved ? [] : [`${UNAPPROVED} (${read.unapproved || "none yet"})`]),
@@ -127,9 +144,11 @@ export function standingOf(
         ? [CONFLICTS]
         : [`mergeability (${read.mergeable?.said || "the forge has not said"})`]),
   ];
-  return why.length === 0
-    ? { _tag: "Ready", head: read.head, approvers: read.approvers }
-    : { _tag: "Waiting", why, approvers: read.approvers };
+  const returned: ReviewStanding =
+    why.length === 0
+      ? { _tag: "Ready", head: read.head, approvers: read.approvers }
+      : { _tag: "Waiting", why, approvers: read.approvers };
+  return returned;
 }
 
 /** The merge request's head, which of a round's commits it carries, and its open external comments. */
@@ -177,7 +196,7 @@ export function settleAnswers(round: {
   readonly answers: ReadonlyArray<Answer>;
   readonly onHead: ReadonlyArray<string>;
   readonly open: ReadonlyArray<string>;
-}): SettledAnswers {
+}) {
   const replies: Array<SettledAnswers["replies"][number]> = [];
   const carried: OpenComment[] = [];
   for (const comment of Arr.filter(round.given, (one) => round.open.includes(one.id))) {
@@ -232,14 +251,16 @@ export const conflictsWithTarget = (mergeable: Mergeability | null | undefined) 
 
 export const CONFLICTS = "it conflicts with its target branch, and its branch must take the target";
 
-export function reviewWaitOf(mr: string, read: ReviewRead): ReviewWait {
+export function reviewWaitOf(mr: string, read: ReviewRead) {
   const label = mrLabel(mr);
-  if (!read.ok)
-    return {
+  if (!read.ok) {
+    const returned: ReviewWait = {
       _tag: "Awaiting",
       on: `the forge to answer about ${label} (${read.reason})`,
       who: null,
     };
+    return returned;
+  }
   const mergeable = read.mergeable;
   const held = mergeable?.state === "blocked" ? HELD_FOR.get(mergeable.said) : undefined;
   const blocked = [
@@ -265,17 +286,20 @@ export function reviewWaitOf(mr: string, read: ReviewRead): ReviewWait {
         : []),
     ]),
   ];
-  if (blocked.length > 0 || on.length === 0)
-    return {
+  if (blocked.length > 0 || on.length === 0) {
+    const returned: ReviewWait = {
       _tag: "Blocked",
       cause: read.pipeline.state === "failed" ? "ci-failed" : "review-blocked",
       why: blocked.length > 0 ? blocked : [`the forge will not merge it: ${mergeable?.said ?? ""}`],
     };
-  return {
+    return returned;
+  }
+  const returned: ReviewWait = {
     _tag: "Awaiting",
     on: `${Arr.join(on, " and ")} on ${label}`,
     who: Arr.some(on, (one) => one === APPROVAL || one === THREADS) ? TEAMMATE : null,
   };
+  return returned;
 }
 
 /** The card's line while a person has to repair what holds the release back. */

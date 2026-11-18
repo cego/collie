@@ -46,7 +46,10 @@ export const outputsOf = Effect.fn("RunRecord.outputs")(function* (state: string
   const dir = runDir(state, run);
   const root = yield* fs.realPath(dir).pipe(Effect.orElseSucceed(() => dir));
   const files: string[] = [];
-  const walk = (at: string, depth: number): Effect.Effect<void, never, FileSystem.FileSystem> =>
+  const walk: (at: string, depth: number) => Effect.Effect<void, never, FileSystem.FileSystem> = (
+    at,
+    depth,
+  ) =>
     Effect.gen(function* () {
       if (depth > 4) return;
       for (const name of yield* fs.readDirectory(at).pipe(Effect.orElseSucceed(() => []))) {

@@ -57,7 +57,7 @@ export interface ScrubbedText {
   readonly removed: string[];
 }
 
-export function scrub(text: string): ScrubbedText {
+export function scrub(text: string) {
   const removed: string[] = [];
   let out = text;
   for (const [looksLike, replacement, kind] of SECRETS)
@@ -70,12 +70,12 @@ export function scrub(text: string): ScrubbedText {
 }
 
 /** The text as it will be written: same words, minus anything that looked like a key. */
-export const redact = (text: string): string => scrub(text).text;
+export const redact = (text: string) => scrub(text).text;
 
 /** Every string in a value scrubbed, and the kinds taken out of all of them. */
-export function scrubJson<A extends Given>(value: A): Scrubbed<A> {
+export function scrubJson<A extends Given>(value: A) {
   const removed: string[] = [];
-  const walk = (one: Given): Given => {
+  const walk: (one: Given) => Given = (one) => {
     if (isString(one)) {
       const done = scrub(one);
       removed.push(...done.removed);
@@ -97,7 +97,7 @@ export function scrubJson<A extends Given>(value: A): Scrubbed<A> {
 export const CREDENTIALS_DOCS = "docs/using.md#credentials-never-go-in-a-goal-or-a-steer";
 
 /** What a front door says about values it removed, or null where it removed none. */
-export const removedNotice = (removed: ReadonlyArray<string>): string | null =>
+export const removedNotice = (removed: ReadonlyArray<string>) =>
   removed.length === 0
     ? null
     : `removed ${removed.length} credential-shaped value(s): ${Arr.join([...new Set(removed)], ", ")}. ` +
@@ -108,13 +108,13 @@ export const withNotice = (
   said: string,
   removed: ReadonlyArray<string> | undefined,
   between = "\n",
-): string => {
+) => {
   const notice = removedNotice(removed ?? []);
   return notice === null ? said : Arr.join(Arr.filter([said, notice], Boolean), between);
 };
 
 /** The notice a result's note carries, where it carries one. */
-export const removedIn = (note: string): string | null =>
+export const removedIn = (note: string) =>
   /removed \d+ credential-shaped value\(s\)[^;]*/.exec(note)?.[0] ?? null;
 
 /** `redacted` for a `--json` envelope, present only where something was taken out. */

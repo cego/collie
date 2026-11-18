@@ -7,11 +7,13 @@ import { foldCeiling, type Preferences, resolveWithRoom } from "../src/harness";
 import { parseSetting } from "../src/settings";
 import { epochMs } from "../src/time";
 import { roomFor, type UsageReading, type UsageWindow } from "../src/usage-model";
-import type { HarnessCatalogue } from "../src/catalogue-model";
 
 const NOW = epochMs("2026-10-08T08:00:00Z");
 
-const window = (usedPercent: number, over: Partial<UsageWindow> = {}): UsageWindow => ({
+const window: (usedPercent: number, over?: Partial<UsageWindow>) => UsageWindow = (
+  usedPercent,
+  over = {},
+) => ({
   kind: "session",
   label: "Session",
   model: null,
@@ -20,17 +22,19 @@ const window = (usedPercent: number, over: Partial<UsageWindow> = {}): UsageWind
   reached: false,
   ...over,
 });
-const reading = (subscription: UsageReading["subscription"], windows: UsageWindow[]) =>
-  ({
-    subscription,
-    account: "a",
-    accountLabel: null,
-    plan: null,
-    windows,
-    at: "2026-10-08T07:59:00Z",
-    source: subscription === "claude" ? "claude-usage" : "codex-app-server",
-    problem: null,
-  }) satisfies UsageReading;
+const reading: (
+  subscription: UsageReading["subscription"],
+  windows: UsageWindow[],
+) => UsageReading = (subscription, windows) => ({
+  subscription,
+  account: "a",
+  accountLabel: null,
+  plan: null,
+  windows,
+  at: "2026-10-08T07:59:00Z",
+  source: subscription === "claude" ? "claude-usage" : "codex-app-server",
+  problem: null,
+});
 
 const opus: Preferences = { harness: "claude", model: "opus", effort: "xhigh" };
 const claudeOut = reading("claude", [window(100)]);
@@ -50,7 +54,7 @@ const on = ({ choice }: ReturnType<typeof resolved>) =>
 
 describe("resolveWithRoom", () => {
   test("a fallback carries an effort its model reports, even when Collie's table does not", () => {
-    const listed = (harness: string, model: string): HarnessCatalogue => ({
+    const listed = (harness: string, model: string) => ({
       harness,
       at: "2026-10-29T09:00:00.000Z",
       table: null,

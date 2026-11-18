@@ -1280,7 +1280,7 @@ export default defineWorkflow({
           yield* host.record(runId, `benchmark plan ${plans}: ${reason}`);
           return planned.plan;
         });
-      const planOf = (harnessed: Harnessed): Plan => ({
+      const planOf = (harnessed: Harnessed) => ({
         harness: harnessed.harness,
         prepare: harnessed.prepare,
         commands: harnessed.commands,

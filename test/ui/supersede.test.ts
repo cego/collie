@@ -28,8 +28,8 @@ afterEach(() => runEffect(rig.close()));
  * A state that says which focus produced it. `newer` rather than `note`, because the note
  * is the footer's own line: a load keeps whatever the last command said there.
  */
-function stateFor(selected: string | null): AppState {
-  return {
+function stateFor(selected: string | null) {
+  const returned: AppState = {
     view: "runs",
     filter: { kind: "workspace", id: "w1" },
     tasks: [],
@@ -45,6 +45,7 @@ function stateFor(selected: string | null): AppState {
     previewing: null,
     stopping: [],
   };
+  return returned;
 }
 
 /** Waits for something the fibers do, rather than for a duration. */

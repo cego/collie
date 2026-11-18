@@ -138,7 +138,7 @@ const readReceipt = Effect.fn("collie.readReceipt")(function* (file: string) {
  * a failure that omits the id leaves the caller nothing to retry with but a fresh one
  * — which is a second Run, not a retry.
  */
-function withRequestId(result: Result, id: string): Result {
+function withRequestId(result: Result, id: string) {
   if (!result.ok)
     return err(result.error.code, result.error.message, {
       ...result.error.details,

@@ -316,7 +316,7 @@ export const searchDoorOf = <E1, E2, E3>(client: {
   readonly identity: () => Effect.Effect<{ readonly installation?: string }, E1>;
   readonly artefactSearch: (asked: ArtefactSearch) => Effect.Effect<ArtefactMatches, E2>;
   readonly run: (asked: { readonly runId: string }) => Effect.Effect<unknown, E3>;
-}): Effect.Effect<SearchDoor, Away> =>
+}) =>
   awayFrom(client.identity()).pipe(
     Effect.flatMap(({ installation }) =>
       installation === undefined

@@ -50,11 +50,22 @@ const PROVIDERS = new Map<string, Subscription>([
 ]);
 
 /** The Subscription a choice draws on, or null where Collie reads none for it. */
-export function subscriptionOf(choice: ChoiceLike): Subscription | null {
-  if (choice.harness === "claude") return "claude";
-  if (choice.harness === "codex") return "chatgpt";
-  if (choice.harness !== "pi" && choice.harness !== "opencode") return null;
-  return PROVIDERS.get(Str.split(choice.model, "/")[0] ?? "") ?? null;
+export function subscriptionOf(choice: ChoiceLike) {
+  if (choice.harness === "claude") {
+    const returned: Subscription | null = "claude";
+    return returned;
+  }
+  if (choice.harness === "codex") {
+    const returned: Subscription | null = "chatgpt";
+    return returned;
+  }
+  if (choice.harness !== "pi" && choice.harness !== "opencode") {
+    const returned: Subscription | null = null;
+    return returned;
+  }
+  const returned: Subscription | null =
+    PROVIDERS.get(Str.split(choice.model, "/")[0] ?? "") ?? null;
+  return returned;
 }
 
 const squeezed = (text: string) => pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]/g, ""));
@@ -64,16 +75,30 @@ const squeezed = (text: string) => pipe(Str.toLowerCase(text), Str.replace(/[^a-
  * spelling: `opus` and `claude-opus-4-1` an "Opus" window, `sonnet` a "Sonnet 4.5" one. A
  * choice left at `default` is resolved by its caller; unresolved, it names no model.
  */
-export function appliesTo(window: UsageWindow, model: string | null): boolean {
-  if (window.model === null) return true;
-  if (model === null) return false;
-  return pipe(squeezed(model), Str.includes(squeezed(Str.split(window.model, " ")[0] ?? "")));
+export function appliesTo(window: UsageWindow, model: string | null) {
+  if (window.model === null) {
+    const returned: boolean = true;
+    return returned;
+  }
+  if (model === null) {
+    const returned: boolean = false;
+    return returned;
+  }
+  const returned: boolean = pipe(
+    squeezed(model),
+    Str.includes(squeezed(Str.split(window.model, " ")[0] ?? "")),
+  );
+  return returned;
 }
 
 /** A window as it stands at `now`: once its reset has passed it is unused, whatever was read. */
-export function current(window: UsageWindow, now: number): UsageWindow {
-  if (window.resetsAt === null || epochMs(window.resetsAt) > now) return window;
-  return { ...window, usedPercent: 0, reached: false };
+export function current(window: UsageWindow, now: number) {
+  if (window.resetsAt === null || epochMs(window.resetsAt) > now) {
+    const returned: UsageWindow = window;
+    return returned;
+  }
+  const returned: UsageWindow = { ...window, usedPercent: 0, reached: false };
+  return returned;
 }
 
 export const isFull = (window: UsageWindow) => window.reached || window.usedPercent >= 100;
@@ -86,32 +111,32 @@ export interface Used {
 }
 
 /** The busiest of these windows, counting a full one as busier than any that is not. */
-function busiest(windows: ReadonlyArray<UsageWindow>): Used | null {
+function busiest(windows: ReadonlyArray<UsageWindow>) {
   let found: UsageWindow | null = null;
   const weight = (window: UsageWindow) => (isFull(window) ? 101 : window.usedPercent);
   for (const window of windows)
     if (found === null || weight(window) > weight(found)) found = window;
-  if (found === null) return null;
-  return {
+  if (found === null) {
+    const returned: Used | null = null;
+    return returned;
+  }
+  const returned: Used | null = {
     window: found,
     usedPercent: isFull(found) ? 100 : found.usedPercent,
     resetsAt: found.resetsAt,
     exhausted: isFull(found),
   };
+  return returned;
 }
 
 /**
  * How much of the busiest window that applies to this choice is used, and whether its
  * Subscription is Exhausted for it. Null where nothing is read for it.
  */
-export function usedFor(
-  readings: ReadonlyArray<UsageReading>,
-  choice: ChoiceLike,
-  now: number,
-): Used | null {
+export function usedFor(readings: ReadonlyArray<UsageReading>, choice: ChoiceLike, now: number) {
   const subscription = subscriptionOf(choice);
   const model = choice.model;
-  return busiest(
+  const returned: Used | null = busiest(
     pipe(
       readings,
       Arr.filter((reading) => reading.subscription === subscription),
@@ -120,6 +145,7 @@ export function usedFor(
       Arr.map((window) => current(window, now)),
     ),
   );
+  return returned;
 }
 
 /** At or above this, a door warns. */
@@ -132,18 +158,20 @@ export interface UsagePhrase {
 }
 
 /** A reading's busiest window at `now`. */
-export function busiestWindow(reading: UsageReading, now: number): Used | null {
-  return busiest(Arr.map(reading.windows, (window) => current(window, now)));
+export function busiestWindow(reading: UsageReading, now: number) {
+  const returned: Used | null = busiest(Arr.map(reading.windows, (window) => current(window, now)));
+  return returned;
 }
 
 /** `31%`, `out`, or `Opus out` where a model's own window is the busiest. */
-export function usedPhrase(used: Used): string {
+export function usedPhrase(used: Used) {
   const amount = used.exhausted ? "out" : `${Math.round(used.usedPercent)}%`;
-  return used.window.model === null ? amount : `${used.window.model} ${amount}`;
+  const returned: string = used.window.model === null ? amount : `${used.window.model} ${amount}`;
+  return returned;
 }
 
 /** Each Subscription's busiest window, in a few characters. */
-export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number): UsagePhrase {
+export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number) {
   const parts: string[] = [];
   let warn = false;
   for (const reading of readings) {
@@ -152,7 +180,8 @@ export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number):
     warn ||= used.usedPercent >= WARN_PERCENT;
     parts.push(`${reading.subscription} ${usedPhrase(used)}`);
   }
-  return { text: Arr.join(parts, " · "), warn };
+  const returned: UsagePhrase = { text: Arr.join(parts, " · "), warn };
+  return returned;
 }
 
 // The sources, as they answer. Every field optional: two of the three are undocumented.
@@ -195,8 +224,8 @@ function claudeWindow(
   kind: UsageWindow["kind"],
   label: string,
   model: string | null,
-): UsageWindow {
-  return {
+) {
+  const returned: UsageWindow = {
     kind,
     label,
     model,
@@ -205,32 +234,45 @@ function claudeWindow(
     // A severity is a display level only; credits beyond the plan mark nothing.
     reached: (row.locked_reason ?? null) !== null,
   };
+  return returned;
 }
 
-function claudeLimit(row: ClaudeRow): UsageWindow {
+function claudeLimit(row: ClaudeRow) {
   switch (row.kind) {
-    case "session":
-      return claudeWindow(row, "session", "Session", null);
-    case "weekly_all":
-      return claudeWindow(row, "weekly", "Weekly", null);
+    case "session": {
+      const returned: UsageWindow = claudeWindow(row, "session", "Session", null);
+      return returned;
+    }
+    case "weekly_all": {
+      const returned: UsageWindow = claudeWindow(row, "weekly", "Weekly", null);
+      return returned;
+    }
     case "weekly_scoped": {
       const model = row.scope?.model?.display_name ?? null;
-      return model === null
-        ? claudeWindow(row, "other", "Weekly (scoped)", null)
-        : claudeWindow(row, "weekly-model", `Weekly ${model}`, model);
+      const returned: UsageWindow =
+        model === null
+          ? claudeWindow(row, "other", "Weekly (scoped)", null)
+          : claudeWindow(row, "weekly-model", `Weekly ${model}`, model);
+      return returned;
     }
-    default:
-      return claudeWindow(row, "other", row.kind ?? "Other", null);
+    default: {
+      const returned: UsageWindow = claudeWindow(row, "other", row.kind ?? "Other", null);
+      return returned;
+    }
   }
 }
 
 /** `GET /api/oauth/usage`'s answer as windows: by `limits[].kind`, else the older two rows. */
-export function claudeWindows(usage: ClaudeUsage): ReadonlyArray<UsageWindow> {
-  if (usage.limits) return Arr.map(usage.limits, claudeLimit);
-  return [
+export function claudeWindows(usage: ClaudeUsage) {
+  if (usage.limits) {
+    const returned: ReadonlyArray<UsageWindow> = Arr.map(usage.limits, claudeLimit);
+    return returned;
+  }
+  const returned: ReadonlyArray<UsageWindow> = [
     ...(usage.five_hour ? [claudeWindow(usage.five_hour, "session", "Session", null)] : []),
     ...(usage.seven_day ? [claudeWindow(usage.seven_day, "weekly", "Weekly", null)] : []),
   ];
+  return returned;
 }
 
 export const ClaudeJson = Schema.Struct({
@@ -249,16 +291,17 @@ export type ClaudeJson = typeof ClaudeJson.Type;
 const TEAM_PLANS = new Set(["team", "enterprise"]);
 
 /** Claude Code's `~/.claude.json` account, with the plan its login says. */
-export function claudeLogin(claudeJson: ClaudeJson | null, plan: string | null): Login {
+export function claudeLogin(claudeJson: ClaudeJson | null, plan: string | null) {
   const found = claudeJson?.oauthAccount ?? null;
   const ids = Arr.filter([found?.organizationUuid, found?.accountUuid], (id) => id != null);
   const email = found?.emailAddress ?? null;
   const team = plan !== null && TEAM_PLANS.has(plan) ? (found?.organizationName ?? null) : null;
-  return {
+  const returned: Login = {
     account: ids.length === 0 ? null : Arr.join(ids, ":"),
     accountLabel: email === null ? null : team === null ? email : `${email} (${team})`,
     plan,
   };
+  return returned;
 }
 
 const StatusWindow = Schema.Struct({
@@ -282,12 +325,12 @@ const isoOfSeconds = (seconds: number | null | undefined) =>
   seconds == null ? null : DateTime.formatIso(DateTime.makeUnsafe(seconds * 1000));
 
 /** A Claude status line's `rate_limits`, as the session and weekly windows it measures. */
-export function statusLineWindows(limits: StatusLineLimits): ReadonlyArray<UsageWindow> {
-  const window = (
+export function statusLineWindows(limits: StatusLineLimits) {
+  const window: (
     row: typeof StatusWindow.Type | null | undefined,
     kind: "session" | "weekly",
     label: string,
-  ): ReadonlyArray<UsageWindow> =>
+  ) => ReadonlyArray<UsageWindow> = (row, kind, label) =>
     row
       ? [
           {
@@ -300,10 +343,11 @@ export function statusLineWindows(limits: StatusLineLimits): ReadonlyArray<Usage
           },
         ]
       : [];
-  return [
+  const returned: ReadonlyArray<UsageWindow> = [
     ...window(limits.five_hour, "session", "Session"),
     ...window(limits.seven_day, "weekly", "Weekly"),
   ];
+  return returned;
 }
 
 const CodexWindow = Schema.Struct({
@@ -346,12 +390,13 @@ export const CodexAccount = Schema.Struct({
 export type CodexAccount = typeof CodexAccount.Type;
 
 /** `account/read`'s result as the account a ChatGPT reading belongs to. */
-export function codexLogin(found: CodexAccount): Login {
-  return {
+export function codexLogin(found: CodexAccount) {
+  const returned: Login = {
     account: found?.workspaceRouting?.chatgptAccountId ?? null,
     accountLabel: found?.account?.email ?? null,
     plan: found?.account?.planType ?? null,
   };
+  return returned;
 }
 
 const kindOfLength = (length: number | null) =>
@@ -361,16 +406,12 @@ const kindOfLength = (length: number | null) =>
  * One limit's windows. A limit its source says is reached marks its full window
  * reached, or every window of it when none is full.
  */
-function codexWindows(
-  limit: CodexLimit,
-  model: string | null,
-  blocked: boolean,
-): ReadonlyArray<UsageWindow> {
+function codexWindows(limit: CodexLimit, model: string | null, blocked: boolean) {
   const rows = Arr.filter([limit.primary, limit.secondary], (row) => row != null);
   const reached =
     blocked || (limit.rateLimitReachedType ?? null) !== null || limit.spendControlReached === true;
   const full = Arr.some(rows, (row) => row.usedPercent >= 100);
-  return Arr.map(rows, (row) => {
+  const returned: ReadonlyArray<UsageWindow> = Arr.map(rows, (row) => {
     const length = row.windowDurationMins ?? null;
     const kind = kindOfLength(length);
     const label =
@@ -384,6 +425,7 @@ function codexWindows(
       reached: reached && (!full || row.usedPercent >= 100),
     };
   });
+  return returned;
 }
 
 /**
@@ -405,13 +447,20 @@ export function codexUsage(usage: CodexRateLimits) {
 }
 
 /** How long until a reset, in its two largest units: `in 2h 3m`, `in 1d 4h`, `in 12m`. */
-export function resetIn(resetsAt: string, now: number): string {
+export function resetIn(resetsAt: string, now: number) {
   const minutes = Math.max(0, Math.ceil((epochMs(resetsAt) - now) / 60_000));
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor((minutes % 1440) / 60);
-  if (days > 0) return `in ${days}d ${hours}h`;
-  if (hours > 0) return `in ${hours}h ${minutes % 60}m`;
-  return `in ${minutes}m`;
+  if (days > 0) {
+    const returned: string = `in ${days}d ${hours}h`;
+    return returned;
+  }
+  if (hours > 0) {
+    const returned: string = `in ${hours}h ${minutes % 60}m`;
+    return returned;
+  }
+  const returned: string = `in ${minutes}m`;
+  return returned;
 }
 
 const resetClock = (iso: string, now: number) => {
@@ -424,8 +473,9 @@ const resetClock = (iso: string, now: number) => {
 };
 
 /** A reset as a local clock time and how long until it: `resets 14:00 (in 2h 3m)`. */
-export function resetPhrase(resetsAt: string, now: number): string {
-  return `resets ${resetClock(resetsAt, now)} (${resetIn(resetsAt, now)})`;
+export function resetPhrase(resetsAt: string, now: number) {
+  const returned: string = `resets ${resetClock(resetsAt, now)} (${resetIn(resetsAt, now)})`;
+  return returned;
 }
 
 /**
@@ -433,19 +483,30 @@ export function resetPhrase(resetsAt: string, now: number): string {
  * window is below `upTo`. A Subscription with nothing read has room.
  */
 export function roomFor(readings: ReadonlyArray<UsageReading>, now: number) {
-  return (
-    choice: ChoiceLike,
-    upTo: number | undefined,
-  ): { readonly room: true } | { readonly room: false; readonly why: string } => {
+  return (choice: ChoiceLike, upTo: number | undefined) => {
     const used = usedFor(readings, choice, now);
-    if (used === null) return { room: true };
+    if (used === null) {
+      const returned: { readonly room: true } | { readonly room: false; readonly why: string } = {
+        room: true,
+      };
+      return returned;
+    }
     const over = upTo !== undefined && used.usedPercent >= upTo;
-    if (!used.exhausted && !over) return { room: true };
+    if (!used.exhausted && !over) {
+      const returned: { readonly room: true } | { readonly room: false; readonly why: string } = {
+        room: true,
+      };
+      return returned;
+    }
     const parts = [
       `${Str.toLowerCase(used.window.label)} ${Math.round(used.usedPercent)}%`,
       ...(used.exhausted ? [] : [`over its ${upTo}%`]),
       ...(used.resetsAt === null ? [] : [`resets ${resetClock(used.resetsAt, now)}`]),
     ];
-    return { room: false, why: Arr.join(parts, ", ") };
+    const returned: { readonly room: true } | { readonly room: false; readonly why: string } = {
+      room: false,
+      why: Arr.join(parts, ", "),
+    };
+    return returned;
   };
 }

@@ -67,7 +67,7 @@ import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { placeStaged } from "./carried";
 import { actionsLog, reasonOf } from "./sent";
-import { type Place, setUp, setupInventory, setupOffer, thisComputer } from "./standing-setup";
+import { setUp, setupInventory, setupOffer, thisComputer } from "./standing-setup";
 import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
 import { claudeCode, claudeModels } from "./claude";
 import { claudeDriver } from "./claude-driver";
@@ -325,9 +325,19 @@ const main = Effect.gen(function* () {
   const saved = Result.isSuccess(loadedFlock) ? loadedFlock.success : NO_FLOCK_SETTINGS;
   const desktop = yield* heldSettings(
     own,
-    (): FlockSettings => SubscriptionRef.getUnsafe(flockSettings),
-    (now): Effect.Effect<Offers, never, FileSystem.FileSystem | Path.Path> =>
-      offersOf(now, SubscriptionRef.getUnsafe(flockSettings), readPiConfig(own), lists),
+    () => {
+      const returned: FlockSettings = SubscriptionRef.getUnsafe(flockSettings);
+      return returned;
+    },
+    (now) => {
+      const returned: Effect.Effect<Offers, never, FileSystem.FileSystem | Path.Path> = offersOf(
+        now,
+        SubscriptionRef.getUnsafe(flockSettings),
+        readPiConfig(own),
+        lists,
+      );
+      return returned;
+    },
   );
   const settings = desktop.now;
   const timed = (mark: { readonly name: string; readonly at: number; readonly card: string }) => {
@@ -373,12 +383,13 @@ const main = Effect.gen(function* () {
             Effect.map((said) => said.expires),
             Effect.orElseSucceed(() => null),
           );
-    return {
+    const returned: Credentials = {
       ...blank,
       ...gitlabPages(),
       gitlab: token === null ? null : { expires },
       helle: (yield* keyring.lookup("helle-token")) !== null,
-    } satisfies Credentials;
+    };
+    return returned;
   });
   const credentials = yield* SubscriptionRef.make(blank);
   // Read beside the start rather than before it: frames the view sends before Desktop
@@ -400,18 +411,21 @@ const main = Effect.gen(function* () {
   const now = yield* Clock.currentTimeMillis;
   const [enabled, unlisted] = Result.match(listed, {
     onSuccess: (machines) => [machines, []] as const,
-    onFailure: (reason): readonly [[], FlockItem[]] => [
-      [],
-      [
-        {
-          _tag: "Lost",
-          machine: { profile: "core", name: "core's machines" },
-          state: "unreachable",
-          reason,
-          at: now,
-        },
-      ],
-    ],
+    onFailure: (reason) => {
+      const returned: readonly [[], FlockItem[]] = [
+        [],
+        [
+          {
+            _tag: "Lost",
+            machine: { profile: "core", name: "core's machines" },
+            state: "unreachable",
+            reason,
+            at: now,
+          },
+        ],
+      ];
+      return returned;
+    },
   });
   // Every route by herdr profile, each herdr machine's with the scope it lives in.
   const routes = new Map<string, { route: ShellRoute; scope?: Scope.Closeable }>();
@@ -699,7 +713,10 @@ const main = Effect.gen(function* () {
       // Kept as skipped where the run ended before it, so the next run skips it too.
       const unreached = Arr.map(
         Arr.filter(skip, (step) => !Arr.some(run.steps, (one) => one.step === step)),
-        (step): OnboardStep => ({ step, title: step, status: "skipped" }),
+        (step) => {
+          const returned: OnboardStep = { step, title: step, status: "skipped" };
+          return returned;
+        },
       );
       return { ...run, steps: [...run.steps, ...unreached] };
     }).pipe(
@@ -920,8 +937,8 @@ const main = Effect.gen(function* () {
       Effect.flatMap(Result.match({ onSuccess: use, onFailure: () => Effect.succeed(unstarted) })),
     );
   const home = yield* Config.String("HOME");
-  const setupPlaces = (): ReadonlyArray<Place> => {
-    const machines = Arr.map([...doors.values()], ({ machine, desktop }): Place => ({
+  const setupPlaces = () => {
+    const machines = Arr.map([...doors.values()], ({ machine, desktop }) => ({
       computer: machine.name,
       inventory: desktop.ownInventory().pipe(Effect.mapError(reasonOf)),
       read: desktop.ownWords().pipe(Effect.mapError(reasonOf)),
@@ -1017,7 +1034,10 @@ const main = Effect.gen(function* () {
           routedAt.clear();
           const before: ReadonlyArray<FlockItem> = [
             { _tag: "Routes", profiles: [...routes.keys()] },
-            ...Arr.map(reachable, ({ machine }): FlockItem => ({ _tag: "Routed", machine })),
+            ...Arr.map(reachable, ({ machine }) => {
+              const returned: FlockItem = { _tag: "Routed", machine };
+              return returned;
+            }),
             ...Arr.filter(yield* savedBoards(boards), listed),
             ...Arr.filter([...ownReadings.values()], listed),
             ...Arr.filter(yield* savedOnboardings(onboardings), listed),
@@ -1537,12 +1557,12 @@ const main = Effect.gen(function* () {
         ),
       ),
     // Annotated because it serves its own window through `servedOn`, which needs these handlers.
-    popOut: (): Effect.Effect<
-      void,
-      never,
-      SecureRandom.SecureRandom | Digest.Digest | FileSystem.FileSystem | Path.Path
-    > =>
-      Effect.gen(function* () {
+    popOut: () => {
+      const returned: Effect.Effect<
+        void,
+        never,
+        SecureRandom.SecureRandom | Digest.Digest | FileSystem.FileSystem | Path.Path
+      > = Effect.gen(function* () {
         if (popped === undefined) {
           const opened = windowOn(`${VIEW}#chat`, "Flock chat", {
             width: 480,
@@ -1561,7 +1581,9 @@ const main = Effect.gen(function* () {
           );
         } else popped.window.activate();
         yield* Deferred.await(popped.closed);
-      }),
+      });
+      return returned;
+    },
     popIn: () => Effect.sync(() => popped?.window.close()),
     conversationChanges: () =>
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.changed), Stream.empty)),

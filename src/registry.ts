@@ -67,7 +67,7 @@ export const decodeRegisterOption = Schema.decodeOption(
 );
 
 /** The register a scope's agents are kept in, named as its file was so the import keeps it. */
-export function registerOf(scope: RegistryScope): string {
+export function registerOf(scope: RegistryScope) {
   const where = scope.workspaceId ?? scope.cwd;
   const last = Option.getOrElse(
     Arr.last(Arr.filter(pipe_(where, Str.split("/")), (part) => part !== "")),
@@ -84,12 +84,12 @@ export function registerOf(scope: RegistryScope): string {
  * the formula is two answers to "which workspace is this".
  */
 // `Bun.hash`: Effect has no non-cryptographic digest, and this only needs a short stable key.
-export function scopeKey(scope: RegistryScope): string {
+export function scopeKey(scope: RegistryScope) {
   const where = scope.workspaceId ?? scope.cwd;
   return pipe_(Bun.hash(`${scope.session ?? ""} ${where}`).toString(16), Str.slice(0, 12));
 }
 
-export function scopeFor(cwd: string): RegistryScope {
+export function scopeFor(cwd: string) {
   return { session: null, workspaceId: null, cwd };
 }
 
@@ -121,7 +121,7 @@ export const registeredLayer = Layer.effect(Registered)(
       sql<{ readonly record: string }>`
         SELECT record FROM collie_agents WHERE register = ${register} ORDER BY rowid
       `.pipe(Effect.map(decoded));
-    return {
+    const returned: RegisteredApi = {
       all: sql<{ readonly record: string }>`SELECT record FROM collie_agents ORDER BY rowid`.pipe(
         Effect.map(decoded),
         Effect.orDie,
@@ -152,7 +152,8 @@ export const registeredLayer = Layer.effect(Registered)(
           Effect.orDie,
         );
       },
-    } satisfies RegisteredApi;
+    };
+    return returned;
   }),
 );
 
@@ -188,27 +189,48 @@ export function deliverable(entry: AgentEntry): entry is AgentEntry & { incarnat
  * The reason is returned rather than logged here, so the caller records it where its
  * own refusal is recorded.
  */
-export function verifyIncarnation(
-  entry: AgentEntry,
-  alive: ReadonlyArray<AgentInfo>,
-): { ok: true; info: AgentInfo } | { ok: false; reason: string } {
-  if (!deliverable(entry)) return { ok: false, reason: "no_incarnation" };
-  if (entry.incarnation.backend !== "core") return { ok: false, reason: "agent_gone" };
+export function verifyIncarnation(entry: AgentEntry, alive: ReadonlyArray<AgentInfo>) {
+  if (!deliverable(entry)) {
+    const returned: { ok: true; info: AgentInfo } | { ok: false; reason: string } = {
+      ok: false,
+      reason: "no_incarnation",
+    };
+    return returned;
+  }
+  if (entry.incarnation.backend !== "core") {
+    const returned: { ok: true; info: AgentInfo } | { ok: false; reason: string } = {
+      ok: false,
+      reason: "agent_gone",
+    };
+    return returned;
+  }
   const [live] = matching(entry, alive);
-  if (!live) return { ok: false, reason: "agent_gone" };
-  if (live.terminalId !== entry.incarnation.terminalId)
-    return { ok: false, reason: "incarnation_changed" };
-  return { ok: true, info: live };
+  if (!live) {
+    const returned: { ok: true; info: AgentInfo } | { ok: false; reason: string } = {
+      ok: false,
+      reason: "agent_gone",
+    };
+    return returned;
+  }
+  if (live.terminalId !== entry.incarnation.terminalId) {
+    const returned: { ok: true; info: AgentInfo } | { ok: false; reason: string } = {
+      ok: false,
+      reason: "incarnation_changed",
+    };
+    return returned;
+  }
+  const returned: { ok: true; info: AgentInfo } | { ok: false; reason: string } = {
+    ok: true,
+    info: live,
+  };
+  return returned;
 }
 
-function matching(entry: AgentEntry, alive: ReadonlyArray<AgentInfo>): AgentInfo[] {
+function matching(entry: AgentEntry, alive: ReadonlyArray<AgentInfo>) {
   return Arr.filter(alive, (a) => a.name === entry.agent && a.paneId === entry.paneId);
 }
 
-export function liveEntries(
-  entries: ReadonlyArray<AgentEntry>,
-  alive: ReadonlyArray<AgentInfo>,
-): AgentEntry[] {
+export function liveEntries(entries: ReadonlyArray<AgentEntry>, alive: ReadonlyArray<AgentInfo>) {
   return Arr.filter(entries, (e) => matching(e, alive).length > 0);
 }
 

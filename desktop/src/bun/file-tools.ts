@@ -133,7 +133,7 @@ export const FILE_TOOLS = [
 
 export const isFileTool = (name: string) => Arr.some(FILE_TOOLS, (one) => one.name === name);
 
-const text = (said: string): ReadonlyArray<ToolContent> => [{ type: "text", text: said }];
+const text: (said: string) => ReadonlyArray<ToolContent> = (said) => [{ type: "text", text: said }];
 
 /** Where a `<machine>:<path>` points, or why it does not. */
 const placed = (flock: FlockChat, named: string) => {

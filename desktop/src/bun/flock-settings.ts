@@ -73,7 +73,7 @@ export const readFlockDefinitions = Effect.fn("FlockDefinitions.read")(function*
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.readFileString((yield* Path.Path).join(dir, DEFINITIONS_FILE)).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(FlockDefinitionsFile)),
-    Effect.orElseSucceed((): FlockDefinitions => ({})),
+    Effect.orElseSucceed(() => ({})),
   );
 });
 
@@ -90,7 +90,7 @@ export const writeFlockDefinitions = Effect.fn("FlockDefinitions.write")(functio
 });
 
 const heldDefinitions = (flock: FlockDefinitions) =>
-  Arr.map(Rec.toEntries(flock), ([path, { base64, at }]): SharedDefinition => ({
+  Arr.map(Rec.toEntries(flock), ([path, { base64, at }]) => ({
     path,
     base64,
     at,
@@ -207,7 +207,7 @@ const latestSync = <T, Has, M extends { readonly name: string }, SaveError, Exch
         }),
       );
     /** Why the sync with `machine` failed, or null. */
-    const syncOn = (machine: M): Effect.Effect<string | null> =>
+    const syncOn: (machine: M) => Effect.Effect<string | null> = (machine) =>
       took(machine).pipe(
         Effect.tap(() => options.told(machine, null)),
         Effect.flatMap((changed) =>

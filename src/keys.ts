@@ -8,7 +8,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { Effect, Queue } from "effect";
 
 /** One chunk of stdin can carry several keypresses; split them apart. */
-export function tokenizeKeys(chunk: string): string[] {
+export function tokenizeKeys(chunk: string) {
   const out: string[] = [];
   let i = 0;
   while (i < chunk.length) {
@@ -57,7 +57,7 @@ export const keyboard = (input: KeyboardInput = process.stdin) =>
   Effect.acquireRelease(
     Effect.gen(function* () {
       const keys = yield* Queue.unbounded<string>();
-      const onData = (buffer: Buffer): void => {
+      const onData = (buffer: Buffer) => {
         for (const key of tokenizeKeys(buffer.toString("utf8"))) Queue.offerUnsafe(keys, key);
       };
       input.setRawMode?.(true);
@@ -71,4 +71,4 @@ export const keyboard = (input: KeyboardInput = process.stdin) =>
         input.setRawMode?.(false);
         input.pause();
       }),
-  ).pipe(Effect.map(({ keys }): Queue.Dequeue<string> => keys));
+  ).pipe(Effect.map(({ keys }) => keys));

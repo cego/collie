@@ -20,7 +20,6 @@ import {
   jsonSchemaFor,
   step,
   template,
-  type Registration,
   type WorkflowEntry,
   type WorkflowMetadata,
 } from "../src/sdk";
@@ -85,12 +84,12 @@ test(
 );
 
 /** Checking what a module declares never builds one, which is the point of doing it first. */
-const registration = (): Registration => {
+const registration = () => {
   throw new Error("checkEntry does not construct a registration");
 };
 
 /** A module with one launch Input, unless a test says otherwise. */
-const entry = (over: Partial<WorkflowEntry>): WorkflowEntry => ({
+const entry = (over: Partial<WorkflowEntry>) => ({
   id: "echo",
   title: "Echo",
   description: "Repeats a line.",
@@ -224,7 +223,7 @@ test("a checkout is branch or roaming, and anything else is refused at load", ()
 
 type Action = NonNullable<WorkflowMetadata["actions"]>[number];
 
-const action = (over: Partial<Action>): Action => ({
+const action = (over: Partial<Action>) => ({
   id: "fix-open",
   title: "Fix what is open",
   workflow: "implement",

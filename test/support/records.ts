@@ -14,9 +14,9 @@ import { deliveriesOf, readLedger } from "../../src/steering";
 import { RunRecords, type RunRecordsApi } from "../../src/run-records";
 import { platformLayer } from "../../src/platform";
 
-export function runFacts(over: Partial<RunFacts> = {}): RunFacts {
+export function runFacts(over: Partial<RunFacts> = {}) {
   const id = over.id ?? "r1";
-  return {
+  const returned: RunFacts = {
     id,
     workflow: "implement",
     project: "/project",
@@ -46,6 +46,7 @@ export function runFacts(over: Partial<RunFacts> = {}): RunFacts {
     summary: null,
     ...over,
   };
+  return returned;
 }
 
 /** A Run whose directories exist under this state directory, for readers of its files. */
@@ -122,7 +123,7 @@ export const launchedAt = (stateDir: string, run: string, operation: string) =>
  * A Run's records as the host on `stateDir()`, whichever directory that is when asked, keeps
  * them: for a test whose own reads and writes must meet its host's, not `runEffect`'s empty ones.
  */
-export const hostRunRecords = (stateDir: () => string): RunRecordsApi => {
+export const hostRunRecords: (stateDir: () => string) => RunRecordsApi = (stateDir) => {
   const at = <A, E, R>(use: (records: RunRecordsApi) => Effect.Effect<A, E, R>) =>
     FileSystem.FileSystem.pipe(
       Effect.flatMap((fs) => fs.makeDirectory(stateDir(), { recursive: true })),

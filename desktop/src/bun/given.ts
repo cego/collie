@@ -62,7 +62,10 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
   const file = (yield* Path.Path).join(options.dir, FILE);
   let record = yield* fs.readFileString(file).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(GivenFile)),
-    Effect.orElseSucceed((): typeof GivenFile.Type => ({})),
+    Effect.orElseSucceed(() => {
+      const returned: typeof GivenFile.Type = {};
+      return returned;
+    }),
   );
   /** Why the last give of a fingerprint failed, by profile and credential; this run's only. */
   const failures = new Map<string, { readonly print: string; readonly reason: string }>();
@@ -101,7 +104,11 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
           : [[credential, text] as const];
       }),
     );
-  const stateOf = (machine: KnownMachine, credential: Credential, text: string): MachineGiven => {
+  const stateOf: (machine: KnownMachine, credential: Credential, text: string) => MachineGiven = (
+    machine,
+    credential,
+    text,
+  ) => {
     const print = fingerprint(text);
     const given = record[machine.profile]?.[credential] === print;
     const failure = failures.get(`${machine.profile} ${credential}`);

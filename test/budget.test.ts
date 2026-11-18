@@ -24,12 +24,7 @@ import { until } from "./support/host";
 const VM_MK = budgetOf(24);
 
 let seq = 0;
-const entry = (
-  kind: Entry["kind"],
-  state: Entry["state"],
-  asked: number,
-  workers = asked,
-): Entry => ({
+const entry = (kind: Entry["kind"], state: Entry["state"], asked: number, workers = asked) => ({
   id: `e${++seq}`,
   kind,
   state,

@@ -21,7 +21,7 @@ export const memoryRecords = recordsLayer.pipe(
 /** Runs `effect` in a scope of its own, closed when it ends. */
 export function runEffect<A, E>(
   effect: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>,
-): Promise<A> {
+) {
   return runtime.runPromise(Effect.scoped(Effect.provide(effect, memoryRecords)));
 }
 

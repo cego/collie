@@ -11,16 +11,16 @@ export interface Asked {
   readonly held?: RunRevision;
 }
 
-export const revision = (seq: number): RunRevision => ({ epoch: "e-1", seq });
+export const revision = (seq: number) => ({ epoch: "e-1", seq });
 
 // SAFETY: the tests read only a record's title and revision.
 export const frame = (title: string) => ({ title }) as RunDetail;
-export const frameAt = (title: string, seq: number): RunDetail => ({
+export const frameAt = (title: string, seq: number) => ({
   ...frame(title),
   revision: revision(seq),
 });
 
-export const unchanged = (seq: number): RecordUnchanged => ({
+export const unchanged: (seq: number) => RecordUnchanged = (seq) => ({
   _tag: "Unchanged",
   revision: revision(seq),
 });
@@ -37,7 +37,7 @@ export const recordDoor = (asked: Array<Asked>) =>
           Effect.sync(() => queues.set(runId, made)),
         );
       });
-    const runDetail = (payload: Asked): Stream.Stream<Answer> =>
+    const runDetail = (payload: Asked) =>
       Stream.unwrap(
         Effect.map(queueOf(payload.runId), (queue) => {
           asked.push(payload);

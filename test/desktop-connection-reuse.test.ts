@@ -87,9 +87,8 @@ test("Use glab's login reads the source host and token, saves it, and hands it o
   ));
 
 /** A Machine's glab: the host it defaults to, and the token it holds for each host. */
-const glabOn =
-  (defaultHost: string, logins: Map<string, string>): Runner =>
-  (_, args) =>
+const glabOn: (defaultHost: string, logins: Map<string, string>) => Runner =
+  (defaultHost, logins) => (_, args) =>
     Effect.sync(() => {
       const said = Arr.join(args, " ");
       if (said === "config get host --global") return { code: 0, stdout: defaultHost };

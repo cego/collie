@@ -38,9 +38,14 @@ export class HerdrError extends Data.TaggedError("HerdrError")<{
   readonly answered?: true;
 }> {}
 
-export function herdrFailureReason(cause: unknown): string {
-  if (!(cause instanceof HerdrError)) return reason(cause);
-  return cause.detail === "" ? cause.message : `${cause.message}: ${cause.detail}`;
+export function herdrFailureReason(cause: unknown) {
+  if (!(cause instanceof HerdrError)) {
+    const returned: string = reason(cause);
+    return returned;
+  }
+  const returned: string =
+    cause.detail === "" ? cause.message : `${cause.message}: ${cause.detail}`;
+  return returned;
 }
 
 type HerdrEffect<A> = Effect.Effect<A, HerdrError, PlatformServices>;
@@ -54,11 +59,13 @@ export type Submission = "observed" | "unobserved" | "pressed";
 /** Between turns, as core says so: anything else may be hiding a turn. */
 export const isSettled = (status: AgentStatus) => status === "idle" || status === "done";
 
-function agentStatus(value: string): AgentStatus {
+function agentStatus(value: string) {
   if (value === "idle" || value === "working" || value === "blocked" || value === "done") {
-    return value;
+    const returned: AgentStatus = value;
+    return returned;
   }
-  return "unknown";
+  const returned: AgentStatus = "unknown";
+  return returned;
 }
 
 /** A live agent as core lists it: one of Collie's terminals, named after its agent. */
@@ -108,7 +115,7 @@ const coreCall = <M extends HcMethod>(socket: string, method: M, params: Schema.
   );
 
 /** A machine core keeps, as the Machine Collie pairs with by core's name for it. */
-const rosterEntry = (machine: HcMachine): HerdrMachine => ({
+const rosterEntry: (machine: HcMachine) => HerdrMachine = (machine) => ({
   id: machine.name,
   label: machine.name,
   target: machine.via === true ? viaTarget(machine.target) : machine.target,
@@ -124,7 +131,7 @@ const isAgentTerminal = (terminal: HcTerminal) =>
 
 const coreStatus = (terminal: HcTerminal) => agentStatus(terminal.status?.state ?? "");
 
-const coreAgent = (terminal: HcTerminal): AgentInfo => ({
+const coreAgent: (terminal: HcTerminal) => AgentInfo = (terminal) => ({
   name: terminal.name ?? terminal.address,
   paneId: terminal.address,
   status: coreStatus(terminal),
@@ -182,11 +189,11 @@ export class Herdr {
     readonly cwd: string;
     readonly env: Readonly<Record<string, string>>;
     readonly labels: Readonly<Record<string, string>>;
-  }): HerdrEffect<string> {
+  }) {
     const env: Record<string, string> = {};
     if (this.env.raw.PATH !== undefined) env.PATH = this.env.raw.PATH;
     Object.assign(env, opts.env);
-    return this.onCore((socket) =>
+    const returned: HerdrEffect<string> = this.onCore((socket) =>
       coreCall(socket, "terminal.run", {
         name: opts.name,
         argv: [...opts.argv],
@@ -196,15 +203,14 @@ export class Herdr {
         no_parent: true,
       }).pipe(Effect.map((started) => started.address)),
     );
+    return returned;
   }
 
   /**
    * A tick each time core's events are followed from the start, which a holder that came back
    * is, and on each event `counts` takes.
    */
-  private followed(
-    counts: (type: string) => boolean,
-  ): Stream.Stream<void, never, PlatformServices> {
+  private followed(counts: (type: string) => boolean) {
     const env = this.env;
     const ticks = Stream.unwrap(
       Effect.gen(function* () {
@@ -222,39 +228,45 @@ export class Herdr {
         );
       }),
     );
-    return ticks.pipe(
+    const returned: Stream.Stream<void, never, PlatformServices> = ticks.pipe(
       Stream.catch(() => Stream.empty),
       Stream.repeat(Schedule.spaced("1 second")),
     );
+    return returned;
   }
 
   /** A tick whenever a terminal on this Machine's core may have gone. */
-  terminalsEnded(): Stream.Stream<void, never, PlatformServices> {
-    return this.followed((type) => ["finished", "lost", "removed"].includes(type));
+  terminalsEnded() {
+    const returned: Stream.Stream<void, never, PlatformServices> = this.followed((type) =>
+      ["finished", "lost", "removed"].includes(type),
+    );
+    return returned;
   }
 
   /** A tick whenever anything about this Machine's terminals may have changed. */
-  changes(): Stream.Stream<void, never, PlatformServices> {
-    return this.followed(() => true);
+  changes() {
+    const returned: Stream.Stream<void, never, PlatformServices> = this.followed(() => true);
+    return returned;
   }
 
   /** Whether this Machine's core has a live terminal named `name`. */
-  terminalLive(name: string): HerdrEffect<boolean> {
-    return this.onCore((socket) =>
+  terminalLive(name: string) {
+    const returned: HerdrEffect<boolean> = this.onCore((socket) =>
       coreCall(socket, "terminal.list", {}).pipe(
         Effect.map((listed) =>
           Arr.some(listed.terminals, (one) => one.state === "live" && one.name === name),
         ),
       ),
     );
+    return returned;
   }
 
   /**
    * One `terminal.send`. A send core saw not start a turn gets one Enter, never the text
    * again: the work would run twice.
    */
-  agentPrompt(target: string, text: string): HerdrEffect<Submission> {
-    return this.onCore((socket) =>
+  agentPrompt(target: string, text: string) {
+    const returned: HerdrEffect<Submission> = this.onCore((socket) =>
       Effect.gen(function* () {
         const sent = yield* coreCall(socket, "terminal.send", { terminal: target, text });
         if (sent.started === true) return "observed";
@@ -263,30 +275,34 @@ export class Herdr {
         return "pressed";
       }),
     );
+    return returned;
   }
 
   /** One Enter, for text already in the agent's prompt box. */
-  agentPressEnter(target: string): HerdrEffect<void> {
-    return this.agentSendKeys(target, ["enter"]);
+  agentPressEnter(target: string) {
+    const returned: HerdrEffect<void> = this.agentSendKeys(target, ["enter"]);
+    return returned;
   }
 
   /**
    * Raw keys into an agent's terminal. Core answering says the keys were sent, which is not
    * the same as the harness having acted on them: nothing here reports an agent stopped.
    */
-  agentSendKeys(target: string, keys: ReadonlyArray<string>): HerdrEffect<void> {
-    return this.onCore((socket) =>
+  agentSendKeys(target: string, keys: ReadonlyArray<string>) {
+    const returned: HerdrEffect<void> = this.onCore((socket) =>
       coreCall(socket, "terminal.keys", { terminal: target, keys: [...keys] }).pipe(Effect.asVoid),
     );
+    return returned;
   }
 
   /** Collie's live agents on this Machine's core. */
-  agentList(): HerdrEffect<AgentInfo[]> {
-    return this.onCore((socket) =>
+  agentList() {
+    const returned: HerdrEffect<AgentInfo[]> = this.onCore((socket) =>
       coreCall(socket, "terminal.list", {}).pipe(
         Effect.map((listed) => Arr.map(Arr.filter(listed.terminals, isAgentTerminal), coreAgent)),
       ),
     );
+    return returned;
   }
 
   /** The Machines this one may pair with, by core's name for each. */
@@ -320,9 +336,9 @@ export class Herdr {
    * evidence that nothing is there. Only when every one of them is conclusively gone is
    * the answer `absent`. An agent core still has but calls `done` counts as gone.
    */
-  agentsAlive(names: ReadonlyArray<string>): Effect.Effect<AgentsAlive, never, PlatformServices> {
+  agentsAlive(names: ReadonlyArray<string>) {
     const ask = (name: string) => this.agentStatus(name);
-    return Effect.gen(function* () {
+    const returned: Effect.Effect<AgentsAlive, never, PlatformServices> = Effect.gen(function* () {
       if (names.length === 0) return "absent" as const;
       let verdict: AgentsAlive = "absent";
       for (const name of names) {
@@ -340,11 +356,12 @@ export class Herdr {
       }
       return verdict;
     });
+    return returned;
   }
 
   /** As core's events last said: the status its harness reported through OSC 7501. */
-  agentStatus(target: string): HerdrEffect<AgentStatus> {
-    return this.onCore((socket) =>
+  agentStatus(target: string) {
+    const returned: HerdrEffect<AgentStatus> = this.onCore((socket) =>
       Effect.gen(function* () {
         const view = yield* watched(socket);
         const named = Arr.filter(
@@ -367,12 +384,14 @@ export class Herdr {
         return coreStatus(terminal);
       }),
     );
+    return returned;
   }
 
   /** Ends the terminal at `address`, and the program in it. */
-  terminalKill(address: string): HerdrEffect<void> {
-    return this.onCore((socket) =>
+  terminalKill(address: string) {
+    const returned: HerdrEffect<void> = this.onCore((socket) =>
       coreCall(socket, "terminal.kill", { terminal: address }).pipe(Effect.asVoid),
     );
+    return returned;
   }
 }

@@ -77,10 +77,13 @@ const desktop = Effect.gen(function* () {
   });
   const opened: URL[] = [];
   const browser = {
-    answer: (authorize: URL): Array<[string, string]> => [
-      ["code", "the-code"],
-      ["state", authorize.searchParams.get("state")!],
-    ],
+    answer: (authorize: URL) => {
+      const returned: Array<[string, string]> = [
+        ["code", "the-code"],
+        ["state", authorize.searchParams.get("state")!],
+      ];
+      return returned;
+    },
   };
   const session = yield* slackUserSession({
     keyring,
@@ -98,9 +101,7 @@ const desktop = Effect.gen(function* () {
   const file = (name: string, which: string) => `${dir}/${name}/.config/collie/${which}`;
   /** What each Machine holds in `slack-user.env`, or null without one. */
   const held = Effect.forEach(["vm", "mini"], (name) =>
-    fs
-      .readFileString(file(name, "slack-user.env"))
-      .pipe(Effect.orElseSucceed((): string | null => null)),
+    fs.readFileString(file(name, "slack-user.env")).pipe(Effect.orElseSucceed(() => null)),
   );
   const oauthCalls = () => Arr.filter(fake.calls, (call) => call.method === "oauth.v2.access");
   return {

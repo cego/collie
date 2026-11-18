@@ -90,7 +90,7 @@ const slackCall = (token: string | null, client?: HttpClient.HttpClient) => {
     method: string,
     schema: S,
     parameters: Record<string, string> = {},
-  ): Effect.Effect<S["Type"], string> =>
+  ) =>
     Effect.gen(function* () {
       const url = `https://slack.com/api/${method}`;
       const request = (

@@ -174,7 +174,7 @@ test(
           expect(runsOf(calls, "collie-board")).toHaveLength(1);
           const herds = yield* fs
             .readDirectory(`${world.state}/herd`)
-            .pipe(Effect.orElseSucceed((): string[] => []));
+            .pipe(Effect.orElseSucceed(() => []));
           for (const herd of herds)
             expect(yield* fs.exists(`${world.state}/herd/${herd}/home.json`)).toBe(false);
         }).pipe(Effect.orDie),

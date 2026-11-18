@@ -56,7 +56,7 @@ const listed = (parts: ReadonlyArray<string>) =>
 export const isToStandard = (question: AskedQuestion) => gapsOf(question).length === 0;
 
 /** What tells the agent how to ask its call's questions again. */
-export const questionRepair = (questions: ReadonlyArray<AskedQuestion>): string =>
+export const questionRepair = (questions: ReadonlyArray<AskedQuestion>) =>
   Arr.join(
     [
       "Collie did not post this question.",
@@ -75,7 +75,7 @@ export const questionRepair = (questions: ReadonlyArray<AskedQuestion>): string 
   );
 
 /** The flag on a question posted short of standard, or null where it is to standard. */
-export const shortfallOf = (question: AskedQuestion): string | null => {
+export const shortfallOf = (question: AskedQuestion) => {
   const gaps = gapsOf(question);
   if (gaps.length === 0) return null;
   const count = question.options.length;
@@ -93,7 +93,7 @@ export const shortfallOf = (question: AskedQuestion): string | null => {
  * Its options as solutions numbered from 1, the one recommended first, without the
  * marker. More or fewer than one marked, none is recommended.
  */
-export const solutionsOf = (question: AskedQuestion): ReadonlyArray<Solution> => {
+export const solutionsOf = (question: AskedQuestion) => {
   const one = recommendedCount(question) === 1;
   const ordered = one
     ? [

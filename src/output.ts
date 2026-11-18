@@ -246,10 +246,7 @@ const criterionKey = (text: string) =>
   );
 
 /** The newest answer to this criterion's whole wording; a copy without its formatting counts. */
-export const answerFor = (
-  criterion: string,
-  answers: ReadonlyArray<Criterion>,
-): Criterion | undefined =>
+export const answerFor = (criterion: string, answers: ReadonlyArray<Criterion>) =>
   Option.getOrUndefined(
     Arr.findLast(answers, (one) => criterionKey(one.criterion) === criterionKey(criterion)),
   );
@@ -262,8 +259,8 @@ export function unmetCriteria(
   ticket: string,
   criteria: ReadonlyArray<string>,
   answers: ReadonlyArray<Criterion>,
-): Finding[] {
-  return Arr.flatMap(criteria, (criterion): Finding[] => {
+) {
+  return Arr.flatMap(criteria, (criterion) => {
     const met = answerFor(criterion, answers)?.met;
     if (met === undefined)
       return [
@@ -291,7 +288,7 @@ export function unmetCriteria(
 export const afterMergeAnswers = (
   criteria: ReadonlyArray<string>,
   answers: ReadonlyArray<Criterion>,
-): Criterion[] =>
+) =>
   Arr.flatMap(criteria, (criterion) => {
     const met = answerFor(criterion, answers)?.met;
     return met !== undefined && /^after merge\b/i.test(Str.trim(met)) ? [{ criterion, met }] : [];
@@ -348,7 +345,7 @@ export const leaveReview = (
   dir: string,
   // What the schema decodes, readonly, as the declarations an author is given say it is.
   synthesis: typeof SynthesisSchema.Type,
-): Effect.Effect<void, never, FileSystem.FileSystem> =>
+) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
       Effect.all([
@@ -364,10 +361,7 @@ export const leaveReview = (
  * The findings still standing after a last fix `settleFinalFix` accepted, for whatever
  * counts them next. The review's prose stays as the reviewers wrote it.
  */
-export const leaveOutstanding = (
-  dir: string,
-  outstanding: ReadonlyArray<Finding>,
-): Effect.Effect<void, never, FileSystem.FileSystem> =>
+export const leaveOutstanding = (dir: string, outstanding: ReadonlyArray<Finding>) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
       fs.writeFileString(`${dir}/${FINDINGS_FILE}`, encodeFindings(outstanding)),
@@ -376,7 +370,7 @@ export const leaveOutstanding = (
   );
 
 /** The extra axes a human asked for, as a paragraph, or nothing where they asked for none. */
-export function riskLine(risks: string): string {
+export function riskLine(risks: string) {
   const asked = Str.trim(risks);
   if (asked === "") return "";
   return (
@@ -388,9 +382,7 @@ export function riskLine(risks: string): string {
 }
 
 /** The findings of the review a Run left, or none where it left no review. */
-export const findingsIn = (
-  dir: string,
-): Effect.Effect<ReadonlyArray<typeof FindingSchema.Type>, never, FileSystem.FileSystem> =>
+export const findingsIn = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     if (!(yield* fs.exists(`${dir}/${REVIEW_FILE}`))) return [];
@@ -402,7 +394,7 @@ export const findingsIn = (
  * review that holds it: a Run with findings and no review wrote no review, and one with
  * a review and no findings came back clean.
  */
-export const openFindingsIn = (dir: string): Effect.Effect<number, never, FileSystem.FileSystem> =>
+export const openFindingsIn = (dir: string) =>
   findingsIn(dir).pipe(
     Effect.map(
       (found) => Arr.filter(found, (f) => f.status !== "fixed" && f.status !== "obsolete").length,
@@ -411,63 +403,111 @@ export const openFindingsIn = (dir: string): Effect.Effect<number, never, FileSy
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
-function parseJson(text: string, where: string): Parsed<YamlValue> {
+function parseJson(text: string, where: string) {
   try {
-    return {
+    const returned: Parsed<YamlValue> = {
       ok: true,
       value: flow(Schema.decodeResult(YamlValueJsonSchema), Result.getOrThrow)(text),
     };
+    return returned;
   } catch (cause) {
-    return { ok: false, error: `${where}: not valid JSON (${String(cause)})` };
+    const returned: Parsed<YamlValue> = {
+      ok: false,
+      error: `${where}: not valid JSON (${String(cause)})`,
+    };
+    return returned;
   }
 }
 
-function display(value: YamlValue | undefined): string {
+function display(value: YamlValue | undefined) {
   return value === undefined
     ? "undefined"
     : flow(Schema.encodeResult(YamlValueJsonSchema), Result.getOrThrow)(value);
 }
 
-export function parseReviewOutput(text: string, where: string): Parsed<ReviewOutput> {
+export function parseReviewOutput(text: string, where: string) {
   const parsed = parseJson(text, where);
-  if (!parsed.ok) return parsed;
-  if (!isYamlMap(parsed.value)) return { ok: false, error: `${where}: expected a JSON object` };
+  if (!parsed.ok) {
+    const returned: Parsed<ReviewOutput> = parsed;
+    return returned;
+  }
+  if (!isYamlMap(parsed.value)) {
+    const returned: Parsed<ReviewOutput> = { ok: false, error: `${where}: expected a JSON object` };
+    return returned;
+  }
   const obj = parsed.value;
   if (obj.verdict !== "clean" && obj.verdict !== "findings") {
-    return {
+    const returned: Parsed<ReviewOutput> = {
       ok: false,
       error: `${where}: verdict must be "clean" or "findings", got ${display(obj.verdict)}`,
     };
+    return returned;
   }
   const findings = parseFindings(obj.findings, `${where}: findings`);
-  if (!findings.ok) return findings;
-  const disputed = parseFindings(obj.disputed, `${where}: disputed`);
-  if (!disputed.ok) return disputed;
-  if (obj.verdict === "findings" && findings.value.length === 0) {
-    return { ok: false, error: `${where}: verdict "findings" with an empty findings list` };
+  if (!findings.ok) {
+    const returned: Parsed<ReviewOutput> = findings;
+    return returned;
   }
-  return {
+  const disputed = parseFindings(obj.disputed, `${where}: disputed`);
+  if (!disputed.ok) {
+    const returned: Parsed<ReviewOutput> = disputed;
+    return returned;
+  }
+  if (obj.verdict === "findings" && findings.value.length === 0) {
+    const returned: Parsed<ReviewOutput> = {
+      ok: false,
+      error: `${where}: verdict "findings" with an empty findings list`,
+    };
+    return returned;
+  }
+  const returned: Parsed<ReviewOutput> = {
     ok: true,
     value: { verdict: obj.verdict, findings: findings.value, disputed: disputed.value },
   };
+  return returned;
 }
 
-export function parseFindings(raw: YamlValue | undefined, where: string): Parsed<Finding[]> {
-  if (raw === undefined || raw === null) return { ok: true, value: [] };
-  if (!Arr.isArray<typeof raw>(raw)) return { ok: false, error: `${where}: expected an array` };
+export function parseFindings(raw: YamlValue | undefined, where: string) {
+  if (raw === undefined || raw === null) {
+    const returned: Parsed<Finding[]> = { ok: true, value: [] };
+    return returned;
+  }
+  if (!Arr.isArray<typeof raw>(raw)) {
+    const returned: Parsed<Finding[]> = { ok: false, error: `${where}: expected an array` };
+    return returned;
+  }
   const out: Finding[] = [];
   for (const [index, item] of raw.entries()) {
-    if (!isYamlMap(item)) return { ok: false, error: `${where}[${index}]: expected an object` };
+    if (!isYamlMap(item)) {
+      const returned: Parsed<Finding[]> = {
+        ok: false,
+        error: `${where}[${index}]: expected an object`,
+      };
+      return returned;
+    }
     if (!isString(item.title) || Str.trim(item.title) === "") {
-      return { ok: false, error: `${where}[${index}]: title is required` };
+      const returned: Parsed<Finding[]> = {
+        ok: false,
+        error: `${where}[${index}]: title is required`,
+      };
+      return returned;
     }
     if (!isString(item.severity) || Str.trim(item.severity) === "") {
-      return { ok: false, error: `${where}[${index}]: severity is required` };
+      const returned: Parsed<Finding[]> = {
+        ok: false,
+        error: `${where}[${index}]: severity is required`,
+      };
+      return returned;
     }
     const finding: Finding = { severity: item.severity, title: item.title };
     if (item.id !== undefined) {
-      if (!isString(item.id) || Str.trim(item.id) === "")
-        return { ok: false, error: `${where}[${index}].id is required and must not be blank` };
+      if (!isString(item.id) || Str.trim(item.id) === "") {
+        const returned: Parsed<Finding[]> = {
+          ok: false,
+          error: `${where}[${index}].id is required and must not be blank`,
+        };
+        return returned;
+      }
       finding.id = item.id;
     }
     if (item.status !== undefined) {
@@ -476,11 +516,13 @@ export function parseFindings(raw: YamlValue | undefined, where: string): Parsed
         item.status !== "fixed" &&
         item.status !== "disputed" &&
         item.status !== "obsolete"
-      )
-        return {
+      ) {
+        const returned: Parsed<Finding[]> = {
           ok: false,
           error: `${where}[${index}].status must be open, fixed, disputed or obsolete`,
         };
+        return returned;
+      }
       finding.status = item.status;
     }
     if (isString(item.head)) finding.head = item.head;
@@ -489,26 +531,32 @@ export function parseFindings(raw: YamlValue | undefined, where: string): Parsed
     if (isNumber(item.line)) finding.line = item.line;
     if (isString(item.detail)) finding.detail = item.detail;
     if (item.internal !== undefined) {
-      if (!isBoolean(item.internal))
-        return { ok: false, error: `${where}[${index}]: internal must be a boolean` };
+      if (!isBoolean(item.internal)) {
+        const returned: Parsed<Finding[]> = {
+          ok: false,
+          error: `${where}[${index}]: internal must be a boolean`,
+        };
+        return returned;
+      }
       finding.internal = item.internal;
     }
     if (isString(item.rebuttal)) finding.rebuttal = item.rebuttal;
     if (isString(item.reason)) finding.reason = item.reason;
     out.push(finding);
   }
-  return { ok: true, value: out };
+  const returned: Parsed<Finding[]> = { ok: true, value: out };
+  return returned;
 }
 
 /**
  * What makes two findings the same finding. The line is deliberately left out: it
  * moves as the branch is fixed, and a dispute has to survive that to ever settle.
  */
-export function findingKey(f: Pick<Finding, "file" | "title">): string {
+export function findingKey(f: Pick<Finding, "file" | "title">) {
   return `${f.file ?? ""}::${Str.toLowerCase(Str.trim(f.title))}`;
 }
 
-export function sameFinding(left: Finding, right: Finding): boolean {
+export function sameFinding(left: Finding, right: Finding) {
   return left.id !== undefined && right.id !== undefined
     ? left.id === right.id
     : findingKey(left) === findingKey(right);
@@ -518,32 +566,52 @@ export function sameFinding(left: Finding, right: Finding): boolean {
  * A review of reviews: everything `review.json` has, plus the summary a human reads
  * first and the findings this synthesis decided not to carry.
  */
-export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
+export function parseSynthesis(text: string, where: string) {
   const base = parseReviewOutput(text, where);
-  if (!base.ok) return base;
+  if (!base.ok) {
+    const returned: Parsed<Synthesis> = base;
+    return returned;
+  }
   const parsed = parseJson(text, where);
-  if (!parsed.ok || !isYamlMap(parsed.value))
-    return { ok: false, error: `${where}: expected a JSON object` };
+  if (!parsed.ok || !isYamlMap(parsed.value)) {
+    const returned: Parsed<Synthesis> = { ok: false, error: `${where}: expected a JSON object` };
+    return returned;
+  }
   const obj = parsed.value;
   if (!isString(obj.summary) || Str.trim(obj.summary) === "") {
-    return { ok: false, error: `${where}: summary is required` };
+    const returned: Parsed<Synthesis> = { ok: false, error: `${where}: summary is required` };
+    return returned;
   }
   if (
     obj.public_summary !== undefined &&
     (!isString(obj.public_summary) || Str.trim(obj.public_summary) === "")
   ) {
-    return { ok: false, error: `${where}: public_summary must be a non-blank string` };
+    const returned: Parsed<Synthesis> = {
+      ok: false,
+      error: `${where}: public_summary must be a non-blank string`,
+    };
+    return returned;
   }
   const dropped = parseFindings(obj.dropped, `${where}: dropped`);
-  if (!dropped.ok) return dropped;
+  if (!dropped.ok) {
+    const returned: Parsed<Synthesis> = dropped;
+    return returned;
+  }
   for (const [i, finding] of dropped.value.entries()) {
     // A finding dropped without a reason is a finding lost, not one resolved.
     if (!finding.reason || Str.trim(finding.reason) === "") {
-      return { ok: false, error: `${where}: dropped[${i}]: reason is required` };
+      const returned: Parsed<Synthesis> = {
+        ok: false,
+        error: `${where}: dropped[${i}]: reason is required`,
+      };
+      return returned;
     }
   }
   const fixed = parseFixed(obj.fixed, `${where}: fixed`);
-  if (!fixed.ok) return fixed;
+  if (!fixed.ok) {
+    const returned: Parsed<Synthesis> = fixed;
+    return returned;
+  }
   const value: Synthesis = {
     ...base.value,
     summary: Str.trim(obj.summary),
@@ -551,25 +619,37 @@ export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
     fixed: fixed.value,
   };
   if (isString(obj.public_summary)) value.public_summary = Str.trim(obj.public_summary);
-  return { ok: true, value };
+  const returned: Parsed<Synthesis> = { ok: true, value };
+  return returned;
 }
 
 /** What the last review raised and this one could not find any more. */
-export function parseFixed(value: YamlValue | undefined, where: string): Parsed<Fixed[]> {
-  if (value === undefined || value === null) return { ok: true, value: [] };
-  if (!Arr.isArray<typeof value>(value)) return { ok: false, error: `${where}: expected a list` };
+export function parseFixed(value: YamlValue | undefined, where: string) {
+  if (value === undefined || value === null) {
+    const returned: Parsed<Fixed[]> = { ok: true, value: [] };
+    return returned;
+  }
+  if (!Arr.isArray<typeof value>(value)) {
+    const returned: Parsed<Fixed[]> = { ok: false, error: `${where}: expected a list` };
+    return returned;
+  }
   const out: Fixed[] = [];
   for (const [i, item] of value.entries()) {
-    if (!isYamlMap(item)) return { ok: false, error: `${where}[${i}]: expected an object` };
+    if (!isYamlMap(item)) {
+      const returned: Parsed<Fixed[]> = { ok: false, error: `${where}[${i}]: expected an object` };
+      return returned;
+    }
     if (!isString(item.title) || Str.trim(item.title) === "") {
-      return { ok: false, error: `${where}[${i}]: title is required` };
+      const returned: Parsed<Fixed[]> = { ok: false, error: `${where}[${i}]: title is required` };
+      return returned;
     }
     const entry: Fixed = { title: Str.trim(item.title) };
     if (isString(item.file)) entry.file = item.file;
     if (isString(item.note)) entry.note = item.note;
     out.push(entry);
   }
-  return { ok: true, value: out };
+  const returned: Parsed<Fixed[]> = { ok: true, value: out };
+  return returned;
 }
 
 /**
@@ -596,23 +676,46 @@ export interface FixOutput {
   checks: Check[];
 }
 
-export function parseFixOutput(raw: YamlValue, where: string): Parsed<FixOutput> {
-  if (!isYamlMap(raw)) return { ok: false, error: `${where}: expected a JSON object` };
+export function parseFixOutput(raw: YamlValue, where: string) {
+  if (!isYamlMap(raw)) {
+    const returned: Parsed<FixOutput> = { ok: false, error: `${where}: expected a JSON object` };
+    return returned;
+  }
   if (raw.verdict !== "clean" && raw.verdict !== "findings") {
-    return { ok: false, error: `${where}: verdict must be "clean" or "findings"` };
+    const returned: Parsed<FixOutput> = {
+      ok: false,
+      error: `${where}: verdict must be "clean" or "findings"`,
+    };
+    return returned;
   }
   const findings = parseFindings(raw.findings, `${where}: findings`);
-  if (!findings.ok) return findings;
+  if (!findings.ok) {
+    const returned: Parsed<FixOutput> = findings;
+    return returned;
+  }
   if (raw.verdict === "findings" && findings.value.length === 0) {
-    return { ok: false, error: `${where}: verdict "findings" with an empty findings list` };
+    const returned: Parsed<FixOutput> = {
+      ok: false,
+      error: `${where}: verdict "findings" with an empty findings list`,
+    };
+    return returned;
   }
   const fixed = parseFixed(raw.fixed, `${where}: fixed`);
-  if (!fixed.ok) return fixed;
+  if (!fixed.ok) {
+    const returned: Parsed<FixOutput> = fixed;
+    return returned;
+  }
   const disputed = parseFindings(raw.disputed, `${where}: disputed`);
-  if (!disputed.ok) return disputed;
+  if (!disputed.ok) {
+    const returned: Parsed<FixOutput> = disputed;
+    return returned;
+  }
   const checks = parseChecks(raw.checks, `${where}: checks`);
-  if (!checks.ok) return checks;
-  return {
+  if (!checks.ok) {
+    const returned: Parsed<FixOutput> = checks;
+    return returned;
+  }
+  const returned: Parsed<FixOutput> = {
     ok: true,
     value: {
       verdict: raw.verdict,
@@ -622,22 +725,34 @@ export function parseFixOutput(raw: YamlValue, where: string): Parsed<FixOutput>
       checks: checks.value,
     },
   };
+  return returned;
 }
 
-function parseChecks(value: YamlValue | undefined, where: string): Parsed<Check[]> {
-  if (value === undefined || value === null) return { ok: true, value: [] };
-  if (!Arr.isArray<typeof value>(value)) return { ok: false, error: `${where}: expected a list` };
+function parseChecks(value: YamlValue | undefined, where: string) {
+  if (value === undefined || value === null) {
+    const returned: Parsed<Check[]> = { ok: true, value: [] };
+    return returned;
+  }
+  if (!Arr.isArray<typeof value>(value)) {
+    const returned: Parsed<Check[]> = { ok: false, error: `${where}: expected a list` };
+    return returned;
+  }
   const out: Check[] = [];
   for (const [i, item] of value.entries()) {
-    if (!isYamlMap(item)) return { ok: false, error: `${where}[${i}]: expected an object` };
+    if (!isYamlMap(item)) {
+      const returned: Parsed<Check[]> = { ok: false, error: `${where}[${i}]: expected an object` };
+      return returned;
+    }
     if (!isString(item.name) || Str.trim(item.name) === "") {
-      return { ok: false, error: `${where}[${i}]: name is required` };
+      const returned: Parsed<Check[]> = { ok: false, error: `${where}[${i}]: name is required` };
+      return returned;
     }
     const check: Check = { name: Str.trim(item.name) };
     if (isString(item.note)) check.note = item.note;
     out.push(check);
   }
-  return { ok: true, value: out };
+  const returned: Parsed<Check[]> = { ok: true, value: out };
+  return returned;
 }
 
 /**
@@ -653,13 +768,13 @@ function parseChecks(value: YamlValue | undefined, where: string): Parsed<Check[
  * Minor findings are exempt: they do not drive the loop, and holding a passing remark to
  * the standard of a blocker would cost a repair round for a note nobody has to act on.
  */
-export function substantiated(finding: Finding): boolean {
+export function substantiated(finding: Finding) {
   if (!isBlocking(finding)) return true;
   return Str.trim(finding.file ?? "") !== "" && Str.trim(finding.detail ?? "") !== "";
 }
 
 /** What to tell a reviewer whose blocking findings cannot be acted on, naming them. */
-export function unsubstantiated(findings: ReadonlyArray<Finding>): string | null {
+export function unsubstantiated(findings: ReadonlyArray<Finding>) {
   const bad = Arr.filter(findings, (f) => !substantiated(f));
   if (bad.length === 0) return null;
   const named = Arr.join(
@@ -674,7 +789,7 @@ export function unsubstantiated(findings: ReadonlyArray<Finding>): string | null
 }
 
 /** Minor is the one severity not worth blocking on; anything unrecognised fails closed. */
-export function isBlocking(finding: Finding): boolean {
+export function isBlocking(finding: Finding) {
   return (
     finding.status !== "fixed" && finding.status !== "obsolete" && finding.severity !== "minor"
   );
@@ -693,7 +808,7 @@ export type Halt =
  * against. A finding a reviewer answered a dispute on is the argument moving rather than
  * standing, so it is not part of what "the same set again" means.
  */
-export function blockingKeys(findings: ReadonlyArray<Finding>): string[] {
+export function blockingKeys(findings: ReadonlyArray<Finding>) {
   return [
     ...new Set(
       Arr.map(
@@ -744,7 +859,7 @@ export function settleRound(round: {
   readonly at: number;
   /** The blocking set of an earlier round, and which round that was. */
   readonly seen?: { readonly at: number; readonly keys: ReadonlyArray<string> } | null;
-}): Rally {
+}) {
   const live = Arr.filter(round.live, (f) => f.status !== "fixed" && f.status !== "obsolete");
   const reopened = [...(round.reopened ?? [])];
   const blocking = [...Arr.filter(live, isBlocking), ...reopened];
@@ -756,14 +871,16 @@ export function settleRound(round: {
       (left: Finding, right: Finding) => sameFinding(left, right),
     );
     if (standing.length > 0) {
-      return {
+      const returned: Rally = {
         go: "halt",
         halt: "dispute_unresolved",
         reason: `${standing.length} disputed blocking finding(s) stand unanswered — your call, not the loop's`,
         outstanding: [...standing, ...live],
       };
+      return returned;
     }
-    return { go: "clean", remaining: live };
+    const returned: Rally = { go: "clean", remaining: live };
+    return returned;
   }
   const keys = blockingKeys(live);
   const seen = round.seen;
@@ -774,14 +891,16 @@ export function settleRound(round: {
     keys.length === seen.keys.length &&
     Arr.every(keys, (key, at) => key === seen.keys[at])
   ) {
-    return {
+    const returned: Rally = {
       go: "halt",
       halt: "no_progress",
       reason: `no progress: review ${round.at} raised the same ${keys.length} blocking finding(s) as review ${seen.at}`,
       outstanding: live,
     };
+    return returned;
   }
-  return { go: "fix", live: [...live, ...reopened], blocking, keys };
+  const returned: Rally = { go: "fix", live: [...live, ...reopened], blocking, keys };
+  return returned;
 }
 
 export type FinalFix =
@@ -826,7 +945,7 @@ export interface CheckEvidence {
  * tree, or the gate decides it on the final tree. A record by an agent counts: what binds
  * it is the collector, not who called it.
  */
-function checkGap(name: string, proof: CheckProof, evidence: CheckEvidence): string | null {
+function checkGap(name: string, proof: CheckProof, evidence: CheckEvidence) {
   switch (proof.state) {
     case "passed":
     case "waiting":
@@ -861,7 +980,7 @@ export function settleFinalFix(
   live: ReadonlyArray<Finding>,
   fix: FixReport,
   evidence: CheckEvidence,
-): FinalFix {
+) {
   const fixed = new Set(Arr.map(fix.fixed, findingKey));
   const disputed = new Map(Arr.map(fix.disputed, (d) => [findingKey(d), d]));
   const disputeLine = (f: Finding) => {
@@ -915,12 +1034,13 @@ export function settleFinalFix(
   const unresolved = [...live, ...fix.findings, ...standing];
   // A dispute is the human's call only once everything else about the fix holds up.
   if (unverified.length > 0) {
-    return {
+    const returned: FinalFix = {
       ok: false,
       halt: "fix_unverified",
       reasons: [...unverified, ...disputes],
       outstanding: unresolved,
     };
+    return returned;
   }
   const reportedFixed = Arr.filter(live, (f) => isBlocking(f) && fixed.has(findingKey(f))).length;
   const disputedToo = disputes.length > 0 ? `, ${disputes.length} disputed` : "";
@@ -930,15 +1050,21 @@ export function settleFinalFix(
       : "";
   const attestation = `last fix: ${reportedFixed} blocking finding(s) reported fixed${disputedToo}, ${verifiedHere.length} check(s) verified on this tree${gateToo} — implementer-reported, not re-reviewed`;
   if (disputes.length > 0) {
-    return {
+    const returned: FinalFix = {
       ok: false,
       halt: "dispute_unresolved",
       attestation,
       reasons: disputes,
       outstanding: unresolved,
     };
+    return returned;
   }
-  return { ok: true, attestation, outstanding: Arr.filter(live, (f) => !fixed.has(findingKey(f))) };
+  const returned: FinalFix = {
+    ok: true,
+    attestation,
+    outstanding: Arr.filter(live, (f) => !fixed.has(findingKey(f))),
+  };
+  return returned;
 }
 
 const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}`;
@@ -946,14 +1072,14 @@ const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.fil
 /** Worst first; anything a fork's own vocabulary adds sorts after these, by name. */
 const SEVERITIES = ["blocker", "major", "minor"];
 
-function severityOrder(findings: ReadonlyArray<Finding>): string[] {
+function severityOrder(findings: ReadonlyArray<Finding>) {
   const present = [...new Set(Arr.map(findings, (f) => f.severity))];
   const known = Arr.filter(SEVERITIES, (s) => present.includes(s));
   return [...known, ...Arr.filter(present, (s) => !SEVERITIES.includes(s)).sort()];
 }
 
 /** The complete review kept in the Run, including process findings and fixed entries. */
-export function renderReview(synthesis: typeof SynthesisSchema.Type): string {
+export function renderReview(synthesis: typeof SynthesisSchema.Type) {
   const blocks = [Str.trim(synthesis.summary)];
   // Read first: it is what says the rally is converging rather than repeating.
   if (synthesis.fixed.length > 0) {
@@ -987,7 +1113,7 @@ export function renderReview(synthesis: typeof SynthesisSchema.Type): string {
   return `${Arr.join(blocks, "\n\n")}\n`;
 }
 
-export function renderPublicReview(synthesis: typeof SynthesisSchema.Type): string {
+export function renderPublicReview(synthesis: typeof SynthesisSchema.Type) {
   return renderReview({
     ...synthesis,
     summary: synthesis.public_summary ?? synthesis.summary,
@@ -996,7 +1122,7 @@ export function renderPublicReview(synthesis: typeof SynthesisSchema.Type): stri
   });
 }
 
-function reviewBullet(finding: Finding): string {
+function reviewBullet(finding: Finding) {
   const at = finding.file ? `\`${finding.file}${finding.line ? `:${finding.line}` : ""}\` — ` : "";
   // The detail is a sentence or two; a continuation line keeps it in the same bullet.
   const text = Option.getOrElse(
@@ -1026,7 +1152,7 @@ export function remainingDisputes(
     readonly dropped: ReadonlyArray<Finding>;
     readonly fixed: ReadonlyArray<Fixed>;
   },
-): Finding[] {
+) {
   const standing = new Set(Arr.map([...review.findings, ...review.disputed], findingKey));
   const resolved = new Set(
     Arr.map(
@@ -1045,10 +1171,7 @@ export function remainingDisputes(
  * another round of the same two agents — only by the human. So it stops driving the
  * loop, unless a reviewer answers the reason with a `rebuttal`.
  */
-export function splitDisputed(
-  findings: ReadonlyArray<Finding>,
-  disputed: ReadonlyArray<Finding>,
-): Split {
+export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: ReadonlyArray<Finding>) {
   const split: Split = { live: [], settled: [], rebutted: [] };
   for (const finding of findings) {
     if (finding.status === "fixed" || finding.status === "obsolete") continue;
@@ -1066,7 +1189,7 @@ export function splitDisputed(
   return split;
 }
 
-export function formatFindings(findings: ReadonlyArray<Finding>): string {
+export function formatFindings(findings: ReadonlyArray<Finding>) {
   if (findings.length === 0) return "(none)";
   return Arr.join(
     Arr.map(findings, (f) => {

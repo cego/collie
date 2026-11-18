@@ -36,12 +36,12 @@ interface Row {
 
 const CAPABILITIES = ["now", "interrupt", "ack", "attribution"] as const;
 
-function allNotRun(note: string): Row[] {
+function allNotRun(note: string) {
   return Arr.map(CAPABILITIES, (capability) => ({ capability, result: "not-run" as const, note }));
 }
 
 /** What a delivery asks for in this experiment: the token, and the ack, and nothing else. */
-function askFor(runDir: string, id: string): string {
+function askFor(runDir: string, id: string) {
   return Arr.join(
     [
       `collie-delivery:${id}`,

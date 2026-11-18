@@ -36,7 +36,7 @@ const ISO = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z/g;
 const earlier = (text: string) =>
   text.replace(ISO, (at) => new Date(Date.parse(at) - OLD_DAYS * 86_400_000).toISOString());
 
-const filesUnder = (dir: string): ReadonlyArray<string> =>
+const filesUnder = (dir: string) =>
   readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
     entry.isDirectory() ? filesUnder(`${dir}/${entry.name}`) : [`${dir}/${entry.name}`],
   );

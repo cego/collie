@@ -74,7 +74,7 @@ export interface CleanupView {
 
 const STILL_SWEPT = "Its host still cleans up there every ten minutes.";
 
-const groupsOf = (remove: ReadonlyArray<CleanupItem>): ReadonlyArray<CleanupGroup> => {
+const groupsOf = (remove: ReadonlyArray<CleanupItem>) => {
   const byKind = Map.groupBy(remove, ({ kind }) => kind);
   const totals = Arr.map([...byKind], ([kind, items]) => ({
     kind,
@@ -111,7 +111,7 @@ const rowOf = (
   sweep: CleanupSweep | undefined,
   now: number,
   readable: boolean,
-): Omit<CleanupRowView, "chosen"> => {
+) => {
   const row = (said: string, over: Partial<CleanupRowView> = {}) => ({
     profile: shown.profile,
     name: shown.name,
@@ -174,7 +174,7 @@ export const cleanupView = (
   chosen: ReadonlySet<string> | null,
   sweeps: ReadonlyMap<string, CleanupSweep> = new Map(),
   now = 0,
-): CleanupView => {
+) => {
   const swept = sweeps.size > 0;
   const rows = Arr.map(shown, (one) => {
     const read = reads.get(one.profile);
@@ -199,13 +199,10 @@ export const cleanupView = (
   };
 };
 
-export const sweptToast = (
-  name: string,
-  sweep: Exclude<CleanupSweep, { state: "running" }>,
-): { readonly title: string; readonly color: "success" | "error" } =>
+export const sweptToast = (name: string, sweep: Exclude<CleanupSweep, { state: "running" }>) =>
   sweep.state === "done"
     ? { title: `Cleaned up ${name}: freed ${humanBytes(sweep.report.bytes)}`, color: "success" }
     : { title: `${name} not cleaned: ${sweep.reason}`, color: "error" };
 
-export const choose = (view: CleanupView, which: "all" | "none"): ReadonlySet<string> =>
+export const choose = (view: CleanupView, which: "all" | "none") =>
   new Set(which === "all" ? view.choosable : []);

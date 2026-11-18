@@ -41,7 +41,7 @@ const CLEARS = new Map([
  * ponytail: 256- and true-colour codes are skipped, so highlighted code stays uncoloured
  * until a plugin such as Shiki is added and they are mapped.
  */
-export function ansiText(ansi: string): StyledText {
+export function ansiText(ansi: string) {
   const chunks: TextChunk[] = [];
   let fg: RGBA | undefined;
   let attributes = 0;
@@ -67,5 +67,5 @@ export function ansiText(ansi: string): StyledText {
 }
 
 /** Markdown drawn `width` columns wide; `null` when Comark could not render it. */
-export const styledMarkdown = (markdown: string, width: number): Promise<StyledText | null> =>
+export const styledMarkdown = (markdown: string, width: number) =>
   renderAnsi(markdown, { plugins: SANITISED, width, colors: true }).then(ansiText, () => null);

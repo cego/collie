@@ -64,7 +64,7 @@ const project = Effect.gen(function* () {
   return { root, repo, base, harness, git, write, commit };
 });
 
-const planOf = (harness: string, commands: Plan["commands"], more: Partial<Plan> = {}): Plan => ({
+const planOf = (harness: string, commands: Plan["commands"], more: Partial<Plan> = {}) => ({
   harness: { commits: [harness], paths: ["bench"] },
   commands,
   metrics: [{ name: "bench.counter", direction: "lower", role: "primary" }],
@@ -73,9 +73,10 @@ const planOf = (harness: string, commands: Plan["commands"], more: Partial<Plan>
   ...more,
 });
 
-const sh = (script: string, ...argv: ReadonlyArray<string>): Plan["commands"] => [
-  { name: "bench", executable: "sh", argv: [`bench/${script}`, ...argv] },
-];
+const sh: (script: string, ...argv: ReadonlyArray<string>) => Plan["commands"] = (
+  script,
+  ...argv
+) => [{ name: "bench", executable: "sh", argv: [`bench/${script}`, ...argv] }];
 
 const measuring = (
   root: string,

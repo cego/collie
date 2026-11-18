@@ -6,7 +6,7 @@ import type { MissingFact, RunProgress, TaskMr } from "../src/board-model";
 import type { RunView } from "../src/engine";
 import { followEvents, followLine, reached } from "../src/following";
 
-const view = (over: Partial<RunView> = {}): RunView => ({
+const view: (over?: Partial<RunView>) => RunView = (over = {}) => ({
   runId: "r1",
   workflow: "implement",
   project: "/p",
@@ -38,7 +38,7 @@ const view = (over: Partial<RunView> = {}): RunView => ({
 const ciRunning: MissingFact = { fact: "ci", said: "CI is still running", settling: true };
 const failed: MissingFact = { fact: "succeeded", said: "it failed", settling: false };
 
-const progress = (over: Partial<RunProgress> = {}): RunProgress => ({
+const progress = (over: Partial<RunProgress> = {}) => ({
   ready: { ready: false, missing: [ciRunning] },
   ci: null,
   steps: [],
@@ -142,7 +142,7 @@ test("a wait that ends by itself is no attention, and is followed as what it awa
 });
 
 test("a follower hears each of a Task's merge requests as it opens, merges or closes", () => {
-  const entry = (repo: string, iid: number, state: TaskMr["state"]): TaskMr => ({
+  const entry = (repo: string, iid: number, state: TaskMr["state"]) => ({
     id: `gitlab.cego.dk/cego/${repo}!${iid}`,
     mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
     label: `cego/${repo}!${iid}`,

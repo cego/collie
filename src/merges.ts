@@ -37,9 +37,10 @@ const isMrTarget = (target: string | null): target is string =>
   target !== null && parseMrTarget(target) !== null;
 
 /** The merge request this Run opened, or the one it was pointed at; null for neither. */
-export function mrOf(run: RunFacts): string | null {
+export function mrOf(run: RunFacts) {
   const target = diffTargetOf(run.settled)?.value ?? null;
-  return run.mr ?? (isMrTarget(target) ? target : null);
+  const returned: string | null = run.mr ?? (isMrTarget(target) ? target : null);
+  return returned;
 }
 
 /** How long one merge request's answer stands before its forge is asked again. */
@@ -117,12 +118,12 @@ const StatesJson = Schema.fromJsonString(Schema.Record(Schema.String, EntrySchem
 const OldStatesJson = Schema.fromJsonString(Schema.Record(Schema.String, StateSchema));
 type Entry = typeof EntrySchema.Type;
 
-function stateOf(state: string): MrState {
+const stateOf: (state: string) => MrState = (state) => {
   const said = Str.toLowerCase(state);
   if (said === "merged") return "merged";
   if (said === "closed") return "closed";
   return "open";
-}
+};
 
 /**
  * One round: each branch of a Task with no merge request recorded takes the one opened
@@ -527,7 +528,7 @@ const forgeAnswer = Effect.fn("Merges.forgeAnswer")(function* <R>(
   };
 });
 
-const panelFacts = (panel: Extract<MrPanel, { _tag: "Details" }>): ForgeFacts => {
+const panelFacts: (panel: Extract<MrPanel, { _tag: "Details" }>) => ForgeFacts = (panel) => {
   const facts: ForgeFacts = {
     checks: panel.checks ?? { state: "unknown" },
     head: (panel.head ?? "") === "" ? null : panel.head!,
@@ -540,7 +541,7 @@ const panelFacts = (panel: Extract<MrPanel, { _tag: "Details" }>): ForgeFacts =>
 
 const writing = Semaphore.makeUnsafe(1);
 
-const newerEntry = (known: Entry | undefined, incoming: Entry): Entry => {
+const newerEntry: (known: Entry | undefined, incoming: Entry) => Entry = (known, incoming) => {
   const read = epochMs(known?.read ?? "") || -Infinity;
   const next = epochMs(incoming.read ?? "") || -Infinity;
   const kept = read > next ? known! : incoming;
@@ -599,7 +600,7 @@ const readEntries = Effect.fn("Merges.readEntries")(function* (stateDir: string)
   );
 });
 
-const factsOf = (entry: Entry | undefined): ForgeFacts | null => {
+const factsOf: (entry: Entry | undefined) => ForgeFacts | null = (entry) => {
   if (entry?.checks === undefined) return null;
   return { ...Struct.omit(entry, ["state"]), checks: entry.checks, head: entry.head ?? null };
 };

@@ -80,9 +80,9 @@ function glab() {
   };
 }
 
-function session(): ControlSession {
+function session() {
   const env = rig.pluginEnv();
-  return {
+  const returned: ControlSession = {
     herdr: new Herdr(env),
     ...scopeFor(env.cwd),
     stateDir: env.stateDir,
@@ -98,6 +98,7 @@ function session(): ControlSession {
     tasksOf: () => Effect.succeed({ tasks: [], unreadable: null }),
     detailOf: () => Effect.succeed(null),
   };
+  return returned;
 }
 
 /** The board's reads, over the Runs this test made rather than a host's. */

@@ -44,11 +44,11 @@ const writing = new Map<string, Semaphore.Semaphore>();
 
 /** `actions.log` in `dir`, kept once as `actions.log.1` past `maxBytes`; a write that fails is dropped. */
 export const actionsLog = (dir: string, maxBytes = LOG_BYTES) =>
-  Effect.map(FileSystem.FileSystem, (fs): ActionsLog => {
+  Effect.map(FileSystem.FileSystem, (fs) => {
     const file = `${dir}/actions.log`;
     const lock = writing.get(file) ?? Semaphore.makeUnsafe(1);
     writing.set(file, lock);
-    return (line) =>
+    const returned: ActionsLog = (line) =>
       Effect.gen(function* () {
         const at = yield* nowIso;
         const bytes = new TextEncoder().encode(`${lineOf({ at, ...line })}\n`);
@@ -59,6 +59,7 @@ export const actionsLog = (dir: string, maxBytes = LOG_BYTES) =>
         if (size > 0 && size + bytes.length > maxBytes) yield* fs.rename(file, `${file}.1`);
         yield* fs.writeFile(file, bytes, { flag: "a" });
       }).pipe(lock.withPermits(1), Effect.ignoreCause);
+    return returned;
   });
 
 /** Why a host said no, in its own words. */
@@ -102,7 +103,10 @@ const IDS = new Set([
 ]);
 
 /** Every string an action carries but its ids and kinds: what a log line never holds. */
-export const withheldOf = (action: Schema.Json, key = ""): ReadonlyArray<string> => {
+export const withheldOf: (action: Schema.Json, key?: string) => ReadonlyArray<string> = (
+  action: Schema.Json,
+  key = "",
+) => {
   if (IDS.has(key)) return [];
   if (isString(action)) return action === "" ? [] : [action];
   if (Arr.isArray<typeof action>(action)) return Arr.flatMap(action, (value) => withheldOf(value));
@@ -136,14 +140,14 @@ export const confirmed = <A, E extends { readonly _tag: string; readonly message
   { log, what, withheld, ...sending }: Sending,
   call: Effect.Effect<A, E, R>,
   repeat: (reply: A) => boolean = () => false,
-): Effect.Effect<A, E | Unconfirmed, R> => {
+) => {
   const note = (attempt: number, ended: Attempted["ended"], reason?: string) =>
     log(
       reason === undefined
         ? { ...sending, attempt, ended }
         : { ...sending, attempt, ended, reason: without(reason, withheld) },
     );
-  const tried = (attempt: number): Effect.Effect<A, E | Unconfirmed, R> =>
+  const tried: (attempt: number) => Effect.Effect<A, E | Unconfirmed, R> = (attempt) =>
     call.pipe(
       Effect.timeoutOption(WAIT),
       Effect.tapError((error) =>

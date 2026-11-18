@@ -12,7 +12,7 @@ const rows = [
   { run: "run-third", parent: null },
 ];
 
-const detail = (over: Partial<RunDetail> = {}): RunDetail => ({
+const detail = (over: Partial<RunDetail> = {}) => ({
   repo: ".",
   change: null,
   ended: false,

@@ -51,7 +51,7 @@ const encodeTurn = flow(Schema.encodeResult(TurnJson), Result.getOrThrow);
  * outside the Run's own directories is refused rather than shown: a path in a turn came
  * from a model, and a model's idea of an interesting file is not a reason to open one.
  */
-export function insideKnown(path: string, roots: ReadonlyArray<string>): boolean {
+export function insideKnown(path: string, roots: ReadonlyArray<string>) {
   return Arr.some(
     roots,
     (root) => root !== "" && (path === root || pipe(path, Str.startsWith(`${root}/`))),
@@ -75,7 +75,7 @@ export const read = (file: string) => readJournal(file, TurnJson);
  * write rather than by a sweep, because there is no daemon to sweep with — and because
  * the write is the only moment anyone holds the lock.
  */
-export function keep(turns: ReadonlyArray<Turn>, nowMs: number): Turn[] {
+export function keep(turns: ReadonlyArray<Turn>, nowMs: number) {
   const oldest = nowMs - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   return Arr.filter(turns, (turn) => {
     const at = epochMs(turn.at);
@@ -132,7 +132,7 @@ export const append = Effect.fn("Conversation.append")(function* (
 });
 
 /** Absolute paths in a turn's text that point nowhere Collie knows, blanked. */
-function sanitise(text: string, roots: ReadonlyArray<string>): string {
+function sanitise(text: string, roots: ReadonlyArray<string>) {
   if (roots.length === 0) return text;
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
   return text.replace(/(^|\s)(\/[^\s'"`)]+)/g, (whole, lead: string, found: string) =>

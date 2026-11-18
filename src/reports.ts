@@ -48,7 +48,10 @@ export const reportsLayer = (opts: {
         Effect.gen(function* () {
           const who = view.requestedBy;
           const at = yield* nowIso;
-          const undelivered = (note: string, unreached = false): RunReport => ({
+          const undelivered: (note: string, unreached?: boolean) => RunReport = (
+            note: string,
+            unreached = false,
+          ) => ({
             state: "undelivered",
             at,
             note,

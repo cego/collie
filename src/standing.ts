@@ -31,7 +31,7 @@ export interface WorkFacts {
 }
 
 /** Whether this Run left anything anyone has to file: work to land, or work to build from. */
-export function filed(facts: Pick<WorkFacts, "branch" | "mr" | "planIssues">): boolean {
+export function filed(facts: Pick<WorkFacts, "branch" | "mr" | "planIssues">) {
   return facts.branch !== null || facts.mr !== null || facts.planIssues > 0;
 }
 
@@ -44,7 +44,7 @@ export interface Standing {
   readonly landed: boolean;
 }
 
-export function standingOf(facts: WorkFacts): Standing {
+export function standingOf(facts: WorkFacts) {
   const unfiled = facts.settled && !filed(facts) && !facts.asking;
   const planReady =
     facts.succeeded &&
@@ -92,11 +92,7 @@ export interface Settlement {
  * and not read open since, or superseded by a Run of another Task or while its forge reads
  * it closed. Each Run's latest line about it is that Run's answer.
  */
-export function settlementOf(
-  item: Owed,
-  recorded: ReadonlyArray<Recorded>,
-  leader: string,
-): Settlement {
+export function settlementOf(item: Owed, recorded: ReadonlyArray<Recorded>, leader: string) {
   const carries = (run: string) => item.runs.includes(run);
   const about = (one: Recorded) =>
     item.id === null
@@ -113,13 +109,22 @@ export function settlementOf(
     )
       .sort((a, b) => epochMs(a.at) - epochMs(b.at))
       .at(-1) ?? null;
-  if (item.forge === "merged") return { by: "merged", line: latest("merged") };
+  if (item.forge === "merged") {
+    const returned: Settlement = { by: "merged", line: latest("merged") };
+    return returned;
+  }
   const abandoned = latest("abandoned", (one) => carries(one.run) || one.run === leader);
-  if (abandoned !== null) return { by: "abandoned", line: abandoned };
+  if (abandoned !== null) {
+    const returned: Settlement = { by: "abandoned", line: abandoned };
+    return returned;
+  }
   const merged = latest("merged");
   const reopened =
     merged !== null && item.forge === "open" && (item.read ?? -Infinity) > epochMs(merged.at);
-  if (merged !== null && !reopened) return { by: "merged", line: merged };
+  if (merged !== null && !reopened) {
+    const returned: Settlement = { by: "merged", line: merged };
+    return returned;
+  }
   const handedOn =
     item.runs.length > 0 &&
     Arr.every(item.runs, (run) => {
@@ -127,6 +132,10 @@ export function settlementOf(
       return one !== undefined && one.line.kind === "superseded" && one.elsewhere;
     });
   const superseded = handedOn || item.forge === "closed" ? latest("superseded") : null;
-  if (superseded !== null) return { by: "superseded", line: superseded };
-  return { by: null, line: null };
+  if (superseded !== null) {
+    const returned: Settlement = { by: "superseded", line: superseded };
+    return returned;
+  }
+  const returned: Settlement = { by: null, line: null };
+  return returned;
 }

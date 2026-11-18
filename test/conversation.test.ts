@@ -119,7 +119,7 @@ test("what is kept is the recent and the not-too-old", () => {
   const epoch = epochMs("2026-09-09T00:00:00Z");
   const at = (daysAgo: number) =>
     DateTime.formatIso(DateTime.makeUnsafe(epoch - daysAgo * 86_400_000));
-  const turn = (id: string, daysAgo: number): Turn => ({
+  const turn: (id: string, daysAgo: number) => Turn = (id, daysAgo) => ({
     id,
     at: at(daysAgo),
     role: "human",

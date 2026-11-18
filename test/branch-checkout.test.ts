@@ -473,11 +473,7 @@ const askStarted = (checkout: string, agents: ReadonlyArray<AgentInfo> = []) =>
 const cutsOf = (repo: string) =>
   Effect.all([git(repo, "worktree", "list", "--porcelain"), git(repo, "branch", "--list")]);
 
-const agentIn = (
-  cwd: string,
-  status: AgentStatus,
-  foregroundCwd: string | null = null,
-): AgentInfo => ({
+const agentIn = (cwd: string, status: AgentStatus, foregroundCwd: string | null = null) => ({
   name: "claude",
   paneId: "t1",
   status,

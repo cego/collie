@@ -82,9 +82,7 @@ import {
   shippingLabel,
   sortBoard,
   type BoardAgent,
-  type BoardChild,
   type BoardOffer,
-  type BoardStep,
   type Checks,
   type Decision,
   type MrState,
@@ -93,7 +91,6 @@ import {
   type Reopened,
   type Section,
   type StepState,
-  type TaskMr,
   type TaskState,
   type TaskView,
 } from "./board-model";
@@ -222,14 +219,27 @@ export interface ForgeFacts {
  * Collie's own checks and the forge's, as one: any failure fails, anything running is
  * running, and passed needs every source that said anything to have passed.
  */
-export function withForge(collie: Checks, forge: ForgeFacts | null): Checks {
+export function withForge(collie: Checks, forge: ForgeFacts | null) {
   const said = forge?.checks ?? { state: "unknown" };
   const at = forge?.head ?? ("at" in collie ? collie.at : "");
-  if (said.state === "failed") return { state: "failed", name: said.name, at };
-  if (collie.state === "failed") return collie;
-  if (said.state === "running" || collie.state === "running") return { state: "running" };
-  if (said.state === "passed" && collie.state === "passed") return { state: "passed", at };
-  return collie;
+  if (said.state === "failed") {
+    const returned: Checks = { state: "failed", name: said.name, at };
+    return returned;
+  }
+  if (collie.state === "failed") {
+    const returned: Checks = collie;
+    return returned;
+  }
+  if (said.state === "running" || collie.state === "running") {
+    const returned: Checks = { state: "running" };
+    return returned;
+  }
+  if (said.state === "passed" && collie.state === "passed") {
+    const returned: Checks = { state: "passed", at };
+    return returned;
+  }
+  const returned: Checks = collie;
+  return returned;
 }
 
 /** Everything the sentence is made of, apart from the TaskView so the formatter is pure. */
@@ -335,7 +345,7 @@ export interface SaidMr {
 }
 
 /** `1 of 3 merged; app!12 ready to release; api!7 waits on app!12.` */
-function severalSentence(mrs: ReadonlyArray<SaidMr>, historical = false): string {
+function severalSentence(mrs: ReadonlyArray<SaidMr>, historical = false) {
   const each = Arr.flatMap(mrs, (one) =>
     one.merged
       ? []
@@ -354,7 +364,7 @@ function severalSentence(mrs: ReadonlyArray<SaidMr>, historical = false): string
 }
 
 /** An embedded workflow's step is that workflow's: `review.synthesize` is a synthesis. */
-function verbOf(facts: Sentence): string {
+function verbOf(facts: Sentence) {
   if (facts.verb !== null) return facts.verb;
   if (facts.step === null) return "Starting";
   const id = facts.step.id;
@@ -363,7 +373,7 @@ function verbOf(facts: Sentence): string {
   return VERBS.get(kind) ?? VERBS.get(Str.split(kind, "-")[0]!) ?? "Working on it";
 }
 
-function roundOf(step: Sentence["step"]): string {
+function roundOf(step: Sentence["step"]) {
   if (!step?.round) return "";
   const { at, of } = step.round;
   return of === null ? `, round ${at}` : `, round ${at} of ${of}`;
@@ -374,7 +384,7 @@ function roundOf(step: Sentence["step"]): string {
  * fixing, `review-2-1` the first seat of round 2's review, `review-2` the second seat of
  * round 1's (`reviewing.ts` numbers only later rounds), and `02-parse.md` a ticket.
  */
-export function stepOfOperation(operation: string): Pick<Sentence, "step" | "verb"> {
+export function stepOfOperation(operation: string) {
   const ticket = /^(\d+)-.*\.md$/.exec(operation);
   if (ticket) return { step: { id: "build", round: null }, verb: `Building ticket ${ticket[1]}` };
   // A review seat's name is free text (`gpt-5`): only a leading number is its round.
@@ -394,16 +404,16 @@ export function stepOfOperation(operation: string): Pick<Sentence, "step" | "ver
 }
 
 /** `2 times` reads as a count; twice reads as a sentence. */
-function times(n: number): string {
+function times(n: number) {
   return n === 1 ? "once" : n === 2 ? "twice" : `${n} times`;
 }
 
-function clause(repos: ReadonlyArray<string>, singular: string, plural: string): string[] {
+function clause(repos: ReadonlyArray<string>, singular: string, plural: string) {
   if (repos.length === 0) return [];
   return [`${Arr.join(repos, ", ")} ${repos.length === 1 ? singular : plural}`];
 }
 
-function waveSentence(wave: NonNullable<Sentence["wave"]>): string {
+function waveSentence(wave: NonNullable<Sentence["wave"]>) {
   const parts = [
     ...clause(wave.landed, "landed", "landed"),
     ...clause(wave.building, "is building", "are building"),
@@ -414,7 +424,7 @@ function waveSentence(wave: NonNullable<Sentence["wave"]>): string {
   return parts.length === 0 ? where : `${where} ${Arr.join(parts, ", ")}.`;
 }
 
-function decisionSentence(decision: Decision): string {
+function decisionSentence(decision: Decision) {
   switch (decision.kind) {
     case "question":
       return `Waiting on your answer about ${decision.topic}.`;
@@ -431,7 +441,7 @@ function openSentence(
   checks: Checks | null,
   agent: string | null,
   readiness: ReadyToRelease | null,
-): string {
+) {
   const label = mrLabel(mr);
   const ref = readMrRef(mr);
   const running =
@@ -466,7 +476,7 @@ function doneSentence(
   summary: string | null = null,
   readiness: ReadyToRelease | null = null,
   answered: Sentence["answered"] = null,
-): string {
+) {
   if (disposition === null) {
     if (planReady) return "Plan ready to implement.";
     if (mr === null)
@@ -504,7 +514,7 @@ function doneSentence(
   }
 }
 
-function failedSentence(facts: Sentence): string {
+function failedSentence(facts: Sentence) {
   if (facts.failure !== null)
     return `Stopped after ${facts.failure.name} failed ${times(facts.failure.times)} in a row.`;
   return facts.note === null ? "Stopped without finishing." : `Stopped: ${facts.note}.`;
@@ -514,11 +524,11 @@ function failedSentence(facts: Sentence): string {
  * A Task waiting on a human with nothing on the card to answer: the answer is in the
  * agent's own pane. Named, because "needs you" over four cards is four panes to find.
  */
-function stalledSentence(facts: Sentence): string {
+function stalledSentence(facts: Sentence) {
   return `Waiting for you in ${facts.stalled ?? "its pane"}.`;
 }
 
-function workingSentence(facts: Sentence): string {
+function workingSentence(facts: Sentence) {
   if (facts.checking !== null) return facts.checking;
   if (facts.awaiting != null) return facts.awaiting;
   if (facts.reopened !== null)
@@ -539,7 +549,7 @@ function workingSentence(facts: Sentence): string {
  * merge-request references. A pending decision outranks every other state, because it is
  * the one where nothing moves until someone answers.
  */
-export function sentenceFor(facts: Sentence): string {
+export function sentenceFor(facts: Sentence) {
   if (
     (facts.state === "failed" || facts.state === "stopped" || facts.state === "abandoned") &&
     facts.disposition === null &&
@@ -582,7 +592,7 @@ export function sentenceFor(facts: Sentence): string {
   }
 }
 
-function answeredLine(answered: Sentence["answered"]): string {
+function answeredLine(answered: Sentence["answered"]) {
   if (answered == null) return "";
   if (answered.ago === null)
     return ` ${answered.forge} could not be read; it has not answered yet.`;
@@ -596,12 +606,12 @@ function answeredLine(answered: Sentence["answered"]): string {
  * recorded beside a status and never over it: a Run that failed and whose branch someone
  * merged by hand did both, and a card that said only the first would be hiding the second.
  */
-function alsoBecame(sentence: string, disposition: Sentence["disposition"]): string {
+function alsoBecame(sentence: string, disposition: Sentence["disposition"]) {
   return disposition === null ? sentence : `${sentence} ${doneSentence(disposition)}`;
 }
 
 /** The second line a held Task carries, under its sentence. */
-export function heldLine(until: string | null): string {
+export function heldLine(until: string | null) {
   return until === null ? "⏸ Held." : `⏸ Held until ${until}.`;
 }
 
@@ -615,7 +625,7 @@ const STEP_STATE: Readonly<Record<RunState, StepState>> = {
 };
 
 /** The Task's pipeline: its Runs in the order they started, each as it now stands. */
-function glyphsOf(runs: ReadonlyArray<RunFacts>): BoardStep[] {
+function glyphsOf(runs: ReadonlyArray<RunFacts>) {
   return Arr.map([...runs].reverse(), (run) => ({
     name: run.workflow,
     state: STEP_STATE[run.state],
@@ -631,7 +641,7 @@ function stateOf(
   stalled: boolean,
   /** A check of it is still running, which outlives even its ending. */
   checking: boolean,
-): TaskState {
+) {
   if (decision !== null) return "blocked";
   if (checking) return "active";
   if (status === "stopped") return "stopped";
@@ -648,9 +658,7 @@ function stateOf(
  * run of failures of the newest failing check: a check that failed, was fixed and failed
  * again is not failing "three times in a row".
  */
-export function lastFailure(
-  records: ReadonlyArray<Pick<Verification, "name" | "result">>,
-): { name: string; times: number } | null {
+export function lastFailure(records: ReadonlyArray<Pick<Verification, "name" | "result">>) {
   const last = records.at(-1);
   if (last === undefined || last.result !== "fail") return null;
   let times = 0;
@@ -672,7 +680,7 @@ export function checksAt(
   head: string | null,
   /** The Run's checks as they stand, each of which must have passed at that revision. */
   granted: ReadonlyArray<CheckCommand> = [],
-): Checks {
+) {
   const approved = owedLocally(granted);
   const checksOf = (record: Verification) =>
     ranOneTest(record)
@@ -695,12 +703,16 @@ export function checksAt(
   const red = Option.getOrUndefined(
     Arr.findFirst([...newest.entries()], ([, record]) => !passed(record)),
   );
-  if (red !== undefined) return { state: "failed", name: red[0], at };
+  if (red !== undefined) {
+    const returned: Checks = { state: "failed", name: red[0], at };
+    return returned;
+  }
   const unrun =
     approved.length === 0
       ? newest.size === 0
       : Arr.some(approved, (spec) => !newest.has(spec.name));
-  return unrun ? { state: "unchecked" } : { state: "passed", at };
+  const returned: Checks = unrun ? { state: "unchecked" } : { state: "passed", at };
+  return returned;
 }
 
 /** The commit the Run's branch is at now in its checkout, or null where that cannot be read. */
@@ -732,7 +744,7 @@ const HEAD_FOR_MS = 60_000;
 const heads = new Map<string, { readonly at: number; readonly sha: string | null }>();
 
 /** An absolute path, wherever one sits in a name, read as what it points at. */
-function withoutPaths(text: string): string {
+function withoutPaths(text: string) {
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
   return text.replace(/(?:^|\s)\/(?:[^\s/]+\/)+([^\s/]+)/g, (whole, last: string) =>
     pipe(whole, Str.startsWith(" ")) ? ` ${last}` : last,
@@ -756,7 +768,7 @@ function namesOf(label: string, run: RunFacts) {
   return { project, name };
 }
 
-function basename(path: string): string {
+function basename(path: string) {
   return Str.split(pipe(path, Str.replace(/\/+$/, "")), "/").at(-1) ?? path;
 }
 
@@ -783,7 +795,7 @@ function agentsOf(
   runs: ReadonlyArray<RunFacts>,
   registered: ReadonlyArray<AgentEntry>,
   live: ReadonlyMap<string, AgentInfo>,
-): BoardAgent[] {
+) {
   const byRun = registeredByRun(registered);
   const found = new Map<string, BoardAgent>();
   for (const run of runs) {
@@ -851,7 +863,7 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
       run: started.get(repo)?.id ?? null,
     })),
   );
-  const rows = Arr.map(waves.flat(), (repo): BoardChild => {
+  const rows = Arr.map(waves.flat(), (repo) => {
     const run = started.get(repo);
     return {
       repo,
@@ -888,7 +900,7 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
  * card that are over, one of them stopped. A stop suspends a Run, so its parent waits on
  * it forever; a child that finished hands the parent back its own work.
  */
-function over(run: RunFacts, runs: ReadonlyArray<RunFacts>): boolean {
+const over: (run: RunFacts, runs: ReadonlyArray<RunFacts>) => boolean = (run, runs) => {
   if (ended(run)) return true;
   if (run.asking.length > 0 || run.parked !== null) return false;
   const children = Arr.filter(runs, (one) => one.parent === run.id);
@@ -896,7 +908,7 @@ function over(run: RunFacts, runs: ReadonlyArray<RunFacts>): boolean {
     Arr.some(children, (child) => child.state === "stopped" || !ended(child)) &&
     Arr.every(children, (child) => over(child, runs))
   );
-}
+};
 
 /** Who made a Run's latest stop, from its audit trail (ADR-0039). */
 const lastStopBy = (run: RunFacts) =>
@@ -906,7 +918,7 @@ const lastStopBy = (run: RunFacts) =>
   );
 
 /** The Run a card is about: the newest still going, else the newest. */
-function leaderOf(runs: ReadonlyArray<RunFacts>): RunFacts {
+function leaderOf(runs: ReadonlyArray<RunFacts>) {
   return Option.getOrUndefined(Arr.findFirst(runs, (run) => !over(run, runs))) ?? runs[0]!;
 }
 
@@ -945,7 +957,7 @@ interface Carried {
 function mrsOf(
   carried: ReadonlyArray<{ readonly run: RunFacts; readonly mr: string; readonly id: string }>,
   waves: ReadonlyArray<{ readonly run: string | null; readonly wave: number }>,
-): Array<Carried & { readonly id: string; readonly runs: ReadonlyArray<RunFacts> }> {
+) {
   const waveOf = new Map(Arr.map(waves, (one) => [one.run, one.wave]));
   const byId = new Map<string, { id: string; mr: string; runs: RunFacts[] }>();
   for (const { run, mr, id } of carried) {
@@ -1049,7 +1061,7 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
 function dispositionFor(
   entry: Carried & { readonly id: string },
   ledgers: ReadonlyMap<string, ReadonlyArray<Recorded>>,
-): Disposition | null {
+) {
   const named = Arr.flatMap([...ledgers], ([run, lines]) =>
     Arr.flatMap(lines, ({ line, mr }) =>
       (line.ref === "" ? run === entry.owner.id : mr === entry.id) ? [line] : [],
@@ -1088,8 +1100,8 @@ const nothingToFile = Effect.fn("Board.nothingToFile")(function* (runs: Readonly
   return true;
 });
 
-function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>): Proposal {
-  return {
+function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>) {
+  const returned: Proposal = {
     kind: "proposal",
     id: line.id,
     hash: line.content_hash,
@@ -1099,6 +1111,7 @@ function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>): Proposal
       allowed: line.allowed_now.includes(at),
     })),
   };
+  return returned;
 }
 
 /** Every Herd's proposals: the host serves every Herd on its Machine, not the one it came from. */
@@ -1226,7 +1239,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
     ((runId: string) =>
       offersOf(opts.env, runId).pipe(
         Effect.map((listed) => ("ok" in listed ? [] : listed)),
-        Effect.orElseSucceed((): ReadonlyArray<OfferView> => []),
+        Effect.orElseSucceed(() => []),
       ));
 
   // A Repo run is its fan-out's card's child rather than a card of its own.
@@ -1683,7 +1696,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             )
           : alone.readiness;
         const ids = Arr.map(entries, (one) => one.id);
-        const mrs = Arr.map(each, (one): TaskMr => {
+        const mrs = Arr.map(each, (one) => {
           const words = wordsOf(one.id, one.mr);
           return {
             id: one.id,
@@ -1757,15 +1770,15 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           })),
         );
         const offers = Arr.flatMap(ownedOffers, (one) =>
-          Arr.map(one.offers, (offer): BoardOffer => {
+          Arr.map(one.offers, (offer) => {
             const listed = {
               id: offer.id,
               title: several ? `${offer.title} ${one.named}` : offer.title,
               run: one.run,
             };
-            return offer.unavailable === null
-              ? listed
-              : { ...listed, unavailable: offer.unavailable };
+            const returned: BoardOffer =
+              offer.unavailable === null ? listed : { ...listed, unavailable: offer.unavailable };
+            return returned;
           }),
         );
         offers.sort(
@@ -2036,7 +2049,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         }
         if (leader.branch !== null) return keep(shown, now + 60_000);
         const leaves = last + FINISHED_FOR_MS + 1;
-        const retimed = (now: number): Retimed | null =>
+        const retimed = (now: number) =>
           now >= leaves
             ? null
             : {
@@ -2076,9 +2089,7 @@ export const taskFlowOf = (
 ) => Effect.map(taskCardOf(opts, runId), (card) => card?.flow ?? null);
 
 /** Each Ready to release card's Run, with the revision its checks passed at and its sentence. */
-export function readyRuns(
-  views: ReadonlyArray<TaskView>,
-): ReadonlyMap<string, { at: string; sentence: string }> {
+export function readyRuns(views: ReadonlyArray<TaskView>) {
   return new Map(
     Arr.flatMap(views, (view) =>
       view.shipping == null && view.ready && view.checks?.state === "passed"
@@ -2089,7 +2100,7 @@ export function readyRuns(
 }
 
 /** What ships a ready merge request: an offer that releases, else one that merges, else `release`. */
-const shippingOffer = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
+const shippingOffer = (offers: ReadonlyArray<OfferView>) => {
   const ready = Arr.filter(offers, (one) => one.unavailable === null);
   const declared = Arr.findFirst(ready, (one) => one.ships === "release").pipe(
     Option.orElse(() => Arr.findFirst(ready, (one) => one.ships === "merge")),
@@ -2097,12 +2108,12 @@ const shippingOffer = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
   return Option.isSome(declared) ? boardOffer(declared.value) : offerOf(offers, "release");
 };
 
-const boardOffer = (offer: OfferView): BoardOffer =>
+const boardOffer = (offer: OfferView) =>
   offer.run === undefined
     ? { id: offer.id, title: offer.title }
     : { id: offer.id, title: offer.title, run: offer.run };
 
-const offerOf = (offers: ReadonlyArray<OfferView>, id?: string): BoardOffer | null => {
+const offerOf = (offers: ReadonlyArray<OfferView>, id?: string) => {
   const first = Option.getOrUndefined(
     Arr.findFirst(
       offers,
@@ -2114,11 +2125,11 @@ const offerOf = (offers: ReadonlyArray<OfferView>, id?: string): BoardOffer | nu
   return first === undefined ? null : boardOffer(first);
 };
 
-export function waitingLabel(waiting: ReadonlyArray<TaskView>): string {
+export function waitingLabel(waiting: ReadonlyArray<TaskView>) {
   return `Waiting on you · ${waiting.length}`;
 }
 
-export function workingLabel(working: ReadonlyArray<TaskView>): string {
+export function workingLabel(working: ReadonlyArray<TaskView>) {
   return `Working · ${working.length}`;
 }
 
@@ -2131,7 +2142,7 @@ export function finishedLabel(
   open: boolean,
   /** Given the clock, "today" is the day's endings and the rest are counted as older. */
   now?: number,
-): string {
+) {
   // Nothing finished today, but this checkout's earlier runs are still behind this line.
   if (finished.length === 0) return "Earlier work";
   if (open) return `Finished · ${finished.length}`;
@@ -2145,7 +2156,7 @@ export function finishedLabel(
 }
 
 /** The step a Task has got to, in one word, or `done` where it is past the last of them. */
-export function whereItIs(view: TaskView): string {
+export function whereItIs(view: TaskView) {
   if (view.steps.length === 0) return "";
   return (
     Option.getOrUndefined(Arr.findFirst(view.steps, (step) => step.state !== "done"))?.name ??
@@ -2154,7 +2165,7 @@ export function whereItIs(view: TaskView): string {
 }
 
 /** How many agents are on it, or nothing where herdr has none left. */
-export function agentCount(view: TaskView): string {
+export function agentCount(view: TaskView) {
   const n = view.agents.length;
   return n === 0 ? "" : `${n} ${n === 1 ? "agent" : "agents"}`;
 }
@@ -2171,7 +2182,7 @@ export function boardLines(
   views: ReadonlyArray<TaskView>,
   /** Lines to put under one Task's own: the question a dumb terminal answers in place. */
   under: { run: string; lines: ReadonlyArray<string> } | null = null,
-): string[] {
+) {
   const label: Record<Section, (rows: ReadonlyArray<TaskView>) => string> = {
     "needs-you": () => "Needs you",
     "ready-to-ship": (rows) => `Ready to ship · ${rows.length}`,
@@ -2190,7 +2201,7 @@ function textSection(
   label: string,
   views: ReadonlyArray<TaskView>,
   under: { run: string; lines: ReadonlyArray<string> } | null,
-): string[] {
+) {
   const rows = Arr.flatMap(views, (view) => [
     `  ${GLYPH_FOR[view.state]} ${view.name} · ${view.project} — ${shippingLabel(view)}${view.sentence}`,
     ...(view.drift === null ? [] : [`    ↯ ${view.drift}`]),

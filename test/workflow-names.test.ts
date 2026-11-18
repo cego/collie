@@ -23,7 +23,7 @@ const withoutComments = (text: string) =>
   pipe(text, Str.replaceAll(/\/\*[\s\S]*?\*\//g, ""), Str.replaceAll(/(^|[^:])\/\/.*$/gm, "$1"));
 
 /** Every place in one source file that decides by a shipped workflow's name. */
-function nameDispatch(source: string): string[] {
+function nameDispatch(source: string) {
   const text = withoutComments(source);
   const found: string[] = [];
   const compared = new RegExp(

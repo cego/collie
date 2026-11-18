@@ -30,7 +30,7 @@ export const stdinText = Effect.gen(function* () {
   return yield* stdio.stdin.pipe(
     Stream.decodeText(),
     Stream.runFold(
-      (): string => "",
+      () => "",
       (all, chunk) => all + chunk,
     ),
   );
@@ -62,10 +62,11 @@ export type RunScope = { readonly task: string | null; readonly caller: string |
 export const runScope = Effect.fn("collie.runScope")(function* (global: Global) {
   const env = yield* currentEnv;
   const door = yield* cliDoor(env);
-  return {
+  const returned: RunScope = {
     task: yield* selectedTask(global),
     caller: Schema.is(FrontDoor)(door) ? env.raw["COLLIE_RUN"] || null : door.from.run,
-  } satisfies RunScope;
+  };
+  return returned;
 });
 
 const steered = (line: AuditLine, id: string) =>
@@ -138,13 +139,16 @@ export type ContextResolution =
     }
   | { readonly _tag: "ContextFailure"; readonly result: Failure };
 
-const resolvedContext = (env: PluginEnv, workspace: NamedDirectory | null): ContextResolution => ({
+const resolvedContext: (env: PluginEnv, workspace: NamedDirectory | null) => ContextResolution = (
+  env,
+  workspace,
+) => ({
   _tag: "ResolvedContext",
   env,
   workspace,
 });
 
-const contextFailure = (result: Failure): ContextResolution => ({
+const contextFailure: (result: Failure) => ContextResolution = (result) => ({
   _tag: "ContextFailure",
   result,
 });
@@ -224,15 +228,15 @@ export type Located =
   | { readonly _tag: "RunFailure"; readonly result: Failure };
 
 /** Which of those this id is. */
-export const locateRun = Effect.fn("collie.locateRun")(function* (
+export const locateRun: (
   env: PluginEnv,
   id: string,
   scope: RunScope,
-): Effect.fn.Return<
+) => Effect.Effect<
   Located,
   never,
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | PlatformServices
-> {
+> = Effect.fn("collie.locateRun")(function* (env: PluginEnv, id: string, scope: RunScope) {
   const missing: Located = {
     _tag: "RunFailure",
     result: err("run_not_found", `Run "${id}" was not found.`, { run: id }),
@@ -245,7 +249,12 @@ export const locateRun = Effect.fn("collie.locateRun")(function* (
   if (view === null) return missing;
   const refused = yield* outOfReach(env, view, found.machine, scope);
   if (refused !== null) return { _tag: "RunFailure", result: refused };
-  return { _tag: "Hosted", view, dir, evidence: evidenceDir(env.stateDir, id) };
+  return {
+    _tag: "Hosted",
+    view,
+    dir,
+    evidence: evidenceDir(env.stateDir, id),
+  };
 });
 
 /** What a located Run is called and what it was for. */
@@ -270,16 +279,22 @@ export const layerDir = Effect.fn("collie.layerDir")(function* (
 
 type ParsedInputs = { ok: true; given: Given } | { ok: false; error: Result };
 
-export const parseInput = Effect.fn("collie.parseInput")(function* (
+export const parseInput: (
   values: ReadonlyArray<string>,
   json: Option.Option<string>,
-): Effect.fn.Return<ParsedInputs, never, Stdio.Stdio> {
+) => Effect.Effect<ParsedInputs, never, Stdio.Stdio> = Effect.fn("collie.parseInput")(function* (
+  values: ReadonlyArray<string>,
+  json: Option.Option<string>,
+) {
   let typed: Record<string, Schema.Json> = {};
   if (Option.isSome(json)) {
     const raw = json.value === "-" ? yield* stdinText : json.value;
     const parsed = Schema.decodeResult(InputsJson)(raw);
     if (ParseResult.isFailure(parsed)) {
-      return { ok: false, error: err("invalid_input", "--inputs-json must be a JSON object.") };
+      return {
+        ok: false,
+        error: err("invalid_input", "--inputs-json must be a JSON object."),
+      };
     }
     typed = parsed.success;
   }
@@ -287,7 +302,10 @@ export const parseInput = Effect.fn("collie.parseInput")(function* (
   for (const entry of values) {
     const at = Option.getOrElse(pipe_(entry, Str.indexOf("=")), () => -1);
     if (at <= 0)
-      return { ok: false, error: err("invalid_input", `Input "${entry}" must be key=value.`) };
+      return {
+        ok: false,
+        error: err("invalid_input", `Input "${entry}" must be key=value.`),
+      };
     text[pipe_(entry, Str.slice(0, at))] = pipe_(entry, Str.slice(at + 1));
   }
   return { ok: true, given: { json: typed, text } };
@@ -378,7 +396,7 @@ export function cliOrigin(at: {
   readonly terminal: boolean;
   /** Whether this process runs in a terminal Collie launched as an agent. */
   readonly agent: boolean;
-}): "cli" | "cli-tty" {
+}) {
   return at.terminal && !at.agent ? "cli-tty" : "cli";
 }
 

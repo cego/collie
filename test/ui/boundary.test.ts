@@ -14,7 +14,7 @@ const uiFiles = Effect.fn("boundary.uiFiles")(function* (predicate: (name: strin
 });
 
 /** The code, without the prose: a comment naming `Effect` is not a use of it. */
-function code(source: string): string {
+function code(source: string) {
   return Arr.join(
     Arr.filter(
       Str.split(pipe(source, Str.replace(/\/\*[\s\S]*?\*\//g, "")), "\n"),
@@ -33,7 +33,7 @@ const PURE_EFFECT_HELPERS = new Set([
 ]);
 
 /** Pure helpers belong in views; runtime modules stay at the bridge. Type imports erase. */
-function effectRuntimeImports(source: string): string[] {
+function effectRuntimeImports(source: string) {
   return Arr.filter(
     Arr.map(scanner.scanImports(source), ({ path }) => path),
     (path) =>

@@ -3,12 +3,12 @@ import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { Effect, Schema, flow, Result } from "effect";
-import type { RepoRef, Thread, ThreadRef } from "forges";
+import type { Thread } from "forges";
 import { ForgeHttp, pagesAs, request, requestAs, type ForgeLogin } from "./http";
 import { Issue } from "./issues";
 import { mrWords, type MrRef } from "../board-model";
 
-const threadRepo = (login: ForgeLogin, project: string): RepoRef => {
+const threadRepo = (login: ForgeLogin, project: string) => {
   const path = pipe(project, Str.slice(login.host.length + 1));
   const slash = Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1);
   return {
@@ -104,7 +104,7 @@ const threadRef = (
   project: string,
   number: string,
   kind: "issue" | "pull_request",
-): ThreadRef => ({
+) => ({
   forge: login.forge,
   instance: login.host,
   repo: threadRepo(login, project),

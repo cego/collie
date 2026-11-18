@@ -5,7 +5,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { Effect, Schema, flow } from "effect";
-import { Judgement, type Limits } from "./measurement-verdict";
+import { Judgement } from "./measurement-verdict";
 
 export const Command = Schema.Struct({
   executable: Schema.String,
@@ -208,7 +208,7 @@ export const MeasureEvent = Schema.Union([
 export const limitsOf = (
   plan: Pick<BenchmarkPlan, "threshold" | "tolerance">,
   metric: BenchmarkPlan["metrics"][number],
-): Limits => ({
+) => ({
   threshold: metric.threshold ?? plan.threshold,
   tolerance: metric.tolerance ?? plan.tolerance,
   absolute: metric.absolute ?? 0,
@@ -237,7 +237,9 @@ const bounds = (interval: readonly [number, number]) =>
     ", ",
   )}]`;
 
-export const calibrationOf = (measured: Pick<Measurement, "plan" | "result">): Calibration => {
+export const calibrationOf: (measured: Pick<Measurement, "plan" | "result">) => Calibration = (
+  measured,
+) => {
   const { plan, result } = measured;
   if (result._tag !== "Judged") return { _tag: "HarnessBroken", why: [summaryOf(measured)] };
   const broken: Array<string> = [];

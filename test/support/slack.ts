@@ -36,7 +36,7 @@ export const botLeftOver = (env: Pick<PluginEnv, "home" | "raw">, left: boolean)
   }).pipe(Effect.orDie);
 
 export const fakeSlack = () => {
-  let after = (_method: string): Effect.Effect<void> => Effect.void;
+  let after = (_method: string) => Effect.void;
   let messages: Array<{ channel: string; ts: string; text: string; thread_ts?: string }> = [];
   const reacted = new Map<string, Set<string>>();
   const calls: Array<{ method: string; parameters: Record<string, string> }> = [];

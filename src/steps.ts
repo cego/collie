@@ -41,7 +41,7 @@ export const CurrentStep = Context.Reference<At | null>("collie/CurrentStep", {
 });
 
 /** A Step run's key: its id and place, or its id and how many calls without one came before. */
-export const runKey = (id: string, place: StepPlace | null, call: number): string => {
+export const runKey = (id: string, place: StepPlace | null, call: number) => {
   if (place === null) return call > 1 ? `${id}~${call}` : id;
   return "item" in place ? `${id}@${place.item}` : `${id}#${place.round}`;
 };
@@ -84,7 +84,7 @@ export const STEPS_FILE = STEPS;
 const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(StepLine));
 const encodeLine = flow(Schema.encodeResult(Schema.fromJsonString(StepLine)), Result.getOrThrow);
 
-export const encodeStepLine = (line: StepLine): string => encodeLine(line);
+export const encodeStepLine = (line: StepLine) => encodeLine(line);
 
 /** What a Run records of its Steps, in the order it was written. */
 export const readStepLines = Effect.fn("Steps.read")(function* (runDir: string) {

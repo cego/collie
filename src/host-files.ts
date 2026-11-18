@@ -58,7 +58,7 @@ export const readPart = Effect.fn("HostFiles.read")(function* (
 });
 
 /** Each name `segment` stands for, its braces expanded innermost first. */
-const expanded = (segment: string): ReadonlyArray<string> => {
+const expanded: (segment: string) => ReadonlyArray<string> = (segment) => {
   const braces = /\{([^{}]*)\}/.exec(segment);
   if (braces === null) return [segment];
   const [before, after] = [

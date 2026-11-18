@@ -55,7 +55,8 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
         made.restore(),
       );
       const faked = yield* forgeOnPath(bin, name, model);
-      let before = (_url: string, _init?: RequestInit): Promise<void> => Promise.resolve();
+      let before: (_url: string, _init?: RequestInit) => Promise<void> = (_url, _init?) =>
+        Promise.resolve();
       let after = (_url: string, _init: RequestInit | undefined, response: Response) =>
         Promise.resolve(response);
       const face = (url: string, init?: RequestInit) =>

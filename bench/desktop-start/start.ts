@@ -10,7 +10,7 @@ interface Process {
 }
 
 /** `pid ppid rss args` rows, as `ps -A -o pid=,ppid=,rss=,args=` prints them on Linux and macOS. */
-const processesIn = (ps: string): ReadonlyArray<Process> =>
+const processesIn = (ps: string) =>
   Arr.flatMap(Str.split(ps, "\n"), (line) => {
     const row = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/.exec(line);
     return row === null

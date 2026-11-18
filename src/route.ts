@@ -57,7 +57,7 @@ export function placedByUrl(words: string, candidates: ReadonlyArray<Placeable>)
 }
 
 /** Everything the router is shown, and it is all data. */
-export function routePack(words: string, candidates: ReadonlyArray<Placeable>): string {
+export function routePack(words: string, candidates: ReadonlyArray<Placeable>) {
   return Arr.join(
     [
       "## What the person wants",

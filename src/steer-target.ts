@@ -21,7 +21,7 @@ export const ROLES = {
   planner: ["planner"],
 } satisfies Record<string, ReadonlyArray<string>>;
 
-const rolesFor = (to: string): ReadonlyArray<string> | undefined =>
+const rolesFor = (to: string) =>
   Option.getOrUndefined(Arr.findFirst(Rec.toEntries(ROLES), ([name]) => name === to))?.[1];
 
 export interface Asked {
@@ -38,7 +38,7 @@ export function steerTarget<C extends Candidate>(
   launches: ReadonlyArray<C>,
   asked: Asked,
   launchedAs: (one: C, name: string) => boolean = () => false,
-): C | undefined {
+) {
   const { agent, operation, to } = asked;
   const named = (one: C, name: string) =>
     one.operation === name || one.agent === name || launchedAs(one, name);

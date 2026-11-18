@@ -30,17 +30,26 @@ export const retryWake = () => {
   };
 };
 
-export const retrying = <A, E extends Error, R>(
+export const retrying: <A, E extends Error, R>(
   source: Stream.Stream<A, E, R>,
   waited: Effect.Effect<void>,
-): Stream.Stream<Retried<A>, never, R> => {
+) => Stream.Stream<Retried<A>, never, R> = <A, E extends Error, R>(
+  source: Stream.Stream<A, E, R>,
+  waited: Effect.Effect<void>,
+) => {
   /** `failures` said in a row, and `renewals` taken quietly in a row, since the last value. */
-  const after = (failures: number, renewals: number): Stream.Stream<Retried<A>, never, R> =>
+  const after: (failures: number, renewals: number) => Stream.Stream<Retried<A>, never, R> = (
+    failures,
+    renewals,
+  ) =>
     Stream.suspend(() => {
       let reached = false;
       const wait = (failed: number) => Effect.raceFirst(Effect.sleep(backoff(failed)), waited);
       return source.pipe(
-        Stream.map((value): Retried<A> => ({ _tag: "Value", value })),
+        Stream.map((value) => {
+          const returned: Retried<A> = { _tag: "Value", value };
+          return returned;
+        }),
         Stream.tap(() => Effect.sync(() => void (reached = true))),
         // A subscription that ends was cut off, as one interrupted was.
         Stream.concat(Stream.failCause(Cause.interrupt())),
@@ -83,21 +92,34 @@ export interface Held<A> {
  * A subscription's values folded by `step` across its retries, so what a page holds is never
  * started again from nothing.
  */
-export const foldedOf = <A, S, E extends Error, R>(
+export const foldedOf: <A, S, E extends Error, R>(
   source: Stream.Stream<A, E, R>,
   waited: Effect.Effect<void>,
   step: (held: Option.Option<S>, value: A) => S,
-): Stream.Stream<Held<S>, never, R> =>
+) => Stream.Stream<Held<S>, never, R> = <A, S, E extends Error, R>(
+  source: Stream.Stream<A, E, R>,
+  waited: Effect.Effect<void>,
+  step: (held: Option.Option<S>, value: A) => S,
+) =>
   retrying(source, waited).pipe(
     Stream.scan(
-      (): Held<S> => ({ value: Option.none(), trouble: null }),
-      (held, item): Held<S> =>
-        item._tag === "Value"
-          ? {
-              value: Option.some(step(held.value, item.value)),
-              trouble: null,
-            }
-          : { value: held.value, trouble: { said: item.said, attempt: item.attempt, at: item.at } },
+      () => {
+        const returned: Held<S> = { value: Option.none(), trouble: null };
+        return returned;
+      },
+      (held, item) => {
+        const returned: Held<S> =
+          item._tag === "Value"
+            ? {
+                value: Option.some(step(held.value, item.value)),
+                trouble: null,
+              }
+            : {
+                value: held.value,
+                trouble: { said: item.said, attempt: item.attempt, at: item.at },
+              };
+        return returned;
+      },
     ),
   );
 

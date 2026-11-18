@@ -15,7 +15,11 @@ import { runFacts } from "./support/records";
 
 const now = epochMs("2026-09-14T10:30:00Z");
 
-const proposal = (id: string, run: string, expires_at = "2026-09-14T11:00:00Z"): ProposalLine => ({
+const proposal: (id: string, run: string, expires_at?: string) => ProposalLine = (
+  id: string,
+  run: string,
+  expires_at = "2026-09-14T11:00:00Z",
+) => ({
   kind: "proposal",
   id,
   created_at: "2026-09-14T10:00:00Z",

@@ -133,7 +133,7 @@ const asEvent = Schema.decodeUnknownOption(Event);
 const STRUCTURED_OUTPUT = "StructuredOutput";
 
 /** What in a stream-json transcript says the isolation failed, by event, not by word. */
-export function leaks(transcript: string): string[] {
+export function leaks(transcript: string) {
   const found: string[] = [];
   for (const line of Str.split(transcript, "\n")) {
     const parsed = parseLine(line);

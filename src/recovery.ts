@@ -297,7 +297,7 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       review: null,
     } satisfies Recovery;
   },
-  Effect.orElseSucceed((): Recovery => ({
+  Effect.orElseSucceed(() => ({
     implementation: false,
     reason: "Branch or review records are unreadable.",
     previous: "",

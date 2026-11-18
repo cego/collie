@@ -27,7 +27,10 @@ interface Extension {
 
 /** The tools the extension at `file` registers. */
 export const piTools = (file: string) =>
-  Effect.promise((): Promise<Extension> => import(file)).pipe(
+  Effect.promise(() => {
+    const returned: Promise<Extension> = import(file);
+    return returned;
+  }).pipe(
     Effect.map((loaded) => {
       const tools: PiTool[] = [];
       loaded.default({

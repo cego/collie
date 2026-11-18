@@ -5,8 +5,8 @@
 import type { Focus } from "../../src/ui/state";
 
 /** What is being looked at, with the parts a test does not care about at rest. */
-export function focus(over: Partial<Focus> = {}): Focus {
-  return {
+export function focus(over: Partial<Focus> = {}) {
+  const returned: Focus = {
     view: "runs",
     filter: { kind: "workspace", id: "w1" },
     origin: "w1",
@@ -18,4 +18,5 @@ export function focus(over: Partial<Focus> = {}): Focus {
     nonce: 0,
     ...over,
   };
+  return returned;
 }

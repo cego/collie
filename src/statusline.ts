@@ -37,7 +37,7 @@ export const claudeSettingsPath = Effect.fn("StatusLine.settingsPath")(function*
  * What the settings ask Claude Code to run, pointed at this binary rather than at a name
  * on PATH: the line has to keep working in a pane whose PATH is not the installer's.
  */
-export function statusLineCommand(self: ReadonlyArray<string> = selfCommand()): string {
+export function statusLineCommand(self: ReadonlyArray<string> = selfCommand()) {
   return Result.getOrThrow(CommandLine.join([...self, ...STATUS_LINE_ARGS]));
 }
 

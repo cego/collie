@@ -55,8 +55,9 @@ import { installDependencies } from "./dependencies";
  * `plan` and `architecture` declare none: they get a checkout where they chain into
  * `implement`, and the chained Run resolves it.
  */
-export function mutates(checkout: CheckoutKind): boolean {
-  return checkout !== "none";
+export function mutates(checkout: CheckoutKind) {
+  const returned: boolean = checkout !== "none";
+  return returned;
 }
 
 /**
@@ -66,8 +67,9 @@ export function mutates(checkout: CheckoutKind): boolean {
  * the Run's worktree is a branch no other checkout may have, and these are branches
  * the operator's own checkouts are entitled to.
  */
-export function roams(checkout: CheckoutKind): boolean {
-  return checkout === "roaming";
+export function roams(checkout: CheckoutKind) {
+  const returned: boolean = checkout === "roaming";
+  return returned;
 }
 
 /**
@@ -210,12 +212,11 @@ export const BRANCH_INPUT = "branch";
  * `InputStrategy` has would be reading something it cannot act on. `optional` is also
  * true of it — inference never supplies it, and a Run without it still starts.
  */
-export function branchListed(
-  checkout: CheckoutKind,
-  inputs: Record<string, string>,
-): Record<string, string> {
+export function branchListed(checkout: CheckoutKind, inputs: Record<string, string>) {
   // Not for a roaming Workflow: it has no branch of its own to be given one.
-  return mutates(checkout) && !roams(checkout) ? { ...inputs, [BRANCH_INPUT]: "optional" } : inputs;
+  const returned: Record<string, string> =
+    mutates(checkout) && !roams(checkout) ? { ...inputs, [BRANCH_INPUT]: "optional" } : inputs;
+  return returned;
 }
 
 /**
@@ -253,8 +254,13 @@ const SLUG_MAX = 40;
  */
 export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: BranchAsk) {
   const run = opts.run ?? shell;
-  const refuse = (why: string) =>
-    ({ branch: "", task: "", base: "", refused: why, source: null }) satisfies BranchPlan;
+  const refuse: (why: string) => BranchPlan = (why) => ({
+    branch: "",
+    task: "",
+    base: "",
+    refused: why,
+    source: null,
+  });
   const asked = yield* branchName(opts, run);
   if (asked.refused !== null) return refuse(asked.refused);
   let plan = asked.branch;
@@ -328,7 +334,7 @@ interface Named {
   source: BranchSource | null;
 }
 
-const refusedName = (why: string): Named => ({
+const refusedName: (why: string) => Named = (why) => ({
   refused: why,
   branch: "",
   reviewed: false,
@@ -337,7 +343,11 @@ const refusedName = (why: string): Named => ({
 });
 
 /** A branch that already exists, or that a human named: taken exactly as it came. */
-const verbatim = (branch: string, source: BranchSource, reviewed = false): Named => ({
+const verbatim: (branch: string, source: BranchSource, reviewed?: boolean) => Named = (
+  branch: string,
+  source: BranchSource,
+  reviewed = false,
+) => ({
   refused: null,
   branch,
   reviewed,
@@ -418,14 +428,15 @@ const branchName = Effect.fn("worktree.branchName")(function* (
  * came out the same — the whole of the path a basename was taken from, the description
  * behind a Run's clipped name.
  */
-function generated(from: string, source: BranchSource, distinctBy = from): Named {
-  return {
+function generated(from: string, source: BranchSource, distinctBy = from) {
+  const returned: Named = {
     refused: null,
     branch: taskSlug(from, distinctBy),
     reviewed: false,
     generated: true,
     source,
   };
+  return returned;
 }
 
 /**
@@ -438,15 +449,20 @@ function generated(from: string, source: BranchSource, distinctBy = from): Named
  * one branch and one checkout, rather than a second merge request on every retry.
  * `Bun.hash` for the reason `registry.ts` gives.
  */
-function taskSlug(from: string, distinctBy: string): string {
+function taskSlug(from: string, distinctBy: string) {
   const derived = slugify(from, SLUG_MAX);
-  if (letters(from) === letters(derived)) return derived;
-  return `${derived}-${pipe_(Bun.hash(distinctBy).toString(36), Str.slice(0, 6))}`;
+  if (letters(from) === letters(derived)) {
+    const returned: string = derived;
+    return returned;
+  }
+  const returned: string = `${derived}-${pipe_(Bun.hash(distinctBy).toString(36), Str.slice(0, 6))}`;
+  return returned;
 }
 
 /** Case, spacing and punctuation are not distinctions: the same words are the same task. */
-function letters(text: string): string {
-  return pipe_(Str.toLowerCase(text), Str.replace(/[^\p{L}\p{N}]+/gu, ""));
+function letters(text: string) {
+  const returned: string = pipe_(Str.toLowerCase(text), Str.replace(/[^\p{L}\p{N}]+/gu, ""));
+  return returned;
 }
 
 /**
@@ -516,8 +532,9 @@ export const defaultStart = Effect.fn("worktree.defaultStart")(function* (
  */
 const SAID = new Set(["explicit", "typed", "asked"]);
 
-function said(opts: BranchAsk, name: string): boolean {
-  return SAID.has(opts.sources?.[name] ?? "");
+function said(opts: BranchAsk, name: string) {
+  const returned: boolean = SAID.has(opts.sources?.[name] ?? "");
+  return returned;
 }
 
 /**
@@ -525,10 +542,14 @@ function said(opts: BranchAsk, name: string): boolean {
  * no branch to build. A diff's head is a ref, not necessarily a branch — `HEAD` and a
  * sha are both things a human may review — and only a name a branch could have is one.
  */
-function targetBranch(target: string): string | null {
+function targetBranch(target: string) {
   const head = branchTargetHead(target) ?? "";
-  if (head === "" || head === "HEAD" || /^[0-9a-f]{7,40}$/.test(head)) return null;
-  return head;
+  if (head === "" || head === "HEAD" || /^[0-9a-f]{7,40}$/.test(head)) {
+    const returned: string | null = null;
+    return returned;
+  }
+  const returned: string | null = head;
+  return returned;
 }
 
 /** No URL holds these unescaped, so no URL spans one. */
@@ -1331,8 +1352,10 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
 
   // Whichever manager was asked, a Run with nowhere of its own to work says so the
   // same way, naming the branch it could not be given a checkout for.
-  const refuse = (why: string) =>
-    ({ ...here, refused: `no worktree for ${plan.branch}: ${why}` }) satisfies Checkout;
+  const refuse: (why: string) => Checkout = (why) => ({
+    ...here,
+    refused: `no worktree for ${plan.branch}: ${why}`,
+  });
 
   const newOn = yield* newOnOrigin(plan.branch, opts.cwd);
   const made = yield* gitCheckout({
@@ -1576,18 +1599,22 @@ const endLeftovers = Effect.fn("worktree.endLeftovers")(function* (
 });
 
 /** Why this checkout is in use, or null when nothing holds it. */
-function heldBy(use: InUse, worktree: { path: string }): string | null {
+function heldBy(use: InUse, worktree: { path: string }) {
   for (const [dir, why] of use.paths) {
-    if (inside(worktree.path, dir)) return why;
+    if (inside(worktree.path, dir)) {
+      const returned: string | null = why;
+      return returned;
+    }
   }
-  return null;
+  const returned: string | null = null;
+  return returned;
 }
 
 /** What to do about a checkout: keep it for this reason, or remove it for that one. */
 type Verdict = { keep: string; why?: undefined } | { keep?: undefined; why: string };
 
-const keepIt = (keep: string): Verdict => ({ keep });
-const settledBecause = (why: string): Verdict => ({ why });
+const keepIt: (keep: string) => Verdict = (keep) => ({ keep });
+const settledBecause: (why: string) => Verdict = (why) => ({ why });
 
 const settled = Effect.fn("worktree.settled")(function* (
   worktree: Listed & { branch: string },
@@ -1690,8 +1717,12 @@ const upstreamRemote = Effect.fn("worktree.upstreamRemote")(function* (
 });
 
 /** How many lines a `rev-list` answered with; each one is a commit. */
-function commits(result: { stdout: string }): number {
-  return Arr.filter(Str.split(result.stdout, "\n"), (line) => Str.trim(line) !== "").length;
+function commits(result: { stdout: string }) {
+  const returned: number = Arr.filter(
+    Str.split(result.stdout, "\n"),
+    (line) => Str.trim(line) !== "",
+  ).length;
+  return returned;
 }
 
 /**
@@ -1828,7 +1859,10 @@ const prune = Effect.fn("worktree.prune")(function* (
     worktree.branch || path.basename(worktree.path);
   const state = yield* fs.readFileString(statePath).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(PruneStateJson)),
-    Effect.orElseSucceed((): PruneState => ({})),
+    Effect.orElseSucceed(() => {
+      const returned: PruneState = {};
+      return returned;
+    }),
   );
   const before = `${yield* Schema.encodeEffect(PruneStateJson)(state).pipe(Effect.orDie)}\n`;
 
@@ -1972,8 +2006,8 @@ const conclude = Effect.fn("worktree.conclude")(function* (opts: {
  * What is worth putting on a board: everything held, and a removal while it is still
  * news. Only `repo`'s, where one is named.
  */
-function reported(state: PruneState, now: number, repo?: string): string[] {
-  return Arr.map(
+function reported(state: PruneState, now: number, repo?: string) {
+  const returned: string[] = Arr.map(
     Arr.filter(
       Rec.values(state),
       (entry) =>
@@ -1982,6 +2016,7 @@ function reported(state: PruneState, now: number, repo?: string): string[] {
     ),
     (entry) => entry.line,
   );
+  return returned;
 }
 
 /** One line about a removal, and whether the checkout actually went. */
@@ -2009,7 +2044,10 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
     registered: ReadonlyArray<AgentEntry>;
   },
 ) {
-  const kept = (why: string): Removal => ({ line: `kept ${opts.name} · ${why}`, removed: false });
+  const kept: (why: string) => Removal = (why) => ({
+    line: `kept ${opts.name} · ${why}`,
+    removed: false,
+  });
   // Never `--force`: git's own refusal is the guard. A checkout herdr made once is a git
   // worktree like any other.
   const dropped = yield* opts.run("git", ["worktree", "remove", worktree.path], opts.repo);
@@ -2079,7 +2117,10 @@ export const reportedWorktrees = Effect.fn("worktree.reportedWorktrees")(functio
     .readFileString(path.join(stateDir, PRUNE_FILE))
     .pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(PruneStateJson)),
-      Effect.orElseSucceed((): PruneState => ({})),
+      Effect.orElseSucceed(() => {
+        const returned: PruneState = {};
+        return returned;
+      }),
     );
   return reported(state, yield* Clock.currentTimeMillis);
 });

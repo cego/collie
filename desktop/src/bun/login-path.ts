@@ -6,7 +6,7 @@ import { CHILD_CWD } from "./login-env";
 export const MARK = "__COLLIE_PATH__";
 
 /** The PATH a shell printed between the markers, or null where it printed none. */
-export const pathIn = (printed: string): string | null => {
+export const pathIn = (printed: string) => {
   const parts = Str.split(printed, MARK);
   return (parts.length > 2 && parts[1]) || null;
 };

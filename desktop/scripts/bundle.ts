@@ -139,11 +139,7 @@ ${pipe(
 `;
 
 /** codesign's arguments for each part of the app, inside out. */
-export const macSignings = (
-  env: Env,
-  entitlements: string,
-  app: string,
-): ReadonlyArray<ReadonlyArray<string>> => {
+export const macSignings = (env: Env, entitlements: string, app: string) => {
   const identity = macSigning(env).codesign ? (env.ELECTROBUN_DEVELOPER_ID ?? "-") : "-";
   // Apple's timestamp server serves a real identity only.
   const timestamp = identity === "-" ? [] : ["--timestamp"];
@@ -164,7 +160,7 @@ export const macSignings = (
 };
 
 /** `xcrun`'s arguments to notarise `zip`, or null where Desktop's build would not. */
-export const notarizeArgs = (env: Env, zip: string): ReadonlyArray<string> | null => {
+export const notarizeArgs = (env: Env, zip: string) => {
   if (!macSigning(env).notarize) return null;
   const submit = ["notarytool", "submit", zip, "--wait"];
   const appleId = Arr.every(

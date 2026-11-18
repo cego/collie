@@ -609,7 +609,11 @@ test.each([
 });
 
 /** A merge request of a Task on gitlab.cego.dk, open and with nothing said of it. */
-const entryOf = (repo: string, iid: number, over: Partial<TaskMr> = {}): TaskMr => ({
+const entryOf: (repo: string, iid: number, over?: Partial<TaskMr>) => TaskMr = (
+  repo,
+  iid,
+  over = {},
+) => ({
   id: `gitlab.cego.dk/cego/${repo}!${iid}`,
   mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
   label: `cego/${repo}!${iid}`,

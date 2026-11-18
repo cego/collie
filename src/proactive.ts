@@ -66,7 +66,7 @@ export function eventsIn(
   ready: ReadonlyMap<string, { at: string; sentence: string }> = new Map(),
   /** Reopened Runs whose agent has finished what it was told, by Run (`idleAgain`). */
   done: ReadonlyMap<string, Reopened> = new Map(),
-): Event[] {
+) {
   return Arr.flatMap(runs, (run) => [
     ...reopenedOf(run, done),
     ...causesOf(run, drifting, ready).slice(0, 1),
@@ -83,7 +83,7 @@ export function holding(
   disposed: ReadonlySet<string> = new Set(),
   ready: ReadonlyMap<string, { at: string; sentence: string }> = new Map(),
   done: ReadonlyMap<string, Reopened> = new Map(),
-): Set<string> {
+) {
   return new Set(
     Arr.flatMap(runs, (run) =>
       Arr.map(
@@ -102,11 +102,14 @@ export function holding(
 }
 
 /** Beside whatever else is true of the Run: it is about one request, not the Run. */
-function reopenedOf(run: RunFacts, done: ReadonlyMap<string, Reopened>): Event[] {
+function reopenedOf(run: RunFacts, done: ReadonlyMap<string, Reopened>) {
   const finished = done.get(run.id);
-  if (finished === undefined) return [];
+  if (finished === undefined) {
+    const returned: Event[] = [];
+    return returned;
+  }
   const told = finished.told === null ? "" : ` (“${finished.told}”)`;
-  return [
+  const returned: Event[] = [
     {
       run: run.id,
       key: `${run.id}:reopened:${finished.delivery}`,
@@ -114,6 +117,7 @@ function reopenedOf(run: RunFacts, done: ReadonlyMap<string, Reopened>): Event[]
       text: `Run ${run.id} (${runTitle(run)}): ${finished.agent} has finished what it was told after the Run ended${told}. What came of it?`,
     },
   ];
+  return returned;
 }
 
 /**
@@ -141,9 +145,9 @@ function causesOf(
   run: RunFacts,
   drifting: ReadonlyMap<string, string>,
   ready: ReadonlyMap<string, { at: string; sentence: string }>,
-): Event[] {
+) {
   const about = runTitle(run);
-  const out: Event[] = Arr.map(run.asking, (asked): Event => ({
+  const out: Event[] = Arr.map(run.asking, (asked) => ({
     run: run.id,
     key: `${run.id}:asking:${asked.name}`,
     significance: "decision",
@@ -186,10 +190,7 @@ function causesOf(
  * Reopened Runs whose agent was seen working on what it was told and is idle now: once per
  * Delivery. `seen` is the caller's memory between board reads, of Deliveries seen working.
  */
-export function idleAgain(
-  views: ReadonlyArray<TaskView>,
-  seen: Set<string>,
-): Map<string, Reopened> {
+export function idleAgain(views: ReadonlyArray<TaskView>, seen: Set<string>) {
   const idle = new Map<string, Reopened>();
   for (const view of views) {
     const reopened = view.reopened ?? null;

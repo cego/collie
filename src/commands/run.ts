@@ -175,7 +175,7 @@ const chosenTask = Effect.fn("collie.chosenTask")(function* (
  * questions are asked when the work reaches them. Refused rather than dropped, since a
  * decision nobody answered is worse than being told so here.
  */
-function unsupportedDecide(decide: ReadonlyArray<string>): Failure | null {
+function unsupportedDecide(decide: ReadonlyArray<string>) {
   if (decide.length === 0) return null;
   return err(
     "invalid_input",
@@ -650,13 +650,11 @@ const runChecks = Command.make(
             const ended = yield* Effect.scoped(
               Effect.gen(function* () {
                 const log = yield* followCheckLog(resolved.env, runId);
-                const last = yield* Stream.runFoldEffect(
-                  log,
-                  (): import("../verify").Verification | null => null,
-                  (last, event) =>
-                    event._tag === "Output"
-                      ? say(event.text).pipe(Effect.as(last))
-                      : Effect.succeed(event.check),
+                const nothingYet: () => import("../verify").Verification | null = () => null;
+                const last = yield* Stream.runFoldEffect(log, nothingYet, (last, event) =>
+                  event._tag === "Output"
+                    ? say(event.text).pipe(Effect.as(last))
+                    : Effect.succeed(event.check),
                 );
                 return last;
               }),
@@ -787,25 +785,36 @@ const runOutput = Command.make(
 type ParsedTimeout = { ok: true; ms: number | null } | { ok: false; error: Result };
 
 /** A duration in Effect's canonical `DurationFromString` grammar. */
-function parseTimeout(value: Option.Option<string>): ParsedTimeout {
-  if (Option.isNone(value)) return { ok: true, ms: null };
+function parseTimeout(value: Option.Option<string>) {
+  if (Option.isNone(value)) {
+    const returned: ParsedTimeout = { ok: true, ms: null };
+    return returned;
+  }
   const duration = Schema.decodeOption(Schema.DurationFromString)(value.value);
-  return Option.isSome(duration)
+  const returned: ParsedTimeout = Option.isSome(duration)
     ? { ok: true, ms: Duration.toMillis(duration.value) }
     : { ok: false, error: err("invalid_input", `Invalid timeout "${value.value}".`) };
+  return returned;
 }
 
 type ParsedUntil = { ok: true; until: Until } | { ok: false; error: Result };
 
 /** What ends the wait. Omitted keeps the terminal-only wait every caller already has. */
-function parseUntil(value: Option.Option<string>): ParsedUntil {
-  if (Option.isNone(value)) return { ok: true, until: "terminal" };
+function parseUntil(value: Option.Option<string>) {
+  if (Option.isNone(value)) {
+    const returned: ParsedUntil = { ok: true, until: "terminal" };
+    return returned;
+  }
   const until = Option.getOrUndefined(Arr.findFirst(UNTILS, (one) => one === value.value));
-  if (until !== undefined) return { ok: true, until };
-  return {
+  if (until !== undefined) {
+    const returned: ParsedUntil = { ok: true, until };
+    return returned;
+  }
+  const returned: ParsedUntil = {
     ok: false,
     error: err("invalid_input", `Invalid --until "${value.value}"; use ${Arr.join(UNTILS, ", ")}.`),
   };
+  return returned;
 }
 
 const runWait = Command.make(
@@ -1701,7 +1710,7 @@ const propagateFlag = Flag.Boolean("propagate").pipe(
   Flag.withDefault(false),
 );
 
-function severityOf(value: string): "block" | "warn" | null {
+function severityOf(value: string) {
   return value === "block" || value === "warn" ? value : null;
 }
 

@@ -811,7 +811,7 @@ test("a log past its bound is cut, and says it was", () =>
   ));
 
 /** Sets NODE_OPTIONS for this process, and returns what puts it back. */
-function nodeOptions(value: string): () => void {
+function nodeOptions(value: string) {
   const before = Bun.env.NODE_OPTIONS;
   Bun.env.NODE_OPTIONS = value;
   return () => {

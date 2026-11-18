@@ -53,7 +53,7 @@ const cli = Effect.fn("test.cli")(function* (args: string[], env: Record<string,
   return { stdout, stderr, exit };
 });
 
-const line = (over: Partial<Disposition> = {}): Disposition => ({
+const line: (over?: Partial<Disposition>) => Disposition = (over = {}) => ({
   at: "2026-09-11T10:00:00.000Z",
   by: "mk",
   kind: "merged",

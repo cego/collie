@@ -13,7 +13,7 @@ import { diffTargetOf, type Settled } from "./strategies";
 const MAX = 32;
 const DIGEST = 6;
 
-function sanitize(text: string): string {
+function sanitize(text: string) {
   return pipe(
     Str.toLowerCase(text),
     Str.replace(/[^a-z0-9_-]+/g, "-"),
@@ -31,12 +31,7 @@ function sanitize(text: string): string {
  * slug only what is left after that. A name anything was cut from carries a digest
  * of all three, so two that differ only in what was cut stay apart.
  */
-export function agentName(
-  slug: string,
-  stepId: string,
-  variantKey: string | null,
-  seq: number,
-): string {
+export function agentName(slug: string, stepId: string, variantKey: string | null, seq: number) {
   return nameWith(slug, stepId, variantKey, seq, false);
 }
 
@@ -54,7 +49,7 @@ function nameWith(
   variantKey: string | null,
   seq: number,
   legacy: boolean,
-): string {
+) {
   const whole = layout(slug, stepId, variantKey, `r${seq}`, legacy);
   if (!whole.cut) return whole.name;
   const sum = pipe(
@@ -106,7 +101,7 @@ function layout(
 }
 
 /** The readable name for a tab or pane. */
-export function stepLabel(slug: string, stepId: string, variantKey: string | null): string {
+export function stepLabel(slug: string, stepId: string, variantKey: string | null) {
   return Arr.join(
     Arr.map(
       Arr.filter([slug, stepId, variantKey], (p) => Boolean(p)),
@@ -122,7 +117,7 @@ export function stepLabel(slug: string, stepId: string, variantKey: string | nul
  * a value is unsafe, or null when it is a plain component. Validation wraps it
  * in field-naming messages; Run path construction wraps it in a throw.
  */
-export function unsafePathComponent(value: string): string | null {
+export function unsafePathComponent(value: string) {
   if (value === "") return "is empty";
   if (value === "." || value === "..") return `is "${value}"`;
   if (pipe(value, Str.includes("/")) || pipe(value, Str.includes("\\")))
@@ -139,7 +134,7 @@ export function unsafePathComponent(value: string): string | null {
  * What a failure says in a log line or a board row: a caught Error's own message, and
  * anything else as it prints. Both adapters and the engine report failures this way.
  */
-export function reason(cause: unknown): string {
+export function reason(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
@@ -163,7 +158,7 @@ export const COLLIE_TAB = `${COLLIE_GLYPH} Collie`;
  * its own casing (`gpt-5.6-sol`), and a target keeps whatever it actually is —
  * a branch is not a branch any more once it has been prettied up.
  */
-export function displayName(name: string): string {
+export function displayName(name: string) {
   const [head, ...rest] = Str.split(name, " · ");
   const word = /^[a-z][a-z-]*$/.test(head)
     ? `${Str.toUpperCase(head[0]!)}${pipe(head, Str.slice(1))}`
@@ -172,12 +167,12 @@ export function displayName(name: string): string {
 }
 
 /** A sha, or `HEAD`, names nothing a human recognises on a tab. */
-function opaque(ref: string): boolean {
+function opaque(ref: string) {
   return ref === "" || ref === "HEAD" || /^[0-9a-f]{7,40}$/i.test(ref);
 }
 
 /** A Run's own name, without the workflow its slug already carries. */
-export function runName(workflow: string, slug: string): string {
+export function runName(workflow: string, slug: string) {
   const prefix = `${workflow}-`;
   return pipe(slug, Str.startsWith(prefix)) ? pipe(slug, Str.slice(prefix.length)) : slug;
 }
@@ -187,7 +182,7 @@ export function runName(workflow: string, slug: string): string {
  * by name, the working tree, or — for the workflows that have no target — the
  * run's own slug without the workflow it already carries.
  */
-export function targetLabel(workflow: string, slug: string, target: string): string {
+export function targetLabel(workflow: string, slug: string, target: string) {
   if (target === "worktree") return "worktree";
   // An MR target carries its project; only the iid belongs on a label.
   const mr = parseMrTarget(target);
@@ -206,12 +201,12 @@ export function targetLabel(workflow: string, slug: string, target: string): str
  * for a run's own tab, the step for a step's. The target is added only where two
  * live tabs would otherwise read the same.
  */
-export function tabLabel(glyph: string, name: string): string {
+export function tabLabel(glyph: string, name: string) {
   return `${glyph} ${displayName(name)}`;
 }
 
 /** The name part of a tab label, i.e. what a collision is judged on. */
-export function tabNameOf(label: string): string {
+export function tabNameOf(label: string) {
   const glyphs = Arr.join([...Rec.values(GLYPH), COLLIE_GLYPH], "");
   // The u flag, or the dog (U+1F415) enters the class as its two surrogate halves
   // and stripping matches one of them, leaving a lone surrogate in the name.
@@ -219,7 +214,7 @@ export function tabNameOf(label: string): string {
 }
 
 /** `implement` vs `implement · add-picker`, once something else owns the plain name. */
-export function disambiguate(name: string, target: string): string {
+export function disambiguate(name: string, target: string) {
   return target ? `${name} · ${target}` : name;
 }
 
@@ -228,11 +223,7 @@ export function disambiguate(name: string, target: string): string {
  * piece of work, which piece — a reviewer seat and the synthesis are otherwise two tabs
  * that read the same. A shared agent does several, so its tab names only the role.
  */
-export function agentTabLabel(ask: {
-  role: string;
-  operation: string;
-  agent: string | null;
-}): string {
+export function agentTabLabel(ask: { role: string; operation: string; agent: string | null }) {
   const step =
     ask.agent === null
       ? pipe(
@@ -244,7 +235,7 @@ export function agentTabLabel(ask: {
 }
 
 /** `openai-codex/gpt-5.6-sol` is a model id; `gpt-5.6-sol` is the model. */
-function shortModel(model: string): string {
+function shortModel(model: string) {
   return pipe(model, Str.slice(Option.getOrElse(pipe(model, Str.lastIndexOf("/")), () => -1) + 1));
 }
 
@@ -258,7 +249,7 @@ export function paneLabel(
   stepId: string,
   variantCount: number,
   sharesTab: boolean,
-): string | null {
+) {
   if (variantCount > 1) {
     // On the harness's own default there is no model to name, so the harness is the name.
     const name = variant.model === DEFAULT_MODEL ? variant.harness : shortModel(variant.model);
@@ -273,18 +264,18 @@ export function paneLabel(
 }
 
 /** Splitting N panes evenly: the i-th split leaves the left pane 1/N of the tab. */
-export function evenRatio(index: number, count: number): number {
+export function evenRatio(index: number, count: number) {
   return 1 / (count - index + 1);
 }
 
 /** A Run's title from its facts: the workflow, and what it was pointed at. */
-export function runTitle(run: { readonly workflow: string; readonly settled: Settled }): string {
+export function runTitle(run: { readonly workflow: string; readonly settled: Settled }) {
   const target = diffTargetOf(run.settled)?.value ?? "";
   return disambiguate(displayName(run.workflow), targetLabel(run.workflow, "", target));
 }
 
 /** `Collie | Task workspaces`: a task workspace's own label, from its two halves. */
-export function taskWorkspaceLabel(name: { project: string; title: string }): string {
+export function taskWorkspaceLabel(name: { project: string; title: string }) {
   return Arr.join(
     Arr.filter([displayName(oneLine(name.project)), oneLine(name.title)], (part) => part !== ""),
     " | ",
@@ -292,7 +283,7 @@ export function taskWorkspaceLabel(name: { project: string; title: string }): st
 }
 
 /** `Task workspaces` from `Collie | Task workspaces`: what the work is, without its project. */
-export function taskTitleOf(label: string): string {
+export function taskTitleOf(label: string) {
   const at = Option.getOrElse(pipe(label, Str.indexOf(" | ")), () => -1);
   return at < 0 ? label : pipe(label, Str.slice(at + 3));
 }
@@ -302,6 +293,6 @@ export function taskTitleOf(label: string): string {
  * Names reach here from the model and from the user's own live labels, and both are
  * display data — a newline in one would break the sidebar row it is drawn in.
  */
-export function oneLine(text: string): string {
+export function oneLine(text: string) {
   return Str.trim(pipe(text, Str.replace(/\p{Cc}/gu, " "), Str.replace(/\s+/g, " ")));
 }

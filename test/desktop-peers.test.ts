@@ -485,10 +485,10 @@ test(
 );
 
 test("a merge request two Machines' Tasks hold is shown once, with a link to each, and each link's actions go to its own Machine", () => {
-  const boardOf = (
+  const boardOf: (
     machine: { installation: string; profile: string; name: string },
     tasks: ReadonlyArray<ReturnType<typeof task>>,
-  ): FlockItem => ({
+  ) => FlockItem = (machine, tasks) => ({
     machine,
     message: {
       _tag: "Snapshot",

@@ -122,10 +122,10 @@ export const withLock = <A, E, R, A2, E2, R2>(
       ),
       Effect.uninterruptible,
     );
+    const proceed: (claimed: boolean) => Effect.Effect<A | A2, E | E2, R | R2> = (claimed) =>
+      claimed ? effect : contended;
     return acquireLock(claim, claims).pipe(
-      Effect.flatMap((claimed): Effect.Effect<A | A2, E | E2, R | R2> =>
-        claimed ? effect : contended,
-      ),
+      Effect.flatMap(proceed),
       Effect.ensuring(
         Effect.suspend(() => (held ? releaseOwnLock(lock).pipe(Effect.ignore) : Effect.void)),
       ),
@@ -257,7 +257,7 @@ export function withDirLock<A, E, R>(
 /** When this pid's process started, as an opaque token. Null means the identity cannot be read. */
 export const processStartTime = startedOf;
 
-function decodeLockHolder(raw: string): LockHolder | null {
+function decodeLockHolder(raw: string) {
   try {
     return decodeLockHolderJson(raw);
   } catch {
@@ -278,7 +278,7 @@ const readClaim = Effect.fn("readClaim")(function* (lock: string) {
 });
 
 /** A claim only names a holder when it decodes to a pid that could be one. */
-function validHolder(claim: string): LockHolder | null {
+function validHolder(claim: string) {
   const holder = decodeLockHolder(claim);
   return holder && Number.isInteger(holder.pid) && holder.pid > 0 ? holder : null;
 }

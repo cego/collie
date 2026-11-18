@@ -9,7 +9,6 @@ import {
   answersSettled,
   answerTried,
   cardQuestion,
-  type InFlight,
   nothingAnswered,
   openQuestions,
   type Sitting,
@@ -21,7 +20,7 @@ import {
 } from "../desktop/src/shared/pending-answer";
 import { task } from "./support/task";
 
-const question = (id: string, run = "r-1"): Question => ({
+const question: (id: string, run?: string) => Question = (id: string, run = "r-1") => ({
   kind: "question",
   run,
   id,
@@ -37,7 +36,7 @@ const keyOf = (asked: Question) => answerKey("vm", asked.run, asked.id);
 
 let sends = 0;
 /** An answer as the dialog sends it: what is shown, to which Machine, and which send it is. */
-const sent = (shown: string): Omit<InFlight, "confirmed"> => ({
+const sent = (shown: string) => ({
   shown,
   machine: "vm-mk",
   send: ++sends,
@@ -123,7 +122,10 @@ test("a question another Task or Machine still has open keeps what is held for i
 test("a Task that leaves its Machine's board, by a Snapshot without it or a Remove, drops its answers", () => {
   const machine = { installation: "vm", profile: "remote", name: "vm-mk" };
   const asked = question("scope");
-  const snapshot = (tasks: ReadonlyArray<ReturnType<typeof task>>, seq: number): FlockItem => ({
+  const snapshot: (tasks: ReadonlyArray<ReturnType<typeof task>>, seq: number) => FlockItem = (
+    tasks,
+    seq,
+  ) => ({
     machine,
     message: {
       _tag: "Snapshot",

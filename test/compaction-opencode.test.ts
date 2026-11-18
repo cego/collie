@@ -15,7 +15,6 @@ import { fakeChannel } from "./support/compaction";
 import { reason } from "../src/naming";
 import { COMPACTION_PORTS, VERIFIED_VERSIONS, writeEvent } from "../src/compactors";
 import { Unsubmitted } from "../src/compaction";
-import type { AgentContext } from "../src/compaction";
 
 let rig: Rig;
 let fs: FileSystem.FileSystem;
@@ -75,7 +74,7 @@ const json = (value: Answer, status = 200) => Response.json(value, { status });
  * are the ones the installed release's own OpenAPI document declares, which the
  * contract checks at the bottom of this file assert separately.
  */
-function serve(): FakeServer {
+function serve() {
   const listening = Bun.serve({
     port: 0,
     fetch: (request) => {
@@ -108,7 +107,7 @@ function serve(): FakeServer {
   };
 }
 
-const ctx = (): AgentContext => ({
+const ctx = () => ({
   agent: "build-r1",
   run: "run-1",
   harness: "opencode",
@@ -121,11 +120,15 @@ const ctx = (): AgentContext => ({
 /** As `install` leaves it: the session Collie created, recorded before the agent starts. */
 const bind = () => writeEvent(dir, { session: fake.session, kind: "session" });
 
-function why<A, E>(result: Result.Result<A, E>): string {
+function why<A, E>(result: Result.Result<A, E>) {
   return Result.isFailure(result) ? reason(result.failure) : "";
 }
 
-const assistant = (id: string, tokens: Line["tokens"], extra: Partial<Line> = {}): Line => ({
+const assistant: (id: string, tokens: Line["tokens"], extra?: Partial<Line>) => Line = (
+  id,
+  tokens,
+  extra = {},
+) => ({
   id,
   role: "assistant",
   mode: "build",

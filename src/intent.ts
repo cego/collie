@@ -120,7 +120,7 @@ export const writeIntent = Effect.fn("Intent.write")(function* (dir: string, int
 });
 
 /** A constraint is identified by what it says, so the same text is the same entry. */
-export function constraintId(text: string): string {
+export function constraintId(text: string) {
   return pipe(Bun.hash(text).toString(16), Str.slice(0, 8));
 }
 
@@ -132,8 +132,9 @@ export type Change =
   | { readonly kind: "authority"; readonly patch: Partial<Authority> };
 
 /** The outcome change a front door's word asks for: `unspecified` clears the kind. */
-export function outcomeChange(word: string): Change {
-  return { kind: "set-outcome", outcome: word === "unspecified" ? null : word };
+export function outcomeChange(word: string) {
+  const returned: Change = { kind: "set-outcome", outcome: word === "unspecified" ? null : word };
+  return returned;
 }
 
 /** The authority change granting `name` this command, or withdrawing it where there is none. */
@@ -141,15 +142,16 @@ export function verificationGrant(
   intent: Intent,
   name: string,
   command: Omit<VerifySpec, "name"> | null,
-): Change {
+) {
   const kept = Arr.filter(intent.authority.run_verification, (spec) => spec.name !== name);
-  return {
+  const returned: Change = {
     kind: "authority",
     patch: { run_verification: command === null ? kept : [...kept, { name, ...command }] },
   };
+  return returned;
 }
 
-function describe(change: Change): string {
+function describe(change: Change) {
   switch (change.kind) {
     case "set-goal":
       return `goal set to ${change.goal === null ? "nothing" : JSON.stringify(change.goal)}`;
@@ -170,7 +172,7 @@ function describe(change: Change): string {
   }
 }
 
-function applied(intent: Intent, change: Change, version: number): Intent | null {
+function applied(intent: Intent, change: Change, version: number) {
   switch (change.kind) {
     case "set-goal":
       return intent.goal === change.goal ? null : { ...intent, goal: change.goal };
@@ -195,13 +197,7 @@ function applied(intent: Intent, change: Change, version: number): Intent | null
  * version bump that changed nothing is a history entry nobody can act on, and every
  * later comparison keys off the version.
  */
-export function amend(
-  intent: Intent,
-  change: Change,
-  by: string,
-  at: string,
-  voice: Voice = {},
-): Intent {
+export function amend(intent: Intent, change: Change, by: string, at: string, voice: Voice = {}) {
   const version = intent.version + 1;
   const next = applied(intent, change, version);
   if (!next) return intent;
@@ -213,10 +209,7 @@ export function amend(
 }
 
 /** A Run's launch options, with the outcome kind its Intent was last set to where it was. */
-export function withOutcome(
-  options: Readonly<Record<string, string>>,
-  intent: Intent | null,
-): Readonly<Record<string, string>> {
+export function withOutcome(options: Readonly<Record<string, string>>, intent: Intent | null) {
   if (intent?.outcome === undefined) return options;
   const { outcome: _admitted, ...rest } = options;
   return intent.outcome === null ? rest : { ...rest, outcome: intent.outcome };
@@ -234,7 +227,7 @@ export function followPlan(
   intent: Intent,
   found: ReadonlyArray<Omit<Constraint, "since">>,
   at: string,
-): Intent {
+) {
   const removedByOthers = new Set(
     Arr.map(
       Arr.filter(intent.history, (entry) => entry.by !== PLAN_AUTHOR),
@@ -279,7 +272,7 @@ export interface SeedOptions {
  * a default with the same id, so a human who typed a stricter version of a default
  * gets one constraint and not two that disagree.
  */
-export function seedIntent(run: string, options: SeedOptions): Intent {
+export function seedIntent(run: string, options: SeedOptions) {
   const byId = new Map<string, Constraint>();
   for (const constraint of options.defaults?.constraints ?? []) byId.set(constraint.id, constraint);
   for (const constraint of options.constraints ?? [])
@@ -402,7 +395,7 @@ export function extractRequirements(text: string, file: string) {
   return { goal, constraints };
 }
 
-function firstParagraphUnder(lines: ReadonlyArray<string>, heading: RegExp): string | null {
+function firstParagraphUnder(lines: ReadonlyArray<string>, heading: RegExp) {
   const start = Option.getOrElse(
     Arr.findFirstIndex(lines, (line) => heading.test(line)),
     () => -1,
@@ -454,7 +447,7 @@ export const writeDefaults = Effect.fn("Intent.writeDefaults")(function* (
 export const EMPTY_DEFAULTS: Defaults = { constraints: [], authority: DEFAULT_AUTHORITY };
 
 /** The defaults as a human reads them: what every Run started here begins with. */
-export function describeDefaults(defaults: Defaults): string {
+export function describeDefaults(defaults: Defaults) {
   return Arr.join(
     [
       ...Arr.map(defaults.constraints, (c) => `${c.id}\t${c.severity}\t${c.kind}\t${c.text}`),
@@ -494,10 +487,7 @@ export const fromWorkSource = Effect.fn("Intent.fromWorkSource")(function* (
  * positional on purpose — a constraint the human cannot predict the meaning of is
  * worse than one they have to look up.
  */
-export function parseConstraint(
-  text: string,
-  severity: "block" | "warn",
-): Omit<Constraint, "since"> | { readonly error: string } {
+export function parseConstraint(text: string, severity: "block" | "warn") {
   const base = {
     id: constraintId(text),
     text,
@@ -510,7 +500,7 @@ export function parseConstraint(
   return "error" in rule ? rule : { ...base, kind: "rule" as const, rule };
 }
 
-function parseRule(kind: string, args: string[]): RuleSpec | { readonly error: string } {
+function parseRule(kind: string, args: string[]) {
   const wrong = (spelling: string) => ({
     error: `rule:${kind} is spelled rule:${kind}:${spelling}`,
   });

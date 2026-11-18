@@ -117,12 +117,6 @@ interface Link {
   readonly write: (bytes: Uint8Array) => Effect.Effect<void>;
 }
 
-type Answer =
-  | { readonly result: Schema.Json }
-  | {
-      readonly failure: { readonly code: number; readonly message: string; readonly kind: string };
-    };
-
 const json = (value: Schema.Json) => value;
 
 interface Terminal {
@@ -142,7 +136,7 @@ interface Terminal {
 }
 
 /** A terminal as core's API shows it. */
-const view = (terminal: Terminal): Schema.JsonObject => ({
+const view: (terminal: Terminal) => Schema.JsonObject = (terminal) => ({
   address: terminal.address,
   name: terminal.name,
   labels: terminal.labels,
@@ -234,7 +228,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       Arr.filter([...terminals.values()], (t) => t.state === "live"),
       view,
     );
-  const notFound = (params: Schema.JsonObject): Answer => ({
+  const notFound = (params: Schema.JsonObject) => ({
     failure: {
       code: -32000,
       message: `no terminal ${text(params.terminal) ?? ""}`,
@@ -347,7 +341,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     opencodes.set(terminal.address, served);
   };
 
-  const profile = (machine: Added): Schema.JsonObject => ({
+  const profile = (machine: Added) => ({
     name: machine.name,
     target: machine.target,
     via: machine.via,
@@ -355,7 +349,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     host: machine.name,
     version: "0.1.14",
   });
-  const machineView = (machine: Added): Schema.JsonObject => ({
+  const machineView: (machine: Added) => Schema.JsonObject = (machine) => ({
     ...profile(machine),
     state: machine.state,
     why: machine.why,
@@ -378,7 +372,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       const ms = (yield* Clock.currentTimeMillis) - started;
       yield* logged("dialled", { machine: machine.name, code, ms });
     });
-  const unknownMachine = (params: Schema.JsonObject): Answer => ({
+  const unknownMachine = (params: Schema.JsonObject) => ({
     failure: {
       code: -32000,
       message: `no machine ${text(params.machine) ?? ""}`,
@@ -386,7 +380,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     },
   });
 
-  const answer = (method: string, params: Schema.JsonObject, link: Link): Effect.Effect<Answer> =>
+  const answer = (method: string, params: Schema.JsonObject, link: Link) =>
     Effect.gen(function* () {
       const refused = refusals.get(method);
       if (refused !== undefined) return { failure: refused };
@@ -589,12 +583,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       }
     });
 
-  const reply = (
-    id: number,
-    method: string,
-    params: Schema.JsonObject,
-    link: Link,
-  ): Effect.Effect<Schema.Json> =>
+  const reply = (id: number, method: string, params: Schema.JsonObject, link: Link) =>
     Effect.gen(function* () {
       const answered = yield* answer(method, params, link);
       if ("failure" in answered) {
@@ -714,7 +703,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
 
   const server = yield* BunSocketServer.make({ path: socketPath }).pipe(Scope.provide(scope));
   yield* Effect.forkIn(server.run(connection), scope);
-  return {
+  const returned: FakeHc = {
     socketPath,
     logPath,
     cd: (name, dir) => {
@@ -804,5 +793,6 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     barePath: () => {
       bare = true;
     },
-  } satisfies FakeHc;
+  };
+  return returned;
 });

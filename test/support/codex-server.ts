@@ -227,11 +227,11 @@ const main = Effect.gen(function* () {
     );
     yield* record({ child: child.pid });
   }
-  const statusOf = (thread: StandIn["threads"][number]): Schema.Json => {
+  const statusOf = (thread: StandIn["threads"][number]) => {
     const active = Arr.some(running(), (turn) => Arr.contains(turns.get(thread.id) ?? [], turn));
-    return (thread.status ?? (active ? "active" : "idle")) === "idle"
-      ? { type: "idle" }
-      : { type: "active", activeFlags: [] };
+    const idle = (thread.status ?? (active ? "active" : "idle")) === "idle";
+    const status: Schema.Json = idle ? { type: "idle" } : { type: "active", activeFlags: [] };
+    return status;
   };
   const answer = (ws: import("bun").ServerWebSocket<undefined>, raw: string | Buffer) =>
     Effect.gen(function* () {

@@ -91,11 +91,15 @@ export const CAPABILITIES = {
 } satisfies Record<string, Record<Capability, CapabilityRecord>>;
 
 /** One harness's row, or none: a harness nobody has tested is not in the table. */
-function rowFor(harness: string): Record<Capability, CapabilityRecord> | undefined {
+function rowFor(harness: string) {
   // SAFETY: the check establishes that `harness` is one of the table's own keys.
-  return Arr.some(Rec.keys(CAPABILITIES), (key) => key === harness)
+  const returned: Record<Capability, CapabilityRecord> | undefined = Arr.some(
+    Rec.keys(CAPABILITIES),
+    (key) => key === harness,
+  )
     ? CAPABILITIES[harness as keyof typeof CAPABILITIES]
     : undefined;
+  return returned;
 }
 
 /** One harness's recorded row, for a caller that has a harness name and not a literal. */
@@ -104,7 +108,7 @@ export function capabilitiesOf(harness: string) {
 }
 
 /** The capability a delivery mode needs. `boundary` is the next prompt; it needs none. */
-export function needed(mode: "boundary" | "now" | "interrupt"): Capability | null {
+export function needed(mode: "boundary" | "now" | "interrupt") {
   return mode === "boundary" ? null : mode;
 }
 
@@ -137,6 +141,6 @@ export const gate = Effect.fn("SteeringCaps.gate")(function* (
 });
 
 /** The keys this harness takes as an interrupt, or none — in which case it cannot be. */
-export function interruptKeys(harness: string): ReadonlyArray<string> | null {
+export function interruptKeys(harness: string) {
   return rowFor(harness)?.interrupt.interrupt_key ?? null;
 }

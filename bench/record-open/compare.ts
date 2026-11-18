@@ -21,7 +21,7 @@ export interface PaintedRow {
 export type Painted = ReadonlyArray<PaintedRow>;
 
 /** What FlowMap paints of `flow` on a live Machine with nothing linked away. */
-export const paintedOf = (flow: Flow, installation: string): Painted =>
+export const paintedOf = (flow: Flow, installation: string) =>
   Arr.map(flowRows(flow), (row) => {
     const lane = Option.getOrElse(
       Arr.findFirst(flow.lanes, (one) => one.run === row.run),
@@ -55,7 +55,7 @@ export const paintedOf = (flow: Flow, installation: string): Painted =>
 const listed = (names: ReadonlyArray<string>) => `"${Arr.join(names, ", ")}"`;
 
 /** How `shown` differs from `host`, empty where it is the same Flow. */
-export const differences = (shown: Painted, host: Painted): ReadonlyArray<string> => {
+export const differences = (shown: Painted, host: Painted) => {
   if (shown.length !== host.length || Arr.some(shown, (row, at) => row.name !== host[at]!.name))
     return [
       `rows are ${listed(Arr.map(shown, (row) => row.name))}, not ${listed(Arr.map(host, (row) => row.name))}`,

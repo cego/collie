@@ -32,23 +32,23 @@ export interface Draft {
   readonly text: string;
 }
 
-export const addDraft = (drafts: ReadonlyArray<Draft>, draft: Draft): Draft[] => [...drafts, draft];
+export const addDraft = (drafts: ReadonlyArray<Draft>, draft: Draft) => [...drafts, draft];
 
-export const editDraft = (drafts: ReadonlyArray<Draft>, id: string, text: string): Draft[] =>
+export const editDraft = (drafts: ReadonlyArray<Draft>, id: string, text: string) =>
   Arr.map(drafts, (draft) => (draft.id === id ? { ...draft, text } : draft));
 
-export const removeDraft = (drafts: ReadonlyArray<Draft>, id: string): Draft[] =>
+export const removeDraft = (drafts: ReadonlyArray<Draft>, id: string) =>
   Arr.filter(drafts, (draft) => draft.id !== id);
 
 /** What is left once the drafts `sent` carried have gone; one edited since is kept. */
-export const clearSent = (drafts: ReadonlyArray<Draft>, sent: ReadonlyArray<Draft>): Draft[] =>
+export const clearSent = (drafts: ReadonlyArray<Draft>, sent: ReadonlyArray<Draft>) =>
   Arr.filter(
     drafts,
     (draft) => !Arr.some(sent, (one) => one.id === draft.id && one.text === draft.text),
   );
 
 /** A selection in a plan file as an anchor; null for one with nothing but whitespace. */
-export const planAnchor = (file: string, selected: string): PlanAnchor | null =>
+export const planAnchor = (file: string, selected: string) =>
   Str.trim(selected) === "" ? null : { _tag: "Plan", file, quote: selected };
 
 /** The hunk of `file` that shows `line` on `side`, and where its lines start. */
@@ -80,11 +80,11 @@ const textAt = (file: FileDiffMetadata, line: number, side: SelectionSide) => {
  * The lines a selection covers on its side, the file as it is now where it names none. One
  * crossing to the other side is its first line alone, since the two sides number apart.
  */
-export const diffAnchor = (
+export const diffAnchor: (
   path: string,
   range: SelectedLineRange,
   file: FileDiffMetadata,
-): DiffAnchor => {
+) => DiffAnchor = (path, range, file) => {
   const side = range.side ?? "additions";
   const end = (range.endSide ?? side) === side ? range.end : range.start;
   const first = Math.min(range.start, end);

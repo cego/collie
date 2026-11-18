@@ -80,13 +80,13 @@ const project = (world: World) =>
     return { base, harness, product, commit, write };
   });
 
-const planOf = (
+const planOf: (
   harness: string,
   script: string,
   ran: string,
-  more: { readonly limit?: number } = {},
-  argv: ReadonlyArray<string> = [],
-): Plan => ({
+  more?: { readonly limit?: number },
+  argv?: ReadonlyArray<string>,
+) => Plan = (harness, script, ran, more = {}, argv = []) => ({
   harness: { commits: [harness], paths: ["bench"] },
   commands: [{ name: "bench", executable: "sh", argv: [`bench/${script}`, ran, ...argv] }],
   metrics: [{ name: "bench.counter", direction: "lower", role: "primary" }],
@@ -143,7 +143,7 @@ const linesOf = (world: World, file: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(file)),
     Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
-    Effect.orElseSucceed((): Array<string> => []),
+    Effect.orElseSucceed(() => []),
   );
 
 const verdictOf = (measurement: Measurement, metric: string) =>

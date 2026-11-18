@@ -439,7 +439,7 @@ const REMOVED = [
   ],
 ] as const;
 
-export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
+export const sdkModules: () => ReadonlyArray<readonly [string, object]> = () => {
   // Two files, one module: `sdk.ts` is what a module declares about itself and `agents.ts`
   // is what it does with an agent. They are apart because the second reaches for herdr
   // and the first must not, and an author has no reason to know that.
@@ -2768,7 +2768,7 @@ const itself = (workflow: string) => (workflow === "self" ? SELF : workflow);
  * are kept as they are: the module is the only thing that can answer for its own actions,
  * and a projection of one would be a copy that stops agreeing with it.
  */
-export function declaredByModule(metadata: WorkflowMetadata | undefined): Declared[] {
+export function declaredByModule(metadata: WorkflowMetadata | undefined) {
   const actions = Arr.map(metadata?.actions ?? [], (action) => ({
     id: action.id,
     title: action.title,
@@ -2798,10 +2798,11 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
       (offer.when === "always" || (offer.when === "succeeded") === facts.succeeded) &&
       (offer.eligible?.(facts) ?? true),
   }));
-  return [...actions, ...followUps];
+  const returned: Declared[] = [...actions, ...followUps];
+  return returned;
 }
 
-export function installSdk(): void {
+export function installSdk() {
   if (sdkInstalled) return;
   sdkInstalled = true;
   Bun.plugin({
@@ -2892,7 +2893,7 @@ const isWritten = (exported: unknown): exported is WrittenDefinition =>
   Schema.is(DefinitionContract)(exported);
 
 /** A definition as the entry the rest of the host reads. */
-const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
+const entryOf: (definition: WorkflowDefinition) => WorkflowEntry = (definition) => {
   const { outcome, checkout, closes, heals, followUps, actions, connections, follows } = definition;
   const path = Option.getOrUndefined(
     Option.map(Option.fromNullishOr(definition.path), (present) =>
@@ -2985,7 +2986,10 @@ const waitForEntry = (workflow: HostWorkflow, runId: string, before: number) =>
  * The Effect workflow a definition is registered as, under the host's own name for this
  * generation. The Run it executes as is provided here, so no author passes it along.
  */
-const registrationOf = (definition: WorkflowDefinition, name: string): Registration => {
+const registrationOf: (definition: WorkflowDefinition, name: string) => Registration = (
+  definition,
+  name,
+) => {
   // SAFETY: every workflow is executed with this envelope, and its input is the
   // definition's own struct, whose fields checkEntry has held to be schemas.
   const payload = Schema.Struct({ runId: Schema.String, input: definition.input }) as HostPayload;
@@ -3163,7 +3167,12 @@ const CHECK_PROJECT = ".collie-check";
 const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const names: Array<string> = [];
-  const top = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed((): Array<string> => []));
+  const top = yield* fs.readDirectory(dir).pipe(
+    Effect.orElseSucceed(() => {
+      const returned: Array<string> = [];
+      return returned;
+    }),
+  );
   for (const name of top) {
     if (unstaged(name)) continue;
     names.push(name);
@@ -3175,9 +3184,12 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
       Effect.orElseSucceed(() => false),
     );
     if (link) continue;
-    const below = yield* fs
-      .readDirectory(`${dir}/${name}`, { recursive: true })
-      .pipe(Effect.orElseSucceed((): Array<string> => []));
+    const below = yield* fs.readDirectory(`${dir}/${name}`, { recursive: true }).pipe(
+      Effect.orElseSucceed(() => {
+        const returned: Array<string> = [];
+        return returned;
+      }),
+    );
     names.push(...Arr.map(below, (one) => `${name}/${one}`));
   }
   return names;
@@ -3212,9 +3224,12 @@ const sourceTree = Effect.fn("Engine.sourceTree")(function* (dir: string) {
   // An installed dependency counts by its names alone: the toolchain a module is
   // typechecked against lives here too, and reading all of it would cost more than
   // every start it is on the way of.
-  const installed = yield* fs
-    .readDirectory(`${dir}/node_modules`, { recursive: true })
-    .pipe(Effect.orElseSucceed((): Array<string> => []));
+  const installed = yield* fs.readDirectory(`${dir}/node_modules`, { recursive: true }).pipe(
+    Effect.orElseSucceed(() => {
+      const returned: Array<string> = [];
+      return returned;
+    }),
+  );
   let read = Arr.join(
     Arr.map(installed.sort(), (name) => `node_modules/${name}\n`),
     "",
@@ -3361,7 +3376,7 @@ const stageFiles = Effect.fn("Engine.stageFiles")(function* (
   return staged(options.entry);
 });
 
-const loaderOf = (name: string): "ts" | "tsx" | "js" | null => {
+const loaderOf: (name: string) => "ts" | "tsx" | "js" | null = (name) => {
   if (/\.(ts|mts|cts)$/.test(name)) return "ts";
   if (pipe(name, Str.endsWith(".tsx"))) return "tsx";
   return /\.(js|mjs|cjs|jsx)$/.test(name) ? "js" : null;
@@ -3388,7 +3403,9 @@ const parentOf = (at: string) =>
   );
 
 /** Every generation a host staged, gone: a new host stages from the sources again. */
-export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
+export const clearGenerations: (
+  dir: string,
+) => Effect.Effect<void, never, FileSystem.FileSystem> = (dir) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.remove(`${dir}/generations`, { recursive: true, force: true })),
     Effect.ignore({ log: "Warn" }),
@@ -3403,14 +3420,7 @@ export function engineLayer(options: {
   readonly dir: string;
   /** How often the engine reads its storage for messages now due; upstream's default if unset. */
   readonly messagePoll?: Duration.Input | undefined;
-}): Layer.Layer<
-  | WorkflowEngine.WorkflowEngine
-  | MessageStorage.MessageStorage
-  | SqlClient.SqlClient
-  | Reactivity.Reactivity
-  | EngineTouches,
-  ConfigError
-> {
+}) {
   // One connection, two halves: the engine's own tables and the rows Collie keeps beside
   // them are in the same file, written by the same process.
   // A host that cannot open its own database has nothing to serve.
@@ -3476,7 +3486,15 @@ export function engineLayer(options: {
       ),
     ),
   );
-  return engine.pipe(Layer.provideMerge(sql), Layer.provideMerge(engineTouchesLayer));
+  const returned: Layer.Layer<
+    | WorkflowEngine.WorkflowEngine
+    | MessageStorage.MessageStorage
+    | SqlClient.SqlClient
+    | Reactivity.Reactivity
+    | EngineTouches,
+    ConfigError
+  > = engine.pipe(Layer.provideMerge(sql), Layer.provideMerge(engineTouchesLayer));
+  return returned;
 }
 
 /** The one shard this engine holds, which every message is on. */
@@ -3549,8 +3567,13 @@ const AWAITED = "awaited";
 const NOTIFIED = "notified";
 
 const decodeParkCause = Schema.decodeUnknownOption(ParkCause);
-const parkCauseOf = (text: string | null): ParkCause =>
-  text === null ? "unknown" : Option.getOrElse(decodeParkCause(text), (): ParkCause => "unknown");
+const parkCauseOf: (text: string | null) => ParkCause = (text) =>
+  text === null
+    ? "unknown"
+    : Option.getOrElse(decodeParkCause(text), () => {
+        const returned: ParkCause = "unknown";
+        return returned;
+      });
 
 export const UsageWaitSchema = Schema.Struct({
   account: Schema.String,
@@ -3567,14 +3590,16 @@ const UNSPECIFIED = "unspecified";
  * because the collector is the same one the command line uses — what proves a Run is not
  * a different thing for being a module's.
  */
-export const evidenceDir = (dir: string, runId: string): string => `${dir}/evidence/${runId}`;
+export const evidenceDir: (dir: string, runId: string) => string = (dir, runId) =>
+  `${dir}/evidence/${runId}`;
 
 /**
  * Where one Run's own work belongs: the plan it wrote, the review it left, and
  * anything else a card reads back. A directory per Run rather than a column, because what
  * a Run produces is files and the things that read them are ordinary readers of files.
  */
-export const runDir = (dir: string, runId: string): string => `${dir}/runs/${runId}`;
+export const runDir: (dir: string, runId: string) => string = (dir, runId) =>
+  `${dir}/runs/${runId}`;
 
 /**
  * A Run, then the Runs it came from: its parent and the Run whose plan it builds. Stops at
@@ -3622,24 +3647,22 @@ const reviewedAsk = (
 });
 
 /** The Run that recorded the checkout at a path; a review's fix round never takes one over. */
-const recordedIn =
-  (store: StoreApi): RecordedBy =>
-  (at) =>
-    store.runs.pipe(
-      Effect.map((rows) => {
-        const one = Option.getOrUndefined(
-          Arr.findFirst(rows, (row) => placedOf(row, {}).worktree?.path === at),
-        );
-        return one === undefined
-          ? null
-          : {
-              run: one.run,
-              worktree: placedOf(one, {}).worktree ?? null,
-              live: Effect.succeed(null),
-              release: Effect.succeed("a review's fix round takes over nothing"),
-            };
-      }),
-    );
+const recordedIn: (store: StoreApi) => RecordedBy = (store) => (at) =>
+  store.runs.pipe(
+    Effect.map((rows) => {
+      const one = Option.getOrUndefined(
+        Arr.findFirst(rows, (row) => placedOf(row, {}).worktree?.path === at),
+      );
+      return one === undefined
+        ? null
+        : {
+            run: one.run,
+            worktree: placedOf(one, {}).worktree ?? null,
+            live: Effect.succeed(null),
+            release: Effect.succeed("a review's fix round takes over nothing"),
+          };
+    }),
+  );
 
 /**
  * Why a Run `starter` starts on `target` would have its reviewed checkout refused now, or
@@ -3655,7 +3678,10 @@ const refusedCheckout = (o: {
 }) =>
   Effect.gen(function* () {
     const launch = yield* decodeStrings(o.starter.options ?? "{}").pipe(
-      Effect.orElseSucceed((): Record<string, string> => ({})),
+      Effect.orElseSucceed(() => {
+        const returned: Record<string, string> = {};
+        return returned;
+      }),
     );
     const placed = placedOf(o.starter, launch);
     const { herdr, env } = o.placing;
@@ -3726,7 +3752,10 @@ export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (opti
   const approved =
     options.approved ??
     (yield* approvedAt(options.project, options.userDir, yield* startOf(options.project)).pipe(
-      Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []),
+      Effect.orElseSucceed(() => {
+        const returned: ReadonlyArray<VerifySpec> = [];
+        return returned;
+      }),
     ));
   yield* updateApproved(evidence, (was) => was ?? approved);
 });
@@ -3750,14 +3779,17 @@ const encodeClaims = flow(
 );
 
 /** What this Run already claimed, empty where it has claimed nothing yet. */
-const recordedClaims = (
+const recordedClaims: (
   file: string,
-): Effect.Effect<ReadonlyArray<HelleClaim>, never, FileSystem.FileSystem> =>
+) => Effect.Effect<ReadonlyArray<HelleClaim>, never, FileSystem.FileSystem> = (file) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(file)),
     Effect.flatMap(decodeClaims),
     Effect.map((read) => ("slug" in read ? [read] : read)),
-    Effect.orElseSucceed((): ReadonlyArray<HelleClaim> => []),
+    Effect.orElseSucceed(() => {
+      const returned: ReadonlyArray<HelleClaim> = [];
+      return returned;
+    }),
   );
 
 /** Writes a Run's claims, and removes the record where none are left. */
@@ -3936,7 +3968,7 @@ const restoreCheckout = (cwd: string, away: string) =>
   });
 
 /** The pass a workflow's verify asked for: at the default branch's base it is `baseline`. */
-const passAsked = (asked: Parameters<Sdk.HostApi["verify"]>[0]): CheckPass => {
+const passAsked: (asked: Parameters<Sdk.HostApi["verify"]>[0]) => CheckPass = (asked) => {
   if (asked.at === "default-base") return { pass: "baseline" };
   if (asked.pass === "fix" && asked.round !== undefined) return { pass: "fix", round: asked.round };
   return { pass: asked.pass ?? "check" };
@@ -4006,7 +4038,10 @@ const recoveryFor = Effect.fn("Engine.recoveryFor")(function* (
     own === null
       ? {}
       : yield* decodeStrings(own.options ?? "{}").pipe(
-          Effect.orElseSucceed((): Record<string, string> => ({})),
+          Effect.orElseSucceed(() => {
+            const returned: Record<string, string> = {};
+            return returned;
+          }),
         );
   const candidates = Arr.filter(
     yield* store.runs,
@@ -4023,7 +4058,7 @@ const recoveryFor = Effect.fn("Engine.recoveryFor")(function* (
   });
 });
 
-export const hostLayer = (options: {
+export const hostLayer: (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
   readonly userDir?: string;
@@ -4042,11 +4077,11 @@ export const hostLayer = (options: {
   readonly issuePrivacyBudget?: Duration.Input;
   /** How often a wait for review reads the merge request again. */
   readonly reviewPoll?: Duration.Input;
-}): Layer.Layer<
+}) => Layer.Layer<
   Host | Notifier | Oversight | Reliance,
   never,
   Store | Records | PlatformServices | ForgeHttp
-> =>
+> = (options) =>
   Layer.effectContext(
     Effect.gen(function* () {
       const dir = options.dir;
@@ -4161,7 +4196,10 @@ export const hostLayer = (options: {
                 : placedOf(
                     row,
                     yield* decodeStrings(row.options ?? "{}").pipe(
-                      Effect.orElseSucceed((): Record<string, string> => ({})),
+                      Effect.orElseSucceed(() => {
+                        const returned: Record<string, string> = {};
+                        return returned;
+                      }),
                     ),
                   ).cwd;
             const task =
@@ -4215,11 +4253,11 @@ export const hostLayer = (options: {
         }
         return lineage;
       });
-      const inheritedEvidence = (
+      const inheritedEvidence: (
         runs: ReadonlyArray<string>,
         cwd: string,
         seen: ReadonlySet<string>,
-      ): Effect.Effect<ReadonlyArray<Verification>, never, Collecting> =>
+      ) => Effect.Effect<ReadonlyArray<Verification>, never, Collecting> = (runs, cwd, seen) =>
         Effect.map(
           Effect.forEach(runs, (runId) =>
             Effect.gen(function* () {
@@ -4403,11 +4441,17 @@ export const hostLayer = (options: {
           const row = yield* store.run(runId);
           if (row === null) return { refused: `there is no Run ${runId}` };
           const launch = yield* decodeStrings(row.options ?? "{}").pipe(
-            Effect.orElseSucceed((): Record<string, string> => ({})),
+            Effect.orElseSucceed(() => {
+              const returned: Record<string, string> = {};
+              return returned;
+            }),
           );
           const placed = placedOf(row, launch);
           const input = yield* decodeInput(row.input).pipe(
-            Effect.orElseSucceed((): Readonly<Record<string, Schema.Json>> => ({})),
+            Effect.orElseSucceed(() => {
+              const returned: Readonly<Record<string, Schema.Json>> = {};
+              return returned;
+            }),
           );
           const field = fieldWith(yield* WorkflowHints, "diff-target");
           const target = field === undefined ? undefined : input[field];
@@ -4772,22 +4816,37 @@ export const hostLayer = (options: {
         under(
           Effect.gen(function* () {
             const ref = mrRefOf(mr);
-            if (ref === null) return { _tag: "Unreadable" } satisfies MrLanding;
+            if (ref === null) {
+              const returned: MrLanding = { _tag: "Unreadable" };
+              return returned;
+            }
             const read = yield* forgeOf(ref).readReview(ref, cwd, runShell);
-            if (!read.ok) return { _tag: "Unreadable" } satisfies MrLanding;
-            if (read.state === "open") return { _tag: "Open" } satisfies MrLanding;
-            if (read.state === "closed") return { _tag: "Closed" } satisfies MrLanding;
+            if (!read.ok) {
+              const returned: MrLanding = { _tag: "Unreadable" };
+              return returned;
+            }
+            if (read.state === "open") {
+              const returned: MrLanding = { _tag: "Open" };
+              return returned;
+            }
+            if (read.state === "closed") {
+              const returned: MrLanding = { _tag: "Closed" };
+              return returned;
+            }
             const sha = read.merged?.sha ?? "";
             const branch = yield* defaultBase(runShell, cwd);
-            if (sha === "" || branch === null)
-              return { _tag: "Merged", onDefault: false } satisfies MrLanding;
+            if (sha === "" || branch === null) {
+              const returned: MrLanding = { _tag: "Merged", onDefault: false };
+              return returned;
+            }
             yield* runShell("git", ["fetch", "-q", "origin", branch], cwd);
             const carried = yield* runShell(
               "git",
               ["merge-base", "--is-ancestor", sha, `origin/${branch}`],
               cwd,
             );
-            return { _tag: "Merged", onDefault: carried.code === 0 } satisfies MrLanding;
+            const returned: MrLanding = { _tag: "Merged", onDefault: carried.code === 0 };
+            return returned;
           }),
         );
       const prerequisitesRead = (asked: {
@@ -4815,7 +4874,12 @@ export const hostLayer = (options: {
           const optionsOf = (run: string) =>
             decodeStrings(
               Option.getOrUndefined(Arr.findFirst(rows, (row) => row.run === run))?.options ?? "{}",
-            ).pipe(Effect.orElseSucceed((): Record<string, string> => ({})));
+            ).pipe(
+              Effect.orElseSucceed(() => {
+                const returned: Record<string, string> = {};
+                return returned;
+              }),
+            );
           const details = new Map<string, RunDetail>();
           for (const run of Arr.dedupe(
             Arr.flatMap(prerequisites, (one) => [one.run, ...descendantsOf(rows, one.run)]),
@@ -4974,7 +5038,10 @@ export const hostLayer = (options: {
                   row === null
                     ? Effect.succeed(null)
                     : decodeStrings(row.options ?? "{}").pipe(
-                        Effect.orElseSucceed((): Record<string, string> => ({})),
+                        Effect.orElseSucceed(() => {
+                          const returned: Record<string, string> = {};
+                          return returned;
+                        }),
                         Effect.flatMap((admitted) => optionsNow(dir, runId, admitted)),
                         Effect.map((options) => ({
                           options,
@@ -5265,7 +5332,10 @@ export const hostLayer = (options: {
               return yield* Effect.all({
                 verifications: Effect.forEach(lineage, (from) =>
                   readVerifications(evidenceDir(dir, from)).pipe(
-                    Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
+                    Effect.orElseSucceed(() => {
+                      const returned: ReadonlyArray<Verification> = [];
+                      return returned;
+                    }),
                   ),
                 ).pipe(
                   Effect.map((lines) =>
@@ -5277,7 +5347,10 @@ export const hostLayer = (options: {
                   commandOf({ ...own, cwd }, spec),
                 ),
                 measurements: readMeasurements(evidenceDir(dir, runId)).pipe(
-                  Effect.orElseSucceed((): ReadonlyArray<Measurement> => []),
+                  Effect.orElseSucceed(() => {
+                    const returned: ReadonlyArray<Measurement> = [];
+                    return returned;
+                  }),
                 ),
                 mergeBase: Effect.map(defaultMergeBase(cwd), (found) =>
                   found.found ? found.base : null,
@@ -5637,73 +5710,78 @@ export const hostLayer = (options: {
             readonly jobs: ReadonlyArray<string>;
           };
           readonly free?: boolean;
-        }): Effect.Effect<Sdk.Claimed, WorkflowError | E, R> =>
-          Effect.gen(function* () {
-            const file = claimPath(dir, asked.runId);
-            const held = yield* waitForHelle({
-              ...(yield* helleWhere(asked.cwd, asked.deploys)),
-              free: asked.free ?? false,
-              claimed: yield* recordedClaims(file),
-              record: (claim) =>
-                Effect.gen(function* () {
-                  if (claim.claim === "adopted") {
-                    const agents = yield* Effect.serviceOption(Agents);
-                    const executions = yield* Effect.serviceOption(Executions);
-                    const from = yield* handOverClaim({
-                      dir,
-                      slug: claim.slug,
-                      to: asked.runId,
-                      runs: Arr.map(yield* store.runs, (row) => row.run),
-                      stop: (runId) =>
-                        Option.isSome(executions)
-                          ? executions.value.stop(runId)
-                          : Effect.succeed({ runs: [runId], left: ["nothing here can stop it"] }),
-                      halt: (runId) =>
-                        Option.isSome(agents)
-                          ? agents.value.halt(runId)
-                          : Effect.succeed({ stopped: [], left: ["nothing here can close them"] }),
-                      stopped: (runId) =>
-                        Option.isSome(executions)
-                          ? executions.value.stopped(runId)
-                          : Effect.succeed(false),
-                    });
-                    for (const runId of from) {
-                      yield* asked.say(`took the claim on ${claim.slug} over from ${runId}`);
+        }) => {
+          const returned: Effect.Effect<Sdk.Claimed, WorkflowError | E, R> = Effect.gen(
+            function* () {
+              const file = claimPath(dir, asked.runId);
+              const held = yield* waitForHelle({
+                ...(yield* helleWhere(asked.cwd, asked.deploys)),
+                free: asked.free ?? false,
+                claimed: yield* recordedClaims(file),
+                record: (claim) =>
+                  Effect.gen(function* () {
+                    if (claim.claim === "adopted") {
+                      const agents = yield* Effect.serviceOption(Agents);
+                      const executions = yield* Effect.serviceOption(Executions);
+                      const from = yield* handOverClaim({
+                        dir,
+                        slug: claim.slug,
+                        to: asked.runId,
+                        runs: Arr.map(yield* store.runs, (row) => row.run),
+                        stop: (runId) =>
+                          Option.isSome(executions)
+                            ? executions.value.stop(runId)
+                            : Effect.succeed({ runs: [runId], left: ["nothing here can stop it"] }),
+                        halt: (runId) =>
+                          Option.isSome(agents)
+                            ? agents.value.halt(runId)
+                            : Effect.succeed({
+                                stopped: [],
+                                left: ["nothing here can close them"],
+                              }),
+                        stopped: (runId) =>
+                          Option.isSome(executions)
+                            ? executions.value.stopped(runId)
+                            : Effect.succeed(false),
+                      });
+                      for (const runId of from) {
+                        yield* asked.say(`took the claim on ${claim.slug} over from ${runId}`);
+                      }
                     }
-                  }
-                  yield* fs
-                    .makeDirectory(runDir(dir, asked.runId), { recursive: true })
-                    .pipe(
-                      Effect.andThen(
-                        updateClaims(file, (before) => [
-                          ...Arr.filter(before, (one) => one.slug !== claim.slug),
-                          claim,
-                        ]),
-                      ),
-                      Effect.orDie,
-                    );
-                }),
-              forget: (slug) =>
-                updateClaims(file, (before) => Arr.filter(before, (one) => one.slug !== slug)).pipe(
-                  Effect.orDie,
-                ),
-              out: asked.say,
-              // The question is the workflow's, so it is durable and asked once; this only
-              // turns the answer into the word the gate reads.
-              ask: () => asked.adopting.pipe(Effect.map((yes) => (yes ? "yes" : null))),
-              queued: (slug, position) =>
-                waitOn(asked.runId, {
-                  on: `its turn for the Helle claim on ${slug}, at ${position} in its queue`,
-                  who: "whoever holds it",
-                }),
-              ended: () => waitOn(asked.runId, null),
-            });
-            if (held._tag === "None") return { none: held.why };
-            if (held._tag === "Unresolved") return { unresolved: held.why };
-            return held.left === undefined
-              ? { slugs: held.slugs }
-              : { slugs: held.slugs, left: held.left };
-          }).pipe(
+                    yield* fs
+                      .makeDirectory(runDir(dir, asked.runId), { recursive: true })
+                      .pipe(
+                        Effect.andThen(
+                          updateClaims(file, (before) => [
+                            ...Arr.filter(before, (one) => one.slug !== claim.slug),
+                            claim,
+                          ]),
+                        ),
+                        Effect.orDie,
+                      );
+                  }),
+                forget: (slug) =>
+                  updateClaims(file, (before) =>
+                    Arr.filter(before, (one) => one.slug !== slug),
+                  ).pipe(Effect.orDie),
+                out: asked.say,
+                // The question is the workflow's, so it is durable and asked once; this only
+                // turns the answer into the word the gate reads.
+                ask: () => asked.adopting.pipe(Effect.map((yes) => (yes ? "yes" : null))),
+                queued: (slug, position) =>
+                  waitOn(asked.runId, {
+                    on: `its turn for the Helle claim on ${slug}, at ${position} in its queue`,
+                    who: "whoever holds it",
+                  }),
+                ended: () => waitOn(asked.runId, null),
+              });
+              if (held._tag === "None") return { none: held.why };
+              if (held._tag === "Unresolved") return { unresolved: held.why };
+              return held.left === undefined
+                ? { slugs: held.slugs }
+                : { slugs: held.slugs, left: held.left };
+            },
+          ).pipe(
             Effect.provide(FetchHttpClient.layer),
             Effect.provideContext(services),
             // Helle refusing to answer is this Run being unable to take the claim; the
@@ -5711,7 +5789,9 @@ export const hostLayer = (options: {
             Effect.mapError((cause: HelleError | E) =>
               cause instanceof HelleError ? new WorkflowError({ reason: cause.message }) : cause,
             ),
-          ),
+          );
+          return returned;
+        },
         holders: (asked) =>
           Effect.gen(function* () {
             return yield* helleHolders(yield* helleWhere(asked.cwd, asked.deploys));
@@ -5964,7 +6044,10 @@ export const hostLayer = (options: {
             if (pinned.refused !== undefined) return { refused: pinned.refused };
             if (pinned.moved !== undefined) return { moved: pinned.moved };
             const launch = yield* decodeStrings(row.options ?? "{}").pipe(
-              Effect.orElseSucceed((): Record<string, string> => ({})),
+              Effect.orElseSucceed(() => {
+                const returned: Record<string, string> = {};
+                return returned;
+              }),
             );
             const placed = placedOf(row, launch);
             yield* store.place(asked.runId, {
@@ -6402,7 +6485,10 @@ export const hostLayer = (options: {
               : placedOf(
                   row,
                   yield* decodeStrings(row.options ?? "{}").pipe(
-                    Effect.orElseSucceed((): Record<string, string> => ({})),
+                    Effect.orElseSucceed(() => {
+                      const returned: Record<string, string> = {};
+                      return returned;
+                    }),
                   ),
                 );
           const worktree = placed?.worktree?.path ?? null;
@@ -6417,12 +6503,18 @@ export const hostLayer = (options: {
             const opened = yield* mergeRequestOf(row.run);
             if (opened === null || mrId(opened) !== id) continue;
             const options = yield* decodeStrings(row.options ?? "{}").pipe(
-              Effect.orElseSucceed((): Record<string, string> => ({})),
+              Effect.orElseSucceed(() => {
+                const returned: Record<string, string> = {};
+                return returned;
+              }),
             );
             const parent = Arr.findFirst(rows, (one) => one.run === row.parent);
             if ((options.repo ?? "") === "" || Option.isNone(parent)) return undefined;
             const given = yield* decodeInput(parent.value.input).pipe(
-              Effect.orElseSucceed((): Readonly<Record<string, Schema.Json>> => ({})),
+              Effect.orElseSucceed(() => {
+                const returned: Readonly<Record<string, Schema.Json>> = {};
+                return returned;
+              }),
             );
             const root = (yield* checkoutOf(parent.value)).cwd;
             for (const value of Rec.values(given)) {
@@ -6448,8 +6540,8 @@ export const hostLayer = (options: {
           return undefined;
         }).pipe(Effect.provideContext(bun));
       /** A Run as a card sees it: where it works, and where its records are. */
-      const watched = (runId: string): Effect.Effect<Watched> =>
-        Effect.gen(function* () {
+      const watched = (runId: string) => {
+        const returned: Effect.Effect<Watched> = Effect.gen(function* () {
           const row = yield* store.run(runId);
           const task =
             row?.task == null
@@ -6485,6 +6577,8 @@ export const hostLayer = (options: {
             herd: task?.herd ?? (yield* hostHerd),
           };
         });
+        return returned;
+      };
       /** A card that is something a human could go and try is worth telling them about. */
       const told = (runId: string, cards: ReadonlyArray<Card>) =>
         Effect.forEach(cards, (card) =>
@@ -6663,10 +6757,11 @@ export interface Herd {
  * The public workflow id, this registration name and a run id stay three different things;
  * only the first is what an operator types.
  */
-export const nextRegistrationName = (
+export const nextRegistrationName: (
   known: ReadonlyArray<{ readonly workflow: string }>,
   id: string,
-): string => `${id}@${Arr.filter(known, (entry) => entry.workflow === id).length + 1}`;
+) => string = (known, id) =>
+  `${id}@${Arr.filter(known, (entry) => entry.workflow === id).length + 1}`;
 
 /** Once the Run has stopped, however long it takes to. */
 const untilStopped = (registration: Registration, executionId: string) =>
@@ -6683,10 +6778,10 @@ const wokeText = flow(Schema.encodeResult(Schema.fromJsonString(Woke)), Result.g
  * has stopped to wait on it: the engine still wakes a Run that read its answer early, and
  * that wake resumes whatever park the Run reached next.
  */
-export const answerDecision = (
+export const answerDecision: (
   registration: Registration,
   options: { readonly name: string; readonly executionId: string; readonly value: string },
-): Effect.Effect<void, never, WorkflowEngine.WorkflowEngine> => {
+) => Effect.Effect<void, never, WorkflowEngine.WorkflowEngine> = (registration, options) => {
   // A question is its name: one asked as the work reached it is found by that alone.
   const decision = DurableDeferred.make(options.name, { success: Schema.String });
   const token = DurableDeferred.tokenFromExecutionId(decision, {
@@ -6717,15 +6812,15 @@ export const RunStatus = Schema.Union([
   }),
 ]);
 
-export const terminalStatus = (status: typeof RunStatus.Type): boolean =>
+export const terminalStatus: (status: typeof RunStatus.Type) => boolean = (status) =>
   status.status === "complete" || status.status === "failed" || status.status === "ended";
 
-export const pollStatus = (
+export const pollStatus: (
   result: Option.Option<Workflow.Result<unknown, unknown>>,
   entry: string,
   success?: Schema.Codec<unknown, unknown, never, never>,
   error?: Schema.Codec<unknown, unknown, never, never>,
-): typeof RunStatus.Type => {
+) => typeof RunStatus.Type = (result, entry, success?, error?) => {
   if (Option.isNone(result)) return { status: "pending" };
   const value = result.value;
   if (value._tag === "Suspended") return { status: "suspended" };
@@ -6733,12 +6828,12 @@ export const pollStatus = (
 };
 
 /** A finished execution as a client reads it. */
-const exitStatus = (
+const exitStatus: (
   exit: Exit.Exit<unknown, unknown>,
   entry: string,
   success?: Schema.Codec<unknown, unknown, never, never>,
   error?: Schema.Codec<unknown, unknown, never, never>,
-): typeof RunStatus.Type => {
+) => typeof RunStatus.Type = (exit, entry, success?, error?) => {
   if (Exit.isSuccess(exit)) {
     // Encoded by its own schema, so a client can decode it again; as it is where that fails.
     const result = exit.value;
@@ -6773,7 +6868,7 @@ const isWorkflowError = Schema.is(WorkflowError);
  * there. Anything else is a defect, where the first line is the sentence: a service a
  * module never provided reads as "Service not found: <its key>".
  */
-const reasonOf = (cause: Cause.Cause<unknown>): string => {
+const reasonOf: (cause: Cause.Cause<unknown>) => string = (cause) => {
   const failure = Cause.findErrorOption(cause);
   if (Option.isSome(failure) && isWorkflowError(failure.value)) return failure.value.reason;
   const [reason] = Str.split(Cause.pretty(cause), "\n");
@@ -6785,10 +6880,10 @@ const reasonOf = (cause: Cause.Cause<unknown>): string => {
  * The field's own name is the author's, so a module that calls it `change` is read the
  * same as one that calls it `target`.
  */
-const pointedAt = (
+const pointedAt: (
   generation: Generation,
   input: Readonly<Record<string, Schema.Json>>,
-): string | null => {
+) => string | null = (generation, input) => {
   const field = Option.getOrUndefined(
     Arr.findFirst(Rec.toEntries(generation.hints), ([, hint]) => hint === "diff-target"),
   )?.[0];
@@ -6845,10 +6940,10 @@ export const INFERRED = "inferred";
  * rather than given an empty string, so an optional one stays absent and a required one is
  * the schema's own complaint.
  */
-export const settleInput = (
+export const settleInput: (
   fields: InputFields,
   given: Given,
-): Effect.Effect<Settled, HostRefused> => {
+) => Effect.Effect<Settled, HostRefused> = (fields, given) => {
   const undeclared = Arr.filter(
     [...Struct.keys(given.json), ...Struct.keys(given.text)],
     (name) => !(name in fields),
@@ -6906,7 +7001,7 @@ const asText = (field: InputField, text: string) => {
 };
 
 /** What a field will take, as short as a refusal can say it. */
-const describe = (field: InputField): string => {
+const describe: (field: InputField) => string = (field) => {
   const drawn = jsonSchemaFor(field).document;
   if (!isDrawn(drawn)) return "what this input takes";
   const options = drawn.enum;
@@ -6930,10 +7025,10 @@ const refusedInput = (reason: string) =>
  * outcome a workflow fixes is not one a caller may ask to be something else: a Run that
  * promised evidence it cannot produce finds out at the gate before its merge request.
  */
-const refuseOptions = (
+const refuseOptions: (
   generation: Generation,
   options: Readonly<Record<string, string>>,
-): Effect.Effect<void, HostRefused> => {
+) => Effect.Effect<void, HostRefused> = (generation, options) => {
   // Scoped policy travels separately from inputs without reserving another input name.
   const strange = Arr.filter(
     Struct.keys(options),
@@ -7085,10 +7180,10 @@ export const owesReport = (row: RunRow) => {
 };
 
 /** What a Run's agents are told it authorises; a record from before this was kept authorises nothing. */
-const authorityOf = (
+const authorityOf: (
   worktree: WorktreeRecord | null,
   started: Started | undefined,
-): RunAuthority => ({
+) => RunAuthority = (worktree, started) => ({
   created:
     worktree?.created_branch === true && worktree.created_on !== null
       ? { branch: worktree.branch, checkout: worktree.path, origin: worktree.created_on }
@@ -7112,14 +7207,17 @@ const treeOf = Effect.fn("Engine.treeOf")(function* (
       : placedOf(
           row,
           yield* decodeStrings(row.options ?? "{}").pipe(
-            Effect.orElseSucceed((): Record<string, string> => ({})),
+            Effect.orElseSucceed(() => {
+              const returned: Record<string, string> = {};
+              return returned;
+            }),
           ),
         );
   return { id: runId, cwd: placed?.cwd ?? dir, worktree: placed?.worktree?.path ?? null };
 });
 
 /** Where a row works: as placed, or, while it is being placed, as its receipt says so far. */
-const workingPlace = (row: RunRow): Placed => {
+const workingPlace: (row: RunRow) => Placed = (row) => {
   if (!unplaced(row)) return placedOf(row, {});
   const receipt = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
   return receipt?.checkout?.placed ?? { ...placedOf(row, {}), cwd: receipt?.from ?? row.project };
@@ -7132,7 +7230,10 @@ const optionsNow = (dir: string, runId: string, options: Readonly<Record<string,
     Effect.orElseSucceed(() => options),
   );
 
-const placedOf = (row: RunRow, options: Readonly<Record<string, string>>): Placed =>
+const placedOf: (row: RunRow, options: Readonly<Record<string, string>>) => Placed = (
+  row,
+  options,
+) =>
   Option.getOrElse(decodePlaced(row.checkout ?? ""), () => ({
     cwd: Option.getOrElse(
       Option.filter(Option.fromNullishOr(options.workspace), Str.startsWith("/")),
@@ -7250,7 +7351,10 @@ const writeSeed = Effect.fn("Engine.writeSeed")(function* (options: {
   const at = runDir(options.dir, options.row.run);
   if ((yield* readIntent(at).pipe(Effect.orElseSucceed(() => null))) !== null) return;
   const input = yield* decodeInput(options.row.input).pipe(
-    Effect.orElseSucceed((): Readonly<Record<string, Schema.Json>> => ({})),
+    Effect.orElseSucceed(() => {
+      const returned: Readonly<Record<string, Schema.Json>> = {};
+      return returned;
+    }),
   );
   const textOf = (hint: string) => {
     const field = fieldWith(options.generation.hints, hint);
@@ -7772,10 +7876,10 @@ export interface RegistryOptions {
     | undefined;
 }
 
-export const registryLayer = (
+export const registryLayer: (
   dir: string,
   options?: RegistryOptions,
-): Layer.Layer<
+) => Layer.Layer<
   Registry,
   never,
   | HostServices
@@ -7783,14 +7887,14 @@ export const registryLayer = (
   | SecureRandom.SecureRandom
   | ChildProcessSpawner.ChildProcessSpawner
   | PlatformServices
-> => Layer.effect(Registry)(makeRegistry(dir, options));
+> = (dir, options?) => Layer.effect(Registry)(makeRegistry(dir, options));
 
 /**
  * One host's foundation: the engine, the rows beside it, and the run's own view of its
  * controls and questions. Composed here so there is one SQLite client and one Store
  * behind all three, rather than a second connection reading what the first wrote.
  */
-export const foundationLayer = (options: {
+export const foundationLayer: (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
   readonly userDir?: string;
@@ -7807,7 +7911,7 @@ export const foundationLayer = (options: {
   readonly productionPoll?: Duration.Input;
   readonly issuePrivacyBudget?: Duration.Input;
   readonly reviewPoll?: Duration.Input;
-}): Layer.Layer<
+}) => Layer.Layer<
   | Host
   | Notifier
   | Oversight
@@ -7821,7 +7925,7 @@ export const foundationLayer = (options: {
   | ForgeHttp,
   ConfigError,
   PlatformServices
-> =>
+> = (options) =>
   hostLayer(options).pipe(
     Layer.provideMerge(
       recordsLayer.pipe(
@@ -8124,7 +8228,7 @@ const makeRegistry: (
         Effect.provideContext(bun),
       );
       const records = yield* outcomeRecordsOf(dir, view.runId).pipe(
-        Effect.orElseSucceed((): OutcomeRecords | null => null),
+        Effect.orElseSucceed(() => null satisfies OutcomeRecords | null),
         Effect.provideContext(bun),
       );
       metrics.set(view.runId, metricsOf(lines, view.created));
@@ -8132,7 +8236,9 @@ const makeRegistry: (
     }
     return reportOf(views, metrics, since, recorded);
   });
-  const lending = <A, E>(effect: Effect.Effect<A, E, HostServices>): Effect.Effect<A, E> =>
+  const lending: <A, E>(effect: Effect.Effect<A, E, HostServices>) => Effect.Effect<A, E> = <A, E>(
+    effect: Effect.Effect<A, E, HostServices>,
+  ) =>
     Effect.updateContext(effect, (caller: Context.Context<never>) =>
       Context.merge(hostServices, caller),
     );
@@ -8514,7 +8620,9 @@ const makeRegistry: (
     if (!unplaced(row) || generation === undefined || Option.isNone(placing)) return row;
     let receipt = placing.value;
     const strings = (text: string | null) =>
-      decodeStrings(text ?? "{}").pipe(Effect.orElseSucceed((): Record<string, string> => ({})));
+      decodeStrings(text ?? "{}").pipe(
+        Effect.orElseSucceed(() => ({}) satisfies Record<string, string>),
+      );
     const options = yield* strings(row.options);
     const placement = yield* Effect.gen(function* () {
       return yield* placeRun({
@@ -8595,7 +8703,10 @@ const makeRegistry: (
     }).pipe(Effect.mapError((failure) => refused(failure.reason)));
     const runId = childRunId(ask);
     const parentOptions = yield* decodeStrings(parent.options ?? "{}").pipe(
-      Effect.orElseSucceed((): Record<string, string> => ({})),
+      Effect.orElseSucceed(() => {
+        const none: Record<string, string> = {};
+        return none;
+      }),
     );
     // What the parent prefers where it starts the child, as options the child is given:
     // serializable, so no Context, service or Layer of the parent's crosses over.
@@ -9000,10 +9111,16 @@ const makeRegistry: (
       entry: entryOf(row.generation),
       input,
       provenance: yield* decodeStrings(row.provenance ?? "{}").pipe(
-        Effect.orElseSucceed((): Record<string, string> => ({})),
+        Effect.orElseSucceed(() => {
+          const none: Record<string, string> = {};
+          return none;
+        }),
       ),
       options: yield* decodeStrings(row.options ?? "{}").pipe(
-        Effect.orElseSucceed((): Record<string, string> => ({})),
+        Effect.orElseSucceed(() => {
+          const none: Record<string, string> = {};
+          return none;
+        }),
         Effect.flatMap((options) => optionsNow(dir, row.run, options)),
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideContext(bun),
@@ -9066,7 +9183,7 @@ const makeRegistry: (
           ? finalMeasurementLine(
               yield* readMeasurements(evidenceDir(dir, row.run)).pipe(
                 Effect.provideContext(bun),
-                Effect.orElseSucceed((): ReadonlyArray<Measurement> => []),
+                Effect.orElseSucceed(() => [] satisfies ReadonlyArray<Measurement>),
               ),
             )
           : null,
@@ -9849,7 +9966,7 @@ const makeRegistry: (
   const unbound = (offer: Offer, project: string) =>
     resolve({ project, id: offer.workflow }).pipe(
       Effect.map((target) => Rec.keys(Rec.filter(target.hints, (hint) => hint === "internal"))),
-      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+      Effect.orElseSucceed(() => [] satisfies ReadonlyArray<string>),
       Effect.map((internal) => ({
         ...offer,
         arguments: argumentsWithout(
@@ -9870,7 +9987,10 @@ const makeRegistry: (
     }
     const generation = yield* resolve({ project: row.project, id: row.workflow });
     const options = yield* decodeStrings(row.options ?? "{}").pipe(
-      Effect.orElseSucceed((): Record<string, string> => ({})),
+      Effect.orElseSucceed(() => {
+        const none: Record<string, string> = {};
+        return none;
+      }),
       Effect.flatMap((admitted) => optionsNow(dir, runId, admitted)),
       Effect.provideContext(bun),
     );
@@ -9885,7 +10005,9 @@ const makeRegistry: (
     // ended are the row's; the tickets it wrote and the findings it left are read from
     // its own directory, because producing them is the only way a Run can have them.
     const disposition = latest(
-      yield* readDispositions(where).pipe(Effect.orElseSucceed((): Array<Disposition> => [])),
+      yield* readDispositions(where).pipe(
+        Effect.orElseSucceed(() => [] satisfies Array<Disposition>),
+      ),
     );
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const facts: Types.Mutable<ActionFacts> = {
@@ -10009,7 +10131,10 @@ const makeRegistry: (
         if (candidate.parent !== runId) {
           if (!withMr) continue;
           const given = yield* decodeInput(candidate.input).pipe(
-            Effect.orElseSucceed((): Record<string, Schema.Json> => ({})),
+            Effect.orElseSucceed(() => {
+              const none: Record<string, Schema.Json> = {};
+              return none;
+            }),
           );
           if (!Arr.some(fields, ([name]) => given[name] === mr)) continue;
         }
@@ -10343,7 +10468,7 @@ const makeRegistry: (
     ),
   );
 
-  return {
+  const returned: RegistryApi = {
     load: (file: string) => registering.withPermits(1)(mint(file)),
 
     use: useEntry,
@@ -10586,7 +10711,10 @@ const makeRegistry: (
           launch.outcome ??= facts.outcome;
         if (offer.workflow === generation.id) {
           const previous = yield* decodeStrings(row.options ?? "{}").pipe(
-            Effect.orElseSucceed((): Record<string, string> => ({})),
+            Effect.orElseSucceed(() => {
+              const none: Record<string, string> = {};
+              return none;
+            }),
           );
           if (previous.risks !== undefined) launch.risks ??= previous.risks;
         }
@@ -10973,7 +11101,8 @@ const makeRegistry: (
       yield* missedMessages;
       yield* reviseQuestions;
     }),
-  } satisfies RegistryApi;
+  };
+  return returned;
 });
 
 const decodeOptions = Schema.decodeUnknownEffect(
@@ -10996,7 +11125,10 @@ const askedQuestions = (rows: ReadonlyArray<DecisionRow>, audit: ReadonlyArray<A
         answer: row.answer,
         superseded: row.superseded,
         options: yield* decodeOptions(row.options).pipe(
-          Effect.orElseSucceed((): ReadonlyArray<Solution> => []),
+          Effect.orElseSucceed(() => {
+            const returned: ReadonlyArray<Solution> = [];
+            return returned;
+          }),
         ),
       };
       if (actor === undefined) return asked;
@@ -11033,14 +11165,18 @@ const touchedBy = (
   };
 };
 
-const asksAs = (
+const asksAs: (
   launches: ReadonlyArray<{ readonly operation: string; readonly agent: string }>,
   asker: string,
   agent: string,
-): boolean => Arr.some(launches, (launch) => launch.operation === asker && launch.agent === agent);
+) => boolean = (launches, asker, agent) =>
+  Arr.some(launches, (launch) => launch.operation === asker && launch.agent === agent);
 
 /** Every child this Run started, however deep; an offer's Run has a request of its own. */
-const descendantsOf = (rows: ReadonlyArray<RunRow>, runId: string): ReadonlyArray<string> => {
+const descendantsOf: (rows: ReadonlyArray<RunRow>, runId: string) => ReadonlyArray<string> = (
+  rows,
+  runId,
+) => {
   const children = Arr.map(
     Arr.filter(rows, (row) => row.parent === runId && row.request === row.run),
     (row) => row.run,
@@ -11051,10 +11187,10 @@ const descendantsOf = (rows: ReadonlyArray<RunRow>, runId: string): ReadonlyArra
 const SUPERSEDE_GRACE_MS = 30_000;
 
 /** The questions `name` asks again, the original first and `name` last. */
-const lineageOf = (
+const lineageOf: (
   rows: ReadonlyArray<{ readonly decision: string; readonly revises: string | null }>,
   name: string,
-): ReadonlyArray<string> => {
+) => ReadonlyArray<string> = (rows, name) => {
   const line: Array<string> = [];
   let at: string | null = name;
   while (at !== null && !Arr.contains(line, at)) {
@@ -11067,21 +11203,21 @@ const lineageOf = (
 };
 
 /** The question a revision asks again, whose deferred its Workflow is waiting on. */
-const rootOf = (
+const rootOf: (
   rows: ReadonlyArray<{ readonly decision: string; readonly revises: string | null }>,
   name: string,
-): string => lineageOf(rows, name)[0] ?? name;
+) => string = (rows, name) => lineageOf(rows, name)[0] ?? name;
 
 /**
  * Why a caller who named no question cannot be given one, or null where exactly one is
  * open. Nothing is guessed at: an answer landing on the wrong question is the mistake
  * this exists to prevent.
  */
-const soleOpen = (
+const soleOpen: (
   runId: string,
   open: ReadonlyArray<OpenDecision>,
   asks: ReadonlyArray<OpenDecision>,
-): HostRefused | null => {
+) => HostRefused | null = (runId, open, asks) => {
   if (open.length === 1) return null;
   const setAside = Arr.filter(asks, isSuperseded);
   return new HostRefused({
@@ -11154,8 +11290,9 @@ const writeJsonObject = flow(
   Schema.encodeResult(Schema.fromJsonString(JsonObject, { space: 2 })),
   Result.getOrThrow,
 );
-const objectIn = (value: Schema.Json | undefined): Readonly<Record<string, Schema.Json>> =>
-  isJsonObject(value) ? value : {};
+const objectIn: (value: Schema.Json | undefined) => Readonly<Record<string, Schema.Json>> = (
+  value,
+) => (isJsonObject(value) ? value : {});
 
 /**
  * An author's package.json with what a module is typechecked against added where it is
@@ -11330,14 +11467,14 @@ export const typecheckEntry: (options: {
  * installing a package and running a compiler need neither Bun nor Node on the machine;
  * running from source, `execPath` is already Bun and the variable changes nothing.
  */
-const runBun = (
+const runBun: (
   cwd: string,
   args: ReadonlyArray<string>,
-): Effect.Effect<
+) => Effect.Effect<
   { readonly code: number; readonly output: string },
   string,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
-> =>
+> = (cwd, args) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const tmp = yield* fs.makeTempDirectoryScoped({ prefix: "collie-bun-" });
@@ -11365,7 +11502,10 @@ const collect = (stream: Stream.Stream<Uint8Array, PlatformError>) =>
   stream.pipe(
     Stream.decodeText(),
     Stream.runFold(
-      (): string => "",
+      () => {
+        const returned: string = "";
+        return returned;
+      },
       (all, chunk) => all + chunk,
     ),
   );

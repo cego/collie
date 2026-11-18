@@ -126,7 +126,7 @@ const env = () => {
 /** The state directory the host, its Tasks and its agents all share, as an install's do. */
 const dir = () => env().stateDir;
 
-const hostOf = (): AgentHost => ({
+const hostOf: () => AgentHost = () => ({
   dir: dir(),
   env: env(),
   herdr: new Herdr(env()),

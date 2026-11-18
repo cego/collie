@@ -52,7 +52,7 @@ export const HARNESS_MODELS: ModelCatalogue = {
   },
 };
 
-export function harnessNames(): string[] {
+export function harnessNames() {
   return Arr.sort(Struct.keys(HARNESS_MODELS), Str.Order);
 }
 
@@ -60,13 +60,13 @@ export function knownModel(
   harness: HarnessModels,
   model: string,
   extra: ReadonlyArray<string> = [],
-): boolean {
+) {
   if (model === DEFAULT_MODEL) return true;
   if (Arr.contains(harness.models, model) || Arr.contains(extra, model)) return true;
   return harness.modelPattern?.test(model) ?? false;
 }
 
-export function modelHint(harness: HarnessModels, extra: ReadonlyArray<string> = []): string {
+export function modelHint(harness: HarnessModels, extra: ReadonlyArray<string> = []) {
   const known = [DEFAULT_MODEL, ...harness.models, ...extra];
   const parts: string[] = [];
   if (known.length > 0) parts.push(Arr.join(known, ", "));
@@ -92,7 +92,7 @@ export const preferencesIn = (options: {
   readonly model?: string | undefined;
   readonly effort?: string | undefined;
   readonly claudeSubagents?: ClaudeSubagents | undefined;
-}): Preferences =>
+}) =>
   Rec.fromEntries(
     Arr.filter(
       Rec.toEntries({
@@ -117,7 +117,7 @@ export const preferencesFromOptions = Effect.fn("Harness.preferencesFromOptions"
 });
 
 /** A preference as code gives it: `preferencesIn`'s fields, with its ceiling where it has one. */
-export const ceilingIn = (options: Preferences): Preferences => {
+export const ceilingIn = (options: Preferences) => {
   const ceiling: { -readonly [K in keyof Preferences]: Preferences[K] } = preferencesIn(options);
   if (options.upTo !== undefined) ceiling.upTo = options.upTo;
   if (options.otherwise !== undefined) ceiling.otherwise = options.otherwise;
@@ -146,9 +146,7 @@ export interface MachineCatalogue {
  * Layers of preferences as one, lowest first. A layer that switches harness keeps nothing
  * chosen below it: a model and an effort are for the harness they were chosen with.
  */
-export function foldPreferences(
-  layers: ReadonlyArray<Preferences | undefined>,
-): Pick<Preferences, "harness" | "model" | "effort" | "claudeSubagents"> {
+export function foldPreferences(layers: ReadonlyArray<Preferences | undefined>) {
   let harness: string | undefined;
   let model: string | undefined;
   let effort: string | undefined;
@@ -175,12 +173,14 @@ export function foldPreferences(
         ),
       };
   }
-  return Rec.fromEntries(
-    Arr.filter(
-      Rec.toEntries({ harness, model, effort, claudeSubagents }),
-      ([, value]) => value !== undefined,
-    ),
-  );
+  const returned: Pick<Preferences, "harness" | "model" | "effort" | "claudeSubagents"> =
+    Rec.fromEntries(
+      Arr.filter(
+        Rec.toEntries({ harness, model, effort, claudeSubagents }),
+        ([, value]) => value !== undefined,
+      ),
+    );
+  return returned;
 }
 
 /**
@@ -192,16 +192,17 @@ export function resolveChoice(
   layers: ReadonlyArray<Preferences | undefined>,
   extraModels: Readonly<Record<string, ReadonlyArray<string>>> = {},
   catalogue?: MachineCatalogue,
-):
-  | { readonly ok: true; readonly choice: AgentChoice }
-  | { readonly ok: false; readonly problem: string } {
+) {
   const { harness = "", model = DEFAULT_MODEL, effort, claudeSubagents } = foldPreferences(layers);
   const adapter = HARNESS_MODELS[harness];
   if (adapter === undefined) {
-    return {
+    const returned:
+      | { readonly ok: true; readonly choice: AgentChoice }
+      | { readonly ok: false; readonly problem: string } = {
       ok: false,
       problem: `no harness called "${harness}" (${Arr.join(harnessNames(), ", ")})`,
     };
+    return returned;
   }
   const extra = extraModels[harness] ?? [];
   const reported = Option.getOrUndefined(
@@ -209,8 +210,15 @@ export function resolveChoice(
       Arr.findFirst(current.harnesses, (one) => one.harness === harness),
     ),
   );
-  if (catalogue !== undefined && reported === undefined)
-    return { ok: false, problem: `${catalogue.machine} has no ${harness} installed` };
+  if (catalogue !== undefined && reported === undefined) {
+    const returned:
+      | { readonly ok: true; readonly choice: AgentChoice }
+      | { readonly ok: false; readonly problem: string } = {
+      ok: false,
+      problem: `${catalogue.machine} has no ${harness} installed`,
+    };
+    return returned;
+  }
   const selected =
     model === DEFAULT_MODEL
       ? (adapter.defaultModel ??
@@ -230,7 +238,9 @@ export function resolveChoice(
       : knownModel(adapter, id, extra);
   const source = reported?.table == null ? "" : `; from Collie's table: ${reported.table}`;
   if (selected !== undefined && !known(selected)) {
-    return {
+    const returned:
+      | { readonly ok: true; readonly choice: AgentChoice }
+      | { readonly ok: false; readonly problem: string } = {
       ok: false,
       problem:
         catalogue === undefined
@@ -241,6 +251,7 @@ export function resolveChoice(
                 : modelHint(adapter, extra)
             })${source}`,
     };
+    return returned;
   }
   const efforts = lists
     ? selected === undefined
@@ -252,35 +263,59 @@ export function resolveChoice(
     effort !== undefined &&
     catalogue !== undefined &&
     !Option.exists(Option.fromNullishOr(efforts), (available) => Arr.contains(available, effort))
-  )
-    return {
+  ) {
+    const returned:
+      | { readonly ok: true; readonly choice: AgentChoice }
+      | { readonly ok: false; readonly problem: string } = {
       ok: false,
       problem: `"${effort}" is not an effort ${catalogue.machine}'s ${harness}/${selected ?? DEFAULT_MODEL} takes (${Option.getOrUndefined(Option.map(Option.fromNullishOr(efforts), (available) => Arr.join(available, ", "))) || "none"})${source}`,
     };
+    return returned;
+  }
   if (effort !== undefined && efforts === undefined) {
-    return {
+    const returned:
+      | { readonly ok: true; readonly choice: AgentChoice }
+      | { readonly ok: false; readonly problem: string } = {
       ok: false,
       problem: `${harness} takes no effort, so "${effort}" cannot be asked of it`,
     };
+    return returned;
   }
   if (
     effort !== undefined &&
     !Option.exists(Option.fromNullishOr(efforts), (available) => Arr.contains(available, effort))
   ) {
-    return {
+    const returned:
+      | { readonly ok: true; readonly choice: AgentChoice }
+      | { readonly ok: false; readonly problem: string } = {
       ok: false,
       problem: `"${effort}" is not an effort ${harness} takes (${Option.getOrUndefined(Option.map(Option.fromNullishOr(efforts), (present) => Arr.join(present, ", ")))})`,
     };
+    return returned;
   }
   if (harness === "claude" && claudeSubagents !== undefined) {
     for (const layer of layers) {
       if (layer?.claudeSubagents === undefined) continue;
       const checked = decodeSubagents(layer.claudeSubagents);
-      if (checked._tag === "Failure")
-        return { ok: false, problem: `claudeSubagents: ${String(checked.failure)}` };
+      if (checked._tag === "Failure") {
+        const returned:
+          | { readonly ok: true; readonly choice: AgentChoice }
+          | { readonly ok: false; readonly problem: string } = {
+          ok: false,
+          problem: `claudeSubagents: ${String(checked.failure)}`,
+        };
+        return returned;
+      }
     }
-    if (claudeSubagents.forceModel === true && claudeSubagents.model === undefined)
-      return { ok: false, problem: "claudeSubagents.forceModel requires a model" };
+    if (claudeSubagents.forceModel === true && claudeSubagents.model === undefined) {
+      const returned:
+        | { readonly ok: true; readonly choice: AgentChoice }
+        | { readonly ok: false; readonly problem: string } = {
+        ok: false,
+        problem: "claudeSubagents.forceModel requires a model",
+      };
+      return returned;
+    }
     if (
       claudeSubagents.model !== undefined &&
       !known(
@@ -288,28 +323,41 @@ export function resolveChoice(
           ? (adapter.defaultModel ?? DEFAULT_MODEL)
           : claudeSubagents.model,
       )
-    )
-      return {
+    ) {
+      const returned:
+        | { readonly ok: true; readonly choice: AgentChoice }
+        | { readonly ok: false; readonly problem: string } = {
         ok: false,
         problem: `claudeSubagents.model: ${claudeSubagents.model} is not a Claude model`,
       };
+      return returned;
+    }
     const policy =
       claudeSubagents.model === DEFAULT_MODEL
         ? { ...claudeSubagents, model: adapter.defaultModel ?? DEFAULT_MODEL }
         : claudeSubagents;
-    return {
+    const returned:
+      | { readonly ok: true; readonly choice: AgentChoice }
+      | { readonly ok: false; readonly problem: string } = {
       ok: true,
       choice: { harness, model, effort: effort ?? null, claudeSubagents: policy },
     };
+    return returned;
   }
-  return { ok: true, choice: { harness, model, effort: effort ?? null } };
+  const returned:
+    | { readonly ok: true; readonly choice: AgentChoice }
+    | { readonly ok: false; readonly problem: string } = {
+    ok: true,
+    choice: { harness, model, effort: effort ?? null },
+  };
+  return returned;
 }
 
 /**
  * The ceiling layers set, lowest first: the nearest layer that names `upTo` or `otherwise`
  * sets both, and a layer that switches harness clears both.
  */
-export function foldCeiling(layers: ReadonlyArray<Preferences | undefined>): Preferences {
+export function foldCeiling(layers: ReadonlyArray<Preferences | undefined>) {
   let harness: string | undefined;
   let ceiling: Preferences = {};
   for (const layer of layers) {
@@ -332,7 +380,7 @@ export function foldCeiling(layers: ReadonlyArray<Preferences | undefined>): Pre
 }
 
 /** A `fallbacks` entry: `harness`, or `harness/model` split at the first `/`. */
-export function chainEntry(text: string): Preferences {
+export function chainEntry(text: string) {
   const at = Option.getOrElse(pipe(text, Str.indexOf("/")), () => -1);
   return at === -1
     ? { harness: text }
@@ -368,11 +416,14 @@ export function resolveWithRoom(
   room: Room,
   extraModels: Readonly<Record<string, ReadonlyArray<string>>> = {},
   catalogue?: MachineCatalogue,
-):
-  | { readonly ok: true; readonly chosen: Chosen }
-  | { readonly ok: false; readonly problem: string } {
+) {
   const primary = resolveChoice(layers, extraModels, catalogue);
-  if (!primary.ok) return primary;
+  if (!primary.ok) {
+    const returned:
+      | { readonly ok: true; readonly chosen: Chosen }
+      | { readonly ok: false; readonly problem: string } = primary;
+    return returned;
+  }
   const folded = primary.choice;
   const ceiling = foldCeiling(layers);
   const outOfRange = Option.getOrUndefined(
@@ -381,15 +432,30 @@ export function resolveWithRoom(
       (upTo) => upTo !== undefined && !(upTo >= 1 && upTo <= 100),
     ),
   );
-  if (outOfRange !== undefined)
-    return { ok: false, problem: `upTo is a percentage from 1 to 100, not ${outOfRange}` };
+  if (outOfRange !== undefined) {
+    const returned:
+      | { readonly ok: true; readonly chosen: Chosen }
+      | { readonly ok: false; readonly problem: string } = {
+      ok: false,
+      problem: `upTo is a percentage from 1 to 100, not ${outOfRange}`,
+    };
+    return returned;
+  }
   const base = { ...folded, effort: folded.effort ?? undefined };
   const candidates: Array<{ readonly choice: AgentChoice; readonly upTo?: number }> = [
     { choice: folded, upTo: ceiling.upTo },
   ];
   for (const [at, entry] of (ceiling.otherwise ?? []).entries()) {
     const next = resolveChoice([base, preferencesIn(entry)], extraModels, catalogue);
-    if (!next.ok) return { ok: false, problem: `otherwise entry ${at + 1}: ${next.problem}` };
+    if (!next.ok) {
+      const returned:
+        | { readonly ok: true; readonly chosen: Chosen }
+        | { readonly ok: false; readonly problem: string } = {
+        ok: false,
+        problem: `otherwise entry ${at + 1}: ${next.problem}`,
+      };
+      return returned;
+    }
     candidates.push({ choice: next.choice, upTo: entry.upTo });
   }
   const skipped: string[] = [];
@@ -444,15 +510,20 @@ export function resolveWithRoom(
     const judged = room(pinned(choice), upTo);
     if (judged.room) {
       const fell = choice !== folded;
-      return {
+      const returned:
+        | { readonly ok: true; readonly chosen: Chosen }
+        | { readonly ok: false; readonly problem: string } = {
         ok: true,
         chosen: { choice, from: fell ? folded : null, why: fell ? first : null, skipped },
       };
+      return returned;
     }
     first ??= judged.why;
     whys.push(`${said(choice)}: ${judged.why}`);
   }
-  return {
+  const returned:
+    | { readonly ok: true; readonly chosen: Chosen }
+    | { readonly ok: false; readonly problem: string } = {
     ok: true,
     chosen: {
       choice: folded,
@@ -461,10 +532,11 @@ export function resolveWithRoom(
       skipped,
     },
   };
+  return returned;
 }
 
 /** The model a choice runs, so `default` is judged as the model it pins. */
-export const pinned = (choice: AgentChoice): AgentChoice =>
+export const pinned = (choice: AgentChoice) =>
   choice.model === DEFAULT_MODEL
     ? { ...choice, model: HARNESS_MODELS[choice.harness]?.defaultModel ?? DEFAULT_MODEL }
     : choice;

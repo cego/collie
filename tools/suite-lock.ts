@@ -23,7 +23,7 @@ export const described = (pid: number) =>
     const out = yield* handle.stdout.pipe(
       Stream.decodeText(),
       Stream.runFold(
-        (): string => "",
+        () => "",
         (all, chunk) => all + chunk,
       ),
     );

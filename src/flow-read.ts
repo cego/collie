@@ -19,7 +19,6 @@ import {
   linkState,
   releaseRow,
   type ChildFact,
-  type Execution,
   type LaneWait,
 } from "./flow";
 import { readLaunches } from "./launches";
@@ -35,7 +34,7 @@ import { epochMs } from "./time";
 import { readProofsOf } from "./verify";
 import { changeKey } from "./plan";
 
-const executionOfState = (state: RunState): Execution => {
+const executionOfState = (state: RunState) => {
   switch (state) {
     case "running":
       return "running";
@@ -64,7 +63,7 @@ const ALONE: LaneContext = { children: [], toCome: [], wait: null, offer: null, 
 
 const machineOf = (env: PluginEnv) => env.machine ?? machineName();
 
-const requestedLink = (notice: {
+const requestedLink: (notice: {
   readonly run: string;
   readonly workflow: string;
   readonly machine: { readonly name: string; readonly installation: string };
@@ -72,7 +71,7 @@ const requestedLink = (notice: {
   readonly said: string | null;
   readonly at: string | null;
   readonly canResume?: boolean;
-}): FlowRun => ({
+}) => FlowRun = (notice) => ({
   id: `run:${notice.machine.installation}:${notice.run}`,
   title: `${Option.getOrUndefined(Option.map(Option.fromNullishOr(notice.workflow[0]), (present) => Str.toUpperCase(present))) ?? ""}${pipe_(notice.workflow, Str.slice(1))} on ${notice.machine.name}`,
   kind: "link",

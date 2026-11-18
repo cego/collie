@@ -36,7 +36,6 @@ import type {
   StagingRead,
   Forge,
   ForBranch,
-  FromBranch,
   FromBranchList,
   BaseJobRead,
   TargetJobRead,
@@ -46,7 +45,6 @@ import type {
   PipelineRead,
   PipelineStart,
   TagPipelineRead,
-  Readiness,
   ReviewRequest,
 } from "./forge";
 import {
@@ -78,7 +76,7 @@ export const MR_TEMPLATE = ".gitlab/merge_request_templates/default.md";
 export const GLAB_RELOGIN = "glab auth login";
 
 /** The glab arguments that point a command at a project rather than at the cwd. */
-export function repoArgs(project: string | null): string[] {
+export function repoArgs(project: string | null) {
   return project ? ["--repo", project] : [];
 }
 
@@ -86,7 +84,7 @@ export function repoArgs(project: string | null): string[] {
 const whereOf = (ref: MrRef) => (ref.project ? `${ref.project}!${ref.iid}` : `!${ref.iid}`);
 
 /** The host part of `host/group/project`, which is what glab authenticates against. */
-export function hostOf(project: string | null): string | null {
+export function hostOf(project: string | null) {
   const host = Option.getOrUndefined(
     Option.map(Option.fromNullishOr(project), (present) => Str.split(present, "/")[0]),
   );
@@ -169,15 +167,22 @@ const SETTLING_MERGE = new Set([
  * GitLab's own answer to "can this merge now", which carries its approval rules: the
  * detailed status where this GitLab has one, else the older `merge_status`.
  */
-function mergeabilityOf(
-  detailed: string | null | undefined,
-  legacy: string | null | undefined,
-): Mergeability | undefined {
+function mergeabilityOf(detailed: string | null | undefined, legacy: string | null | undefined) {
   const said = detailed ?? (legacy === "can_be_merged" ? "mergeable" : legacy);
-  if (said === undefined || said === null || said === "") return undefined;
+  if (said === undefined || said === null || said === "") {
+    const returned: Mergeability | undefined = undefined;
+    return returned;
+  }
   const words = pipe(said, Str.replaceAll("_", " "));
-  if (said === "mergeable") return { state: "mergeable", said: words };
-  return { state: SETTLING_MERGE.has(said) ? "unknown" : "blocked", said: words };
+  if (said === "mergeable") {
+    const returned: Mergeability | undefined = { state: "mergeable", said: words };
+    return returned;
+  }
+  const returned: Mergeability | undefined = {
+    state: SETTLING_MERGE.has(said) ? "unknown" : "blocked",
+    said: words,
+  };
+  return returned;
 }
 
 /**
@@ -186,12 +191,8 @@ function mergeabilityOf(
  * Never called from a render path and never for a list: the app fetches this when a Run
  * with a merge-request target becomes the Selection, and caches it per ref.
  */
-export function mrDetails<R>(
-  ref: MrRef,
-  cwd: string,
-  run: Runner<R>,
-): Effect.Effect<MrPanel, never, R | ForgeHttp> {
-  return Effect.gen(function* () {
+export function mrDetails<R>(ref: MrRef, cwd: string, run: Runner<R>) {
+  const returned: Effect.Effect<MrPanel, never, R | ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     // A bare `!42` is the checkout's own, as glab read it from the remote.
     const named = ref.project ?? (yield* projectHere(cwd, run));
@@ -270,6 +271,7 @@ export function mrDetails<R>(
     const merged = mr.merged_at ? { ...details, mergedAt: mr.merged_at } : details;
     return mergeable === undefined ? merged : { ...merged, mergeable };
   });
+  return returned;
 }
 
 /** A merge request's approvals; one that requires none and has none says nothing. */
@@ -285,7 +287,7 @@ const approvalsOf = (approvals: typeof Approvals.Type) =>
 function approvalsLine(
   requiredOrNull: number | null | undefined,
   leftOrNull: number | null | undefined,
-): string {
+) {
   const required = requiredOrNull ?? undefined;
   const left = leftOrNull ?? undefined;
   if (required === undefined && left === undefined) return "";
@@ -305,27 +307,43 @@ function headChecks(
     readonly web_url?: string | null;
   } | null,
   head: string,
-): ForgeChecks {
-  if (pipeline === null) return { state: "none" };
+) {
+  if (pipeline === null) {
+    const returned: ForgeChecks = { state: "none" };
+    return returned;
+  }
   const checks: ForgeChecks =
     pipeline.sha && head !== "" && pipeline.sha !== head
       ? { state: "unknown" }
       : pipelineChecks(pipeline.status ?? "");
-  return pipeline.web_url ? { ...checks, url: pipeline.web_url } : checks;
+  const returned: ForgeChecks = pipeline.web_url ? { ...checks, url: pipeline.web_url } : checks;
+  return returned;
 }
 
 /** GitLab's head pipeline status, as the card reads it. */
-export function pipelineChecks(status: string): ForgeChecks {
-  if (status === "") return { state: "none" };
-  if (status === "success" || status === "passed") return { state: "passed" };
-  if (status === "failed") return { state: "failed", name: "pipeline" };
+export function pipelineChecks(status: string) {
+  if (status === "") {
+    const returned: ForgeChecks = { state: "none" };
+    return returned;
+  }
+  if (status === "success" || status === "passed") {
+    const returned: ForgeChecks = { state: "passed" };
+    return returned;
+  }
+  if (status === "failed") {
+    const returned: ForgeChecks = { state: "failed", name: "pipeline" };
+    return returned;
+  }
   if (
     ["running", "pending", "created", "preparing", "waiting_for_resource", "scheduled"].includes(
       status,
     )
-  )
-    return { state: "running" };
-  return { state: "unknown" };
+  ) {
+    const returned: ForgeChecks = { state: "running" };
+    return returned;
+  }
+  const returned: ForgeChecks = { state: "unknown" };
+  return returned;
 }
 
 /**
@@ -333,11 +351,7 @@ export function pipelineChecks(status: string): ForgeChecks {
  * The cwd's remotes are none of its business — which forge a checkout is on is decided
  * before an adapter is asked.
  */
-export function gitlabForProject<R>(
-  project: string | null,
-  cwd: string,
-  run: Runner<R>,
-): Effect.Effect<Readiness, never, R | ForgeHttp> {
+export function gitlabForProject<R>(project: string | null, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
     const glab = yield* run("glab", ["--version"], cwd);
     if (glab.code !== 0) return { ok: false, reason: "glab is not installed" };
@@ -353,11 +367,7 @@ export function gitlabForProject<R>(
  * say. The authenticated user, not a configured assignee: a branch belongs to whoever
  * is pushing it, and the two are different people whenever an assignee is set at all.
  */
-export function glabLogin<R>(
-  cwd: string,
-  run: Runner<R>,
-  project: string | null = null,
-): Effect.Effect<string | null, never, R | ForgeHttp> {
+export function glabLogin<R>(cwd: string, run: Runner<R>, project: string | null = null) {
   return Effect.gen(function* () {
     const named = project ?? (yield* projectHere(cwd, run));
     return yield* viewerLogin(glabLoginTo(hostOf(named) ?? "gitlab.com"), cwd);
@@ -378,8 +388,8 @@ const reviewRequests = (host: string, login: string, cwd: string) =>
       cwd,
       `merge_requests?scope=all&state=opened&reviewer_username=${encodeURIComponent(login)}`,
     ),
-    (listed): Answered<ReadonlyArray<ReviewRequest>> =>
-      listed.ok
+    (listed) => {
+      const returned: Answered<ReadonlyArray<ReviewRequest>> = listed.ok
         ? {
             ok: true,
             value: Arr.map(listed.value, (one) => ({
@@ -388,7 +398,9 @@ const reviewRequests = (host: string, login: string, cwd: string) =>
               author: one.author.username,
             })),
           }
-        : listed,
+        : listed;
+      return returned;
+    },
   );
 
 const Environments = Schema.Array(Schema.Struct({ name: Schema.String, tier: optionalText }));
@@ -404,11 +416,7 @@ const MergeBase = Schema.Struct({ id: optionalText });
  * with no staging or production environment answers null, and so does GitLab not
  * answering: the board then says "merged", which is true, rather than guessing further.
  */
-export function liveTier(
-  ref: MrRef,
-  mergedSha: string,
-  cwd: string,
-): Effect.Effect<DeployTier | null, never, ForgeHttp> {
+export function liveTier(ref: MrRef, mergedSha: string, cwd: string) {
   return Effect.gen(function* () {
     if (mergedSha === "") return null;
     const api = projectRest(ref, cwd);
@@ -450,12 +458,8 @@ export function liveTier(
 }
 
 /** The commit the newest successful deployment to an environment of `tier` has. */
-function deployed(
-  ref: MrRef,
-  tier: DeployTier,
-  cwd: string,
-): Effect.Effect<DeployedRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function deployed(ref: MrRef, tier: DeployTier, cwd: string) {
+  const returned: Effect.Effect<DeployedRead, never, ForgeHttp> = Effect.gen(function* () {
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return reached;
     const { rest } = reached;
@@ -480,6 +484,7 @@ function deployed(
       if (newest.value.length < 100) return { ok: true, sha: null };
     }
   });
+  return returned;
 }
 
 const EnvironmentDeployment = Schema.Struct({
@@ -503,8 +508,8 @@ function stagingEnvironments<R>(
   cwd: string,
   _run: Runner<R>,
   jobs?: ReadonlyArray<string>,
-): Effect.Effect<StagingRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+) {
+  const returned: Effect.Effect<StagingRead, never, ForgeHttp> = Effect.gen(function* () {
     const api = projectRest(ref, cwd);
     if (!api.ok) return api;
     const unread = (reason: string) => ({
@@ -556,6 +561,7 @@ function stagingEnvironments<R>(
     }
     return { ok: true, environments };
   });
+  return returned;
 }
 
 const BranchMr = Schema.Struct({
@@ -569,12 +575,17 @@ const BranchMr = Schema.Struct({
 });
 
 /** The merge requests from `branch` into `project`, `opened` or in any state, every page of them. */
-const mrsFrom = (
+const mrsFrom: (
   project: string,
   branch: string,
   state: "opened" | "all",
   cwd: string,
-): Effect.Effect<Answered<Array<typeof BranchMr.Type>>, never, ForgeHttp> => {
+) => Effect.Effect<Answered<Array<typeof BranchMr.Type>>, never, ForgeHttp> = (
+  project,
+  branch,
+  state,
+  cwd,
+) => {
   const reached = projectRest({ project, iid: "" }, cwd);
   if (!reached.ok) return Effect.succeed({ ok: false, reason: reached.reason });
   const query = `source_branch=${encodeURIComponent(branch)}&state=${state}`;
@@ -591,28 +602,28 @@ const mrsFrom = (
 };
 
 /** The open merge request from `branch`; a failed read is not "none". */
-function forBranch(
-  project: string,
-  branch: string,
-  cwd: string,
-): Effect.Effect<ForBranch, never, ForgeHttp> {
-  return Effect.map(mrsFrom(project, branch, "opened", cwd), (listed) => {
-    if (!listed.ok) return listed;
-    const mr =
-      Option.getOrUndefined(
-        Arr.findFirst(listed.value, (one) => one.merge_when_pipeline_succeeds === true),
-      ) ?? listed.value[0];
-    if (mr === undefined) return { ok: true, open: null };
-    const iid = String(mr.iid);
-    return {
-      ok: true,
-      open: {
-        iid,
-        url: mr.web_url ?? `https://${project}/-/merge_requests/${iid}`,
-        autoMerge: mr.merge_when_pipeline_succeeds === true,
-      },
-    };
-  });
+function forBranch(project: string, branch: string, cwd: string) {
+  const returned: Effect.Effect<ForBranch, never, ForgeHttp> = Effect.map(
+    mrsFrom(project, branch, "opened", cwd),
+    (listed) => {
+      if (!listed.ok) return listed;
+      const mr =
+        Option.getOrUndefined(
+          Arr.findFirst(listed.value, (one) => one.merge_when_pipeline_succeeds === true),
+        ) ?? listed.value[0];
+      if (mr === undefined) return { ok: true, open: null };
+      const iid = String(mr.iid);
+      return {
+        ok: true,
+        open: {
+          iid,
+          url: mr.web_url ?? `https://${project}/-/merge_requests/${iid}`,
+          autoMerge: mr.merge_when_pipeline_succeeds === true,
+        },
+      };
+    },
+  );
+  return returned;
 }
 
 const DefaultBranch = Schema.Struct({ default_branch: Schema.String });
@@ -626,11 +637,7 @@ const wildcard = (pattern: string) =>
   );
 
 /** The default branch, or a protected branch as listed, wildcards matched; null where either is unread. */
-function protects(
-  project: string,
-  branch: string,
-  cwd: string,
-): Effect.Effect<boolean | null, never, ForgeHttp> {
+function protects(project: string, branch: string, cwd: string) {
   return Effect.gen(function* () {
     const host = hostOf(project);
     if (host === null) return null;
@@ -646,27 +653,27 @@ function protects(
 }
 
 /** Every merge request from `branch`, whatever its state; a failed read is not "none". */
-function fromBranch(
-  project: string,
-  branch: string,
-  cwd: string,
-): Effect.Effect<FromBranchList, never, ForgeHttp> {
-  return Effect.map(mrsFrom(project, branch, "all", cwd), (listed) => {
-    if (!listed.ok) return listed;
-    return {
-      ok: true,
-      mrs: Arr.map(listed.value, (mr): FromBranch => {
-        const iid = String(mr.iid);
-        return {
-          iid,
-          url: mr.web_url ?? `https://${project}/-/merge_requests/${iid}`,
-          state: mr.state === "merged" ? "merged" : mr.state === "opened" ? "open" : "closed",
-          created: mr.created_at,
-          ended: mr.merged_at ?? mr.closed_at ?? null,
-        };
-      }),
-    };
-  });
+function fromBranch(project: string, branch: string, cwd: string) {
+  const returned: Effect.Effect<FromBranchList, never, ForgeHttp> = Effect.map(
+    mrsFrom(project, branch, "all", cwd),
+    (listed) => {
+      if (!listed.ok) return listed;
+      return {
+        ok: true,
+        mrs: Arr.map(listed.value, (mr) => {
+          const iid = String(mr.iid);
+          return {
+            iid,
+            url: mr.web_url ?? `https://${project}/-/merge_requests/${iid}`,
+            state: mr.state === "merged" ? "merged" : mr.state === "opened" ? "open" : "closed",
+            created: mr.created_at,
+            ended: mr.merged_at ?? mr.closed_at ?? null,
+          };
+        }),
+      };
+    },
+  );
+  return returned;
 }
 
 const MrHead = Schema.Struct({
@@ -710,8 +717,8 @@ const JOB_STATES = new Map<string, JobState>([
  * The job on the merge request's head pipeline. A merged-results pipeline runs on a merge
  * commit, which counts for the head only where GitLab shows that commit's parent is it.
  */
-function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function job(ref: MrRef, name: string, cwd: string) {
+  const returned: Effect.Effect<JobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return reached;
@@ -752,10 +759,11 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
       };
     return { ok: true, head, ...found.value, merge, target };
   });
+  return returned;
 }
 
 /** glab's login to `host`, which ForgeHttp asks GitLab with. */
-export function glabLoginTo(host: string, stored = false): ForgeLogin {
+export function glabLoginTo(host: string, stored = false) {
   // glab answers a token in its environment for any host; a stored login is the host's own.
   const glab = <R>(args: ReadonlyArray<string>, run: Runner<R>, cwd: string) =>
     stored
@@ -769,7 +777,7 @@ export function glabLoginTo(host: string, stored = false): ForgeLogin {
     Effect.map(glab(["config", "get", key, "--host", host], run, cwd), (ran) =>
       ran.code === 0 ? Str.trim(ran.stdout) : "",
     );
-  return {
+  const returned: ForgeLogin = {
     forge: "gitlab",
     host,
     key: stored ? `${host} stored` : host,
@@ -788,6 +796,7 @@ export function glabLoginTo(host: string, stored = false): ForgeLogin {
     refresh: (run, cwd) =>
       Effect.map(run("glab", ["auth", "status", "--hostname", host], cwd), (ran) => ran.code === 0),
   };
+  return returned;
 }
 
 export const MONTHS = [
@@ -809,7 +818,7 @@ export const MONTHS = [
  * When an OAuth token glab stored expires: Go's RFC 822, `02 Jan 06 15:04 MST`, written in
  * the Machine's own zone, so a zone named by its abbreviation is this Machine's.
  */
-export function glabExpiry(said: string): number | null {
+export function glabExpiry(said: string) {
   const m = /^(\d{2}) (\w{3}) (\d{2}) (\d{2}):(\d{2}) (\S+)$/.exec(Str.trim(said));
   if (m === null) return null;
   const [, day, month, year, hour, minute, zone = ""] = m;
@@ -881,11 +890,7 @@ const plainTrace = (trace: string) =>
   );
 
 /** Job `id`'s failed attempt, with the failed tests its pipeline's failed jobs' traces name. */
-function failedAttempt(
-  ref: MrRef,
-  id: string,
-  cwd: string,
-): Effect.Effect<FailedAttempt, never, ForgeHttp> {
+function failedAttempt(ref: MrRef, id: string, cwd: string) {
   return Effect.gen(function* () {
     const unread: FailedAttempt = { url: null, tests: [], jobs: null };
     const reached = projectRest(ref, cwd);
@@ -944,12 +949,8 @@ function failedAttempt(
 }
 
 /** The job at the merge request's merge-base pipeline, else on its target branch's latest. */
-function baseJob(
-  ref: MrRef,
-  name: string,
-  cwd: string,
-): Effect.Effect<BaseJobRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function baseJob(ref: MrRef, name: string, cwd: string) {
+  const returned: Effect.Effect<BaseJobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return reached;
@@ -959,7 +960,10 @@ function baseJob(
     const base = mr.value.diff_refs?.base_sha;
     const target = mr.value.target_branch;
     if (!base || !target)
-      return { ok: false, reason: `GitLab would not say where ${where} leaves its target branch` };
+      return {
+        ok: false,
+        reason: `GitLab would not say where ${where} leaves its target branch`,
+      };
     const latest = (query: string) =>
       Effect.map(rest(Pipelines, `pipelines?${query}&per_page=1`), (listed) =>
         listed.ok ? ({ ok: true, value: listed.value[0] } as const) : listed,
@@ -996,15 +1000,12 @@ function baseJob(
       id: found.value.id,
     };
   });
+  return returned;
 }
 
 /** The job named `name` in the newest pipeline on the merge request's target branch. */
-function targetJob(
-  ref: MrRef,
-  name: string,
-  cwd: string,
-): Effect.Effect<TargetJobRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function targetJob(ref: MrRef, name: string, cwd: string) {
+  const returned: Effect.Effect<TargetJobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return reached;
@@ -1030,6 +1031,7 @@ function targetJob(
     const { state, url, id } = found.value;
     return { ok: true, branch, at: pipeline.sha, state, url, id };
   });
+  return returned;
 }
 
 const Username = Schema.Struct({ username: Schema.String });
@@ -1100,7 +1102,7 @@ function approvalOf(
   }>,
   login: string,
   changesRequested: boolean,
-): string {
+) {
   const requiring = Arr.filter(rules, (rule) => rule.required > 0);
   if (requiring.length === 0) return changesRequested ? "changes were requested" : "";
   return Arr.join(
@@ -1120,8 +1122,8 @@ function approvalOf(
  * The merge request, its approvals (rule by rule where this GitLab has approval state) and
  * every page of its discussions.
  */
-function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function readReview(ref: MrRef, cwd: string) {
+  const returned: Effect.Effect<ReviewRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return reached;
@@ -1219,15 +1221,11 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
       comments: judgeComments(comments, login, resolved),
     };
   });
+  return returned;
 }
 
 /** A note in the comment's discussion, or a note of its own on the merge request. */
-function reply(
-  ref: MrRef,
-  to: Pick<ForgeComment, "thread">,
-  body: string,
-  cwd: string,
-): Effect.Effect<Readiness, never, ForgeHttp> {
+function reply(ref: MrRef, to: Pick<ForgeComment, "thread">, body: string, cwd: string) {
   return Effect.gen(function* () {
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return reached;
@@ -1251,12 +1249,8 @@ function reply(
  * GitLab's merge endpoint at `head`, never `glab mr merge`, whose `--auto-merge` defaults
  * to on. No squash is passed, so the project's own setting stands.
  */
-function merge(
-  ref: MrRef,
-  head: string,
-  cwd: string,
-): Effect.Effect<MergeAnswer, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function merge(ref: MrRef, head: string, cwd: string) {
+  const returned: Effect.Effect<MergeAnswer, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return { _tag: "Refused", reason: reached.reason };
@@ -1285,9 +1279,10 @@ function merge(
     if ((mr.sha ?? "") !== head) return { _tag: "HeadMoved", head: mr.sha ?? "" };
     return { _tag: "Refused", reason: refusal };
   });
+  return returned;
 }
 
-function retryJob(ref: MrRef, id: string, cwd: string): Effect.Effect<Readiness, never, ForgeHttp> {
+function retryJob(ref: MrRef, id: string, cwd: string) {
   return Effect.gen(function* () {
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return reached;
@@ -1310,12 +1305,8 @@ const StartedPipeline = Schema.Struct({
  * The merge request's pipeline on `head`, else its source branch's where GitLab refuses that
  * with 400, unless `head` has one that was not skipped.
  */
-function startPipeline(
-  ref: MrRef,
-  head: string,
-  cwd: string,
-): Effect.Effect<PipelineStart, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function startPipeline(ref: MrRef, head: string, cwd: string) {
+  const returned: Effect.Effect<PipelineStart, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return { _tag: "Failed", reason: reached.reason };
@@ -1374,6 +1365,7 @@ function startPipeline(
       return { _tag: "NoneByRules", message: asBranch.reason };
     return yield* started(asBranch);
   });
+  return returned;
 }
 
 const jobLog = (ref: MrRef, id: string) =>
@@ -1390,7 +1382,7 @@ function template(cwd: string) {
 const PipelineState = Schema.Struct({ status: Schema.String });
 
 /** `https://host/group/project/-/pipelines/7`'s status, or null where GitLab does not say. */
-function pipelineStatus(url: string, cwd: string): Effect.Effect<string | null, never, ForgeHttp> {
+function pipelineStatus(url: string, cwd: string) {
   return Effect.gen(function* () {
     const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(Str.trim(url));
     if (!m) return null;
@@ -1413,12 +1405,8 @@ const PipelineIdentity = Schema.Struct({
 });
 
 /** The newest pipeline of `tag` in `ref`'s project. */
-function tagPipeline(
-  ref: MrRef,
-  tag: string,
-  cwd: string,
-): Effect.Effect<TagPipelineRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function tagPipeline(ref: MrRef, tag: string, cwd: string) {
+  const returned: Effect.Effect<TagPipelineRead, never, ForgeHttp> = Effect.gen(function* () {
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return reached;
     const pipelines = yield* reached.rest(
@@ -1432,11 +1420,12 @@ function tagPipeline(
       url: newest === undefined ? null : `https://${ref.project}/-/pipelines/${newest.id}`,
     };
   });
+  return returned;
 }
 
 /** `https://host/group/project/-/pipelines/7` and its jobs, a manual one as waiting by hand. */
-function pipeline(url: string, cwd: string): Effect.Effect<PipelineRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function pipeline(url: string, cwd: string) {
+  const returned: Effect.Effect<PipelineRead, never, ForgeHttp> = Effect.gen(function* () {
     const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(Str.trim(url));
     if (!m) return { ok: false, reason: `${url} is not a GitLab pipeline` };
     const [, host, project, id] = m;
@@ -1464,15 +1453,11 @@ function pipeline(url: string, cwd: string): Effect.Effect<PipelineRead, never, 
       })),
     };
   });
+  return returned;
 }
 
 /** A clone with glab's token for the host as git's auth header, so no credential is stored. */
-function clone<R>(
-  project: string,
-  into: string,
-  cwd: string,
-  run: Runner<R>,
-): Effect.Effect<Readiness, never, R> {
+function clone<R>(project: string, into: string, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
     const host = hostOf(project) ?? Str.split(project, "/")[0]!;
     const token = Str.trim(

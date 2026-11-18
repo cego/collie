@@ -77,10 +77,6 @@ type Needs =
   | RunRecords;
 
 /** A part of the record, and the fields it fills when it comes. */
-interface Part {
-  readonly name: RecordPart;
-  readonly value: Effect.Effect<Partial<RunDetail>>;
-}
 
 const sameRevision = (one: RunRevision, other: RunRevision) =>
   one.epoch === other.epoch && one.seq === other.seq;
@@ -217,10 +213,7 @@ export const recordFrames = (
         Path.Path | ChildProcessSpawner.ChildProcessSpawner | Launches | RunRecords
       >();
       // A part that fails ends the stream, as a whole record that failed always has.
-      const part = <E>(
-        name: RecordPart,
-        value: Effect.Effect<Partial<RunDetail>, E, Needs>,
-      ): Part => ({
+      const part = <E>(name: RecordPart, value: Effect.Effect<Partial<RunDetail>, E, Needs>) => ({
         name,
         value: value.pipe(
           Effect.provideService(FileSystem.FileSystem, model.reading),
@@ -345,7 +338,7 @@ export const recordFrames = (
               }),
             ),
             Stream.drop(1),
-            Stream.map((detail): RunDetail => {
+            Stream.map((detail) => {
               if (detail.pending?.length !== 0) return detail;
               const { pending: _, revision: __, ...done } = detail;
               const revision = model.stampRecord(stampKey, key.runId, base.ids, fingerprint(done));

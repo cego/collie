@@ -1277,7 +1277,10 @@ const buildEach = (fan: {
     const changeOf = (key: string) =>
       Option.getOrElse(
         Arr.findFirst(fan.changes, (one) => one.key === key),
-        (): typeof ChangeReading.Type => ({ key, repo: key }),
+        () => {
+          const returned: typeof ChangeReading.Type = { key, repo: key };
+          return returned;
+        },
       );
     const built: string[] = [];
     const keys = fan.waves.flat();
@@ -1336,7 +1339,10 @@ const buildEach = (fan: {
   });
 
 /** What the slice claims it built, or the ticket's own name where it named nothing. */
-const claimsOf = (built: typeof Built.Type, ticket: Slice): ReadonlyArray<string> => {
+const claimsOf: (built: typeof Built.Type, ticket: Slice) => ReadonlyArray<string> = (
+  built,
+  ticket,
+) => {
   const named = built.tickets_done ?? [];
   return named.length > 0 ? named : [ticket.title];
 };
@@ -1351,7 +1357,10 @@ const renderCriteria = (criteria: ReadonlyArray<string>) =>
       );
 
 /** Each answer as the wording it answered; one that answered none of it is dropped. */
-const boundTo = (wording: ReadonlyArray<string>, given: ReadonlyArray<Criterion>): Criterion[] =>
+const boundTo: (wording: ReadonlyArray<string>, given: ReadonlyArray<Criterion>) => Criterion[] = (
+  wording,
+  given,
+) =>
   Arr.flatMap(given, (answer) => {
     const criterion = Option.getOrUndefined(
       Arr.findFirst(wording, (one) => answerFor(one, [answer]) !== undefined),

@@ -38,7 +38,7 @@ import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { readBudget } from "../src/steering";
 
-const facts = (over: Partial<RuleFacts> = {}): RuleFacts => ({
+const facts = (over: Partial<RuleFacts> = {}) => ({
   changedFiles: ["src/a.ts"],
   branch: "feat/picker",
   mrTarget: { project: "acme/app", iid: "42" },
@@ -47,7 +47,7 @@ const facts = (over: Partial<RuleFacts> = {}): RuleFacts => ({
   ...over,
 });
 
-function intentWith(rule: Constraint["rule"], severity: Constraint["severity"] = "block"): Intent {
+function intentWith(rule: Constraint["rule"], severity: Constraint["severity"] = "block") {
   return seedIntent("r1", {
     constraints: [{ id: "c1", kind: "rule", text: "the rule", severity, source: "human", rule }],
   });
@@ -290,7 +290,7 @@ test("an amended Intent supersedes what it moved past, and nothing else", () => 
     ],
   });
   const at = { ...intent, version: 3 };
-  const open = (over: Partial<DriftReport>): DriftReport => ({
+  const open: (over: Partial<DriftReport>) => DriftReport = (over) => ({
     id: "d1",
     at: "t",
     run: "r1",
@@ -458,7 +458,7 @@ const judgementDeps = (dir: string, help = FLAGS) => ({
   log: () => Effect.void,
 });
 
-const semanticIntent = (over: Partial<Intent> = {}): Intent => ({
+const semanticIntent: (over?: Partial<Intent>) => Intent = (over = {}) => ({
   ...seedIntent("r1", { goal: "add a picker" }),
   constraints: [
     {

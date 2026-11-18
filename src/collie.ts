@@ -127,7 +127,7 @@ export const program = app.pipe(
 );
 
 /** What was wrong with the command line, or that it stopped short of a command. */
-function parseMessage(parse: CliError.ShowHelp): string {
+function parseMessage(parse: CliError.ShowHelp) {
   if (parse.errors.length > 0)
     return Arr.join(
       Arr.map(parse.errors, (error) => error.message),

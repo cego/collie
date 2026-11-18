@@ -45,8 +45,8 @@ export interface Ran {
 }
 
 /** What a command told a human — its stdout, then its stderr. An answer is read from `stdout` alone. */
-export function whatItSaid(result: Ran): string {
-  return Arr.join(
+export function whatItSaid(result: Ran) {
+  const returned: string = Arr.join(
     Arr.filter(
       [
         Str.trim(result.stdout),
@@ -58,6 +58,7 @@ export function whatItSaid(result: Ran): string {
     ),
     "\n",
   );
+  return returned;
 }
 
 /**
@@ -89,16 +90,19 @@ const LINEAR_ID = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
  * `branch:main...HEAD` and a diff of two shas are both things a human may review — so
  * what a caller may do with it depends on what the caller wants it for.
  */
-export function branchTargetHead(target: string): string | null {
-  if (!pipe_(target, Str.startsWith("branch:"))) return null;
-  return (
+export function branchTargetHead(target: string) {
+  if (!pipe_(target, Str.startsWith("branch:"))) {
+    const returned: string | null = null;
+    return returned;
+  }
+  const returned: string | null =
     Option.getOrUndefined(
       Option.map(
         Option.fromNullishOr(Str.split(pipe_(target, Str.slice("branch:".length)), "...").at(-1)),
         (present_) => Str.trim(present_),
       ),
-    ) ?? ""
-  );
+    ) ?? "";
+  return returned;
 }
 
 /**
@@ -112,16 +116,12 @@ export function branchTargetHead(target: string): string | null {
  * An unreadable merge request answers no. The costly mistake is the other one: staying
  * quiet about someone else's change because glab had a bad minute.
  */
-export function assignedTo<R>(
-  mr: MrRef,
-  who: string,
-  cwd: string,
-  run: Runner<R>,
-): Effect.Effect<boolean, never, R | ForgeHttp> {
-  return Effect.gen(function* () {
+export function assignedTo<R>(mr: MrRef, who: string, cwd: string, run: Runner<R>) {
+  const returned: Effect.Effect<boolean, never, R | ForgeHttp> = Effect.gen(function* () {
     const panel = yield* forgeOf(mr).details(mr, cwd, run);
     return panel._tag === "Details" && panel.assignees.includes(who);
   });
+  return returned;
 }
 
 /**
@@ -142,8 +142,8 @@ export function postNote<R>(
     readonly gitlabHost?: string;
   },
   run: Runner<R>,
-): Effect.Effect<Posted, never, R | ForgeHttp> {
-  return Effect.gen(function* () {
+) {
+  const returned: Effect.Effect<Posted, never, R | ForgeHttp> = Effect.gen(function* () {
     const mr = parseMrTarget(options.target);
     if (!mr)
       return { ok: false, message: `${options.target || "this run"} is not a merge request` };
@@ -178,7 +178,10 @@ export function postNote<R>(
       const signature = `<!-- collie:${runId} round ${round} at ${head} by ${me} -->`;
       const found = yield* forge.findNote(mr, signature, options.cwd, run);
       if (!found.ok)
-        return { ok: false, message: `could not read the review before posting: ${found.reason}` };
+        return {
+          ok: false,
+          message: `could not read the review before posting: ${found.reason}`,
+        };
       if (found.value)
         return { ok: true, message: `posted the review to ${options.target}`, signature };
       const current = yield* forge.details(mr, options.cwd, run);
@@ -198,6 +201,7 @@ export function postNote<R>(
     }
     return yield* forge.post(mr, body, options.cwd, run);
   });
+  return returned;
 }
 
 export { mrTarget, targetKind };
@@ -206,16 +210,27 @@ export { mrTarget, targetKind };
  * `git@host:group/project.git` and `https://host/group/project.git` both name the
  * same project; either is what a bare iid or a branch's MR is resolved against.
  */
-export function projectFromRemote(url: string): string | null {
+export function projectFromRemote(url: string) {
   const text = Str.trim(url);
-  if (text === "") return null;
+  if (text === "") {
+    const returned: string | null = null;
+    return returned;
+  }
   const ssh = /^(?:ssh:\/\/)?(?:[^@\s]+@)?([^:/\s]+)[:/](.+?)(?:\.git)?$/.exec(
     pipe_(text, Str.replace(/^https?:\/\//, "")),
   );
-  if (!ssh) return null;
+  if (!ssh) {
+    const returned: string | null = null;
+    return returned;
+  }
   const [, host = "", path = ""] = ssh;
-  if (!pipe_(host, Str.includes(".")) || path === "") return null;
-  return `${host}/${pipe_(path, Str.replace(/^\/+/, ""), Str.replace(/\.git$/, ""))}`;
+  if (!pipe_(host, Str.includes(".")) || path === "") {
+    const returned: string | null = null;
+    return returned;
+  }
+  const returned: string | null =
+    `${host}/${pipe_(path, Str.replace(/^\/+/, ""), Str.replace(/\.git$/, ""))}`;
+  return returned;
 }
 
 /**
@@ -223,53 +238,48 @@ export function projectFromRemote(url: string): string | null {
  * comes back as exit 127 with why on stderr, which is what lets callers treat "no glab
  * here" as an answer rather than an error.
  */
-export function shell(
-  cmd: string,
-  args: string[],
-  cwd: string,
-  env?: RunnerEnv,
-): Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner> {
-  return Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make(cmd, args, {
-      cwd,
-      // A status that refreshes the index holds `index.lock` while it writes, and a commit an
-      // agent makes in that moment is refused. Git's optional locks are for the one working
-      // in a checkout, never for a reader beside it.
-      env: cmd === "git" ? { GIT_OPTIONAL_LOCKS: "0", ...env } : env,
-      stdout: "pipe",
-      stderr: "pipe",
-      // extendEnv, so git and glab inherit this process's environment and find their
-      // config and credentials — the Effect-native spelling of `{ ...process.env }`.
-      extendEnv: true,
-    });
-    const handle = yield* spawner.spawn(command);
-    const text = (stream: typeof handle.stdout) =>
-      stream.pipe(
-        Stream.decodeText(),
-        Stream.runFold(
-          () => "",
-          (out, chunk) => out + chunk,
-        ),
+export function shell(cmd: string, args: string[], cwd: string, env?: RunnerEnv) {
+  const returned: Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner> = Effect.gen(
+    function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const command = ChildProcess.make(cmd, args, {
+        cwd,
+        // A status that refreshes the index holds `index.lock` while it writes, and a commit an
+        // agent makes in that moment is refused. Git's optional locks are for the one working
+        // in a checkout, never for a reader beside it.
+        env: cmd === "git" ? { GIT_OPTIONAL_LOCKS: "0", ...env } : env,
+        stdout: "pipe",
+        stderr: "pipe",
+        // extendEnv, so git and glab inherit this process's environment and find their
+        // config and credentials — the Effect-native spelling of `{ ...process.env }`.
+        extendEnv: true,
+      });
+      const handle = yield* spawner.spawn(command);
+      const text = (stream: typeof handle.stdout) =>
+        stream.pipe(
+          Stream.decodeText(),
+          Stream.runFold(
+            () => "",
+            (out, chunk) => out + chunk,
+          ),
+        );
+      const [stdout, stderr, code] = yield* Effect.all(
+        [text(handle.stdout), text(handle.stderr), handle.exitCode],
+        { concurrency: "unbounded" },
       );
-    const [stdout, stderr, code] = yield* Effect.all(
-      [text(handle.stdout), text(handle.stderr), handle.exitCode],
-      { concurrency: "unbounded" },
-    );
-    return { code: Number(code), stdout, stderr };
-  }).pipe(
+      return { code: Number(code), stdout, stderr };
+    },
+  ).pipe(
     Effect.scoped,
     waitingForIO,
     Effect.catch((cause) => Effect.succeed({ code: 127, stdout: "", stderr: String(cause) })),
   );
+  return returned;
 }
 
 /** The project this checkout pushes to, or null when there is no GitLab remote. */
-export function projectHere<R>(
-  cwd: string,
-  run: Runner<R>,
-): Effect.Effect<string | null, never, R> {
-  return Effect.gen(function* () {
+export function projectHere<R>(cwd: string, run: Runner<R>) {
+  const returned: Effect.Effect<string | null, never, R> = Effect.gen(function* () {
     for (const remote of ["origin", "upstream"]) {
       const url = yield* run("git", ["remote", "get-url", remote], cwd);
       if (url.code !== 0) continue;
@@ -278,17 +288,14 @@ export function projectHere<R>(
     }
     return null;
   });
+  return returned;
 }
 /**
  * `mr`'s MR id, where a bare or hostless one is resolved against the checkout at `cwd`;
  * null where it names no merge request a host can be told for.
  */
-export function mrIdIn<R>(
-  mr: string,
-  cwd: string,
-  run: Runner<R>,
-): Effect.Effect<string | null, never, R> {
-  return Effect.gen(function* () {
+export function mrIdIn<R>(mr: string, cwd: string, run: Runner<R>) {
+  const returned: Effect.Effect<string | null, never, R> = Effect.gen(function* () {
     const id = mrId(mr);
     if (id !== null) return id;
     const said = Str.trim(mr);
@@ -299,6 +306,7 @@ export function mrIdIn<R>(
     if (project !== null) checkouts.set(cwd, project);
     return mrId(mr, { project });
   });
+  return returned;
 }
 
 // ponytail: a checkout's project for the process's life, read only for legacy references.
@@ -310,19 +318,26 @@ export type ForgeHere =
   | { readonly ok: false; readonly reason: string };
 
 /** The forge of the checkout at `cwd`: its `origin`'s host, else `upstream`'s (ADR-0050 D2). */
-export function forgeHere<R>(
-  cwd: string,
-  run: Runner<R>,
-  gitlabHost?: string,
-): Effect.Effect<ForgeHere, never, R> {
-  return Effect.map(projectHere(cwd, run), (project): ForgeHere => {
-    if (project === null) return { ok: false, reason: "this repo has no remote" };
-    const host = Str.split(project, "/")[0]!;
-    const name = forgeOfHost(host, gitlabHost);
-    return name === null
-      ? { ok: false, reason: `${host} is neither GitHub nor GitLab` }
-      : { ok: true, forge: FORGES[name], project };
-  });
+export function forgeHere<R>(cwd: string, run: Runner<R>, gitlabHost?: string) {
+  const answer: Effect.Effect<ForgeHere, never, R> = Effect.map(
+    projectHere(cwd, run),
+    (project) => {
+      if (project === null) {
+        const returned: ForgeHere = { ok: false, reason: "this repo has no remote" };
+        return returned;
+      }
+      const host = Str.split(project, "/")[0]!;
+      const name = forgeOfHost(host, gitlabHost);
+      {
+        const returned: ForgeHere =
+          name === null
+            ? { ok: false, reason: `${host} is neither GitHub nor GitLab` }
+            : { ok: true, forge: FORGES[name], project };
+        return returned;
+      }
+    },
+  );
+  return answer;
 }
 
 /** Whether the forge shows production carrying `sha`: false where it cannot say. */
@@ -331,13 +346,14 @@ export function productionCarries<R>(
   sha: string,
   run: Runner<R>,
   gitlabHost?: string,
-): Effect.Effect<boolean, never, R | ForgeHttp> {
-  return Effect.gen(function* () {
+) {
+  const returned: Effect.Effect<boolean, never, R | ForgeHttp> = Effect.gen(function* () {
     const here = yield* forgeHere(cwd, run, gitlabHost);
     if (!here.ok) return false;
     const ref = { project: here.project, iid: "" };
     return (yield* here.forge.liveTier(ref, sha, cwd, run)) === "production";
   });
+  return returned;
 }
 
 /**
@@ -345,12 +361,8 @@ export function productionCarries<R>(
  * else null. A checkout on no forge has none to merge; a forge that cannot be read fails with
  * why, since a push is safe only once it has said no.
  */
-export function autoMergingHere<R>(
-  cwd: string,
-  run: Runner<R>,
-  gitlabHost?: string,
-): Effect.Effect<string | null, string, R | ForgeHttp> {
-  return Effect.gen(function* () {
+export function autoMergingHere<R>(cwd: string, run: Runner<R>, gitlabHost?: string) {
+  const returned: Effect.Effect<string | null, string, R | ForgeHttp> = Effect.gen(function* () {
     const here = yield* forgeHere(cwd, run, gitlabHost);
     if (!here.ok) return null;
     const branch = Str.trim((yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).stdout);
@@ -359,6 +371,7 @@ export function autoMergingHere<R>(
     if (!found.ok) return yield* Effect.fail(found.reason);
     return found.open?.autoMerge === true ? found.open.url : null;
   });
+  return returned;
 }
 
 /**
@@ -367,12 +380,19 @@ export function autoMergingHere<R>(
  * makes — a commit count would need a second, and "has anything moved" is the question
  * a human actually has.
  */
-export function sinceReview(details: MrDetails, reviewedAt: number): string {
-  if (reviewedAt <= 0 || details.updatedAt <= 0) return "";
-  if (details.updatedAt <= reviewedAt) return "nothing has moved since this review";
+export function sinceReview(details: MrDetails, reviewedAt: number) {
+  if (reviewedAt <= 0 || details.updatedAt <= 0) {
+    const returned: string = "";
+    return returned;
+  }
+  if (details.updatedAt <= reviewedAt) {
+    const returned: string = "nothing has moved since this review";
+    return returned;
+  }
   const hours = Math.round((details.updatedAt - reviewedAt) / 3_600_000);
   const when = hours < 1 ? "since" : `${hours}h after`;
-  return `changed ${when} this review — head ${details.headSha}`;
+  const returned: string = `changed ${when} this review — head ${details.headSha}`;
+  return returned;
 }
 
 /** The configured assignee wins; otherwise whoever the forge's CLI is logged in as. */
@@ -382,23 +402,21 @@ export function resolveAssignee<R>(
   forge: Forge,
   run: Runner<R>,
   project: string | null = null,
-): Effect.Effect<string | null, never, R | ForgeHttp> {
-  return Effect.gen(function* () {
+) {
+  const returned: Effect.Effect<string | null, never, R | ForgeHttp> = Effect.gen(function* () {
     if (configured !== undefined && isString(configured) && Str.trim(configured) !== "")
       return Str.trim(configured);
     return yield* forge.login(cwd, run, project);
   });
+  return returned;
 }
 
 /**
  * Every Linear ticket this branch could be answering: the work source when the
  * human named one, and the branch name.
  */
-export function linearIssues<R>(
-  opts: { cwd: string } & Settled,
-  run: Runner<R>,
-): Effect.Effect<string[], never, R> {
-  return Effect.gen(function* () {
+export function linearIssues<R>(opts: { cwd: string } & Settled, run: Runner<R>) {
+  const returned: Effect.Effect<string[], never, R> = Effect.gen(function* () {
     const found: string[] = [];
     const add = (id: string) => {
       const up = Str.toUpperCase(id);
@@ -412,10 +430,12 @@ export function linearIssues<R>(
     for (const id of matchAll(branch.stdout)) add(id);
     return found;
   });
+  return returned;
 }
 
-function matchAll(text: string): string[] {
-  return Arr.map([...pipe_(text, Str.matchAll(LINEAR_ID))], (m) => m[1]!);
+function matchAll(text: string) {
+  const returned: string[] = Arr.map([...pipe_(text, Str.matchAll(LINEAR_ID))], (m) => m[1]!);
+  return returned;
 }
 
 /** The forge this branch pushes to, and the facts its delivery prompt needs. */
@@ -432,11 +452,18 @@ export function prepareMergeRequest<R>(
     readonly gitlabHost?: string;
   },
   run: Runner<R>,
-): Effect.Effect<MrReady, PlatformError, FileSystem.FileSystem | Path.Path | R | ForgeHttp> {
-  return Effect.gen(function* () {
-    const unavailable = (reason: string, cause?: ParkCause): MrReady => {
+) {
+  const answer: Effect.Effect<
+    MrReady,
+    PlatformError,
+    FileSystem.FileSystem | Path.Path | R | ForgeHttp
+  > = Effect.gen(function* () {
+    const unavailable = (reason: string, cause?: ParkCause) => {
       const result = { ok: false, reason, assignee: "", template: "", issues: [] };
-      return cause === undefined ? result : { ...result, cause };
+      {
+        const returned: MrReady = cause === undefined ? result : { ...result, cause };
+        return returned;
+      }
     };
     const ref = opts.target === undefined ? null : parseMrTarget(opts.target);
     const here =
@@ -488,4 +515,5 @@ export function prepareMergeRequest<R>(
       autoMerge: found.open?.autoMerge ?? false,
     };
   });
+  return answer;
 }

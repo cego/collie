@@ -30,7 +30,7 @@ import { collie, proves } from "./support/world";
 
 type Rpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 
-const entry = (over: Partial<ScheduleEntry> = {}): ScheduleEntry => ({
+const entry = (over: Partial<ScheduleEntry> = {}) => ({
   machine: { installation: "i-vm", hostname: "vm" },
   name: "daily",
   workflow: "self-improve",
@@ -44,7 +44,7 @@ const entry = (over: Partial<ScheduleEntry> = {}): ScheduleEntry => ({
   ...over,
 });
 
-const on = (over: Partial<MachineSchedules> = {}): MachineSchedules => ({
+const on = (over: Partial<MachineSchedules> = {}) => ({
   installation: "i-vm",
   profile: "vm",
   name: "vm",

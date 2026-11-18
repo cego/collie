@@ -61,7 +61,7 @@ const readConfig = Effect.fn("test.readConfig")(function* (path: string) {
   return yield* Schema.decodeEffect(ClaudeConfigJson)(yield* fs.readFileString(path));
 });
 
-function project(config: YamlMap, path: string): YamlMap {
+function project(config: YamlMap, path: string) {
   expect(isYamlMap(config.projects)).toBe(true);
   const projects = isYamlMap(config.projects) ? config.projects : {};
   expect(isYamlMap(projects[path])).toBe(true);

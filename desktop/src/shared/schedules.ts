@@ -35,11 +35,7 @@ export type ScheduleAsk =
       };
     };
 
-export const scheduleAsk = (
-  installation: string,
-  name: string,
-  action: ScheduleAction,
-): ScheduleAsk =>
+export const scheduleAsk = (installation: string, name: string, action: ScheduleAction) =>
   action === "move"
     ? { kind: "move", from: installation, name }
     : { kind: "change", payload: { installation, name, change: action } };
@@ -66,7 +62,7 @@ const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", 
 const NUMBER = /^\d+$/;
 
 /** A cron expression in words, for the shapes people write; null for the rest. */
-export const cronWords = (cron: string): string | null => {
+export const cronWords = (cron: string) => {
   // ponytail: common five-field shapes only; anything else is shown as its expression.
   const [minute, hour, day, month, weekday, ...rest] = Str.split(Str.trim(cron), /\s+/);
   if (rest.length > 0 || weekday === undefined || day !== "*" || month !== "*") return null;
@@ -83,7 +79,7 @@ export const cronWords = (cron: string): string | null => {
   return named === undefined ? null : `every ${named} ${at}`;
 };
 
-const rowOf = (entry: ScheduleEntry): ScheduleRowView => {
+const rowOf = (entry: ScheduleEntry) => {
   const expression = `${entry.cron} ${entry.tz}`;
   const words = cronWords(entry.cron);
   return {
@@ -98,7 +94,7 @@ const rowOf = (entry: ScheduleEntry): ScheduleRowView => {
 };
 
 /** A Machine's Schedules section. */
-export const machineSchedules = (machine: MachineSchedules): MachineSchedulesView => {
+export const machineSchedules = (machine: MachineSchedules) => {
   if (machine.unreachable)
     return {
       state: "unreachable",

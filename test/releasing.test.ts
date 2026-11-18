@@ -23,8 +23,8 @@ const git = (cwd: string, ...args: string[]) =>
   });
 
 /** git for real; any other command is the forge's, answered by `forge`. */
-const runner =
-  (forge: Runner<never> = () => Effect.succeed({ code: 1, stdout: "" })): Runner<never> =>
+const runner: (forge?: Runner<never>) => Runner<never> =
+  (forge = () => Effect.succeed({ code: 1, stdout: "" })) =>
   (cmd, args, cwd) =>
     cmd === "git"
       ? Effect.map(exec([cmd, ...args], { cwd }), (ran) => ({

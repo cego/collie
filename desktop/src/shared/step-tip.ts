@@ -29,7 +29,7 @@ export type TipEvent =
   | { readonly kind: "release" }
   | { readonly kind: "leave" | "blur" | "dismiss"; readonly at: number };
 
-const closed = (tip: StepTip, at: number): StepTip => ({
+const closed = (tip: StepTip, at: number) => ({
   ...tip,
   open: null,
   waiting: null,
@@ -42,7 +42,7 @@ export interface TipNext {
   readonly wait: number | null;
 }
 
-export const tipAfter = (tip: StepTip, event: TipEvent): TipNext => {
+export const tipAfter = (tip: StepTip, event: TipEvent) => {
   switch (event.kind) {
     case "enter":
       return tip.open !== null || event.at < tip.instantUntil

@@ -20,7 +20,7 @@ export type Until = (typeof UNTILS)[number];
  * Waiting on someone: a question, a hold or a stop, or a park its status may not show. A
  * superseded question keeps the workflow suspended while the agent works on the message.
  */
-export const atAttention = (view: RunView): boolean =>
+export const atAttention: (view: RunView) => boolean = (view) =>
   view.parked !== null ||
   (view.status.status === "suspended" &&
     (!Arr.some(view.waiting, (one) => isSetAside(view.waiting, one)) ||
@@ -36,15 +36,28 @@ export function reached(
   view: RunView,
   progress: RunProgress | null,
   settled: boolean,
-): Reached {
-  if (until === "terminal") return settled ? "reached" : "waiting";
-  if (until === "attention") return settled || atAttention(view) ? "reached" : "waiting";
-  if (progress === null) return "waiting";
+) {
+  if (until === "terminal") {
+    const returned: Reached = settled ? "reached" : "waiting";
+    return returned;
+  }
+  if (until === "attention") {
+    const returned: Reached = settled || atAttention(view) ? "reached" : "waiting";
+    return returned;
+  }
+  if (progress === null) {
+    const returned: Reached = "waiting";
+    return returned;
+  }
   const ready = progress.ready.ready;
   const human =
     atAttention(view) || (settled && Arr.every(progress.ready.missing, (one) => !one.settling));
-  if (until === "ready") return ready ? "reached" : human ? "stuck" : "waiting";
-  return ready || human ? "reached" : "waiting";
+  if (until === "ready") {
+    const returned: Reached = ready ? "reached" : human ? "stuck" : "waiting";
+    return returned;
+  }
+  const returned: Reached = ready || human ? "reached" : "waiting";
+  return returned;
 }
 
 export type FollowEvent =
@@ -69,7 +82,7 @@ export interface Followed {
 const ciSaid = (ci: ForgeChecks) => (ci.state === "failed" ? `failed: ${ci.name}` : ci.state);
 
 /** What happened between two looks at a Run, oldest first. */
-export function followEvents(before: Followed, after: Followed): ReadonlyArray<FollowEvent> {
+export function followEvents(before: Followed, after: Followed) {
   const events: FollowEvent[] = [];
   if (after.progress !== null) {
     const was = new Map(Arr.map(before.progress?.steps ?? [], (step) => [step.operation, step]));
@@ -112,7 +125,8 @@ export function followEvents(before: Followed, after: Followed): ReadonlyArray<F
     const mr = after.view?.mr ?? null;
     if (mr !== null && mr !== (before.view?.mr ?? null)) events.push({ type: "mr", mr });
   }
-  return events;
+  const returned: ReadonlyArray<FollowEvent> = events;
+  return returned;
 }
 
 const MERGED: ReadonlySet<string> = new Set(["merged", "on-stage", "in-prod"]);
@@ -121,41 +135,56 @@ const endOf = (state: TaskMr["state"]) =>
   state === null ? null : MERGED.has(state) ? "merged" : state === "closed" ? "closed" : null;
 
 /** Each merge request of a Task that appeared, merged or closed between two looks. */
-const mrEvents = (
+const mrEvents: (
   before: ReadonlyArray<TaskMr>,
   after: ReadonlyArray<TaskMr>,
-): ReadonlyArray<FollowEvent> => {
+) => ReadonlyArray<FollowEvent> = (before, after) => {
   const was = new Map(Arr.map(before, (one) => [one.id, one]));
-  return Arr.flatMap(after, (one): ReadonlyArray<FollowEvent> => {
+  return Arr.flatMap(after, (one) => {
     const prior = was.get(one.id);
-    if (prior === undefined) return [{ type: "mr", mr: one.mr }];
+    if (prior === undefined) {
+      const returned: ReadonlyArray<FollowEvent> = [{ type: "mr", mr: one.mr }];
+      return returned;
+    }
     const end = endOf(one.state);
-    return end !== null && end !== endOf(prior.state)
-      ? [{ type: "mr", mr: one.mr, state: end }]
-      : [];
+    const returned: ReadonlyArray<FollowEvent> =
+      end !== null && end !== endOf(prior.state) ? [{ type: "mr", mr: one.mr, state: end }] : [];
+    return returned;
   });
 };
 
 /** One event as `--follow` prints it without `--json`. */
-export function followLine(runId: string, event: FollowEvent): string {
+export function followLine(runId: string, event: FollowEvent) {
   switch (event.type) {
-    case "agent":
-      return `${runId}: agent ${event.agent} launched for ${event.operation}`;
-    case "operation":
-      return `${runId}: operation ${event.operation} ${event.state}`;
-    case "parked":
-      return `${runId}: parked: ${event.reason}`;
-    case "awaiting":
-      return `${runId}: Waiting for ${event.on}.`;
-    case "mr":
-      return `${runId}: merge request ${event.mr} ${event.state ?? "opened"}`;
-    case "ci":
-      return `${runId}: CI ${ciSaid(event.ci)}`;
+    case "agent": {
+      const returned: string = `${runId}: agent ${event.agent} launched for ${event.operation}`;
+      return returned;
+    }
+    case "operation": {
+      const returned: string = `${runId}: operation ${event.operation} ${event.state}`;
+      return returned;
+    }
+    case "parked": {
+      const returned: string = `${runId}: parked: ${event.reason}`;
+      return returned;
+    }
+    case "awaiting": {
+      const returned: string = `${runId}: Waiting for ${event.on}.`;
+      return returned;
+    }
+    case "mr": {
+      const returned: string = `${runId}: merge request ${event.mr} ${event.state ?? "opened"}`;
+      return returned;
+    }
+    case "ci": {
+      const returned: string = `${runId}: CI ${ciSaid(event.ci)}`;
+      return returned;
+    }
   }
 }
 
 /** Ready to release as a human reads it: yes, or each missing fact and whether it may still come. */
-export const readyLines = (ready: ReadyToRelease): ReadonlyArray<string> =>
+export const readyLines: (ready: ReadyToRelease) => ReadonlyArray<string> = (ready) =>
   ready.ready
     ? ["Ready to release."]
     : [
@@ -167,7 +196,7 @@ export const readyLines = (ready: ReadyToRelease): ReadonlyArray<string> =>
       ];
 
 /** Ready to release for each of a Task's several merge requests; the Task's own where it has one. */
-export const progressReadyLines = (progress: RunProgress): ReadonlyArray<string> =>
+export const progressReadyLines: (progress: RunProgress) => ReadonlyArray<string> = (progress) =>
   progress.mrs !== undefined && progress.mrs.length > 1
     ? Arr.map(progress.mrs, (one) => `- ${one.short}: ${mrReadiness(one, progress.mrs!)}`)
     : readyLines(progress.ready);

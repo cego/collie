@@ -20,7 +20,7 @@ export type Gesture =
   | { readonly kind: "close" }
   | { readonly kind: "escape"; readonly overlay: boolean; readonly typing: boolean };
 
-export const afterGesture = (state: BoardState, gesture: Gesture): BoardState => {
+export const afterGesture = (state: BoardState, gesture: Gesture) => {
   switch (gesture.kind) {
     case "click":
     case "double-click": {
@@ -81,7 +81,7 @@ const OVERLAY =
   '[data-state="open"]:is([role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"])';
 
 /** A control does only what it does; a card's body is the card's; the rest is the board's own. */
-export const landedOn = (target: Target): Landed => {
+export const landedOn = (target: Target) => {
   if (target === null) return { on: "background" };
   if (target.closest(CONTROL) !== null) return { on: "control" };
   const card = target.closest("[data-card]");
@@ -94,13 +94,13 @@ export const landedOn = (target: Target): Landed => {
       };
 };
 
-export const overlayOpen = (page: Page): boolean => page.querySelector(OVERLAY) !== null;
+export const overlayOpen = (page: Page) => page.querySelector(OVERLAY) !== null;
 
-export const inField = (target: Target): boolean =>
+export const inField = (target: Target) =>
   target !== null && (target.isContentEditable === true || target.closest(FIELD) !== null);
 
 /** Escape as the board reads it: whether an overlay is open, and whether focus is in a field. */
-export const escapeOn = (target: Target, page: Page): Gesture => ({
+export const escapeOn = (target: Target, page: Page) => ({
   kind: "escape",
   overlay: overlayOpen(page) || (target?.closest("[data-escape-scope]") ?? null) !== null,
   typing: inField(target),

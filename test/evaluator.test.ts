@@ -188,7 +188,7 @@ test("the schema handed to the model is real JSON Schema for each kind", () => {
   expect(jsonSchemaFor("judgement")).toContain("reports");
 });
 
-const proposal = (actions: Proposal["actions"]): Proposal => ({
+const proposal = (actions: Proposal["actions"]) => ({
   interpretation: "the branch is wrong",
   targets: [{ run: "r1" }],
   actions,

@@ -76,7 +76,7 @@ const listed = (
   harness: Harness,
   printed: Effect.Effect<string | null, string>,
   decode: (text: string) => ReadonlyArray<CatalogueEntry> | null,
-): HarnessSource =>
+) =>
   Effect.flatMap(printed, (text) => {
     if (text === null) return Effect.succeed(null);
     const entries = decode(text);
@@ -85,7 +85,7 @@ const listed = (
       : Effect.succeed(entries);
   });
 
-export const sourcesOf = (adapters: HarnessAdapters): CatalogueSources => ({
+export const sourcesOf = (adapters: HarnessAdapters) => ({
   claude: Effect.map(adapters.claude, (models) => (models === null ? null : claudeEntries(models))),
   codex: Effect.map(adapters.codex, (list) => (list === null ? null : codexEntries(list))),
   pi: listed("pi", adapters.pi, piEntries),
@@ -307,15 +307,12 @@ const codexModels = (cwd: string) =>
   );
 
 export const liveAdapters = (cwd: string) =>
-  Effect.map(
-    Effect.context<ChildProcessSpawner.ChildProcessSpawner>(),
-    (services): HarnessAdapters => ({
-      claude: Effect.provideContext(claudeModels(cwd), services),
-      codex: Effect.provideContext(codexModels(cwd), services),
-      pi: Effect.provideContext(printed("pi", ["--list-models"]), services),
-      opencode: Effect.provideContext(printed("opencode", ["models"]), services),
-    }),
-  );
+  Effect.map(Effect.context<ChildProcessSpawner.ChildProcessSpawner>(), (services) => ({
+    claude: Effect.provideContext(claudeModels(cwd), services),
+    codex: Effect.provideContext(codexModels(cwd), services),
+    pi: Effect.provideContext(printed("pi", ["--list-models"]), services),
+    opencode: Effect.provideContext(printed("opencode", ["models"]), services),
+  }));
 
 /** This Machine's one reader of its harnesses, on the environment this process runs in. */
 export const catalogueLayer = (cwd: string) =>

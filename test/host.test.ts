@@ -957,7 +957,7 @@ const notedIn = (notes: string, file: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${notes}/${file}`)),
     Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
-    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    Effect.orElseSucceed(() => []),
   );
 
 /** The leader pid of each running check the host has recorded. */

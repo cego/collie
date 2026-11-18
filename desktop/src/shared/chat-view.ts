@@ -29,7 +29,7 @@ export const aboutNote = (about: About) =>
   `${ABOUT}\n${flow(Schema.encodeResult(AboutJson), Result.getOrThrow)(about)}`;
 
 /** The card a block of Desktop's names, or null for any other text. */
-export const fromAboutNote = (text: string): About | null => {
+export const fromAboutNote = (text: string) => {
   const [first, json, ...rest] = Str.split(text, "\n");
   return first !== ABOUT || json === undefined || rest.length > 0
     ? null
@@ -111,7 +111,10 @@ const split = (id: string) => {
 /** A tool call as one row: the tool, the Machine its ids name, and a short summary of the rest. */
 export const toolRow = (name: string, args: string) => {
   const tool = pipe(name, Str.replace(/^mcp__collie__(collie_)?/, ""));
-  const asked = Option.getOrElse(decodeAsked(args), (): typeof Asked.Type => ({}));
+  const asked = Option.getOrElse(decodeAsked(args), () => {
+    const returned: typeof Asked.Type = {};
+    return returned;
+  });
   const ids = Arr.flatMap([asked, ...(asked.actions ?? [])], ({ run, workspace }) =>
     Arr.map(Arr.filter([run, workspace], isString), split),
   );

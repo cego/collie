@@ -144,7 +144,7 @@ export const peersOf = (stateDir: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(fileOf(stateDir))),
     Effect.flatMap(decodePeers),
-    Effect.orElseSucceed((): ReadonlyArray<Peer> => []),
+    Effect.orElseSucceed(() => []),
   );
 
 const writePeers = Effect.fn("Peers.write")(function* (
@@ -958,12 +958,12 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   };
 
   /** A `/channel` a peer opened, declared into this host. */
-  const channelFrom = (
+  const channelFrom: (
     peer: Peer,
     as: FrontDoor,
     client: string,
     sender?: AgentAddress,
-  ): Accepted => {
+  ) => Accepted = (peer, as, client, sender?) => {
     const inbox = held();
     return {
       peer,
@@ -990,7 +990,11 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
    * A peer's control link: the newest one an installation opens is the one kept, over the
    * transport its dialler declared.
    */
-  const controlFrom = (peer: Peer, transport: Way, direct: string | null): Accepted => ({
+  const controlFrom: (peer: Peer, transport: Way, direct: string | null) => Accepted = (
+    peer,
+    transport,
+    direct,
+  ) => ({
     peer,
     opened: (ws) => {
       const older = controls.get(peer.installation);
@@ -1020,7 +1024,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   });
 
   /** The dial-back a ticket was minted for, handed to the relay connection waiting on it. */
-  const reverseFrom = (peer: Peer, ticket: Ticket): Accepted => {
+  const reverseFrom: (peer: Peer, ticket: Ticket) => Accepted = (peer, ticket) => {
     const inbox = held();
     return {
       peer,
@@ -1036,7 +1040,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   };
 
   /** What a request to the listener is let in as, or the response refusing it. */
-  const accept = (request: Request): Accepted | Response => {
+  const accept = (request: Request) => {
     const url = new URL(request.url);
     const peer = bearerOf(request);
     if (peer === undefined) return new Response("not paired", { status: 401 });
@@ -1299,7 +1303,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
                 ...NO_WAY,
               };
               const connection = peer.dials === "out" ? yield* connectionOf(peer) : undefined;
-              return {
+              const returned: PeerView = {
                 installation: peer.installation,
                 name: peer.name,
                 dials: peer.dials,
@@ -1311,7 +1315,8 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
                   connection === undefined
                     ? null
                     : connection !== null && (yield* connection.check),
-              } satisfies PeerView;
+              };
+              return returned;
             }),
           ),
         ),

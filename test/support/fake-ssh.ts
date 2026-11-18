@@ -5,7 +5,7 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
-import { Effect, FileSystem, Result, Schema, type Scope, flow } from "effect";
+import { Effect, FileSystem, Result, Schema, flow } from "effect";
 import { CommandLine } from "effect/process";
 import { SOCKET_BASE } from "./sweep";
 import { fixtureBinary } from "./bin";
@@ -135,10 +135,7 @@ export const blackhole = (port: number) => blocker(onLoopback(port), false);
 const onLoopback = (port: number) => (server: Server, listening: () => void) =>
   server.listen(port, "127.0.0.1", listening);
 
-const blocker = (
-  listen: (server: Server, listening: () => void) => void,
-  resets: boolean,
-): Effect.Effect<Server, never, Scope.Scope> => {
+const blocker = (listen: (server: Server, listening: () => void) => void, resets: boolean) => {
   const held = new Set<Socket>();
   return Effect.acquireRelease(
     Effect.callback<Server>((resume) => {

@@ -47,7 +47,7 @@ export const actionRunner = (
     applied?: () => void,
     unsent?: () => string | undefined,
     tried?: (done: boolean | null, failed?: ReturnType<typeof failureOf>) => void,
-  ): Promise<boolean> => {
+  ) => {
     const request = again ?? newRequest();
     const why = unsent?.();
     tried?.(null);
@@ -82,7 +82,7 @@ export const actionRunner = (
   return run;
 };
 
-export const offerKey = (offer: Pick<OfferView, "id" | "run">): string =>
+export const offerKey = (offer: Pick<OfferView, "id" | "run">) =>
   offer.run === undefined ? offer.id : `${offer.run}:${offer.id}`;
 
 export const offeringOf = (runId: string, offer: Pick<OfferView, "id" | "run"> | null) => ({

@@ -23,11 +23,17 @@ export interface ProjectsRoot {
 
 export const projectsRoot = Effect.fn("Projects.projectsRoot")(function* (env: PluginEnv) {
   const configured = configValue(yield* readConfig(env.userDir), "projects.root");
-  if (isString(configured) && configured !== "")
-    return { path: configured, source: "config" } satisfies ProjectsRoot;
+  if (isString(configured) && configured !== "") {
+    const returned: ProjectsRoot = { path: configured, source: "config" };
+    return returned;
+  }
   const gitte = env.raw["GITTE_CWD"];
-  if (gitte) return { path: gitte, source: "gitte" } satisfies ProjectsRoot;
-  return { path: env.home, source: "home" } satisfies ProjectsRoot;
+  if (gitte) {
+    const returned: ProjectsRoot = { path: gitte, source: "gitte" };
+    return returned;
+  }
+  const returned: ProjectsRoot = { path: env.home, source: "home" };
+  return returned;
 });
 
 const DEPTH = 5;
@@ -46,7 +52,7 @@ export const checkoutsUnder = Effect.fn("Projects.checkoutsUnder")(function* (ro
       Effect.result,
       Effect.map((info) => Result.isSuccess(info) && info.success.type === "Directory"),
     );
-  const visit = (dir: string, depth: number): Effect.Effect<void> =>
+  const visit: (dir: string, depth: number) => Effect.Effect<void> = (dir, depth) =>
     Effect.gen(function* () {
       if (yield* isDirectory(path.join(dir, ".git"))) {
         found.push(dir);

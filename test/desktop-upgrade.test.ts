@@ -31,11 +31,6 @@ const TAR = new TextEncoder().encode("the 0.34.0 bundle");
 const ARTIFACT = "stable-linux-x64-collie-desktop.tar.zst";
 const ROOT = "dk.cego.collie.desktop/stable";
 
-interface Release {
-  readonly base: string;
-  readonly asked: string[];
-}
-
 /** Serves release 0.34.0 under `/download/0.34.0/`, its tar signed `signature`. */
 const serveRelease = (signature: string | null, tar: Uint8Array = TAR, version = "0.34.0") =>
   Effect.acquireRelease(
@@ -74,7 +69,7 @@ const serveRelease = (signature: string | null, tar: Uint8Array = TAR, version =
     }),
     ({ server }) => Effect.promise(() => server.stop(true)),
   ).pipe(
-    Effect.map(({ server, asked }): Release => ({
+    Effect.map(({ server, asked }) => ({
       base: `http://localhost:${server.port}`,
       asked,
     })),

@@ -247,10 +247,7 @@ const stalledFix = (
  * Each check as the gate last spawned it: a grant can change under a Run, and the command
  * the human reads has to be the one that ran.
  */
-const spawned = (
-  granted: ReadonlyArray<VerifySpec>,
-  verifications: ReadonlyArray<Verification>,
-): ReadonlyArray<VerifySpec> =>
+const spawned = (granted: ReadonlyArray<VerifySpec>, verifications: ReadonlyArray<Verification>) =>
   Arr.map(granted, (spec) => {
     const ran = Option.getOrUndefined(
       Arr.findLast(

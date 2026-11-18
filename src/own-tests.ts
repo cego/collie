@@ -32,10 +32,7 @@ const literalsOf = (line: string) =>
  * or its name contains a string literal of 16 or more characters on a line the branch adds.
  */
 // ponytail: an edit only to a helper an existing test uses is not caught; reading imports would.
-export const ownTests = (
-  failed: ReadonlyArray<FailedTest>,
-  change: BranchChange,
-): ReadonlyArray<FailedTest> => {
+export const ownTests = (failed: ReadonlyArray<FailedTest>, change: BranchChange) => {
   const strings = Arr.filter(
     Arr.flatMap(change.added, literalsOf),
     (s) => s.length >= SHORTEST_LITERAL,
@@ -56,7 +53,7 @@ const FILE_HEADER = /^(\S+\.[cm]?[jt]sx?):$/;
 const FAILED = /^\(fail\) (.+?)(?: \[[\d.]+m?s\])?$/;
 
 /** The failed tests in plain bun output; a file is named only where the output has one file. */
-export const failedTestsIn = (output: string): ReadonlyArray<FailedTest> => {
+export const failedTestsIn = (output: string) => {
   const lines = Str.split(output, "\n");
   const files = Arr.dedupe(
     Arr.flatMap(lines, (line) => FILE_HEADER.exec(Str.trim(line))?.slice(1, 2) ?? []),

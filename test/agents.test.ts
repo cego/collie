@@ -195,7 +195,7 @@ const steppedBody = stepped.toLayer((payload) => reviewing(reviewWork()).pipe(as
 const CLAUDE_HELP = "  --autocompact <auto|tokens>           Auto-compact window size";
 const CODEX_HELP = "  --dangerously-bypass-hook-trust";
 
-const hostOf = (): AgentHost => ({
+const hostOf: () => AgentHost = () => ({
   dir,
   env: rig.pluginEnv(),
   herdr: new UnseenTurn(rig.pluginEnv()),
@@ -1098,7 +1098,7 @@ test("work the workflow skips starts no agent", () =>
 type Reached = Effect.Effect<boolean, never, WorkflowEngine.WorkflowEngine | FileSystem.FileSystem>;
 
 /** The run has parked or otherwise stopped where it is, and the engine knows it. */
-const suspended = (runId: string): Reached =>
+const suspended = (runId: string) =>
   Effect.gen(function* () {
     const engine = yield* WorkflowEngine.WorkflowEngine;
     const id = yield* work.executionId({ runId, input: { skip: false } });
@@ -1106,17 +1106,17 @@ const suspended = (runId: string): Reached =>
   });
 
 /** The run has said why it parked, which it does before its step lets go of the work. */
-const parked = (runId: string): Reached => isSet(PARKED, runId);
+const parked = (runId: string) => isSet(PARKED, runId);
 
 /** An agent has been sent a prompt about this, `times` times. */
-const prompted = (about: string, times = 1): Reached =>
+const prompted = (about: string, times = 1) =>
   rig.calls().pipe(
     Effect.map((calls) => sent(calls, about) >= times),
     Effect.orElseSucceed(() => false),
   );
 
 /** The agent's Output says this. */
-const wrote = (runId: string, about: string): Reached =>
+const wrote = (runId: string, about: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(outputPath(runId))),
     Effect.map((text) => pipe(text, Str.includes(about))),
@@ -1188,7 +1188,7 @@ class UnseenTurn extends Herdr {
     return super
       .agentStatus(...args)
       .pipe(
-        Effect.map((status): AgentStatus =>
+        Effect.map((status) =>
           this.submitted.has(args[0]) && status === "idle" ? "unknown" : status,
         ),
       );
@@ -1286,7 +1286,10 @@ test(
 
 const managedCodex = Effect.gen(function* () {
   const children = yield* Effect.acquireRelease(
-    Effect.sync((): Bun.Subprocess[] => []),
+    Effect.sync(() => {
+      const returned: Bun.Subprocess[] = [];
+      return returned;
+    }),
     (children) =>
       Effect.forEach(children, (child) =>
         Effect.gen(function* () {
@@ -5704,7 +5707,7 @@ test("a window Claude Code would not take, hand-written into the config, stops t
   ));
 
 /** The run has parked or failed: either way its step has let go of the work. */
-const settled = (runId: string): Reached =>
+const settled = (runId: string) =>
   Effect.gen(function* () {
     const engine = yield* WorkflowEngine.WorkflowEngine;
     const id = yield* work.executionId({ runId, input: { skip: false } });
@@ -6082,7 +6085,7 @@ test("a lineage lookup leaves every register as it found it, and registrations a
 
 /** The controls an operator sets, as the host keeps them beside the run. */
 /** Stopped once its agent has been given `about`, the launch that gave it done; then suspended. */
-const stoppedOnce = (runId: string, about: string): Reached => {
+const stoppedOnce = (runId: string, about: string) => {
   let stopped = false;
   return Effect.gen(function* () {
     if (!stopped) {
@@ -6949,7 +6952,10 @@ test("a steer nothing shows taken is reported sent and not observed, and a role 
   ));
 
 /** A harness whose context is always over the limit, and which compacts when asked. */
-const fullContext = (asked: string[], tokens: number | null = 1_000_000): CompactionPorts => ({
+const fullContext: (asked: string[], tokens?: number | null) => CompactionPorts = (
+  asked,
+  tokens = 1_000_000,
+) => ({
   claude: {
     gate: Effect.void,
     install: () => Effect.succeed({ args: [] }),
@@ -7090,7 +7096,7 @@ const until = <E, R>(reached: Effect.Effect<boolean, E, R>) =>
     }
   });
 
-const parkedSays = (about: string): Reached =>
+const parkedSays = (about: string) =>
   controlOf(PARKED, "r1").pipe(Effect.map((why) => pipe(why, Str.includes(about))));
 
 const listingSuspended: Reached = Effect.gen(function* () {
@@ -7833,7 +7839,7 @@ const decodeJson = flow(
 );
 
 /** Claude's own controls, without asking this machine which Claude it has installed. */
-const claudeControls = (): CompactionPorts => ({
+const claudeControls = () => ({
   claude: { ...COMPACTION_PORTS.claude!, gate: Effect.void },
 });
 
@@ -8207,7 +8213,7 @@ const withProfile = (profile: AgentProfile) =>
   configured(encodeJson({ agent_profile: encodeJson(profile) }));
 
 /** Claude's compaction controls as shipped, with nothing to wait on before the first prompt. */
-const claudeSettingsControls = (): CompactionPorts => ({
+const claudeSettingsControls = () => ({
   claude: { ...COMPACTION_PORTS.claude!, gate: Effect.void, ready: undefined },
 });
 
@@ -8348,9 +8354,12 @@ test("subagent policy fields follow workflow, role, scope and call preferences w
       ).toBeUndefined();
       const args =
         Option.getOrUndefined(
-          Arr.findFirst(everyLaunch(yield* rig.calls()), (args): boolean =>
-            Arr.some(args, (arg) => pipe(arg, Str.endsWith("/research.settings.json"))),
-          ),
+          Arr.findFirst(everyLaunch(yield* rig.calls()), (args) => {
+            const returned: boolean = Arr.some(args, (arg) =>
+              pipe(arg, Str.endsWith("/research.settings.json")),
+            );
+            return returned;
+          }),
         ) ?? [];
       const settings = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.JsonObject))(
         yield* read(args[args.indexOf("--settings") + 1] ?? ""),
@@ -8362,9 +8371,12 @@ test("subagent policy fields follow workflow, role, scope and call preferences w
       expect(settings.permissions).toBeUndefined();
       const smallArgs =
         Option.getOrUndefined(
-          Arr.findFirst(everyLaunch(yield* rig.calls()), (args): boolean =>
-            Arr.some(args, (arg) => pipe(arg, Str.endsWith("/small.settings.json"))),
-          ),
+          Arr.findFirst(everyLaunch(yield* rig.calls()), (args) => {
+            const returned: boolean = Arr.some(args, (arg) =>
+              pipe(arg, Str.endsWith("/small.settings.json")),
+            );
+            return returned;
+          }),
         ) ?? [];
       const small = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.JsonObject))(
         yield* read(smallArgs[smallArgs.indexOf("--settings") + 1] ?? ""),
@@ -8999,7 +9011,7 @@ test("a Codex launch writes no autoMode or Claude skill overrides", () =>
     }),
   ));
 
-const waitsForMemory = (runId: string): Reached =>
+const waitsForMemory = (runId: string) =>
   Effect.map(memoryWaitOf(runId), (wait) => wait !== null).pipe(overHost(() => dir));
 
 const runLogOf = (runId: string) => read(`${dir}/agents/${runId}/agents.log`);

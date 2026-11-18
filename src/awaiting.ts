@@ -30,7 +30,7 @@ const patienceOf = (who: string | null) =>
 export const awaitingLine = (wait: Awaiting) => `Waiting for ${wait.on}.`;
 
 /** The park a wait becomes once it has outlasted its patience, or null while it has not. */
-export function overdueLine(wait: Awaiting, now: number): string | null {
+export function overdueLine(wait: Awaiting, now: number) {
   const patience = patienceOf(wait.who);
   if (patience === null || now - epochMs(wait.since) <= patience.ms) return null;
   return `Waiting for ${wait.on} for over ${patience.said}, which is longer than it should take. See what holds it up.`;

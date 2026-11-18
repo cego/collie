@@ -76,7 +76,7 @@ export const reassess = (ask: {
       },
       output: ReassessmentSchema(Arr.map(ask.findings, (one) => one.id!)),
     });
-    const findings = Arr.map(ask.ledger, (one): Finding => {
+    const findings = Arr.map(ask.ledger, (one) => {
       const found = Arr.findFirst(judged.findings, (next) => next.id === one.id);
       if (found._tag === "None") return one;
       const status = found.value;

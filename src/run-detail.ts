@@ -6,19 +6,16 @@ import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Option, Path, Schema, Stream, flow, Result } from "effect";
 import * as Base64 from "effect/encoding/Base64";
-import type { ChildProcessSpawner } from "effect/process";
 import { HostRefused, PART_BYTES, RunDiff, type DiffFile, type RunFile } from "./board-model";
 import { attachmentsDir } from "./attachments";
 import { handoffsDir } from "./handoffs";
 import { classifyWorkSource } from "./inputs";
 import { shell } from "./mr";
 import { forgeOfUrl } from "./forge/forge";
-import type { ForgeHttp } from "./forge/http";
 import { REVIEW_FILE } from "./output";
 import { settled, type RunFacts } from "./runs";
 import { workSourceOf } from "./strategies";
 import { readVerifications } from "./verify";
-import type { RunRecords } from "./run-records";
 
 /** What a Run's own plan directory is called inside it (ADR-0002). */
 export const PLAN_DIR = "plan";
@@ -61,8 +58,7 @@ const mergeBase = Effect.fn("RunDetail.mergeBase")(function* (root: string, bran
   return null;
 });
 
-const statusOf = (code: string): DiffFile["status"] =>
-  code === "A" ? "added" : code === "D" ? "deleted" : "modified";
+const statusOf = (code: string) => (code === "A" ? "added" : code === "D" ? "deleted" : "modified");
 
 /** An untracked file this big is listed without counting its lines. */
 const COUNTED_BYTES = 1024 * 1024;
@@ -257,26 +253,22 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
   },
   /** Where glab runs: not the Run's checkout, which is removed once the Run settles. */
   glabCwd: string = run.dir,
-): Effect.fn.Return<
-  RunFile,
-  HostRefused,
-  | FileSystem.FileSystem
-  | Path.Path
-  | ChildProcessSpawner.ChildProcessSpawner
-  | ForgeHttp
-  | RunRecords
-> {
+) {
   const part = {
     offset: Math.max(0, range.offset),
     length: Math.min(Math.max(0, range.length), PART_BYTES),
   };
   const fs = yield* FileSystem.FileSystem;
   // A part of a text is bytes too: a character across the seam is whole once the parts are joined.
-  const asked = (bytes: Uint8Array, size: number, file: string | null): RunFile =>
+  const asked: (bytes: Uint8Array, size: number, file: string | null) => RunFile = (
+    bytes,
+    size,
+    file,
+  ) =>
     bytes.length === size && (file === null || TEXT.test(file))
       ? { ref, encoding: "utf8", content: new TextDecoder().decode(bytes), size }
       : { ref, encoding: "base64", content: Base64.encode(bytes), size };
-  const text = (content: string): RunFile => {
+  const text = (content: string) => {
     const bytes = new TextEncoder().encode(content);
     return asked(bytes.subarray(part.offset, part.offset + part.length), bytes.length, null);
   };
@@ -390,7 +382,7 @@ const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), 
 export const followDetail = <A, E, R, R2>(
   build: Effect.Effect<A, E, R>,
   changed: Stream.Stream<unknown, never, R2>,
-): Stream.Stream<A, E, R | R2> =>
+) =>
   Stream.concat(Stream.make(undefined), changed).pipe(
     Stream.mapEffect(() => build),
     Stream.changesWith((a, b) => asJson(a) === asJson(b)),

@@ -37,7 +37,7 @@ export const usageDue = (askedAt: number | null, now: number, shown: boolean) =>
 
 export type Level = "ok" | "warn" | "out";
 
-const levelOf = (usedPercent: number, exhausted: boolean): Level =>
+const levelOf = (usedPercent: number, exhausted: boolean) =>
   exhausted ? "out" : usedPercent >= WARN_PERCENT ? "warn" : "ok";
 
 const NAMES = { claude: "Claude", chatgpt: "ChatGPT" } satisfies Record<Subscription, string>;
@@ -83,7 +83,7 @@ const byLabel = (a: string | null, b: string | null) =>
 export const usageAccounts = (
   machines: ReadonlyArray<MachineUsage>,
   live: ReadonlyArray<string>,
-): ReadonlyArray<UsageAccount> => {
+) => {
   const groups = new Map<string, UsageAccount>();
   for (const profile of live)
     for (const { name, readings } of Arr.filter(machines, (machine) => machine.profile === profile))
@@ -118,7 +118,7 @@ export const usageEntries = (
   machines: ReadonlyArray<MachineUsage>,
   live: ReadonlyArray<string>,
   now: number,
-): ReadonlyArray<UsageEntry> => {
+) => {
   const shown = Arr.flatMap(usageAccounts(machines, live), ({ key, newest }) =>
     newest === null ? [] : [{ key, ...newest }],
   );
@@ -180,7 +180,7 @@ export interface UsagePageView {
   readonly notRead: ReadonlyArray<{ readonly key: string; readonly said: string }>;
 }
 
-const windowsOf = (reading: UsageReading, now: number): ReadonlyArray<WindowView> =>
+const windowsOf = (reading: UsageReading, now: number) =>
   Arr.map(reading.windows, (raw, i) => {
     const window = current(raw, now);
     const full = isFull(window);
@@ -207,10 +207,10 @@ export const usagePage = (
   machines: ReadonlyArray<MachineUsage>,
   live: ReadonlyArray<string>,
   now: number,
-): UsagePageView => {
+) => {
   const sections = Arr.flatMap(
     usageAccounts(machines, live),
-    ({ key, account, newest, machines: readers }): ReadonlyArray<UsageSection> => {
+    ({ key, account, newest, machines: readers }) => {
       if (account === null && newest === null) return [];
       const titled =
         newest?.reading ??

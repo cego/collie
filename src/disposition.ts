@@ -56,7 +56,7 @@ export const refRuns = (ref: string, machine: string) => {
  * The current answer, which is the last one given. A correction is a new line rather than
  * an edit, so the history of what people believed happened is itself kept.
  */
-export function latest(lines: ReadonlyArray<Disposition>): Disposition | null {
+export function latest(lines: ReadonlyArray<Disposition>) {
   return lines.length === 0 ? null : lines[lines.length - 1]!;
 }
 
@@ -64,7 +64,7 @@ export function latest(lines: ReadonlyArray<Disposition>): Disposition | null {
  * One line for a human, holding both facts at once. The execution status comes first
  * because it is what happened; the delivery follows because it is what came of it.
  */
-export function statusLine(status: string, line: Disposition | null): string {
+export function statusLine(status: string, line: Disposition | null) {
   if (line === null) return status;
   const where = line.ref === "" ? "" : ` ${line.ref}`;
   return `${status} · ${line.kind}${where} by ${line.by}`;

@@ -70,7 +70,7 @@ export interface PersonaDef extends Provenance {
   body: string;
 }
 
-export function personaData(persona: PersonaDef): PersonaView {
+export function personaData(persona: PersonaDef) {
   return {
     name: persona.name,
     description: persona.description,
@@ -82,7 +82,7 @@ export function personaData(persona: PersonaDef): PersonaView {
 }
 
 /** A full copy whose parent has changed since: what it copied is no longer what it forked. */
-export function isStale(def: Provenance): boolean {
+export function isStale(def: Provenance) {
   return Boolean(def.forkedFromHash && def.parentHash && def.forkedFromHash !== def.parentHash);
 }
 
@@ -135,7 +135,7 @@ const markdownFiles = Effect.fn("Definitions.markdownFiles")(function* (dir: str
   );
 });
 
-function str(value: YamlValue | undefined, fallback = ""): string {
+function str(value: YamlValue | undefined, fallback = "") {
   return value !== undefined && isString(value) ? value : fallback;
 }
 
@@ -171,7 +171,7 @@ const parsePersona = Effect.fn("Definitions.parsePersona")(function* (
 });
 
 /** Every expression in a persona that nothing fills: all of them but a skill. */
-export const personaHoles = (body: string): string[] => [
+export const personaHoles = (body: string) => [
   ...Arr.map(expressionsIn(body), (name) => `{{${name}}}`),
   ...malformedIn(body),
 ];
@@ -223,14 +223,14 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
   }
 
   const settled = new Set<string>();
-  const resolve = (
+  const resolve: (
     name: string,
     chain: string[],
-  ): Effect.Effect<
+  ) => Effect.Effect<
     void,
     PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path | Digest.Digest
-  > =>
+  > = (name, chain) =>
     Effect.gen(function* () {
       if (settled.has(name)) return;
       const def = parsed.get(name);
@@ -281,7 +281,7 @@ const readHash = Effect.fn("Definitions.readHash")(function* (path: string) {
 });
 
 /** The parent with the child's frontmatter and sections laid over it. */
-function mergePersona(parent: PersonaDef, child: PersonaDef): PersonaDef {
+function mergePersona(parent: PersonaDef, child: PersonaDef) {
   return {
     ...parent,
     ...pick(child, ["name", "path", "layer", "extends", "forkedFromHash"]),
@@ -290,7 +290,7 @@ function mergePersona(parent: PersonaDef, child: PersonaDef): PersonaDef {
   };
 }
 
-function pick<T, K extends keyof T>(from: T, keys: K[]): Partial<T> {
+function pick<T, K extends keyof T>(from: T, keys: K[]) {
   const out: Partial<T> = {};
   for (const key of keys) if (from[key] !== undefined) out[key] = from[key];
   return out;
@@ -302,7 +302,7 @@ function pick<T, K extends keyof T>(from: T, keys: K[]): Partial<T> {
  * The result is rebuilt rather than spliced, so the merged body is normalised —
  * which is what every reader of it already assumes.
  */
-function mergeBody(parent: string, child: string): string {
+function mergeBody(parent: string, child: string) {
   const a = bodySections(parent);
   const b = bodySections(child);
   const sections = new Map(a.sections);
@@ -323,7 +323,7 @@ export interface BodySections {
   sections: Map<string, string>;
 }
 
-export function bodySections(body: string): BodySections {
+export function bodySections(body: string) {
   const sections = new Map<string, string>();
   const lines = Str.split(body, "\n");
   const preamble: string[] = [];

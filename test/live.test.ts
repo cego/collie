@@ -24,8 +24,8 @@ const encodeReport = flow(
 
 const REVISION = { branch: "main", head_sha: "abc1234def", fingerprint: "f1", dirty: false };
 
-function card(over: Partial<Card> = {}): Card {
-  return {
+function card(over: Partial<Card> = {}) {
+  const returned: Card = {
     id: "c1",
     run: "r1",
     kind: "slice",
@@ -50,6 +50,7 @@ function card(over: Partial<Card> = {}): Card {
     significance: "try-it",
     ...over,
   };
+  return returned;
 }
 
 const rig = Effect.fn("live.rig")(function* () {

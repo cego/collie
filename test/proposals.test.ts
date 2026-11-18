@@ -278,7 +278,7 @@ test("a confirmed proposal cannot then be declined", () =>
     }),
   ));
 
-const ctx = (over: Partial<AdmissionContext> = {}): AdmissionContext => ({
+const ctx = (over: Partial<AdmissionContext> = {}) => ({
   run: { id: "r1", status: "running" },
   pendingChoice: null,
   incarnation: "term-1",

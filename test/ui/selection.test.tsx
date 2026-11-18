@@ -34,8 +34,8 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-function appState(over: Partial<AppState> = {}): AppState {
-  return {
+function appState(over: Partial<AppState> = {}) {
+  const returned: AppState = {
     view: "runs",
     filter: { kind: "all" },
     tasks: [],
@@ -51,6 +51,7 @@ function appState(over: Partial<AppState> = {}): AppState {
     stopping: [],
     ...over,
   };
+  return returned;
 }
 
 /** The tab, wired to a bridge that writes the selection where chat reads it. */

@@ -63,7 +63,7 @@ export function sessionStoreReached(
     readonly resolve: (...paths: ReadonlyArray<string>) => string;
   },
   call: SessionCall,
-): string | undefined {
+) {
   const full = (path: string) =>
     io.resolve(call.cwd, path === "~" || path.startsWith("~/") ? home + path.slice(1) : path);
   // A path not there yet is where the nearest one that is leads.
@@ -112,10 +112,7 @@ interface Session {
 
 const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 /** Each line's record, or why the file is not one the reader knows; an unended last line is still being written. */
-const recordsOf = (
-  text: string,
-  types?: ReadonlySet<string>,
-): ReadonlyArray<JsonObject> | string => {
+const recordsOf = (text: string, types?: ReadonlySet<string>) => {
   const records: Array<JsonObject> = [];
   const lines = Str.split(text, "\n");
   for (const [index, line] of Arr.map(Arr.dropRight(lines, 1), (line, i) => [i, line] as const)) {
@@ -198,7 +195,7 @@ const PI_TYPES = new Set([
   "label",
   "session_info",
 ]);
-const objectAt = (value: Json | undefined, key: string): JsonObject | undefined => {
+const objectAt = (value: Json | undefined, key: string) => {
   const found = isJsonObject(value) ? value[key] : undefined;
   return isJsonObject(found) ? found : undefined;
 };
@@ -230,7 +227,7 @@ const typedText = (content: Json | undefined, kind: string) => {
   return texts.length === 0 ? undefined : Arr.join(texts, "\n");
 };
 
-const claudeSession = (records: ReadonlyArray<JsonObject>, stem: string): Session => {
+const claudeSession = (records: ReadonlyArray<JsonObject>, stem: string) => {
   let cwd: string | null = null;
   let delivered = false;
   const said: Array<Said> = [];
@@ -256,7 +253,7 @@ const claudeSession = (records: ReadonlyArray<JsonObject>, stem: string): Sessio
   return { ids: [stem], cwd, said, delivered };
 };
 
-const codexSession = (records: ReadonlyArray<JsonObject>): Session => {
+const codexSession = (records: ReadonlyArray<JsonObject>) => {
   let ids: ReadonlyArray<string> = [];
   let cwd: string | null = null;
   let spawned = false;
@@ -286,7 +283,7 @@ const codexSession = (records: ReadonlyArray<JsonObject>): Session => {
   return { ids, cwd, said: spawned ? [] : said, delivered };
 };
 
-const piSession = (records: ReadonlyArray<JsonObject>): Session => {
+const piSession = (records: ReadonlyArray<JsonObject>) => {
   let ids: ReadonlyArray<string> = [];
   let cwd: string | null = null;
   let delivered = false;
@@ -373,28 +370,25 @@ const openCodeStore = (file: string, since: number | null) =>
             )
             .all(since),
         );
-        const sessions = Arr.map(
-          Rec.values(Arr.groupBy(rows, (row) => row.session)),
-          (parts): Session => {
-            const said: Array<Said> = [];
-            for (const row of parts) {
-              const part = pipe(decodeLine(row.part), Option.getOrUndefined);
-              const raw = stringAt(part, "type") === "text" ? stringAt(part, "text") : undefined;
-              if (raw === undefined) continue;
-              const typed = Str.trim(raw);
-              if (isJsonObject(part) && part["synthetic"] === true) continue;
-              if (typed !== "" && !injected(typed)) said.push({ at: isoAt(row.at), text: typed });
-            }
-            const first = parts[0]!;
-            // A child session's user turns are the model's own.
-            return {
-              ids: [first.session],
-              cwd: first.directory,
-              said: first.parent === null ? said : [],
-              delivered: collies.has(first.session),
-            };
-          },
-        );
+        const sessions = Arr.map(Rec.values(Arr.groupBy(rows, (row) => row.session)), (parts) => {
+          const said: Array<Said> = [];
+          for (const row of parts) {
+            const part = pipe(decodeLine(row.part), Option.getOrUndefined);
+            const raw = stringAt(part, "type") === "text" ? stringAt(part, "text") : undefined;
+            if (raw === undefined) continue;
+            const typed = Str.trim(raw);
+            if (isJsonObject(part) && part["synthetic"] === true) continue;
+            if (typed !== "" && !injected(typed)) said.push({ at: isoAt(row.at), text: typed });
+          }
+          const first = parts[0]!;
+          // A child session's user turns are the model's own.
+          return {
+            ids: [first.session],
+            cwd: first.directory,
+            said: first.parent === null ? said : [],
+            delivered: collies.has(first.session),
+          };
+        });
         return { count, sessions };
       } finally {
         db.close();
@@ -412,7 +406,7 @@ interface FileStore {
   readonly read: (records: ReadonlyArray<JsonObject>, relative: string) => Session;
 }
 
-const fileStores = (home: string): ReadonlyArray<FileStore> => [
+const fileStores: (home: string) => ReadonlyArray<FileStore> = (home) => [
   {
     source: "claude-code",
     root: `${home}/.claude/projects`,
@@ -528,7 +522,7 @@ class Unread {
     this.count += 1;
     this.first ??= `${which}: ${why}`;
   }
-  said(): Pick<OwnStore, "unread" | "why"> {
+  said() {
     return this.first === undefined ? {} : { unread: this.count, why: this.first };
   }
 }
@@ -594,7 +588,7 @@ interface Gathered {
   readonly skipped: number;
 }
 
-const notThere = (source: OwnSource, where: string): OwnStore => ({
+const notThere: (source: OwnSource, where: string) => OwnStore = (source, where) => ({
   source,
   where,
   found: "missing",
@@ -707,7 +701,8 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
     for (const one of collie.success.words)
       if (since === null || epochMs(one.at) >= since) messages.push(one);
   }
-  return { stores, messages, skipped } satisfies Gathered;
+  const returned: Gathered = { stores, messages, skipped };
+  return returned;
 });
 
 /** Where the human's words are and how many sessions hold them; no text. */
@@ -733,11 +728,12 @@ export const readOwnWords = Effect.fn("OwnWords.read")(function* (
       return one;
     }),
   );
-  return {
+  const returned: OwnWords = {
     messages: kept,
     stores: gathered.stores,
     skipped: gathered.skipped,
     leftOut,
     cut: Arr.filter(kept, (one) => cutOnes.has(one)).length,
-  } satisfies OwnWords;
+  };
+  return returned;
 });

@@ -153,7 +153,7 @@ export const twoMachines = <A, E>(
         );
         const sshDir = `${dir}/ssh`;
         yield* fs.makeDirectory(sshDir);
-        const side = (ssh: FakeSsh): Side => ({
+        const side: (ssh: FakeSsh) => Side = (ssh) => ({
           name,
           world,
           env,

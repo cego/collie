@@ -28,7 +28,7 @@ export const IntegrationSchema = Schema.Struct({
 export type Integration = typeof IntegrationSchema.Type;
 
 /** The Run log's line for an integration, or null where nothing was merged. */
-export const integratedLine = (done: Integration): string | null => {
+export const integratedLine = (done: Integration) => {
   const at = `integrated ${done.branch}@${done.sha}`;
   if (done.status === "merged") return at;
   if (done.status === "conflicted")

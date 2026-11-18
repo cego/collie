@@ -18,10 +18,13 @@ const LIMITS: Limits = { threshold: 5, tolerance: 2 };
 
 const of = (value: number, count = 10) => Array.from({ length: count }, () => value);
 
-const run = (samples: MetricSamples, id = ID, limits = LIMITS): Judgement =>
+const run = (samples: MetricSamples, id = ID, limits = LIMITS) =>
   Effect.runSync(judge(id, samples, limits));
 
-const latency = (base: ReadonlyArray<number>, candidate: ReadonlyArray<number>): MetricSamples => ({
+const latency: (base: ReadonlyArray<number>, candidate: ReadonlyArray<number>) => MetricSamples = (
+  base,
+  candidate,
+) => ({
   metric: "p95",
   direction: "lower",
   base,
@@ -74,10 +77,10 @@ describe("a metric's verdict", () => {
   });
 
   test("a higher-is-better metric gains when the candidate's median is the larger", () => {
-    const throughput = (
+    const throughput: (
       base: ReadonlyArray<number>,
       candidate: ReadonlyArray<number>,
-    ): MetricSamples => ({
+    ) => MetricSamples = (base, candidate) => ({
       metric: "requests/s",
       direction: "higher",
       base,

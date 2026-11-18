@@ -76,9 +76,9 @@ const SETTLED: ReadonlyArray<StepStatus> = ["done", "in_place", "skipped"];
 /** A URL's own characters (RFC 3986), so the terminal escapes around it are not part of it. */
 const URL_IN = /https:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+/;
 
-const done = (detail: string): Outcome => ({ status: "done", detail });
-const inPlace = (detail: string): Outcome => ({ status: "in_place", detail });
-const failed = (detail: string, command?: string): Outcome => ({
+const done: (detail: string) => Outcome = (detail) => ({ status: "done", detail });
+const inPlace: (detail: string) => Outcome = (detail) => ({ status: "in_place", detail });
+const failed: (detail: string, command?: string) => Outcome = (detail, command?) => ({
   status: "failed",
   detail,
   ...(command && { command }),
@@ -109,11 +109,12 @@ const needsRoot = Effect.fn("Onboard.needsRoot")(function* (
   tools: ReadonlyArray<string>,
   packages: ReadonlyArray<string> = tools,
 ) {
-  return {
+  const returned: Outcome = {
     status: "needs_root",
     detail: `${Arr.join(tools, " and ")} must be installed as root; run the command, then onboard again`,
     command: yield* rootCommand(search, packages),
-  } satisfies Outcome;
+  };
+  return returned;
 });
 
 const profileOf = (env: PluginEnv) => {

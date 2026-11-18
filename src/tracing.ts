@@ -12,7 +12,7 @@ import * as OtlpTracer from "effect/observability/OtlpTracer";
  * sub-millisecond spans a second, which no collector keeps up with. A child never outlasts
  * its parent, so every exported span's parent is exported too.
  */
-export const atLeast = (inner: Tracer.Tracer, minMs: number): Tracer.Tracer => {
+export const atLeast = (inner: Tracer.Tracer, minMs: number) => {
   const minNs = BigInt(Math.round(minMs * 1_000_000));
   return Tracer.make({
     ...inner,

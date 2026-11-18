@@ -16,7 +16,6 @@ import {
   stoppedSince,
   VERIFIED_VERSIONS,
 } from "../src/compactors";
-import type { AgentContext } from "../src/compaction";
 
 let rig: Rig;
 let fs: FileSystem.FileSystem;
@@ -27,7 +26,7 @@ const pi = COMPACTION_PORTS.pi!;
 
 /** No prompt is sent in these checks; a boundary that reached for one would say so. */
 const prompted: string[] = [];
-const ctx = (): AgentContext => ({
+const ctx = () => ({
   agent: "reuse-run-two-r1",
   run: "reuse-run-two",
   harness: "pi",

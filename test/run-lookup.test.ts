@@ -38,7 +38,7 @@ const Asked = RpcGroup.make(
   Rpc.make("launches", { payload: { run: Schema.String }, success: Schema.Array(Launched) }),
 );
 
-const view = (runId: string, parent: string | null = null): RunView => ({
+const view: (runId: string, parent?: string | null) => RunView = (runId, parent = null) => ({
   runId,
   workflow: "builds",
   project: "/project",

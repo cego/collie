@@ -109,7 +109,7 @@ export const finishedOnRecord = Effect.fn("Cards.finishedOnRecord")(function* (r
 });
 
 /** The newest card per slice of work: a re-written card replaces the one it re-writes. */
-export function newest(cards: ReadonlyArray<Card>): Card[] {
+export function newest(cards: ReadonlyArray<Card>) {
   const latest = new Map<string, Card>();
   for (const card of cards) latest.set(`${card.step}#${card.iteration}#${card.kind}`, card);
   return [...latest.values()];
@@ -123,7 +123,7 @@ export function newest(cards: ReadonlyArray<Card>): Card[] {
 export const REVIEW_ROLE = "reviewer";
 
 /** Which card the work of this role writes. */
-export function kindForRole(role: string | null | undefined): Card["kind"] {
+export function kindForRole(role: string | null | undefined) {
   return role === REVIEW_ROLE ? "review" : "slice";
 }
 
@@ -142,7 +142,7 @@ export interface ReadinessFacts {
  * command Collie watched passed on *this* tree. A verification from a different revision
  * does not make this card verified — that is what `stale` is for.
  */
-export function readiness(facts: ReadinessFacts): Card["readiness"] {
+export function readiness(facts: ReadinessFacts) {
   if (facts.verifiedHere && facts.changed) return "verified";
   if (facts.changed && facts.claimed) return "inspect-ready";
   return "claimed";
@@ -169,7 +169,7 @@ export interface SignificanceFacts {
  * `decision` outranks `consequential` because a decision is the human being *waited on*,
  * and `consequential` is the human being told.
  */
-export function significance(facts: SignificanceFacts): Card["significance"] {
+export function significance(facts: SignificanceFacts) {
   if (
     facts.pendingChoice ||
     facts.driftUnresolved ||
@@ -187,14 +187,15 @@ export function significance(facts: SignificanceFacts): Card["significance"] {
 export function verificationOn(
   verification: Verification,
   revision: { readonly head_sha: string; readonly fingerprint: string },
-): Card["verifications"][number] {
+) {
   const here = sameTree(verification.end, revision);
-  return {
+  const returned: Card["verifications"][number] = {
     id: verification.id,
     name: verification.name,
     result: here ? verification.result : "stale",
     ref: verification.id,
   };
+  return returned;
 }
 
 /**
@@ -206,7 +207,7 @@ export function inspectFor(options: {
   readonly worktree: string | null;
   readonly base: string;
   readonly mr: string | null;
-}): Card["inspect"] {
+}) {
   const entries: Card["inspect"][number][] = [];
   if (options.worktree !== null)
     entries.push({
@@ -225,7 +226,7 @@ export function inspectFor(options: {
 }
 
 /** A card's own text, with anything credential-shaped taken out before it is written. */
-export function clean(card: Card): Card {
+export function clean(card: Card) {
   return {
     ...card,
     claims: Arr.map(card.claims, (claim) => ({ ...claim, text: redact(claim.text) })),
@@ -271,7 +272,7 @@ export interface CardSources {
  * from the facts above, so a caller cannot hand in a card that says it is verified when
  * nothing verified it.
  */
-export function buildCard(sources: CardSources): Card {
+export function buildCard(sources: CardSources) {
   const verifications = Arr.map(sources.verifications, (entry) =>
     verificationOn(entry, sources.revision),
   );

@@ -91,7 +91,7 @@ describe("the record-open benchmark's Flow comparison", () => {
     release: null,
   };
   /** What the record paints of `host`, as its accessible names read. */
-  const painted = (): Painted => [
+  const painted = () => [
     {
       name: "Implement, build-run, on laptop, running",
       nodes: [
@@ -102,7 +102,7 @@ describe("the record-open benchmark's Flow comparison", () => {
   ];
   const differ = (shown: Painted) => differences(shown, paintedOf(host, "laptop"));
   /** The painted Flow with node `at` changed. */
-  const changed = (at: number, over: Partial<PaintedNode>): Painted =>
+  const changed = (at: number, over: Partial<PaintedNode>) =>
     Arr.map(painted(), (row) => ({
       ...row,
       nodes: Arr.map(row.nodes, (node, i) => (i === at ? { ...node, ...over } : node)),

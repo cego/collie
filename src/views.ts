@@ -60,11 +60,18 @@ import type { Mutable } from "effect/Types";
 const HISTORY = 200;
 
 /** How long the run took, where both ends of it were recorded. */
-function ranFor(run: RunFacts): string | null {
-  if (!run.finished) return null;
+function ranFor(run: RunFacts) {
+  if (!run.finished) {
+    const returned: string | null = null;
+    return returned;
+  }
   const ms = epochMs(run.finished) - epochMs(run.created);
-  if (!Number.isFinite(ms) || ms <= 0) return null;
-  return took(ms);
+  if (!Number.isFinite(ms) || ms <= 0) {
+    const returned: string | null = null;
+    return returned;
+  }
+  const returned: string | null = took(ms);
+  return returned;
 }
 
 /**
@@ -109,8 +116,9 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
   return rows;
 });
 
-function glyphOf(state: RunState): string {
-  return state === "succeeded" ? "✓" : state === "failed" ? "✗" : "⚠";
+function glyphOf(state: RunState) {
+  const returned: string = state === "succeeded" ? "✓" : state === "failed" ? "✗" : "⚠";
+  return returned;
 }
 
 /** One Workflow as the Workflows view lists it. */
@@ -161,8 +169,9 @@ export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: 
  * beyond its text — and the only thing `m` can act on. Takes an absent panel too,
  * because every caller is reading through a Selection that may not have one.
  */
-export function truncated(panel: Panel | null | undefined): boolean {
-  return panel?._tag === "Text" && panel.truncated;
+export function truncated(panel: Panel | null | undefined) {
+  const returned: boolean = panel?._tag === "Text" && panel.truncated;
+  return returned;
 }
 
 /**
@@ -223,7 +232,7 @@ const CHECKBOX = /^\s*[-*]\s*\[( |x|X)\]/;
  * the title because that is what every workflow's ticket template writes, and a file
  * with none is named by its file rather than by a guess at its first sentence.
  */
-export function planTicket(file: string, text: string): PlanTicket {
+export function planTicket(file: string, text: string) {
   const lines = Str.split(text, "\n");
   const heading = Str.trim(
     pipe(
@@ -233,13 +242,14 @@ export function planTicket(file: string, text: string): PlanTicket {
   );
   // The mark inside each checkbox, in one pass: a line that is not one contributes none.
   const marks = Arr.flatMap(lines, (line) => Arr.ensure(CHECKBOX.exec(line)?.[1] ?? []));
-  return {
+  const returned: PlanTicket = {
     file,
     title: heading === "" ? file : heading,
     // A ticket nobody has marked up is open, not finished: `every` over nothing is true,
     // which would have called every prose-only ticket done.
     done: marks.length > 0 && Arr.every(marks, (mark) => mark !== " "),
   };
+  return returned;
 }
 
 /**
@@ -348,13 +358,17 @@ const REPO_SCAN_CAP = 1024 * 1024;
  * A ticket's `**Repo:**` match, or null where the part of the file not read could change it:
  * an empty value can still run on to a later line.
  */
-function repoLineIn(text: string, truncated: boolean): string | null {
+function repoLineIn(text: string, truncated: boolean) {
   const whole = truncated
     ? pipe(text, Str.slice(0, Option.getOrElse(pipe(text, Str.lastIndexOf("\n")), () => -1) + 1))
     : text;
   const found = REPO_LINE.exec(whole);
-  if (!truncated) return found?.[0] ?? "";
-  return found && found[1] !== "" ? found[0] : null;
+  if (!truncated) {
+    const returned: string | null = found?.[0] ?? "";
+    return returned;
+  }
+  const returned: string | null = found && found[1] !== "" ? found[0] : null;
+  return returned;
 }
 
 /** Each ticket's `**Repo:**` and `**Change:**` lines, null where unknown, read only when the ticket has changed. */
@@ -451,9 +465,13 @@ export const NO_RUN_OUTCOME: RunDetail["outcome"] = {
 };
 
 /** What became of the work, as one phrase, or nothing where nobody has said. */
-function dispositionOf(line: Disposition | null): string | null {
-  if (line === null) return null;
-  return line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
+function dispositionOf(line: Disposition | null) {
+  if (line === null) {
+    const returned: string | null = null;
+    return returned;
+  }
+  const returned: string | null = line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
+  return returned;
 }
 
 /** What a Run kept beside its journals, which a drawer fetches one by one. */
@@ -575,7 +593,10 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
         run.outcome === "performance"
           ? finalMeasurementLine(
               yield* readMeasurements(run.evidence).pipe(
-                Effect.orElseSucceed((): ReadonlyArray<Measurement> => []),
+                Effect.orElseSucceed(() => {
+                  const returned: ReadonlyArray<Measurement> = [];
+                  return returned;
+                }),
               ),
             )
           : null,
@@ -651,24 +672,35 @@ export interface SettingsView {
 }
 
 /** Every leaf of the config file as a dotted key, so a nested value still has a name. */
-function flatten(raw: YamlMap, prefix = ""): Array<{ key: string; value: string }> {
+function flatten(raw: YamlMap, prefix = "") {
   const out: Array<{ key: string; value: string }> = [];
   for (const [key, value] of Rec.toEntries(raw)) {
     const dotted = prefix === "" ? key : `${prefix}.${key}`;
     if (isYamlMap(value)) out.push(...flatten(value, dotted));
     else out.push({ key: dotted, value: scalar(value) });
   }
-  return out;
+  const returned: Array<{ key: string; value: string }> = out;
+  return returned;
 }
 
 /** One config value as a line of text. A nested map has no one line, so it has none. */
-function scalar(value: YamlValue | undefined): string {
-  if (value === null || value === undefined) return "";
-  if (Arr.isArray<typeof value>(value)) return Arr.join(Arr.map(value, scalar), ", ");
-  if (isYamlMap(value)) return "";
+function scalar(value: YamlValue | undefined) {
+  if (value === null || value === undefined) {
+    const returned: string = "";
+    return returned;
+  }
+  if (Arr.isArray<typeof value>(value)) {
+    const returned: string = Arr.join(Arr.map(value, scalar), ", ");
+    return returned;
+  }
+  if (isYamlMap(value)) {
+    const returned: string = "";
+    return returned;
+  }
   // Serialised rather than stringified: a value the checker still reads as map-like
   // would otherwise reach Settings as "[object Object]".
-  return isString(value) ? value : (JSON.stringify(value) ?? "");
+  const returned: string = isString(value) ? value : (JSON.stringify(value) ?? "");
+  return returned;
 }
 
 export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: PluginEnv) {
@@ -678,7 +710,7 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
     .state(env.cwd)
     .pipe(Effect.orElseSucceed(() => "unknown" as const));
 
-  return {
+  const returned: SettingsView = {
     configPath: path.join(env.userDir, "config.json"),
     // As written where it is set, so a hand-edited value that loadDefaults would
     // coerce is shown here, where it is put right.
@@ -695,7 +727,8 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
     remembered: Arr.filter(flatten(raw), (entry) => settingOf(entry.key) === undefined),
     trust: { cwd: env.cwd, state },
     flock: (yield* readSettingsSet(env.userDir)).flock?.by ?? null,
-  } satisfies SettingsView;
+  };
+  return returned;
 });
 
 export const buildMachineOwn = Effect.fn("Views.buildMachineOwn")(function* (env: PluginEnv) {

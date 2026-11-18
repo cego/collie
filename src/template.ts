@@ -22,24 +22,25 @@ export interface RenderOptions {
  * slash command inside a prompt or a system-prompt file, so a mention is a path —
  * which makes it the same for every harness. The map is `name → SKILL.md`.
  */
-export function skillMention(skills: ReadonlyMap<string, string>): (name: string) => string {
-  return (name) => {
+export function skillMention(skills: ReadonlyMap<string, string>) {
+  const returned: (name: string) => string = (name) => {
     const file = skills.get(name);
     return file
       ? `the \`${name}\` skill (read \`${file}\` and follow it)`
       : `the \`${name}\` skill (not installed here)`;
   };
+  return returned;
 }
 
 /** Every skill a text rendered with `skillMention` mentions, in the order it mentions them. */
-export function mentionedSkills(text: string): string[] {
+export function mentionedSkills(text: string) {
   return Arr.dedupe(Arr.map(Arr.fromIterable(Str.matchAll(MENTION)(text)), ([, name]) => name!));
 }
 
 const MENTION = /the `([A-Za-z0-9_-]+)` skill \((?:read|not installed)/g;
 
 /** Every skill a body asks for, in the order it asks. */
-export function skillsIn(text: string): string[] {
+export function skillsIn(text: string) {
   const names: string[] = [];
   for (const [, name] of pipe(text, Str.matchAll(SKILL)))
     if (name && !names.includes(name)) names.push(name);
@@ -51,7 +52,7 @@ const EXPRESSION = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 const BRACES = /\{\{[^}]*\}\}/g;
 
 /** Every name a body looks up, skills aside, in the order it first names them. */
-export function expressionsIn(text: string): string[] {
+export function expressionsIn(text: string) {
   const names: string[] = [];
   for (const [, name] of pipe(text, Str.replace(SKILL, ""), Str.matchAll(EXPRESSION)))
     if (name && !names.includes(name)) names.push(name);
@@ -59,7 +60,7 @@ export function expressionsIn(text: string): string[] {
 }
 
 /** Every `{{…}}` that is neither a skill nor a name to look up: nothing would fill it. */
-export function malformedIn(text: string): string[] {
+export function malformedIn(text: string) {
   return Arr.map(
     [...pipe(text, Str.replace(SKILL, ""), Str.replace(EXPRESSION, ""), Str.matchAll(BRACES))],
     ([all]) => all,
@@ -69,7 +70,7 @@ export function malformedIn(text: string): string[] {
 /** An Input the Run was not given, said rather than left blank. */
 const NOT_GIVEN = "not given";
 
-export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions = {}): Rendered {
+export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions = {}) {
   const missing: string[] = [];
   // Skills first, so `{{skill:x}}` is never mistaken for missing input.
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
@@ -89,7 +90,7 @@ export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions
   return { text: out, missing };
 }
 
-function lookup(input: YamlMap, path: string[]): YamlValue | undefined {
+function lookup(input: YamlMap, path: string[]) {
   let node: YamlValue = input;
   for (const key of path) {
     if (!isYamlMap(node)) return undefined;
@@ -102,7 +103,7 @@ function lookup(input: YamlMap, path: string[]): YamlValue | undefined {
 
 const isText = Schema.is(Schema.String);
 
-export function slugify(text: string, max = 40): string {
+export function slugify(text: string, max = 40) {
   return slug(text, max).slug;
 }
 

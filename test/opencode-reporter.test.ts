@@ -24,7 +24,10 @@ const loadedOn = (session?: string) =>
       opencodeReporter(session === undefined ? files : { ...files, session }),
     );
     yield* fs.writeFileString(files.tty, "");
-    const plugin = yield* Effect.promise((): Promise<Reporter> => import(`${dir}/status.js`));
+    const plugin = yield* Effect.promise(() => {
+      const returned: Promise<Reporter> = import(`${dir}/status.js`);
+      return returned;
+    });
     const hooks = yield* Effect.promise(() => plugin.CollieStatus());
     const event = (type: string, properties: JsonObject) =>
       Effect.promise(() => hooks.event({ event: { type, properties } }));

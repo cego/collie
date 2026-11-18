@@ -27,7 +27,6 @@ import {
   submittedDelivery,
   VERIFIED_VERSIONS,
 } from "../src/compactors";
-import type { AgentContext } from "../src/compaction";
 
 let rig: Rig;
 let fs: FileSystem.FileSystem;
@@ -37,7 +36,7 @@ let dir: string;
 const claude = COMPACTION_PORTS.claude!;
 const prompted: string[] = [];
 
-const ctx = (): AgentContext => ({
+const ctx = () => ({
   agent: "build-r1",
   run: "run-1",
   harness: "claude",
