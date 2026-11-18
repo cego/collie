@@ -76,6 +76,16 @@ export const VerificationSchema = Schema.Struct({
   /** Why Collie ran it; absent on an agent's and on records written before passes were. */
   pass: Schema.optionalKey(Pass),
   round: Schema.optionalKey(Schema.Int),
+  /** Each request one run answered, where identical ones asked while it ran; absent where one did. */
+  answered: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        by: Schema.Literals(["agent", "collie"]),
+        pass: Schema.optionalKey(Pass),
+        round: Schema.optionalKey(Schema.Int),
+      }),
+    ),
+  ),
   /** Where both streams were written as they arrived, up to `LOG_BYTES`. */
   log: Schema.optionalKey(Schema.String),
   /** What it ran with outside the tree; absent before environments were, and never reused. */

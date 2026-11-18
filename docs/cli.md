@@ -1876,8 +1876,9 @@ record: it says `not run again: verification <id> of "<check>" passed on this tr
 `failed`) and names the record's log, exits with the record's exit code, and its `--json`
 envelope is `{ "verification": <that record>, "ran": false }`. Where the tree has none, it
 refuses with `invalid_state`, naming the gate: Collie runs that check itself, on the final
-tree. `--expect fail` makes no exception, and a human's `collie verify --run` is answered as
-an agent's is.
+tree. The refusal says why no record answers, and the Run's log gets
+`check: <name> not answered: <reason>`. `--expect fail` makes no exception, and a human's
+`collie verify --run` is answered as an agent's is.
 
 A command that is not one of the Run's checks is answered the same way where this tree
 already has a record of it: the latest record of the same executable as resolved, arguments,
@@ -1885,9 +1886,35 @@ directory, `--name` and `--expect`, collected by this host in the same environme
 passed or failed. It says `not run again: verification <id> of "<name>" passed on this tree`
 (or `failed`), names the record's log and adds `--again runs it anyway`; the Run's log gets
 `verify: <name> answered by verification <id>`. An `unstable` latest record, or a gate's
-rerun of one failed test, answers nothing, and the command runs. `--again` runs it whatever
+rerun of one failed test, answers nothing, and the command runs. A command that runs
+because no record answers first prints `running it: <reason>`, and the Run's log gets
+`verify: <name> runs: <reason>`. `--again` runs it whatever
 is recorded; a Check is unaffected and is still answered or refused, `--again` or not.
 A command that runs has `"ran": true` in its envelope; no script name is special.
+
+The reason is exactly one of these, checked in this order:
+
+- `no record of this command on this Run`;
+- `the command differs from verification <id>'s`: the latest record under that name ran
+  another command, as after its approved command was replaced;
+- `the tree differs from verification <id>'s`: the latest record of the command is on
+  another tree;
+- `verification <id> on this tree is unstable or expected red`;
+- `the environment differs from verification <id>'s`;
+- `verification <id> was collected before this host started`. A pass counts only if this
+  host collected it, because a restart is when a human may have repaired something outside
+  the tree, so a restarted host runs the check again, and this line says why.
+
+The gate says the same in the Run's log, `<pass>: <check> runs: <reason>`, before it runs a
+check it could not rely on.
+
+Identical requests made while one is running share it: the same Run, executable as
+resolved, arguments, directory, tree fingerprint, environment and `--expect`. The later
+request prints `"<name>" is already running on this tree: waiting on it`, starts no
+process, and gets the same record, whose `answered` lists each request it answered. A
+request that differs in any of these runs its own process. Where the tree cannot be
+measured or the environment read, nothing is shared. Where the run waited on is ended, as by
+a stop of the Run that asked first, the waiting request runs the command itself.
 
 While the Machine is [Short of memory](using.md#short-of-memory), the host holds the
 command before it runs, reading again every 15 seconds: `collie verify` first prints

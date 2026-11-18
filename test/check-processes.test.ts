@@ -1724,3 +1724,99 @@ test("a check whose Verification cannot be appended gives no verdict", () =>
       expect(refused.why).toContain("disk full");
     }),
   ));
+
+/** A repository to check in, and a command that notes each start beside it and holds until `go` is there. */
+const heldTwice = (one: Effect.Success<typeof world>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const repo = `${one.root}/repo`;
+    yield* fs.makeDirectory(repo);
+    for (const args of [
+      ["init", "-q"],
+      [
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "first",
+      ],
+    ])
+      yield* exec(["git", ...args], { cwd: repo });
+    const starts = `${one.notes}/starts`;
+    const go = `${one.notes}/go`;
+    const ask = (said: (line: string) => Effect.Effect<void> = () => Effect.void) =>
+      collect(
+        `${one.root}/evidence`,
+        {
+          ...check,
+          executable: "sh",
+          argv: ["-c", `echo started >> ${starts}; while [ ! -f ${go} ]; do sleep 0.02; done`],
+          cwd: repo,
+        },
+        { stdout: () => Effect.void, stderr: () => Effect.void, said },
+      ).pipe(Effect.provideService(CheckProcesses, one.checks));
+    const started = (count: number) =>
+      until(
+        () => fs.readFileString(starts).pipe(Effect.orElseSucceed(() => "")),
+        (text) => Str.split(Str.trim(text), "\n").filter(Boolean).length >= count,
+      );
+    const lines = fs
+      .readFileString(starts)
+      .pipe(Effect.map((text) => Str.split(Str.trim(text), "\n").length));
+    return { ask, started, release: fs.writeFileString(go, ""), lines };
+  });
+
+test("two identical requests for a check while it runs start one process, and both get its record", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const held = yield* heldTwice(yield* world);
+      const first = yield* Effect.forkScoped(held.ask());
+      yield* held.started(1);
+      const waiting: string[] = [];
+      const second = yield* Effect.forkScoped(
+        held.ask((line) =>
+          Effect.sync(() => {
+            if (pipe_(line, Str.includes("already running"))) waiting.push(line);
+          }),
+        ),
+      );
+      // Until it waits on the first, or has started a process of its own.
+      yield* until(
+        () => Effect.map(held.lines, (lines) => lines + waiting.length),
+        (n) => n >= 2,
+      );
+      yield* held.release;
+      const [one, other] = [yield* Fiber.join(first), yield* Fiber.join(second)];
+      expect(yield* held.lines).toBe(1);
+      expect(other.id).toBe(one.id);
+      expect(one.answered).toEqual([{ by: "collie" }, { by: "collie" }]);
+    }),
+  ));
+
+test("two requests for a check that differ only in environment start two processes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const held = yield* heldTwice(yield* world);
+      const first = yield* Effect.forkScoped(held.ask());
+      yield* held.started(1);
+      const before = Bun.env.NODE_OPTIONS;
+      Bun.env.NODE_OPTIONS = "--max-old-space-size=64";
+      const second = yield* Effect.forkScoped(held.ask());
+      yield* held.started(2).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (before === undefined) delete Bun.env.NODE_OPTIONS;
+            else Bun.env.NODE_OPTIONS = before;
+          }),
+        ),
+      );
+      yield* held.release;
+      const [one, other] = [yield* Fiber.join(first), yield* Fiber.join(second)];
+      expect(yield* held.lines).toBe(2);
+      expect(other.environment).not.toBe(one.environment);
+    }),
+  ));

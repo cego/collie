@@ -13,7 +13,18 @@ import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
-import { Data, Effect, FileSystem, Path, Schema, flow, Result, type Scope } from "effect";
+import {
+  Data,
+  Deferred,
+  Effect,
+  Exit,
+  FileSystem,
+  Path,
+  Schema,
+  flow,
+  Result,
+  type Scope,
+} from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect's file info has no ctime.
@@ -680,12 +691,35 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   /** Where each stream is shown as it arrives, for a caller watching the command run. */
   echo?: Echo,
 ): Effect.fn.Return<StartedCheck, VerifyRefused, Services | Scope.Scope> {
+  return yield* startPrepared(runDir, what, yield* prepare(what), echo);
+});
+
+/** What a check is run with and on, read before it starts. */
+interface Prepared {
+  readonly absolute: string;
+  readonly environment: string | null;
+  readonly start: Snapshot;
+}
+
+const prepare = Effect.fn("Verify.prepare")(function* (
+  what: Collected,
+): Effect.fn.Return<Prepared, VerifyRefused, Services> {
   const absolute = yield* resolveExecutable(what.executable, what.cwd);
   if (absolute === null)
     return yield* new VerifyRefused({ why: `nothing on PATH called "${what.executable}"` });
+  return {
+    absolute,
+    environment: yield* environmentOf(absolute, what.cwd),
+    start: yield* fingerprint(what.cwd),
+  };
+});
 
-  const environment = yield* environmentOf(absolute, what.cwd);
-  const start = yield* fingerprint(what.cwd);
+const startPrepared = Effect.fn("Verify.startPrepared")(function* (
+  runDir: string,
+  what: Collected,
+  { absolute, environment, start }: Prepared,
+  echo?: Echo,
+): Effect.fn.Return<StartedCheck, VerifyRefused, Services | Scope.Scope> {
   const began = yield* nowIso;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -794,9 +828,18 @@ const readCheck = Effect.fn("Verify.readCheck")(function* (id: string, name: str
   };
 });
 
+type Asker = NonNullable<Verification["answered"]>[number];
+
+const askerOf = (what: Pick<Collected, "by" | "pass">): Asker => ({
+  by: what.by,
+  ...passFields(what.pass),
+});
+
 const settleCheck = Effect.fn("Verify.settleCheck")(function* (
   { check, command, tail: { stdout, stderr } }: Effect.Success<ReturnType<typeof readCheck>>,
   exit: number,
+  /** The identical requests it answered beside its own. */
+  joined: ReadonlyArray<Asker> = [],
 ): Effect.fn.Return<Verification, VerifyRefused, Services> {
   const { spec } = command;
   const fs = yield* FileSystem.FileSystem;
@@ -842,10 +885,14 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
   const placed: Verification =
     spec.environment === undefined ? owned : { ...owned, environment: spec.environment };
   const loggedRecord: Verification = spec.log === undefined ? placed : { ...placed, log: spec.log };
-  const kept: Verification =
+  const stepped: Verification =
     spec.step === null
       ? loggedRecord
       : { ...loggedRecord, step: spec.step.step, place: spec.step.place };
+  const kept: Verification =
+    joined.length === 0
+      ? stepped
+      : { ...stepped, answered: [askerOf({ by: check.by, pass: passOf(check.pass) }), ...joined] };
   yield* appendVerification(spec.evidence, kept).pipe(
     Effect.catchDefect((defect) =>
       Effect.fail(
@@ -871,7 +918,40 @@ export const collect = (
   /** Where each stream is shown as it arrives, for a caller watching the command run. */
   echo?: Echo,
 ): Effect.Effect<Verification, VerifyRefused, Services> =>
-  startCheck(runDir, what, echo).pipe(
+  Effect.gen(function* () {
+    const prepared = yield* prepare(what);
+    const key = sharedRunOf(runDir, what, prepared);
+    if (key === null) return yield* collectPrepared(runDir, what, prepared, echo);
+    for (;;) {
+      const running = underWay.get(key);
+      if (running === undefined) break;
+      running.joined.push(askerOf(what));
+      if (echo?.said !== undefined)
+        yield* echo.said(`"${what.name}" is already running on this tree: waiting on it`);
+      const exit = yield* Effect.exit(Deferred.await(running.done));
+      // Where the run it waited on was ended, it runs anew.
+      if (!Exit.hasInterrupts(exit)) return yield* exit;
+    }
+    const entry: UnderWay = { done: Deferred.makeUnsafe(), joined: [] };
+    underWay.set(key, entry);
+    const close = Effect.sync(() => {
+      if (underWay.get(key) === entry) underWay.delete(key);
+      return entry.joined;
+    });
+    return yield* collectPrepared(runDir, what, prepared, echo, close).pipe(
+      Effect.onExit((exit) => Effect.andThen(close, Deferred.done(entry.done, exit))),
+    );
+  }).pipe(Effect.withSpan("Verify.collect"));
+
+const collectPrepared = (
+  runDir: string,
+  what: Collected,
+  prepared: Prepared,
+  echo?: Echo,
+  /** Takes the identical requests that joined it, after which none more do. */
+  close: Effect.Effect<ReadonlyArray<Asker>> = Effect.succeed([]),
+) =>
+  startPrepared(runDir, what, prepared, echo).pipe(
     Effect.flatMap((started) =>
       Effect.flatMap(started.exit, (exit) =>
         Effect.map(readCheck(started.id, what.name), (read) => [read, exit] as const),
@@ -879,9 +959,37 @@ export const collect = (
     ),
     // Its Scope ends what is left of it before the tree is looked at again.
     Effect.scoped,
-    Effect.flatMap(([read, exit]) => settleCheck(read, exit)),
-    Effect.withSpan("Verify.collect"),
+    Effect.flatMap(([read, exit]) =>
+      Effect.flatMap(close, (joined) => settleCheck(read, exit, joined)),
+    ),
   );
+
+interface UnderWay {
+  readonly done: Deferred.Deferred<Verification, VerifyRefused>;
+  readonly joined: Array<Asker>;
+}
+
+// ponytail: in memory, as only this process's requests can wait on its run.
+const underWay = new Map<string, UnderWay>();
+
+/** What makes two requests one run, or null where the tree or environment cannot be known. */
+const sharedRunOf = (runDir: string, what: Collected, prepared: Prepared) =>
+  prepared.environment === null ||
+  prepared.start.fingerprint === TOO_LARGE ||
+  prepared.start.fingerprint === UNMEASURED
+    ? null
+    : JSON.stringify([
+        runDir,
+        what.run,
+        prepared.absolute,
+        what.argv,
+        what.cwd,
+        prepared.start.fingerprint,
+        prepared.environment,
+        what.expect ?? "pass",
+        what.test ?? null,
+        what.own ?? null,
+      ]);
 
 /** A record's pass, where it is one a Verification keeps. */
 function passOf(given: CheckOf["pass"]): CheckPass | undefined {
@@ -1013,24 +1121,69 @@ export const ranOneTest = (v: Pick<Verification, "test">) => v.test !== undefine
 /** A pass that expected one: a reproduced failure is not. */
 export const passed = (v: Verification) => v.result === "pass" && v.expect === "pass";
 
+/** Why no record answers for a command now: exactly one reason, naming the record compared with. */
+export type Miss =
+  | { readonly reason: "none" }
+  | {
+      readonly reason: "command" | "tree" | "unstable" | "environment" | "before-host";
+      readonly record: string;
+    };
+
+/** What a lookup found: a record, or why none answers. */
+export type Reuse =
+  | { readonly record: Verification; readonly miss: null }
+  | { readonly record: null; readonly miss: Miss };
+
+const missed = (miss: Miss): Reuse => ({ record: null, miss });
+
+/** Why it was not reused, as the Run's log and `collie verify` say it. */
+export const missSaid = (miss: Miss): string => {
+  switch (miss.reason) {
+    case "none":
+      return "no record of this command on this Run";
+    case "command":
+    case "tree":
+    case "environment":
+      return `the ${miss.reason} differs from verification ${miss.record}'s`;
+    case "unstable":
+      return `verification ${miss.record} on this tree is unstable or expected red`;
+    case "before-host":
+      return `verification ${miss.record} was collected before this host started`;
+  }
+};
+
 /**
  * The latest record of exactly this command on this tree, where it was collected in this
- * environment since `since`. Whoever asked for it does not matter: the host ran it.
+ * environment since `since`, stable and expecting what was asked. Whoever asked for it does
+ * not matter: the host ran it. A run of one failed test is never the command's own.
  */
 function latestRecord(
   records: ReadonlyArray<Verification>,
-  wanted: Pick<Verification, "executable" | "argv" | "cwd"> & {
+  wanted: Pick<Verification, "name" | "executable" | "argv" | "cwd"> & {
     readonly environment: string | null;
+    readonly expect?: Verification["expect"];
   },
   now: Snapshot,
   since: string,
-): Verification | null {
-  const latest = Option.getOrUndefined(
-    Arr.findLast(records, (one) => sameCommand(one, wanted) && !staleAgainst(one, now)),
-  );
-  if (latest === undefined || wanted.environment === null) return null;
-  const holds = latest.environment === wanted.environment && epochMs(latest.at) > epochMs(since);
-  return holds ? latest : null;
+): Reuse {
+  const own = Arr.filter(records, (one) => !ranOneTest(one));
+  const same = Arr.filter(own, (one) => sameCommand(one, wanted));
+  const last = Arr.last(same);
+  if (Option.isNone(last)) {
+    const named = Arr.findLast(own, (one) => one.name === wanted.name);
+    return missed(
+      Option.isNone(named) ? { reason: "none" } : { reason: "command", record: named.value.id },
+    );
+  }
+  const onTree = Option.getOrUndefined(Arr.findLast(same, (one) => !staleAgainst(one, now)));
+  if (onTree === undefined) return missed({ reason: "tree", record: last.value.id });
+  const record = onTree.id;
+  if (onTree.result === "unstable" || (wanted.expect ?? onTree.expect) !== onTree.expect)
+    return missed({ reason: "unstable", record });
+  if (wanted.environment === null || onTree.environment !== wanted.environment)
+    return missed({ reason: "environment", record });
+  if (epochMs(onTree.at) <= epochMs(since)) return missed({ reason: "before-host", record });
+  return { record: onTree, miss: null };
 }
 
 /** A check's command as Collie runs it for this Run; its executable is null where none is found. */
@@ -1047,13 +1200,21 @@ export const recordFor = Effect.fn("Verify.recordFor")(function* (
   run: CheckRun,
   spec: VerifySpec,
   since: string,
+  expect?: Verification["expect"],
 ) {
   const cwd = yield* checkCwd(run, spec);
   const executable = yield* resolveExecutable(spec.executable, cwd);
-  if (executable === null) return null;
+  if (executable === null) return missed({ reason: "none" });
   return latestRecord(
     yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => [])),
-    { executable, argv: spec.argv, cwd, environment: yield* environmentOf(executable, cwd) },
+    {
+      name: spec.name,
+      executable,
+      argv: spec.argv,
+      cwd,
+      environment: yield* environmentOf(executable, cwd),
+      ...(expect !== undefined && { expect }),
+    },
     yield* fingerprint(cwd),
     since,
   );
@@ -1064,7 +1225,7 @@ export const recordedFor = Effect.fn("Verify.recordedFor")(function* (
   wanted: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect">,
   since: string,
 ) {
-  const latest = latestRecord(
+  return latestRecord(
     Arr.filter(
       yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => [])),
       (one) => one.name === wanted.name && one.expect === wanted.expect,
@@ -1073,11 +1234,12 @@ export const recordedFor = Effect.fn("Verify.recordedFor")(function* (
     yield* fingerprint(wanted.cwd),
     since,
   );
-  return latest === null || latest.result === "unstable" || ranOneTest(latest) ? null : latest;
 });
 
-/** `recordFor`, where it is a pass. */
-export const reliedFor = (...args: Parameters<typeof recordFor>) =>
-  recordFor(...args).pipe(
-    Effect.map((latest) => (latest !== null && passed(latest) ? latest : null)),
+/** `recordFor` a pass; a record that failed on this tree answers nothing, and is no miss. */
+export const reliedFor = (runDir: string, run: CheckRun, spec: VerifySpec, since: string) =>
+  recordFor(runDir, run, spec, since, "pass").pipe(
+    Effect.map((found): { readonly record: Verification | null; readonly miss: Miss | null } =>
+      found.record === null || passed(found.record) ? found : { record: null, miss: null },
+    ),
   );

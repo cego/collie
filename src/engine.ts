@@ -373,9 +373,11 @@ import {
   contentOf,
   ranCommand,
   readVerifications,
+  missSaid,
   recordFor,
   recordedFor,
   reliedFor,
+  type Reuse,
   rerunTest,
   resolveExecutable,
   runApproved,
@@ -3854,12 +3856,12 @@ export class Reliance extends Context.Service<
     readonly relied: (
       runId: string,
       command: Pick<Verification, "executable" | "argv" | "cwd">,
-    ) => Effect.Effect<{ readonly check: string; readonly record: Verification | null } | null>;
-    /** The record that answers a command that is none of the Run's Checks, or null where it runs. */
+    ) => Effect.Effect<({ readonly check: string } & Reuse) | null>;
+    /** The record that answers a command that is none of the Run's Checks, or why it runs. */
     readonly recorded: (
       runId: string,
       command: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect">,
-    ) => Effect.Effect<Verification | null>;
+    ) => Effect.Effect<Reuse>;
   }
 >()("collie/Reliance") {}
 
@@ -4329,13 +4331,23 @@ export const hostLayer = (options: {
       /** A pass this host collected that answers for this check now, said in the Run log. */
       const relyOn = (runId: string, run: CheckRun, spec: VerifySpec, recorded: CheckPass) =>
         Effect.gen(function* () {
-          const kept = yield* reliedFor(evidenceDir(dir, runId), run, spec, hostStarted);
-          if (kept !== null)
-            yield* appendLog(
-              runDir(dir, runId),
-              `${recorded.pass}: ${spec.name} relies on verification ${kept.id}`,
-            ).pipe(Effect.orDie);
-          return kept;
+          const { record, miss } = yield* reliedFor(
+            evidenceDir(dir, runId),
+            run,
+            spec,
+            hostStarted,
+          );
+          const said =
+            record !== null
+              ? `relies on verification ${record.id}`
+              : miss === null
+                ? null
+                : `runs: ${missSaid(miss)}`;
+          if (said !== null)
+            yield* appendLog(runDir(dir, runId), `${recorded.pass}: ${spec.name} ${said}`).pipe(
+              Effect.orDie,
+            );
+          return record;
         });
       /** Runs one approved command for a Run, under the pass it was asked for (ADR-0042). */
       const check = (asked: Parameters<Sdk.HostApi["verify"]>[0], recorded: CheckPass) =>
@@ -6696,35 +6708,38 @@ export const hostLayer = (options: {
             if (executable === null) return null;
             for (const spec of yield* approvedOf(dir, runId)) {
               if (!ranCommand({ ...command, executable }, yield* commandOf(own, spec))) continue;
-              const record = yield* recordFor(evidenceDir(dir, runId), own, spec, hostStarted);
-              if (record !== null)
-                yield* appendLog(
-                  runDir(dir, runId),
-                  `check: ${spec.name} answered by verification ${record.id}`,
-                ).pipe(Effect.orDie);
-              return { check: spec.name, record };
+              const found = yield* recordFor(evidenceDir(dir, runId), own, spec, hostStarted);
+              yield* appendLog(
+                runDir(dir, runId),
+                found.record === null
+                  ? `check: ${spec.name} not answered: ${missSaid(found.miss)}`
+                  : `check: ${spec.name} answered by verification ${found.record.id}`,
+              ).pipe(Effect.orDie);
+              return { check: spec.name, ...found };
             }
             return null;
           }),
         ).pipe(Effect.orElseSucceed(() => null));
+      const missed: Reuse = { record: null, miss: { reason: "none" } };
       const recorded: Reliance["Service"]["recorded"] = (runId, command) =>
         under(
           Effect.gen(function* () {
             const executable = yield* resolveExecutable(command.executable, command.cwd);
-            if (executable === null) return null;
-            const record = yield* recordedFor(
+            if (executable === null) return missed;
+            const found = yield* recordedFor(
               evidenceDir(dir, runId),
               { ...command, executable },
               hostStarted,
             );
-            if (record !== null)
-              yield* appendLog(
-                runDir(dir, runId),
-                `verify: ${command.name} answered by verification ${record.id}`,
-              ).pipe(Effect.orDie);
-            return record;
+            yield* appendLog(
+              runDir(dir, runId),
+              found.record === null
+                ? `verify: ${command.name} runs: ${missSaid(found.miss)}`
+                : `verify: ${command.name} answered by verification ${found.record.id}`,
+            ).pipe(Effect.orDie);
+            return found;
           }),
-        ).pipe(Effect.orElseSucceed(() => null));
+        ).pipe(Effect.orElseSucceed(() => missed));
       return Context.make(Host, host).pipe(
         Context.add(Notifier, Notifier.of({ notify })),
         Context.add(Oversight, oversight),

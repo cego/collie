@@ -28,6 +28,7 @@ import {
   staleAgainst,
 } from "../src/verify";
 import type { VerifySpec } from "../src/intent";
+import type { Verification } from "../src/verify-model";
 import { fileTime } from "../src/time";
 import { noteVerification, readMetrics } from "../src/metrics";
 import { FakeBin, loggedGit } from "./support/bin";
@@ -917,6 +918,9 @@ function nodeOptions(value: string): () => void {
 }
 
 /** A tool of the test's own, outside the tree, whose content is what it is. */
+const recordOf = <E, R>(found: Effect.Effect<{ readonly record: Verification | null }, E, R>) =>
+  Effect.map(found, (one) => one.record);
+
 const tool = (dir: string, body: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -957,7 +961,7 @@ test("a pass is relied on only while its tree, its command and its environment a
       const spec: VerifySpec = { name: "unit", executable, argv: [], cwd: "." };
       const run = { id: "r1", cwd: repo, worktree: null };
       const since = "2000-01-01T00:00:00.000Z";
-      const relied = () => reliedFor(runDir, run, spec, since);
+      const relied = () => recordOf(reliedFor(runDir, run, spec, since));
 
       expect(yield* relied()).toBeNull();
       // An agent's pass of exactly the check's command, under a name of its own.
@@ -974,7 +978,9 @@ test("a pass is relied on only while its tree, its command and its environment a
       expect((yield* relied())?.id).toBe(collies.id);
 
       // Another command under the same name.
-      expect(yield* reliedFor(runDir, run, { ...spec, argv: ["--bail"] }, since)).toBeNull();
+      expect(
+        yield* recordOf(reliedFor(runDir, run, { ...spec, argv: ["--bail"] }, since)),
+      ).toBeNull();
 
       // The tree moved.
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "two\n");
@@ -1006,7 +1012,7 @@ test("an install into an ignored node_modules makes a record stale, and a cache 
       const spec: VerifySpec = { name: "unit", executable, argv: [], cwd: "." };
       const run = { id: "r1", cwd: repo, worktree: null };
       const since = "2000-01-01T00:00:00.000Z";
-      const recorded = () => recordFor(runDir, run, spec, since);
+      const recorded = () => recordOf(recordFor(runDir, run, spec, since));
 
       const failed = yield* runApproved(runDir, run, [spec], spec);
       expect(failed.result).toBe("fail");
@@ -1049,7 +1055,7 @@ test("the latest record of that command on the tree decides, whoever asked", () 
         by: "agent",
       });
       yield* fs.remove(flag);
-      expect(yield* reliedFor(runDir, run, spec, since)).toBeNull();
+      expect(yield* recordOf(reliedFor(runDir, run, spec, since))).toBeNull();
 
       // Expecting a failure is never a pass of the check.
       yield* collect(runDir, {
@@ -1061,15 +1067,99 @@ test("the latest record of that command on the tree decides, whoever asked", () 
         by: "agent",
         expect: "fail",
       });
-      expect(yield* reliedFor(runDir, run, spec, since)).toBeNull();
+      expect(yield* recordOf(reliedFor(runDir, run, spec, since))).toBeNull();
 
       yield* appendVerification(runDir, { ...passed, id: "again" });
-      expect((yield* reliedFor(runDir, run, spec, since))?.id).toBe("again");
+      expect((yield* recordOf(reliedFor(runDir, run, spec, since)))?.id).toBe("again");
       // Collected before this host started.
-      expect(yield* reliedFor(runDir, run, spec, "2999-01-01T00:00:00.000Z")).toBeNull();
+      expect(yield* recordOf(reliedFor(runDir, run, spec, "2999-01-01T00:00:00.000Z"))).toBeNull();
 
       const { environment: _, ...older } = passed;
       yield* appendVerification(runDir, { ...older, id: "older" });
-      expect(yield* reliedFor(runDir, run, spec, since)).toBeNull();
+      expect(yield* recordOf(reliedFor(runDir, run, spec, since))).toBeNull();
+    }),
+  ));
+
+/** A Run's check that passed once on this tree, and the lookup of it from a host started `since`. */
+const passedOnce = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });
+  const executable = yield* tool(runDir, "exit 0");
+  const spec: VerifySpec = { name: "unit", executable, argv: [], cwd: "." };
+  const run = { id: "r1", cwd: repo, worktree: null };
+  const since = "2000-01-01T00:00:00.000Z";
+  const lookup = (asked = spec, from = since) => recordFor(runDir, run, asked, from);
+  return { runDir, spec, run, lookup, ran: runApproved(runDir, run, [spec], spec) };
+});
+
+test("a check with no record on the Run is not reused because there is none", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { lookup } = yield* passedOnce;
+      expect(yield* lookup()).toEqual({ record: null, miss: { reason: "none" } });
+    }),
+  ));
+
+test("a check whose command changed is not reused because the command differs, naming its last record", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { lookup, spec, ran } = yield* passedOnce;
+      const passed = yield* ran;
+      expect(yield* lookup({ ...spec, argv: ["--bail"] })).toEqual({
+        record: null,
+        miss: { reason: "command", record: passed.id },
+      });
+    }),
+  ));
+
+test("a check whose tree moved is not reused because the tree differs, naming its last record", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { lookup, ran } = yield* passedOnce;
+      const passed = yield* ran;
+      yield* fs.writeFileString(`${repo}/tracked.txt`, "two\n");
+      expect(yield* lookup()).toEqual({
+        record: null,
+        miss: { reason: "tree", record: passed.id },
+      });
+    }),
+  ));
+
+test("a check recorded in another environment is not reused because the environment differs", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { lookup, runDir, ran } = yield* passedOnce;
+      const passed = yield* ran;
+      yield* appendVerification(runDir, { ...passed, id: "elsewhere", environment: "other" });
+      expect(yield* lookup()).toEqual({
+        record: null,
+        miss: { reason: "environment", record: "elsewhere" },
+      });
+    }),
+  ));
+
+test("a check whose latest record on the tree is unstable is not reused because it is unstable", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { lookup, runDir, ran } = yield* passedOnce;
+      const passed = yield* ran;
+      yield* appendVerification(runDir, { ...passed, id: "moved", result: "unstable" });
+      expect(yield* lookup()).toEqual({
+        record: null,
+        miss: { reason: "unstable", record: "moved" },
+      });
+    }),
+  ));
+
+test("a check collected before this host started is not reused, and says so", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { lookup, spec, ran } = yield* passedOnce;
+      const passed = yield* ran;
+      expect(yield* lookup(spec, "2999-01-01T00:00:00.000Z")).toEqual({
+        record: null,
+        miss: { reason: "before-host", record: passed.id },
+      });
     }),
   ));

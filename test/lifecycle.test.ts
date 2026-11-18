@@ -1135,6 +1135,64 @@ test(
   240_000,
 );
 
+test(
+  "collie verify of a Run's Check whose last record was on another tree is refused, saying the tree differs from that record",
+  () =>
+    provesWith(
+      "collie-lifecycle-verify-moved-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { counter, runs } = yield* counted(world);
+          const command = ["sh", "-c", `echo ran >> ${counter}`];
+          const runId = yield* checkedRun(world, "checked", command);
+          const verify = () => collie(world, ["verify", "--run", runId, "--", ...command]);
+          const gate = yield* Schema.decodeUnknownEffect(Answer)(
+            (yield* verify()).envelope.data,
+          ).pipe(Effect.orDie);
+
+          yield* fs.writeFileString(`${world.project}/moved.txt`, "moved\n");
+          const refused = yield* verify();
+          expect(refused.envelope.error?.code).toBe("invalid_state");
+          expect(refused.envelope.error?.message).toContain(
+            `the tree differs from verification ${gate.verification.id}'s`,
+          );
+          expect(refused.envelope.error?.message).toContain("gate");
+          expect(yield* runs).toBe(1);
+          yield* stopHost(world.state);
+        }),
+      ["checked.workflow.ts"],
+    ),
+  240_000,
+);
+
+test(
+  "collie verify of a command whose last record was on another tree says it ran because the tree differed",
+  () =>
+    provesWith(
+      "collie-lifecycle-verify-reran-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const runId = yield* checkedRun(world, "checked", ["true"]);
+          const verify = () => collie(world, ["verify", "--run", runId, "--", "sh", "-c", "true"]);
+          const first = yield* Schema.decodeUnknownEffect(Answer)(
+            (yield* verify()).envelope.data,
+          ).pipe(Effect.orDie);
+
+          yield* fs.writeFileString(`${world.project}/moved.txt`, "moved\n");
+          const again = yield* verify();
+          expect(again.envelope.data).toMatchObject({ ran: true });
+          expect(again.stderr).toContain(
+            `running it: the tree differs from verification ${first.verification.id}'s`,
+          );
+          yield* stopHost(world.state);
+        }),
+      ["checked.workflow.ts"],
+    ),
+  240_000,
+);
+
 const mrUrl = (repo: string, iid: number) =>
   `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`;
 
