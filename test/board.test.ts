@@ -157,14 +157,27 @@ test(
           const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
           yield* stopHost(world.state);
           yield* connect(world.state).pipe(Effect.orDie);
-          const board = yield* collie(world, ["board"]);
-          const data = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({
-              tasks: Schema.Array(
-                Schema.Struct({ state: Schema.String, drift: Schema.NullOr(Schema.String) }),
+          // A host just started first shows the card it was left, unconfirmed; its git sync moves it.
+          const data = yield* until(
+            () =>
+              collie(world, ["board"]).pipe(
+                Effect.flatMap((board) =>
+                  Schema.decodeUnknownEffect(
+                    Schema.Struct({
+                      tasks: Schema.Array(
+                        Schema.Struct({
+                          state: Schema.String,
+                          drift: Schema.NullOr(Schema.String),
+                          confirmed: Schema.optionalKey(Schema.Boolean),
+                        }),
+                      ),
+                    }),
+                  )(board.envelope.data),
+                ),
+                Effect.orDie,
               ),
-            }),
-          )(board.envelope.data).pipe(Effect.orDie);
+            (data) => data.tasks[0]?.confirmed !== false,
+          );
           expect(data.tasks[0]?.state).toBe("failed");
           expect(data.tasks[0]?.drift).toContain(`1 commit past ${ended}`);
           expect(data.tasks[0]?.drift).toContain(head);
