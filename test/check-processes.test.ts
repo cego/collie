@@ -1762,7 +1762,7 @@ const heldTwice = (one: Effect.Success<typeof world>) =>
     const started = (count: number) =>
       until(
         () => fs.readFileString(starts).pipe(Effect.orElseSucceed(() => "")),
-        (text) => Str.split(Str.trim(text), "\n").filter(Boolean).length >= count,
+        (text) => Arr.filter(Str.split(Str.trim(text), "\n"), Str.isNonEmpty).length >= count,
       );
     const lines = fs
       .readFileString(starts)

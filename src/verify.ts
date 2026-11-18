@@ -529,7 +529,10 @@ export const environmentOf = Effect.fn("Verify.environmentOf")(
     for (const name of TOOLCHAIN_VARIABLES) parts.push(`${name}=${Bun.env[name] ?? ""}`);
     if (isolated === undefined)
       for (const root of yield* packageRoots(cwd)) parts.push(yield* installedAt(root));
-    else parts.push(`isolated after ${JSON.stringify(isolated.prepare ?? null)}`);
+    else
+      parts.push(
+        `isolated after ${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(isolated.prepare ?? null)}`,
+      );
     return Bun.hash(Arr.join(parts, "\n")).toString(16);
   },
   Effect.orElseSucceed(() => null),
@@ -1019,7 +1022,7 @@ export const collect = (
     const prepared = yield* prepare(what);
     const key = sharedRunOf(runDir, what, prepared);
     if (key === null)
-      return yield* collectPrepared(runDir, what, prepared, crypto.randomUUID(), echo);
+      return yield* collectPrepared(runDir, what, prepared, `unshared ${++unshared}`, echo);
     for (;;) {
       const running = underWay.get(key);
       if (running === undefined) break;
@@ -1108,6 +1111,7 @@ interface UnderWay {
 
 // ponytail: in memory, as only this process's requests can wait on its run.
 const underWay = new Map<string, UnderWay>();
+let unshared = 0;
 
 /** What makes two requests one run, or null where the tree or environment cannot be known. */
 const sharedRunOf = (runDir: string, what: Collected, prepared: Prepared) =>

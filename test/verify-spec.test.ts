@@ -275,7 +275,7 @@ test("an approved check renders as a line a shell runs with the same words", () 
   ));
 
 test("a check marked to run before review decodes, an unmarked one decodes as before, and one left to CI cannot be marked", () => {
-  const given = (spec: object) => givenVerifications([JSON.stringify(spec)]);
+  const given = (spec: VerifySpec) => givenVerifications([JSON.stringify(spec)]);
   expect(given({ ...TESTS, before_review: true })).toEqual({
     ok: true,
     specs: [{ ...TESTS, before_review: true }],
