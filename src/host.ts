@@ -134,7 +134,7 @@ import { REQUESTABLE } from "./outcome";
 import { OutcomeRecords, outcomeRecordsOf } from "./outcomes";
 import { trialRecordsOf } from "./trial";
 import { TrialRecords } from "./trial-model";
-import { UsageEntry } from "./usage-ledger-model";
+import { descendantsOf, UsageEntry } from "./usage-ledger-model";
 import { readUsage } from "./usage-ledger";
 import { removedNotice, scrub, scrubJson } from "./redact";
 import { readMetrics } from "./metrics";
@@ -4179,7 +4179,15 @@ const frontDoorHandlers = (
                 const related = yield* Effect.cached(
                   record !== undefined && runId !== undefined
                     ? record
-                        .related(runId, record.model.planned(runId))
+                        .related(runId, [
+                          ...record.model.planned(runId),
+                          ...descendantsOf(
+                            Arr.flatMap([...record.model.indexes().byParent], ([parent, runs]) =>
+                              Arr.map([...runs], (child) => ({ runId: child, parent })),
+                            ),
+                            runId,
+                          ),
+                        ])
                         .pipe(Effect.map(newestFirst))
                     : runs,
                 );
