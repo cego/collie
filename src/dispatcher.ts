@@ -24,7 +24,7 @@ import {
   HerdrError,
   herdrFailureReason,
   isSettled,
-  type Backend,
+  type AgentInfo,
   type Herdr,
   type Submission,
 } from "./herdr";
@@ -240,7 +240,7 @@ export interface Channel {
 
 export interface DispatcherDeps {
   readonly stateDir: string;
-  readonly herdr: Pick<Herdr, "agentPrompt" | "agentList" | "agentSendKeys" | "restoreAgentName"> &
+  readonly herdr: Pick<Herdr, "agentPrompt" | "agentList" | "agentSendKeys"> &
     Partial<Pick<Herdr, "agentStatus">>;
   /** The Run's audit trail, so a refusal is explained where the Run is read. */
   readonly log: (
@@ -330,7 +330,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
   if (open.has(terminalId)) return yield* new TransactionOpen({ agent: entry.agent });
   open.add(terminalId);
   return yield* Effect.gen(function* () {
-    let listing = yield* agentsNow(deps, entry);
+    let listing = yield* agentsNow(deps);
     let listedAt = yield* Clock.currentTimeMillis;
 
     const identified = verifyIncarnation(entry, listing);
@@ -379,7 +379,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
           // can happen inside one. Anything older than a few seconds is re-read before
           // it is trusted with a send.
           if ((yield* Clock.currentTimeMillis) - listedAt > LISTING_MAX_AGE_MS) {
-            listing = yield* agentsNow(deps, entry);
+            listing = yield* agentsNow(deps);
             listedAt = yield* Clock.currentTimeMillis;
             const again = verifyIncarnation(entry, listing);
             if (!again.ok) {
@@ -404,29 +404,12 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
   }).pipe(Effect.ensuring(Effect.sync(() => open.delete(terminalId))));
 });
 
-/** Where an entry's incarnation runs: a record without a backend is Herdr 1's. */
-const backendOf = (entry: AgentEntry): Backend => entry.incarnation?.backend ?? "herdr";
-
 function refuse(id: string | null, reason: Refusal, detail: string): SubmitOutcome {
   return { ok: false, id, reason, detail };
 }
 
-/** Recover a missing name only with an existing binding, then revalidate the fresh list. */
-const agentsNow = Effect.fn("Dispatcher.agentsNow")(function* (
-  deps: DispatcherDeps,
-  entry?: AgentEntry,
-) {
-  const read = () => deps.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
-  let listing = yield* read();
-  if (
-    entry?.incarnation &&
-    !Arr.some(listing, (agent) => agent.name === entry.agent) &&
-    (yield* deps.herdr.restoreAgentName(entry).pipe(Effect.orElseSucceed(() => false)))
-  ) {
-    listing = yield* read();
-  }
-  return listing;
-});
+const agentsNow = (deps: DispatcherDeps) =>
+  deps.herdr.agentList().pipe(Effect.orElseSucceed((): AgentInfo[] => []));
 
 /**
  * One message: reserved, sent, settled. The reservation is appended **before** herdr is
@@ -513,9 +496,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
   // Refused as herdr refuses a pane in a dialog, so it is waited out the same way.
   const sent =
     asking === null
-      ? yield* deps.herdr
-          .agentPrompt(entry.agent, marked(text, id), backendOf(entry))
-          .pipe(Effect.result)
+      ? yield* deps.herdr.agentPrompt(entry.agent, marked(text, id)).pipe(Effect.result)
       : Result.fail(
           new HerdrError({ message: asking, detail: "", code: AGENT_BLOCKED, answered: true }),
         );
@@ -615,23 +596,21 @@ export class Unconfirmed extends Data.TaggedError("Unconfirmed")<{
 
 export interface ConfirmDeps<R> {
   readonly stateDir: string;
-  readonly herdr: Pick<Herdr, "agentStatus" | "promptBox" | "agentPressEnter">;
+  readonly herdr: Pick<Herdr, "agentStatus">;
   readonly log: DispatcherDeps["log"];
   /** Whatever else says the agent took this delivery, as a phrase; null for nothing. */
   readonly taken: (delivery: Delivery) => Effect.Effect<string | null, never, R>;
   readonly pollMs: number;
-  /** How long a settled agent may show neither the prompt nor a turn before a human is asked. */
+  /** How long a settled agent may show no turn before a human is asked. */
   readonly graceMs: number;
 }
 
 /**
  * A `submitted (unobserved)` delivery about one of these causal keys, checked until it is
- * known either way. Taken is a turn herdr saw start from a settled agent, or whatever
- * `taken` finds, and is recorded `acknowledged`. A settled agent whose prompt box still
- * holds the delivery's token gets one Enter — never the text again, which would be the work
- * twice. A settled agent that shows neither, for the whole grace, fails `Unconfirmed`:
- * nothing can prove sending it again is safe, so a human is asked. Returns how it was taken,
- * or null where nothing was left unobserved.
+ * known either way. Taken is a turn core saw start from a settled agent, or whatever
+ * `taken` finds, and is recorded `acknowledged`. A settled agent that shows neither, for
+ * the whole grace, fails `Unconfirmed`: nothing can prove sending it again is safe, so a
+ * human is asked. Returns how it was taken, or null where nothing was left unobserved.
  */
 export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(function* <R>(
   deps: ConfirmDeps<R>,
@@ -640,7 +619,6 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
 ) {
   const terminalId = entry.incarnation?.terminalId;
   if (terminalId === undefined) return null;
-  const backend = backendOf(entry);
   const pending = Effect.map(readLedger(terminalId), (lines) =>
     Arr.filter(
       [...newestById(lines).values()],
@@ -648,69 +626,40 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
     ).at(-1),
   );
   /** Re-read first, so a settlement never lands on a delivery the sender moved meanwhile. */
-  const settle = (
-    id: string,
-    act: Effect.Effect<void, never, PlatformServices>,
-    note: string,
-    state?: "acknowledged",
-  ) =>
+  const settle = (id: string, note: string, state?: "acknowledged") =>
     Effect.gen(function* () {
       const now = newestById(yield* readLedger(terminalId)).get(id);
       if (now === undefined || !isUnobserved(now)) return;
-      yield* act;
       yield* appendLine({ ...now, at: yield* nowIso, state: state ?? now.state, note });
     });
   let sawSettled = false;
   let quietSince: number | null = null;
-  let pressed = false;
   for (;;) {
     const open = yield* pending;
     if (open === undefined) return null;
     const status = yield* deps.herdr
-      .agentStatus(entry.agent, backend)
+      .agentStatus(entry.agent)
       .pipe(Effect.orElseSucceed(() => "unknown" as const));
     const turn = sawSettled && (status === "working" || status === "blocked");
     const found = turn ? TURN_STARTED : yield* deps.taken(open);
     if (found !== null) {
-      const taken = pressed ? `${found} after Enter was pressed` : found;
-      yield* settle(open.id, Effect.void, `taken: ${taken}`, "acknowledged");
-      yield* deps.log(`${entry.agent} took ${open.id}: ${taken}`);
-      return taken;
+      yield* settle(open.id, `taken: ${found}`, "acknowledged");
+      yield* deps.log(`${entry.agent} took ${open.id}: ${found}`);
+      return found;
     }
     if (!isSettled(status)) {
       quietSince = null;
     } else {
       sawSettled = true;
-      const box = yield* deps.herdr
-        .promptBox(entry.agent, backend)
-        .pipe(Effect.orElseSucceed(() => null));
-      const waiting =
-        Option.getOrUndefined(
-          Option.map(Option.fromNullishOr(box), (present) =>
-            pipe_(present, Str.includes(`${DELIVERY_TOKEN}${open.id}`)),
-          ),
-        ) === true;
-      if (waiting && open.note === UNOBSERVED) {
-        const press = deps.herdr.agentPressEnter(entry.agent, backend).pipe(Effect.ignore);
-        yield* settle(open.id, press, ENTER_PRESSED);
-        yield* deps.log(`${entry.agent}: ${open.id} was still in its prompt box; pressed Enter`);
-        pressed = true;
-        quietSince = null;
-      } else {
-        const now = yield* Clock.currentTimeMillis;
-        quietSince ??= now;
-        if (now - quietSince >= deps.graceMs) {
-          return yield* new Unconfirmed({
-            agent: entry.agent,
-            pane: entry.paneId,
-            delivery: open.id,
-            why: waiting
-              ? "its prompt box still holds it after one Enter"
-              : box === null
-                ? "its prompt box cannot be read"
-                : "its prompt box does not hold it",
-          });
-        }
+      const now = yield* Clock.currentTimeMillis;
+      quietSince ??= now;
+      if (now - quietSince >= deps.graceMs) {
+        return yield* new Unconfirmed({
+          agent: entry.agent,
+          pane: entry.paneId,
+          delivery: open.id,
+          why: "it started no turn for it",
+        });
       }
     }
     yield* Effect.sleep(Duration.millis(deps.pollMs));
@@ -781,23 +730,17 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
     Arr.findFirst(yield* agentsNow(deps), (a) => a.name === about.agent),
   );
   if (!live)
-    return { entry: null, reason: `${about.agent} is gone — herdr no longer has it`, gone: true };
-  if (!live.terminalId)
-    return {
-      entry: null,
-      reason: `${about.agent} cannot be addressed: herdr does not name its process`,
-      gone: false,
-    };
+    return { entry: null, reason: `${about.agent} is gone — core no longer has it`, gone: true };
   const incarnation: Incarnation = {
     terminalId: live.terminalId,
-    agentSession: live.agentSession,
+    agentSession: null,
+    backend: "core",
   };
-  if (live.backend !== undefined) incarnation.backend = live.backend;
   const entry: AgentEntry = {
     role: about.role,
     agent: about.agent,
     paneId: about.paneId ?? live.paneId,
-    workspaceId: about.workspaceId ?? live.workspaceId,
+    workspaceId: about.workspaceId,
     runId: about.runId,
     workflow: about.workflow,
     at: yield* nowIso,
@@ -852,7 +795,7 @@ export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
   const keys = interruptKeys(draft.harness ?? "");
   if (keys === null)
     return refuse(null, "failed", `capability_unproven:${draft.harness ?? ""}:interrupt`);
-  const sent = yield* deps.herdr.agentSendKeys(entry.agent, keys, backendOf(entry)).pipe(
+  const sent = yield* deps.herdr.agentSendKeys(entry.agent, keys).pipe(
     Effect.as(null),
     Effect.catch((cause) => Effect.succeed(herdrFailureReason(cause))),
   );

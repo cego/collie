@@ -13,7 +13,7 @@ export const SCHEDULE_NAME = /^[a-z0-9-]{1,40}$/;
 /** Where the checkout of a saved start is: an absolute path, or this. */
 export const SCHEDULE_PROJECTS_ROOT = "projects-root";
 
-/** A start as an agent gives one, without `here` and attachments: chat's `start` action. */
+/** A start as an agent gives one, without attachments: chat's `start` action. */
 export const SavedStart = Schema.Struct({
   workflow: Schema.String,
   inputs: Schema.Record(Schema.String, Schema.String),
@@ -103,7 +103,7 @@ export const lastLine = (last: ScheduleEntry["last"]) => {
       : outcome.kind === "waiting-for-run"
         ? `waiting for ${outcome.run} (${outcome.status})`
         : outcome.kind === "waiting-for-herdr"
-          ? "waiting for herdr"
+          ? "waiting for core"
           : `refused: ${outcome.reason}`;
   return `${last.occurrence} ${said}`;
 };

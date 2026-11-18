@@ -13,7 +13,7 @@ export default defineWorkflow({
   run: () =>
     Effect.gen(function* () {
       const run = yield* Run;
-      const state = yield* Config.String("HERDR_PLUGIN_STATE_DIR");
+      const state = yield* Config.String("COLLIE_STATE_DIR");
       const project = yield* Config.String("COLLIE_CWD");
       const fs = yield* FileSystem.FileSystem;
       for (let round = 1; round <= 29; round++) {

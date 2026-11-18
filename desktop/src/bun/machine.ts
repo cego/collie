@@ -62,12 +62,7 @@ import {
   type Toasted,
 } from "../../../src/board-model";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
-import {
-  HerdrMachine,
-  HerdrMachines,
-  type PeerView,
-  PeerView as PeerSchema,
-} from "../../../src/peers-model";
+import { HerdrMachine, type PeerView, PeerView as PeerSchema } from "../../../src/peers-model";
 import { MUX_BOUND, muxArgv, remoteCollie, riderArgv } from "../../../src/ssh-argv";
 import {
   ActionFailed,
@@ -483,35 +478,6 @@ export const output = (command: ReadonlyArray<string>) =>
 
 export type { HerdrMachine } from "../../../src/peers-model";
 
-const NO_SUBCOMMAND = /unrecognized subcommand|unknown (sub)?command|invalid subcommand/i;
-
-/**
- * The machines enabled in herdr. Asked here rather than through `src/herdr.ts`, which
- * would bring Collie's locks into Desktop, as are adding one and removing one.
- */
-export const herdrMachines = (herdr: string, minHerdr: string) =>
-  output([herdr, "machine", "list", "--json"]).pipe(
-    Effect.catch((said) =>
-      output([herdr, "--version"]).pipe(
-        Effect.orElseSucceed(() => ""),
-        Effect.flatMap((answer) => {
-          const version = /\d+\.\d+\.\d+/.exec(answer)?.[0];
-          return Effect.fail(
-            version !== undefined &&
-              Bun.semver.order(version, minHerdr) < 0 &&
-              NO_SUBCOMMAND.test(said)
-              ? `herdr ${version} has no \`herdr machine\`; Collie needs ${minHerdr} — run \`collie doctor\` on this computer`
-              : said,
-          );
-        }),
-      ),
-    ),
-    Effect.flatMap((json) =>
-      Schema.decodeEffect(HerdrMachines)(json).pipe(Effect.mapError((e) => e.message)),
-    ),
-    Effect.map((machines) => Arr.filter(machines, (machine) => machine.enabled)),
-  );
-
 const Answered = Schema.fromJsonString(
   Schema.Union([
     Schema.Struct({ ok: Schema.Literal(true), data: Schema.Json }),
@@ -535,11 +501,11 @@ export const collieSaid = (collie: ReadonlyArray<string>, args: ReadonlyArray<st
   );
 
 const Roster = Schema.Struct({
-  backend: Schema.Literals(["herdr", "core"]),
+  backend: Schema.Literal("core"),
   roster: Schema.Array(HerdrMachine),
 });
 
-/** This computer's Machines as its terminal backend keeps them: core's list, or herdr's. */
+/** This computer's Machines as its core keeps them. */
 export const rosterOf = (collie: ReadonlyArray<string>) =>
   collieSaid(collie, ["machine", "list"]).pipe(
     Effect.flatMap((data) =>
@@ -550,13 +516,6 @@ export const rosterOf = (collie: ReadonlyArray<string>) =>
 /** Removes a Machine from core and from Pairing; nothing on it is stopped or uninstalled. */
 export const forgetMachine = (collie: ReadonlyArray<string>, name: string) =>
   collieSaid(collie, ["machine", "forget", name]).pipe(Effect.asVoid);
-
-/** Drops a machine from herdr's list; nothing on it is stopped or uninstalled. */
-export const removeFromHerdr = (herdr: string, profile: string, collie?: ReadonlyArray<string>) =>
-  output([herdr, "machine", "remove", profile]).pipe(
-    Effect.andThen(() => (collie === undefined ? Effect.void : pairedMachines(collie))),
-    Effect.asVoid,
-  );
 
 /**
  * One way to reach a Machine: what it is called, and how its bridge is opened, saying

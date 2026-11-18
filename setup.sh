@@ -15,7 +15,6 @@ COLLIE_DIR="${COLLIE_DIR:-$HOME/.collie}"
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 die() { printf 'setup: %s\n' "$*" >&2; exit 1; }
 
-command -v herdr >/dev/null 2>&1 || die "herdr is not installed — see https://herdr.dev/docs/install/"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 openssl=${COLLIE_OPENSSL:-openssl}
 "$openssl" version >/dev/null 2>&1 || die "openssl is required, to check the download's signature"
@@ -60,9 +59,9 @@ case "$(od -An -tx1 -N4 "$work/collie" | tr -d ' \n')" in
 esac
 
 # A clone there is an install from before releases were placed: upgrade migrates it.
-if [ -e "$COLLIE_DIR/.git" ]; then plugin_root="$COLLIE_DIR"; else plugin_root="$COLLIE_DIR/release"; fi
+if [ -e "$COLLIE_DIR/.git" ]; then collie_root="$COLLIE_DIR"; else collie_root="$COLLIE_DIR/release"; fi
 say "Placing Collie into $COLLIE_DIR"
-COLLIE_DIR="$COLLIE_DIR" HERDR_PLUGIN_ROOT="$plugin_root" COLLIE_RELEASES="$RELEASES" \
+COLLIE_DIR="$COLLIE_DIR" COLLIE_ROOT="$collie_root" COLLIE_RELEASES="$RELEASES" \
   "$work/collie" upgrade ${VERSION:+--to "$VERSION"} || die "the runner did not place its release"
 ROOT="$COLLIE_DIR/release"
 

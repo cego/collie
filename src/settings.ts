@@ -29,10 +29,7 @@ export function isDensity(value: string): value is Density {
 }
 export const SCOPES: ReadonlyArray<Scope> = ["local", "all"];
 
-/** What runs a Machine's agents: Herdr 1, or herdr-core. */
-export type TerminalBackend = "herdr" | "core";
 export const WORKTREES_DIRECTORY = "~/.collie/worktrees";
-export const TERMINAL_BACKENDS: ReadonlyArray<TerminalBackend> = ["herdr", "core"];
 export function isScope(value: string): value is Scope {
   return Arr.some(SCOPES, (scope) => scope === value);
 }
@@ -295,6 +292,18 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description:
       "Who decides whether an agent's tool call runs: the harness's own review (auto), no one (bypass), or a prompt in the agent's pane (harness).",
   }),
+  choice("role_tools", ["all", "role"], "all", {
+    group: "Agents",
+    label: "Collie tools per role",
+    description:
+      "Whether every agent is offered all of Collie's tools (all), or only those its role uses (role). The chat always has every tool, and the command line reaches the rest.",
+  }),
+  choice("output_submit", ["file", "tool"], "file", {
+    group: "Agents",
+    label: "How agents hand in their Output",
+    description:
+      "Whether an agent writes its Output to a file (file), or may also submit it with the collie_submit tool, which names every problem at once (tool).",
+  }),
   choice("trust", ["auto", "never"], D.trust, {
     group: "Agents",
     label: "Trust new folders",
@@ -314,13 +323,6 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description: `Where Claude Code compacts by itself: a whole number of tokens from ${AUTO_COMPACT_LEAST} to ${AUTO_COMPACT_MOST}, or auto for the model's own window. Claude Code agents only, from the next one started.`,
     unit: "tokens",
   }),
-  choice("terminal_backend", TERMINAL_BACKENDS, "herdr", {
-    group: "Agents",
-    label: "Terminal backend",
-    description:
-      "Where this Machine starts its next agents: herdr, or herdr-core. Agents already running finish where they started. This Machine only.",
-    machine: true,
-  }),
   of("quiet_ms", "number", String(D.quietMs), {
     group: "Agents",
     label: "Quiet before a nudge",
@@ -332,7 +334,7 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     group: "Agents",
     label: "Close an idle agent after",
     description:
-      "An agent of a finished Run that has been idle this long since the Run finished is closed, unless something still needs it. 0 never closes one.",
+      "How long an agent of a finished Run is idle before cleanup judges it. It is closed only where core proves nobody is viewing or typing into it, which core cannot yet, so it is kept. 0 never closes one.",
     unit: "minutes",
   }),
   of("agent_profile", "json", D.agentProfile, {

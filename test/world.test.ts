@@ -110,7 +110,7 @@ test.skipIf(process.platform !== "linux")(
                     `${world.state}/last-write`,
                   ],
                   {
-                    env: { ...process.env, HERDR_PLUGIN_STATE_DIR: undefined },
+                    env: { ...process.env, COLLIE_STATE_DIR: undefined },
                     stdin: "ignore",
                     stdout: "ignore",
                     stderr: "ignore",
@@ -119,7 +119,7 @@ test.skipIf(process.platform !== "linux")(
                 other = Bun.spawn([process.execPath, "-e", "await Bun.sleep(60_000);"], {
                   env: {
                     ...process.env,
-                    FAKE_HERDR_LOG: `${path.dirname(world.state)}/herdr-calls.jsonl-other`,
+                    HC_SOCKET: `${path.dirname(world.state)}/other-core.sock`,
                   },
                   stdin: "ignore",
                   stdout: "ignore",

@@ -11,6 +11,7 @@ import { until, stopHost } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 import { settledRun } from "./support/hosted";
 import { signalProcess } from "../src/lock";
+import type { FakeHc } from "./support/fake-hc";
 
 const stopCompletely = (state: string) =>
   Effect.gen(function* () {
@@ -23,31 +24,33 @@ const stopCompletely = (state: string) =>
       );
   });
 
+/** Output reminders are separate deliveries; only Steps count as work being resent. */
+const stepDeliveries = (state: string, runId: string) =>
+  deliveredTo(state, runId).pipe(
+    Effect.map((deliveries) => Arr.filter(deliveries, (one) => one.cause.kind === "step")),
+  );
+
 const withLostPrompt = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
-  extra: Readonly<Record<string, string>> = {},
+  body: (world: World, core: FakeHc) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) =>
-  withHerdr(prefix, body, {
-    FAKE_HERDR_PROMPT_LOST: "text",
-    FAKE_HERDR_PROMPT_LOST_TIMES: "1",
-    FAKE_HERDR_AGENT_STATUS: "working,idle",
-    ...extra,
+  withCore(prefix, (world, core) => {
+    core.answer("terminal.send", { turn: 0, started: null, status: "idle" });
+    return body(world, core);
   });
 
-const withHerdr = <A, E>(
+const withCore = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
-  fake: Readonly<Record<string, string>>,
+  body: (world: World, core: FakeHc) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) =>
   proves(
     prefix,
-    (world) =>
+    (world, core) =>
       Effect.gen(function* () {
         const set = {
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
-          ...fake,
+          HC_SOCKET: core.socketPath,
         };
         yield* Effect.acquireRelease(
           Effect.sync(() => {
@@ -64,7 +67,10 @@ const withHerdr = <A, E>(
                 else Bun.env[key] = value;
             }),
         );
-        return yield* body(world).pipe(Effect.scoped, Effect.ensuring(stopCompletely(world.state)));
+        return yield* body(world, core).pipe(
+          Effect.scoped,
+          Effect.ensuring(stopCompletely(world.state)),
+        );
       }),
     ["told.workflow.ts"],
   );
@@ -84,7 +90,7 @@ const parkedAgent = Effect.fn("test.parkedAgent")(function* (world: World) {
     () => client.run({ runId }).pipe(Effect.orDie),
     (one) => one?.status.status === "suspended" && one.parked !== null,
   );
-  const found = yield* deliveredTo(world.state, runId);
+  const found = yield* stepDeliveries(world.state, runId);
   if (found.length === 0) throw new Error(`parked before delivery: ${view?.parked}`);
   const [delivery] = found;
   expect(view?.parked).toContain(delivery!.id);
@@ -94,46 +100,45 @@ const parkedAgent = Effect.fn("test.parkedAgent")(function* (world: World) {
 test(
   "a start that timed out parks naming its work, and a resume starts it and completes the step",
   () =>
-    withHerdr(
-      "collie-resume-start-",
-      (world) =>
-        Effect.gen(function* () {
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const { runId } = yield* client
-            .start({
-              project: world.project,
-              id: "told",
-              request: "start",
-              input: { work: "resume" },
-              options: { harness: "claude" },
-            })
-            .pipe(Effect.orDie);
-          const parked = yield* until(
-            () => client.run({ runId }).pipe(Effect.orDie),
-            (one) => one?.status.status !== "pending",
-          );
-          expect(parked?.status.status).toBe("suspended");
-          expect(parked?.parked).toContain("timed out");
-          expect(parked?.parked).toContain(`${world.state}/agents/${runId}/build.prompt.md`);
-          expect(yield* deliveredTo(world.state, runId)).toEqual([]);
+    withCore("collie-resume-start-", (world, core) =>
+      Effect.gen(function* () {
+        core.refuse("terminal.run", "unreachable", "timed out");
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const { runId } = yield* client
+          .start({
+            project: world.project,
+            id: "told",
+            request: "start",
+            input: { work: "resume" },
+            options: { harness: "claude" },
+          })
+          .pipe(Effect.orDie);
+        const parked = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (one) => one?.status.status !== "pending",
+        );
+        expect(parked?.status.status).toBe("suspended");
+        expect(parked?.parked).toContain("timed out");
+        expect(parked?.parked).toContain(`${world.state}/agents/${runId}/build.prompt.md`);
+        expect(yield* deliveredTo(world.state, runId)).toEqual([]);
 
-          expect(
-            (yield* client.resume({ runId, request: "resume" }).pipe(Effect.orDie)).applied,
-          ).toBe(true);
-          yield* until(
-            () => deliveredTo(world.state, runId),
-            (one) => one.length === 1,
-          );
-          yield* (yield* FileSystem.FileSystem)
-            .writeFileString(`${world.state}/agents/${runId}/build.json`, '{"verdict":"built"}')
-            .pipe(Effect.orDie);
-          const done = yield* until(
-            () => client.run({ runId }).pipe(Effect.orDie),
-            (one) => one?.status.status !== "pending",
-          );
-          expect(done?.status.status).toBe("complete");
-        }),
-      { FAKE_HERDR_FAIL: `{"agent start":"timed out"}`, FAKE_HERDR_FAIL_TIMES: "1" },
+        yield* (yield* FileSystem.FileSystem)
+          .writeFileString(`${world.home}/outputs.json`, '[{"verdict":"built"}]')
+          .pipe(Effect.orDie);
+        core.restore("terminal.run");
+        expect(
+          (yield* client.resume({ runId, request: "resume" }).pipe(Effect.orDie)).applied,
+        ).toBe(true);
+        yield* until(
+          () => deliveredTo(world.state, runId),
+          (one) => one.length === 1,
+        );
+        const done = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (one) => one?.status.status !== "pending",
+        );
+        expect(done?.status.status).toBe("complete");
+      }),
     ),
   120_000,
 );
@@ -141,9 +146,10 @@ test(
 test(
   "resume clears a collection's old note before Output, journals take-up, and refuses no-ops",
   () =>
-    withLostPrompt("collie-resume-collection-", (world) =>
+    withLostPrompt("collie-resume-collection-", (world, core) =>
       Effect.gen(function* () {
         const { client, runId, delivery } = yield* parkedAgent(world);
+        core.restore("terminal.send");
         yield* client
           .settleDelivery({
             runId,
@@ -166,13 +172,13 @@ test(
         expect(waiting?.status.status).toBe("pending");
         expect(waiting?.parked).toBeNull();
         const sent = yield* until(
-          () => deliveredTo(world.state, runId),
+          () => stepDeliveries(world.state, runId),
           (one) => one.length === 2,
         );
         expect(Arr.map(sent, (one) => one.attempt)).toEqual([1, 2]);
         expect(new Set(Arr.map(sent, (one) => one.id)).size).toBe(2);
         expect(yield* client.resume({ runId, request }).pipe(Effect.orDie)).toEqual(first);
-        expect(yield* deliveredTo(world.state, runId)).toHaveLength(2);
+        expect(yield* stepDeliveries(world.state, runId)).toHaveLength(2);
         const noOp = yield* client.resume({ runId, request: "resume-2" }).pipe(Effect.orDie);
         expect(noOp.applied).toBe(false);
         expect(noOp.detail).toContain("already running");
@@ -191,7 +197,7 @@ test(
         expect(finished.applied).toBe(false);
         expect(finished.detail).toContain("finished");
         expect(yield* client.resume({ runId, request }).pipe(Effect.orDie)).toEqual(first);
-        expect(yield* deliveredTo(world.state, runId)).toHaveLength(2);
+        expect(yield* stepDeliveries(world.state, runId)).toHaveLength(2);
       }),
     ),
   120_000,
@@ -200,54 +206,51 @@ test(
 test(
   "resume takes up uncertain work without resending, then retains a rejected resend's new park",
   () =>
-    withLostPrompt(
-      "collie-resume-repark-",
-      (world) =>
-        Effect.gen(function* () {
-          const { client, runId, delivery, old } = yield* parkedAgent(world);
-          expect(
-            (yield* client.resume({ runId, request: "uncertain" }).pipe(Effect.orDie)).applied,
-          ).toBe(true);
-          const uncertain = yield* until(
-            () => client.run({ runId }).pipe(Effect.orDie),
-            (one) => one?.status.status === "suspended" && one.parked !== null,
-          );
-          expect(uncertain?.parked).toContain(delivery.id);
-          expect(yield* deliveredTo(world.state, runId)).toHaveLength(1);
-          yield* client
-            .settleDelivery({
-              runId,
-              delivery: delivery.id,
-              as: "not-sent",
-              request: "not-sent",
-            })
-            .pipe(Effect.orDie);
-          expect(
-            (yield* client.resume({ runId, request: "rejected" }).pipe(Effect.orDie)).applied,
-          ).toBe(true);
-          const again = yield* until(
-            () => client.run({ runId }).pipe(Effect.orDie),
-            (one) =>
-              one?.status.status === "suspended" && one.parked !== null && one.parked !== old,
-          );
-          expect(again?.parked).toContain("could not be sent");
-          expect(again?.parked).toContain("tries again");
-          expect(
-            (yield* client.resume({ runId, request: "rejected" }).pipe(Effect.orDie)).applied,
-          ).toBe(true);
-          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.parked).toBe(again?.parked);
-          yield* client
-            .control({ runId, control: "stop", set: true, request: "stop" })
-            .pipe(Effect.orDie);
-          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.parked).toBeNull();
-        }),
-      { FAKE_HERDR_FAIL_PROMPT_FROM: "2" },
+    withLostPrompt("collie-resume-repark-", (world, core) =>
+      Effect.gen(function* () {
+        const { client, runId, delivery, old } = yield* parkedAgent(world);
+        expect(
+          (yield* client.resume({ runId, request: "uncertain" }).pipe(Effect.orDie)).applied,
+        ).toBe(true);
+        const uncertain = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (one) => one?.status.status === "suspended" && one.parked !== null,
+        );
+        expect(uncertain?.parked).toContain(delivery.id);
+        expect(yield* stepDeliveries(world.state, runId)).toHaveLength(1);
+        core.refuse("terminal.send", "invalid_argument", "prompt refused");
+        yield* client
+          .settleDelivery({
+            runId,
+            delivery: delivery.id,
+            as: "not-sent",
+            request: "not-sent",
+          })
+          .pipe(Effect.orDie);
+        expect(
+          (yield* client.resume({ runId, request: "rejected" }).pipe(Effect.orDie)).applied,
+        ).toBe(true);
+        const again = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (one) => one?.status.status === "suspended" && one.parked !== null && one.parked !== old,
+        );
+        expect(again?.parked).toContain("could not be sent");
+        expect(again?.parked).toContain("tries again");
+        expect(
+          (yield* client.resume({ runId, request: "rejected" }).pipe(Effect.orDie)).applied,
+        ).toBe(true);
+        expect((yield* client.run({ runId }).pipe(Effect.orDie))?.parked).toBe(again?.parked);
+        yield* client
+          .control({ runId, control: "stop", set: true, request: "stop" })
+          .pipe(Effect.orDie);
+        expect((yield* client.run({ runId }).pipe(Effect.orDie))?.parked).toBeNull();
+      }),
     ),
   120_000,
 );
 
 test(
-  "sent reconciliation resumes collection without another delivery",
+  "sent reconciliation resumes collection without another Step delivery",
   () =>
     withLostPrompt("collie-resume-sent-", (world) =>
       Effect.gen(function* () {
@@ -269,7 +272,7 @@ test(
             .pipe(Effect.orDie)).applied,
         ).toBe(true);
         expect((yield* client.run({ runId }).pipe(Effect.orDie))?.parked).toBeNull();
-        expect(yield* deliveredTo(world.state, runId)).toHaveLength(1);
+        expect(yield* stepDeliveries(world.state, runId)).toHaveLength(1);
       }),
     ),
   120_000,

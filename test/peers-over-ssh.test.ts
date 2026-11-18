@@ -80,8 +80,7 @@ test(
               outputs,
               encode(Array.from({ length: 8 }, () => ({ verdict: "done" }))),
             );
-            const extra = { FAKE_HERDR_OUTPUTS: outputs };
-            yield* second.cli(["machine", "list"], extra);
+            yield* second.cli(["machine", "list"]);
             yield* first.lists([second]);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
             // Pairing's connection ends, as a laptop's does when it sleeps.
@@ -100,7 +99,7 @@ test(
             yield* resetter(advertised).pipe(Scope.provide(blocking));
             yield* first.ssh.maps({ [advertised]: moved });
             yield* first.ssh.configuredForwards(true);
-            yield* second.cli(["machine", "list"], { ...extra, COLLIE_PEER_PORT: String(moved) });
+            yield* second.cli(["machine", "list"], { COLLIE_PEER_PORT: String(moved) });
 
             const waiting = yield* until(
               () => listed(first, "second"),
@@ -162,10 +161,15 @@ test(
             expect(once).toEqual(["master mk@second"]);
 
             // Runs go both ways through the tunnel while direct still resets.
-            const started = yield* first.cli(
-              ["--machine", "second", "run", "start", "attended", "--input", "work=over ssh"],
-              extra,
-            );
+            const started = yield* first.cli([
+              "--machine",
+              "second",
+              "run",
+              "start",
+              "attended",
+              "--input",
+              "work=over ssh",
+            ]);
             expect(started.envelope.error).toBeUndefined();
             const { runId } = yield* Schema.decodeUnknownEffect(Started)(
               started.envelope.data,
@@ -199,7 +203,7 @@ test(
             // Lifting the block brings the next connect back direct.
             yield* Scope.close(blocking, Exit.void);
             yield* stopHost(second.world.state);
-            yield* second.cli(["machine", "list"], extra);
+            yield* second.cli(["machine", "list"]);
             const direct = yield* until(
               () => listed(first, "second"),
               (view) => view.state === "live",

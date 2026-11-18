@@ -1,42 +1,15 @@
-// The only channel to herdr: the CLI at HERDR_BIN_PATH, plus the socket at
-// HERDR_SOCKET_PATH for the few methods 0.9.3 does not expose on the CLI — and herdr's
-// own `config.toml`, for the few things it settles but answers no question about. Every
-// fact about herdr is behind this one interface, which is what makes the fake herdr in
-// `test/support/` enough to test everything above it.
+// The only channel to this Machine's herdr-core: every agent, the board and chat are core
+// terminals, reached through the core client in `src/hc.ts`. Every fact about a running
+// agent is behind this one interface, which is what makes the rig's fake core enough to
+// test everything above it.
 
-import * as Str from "effect/String";
-import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import * as Rec from "effect/Record";
 import type { PlatformServices } from "./platform";
-import {
-  Data,
-  Deferred,
-  Duration,
-  Effect,
-  FileSystem,
-  Option,
-  Path,
-  Queue,
-  Result,
-  Schedule,
-  Schema,
-  Stream,
-  flow,
-} from "effect";
-import * as BunSocket from "@effect/platform-bun/BunSocket";
-import * as Socket from "effect/socket/Socket";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import type { PlatformError } from "effect/PlatformError";
+import { Data, Deferred, Effect, Option, Queue, Schedule, Schema, Stream } from "effect";
 import type { PluginEnv } from "./env";
-import { isString } from "./schema";
-import { PLUGIN_ID } from "./env";
 import { reason } from "./naming";
-import { verifyIncarnation, type AgentEntry } from "./registry";
 import { HerdrMachine } from "./peers-model";
 import { viaTarget } from "./ssh-argv";
-import { terminalBackend } from "./config";
-import type { TerminalBackend } from "./settings";
 import {
   applyNote,
   connect as connectCore,
@@ -54,14 +27,13 @@ export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 export class HerdrError extends Data.TaggedError("HerdrError")<{
   readonly message: string;
   readonly detail: string;
-  /** herdr's own code, where it answered with one — `agent_not_found` and friends. */
+  /** Core's refusal as a code — `agent_not_found` and friends. */
   readonly code?: string;
   /**
-   * True where herdr demonstrably answered: an error envelope, or a CLI that ran and
-   * exited non-zero. Absent where nobody can say whether the request arrived — a
-   * subprocess that would not start, a socket that closed mid-exchange. The difference
-   * decides whether a delivery is `failed` (herdr decided) or `unknown` (nobody knows),
-   * and only one of those is safe to send again.
+   * True where core demonstrably answered. Absent where nobody can say whether the request
+   * arrived — a socket that would not open or closed mid-exchange. The difference decides
+   * whether a delivery is `failed` (core decided) or `unknown` (nobody knows), and only one
+   * of those is safe to send again.
    */
   readonly answered?: true;
 }> {}
@@ -72,394 +44,15 @@ export function herdrFailureReason(cause: unknown): string {
 }
 
 type HerdrEffect<A> = Effect.Effect<A, HerdrError, PlatformServices>;
-/** What running the CLI needs, and the fakes that answer for it. */
-type CliServices = ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path;
-type ExecResult = { code: number; stdout: string; stderr: string };
-type BoundaryValue = Schema.Json | string | undefined;
-type HerdrParams = Schema.JsonObject;
-
-const JsonString = Schema.fromJsonString(Schema.Json);
-const encodeJson = flow(Schema.encodeResult(JsonString), Result.getOrThrow);
-
-const ErrorReply = Schema.Struct({
-  message: Schema.optionalKey(Schema.String),
-  code: Schema.optionalKey(Schema.String),
-});
-const SocketReply = Schema.Struct({
-  error: Schema.optionalKey(ErrorReply),
-  result: Schema.optionalKey(Schema.Json),
-});
-const TabCreateReply = Schema.Struct({
-  result: Schema.Struct({
-    tab: Schema.Struct({ tab_id: Schema.String }),
-    root_pane: Schema.Struct({ pane_id: Schema.String }),
-  }),
-});
-const WorkspaceReply = Schema.Struct({
-  workspace_id: Schema.String,
-  label: Schema.String,
-  cwd: Schema.optionalKey(Schema.String),
-  working_directory: Schema.optionalKey(Schema.String),
-  // `null` for a workspace that is not worktree-backed, which is most of them. herdr's
-  // worktree object is `{ checkout_path, repo_root, ... }`; `path` is the older name.
-  // All three tolerated: a required key here made every workspace undecodable the
-  // moment one of them was worktree-backed.
-  worktree: Schema.optionalKey(
-    Schema.NullOr(
-      Schema.Struct({
-        path: Schema.optionalKey(Schema.String),
-        checkout_path: Schema.optionalKey(Schema.String),
-      }),
-    ),
-  ),
-  worktree_path: Schema.optionalKey(Schema.String),
-  /**
-   * Metadata a plugin has attached to this workspace. Collie's Home is owned by a token
-   * here, never by a label: a label is what a human sees, and two of them can say the
-   * same thing.
-   */
-  tokens: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.String))),
-  /** Whether it is the workspace herdr has in focus, which cleanup never closes. */
-  focused: Schema.optionalKey(Schema.Boolean),
-});
-const WorkspaceCreateReply = Schema.Struct({
-  result: Schema.Struct({
-    workspace: Schema.Struct({ workspace_id: Schema.String }),
-    // The shell tab a new workspace comes with; its first agent takes it over.
-    tab: Schema.optionalKey(Schema.Struct({ tab_id: Schema.String })),
-    root_pane: Schema.optionalKey(Schema.Struct({ pane_id: Schema.String })),
-  }),
-});
-const WorkspaceListReply = Schema.Struct({
-  result: Schema.Struct({ workspaces: Schema.Array(WorkspaceReply) }),
-});
-const TabListReply = Schema.Struct({
-  result: Schema.Struct({
-    tabs: Schema.Array(Schema.Struct({ tab_id: Schema.String, label: Schema.String })),
-  }),
-});
-const AgentSessionReply = Schema.Struct({
-  source: Schema.String,
-  agent: Schema.String,
-  kind: Schema.String,
-  value: Schema.String,
-});
-const PaneProcessReply = Schema.Struct({
-  result: Schema.Struct({
-    process_info: Schema.Struct({ shell_pid: Schema.optionalKey(Schema.NullOr(Schema.Finite)) }),
-  }),
-});
-const PaneListReply = Schema.Struct({
-  result: Schema.Struct({
-    panes: Schema.Array(
-      Schema.Struct({
-        pane_id: Schema.String,
-        tab_id: Schema.String,
-        label: Schema.optionalKey(Schema.NullOr(Schema.String)),
-        agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
-        agent_status: Schema.optionalKey(Schema.NullOr(Schema.String)),
-        workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
-        cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
-        // Where the process in the pane is now, which is not where it started once
-        // anything has `cd`-ed.
-        foreground_cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
-        /** Metadata a plugin attached to this pane, and herdr's identity for its terminal. */
-        tokens: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.String))),
-        terminal_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
-        agent_session: Schema.optionalKey(Schema.NullOr(AgentSessionReply)),
-      }),
-    ),
-  }),
-});
-const PaneSplitReply = Schema.Struct({
-  result: Schema.Struct({ pane: Schema.Struct({ pane_id: Schema.String }) }),
-});
-const AgentReply = Schema.Struct({
-  // herdr sends `null` for an agent it did not start, and older versions omitted the
-  // key; one of those in the workspace must not make the whole list undecodable.
-  name: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  pane_id: Schema.String,
-  workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  agent_status: Schema.String,
-  /**
-   * What the harness published as its pane's terminal title — Claude Code puts the task
-   * it is on there. herdr omits it for a pane that never set one.
-   */
-  terminal_title: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /**
-   * herdr's own identity for the process in the pane, and for the harness session it is
-   * driving. This is what makes "this live agent" a thing Collie can name: an agent name
-   * is reused by the next incarnation in the same role, and a pane outlives what ran in
-   * it. Optional because a release older than the pin omits them, and an agent with no
-   * `terminal_id` is refused as a delivery target rather than guessed at.
-   */
-  terminal_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  agent_session: Schema.optionalKey(Schema.NullOr(AgentSessionReply)),
-});
-const AgentListReply = Schema.Struct({
-  result: Schema.Struct({ agents: Schema.Array(AgentReply) }),
-});
-const AgentStatusReply = Schema.Struct({
-  result: Schema.Struct({ agent: Schema.Struct({ agent_status: Schema.String }) }),
-});
-const AgentIdentityReply = Schema.Struct({
-  result: Schema.Struct({ agent: AgentReply }),
-});
-const WorktreeReply = Schema.Struct({
-  path: Schema.String,
-  // A detached checkout has no branch, and herdr says so by leaving it out.
-  branch: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  open_workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
-});
-const WorktreeListReply = Schema.Struct({
-  result: Schema.Struct({
-    worktrees: Schema.Array(WorktreeReply),
-    // Which checkout the repository itself is: the one place a command about the
-    // repository can be run from and still be there afterwards.
-    source: Schema.optionalKey(
-      Schema.Struct({
-        source_checkout_path: Schema.optionalKey(Schema.String),
-        repo_root: Schema.optionalKey(Schema.String),
-      }),
-    ),
-  }),
-});
-const WorktreeWorkspaceReply = Schema.Struct({
-  worktree: WorktreeReply,
-  workspace: Schema.Struct({
-    workspace_id: Schema.String,
-    label: Schema.optionalKey(Schema.String),
-  }),
-});
-/**
- * What `create` and `open` both answer with, and the shell tab that only `create` may
- * add. Optional, and that is the contract rather than laxity: herdr's own schema gives
- * `worktree_created` two variants — `{type, workspace, worktree}` and the same plus
- * `{tab, root_pane}` — so a create reply without them is as legal as one with them, and
- * requiring them refused a Run its checkout over a tab it did not need. `worktree_opened`
- * has one variant and never carries them.
- */
-const WorktreeReplyBody = Schema.Struct({
-  ...WorktreeWorkspaceReply.fields,
-  tab: Schema.optionalKey(Schema.Struct({ tab_id: Schema.String })),
-  root_pane: Schema.optionalKey(Schema.Struct({ pane_id: Schema.String })),
-});
-const WorktreeOpenReply = Schema.Struct({ result: WorktreeReplyBody });
 
 /**
- * `herdr status server --json`, as far as this plugin needs it: whether a server is
- * running, and the socket it is listening on. The one thing this module asks the CLI
- * rather than the socket, since it is what tells this module which socket to open.
- */
-const HerdrStatusReply = Schema.Struct({
-  running: Schema.Boolean,
-  socket: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** Optional because an older herdr answers without them; the Home records what it can. */
-  version: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  protocol: Schema.optionalKey(Schema.NullOr(Schema.Int)),
-});
-
-const PluginPaneReply = Schema.Struct({
-  result: Schema.Struct({
-    plugin_pane: Schema.Struct({
-      pane: Schema.Struct({ tab_id: Schema.String, pane_id: Schema.String }),
-    }),
-  }),
-});
-
-/**
- * Every method this module calls over the socket. Named as a list, and `rpc` accepts
- * nothing else, so a new socket call has to be added here — which is what lets
- * `test/herdr-contract.test.ts` prove its request table covers all of them rather than
- * going green on a method nobody checked.
- */
-export const SOCKET_METHODS = [
-  "workspace.focus",
-  "workspace.close",
-  "tab.move",
-  "agent.view.set",
-  "agent.view.clear",
-  "agent.send_keys",
-  "workspace.report_metadata",
-  "pane.report_metadata",
-  "popup.close",
-  "events.subscribe",
-  "pane.process_info",
-] as const;
-
-export type SocketMethod = (typeof SOCKET_METHODS)[number];
-
-/**
- * Every reply shape this module decodes, keyed by name. Exported as one record rather
- * than twelve names so the herdr interface stays about calling herdr, and so
- * `test/herdr-contract.test.ts` can prove its table covers all of them: a reply added
- * here without a row there fails that test instead of going unchecked.
- */
-export const replySchemas = {
-  ErrorReply,
-  SocketReply,
-  TabCreateReply,
-  WorkspaceCreateReply,
-  WorkspaceListReply,
-  TabListReply,
-  PaneListReply,
-  PaneProcessReply,
-  PaneSplitReply,
-  AgentListReply,
-  AgentStatusReply,
-  AgentIdentityReply,
-  WorktreeListReply,
-  WorktreeOpenReply,
-  PluginPaneReply,
-} as const;
-
-const encodeJsonValue = flow(
-  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
-  Result.getOrThrow,
-);
-
-/**
- * What each binary has said it can do, by its path. A capability declaration cannot change
- * while that binary is the one on disk, and asking again is a quarter of a megabyte down a
- * pipe — on a Run start that already pays for the ownership calls. A herdr *replaced* under
- * a running process keeps the answer this process was started against, which is the same
- * thing every other decision here does about the binary it was launched with.
- */
-const schemas = new Map<string, string>();
-
-const herdrError = (message: string, detail: string, code?: string) =>
-  // A code means herdr answered with an error envelope; without one it is this side
-  // saying something went wrong, and that says nothing about whether herdr saw it.
-  code === undefined
-    ? new HerdrError({ message, detail })
-    : new HerdrError({ message, detail, code, answered: true });
-
-/** herdr answers a missing target with an error envelope and exit 0, not a failure. */
-const ErrorEnvelope = Schema.Struct({ error: ErrorReply });
-
-/** The code herdr named, when what came back was one of its error envelopes. */
-function envelopeError(operation: string, value: BoundaryValue): HerdrError | null {
-  return Option.match(Schema.decodeUnknownOption(ErrorEnvelope)(value), {
-    onNone: () => null,
-    onSome: (reply) =>
-      herdrError(operation, reply.error.message ?? reply.error.code ?? "unknown", reply.error.code),
-  });
-}
-const herdrFail = (message: string, detail: string) => Effect.fail(herdrError(message, detail));
-
-/** The ceiling on a submission, so a harness slow to report never fails a step. */
-const SUBMIT_TIMEOUT_MS = 15_000;
-
-/**
- * What herdr could tell us about a submission: a turn it saw start after this prompt, or
- * no evidence — the text and the Enter were written, and it cannot say they were read.
- * `pressed` is core's: no turn started, so one Enter was pressed after it.
+ * What core could tell us about a submission: a turn it saw start after this prompt, or
+ * no evidence. `pressed`: no turn started, so one Enter was pressed after it.
  */
 export type Submission = "observed" | "unobserved" | "pressed";
 
-/** Between turns, as herdr itself says so: anything else may be hiding a turn. */
+/** Between turns, as core says so: anything else may be hiding a turn. */
 export const isSettled = (status: AgentStatus) => status === "idle" || status === "done";
-
-/** As much of `agent explain --json` as Collie reads; a shape it cannot read is no answer. */
-const ExplainReply = Schema.Struct({
-  evaluated_rules: Schema.Array(
-    Schema.Struct({
-      region: Schema.String,
-      evidence: Schema.optionalKey(
-        Schema.Struct({ region_preview: Schema.optionalKey(Schema.String) }),
-      ),
-    }),
-  ),
-});
-
-/** How long a submission that saw no turn waits for herdr to give its agent a status. */
-const STATUS_WAIT = { every: Duration.millis(500), times: 20 } as const;
-
-/** The code herdr named, where a failed call printed an error envelope as its output. */
-function envelopeCode(text: string): string | undefined {
-  return Schema.decodeOption(JsonString)(text).pipe(
-    Option.flatMap((json) => Schema.decodeUnknownOption(ErrorEnvelope)(json)),
-    Option.map((envelope) => envelope.error.code),
-    Option.getOrUndefined,
-  );
-}
-
-/**
- * A target herdr does not have — a branch with no checkout, a repository it cannot key
- * — is answered, not failed: exit 0 with an error envelope. Naming its code is what
- * lets a caller tell that from "herdr did not answer me".
- */
-const decodeOrNamed = <S extends Schema.Top>(
-  operation: string,
-  schema: S,
-  value: BoundaryValue,
-) => {
-  const named = envelopeError(operation, value);
-  return named ? Effect.fail(named) : decodeBoundary(operation, schema, value);
-};
-
-/**
- * `session list --json` answers with this rather than an envelope, so it is not in the
- * socket schema the contract test reads; a herdr without the command has no sessions.
- */
-const SessionListReply = Schema.Struct({
-  sessions: Schema.Array(
-    Schema.Struct({
-      name: Schema.String,
-      default: Schema.optionalKey(Schema.Boolean),
-      running: Schema.Boolean,
-      socket_path: Schema.String,
-    }),
-  ),
-});
-
-/** One running herdr session: its name, the socket that reaches it, and whether it is herdr's default. */
-export interface HerdrSession {
-  readonly name: string;
-  readonly socketPath: string;
-  readonly default: boolean;
-}
-
-const decodeBoundary = <S extends Schema.Top>(operation: string, schema: S, value: BoundaryValue) =>
-  Schema.decodeEffect(schema)(value).pipe(
-    Effect.mapError((cause) =>
-      herdrError(`${operation} returned an invalid response`, String(cause)),
-    ),
-  );
-
-/**
- * One line of herdr's reply: its `result`, or the error it names. Both shapes come
- * back on the same socket, so the caller never has to look inside the envelope.
- */
-const decodeReply = (
-  method: string,
-  line: string,
-): Effect.Effect<Schema.Json | undefined, HerdrError> =>
-  Schema.decodeEffect(JsonString)(line).pipe(
-    Effect.mapError(() => herdrError(`${method} failed`, "invalid json response")),
-    Effect.flatMap((message) => decodeBoundary(method, SocketReply, message)),
-    Effect.flatMap((message) =>
-      message.error
-        ? Effect.fail(
-            herdrError(
-              `${method} failed`,
-              message.error.message ?? message.error.code ?? "unknown",
-              message.error.code ?? "unknown",
-            ),
-          )
-        : Effect.succeed(message.result),
-    ),
-  );
-
-/** A child's whole output as text. */
-const collect = (stream: Stream.Stream<Uint8Array, PlatformError>) =>
-  stream.pipe(
-    Stream.decodeText(),
-    Stream.runFold(
-      (): string => "",
-      (all, chunk) => all + chunk,
-    ),
-  );
 
 function agentStatus(value: string): AgentStatus {
   if (value === "idle" || value === "working" || value === "blocked" || value === "done") {
@@ -468,204 +61,29 @@ function agentStatus(value: string): AgentStatus {
   return "unknown";
 }
 
-/** The checkout and the workspace holding it, which both `create` and `open` answer with. */
-function worktreeWorkspace(result: Schema.Schema.Type<typeof WorktreeWorkspaceReply>) {
-  return {
-    ...worktreeInfo(result.worktree),
-    workspaceId: result.workspace.workspace_id,
-    label: result.workspace.label ?? null,
-  };
-}
-
-function worktreeInfo(worktree: {
-  path: string;
-  branch?: string | null;
-  open_workspace_id?: string | null;
-}): WorktreeInfo {
-  return {
-    path: worktree.path,
-    branch: worktree.branch ?? null,
-    workspaceId: worktree.open_workspace_id ?? null,
-  };
-}
-
-export interface StartedTab {
-  tabId: string;
-  paneId: string;
-}
-
-export interface TabInfo {
-  tabId: string;
-  label: string;
-}
-
-export interface WorkspaceInfo {
-  workspaceId: string;
-  label: string;
-  cwd: string;
-  worktree: string | null;
-  /** What a plugin has attached to it. Collie's Home ownership rests on one of these. */
-  tokens: Readonly<Record<string, string>>;
-  focused: boolean;
-}
-
-/** One checkout of a repository, as `herdr worktree list` reports it. */
-export interface WorktreeInfo {
-  path: string;
-  branch: string | null;
-  /** The workspace herdr has this checkout open in, when one is open. */
-  workspaceId: string | null;
-}
-
-/** Every checkout of one repository, and which of them the repository itself is. */
-export interface WorktreeListing {
-  worktrees: WorktreeInfo[];
-  /** The source checkout, which outlives the removal of any of the others. */
-  source: string | null;
-}
-
-/** A worktree and the workspace herdr opened for it. */
-export interface WorktreeWorkspace extends WorktreeInfo {
-  workspaceId: string;
-  label: string | null;
-  /**
-   * The shell tab a newly-made workspace comes with, which whoever asked for the
-   * worktree may take over. Null for a workspace that already existed.
-   */
-  rootTab: StartedTab | null;
-}
-
-export interface PaneInfo {
-  paneId: string;
-  tabId: string;
-  label: string | null;
-  agent: string | null;
-  /** herdr's read of what the agent is doing: `working`, `idle`, or `unknown`. */
-  agentStatus?: string | null;
-  workspaceId: string | null;
-  /** Where the pane's process was started, which is the directory it stands for. */
-  cwd: string | null;
-  /** Where it is working now, where herdr can see that — an agent that `cd`-ed. */
-  foregroundCwd: string | null;
-  tokens: Readonly<Record<string, string>>;
-  /** herdr's identity for the terminal in this pane, where it names one. */
-  terminalId: string | null;
-  /** The harness session its agent is driving, where herdr knows one. */
-  agentSession: AgentSession | null;
-}
-
-export interface AgentSession {
-  kind: string;
-  value: string;
-}
-
-const sessionOf = (reply: typeof AgentSessionReply.Type | null | undefined): AgentSession | null =>
-  reply ? { kind: reply.kind, value: reply.value } : null;
-
-/** A live agent as herdr sees it. Only named agents — the ones this plugin started. */
+/** A live agent as core lists it: one of Collie's terminals, named after its agent. */
 export interface AgentInfo {
   name: string;
+  /** Core's address for its terminal. */
   paneId: string;
-  /** Which workspace herdr says it is in; scoping never trusts a record over this. */
-  workspaceId: string | null;
   status: AgentStatus;
-  /**
-   * What the agent says it is doing, from its pane's terminal title, or `null` where the
-   * harness publishes none. herdr's own spinner glyph is stripped: it animates, so a
-   * board that kept it would redraw a row that had not changed.
-   */
-  title: string | null;
-  /** herdr's identity for this live process, or `null` from a release that omits it. */
-  terminalId: string | null;
-  /** The harness session it is driving, where herdr knows one. */
-  agentSession: AgentSession | null;
-  /** Absent for Herdr 1's. */
-  backend?: "core";
+  /** Core's address for this live process, which an incarnation is matched on. */
+  terminalId: string;
+  /** Where it was started. */
+  cwd: string;
+  /** Where what runs in it now is, which an agent that changed directory has moved. */
+  foregroundCwd: string | null;
 }
-
-/**
- * The glyph herdr puts in front of a name, and the space after it: a spinner frame on a
- * live pane's title — `◐ `, `⠹ ` — and a status glyph on a workspace's label, `⚙ `.
- * Only that is removed, and the space is what identifies it: dropping every leading
- * non-alphanumeric instead took the name's own punctuation with it, so
- * `◐ [Fix] the parser` arrived as `Fix] the parser` and a workspace called `.dotfiles`
- * as `dotfiles`. Exported because the Control Plane's group rows strip the same thing,
- * and two spellings of it drift.
- */
-export const LEADING_GLYPH = /^[^\p{L}\p{N}\s]+\s+/u;
-
-function agentTitle(raw: string | null | undefined): string | null {
-  const title = Str.trim(pipe_(raw ?? "", Str.replace(LEADING_GLYPH, "")));
-  return title === "" ? null : title;
-}
-
-/** `herdr agent list` as this plugin reads it: the agents it named, and what each is on. */
-export const decodeAgentList = (res: BoundaryValue) =>
-  decodeBoundary("herdr agent list", AgentListReply, res).pipe(
-    Effect.map(({ result }) =>
-      Arr.flatMap(result.agents, (agent): AgentInfo[] =>
-        agent.name
-          ? [
-              {
-                name: agent.name,
-                paneId: agent.pane_id,
-                workspaceId: agent.workspace_id ?? null,
-                status: agentStatus(agent.agent_status),
-                title: agentTitle(agent.terminal_title),
-                terminalId: agent.terminal_id ?? null,
-                agentSession: sessionOf(agent.agent_session),
-              },
-            ]
-          : [],
-      ),
-    ),
-  );
-
-/** `herdr workspace list` as this plugin reads it; a worktree-backed workspace's checkout is its directory. */
-const decodeWorkspaceCreate = (res: BoundaryValue) =>
-  decodeBoundary("herdr workspace create", WorkspaceCreateReply, res).pipe(
-    Effect.map(({ result }) => ({
-      workspaceId: result.workspace.workspace_id,
-      rootTab:
-        result.tab && result.root_pane
-          ? { tabId: result.tab.tab_id, paneId: result.root_pane.pane_id }
-          : null,
-    })),
-  );
-
-export const decodeWorkspaceList = (res: BoundaryValue) =>
-  decodeBoundary("herdr workspace list", WorkspaceListReply, res).pipe(
-    Effect.map(({ result }) =>
-      Arr.map(result.workspaces, (workspace): WorkspaceInfo => {
-        const worktree =
-          workspace.worktree?.checkout_path ??
-          workspace.worktree?.path ??
-          workspace.worktree_path ??
-          null;
-        return {
-          workspaceId: workspace.workspace_id,
-          label: workspace.label,
-          cwd: workspace.cwd ?? workspace.working_directory ?? worktree ?? "",
-          worktree,
-          tokens: workspace.tokens ?? {},
-          focused: workspace.focused ?? false,
-        };
-      }),
-    ),
-  );
 
 /**
  * What became of the agents a Run's record still calls running. The record alone is
- * stale-capable metadata — a variant stays `running` in it whether its agent finished,
- * died or is still writing — so it is turned into an answer by asking herdr, which is
- * the authority on what it still has. `unasked` is the honest value everywhere the
- * question could not change what is safe, and nothing was probed.
+ * stale-capable metadata, so it is turned into an answer by asking core, which is the
+ * authority on what it still has. `unasked` is the honest value everywhere the question
+ * could not change what is safe, and nothing was probed.
  */
 export type AgentsAlive = "unasked" | "absent" | "live" | "unverified";
 
-export type Backend = TerminalBackend;
-
-/** Core's refusals as the codes herdr gives the same ones, which the callers already read. */
+/** Core's refusals as the codes the callers read. */
 const coreCode = (kind: string) =>
   kind === "blocked"
     ? "agent_blocked"
@@ -709,12 +127,10 @@ const coreStatus = (terminal: HcTerminal) => agentStatus(terminal.status?.state 
 const coreAgent = (terminal: HcTerminal): AgentInfo => ({
   name: terminal.name ?? terminal.address,
   paneId: terminal.address,
-  workspaceId: null,
   status: coreStatus(terminal),
-  title: null,
   terminalId: terminal.address,
-  agentSession: null,
-  backend: "core",
+  cwd: terminal.cwd,
+  foregroundCwd: terminal.foreground?.cwd ?? null,
 });
 
 /** Each core's terminals as its events describe them, for as long as the stream lasts. */
@@ -747,45 +163,10 @@ const watched = (socket: string) =>
   });
 
 export class Herdr {
-  private seq = 0;
-
   constructor(readonly env: PluginEnv) {}
 
-  /**
-   * Where `target` runs: `given`, which is what its incarnation recorded, or else core on a
-   * Machine set to core, unless herdr is open there and core's events do not name it.
-   */
-  private backendOf(
-    target: string,
-    given?: Backend,
-  ): Effect.Effect<Backend, never, PlatformServices> {
-    const env = this.env;
-    if (given !== undefined) return Effect.succeed(given);
-    return Effect.gen(function* () {
-      if ((yield* terminalBackend(env.userDir)) === "herdr") return "herdr";
-      if (env.socketPath === null) return "core";
-      // ponytail: an agent launched a moment ago may not be in the events yet; it reads as herdr's.
-      const view = yield* watched(yield* coreSocket(env.raw)).pipe(Effect.option);
-      return Option.isSome(view) &&
-        Arr.some(
-          [...view.value.current.terminals.values()],
-          (one) => isAgentTerminal(one) && one.name === target,
-        )
-        ? "core"
-        : "herdr";
-    });
-  }
-
-  private routed<A>(
-    target: string,
-    given: Backend | undefined,
-    onHerdr: HerdrEffect<A>,
-    onCore: (socket: string) => HerdrEffect<A>,
-  ): HerdrEffect<A> {
-    const raw = this.env.raw;
-    return Effect.flatMap(this.backendOf(target, given), (backend) =>
-      backend === "herdr" ? onHerdr : Effect.flatMap(coreSocket(raw), onCore),
-    );
+  private onCore<A, R>(use: (socket: string) => Effect.Effect<A, HerdrError, R>) {
+    return Effect.flatMap(coreSocket(this.env.raw), use);
   }
 
   /**
@@ -802,38 +183,30 @@ export class Herdr {
     readonly env: Readonly<Record<string, string>>;
     readonly labels: Readonly<Record<string, string>>;
   }): HerdrEffect<string> {
-    const raw = this.env.raw;
     const env: Record<string, string> = {};
-    if (raw.PATH !== undefined) env.PATH = raw.PATH;
+    if (this.env.raw.PATH !== undefined) env.PATH = this.env.raw.PATH;
     Object.assign(env, opts.env);
-    return Effect.gen(function* () {
-      const started = yield* coreCall(yield* coreSocket(raw), "terminal.run", {
+    return this.onCore((socket) =>
+      coreCall(socket, "terminal.run", {
         name: opts.name,
         argv: [...opts.argv],
         cwd: opts.cwd,
         env,
         labels: { ...opts.labels },
         no_parent: true,
-      });
-      return started.address;
-    });
+      }).pipe(Effect.map((started) => started.address)),
+    );
   }
 
   /**
-   * A tick whenever an agent on core may have gone, whatever the Machine's setting: one set
-   * to herdr may switch to core while the host runs.
+   * A tick each time core's events are followed from the start, which a holder that came back
+   * is, and on each event `counts` takes.
    */
-  agentsEnded(): Stream.Stream<void, never, PlatformServices> {
-    return this.terminalsEnded();
-  }
-
-  /**
-   * A tick whenever a terminal on this Machine's core may have gone: each time core's events
-   * are followed from the start, which a holder that came back is, and each time one ends.
-   */
-  terminalsEnded(): Stream.Stream<void, never, PlatformServices> {
+  private followed(
+    counts: (type: string) => boolean,
+  ): Stream.Stream<void, never, PlatformServices> {
     const env = this.env;
-    const followed = Stream.unwrap(
+    const ticks = Stream.unwrap(
       Effect.gen(function* () {
         const hc = yield* connectCore(yield* coreSocket(env.raw));
         yield* hc.call("events.subscribe", {});
@@ -842,343 +215,46 @@ export class Herdr {
           Stream.fromQueue(hc.notes).pipe(
             Stream.filter(
               (note) =>
-                note.method === "missed" ||
-                (note.method === "event" &&
-                  ["finished", "lost", "removed"].includes(note.params.type)),
+                note.method === "missed" || (note.method === "event" && counts(note.params.type)),
             ),
             Stream.as(undefined),
           ),
         );
       }),
     );
-    return followed.pipe(
+    return ticks.pipe(
       Stream.catch(() => Stream.empty),
       Stream.repeat(Schedule.spaced("1 second")),
     );
   }
 
+  /** A tick whenever a terminal on this Machine's core may have gone. */
+  terminalsEnded(): Stream.Stream<void, never, PlatformServices> {
+    return this.followed((type) => ["finished", "lost", "removed"].includes(type));
+  }
+
+  /** A tick whenever anything about this Machine's terminals may have changed. */
+  changes(): Stream.Stream<void, never, PlatformServices> {
+    return this.followed(() => true);
+  }
+
   /** Whether this Machine's core has a live terminal named `name`. */
-  coreTerminalLive(name: string): HerdrEffect<boolean> {
-    const raw = this.env.raw;
-    return Effect.gen(function* () {
-      const listed = yield* coreCall(yield* coreSocket(raw), "terminal.list", {});
-      return Arr.some(listed.terminals, (one) => one.state === "live" && one.name === name);
-    });
-  }
-
-  /** Runs the herdr CLI; parses stdout as JSON when it is JSON. */
-  cli(args: string[]): Effect.Effect<Schema.Json | string, HerdrError, CliServices> {
-    const exec = this.exec.bind(this);
-    return Effect.gen(function* () {
-      const { code, stdout, stderr } = yield* exec(args);
-      if (code !== 0) {
-        const detail = Str.trim(stderr) || Str.trim(stdout);
-        return yield* new HerdrError({
-          message: `herdr ${Arr.join(args.slice(0, 2), " ")} failed (exit ${code})`,
-          detail,
-          // Named even on a non-zero exit, where herdr still prints its envelope.
-          code: envelopeCode(detail),
-          answered: true,
-        });
-      }
-      const text = Str.trim(stdout);
-      if (!pipe_(text, Str.startsWith("{")) && !pipe_(text, Str.startsWith("["))) return text;
-      return yield* Schema.decodeEffect(JsonString)(text).pipe(
-        Effect.catchTag("SchemaError", () => Effect.succeed(text)),
-      );
-    });
-  }
-
-  /** The subprocess boundary alone, so a test double can answer in-process. */
-  protected exec(args: string[]): Effect.Effect<ExecResult, HerdrError, CliServices> {
-    const env = this.env;
-    return Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const handle = yield* spawner.spawn(
-        ChildProcess.make(env.binPath, args, {
-          stdout: "pipe",
-          stderr: "pipe",
-          // extendEnv, so herdr sees the environment this process has with the plugin's
-          // own keys over the top — what `{ ...Bun.env, ...env.raw }` used to spell.
-          env: env.raw,
-          extendEnv: true,
-        }),
-      );
-      const [stdout, stderr, code] = yield* Effect.all(
-        [collect(handle.stdout), collect(handle.stderr), handle.exitCode],
-        { concurrency: "unbounded" },
-      );
-      return { code: Number(code), stdout, stderr };
-    }).pipe(
-      Effect.scoped,
-      Effect.catch((cause) => herdrFail("herdr subprocess failed", String(cause))),
-    );
-  }
-
-  /**
-   * One request/response over the herdr socket (newline-delimited JSON), through
-   * Effect's own Unix-domain client rather than a hand-rolled Bun.connect callback.
-   * The exchange is one line out and one line back, so the read loop resolves on the
-   * first newline and the scope closes the socket.
-   */
-  rpc(method: SocketMethod, params: HerdrParams = {}): HerdrEffect<Schema.Json | undefined> {
-    const explicit = this.env.socketPath;
-    if (explicit) return this.exchange(method, params, explicit);
-    // Some CLI launches never get HERDR_SOCKET_PATH injected, unlike a plugin action or
-    // pane. herdr's own CLI can still say where its running server is listening, so ask
-    // that rather than guess a path.
-    return this.cli(["status", "server", "--json"]).pipe(
-      Effect.flatMap((res) => decodeBoundary(`${method} failed`, HerdrStatusReply, res)),
-      Effect.flatMap((status) =>
-        status.running && status.socket
-          ? Effect.succeed(status.socket)
-          : herdrFail(`cannot call ${method}`, "herdr status reports no running server"),
-      ),
-      Effect.flatMap((path) => this.exchange(method, params, path)),
-    );
-  }
-
-  private exchange(
-    method: SocketMethod,
-    params: HerdrParams,
-    path: string,
-  ): HerdrEffect<Schema.Json | undefined> {
-    const id = `hw-${++this.seq}`;
-    const payload = `${encodeJson({ id, method, params })}\n`;
-
-    return Effect.gen(function* () {
-      const socket = yield* BunSocket.makeNet({ path });
-      // Reading before writing, so no part of the reply can land before we are pulling.
-      const pull = yield* Socket.readerString(socket);
-      const writer = yield* socket.writer;
-      yield* writer.write(payload);
-
-      let buffered = "";
-      // A herdr that closes without answering fails the pull rather than hanging here.
-      while (true) {
-        buffered += Arr.join(yield* pull, "");
-        const newline = Option.getOrElse(pipe_(buffered, Str.indexOf("\n")), () => -1);
-        if (newline >= 0) return yield* decodeReply(method, pipe_(buffered, Str.slice(0, newline)));
-      }
-    }).pipe(
-      Effect.scoped,
-      Effect.catchTag("SocketError", (cause) => herdrFail(`${method} failed`, String(cause))),
-    );
-  }
-
-  tabCreate(opts: {
-    label?: string;
-    cwd?: string;
-    focus?: boolean;
-    /** Where the tab goes; this process's own workspace where none is named. */
-    workspace?: string | null;
-  }): HerdrEffect<StartedTab> {
-    const env = this.env;
-    const cli = this.cli.bind(this);
-    return Effect.gen(function* () {
-      const args = ["tab", "create"];
-      const workspace = opts.workspace ?? env.workspaceId;
-      if (workspace) args.push("--workspace", workspace);
-      if (opts.cwd) args.push("--cwd", opts.cwd);
-      if (opts.label) args.push("--label", opts.label);
-      args.push(opts.focus ? "--focus" : "--no-focus");
-      const res = yield* cli(args);
-      const decoded = yield* decodeBoundary("herdr tab create", TabCreateReply, res);
-      return {
-        tabId: decoded.result.tab.tab_id,
-        paneId: decoded.result.root_pane.pane_id,
-      };
-    });
-  }
-
-  /** Closes a tab and every pane in it; what a removed checkout's dead shells get. */
-  tabClose(tabId: string): HerdrEffect<void> {
-    return this.cli(["tab", "close", tabId]).pipe(Effect.asVoid);
-  }
-
-  tabRename(tabId: string, label: string): HerdrEffect<void> {
-    return this.cli(["tab", "rename", tabId, label]).pipe(Effect.asVoid);
-  }
-
-  workspaceRename(workspaceId: string, label: string): HerdrEffect<void> {
-    return this.cli(["workspace", "rename", workspaceId, label]).pipe(Effect.asVoid);
-  }
-
-  workspaceList(): HerdrEffect<WorkspaceInfo[]> {
-    return this.cli(["workspace", "list"]).pipe(Effect.flatMap(decodeWorkspaceList));
-  }
-
-  tabList(workspaceId = this.env.workspaceId): HerdrEffect<TabInfo[]> {
-    const cli = this.cli.bind(this);
-    return Effect.gen(function* () {
-      const args = ["tab", "list"];
-      if (workspaceId) args.push("--workspace", workspaceId);
-      const res = yield* cli(args);
-      const decoded = yield* decodeBoundary("herdr tab list", TabListReply, res);
-      return Arr.map(decoded.result.tabs, (tab) => ({
-        tabId: tab.tab_id,
-        label: tab.label,
-      }));
-    });
-  }
-
-  tabFocus(tabId: string): HerdrEffect<void> {
-    return this.cli(["tab", "focus", tabId]).pipe(Effect.asVoid);
-  }
-
-  /**
-   * Where a workspace group row goes: whatever tab that workspace was last on. One
-   * call, and it is the only thing the board asks herdr to focus that is not an agent
-   * or a tab of its own.
-   */
-  workspaceFocus(workspaceId: string): HerdrEffect<void> {
-    return this.rpc("workspace.focus", { workspace_id: workspaceId }).pipe(Effect.asVoid);
-  }
-
-  /** Closes a workspace and every pane in it. */
-  workspaceClose(workspaceId: string): HerdrEffect<void> {
-    return this.rpc("workspace.close", { workspace_id: workspaceId }).pipe(Effect.asVoid);
-  }
-
-  /** Reorders a tab within its workspace; 0 is first. No CLI for it in 0.9.3. */
-  tabMove(tabId: string, insertIndex: number): HerdrEffect<void> {
-    return this.rpc("tab.move", { tab_id: tabId, insert_index: insertIndex }).pipe(Effect.asVoid);
-  }
-
-  paneList(): HerdrEffect<PaneInfo[]> {
-    return this.cli(["pane", "list"]).pipe(
-      Effect.flatMap((res) => decodeBoundary("herdr pane list", PaneListReply, res)),
-      Effect.map(({ result }) => {
-        return Arr.map(result.panes, (pane) => ({
-          paneId: pane.pane_id,
-          tabId: pane.tab_id,
-          label: pane.label ?? null,
-          agent: pane.agent ?? null,
-          agentStatus: pane.agent_status ?? null,
-          workspaceId: pane.workspace_id ?? null,
-          cwd: pane.cwd ?? null,
-          foregroundCwd: pane.foreground_cwd ?? null,
-          tokens: pane.tokens ?? {},
-          terminalId: pane.terminal_id ?? null,
-          agentSession: sessionOf(pane.agent_session),
-        }));
-      }),
-    );
-  }
-
-  /** Moves a live pane into another tab; the process in it keeps running. */
-  paneMove(opts: {
-    paneId: string;
-    tabId: string;
-    targetPaneId?: string;
-    direction?: "right" | "down";
-    ratio?: number;
-  }): HerdrEffect<void> {
-    const args = ["pane", "move", opts.paneId, "--tab", opts.tabId];
-    if (opts.targetPaneId) args.push("--target-pane", opts.targetPaneId);
-    if (opts.direction) args.push("--split", opts.direction);
-    if (opts.ratio !== undefined) args.push("--ratio", String(opts.ratio));
-    return this.cli(args).pipe(Effect.asVoid);
-  }
-
-  paneSplit(opts: {
-    paneId: string;
-    direction: "right" | "down";
-    ratio?: number;
-    cwd?: string;
-    focus?: boolean;
-  }): HerdrEffect<string> {
-    const cli = this.cli.bind(this);
-    return Effect.gen(function* () {
-      const args = ["pane", "split", opts.paneId, "--direction", opts.direction];
-      if (opts.ratio !== undefined) args.push("--ratio", String(opts.ratio));
-      if (opts.cwd) args.push("--cwd", opts.cwd);
-      args.push(opts.focus ? "--focus" : "--no-focus");
-      const res = yield* cli(args);
-      const decoded = yield* decodeBoundary("herdr pane split", PaneSplitReply, res);
-      return decoded.result.pane.pane_id;
-    });
-  }
-
-  paneRun(paneId: string, command: string): HerdrEffect<void> {
-    return this.cli(["pane", "run", paneId, command]).pipe(Effect.asVoid);
-  }
-
-  /** Exchanges two panes' positions; their slots keep their sizes. */
-  /** Moves a pane's split by a fraction of the tab, the way a dragged divider would. */
-  paneResize(
-    paneId: string,
-    direction: "left" | "right" | "up" | "down",
-    amount: number,
-  ): HerdrEffect<void> {
-    return this.cli([
-      "pane",
-      "resize",
-      "--pane",
-      paneId,
-      "--direction",
-      direction,
-      "--amount",
-      String(amount),
-    ]).pipe(Effect.asVoid);
-  }
-
-  paneSwap(sourcePaneId: string, targetPaneId: string): HerdrEffect<void> {
-    return this.cli([
-      "pane",
-      "swap",
-      "--source-pane",
-      sourcePaneId,
-      "--target-pane",
-      targetPaneId,
-    ]).pipe(Effect.asVoid);
-  }
-
-  paneZoom(paneId: string, on: boolean): HerdrEffect<void> {
-    return this.cli(["pane", "zoom", paneId, on ? "--on" : "--off"]).pipe(Effect.asVoid);
-  }
-
-  /** A bounded tail of a pane's output. Polled while a step runs, so never the lot. */
-  paneRead(paneId: string, lines = 40): HerdrEffect<string> {
-    // `pane read` answers with the terminal text itself, not an envelope — but a pane
-    // showing JSON (this plugin's own output, for one) starts with `{`, and `cli`
-    // parses that as a reply. Either way what comes back is a sample of what the pane
-    // holds, which is all liveness needs, so both shapes are rendered as text rather
-    // than one of them being an error that costs the tail entirely.
-    return this.cli(["pane", "read", paneId, "--lines", String(lines)]).pipe(
-      Effect.map((res) =>
-        Schema.decodeUnknownOption(Schema.String)(res).pipe(
-          Option.getOrElse(() => encodeJson(res)),
+  terminalLive(name: string): HerdrEffect<boolean> {
+    return this.onCore((socket) =>
+      coreCall(socket, "terminal.list", {}).pipe(
+        Effect.map((listed) =>
+          Arr.some(listed.terminals, (one) => one.state === "live" && one.name === name),
         ),
       ),
     );
   }
 
-  paneRename(paneId: string, label: string): HerdrEffect<void> {
-    return this.cli(["pane", "rename", paneId, label]).pipe(Effect.asVoid);
-  }
-
-  agentStart(opts: {
-    name: string;
-    kind: string;
-    paneId: string;
-    args?: string[];
-    timeoutMs?: number;
-  }): HerdrEffect<void> {
-    const args = ["agent", "start", opts.name, "--kind", opts.kind, "--pane", opts.paneId];
-    if (opts.timeoutMs) args.push("--timeout", String(opts.timeoutMs));
-    if (opts.args?.length) args.push("--", ...opts.args);
-    return this.cli(args).pipe(Effect.asVoid);
-  }
-
   /**
-   * Waits for the agent to take the prompt, not for its turn to finish, so several
-   * agents can work at once. Fails only where the prompt is known not to be in front
-   * of the agent; see [Internals](../docs/internals.md#checking-the-boundary-against-herdr)
-   * for why a written submission is not a delivered one.
+   * One `terminal.send`. A send core saw not start a turn gets one Enter, never the text
+   * again: the work would run twice.
    */
-  agentPrompt(target: string, text: string, backend?: Backend): HerdrEffect<Submission> {
-    return this.routed(target, backend, this.herdrPrompt(target, text), (socket) =>
+  agentPrompt(target: string, text: string): HerdrEffect<Submission> {
+    return this.onCore((socket) =>
       Effect.gen(function* () {
         const sent = yield* coreCall(socket, "terminal.send", { terminal: target, text });
         if (sent.started === true) return "observed";
@@ -1189,276 +265,62 @@ export class Herdr {
     );
   }
 
-  private herdrPrompt(target: string, text: string): HerdrEffect<Submission> {
-    const statusNow = () =>
-      this.agentStatus(target).pipe(Effect.orElseSucceed(() => "unknown" as const));
-    const submit = this.cli([
-      "agent",
-      "prompt",
-      target,
-      text,
-      "--wait",
-      "--until",
-      "working",
-      "--until",
-      "blocked",
-      "--timeout",
-      String(SUBMIT_TIMEOUT_MS),
-    ]).pipe(Effect.asVoid);
-    const press = this.agentPressEnter(target);
-    const startedATurn = this.agentWait(target, {
-      until: ["working", "blocked"],
-      timeoutMs: SUBMIT_TIMEOUT_MS,
-    });
-    return Effect.gen(function* () {
-      // `--wait` matches a turn that was already running, so only a settled start
-      // makes a match evidence of this prompt.
-      const settled = isSettled(yield* statusNow());
-      const outcome = yield* submit.pipe(Effect.result);
-      if (Result.isSuccess(outcome)) return settled ? "observed" : "unobserved";
-      const { code } = outcome.failure;
-      if (code !== "timeout" && code !== "agent_prompt_stalled") {
-        return yield* outcome.failure;
-      }
-      // No turn was seen, so the text may be in the editor unsent. One Enter sends it:
-      // never the text again — the work would run twice — and never at an agent whose
-      // dialog would take it. An agent herdr has only just seen start has no status yet,
-      // which is "not yet" rather than "mid-turn", so this waits for one.
-      const now = yield* statusNow().pipe(
-        Effect.repeat({
-          until: (status) => status !== "unknown",
-          times: STATUS_WAIT.times,
-          schedule: Schedule.spaced(STATUS_WAIT.every),
-        }),
-      );
-      if (!isSettled(now)) return "unobserved";
-      yield* press;
-      // Nothing seen is not proof it was lost: a turn can start and finish inside the
-      // wait, so this is unobserved like any other and the Output is still collected.
-      return yield* startedATurn.pipe(
-        Effect.as<Submission>("observed"),
-        Effect.orElseSucceed(() => "unobserved" as const),
-      );
-    });
-  }
-
   /** One Enter, for text already in the agent's prompt box. */
-  agentPressEnter(target: string, backend?: Backend): HerdrEffect<void> {
-    return this.routed(
-      target,
-      backend,
-      this.cli(["agent", "send-keys", target, "enter"]).pipe(Effect.asVoid),
-      (socket) =>
-        coreCall(socket, "terminal.keys", { terminal: target, keys: ["enter"] }).pipe(
-          Effect.asVoid,
-        ),
-    );
+  agentPressEnter(target: string): HerdrEffect<void> {
+    return this.agentSendKeys(target, ["enter"]);
   }
 
   /**
-   * The head of the agent's prompt box as herdr's detection manifest reads it — its
-   * `prompt_box_body` region, which herdr cuts off after a few hundred bytes. Null where
-   * the manifest has no such region, or herdr answered nothing Collie can read.
+   * Raw keys into an agent's terminal. Core answering says the keys were sent, which is not
+   * the same as the harness having acted on them: nothing here reports an agent stopped.
    */
-  promptBox(target: string, backend?: Backend): HerdrEffect<string | null> {
-    // Core has no prompt box to read: a send it saw not start is pressed once instead.
-    return this.routed(target, backend, this.herdrPromptBox(target), () => Effect.succeed(null));
+  agentSendKeys(target: string, keys: ReadonlyArray<string>): HerdrEffect<void> {
+    return this.onCore((socket) =>
+      coreCall(socket, "terminal.keys", { terminal: target, keys: [...keys] }).pipe(Effect.asVoid),
+    );
   }
 
-  private herdrPromptBox(target: string): HerdrEffect<string | null> {
-    return this.cli(["agent", "explain", target, "--json"]).pipe(
-      Effect.map((res) =>
-        Option.match(Schema.decodeUnknownOption(ExplainReply)(res), {
-          onNone: () => null,
-          onSome: (explained) =>
-            Option.getOrUndefined(
-              Arr.findFirst(explained.evaluated_rules, (rule) => rule.region === "prompt_box_body"),
-            )?.evidence?.region_preview ?? null,
-        }),
+  /** Collie's live agents on this Machine's core. */
+  agentList(): HerdrEffect<AgentInfo[]> {
+    return this.onCore((socket) =>
+      coreCall(socket, "terminal.list", {}).pipe(
+        Effect.map((listed) => Arr.map(Arr.filter(listed.terminals, isAgentTerminal), coreAgent)),
       ),
     );
   }
 
-  agentWait(
-    target: string,
-    opts: { until?: AgentStatus[]; timeoutMs?: number } = {},
-  ): HerdrEffect<void> {
-    const args = ["agent", "wait", target];
-    for (const s of opts.until ?? []) args.push("--until", s);
-    if (opts.timeoutMs) args.push("--timeout", String(opts.timeoutMs));
-    return this.cli(args).pipe(Effect.asVoid);
-  }
-
-  /** Herdr 1's agents, and on a Machine set to core, core's, with herdr's where it is open. */
-  agentList(): HerdrEffect<AgentInfo[]> {
-    const herdr = this.cli(["agent", "list"]).pipe(Effect.flatMap(decodeAgentList));
-    const env = this.env;
-    return Effect.gen(function* () {
-      if ((yield* terminalBackend(env.userDir)) === "herdr") return yield* herdr;
-      const listed = yield* coreCall(yield* coreSocket(env.raw), "terminal.list", {});
-      const onCore = Arr.map(Arr.filter(listed.terminals, isAgentTerminal), coreAgent);
-      return env.socketPath === null ? onCore : [...onCore, ...(yield* herdr)];
-    });
-  }
-
-  /** herdr's saved SSH machines. */
-  herdrMachineList(): Effect.Effect<ReadonlyArray<HerdrMachine>, HerdrError, CliServices> {
-    return this.cli(["machine", "list", "--json"]).pipe(
-      Effect.flatMap((reply) => decodeBoundary("machine list", Schema.Array(HerdrMachine), reply)),
+  /** The Machines this one may pair with, by core's name for each. */
+  machineList() {
+    return this.onCore((socket) =>
+      coreCall(socket, "machine.list", {}).pipe(
+        Effect.map((listed) => Arr.map(listed.machines, rosterEntry)),
+      ),
     );
-  }
-
-  /**
-   * The Machines this one may pair with: core's, by core's name, on a Machine set to core;
-   * herdr's saved ones on a Machine set to herdr.
-   */
-  machineList(): Effect.Effect<ReadonlyArray<HerdrMachine>, HerdrError, CliServices> {
-    const env = this.env;
-    const herdr = this.herdrMachineList();
-    return Effect.gen(function* () {
-      if ((yield* terminalBackend(env.userDir)) === "herdr") return yield* herdr;
-      const listed = yield* coreCall(yield* coreSocket(env.raw), "machine.list", {});
-      return Arr.map(listed.machines, rosterEntry);
-    });
   }
 
   /** Adds a Machine to core, which reaches it with `via` and never installs hc there. */
   machineAdd(name: string, via: string) {
-    return Effect.flatMap(coreSocket(this.env.raw), (socket) =>
-      coreCall(socket, "machine.add", { name, via }),
-    );
+    return this.onCore((socket) => coreCall(socket, "machine.add", { name, via }));
   }
 
   /** Has core dial a Machine now rather than at its next retry. */
   machineDial(name: string) {
-    return Effect.flatMap(coreSocket(this.env.raw), (socket) =>
-      coreCall(socket, "machine.connect", { machine: name }),
-    );
+    return this.onCore((socket) => coreCall(socket, "machine.connect", { machine: name }));
   }
 
   /** Has core forget a Machine; its terminals keep running there. */
   machineRemove(name: string) {
-    return Effect.flatMap(coreSocket(this.env.raw), (socket) =>
-      coreCall(socket, "machine.rm", { machine: name }),
-    );
-  }
-
-  /** Every herdr session on this computer that is running now. */
-  sessionList(): HerdrEffect<HerdrSession[]> {
-    return this.cli(["session", "list", "--json"]).pipe(
-      Effect.flatMap((reply) => decodeBoundary("session list", SessionListReply, reply)),
-      Effect.map((reply) =>
-        Arr.map(
-          Arr.filter(reply.sessions, (one) => one.running),
-          (one) => ({
-            name: one.name,
-            socketPath: one.socket_path,
-            default: one.default ?? false,
-          }),
-        ),
-      ),
-    );
-  }
-
-  /** The same herdr, reaching another session through that session's socket. */
-  inSession(socketPath: string): Herdr {
-    return new Herdr({
-      ...this.env,
-      socketPath,
-      raw: { ...this.env.raw, HERDR_SOCKET_PATH: socketPath },
-    });
-  }
-
-  /**
-   * Subscribes to these events on this session's socket and resolves on the first one
-   * herdr pushes; the connection closes with it. The subscriptions are read once the socket
-   * is open, so a session that cannot be watched is not read for them.
-   */
-  waitForEvent<R>(
-    subscriptions: Effect.Effect<ReadonlyArray<HerdrParams>, HerdrError, R>,
-  ): Effect.Effect<void, HerdrError, PlatformServices | R> {
-    const path = this.env.socketPath;
-    if (!path) return herdrFail("cannot subscribe to herdr events", "no socket path");
-    const id = `hw-${++this.seq}`;
-    return Effect.gen(function* () {
-      const socket = yield* BunSocket.makeNet({ path });
-      const pull = yield* Socket.readerString(socket);
-      const params = { subscriptions: yield* subscriptions };
-      yield* (yield* socket.writer).write(
-        `${encodeJson({ id, method: "events.subscribe", params })}\n`,
-      );
-      let buffered = "";
-      let acknowledged = false;
-      while (true) {
-        buffered += Arr.join(yield* pull, "");
-        let newline = Option.getOrElse(pipe_(buffered, Str.indexOf("\n")), () => -1);
-        while (newline >= 0) {
-          const line = pipe_(buffered, Str.slice(0, newline));
-          buffered = pipe_(buffered, Str.slice(newline + 1));
-          // The first line answers the subscription; any after it is an event.
-          if (acknowledged) return;
-          yield* decodeReply("events.subscribe", line);
-          acknowledged = true;
-          newline = Option.getOrElse(pipe_(buffered, Str.indexOf("\n")), () => -1);
-        }
-      }
-    }).pipe(
-      Effect.scoped,
-      Effect.catchTag("SocketError", (cause) =>
-        herdrFail("events.subscribe failed", String(cause)),
-      ),
-    );
-  }
-
-  /** Restore only a lost alias, never a human rename or another session in this pane. */
-  restoreAgentName(entry: AgentEntry): HerdrEffect<boolean> {
-    if (!entry.incarnation?.agentSession || entry.incarnation.backend === "core")
-      return Effect.succeed(false);
-    const inspect = this.cli(["agent", "get", entry.paneId]).pipe(
-      Effect.flatMap((res) => decodeOrNamed("herdr agent get", AgentIdentityReply, res)),
-    );
-    const rename = this.cli(["agent", "rename", entry.paneId, entry.agent]);
-    return Effect.gen(function* () {
-      const {
-        result: { agent },
-      } = yield* inspect;
-      if (agent.name) return false;
-      const candidate: AgentInfo = {
-        name: entry.agent,
-        paneId: agent.pane_id,
-        workspaceId: agent.workspace_id ?? null,
-        status: agentStatus(agent.agent_status),
-        title: null,
-        terminalId: agent.terminal_id ?? null,
-        agentSession: sessionOf(agent.agent_session),
-      };
-      if (!verifyIncarnation(entry, [candidate]).ok) return false;
-      const renamed = yield* rename;
-      const failure = envelopeError("herdr agent rename", renamed);
-      if (failure) return yield* failure;
-      return true;
-    });
-  }
-
-  agentFocus(target: string): HerdrEffect<void> {
-    return this.cli(["agent", "focus", target]).pipe(Effect.asVoid);
+    return this.onCore((socket) => coreCall(socket, "machine.rm", { machine: name }));
   }
 
   /**
    * What has become of the agents a Run still has running. One `live` is enough to make
    * a resume unsafe — it would reset the Step under an agent still writing in that
-   * worktree — and so is one answer herdr could not give: "I could not ask" is not
+   * worktree — and so is one answer core could not give: "I could not ask" is not
    * evidence that nothing is there. Only when every one of them is conclusively gone is
-   * the answer `absent`.
-   *
-   * Draws the same distinction `agentStatus` above does, between an agent herdr no
-   * longer has and an agent it could not be asked about. An agent herdr still has but
-   * calls `idle` or `done` counts as gone here, as it does everywhere else: it is
-   * holding a pane, not the work.
+   * the answer `absent`. An agent core still has but calls `done` counts as gone.
    */
   agentsAlive(names: ReadonlyArray<string>): Effect.Effect<AgentsAlive, never, PlatformServices> {
-    // An arrow rather than the generator's `this`: the loop below only needs the one
-    // question asked, and closing over it keeps the class's scope out of it.
     const ask = (name: string) => this.agentStatus(name);
     return Effect.gen(function* () {
       if (names.length === 0) return "absent" as const;
@@ -1469,7 +331,7 @@ export class Herdr {
             Effect.succeed(cause.code === "agent_not_found" ? ("gone" as const) : null),
           ),
         );
-        // Idle is alive: the agent holds its name and its pane, so a Driver that started
+        // Idle is alive: the agent holds its name and its terminal, so a Driver that started
         // another under that name — or restarted its step beneath it — would collide.
         if (status === "working" || status === "blocked" || status === "idle")
           return "live" as const;
@@ -1480,9 +342,9 @@ export class Herdr {
     });
   }
 
-  /** On core, as its events last said: the status its harness reported through OSC 7501. */
-  agentStatus(target: string, backend?: Backend): HerdrEffect<AgentStatus> {
-    return this.routed(target, backend, this.herdrStatus(target), (socket) =>
+  /** As core's events last said: the status its harness reported through OSC 7501. */
+  agentStatus(target: string): HerdrEffect<AgentStatus> {
+    return this.onCore((socket) =>
       Effect.gen(function* () {
         const view = yield* watched(socket);
         const named = Arr.filter(
@@ -1507,281 +369,27 @@ export class Herdr {
     );
   }
 
-  private herdrStatus(target: string): HerdrEffect<AgentStatus> {
-    return this.cli(["agent", "get", target]).pipe(
-      Effect.flatMap((res) => {
-        // An agent herdr does not have is answered, not failed: exit 0 with an error
-        // envelope. Carrying its code is what lets a caller tell "this agent is gone"
-        // from "herdr did not answer me", which are opposite things to do about.
-        const named = envelopeError("herdr agent get", res);
-        return named
-          ? Effect.fail(named)
-          : decodeBoundary("herdr agent get", AgentStatusReply, res).pipe(
-              Effect.map(({ result }) => agentStatus(result.agent.agent_status)),
-            );
-      }),
-    );
-  }
-
-  /**
-   * Every checkout of the repository at `cwd`, the source checkout included. Git
-   * allows one worktree per checked-out branch, so this is the index a Run's
-   * checkout is looked up in.
-   */
-  worktreeList(cwd: string): HerdrEffect<WorktreeListing> {
-    return this.cli(["worktree", "list", "--cwd", cwd]).pipe(
-      Effect.flatMap((res) => decodeOrNamed("herdr worktree list", WorktreeListReply, res)),
-      Effect.map(({ result }) => ({
-        worktrees: Arr.map(result.worktrees, worktreeInfo),
-        source: result.source?.source_checkout_path ?? result.source?.repo_root ?? null,
-      })),
-    );
-  }
-
-  worktreeCreate(opts: {
-    cwd: string;
-    branch: string;
-    base?: string;
-    label?: string;
-  }): HerdrEffect<WorktreeWorkspace> {
-    const args = ["worktree", "create", "--cwd", opts.cwd, "--branch", opts.branch];
-    if (opts.base) args.push("--base", opts.base);
-    if (opts.label) args.push("--label", opts.label);
-    args.push("--no-focus");
-    return this.cli(args).pipe(
-      Effect.flatMap((res) => decodeOrNamed("herdr worktree create", WorktreeOpenReply, res)),
-      Effect.map(({ result }) => ({
-        ...worktreeWorkspace(result),
-        // Both keys or neither: the variant that carries the tab carries its pane too,
-        // and a Run with one and not the other has nothing it can reuse.
-        rootTab:
-          result.tab && result.root_pane
-            ? { tabId: result.tab.tab_id, paneId: result.root_pane.pane_id }
-            : null,
-      })),
-    );
-  }
-
-  /** Opens a workspace on a checkout that already exists, or focuses the one it has. */
-  worktreeOpen(opts: {
-    cwd: string;
-    path?: string;
-    branch?: string;
-    label?: string;
-  }): HerdrEffect<WorktreeWorkspace> {
-    const args = ["worktree", "open", "--cwd", opts.cwd];
-    if (opts.path) args.push("--path", opts.path);
-    if (opts.branch) args.push("--branch", opts.branch);
-    if (opts.label) args.push("--label", opts.label);
-    args.push("--no-focus");
-    return this.opened("herdr worktree open", args);
-  }
-
-  /**
-   * Removes the checkout the workspace holds and closes the workspace with it. No
-   * `--force`, ever: git's own refusal to drop a dirty or unmerged checkout is the
-   * last guard against a wrong judgement about what is safe to delete.
-   */
-  worktreeRemove(workspaceId: string): HerdrEffect<void> {
-    return this.cli(["worktree", "remove", "--workspace", workspaceId]).pipe(Effect.asVoid);
-  }
-
-  private opened(operation: string, args: string[]): HerdrEffect<WorktreeWorkspace> {
-    return this.cli(args).pipe(
-      Effect.flatMap((res) => decodeOrNamed(operation, WorktreeOpenReply, res)),
-      // No root tab: the workspace `open` gives back is one that already existed, and
-      // nothing in it is this caller's to take over.
-      Effect.map(({ result }) => ({ ...worktreeWorkspace(result), rootTab: null })),
-    );
-  }
-
-  /** The process at the root of a pane: its shell on herdr, its program on core; null where neither says. */
-  paneRoot(paneId: string, backend: Backend = "herdr"): HerdrEffect<number | null> {
-    if (backend === "herdr")
-      return this.rpc("pane.process_info", { pane_id: paneId }).pipe(
-        Effect.flatMap((result) =>
-          decodeBoundary("pane.process_info", PaneProcessReply, { result: result ?? null }),
+  /** The pid of the program in the live terminal at `address`, or null where core names none. */
+  terminalRoot(address: string): HerdrEffect<number | null> {
+    return this.onCore((socket) =>
+      coreCall(socket, "terminal.list", {}).pipe(
+        Effect.map(
+          (listed) =>
+            Option.getOrUndefined(
+              Arr.findFirst(
+                listed.terminals,
+                (one) => one.state === "live" && one.address === address,
+              ),
+            )?.pid ?? null,
         ),
-        Effect.map((reply) => reply.result.process_info.shell_pid ?? null),
-      );
-    const raw = this.env.raw;
-    return Effect.gen(function* () {
-      const listed = yield* coreCall(yield* coreSocket(raw), "terminal.list", {});
-      const terminal = Arr.findFirst(
-        listed.terminals,
-        (one) => one.state === "live" && one.address === paneId,
-      );
-      return Option.getOrUndefined(terminal)?.pid ?? null;
-    });
-  }
-
-  /** On core, `paneId` is the agent's terminal, and closing it ends its program. */
-  paneClose(paneId: string, backend: Backend = "herdr"): HerdrEffect<void> {
-    if (backend === "herdr") return this.cli(["pane", "close", paneId]).pipe(Effect.asVoid);
-    const raw = this.env.raw;
-    return Effect.gen(function* () {
-      yield* coreCall(yield* coreSocket(raw), "terminal.kill", { terminal: paneId });
-    });
-  }
-
-  pluginPaneOpen(opts: {
-    entrypoint: string;
-    env?: Record<string, string>;
-    focus?: boolean;
-    /** Only for non-popup placements: popups and overlays target the active pane. */
-    workspaceId?: string | null;
-    cwd?: string;
-    /** Overrides the placement the manifest declares for this entrypoint. */
-    placement?: "tab" | "split";
-    targetPaneId?: string;
-    direction?: "right" | "down";
-  }): HerdrEffect<StartedTab> {
-    const cli = this.cli.bind(this);
-    return Effect.gen(function* () {
-      const args = [
-        "plugin",
-        "pane",
-        "open",
-        "--plugin",
-        PLUGIN_ID,
-        "--entrypoint",
-        opts.entrypoint,
-      ];
-      if (opts.workspaceId) args.push("--workspace", opts.workspaceId);
-      if (opts.placement) args.push("--placement", opts.placement);
-      if (opts.targetPaneId) args.push("--target-pane", opts.targetPaneId);
-      if (opts.direction) args.push("--direction", opts.direction);
-      if (opts.cwd) args.push("--cwd", opts.cwd);
-      for (const [k, v] of Rec.toEntries(opts.env ?? {})) args.push("--env", `${k}=${v}`);
-      args.push(opts.focus === false ? "--no-focus" : "--focus");
-      const res = yield* cli(args);
-      const decoded = yield* decodeBoundary("herdr plugin pane open", PluginPaneReply, res);
-      const pane = decoded.result.plugin_pane.pane;
-      return { tabId: pane.tab_id, paneId: pane.pane_id };
-    });
-  }
-
-  /** Filters the Agents sidebar to this run's panes. CLI has no equivalent in 0.9.3. */
-  agentViewSet(source: string, label: string, paneIds: string[]): HerdrEffect<void> {
-    return this.rpc("agent.view.set", {
-      source,
-      label,
-      filter: { op: "in", field: "pane_id", values: paneIds },
-    }).pipe(Effect.asVoid);
-  }
-
-  agentViewClear(source: string): HerdrEffect<void> {
-    return this.rpc("agent.view.clear", { source }).pipe(Effect.asVoid);
-  }
-
-  /**
-   * Raw keys into an agent's terminal. The only use is an interrupt — the key a harness
-   * takes as "stop what you are doing" — and herdr answering says the keys were sent,
-   * which is not the same as the harness having acted on them. Nothing here ever reports
-   * an agent as stopped: no proof of quiescence exists at this boundary.
-   */
-  agentSendKeys(target: string, keys: ReadonlyArray<string>, backend?: Backend): HerdrEffect<void> {
-    return this.routed(
-      target,
-      backend,
-      this.rpc("agent.send_keys", { target, keys: [...keys] }).pipe(Effect.asVoid),
-      (socket) =>
-        coreCall(socket, "terminal.keys", { terminal: target, keys: [...keys] }).pipe(
-          Effect.asVoid,
-        ),
+      ),
     );
   }
 
-  /**
-   * A workspace of Collie's own, for the Herd's Home or a Task. Never focused: creating it
-   * is not the same as going to it, and the shortcut is what does the going.
-   */
-  workspaceCreate(opts: {
-    cwd: string;
-    label: string;
-  }): HerdrEffect<{ workspaceId: string; rootTab: StartedTab | null }> {
-    return this.cli([
-      "workspace",
-      "create",
-      "--cwd",
-      opts.cwd,
-      "--label",
-      opts.label,
-      "--no-focus",
-    ]).pipe(Effect.flatMap((value) => decodeWorkspaceCreate(value)));
-  }
-
-  /**
-   * Attach metadata to a workspace, with a lifetime. The Home is owned by one of these
-   * rather than by a label, and the TTL is what makes a stale claim expire on its own
-   * instead of needing something to come along and clean it up.
-   */
-  workspaceReportMetadata(
-    workspaceId: string,
-    tokens: Readonly<Record<string, string>>,
-    ttlMs: number,
-  ): HerdrEffect<void> {
-    return this.rpc("workspace.report_metadata", {
-      workspace_id: workspaceId,
-      source: PLUGIN_ID,
-      tokens: { ...tokens },
-      ttl_ms: ttlMs,
-    }).pipe(Effect.asVoid);
-  }
-
-  paneReportMetadata(
-    paneId: string,
-    tokens: Readonly<Record<string, string>>,
-    ttlMs: number,
-  ): HerdrEffect<void> {
-    return this.rpc("pane.report_metadata", {
-      pane_id: paneId,
-      source: PLUGIN_ID,
-      tokens: { ...tokens },
-      ttl_ms: ttlMs,
-    }).pipe(Effect.asVoid);
-  }
-
-  /**
-   * The installed binary's own description of what it can do. The pinned schema says
-   * what Collie was built against; this says what is actually there, which is the only
-   * one that can refuse a feature at runtime.
-   */
-  /** Which herdr this is, and where its server listens, as its own CLI reports it. */
-  serverInfo(): HerdrEffect<{
-    running: boolean;
-    socket: string;
-    version: string;
-    protocol: number;
-  }> {
-    return this.cli(["status", "server", "--json"]).pipe(
-      Effect.flatMap((res) => decodeBoundary("status server failed", HerdrStatusReply, res)),
-      Effect.map((status) => ({
-        running: status.running,
-        socket: status.socket ?? this.env.socketPath ?? "",
-        version: status.version ?? "unknown",
-        protocol: status.protocol ?? 0,
-      })),
+  /** Ends the terminal at `address`, and the program in it. */
+  terminalKill(address: string): HerdrEffect<void> {
+    return this.onCore((socket) =>
+      coreCall(socket, "terminal.kill", { terminal: address }).pipe(Effect.asVoid),
     );
-  }
-
-  apiSchema(): HerdrEffect<string> {
-    const cached = schemas.get(this.env.binPath);
-    if (cached !== undefined) return Effect.succeed(cached);
-    return this.cli(["api", "schema", "--json"]).pipe(
-      Effect.map((value) => (isString(value) ? value : encodeJsonValue(value))),
-      Effect.tap((schema) => Effect.sync(() => schemas.set(this.env.binPath, schema))),
-    );
-  }
-
-  popupClose(): HerdrEffect<void> {
-    return this.rpc("popup.close", {}).pipe(Effect.asVoid);
   }
 }
-
-/** Where herdr says its running server listens, or null where it cannot say. */
-export const serverSocket = (herdr: Herdr) =>
-  herdr.serverInfo().pipe(
-    Effect.map((server) => (server.socket === "" ? null : server.socket)),
-    Effect.orElseSucceed(() => null),
-  );

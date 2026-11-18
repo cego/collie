@@ -42,7 +42,6 @@ import {
   flow,
   Result,
 } from "effect";
-import { CommandLine } from "effect/process";
 import type { PlatformServices } from "./platform";
 import * as Activity from "effect/workflow/Activity";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -114,13 +113,12 @@ import {
   gitlabHostOf,
   loadDefaults,
   readConfig,
-  terminalBackend,
   type Defaults,
 } from "./config";
 import { autoModeBlock, autoModeFacts, type AutoModeBlock, type RunAuthority } from "./automode";
 import { shell } from "./mr";
 import type { ForgeHttp } from "./forge/http";
-import type { YamlMap } from "./yaml";
+import { parseDocument, type YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
 import { humanOf, type Asker } from "./proposals";
 import { STOP, controlSet } from "./controls";
@@ -128,7 +126,6 @@ import * as dispatch from "./dispatcher";
 import type * as Types from "effect/Types";
 import { bodySections, layers, personaHoles, skillDirs, skillFile } from "./definitions";
 import { currentEnv, selfCommand, type PluginEnv } from "./env";
-import type { TerminalBackend } from "./settings";
 import {
   HARNESSES,
   foldPreferences,
@@ -149,6 +146,7 @@ import {
   sessionArgs,
   type AgentChoice,
   type HarnessAdapter,
+  type Room,
   type StartSession,
   type PermissionMode,
   type Preferences,
@@ -167,20 +165,14 @@ import { isSuperseded, isUnanswered } from "./store";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue, type Queued } from "./delivery-queue";
-import {
-  agentName,
-  agentTabLabel,
-  launchedAs,
-  legacyAgentName,
-  reason,
-  unsafePathComponent,
-} from "./naming";
+import { verifyingOf, type Verifying } from "./verify";
+import { agentName, launchedAs, legacyAgentName, reason, unsafePathComponent } from "./naming";
 import { machineName } from "./peers";
 import type { MachineCatalogue } from "./harness-choice";
 import { askRouteTo } from "./handoff";
 import { epochMs, nowIso } from "./time";
 import { noteContext, noteReminder, type RecoveryOutcome } from "./metrics";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import {
   appliesTo,
   current as currentUsageWindow,
@@ -193,6 +185,7 @@ import {
 } from "./usage-model";
 import { ownCodexReading, USAGE_INTERVAL_MS } from "./usage";
 import {
+  everyRegistered,
   lineageAgent,
   registerAgent,
   scopeFor,
@@ -228,20 +221,25 @@ import {
   type RoleProfile,
 } from "./profile";
 import { isString, type JsonObject } from "./schema";
+import { awaitOutput, outputCollected } from "./output-submit";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
+  appendLine,
   causalKey,
   deliveriesAbout,
   deliveriesOf,
+  isSettledDelivery,
   isUnobserved,
+  newestById,
+  readLedger,
   SENT_STATES,
   toldLine,
 } from "./steering";
+import { rememberUnsettled } from "./park-recheck";
 import type { Records } from "./records";
 import { RELAUNCH, RunRecords } from "./run-records";
-import { readTask, withTaskLock, writeTask } from "./task";
 import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
 import {
   quietSkills,
@@ -285,10 +283,14 @@ export interface AgentAsk {
   /** What this work fell back from, and why, where it did. */
   readonly from?: AgentChoice;
   readonly why?: string;
+  /** Where a Fallback would move this work were its usage spent now. */
+  readonly next?: AgentChoice;
   /** Which agent of this work it is: past 1, one taking over from an agent that ran out. */
   readonly sequence?: number;
   /** The Step run this work is in, where it is in one. */
   readonly step?: At;
+  /** How it hands in its Output; left out, the `output_submit` setting decides. */
+  readonly outputSubmit?: "file" | "tool";
 }
 
 /**
@@ -300,6 +302,7 @@ export const AgentChoiceSchema = Schema.Struct({
   claudeSubagents: Schema.optionalKey(ClaudeSubagents),
   from: Schema.optionalKey(RanOn),
   why: Schema.optionalKey(Schema.String),
+  next: Schema.optionalKey(RanOn),
 });
 export type ChosenAgent = typeof AgentChoiceSchema.Type;
 
@@ -428,6 +431,8 @@ export interface AgentsApi {
    * path that is not there.
    */
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
+  /** How the Settings say an agent hands in its Output, read at each step. */
+  readonly outputSubmit: Effect.Effect<"file" | "tool">;
   /** What this Run's `attachments/` holds now, which its next prompt lists. */
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
   /**
@@ -460,7 +465,9 @@ export interface AgentsApi {
   readonly choiceOf: (
     runId: string,
     agent: string,
-  ) => Effect.Effect<(ChosenAgent & { readonly sequence: number }) | null>;
+  ) => Effect.Effect<
+    (ChosenAgent & { readonly sequence: number; readonly outputSubmit: "file" | "tool" }) | null
+  >;
   /**
    * Once this agent has run out — its harness said so since it was given this work, or
    * its Subscription reads Exhausted for it — why. Never succeeds otherwise.
@@ -533,10 +540,11 @@ export interface AgentsApi {
   readonly usageWaiting: (launched: Launched, incident: RanOut | null) => Effect.Effect<void>;
   /** An incident persisted before its collect Activity could record the result. */
   readonly usageIncident: (launched: Launched) => Effect.Effect<RanOut | null>;
-  /** Waits for working → idle/done with absent Output and permission to remind. */
+  /** Waits for working → idle/done with absent Output, no open question and permission to remind. */
   readonly endedWithoutOutput: (
     launched: Launched,
     may: Effect.Effect<boolean>,
+    questions?: Questions,
   ) => Effect.Effect<void>;
   /** Returns when the reminder was sent, or null if it could not be. */
   readonly remind: (
@@ -822,6 +830,9 @@ export const agentWork = <
     // Where each skill the instructions mention lives, so a mention is the path to read
     // rather than a name the agent has to go looking for.
     const skills = yield* agents.skills(skillsIn(work.instructions));
+    const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
+    // A running agent keeps the tool server it was launched with.
+    const outputSubmit = held?.outputSubmit ?? (yield* agents.outputSubmit);
     const parts: PromptParts = {
       role,
       instructions: work.instructions,
@@ -831,6 +842,7 @@ export const agentWork = <
       output,
       contract: plain ? null : jsonSchemaFor(work.output),
       attachments: yield* agents.attachments(runId),
+      outputSubmit,
     };
     const prompt = renderPrompt(parts);
     if (prompt.unfilled.length > 0) {
@@ -842,7 +854,6 @@ export const agentWork = <
     // a conversation cannot become another agent: what is asked for here has to agree with
     // it, and what only defaults below that does not apply.
     const scopes = yield* AgentScopes;
-    const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
     const requested = foldPreferences([...scopes, preferencesIn(given)]);
     if (held !== null && !agrees(held, requested)) {
       return yield* new WorkflowError({
@@ -896,9 +907,11 @@ export const agentWork = <
       effort: choice.effort,
       permissions: work.permissions ?? null,
       authority: place.authority,
+      outputSubmit,
     };
     if (choice.claudeSubagents !== undefined) ask.claudeSubagents = choice.claudeSubagents;
     fellBack(ask, choice.from, choice.why);
+    if (choice.next !== undefined) ask.next = choice.next;
     if (held !== null && held.sequence > 1) ask.sequence = held.sequence;
     const at = yield* CurrentStep;
     if (at !== null) ask.step = at;
@@ -990,21 +1003,23 @@ export const agentWork = <
         ),
       );
     const usable = (text: string) => decodeOutput(work.output, text, plain).ok;
+    const problemIn = (text: string) => {
+      const read = decodeOutput(work.output, text, plain);
+      return read.ok ? null : read.problem;
+    };
     // Uninterruptible, so a stop racing a restart waits for it and finds its agent to stop.
     const reviving = (from: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
-          if (yield* host.stopRequested(runId)) return;
-          if (
-            (yield* agents.revive(
-              from,
-              unless,
-              onlyDeadServer,
-              unless == null ? undefined : usable,
-            )) &&
-            (yield* host.stopRequested(runId))
-          )
-            yield* haltLate;
+          if (yield* host.stopRequested(runId)) return false;
+          const revived = yield* agents.revive(
+            from,
+            unless,
+            onlyDeadServer,
+            unless == null ? undefined : usable,
+          );
+          if (revived && (yield* host.stopRequested(runId))) yield* haltLate;
+          return revived;
         }),
       );
     // A stale working status must not hide a dead server for the entire idle budget.
@@ -1033,6 +1048,7 @@ export const agentWork = <
       return !Arr.some(yield* host.asked(runId), (one) => one.answer === null);
     });
     const collecting = (on: Launched, from: AgentAsk, waiting?: string) => {
+      const awaited = awaitOutput(runId, on.agent, on.output, problemIn);
       // Collected throughout, so a verify ending between attempts is still told to it.
       const output = agents.collectedDuring(
         on,
@@ -1050,30 +1066,33 @@ export const agentWork = <
           parksOnStop(on),
         ),
       );
-      const ended = agents.endedWithoutOutput(on, remindable).pipe(
+      const ended = agents.endedWithoutOutput(on, remindable, questions).pipe(
         Effect.andThen(Clock.currentTimeMillis),
         Effect.map((endedAt) => TurnEnded.make({ endedAt })),
       );
-      return stoppable(
-        parkedWhenStuck(
-          waiting === undefined
-            ? Effect.gen(function* () {
-                // Reconcile a crash before the incident was journaled, before idle reminders race it.
-                const incident = yield* agents.usageIncident(on);
-                if (incident !== null) return incident;
-                yield* reviving(from);
-                return yield* Effect.raceFirst(
-                  Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on)),
-                  recovering(on, from),
-                );
-              })
-            : output,
+      return Effect.andThen(
+        awaited,
+        stoppable(
+          parkedWhenStuck(
+            waiting === undefined
+              ? Effect.gen(function* () {
+                  // Reconcile a crash before the incident was journaled, before idle reminders race it.
+                  const incident = yield* agents.usageIncident(on);
+                  if (incident !== null) return incident;
+                  yield* reviving(from);
+                  return yield* Effect.raceFirst(
+                    Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on)),
+                    recovering(on, from),
+                  );
+                })
+              : output,
+            host,
+            work.runId,
+          ),
           host,
           work.runId,
+          agents.pollMs,
         ),
-        host,
-        work.runId,
-        agents.pollMs,
       );
     };
     let reminder: { on: Launched; ordinal: number; endedAt: number } | null = null;
@@ -1313,14 +1332,17 @@ export const agentWork = <
     }
     const read = decodeOutput(work.output, first, plain);
     if (read.ok) {
+      yield* outputCollected(runId, current.agent, first);
       yield* agents.usageWaiting(current, null);
       yield* recovered();
       return yield* carded(read.value);
     }
 
     // A harness that stopped is waited on past the budget, as its park says it is.
+    let latest = first;
     const recollecting = (unusable: string, since: number) =>
       Effect.gen(function* () {
+        yield* awaitOutput(runId, current.agent, current.output, problemIn);
         for (;;) {
           const text = yield* watching(
             agents.collect(current, unusable, questions, undefined, usable),
@@ -1346,8 +1368,11 @@ export const agentWork = <
           error: AgentUncertain,
           execute: stoppable(
             parkedWhenStuck(
+              // One started again was given its step, which asks for the Output anew.
               reviving(currentAsk, unusable).pipe(
-                Effect.andThen(agents.repair(current, problem, unusable, round)),
+                Effect.flatMap((revived) =>
+                  revived ? Effect.succeed(true) : agents.repair(current, problem, unusable, round),
+                ),
               ),
               host,
               work.runId,
@@ -1386,6 +1411,7 @@ export const agentWork = <
             });
         if (again === null)
           return { ok: false as const, problem: `did not write ${output} again: ${problem}` };
+        latest = again;
         const repaired = decodeOutput(work.output, again, plain);
         return repaired.ok
           ? repaired
@@ -1406,9 +1432,11 @@ export const agentWork = <
           return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
         }),
       });
+      latest = now;
       const reread = decodeOutput(work.output, now, plain);
       repaired = reread.ok ? reread : yield* repairing(round + 1, now, reread.problem);
     }
+    yield* outputCollected(runId, current.agent, latest);
     yield* recovered();
     yield* agents.usageWaiting(current, null);
     return yield* carded(repaired.value);
@@ -1617,6 +1645,8 @@ export interface PromptParts {
   readonly attachments?: ReadonlyArray<Attachment>;
   /** What an agent taking over this work from one that ran out is told first. */
   readonly handover?: string;
+  /** Under `tool` the agent is told to hand its Output to `collie_submit`, not where to write it. */
+  readonly outputSubmit?: "file" | "tool";
 }
 
 /**
@@ -1650,7 +1680,9 @@ function renderPrompt(parts: PromptParts) {
         Str.trim(rendered.text),
         attachmentsSection(parts.attachments ?? []),
         parts.handover ?? "",
-        `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
+        parts.outputSubmit === "tool"
+          ? `When you are done, submit your result ${parts.contract === null ? "as plain text" : "as JSON"} with the collie_submit Collie tool, as its \`output\`. It answers "accepted", or with every problem it found and nothing kept: correct them and submit again.`
+          : `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
         parts.contract === null ? "" : contractSection(parts.contract),
       ],
       (part) => part !== "",
@@ -1703,17 +1735,8 @@ function contractSection(contract: Projection): string {
   return `That file must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.\n\n\`\`\`json\n${JSON.stringify(contract.document, null, 2)}\n\`\`\`${limits}`;
 }
 
-/** What one delivery and its confirmation ask of herdr. */
-type DeliveringHerdr = Pick<
-  Herdr,
-  | "agentPrompt"
-  | "agentList"
-  | "agentSendKeys"
-  | "restoreAgentName"
-  | "agentStatus"
-  | "promptBox"
-  | "agentPressEnter"
->;
+/** What one delivery and its confirmation ask of core. */
+type DeliveringHerdr = Pick<Herdr, "agentPrompt" | "agentList" | "agentSendKeys" | "agentStatus">;
 
 /** What the host has, so an agent it starts is the one the operator configured. */
 export interface AgentHost {
@@ -1861,12 +1884,6 @@ const usageRecovered = (spent: SpentChoice, readings: ReadonlyArray<UsageReading
   });
 };
 
-/**
- * How long a harness may take to be ready. In a checkout it has never opened it settles
- * trust, loads plugins and starts MCP servers, which outlasts herdr's own 30s.
- */
-const START_TIMEOUT_MS = 180_000;
-
 /** Past herdr's own start, which has already waited for the harness to be ready. */
 const READY_TIMEOUT_MS = 120_000;
 
@@ -1875,16 +1892,6 @@ const CONFIRM_GRACE_MS = 15_000;
 
 /** Someone is waiting on a steer's receipt, so it is not held for a busy agent's whole turn. */
 const OBSERVE_MS = 20_000;
-
-/** herdr says this of a pane that exists but whose shell has not come up yet. */
-const paneNotReady = (error: HerdrError) =>
-  /agent_pane_busy|not an available shell/.test(error.detail);
-
-/**
- * herdr keeps the name of an agent blocked during startup — a first-run dialog in its
- * pane — so it is there, and its prompt waits for it as any blocked agent's does.
- */
-const blockedAtStartup = (error: HerdrError) => /blocked during startup/.test(error.detail);
 
 /** herdr still lists an agent whose process has gone, and refuses it with this. */
 const inactive = (refusal: string) => /not an active named agent/.test(refusal);
@@ -1912,21 +1919,17 @@ export const agentsLayer = (
 
 type Under = <A, E>(effect: Effect.Effect<A, E, AgentServices>) => Effect.Effect<A, E>;
 
-const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
-  const dirFor = (runId: string) => launchDir(host.dir, runId);
-  const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
-  // A recovery already admitted finishes before its quota incident is published. Once
-  // published, no recovery may pass the incident check and start the spent agent again.
-  const recoveryGates = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
-  const withRecoveryGate =
-    (runId: string) =>
+/** Runs one effect at a time per key; a key's gate is dropped once nobody holds or waits on it. */
+const keyedGate = () => {
+  const gates = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
+  return (key: string) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.acquireUseRelease(
         Effect.sync(() => {
-          let entry = recoveryGates.get(runId);
+          let entry = gates.get(key);
           if (entry === undefined) {
             entry = { gate: Semaphore.makeUnsafe(1), users: 0 };
-            recoveryGates.set(runId, entry);
+            gates.set(key, entry);
           }
           entry.users++;
           return entry;
@@ -1934,9 +1937,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         (entry) => entry.gate.withPermits(1)(effect),
         (entry) =>
           Effect.sync(() => {
-            if (--entry.users === 0) recoveryGates.delete(runId);
+            if (--entry.users === 0) gates.delete(key);
           }),
       );
+};
+
+const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
+  const dirFor = (runId: string) => launchDir(host.dir, runId);
+  const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
+  // A recovery already admitted finishes before its quota incident is published. Once
+  // published, no recovery may pass the incident check and start the spent agent again.
+  const withRecoveryGate = keyedGate();
+  // A collect and an end-of-turn check read one agent's questions at once; one pass at a time.
+  const withQuestionPass = keyedGate();
   const usageWaitPath = (launched: Pick<AgentAsk, "runId" | "operation" | "sequence">) =>
     `${dirFor(launched.runId)}/${stemOf(launched)}.usage-wait`;
   const usageWaiting = (launched: Launched, incident: RanOut | null) =>
@@ -2073,6 +2086,18 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const ports = host.ports ?? COMPACTION_PORTS;
   const adapterFor = (harness: string) => HARNESSES[harness] ?? configured;
 
+  const registeredOnCore = (runId: string, agent: string, terminalId: string | undefined) =>
+    Effect.map(
+      everyRegistered,
+      Arr.some(
+        (one) =>
+          one.agent === agent &&
+          one.runId === runId &&
+          one.incarnation?.backend === "core" &&
+          one.incarnation.terminalId === terminalId,
+      ),
+    );
+
   /** Null places it where herdr says the agent is. */
   const entryFor = (
     about: Launched | AgentAsk,
@@ -2083,13 +2108,58 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     } | null,
     through = deps,
   ) =>
-    dispatch.entryFromLive(through, {
-      role: about.role,
-      agent,
-      paneId: place?.paneId ?? null,
-      workspaceId: place?.workspaceId ?? null,
-      runId: about.runId,
-      workflow: about.workflow,
+    Effect.gen(function* () {
+      const found = yield* dispatch.entryFromLive(through, {
+        role: about.role,
+        agent,
+        paneId: place?.paneId ?? null,
+        workspaceId: place?.workspaceId ?? null,
+        runId: about.runId,
+        workflow: about.workflow,
+      });
+      if (found.entry === null || place !== null) return found;
+      // Herdr 1 named its agents as core does: only a start on core registers this terminal.
+      return (yield* registeredOnCore(about.runId, agent, found.entry.incarnation?.terminalId))
+        ? found
+        : { entry: null, reason: `${agent} was never started on core`, gone: true };
+    });
+
+  /**
+   * The Check Collie is collecting proof with on this agent's checkout, which its deliveries
+   * wait for; null for none. An agent whose own record puts it in another checkout is not held.
+   */
+  const fenceOf = (about: Pick<Launched, "runId" | "agent">) =>
+    Effect.gen(function* () {
+      const check = yield* under(verifyingOf(about.runId));
+      if (check === null || check.pass === "ci") return null;
+      const cwd = (yield* readControl(host.env.stateDir, about.agent).pipe(
+        Effect.orElseSucceed(() => null),
+      ))?.cwd;
+      if (check.checkout === undefined || cwd === undefined) return check;
+      const within = (inner: string, outer: string) =>
+        inner === outer || pipe(inner, Str.startsWith(`${outer}/`));
+      return within(cwd, check.checkout) || within(check.checkout, cwd) ? check : null;
+    });
+
+  const heldBehind = (check: Verifying) =>
+    `Held behind the Check "${check.name}" Collie started at ${check.started} on this agent's checkout, until it ends; the host delivers it then.`;
+
+  /** Waits while a Check collects proof on the agent's checkout, saying so once. */
+  const untilUnfenced = (about: Launched, what: string) =>
+    Effect.gen(function* () {
+      let said = false;
+      for (;;) {
+        const check = yield* fenceOf(about);
+        if (check === null) return;
+        if (!said) {
+          said = true;
+          yield* log(
+            about.runId,
+            `${about.agent}: its ${what} is ${Str.uncapitalize(heldBehind(check))}`,
+          );
+        }
+        yield* Effect.sleep(host.pollMs ?? DEFAULT_POLL_MS);
+      }
     });
 
   /**
@@ -2121,6 +2191,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   ) {
     const lost = yield* lostServer(compactionDeps(host, about.runId), about.agent);
     if (lost !== null) return { sent: false, why: lost, gone: true };
+    if (delivery.kind !== "steer") yield* untilUnfenced(about, delivery.kind);
     const through = delivery.herdr === undefined ? deps : { ...deps, herdr: delivery.herdr };
     const found = yield* entryFor(about, about.agent, null, through);
     if (found.entry === null)
@@ -2173,6 +2244,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           `${about.agent}: its ${delivery.kind} ${outcome.id} did not start a turn on core, so Enter was pressed once`,
         );
       const id = outcome.id;
+      if (
+        outcome.submission === "observed" &&
+        (delivery.kind === "step" || delivery.kind === "repair")
+      )
+        turnBegun.add(about.agent);
       if (outcome.submission === "observed")
         return {
           sent: true,
@@ -2203,11 +2279,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         observed: outcome.held === "acknowledged" ? "taken when it was first sent" : null,
         pane,
       };
+    const terminal = entry.incarnation?.terminalId;
     return {
       sent: false,
       why: `${outcome.reason}: ${outcome.detail}`,
       refused: outcome.reason === "exhausted",
       gone: inactive(outcome.detail),
+      blockedBy:
+        outcome.reason === "blocked" && outcome.id != null && terminal !== undefined
+          ? { terminal, delivery: outcome.id }
+          : undefined,
     };
   });
 
@@ -2245,73 +2326,6 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       Effect.map(Option.getOrNull),
       Effect.orElseSucceed(() => null),
     );
-
-  /**
-   * The workspace this Run's Task lives in. herdr drops a workspace once its last pane
-   * closes and never gives its id out again, so one that has gone is reopened on the Run's
-   * checkout and written back to the Task, where every Run of it reads the new id. A
-   * checkout that has gone too is not guessed at: the work parks.
-   */
-  const taskWorkspace = Effect.fn("Agents.taskWorkspace")(function* (ask: AgentAsk) {
-    const id = ask.task;
-    if (id === null) return null;
-    return yield* withTaskLock(
-      id,
-      Effect.gen(function* () {
-        const task = yield* readTask(id);
-        if (task === null) return null;
-        const open = yield* host.herdr.workspaceList();
-        if (Arr.some(open, (one) => one.workspaceId === task.workspace)) return task.workspace;
-        const fs = yield* FileSystem.FileSystem;
-        if (!(yield* fs.exists(ask.cwd).pipe(Effect.orElseSucceed(() => false)))) {
-          return yield* new AgentParked({
-            operation: ask.operation,
-            reason: `${id}'s workspace ${task.workspace} has closed and its checkout ${ask.cwd} is gone, so no agent was started. Restore ${ask.cwd} and \`collie run resume ${ask.runId}\`, or begin again with \`collie run start\`.`,
-          });
-        }
-        const reopened = yield* host.herdr.workspaceCreate({
-          cwd: ask.cwd,
-          label: task.label,
-        });
-        yield* writeTask({
-          ...task,
-          workspace: reopened.workspaceId,
-          root_pane: reopened.rootTab?.paneId ?? null,
-        });
-        yield* log(
-          ask.runId,
-          `${id}'s workspace ${task.workspace} had closed; reopened on ${ask.cwd} as ${reopened.workspaceId}`,
-        );
-        return reopened.workspaceId;
-      }),
-    );
-  });
-
-  /**
-   * The shell pane the Task's workspace was made with, for its first agent to take over
-   * rather than leave an empty first tab beside one of its own. Taken once, under the
-   * Task's lock, and used only while it is still there with nothing running in it.
-   */
-  const rootPane = Effect.fn("Agents.rootPane")(function* (ask: AgentAsk) {
-    const id = ask.task;
-    if (id === null) return null;
-    const taken = yield* withTaskLock(
-      id,
-      Effect.gen(function* () {
-        const task = yield* readTask(id);
-        const pane = task?.root_pane ?? null;
-        if (task === null || pane === null) return null;
-        yield* writeTask({ ...task, root_pane: null });
-        return pane;
-      }),
-    );
-    if (taken === null) return null;
-    const panes = yield* host.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
-    const pane = Option.getOrUndefined(
-      Arr.findFirst(panes, (one) => one.paneId === taken && one.agent === null),
-    );
-    return pane === undefined ? null : { tabId: pane.tabId, paneId: pane.paneId };
-  });
 
   /**
    * Waits out a reused agent's turn before its boundary, outside the Dispatcher's
@@ -2357,7 +2371,21 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const found = yield* entryFor(launched, launched.agent, null);
       if (found.entry === null) return { dispatch: true as const };
       const entry = found.entry;
-      const compaction = compactionDeps(host, launched.runId);
+      const compaction: CompactionDeps = {
+        ...compactionDeps(host, launched.runId),
+        room: (cwd) =>
+          under(
+            waitForMemory({
+              env: host.env,
+              stateDir: host.dir,
+              runId: launched.runId,
+              what: `${launched.agent}'s compaction`,
+              checkout: cwd,
+              memory: false,
+              stopped: stoppedRun(launched.runId),
+            }),
+          ),
+      };
       const due = yield* atBoundary(
         compaction,
         { agent: launched.agent, run: launched.runId, step: launched.operation },
@@ -2483,7 +2511,6 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       readonly agents: ReadonlyArray<AgentInfo>;
       readonly listedAt: string;
     },
-    backend: TerminalBackend,
     /** The step's prompt, for a harness given it at launch rather than sent it. */
     prompt: string | null,
     /** The session its harness opens, where Collie chose it, or resumes. */
@@ -2559,17 +2586,22 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     const personaBody = yield* personaOf(ask.persona ?? ask.role);
     yield* write(persona, `${personaBody}\n`);
     const { mcpConfig, piExtension } = yield* Effect.promise(() => import("./chat"));
-    const { TOOLS } = yield* Effect.promise(() => import("./tools"));
+    const { SUBMIT, TOOLS } = yield* Effect.promise(() => import("./tools"));
+    const { ROLE_TOOLS } = yield* Effect.promise(() => import("./toolkit"));
+    const byRole = config.role_tools === "role";
+    const roleTools = byRole ? ROLE_TOOLS.get(ask.role) : undefined;
     const command = host.self ?? selfCommand();
-    const serverEnv = {
-      HERDR_PLUGIN_ROOT: host.env.pluginRoot,
-      HERDR_PLUGIN_STATE_DIR: host.env.stateDir,
+    const runEnv = {
+      COLLIE_ROOT: host.env.pluginRoot,
+      COLLIE_STATE_DIR: host.env.stateDir,
       COLLIE_USER_DIR: host.env.userDir,
-      HERDR_SOCKET_PATH: host.env.socketPath ?? "",
       COLLIE_CWD: ask.cwd,
       COLLIE_RUN: ask.runId,
       COLLIE_AGENT: agent,
     };
+    const roleEnv = roleTools === undefined ? runEnv : { ...runEnv, COLLIE_TOOLS_ROLE: ask.role };
+    const submits = (ask.outputSubmit ?? config.output_submit) === "tool";
+    const serverEnv = submits ? { ...roleEnv, COLLIE_OUTPUT_SUBMIT: "tool" } : roleEnv;
     const configFile = `${dirFor(ask.runId)}/${stemOf(ask)}.mcp.json`;
     const extension = `${dirFor(ask.runId)}/${stemOf(ask)}.tools.ts`;
     yield* write(configFile, mcpConfig(command, serverEnv));
@@ -2578,12 +2610,21 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         extension,
         piExtension(
           command,
-          Arr.map(TOOLS, (tool) => ({
-            name: tool.name,
-            label: tool.title,
-            description: tool.description,
-            parameters: tool.input,
-          })),
+          Arr.map(
+            Arr.filter(
+              submits ? [...TOOLS, SUBMIT] : TOOLS,
+              (tool) =>
+                tool === SUBMIT ||
+                roleTools === undefined ||
+                Arr.some(roleTools, (name) => name === tool.name),
+            ),
+            (tool) => ({
+              name: tool.name,
+              label: tool.title,
+              description: tool.description,
+              parameters: tool.input,
+            }),
+          ),
           serverEnv,
           "",
           "",
@@ -2597,7 +2638,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           )
         : undefined;
     const settings =
-      backend === "core" && adapter.id === "opencode"
+      adapter.id === "opencode"
         ? yield* withReporter(ask, operators ?? {}, session?.resumed === true ? session.id : null)
         : operators;
     const mcp = adapter.mcp({
@@ -2675,93 +2716,45 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ...settingsArgs,
           ...mcp.args,
         ];
-        const started = `permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}${window.passed === null ? "" : `, auto-compact window ${window.passed}`}`;
-        if (backend === "core") {
-          const named = { [RUN_LABEL]: ask.runId, operation: ask.operation };
-          const labels = ask.task === null ? named : { ...named, task: ask.task };
-          const opened = session === null ? null : sessionArgs(adapter.id, session);
-          const terminal = yield* host.herdr
-            .agentLaunch({
-              name: agent,
-              argv: [
-                adapter.kind,
-                ...(opened?.lead ?? []),
-                ...args,
-                ...(prompt === null ? [] : ["--prompt", prompt]),
-                // OpenCode's controls, where installed, already name the session.
-                ...(opened === null || settingsArgs.includes("--session") ? [] : opened.tail),
-              ],
-              cwd: ask.cwd,
-              env: {
-                ...serverEnv,
-                // Who it is comes from these, never from a herdr pane core was started in.
-                HERDR_SOCKET_PATH: "",
-                HERDR_PANE_ID: "",
-                ...mcp.env,
-                ...(yield* envValues(profile.env ?? {}, host.env.home)),
-              },
-              labels,
-            })
-            .pipe(
-              Effect.mapError((cause) =>
-                unsettled(ask, `${agent} did not start on core: ${herdrFailureReason(cause)}`),
-              ),
-            );
-          yield* log(ask.runId, `${agent}: ${adapter.id} in core terminal ${terminal}, ${started}`);
-          yield* setStarted(ask.runId, agent, encodeStarted(ask));
-          const found = yield* entryFor(ask, agent, { paneId: terminal, workspaceId: null });
-          if (found.entry === null) return undefined;
-          yield* registerAgent(scopeFor(host.env, ask.cwd), found.entry, alive);
-          return rooted(found.entry.incarnation, yield* rootOf(host.herdr, terminal, "core"));
-        }
-        const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
-        const reused = ask.workspace ? null : yield* rootPane(ask);
-        const label = agentTabLabel(ask);
-        if (reused !== null) yield* Effect.ignore(host.herdr.tabRename(reused.tabId, label));
-        const tab = reused ?? (yield* host.herdr.tabCreate({ label, cwd: ask.cwd, workspace }));
-        // herdr ignores --cwd on tab create, so the pane is told where it is explicitly.
-        yield* host.herdr.paneRun(
-          tab.paneId,
-          yield* Effect.orDie(Effect.fromResult(CommandLine.join(["cd", ask.cwd]))),
-        );
-        for (const [key, value] of Rec.toEntries(mcp.env))
-          yield* host.herdr.paneRun(
-            tab.paneId,
-            `export ${key}=${yield* Effect.orDie(Effect.fromResult(CommandLine.quote(value)))}`,
-          );
-        for (const line of env) yield* host.herdr.paneRun(tab.paneId, line);
-        yield* host.herdr
-          .agentStart({
+        const tools = !byRole
+          ? ""
+          : roleTools === undefined
+            ? `, Collie tools: every tool, as the ${ask.role} has no list`
+            : `, Collie tools: the ${ask.role}'s ${roleTools.length}`;
+        const started = `permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}${window.passed === null ? "" : `, auto-compact window ${window.passed}`}${tools}`;
+        const named = { [RUN_LABEL]: ask.runId, operation: ask.operation };
+        const labels = ask.task === null ? named : { ...named, task: ask.task };
+        const opened = session === null ? null : sessionArgs(adapter.id, session);
+        const terminal = yield* host.herdr
+          .agentLaunch({
             name: agent,
-            kind: adapter.kind,
-            paneId: tab.paneId,
-            timeoutMs: START_TIMEOUT_MS,
-            args,
+            argv: [
+              adapter.kind,
+              ...(opened?.lead ?? []),
+              ...args,
+              ...(prompt === null ? [] : ["--prompt", prompt]),
+              // OpenCode's controls, where installed, already name the session.
+              ...(opened === null || settingsArgs.includes("--session") ? [] : opened.tail),
+            ],
+            cwd: ask.cwd,
+            env: {
+              ...serverEnv,
+              ...mcp.env,
+              ...(yield* envValues(profile.env ?? {}, host.env.home)),
+            },
+            labels,
           })
           .pipe(
-            Effect.retry({
-              while: paneNotReady,
-              times: 5,
-              schedule: Schedule.spaced("1 second"),
-            }),
-            Effect.catchIf(blockedAtStartup, () =>
-              log(ask.runId, `${agent}: blocked during startup in ${tab.paneId}; its prompt waits`),
-            ),
             Effect.mapError((cause) =>
-              unsettled(
-                ask,
-                `${agent} did not start in ${tab.paneId}: ${herdrFailureReason(cause)}`,
-              ),
+              unsettled(ask, `${agent} did not start on core: ${herdrFailureReason(cause)}`),
             ),
           );
-        yield* log(ask.runId, `${agent}: ${adapter.id} in ${tab.paneId}, ${started}`);
-        const found = yield* entryFor(ask, agent, {
-          paneId: tab.paneId,
-          workspaceId: workspace,
-        });
+        yield* log(ask.runId, `${agent}: ${adapter.id} in core terminal ${terminal}, ${started}`);
+        yield* setStarted(ask.runId, agent, encodeStarted(ask));
+        const found = yield* entryFor(ask, agent, { paneId: terminal, workspaceId: null });
         if (found.entry === null) return undefined;
-        yield* registerAgent(scopeFor(host.env, ask.cwd), found.entry, alive);
-        return rooted(found.entry.incarnation, yield* rootOf(host.herdr, tab.paneId));
+        yield* registerAgent(scopeFor(ask.cwd), found.entry, alive);
+        return rooted(found.entry.incarnation, yield* rootOf(host.herdr, terminal));
       }),
     );
   });
@@ -2837,7 +2830,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           // work is worse than work that stops and says why it stopped.
           return yield* unsettled(
             ask,
-            `herdr cannot say which agents it has (${herdrFailureReason(listing.failure)})`,
+            `core cannot say which agents it has (${herdrFailureReason(listing.failure)})`,
             "herdr-unavailable",
           );
         }
@@ -2867,14 +2860,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         }
         // Only a new agent's first work holds a steer; one reused takes it at its boundary.
         if (alive) yield* stepGoneOut(agent);
-        // herdr keeps a name while it lists it, so a new agent cannot take it until then.
+        // Core keeps a name while it lists it, so a new agent cannot take it until then.
         if (fresh && live !== undefined)
-          yield* host.herdr.paneClose(live.paneId, live.backend).pipe(
+          yield* host.herdr.terminalKill(live.paneId).pipe(
             Effect.mapError(
               (cause) =>
                 new AgentUncertain({
                   operation: ask.operation,
-                  reason: `${agent} is gone, but its pane ${live.paneId} did not close, so it was not started again: ${herdrFailureReason(cause)}`,
+                  reason: `${agent} is gone, but its terminal ${live.paneId} did not close, so it was not started again: ${herdrFailureReason(cause)}`,
                 }),
             ),
           );
@@ -2885,6 +2878,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               stateDir: host.dir,
               runId: ask.runId,
               what: `${agent}'s launch`,
+              checkout: ask.cwd,
               stopped: stoppedRun(ask.runId),
             });
         // Listed again: what herdr had before the wait may have changed during it.
@@ -2908,8 +2902,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             if (ask.claudeSubagents !== undefined) landed.claudeSubagents = ask.claudeSubagents;
             if ((ask.sequence ?? 1) > 1) landed.sequence = ask.sequence;
             if (ask.step !== undefined) landed.step = ask.step;
+            if (ask.outputSubmit !== undefined) landed.outputSubmit = ask.outputSubmit;
             landed.at = yield* Clock.currentTimeMillis;
             fellBack(landed, ask.from, ask.why);
+            if (ask.next !== undefined) landed.next = ask.next;
             if (incarnation !== undefined) {
               landed.terminalId = incarnation.terminalId;
               if (incarnation.agentSession !== null) landed.agentSession = incarnation.agentSession;
@@ -2943,45 +2939,51 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           `${notes === "" ? "" : `${notes}\n\n`}${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
         );
         const pointer = stepText(adapter, ask, file);
-        const backend = yield* terminalBackend(host.env.userDir);
-        // OpenCode reports no readiness, so on core its first prompt goes in at launch.
-        const atLaunch = !alive && backend === "core" && adapter.id === "opencode";
-        // On core, one it had is resumed. Claude's and pi's are chosen here so a full stop
-        // can resume them; Codex's and OpenCode's are read once they have opened one.
-        const had =
-          !alive && backend === "core"
-            ? yield* sessionHad(ask.runId, agent, adapter.kind, ask.sequence ?? 1)
-            : null;
+        // OpenCode reports no readiness, so its first prompt goes in at launch.
+        const atLaunch = !alive && adapter.id === "opencode";
+        // One it had is resumed. Claude's and pi's are chosen here so a full stop can resume
+        // them; Codex's and OpenCode's are read once they have opened one.
+        const had = alive
+          ? null
+          : yield* sessionHad(ask.runId, agent, adapter.kind, ask.sequence ?? 1);
         const session: StartSession | null =
           had !== null
             ? { id: had, resumed: true }
-            : !alive && backend === "core" && (adapter.id === "pi" || adapter.id === "claude")
+            : !alive && (adapter.id === "pi" || adapter.id === "claude")
               ? { id: yield* (yield* SecureRandom.SecureRandom).uuidV4(), resumed: false }
               : null;
         const chosen = session === null ? null : { kind: adapter.kind, value: session.id };
         // Started and recorded as one step, so a stop never misses an agent this started.
         const launched = alive
-          ? yield* recorded(
-              live.terminalId === null
-                ? undefined
-                : rooted(
-                    { terminalId: live.terminalId, agentSession: live.agentSession },
-                    yield* rootOf(host.herdr, live.paneId, live.backend),
-                  ),
-            )
+          ? yield* Effect.gen(function* () {
+              const found = yield* entryFor(ask, agent, { paneId: live.paneId, workspaceId: null });
+              if (
+                found.entry !== null &&
+                !(yield* registeredOnCore(ask.runId, agent, live.terminalId))
+              )
+                yield* registerAgent(scopeFor(ask.cwd), found.entry, {
+                  agents: listing.success,
+                  listedAt,
+                });
+              return yield* recorded(
+                rooted(
+                  { terminalId: live.terminalId, agentSession: null },
+                  yield* rootOf(host.herdr, live.paneId),
+                ),
+              );
+            })
           : yield* Effect.uninterruptible(
               start(
                 ask,
                 agent,
                 { agents: listing.success, listedAt },
-                backend,
                 atLaunch ? pointer : null,
                 session,
               ).pipe(Effect.flatMap((incarnation) => recorded(incarnation, chosen))),
             );
         if (atLaunch) {
           if (!replayed) yield* orderLaunch(ask);
-          givenAtLaunch.add(launched.agent);
+          turnBegun.add(launched.agent);
           yield* write(sentPath(launched, "step"), pointer);
           yield* log(
             ask.runId,
@@ -3058,7 +3060,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ask.runId,
           `${agent}: ${alive ? "reattached to" : "launched for"} ${ask.operation}`,
         );
-        if (!alive && backend === "core" && adapter.id === "codex" && session === null)
+        // Only Codex's App Server names a thread; without one there is none to wait for.
+        if (
+          !alive &&
+          adapter.id === "codex" &&
+          session === null &&
+          (yield* readControl(host.env.stateDir, agent))?.endpoint != null
+        )
           return yield* withSession(
             launched,
             boundThreadOf(launched),
@@ -3161,6 +3169,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 
   /** Calls whose answers were sent, or refused for good, by agent and call. */
   const answeredCalls = new Set<string>();
+  /** Calls whose answers wait behind a Check, by agent and call, so that is logged once. */
+  const fencedCalls = new Set<string>();
 
   /**
    * Puts each question the agent asked since it was given this work, and before `until`,
@@ -3202,6 +3212,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               ref: `question-${call.id}`,
               herdr: yield* herdr,
             });
+            // Taken once settled: a pass interrupted mid-send leaves it to the next, which
+            // the ledger answers as already sent where it went.
             answeredCalls.add(key);
             if (sent.sent) continue;
             yield* log(
@@ -3267,6 +3279,18 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               holds(false);
               continue;
             }
+            const fence = yield* fenceOf(launched);
+            if (fence !== null) {
+              if (!fencedCalls.has(key))
+                yield* log(
+                  launched.runId,
+                  `${launched.agent}: the answers to its question are ${Str.uncapitalize(heldBehind(fence))}`,
+                );
+              fencedCalls.add(key);
+              holds(true);
+              continue;
+            }
+            fencedCalls.delete(key);
             let sentAll = true;
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
@@ -3309,7 +3333,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             holds(!answeredCalls.has(key));
           }
           return open;
-        }).pipe(Effect.orElseSucceed(() => false));
+        }).pipe(
+          withQuestionPass(launched.agent),
+          Effect.orElseSucceed(() => false),
+        );
     });
 
   const tendQuestions = (
@@ -3341,7 +3368,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           .readDirectory(yield* controlDir(host.env.stateDir, ""))
           .pipe(Effect.orElseSucceed(() => []));
         yield* Effect.forEach(named, (agent) =>
-          takeHarnessQuestions(host.env.stateDir, ports, agent).pipe(Effect.ignore),
+          takeHarnessQuestions(host.env.stateDir, ports, agent).pipe(
+            withQuestionPass(agent),
+            Effect.ignore,
+          ),
         );
         const asking = yield* Effect.filter(named, (agent) =>
           Effect.map(
@@ -3357,25 +3387,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             ([runId, asked]) => [runId, new Map(Arr.map(asked, (one) => [one.name, one] as const))],
           ),
         );
-        // Every Herd's, and none where one cannot be read: an agent there may be live.
-        const alive = yield* Effect.cached(
-          Effect.gen(function* () {
-            const listed = yield* host.herdr.sessionList();
-            const sessions =
-              listed.length === 0
-                ? [host.herdr]
-                : Arr.map(listed, (one) => host.herdr.inSession(one.socketPath));
-            const agents = yield* Effect.forEach(
-              sessions,
-              (herdr) =>
-                Effect.map(herdr.agentList(), (listed) =>
-                  Arr.map(listed, (one) => ({ name: one.name, herdr })),
-                ),
-              { concurrency: "unbounded" },
-            );
-            return agents.flat();
-          }).pipe(Effect.option),
-        );
+        // None where core cannot be read: an agent there may be live.
+        const alive = yield* Effect.cached(host.herdr.agentList().pipe(Effect.option));
         for (const agent of asking) {
           const launchesOf = Arr.filter(launches, (one) => one.agent === agent);
           const own = Arr.sortWith(
@@ -3395,22 +3408,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               launched,
               questionsFor(launched.runId),
               next?.at ?? Infinity,
-              Effect.map(
-                alive,
-                (found) =>
-                  Option.getOrUndefined(
-                    Option.flatMap(Option.fromNullishOr(Option.getOrUndefined(found)), (present) =>
-                      Option.map(
-                        Option.fromNullishOr(
-                          Option.getOrUndefined(
-                            Arr.findFirst(present, (one) => one.name === agent),
-                          ),
-                        ),
-                        (present_) => present_.herdr,
-                      ),
-                    ),
-                  ) ?? host.herdr,
-              ),
+              Effect.succeed(host.herdr),
               known,
             );
             if (!(yield* tend(null))) continue;
@@ -3541,7 +3539,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     );
 
-  const endedWithoutOutput = (launched: Launched, may: Effect.Effect<boolean>) =>
+  const endedWithoutOutput = (
+    launched: Launched,
+    may: Effect.Effect<boolean>,
+    questions?: Questions,
+  ) =>
     under(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -3549,19 +3551,57 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           Effect.map((text) => Str.trim(text) === ""),
           Effect.orElseSucceed(() => true),
         );
-        // A turn begun with its launch may end before it is first watched.
-        let working = givenAtLaunch.delete(launched.agent);
+        // Read here too: a turn that ended on a question may not be on its Run yet.
+        const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
+        const unasked =
+          asking === null ? Effect.succeed(true) : Effect.map(asking(null), (open) => !open);
+        let working = turnBegun.delete(launched.agent);
         for (;;) {
           const status = yield* host.herdr
             .agentStatus(launched.agent)
             .pipe(Effect.orElseSucceed(() => null));
           working ||= status === "working";
-          if (working && status !== null && isSettled(status) && (yield* absent) && (yield* may))
+          if (
+            working &&
+            status !== null &&
+            isSettled(status) &&
+            (yield* absent) &&
+            (yield* unasked) &&
+            (yield* may) &&
+            !(yield* holdsBudgetOf(launched.runId, launched.agent)) &&
+            (openQuestions.get(launched.agent)?.size ?? 0) === 0
+          )
             return;
           yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
         }
       }),
     );
+
+  /**
+   * Whether a delivery blocking a reminder is settled, settling it as sent where the agent's
+   * own submit record shows it landed.
+   */
+  const settledNow = (launched: Launched, held: { terminal: string; delivery: string }) =>
+    Effect.gen(function* () {
+      const lines = yield* readLedger(held.terminal);
+      const now = newestById(lines).get(held.delivery);
+      if (now === undefined || isSettledDelivery(now)) return true;
+      const dir = yield* controlDir(host.env.stateDir, launched.agent);
+      if (!(yield* submittedDelivery(dir, held.delivery).pipe(Effect.orElseSucceed(() => false))))
+        return false;
+      // As `confirmSubmitted` settles one its agent took.
+      yield* appendLine({
+        ...now,
+        at: yield* nowIso,
+        state: "acknowledged",
+        note: "taken: its submit hook recorded it",
+      });
+      yield* log(
+        launched.runId,
+        `${launched.agent}: ${held.delivery} had landed; settled it as sent`,
+      );
+      return true;
+    });
 
   const remind = (launched: Launched, ordinal: number) =>
     under(
@@ -3570,20 +3610,40 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           kind: "repair",
           ref: `${stemOf(launched)}.remind-${ordinal}`,
         });
+        const held = sent.sent ? undefined : sent.blockedBy;
+        if (held !== undefined) {
+          const settled =
+            (yield* settledNow(launched, held)) ||
+            (yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS)).pipe(
+              Effect.andThen(settledNow(launched, held)),
+            ));
+          if (!settled) {
+            yield* rememberUnsettled(`${host.dir}/runs/${launched.runId}`, held);
+            return yield* new AgentParked({
+              operation: launched.operation,
+              reason: `${launched.agent} could not be reminded to write ${launched.operation}.json: delivery ${held.delivery} has not settled. Collie rechecks it; \`collie run deliveries ${launched.runId} --reconcile ${held.delivery} --as sent|not-sent\` settles it now.`,
+              cause: "delivery-unsettled",
+            });
+          }
+        }
+        // A reminder is held only by an earlier copy of itself, so one that landed was sent.
+        const wasSent = sent.sent || held !== undefined;
         yield* log(
           launched.runId,
-          sent.sent
+          wasSent
             ? `${launched.agent}: ended its turn without ${launched.operation}.json, so was reminded to write it (${ordinal} of ${OUTPUT_REMINDERS})`
             : `${launched.agent}: ended its turn without ${launched.operation}.json, and could not be reminded to write it (${sent.why})`,
         );
-        if (sent.sent) yield* reminded(launched, ordinal, "still-absent", 0);
-        return sent.sent ? yield* nowIso : null;
+        if (wasSent) yield* reminded(launched, ordinal, "still-absent", 0);
+        return wasSent ? yield* nowIso : null;
       }).pipe(
-        Effect.catch((cause) =>
-          log(
-            launched.runId,
-            `${launched.agent}: could not be reminded to write ${launched.operation}.json (${reason(cause)})`,
-          ).pipe(Effect.as(null)),
+        Effect.catchIf(
+          (cause) => !isParked(cause),
+          (cause) =>
+            log(
+              launched.runId,
+              `${launched.agent}: could not be reminded to write ${launched.operation}.json (${reason(cause)})`,
+            ).pipe(Effect.as(null)),
         ),
       ),
     );
@@ -3626,27 +3686,26 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   /** What a Run's agent on core was started with, until it is ended on purpose. */
   const startedWith = (runId: string, agent: string) =>
     under(RunRecords.use((records) => records.control(RELAUNCH, runId, agent)));
-  const setStarted = (runId: string, agent: string, text: string) =>
+  const setStarted = (runId: string, agent: string, text: string | null) =>
     under(RunRecords.use((records) => records.setControl(RELAUNCH, runId, text, agent)));
 
   /** The agents the host is starting again after core lost them, until each has started. */
   const comingBack = new Map<string, Deferred.Deferred<void>>();
-  /** Agents whose step went in with their launch, so their turn began unwatched. */
-  const givenAtLaunch = new Set<string>();
+  /** Why the host could not start a lost agent again, until its collection parks on it. */
+  const refusedStarts = new Map<string, string>();
+  /** Agents whose work was seen starting a turn, which may end before it is watched. */
+  const turnBegun = new Set<string>();
   const resuming = Semaphore.makeUnsafe(1);
 
   /**
    * One agent core lost, started again in the session it had. What it is then told, where
    * its work is still out, is handed back to go once every lost agent of the Run is back.
    */
-  /** The host's herdr, but prompting an OpenCode agent's own server instead of its TUI. */
+  /** The host's core, but prompting an OpenCode agent's own server instead of its TUI. */
   const posting = (base: string, session: string): DeliveringHerdr => ({
     agentList: () => host.herdr.agentList(),
-    agentSendKeys: (target, keys, backend) => host.herdr.agentSendKeys(target, keys, backend),
-    restoreAgentName: (entry) => host.herdr.restoreAgentName(entry),
-    agentStatus: (target, backend) => host.herdr.agentStatus(target, backend),
-    promptBox: (target, backend) => host.herdr.promptBox(target, backend),
-    agentPressEnter: (target, backend) => host.herdr.agentPressEnter(target, backend),
+    agentSendKeys: (target, keys) => host.herdr.agentSendKeys(target, keys),
+    agentStatus: (target) => host.herdr.agentStatus(target),
     agentPrompt: (_target, text) =>
       promptAsync(base, session, text).pipe(
         Effect.as("unobserved" as const),
@@ -3734,10 +3793,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             ? { id: yield* (yield* SecureRandom.SecureRandom).uuidV4(), resumed: false }
             : null;
       const incarnation = yield* Effect.uninterruptible(
-        start(ask, agent, listed, "core", atLaunch ? told : null, session),
+        start(ask, agent, listed, atLaunch ? told : null, session),
       );
       if (incarnation === undefined) return [];
-      if (atLaunch) givenAtLaunch.add(agent);
+      if (atLaunch) turnBegun.add(agent);
       // Every record of its work names this incarnation now, so a stop and a send reach it.
       let now = latest;
       for (const one of own) {
@@ -3852,10 +3911,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                     relaunch(runId, agent, launches, { agents: listing.value, listedAt }, run),
                   ).pipe(
                     Effect.catch((cause) =>
-                      log(
-                        runId,
-                        `${agent}: could not be started again on core (${isParked(cause) ? cause.reason : reason(cause)})`,
-                      ).pipe(Effect.as([])),
+                      Effect.sync(() => {
+                        if (isParked(cause)) refusedStarts.set(agent, cause.reason);
+                      }).pipe(
+                        Effect.andThen(
+                          log(
+                            runId,
+                            `${agent}: could not be started again on core (${isParked(cause) ? cause.reason : reason(cause)})`,
+                          ),
+                        ),
+                        Effect.as([]),
+                      ),
                     ),
                   )),
                 );
@@ -3933,6 +3999,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (yield* fs.exists(usageWaitPath(ask)).pipe(Effect.orElseSucceed(() => true)))
           return false;
         const agent = yield* nameFor(ask);
+        const refused = refusedStarts.get(agent);
+        if (refused !== undefined) {
+          refusedStarts.delete(agent);
+          // Resumed, it is started again with its step, as one ended on purpose is.
+          yield* setStarted(ask.runId, agent, null);
+          return yield* new AgentParked({ operation: ask.operation, reason: refused });
+        }
         const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
         if (onlyDeadServer && lost === null) return false;
         const completed = waitForOutput(ask.output, unless ?? null, {
@@ -3946,6 +4019,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ),
         });
         if ((yield* completed) !== null) return false;
+        const rows = Arr.filter(
+          yield* everyRegistered,
+          (one) => one.agent === agent && one.runId === ask.runId,
+        );
+        if (
+          Arr.isReadonlyArrayNonEmpty(rows) &&
+          !Arr.some(rows, (one) => one.incarnation?.backend === "core")
+        ) {
+          yield* log(ask.runId, `${agent}: started before core, so not started again`);
+          return false;
+        }
         // The host starts an agent on core again, in the session it had.
         if (lost === null && (yield* startedWith(ask.runId, agent)) !== null) return false;
         const listing = yield* host.herdr.agentList().pipe(Effect.option);
@@ -4118,7 +4202,6 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const endsOf = (runId: string): EndDeps => ({
     ...compactionDeps(host, runId),
     herdr: host.herdr,
-    cwd: host.env.cwd,
     stopMs: host.stopMs,
   });
 
@@ -4134,7 +4217,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           Effect.mapError((failure) =>
             failure._tag === "AgentsUnlisted"
               ? parked(
-                  `herdr cannot say whether it is running (${herdrFailureReason(failure.cause)})`,
+                  `core cannot say whether it is running (${herdrFailureReason(failure.cause)})`,
                 )
               : parked(
                   `its pane ${failure.paneId} would not close (${herdrFailureReason(failure.cause)})`,
@@ -4195,7 +4278,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (launches.length === 0) return yield* reported(runId, stopped, left);
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
         if (listing._tag === "Failure") {
-          left.push(`herdr cannot say which agents it has (${reason(listing.failure)})`);
+          left.push(`core cannot say which agents it has (${reason(listing.failure)})`);
           return yield* reported(runId, stopped, left);
         }
         // Every agent it launched, listed or not: a closed pane is not a stopped server.
@@ -4211,7 +4294,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             left.push(
               failure._tag === "PaneOpen"
                 ? `${name}'s pane ${failure.paneId} would not close (${reason(failure.cause)})`
-                : `herdr cannot say which agents it has (${reason(failure.cause)})`,
+                : `core cannot say which agents it has (${reason(failure.cause)})`,
             );
           } else if (ended.success._tag === "Closed") {
             if (ended.success.ended) stopped.push(name);
@@ -4305,6 +4388,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           pending.workflowNotice = options.workflowNotice;
         if (options.actor !== undefined && queued === undefined) {
           pending.actor = Struct.omit(actorOf(options.actor, options.request), ["requestId"]);
+        }
+        // Held for humans and agents alike: a message landing mid-Check moves the tree it proves.
+        const fence = yield* fenceOf(launched);
+        if (fence !== null) {
+          yield* keepQueued(dirFor(options.runId), pending).pipe(Effect.orDie);
+          return {
+            agent: launched.agent,
+            delivered: false,
+            queued: true,
+            detail: heldBehind(fence),
+          };
         }
         if (fallback) {
           const found = yield* entryFor(launched, launched.agent, null);
@@ -4405,6 +4499,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return { typed: dispatch.marked(text, `${ask.runId}-${stemOf(ask)}-step-1`), prompt };
     },
     skills: (names) => under(skills(names)),
+    outputSubmit: under(readConfig(host.env.userDir)).pipe(
+      Effect.map((config) => (config.output_submit === "tool" ? "tool" : "file")),
+      Effect.orElseSucceed(() => "file" as const),
+    ),
     attachments: (runId) =>
       under(listAttachments(attachmentsDir(`${host.dir}/runs/${runId}`))).pipe(
         Effect.orElseSucceed(() => []),
@@ -4452,24 +4550,39 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           const now = yield* Clock.currentTimeMillis;
           const read = roomFor(readings, now);
           const out = Arr.map(spent, (one) => ({ ...one, on: pinned(one.on) }));
+          const fallbacks = yield* chain;
+          const catalogue = host.catalogue === undefined ? undefined : yield* host.catalogue;
+          const room: Room = (choice, upTo) => {
+            const judged = read(choice, upTo);
+            const ran = Option.getOrUndefined(
+              Arr.findFirst(
+                out,
+                (one) => sameUsage(one.on, choice) && !usageRecovered(one, readings, now),
+              ),
+            );
+            return judged.room && ran !== undefined ? { room: false, why: ran.why } : judged;
+          };
           const resolved = resolveWithRoom(
             [configured, ...layers],
-            yield* chain,
-            (choice, upTo) => {
-              const judged = read(choice, upTo);
-              const ran = Option.getOrUndefined(
-                Arr.findFirst(
-                  out,
-                  (one) => sameUsage(one.on, choice) && !usageRecovered(one, readings, now),
-                ),
-              );
-              return judged.room && ran !== undefined ? { room: false, why: ran.why } : judged;
-            },
+            fallbacks,
+            room,
             host.models,
-            host.catalogue === undefined ? undefined : yield* host.catalogue,
+            catalogue,
           );
           if (!resolved.ok) return yield* new WorkflowError({ reason: resolved.problem });
           const { choice, from, why, skipped } = resolved.chosen;
+          // The same resolution with this choice's usage spent: where a Fallback would go now.
+          const after = resolveWithRoom(
+            [configured, ...layers],
+            fallbacks,
+            (one, upTo) =>
+              sameUsage(pinned(one), pinned(choice))
+                ? { room: false, why: "spent" }
+                : room(one, upTo),
+            host.models,
+            catalogue,
+          );
+          const next = after.ok && after.chosen.from !== null ? after.chosen.choice : null;
           for (const line of skipped) yield* log(runId, `${operation}: ${line}`);
           // Chosen mid-work, the work's own line says what came of it.
           if (spent.length === 0 && from !== null) {
@@ -4482,6 +4595,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           }
           const chosen: Types.Mutable<ChosenAgent> = { ...choice };
           fellBack(chosen, from, why);
+          if (next !== null)
+            chosen.next = { harness: next.harness, model: next.model, effort: next.effort };
           return chosen;
         }),
       ),
@@ -4497,14 +4612,18 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             Arr.some(agents, (one) => one.name === held.agent),
           );
           if (!alive || held.model === undefined) return null;
-          const running: Types.Mutable<ChosenAgent & { sequence: number }> = {
+          const running: Types.Mutable<
+            ChosenAgent & { sequence: number; outputSubmit: "file" | "tool" }
+          > = {
             harness: held.harness,
             model: held.model,
             effort: held.effort ?? null,
             sequence: held.sequence ?? 1,
+            outputSubmit: held.outputSubmit ?? "file",
           };
           if (held.claudeSubagents !== undefined) running.claudeSubagents = held.claudeSubagents;
           fellBack(running, held.from, held.why);
+          if (held.next !== undefined) running.next = held.next;
           return running;
         }),
       ),
@@ -4566,7 +4685,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         ),
       ),
     resumeLost,
-    onLosses: (resumed) => under(Stream.runForEach(host.herdr.agentsEnded(), () => resumed)),
+    onLosses: (resumed) => under(Stream.runForEach(host.herdr.terminalsEnded(), () => resumed)),
     atWork: (runId) =>
       under(candidatesOf(runId).pipe(Effect.map((all) => steerTarget(all, {}) ?? null))).pipe(
         Effect.orElseSucceed(() => null),
@@ -4753,25 +4872,50 @@ const layeredPersona = Effect.fn("Agents.layeredPersona")(function* (
   env: PersonaEnv,
   role: string,
   dirs: ReadonlyArray<string>,
-) {
+  followed: ReadonlyArray<string> = [],
+): Effect.fn.Return<string | null, AgentParked, FileSystem.FileSystem | Path.Path> {
   const fs = yield* FileSystem.FileSystem;
-  for (const dir of dirs) {
+  for (const [at, dir] of dirs.entries()) {
     const file = `${dir}/personas/${role}.md`;
     if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) continue;
     const markdown = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-    const body = bodySections(pipe(markdown, Str.replace(PERSONA_FRONT_MATTER, ""))).preamble;
-    if (Str.trim(body) === "") continue;
-    const unfilled = personaHoles(body);
-    if (unfilled.length > 0) {
-      return yield* new AgentParked({
-        operation: role,
-        reason: `the ${role} persona in ${file} names ${Arr.join(unfilled, ", ")}, and a persona is told nothing but {{skill:name}}: fix it, then resume this Run`,
-      });
+    const { preamble, sections } = bodySections(
+      pipe(markdown, Str.replace(PERSONA_FRONT_MATTER, "")),
+    );
+    if (Str.trim(preamble) === "") {
+      // A fork stub is the persona it extends, found from its own Layer down, then its own sections.
+      const parent = yield* Effect.try(() => parseDocument(markdown).data.extends).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (isString(parent) && !followed.includes(file)) {
+        const from = parent === role ? at + 1 : at;
+        const inherited = yield* layeredPersona(env, parent, dirs.slice(from), [...followed, file]);
+        if (inherited === null || sections.size === 0) return inherited;
+        const added = Arr.map([...sections], ([name, text]) => `## ${name}\n\n${text}`);
+        return `${inherited}\n\n${yield* renderedPersona(env, role, file, Arr.join(added, "\n\n"))}`;
+      }
+      continue;
     }
-    const named = yield* installedSkills(env, skillsIn(body));
-    return renderTemplate(body, {}, { skill: skillMention(named) }).text;
+    return yield* renderedPersona(env, role, file, preamble);
   }
   return null;
+});
+
+const renderedPersona = Effect.fn("Agents.renderedPersona")(function* (
+  env: PersonaEnv,
+  role: string,
+  file: string,
+  body: string,
+) {
+  const unfilled = personaHoles(body);
+  if (unfilled.length > 0) {
+    return yield* new AgentParked({
+      operation: role,
+      reason: `the ${role} persona in ${file} names ${Arr.join(unfilled, ", ")}, and a persona is told nothing but {{skill:name}}: fix it, then resume this Run`,
+    });
+  }
+  const named = yield* installedSkills(env, skillsIn(body));
+  return renderTemplate(body, {}, { skill: skillMention(named) }).text;
 });
 
 /** What the role is stated as, in the persona and in the prompt alike. */

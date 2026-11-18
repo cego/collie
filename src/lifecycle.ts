@@ -10,9 +10,11 @@
 
 import type { Launched } from "./launches";
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { awaitingLine } from "./awaiting";
+import { cursorToken, newerFirst, pageToken, restarted, type RunListAsked } from "./run-list";
 import { redactedField, withNotice } from "./redact";
 import type { SettingValue } from "./settings";
 import { reportOf, resultText, type Recorded } from "./report";
@@ -46,12 +48,12 @@ import {
   restartSaid,
   socketOf,
   type HostClient,
+  type RunPageAnswer,
   type HostUnavailable,
   type HostVersionMismatch,
 } from "./host";
 import { Herdr, type HerdrError } from "./herdr";
 import { viaCommand } from "./ssh-argv";
-import { terminalBackend } from "./config";
 import { machineName, pairWith, peersOf } from "./peers";
 import {
   artefactOwner,
@@ -261,9 +263,9 @@ export type Door = FrontDoor | Asker;
 
 const isFrontDoor = Schema.is(FrontDoor);
 
-const declaring = (door: Door, session: string | null, stamp?: string): Declaration => {
-  if (isFrontDoor(door)) return { frontDoor: door, session };
-  let declared: Declaration = { frontDoor: door.origin, session, ...voiceOf(door) };
+const declaring = (door: Door, stamp?: string): Declaration => {
+  if (isFrontDoor(door)) return { frontDoor: door };
+  let declared: Declaration = { frontDoor: door.origin, ...voiceOf(door) };
   if (door.from !== undefined) declared = { ...declared, from: door.from };
   if (stamp !== undefined) declared = { ...declared, stamp };
   return declared;
@@ -310,7 +312,7 @@ const notListed = (name: string) =>
     reason: `${REFUSED_INPUT}: no Machine "${name}": this Machine's list names none by that name`,
   });
 
-/** This Machine's Machines, core's or herdr's as its backend says, or none where it could not say. */
+/** This Machine's Machines, as core lists them, or none where it could not say. */
 const herdrMachines = (env: PluginEnv) =>
   new Herdr(env).machineList().pipe(
     Effect.orElseSucceed((): ReadonlyArray<HerdrMachine> => []),
@@ -341,27 +343,21 @@ const openAndWake = (
   target?: string,
 ) =>
   Effect.gen(function* () {
-    const onCore = (yield* terminalBackend(env.userDir)) === "core";
     const listed = named(yield* herdrMachines(env), name);
-    // A pairing made on herdr, before this Machine was set to core.
-    const saved = onCore
-      ? named(
-          yield* new Herdr(env).herdrMachineList().pipe(
-            Effect.orElseSucceed((): ReadonlyArray<HerdrMachine> => []),
-            Effect.provide(Path.layer),
-          ),
-          name,
-        )
-      : undefined;
-    const machine = listed ?? (target === undefined ? saved : { label: name, target });
+    const paired =
+      listed === undefined && Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name);
+    // A pairing core does not keep has no saved target: ssh resolves its name.
+    const machine =
+      listed ??
+      (target !== undefined || paired ? { label: name, target: target ?? name } : undefined);
     if (machine === undefined) return yield* notListed(name);
     const opened = yield* openConnection(env.stateDir, machine, { said });
     let added = false;
-    if (onCore && listed !== undefined)
+    if (listed !== undefined)
       yield* new Herdr(env)
         .machineDial(name)
         .pipe(Effect.mapError(coreRefused(name)), Effect.provide(Path.layer));
-    else if (onCore && Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name)) {
+    else if (paired) {
       yield* addToCore(env, name, machine.target, opened.path);
       added = true;
     }
@@ -417,9 +413,7 @@ const reach = (
   machine === null
     ? connect(env.stateDir).pipe(
         Effect.tap((client) =>
-          door === undefined
-            ? Effect.void
-            : client.declare(declaring(door, env.socketPath, env.hostStamp)),
+          door === undefined ? Effect.void : client.declare(declaring(door, env.hostStamp)),
         ),
       )
     : ensurePaired(env, machine).pipe(
@@ -604,12 +598,12 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
   if (elsewhere && options.task.mode !== "new")
     return err(
       "invalid_input",
-      `A Run started on ${env.machine} opens a Task there; --task, --continue-task and --here name this Machine's.`,
+      `A Run started on ${env.machine} opens a Task there; --task names this Machine's.`,
     );
   // The defaults of the workspace this was started from, which only a front door knows.
   const defaults = elsewhere
     ? null
-    : yield* readDefaults(yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env, env.cwd)))).pipe(
+    : yield* readDefaults(yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env.cwd)))).pipe(
         Effect.orElseSucceed(() => null),
       );
   const placed = yield* taskFor(env, options.task, {
@@ -618,7 +612,6 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     goal: options.intent?.goal,
     title: options.title,
   });
-  if (placed._tag === "Rejected") return placed.result;
   // Resolved here, once: what this front door listed and offered is where the host roots it.
   const root =
     options.options?.workspace === PROJECTS_ROOT_OPTION && !elsewhere
@@ -638,7 +631,6 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
         options: options.options,
         task: placed.task?.id,
         taskLabel: placed.label ?? undefined,
-        here: placed.here ?? undefined,
         parent: options.parent ?? undefined,
         intent: defaults === null ? { ...options.intent } : { ...options.intent, defaults },
         verify: options.verify,
@@ -763,38 +755,101 @@ export const runViews = (
     ),
   );
 
-export const flockRuns = Effect.fn("Lifecycle.flockRuns")(function* (
+/**
+ * One page of the flock's Runs, newest first: each Machine's own page merged, with the
+ * token for the next and the cursor for what changes after this. A token from a host
+ * that has started again since is refused with `stale_cursor`, never guessed across.
+ */
+export const flockRunPage = Effect.fn("Lifecycle.flockRunPage")(function* (
   env: PluginEnv,
-  task: string | null,
+  asked: RunListAsked,
 ) {
-  const local = yield* runViews(env, task);
-  const runs: Array<RunView & { readonly machine: string }> = Arr.map(local.runs, (view) => ({
-    ...view,
-    machine: env.machine ?? machineName(),
-  }));
+  const here = env.machine ?? machineName();
+  const pageAsked = (machine: string) => ({
+    task: machine === here ? asked.task : null,
+    states: asked.states,
+    limit: asked.limit,
+    full: asked.full,
+    after: asked.after,
+    since: asked.since === null ? null : (asked.since[machine]?.seq ?? null),
+  });
+  const answers: Array<{ readonly machine: string; readonly page: typeof RunPageAnswer.Type }> = [];
   const machines: Array<{
     readonly machine: string;
     readonly state: "away";
     readonly note: string;
   }> = [];
-  if (env.machine !== undefined) return { ...local, runs, machines };
-  for (const peer of yield* peersOf(env.stateDir)) {
-    const read = yield* Effect.scoped(
-      connectPeer(env.stateDir, peer.name, { as: "cli", client: machineName() }).pipe(
-        Effect.flatMap((client) => client.runs({ task: null })),
-        Effect.result,
-      ),
-    );
-    if (read._tag === "Success")
-      runs.push(...Arr.map(read.success, (view) => ({ ...view, machine: peer.name })));
-    else
-      machines.push({
-        machine: peer.name,
-        state: "away",
-        note: refusal(read.failure).error.message,
-      });
+  let unreadable: string | null = null;
+  if ((yield* anyRuns(env)) || env.machine !== undefined) {
+    const local = yield* asks(env, (client) => client.runPage(pageAsked(here)));
+    if (local.ok) answers.push({ machine: here, page: local.value });
+    else unreadable = local.error.message;
   }
-  return { ...local, runs, machines };
+  if (env.machine === undefined)
+    for (const peer of yield* peersOf(env.stateDir)) {
+      const read = yield* Effect.scoped(
+        connectPeer(env.stateDir, peer.name, { as: "cli", client: machineName() }).pipe(
+          Effect.flatMap((client) => client.runPage(pageAsked(peer.name))),
+          Effect.result,
+        ),
+      );
+      if (read._tag === "Success") answers.push({ machine: peer.name, page: read.success });
+      else
+        machines.push({
+          machine: peer.name,
+          state: "away",
+          note: refusal(read.failure).error.message,
+        });
+    }
+  const epochs = Rec.fromEntries(Arr.map(answers, ({ machine, page }) => [machine, page.epoch]));
+  const stale = restarted(
+    { ...asked.epochs, ...Rec.map(asked.since ?? {}, (mark) => mark.epoch) },
+    epochs,
+  );
+  if (stale.length > 0)
+    return err(
+      "stale_cursor",
+      `The host on ${Arr.join(stale, ", ")} has started again since that token was given; list again from the first page or a fresh cursor.`,
+      { machines: [...stale] },
+    );
+  const merged = Arr.flatMap(answers, ({ machine, page }) => {
+    const views = new Map(Arr.map(page.views ?? [], (view) => [view.runId, view]));
+    return Arr.map(page.runs, (summary) => ({
+      machine,
+      summary,
+      view: views.get(summary.runId) ?? null,
+    }));
+  }).sort((a, b) => newerFirst(a.summary, b.summary));
+  const taken = asked.limit === null ? merged : merged.slice(0, asked.limit);
+  const omitted =
+    merged.length - taken.length + Arr.reduce(answers, 0, (sum, { page }) => sum + page.omitted);
+  const last = taken.at(-1)?.summary;
+  const next =
+    omitted === 0 || last === undefined
+      ? null
+      : pageToken({
+          task: asked.task,
+          states: asked.states,
+          limit: asked.limit,
+          full: asked.full,
+          since: asked.since,
+          after: { created: last.created, runId: last.runId },
+          epochs: { ...asked.epochs, ...epochs },
+        });
+  return {
+    ok: true as const,
+    runs: taken,
+    omitted,
+    next,
+    complete: omitted === 0 && machines.length === 0 && unreadable === null,
+    cursor: cursorToken(
+      Rec.fromEntries(
+        Arr.map(answers, ({ machine, page }) => [machine, { epoch: page.epoch, seq: page.cursor }]),
+      ),
+    ),
+    machines,
+    unreadable,
+  };
 });
 
 /**
@@ -1505,7 +1560,7 @@ export const deliveredLine = (sent: {
 }): string =>
   sent.observed === true
     ? `Delivered to ${sent.agent} (observed: ${sent.how ?? "taken"}).`
-    : `Sent to ${sent.agent}, not observed. Go to pane: herdr agent focus ${sent.agent}${sent.pane === undefined ? "" : ` (pane ${sent.pane})`}.`;
+    : `Sent to ${sent.agent}, not observed. Go to pane: \`hc attach ${sent.pane ?? sent.agent}\`.`;
 
 /**
  * What carries a request on to a finished Run whose agent is gone: its follow-up offer
@@ -1827,6 +1882,10 @@ export const machineShell = (env: PluginEnv, script: string, request: string, do
 export const usageReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.usage(), door);
 
+/** Where a Fallback would move each unfinished Run's work now. */
+export const usageFallbacks = (env: PluginEnv, door: Door) =>
+  asks(env, (client) => client.fallbacks(), door);
+
 /** What a cleanup sweep would remove now, and what is kept and why. */
 export const cleanupListing = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.cleanup(), door);
@@ -1837,7 +1896,7 @@ export const scheduleListing = (env: PluginEnv, door: Door) =>
 
 /**
  * The Schedules of the Machine `--machine` names, or of this Machine and every paired one,
- * with each peer that did not answer named as away, as `flockRuns` lists Runs.
+ * with each peer that did not answer named as away, as `flockRunPage` lists Runs.
  */
 export const flockSchedules = Effect.fn("Lifecycle.flockSchedules")(function* (
   env: PluginEnv,
@@ -2175,7 +2234,7 @@ export const machinesListed = (env: PluginEnv) =>
   Effect.gen(function* () {
     const read = yield* asks(env, (client) => client.peers());
     if (!read.ok) return read;
-    const backend = yield* terminalBackend(env.userDir);
+    const backend = "core" as const;
     const roster = yield* herdrMachines(env);
     const listed = new Set(Arr.map(roster, (machine) => machine.label));
     return {
@@ -2185,7 +2244,7 @@ export const machinesListed = (env: PluginEnv) =>
         roster,
         peers: Arr.map(read.value, (peer) => ({
           ...peer,
-          added: backend === "core" && peer.dials === "out" ? listed.has(peer.name) : null,
+          added: peer.dials === "out" ? listed.has(peer.name) : null,
         })),
       },
     };
@@ -2224,10 +2283,6 @@ export const machineAdd = (
 ) =>
   answered(
     Effect.gen(function* () {
-      if ((yield* terminalBackend(env.userDir)) !== "core")
-        return yield* new HostRefused({
-          reason: `invalid_state: this Machine's terminal backend is herdr, which keeps its own machines: herdr machine add saves one`,
-        });
       const opened = yield* openConnection(env.stateDir, { label: name, target }, { said });
       yield* addToCore(env, name, target, opened.path);
       return { machine: name, ...opened };
@@ -2245,15 +2300,14 @@ export const machineForget = (env: PluginEnv, name: string) =>
         client.unpair({ machine: name }),
       );
       if (!unpaired.ok) return yield* new HostRefused({ reason: unpaired.error.message });
-      if ((yield* terminalBackend(env.userDir)) === "core")
-        yield* new Herdr(env).machineRemove(name).pipe(
-          Effect.catchIf(
-            (cause) => cause.code === "machine_unknown",
-            () => Effect.void,
-          ),
-          Effect.mapError(coreRefused(name)),
-          Effect.provide(Path.layer),
-        );
+      yield* new Herdr(env).machineRemove(name).pipe(
+        Effect.catchIf(
+          (cause) => cause.code === "machine_unknown",
+          () => Effect.void,
+        ),
+        Effect.mapError(coreRefused(name)),
+        Effect.provide(Path.layer),
+      );
       return { machine: name };
     }).pipe(Effect.provide(Path.layer)),
   );
@@ -2297,9 +2351,7 @@ export const verifyRun = Effect.fn("Lifecycle.verifyRun")(function* (
   return {
     ok: true as const,
     events: followVerify(env.stateDir, events, (again) =>
-      door === undefined
-        ? Effect.void
-        : again.declare(declaring(door, env.socketPath, env.hostStamp)),
+      door === undefined ? Effect.void : again.declare(declaring(door, env.hostStamp)),
     ),
   };
 });

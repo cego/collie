@@ -84,10 +84,9 @@ function session(): ControlSession {
   const env = rig.pluginEnv();
   return {
     herdr: new Herdr(env),
-    ...scopeFor(env, env.cwd),
+    ...scopeFor(env.cwd),
     stateDir: env.stateDir,
     userDir: env.userDir,
-    paneId: env.paneId,
     pluginRoot: env.pluginRoot,
     runsOf: () => Effect.succeed(runs),
     recordsOf: () => Effect.succeed({ tasks: [], registered: [] }),
@@ -132,7 +131,7 @@ const made = Effect.fn("fetching.made")(function* (over: Partial<RunFacts>) {
     id: `r${runs.length + 1}`,
     project: env.cwd,
     cwd: env.cwd,
-    workspace: env.workspaceId,
+    workspace: null,
     created: at,
     ...over,
   });

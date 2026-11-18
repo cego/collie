@@ -83,7 +83,8 @@ upgrade replaces `release/` whole and never writes `user/`
 ([ADR-draft-an-installation-is-the-release-its-runner-carries](adr/draft-an-installation-is-the-release-its-runner-carries.md)). An edit made
 inside `release/` is copied to `~/.collie/kept/` by the next upgrade and is no longer in
 force, so fork instead. What Collie itself keeps — runs, the
-host's database, tasks — is state, and stays in herdr's state directory for the plugin.
+host's database, tasks — is state, kept in `~/.local/state/herdr/plugins/cego.collie` or
+where `COLLIE_STATE_DIR` names.
 
 Only entry files take part. A helper or a Markdown prompt beside one is reached because
 your entry imports it, never because it was found. Two files in one layer claiming one id
@@ -151,6 +152,32 @@ replaces only the sections it names. A `copy` records `forked_from_hash` — the
 content hash at the moment of the copy — so when the original moves on the picker can mark
 the fork `(stale — the original has changed since this copy)`. A stale fork still works;
 the mark tells you a change has passed it by.
+
+A stub with nothing above its first `## Name` section is launched as the persona it extends,
+found from its own Layer down (from the Layer below, when it extends its own name), followed
+by the sections it names. That is how a trial swaps the shipped `reviewer` for
+`reviewer-single-pass`, which reviews a change in one pass over the same seven axes with
+one skill, `code-review-and-quality`, instead of two. No setting selects it: save
+`~/.collie/user/personas/reviewer.md` as
+
+```markdown
+---
+name: reviewer
+extends: reviewer-single-pass
+---
+```
+
+and every reviewer this user's Machines launch is the single pass, until the file is
+deleted. A project's `.collie/personas/reviewer.md` does the same for one project.
+
+`implementer-handback` is such a stub over `implementer`: it adds one `## Delegation`
+section, for a builder that hands work to sub-agents. It says what each sub-agent is given
+(one bounded task, file pointers, the criteria it owns and the files it may change) and the
+handback it returns (Changes, Proof, Unresolved, Decisions). It also tells the builder that
+a sub-agent's handback is not review. A trial selects it the same way, with
+`~/.collie/user/personas/implementer.md` saying `name: implementer` and
+`extends: implementer-handback`, and every implementer is then launched as the shipped
+`implementer` followed by that section.
 
 ## Persona frontmatter
 

@@ -18,7 +18,7 @@ test("an until that runs out names its wait, the last value it read, and the end
         (now) => now.runs.includes("run-new"),
       ).pipe(
         Effect.provide(
-          ConfigProvider.layer(ConfigProvider.fromUnknown({ HERDR_PLUGIN_STATE_DIR: state })),
+          ConfigProvider.layer(ConfigProvider.fromUnknown({ COLLIE_STATE_DIR: state })),
         ),
         Effect.forkScoped,
       );

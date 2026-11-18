@@ -135,10 +135,9 @@ replacement's evidence is never collected beside a predecessor that might still 
   out of its pane gets a stop under D1–D4 in the same change.
 
 **Amended: an in-pane harness is found Quiet too.** Closing a Claude, Pi or OpenCode pane
-is no longer taken as its stop. An agent's start records the process at its pane's root:
-herdr's `pane.process_info` shell pid, or core's terminal pid, with its start time. Before
-the close, the end notes that root's session (D2 step 6's listing) and, where herdr names a
-different root now, that one's too; a root whose pid is now another process names nothing.
+is no longer taken as its stop. An agent's start records the process at its terminal's
+root: core's terminal pid, with its start time. Before the close, the end notes that root's
+session (D2 step 6's listing) and, where core names a different root now, that one's too; a root whose pid is now another process names nothing.
 After the close, every noted process and every process still in those sessions gets a short
 grace, then one SIGTERM, and the stop's wait. None left is Quiet. One left makes the end
 `NotQuiet`; a Fallback then parks with the cause `predecessor-not-quiet`, which records what

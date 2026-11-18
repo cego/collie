@@ -6,8 +6,10 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { Clock, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { isoAt } from "../src/time";
 import { TestClock } from "effect/testing";
+import * as PlatformError from "effect/PlatformError";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { onMachineWith } from "./support/live";
@@ -19,13 +21,19 @@ import {
   externalSubmissions,
   newestRateLimits,
   questionsSince,
+  rateLimitsReader,
   ranOutSince,
   recordClaudeEvent,
   stoppedSince,
   submittedDelivery,
   VERIFIED_VERSIONS,
 } from "../src/compactors";
-import type { AgentContext } from "../src/compaction";
+import {
+  pollCompaction,
+  readControl,
+  type AgentContext,
+  type CompactionDeps,
+} from "../src/compaction";
 
 let rig: Rig;
 let fs: FileSystem.FileSystem;
@@ -558,6 +566,83 @@ test("a status line's rate_limits are the Machine's newest Claude sample, and it
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
+test("the status-line reader decodes again only the agents whose telemetry changed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stateDir = path.join(rig.root, "state");
+      const build = path.join(stateDir, "compaction", "build-r1");
+      const review = path.join(stateDir, "compaction", "review-r1");
+      yield* recordClaudeEvent(build, limited(fiveHour(31)));
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(review, limited(fiveHour(40)));
+
+      const fs = yield* FileSystem.FileSystem;
+      const decoded: string[] = [];
+      const counting: FileSystem.FileSystem = {
+        ...fs,
+        readFileString: (file, encoding) => {
+          decoded.push(path.basename(path.dirname(file)));
+          return fs.readFileString(file, encoding);
+        },
+      };
+      const { newest: read } = yield* rateLimitsReader(stateDir).pipe(
+        Effect.provideService(FileSystem.FileSystem, counting),
+      );
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+      expect(decoded.sort()).toEqual(["build-r1", "review-r1"]);
+
+      decoded.length = 0;
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+      expect(decoded).toEqual([]);
+
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(build, limited(fiveHour(55)));
+      expect((yield* read)?.limits).toEqual(fiveHour(55));
+      expect(decoded).toEqual(["build-r1"]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("a status line the reader could not read is read again, and its last sample stands meanwhile", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stateDir = path.join(rig.root, "state");
+      const build = path.join(stateDir, "compaction", "build-r1");
+      const review = path.join(stateDir, "compaction", "review-r1");
+      yield* recordClaudeEvent(build, limited(fiveHour(31)));
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(review, limited(fiveHour(40)));
+
+      const fs = yield* FileSystem.FileSystem;
+      let failReview = true;
+      const flaky: FileSystem.FileSystem = {
+        ...fs,
+        readFileString: (file, encoding) =>
+          failReview && path.basename(path.dirname(file)) === "review-r1"
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "Busy",
+                  module: "FileSystem",
+                  method: "readFileString",
+                }),
+              )
+            : fs.readFileString(file, encoding),
+      };
+      const { newest: read } = yield* rateLimitsReader(stateDir).pipe(
+        Effect.provideService(FileSystem.FileSystem, flaky),
+      );
+      expect((yield* read)?.limits).toEqual(fiveHour(31));
+      failReview = false;
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(review, limited(fiveHour(60)));
+      failReview = true;
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+      failReview = false;
+      expect((yield* read)?.limits).toEqual(fiveHour(60));
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
 test("rate_limits Collie cannot read leave the context line alone", () =>
   runEffect(
     Effect.gen(function* () {
@@ -640,3 +725,76 @@ test("the StopFailure hook is installed only on a Claude known to have it, for e
   expect(hook.hooks[0].command).toContain(`herdr compaction ${dir}`);
   expect(claudeSettings(dir, false)).not.toContain("StopFailure");
 });
+
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+
+/**
+ * An attempt asked for 11 minutes ago whose `PostCompact` never arrived, with the status
+ * line's `transcript_path` pointing at `transcript`, polled by the shared policy.
+ */
+const lostCompletion = (transcript: (askedIso: string) => string) =>
+  Effect.gen(function* () {
+    const control = `${rig.stateDir}/compaction/build-r1`;
+    const asked = (yield* Clock.currentTimeMillis) - 11 * 60_000;
+    const file = path.join(rig.root, "s-1.jsonl");
+    yield* fs.writeFileString(file, transcript(isoAt(asked + 60_000)));
+    yield* fs.makeDirectory(control, { recursive: true });
+    yield* fs.writeFileString(
+      `${control}/control.json`,
+      asJson({
+        agent: "build-r1",
+        harness: "claude",
+        cwd: rig.projectDir,
+        dir: control,
+        attempt: { id: "req-1", run: "run-1", step: "02-ui", deadline: asked + 5 * 60_000, asked },
+      }),
+    );
+    yield* recordClaudeEvent(control, asJson({ session_id: "s-1", transcript_path: file }));
+    yield* recordClaudeEvent(
+      control,
+      pre("s-1", "manual", "Keep the work in progress. (collie:req-1)"),
+    );
+    const said: string[] = [];
+    const deps: CompactionDeps = {
+      ports: COMPACTION_PORTS,
+      stateDir: rig.stateDir,
+      configured: 1000,
+      herdr: { agentList: () => Effect.succeed([]) },
+      log: (line) => Effect.sync(() => void said.push(line)),
+      warn: (line) => Effect.sync(() => void said.push(line)),
+      waitMs: 5 * 60_000,
+      pollMs: 1_000,
+    };
+    const due = yield* pollCompaction(deps, "build-r1");
+    const left = (yield* readControl(rig.stateDir, "build-r1"))?.attempt;
+    return { due, said, left };
+  });
+
+test("a lost completion is reconciled as done after the bound, where the transcript shows the compaction", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, said, left } = yield* lostCompletion(
+        (at) =>
+          `{"type":"user","timestamp":"${at}","message":{"role":"user","content":"/compact"}}\n` +
+          `{"type":"system","subtype":"compact_boundary","timestamp":"${at}","compactMetadata":{"trigger":"manual","preTokens":180000}}\n`,
+      );
+      expect(due).toEqual({ dispatch: true });
+      expect(left).toBeNull();
+      expect(said).toContain("build-r1: native compaction req-1 completed");
+    }),
+  ));
+
+test("a lost completion is reconciled as failed after the bound, where the transcript shows none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, said, left } = yield* lostCompletion(
+        (at) =>
+          `{"type":"user","timestamp":"${at}","message":{"role":"user","content":"/compact"}}\n`,
+      );
+      expect(due).toEqual({ dispatch: true });
+      expect(left).toBeNull();
+      expect(said).toEqual([
+        "  ⚠ build-r1: native compaction failed (its transcript shows no compaction since it was asked for) — sending the work anyway",
+      ]);
+    }),
+  ));

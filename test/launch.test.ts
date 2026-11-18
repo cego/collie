@@ -12,7 +12,7 @@ import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import type { PickItem } from "../src/inputs";
 import { runViews } from "../src/lifecycle";
-import { budgetPath, herdDir, herdOf, readBudget } from "../src/steering";
+import { budgetPath, herdDir, readBudget, machineHerd } from "../src/steering";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { forgeOnPath, serveForges } from "./support/forge";
@@ -104,10 +104,9 @@ const onBranch = Effect.fn("test.onBranch")(function* (world: World, branch: str
 /** The flow drawn by the board terminal, in the Herd's own directory, which is no checkout. */
 const onTheBoard = Effect.fn("test.onTheBoard")(function* (world: World) {
   const env = yield* currentEnv;
-  const socket = `${world.home}/herdr.sock`;
-  const cwd = yield* herdDir(world.state, yield* herdOf(socket));
+  const cwd = yield* herdDir(world.state, yield* machineHerd(env));
   yield* (yield* FileSystem.FileSystem).makeDirectory(cwd, { recursive: true });
-  return { ...env, socketPath: socket, workspaceId: null, cwd } satisfies PluginEnv;
+  return { ...env, cwd } satisfies PluginEnv;
 });
 
 const Shown = Schema.Struct({
@@ -466,7 +465,7 @@ test(
             });
 
             const budget = yield* readBudget(
-              yield* budgetPath(world.state, yield* herdOf(home.socketPath)),
+              yield* budgetPath(world.state, yield* machineHerd(home)),
             );
             const reserved = Arr.filter(budget, (line) => line.kind === "reserve");
             expect(reserved).toHaveLength(2);

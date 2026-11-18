@@ -19,7 +19,7 @@ import {
 import { codexPort, servedEndpoint } from "../src/compactors";
 import type { Channel } from "../src/dispatcher";
 import { handOverClaim } from "../src/engine";
-import { runEffect } from "./support/effect";
+import { fastForward, runEffect } from "./support/effect";
 import { until } from "./support/host";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -251,6 +251,25 @@ test("a server log read still running at the start budget is waited for, and its
     }),
   ));
 
+test("a fast-forwarded server start waits for a server that takes real time to come up", () =>
+  runEffect(
+    fastForward(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-served-" });
+        const served = yield* servedEndpoint({
+          cwd: dir,
+          log: `${dir}/server.log`,
+          command: "sh -c 'sleep 1; echo listening on ws://127.0.0.1:1'",
+          listening: /listening on (\S+)/,
+          startMs: 1000,
+          what: "the stand-in",
+        });
+        expect(served.found).toBe("ws://127.0.0.1:1");
+      }).pipe(Effect.scoped),
+    ),
+  ));
+
 // Past any pid_max, so no process here can be one of the machine's.
 const ROOT = 4_194_400;
 const CHILD = 4_194_401;
@@ -480,5 +499,32 @@ test("a Codex usage replay that lands just before the deadline is used, not drop
       yield* Effect.sleep("200 millis");
       yield* clock.adjust(50);
       expect(yield* Fiber.join(fiber)).toBe(400_000);
+    }),
+  ));
+
+test("a compaction waits for room before it is asked for, and a stop in that wait asks nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stateDir = yield* controlled(null);
+      const said: string[] = [];
+      const due = yield* atBoundary(
+        {
+          ...deps(
+            stateDir,
+            port({
+              usage: () => Effect.succeed(5000),
+              request: () => Effect.sync(() => void said.push("request")).pipe(Effect.as(null)),
+            }),
+          ),
+          room: () => Effect.sync(() => said.push("room")).pipe(Effect.as("stopped" as const)),
+        },
+        { agent: "build-r1", run: "r1", step: "02-ui" },
+        submitting,
+      );
+      expect(said).toEqual(["room"]);
+      expect(due).toEqual({
+        dispatch: false,
+        reason: "build-r1: the Run was stopped while its compaction waited for disk",
+      });
     }),
   ));

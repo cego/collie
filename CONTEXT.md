@@ -4,7 +4,7 @@
 
 **Workflow** — A TypeScript module saved as `<id>.workflow.ts` whose default export is its definition: its public id, what it takes and gives back, what it declares — hints, outcome, checkout, whether it closes after reporting, offers and the agents it prefers — and `run`, ordinary Effect code the host executes as a Run. It asks an agent with `agentWork`, a human with `ask` and another Workflow with `child`, each when the work reaches it, and composes everything else as ordinary TypeScript. Found where it was saved (see **Layer**); a shipped Workflow is one more module and gets nothing a user's does not.
 
-**Operation** — One piece of agent work inside a Run, named by the Workflow that asks for it. The name is its identity: the agent's name, its prompt and Output files and the Activities that make it durable come from it, so it is stable within a Run and differs from every other. It has a role, injected as a Persona, a Harness, a Model, optionally the Skill it starts, and the schema its Output must decode against. An agent it starts gets a Tab of its own in its Task's workspace, labelled with its role; an operation that reuses an agent opens nothing.
+**Operation** — One piece of agent work inside a Run, named by the Workflow that asks for it. The name is its identity: the agent's name, its prompt and Output files and the Activities that make it durable come from it, so it is stable within a Run and differs from every other. It has a role, injected as a Persona, a Harness, a Model, optionally the Skill it starts, and the schema its Output must decode against. An agent it starts gets a terminal of its own in core, labelled with its Run, Operation and Task; an operation that reuses an agent opens nothing.
 
 **Step** — One declared piece of a Workflow's work: an agent's (an **Operation**), a question to a human, another Workflow, or a check. Like a Prefect task, it is made where its work is written and called from `run` when the work reaches it. Its metadata is what a reader needs before it runs: its id, title, description, kind, role, and what it produces. A definition may list the **path** it expects its Steps to take. The path is a forecast, never a precondition: a Step called off the path still runs, and a path Step the Run never reached ends `not run`. A Step called once per item has a run per **Slice**, and one a loop calls again has a run per round. A Workflow that declares none still runs, and its Steps are its Operations, questions and children as they happen. A Step can be paused before, so the Run holds as its work reaches it, and given a note its agent reads before its next prompt ([ADR-draft-a-step-is-declared-where-its-work-is-written](docs/adr/draft-a-step-is-declared-where-its-work-is-written.md)).
 
@@ -52,7 +52,7 @@ proved. In the Flock chat it is also what the model is shown — an image, a PDF
 a name, size and path — and Desktop keeps a copy, so the conversation still shows it after a
 restart ([ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
-**Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. One still unusable after its repair parks the Run at its Step, and a resume reads the file again before giving one more repair. Workflows read Outputs, never terminal text. Collie waits for it against the agent's idle time only: while herdr reports the agent working or blocked, a question it asked is open on the Run, or a `collie verify` it asked for waits while its Machine is **Short of memory**, the budget does not run (ADR-0062). When the budget runs out, the Run is parked and keeps waiting: an Output written later is collected without a resume (ADR-0062, amended 2026-10-19).
+**Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. One still unusable after its repair parks the Run at its Step, and a resume reads the file again before giving one more repair. Workflows read Outputs, never terminal text. Collie waits for it against the agent's idle time only: while core reports the agent working or blocked, a question it asked is open on the Run, or a `collie verify` it asked for waits while its Machine is **Short of memory**, the budget does not run (ADR-0062). When the budget runs out, the Run is parked and keeps waiting: an Output written later is collected without a resume (ADR-0062, amended 2026-10-19).
 
 Managed server health has a separate readiness deadline. A terminal reporting
 working or blocked does not pause that deadline while its server remains unhealthy.
@@ -62,27 +62,21 @@ owned predecessor is Quiet and preserves unresolved Delivery receipts.
 **Finding status** — `open`, `fixed`, `disputed` or `obsolete`, for one finding with a stable
 id, anchored to the head it was judged at and the note that posted it.
 
-**Herd** — One herdr session: every workspace in it. On a Machine whose
-`terminal_backend` is `core`, one herdr-core session instead: every terminal in it. The
-scope of the board, the conversation, proposals, the budget and elections. Keyed by
-the canonical path of the session's socket, herdr's or core's, never by a directory. A Task records the Herd its workspace is in, and a
-Machine's host reads every Herd on it. **Session** keeps its own meaning below — one
-workspace — and is not the Herd.
+**Herd** — One herdr-core session: every terminal in it. The scope of the board, the
+conversation, proposals, the budget and elections. Keyed by the canonical path of core's
+socket, never by a directory. A Task records its Herd, and a Machine's host reads that
+Machine's core session. **Session** keeps its own registry meaning below.
 
 **Machine** — One computer's Collie: one state directory, its one host, and every Herd on
 that computer. Known by its **installation id**, which the first host to own the state
 directory writes into it and every later host keeps, so two routes to one state directory
-are one Machine. Desktop names it by the label of the first enabled herdr machine that
+are one Machine. Desktop names it by the name of the first core machine that
 reaches it, or by the hostname for Local, and adds its SSH target where two share a name.
-A computer Desktop reaches that has no Collie yet is known by its herdr profile id until a
-host there reports an installation id. Not the plugin installation a host serves, which
-`identity` calls `root`. On a Machine set to `core`, core's machine list (`hc machine ls`)
-is the list of Machines, for the CLI as for Desktop, and a Machine is known by core's name
-for it, which its pairing is keyed by; on one set to `herdr`, herdr's (`herdr machine list`)
-is. Adding a Machine there is all it takes to reach it.
-Its `terminal_backend` setting, its own and never the Flock's, says where the agents its
-Runs launch next run: in herdr panes (`herdr`, the default) or in herdr-core terminals
-(`core`). An agent already running on herdr stays there.
+A computer Desktop reaches that has no Collie yet is known by its core name until a host
+there reports an installation id. The installation a host serves is a separate thing,
+which `identity` calls `root`. Core's machine list (`hc machine ls`) is the roster for the
+CLI and Desktop, and its names key pairings. Every agent runs in a core terminal; no
+setting selects another terminal backend.
 
 **Short of memory** — A Machine whose available memory is under `memory_hold` percent of
 its total (10 by default; 0 never), or, on Linux, whose memory pressure (`full avg10` in
@@ -93,10 +87,16 @@ Run's start, a steer, a stop, the chats and **Cleanup** never wait. It binds a h
 start as it does an agent's, and no count of Runs, agents or checks is capped
 (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory).
 
+**Short of disk** — A Machine where a filesystem holding the state directory or a Run's
+checkout has under a tenth of its size or under 5 GiB free, as `collie doctor` reads it.
+The starts **Short of memory** holds wait for it the same way, and so does a compaction
+Collie is about to ask a reused agent for
+(ADR-draft-new-work-waits-while-its-machine-is-short-of-memory).
+
 **Installation** — What a Machine runs Collie from, which `identity` calls `root`. A
 **release** is placed in the Collie directory's `release/` by the runner that carries it,
 and an upgrade replaces it whole without git. A **development checkout** is a clone of
-Collie that a developer linked as the plugin, built from source. Only git upgrades it;
+Collie built from source and prepared with `prepare.sh`. Only git upgrades it;
 Desktop and peers never do. A clone at the Collie directory itself is an install from before
 ADR-draft-an-installation-is-the-release-its-runner-carries, and its next upgrade migrates it to a release.
 
@@ -108,7 +108,7 @@ release before an upgrade replaced it (ADR-draft-an-installation-is-the-release-
 **Flock** — Every Herd on every Machine paired with this one, or reached by **Desktop**.
 
 **Peer** — A Machine paired with this one, known by its installation id and named by
-herdr's label for it. A peer this one can open a connection to listens and is dialled; one
+core's name for it. A peer this one can open a connection to listens and is dialled; one
 it cannot, such as a laptop, keeps a link open to it and is reached back over that link.
 Each host keeps a relay socket for each peer, `peers/<name>.sock`, that speaks what
 `host.sock` speaks ([ADR-0057](docs/adr/0057-a-machine-reaches-another-over-a-paired-link.md)).
@@ -119,9 +119,10 @@ no setting chooses (ADR-draft-a-blocked-link-rides-the-machines-ssh-connection).
 
 **Pairing** — The record each side of two **Peers** keeps in `peers.json`: who the other
 is, which side dials, and the secret and certificate the link is authenticated with. Made
-by itself the first time Collie reaches a herdr machine it has none for, over that
-machine's SSH login, and removed when herdr no longer lists the Machine. There is no
-command to pair or to forget.
+by itself the first time Collie reaches a Machine it has none for, over that Machine's
+SSH login. A paired Machine missing from core's roster stays paired and is shown as not
+added. `collie machine forget` unpairs it and removes it from core without stopping work
+on that Machine.
 
 **SSH connection** — The one SSH login a computer keeps open to a Machine. Its control
 path is named by this computer's host, and ssh keeps it open after whatever opened it
@@ -170,11 +171,10 @@ fixed questions. The draft is kept only as text the human accepted
 ([ADR-draft-a-humans-standing-direction-outlives-the-chat](docs/adr/draft-a-humans-standing-direction-outlives-the-chat.md)).
 
 **Home** — Where a human works with the Herd from a terminal: two core terminals the
-Machine's host keeps, whatever its `terminal_backend`. `collie-board` draws the board and
+Machine's host keeps. `collie-board` draws the board and
 `collie-chat` holds **Native chat**, both in the Herd's own directory, which has no
 checkout. The host starts each when it starts and once more, under the same name, whenever
-one ends; `hc attach collie-board` reaches it. Neither is a herdr tab or pane, and nothing
-about them is recorded.
+one ends; `hc attach collie-board` reaches it. Neither has a Run record.
 
 **Native chat** — The Herd's conversation, held in an ordinary Claude Code or Pi session in
 the Home's `collie-chat` terminal. The harness owns the editor, the streaming, the history and the
@@ -276,7 +276,7 @@ and the CLI would otherwise read its terminal as a person. Attribution is audit,
 gate. No action kind confirms anything, so a Proposal can never contain its own.
 
 **Delivery** — One message to one live agent incarnation, with states `queued` (a boundary
-delivery an older Collie held for the agent's next prompt), `reserved`, `deferred` (herdr answered that the
+delivery an older Collie held for the agent's next prompt), `reserved`, `deferred` (core answered that the
 pane cannot take it yet, so it is tried again under the same id), `submitted` (sent),
 `acknowledged` (the agent took a turn after it) and the terminal `failed` and `superseded`;
 `unknown` blocks the same work until a human settles it. They are separate because they are
@@ -302,10 +302,11 @@ that review. Not **Authority**, which is what Collie may do to a Run.
 **Dispatcher** — The only code that sends text to an agent. Holds that agent's ledger
 across the compaction decision, the composition and the send.
 
-**Incarnation** — An agent as one live process, identified by herdr's own `terminal_id` and
-`agent_session`, or, for an agent launched on core, by its core terminal's address and
-marked as core's: it is reached on core while its Machine stays set to core. A name and a pane are inherited by whatever takes the role next; neither
-names a process. A registry entry without one is never a delivery target. Where a Harness's
+**Incarnation** — An agent as one live process, identified by its core terminal's address
+and marked as core's. A name is inherited by whatever takes the role next and does not
+identify a process. A registry entry without an incarnation, or an old Herdr incarnation
+without the core marker, stays readable but is never a delivery target or automatically
+recovered. Where a Harness's
 work runs outside its pane — Codex's, in the App Server Collie starts for that one agent —
 the incarnation is the pane's process and that server, with every thread loaded on it,
 until the server is **Quiet**. That server is also where a Codex agent's question is read
@@ -338,8 +339,12 @@ corrections to it stop until an explicit `run clear-override`; nothing times it 
 **Verification** — An independently collected command result bound to the tree it ran on,
 before and after. A tree is its content: committing exactly the bytes a Verification ran on
 leaves it on the same tree, and changing any of them does not. A result whose snapshots
-differ is `unstable`, never `pass`. An agent's statement about tests is a **claim**, and is
-shown as one.
+differ is `unstable`, never `pass`, and names the paths that moved, each classed tracked,
+untracked or lockfile. While Collie collects one itself on a checkout, deliveries to the
+Run's agents working there are held until it ends. One recorded with `--expect fail` reproduces a failure
+and is never a pass: on the current tree it proves no Check, and on an earlier tree it is
+history, so the Check still owes a pass on the final tree. An agent's statement about tests
+is a **claim**, and is shown as one.
 
 **Measurement** — The host's comparison of a base tree and a candidate tree on one Machine.
 It is a Run's declared benchmark commands, sampled alternately on each tree for a fixed
@@ -415,35 +420,25 @@ It is never hidden (ADR-draft-an-offer-is-made-on-the-run-that-owns-its-work-and
 implementation it chains into, the review of that, the release of its merge request.
 Recorded on every Run at creation and inherited by chains, follow-ups and resumes, so
 membership is a fact rather than a reading of a label — two Tasks may share a project
-prefix, and a workspace renamed by hand is still its Task's. A Task's **work** is what its
+prefix, and a Task renamed by hand keeps its membership. A Task's **work** is what its
 Runs worked on: each branch one was placed on, other than the default branch, and each
 merge request one opened or was given — read from their records, never from the checkout
 the Task was rooted at. A Run started fresh is a new Task, unless it is about that work —
 the merge request its diff target names is one of a Task's, whatever state that Task is
 in, or the branch it is placed on or its diff target names is one of an open Task's, one
-whose workspace herdr has, or on core one not yet closed, until an hour after it is
-**Finished** — and then it is the Task's that had it first: one workspace per
-Task. On a core Machine a Task is Collie's record and a `task` label on its agents'
-terminals, and nothing else: naming or renaming it writes only the record. Joining is membership, not **Lineage**: a Run that joins has no parent. Anything
+not yet closed, until an hour after it is **Finished** — and then it is the Task's that
+had it first. A Task is Collie's record and a `task` label on its agents' terminals:
+naming or renaming it writes only the record. Joining is membership, not **Lineage**: a Run that joins has no parent. Anything
 else joins a Task only by an explicit **Continue task**. A child Run is its parent's
 Task's, unless it was started as work of its own (`ownTask`): then it is placed as a fresh
 start is, and is still its parent's child (ADR-draft-a-tasks-work-is-what-its-runs-worked-on).
 
-**Task workspace** — The herdr workspace a Task's Runs, tabs and agents live in. One per
-Task, made when its first Run is admitted, on the checkout that Run is given. Herdr 1
-only: on core a Task has none, so nothing is made, focused or closed, and an hour after the
-Task is **Finished** Cleanup closes its record instead. It is never
-focused: a start does not take the human away from what they are doing. Collie closes it
-an hour after its Task is **Finished**, unless herdr has it in focus at that moment or it
-holds a pane Collie did not open, which keeps it open until the human closes it (see
-**Cleanup**). Its label is inferred once, at creation — `<Project or theme> | <what
-this work is>`, from the work and from the names already live in the session — and is
-display only: a label never decides membership, and a label a human changed is theirs,
-never written again. It is where Collie scopes a Run lookup: a workspace that is not a
-Task's narrows nothing. It gives no file or branch isolation — that is the Worktree's job.
-A stop closes only its Run's agents' panes, and its own shell tab is never handed to an
-agent, so it outlives them. One herdr has dropped anyway is reopened on the Run's checkout
-at the next launch, and the Task records the new id.
+**Task workspace** — A historical Herdr workspace id that older Task records may retain.
+Collie creates, focuses and closes no external workspace. An hour after a Task is
+**Finished**, Cleanup closes its record. A Task's label is inferred at creation —
+`<Project or theme> | <what this work is>` — and is display only: it never decides
+membership, and a label a human changed is never overwritten. File and branch isolation
+belong to the Worktree.
 
 **TaskView** — One Task as the board draws it: name, project, state, a glyph per Run, one
 plain sentence about what is happening, its age, drift, hold, pending **Decision**, agents,
@@ -480,16 +475,19 @@ question is closed instead, and the agent asks again if it still needs to
 
 **Stalled** — The other way into **Needs you**, and the one with nothing on the card to
 answer: an agent is waiting for a human in its own pane — at a dialog of its harness's
-that Collie could not put on the Run, which herdr reports as a `blocked` agent — or a Run parked because its agent's pane would
+that Collie could not put on the Run, which core reports as a `blocked` agent — or a Run parked because its agent's pane would
 not take a prompt. Either way the work has stopped, so the card says which pane to go to
 rather than what the step was doing.
 
 **Park cause** — Why a Run parked, from one closed list: what the host may do about it.
 A cause either asks the Run's own agent something, or rechecks the fact it parked on, or
-needs you and says why. An unclassified park is `unknown`, never a guess. Counted per cause
-in `collie run report` (ADR-draft-a-run-recovers-where-it-parks). `predecessor-not-quiet`
-is an agent that had to stop before another took its work, and was not **Quiet** within
-the stop's wait: it rechecks that nothing it left is still running, and never starts a Heal.
+needs you and says why. An unclassified park is `unknown`, never a guess. A park's identity is
+derived from the Run, its cause and the evidence that cause is about, so parking again on the
+same evidence after a restart, resume or hand-over is the same park. `delivery-unsettled` is a
+reminder held behind an earlier delivery nobody can settle; it rechecks and never heals.
+`predecessor-not-quiet` is an agent that had to stop before another took its work, and was not
+**Quiet** within the stop's wait: it rechecks that nothing it left is still running, and never
+starts a Heal. Counted per cause in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
 
 **Recovery** — What the host does about a park, without being asked: an **Output reminder**
 to an agent whose turn ended without writing its Output, and a resume once a recheck shows the
@@ -500,11 +498,12 @@ fact the park waited for, never by inactivity or an acknowledgement. It never an
 **Heal** — A Run the host starts for a park its **Recovery** could not clear, before the park
 needs you: its agent may only message the parked Run's own agents and resume it. Judged by
 the parked Run's facts, never its Output, and it always records a finding for everyone who
-runs Collie. One per park, three per Run, one at a time per Machine; never for a Run with a
+runs Collie. One per park's identity, and another only when the last said its diagnosis is
+incomplete; three per Run, one at a time per Machine; never for a Run with a
 **Decision**, **Hold** or **Stop**, or for a Heal (ADR-draft-a-run-recovers-where-it-parks).
 
 **Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,
-**Short of memory**, or something it awaits that ends by itself. A Check Collie runs for it
+**Short of memory**, **Short of disk**, or something it awaits that ends by itself. A Check Collie runs for it
 is shown the same way. A Run can have several at once, and each front door says the one it
 ranks first.
 
@@ -524,7 +523,7 @@ With the setting on, a GitLab review request starts it automatically, except on 
 own merge request. Automatic and manual starts share the same Run.
 
 **Working** — A Task something is actually doing: a Run the host holds that has not
-settled, or a **Reopened** Run whose agent herdr reports working. A Run whose question a
+settled, or a **Reopened** Run whose agent core reports working. A Run whose question a
 human's message superseded is Working while its agent works on that message. The board's fourth
 section, under Waiting on you.
 
@@ -563,12 +562,12 @@ any one of them is.
 
 **Reopened** — A finished Run one of whose agents was sent a steer Delivery after the Run
 finished. Not a status: the Run still reads `succeeded`, `failed` or `stopped`, because
-that is how its steps ended. Derived from the delivery ledger and herdr's agent state, so
+that is how its steps ended. Derived from the delivery ledger and core's agent state, so
 nothing records it. Its card is in Working while that agent works and in Needs you while
 it is blocked, then stands on its own facts again. Steering reaches a finished Run's
 agents for as long as one is alive; a gone pane is the Follow-up Run's job (ADR-0041).
-A finished Run's agent is closed once it has been idle for an hour since the Run finished
-(**Cleanup**), so a Run can be Reopened only until then.
+**Cleanup** keeps a finished Run's idle agent while core cannot prove nobody is viewing or
+typing into it, so a Run can be Reopened until a Stop ends its agents.
 
 **Landed** — What a Task's work has done once everything it owes is settled and none of its
 Runs is still going. A Task owes each merge request its Runs carry, and a branch with none.
@@ -610,11 +609,10 @@ until it is seen (ADR-draft-a-finished-run-is-seen-once-for-the-flock).
 **Held** — A Task whose Runs are under a **Hold**, drawn as a `⏸` line under its sentence
 and lifted by a human.
 
-**Session** — One herdr session and one workspace, taken together. It is the
-scope of a register of live agents, which holds one entry
-per agent for every Run started there. An agent on core is in no herdr workspace, but
-its entry is kept in the same register, its Incarnation marked as core's. One workspace, always: a mutating Run's checkout
-does not take it out of the Session it was started in.
+**Session** — The scope of a register of agents, with one entry per agent for its Runs.
+New scopes use the working directory; old session and workspace keys stay readable so
+existing registrations keep their identity. It is registry bookkeeping, not an external
+workspace or a choice of terminal backend. Every live Incarnation is core's.
 
 **Lineage** — A Run, the Run it was started from, that Run's own, and so on: a child's
 parent, or the Run whose `runs/<id>/plan` an `implement` builds, however it was started. The only Runs whose agents
@@ -631,9 +629,9 @@ into another Run's pane on its behalf.
 exactly one worktree per checked-out branch. The branch names the work rather than the path
 to it, and new work is generated as `<login>/<task>` — the login of the checkout's **Forge** — rather than asked for, so two
 Runs on different work can never key the same checkout
-([the order it is resolved in](docs/cli.md#start-a-run)). Only the Run's cwd moves; its tabs stay in
-its Task's workspace and are `cd`-ed into the checkout, because a Run belongs where its
-Task is (ADR-0006). A Workflow declares one — `checkout` in its metadata — and the host
+([the order it is resolved in](docs/cli.md#start-a-run)). Its agents' core terminals start
+in that checkout, while the Run stays in its Task. A Workflow declares one — `checkout`
+in its metadata — and the host
 cuts it at admission, before the Run exists, from the checkout the Run starts from: a
 directory that is not a git checkout is refused, named. `implement` and `renovate` declare
 one; `plan`, `architecture`, `review` and `general` declare none, and the `implement` they chain into
@@ -647,19 +645,16 @@ A new checkout goes under the `worktrees_directory` setting, by default
 `~/.collie/worktrees/<repo>/<branch>`. A branch's existing checkout is found through
 `git worktree list` wherever it is, `~/.herdr/worktrees` included, and is never moved.
 
-Two managers, and a Run records which: Collie makes the checkout with `git worktree add`
-by default, and on a Herdr 1 Machine `--input workspace=new` asks herdr for it instead,
-which opens it as a workspace of the Run's own — or, for a fresh Task, as the Task's. On
-core git makes it either way. It outlives the merge request and is removed only once **Settled** —
-a git-managed checkout with `git worktree remove` then `git branch -d`, and the Run's
-tabs whose shells sit inside it closed with it; one herdr has a workspace open on through
-`herdr worktree remove`, whoever made it, so herdr never lists a checkout that is gone.
+Collie makes the checkout with `git worktree add`. It outlives the merge request and is
+removed only once **Settled**, with `git worktree remove` then `git branch -d`.
+Its own remaining agents are ended only after proving their exact Incarnations and that
+their work is Quiet. Historical checkouts recorded as Herdr-managed use the same git
+removal path.
 
-A Run records the branch, the path, its manager, whether Collie created it, and the
+A Run records the branch, the path, whether Collie created it, and the
 moment git wrote the checkout — which is what tells Collie's own checkout from one a
-human later made at the same path on the same branch. Where herdr opened a workspace for
-it, that workspace's shell tab is left where it is, as a Task workspace's is. A checkout a
-human made is never removed.
+human later made at the same path on the same branch. Old manager and workspace fields
+remain readable. A checkout a human made is never removed.
 
 **Settled** — A Collie-created Worktree that holds nothing which exists only there:
 
@@ -669,29 +664,27 @@ human made is never removed.
 - Its work has landed: no Task whose Runs used it still owes anything on it, and the merge
   watch read its merge request as merged or closed, on GitHub or GitLab; what settled it
   was recorded (**Landed**); or its remote branch is gone.
-- Its Task's workspace has closed.
 
 A commit is on the remote when a remote-tracking ref contains it, or when it is the head
 its merged merge request was merged at. A squash merge leaves the branch's commits on no
 branch, and "on the default branch" would keep that checkout for ever. A checkout Collie
 made whose branch was switched since is still Collie's, by its path and the moment git
-wrote it, and is judged on what it holds now. The plugin root, a repository's main checkout
+wrote it, and is judged on what it holds now. The installation root, a repository's main checkout
 and any checkout a running host serves from are never removed ([ADR-0045](docs/adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
-Only then is it removed, through herdr, and only ever without a force flag:
+Only then is it removed through git, without a force flag:
 git's own refusal to drop a dirty or unmerged checkout is the last guard, so a wrong
-judgement can fail to clean but never delete work. Removal is never forced whichever
-manager does it. The conditions and their order are canonical in `src/worktree.ts` and
+judgement can fail to clean but never delete work. The conditions and their order are canonical in `src/worktree.ts` and
 `docs/internals.md`.
 
 **Cleanup** — What Collie removes once nothing needs it, and only what it made and can
 show it made. Its own directories (the state directory, `~/.cache/collie` and Desktop's)
 are its own by where they are, and only kinds it knows are removed from them. A Worktree,
-a Task workspace, a pane and a process are proved by Collie's own record of making them.
+a terminal and a process are proved by Collie's own record of making them.
 The host sweeps every ten minutes. `collie cleanup` lists what a sweep would remove now,
 how much space that frees, and what Collie keeps and why. `collie cleanup --apply` sweeps
 now. In order:
 
-1. A **Finished** Task's workspace closes after an hour.
+1. A **Finished** Task's record closes after an hour.
 2. Its Worktrees go once **Settled**, never while a Task still owes anything on them.
 3. Thirty days after its last Run ended, the Task and every one of its Runs are forgotten
    together: rows first, then files.
@@ -703,14 +696,14 @@ their record or by the marker they run with. Any that no host is collecting are 
 SIGKILL included, because a check's result is thrown away
 (ADR-draft-a-check-ends-with-the-host-that-runs-it).
 
-Apart from that order, an agent Collie launched for a Run that has finished is closed once
-herdr has reported it idle for `idle_close_ms` (an hour by default; 0 never), counted
-from the Run's finish if it went idle before then. It is kept while a Delivery to it is
-queued, a question it asked is open, its pane is focused or a human has typed into it
-since it went idle. A pane herdr restored after a restart is the agent whose recorded
-harness session it resumes. A closed agent stays closed: a steer to it is refused, and the
-Run's Follow-up is offered. A live Run's agents are not closed idle
-(ADR-draft-a-finished-runs-idle-agent-is-closed).
+Apart from that order, Cleanup judges a finished Run's idle agents after `idle_close_ms`
+(an hour by default; 0 never), counted from the Run's finish if they went idle before then.
+Closing one also requires proof that nobody is viewing or typing into it. Core does not
+provide that proof, so idle cleanup keeps these agents and reports why. Queued Deliveries,
+open questions and recorded human messages also keep an agent. An explicit Stop still
+ends a Run's agents. Recovery of a lost core terminal resumes its recorded harness session.
+A closed agent stays closed: a steer to it is refused, and the Run's Follow-up is offered.
+A live Run's agents are not closed idle (ADR-draft-a-finished-runs-idle-agent-is-closed).
 
 **Renovate Run** — One execution of the `renovate` Workflow: one repository, from claiming
 it in Helle to checking it off in Linear. Its Worktree is detached and roams — it holds no
@@ -859,7 +852,8 @@ Run's branch, `rerun` of only the tests that just failed, on the same tree, to t
 **Flake**, `baseline` where the branch left the default branch, `recheck` of a whole check
 whose failures name no tests, on the same tree, `fix` after gate fix N, `finish` at the
 Run's end, `ci` for a check left to CI, read from the merge request's pipeline, or a plain
-`check`. Past that one `recheck`, a check is not run whole again on a tree it already
+`check`. A Check whose latest record is an expected-red reproduction on an earlier tree
+owes its pass here, as one that passed only earlier does; neither is a failure. Past that one `recheck`, a check is not run whole again on a tree it already
 failed on: after a gate fix that left the tree as it was, the records on that tree stand.
 A resume of a Run held unproved is the exception, because a repair can be outside the tree:
 each check still failing there runs whole once more (ADR-0034, amended 2026-10-19). The pass is the Workflow's declaration, never read off its
@@ -979,7 +973,7 @@ driven, still checked and still corrected.
 
 **Work boundary** — The moment immediately before a reused agent that has finished its
 previous work is given the next piece: a Workflow's next operation on the same agent, a
-fix round's next iteration. Collie waits there until herdr reports the agent idle, and
+fix round's next iteration. Collie waits there until core reports the agent idle, and
 only then reads that harness's current-context measure and, at or above the user-wide
 `compact_at_tokens`, asks it to compact natively before sending anything. Not a liveness
 nudge, not a mid-step recovery message, and not a human typing in the pane — none of those

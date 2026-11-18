@@ -870,10 +870,14 @@ export function settleFinalFix(
   };
   const disputes: string[] = [];
   const unverified: string[] = [];
-  if (fix.verdict !== "clean") unverified.push(`the fix reports verdict "findings"`);
-  if (fix.findings.length > 0) {
+  // Its own findings follow the round rule: a blocking one halts, a minor one is carried.
+  const ownBlocking = Arr.filter(fix.findings, isBlocking);
+  const ownMinor = Arr.filter(fix.findings, (f) => !isBlocking(f));
+  if (fix.verdict !== "clean" && fix.findings.length === 0)
+    unverified.push(`the fix reports verdict "findings"`);
+  if (ownBlocking.length > 0) {
     unverified.push(
-      `the fix reports ${fix.findings.length} finding(s) of its own: ${Arr.join(Arr.map(fix.findings, oneLine), ", ")}`,
+      `the fix reports ${ownBlocking.length} blocking finding(s) of its own: ${Arr.join(Arr.map(ownBlocking, oneLine), ", ")}`,
     );
   }
   const seen = new Set<string>();
@@ -928,7 +932,11 @@ export function settleFinalFix(
     leftToGate.length > 0
       ? `, ${leftToGate.length} left to the gate on the final tree (${Arr.join(leftToGate, ", ")})`
       : "";
-  const attestation = `last fix: ${reportedFixed} blocking finding(s) reported fixed${disputedToo}, ${verifiedHere.length} check(s) verified on this tree${gateToo} — implementer-reported, not re-reviewed`;
+  const leftOpen =
+    ownMinor.length > 0
+      ? `, ${ownMinor.length} non-blocking finding(s) of its own left open (${Arr.join(Arr.map(ownMinor, oneLine), ", ")})`
+      : "";
+  const attestation = `last fix: ${reportedFixed} blocking finding(s) reported fixed${disputedToo}, ${verifiedHere.length} check(s) verified on this tree${gateToo}${leftOpen} — implementer-reported, not re-reviewed`;
   if (disputes.length > 0) {
     return {
       ok: false,
@@ -938,7 +946,11 @@ export function settleFinalFix(
       outstanding: unresolved,
     };
   }
-  return { ok: true, attestation, outstanding: Arr.filter(live, (f) => !fixed.has(findingKey(f))) };
+  return {
+    ok: true,
+    attestation,
+    outstanding: [...Arr.filter(live, (f) => !fixed.has(findingKey(f))), ...ownMinor],
+  };
 }
 
 const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}`;
@@ -1017,27 +1029,61 @@ export interface Split {
   rebutted: Finding[];
 }
 
-/** A review can confirm a fix or withdraw a disputed finding; silence leaves it unresolved. */
-export function remainingDisputes(
-  disputed: ReadonlyArray<Finding>,
-  review: {
-    readonly findings: ReadonlyArray<Finding>;
-    readonly disputed: ReadonlyArray<Finding>;
-    readonly dropped: ReadonlyArray<Finding>;
-    readonly fixed: ReadonlyArray<Fixed>;
-  },
-): Finding[] {
-  const standing = new Set(Arr.map([...review.findings, ...review.disputed], findingKey));
-  const resolved = new Set(
-    Arr.map(
-      [...review.fixed, ...Arr.filter(review.dropped, (one) => Str.trim(one.reason ?? "") !== "")],
-      findingKey,
-    ),
+type Disposed = {
+  readonly findings: ReadonlyArray<Finding>;
+  readonly disputed: ReadonlyArray<Finding>;
+  readonly dropped: ReadonlyArray<Finding>;
+  readonly fixed: ReadonlyArray<Fixed>;
+};
+
+const isOpen = (finding: Finding) =>
+  finding.status === undefined || finding.status === "open" || finding.status === "disputed";
+
+function standingIn(review: Disposed): Finding[] {
+  return [...Arr.filter(review.findings, isOpen), ...review.disputed];
+}
+
+const withdrawnIn = (review: Disposed) =>
+  Arr.filter(review.dropped, (one) => Str.trim(one.reason ?? "") !== "");
+
+function sameEvidence(left: Finding, right: Finding): boolean {
+  return (
+    findingKey(left) === findingKey(right) &&
+    left.line === right.line &&
+    Str.trim(left.detail ?? "") === Str.trim(right.detail ?? "")
   );
+}
+
+/**
+ * A review can confirm a fix or withdraw a disputed finding; silence leaves it unresolved.
+ * Raised again open with the same evidence, it stands; with new evidence it is a new finding.
+ */
+export function remainingDisputes(disputed: ReadonlyArray<Finding>, review: Disposed): Finding[] {
+  const standing = standingIn(review);
+  const resolved = new Set(Arr.map([...review.fixed, ...withdrawnIn(review)], findingKey));
   return Arr.filter(
     disputed,
-    (one) => standing.has(findingKey(one)) || !resolved.has(findingKey(one)),
+    (one) =>
+      !resolved.has(findingKey(one)) || Arr.some(standing, (echo) => sameEvidence(echo, one)),
   );
+}
+
+/** One line per finding a review both raises open and resolves, for the human to settle. */
+export function conflictingDispositions(review: Disposed): string[] {
+  const withdrawn = withdrawnIn(review);
+  const lines = Arr.flatMap(standingIn(review), (one) => {
+    const resolutions = [
+      ...(Arr.some(withdrawn, (drop) => sameEvidence(drop, one)) ? ["withdrawn"] : []),
+      ...(Arr.some(review.fixed, (fix) => findingKey(fix) === findingKey(one)) ? ["fixed"] : []),
+    ];
+    if (resolutions.length === 0) return [];
+    const raised = one.status === "disputed" || review.disputed.includes(one) ? "disputed" : "open";
+    const at = one.file ? ` (${one.file})` : "";
+    return [
+      `conflicting dispositions of [${one.severity}] ${one.title}${at}: ${Arr.join([raised, ...resolutions], " and ")}`,
+    ];
+  });
+  return [...new Set(lines)];
 }
 
 /**

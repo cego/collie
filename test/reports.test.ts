@@ -1,8 +1,6 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import { createServer } from "node:net";
-import { fakeHerdr } from "./support/fake-herdr-core";
 import { hostRecords, registeredAt } from "./support/records";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
@@ -28,7 +26,6 @@ const root = new URL("../", import.meta.url).pathname;
 
 type Case =
   | "delivered"
-  | "human-pane"
   | "gone"
   | "away"
   | "away-close"
@@ -103,70 +100,9 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             );
           const reportText =
             mode === "failed" ? "The laptop cannot reproduce this goal" : result.summary;
-          const socket = `${first.world.home}/herdr.sock`;
-          let closeAsked = false;
-          const held = Promise.withResolvers<void>();
-          const closeHeld = mode === "away-close" ? held.promise : Promise.resolve();
-          const server = createServer((connection) => {
-            let pending = "";
-            connection.on("data", (chunk) => {
-              pending += chunk.toString();
-              for (
-                let newline;
-                (newline = Option.getOrElse(pipe_(pending, Str.indexOf("\n")), () => -1)) !== -1;
-              ) {
-                const line = pipe_(pending, Str.slice(0, newline));
-                pending = pipe_(pending, Str.slice(newline + 1));
-                const request = flow(
-                  Schema.decodeResult(
-                    Schema.fromJsonString(
-                      Schema.Struct({
-                        id: Schema.Unknown,
-                        method: Schema.String,
-                        params: Schema.optionalKey(
-                          Schema.Struct({ workspace_id: Schema.optionalKey(Schema.String) }),
-                        ),
-                      }),
-                    ),
-                  ),
-                  Result.getOrThrow,
-                )(line);
-                const answer =
-                  request.method === "workspace.close"
-                    ? ((closeAsked = true),
-                      closeHeld.then(() =>
-                        runEffect(
-                          fakeHerdr(
-                            [
-                              "workspace",
-                              "close",
-                              "--workspace",
-                              request.params?.workspace_id ?? "",
-                            ],
-                            first.env,
-                          ),
-                        ),
-                      ))
-                    : Promise.resolve({ code: 0, stdout: "", stderr: "" });
-                void answer.then((reply) =>
-                  connection.write(
-                    `${encode(reply.code === 0 ? { id: request.id, result: { type: "ok" } } : { id: request.id, error: { message: reply.stderr } })}\n`,
-                  ),
-                );
-              }
-            });
-          });
-          yield* Effect.callback<void>((resume) => {
-            server.listen(socket, () => resume(Effect.void));
-          });
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              server.close();
-            }),
-          );
-          const boot = {
-            FAKE_HERDR_STATUS_SOCKET: socket,
-          };
+          const releaseClose =
+            mode === "away-close" ? first.core.hold("terminal.kill") : () => undefined;
+          const boot = {};
           const launch = mode === "restart" ? { ...boot, COLLIE_HOST_CRASH_AT: "reported" } : boot;
           if (mode === "upstream") {
             yield* exec(["git", "remote", "rename", "origin", "upstream"], {
@@ -181,27 +117,33 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           const localOutputs = `${first.world.home}/outputs.json`;
           const farOutputs = `${second.world.home}/outputs.json`;
           yield* fs.writeFileString(localOutputs, encode([null]));
-          yield* fs.writeFileString(farOutputs, encode([{ verdict: "done" }]));
+          const built = { verdict: "done" };
+          // OpenCode's reporter writes the session it opened beside the prompt.
+          const openedSession = {
+            writes: [],
+            sh: 'printf ses_requester > "${PROMPT_PATH%.prompt.md}.session"',
+            output: built,
+          };
+          yield* fs.writeFileString(
+            farOutputs,
+            encode([harness === "opencode" ? openedSession : built]),
+          );
           expect(
             (yield* first.cli(["machine", "list"], {
               ...launch,
-              FAKE_HERDR_OUTPUTS: localOutputs,
             })).envelope.ok,
           ).toBe(true);
-          const requesterStart = yield* second.cli(
-            [
-              "run",
-              "start",
-              "attended",
-              "--harness",
-              harness,
-              "--model",
-              "default",
-              "--input",
-              "work=ask a laptop",
-            ],
-            { FAKE_HERDR_OUTPUTS: farOutputs },
-          );
+          const requesterStart = yield* second.cli([
+            "run",
+            "start",
+            "attended",
+            "--harness",
+            harness,
+            "--model",
+            "default",
+            "--input",
+            "work=ask a laptop",
+          ]);
           const { runId: requesterRun } = yield* Schema.decodeUnknownEffect(
             Schema.Struct({ runId: Schema.String }),
           )(requesterStart.envelope.data).pipe(Effect.orDie);
@@ -243,7 +185,6 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
                     COLLIE_CWD: caller,
                     COLLIE_RUN: requesterRun,
                     COLLIE_AGENT: requester.agent,
-                    HERDR_PANE_ID: requester.paneId,
                   },
                 )
               : yield* second.cli(
@@ -355,10 +296,13 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           const task = yield* hostRecords(first.world.state, readTask(view!.task!)).pipe(
             Effect.orDie,
           );
-          let human: string | undefined;
           let sibling: string | undefined;
           if (mode === "sibling") {
-            yield* fs.writeFileString(localOutputs, encode([null, { verdict: "done" }]));
+            // The reported Run's agent is still working; the sibling's gets "done".
+            yield* fs.writeFileString(
+              localOutputs,
+              encode([{ writes: [], output: null, owed: true }, { verdict: "done" }]),
+            );
             const started = yield* first.cli(
               [
                 "run",
@@ -369,7 +313,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
                 "--input",
                 "goal=keep planner",
               ],
-              { ...boot, FAKE_HERDR_OUTPUTS: localOutputs },
+              { ...boot },
             );
             expect(started.envelope.ok).toBe(true);
             const other = (yield* Schema.decodeUnknownEffect(
@@ -384,13 +328,9 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             )?.paneId;
             expect(sibling).toBeDefined();
           }
-          if (mode === "human-pane")
-            human = (yield* new Herdr(readEnv(first.env)).tabCreate({
-              workspace: task!.workspace,
-              cwd: view!.cwd,
-              label: "my shell",
-            })).paneId;
-          if (mode === "gone") yield* new Herdr(readEnv(second.env)).paneClose(requester.paneId);
+          // Stopped, not killed: core starts a running Run's lost agent again.
+          if (mode === "gone")
+            expect((yield* second.cli(["run", "stop", requesterRun])).envelope.ok).toBe(true);
           if (mode === "away" || mode === "away-close") yield* stopHost(second.world.state);
           const before = mode === "restart" ? yield* ownerOf(first.world.state) : null;
           if (mode !== "failed")
@@ -400,17 +340,14 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             );
           if (mode === "restart") {
             yield* until(
-              () => fs.readFileString(second.herdrLog),
+              () => fs.readFileString(second.coreLog),
               (log) => pipe_(log, Str.includes(` of ${runId} on `)),
             );
             yield* until(
               () => (before === null ? Effect.succeed(false) : holderLives(before)),
               (alive) => !alive,
             );
-            expect(
-              (yield* first.cli(["machine", "list"], { ...boot, FAKE_HERDR_OUTPUTS: localOutputs }))
-                .envelope.ok,
-            ).toBe(true);
+            expect((yield* first.cli(["machine", "list"], { ...boot })).envelope.ok).toBe(true);
           }
           const linkedLines = () =>
             fs.readFileString(`${first.world.state}/host.log`).pipe(
@@ -425,13 +362,13 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           if (mode === "away-close") {
             // The requester's link comes back while the report's close is still running.
             yield* until(
-              () => Effect.sync(() => closeAsked),
-              (asked) => asked,
+              () => fs.readFileString(first.coreLog),
+              (log) => pipe_(log, Str.includes('"cmd":"terminal.kill"')),
             );
             const linkedBefore = yield* linkedLines();
-            yield* second.cli(["board"], { FAKE_HERDR_OUTPUTS: farOutputs });
+            yield* second.cli(["board"]);
             yield* until(linkedLines, (count) => count > linkedBefore);
-            held.resolve();
+            releaseClose();
           }
           const readReport = () =>
             firstHost.run({ runId }).pipe(Effect.map((view) => view?.report ?? null));
@@ -452,7 +389,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
                     host: yield* fs
                       .readFileString(`${first.world.state}/host.log`)
                       .pipe(Effect.orElseSucceed(() => "")),
-                    calls: Str.split(yield* fs.readFileString(first.herdrLog), "\n").slice(-15),
+                    calls: Str.split(yield* fs.readFileString(first.coreLog), "\n").slice(-15),
                   }),
                 );
               }),
@@ -463,19 +400,13 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             mode === "gone" || mode === "away" ? "undelivered" : "delivered",
           );
           if (report!.state === "undelivered") expect(report!.note.length).toBeGreaterThan(0);
-          const panes = yield* new Herdr(readEnv(first.env)).paneList();
-          expect(Arr.some(panes, (pane) => pane.paneId === entry?.paneId)).toBe(false);
-          const workspaces = yield* new Herdr(readEnv(first.env)).workspaceList();
-          expect(
-            Arr.some(workspaces, (workspace) => workspace.workspaceId === task!.workspace),
-          ).toBe(mode === "human-pane" || mode === "sibling");
+          const live = yield* new Herdr(readEnv(first.env)).agentList();
+          expect(Arr.some(live, (one) => one.paneId === entry?.paneId)).toBe(false);
           if (sibling !== undefined)
-            expect(Arr.some(panes, (pane) => pane.paneId === sibling)).toBe(true);
-          if (human !== undefined)
-            expect(Arr.some(panes, (pane) => pane.paneId === human)).toBe(true);
+            expect(Arr.some(live, (one) => one.paneId === sibling)).toBe(true);
           // Three lines and a sender line are over the paste budget, so a report is kept as a file.
           const reports = Arr.filter(
-            Str.split(yield* fs.readFileString(second.herdrLog), "\n"),
+            Str.split(yield* fs.readFileString(second.coreLog), "\n"),
             (line) => pipe_(line, Str.includes(`From ${entry?.agent ?? "host"} of ${runId} on `)),
           );
           expect(reports).toHaveLength(mode === "gone" || mode === "away" ? 0 : 1);
@@ -541,13 +472,13 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             const before = yield* linkedLines();
             const recorded = yield* readReport();
             yield* stopHost(first.world.state);
-            yield* first.cli(["board"], { ...boot, FAKE_HERDR_OUTPUTS: localOutputs });
+            yield* first.cli(["board"], { ...boot });
             yield* until(linkedLines, (count) => count > before);
             expect(
               (yield* (yield* connect(first.world.state)).run({ runId }))?.report ?? null,
             ).toEqual(recorded);
             expect(
-              Arr.filter(Str.split(yield* fs.readFileString(second.herdrLog), "\n"), (line) =>
+              Arr.filter(Str.split(yield* fs.readFileString(second.coreLog), "\n"), (line) =>
                 pipe_(line, Str.includes(` of ${runId} on `)),
               ),
             ).toHaveLength(0);
@@ -560,11 +491,6 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
 test(
   "a Run started by an agent on another Machine reports back and closes",
   () => story("delivered"),
-  180_000,
-);
-test(
-  "a reported Run closes its agent while a human pane keeps its workspace",
-  () => story("human-pane"),
   180_000,
 );
 test(
