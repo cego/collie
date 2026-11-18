@@ -1902,21 +1902,17 @@ export const agentsLayer = (
 
 type Under = <A, E>(effect: Effect.Effect<A, E, AgentServices>) => Effect.Effect<A, E>;
 
-const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
-  const dirFor = (runId: string) => launchDir(host.dir, runId);
-  const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
-  // A recovery already admitted finishes before its quota incident is published. Once
-  // published, no recovery may pass the incident check and start the spent agent again.
-  const recoveryGates = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
-  const withRecoveryGate =
-    (runId: string) =>
+/** Runs one effect at a time per key; a key's gate is dropped once nobody holds or waits on it. */
+const keyedGate = () => {
+  const gates = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
+  return (key: string) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.acquireUseRelease(
         Effect.sync(() => {
-          let entry = recoveryGates.get(runId);
+          let entry = gates.get(key);
           if (entry === undefined) {
             entry = { gate: Semaphore.makeUnsafe(1), users: 0 };
-            recoveryGates.set(runId, entry);
+            gates.set(key, entry);
           }
           entry.users++;
           return entry;
@@ -1924,9 +1920,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         (entry) => entry.gate.withPermits(1)(effect),
         (entry) =>
           Effect.sync(() => {
-            if (--entry.users === 0) recoveryGates.delete(runId);
+            if (--entry.users === 0) gates.delete(key);
           }),
       );
+};
+
+const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
+  const dirFor = (runId: string) => launchDir(host.dir, runId);
+  const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
+  // A recovery already admitted finishes before its quota incident is published. Once
+  // published, no recovery may pass the incident check and start the spent agent again.
+  const withRecoveryGate = keyedGate();
+  // A collect and an end-of-turn check read one agent's questions at once; one pass at a time.
+  const withQuestionPass = keyedGate();
   const usageWaitPath = (launched: Pick<AgentAsk, "runId" | "operation" | "sequence">) =>
     `${dirFor(launched.runId)}/${stemOf(launched)}.usage-wait`;
   const usageWaiting = (launched: Launched, incident: RanOut | null) =>
@@ -3138,13 +3144,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               ids.has(`${call.id}${UNREPAIRED}`)
             )
               continue;
-            // Taken before the send, as a second reader of the same call may be polling.
-            answeredCalls.add(key);
             const sent = yield* deliver(launched, questionRepair(call.questions), {
               kind: "repair",
               ref: `question-${call.id}`,
               herdr: yield* herdr,
             });
+            // Taken once settled: a pass interrupted mid-send leaves it to the next, which
+            // the ledger answers as already sent where it went.
+            answeredCalls.add(key);
             if (sent.sent) continue;
             yield* log(
               launched.runId,
@@ -3251,7 +3258,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             holds(!answeredCalls.has(key));
           }
           return open;
-        }).pipe(Effect.orElseSucceed(() => false));
+        }).pipe(
+          withQuestionPass(launched.agent),
+          Effect.orElseSucceed(() => false),
+        );
     });
 
   const tendQuestions = (
@@ -3283,7 +3293,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           .readDirectory(yield* controlDir(host.env.stateDir, ""))
           .pipe(Effect.orElseSucceed(() => []));
         yield* Effect.forEach(named, (agent) =>
-          takeHarnessQuestions(host.env.stateDir, ports, agent).pipe(Effect.ignore),
+          takeHarnessQuestions(host.env.stateDir, ports, agent).pipe(
+            withQuestionPass(agent),
+            Effect.ignore,
+          ),
         );
         const asking = yield* Effect.filter(named, (agent) =>
           Effect.map(
