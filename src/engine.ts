@@ -357,6 +357,7 @@ import { CurrentStep, appendStepLine, readStepLines, type StepLine, type StepNot
 import { classifyGivenSet, classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { PlatformServices } from "./platform";
 import {
+  markRefused,
   updateApproved,
   approvedFrom,
   approvedIn,
@@ -584,7 +585,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
     readonly lineage: ReadonlyArray<string>;
     /** What its workflow does, fixed when it started; absent from an older host. */
-    readonly features?: { readonly review_delta?: boolean };
+    readonly features?: { readonly review_delta?: boolean; readonly before_review?: boolean };
     /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
     readonly authority: {
       readonly created: {
@@ -942,6 +943,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly cwd: string;
     /** The merge request pipeline job that proves it: nobody runs it locally. */
     readonly ci?: string;
+    /** Run on the builder's tree before a review round opens; never with \`ci\`. */
+    readonly before_review?: boolean;
   }
 
   /** The reviewed branch's checkout, or why there is none. */
@@ -10946,6 +10949,11 @@ const makeRegistry: (
       }
       // Resolved as the gate resolves it, so a check that could never run is refused now.
       if (options.command !== null) {
+        const refused = markRefused(options.command);
+        if (refused !== undefined)
+          return yield* new HostRefused({
+            reason: `${REFUSED_INPUT}: check "${options.name}": ${refused}`,
+          });
         const own = yield* treeOf(row, options.runId, dir);
         const at =
           options.command.cwd === "worktree"

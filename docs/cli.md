@@ -2053,6 +2053,20 @@ the run unproved, naming the check, the job and the commit.
 ]
 ```
 
+An entry may run **before review** with `"before_review": true`. Before each review round
+opens — in `implement`'s rallies, and after each fix the review workflow's "Fix findings" runs —
+Collie runs every such check on the builder's tree, as `host.verify` runs any check, recorded in
+the Run's verifications like any other. A failure goes back to the builder as a fix naming the
+check and the `collie run read <run> verification:<id>` that shows its output, and no reviewer
+starts on that tree; the check runs again on the fixed tree, and the round opens once every
+marked check passes. Still failing after 4 such fixes, the rally stops with
+`before_review_failed`, naming the check. The gate does not run a marked check again on a tree
+that has not moved since it passed: it takes that pass, through the same lookup that answers
+any check on an unmoved tree. A check left to CI cannot be marked, and an entry with both `ci`
+and `before_review` is refused with that reason, from a file, `--verify` or
+`set_verification` alike. Whether a Run runs marked checks before review is fixed when it
+starts; a Run started on an earlier release runs none.
+
 The base is the ref a checkout for the run is cut from: the remote branch it works on, else
 the remote's default branch, else the local one. It is read the same way for a run that has
 no checkout of its own, such as `plan`, and the run it starts inherits what it read. Only a

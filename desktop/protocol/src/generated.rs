@@ -3561,6 +3561,8 @@ pub struct VerifyItem {
     pub isolated: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prepare: Option<Prepare>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_review: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

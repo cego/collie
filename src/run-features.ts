@@ -9,12 +9,14 @@ export const FEATURES_FILE = "features.json";
 export const RunFeatures = Schema.Struct({
   /** Follow-up review rounds are told the prior head, what changed since and what is open. */
   review_delta: Schema.optionalKey(Schema.Boolean),
+  /** Its checks marked `before_review` run before each review round opens. */
+  before_review: Schema.optionalKey(Schema.Boolean),
 });
 export type RunFeatures = typeof RunFeatures.Type;
 
 const FeaturesJson = Schema.fromJsonString(RunFeatures);
 
-export const CURRENT_FEATURES: RunFeatures = { review_delta: true };
+export const CURRENT_FEATURES: RunFeatures = { review_delta: true, before_review: true };
 
 export const recordFeatures = (run: string) =>
   Effect.flatMap(Schema.encodeEffect(FeaturesJson)(CURRENT_FEATURES).pipe(Effect.orDie), (text) =>

@@ -17,6 +17,15 @@ import { CommandLine } from "effect/process";
 import { addressOf, RunRecords } from "./run-records";
 import { PrepareSchema } from "./verify-model";
 
+/** Why a check cannot be marked as it is, or undefined where it can. */
+export const markRefused = (spec: {
+  readonly ci?: string;
+  readonly before_review?: boolean;
+}): string | undefined =>
+  spec.ci !== undefined && spec.before_review === true
+    ? "a check left to CI cannot run before review: nobody runs it locally"
+    : undefined;
+
 /**
  * Exactly what Collie runs for a check, bound argument by argument: the wrapper is part
  * of the check, so `npm test` and `npm test -- --bail` are not the same one, and nothing
@@ -33,7 +42,9 @@ export const VerifySpecSchema = Schema.Struct({
   isolated: Schema.optionalKey(Schema.Boolean),
   /** Run first in that checkout, recorded with the check. */
   prepare: Schema.optionalKey(PrepareSchema),
-});
+  /** Run on the builder's tree before a review round opens; a failure goes back to the builder. */
+  before_review: Schema.optionalKey(Schema.Boolean),
+}).check(Schema.makeFilter(markRefused));
 export type VerifySpec = Schema.Schema.Type<typeof VerifySpecSchema>;
 
 const decodeGiven = Schema.decodeUnknownResult(Schema.fromJsonString(VerifySpecSchema));
