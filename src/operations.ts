@@ -99,6 +99,7 @@ const ErrorCode = Schema.Literals([
   "definition_changed",
   "operation_failed",
   "invalid_input",
+  "stale_cursor",
 ]);
 
 export const ExpectedError = Schema.Struct({

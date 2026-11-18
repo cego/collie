@@ -150,7 +150,10 @@ test("a host reads its shipped and user Workflows and Personas in full, without 
         );
         expect(read.personas.length).toBe(shippedPersonas.length + 1);
         for (const persona of Arr.filter(read.personas, (one) => one.name !== "mine")) {
-          expect(persona).toMatchObject({ layer: "baseline", extends: null });
+          expect(persona).toMatchObject({
+            layer: "baseline",
+            extends: persona.name === "implementer-handback" ? "implementer" : null,
+          });
           expect(persona.body.length).toBeGreaterThan(0);
         }
         expect(personas.get("mine")).toMatchObject({

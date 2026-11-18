@@ -75,6 +75,7 @@ import {
 } from "./processes";
 import { holderLives, hostLockOf, lockHolder, withLock } from "./lock";
 import { carriedDelivery } from "./dispatcher";
+import { epochMs } from "./time";
 import { stringifyJson } from "./json";
 
 const submitCompaction = Effect.fn("Compactors.submitCompaction")(function* (
@@ -530,6 +531,8 @@ const pi: CompactionPort = {
   ready: reported,
   request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
   poll: (ctx, requestId) => outcomeOf(ctx.dir, requestId),
+  reconcile: (ctx, since) =>
+    transcriptCompacted(ctx.dir, since, (line) => line.type === "compaction"),
 };
 
 export class Submitting extends Data.TaggedError("Submitting")<{
@@ -983,6 +986,38 @@ export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
   );
 });
 
+const transcriptCompacted = Effect.fn("Compactors.transcriptCompacted")(function* (
+  dir: string,
+  since: number,
+  boundary: (line: { readonly type?: string; readonly subtype?: string }) => boolean,
+) {
+  const transcript = Option.getOrUndefined(
+    Arr.findLast(yield* readEvents(dir), (event) => event.transcript !== undefined),
+  )?.transcript;
+  if (transcript === undefined)
+    return { kind: "failure", reason: "it never said where its transcript is" } as const;
+  const text = yield* (yield* FileSystem.FileSystem).readFileString(transcript);
+  for (const line of Str.split(text, "\n")) {
+    const entry = Option.getOrUndefined(decodeTranscriptLine(line));
+    if (entry !== undefined && boundary(entry) && epochMs(entry.timestamp) >= since)
+      return { kind: "success" } as const;
+  }
+  return {
+    kind: "failure",
+    reason: "its transcript shows no compaction since it was asked for",
+  } as const;
+});
+
+const decodeTranscriptLine = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      type: Schema.optionalKey(Schema.String),
+      subtype: Schema.optionalKey(Schema.String),
+      timestamp: Schema.String,
+    }),
+  ),
+);
+
 const claude: CompactionPort = {
   gate: gateVersion("claude"),
   install: (ctx) =>
@@ -1000,6 +1035,12 @@ const claude: CompactionPort = {
   request: (ctx, requestId) =>
     submitCompaction(ctx, requestId, `/compact ${claudeInstructions(requestId)}`),
   poll: (ctx, requestId) => claudeOutcome(ctx.dir, requestId),
+  reconcile: (ctx, since) =>
+    transcriptCompacted(
+      ctx.dir,
+      since,
+      (line) => line.type === "system" && line.subtype === "compact_boundary",
+    ),
 };
 
 export const ServerStartDeadline = Context.Reference<Duration.Duration | null>(

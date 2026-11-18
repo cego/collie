@@ -81,6 +81,7 @@ import type {
   TagRead,
 } from "./releasing";
 import type { Holders } from "./helle";
+import type { RunFeatures } from "./run-features";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 export { ConnectionId, ConnectionReading } from "./connection-model";
 
@@ -189,6 +190,7 @@ export {
   afterMergeAnswers,
   answerFor,
   blockingKeys,
+  conflictingDispositions,
   findingKey,
   sameFinding,
   formatFindings,
@@ -1399,16 +1401,22 @@ export interface HostApi {
     readonly permalink?: string;
     readonly wanted: ReadonlyArray<string>;
   }) => Effect.Effect<string>;
-  /** Reads the target's head before review. Take it inside an Activity. */
+  /** Reads the target's head before review, else the checkout's HEAD. Take it inside an Activity. */
   readonly reviewedHead: (options: {
     readonly target: string;
     readonly cwd: string;
   }) => Effect.Effect<string>;
+  /**
+   * What changed from `previous` to `head`: a merge request's interdiff, else the checkout's
+   * commits and files since `previous`, with the command that shows their diff. A
+   * local `base`, the default branch merged in since, is left out of them.
+   */
   readonly reviewChanges: (options: {
     readonly target: string;
     readonly cwd: string;
     readonly previous: string;
     readonly head: string;
+    readonly base?: string;
   }) => Effect.Effect<string, WorkflowError>;
   /** Approves once per Run and attempt; an interrupted attempt returns an uncertain outcome. */
   readonly approveReview: (options: {
@@ -1437,6 +1445,8 @@ export interface Place {
   readonly workspace: string | null;
   /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
   readonly lineage: ReadonlyArray<string>;
+  /** What its workflow does, fixed when it started; absent from an older host. */
+  readonly features?: RunFeatures;
   /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
   readonly authority: RunAuthority;
 }

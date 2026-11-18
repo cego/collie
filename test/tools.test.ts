@@ -69,6 +69,7 @@ import { runDir, type RunView } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
 import { appendLog, MERGE_REQUEST } from "../src/oversight";
 import { RunRecords } from "../src/run-records";
+import { registerAgent } from "../src/registry";
 import { AUDIT_FILE, readAudit } from "../src/audit";
 import * as SqlClient from "effect/sql/SqlClient";
 import { storedAnswers } from "./support/forge";
@@ -246,7 +247,46 @@ test("a Herd too big for one answer says how much it left out", () =>
           concurrency: 8,
         },
       );
-      expect(yield* call("collie_herd")).toMatch(/\(\d+ more card\(s\) not listed here\)/);
+      const first = yield* call("collie_herd");
+      expect(first).toMatch(/\(\d+ more card\(s\) not listed here\) complete: false/);
+      const next = /next: "([^"]+)"/.exec(first)?.[1];
+      expect(next).toBeDefined();
+      const rest = yield* call("collie_herd", { after: next! });
+      expect(rest).toContain("- complete: true");
+      expect(rest).not.toContain("not listed here");
+    }),
+  ));
+
+const Listed = Schema.fromJsonString(
+  Schema.Struct({
+    runs: Schema.Array(Schema.Struct({ runId: Schema.String, state: Schema.String })),
+    complete: Schema.Boolean,
+    next: Schema.NullOr(Schema.String),
+  }),
+);
+
+test("the run tool lists a page that says whether it is whole, and its next reaches the end", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const made = yield* Effect.forEach(["one", "two", "three", "four", "five"], aRun, {
+        concurrency: 5,
+      });
+      const read = (input: JsonObject) =>
+        call("collie_run", input).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Listed)));
+      let page = yield* read({ list: true, limit: 2 });
+      expect(page.runs.length).toBe(2);
+      expect(page.complete).toBe(false);
+      const seen = Arr.map(page.runs, (one) => one.runId);
+      while (page.next !== null) {
+        page = yield* read({ list: true, after: page.next });
+        seen.push(...Arr.map(page.runs, (one) => one.runId));
+      }
+      expect(page.complete).toBe(true);
+      expect([...seen].sort()).toEqual(Arr.map(made, (run) => run.id).sort());
+
+      expect(yield* call("collie_run", { status: ["live"] })).toContain(
+        'collie_run refused the request (InvalidInput): status only filter a listing, which takes "list": true',
+      );
     }),
   ));
 
@@ -943,6 +983,39 @@ test("what Native chat read is still news to another conversation", () =>
       expect(Arr.map(pendingNews(lines, "flock@pc").items, (item) => item.key)).toEqual([
         "r1:ended",
       ]);
+    }),
+  ));
+
+test("a Run's agent reading the news settles its own receipts and leaves Native chat's unread", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const file = yield* newsFile();
+      yield* appendNews(file, { key: "r1:ended", run: "r1", text: "Run r1 ended done." });
+      const run = yield* aRun("read the news");
+      yield* registerAgent(
+        { session: null, workspaceId: null, cwd: project },
+        {
+          role: "implementer",
+          agent: "builder",
+          paneId: "p-1",
+          workspaceId: null,
+          runId: run.id,
+          workflow: "proof",
+          at: "2026-11-13T00:00:00.000Z",
+        },
+      );
+      const agent = {
+        ...env,
+        asker: { origin: "agent" as const, from: { run: run.id, agent: "builder" } },
+      };
+      const asAgent = () => toolNamed("collie_news")!.call(agent, {});
+
+      expect(yield* asAgent()).toContain("Run r1 ended done.");
+      expect(yield* asAgent()).toBe("Nothing has happened that you have not seen.");
+      expect(Arr.map(pendingNews(yield* readNews(file), NATIVE).items, (item) => item.key)).toEqual(
+        ["r1:ended"],
+      );
+      expect(yield* call("collie_news")).toContain("Run r1 ended done.");
     }),
   ));
 

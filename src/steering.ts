@@ -386,6 +386,12 @@ export const isUnobserved = (delivery: Delivery) =>
     ),
   ) === true;
 
+export const isSettledDelivery = (delivery: Delivery) =>
+  delivery.state !== "reserved" &&
+  delivery.state !== "deferred" &&
+  delivery.state !== "unknown" &&
+  !isUnobserved(delivery);
+
 export function reconcile(
   lines: ReadonlyArray<LedgerLine>,
   id: string,

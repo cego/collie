@@ -544,14 +544,48 @@ test("the last fix cannot both fix and dispute a finding, and what it still repo
   if (open.ok) throw new Error("expected halt");
   expect(open.halt).toBe("fix_unverified");
   expect(open.reasons).toEqual([
-    'the fix reports verdict "findings"',
-    "the fix reports 1 finding(s) of its own: [major] Rejection unhandled (cli.js)",
+    "the fix reports 1 blocking finding(s) of its own: [major] Rejection unhandled (cli.js)",
   ]);
   expect(open.outstanding).toEqual([BLOCKER, MAJOR_NEW]);
   const listed = settleFinalFix([BLOCKER], { ...good, findings: [MAJOR_NEW] }, PASSED);
   expect(listed.ok ? "(ok)" : listed.reasons).toEqual([
-    "the fix reports 1 finding(s) of its own: [major] Rejection unhandled (cli.js)",
+    "the fix reports 1 blocking finding(s) of its own: [major] Rejection unhandled (cli.js)",
   ]);
+});
+
+test("a last fix whose own findings are all minor settles and carries them as outstanding", () => {
+  const nit = { file: "cli.js", severity: "minor", title: "Message could be shorter" };
+  const settled = settleFinalFix(
+    [BLOCKER],
+    {
+      verdict: "findings",
+      findings: [nit],
+      fixed: [{ file: "cli.js", title: "no exit code" }],
+      disputed: [],
+      checks: [{ name: "bun test" }],
+    },
+    PASSED,
+  );
+  if (!settled.ok) throw new Error(`expected ok: ${Arr.join(settled.reasons, "; ")}`);
+  expect(settled.outstanding).toEqual([nit]);
+  expect(settled.attestation).toContain("[minor] Message could be shorter (cli.js)");
+});
+
+test("a last fix that reports a major finding of its own halts and names it", () => {
+  const settled = settleFinalFix(
+    [BLOCKER],
+    {
+      verdict: "clean",
+      findings: [MAJOR_NEW],
+      fixed: [{ file: "cli.js", title: "no exit code" }],
+      disputed: [],
+      checks: [{ name: "bun test" }],
+    },
+    PASSED,
+  );
+  expect(settled.ok ? "(ok)" : `${settled.halt}: ${Arr.join(settled.reasons, "; ")}`).toBe(
+    "fix_unverified: the fix reports 1 blocking finding(s) of its own: [major] Rejection unhandled (cli.js)",
+  );
 });
 
 test("minor is the only severity that does not block; anything unknown fails closed", () => {

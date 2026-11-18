@@ -74,9 +74,13 @@ export const MetricSchema = Schema.Struct({
   since: Schema.optionalKey(Schema.String),
   entries: Schema.optionalKey(Schema.Int),
   heal: Schema.optionalKey(Schema.String),
+  diagnosisComplete: Schema.optionalKey(Schema.Boolean),
   finding: Schema.optionalKey(HealFinding),
   publication: Schema.optionalKey(Publication),
   issue: Schema.optionalKey(Schema.String),
+  moved: Schema.optionalKey(
+    Schema.Struct({ tracked: Schema.Int, untracked: Schema.Int, lockfile: Schema.Int }),
+  ),
 });
 export type Metric = Schema.Schema.Type<typeof MetricSchema>;
 const MetricJson = Schema.fromJsonString(MetricSchema);
@@ -96,15 +100,21 @@ export const noteVerification = (
     readonly at: string;
     readonly result: string;
     readonly by: "agent" | "collie";
+    readonly moved?: ReadonlyArray<{ readonly class: "tracked" | "untracked" | "lockfile" }>;
   },
-) =>
-  appendMetric(runDir, {
+) => {
+  const line: Metric = {
     at: record.at,
     kind: "verification",
     subject: record.id,
     value: record.by === "collie" ? 1 : 0,
     note: record.result,
-  });
+  };
+  if (record.moved === undefined) return appendMetric(runDir, line);
+  const moved = { tracked: 0, untracked: 0, lockfile: 0 };
+  for (const one of record.moved) moved[one.class] += 1;
+  return appendMetric(runDir, { ...line, moved });
+};
 
 export const noteReminder = (
   runDir: string,

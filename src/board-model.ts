@@ -198,6 +198,7 @@ export const BoardAgent = Schema.Struct({
   status: Schema.String,
   now: Schema.NullOr(Schema.String),
   run: Schema.String,
+  fallback: Schema.optionalKey(Schema.String),
 });
 export type BoardAgent = typeof BoardAgent.Type;
 
@@ -659,7 +660,15 @@ export const RunAgent = Schema.Struct({
 });
 export type RunAgent = typeof RunAgent.Type;
 
-const choiceSaid = (on: {
+export const AgentFallback = Schema.Struct({
+  run: Schema.String,
+  agent: Schema.String,
+  on: Schema.String,
+  next: Schema.String,
+});
+export type AgentFallback = typeof AgentFallback.Type;
+
+export const choiceSaid = (on: {
   readonly harness: string;
   readonly model: string | null;
   readonly effort: string | null;
@@ -1405,6 +1414,11 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: RunFile,
     error: HostRefused,
   }),
+  Rpc.make("submitOutput", {
+    payload: { runId: Schema.String, output: Schema.Json },
+    success: Schema.String,
+    error: HostRefused,
+  }),
   Rpc.make("artefactRegister", {
     payload: { runId: Schema.String, request: Schema.String, ...RegisterArtefact.fields },
     success: ArtefactRegistered,
@@ -1615,6 +1629,7 @@ export const FrontDoorRpcs = RpcGroup.make(
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   Rpc.make("usage", { success: Schema.Array(UsageReading), error: HostRefused }),
+  Rpc.make("fallbacks", { success: Schema.Array(AgentFallback), error: HostRefused }),
   Rpc.make("models", { success: Schema.Array(HarnessCatalogue), error: HostRefused }),
   Rpc.make("connections", { success: HostConnections, error: HostRefused }),
   Rpc.make("slackChoices", { success: Schema.Never, error: HostRefused }),

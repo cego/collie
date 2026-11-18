@@ -34,6 +34,12 @@ const outputWith = <Fields extends Schema.Struct.Fields>(fields: Fields) => {
       }),
     ),
     diagnosis: Schema.String,
+    diagnosis_complete: Schema.optionalKey(
+      Schema.Boolean.annotate({
+        description:
+          "false where the evidence did not establish why the Run parked, naming in diagnosis what you could not read or reproduce; true where it did",
+      }),
+    ),
     actions: Schema.Array(Schema.String),
     finding: Schema.Struct(fields),
   };

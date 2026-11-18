@@ -5,7 +5,13 @@ import { hostname } from "node:os";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { writeConfigValue } from "../src/config";
-import { holdsBudgetOf, MEMORY_WAIT, memoryWaitOf, waitForMemory } from "../src/memory-wait";
+import {
+  holdsBudgetOf,
+  MEMORY_WAIT,
+  memoryWaitOf,
+  waitForMemory,
+  waitLine,
+} from "../src/memory-wait";
 import { RunRecords } from "../src/run-records";
 
 let rig: Rig;
@@ -199,6 +205,28 @@ test("a live wait reads again within its period, so it stays shown however long 
         }
         expect(yield* memoryWaitOf("r1")).not.toBeNull();
         yield* Fiber.interrupt(fiber);
+      }),
+    ),
+  ));
+
+test("a Machine short of disk holds the start, saying so on the card, until space frees", () =>
+  runEffect(
+    onTestClock(
+      Effect.gen(function* () {
+        yield* rig.disk(2);
+        const fiber = yield* Effect.forkChild(waiting());
+        yield* settle;
+        const wait = yield* memoryWaitOf("r1");
+        expect(wait === null ? null : waitLine(wait)).toBe(
+          `Short of disk on ${hostname()}, waiting for space: / has 2.0 GiB free (2%).`,
+        );
+
+        yield* rig.disk(40);
+        yield* TestClock.adjust("15 seconds");
+        yield* settle;
+        expect(yield* Fiber.join(fiber)).toBe("waited");
+        expect(yield* memoryWaitOf("r1")).toBeNull();
+        expect(yield* log).toContain("build's agent: waited 15s for disk");
       }),
     ),
   ));

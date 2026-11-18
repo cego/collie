@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { PlatformServices } from "./platform";
 import {
   Cause,
@@ -7,6 +8,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  Layer,
   Logger,
   Ref,
   Schema,
@@ -21,7 +23,8 @@ import { currentEnv } from "./env";
 import { replacedOnDisk } from "./flows";
 import { shell } from "./mr";
 import { isJsonObject, type JsonObject } from "./schema";
-import { callTool, TOOLS } from "./tools";
+import { callTool, SUBMIT, TOOLS } from "./tools";
+import { ROLE_TOOLS } from "./toolkit";
 
 export const serveMcp = Effect.fn("Mcp.serve")(
   function* () {
@@ -34,7 +37,15 @@ export const serveMcp = Effect.fn("Mcp.serve")(
       rebuilt: (name, input) =>
         rebuiltAnswer(process.execPath, env.cwd, name, input).pipe(Effect.provideContext(services)),
     });
-    for (const tool of TOOLS) {
+    const role = env.raw.COLLIE_TOOLS_ROLE;
+    const offered = role === undefined ? undefined : ROLE_TOOLS.get(role);
+    const unlisted = yield* Layer.build(
+      McpServer.visibility(({ method }) => Effect.succeed(method !== "tools/list")).layer,
+    );
+    const submits = env.raw.COLLIE_OUTPUT_SUBMIT === "tool";
+    for (const tool of submits ? [...TOOLS, SUBMIT] : TOOLS) {
+      const listed =
+        tool === SUBMIT || offered === undefined || Arr.some(offered, (name) => name === tool.name);
       const descriptor = yield* Schema.decodeUnknownEffect(McpSchema.Tool)({
         name: tool.name,
         title: tool.title,
@@ -45,12 +56,19 @@ export const serveMcp = Effect.fn("Mcp.serve")(
       yield* server.addTool({
         tool: descriptor,
         annotations: Context.empty(),
+        services: listed ? undefined : unlisted,
         handle: (input) =>
-          answer(tool.name, isJsonObject(input) ? input : {}).pipe(
-            Effect.map(
-              (text) => new McpSchema.CallToolResult({ content: [{ type: "text", text }] }),
-            ),
-          ),
+          !listed
+            ? Effect.fail(
+                new McpSchema.InvalidParams({
+                  message: `${tool.name} is not among the ${role}'s Collie tools under role_tools: role. \`collie tools call ${tool.name}\` reaches it.`,
+                }),
+              )
+            : answer(tool.name, isJsonObject(input) ? input : {}).pipe(
+                Effect.map(
+                  (text) => new McpSchema.CallToolResult({ content: [{ type: "text", text }] }),
+                ),
+              ),
       });
     }
     return yield* Effect.never;

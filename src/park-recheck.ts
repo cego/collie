@@ -8,6 +8,9 @@ import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { projectHere, shell, whatItSaid } from "./mr";
 import type { RunView } from "./engine";
 import { herdrFailureReason, type Herdr } from "./herdr";
+import { parkText, type ParkCause } from "./park-cause";
+import { readStepLines } from "./steps";
+import { isSettledDelivery, newestById, readLedger } from "./steering";
 
 const CiTarget = Schema.fromJsonString(
   Schema.Struct({
@@ -39,6 +42,63 @@ export const rememberFailedCi = (dir: string, target: typeof FailedCi.Type) =>
     )).at(-1);
     if (last?.head === target.head && last.mr === target.mr) return;
     yield* appendRunJournal(failedCiJournal(dir), FailedCi, target);
+  });
+
+const UnsettledDelivery = Schema.fromJsonString(
+  Schema.Struct({ terminal: Schema.String, delivery: Schema.String }),
+);
+
+const unsettledJournal = (dir: string) => runJournal(dir, "unsettled-deliveries.jsonl");
+
+export const rememberUnsettled = (dir: string, held: typeof UnsettledDelivery.Type) =>
+  appendRunJournal(unsettledJournal(dir), UnsettledDelivery, held);
+
+const lastUnsettled = (dir: string) =>
+  Effect.map(
+    readRunJournal(unsettledJournal(dir), UnsettledDelivery).pipe(Effect.orElseSucceed(() => [])),
+    (held) => held.at(-1),
+  );
+
+const lastFailedCi = (dir: string) =>
+  Effect.map(
+    readRunJournal(failedCiJournal(dir), FailedCi).pipe(Effect.orElseSucceed(() => [])),
+    (targets) => targets.at(-1),
+  );
+
+export const parkEvidence = (
+  stateDir: string,
+  runId: string,
+  cwd: string,
+  cause: ParkCause,
+  text: string,
+) =>
+  Effect.gen(function* () {
+    const dir = `${stateDir}/runs/${runId}`;
+    switch (cause) {
+      case "ci-job-absent":
+      case "target-red":
+        return Arr.flatMap([...(yield* lastCiTargets(stateDir, runId)).values()], (target) => [
+          target.head,
+          target.job,
+        ]);
+      case "ci-failed": {
+        const target = yield* lastFailedCi(dir);
+        return target === undefined ? [] : [target.head, target.name];
+      }
+      case "delivery-unsettled": {
+        const held = yield* lastUnsettled(dir);
+        return held === undefined ? [] : [held.delivery];
+      }
+      default: {
+        const step = Arr.findLast(yield* readStepLines(dir), (line) => line.kind === "enter");
+        const head = yield* shell("git", ["rev-parse", "HEAD"], cwd);
+        return [
+          step._tag === "Some" && step.value.kind === "enter" ? step.value.key : "",
+          head.code === 0 ? Str.trim(head.stdout) : "",
+          parkText(text),
+        ];
+      }
+    }
   });
 
 const reply = (cleared: boolean, note: string, error = false) => ({ cleared, note, error });
@@ -154,6 +214,14 @@ export const recheckPark = (
           shell,
         );
         return read.ok ? reply(true, "forge answered") : reply(false, read.reason, true);
+      }
+      case "delivery-unsettled": {
+        const held = yield* lastUnsettled(`${stateDir}/runs/${view.runId}`);
+        if (held === undefined) return reply(false, "no unsettled delivery recorded");
+        const now = newestById(yield* readLedger(held.terminal)).get(held.delivery);
+        return now === undefined || !isSettledDelivery(now)
+          ? reply(false, `delivery ${held.delivery} is ${now?.state ?? "not in its ledger"}`)
+          : reply(true, `delivery ${held.delivery} is ${now.state}`);
       }
       case "herdr-unavailable": {
         const read = yield* herdr.agentList().pipe(Effect.result);

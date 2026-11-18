@@ -6,6 +6,7 @@ import { ChildProcessSpawner } from "effect/process";
 import type { FetchLike, ForgeProvider, GitHubProvider } from "forges";
 import type { MrForge } from "../board-model";
 import { shell, type Runner } from "../mr";
+import { epochMs } from "../time";
 import type { Readiness } from "./forge";
 
 export interface ForgeLogin {
@@ -57,6 +58,11 @@ const reasonOf = (forges: Awaited<ReturnType<typeof library>>, display: string, 
   if (error instanceof forges.ForgeNetworkError)
     return `${display} could not be reached: ${error.message}`;
   return `${display} could not be asked: ${error.message}`;
+};
+
+export const rateLimitedUntil = (reason: string) => {
+  const until = /: rate limited, until (\S+Z)/.exec(reason)?.[1];
+  return until === undefined ? null : epochMs(until);
 };
 
 interface Sent<A> {

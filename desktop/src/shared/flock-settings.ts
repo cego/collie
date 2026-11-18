@@ -71,7 +71,7 @@ interface DesktopSetting extends Setting {
   readonly change: (typed: string) => DesktopSettingsChange;
 }
 
-export const CHAT_HARNESSES = ["claude", "pi"];
+export const CHAT_HARNESSES = ["claude", "codex", "pi"];
 export const DEFAULT_CHAT_HARNESS = "claude";
 
 const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
@@ -111,7 +111,10 @@ const UNSET_SAID = new Map([
 
 const SUBS: ReadonlyArray<readonly [string, (key: string) => boolean]> = [
   ["Who does the work", (key) => ["harness", "model", "effort", "fallbacks"].includes(key)],
-  ["What agents may do", (key) => ["permissions", "trust"].includes(key)],
+  [
+    "What agents may do",
+    (key) => ["permissions", "trust", "role_tools", "output_submit"].includes(key),
+  ],
   [
     "Context and patience",
     (key) =>

@@ -37,6 +37,8 @@ import {
 
 export const COMPACTION_WAIT_MS = 5 * 60 * 1000;
 
+export const RECONCILE_AFTER_MS = 2 * COMPACTION_WAIT_MS;
+
 export const STOP_WAIT_MS = 30_000;
 
 export const CONTROL_DIR = "compaction";
@@ -166,6 +168,10 @@ export interface CompactionPort {
     ctx: AgentContext,
     requestId: string,
   ): Effect.Effect<CompactionOutcome | null, PortError, PortServices | Records>;
+  readonly reconcile?: (
+    ctx: AgentContext,
+    since: number,
+  ) => Effect.Effect<CompactionOutcome, PortError, PortServices>;
 }
 
 export interface CompactionPorts {
@@ -183,6 +189,7 @@ const AttemptSchema = Schema.Struct({
   run: Schema.String,
   step: Schema.String,
   deadline: Schema.Finite,
+  asked: Schema.optionalKey(Schema.Finite),
 });
 const ControlSchema = Schema.Struct({
   agent: Schema.String,
@@ -280,6 +287,7 @@ export interface CompactionDeps {
   ) => Effect.Effect<void, PortError, PortServices | Records>;
   waitMs: number;
   pollMs: number;
+  room?: (cwd: string) => Effect.Effect<"free" | "waited" | "stopped">;
   stopMs?: number;
 }
 
@@ -718,12 +726,18 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
     return DISPATCH;
   }
 
+  if (deps.room !== undefined && (yield* deps.room(record.cwd)) === "stopped")
+    return {
+      dispatch: false,
+      reason: `${at.agent}: the Run was stopped while its compaction waited for disk`,
+    } satisfies Boundary;
   const now = yield* Clock.currentTimeMillis;
   const attempt = {
     id: `${at.agent}-${now}`,
     run: at.run,
     step: at.step,
     deadline: now + deps.waitMs,
+    asked: now,
   };
   yield* writeControl(deps.stateDir, { ...record, attempt });
   yield* deps.warn(
@@ -797,13 +811,27 @@ const resolved = Effect.fn("Compaction.resolved")(function* (
           .pipe(Effect.as(null)),
       ),
     );
-  if (outcome === null) return null;
+  const since = attempt.asked ?? attempt.deadline;
+  const settled =
+    outcome === null &&
+    port.reconcile !== undefined &&
+    (yield* Clock.currentTimeMillis) >= since + RECONCILE_AFTER_MS
+      ? yield* port.reconcile(ctx, since).pipe(
+          Effect.catch((cause) =>
+            Effect.succeed({
+              kind: "failure",
+              reason: `its own record could not be read (${reason(cause)})`,
+            } as const),
+          ),
+        )
+      : outcome;
+  if (settled === null) return null;
   yield* writeControl(deps.stateDir, { ...record, attempt: null });
-  if (outcome.kind === "success") {
+  if (settled.kind === "success") {
     yield* deps.log(`${ctx.agent}: native compaction ${attempt.id} completed`);
   } else {
     yield* deps.warn(
-      `  ⚠ ${ctx.agent}: native compaction failed (${outcome.reason}) — sending the work anyway`,
+      `  ⚠ ${ctx.agent}: native compaction failed (${settled.reason}) — sending the work anyway`,
     );
   }
   return DISPATCH;

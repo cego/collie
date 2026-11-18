@@ -3,6 +3,7 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Clock, Config, Duration, Effect, FileSystem, Option, Random, Schema } from "effect";
 import type { PluginEnv } from "./env";
+import { diskSaid, lowOn, readDisk } from "./disk";
 import { launchDir } from "./launches";
 import { machineMemory, PRESSURE_SHORT, type Memory } from "./memory";
 import { machineName } from "./peers";
@@ -59,17 +60,38 @@ export const waitForMemory = (opts: {
   readonly stateDir: string;
   readonly runId: string;
   readonly what: string;
+  readonly checkout?: string;
+  readonly memory?: boolean;
   readonly asker?: string | null;
   readonly stopped?: Effect.Effect<boolean, never, FileSystem.FileSystem>;
   readonly say?: (sentence: string) => Effect.Effect<void>;
 }) =>
   Effect.gen(function* () {
-    const read = machineMemory(opts.env).pipe(
-      Effect.orElseSucceed(() => ({ memory: null, short: false })),
-    );
+    const read = Effect.gen(function* () {
+      const memory =
+        opts.memory === false
+          ? { memory: null, short: false }
+          : yield* machineMemory(opts.env).pipe(
+              Effect.orElseSucceed(() => ({ memory: null, short: false })),
+            );
+      if (memory.short && memory.memory !== null && memory.memory.known)
+        return { on: "memory", sentence: memorySentence(memory.memory) } as const;
+      const low = Arr.findFirst(
+        yield* readDisk(opts.env, [opts.stateDir, ...(opts.checkout ? [opts.checkout] : [])]).pipe(
+          Effect.orElseSucceed(() => []),
+        ),
+        lowOn,
+      );
+      return Option.isSome(low)
+        ? ({
+            on: "disk",
+            sentence: `short of disk on ${machineName()}, waiting for space: ${diskSaid(low.value)}`,
+          } as const)
+        : null;
+    });
     const first = yield* read;
-    if (!first.short || first.memory === null || !first.memory.known) return "free";
-    const reading = first.memory;
+    if (first === null) return "free";
+    let short: { readonly on: string; readonly sentence: string } = first;
     const stopped = opts.stopped ?? Effect.succeed(false);
     const fs = yield* FileSystem.FileSystem;
     const records = yield* RunRecords;
@@ -84,14 +106,14 @@ export const waitForMemory = (opts: {
           Effect.ignore({ log: "Warn" }),
         );
     const period = yield* every;
-    const mark = (memory: Memory & { known: true }) =>
+    const mark = (sentence: string) =>
       Effect.gen(function* () {
         yield* records.setControl(
           MEMORY_WAIT,
           opts.runId,
           yield* Schema.encodeEffect(MemoryWaitJson)({
             what: opts.what,
-            sentence: memorySentence(memory),
+            sentence,
             since,
             read: yield* Clock.currentTimeMillis,
             every: Duration.toMillis(period),
@@ -104,16 +126,17 @@ export const waitForMemory = (opts: {
       for (;;) {
         yield* Effect.sleep(period);
         const now = yield* read;
-        if (!now.short || now.memory === null || !now.memory.known) return;
-        yield* mark(now.memory);
+        if (now === null) return;
+        short = now;
+        yield* mark(now.sentence);
       }
     });
     const untilStopped = Effect.gen(function* () {
       while (!(yield* stopped)) yield* Effect.sleep(Duration.min(period, Duration.seconds(1)));
     });
     return yield* Effect.gen(function* () {
-      const sentence = memorySentence(reading);
-      yield* mark(reading);
+      const sentence = first.sentence;
+      yield* mark(sentence);
       yield* log(`${opts.what}: ${sentence}`);
       if (opts.say !== undefined) yield* opts.say(sentence);
       const ended = yield* Effect.raceFirst(
@@ -128,8 +151,8 @@ export const waitForMemory = (opts: {
           const waited = took((yield* Clock.currentTimeMillis) - since);
           yield* log(
             exit._tag === "Success" && exit.value === "waited"
-              ? `${opts.what}: waited ${waited} for memory`
-              : `${opts.what}: stopped after waiting ${waited} for memory`,
+              ? `${opts.what}: waited ${waited} for ${short.on}`
+              : `${opts.what}: stopped after waiting ${waited} for ${short.on}`,
           );
         }),
       ),

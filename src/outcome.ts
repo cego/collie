@@ -139,7 +139,9 @@ const onlySearched = (what: string) =>
 
 function passedOnlyBefore(got: Collected, name: string) {
   const proof = checkProof(withoutSearches(got, name), name);
-  return proof.state === "earlier" ? proof.runs.at(-1) : undefined;
+  return proof.state === "earlier"
+    ? Option.getOrUndefined(Arr.findLast(proof.runs, passed))
+    : undefined;
 }
 
 const runAgain = (last: Verification, tree: string) =>

@@ -191,6 +191,8 @@ describe("Each setting explains itself", () => {
       ...Arr.map(harnessNames(), (harness) => `models.${harness}`),
       "fallbacks",
       "permissions",
+      "role_tools",
+      "output_submit",
       "trust",
       "compact_at_tokens",
       "claude_auto_compact_window",

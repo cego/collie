@@ -15,7 +15,7 @@ import {
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ensureLockDir, withLock } from "./lock";
-import { RanOn, type RunStep } from "./board-model";
+import { choiceSaid, RanOn, type RunStep } from "./board-model";
 import { StepPlace } from "./steps";
 import { ClaudeSubagents } from "./subagents";
 import { StoreWrites } from "./store-writes";
@@ -50,9 +50,11 @@ export const Launched = Schema.Struct({
   sequence: Schema.optionalKey(Schema.Finite),
   from: Schema.optionalKey(RanOn),
   why: Schema.optionalKey(Schema.String),
+  next: Schema.optionalKey(RanOn),
   terminalId: Schema.optionalKey(Schema.String),
   agentSession: Schema.optionalKey(AgentSession),
   step: Schema.optionalKey(LaunchedIn),
+  outputSubmit: Schema.optionalKey(Schema.Literals(["file", "tool"])),
 });
 export type Launched = typeof Launched.Type;
 
@@ -334,6 +336,27 @@ export const agentOfLaunch = (one: Launched) => ({
   why: one.why ?? null,
   at: one.at === undefined ? null : DateTime.formatIso(DateTime.makeUnsafe(one.at)),
 });
+
+export const fallbacksOf = (launches: ReadonlyArray<Launched>, live: ReadonlySet<string>) => {
+  const latest = new Map<string, Launched>();
+  for (const one of launches) if (live.has(one.agent)) latest.set(one.agent, one);
+  return Arr.flatMap([...latest.values()], (one) =>
+    one.next === undefined
+      ? []
+      : [
+          {
+            run: one.runId,
+            agent: one.agent,
+            on: choiceSaid({
+              harness: one.harness,
+              model: one.model ?? null,
+              effort: one.effort ?? null,
+            }),
+            next: choiceSaid(one.next),
+          },
+        ],
+  );
+};
 
 export const runAgents = (runId: string) =>
   readLaunches(runId).pipe(Effect.map(Arr.map(agentOfLaunch)));

@@ -86,7 +86,8 @@ test("every Run record and Intent mutation reaches its owning Machine from an em
           const caller = yield* connect(first.world.state);
           expect(yield* caller.runs({ task: null })).toEqual([]);
           for (const prefix of [[], ["--machine", "second"]]) {
-            const outputs = (yield* first.cli([...prefix, "run", "output", runId])).envelope;
+            const outputs = (yield* first.cli([...prefix, "run", "output", runId, "--full"]))
+              .envelope;
             expect(outputs).toMatchObject({
               ok: true,
               data: {

@@ -528,7 +528,7 @@ const RunShow = Schema.Struct({ flow: Schema.Unknown });
 
 const children = (world: World, parent: string) =>
   until(
-    () => cli(world, ["run", "list"]),
+    () => cli(world, ["run", "list", "--fields", "full"]),
     ({ envelope }) =>
       pipe_(stringifyJson(envelope.data ?? ""), Str.includes(`"parent":"${parent}"`)),
   ).pipe(

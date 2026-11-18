@@ -19,6 +19,7 @@ import {
   FileSystem,
   Layer,
   Path,
+  Schedule,
   Schema,
   flow,
   Result,
@@ -26,6 +27,8 @@ import {
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, type Call } from "./support/recorder";
+import { installBaseline } from "./support/engine";
+import { mentionedSkills } from "../src/template";
 import type { FakeHc } from "./support/fake-hc";
 import { isJsonObject, isString } from "../src/schema";
 import { fastForward, runEffect as runLive } from "./support/effect";
@@ -36,6 +39,8 @@ import {
   agentsLayer,
   configuredAgents,
   decodeOutput,
+  everyAgentText,
+  personaText,
   promptFor,
   type AgentHost,
   type RanOut,
@@ -89,6 +94,8 @@ import { everyRegistered, lineageAgent, registerAgent, scopeFor } from "../src/r
 import { Herdr, HerdrError, type AgentStatus } from "../src/herdr";
 import { retitleGenericTasks } from "../src/tasknames";
 import { runFacts } from "./support/records";
+import { updateApproved } from "../src/verify-spec";
+import { VERIFYING, encodeVerifying } from "../src/verify";
 import { agentName } from "../src/naming";
 import {
   controlDir,
@@ -100,7 +107,7 @@ import {
   type CompactionOutcome,
   type CompactionPorts,
 } from "../src/compaction";
-import { COMPACTION_PORTS, questionsSince, recordClaudeEvent } from "../src/compactors";
+import { COMPACTION_PORTS, questionsSince, recordClaudeEvent, writeEvent } from "../src/compactors";
 import { hostLockOf } from "../src/lock";
 import { claudeTrust } from "../src/trust";
 import { FALLBACK_DEFAULTS } from "../src/settings";
@@ -118,6 +125,7 @@ interface Clearing {
   readonly clears?: ReadonlyArray<string>;
   readonly skill?: string;
   readonly claudeSubagents?: ClaudeSubagents;
+  readonly role?: string;
 }
 let clearing: Clearing = {};
 
@@ -268,7 +276,7 @@ const session = <A, E>(
   run: Effect.Effect<
     A,
     E,
-    WorkflowEngine.WorkflowEngine | Agents | Collecting | Store | PlatformServices
+    WorkflowEngine.WorkflowEngine | Agents | Collecting | Store | Host | PlatformServices
   >,
   over?: Partial<AgentHost>,
 ) =>
@@ -439,6 +447,22 @@ test("the contract an agent is held to is in the prompt it is sent, with the jud
   expect(prompt).toContain("clean only when there is nothing left for the implementer");
   expect(prompt).toContain("one sentence a human reads");
   expect(prompt).toContain("it is asking for your judgment");
+});
+
+test("under output_submit: tool the prompt names collie_submit and keeps the whole contract, with no path to write", () => {
+  const prompt = promptFor({
+    role: "reviewer",
+    instructions: "Review the diff.",
+    output: "/state/agents/r1/review.json",
+    contract: jsonSchemaFor(Verdict),
+    outputSubmit: "tool",
+  });
+  expect(prompt).toContain("collie_submit");
+  expect(prompt).toContain("clean only when there is nothing left for the implementer");
+  expect(prompt).toContain("one sentence a human reads");
+  expect(prompt).toContain("it is asking for your judgment");
+  expect(prompt).not.toContain("OUTPUT_PATH");
+  expect(prompt).not.toContain("/state/agents/r1/review.json");
 });
 
 test("self-improve's triager is shown that an Improvement's name and keys are kebab-case", () => {
@@ -2571,6 +2595,85 @@ test("a host stopped once its first reminder went out does not send that reminde
     }),
   ));
 
+class HeldReminder extends Turns {
+  private held = false;
+  override agentPrompt(target: string, text: string) {
+    if (!this.held && pipe(text, Str.includes(REMINDER))) {
+      this.held = true;
+      return Effect.never;
+    }
+    return super.agentPrompt(target, text);
+  }
+}
+
+const heldReminder = (runId: string) =>
+  Effect.map(deliveredTo(dir, runId), (deliveries) =>
+    Arr.findFirst(deliveries, (one) => pipe(one.cause.ref, Str.endsWith(".remind-1"))),
+  );
+
+const enteredBehindHeldReminder = (landed: boolean) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* rig.queueOutputs([null, null, null]);
+    yield* interrupted(
+      "r1",
+      Effect.map(heldReminder("r1"), Option.isSome).pipe(Effect.orElseSucceed(() => false)),
+      { herdr: new HeldReminder(), collectMs: 600_000 },
+    );
+    const held = Option.getOrThrow(yield* heldReminder("r1"));
+    if (landed)
+      yield* writeEvent(yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")), {
+        session: null,
+        kind: "submit",
+        reason: "collie",
+        delivery: held.id,
+      });
+    const result = yield* session(
+      Effect.raceFirst(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* TestClock.withLive(Effect.sleep("500 millis"));
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+          return yield* Fiber.join(fiber);
+        }),
+        untilParked("r1"),
+      ),
+      { herdr: new Turns(), collectMs: 600_000 },
+    );
+    const now = Option.getOrUndefined(
+      Arr.findLast(
+        yield* ledgerOf(dir, held.incarnation),
+        (line) => "id" in line && line.id === held.id,
+      ),
+    );
+    return { result, now };
+  });
+
+test("a reminder held behind an earlier copy that landed settles it and is not parked", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { result, now } = yield* enteredBehindHeldReminder(true);
+      expect(result !== "parked" && result._tag === "Success" && result.success.note).toBe("late");
+      expect(now).toMatchObject({ state: "acknowledged" });
+      expect(yield* halts("r1")).toEqual([]);
+    }),
+  ));
+
+test("a reminder held behind an earlier copy that never landed parks as delivery-unsettled and claims no Heal", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { result, now } = yield* enteredBehindHeldReminder(false);
+      expect(result).toBe("parked");
+      expect(now).not.toMatchObject({ state: "acknowledged" });
+      expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("delivery-unsettled");
+      const recoveries = Arr.filter(
+        yield* readMetrics(evidenceDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
+        (line) => line.kind === "recovery" && line.action === "healed",
+      );
+      expect(recoveries).toEqual([]);
+    }),
+  ));
+
 test("an agent herdr reports blocked when its turn stops is not reminded", () =>
   runEffect(
     Effect.gen(function* () {
@@ -3226,6 +3329,57 @@ test("a persona from the user Layer is followed by the every-agent text", () =>
     }),
   ));
 
+test("the shipped reviewer, with no persona in the user Layer, is its own sections and both its skills", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* installBaseline(rig);
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+
+      const text = yield* personaFileText;
+      expect(text).toContain("Run both review skills over the change");
+      expect(text).toContain("Finding nothing is a real answer");
+      expect(mentionedSkills(text)).toEqual(["code-review", "code-review-and-quality"]);
+    }),
+  ));
+
+test("a user-Layer reviewer that extends reviewer-single-pass is launched as the single pass", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* installBaseline(rig);
+      yield* writePersona(rig.userDir, "reviewer", "---\nextends: reviewer-single-pass\n---\n");
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+
+      const text = yield* personaFileText;
+      expect(text).toContain("in one pass");
+      expect(text).not.toContain("Run both review skills over the change");
+      expect(text).toContain("## If the skill is missing");
+      expect(mentionedSkills(text)).toEqual(["code-review-and-quality"]);
+    }),
+  ));
+
+test("a user-Layer implementer that extends implementer-handback is the implementer, then its Delegation section", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* installBaseline(rig);
+      const env = rig.pluginEnv();
+      const every = (yield* everyAgentText(env)) ?? "no every-agent persona";
+      const shipped = yield* personaText(env, "implementer");
+      const own = Str.slice(0, shipped.length - every.length)(shipped);
+      expect(shipped).toEndWith(every);
+
+      yield* writePersona(rig.userDir, "implementer", "---\nextends: implementer-handback\n---\n");
+      const text = yield* personaText(env, "implementer");
+
+      expect(text).toStartWith(own);
+      expect(text).toEndWith(every);
+      const added = Str.slice(own.length, text.length - every.length)(text);
+      expect(added).toStartWith("## Delegation\n");
+      expect(added).toContain("A child's word is not review.");
+    }),
+  ));
+
 test("a role with no persona is its one line, then the every-agent text", () =>
   runEffect(
     Effect.gen(function* () {
@@ -3731,6 +3885,19 @@ test("work whose Subscription is Exhausted starts on the first chain entry with 
       expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
         "review: fell back from claude/opus to codex/default: session 100%",
       );
+    }),
+  ));
+
+test("work on an agent with room records where a Fallback would move it, before any does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { fallbacks: Effect.succeed(["codex"]) });
+
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["claude"]);
+      const launched = yield* launchOf("r1");
+      expect(launched.from).toBeUndefined();
+      expect(launched.next).toEqual({ harness: "codex", model: "default", effort: null });
     }),
   ));
 
@@ -5933,6 +6100,148 @@ const tendIdle = Agents.pipe(
   ),
 );
 
+const collieCheckRunning = (ends: "exits" | "crashes") =>
+  Effect.gen(function* () {
+    const go = `${rig.root}/go`;
+    yield* updateApproved(evidenceDir(dir, "r1"), () => [
+      {
+        name: "unit",
+        executable: "sh",
+        argv: [
+          "-c",
+          `while [ ! -f '${go}' ]; do sleep 0.05; done; ${ends === "crashes" ? "kill -KILL $$" : "true"}`,
+        ],
+        cwd: ".",
+      },
+    ]).pipe(Effect.provide(recordsAt(dir)));
+    const store = yield* Store;
+    if ((yield* store.run("r1")) === null)
+      yield* store.admit({
+        request: "req-r1",
+        run: "r1",
+        workflow: "proof",
+        project: rig.projectDir,
+        input: {},
+        provenance: {},
+        options: {},
+        generation: "proof@1",
+        execution: "execution-r1",
+        task: null,
+        parent: null,
+      });
+    const check = yield* Effect.forkChild(
+      Host.pipe(
+        Effect.flatMap((host) =>
+          host.verify({ runId: "r1", name: "unit", cwd: rig.projectDir, pass: "gate" }),
+        ),
+        Effect.result,
+      ),
+    );
+    yield* until(Effect.map(controlRead(VERIFYING, "r1"), (marker) => marker !== null));
+    return { check, end: (yield* FileSystem.FileSystem).writeFileString(go, "") };
+  });
+
+test.each(["exits", "crashes"] as const)(
+  "a message to an agent while Collie's Check collects proof on its checkout is held behind it, and sent once the Check %s",
+  (ends) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+        yield* session(started("r1"));
+        yield* session(
+          Effect.gen(function* () {
+            const running = yield* collieCheckRunning(ends);
+            const held = yield* say("r1", "stay in src", "steer-held");
+            expect(held).toMatchObject({ delivered: false, queued: true });
+            expect(held.detail).toContain('Held behind the Check "unit"');
+            expect(held.detail).toContain("until it ends");
+            yield* tendIdle;
+            expect(prompts(yield* rig.calls())).not.toContain("stay in src");
+            yield* running.end;
+            const checked = yield* Fiber.join(running.check);
+            expect(checked._tag).toBe(ends === "exits" ? "Success" : "Failure");
+            expect(yield* controlRead(VERIFYING, "r1")).toBeNull();
+            yield* tendIdle;
+          }),
+        );
+        expect(
+          Arr.filter(prompts(yield* rig.calls()), (one) => one === "stay in src"),
+        ).toHaveLength(1);
+      }),
+    ),
+);
+
+test("Collie's own step to an agent waits while Collie's Check collects proof on its checkout", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* controls.setControl(
+        VERIFYING,
+        "r1",
+        encodeVerifying({
+          name: "unit",
+          executable: "true",
+          argv: [],
+          pass: "gate",
+          round: null,
+          revision: "",
+          base: null,
+          started: "2026-11-17T10:00:00.000Z",
+          checkout: rig.projectDir,
+        }),
+      );
+      const step = yield* Effect.forkChild(session(started("r1")));
+      yield* until(
+        Effect.map(
+          read(`${dir}/agents/r1/agents.log`),
+          Str.includes('held behind the Check "unit"'),
+        ),
+      );
+      yield* TestClock.withLive(Effect.sleep("300 millis"));
+      expect(sentTexts(yield* rig.calls())).toEqual([]);
+      yield* controls.setControl(VERIFYING, "r1", null);
+      const result = yield* Fiber.join(step);
+      expect(result._tag === "Success" && result.success.note).toBe("done");
+    }),
+  ));
+
+test("an answer to an agent's question waits while Collie's Check collects proof on its checkout", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ writes: [], output: null, owed: true }]);
+      yield* session(
+        Effect.gen(function* () {
+          yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+          yield* asksTwo;
+          yield* questionsOf(2);
+          yield* controls.setControl(
+            VERIFYING,
+            "r1",
+            encodeVerifying({
+              name: "unit",
+              executable: "true",
+              argv: [],
+              pass: "gate",
+              round: null,
+              revision: "",
+              base: null,
+              started: "2026-11-17T10:00:00.000Z",
+              checkout: rig.projectDir,
+            }),
+          );
+          yield* answer("ask-review-1", "SQLite");
+          yield* answer("ask-review-2", "lint");
+          yield* TestClock.withLive(Effect.sleep("3 seconds"));
+          expect(yield* prompted("are answered")).toBe(false);
+          yield* controls.setControl(VERIFYING, "r1", null);
+          while (!(yield* prompted("are answered")))
+            yield* TestClock.withLive(Effect.sleep("10 millis"));
+        }),
+        { collectMs: 120_000, pollMs: 200 },
+      );
+    }),
+  ));
+
 test.each([true, false])(
   "a queued retry keeps its accepted words and actor (attributed: %s)",
   (attributed) =>
@@ -7790,6 +8099,154 @@ const settingsAt = (calls: ReadonlyArray<Call>) => {
   const args = launchArgs(calls);
   return read(args[args.indexOf("--settings") + 1] ?? "");
 };
+
+const ClaudeMcpConfig = Schema.fromJsonString(
+  Schema.Struct({
+    mcpServers: Schema.Struct({
+      collie: Schema.Struct({
+        env: Schema.Record(Schema.String, Schema.String),
+      }),
+    }),
+  }),
+);
+
+const collieServerOf = Effect.fn("AgentsTest.collieServerOf")(function* () {
+  const args = launchArgs(yield* rig.calls());
+  const config = yield* Schema.decodeEffect(ClaudeMcpConfig)(
+    yield* read(args[args.indexOf("--mcp-config") + 1] ?? ""),
+  );
+  return { args, env: config.mcpServers.collie.env };
+});
+
+test("a reviewer's Claude launch under the default role_tools carries every Collie tool and no strict MCP config", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const { args, env } = yield* collieServerOf();
+      expect(args).not.toContain("--strict-mcp-config");
+      expect(env.COLLIE_RUN).toBe("r1");
+      expect(env.COLLIE_TOOLS_ROLE).toBeUndefined();
+    }),
+  ));
+
+test("under role_tools: role a reviewer's Claude launch names its role to the Collie server, with no strict MCP config", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* configured(encodeJson({ role_tools: "role" }));
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const { args, env } = yield* collieServerOf();
+      expect(args).not.toContain("--strict-mcp-config");
+      expect(env.COLLIE_TOOLS_ROLE).toBe("reviewer");
+      expect(env.COLLIE_RUN).toBe("r1");
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        "Collie tools: the reviewer's 3",
+      );
+    }),
+  ));
+
+test("under output_submit: tool a Claude launch offers collie_submit, and its Output file still counts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* configured(encodeJson({ output_submit: "tool" }));
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* rig.calls().pipe(
+            Effect.repeat({
+              until: (calls) => launchArgs(calls).length > 0,
+              schedule: Schedule.spaced("20 millis"),
+            }),
+          );
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"written"}`);
+          return yield* Fiber.join(fiber);
+        }),
+      );
+      expect((yield* collieServerOf()).env.COLLIE_OUTPUT_SUBMIT).toBe("tool");
+      expect(yield* read(promptPath("r1"))).toContain("collie_submit");
+      expect(result._tag === "Success" && result.success.note).toBe("written");
+    }),
+  ));
+
+test("an agent launched under output_submit: file is still told its Output's path after the setting becomes tool", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const continued = enveloped({ name: "submit-reuse", input: {}, success: Schema.String });
+      const body = continued.toLayer((payload) =>
+        Effect.gen(function* () {
+          yield* agentWork({ operation: "first", agent: "worker", instructions: "One." });
+          yield* configured(encodeJson({ output_submit: "tool" })).pipe(Effect.orDie);
+          return yield* agentWork({ operation: "second", agent: "worker", instructions: "Two." });
+        }).pipe(asRun(payload)),
+      );
+      yield* rig.queueOutputs(["first", "second"]);
+      const result = yield* continued
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.result,
+          Effect.provide(
+            body.pipe(
+              Layer.provideMerge(agentsLayer(hostOf())),
+              Layer.provideMerge(foundationLayer({ dir })),
+            ),
+          ),
+          Effect.scoped,
+        );
+      expect(result).toMatchObject({ _tag: "Success", success: "second" });
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+      const prompt = yield* read(`${dir}/agents/r1/second.prompt.md`);
+      expect(prompt).not.toContain("collie_submit");
+      expect(prompt).toContain(`${dir}/agents/r1/second`);
+    }),
+  ));
+
+test("under role_tools: role a role the table does not name keeps every tool, and its start line says so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      clearing = { role: "planner" };
+      yield* configured(encodeJson({ role_tools: "role" }));
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      expect((yield* collieServerOf()).env.COLLIE_TOOLS_ROLE).toBeUndefined();
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        "Collie tools: every tool, as the planner has no list",
+      );
+    }),
+  ));
+
+test.each(["all", "role"])(
+  "under role_tools: %s a Claude launch keeps the operator's profile and no strict MCP config",
+  (roleTools) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* configured(
+          encodeJson({
+            role_tools: roleTools,
+            agent_profile: encodeJson({
+              "*": {
+                claude: {
+                  enabledPlugins: { "linear@official": true },
+                  disableClaudeAiConnectors: false,
+                },
+              },
+            }),
+          }),
+        );
+        yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+        yield* session(started("r1"));
+        const { args, env } = yield* collieServerOf();
+        const settings = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.JsonObject))(
+          yield* settingsAt(yield* rig.calls()),
+        );
+        expect(env.COLLIE_TOOLS_ROLE).toBe(roleTools === "role" ? "reviewer" : undefined);
+        expect(args).not.toContain("--strict-mcp-config");
+        expect(settings.enabledPlugins).toEqual({ "linear@official": true });
+        expect(settings.disableClaudeAiConnectors).toBe(false);
+      }),
+    ),
+);
 
 test.each([0, 1000])(
   "Claude subagent policy reaches launch settings with compaction at %s",

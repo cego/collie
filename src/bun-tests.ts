@@ -54,3 +54,32 @@ export function failedAlone(exit: number, output: string, test: FailedTest) {
     Arr.some(Str.split(output, "\n"), (line) => FAILED.exec(line)?.[1] === test.name)
   );
 }
+
+export const NAMED_FAILURES = 50;
+
+export const failureReader = () => {
+  let carry = "";
+  let file: string | null = null;
+  let listed = false;
+  const seen = new Set<string>();
+  const line = (text: string) => {
+    if (LIST_HEADER.test(text)) listed = true;
+    if (listed) return;
+    const header = FILE_HEADER.exec(text);
+    if (header !== null) file = header[1]!;
+    const failed = FAILED.exec(text);
+    if (failed !== null) seen.add(file === null ? failed[1]! : `${file} > ${failed[1]}`);
+  };
+  return {
+    feed: (chunk: string) => {
+      const lines = Str.split(carry + chunk, "\n");
+      carry = lines.pop() ?? "";
+      for (const one of lines) line(one);
+    },
+    names: () => {
+      line(carry);
+      carry = "";
+      return [...seen];
+    },
+  };
+};

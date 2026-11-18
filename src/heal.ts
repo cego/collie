@@ -15,6 +15,7 @@ const HealSaid = {
   diagnosis: Schema.String,
   actions: Schema.Array(Schema.String),
   finding: HealFinding,
+  diagnosis_complete: Schema.optionalKey(Schema.Boolean),
 };
 export const HealOutput = Schema.Union([
   Schema.Struct({
@@ -66,7 +67,8 @@ export const healerFor = (env: Pick<PluginEnv, "pluginRoot" | "userDir">, projec
     ),
   );
 
-export const healRequest = (run: string, park: string) => `heal:${run}:${park}`;
+export const healRequest = (run: string, park: string, nth = 1) =>
+  nth === 1 ? `heal:${run}:${park}` : `heal:${run}:${park}:${nth}`;
 
 export const healOn = (userDir: string) =>
   readConfig(userDir).pipe(Effect.map((raw) => configValue(raw, "recovery.heal") !== false));

@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import {
+  movedLine,
   passed,
   ranCommand,
   ranOneTest,
@@ -88,6 +89,7 @@ function stateOf(runs: ReadonlyArray<Verification>, last: Verification | undefin
   if (last !== undefined && passed(last)) return "passed";
   const latest = last ?? runs.at(-1);
   if (latest === undefined) return "never";
+  if (last === undefined && latest.expect === "fail") return "earlier";
   if (latest.result === "fail" || latest.expect === "fail") return "failed";
   if (latest.result === "unstable") return "unstable";
   return "earlier";
@@ -102,8 +104,9 @@ export const owedLocally = <C extends LeftToCi>(checks: ReadonlyArray<C>) =>
 export function unstableWhy(runs: ReadonlyArray<Verification>) {
   const latest = Option.getOrUndefined(Arr.findLast(runs, (v) => v.result === "unstable"));
   const reason = latest?.end.unmeasured ?? latest?.start.unmeasured ?? "";
+  const moved = latest === undefined ? "" : movedLine(latest);
   return Option.match(Arr.findFirst(Arr.map(Str.split(reason, "\n"), Str.trim), Str.isNonEmpty), {
-    onNone: () => "ran on a tree that moved under it",
+    onNone: () => `ran on a tree that moved under it${moved === "" ? "" : `: ${moved}`}`,
     onSome: (line) => `ran on a tree git could not measure: ${line}`,
   });
 }
