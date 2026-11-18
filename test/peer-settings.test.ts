@@ -143,6 +143,10 @@ test(
                     "Desktop",
                     "2099-10-12T15:00:00.000Z",
                   ).pipe(
+                    // The host's own setSettings offers what it took to its peers.
+                    Effect.andThen(
+                      tellHost(side.world.state, [`${side.world.config}/config.json`]),
+                    ),
                     Effect.andThen(sharedSettings(side.world.config)),
                     Effect.provideContext(services),
                   ),
