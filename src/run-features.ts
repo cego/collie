@@ -9,12 +9,14 @@ export const FEATURES_FILE = "features.json";
 export const RunFeatures = Schema.Struct({
   /** Follow-up review rounds are told the prior head, what changed since and what is open. */
   review_delta: Schema.optionalKey(Schema.Boolean),
+  /** Implement's review rounds give findings ledger ids. */
+  findings_ledger: Schema.optionalKey(Schema.Boolean),
 });
 export type RunFeatures = typeof RunFeatures.Type;
 
 const FeaturesJson = Schema.fromJsonString(RunFeatures);
 
-export const CURRENT_FEATURES: RunFeatures = { review_delta: true };
+export const CURRENT_FEATURES: RunFeatures = { review_delta: true, findings_ledger: true };
 
 export const recordFeatures = (run: string) =>
   Effect.flatMap(Schema.encodeEffect(FeaturesJson)(CURRENT_FEATURES).pipe(Effect.orDie), (text) =>

@@ -141,6 +141,8 @@ interface Fixing {
 }
 
 interface Opening {
+  /** Every finding the reviews gave a ledger id, at its latest status; empty where none did. */
+  readonly ledger?: string;
   readonly evidence: string;
   readonly unreviewed: string;
   readonly unsettled: string;
@@ -206,6 +208,7 @@ export interface Delivery<I extends Told, O extends Opened> {
   }>;
   readonly roots: ReadonlyArray<string>;
   readonly rallied: Reviewed;
+  readonly ledger?: string;
   /** What the caller leaves unsettled, listed before what delivery adds. */
   readonly unsettled: ReadonlyArray<string>;
   /** Integrates the default branch before a fresh review. */
@@ -684,6 +687,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             verify: renderApproved(spawned(checks, settledEvidence.verifications)),
             // Read after the gate settled, so the merge request cites the passing runs.
             evidence: renderEvidence(settledEvidence),
+            ledger: ask.ledger ?? "",
             unreviewed,
             unsettled: Arr.join(
               Arr.map(unsettled, (line) => `- ${line}`),

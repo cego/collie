@@ -129,7 +129,9 @@ The review found:
 {{findings}}
 
 That is one review, synthesised from every reviewer that looked at this branch, so each
-finding arrives once and already reconciled. Apply the ones you agree with, as fixup
+finding arrives once and already reconciled. A finding that starts with an id
+(`<run>-F<n>: <status>`) keeps that id in every later review and in the merge request.
+Apply the ones you agree with, as fixup
 commits on this branch. For any finding you believe is wrong, do not apply it — record it
 under `disputed` with your reason. The next review may accept that reason explicitly or
 answer it with a rebuttal. A blocking dispute left unresolved parks the rally for the
@@ -288,6 +290,11 @@ For measurements, report the measured results and metric verdicts in ordinary te
 Where the lines above are not empty, a fix after the last review was checked by its own
 tests and dispositions and not by a reviewer: say so in the description, in one sentence, and list
 what that fix changed. Where findings were left open as non-blocking, list them too.
+
+{{ledger}}
+
+Where the list above is not empty, it is every finding the reviews raised, each with its id
+and where it ended up. Name each one in the description by that id and status.
 
 {{unsettled}}
 

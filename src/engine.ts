@@ -580,7 +580,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
     readonly lineage: ReadonlyArray<string>;
     /** What its workflow does, fixed when it started; absent from an older host. */
-    readonly features?: { readonly review_delta?: boolean };
+    readonly features?: {
+      readonly review_delta?: boolean;
+      readonly findings_ledger?: boolean;
+    };
     /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
     readonly authority: {
       readonly created: {

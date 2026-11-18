@@ -151,6 +151,8 @@ export interface ReviewAsk {
   /** The review before this one, for the reviewers to read rather than repeat. */
   readonly previous: string;
   readonly ledger?: ReadonlyArray<Finding>;
+  /** Ids this Run already gave findings outside `ledger`, which a new finding never takes. */
+  readonly taken?: ReadonlyArray<string>;
   readonly head?: string;
   readonly changes?: string;
   /** A follow-up round's prior head, what changed since it and what is still open; see `followUp`. */
@@ -252,7 +254,10 @@ export const reviewPass = (ask: ReviewAsk) =>
         const before = ask.ledger;
         const findings: Finding[] = [];
         const ids = new Set<string>();
-        const reserved = new Set(Arr.map([...before, ...report.findings], (one) => one.id));
+        const reserved = new Set([
+          ...Arr.map([...before, ...report.findings], (one) => one.id),
+          ...(ask.taken ?? []),
+        ]);
         let next = 1;
         for (const finding of report.findings) {
           const earlier = Option.getOrUndefined(
@@ -449,6 +454,10 @@ export const followUp = (ask: {
     );
   });
 
+/** A ledger's finding a review has closed. */
+const isResolved = (finding: Finding) =>
+  finding.status === "fixed" || finding.status === "obsolete";
+
 /** At most four rounds per rally; it leaves at the first review with nothing blocking. */
 export const ROUNDS = 4;
 
@@ -489,6 +498,10 @@ export const rally = (ask: {
   /** What every round's reviewers are told beside the change; empty for nothing. */
   readonly obstacle: string;
   readonly resume?: { readonly previous: Rallied; readonly reviewers: string };
+  /** The findings ledger its first round is given; absent, no round has one. */
+  readonly ledger?: ReadonlyArray<Finding>;
+  /** Ids the Run gave findings outside this rally. */
+  readonly taken?: ReadonlyArray<string>;
   /** Integrates the default branch, answering with what a review is diffed against. */
   readonly integrate: (
     operation: string,
@@ -511,6 +524,7 @@ export const rally = (ask: {
     const delta =
       ask.resume === undefined && (yield* host.place(runId)).features?.review_delta === true;
     let prior: { readonly head: string; readonly open: ReadonlyArray<Finding> } | null = null;
+    let ledger = ask.ledger;
 
     const repair = Effect.gen(function* () {
       const resumed = ask.resume;
@@ -581,6 +595,8 @@ export const rally = (ask: {
                   ? ""
                   : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
             prefix,
+            ledger,
+            taken: ask.taken,
             reviewers: ask.resume?.reviewers,
             obstacle: ask.obstacle,
             risks: ask.risks,
@@ -590,6 +606,8 @@ export const rally = (ask: {
             of: ask.resume === undefined ? ROUNDS : 1,
             disputed,
           });
+          if (ledger !== undefined) ledger = synthesis.findings;
+          const unresolved = Arr.filter(synthesis.findings, (one) => !isResolved(one));
           for (const conflict of conflictingDispositions(synthesis)) {
             yield* host.record(runId, `review ${at}: ${conflict}`);
           }
@@ -622,11 +640,11 @@ export const rally = (ask: {
           if (round.go === "clean") {
             // Nothing blocking is not nothing found: what is left is carried to the merge
             // request unfixed, and the record says so rather than the loop going quiet.
-            if (synthesis.findings.length > 0) {
+            if (unresolved.length > 0) {
               yield* host.record(
                 runId,
-                `carried ${synthesis.findings.length} non-blocking finding(s) unfixed: ${Arr.join(
-                  Arr.map(synthesis.findings, (one) => one.title),
+                `carried ${unresolved.length} non-blocking finding(s) unfixed: ${Arr.join(
+                  Arr.map(unresolved, (one) => one.title),
                   "; ",
                 )}`,
               );
@@ -667,7 +685,7 @@ export const rally = (ask: {
           if (head !== "")
             prior = {
               head,
-              open: Arr.filter(synthesis.findings, (one) => !answered.has(findingKey(one))),
+              open: Arr.filter(unresolved, (one) => !answered.has(findingKey(one))),
             };
 
           if (at === ROUNDS) {

@@ -711,7 +711,8 @@ const place = yield * host.place((yield * Run).id);
 // place.authority — the branch this Run created, whether it roams, and the human door and
 //                   words that started it: what a Claude agent's auto mode is told
 // place.features  — what its workflow does, fixed when it started: `review_delta` where its
-//                   follow-up review rounds are given a delta; absent on a Run started earlier
+//                   follow-up review rounds are given a delta, `findings_ledger` where
+//                   implement's give findings ledger ids; absent on a Run started earlier
 ```
 
 `place.cwd` is decided before your body runs. A workflow that
@@ -1582,9 +1583,20 @@ that `implement` makes after its rallies, still read the whole change against it
 review workflow's "Fix findings" on a local target is told the same; on a merge request its
 rounds are given the forge's interdiff, as before.
 
-Whether a Run's rounds are told this is fixed when the Run starts, as `Place.features`. A Run with
-no record started on an earlier release and keeps that release's rounds, so its replay meets
-no Activity it did not record.
+Given a `ledger`, `rally` keeps the findings ledger the review workflow keeps: `reviewPass`
+gives each new finding an id, `<run>-F<n>`, skipping the `taken` ids the Run gave outside the
+ledger. It records an earlier finding the review confirms fixed as `fixed` at the reviewed
+head. An earlier finding the review leaves out fails the round with `review omitted earlier
+finding <id>; return its status`. The next round is given the ledger as that round recorded it. `implement` passes
+an empty ledger to each ticket's rally, and to its final rally every finding still open or
+disputed from the tickets. It names every id it gave, at its latest status, in its merge
+request's prompt. The ids are worked out again from the recorded reviews on replay, so a
+host restart does not change them.
+
+Whether a Run's rounds are told this, and whether `implement`'s carry a ledger
+(`findings_ledger`), is fixed when the Run starts, as `Place.features`. A Run with no record
+started on an earlier release and keeps that release's rounds, so its replay meets no
+Activity it did not record.
 
 `ReviewOutputSchema`, `FixOutputSchema` and `SynthesisSchema` are the shapes those steps
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the

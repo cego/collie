@@ -8358,17 +8358,17 @@ scenario(
 );
 
 /**
- * The shipped workflows as a release installs them, with `reviewing` as its rally: started
- * again over the same path, a Run reads what is there now, as after an upgrade.
+ * The shipped workflows as a release installs them, with `earlier` files, by name, in place
+ * of this branch's: started again over the same path, a Run reads what is there now, as
+ * after an upgrade.
  */
-const released = (reviewing: string) =>
+const released = (earlier: Readonly<Record<string, string>> = {}) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const into = `${rig.root}/release/workflows`;
     yield* fs.makeDirectory(into, { recursive: true });
     for (const name of yield* fs.readDirectory(`${ROOT}workflows`))
-      yield* fs.copyFile(`${ROOT}workflows/${name}`, `${into}/${name}`);
-    yield* fs.copyFile(reviewing, `${into}/reviewing.ts`);
+      yield* fs.copyFile(earlier[name] ?? `${ROOT}workflows/${name}`, `${into}/${name}`);
     if (!renamed) return `${into}/implement.workflow.ts`;
     const entry = `${into}/${idOf("implement")}.workflow.ts`;
     yield* fs.writeFileString(
@@ -8395,7 +8395,9 @@ scenario(
         const { bin, options } = yield* fixedOnce(runId);
         const release = {
           ...options,
-          entry: yield* released(`${ROOT}test/fixtures/reviewing.before-delta.ts.txt`),
+          entry: yield* released({
+            "reviewing.ts": `${ROOT}test/fixtures/reviewing.before-delta.ts.txt`,
+          }),
         };
         // Admitted as that release's host admitted it, with no features record.
         yield* running(release, () =>
@@ -8404,7 +8406,7 @@ scenario(
             (asked) => asked,
           ),
         );
-        yield* released(`${ROOT}workflows/reviewing.ts`);
+        yield* released();
         const status = yield* driven({ ...release, restarted: true }, (run) =>
           Effect.andThen(run.resume, ended(run.status)),
         );
@@ -8412,6 +8414,116 @@ scenario(
         expect(outcomeText(status)).toBe(OPENED.mr_url);
         expect(yield* factOf(runId, "features.json")).toBeNull();
         expect(yield* asked(runId, "review-2-1")).not.toContain("Previous round's head:");
+      }),
+    ),
+  120_000,
+);
+
+/** One ticket built; its review's blocker is fixed in round two and its minor left open. */
+const ledgeredOnce = (runId: string) =>
+  Effect.gen(function* () {
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    yield* noGitlabMrs(bin);
+    yield* repository();
+    const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+    yield* approve(runId, ["unit"]);
+    yield* putFact(runId, "features.json", `{"review_delta":true,"findings_ledger":true}`);
+    const finding = {
+      severity: "blocker",
+      title: "the guard is on the wrong side",
+      file: "src/a.ts",
+      detail: "an empty list goes through it",
+    };
+    const minor = { severity: "minor", title: "a name that says less than it does" };
+    const fixed = [{ title: finding.title, file: finding.file }];
+    yield* rig.queueOutputs([
+      BUILT,
+      { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding, minor] },
+      { verdict: "clean", fixed, checks: [] },
+      { ...CLEAN_SYNTHESIS, findings: [minor], fixed },
+      OPENED,
+    ]);
+    return { bin, options: { entry: shipped("implement"), runId, input: { plan, ...FINISH } } };
+  });
+
+scenario(
+  "an implement Run whose blocker is fixed in round two names that finding's ledger id as fixed in its merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-ledger";
+        const { bin, options } = yield* ledgeredOnce(runId);
+        const result = yield* ran(options);
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        const opening = yield* asked(runId, "mr");
+        expect(opening).toContain(
+          `${runId}-F1: fixed — [blocker] the guard is on the wrong side (src/a.ts)`,
+        );
+        expect(opening).toContain(`${runId}-F2: open — [minor] a name that says less than it does`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "an implement Run restarted between two review rounds keeps its findings' ledger ids",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-ledger-restart";
+        const { bin, options } = yield* ledgeredOnce(runId);
+        yield* running(options, () =>
+          until(
+            () => wasAsked(runId, "fix-1"),
+            (asked) => asked,
+          ),
+        );
+        const status = yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.andThen(run.resume, ended(run.status)),
+        );
+        yield* bin.restore();
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        const second = yield* asked(runId, "review-2-1");
+        expect(second).toContain(`"id": "${runId}-F1"`);
+        expect(second).toContain(`"id": "${runId}-F2"`);
+        expect(yield* asked(runId, "mr")).toContain(`${runId}-F1: fixed — [blocker]`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "an implement Run started on the release before findings ledgers resumes mid-ticket on this one and finishes with none",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-unledgered";
+        const { bin, options } = yield* fixedOnce(runId);
+        const release = {
+          ...options,
+          entry: yield* released({
+            "implement.workflow.ts": `${ROOT}test/fixtures/implement.before-ledger.ts.txt`,
+            "implement.md": `${ROOT}test/fixtures/implement.before-ledger.md.txt`,
+            "reviewing.ts": `${ROOT}test/fixtures/reviewing.before-ledger.ts.txt`,
+          }),
+        };
+        // Admitted as that release's host admitted it, with no features record.
+        yield* running(release, () =>
+          until(
+            () => wasAsked(runId, "fix-1"),
+            (asked) => asked,
+          ),
+        );
+        yield* released();
+        const status = yield* driven({ ...release, restarted: true }, (run) =>
+          Effect.andThen(run.resume, ended(run.status)),
+        );
+        yield* bin.restore();
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* factOf(runId, "features.json")).toBeNull();
+        expect(yield* asked(runId, "review-2-1")).not.toContain("Earlier findings ledger");
+        expect(yield* asked(runId, "mr")).not.toContain(`${runId}-F1`);
       }),
     ),
   120_000,

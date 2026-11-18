@@ -135,6 +135,7 @@ const prompts = {
   merge: content.template("merge", { ...Implementing.fields, conflict: text }),
   mr: content.template("mr", {
     ...Implementing.fields,
+    ledger: text,
     evidence: text,
     unreviewed: text,
     unsettled: text,
@@ -614,6 +615,16 @@ export default defineWorkflow({
       const answeredFor: Answered[] = [];
       let build: typeof Built.Type | null = null;
       let rallied: Rallied | null = null;
+      // Every finding a review gave a ledger id, at its latest status.
+      const ledgered = place.features?.findings_ledger === true;
+      const ledger = new Map<string, Finding>();
+      const ledgering = (given: ReadonlyArray<Finding>) =>
+        ledgered ? { ledger: given, taken: [...ledger.keys()] } : {};
+      const kept = (done: Rallied) => {
+        for (const one of ledgered ? done.reviewed.findings : [])
+          if (one.id !== undefined) ledger.set(one.id, one);
+        return done;
+      };
       // An agent's start gives every Input, one it leaves out as "" (docs/cli.md): an empty
       // `recovery` is new work, as one never given is.
       const recovers = asked.recovery === "" ? undefined : asked.recovery;
@@ -1037,26 +1048,10 @@ export default defineWorkflow({
         while (completed === null) completed = yield* nextBuild;
         const { done, blocking } = completed;
         if (blocking.length > 0) {
-          rallied = yield* builderRally({
-            ...rallyAsk,
-            plan: yield* specNow,
-            criteria: reviewerCriteria(answeredFor),
-            input,
-            build: {
-              item: done.item,
-              completed: Arr.map(handed, (one) => one.item),
-              findings: blocking,
-            },
-          });
-          for (let attempt = 1; ; attempt++) {
-            const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
-            if (unresolved === "") break;
-            yield* reviewRound(
-              unbuilt(`${done.item}.rally-${attempt}`, `${done.item}: ${unresolved}`),
-              { round: rallyAsk.rounds.n },
-            );
-            rallied = yield* builderRally({
+          rallied = kept(
+            yield* builderRally({
               ...rallyAsk,
+              ...ledgering([]),
               plan: yield* specNow,
               criteria: reviewerCriteria(answeredFor),
               input,
@@ -1065,8 +1060,30 @@ export default defineWorkflow({
                 completed: Arr.map(handed, (one) => one.item),
                 findings: blocking,
               },
-              resume: { attempt, previous: rallied },
-            });
+            }),
+          );
+          for (let attempt = 1; ; attempt++) {
+            const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
+            if (unresolved === "") break;
+            yield* reviewRound(
+              unbuilt(`${done.item}.rally-${attempt}`, `${done.item}: ${unresolved}`),
+              { round: rallyAsk.rounds.n },
+            );
+            rallied = kept(
+              yield* builderRally({
+                ...rallyAsk,
+                ...ledgering(rallied.reviewed.findings),
+                plan: yield* specNow,
+                criteria: reviewerCriteria(answeredFor),
+                input,
+                build: {
+                  item: done.item,
+                  completed: Arr.map(handed, (one) => one.item),
+                  findings: blocking,
+                },
+                resume: { attempt, previous: rallied },
+              }),
+            );
           }
         }
         tickets = yield* ticketsNow;
@@ -1077,28 +1094,39 @@ export default defineWorkflow({
       input = { ...input, verify: yield* checksNow };
 
       if (rallied === null || rallied.unreviewed !== "") {
-        rallied = yield* builderRally({
-          ...rallyAsk,
-          plan: yield* specNow,
-          criteria: reviewerCriteria(answeredFor),
-          input,
-          obstacle:
-            recovery.entry === "Review"
-              ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe original requirements and review associations this recovery weighed are in ${place.dir}/recovery-reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
-              : "",
-        });
+        rallied = kept(
+          yield* builderRally({
+            ...rallyAsk,
+            ...ledgering(
+              Arr.filter(
+                [...ledger.values()],
+                (one) => one.status === "open" || one.status === "disputed",
+              ),
+            ),
+            plan: yield* specNow,
+            criteria: reviewerCriteria(answeredFor),
+            input,
+            obstacle:
+              recovery.entry === "Review"
+                ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe original requirements and review associations this recovery weighed are in ${place.dir}/recovery-reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
+                : "",
+          }),
+        );
       }
       for (let attempt = 1; ; attempt++) {
         const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
         if (unresolved === "") break;
         yield* reviewRound(unbuilt(`rally-${attempt}`, unresolved), { round: rallyAsk.rounds.n });
-        rallied = yield* builderRally({
-          ...rallyAsk,
-          plan: yield* specNow,
-          criteria: reviewerCriteria(answeredFor),
-          input,
-          resume: { attempt, previous: rallied },
-        });
+        rallied = kept(
+          yield* builderRally({
+            ...rallyAsk,
+            ...ledgering(rallied.reviewed.findings),
+            plan: yield* specNow,
+            criteria: reviewerCriteria(answeredFor),
+            input,
+            resume: { attempt, previous: rallied },
+          }),
+        );
       }
 
       const onto =
@@ -1130,6 +1158,7 @@ export default defineWorkflow({
         tickets: Arr.map(tickets, (ticket) => ({ file: ticket.file, checks: ticket.checks })),
         roots: evidenceRoots(place.dir, cwd, source.value),
         rallied,
+        ledger: ledger.size === 0 ? "" : formatFindings([...ledger.values()]),
         unsettled: [...assumed, ...afterMerged],
         integrate: integrated,
         review: Effect.map(
@@ -1431,6 +1460,8 @@ const builderRally = (ask: {
   readonly criteria: string;
   readonly obstacle?: string;
   readonly resume?: { readonly attempt: number; readonly previous: Rallied };
+  readonly ledger?: ReadonlyArray<Finding>;
+  readonly taken?: ReadonlyArray<string>;
   readonly integrate: (
     operation: string,
   ) => Effect.Effect<

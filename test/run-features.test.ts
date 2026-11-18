@@ -10,7 +10,7 @@ import { until } from "./support/host";
 import { hostRecords } from "./support/records";
 
 test(
-  "a Run started now, and one started from it, record that their follow-up rounds get a delta",
+  "a Run started now, and one started from it, record that their follow-up rounds get a delta and their findings ledger ids",
   () =>
     hosted("hw-features-", ({ world }) =>
       Effect.gen(function* () {
@@ -35,6 +35,7 @@ test(
         for (const runId of [started.runId, child.runId]) {
           expect(yield* hostRecords(world.state, featuresOf(runId))).toEqual({
             review_delta: true,
+            findings_ledger: true,
           });
           yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
