@@ -78,6 +78,7 @@ import * as Sdk from "./sdk";
 import {
   ConsumedCard,
   consumedCard,
+  Recovery,
   recoveryFrom,
   reviewScope,
   recordReview,
@@ -188,6 +189,7 @@ import {
   autoMergingHere,
   whatItSaid,
   forgeHere,
+  forgeOfProject,
   mrIdIn,
   prepareMergeRequest,
   postNote,
@@ -223,6 +225,7 @@ import {
   recommendedFirst,
 } from "./board-model";
 import { readMrStates } from "./merges";
+import { MergeRequests } from "./merge-requests";
 import { COLLIE_REPOSITORY, FORGES, forgeOf } from "./forge/forge";
 import { links } from "./forge/review";
 import { integrateDefault, integratedLine } from "./integrate";
@@ -246,6 +249,7 @@ import {
 import { evaluationDeps } from "./evaluator";
 import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
 import { hostDatabase, recordsLayer, type Records } from "./records";
+import { ModuleRevisions, RevisionRows, onSyncedRevisions } from "./module-revisions";
 import { addressOf, RunRecords } from "./run-records";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
@@ -321,6 +325,8 @@ import { Herdr } from "./herdr";
 
 import type { PluginEnv } from "./env";
 import { connectionOnMachine } from "./connections";
+import { ConnectionRows } from "./connection-rows";
+import { Branches } from "./branches";
 import { isDirectMessage, slackApi, slackText } from "./slack";
 import { slackUserToken } from "./slack-credentials";
 import {
@@ -3992,6 +3998,13 @@ const atDefaultBase = <A, R>(
     return yield* body(branch).pipe(Effect.ensuring(restoreCheckout(cwd, away).pipe(Effect.orDie)));
   });
 
+/** The Run fact the git syncer keeps a follow-up's entry in. */
+const SYNCED_RECOVERY = "synced-recovery";
+const RecoveryJson = Schema.fromJsonString(Recovery);
+const encodeRecovery = flow(Schema.encodeResult(RecoveryJson), Result.getOrThrow);
+const decodeRecovery = (text: string) =>
+  Option.getOrUndefined(Schema.decodeOption(RecoveryJson)(text));
+
 const recoveryFor = Effect.fn("Engine.recoveryFor")(function* (
   store: StoreApi,
   dir: string,
@@ -4845,58 +4858,17 @@ export const hostLayer = (options: {
       const host = Host.of({
         reviewFix: (runId, target) =>
           under(
-            Effect.gen(function* () {
-              const row = yield* store.run(runId);
-              const ref = readMrRef(target);
-              const missing = {
-                owned: false,
-                head: "",
-                reviewed: "",
-                lineage: Arr.empty<string>(),
-                following: false,
-              };
-              if (row === null || ref === null) return missing;
-              const cwd = placedOf(row, {}).cwd;
-              const forge = forgeOf(ref);
-              const panel = yield* forge.details(ref, cwd, runShell);
-              if (panel._tag !== "Details" || !["open", "opened", "draft"].includes(panel.state))
-                return missing;
-              const me = yield* forge.login(cwd, runShell, ref.project);
-              const runs = yield* store.runs;
-              const tasks = new Map(
-                Arr.map(
-                  yield* listTasks.pipe(Effect.orElseSucceed(() => [])),
-                  (one) => [one.id, one] as const,
-                ),
-              );
-              const taskIds = new Set(row.task === null ? [] : [row.task]);
-              let ownsBranch = false;
-              for (const candidate of runs) {
-                const task = candidate.task === null ? undefined : tasks.get(candidate.task);
-                if (candidate.project !== row.project || task === undefined || !isOpen(task))
-                  continue;
-                const at = placedOf(candidate, {});
-                if (at.branch === panel.sourceBranch && at.branch !== null) {
-                  ownsBranch = true;
-                  taskIds.add(task.id);
-                }
-              }
-              return {
-                owned: me !== null && (panel.author === me || ownsBranch),
-                head: panel.head ?? "",
-                reviewed: yield* fs
-                  .readFileString(`${runDir(dir, runId)}/review-head`)
-                  .pipe(Effect.orElseSucceed(() => "")),
-                lineage: Arr.map(
-                  Arr.filter(runs, (one) => one.task !== null && taskIds.has(one.task)),
-                  (one) => one.run,
-                ),
-                following: Arr.some(
-                  yield* store.watches([mrId(target)!]),
-                  (one) => one.run === runId,
-                ),
-              };
-            }).pipe(Effect.provideContext(bun)),
+            reviewFacts(store, dir, runId, target, (ref, cwd) =>
+              Effect.gen(function* () {
+                const forge = forgeOf(ref);
+                const panel = yield* forge.details(ref, cwd, runShell);
+                if (panel._tag !== "Details") return null;
+                return {
+                  mr: { ...panel, head: panel.head ?? "" },
+                  me: yield* forge.login(cwd, runShell, ref.project),
+                };
+              }),
+            ).pipe(Effect.provideContext(bun)),
           ),
         dir,
         build: manifest.version,
@@ -7132,6 +7104,100 @@ const optionsNow = (dir: string, runId: string, options: Readonly<Record<string,
     Effect.orElseSucceed(() => options),
   );
 
+/** What a review's Improve offer reads of its merge request, and who Collie is on its forge. */
+interface ReviewedMr {
+  readonly mr: {
+    readonly state: string;
+    readonly head: string;
+    readonly author: string;
+    readonly sourceBranch: string;
+  };
+  readonly me: string | null;
+}
+
+/**
+ * What the forge syncer last read of a review's merge request and of who Collie is on its
+ * forge, or null where it has read neither yet.
+ */
+const syncedReview = Effect.fn("Engine.syncedReview")(function* (target: string, cwd: string) {
+  const id = yield* mrIdIn(target, cwd, runShell);
+  if (id === null) return null;
+  const requests = yield* MergeRequests;
+  const entry = (yield* requests.entries).get(id);
+  const login = yield* requests.login(Str.split(id, "/")[0] ?? "");
+  if (entry?.read === undefined || entry.author === undefined || login === null) return null;
+  return {
+    mr: {
+      state: entry.draft === true ? "draft" : (entry.state ?? "open"),
+      head: entry.head ?? "",
+      author: entry.author,
+      sourceBranch: entry.source ?? "",
+    },
+    me: login.login,
+  } satisfies ReviewedMr;
+});
+
+/**
+ * Whose fixing a review's findings is, its merge request's head and the Runs of its lineage,
+ * from what `said` knows of that merge request: the forge asked now, or its last synced row.
+ */
+const reviewFacts = <R>(
+  store: StoreApi,
+  dir: string,
+  runId: string,
+  target: string,
+  said: (
+    ref: NonNullable<ReturnType<typeof readMrRef>>,
+    cwd: string,
+  ) => Effect.Effect<ReviewedMr | null, never, R>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const row = yield* store.run(runId);
+    const ref = readMrRef(target);
+    const missing = {
+      owned: false,
+      head: "",
+      reviewed: "",
+      lineage: Arr.empty<string>(),
+      following: false,
+    };
+    if (row === null || ref === null) return missing;
+    const read = yield* said(ref, placedOf(row, {}).cwd);
+    if (read === null || !["open", "opened", "draft"].includes(read.mr.state)) return missing;
+    const { mr, me } = read;
+    const runs = yield* store.runs;
+    const tasks = new Map(
+      Arr.map(
+        yield* listTasks.pipe(Effect.orElseSucceed(() => [])),
+        (one) => [one.id, one] as const,
+      ),
+    );
+    const taskIds = new Set(row.task === null ? [] : [row.task]);
+    let ownsBranch = false;
+    for (const candidate of runs) {
+      const task = candidate.task === null ? undefined : tasks.get(candidate.task);
+      if (candidate.project !== row.project || task === undefined || !isOpen(task)) continue;
+      const at = placedOf(candidate, {});
+      if (at.branch === mr.sourceBranch && at.branch !== null) {
+        ownsBranch = true;
+        taskIds.add(task.id);
+      }
+    }
+    return {
+      owned: me !== null && (mr.author === me || ownsBranch),
+      head: mr.head,
+      reviewed: yield* fs
+        .readFileString(`${runDir(dir, runId)}/review-head`)
+        .pipe(Effect.orElseSucceed(() => "")),
+      lineage: Arr.map(
+        Arr.filter(runs, (one) => one.task !== null && taskIds.has(one.task)),
+        (one) => one.run,
+      ),
+      following: Arr.some(yield* store.watches([mrId(target)!]), (one) => one.run === runId),
+    };
+  });
+
 const placedOf = (row: RunRow, options: Readonly<Record<string, string>>): Placed =>
   Option.getOrElse(decodePlaced(row.checkout ?? ""), () => ({
     cwd: Option.getOrElse(
@@ -7650,6 +7716,8 @@ export interface RegistryApi {
   readonly offers: (
     runId: string,
   ) => Effect.Effect<ReadonlyArray<Offer>, HostRefused, HostServices>;
+  /** Reads from git what a follow-up of this Run would enter at, for its offers' listing. */
+  readonly syncRecovery: (runId: string) => Effect.Effect<void, never, HostServices>;
   /**
    * Carries one out. The offer is looked up again, its eligibility asked again and its
    * arguments decoded again, so one that has gone, stopped being eligible or was given
@@ -7823,6 +7891,7 @@ export const foundationLayer = (options: {
   PlatformServices
 > =>
   hostLayer(options).pipe(
+    Layer.provideMerge(keptRevisions),
     Layer.provideMerge(
       recordsLayer.pipe(
         Layer.provideMerge(storeLayer(options.dir).pipe(Layer.provideMerge(engineLayer(options)))),
@@ -7830,6 +7899,11 @@ export const foundationLayer = (options: {
     ),
     Layer.provideMerge(forgeHttpLayer),
   );
+
+/** A host keeps each workflow directory's revision, which its listings read. */
+const keptRevisions = Layer.effect(RevisionRows)(
+  ModuleRevisions.use((rows) => Effect.succeed({ rows, synced: false })),
+);
 
 const makeRegistry: (
   dir: string,
@@ -9859,6 +9933,35 @@ const makeRegistry: (
       })),
     );
 
+  /** What a follow-up of `runId` enters at, read from git now, and kept for a listing. */
+  const recoveryNow = (runId: string, workSource: string) =>
+    recoveryFor(store, dir, runId, runId, workSource).pipe(
+      Effect.tap((recovery) =>
+        Effect.gen(function* () {
+          const text = encodeRecovery(recovery);
+          // Unchanged, it moves no card.
+          if ((yield* runRecords.fact(runId, SYNCED_RECOVERY)) !== text)
+            yield* runRecords.put(runId, SYNCED_RECOVERY, text);
+        }),
+      ),
+      Effect.provideContext(bun),
+    );
+
+  /** The git syncer's read of what a follow-up of `runId` would enter at, where it offers one. */
+  const syncRecovery = Effect.fn("Engine.Registry.syncRecovery")(function* (runId: string) {
+    const row = yield* store.run(runId);
+    if (row === null) return;
+    const generation = yield* resolve({ project: row.project, id: row.workflow }).pipe(
+      onSyncedRevisions,
+    );
+    const work = fieldWith(generation.hints, "work-source");
+    const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
+    const workSource =
+      work === undefined ? undefined : Rec.get(input, work).pipe(Option.getOrUndefined);
+    if (isText(workSource) && Arr.some(generation.offers, (offer) => offer.entry !== undefined))
+      yield* recoveryNow(runId, workSource);
+  });
+
   /** Resolve offers from current project code; removed modules leave the Run readable but refuse its offers. */
   const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (
     runId: string,
@@ -9902,15 +10005,44 @@ const makeRegistry: (
       claim: yield* claimOf(runId),
     };
     const work = fieldWith(generation.hints, "work-source");
-    if (facts.diffTarget !== null && readMrRef(facts.diffTarget) !== null && facts.openFindings > 0)
-      facts.review = yield* Context.get(hostServices, Host).reviewFix(runId, facts.diffTarget);
+    /** A merge request the forge syncer has not read yet, whose offers wait for its answer. */
+    let unread: string | null = null;
+    if (
+      facts.diffTarget !== null &&
+      readMrRef(facts.diffTarget) !== null &&
+      facts.openFindings > 0
+    ) {
+      // Taking an offer asks the forge now; a listing reads what the syncer last read.
+      if (request !== undefined)
+        facts.review = yield* Context.get(hostServices, Host).reviewFix(runId, facts.diffTarget);
+      else {
+        const target = facts.diffTarget;
+        const synced = yield* syncedReview(target, placedOf(row, options).cwd).pipe(
+          Effect.provideContext(bun),
+        );
+        if (synced === null) unread = target;
+        else
+          facts.review = yield* reviewFacts(store, dir, runId, target, () =>
+            Effect.succeed(synced),
+          ).pipe(Effect.provideContext(bun));
+      }
+    }
     const workSource =
       work === undefined ? undefined : Rec.get(input, work).pipe(Option.getOrUndefined);
-    if (isText(workSource) && Arr.some(generation.offers, (offer) => offer.entry !== undefined))
-      facts.recovery = yield* recoveryFor(store, dir, runId, runId, workSource).pipe(
-        Effect.provideContext(bun),
-      );
+    if (isText(workSource) && Arr.some(generation.offers, (offer) => offer.entry !== undefined)) {
+      // Taking an offer reads git now; a listing reads what the git syncer kept.
+      const recovery =
+        request !== undefined
+          ? yield* recoveryNow(runId, workSource)
+          : yield* runRecords
+              .fact(runId, SYNCED_RECOVERY)
+              .pipe(Effect.map((kept) => (kept === null ? undefined : decodeRecovery(kept))));
+      if (recovery !== undefined) facts.recovery = recovery;
+    }
     const refused = new Map<string, string>();
+    if (unread !== null)
+      for (const offer of generation.offers)
+        refused.set(offer.id, `${unread} is still being read from its forge; offered once it is`);
     const readings = new Map<ConnectionId, ConnectionReading>();
     for (const offer of generation.offers) {
       const ids = yield* connectionIds(
@@ -9918,13 +10050,28 @@ const makeRegistry: (
         generation,
         placedOf(row, options).cwd,
         input,
+        request !== undefined,
       );
       for (const id of ids) {
+        const cwd = placedOf(row, options).cwd;
+        // Taking an offer reads the Connection now; a listing reads what the syncer kept.
         const reading =
           readings.get(id) ??
-          (yield* connectionOnMachine({ ...placing.env, cwd: placedOf(row, options).cwd }, id).pipe(
-            Effect.provideContext(bun),
-          ));
+          (request !== undefined
+            ? yield* connectionOnMachine({ ...placing.env, cwd }, id).pipe(
+                Effect.tap((read) =>
+                  Effect.flatMap(Clock.currentTimeMillis, (at) =>
+                    Context.get(bun, ConnectionRows).put({ id, cwd }, read, at),
+                  ),
+                ),
+                Effect.provideContext(bun),
+              )
+            : yield* Context.get(bun, ConnectionRows).of({ id, cwd }));
+        if (reading === null) {
+          if (!refused.has(offer.id))
+            refused.set(offer.id, `${id} is still being read; offered once it is`);
+          continue;
+        }
         readings.set(id, reading);
         if (reading.state !== "ok" && !refused.has(offer.id))
           refused.set(offer.id, `needs ${id}: ${reading.detail}. Fix: ${reading.fix}`);
@@ -10029,6 +10176,7 @@ const makeRegistry: (
     generation: Generation,
     cwd: string,
     input: Readonly<Record<string, Schema.Json>>,
+    fresh = true,
   ) {
     const field = fieldWith(generation.hints, "diff-target");
     const target = field === undefined ? undefined : input[field];
@@ -10044,7 +10192,20 @@ const makeRegistry: (
             }),
         ),
       );
-      here = yield* forgeHere(cwd, runShell, defaults.gitlabHost).pipe(Effect.provideContext(bun));
+      // A listing reads the project the git syncer kept, and none before its first read; a
+      // start or an offer taken asks git.
+      if (fresh)
+        here = yield* forgeHere(cwd, runShell, defaults.gitlabHost).pipe(
+          Effect.provideContext(bun),
+        );
+      else {
+        const kept = Arr.findFirst([...(yield* Context.get(bun, Branches).all)], ([key]) =>
+          Str.startsWith(`${cwd}\0`)(key),
+        );
+        here = Option.isSome(kept)
+          ? forgeOfProject(kept.value[1].project, defaults.gitlabHost)
+          : null;
+      }
     }
     const forge = ref !== null ? forgeOfRef(ref) : here?.ok ? here.forge.name : null;
     return [
@@ -10507,6 +10668,9 @@ const makeRegistry: (
     newest,
     routed,
 
+    syncRecovery: (runId: string) => syncRecovery(runId).pipe(Effect.ignore),
+
+    // A listing reads each module's kept revision; taking an offer computes it afresh.
     offers: (runId: string) =>
       offeredBy(runId).pipe(
         Effect.flatMap(({ row, generation, facts, where, refused, input }) =>
@@ -10526,6 +10690,7 @@ const makeRegistry: (
                 : unbound(offer, row.project),
           ),
         ),
+        onSyncedRevisions,
       ),
 
     invoke: Effect.fn("Engine.Registry.invoke")(function* (options: {

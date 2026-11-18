@@ -29,7 +29,7 @@ import type { PluginEnv } from "./env";
 import { foregroundLayer } from "./foreground";
 import type { AgentInfo } from "./herdr";
 import { platformLayer, type PlatformServices } from "./platform";
-import { drawerWrites, recordFrames, type RecordSources } from "./record";
+import { recordFrames, type RecordSources } from "./record";
 import { recordsReadLayer } from "./records";
 import { firstValueTimed } from "./first-value";
 import { markFirst } from "./record-marks";
@@ -492,14 +492,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           ? Stream.die("the door reads no record without the Run model")
           : Stream.unwrap(
               Effect.map(withRecords, (context) =>
-                recordFrames(
-                  sources,
-                  key,
-                  Stream.merge(
-                    changes,
-                    drawerWrites(env.stateDir, key.runId).pipe(Stream.provideContext(bun)),
-                  ),
-                ).pipe(
+                recordFrames(sources, key, changes).pipe(
                   markFirst("host:emit", key.runId),
                   (frames) =>
                     firstValueTimed(frames, (ms) =>

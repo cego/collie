@@ -11,7 +11,8 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
-import { discover, searchPath, type EntryLayer } from "../src/discovery";
+import { discover, searchPath, type Catalogued, type EntryLayer } from "../src/discovery";
+import { ModuleRevisions, RevisionRows, onSyncedRevisions } from "../src/module-revisions";
 import { revisionOf } from "../src/engine";
 import { runEffect } from "./support/effect";
 
