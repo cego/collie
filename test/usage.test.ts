@@ -20,7 +20,8 @@ import {
   type Asked,
   type UsageSources,
 } from "../src/usage";
-import { usageLines } from "../src/commands/usage";
+import { fallbackLines, usageLines } from "../src/commands/usage";
+import { fallbacksOf } from "../src/launches";
 import { readEnv } from "../src/env";
 import { epochMs } from "../src/time";
 import type { UsageReading } from "../src/usage-model";
@@ -374,6 +375,37 @@ describe("status-line samples", () => {
 });
 
 describe("collie usage's lines", () => {
+  test("each unfinished Run's agent says where a Fallback would move its work", () => {
+    expect(
+      fallbackLines([
+        { run: "r1", agent: "r1-build", on: "claude/opus xhigh", next: "codex/gpt-5.5 high" },
+      ]),
+    ).toEqual([
+      "fallback r1-build of r1 is on claude/opus xhigh, falls back to codex/gpt-5.5 high",
+    ]);
+  });
+
+  test("only an agent herdr still has is named, with its latest launch", () => {
+    const launch = (agent: string, next: string) => ({
+      agent,
+      output: `/agents/${agent}.json`,
+      reused: false,
+      runId: "r1",
+      operation: "build",
+      role: "implementer",
+      workflow: "implement",
+      harness: "claude",
+      model: "opus",
+      next: { harness: next, model: "default", effort: null },
+    });
+    expect(
+      fallbacksOf(
+        [launch("r1-build", "pi"), launch("r1-review-r1", "codex"), launch("r1-build", "codex")],
+        new Set(["r1-build"]),
+      ),
+    ).toEqual([{ run: "r1", agent: "r1-build", on: "claude/opus", next: "codex/default" }]);
+  });
+
   test("one line per window with its reset, then the reading's age and source", () => {
     const now = epochMs("2026-10-08T08:46:00Z");
     const claude: UsageReading = {

@@ -87,6 +87,12 @@ Run's start, a steer, a stop, the chats and **Cleanup** never wait. It binds a h
 start as it does an agent's, and no count of Runs, agents or checks is capped
 (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory).
 
+**Short of disk** — A Machine where a filesystem holding the state directory or a Run's
+checkout has under a tenth of its size or under 5 GiB free, as `collie doctor` reads it.
+The starts **Short of memory** holds wait for it the same way, and so does a compaction
+Collie is about to ask a reused agent for
+(ADR-draft-new-work-waits-while-its-machine-is-short-of-memory).
+
 **Installation** — What a Machine runs Collie from, which `identity` calls `root`. A
 **release** is placed in the Collie directory's `release/` by the runner that carries it,
 and an upgrade replaces it whole without git. A **development checkout** is a clone of
@@ -483,7 +489,7 @@ runs Collie. One per park, three per Run, one at a time per Machine; never for a
 **Decision**, **Hold** or **Stop**, or for a Heal (ADR-draft-a-run-recovers-where-it-parks).
 
 **Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,
-**Short of memory**, or something it awaits that ends by itself. A Check Collie runs for it
+**Short of memory**, **Short of disk**, or something it awaits that ends by itself. A Check Collie runs for it
 is shown the same way. A Run can have several at once, and each front door says the one it
 ranks first.
 

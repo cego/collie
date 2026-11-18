@@ -491,6 +491,7 @@ export const measure = Effect.fn("Measurement.measure")(function* (
         stateDir: opts.stateDir,
         runId: ask.runId,
         what: `measure ${ask.pass}`,
+        checkout: ask.cwd,
         stopped: opts.stopped,
         say,
       });

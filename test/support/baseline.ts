@@ -3645,6 +3645,43 @@ scenario(
 );
 
 scenario(
+  "fix findings on a branch tells the follow-up review the head it follows and what is still open",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        const fixed = { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] };
+        const clean = { ...SYNTHESIS, verdict: "clean", findings: [] };
+        yield* rig.queueOutputs([SYNTHESIS, fixed, clean]);
+        yield* reviewedBranch();
+        const head = Str.trim(
+          (yield* exec(["git", "rev-parse", "feature"], { cwd: rig.projectDir })).stdout,
+        );
+        const options = {
+          entry: shipped("review"),
+          runId: "r-delta",
+          input: { target: "branch:main...feature" },
+        };
+        yield* putFact("r-delta", "features.json", `{"review_delta":true}`);
+        yield* parked({ ...options, decision: "post-1" });
+        yield* answeredThen({
+          ...options,
+          decision: "post-1",
+          value: "Fix findings",
+          until: "post-2",
+        });
+        expect(yield* asked("r-delta", "review-1")).not.toContain("Previous round's head:");
+        const followUp =
+          Str.split(yield* asked("r-delta", "review-2-1"), "Previous round's head:")[1] ?? "";
+        expect(followUp).toContain(`${head}. Review head: ${head}.`);
+        expect(followUp).toContain("The head has not moved since that round");
+        expect(followUp).toContain("[major] the guard is on the wrong side (src/a.ts)");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a fix round that leaves the same findings asks rather than going round again",
   () =>
     runEffect(
@@ -8207,6 +8244,117 @@ scenario(
         expect(followUp).toContain("Iteration 2 of at most 4");
         // Where the implementer's account of the first round really is.
         expect(followUp).toContain(`${dir}/agents/r-impl-fix/fix-1.json`);
+      }),
+    ),
+  120_000,
+);
+
+/** One ticket built, reviewed with a blocker, fixed, then reviewed clean and opened. */
+const fixedOnce = (runId: string) =>
+  Effect.gen(function* () {
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    yield* noGitlabMrs(bin);
+    yield* repository();
+    const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+    yield* approve(runId, ["unit"]);
+    const finding = {
+      severity: "blocker",
+      title: "the guard is on the wrong side",
+      file: "src/a.ts",
+      detail: "an empty list goes through it",
+    };
+    yield* rig.queueOutputs([
+      BUILT,
+      {
+        ...CLEAN_SYNTHESIS,
+        verdict: "findings",
+        findings: [finding, { severity: "minor", title: "a name that says less than it does" }],
+        scope_met: true,
+      },
+      { verdict: "clean", fixed: [{ title: finding.title, file: finding.file }], checks: [] },
+      { ...CLEAN_SYNTHESIS },
+      OPENED,
+    ]);
+    return { bin, options: { entry: shipped("implement"), runId, input: { plan, ...FINISH } } };
+  });
+
+scenario(
+  "an implement Run that records it started now tells its follow-up review the prior head and what is still open",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-delta";
+        const { bin, options } = yield* fixedOnce(runId);
+        yield* putFact(runId, "features.json", `{"review_delta":true}`);
+        const result = yield* ran(options);
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "review-1")).not.toContain("Previous round's head:");
+        const followUp = yield* asked(runId, "review-2-1");
+        expect(followUp).toContain("Previous round's head:");
+        // The fix committed nothing in this repository, so the head stayed where it was.
+        expect(followUp).toContain("The head has not moved since that round");
+        expect(followUp).toContain("[minor] a name that says less than it does");
+      }),
+    ),
+  120_000,
+);
+
+/**
+ * The shipped workflows as a release installs them, with `reviewing` as its rally: started
+ * again over the same path, a Run reads what is there now, as after an upgrade.
+ */
+const released = (reviewing: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const into = `${rig.root}/release/workflows`;
+    yield* fs.makeDirectory(into, { recursive: true });
+    for (const name of yield* fs.readDirectory(`${ROOT}workflows`))
+      yield* fs.copyFile(`${ROOT}workflows/${name}`, `${into}/${name}`);
+    yield* fs.copyFile(reviewing, `${into}/reviewing.ts`);
+    if (!renamed) return `${into}/implement.workflow.ts`;
+    const entry = `${into}/${idOf("implement")}.workflow.ts`;
+    yield* fs.writeFileString(
+      entry,
+      Arr.join(
+        [
+          `import shipped from "./implement.workflow.ts";`,
+          `import { defineWorkflow } from "collie";`,
+          `export default defineWorkflow({ ...shipped, id: "${idOf("implement")}" });`,
+          "",
+        ],
+        "\n",
+      ),
+    );
+    return entry;
+  }).pipe(Effect.orDie);
+
+scenario(
+  "an implement Run started on the release before follow-up deltas resumes mid-ticket on this one and finishes without one",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-unshaped";
+        const { bin, options } = yield* fixedOnce(runId);
+        const release = {
+          ...options,
+          entry: yield* released(`${ROOT}test/fixtures/reviewing.before-delta.ts.txt`),
+        };
+        // Admitted as that release's host admitted it, with no features record.
+        yield* running(release, () =>
+          until(
+            () => wasAsked(runId, "fix-1"),
+            (asked) => asked,
+          ),
+        );
+        yield* released(`${ROOT}workflows/reviewing.ts`);
+        const status = yield* driven({ ...release, restarted: true }, (run) =>
+          Effect.andThen(run.resume, ended(run.status)),
+        );
+        yield* bin.restore();
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* factOf(runId, "features.json")).toBeNull();
+        expect(yield* asked(runId, "review-2-1")).not.toContain("Previous round's head:");
       }),
     ),
   120_000,
