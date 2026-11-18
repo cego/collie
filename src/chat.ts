@@ -647,9 +647,8 @@ export const startChat = Effect.fn("Chat.start")(function* (
   // conversations about two different Herds — Pi read the human's real state directory
   // that way, and said so confidently. An empty value reads as unset.
   const serverEnv = {
-    HERDR_PLUGIN_STATE_DIR: env.stateDir,
+    COLLIE_STATE_DIR: env.stateDir,
     COLLIE_USER_DIR: env.userDir,
-    HERDR_SOCKET_PATH: env.socketPath ?? "",
     COLLIE_CWD: cwd,
   };
 

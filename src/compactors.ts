@@ -15,6 +15,7 @@ import {
   Cache,
   Cause,
   Clock,
+  Context,
   Data,
   Duration,
   Effect,
@@ -867,30 +868,70 @@ export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")
 });
 const decodeLimits = Schema.decodeUnknownOption(StatusLineLimits);
 
+/** The newest sample one agent's telemetry holds, from its lines. */
+const newestIn = (text: string): StatusSample | null => {
+  let newest: StatusSample | null = null;
+  for (const line of Str.split(text, "\n")) {
+    const event = Option.getOrNull(decodeEvent(line));
+    if (event?.limits && (newest === null || event.at > newest.at))
+      newest = { at: event.at, limits: event.limits };
+  }
+  return newest;
+};
+
 /**
- * The newest Subscription windows any Claude agent's status line reported on this
- * Machine, with when, or null where none has.
+ * A reader of the newest Subscription windows any Claude agent's status line reported on
+ * this Machine, with when, or null where none has. It decodes again only the agents whose
+ * telemetry changed since it last read, by size and modification time: a status line
+ * rewrites its file on every event, and most agents are idle between two reads.
  */
-export const newestRateLimits = Effect.fn("Compactors.newestRateLimits")(function* (
+export const rateLimitsReader = Effect.fn("Compactors.rateLimitsReader")(function* (
   stateDir: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = path.join(stateDir, CONTROL_DIR);
-  const agents = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
-  let newest: StatusSample | null = null;
-  for (const agent of agents) {
-    const text = yield* fs
-      .readFileString(path.join(root, agent, TELEMETRY))
-      .pipe(Effect.orElseSucceed(() => ""));
-    for (const line of Str.split(text, "\n")) {
-      const event = Option.getOrNull(decodeEvent(line));
-      if (event?.limits && (newest === null || event.at > newest.at))
-        newest = { at: event.at, limits: event.limits };
+  const read = new Map<
+    string,
+    { readonly size: bigint; readonly mtime: number; readonly newest: StatusSample | null }
+  >();
+  const newestNow = Effect.gen(function* () {
+    const agents = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
+    const present = new Set(agents);
+    for (const agent of read.keys()) if (!present.has(agent)) read.delete(agent);
+    let newest: StatusSample | null = null;
+    for (const agent of agents) {
+      const file = path.join(root, agent, TELEMETRY);
+      const info = yield* fs.stat(file).pipe(Effect.option);
+      if (Option.isNone(info)) {
+        read.delete(agent);
+        continue;
+      }
+      const size = BigInt(info.value.size);
+      const mtime = Option.match(info.value.mtime, {
+        onNone: () => -1,
+        onSome: (at) => at.getTime(),
+      });
+      let known = read.get(agent);
+      if (known === undefined || known.size !== size || known.mtime !== mtime) {
+        const text = yield* fs.readFileString(file).pipe(Effect.option);
+        // A failed read keeps the agent's last sample and is retried on the next read.
+        if (Option.isSome(text)) {
+          known = { size, mtime, newest: newestIn(text.value) };
+          read.set(agent, known);
+        }
+      }
+      const sample = known?.newest ?? null;
+      if (sample !== null && (newest === null || sample.at > newest.at)) newest = sample;
     }
-  }
-  return newest;
+    return newest;
+  });
+  return { newest: newestNow };
 });
+
+/** The newest status-line sample on this Machine, read once. */
+export const newestRateLimits = (stateDir: string) =>
+  Effect.flatMap(rateLimitsReader(stateDir), (reader) => reader.newest);
 
 /**
  * The token Collie puts in `/compact`'s own instructions and reads back out of the
@@ -1247,6 +1288,12 @@ const claude: CompactionPort = {
   poll: (ctx, requestId) => claudeOutcome(ctx.dir, requestId),
 };
 
+/** Replaces a started server's own budget; a fast-forwarded test clock gives it none. */
+export const ServerStartDeadline = Context.Reference<Duration.Duration | null>(
+  "collie/ServerStartDeadline",
+  { defaultValue: () => null },
+);
+
 /**
  * A local server of this agent's own, started through a shell and waited on until it
  * says it is up. Two adapters need one — Codex's App Server, whose port is only ever on
@@ -1307,7 +1354,8 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
     }),
   );
 
-  const deadline = (yield* Clock.currentTimeMillis) + opts.startMs;
+  const budget = (yield* ServerStartDeadline) ?? Duration.millis(opts.startMs);
+  const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(budget);
   const said = yield* fs.readFileString(opts.log).pipe(
     Effect.map((log) => opts.listening.exec(log)),
     Effect.repeat({

@@ -806,7 +806,7 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
   const record = yield* readControl(deps.stateDir, agent);
   const ready = record === null ? undefined : deps.ports[record.harness]?.ready;
   if (record === null || ready === undefined) {
-    yield* deps.log(`${agent}: nothing of Collie's can say its harness is up; herdr's word stands`);
+    yield* deps.log(`${agent}: nothing of Collie's can say its harness is up; core's word stands`);
     return null;
   }
   const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
@@ -871,7 +871,7 @@ export const putDownControl = Effect.fn("Compaction.putDownControl")(function* <
     Effect.gen(function* () {
       // A launch may have finished while we waited for its lock. The earlier list
       // cannot prove this agent is still absent.
-      if (yield* listed) return "herdr lists its agent again";
+      if (yield* listed) return "core lists its agent again";
       const record = yield* readControl(deps.stateDir, name);
       // A server an earlier stop already signalled is only looked at again, so no launch
       // waits out its budget.

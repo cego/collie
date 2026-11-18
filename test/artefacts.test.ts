@@ -126,11 +126,13 @@ test(
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
           yield* fs.writeFileString(outputs, '[{"verdict":"done"}]');
-          const attended = yield* collie(
-            world,
-            ["run", "start", "attended", "--input", "work=receipts"],
-            { FAKE_HERDR_OUTPUTS: outputs },
-          );
+          const attended = yield* collie(world, [
+            "run",
+            "start",
+            "attended",
+            "--input",
+            "work=receipts",
+          ]);
           const byAgent = (yield* Schema.decodeUnknownEffect(
             Schema.Struct({ runId: Schema.String }),
           )(attended.envelope.data)).runId;

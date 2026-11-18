@@ -80,6 +80,16 @@ export const VerificationSchema = Schema.Struct({
       name: Schema.String,
       url: Schema.NullOr(Schema.String),
       merge: Schema.optionalKey(Schema.String),
+      /** After a failed attempt: each test the job's failed attempts named, and how many named it. */
+      flaked: Schema.optionalKey(
+        Schema.Array(
+          Schema.Struct({
+            name: Schema.String,
+            file: Schema.NullOr(Schema.String),
+            attempts: Schema.Int,
+          }),
+        ),
+      ),
     }),
   ),
 });

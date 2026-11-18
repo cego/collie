@@ -36,8 +36,10 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
-import { Rig, FakeHerdr, type Call } from "./support/recorder";
-import { fastForward, memoryRecords, runEffect as runLive } from "./support/effect";
+import { Rig, type Call } from "./support/recorder";
+import type { FakeHc } from "./support/fake-hc";
+import { isJsonObject, isString } from "../src/schema";
+import { fastForward, runEffect as runLive } from "./support/effect";
 import { onMachineWith } from "./support/live";
 import {
   Agents,
@@ -48,6 +50,7 @@ import {
   promptFor,
   type AgentHost,
   type RanOut,
+  type RunNow,
 } from "../src/agents";
 import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, step, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
@@ -79,7 +82,7 @@ import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
-import { appendLine, herdOf, reconcile } from "../src/steering";
+import { appendLine, reconcile } from "../src/steering";
 import {
   deliveredTo,
   hostRecords,
@@ -92,10 +95,10 @@ import {
 import { RELAUNCH, RunRecords } from "../src/run-records";
 import { Store, type DecisionRow } from "../src/store";
 import type { AuditLine } from "../src/audit";
-import { listTasks, readTask, taskKeptIn, withTaskLock, writeTask } from "../src/task";
+import { readTask, withTaskLock, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
 import { everyRegistered, lineageAgent, registerAgent, scopeFor } from "../src/registry";
-import { Herdr, HerdrError } from "../src/herdr";
+import { Herdr, HerdrError, type AgentStatus } from "../src/herdr";
 import { retitleGenericTasks } from "../src/tasknames";
 import { runFacts } from "./support/records";
 import { agentName } from "../src/naming";
@@ -129,8 +132,10 @@ interface Clearing {
 }
 let clearing: Clearing = {};
 
+let core: FakeHc;
+
 beforeEach(() =>
-  runEffect(
+  runLive(
     Effect.gen(function* () {
       rig = yield* Rig.make();
       const fs = yield* FileSystem.FileSystem;
@@ -142,7 +147,7 @@ beforeEach(() =>
   ),
 );
 
-afterEach(() => runEffect(rig.close()));
+afterEach(() => runLive(rig.close()));
 
 /** What the agent is asked for: two fields, one of them a judgment with words about it. */
 const Verdict = Schema.Struct({
@@ -195,7 +200,7 @@ const CODEX_HELP = "  --dangerously-bypass-hook-trust";
 const hostOf = (): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
-  herdr: new FakeHerdr(rig.pluginEnv()),
+  herdr: new UnseenTurn(rig.pluginEnv()),
   harness: "claude",
   model: "opus",
   permissions: "auto",
@@ -220,12 +225,10 @@ test(
           made.restore(),
         );
         yield* bin.add("codex", "exit 1");
-        yield* rig.startSocket();
         yield* rig.queueOutputs([null]);
-        yield* rig.addWorkspace("wT", "Project | Own task", rig.projectDir);
         yield* writeTask({
           id: "task-own",
-          workspace: "wT",
+          workspace: null,
           label: "Project | Own task",
           cwd: rig.projectDir,
           created_at: "2026-10-12T00:00:00.000Z",
@@ -261,10 +264,10 @@ test(
           ),
           Effect.scoped,
         );
-        const tab = Option.getOrUndefined(
-          Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "tab create"),
+        const run = Option.getOrUndefined(
+          Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "terminal.run"),
         );
-        expect(tab?.argv).toEqual(expect.arrayContaining(["--workspace", "wT"]));
+        expect(run?.params?.labels).toMatchObject({ task: "task-own" });
         expect(launched._tag).toBe("Success");
       }).pipe(Effect.provide(recordsAt(dir)), Effect.scoped),
     ),
@@ -272,11 +275,18 @@ test(
 );
 
 /**
- * Every wait in here is on a clock that moves many times faster than the wall's, and a Run's
- * records are where the host on `dir` keeps them.
+ * Each test's core runs on its test's clock, which moves many times faster than the wall's,
+ * and a Run's records are where the host on `dir` keeps them.
  */
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | RunRecords>) =>
-  runLive(fastForward(effect).pipe(overHost(() => dir)));
+  runLive(
+    fastForward(
+      Effect.suspend(() => rig.startCore()).pipe(
+        Effect.tap((served) => Effect.sync(() => (core = served))),
+        Effect.andThen(effect),
+      ),
+    ).pipe(overHost(() => dir)),
+  );
 
 /** One host's lifetime: a fresh engine on the same directory is what a restart is. */
 const session = <A, E>(
@@ -340,7 +350,6 @@ test("a model absent from this Machine's catalogue starts no agent or pane", () 
       expect(problem).toContain('"opus"');
       expect(problem).toContain("sonnet");
       expect(everyLaunch(yield* rig.calls())).toEqual([]);
-      expect(yield* rig.cmds()).not.toContain("tab create");
     }),
   ));
 
@@ -361,7 +370,6 @@ test("an effort absent from this Machine's model starts no agent and names the s
       expect(problem).toContain("vm-gpu's claude/sonnet");
       expect(problem).toContain("low, medium, high");
       expect(everyLaunch(yield* rig.calls())).toEqual([]);
-      expect(yield* rig.cmds()).not.toContain("tab create");
     }),
   ));
 
@@ -399,7 +407,7 @@ test("a start accepts a table-only model only while its Machine's harness cannot
         Effect.provide(
           registryLayer(dir, {
             userDir: rig.userDir,
-            placing: { env: rig.pluginEnv(), herdr: new FakeHerdr(rig.pluginEnv()) },
+            placing: { env: rig.pluginEnv(), herdr: new Herdr(rig.pluginEnv()) },
             catalogue: Effect.sync(() => ({
               machine: "vm-gpu",
               harnesses: [{ ...machineCatalogue, table }],
@@ -438,11 +446,15 @@ const read = (path: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
+/** Each text sent to a terminal, in the order core was asked. */
+const sentTexts = (calls: ReadonlyArray<Call>) =>
+  Arr.filterMap(calls, (call) => {
+    const text = call.params?.text;
+    return call.cmd === "terminal.send" && isString(text) ? Result.succeed(text) : Result.failVoid;
+  });
+
 const sent = (calls: ReadonlyArray<Call>, about: string) =>
-  Arr.filter(calls, (call) => {
-    const argv = call.argv ?? [];
-    return argv[0] === "agent" && argv[1] === "prompt" && pipe(argv[3] ?? "", Str.includes(about));
-  }).length;
+  Arr.filter(sentTexts(calls), Str.includes(about)).length;
 
 test("the contract an agent is held to is in the prompt it is sent, with the judgment asked for", () => {
   const prompt = promptFor({
@@ -562,8 +574,7 @@ test("a valid Output reaches the workflow as a typed value, from a real launch",
       });
 
       const cmds = yield* rig.cmds();
-      expect(Arr.filter(cmds, (cmd) => cmd === "agent start")).toHaveLength(1);
-      expect(Arr.filter(cmds, (cmd) => cmd === "tab create")).toHaveLength(1);
+      expect(Arr.filter(cmds, (cmd) => cmd === "terminal.run")).toHaveLength(1);
       // The prompt as it went out and the Output as it came back, both on disk.
       expect(yield* read(promptPath("r1"))).toContain("OUTPUT_PATH: ");
       expect(yield* read(outputPath("r1"))).toContain("two things");
@@ -603,11 +614,8 @@ test("work asked for inside a Run needs no run id, checkout or contract, and ans
       expect(prompt).toContain("as plain text");
       expect(prompt).not.toContain("```json");
       // Where the host placed the Run: nothing admitted this one, so its own directory.
-      const moved = Arr.filter(
-        yield* rig.calls(),
-        (call) => call.argv?.[0] === "pane" && call.argv[1] === "run",
-      );
-      expect(Arr.map(moved, (call) => call.argv?.at(-1))).toContain(`cd ${dir}`);
+      const runs = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run");
+      expect(Arr.map(runs, (call) => call.params?.cwd)).toContain(dir);
     }),
   ));
 
@@ -622,7 +630,7 @@ test("an Output the schema refuses buys one repair, and the rewritten one is the
       });
       const calls = yield* rig.calls();
       // One agent, asked twice: the repair goes to the agent still holding the work.
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       expect(sent(calls, "not usable")).toBe(1);
     }),
   ));
@@ -632,13 +640,7 @@ test("a step's message and its repair are Collie's own and carry no sender line,
     Effect.gen(function* () {
       yield* rig.queueOutputs([{ verdict: "maybe" }, { verdict: "clean", note: "fixed" }]);
       yield* session(started("r1"));
-      const typed = Arr.map(
-        Arr.filter(
-          Arr.map(yield* rig.calls(), (call) => call.argv ?? []),
-          (argv) => argv[0] === "agent" && argv[1] === "prompt",
-        ),
-        (argv) => Str.split(argv[3] ?? "", "\n"),
-      );
+      const typed = Arr.map(sentTexts(yield* rig.calls()), Str.split("\n"));
       expect(typed).toHaveLength(2);
       expect(typed[0]).toEqual([
         expect.stringMatching(/^collie-delivery:\S+$/),
@@ -683,16 +685,7 @@ test("every step's address line says how to register a result, with no word of i
   ));
 
 const typedSteps = (calls: ReadonlyArray<Call>) =>
-  Arr.map(
-    Arr.filter(
-      Arr.map(calls, (call) => call.argv ?? []),
-      (argv) =>
-        argv[0] === "agent" &&
-        argv[1] === "prompt" &&
-        pipe(argv[3] ?? "", Str.includes("Your task")),
-    ),
-    (argv) => argv[3] ?? "",
-  );
+  Arr.filter(sentTexts(calls), Str.includes("Your task"));
 
 const CLEARS = [
   "pushing feat/x to origin (https://forge.example/group/x)",
@@ -725,16 +718,17 @@ test(
     runEffect(
       Effect.gen(function* () {
         clearing = { clears: CLEARS };
+        const herdr = new TextLost(rig.pluginEnv());
         yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
         yield* interrupted("r1", parked("r1"), {
-          herdr: promptNotTaken("text"),
+          herdr,
           confirmGraceMs: 300,
           collectMs: OUTLASTS_IO,
         });
         yield* reconciled("r1", "not-sent");
         yield* rig.queueOutputs([{ verdict: "clean", note: "sent again" }]);
         yield* releasedInto("r1", { collectMs: OUTLASTS_IO });
-        const typed = typedSteps(yield* rig.calls());
+        const typed = [...herdr.typed, ...typedSteps(yield* rig.calls())];
         expect(typed).toHaveLength(2);
         for (const one of typed)
           expect(Str.split(one, "\n").slice(1)).toEqual([
@@ -750,7 +744,7 @@ test(
 const refusedStep = (runId: string) =>
   Effect.gen(function* () {
     const opened = (cmds: ReadonlyArray<string>) =>
-      Arr.filter(cmds, (cmd) => cmd === "tab create" || cmd === "agent start").length;
+      Arr.filter(cmds, (cmd) => cmd === "terminal.run").length;
     const before = { opened: opened(yield* rig.cmds()), typed: typedSteps(yield* rig.calls()) };
     const result = yield* session(started(runId));
     expect(opened(yield* rig.cmds())).toBe(before.opened);
@@ -874,7 +868,7 @@ const resumedStepped = (runId: string) =>
   );
 
 const starts = () =>
-  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
+  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
 
 test("an Output still unusable after its repair parks the Step, saying what to correct", () =>
   runEffect(
@@ -945,19 +939,19 @@ test("a parked Output whose next repair is unusable too parks again, launching n
 test("an agent that is already there is reattached to rather than started a second time", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.addAgent(agentFor("r1"), "1-9");
+      yield* rig.addAgent(agentFor("r1"));
       yield* rig.queueOutputs([{ verdict: "clean", note: "reused" }]);
       const result = yield* session(started("r1"));
       expect(result._tag === "Success" && result.success.note).toBe("reused");
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(0);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(0);
     }),
   ));
 
 /** herdr closing an agent's pane once Collie has decided to reuse it, as a stop does. */
-class ClosesOnceReused extends FakeHerdr {
+class ClosesOnceReused extends Herdr {
   closed = false;
   constructor(
-    env: ConstructorParameters<typeof FakeHerdr>[0],
+    env: ConstructorParameters<typeof Herdr>[0],
     readonly pane: string,
     readonly prompt: string,
   ) {
@@ -966,15 +960,15 @@ class ClosesOnceReused extends FakeHerdr {
   override agentList() {
     if (this.closed || Bun.file(this.prompt).size === 0) return super.agentList();
     this.closed = true;
-    return this.paneClose(this.pane).pipe(Effect.andThen(super.agentList()));
+    return this.terminalKill(this.pane).pipe(Effect.andThen(super.agentList()));
   }
 }
 
 /** herdr failing one listing as Collie hands a reused agent, which it still has, its work. */
-class FailsOnceReused extends FakeHerdr {
+class FailsOnceReused extends Herdr {
   failed = false;
   constructor(
-    env: ConstructorParameters<typeof FakeHerdr>[0],
+    env: ConstructorParameters<typeof Herdr>[0],
     readonly pointer: string,
   ) {
     super(env);
@@ -991,12 +985,12 @@ class FailsOnceReused extends FakeHerdr {
 test("a listing that failed is not taken as a reused agent gone, and starts no second one", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.addAgent(agentFor("r1"), "1-9");
+      yield* rig.addAgent(agentFor("r1"));
       yield* rig.queueOutputs([{ verdict: "clean", note: "still the same agent" }]);
       const herdr = new FailsOnceReused(rig.pluginEnv(), `${dir}/agents/r1/review.step.md`);
       const result = yield* session(started("r1"), { herdr });
       expect(result._tag === "Success" && result.success.note).toBe("still the same agent");
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(0);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(0);
       expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
     }),
   ));
@@ -1004,33 +998,13 @@ test("a listing that failed is not taken as a reused agent gone, and starts no s
 test("a reused agent that is gone before it was given its work is started again", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.addAgent(agentFor("r1"), "1-9");
+      yield* rig.addAgent(agentFor("r1"));
       yield* rig.queueOutputs([{ verdict: "clean", note: "started again" }]);
-      const herdr = new ClosesOnceReused(rig.pluginEnv(), "1-9", promptPath("r1"));
+      const herdr = new ClosesOnceReused(rig.pluginEnv(), agentFor("r1"), promptPath("r1"));
       const result = yield* session(started("r1"), { herdr });
       expect(result._tag === "Success" && result.success.note).toBe("started again");
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
-    }),
-  ));
-
-test("a reused agent herdr still lists but no longer runs is started again in place of its pane", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* rig.addAgent(agentFor("r1"), "1-9");
-      yield* rig.queueOutputs([{ verdict: "clean", note: "started again" }]);
-      const herdr = new FakeHerdr(
-        rig.pluginEnv({
-          FAKE_HERDR_PROMPT_ERROR: "agent_not_ready",
-          FAKE_HERDR_PROMPT_ERROR_TIMES: "1",
-          FAKE_HERDR_PROMPT_ERROR_MESSAGE: `agent ${agentFor("r1")} is not an active named agent`,
-          FAKE_HERDR_NAME_TAKEN: "1",
-        }),
-      );
-      const result = yield* session(started("r1"), { herdr });
-      expect(result._tag === "Success" && result.success.note).toBe("started again");
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
-      expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
     }),
   ));
 
@@ -1095,6 +1069,7 @@ test(
           patience: { firstMs: 10, maxMs: 20, forMs: 100 },
         });
         expect(yield* cardsOf("r1")).toEqual([]);
+        yield* core.report(agentFor("r1"), "idle");
         const result = yield* releasedInto("r1");
         expect(result._tag).toBe("Success");
         yield* session(started("r1"));
@@ -1111,13 +1086,13 @@ test(
   120_000,
 );
 
-test("work the workflow skips opens no tab and starts no agent", () =>
+test("work the workflow skips starts no agent", () =>
   runEffect(
     Effect.gen(function* () {
       const result = yield* session(started("r1", true));
       expect(result._tag === "Success" && result.success).toEqual(SKIPPED);
       const cmds = yield* rig.cmds();
-      expect(Arr.filter(cmds, (cmd) => cmd === "tab create" || cmd === "agent start")).toEqual([]);
+      expect(Arr.filter(cmds, (cmd) => cmd === "terminal.run")).toEqual([]);
     }),
   ));
 
@@ -1178,7 +1153,7 @@ test(
         // Nothing written for the first prompt, so the collection is still out.
         yield* rig.queueOutputs([null]);
         yield* interrupted("r1", prompted("Your task for this step"));
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
 
         // A second engine on the same SQLite file picks the work up where it was.
         yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
@@ -1186,11 +1161,41 @@ test(
 
         expect(result._tag === "Success" && result.success.note).toBe("late");
         // The launch came back off the journal; nothing started a second agent for it.
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
 );
+
+/** The prompt is acknowledged, but its turn's current state cannot be observed. */
+class UnseenTurn extends Herdr {
+  private readonly submitted = new Set<string>();
+  override agentLaunch(...args: Parameters<Herdr["agentLaunch"]>) {
+    return Effect.suspend(() => {
+      this.submitted.delete(args[0].name);
+      return super
+        .agentLaunch(...args)
+        .pipe(Effect.tap(() => Effect.sync(() => this.submitted.add(args[0].name))));
+    });
+  }
+  override agentPrompt(...args: Parameters<Herdr["agentPrompt"]>) {
+    return Effect.suspend(() => {
+      this.submitted.delete(args[0]);
+      return super
+        .agentPrompt(...args)
+        .pipe(Effect.tap(() => Effect.sync(() => this.submitted.add(args[0]))));
+    });
+  }
+  override agentStatus(...args: Parameters<Herdr["agentStatus"]>) {
+    return super
+      .agentStatus(...args)
+      .pipe(
+        Effect.map((status): AgentStatus =>
+          this.submitted.has(args[0]) && status === "idle" ? "unknown" : status,
+        ),
+      );
+  }
+}
 
 /** `r1`'s agent past its budget: the Run parked, and its work still out, not suspended. */
 const pastTheBudget = Effect.gen(function* () {
@@ -1203,6 +1208,12 @@ const pastTheBudget = Effect.gen(function* () {
   expect(yield* suspended("r1")).toBe(false);
 });
 
+const runningNow: RunNow = {
+  running: Effect.succeed(true),
+  authority: Effect.succeed({ created: null, roaming: false, started: null }),
+  questions: { ask: () => Effect.void, asked: Effect.succeed([]), close: () => Effect.void },
+};
+
 test(
   "an agent idle past its budget parks the Run and is still collected, so its late Output needs no resume",
   () =>
@@ -1210,6 +1221,7 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         // Nothing within the budget: a long build still working, not one that did nothing.
+        core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
         const result = yield* session(
           Effect.gen(function* () {
@@ -1218,11 +1230,11 @@ test(
             yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
             return yield* Fiber.join(fiber);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("late");
         expect(yield* isSet(PARKED, "r1")).toBe(false);
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -1234,11 +1246,12 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+        core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
-        const herdr = new FakeHerdr(rig.pluginEnv());
+        const herdr = new UnseenTurn(rig.pluginEnv());
         const starts = rig.cmds().pipe(
           Effect.orDie,
-          Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start").length),
+          Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length),
         );
         const result = yield* session(
           Effect.gen(function* () {
@@ -1257,7 +1270,8 @@ test(
             const pane = Option.getOrUndefined(
               Arr.findFirst(yield* herdr.agentList(), (one) => one.name === agentFor("r1")),
             )?.paneId;
-            yield* herdr.paneClose(pane ?? "");
+            yield* herdr.terminalKill(pane ?? "");
+            yield* (yield* Agents).resumeLost("r1", runningNow);
             yield* until(starts.pipe(Effect.map((count) => count === 2)));
             yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"revived"}`);
             return yield* Fiber.join(fiber);
@@ -1267,66 +1281,6 @@ test(
         expect(result._tag === "Success" && result.success.note).toBe("revived");
         expect(yield* isSet(PARKED, "r1")).toBe(false);
         expect(yield* starts).toBe(2);
-      }),
-    ),
-  120_000,
-);
-
-/** herdr still listing an agent whose process has gone, once `dead`, until one is started. */
-class ListsItDead extends FakeHerdr {
-  dead = false;
-  override agentStatus(target: string) {
-    return this.dead
-      ? Effect.fail(
-          new HerdrError({
-            message: "herdr agent get",
-            detail: `agent ${target} is not an active named agent`,
-            code: "agent_not_ready",
-            answered: true,
-          }),
-        )
-      : super.agentStatus(target);
-  }
-  override agentStart(...args: Parameters<FakeHerdr["agentStart"]>) {
-    this.dead = false;
-    return super.agentStart(...args);
-  }
-}
-
-test(
-  "an agent herdr still lists but no longer runs while it is collected is started again with its work",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* rig.queueOutputs([null]);
-        const herdr = new ListsItDead(rig.pluginEnv({ FAKE_HERDR_NAME_TAKEN: "1" }));
-        const starts = rig.cmds().pipe(
-          Effect.orDie,
-          Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start").length),
-        );
-        const result = yield* session(
-          Effect.gen(function* () {
-            const fiber = yield* Effect.forkChild(started("r1"));
-            yield* pastTheBudget;
-            yield* until(
-              steps("r1").pipe(
-                Effect.provideService(Path.Path, yield* Path.Path),
-                Effect.map(
-                  (found) =>
-                    found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
-                ),
-              ),
-            );
-            herdr.dead = true;
-            yield* until(starts.pipe(Effect.map((count) => count === 2)));
-            yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"revived"}`);
-            return yield* Fiber.join(fiber);
-          }),
-          { herdr, collectMs: 400 },
-        );
-        expect(result._tag === "Success" && result.success.note).toBe("revived");
-        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
       }),
     ),
   120_000,
@@ -1378,14 +1332,14 @@ const managedCodex = Effect.gen(function* () {
   return { children, state, ports, spawnServer };
 });
 
-class StaleWorkingTerminal extends FakeHerdr {
+class StaleWorkingTerminal extends UnseenTurn {
   stale = false;
   override agentStatus(target: string) {
     return this.stale ? Effect.succeed("working" as const) : super.agentStatus(target);
   }
-  override agentStart(...args: Parameters<FakeHerdr["agentStart"]>) {
+  override agentLaunch(...args: Parameters<Herdr["agentLaunch"]>) {
     this.stale = false;
-    return super.agentStart(...args);
+    return super.agentLaunch(...args);
   }
 }
 
@@ -1433,16 +1387,7 @@ test.each([false, true])(
         const managed = yield* managedCodex;
         yield* rig.queueOutputs([null]);
         const steerText = "Keep the recovery in this checkout.";
-        class UnobservedSteer extends StaleWorkingTerminal {
-          override agentPrompt(target: string, text: string) {
-            return super
-              .agentPrompt(target, text)
-              .pipe(
-                Effect.map((sent) => (pipe(text, Str.includes(steerText)) ? "unobserved" : sent)),
-              );
-          }
-        }
-        const herdr = new UnobservedSteer(rig.pluginEnv());
+        const herdr = new StaleWorkingTerminal(rig.pluginEnv());
         const over = { herdr, harness: "codex", model: "default", ports: managed.ports };
         const acknowledged = steps("r1").pipe(
           Effect.provideService(Path.Path, yield* Path.Path),
@@ -1456,6 +1401,7 @@ test.each([false, true])(
           expect(Arr.some(yield* herdr.agentList(), (one) => one.name === agentFor("r1"))).toBe(
             true,
           );
+          core.answer("terminal.send", { turn: 0, started: null, status: "idle" });
           expect(
             yield* (yield* Agents).steer({
               runId: "r1",
@@ -1464,6 +1410,7 @@ test.each([false, true])(
               actor: { origin: "cli" },
             }),
           ).toMatchObject({ delivered: true, observed: false });
+          core.restore("terminal.send");
           expect(sent(yield* rig.calls(), steerText)).toBe(1);
           herdr.stale = true;
           expect(yield* herdr.agentStatus(agentFor("r1"))).toBe("working");
@@ -1749,7 +1696,7 @@ test("a reused managed Codex server dying just before delivery is replaced witho
   runEffect(
     Effect.gen(function* () {
       const managed = yield* managedCodex;
-      class DiesBeforeDelivery extends FakeHerdr {
+      class DiesBeforeDelivery extends Herdr {
         killed = false;
         override agentStatus(target: string) {
           const status = super.agentStatus(target);
@@ -1925,7 +1872,7 @@ test.each([false, true])(
           Effect.gen(function* () {
             yield* Effect.forkChild(started("r1"));
             if (!replay) yield* lose;
-            yield* spend(20_000);
+            yield* until(controlOf(PARKED, "r1").pipe(Effect.map(Str.includes("--reconcile"))));
             expect(yield* controlOf(PARKED, "r1")).toContain("--reconcile");
             expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
             expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
@@ -2009,7 +1956,10 @@ test.each(["reachable endpoint", "foreign terminal", "foreign Run"] as const)(
             yield* Effect.forkChild(started("r1"));
             yield* until(acknowledgedStep(yield* Path.Path));
             herdr.stale = true;
-            if (foreign === "foreign terminal") yield* rig.reincarnate(agentFor("r1"));
+            if (foreign === "foreign terminal") {
+              yield* rig.dropAgent(agentFor("r1"));
+              yield* rig.addAgent(agentFor("r1"));
+            }
             if (foreign === "foreign Run") {
               const record = yield* readControl(hostOf().env.stateDir, agentFor("r1"));
               yield* fs.writeFileString(
@@ -2022,7 +1972,7 @@ test.each(["reachable endpoint", "foreign terminal", "foreign Run"] as const)(
             managed.state.reachable = foreign === "reachable endpoint";
             yield* spend(20_000);
             expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
-            expect(yield* rig.cmds()).not.toContain("pane close");
+            expect(yield* rig.cmds()).not.toContain("terminal.kill");
             expect(yield* readControl(hostOf().env.stateDir, agentFor("r1"))).not.toBeNull();
           }),
           { herdr, harness: "codex", model: "default", ports: managed.ports },
@@ -2039,7 +1989,7 @@ test.each(["before detection", "repair collection"] as const)(
         const fs = yield* FileSystem.FileSystem;
         const managed = yield* managedCodex;
         const herdr = new (class extends StaleWorkingTerminal {
-          override agentPrompt(...args: Parameters<FakeHerdr["agentPrompt"]>) {
+          override agentPrompt(...args: Parameters<Herdr["agentPrompt"]>) {
             return super.agentPrompt(...args).pipe(Effect.as("observed" as const));
           }
         })(rig.pluginEnv());
@@ -2112,7 +2062,7 @@ test.each(["before retirement", "during retirement"] as const)(
           override agentStatus() {
             return Effect.succeed("working" as const);
           }
-          override agentPrompt(...args: Parameters<FakeHerdr["agentPrompt"]>) {
+          override agentPrompt(...args: Parameters<Herdr["agentPrompt"]>) {
             return super.agentPrompt(...args).pipe(Effect.as("observed" as const));
           }
         })(rig.pluginEnv());
@@ -2176,13 +2126,13 @@ test.each(["retirement", "launch"] as const)(
         const release = yield* Deferred.make<void>();
         let recovering = false;
         class HeldRecovery extends StaleWorkingTerminal {
-          override agentStart(...args: Parameters<FakeHerdr["agentStart"]>) {
+          override agentLaunch(...args: Parameters<Herdr["agentLaunch"]>) {
             return recovering && race === "launch"
               ? Deferred.succeed(arrived, undefined).pipe(
                   Effect.andThen(Deferred.await(release)),
-                  Effect.andThen(super.agentStart(...args)),
+                  Effect.andThen(super.agentLaunch(...args)),
                 )
-              : super.agentStart(...args);
+              : super.agentLaunch(...args);
           }
         }
         const herdr = new HeldRecovery(rig.pluginEnv());
@@ -2249,6 +2199,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+        core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
         const result = yield* session(
           Effect.gen(function* () {
@@ -2263,11 +2214,11 @@ test(
             yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
             return yield* Fiber.join(fiber);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("late");
         expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -2278,6 +2229,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
+        core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
         yield* session(
           Effect.gen(function* () {
@@ -2285,7 +2237,7 @@ test(
             yield* pastTheBudget;
             expect(yield* (yield* Collecting).has("r1", agentFor("r1"))).toBe(true);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
       }),
     ),
@@ -2300,17 +2252,18 @@ test(
         const starting = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         let blocking = false;
-        class SlowStart extends FakeHerdr {
-          override agentStart(...args: Parameters<FakeHerdr["agentStart"]>) {
+        class SlowStart extends UnseenTurn {
+          override agentLaunch(...args: Parameters<Herdr["agentLaunch"]>) {
             return blocking
               ? Deferred.succeed(starting, undefined).pipe(
                   Effect.andThen(Deferred.await(release)),
-                  Effect.andThen(super.agentStart(...args)),
+                  Effect.andThen(super.agentLaunch(...args)),
                 )
-              : super.agentStart(...args);
+              : super.agentLaunch(...args);
           }
         }
         const fs = yield* FileSystem.FileSystem;
+        core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
         const herdr = new SlowStart(rig.pluginEnv());
         const marked = yield* session(
@@ -2330,12 +2283,16 @@ test(
             const pane = Option.getOrUndefined(
               Arr.findFirst(yield* herdr.agentList(), (one) => one.name === agentFor("r1")),
             )?.paneId;
-            yield* herdr.paneClose(pane ?? "");
+            yield* herdr.terminalKill(pane ?? "");
+            const recovering = yield* Effect.forkChild(
+              (yield* Agents).resumeLost("r1", runningNow),
+            );
             yield* Deferred.await(starting);
             const marked = yield* (yield* Collecting).has("r1", agentFor("r1"));
             blocking = false;
             yield* Deferred.succeed(release, undefined);
             yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"revived"}`);
+            yield* Fiber.join(recovering);
             yield* Fiber.join(fiber);
             return marked;
           }),
@@ -2353,6 +2310,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+        core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
         let marked: boolean | undefined;
         const markedWhenParked = Layer.effect(Host)(
@@ -2389,6 +2347,7 @@ test(
               Layer.provideMerge(
                 agentsLayer({
                   ...hostOf(),
+                  herdr: new UnseenTurn(rig.pluginEnv()),
                   collectMs: 400,
                 }),
               ),
@@ -2413,6 +2372,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
+        core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
         yield* session(
           Effect.gen(function* () {
@@ -2422,7 +2382,7 @@ test(
             yield* until(suspended("r1"));
             expect(yield* (yield* Collecting).has("r1", agentFor("r1"))).toBe(false);
           }),
-          { collectMs: 400 },
+          { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
         );
       }),
     ),
@@ -2443,7 +2403,7 @@ test(
         const result = yield* session(started("r1"), { collectMs: 400 });
         expect(result._tag === "Success" && result.success.note).toBe("late");
         expect(yield* isSet(PARKED, "r1")).toBe(false);
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -2457,7 +2417,7 @@ const untilParked = (runId: string) =>
   });
 
 /** An agent herdr reports busy until its Output is written. */
-class BusyUntilWritten extends FakeHerdr {
+class BusyUntilWritten extends Herdr {
   reads = 0;
   written = false;
   constructor(private readonly busy: "working" | "blocked") {
@@ -2502,7 +2462,7 @@ for (const busy of ["working", "blocked"] as const)
   );
 
 /** An agent herdr reports working from when it is asked to rewrite until it is done. */
-class RewritingAfterRepair extends FakeHerdr {
+class RewritingAfterRepair extends Herdr {
   rewriting = false;
   done = false;
   constructor() {
@@ -2540,7 +2500,7 @@ test("a repaired Output caught half rewritten is judged when the agent's turn en
 const HALF = `{"verdict":"clean"}`;
 
 /** Once asked to repair, starts its rewrite as one status reply goes out and ends it as the next does. */
-class FinishingWhileAsked extends FakeHerdr {
+class FinishingWhileAsked extends Herdr {
   repairing = false;
   constructor(private readonly fs: FileSystem.FileSystem) {
     super(rig.pluginEnv());
@@ -2579,7 +2539,7 @@ test("a repaired Output finished between its read and the turn ending is read ag
   ));
 
 for (const [what, herdr] of [
-  ["idle", () => new FakeHerdr(rig.pluginEnv())],
+  ["unknown", () => new UnseenTurn(rig.pluginEnv())],
   ["unreadable", () => new Unreadable(rig.pluginEnv())],
 ] as const)
   test(
@@ -2587,6 +2547,7 @@ for (const [what, herdr] of [
     () =>
       runEffect(
         Effect.gen(function* () {
+          core.reportedOnly([agentFor("r1")]);
           yield* rig.queueOutputs([null]);
           yield* interrupted("r1", parked("r1"), {
             herdr: herdr(),
@@ -2607,7 +2568,7 @@ for (const [what, herdr] of [
  * Each prompt starts a turn herdr reports `working` for its next reads, then `ending`;
  * the turns after the first `ends` never end.
  */
-class Turns extends FakeHerdr {
+class Turns extends Herdr {
   private working = 0;
   private prompted = 0;
   constructor(
@@ -2616,19 +2577,21 @@ class Turns extends FakeHerdr {
   ) {
     super(rig.pluginEnv());
   }
-  protected override exec(args: string[]) {
-    if (args[0] === "agent" && args[1] === "prompt") {
-      this.prompted += 1;
-      this.working = this.prompted > this.ends ? Infinity : 10;
-    }
-    return super.exec(args);
+  override agentPrompt(target: string, text: string) {
+    this.prompted += 1;
+    this.working = this.prompted > this.ends ? Infinity : 10;
+    return super.agentPrompt(target, text);
   }
   going = false;
-  override agentStatus() {
-    if (this.working === 0)
-      return Effect.succeed(this.prompted > 0 ? this.ending : ("idle" as const));
-    if (!this.going) this.working -= 1;
-    return Effect.succeed("working" as const);
+  override agentStatus(target: string) {
+    return super.agentStatus(target).pipe(
+      Effect.map((status) => {
+        if (status === "working") return status;
+        if (this.working === 0) return this.prompted > 0 ? this.ending : ("idle" as const);
+        if (!this.going) this.working -= 1;
+        return "working" as const;
+      }),
+    );
   }
 }
 
@@ -2836,7 +2799,12 @@ const ANSWERED = "Your questions are answered:";
 /** Once `r1`'s agent has its work, it calls `AskUserQuestion` with two questions. */
 const asksTwo = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  while (Arr.every(yield* launchesAt(dir, "r1"), (one) => one.operation !== "review"))
+  while (
+    !Arr.some(
+      yield* deliveredTo(dir, "r1"),
+      (one) => one.cause.kind === "step" && one.state === "acknowledged",
+    )
+  )
     yield* TestClock.withLive(Effect.sleep("10 millis"));
   // The host runs in this process; the hook puts a question on a Run only while one lives.
   yield* fs.writeFileString(
@@ -2901,13 +2869,86 @@ test(
             const calls = yield* rig.calls();
             expect(sent(calls, ANSWERED)).toBe(1);
             const delivered = Option.getOrUndefined(
-              Arr.findFirst(calls, (call) => pipe(call.argv?.[3] ?? "", Str.includes(ANSWERED))),
+              Arr.findFirst(sentTexts(calls), Str.includes(ANSWERED)),
             );
-            expect(delivered?.argv?.[3]).toEndWith(
+            expect(delivered).toEndWith(
               "\nYour questions are answered: Database: SQLite; Checks: lint",
             );
+            const [receipt] = Arr.filter(
+              yield* deliveredTo(dir, "r1"),
+              (one) => one.cause.kind === "steer",
+            );
+            expect(receipt?.state).toBe("acknowledged");
           }),
-          { collectMs: 120_000, pollMs: 1_000 },
+          {
+            herdr: new UnseenTurn(rig.pluginEnv()),
+            collectMs: 120_000,
+            pollMs: 1_000,
+          },
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "an answered question's pending delivery is not interrupted by an Output reminder",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null]);
+        const replying = yield* Deferred.make<void>();
+        const sawIdle = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const cancelled = yield* Deferred.make<void>();
+        let awaitingReply = false;
+        const herdr = new (class extends UnseenTurn {
+          override agentPrompt(...args: Parameters<Herdr["agentPrompt"]>) {
+            const sent = super.agentPrompt(...args);
+            if (!pipe(args[1], Str.includes(ANSWERED))) return sent;
+            return Effect.gen(function* () {
+              awaitingReply = true;
+              yield* Deferred.succeed(replying, undefined);
+              yield* Deferred.await(release);
+              return yield* sent;
+            }).pipe(
+              Effect.onInterrupt(() => Effect.asVoid(Deferred.succeed(cancelled, undefined))),
+              Effect.ensuring(Effect.sync(() => (awaitingReply = false))),
+            );
+          }
+          override agentStatus(...args: Parameters<Herdr["agentStatus"]>) {
+            return awaitingReply
+              ? Deferred.succeed(sawIdle, undefined).pipe(Effect.as("idle" as const))
+              : super.agentStatus(...args);
+          }
+        })(rig.pluginEnv());
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* asksTwo;
+            yield* questionsOf(2);
+            yield* answer("ask-review-1", "SQLite");
+            yield* answer("ask-review-2", "lint");
+            yield* Deferred.await(replying);
+            yield* Deferred.await(sawIdle);
+            yield* spend(5_000);
+            expect(yield* Deferred.isDone(cancelled)).toBe(false);
+            yield* Deferred.succeed(release, undefined);
+            yield* until(
+              deliveredTo(dir, "r1").pipe(
+                Effect.map((all) =>
+                  Arr.some(
+                    all,
+                    (one) => one.cause.kind === "steer" && one.state === "acknowledged",
+                  ),
+                ),
+                Effect.orDie,
+              ),
+            );
+            expect(sent(yield* rig.calls(), ANSWERED)).toBe(1);
+            expect(yield* reminders).toEqual([]);
+          }),
+          { herdr, collectMs: 120_000, pollMs: 1_000 },
         );
       }),
     ),
@@ -2919,7 +2960,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([null]);
+        yield* rig.queueOutputs([{ writes: [], output: null, owed: true }]);
         yield* session(
           Effect.gen(function* () {
             yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
@@ -2936,10 +2977,7 @@ test(
             });
             while (!(yield* prompted("is answered", 2)))
               yield* TestClock.withLive(Effect.sleep("10 millis"));
-            const typed = Arr.filter(
-              Arr.map(yield* rig.calls(), (call) => call.argv?.[3] ?? ""),
-              (one) => pipe(one, Str.includes("is answered")),
-            );
+            const typed = Arr.filter(sentTexts(yield* rig.calls()), Str.includes("is answered"));
             expect(typed).toHaveLength(2);
             expect(
               Option.getOrUndefined(
@@ -2955,8 +2993,16 @@ test(
             ).toMatch(
               /From the human, on the board, [^\n]*\nYour question Checks is answered: lint$/,
             );
+            const [first] = Arr.filter(
+              yield* deliveredTo(dir, "r1"),
+              (one) => one.cause.kind === "steer",
+            );
+            expect(first?.state).toBe("acknowledged");
           }),
-          { collectMs: 120_000, pollMs: 1_000 },
+          {
+            collectMs: 120_000,
+            pollMs: 1_000,
+          },
         );
       }),
     ),
@@ -2968,6 +3014,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
+        core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
         yield* session(
           Effect.gen(function* () {
@@ -2981,7 +3028,11 @@ test(
             yield* answer("ask-review-2", "lint");
             while (!(yield* parked("r1"))) yield* TestClock.withLive(Effect.sleep("10 millis"));
           }),
-          { collectMs: 60_000, pollMs: 1_000 },
+          {
+            herdr: new UnseenTurn(rig.pluginEnv()),
+            collectMs: 60_000,
+            pollMs: 1_000,
+          },
         );
         expect(yield* controlOf(PARKED, "r1")).toContain("after 1 minutes idle");
       }),
@@ -3077,32 +3128,16 @@ const answersOfR1 = Effect.suspend(() =>
   ),
 );
 
-test("a question whose agent is live in another Herd, or whose Herds cannot be listed, stays open", () =>
+test("a question whose agent core still has, or whose core cannot be asked, stays open", () =>
   runEffect(
     Effect.gen(function* () {
       yield* finishedThenAsked;
-      const first = `${rig.root}/first.sock`;
-      const second = `${rig.root}/second.sock`;
-      const sessions = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
-        { name: "desk", socket_path: first },
-        { name: "builds", socket_path: second },
-      ]).pipe(Effect.orDie);
-      for (const over of [
-        { FAKE_HERDR_SESSIONS: sessions, FAKE_HERDR_FAIL: "" },
-        { FAKE_HERDR_SESSIONS: "", FAKE_HERDR_FAIL: '{"session list":"herdr is restarting"}' },
-      ])
-        yield* session(tendR1, {
-          herdr: new FakeHerdr(
-            rig.pluginEnv({ HERDR_SOCKET_PATH: first, FAKE_HERDR_AGENTS_IN: second, ...over }),
-          ),
-        });
+      for (const herdr of [new Herdr(rig.pluginEnv()), coreGone()])
+        yield* session(tendR1, { herdr });
       expect(yield* answersOfR1).toEqual([null, null]);
 
-      yield* session(tendR1, {
-        herdr: new FakeHerdr(
-          rig.pluginEnv({ FAKE_HERDR_SESSIONS: sessions, FAKE_HERDR_AGENTS_GONE: agentFor("r1") }),
-        ),
-      });
+      yield* rig.dropAgent(agentFor("r1"));
+      yield* session(tendR1);
       expect(yield* answersOfR1).toEqual([
         `closed: ${agentFor("r1")} is gone`,
         `closed: ${agentFor("r1")} is gone`,
@@ -3114,50 +3149,15 @@ test("a pass of question tending reads its Runs' questions once, and closes what
   runEffect(
     Effect.gen(function* () {
       yield* finishedThenAsked;
-      const sessions = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
-        { name: "desk", socket_path: `${rig.root}/first.sock` },
-      ]).pipe(Effect.orDie);
       const reads: Array<string> = [];
       yield* session(tendR1Reading(reads));
-      yield* session(tendR1Reading(reads), {
-        herdr: new FakeHerdr(
-          rig.pluginEnv({ FAKE_HERDR_SESSIONS: sessions, FAKE_HERDR_AGENTS_GONE: agentFor("r1") }),
-        ),
-      });
+      yield* rig.dropAgent(agentFor("r1"));
+      yield* session(tendR1Reading(reads));
       expect(reads).toEqual(["askedOf r1", "askedOf r1"]);
       expect(yield* answersOfR1).toEqual([
         `closed: ${agentFor("r1")} is gone`,
         `closed: ${agentFor("r1")} is gone`,
       ]);
-    }),
-  ));
-
-test("an answer to an agent live only in another Herd is sent to it there", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* finishedThenAsked;
-      const first = `${rig.root}/first.sock`;
-      const second = `${rig.root}/second.sock`;
-      const herdr = new FakeHerdr(
-        rig.pluginEnv({
-          HERDR_SOCKET_PATH: first,
-          FAKE_HERDR_AGENTS_IN: second,
-          FAKE_HERDR_SESSIONS: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
-            { name: "desk", socket_path: first },
-            { name: "builds", socket_path: second },
-          ]).pipe(Effect.orDie),
-        }),
-      );
-      yield* session(
-        Effect.gen(function* () {
-          yield* tendR1;
-          yield* answer("ask-review-1", "Postgres");
-          yield* answer("ask-review-2", "lint");
-          yield* tendR1;
-        }),
-        { herdr },
-      );
-      expect(sent(yield* rig.calls(), ANSWERED)).toBe(1);
     }),
   ));
 
@@ -3205,20 +3205,94 @@ test(
         // Still one: the repair is a recorded step of the work rather than an allowance a
         // restart gives back, and the ledger refuses a second copy of a delivery about it.
         expect(sent(yield* rig.calls(), "not usable")).toBe(1);
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
 );
 
-/** herdr refusing prompts because the pane has a dialog up: the first `times`, or every one. */
-const busyPane = (times = 0) =>
-  new FakeHerdr(
-    rig.pluginEnv({
-      FAKE_HERDR_PROMPT_ERROR: "agent_blocked",
-      FAKE_HERDR_PROMPT_ERROR_TIMES: String(times),
-    }),
-  );
+/** An agent with a dialog up when its prompts go out: the first `times`, or every one. */
+class BusyPane extends Herdr {
+  private refused = 0;
+  constructor(private readonly times: number) {
+    super(rig.pluginEnv());
+  }
+  override agentPrompt(target: string, text: string) {
+    const busy = this.times === 0 || this.refused < this.times;
+    if (busy) this.refused += 1;
+    return core
+      .report(target, busy ? "blocked" : "idle")
+      .pipe(Effect.andThen(super.agentPrompt(target, text)));
+  }
+}
+const busyPane = (times = 0) => new BusyPane(times);
+
+/** Core refusing each method `refusals` names, with its message, the first `times` it is asked. */
+class Refusing extends Herdr {
+  private readonly left = new Map<string, number>();
+  constructor(
+    private readonly refusals: Readonly<Record<string, string>>,
+    times = Infinity,
+  ) {
+    super(rig.pluginEnv());
+    for (const method of Rec.keys(refusals)) this.left.set(method, times);
+  }
+  private refusing<A>(method: string, asked: Effect.Effect<A, HerdrError, PlatformServices>) {
+    const left = this.left.get(method) ?? 0;
+    if (left <= 0) return asked;
+    this.left.set(method, left - 1);
+    return Effect.fail(
+      new HerdrError({
+        message: `core ${method} failed`,
+        detail: this.refusals[method] ?? "",
+        answered: true,
+      }),
+    );
+  }
+  override agentLaunch(...args: Parameters<Herdr["agentLaunch"]>) {
+    return this.refusing("terminal.run", super.agentLaunch(...args));
+  }
+  override agentList() {
+    return this.refusing("terminal.list", super.agentList());
+  }
+  override agentPrompt(target: string, text: string) {
+    return this.refusing("terminal.send", super.agentPrompt(target, text));
+  }
+  override terminalKill(address: string) {
+    return this.refusing("terminal.kill", super.terminalKill(address));
+  }
+}
+
+/** Core saying an agent's status is the next of `statuses` each time it is asked, then the last. */
+class Statuses extends Herdr {
+  private reads = 0;
+  constructor(
+    private readonly statuses: ReadonlyArray<AgentStatus>,
+    env = rig.pluginEnv(),
+  ) {
+    super(env);
+  }
+  private get now() {
+    return this.statuses[Math.min(this.reads, this.statuses.length - 1)] ?? "idle";
+  }
+  override agentStatus(target: string) {
+    return super.agentStatus(target).pipe(
+      Effect.map(() => {
+        const status = this.now;
+        this.reads += 1;
+        return status;
+      }),
+    );
+  }
+  override agentList() {
+    return super
+      .agentList()
+      .pipe(Effect.map((agents) => Arr.map(agents, (one) => ({ ...one, status: this.now }))));
+  }
+}
+
+/** A core that does not answer, as one that went away. */
+const coreGone = () => new Herdr(rig.pluginEnv({ HC_SOCKET: `${rig.root}/gone.sock` }));
 
 const statusNow = (runId: string) =>
   session(
@@ -3248,7 +3322,7 @@ test("a pane that is busy when the step's prompt goes out is waited out, and the
       // Two refused and one taken, all of them one delivery.
       expect(sent(yield* rig.calls(), "Your task for this step")).toBe(3);
       expect(Arr.map(yield* steps("r1"), (one) => one.state)).toEqual(["acknowledged"]);
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
     }),
   ));
 
@@ -3272,9 +3346,10 @@ test(
         expect(Arr.map(yield* steps("r1"), (one) => one.state)).toEqual(["failed"]);
 
         // The dialog has gone. The same agent is given the same prompt, and nothing new starts.
+        yield* core.report(agentFor("r1"), "idle");
         const result = yield* releasedInto("r1");
         expect(result._tag === "Success" && result.success.note).toBe("resumed");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
         expect(Arr.map(yield* steps("r1"), (one) => one.state)).toEqual(["acknowledged"]);
         expect(yield* isSet(PARKED, "r1")).toBe(false);
       }),
@@ -3282,14 +3357,8 @@ test(
   120_000,
 );
 
-/** The `--` arguments the agent was started with, as the launch passed them to herdr. */
-const launchArgs = (calls: ReadonlyArray<Call>) => {
-  const argv =
-    Option.getOrUndefined(Arr.findFirst(calls, (call) => (call.argv ?? [])[1] === "start"))?.argv ??
-    [];
-  const at = argv.indexOf("--");
-  return at === -1 ? [] : argv.slice(at + 1);
-};
+/** The arguments the first agent's harness was started with. */
+const launchArgs = (calls: ReadonlyArray<Call>) => (everyLaunch(calls)[0] ?? []).slice(1);
 
 /** The permission mode the agent was started in, as the launch passed it to claude. */
 const permissionModeOf = (args: ReadonlyArray<string>) =>
@@ -3440,12 +3509,12 @@ test(
         expect(yield* controlOf(PARKED, "r1")).toContain(
           `the reviewer persona in ${personas}/reviewer.md names {{inputs.target}}`,
         );
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toEqual([]);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toEqual([]);
 
         yield* fs.writeFileString(`${personas}/reviewer.md`, "You review.\n");
         const result = yield* releasedInto("r1");
         expect(result._tag === "Success" && result.success.note).toBe("resumed");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -3524,12 +3593,14 @@ test("a directory claude already trusts is not written", () =>
     }),
   ));
 
-/** Every agent's `--` arguments, in the order the agents were started. */
+/** The argv of each terminal core was asked to run. */
 const everyLaunch = (calls: ReadonlyArray<Call>) =>
-  Arr.map(
-    Arr.filter(calls, (call) => (call.argv ?? [])[1] === "start"),
-    (call) => (call.argv ?? []).slice((call.argv ?? []).indexOf("--") + 1),
-  );
+  Arr.filterMap(calls, (call) => {
+    const argv = call.params?.argv;
+    return call.cmd === "terminal.run" && Arr.isArray(argv)
+      ? Result.succeed(Arr.filter(argv, isString))
+      : Result.failVoid;
+  });
 
 /** Two pieces of work under one scope of preferences, the second with a model of its own. */
 const scoped = enveloped({ name: "agent-scoped", input: {}, success: Schema.String });
@@ -3566,7 +3637,7 @@ test("preferences in scope reach the work inside it, and the work's own still wi
         Effect.orDie,
       );
       expect(said).toBe("one+two");
-      expect(Arr.map(everyLaunch(yield* rig.calls()), (args) => args.slice(0, 2))).toEqual([
+      expect(Arr.map(everyLaunch(yield* rig.calls()), (args) => args.slice(1, 3))).toEqual([
         ["--model", "sonnet"],
         ["--model", "haiku"],
       ]);
@@ -3578,16 +3649,27 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([null, { verdict: "clean", note: "back" }]);
+        yield* rig.queueOutputs([null]);
         yield* interrupted("r1", prompted("Your task for this step"));
         // The halting host recovers the work too, and must not give up its wait while the
         // agent it is halting is still there to be seen.
         yield* session(halted("r1"), { collectMs: 30_000 });
 
         // The operator changes the model between the two hosts; the work already has one.
-        const result = yield* session(started("r1"), { model: "sonnet" });
+        const result = yield* session(
+          Effect.gen(function* () {
+            const resumed = yield* Effect.forkChild(started("r1"));
+            yield* until(rig.calls().pipe(Effect.map((calls) => everyLaunch(calls).length === 2)));
+            yield* (yield* FileSystem.FileSystem).writeFileString(
+              outputPath("r1"),
+              `{"verdict":"clean","note":"back"}`,
+            );
+            return yield* Fiber.join(resumed);
+          }),
+          { model: "sonnet" },
+        );
         expect(result._tag === "Success" && result.success.note).toBe("back");
-        expect(Arr.map(everyLaunch(yield* rig.calls()), (args) => args.slice(0, 2))).toEqual([
+        expect(Arr.map(everyLaunch(yield* rig.calls()), (args) => args.slice(1, 3))).toEqual([
           ["--model", "opus"],
           ["--model", "opus"],
         ]);
@@ -3643,20 +3725,15 @@ const numericAsk = () => ({
 });
 
 /** A terminal the previous naming code opened, before this host reconciles its work. */
-const openOldNumeric = (herdr: FakeHerdr, core = false) =>
+const openOldNumeric = (herdr: Herdr) =>
   Effect.gen(function* () {
-    if (core)
-      yield* herdr.agentLaunch({
-        name: oldNumericName,
-        argv: ["claude", "--model", "opus"],
-        cwd: rig.projectDir,
-        env: {},
-        labels: { run: numericRun, operation: numericRole },
-      });
-    else {
-      const tab = yield* herdr.tabCreate({ label: "Reviewer", cwd: rig.projectDir });
-      yield* herdr.agentStart({ name: oldNumericName, kind: "claude", paneId: tab.paneId });
-    }
+    yield* herdr.agentLaunch({
+      name: oldNumericName,
+      argv: ["claude", "--model", "opus"],
+      cwd: rig.projectDir,
+      env: {},
+      labels: { run: numericRun, operation: numericRole },
+    });
     return Option.getOrThrow(
       Arr.findFirst(yield* herdr.agentList(), (one) => one.name === oldNumericName),
     );
@@ -3666,7 +3743,7 @@ test("a recorded legacy numeric agent keeps its name through replay, aliases, re
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([null, null, null, null]);
-      const herdr = new FakeHerdr(rig.pluginEnv());
+      const herdr = new Herdr(rig.pluginEnv());
       const old = yield* openOldNumeric(herdr);
       const terminalId = Option.getOrThrow(Option.fromNullishOr(old.terminalId));
       const ask = numericAsk();
@@ -3728,7 +3805,7 @@ test("a recorded legacy numeric agent keeps its name through replay, aliases, re
           expect(yield* agents.revive(followup)).toBe(false);
           expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
 
-          yield* herdr.paneClose(old.paneId);
+          yield* herdr.terminalKill(old.paneId);
           expect(yield* agents.revive(followup)).toBe(true);
           expect(yield* agents.revive(followup)).toBe(false);
           expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
@@ -3750,18 +3827,13 @@ for (const identity of [
   test(`a listed legacy numeric agent with ${identity} starts no duplicate`, () =>
     runEffect(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const core = identity !== "no identity";
-        if (core) {
-          yield* rig.startCore();
-          yield* fs.writeFileString(`${rig.userDir}/config.json`, '{ "terminal_backend": "core" }');
-        }
-        const env = rig.pluginEnv(core ? { HERDR_SOCKET_PATH: "" } : {});
-        const herdr = new FakeHerdr(env);
+        const marked = identity !== "no identity";
+        const env = rig.pluginEnv();
+        const herdr = new Herdr(env);
         yield* rig.queueOutputs([null]);
-        const old = yield* openOldNumeric(herdr, core);
+        const old = yield* openOldNumeric(herdr);
         const ask = numericAsk();
-        if (core) {
+        if (marked) {
           const started = {
             ...Struct.omit(ask, ["prompt"]),
             sequence: identity === "another generation" ? 1 : 2,
@@ -3790,10 +3862,7 @@ for (const identity of [
           expect(Result.isFailure(result) && result.failure.reason).toContain("generation");
         }
         const calls = yield* rig.calls();
-        expect(
-          everyLaunch(calls).length +
-            Arr.filter(calls, (call) => call.cmd === "terminal.run").length,
-        ).toBe(1);
+        expect(everyLaunch(calls)).toHaveLength(1);
         expect(Arr.map(yield* herdr.agentList(), (one) => one.name)).toEqual([oldNumericName]);
         if (identity !== "exact core marker") {
           expect(prompts(calls)).toEqual([]);
@@ -3838,37 +3907,24 @@ test("an exhaustion result is observed only after its operation's usage wait is 
     }),
   ));
 
-test("an agent's launch record keeps the harness session herdr reports for it", () =>
+test("an agent's launch record keeps the harness session its launch names", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
-      class Sessioned extends FakeHerdr {
-        override agentList() {
-          return super.agentList().pipe(
-            Effect.map((agents) =>
-              Arr.map(agents, (one) => ({
-                ...one,
-                agentSession: { kind: "claude", value: "s-1" },
-              })),
-            ),
-          );
-        }
-      }
-      yield* session(started("r1"), { herdr: new Sessioned(rig.pluginEnv()) });
+      yield* session(started("r1"));
       const launched = yield* launchOf("r1");
+      const args = launchArgs(yield* rig.calls());
+      expect(args).toContain("--session-id");
       expect(launched.terminalId).toBeDefined();
-      expect(launched.agentSession).toEqual({ kind: "claude", value: "s-1" });
+      expect(launched.agentSession).toEqual({
+        kind: "claude",
+        value: args[args.indexOf("--session-id") + 1] ?? "",
+      });
     }),
   ));
 
 const harnessesStarted = (calls: ReadonlyArray<Call>) =>
-  Arr.map(
-    Arr.filter(calls, (call) => (call.argv ?? [])[1] === "start"),
-    (call) =>
-      Option.getOrUndefined(
-        Arr.findFirst(call.argv ?? [], (arg) => arg === "claude" || arg === "codex"),
-      ),
-  );
+  Arr.map(everyLaunch(calls), (argv) => argv[0]);
 
 test("work whose Subscription is Exhausted starts on the first chain entry with room, and its record says why", () =>
   runEffect(
@@ -3923,18 +3979,29 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([null, { verdict: "clean", note: "back" }]);
+        yield* rig.queueOutputs([null]);
         const chain = { fallbacks: Effect.succeed(["codex"]) };
         yield* interrupted("r1", prompted("Your task for this step"), { ...claudeOut, ...chain });
         yield* session(halted("r1"), { collectMs: 30_000 });
 
         // Claude has room again by the time the host comes back.
-        const result = yield* session(started("r1"), chain);
+        const result = yield* session(
+          Effect.gen(function* () {
+            const resumed = yield* Effect.forkChild(started("r1"));
+            yield* until(rig.calls().pipe(Effect.map((calls) => everyLaunch(calls).length === 2)));
+            yield* (yield* FileSystem.FileSystem).writeFileString(
+              outputPath("r1"),
+              `{"verdict":"clean","note":"back"}`,
+            );
+            return yield* Fiber.join(resumed);
+          }),
+          chain,
+        );
         expect(result._tag === "Success" && result.success.note).toBe("back");
         const calls = yield* rig.calls();
         expect(harnessesStarted(calls)).toEqual(["codex", "codex"]);
-        for (const call of Arr.filter(calls, (call) => call.cmd === "agent start"))
-          expect(call.argv).toContain("--dangerously-bypass-hook-trust");
+        for (const argv of everyLaunch(calls))
+          expect(argv).toContain("--dangerously-bypass-hook-trust");
       }),
     ),
   120_000,
@@ -3963,7 +4030,7 @@ const runsOut = (agent: string, times = 1) =>
   }).pipe(Effect.orDie);
 
 const closedPanes = (calls: ReadonlyArray<Call>) =>
-  Arr.filter(calls, (call) => (call.argv ?? [])[0] === "pane" && (call.argv ?? [])[1] === "close");
+  Arr.filter(calls, (call) => call.cmd === "terminal.kill");
 const chain = { fallbacks: Effect.succeed(["codex"]) };
 
 test("a waiting agent switches when a fallback is configured after it ran out", () =>
@@ -4078,6 +4145,8 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
+        // Its turn ends with the harness's error, not as an idle that is reminded.
+        core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
         yield* session(
           Effect.gen(function* () {
@@ -4126,6 +4195,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
+        core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
         yield* session(
           Effect.gen(function* () {
@@ -4134,7 +4204,12 @@ test(
             yield* until(parkedSays("minutes idle"));
             expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
           }),
-          { ...onPi, collectMs: 60_000, pollMs: 1_000 },
+          {
+            ...onPi,
+            herdr: new UnseenTurn(rig.pluginEnv()),
+            collectMs: 60_000,
+            pollMs: 1_000,
+          },
         );
       }),
     ),
@@ -4258,10 +4333,12 @@ test("an agent that runs out mid-work is closed and replaced by one on the next 
       expect(closedPanes(calls)).toHaveLength(1);
       expect(harnessesStarted(calls)).toEqual(["claude", "codex"]);
       const successor = agentName("r1", "review", null, 2);
-      const starts = Arr.filter(calls, (call) => call.cmd === "agent start");
-      expect(starts[0]?.argv).not.toContain("--dangerously-bypass-hook-trust");
-      expect(starts[1]?.argv).toContain("--dangerously-bypass-hook-trust");
-      expect(Arr.some(calls, (call) => Arr.contains(call.argv ?? [], successor))).toBe(true);
+      const starts = everyLaunch(calls);
+      expect(starts[0]).not.toContain("--dangerously-bypass-hook-trust");
+      expect(starts[1]).toContain("--dangerously-bypass-hook-trust");
+      expect(
+        Arr.some(calls, (call) => call.cmd === "terminal.run" && call.params?.name === successor),
+      ).toBe(true);
       const prompt = yield* read(`${dir}/agents/r1/review.r2.prompt.md`);
       const handed = Option.getOrElse(
         pipe(prompt, Str.indexOf("Another agent (claude/opus) started this work")),
@@ -4299,10 +4376,8 @@ test("a repair after a Fallback goes to the agent that took over, and starts no 
       expect(harnessesStarted(calls)).toEqual(["claude", "codex"]);
       const successor = agentName("r1", "review", null, 2);
       const promptedTo = (agent: string) =>
-        Arr.filter(
-          calls,
-          (call) => (call.argv ?? [])[1] === "prompt" && (call.argv ?? [])[2] === agent,
-        ).length;
+        Arr.filter(calls, (call) => call.cmd === "terminal.send" && call.params?.terminal === agent)
+          .length;
       // The agent that ran out had its step only; its successor had its step and the repair.
       expect([promptedTo(agentFor("r1")), promptedTo(successor)]).toEqual([1, 2]);
     }).pipe(Effect.scoped),
@@ -4341,15 +4416,13 @@ test(
             yield* Effect.forkScoped(runsOut(agentFor("r1")));
             yield* interrupted("r1", parked("r1"), {
               ...chain,
-              herdr: new FakeHerdr(
-                rig.pluginEnv({ FAKE_HERDR_FAIL: `{"pane close":"pane is busy"}` }),
-              ),
+              herdr: new Refusing({ "terminal.kill": "pane is busy" }),
             });
           }),
         );
         expect(harnessesStarted(yield* rig.calls())).toEqual(["claude"]);
         expect(yield* controlOf(PARKED, "r1")).toContain(
-          "would not close (herdr pane close failed (exit 1): pane is busy)",
+          "would not close (core terminal.kill failed: pane is busy)",
         );
 
         const result = yield* releasedInto("r1", { ...chain, collectMs: 30_000 });
@@ -4501,10 +4574,9 @@ test("a quota incident survives a host crash before its collection result is rec
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const managed = yield* managedCodex;
-      yield* rig.queueOutputs([
-        null,
-        { verdict: "clean", note: "recovered the unrecorded incident" },
-      ]);
+      // The crash precedes any completed turn that could record a collection result.
+      core.reportedOnly([agentFor("r1")]);
+      yield* rig.queueOutputs([{ verdict: "clean", note: "recovered the unrecorded incident" }]);
       const now = yield* Clock.currentTimeMillis;
       const exhausted: UsageReading = {
         subscription: "chatgpt",
@@ -4544,12 +4616,13 @@ test("a quota incident survives a host crash before its collection result is rec
           fs.writeFileString(path, data, options).pipe(Effect.tap(() => pauseAfterWrite(path))),
         rename: (from, to) => fs.rename(from, to).pipe(Effect.tap(() => pauseAfterWrite(to))),
       };
-      const herdr = new FakeHerdr(rig.pluginEnv());
+      const herdr = new UnseenTurn(rig.pluginEnv());
       const over = {
         herdr,
         harness: "codex",
         model: "default",
         ports: managed.ports,
+        readyMs: 1_000,
         fallbacks: Effect.succeed([]),
         collectMs: 2_000,
       };
@@ -4566,7 +4639,7 @@ test("a quota incident survives a host crash before its collection result is rec
       const terminal = Option.getOrThrow(
         Arr.findFirst(yield* herdr.agentList(), (one) => one.name === agentFor("r1")),
       );
-      yield* herdr.paneClose(terminal.paneId);
+      yield* herdr.terminalKill(terminal.paneId);
 
       const result = yield* session(started("r1").pipe(Effect.timeoutOption("2 minutes")), {
         ...over,
@@ -4579,7 +4652,10 @@ test("a quota incident survives a host crash before its collection result is rec
         ]),
         ownReading: () => Effect.succeed(null),
       });
-      expect(result._tag).toBe("Some");
+      expect(
+        result._tag,
+        `${yield* read(`${dir}/agents/r1/agents.log`)}\n${yield* controlOf(PARKED, "r1")}`,
+      ).toBe("Some");
       expect(
         result._tag === "Some" && result.value._tag === "Success" && result.value.success.note,
       ).toBe("recovered the unrecorded incident");
@@ -4645,6 +4721,7 @@ test("a quota wait does not revive a dead managed Codex server before its usage 
           harness: "codex",
           model: "default",
           ports: managed.ports,
+          readyMs: 1_000,
           fallbacks: Effect.succeed([]),
           readings: Effect.sync(() => [machine]),
           ownReading: (agent) => Effect.succeed(agent === agentFor("r1") ? exhausted : null),
@@ -5275,9 +5352,9 @@ test("an agent's later work goes to the one that took over from it, and asking f
       const fixedBy = Arr.filter(
         calls,
         (call) =>
-          (call.argv ?? [])[1] === "prompt" &&
-          (call.argv ?? [])[2] === successor &&
-          pipe((call.argv ?? [])[3] ?? "", Str.includes("fix.r2.prompt.md")),
+          call.cmd === "terminal.send" &&
+          call.params?.terminal === successor &&
+          pipe(String(call.params?.text), Str.includes("fix.r2.prompt.md")),
       );
       expect(fixedBy).toHaveLength(1);
     }),
@@ -5368,7 +5445,7 @@ test("a definition's own preference sits under a scope's, and parallel scopes ke
         Effect.scoped,
         Effect.orDie,
       );
-      const models = Arr.map(everyLaunch(yield* rig.calls()), (args) => args[1]);
+      const models = Arr.map(everyLaunch(yield* rig.calls()), (args) => args[2]);
       expect([...models].sort((a, b) => pipe(a ?? "", Str.localeCompare(b ?? "")))).toEqual([
         "haiku",
         "opus",
@@ -5413,7 +5490,7 @@ test("a definition's preference for a role reaches that role's work, under a sco
       );
       const chosen = Arr.map(everyLaunch(yield* rig.calls()), (args) => {
         const effort = args.indexOf("--effort");
-        return `${args[1]}${effort === -1 ? "" : `/${args[effort + 1]}`}`;
+        return `${args[2]}${effort === -1 ? "" : `/${args[effort + 1]}`}`;
       });
       // The role's model and effort over the workflow's; the work's own model and a scope's
       // over the role's, each keeping the role's effort where it names none of its own.
@@ -5471,7 +5548,7 @@ test("each seat of a panel is its own agent, persona and instructions; the role'
               -".persona.md".length,
             ),
           );
-          return [operation, `${args[1]}${effort === -1 ? "" : `/${args[effort + 1]}`}`];
+          return [operation, `${args[2]}${effort === -1 ? "" : `/${args[effort + 1]}`}`];
         }),
       );
       expect(chosen).toEqual({
@@ -5563,10 +5640,7 @@ test("a window written to the config between two launches reaches the second, on
         }),
       );
 
-      const windows = Arr.map(
-        Arr.filter(yield* rig.calls(), (call) => (call.argv ?? [])[1] === "start"),
-        (call) => windowOf(call.argv ?? []),
-      );
+      const windows = Arr.map(everyLaunch(yield* rig.calls()), windowOf);
       expect(windows).toEqual(["400000", "500000"]);
     }),
   ));
@@ -5627,54 +5701,7 @@ test("a window Claude Code would not take, hand-written into the config, stops t
       expect(why).toContain("claude_auto_compact_window");
       expect(why).toContain("50000");
       const cmds = yield* rig.cmds();
-      expect(cmds).not.toContain("tab create");
-      expect(cmds).not.toContain("agent start");
-    }),
-  ));
-
-test("an agent is given longer than herdr's default to be ready in a checkout it has never opened", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
-      yield* session(started("r1"));
-      const argv =
-        Option.getOrUndefined(
-          Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "agent start"),
-        )?.argv ?? [];
-      // herdr waits 30s by default, and a first start — trust, plugins, MCP servers — takes longer.
-      expect(Number(argv[argv.indexOf("--timeout") + 1])).toBeGreaterThan(30_000);
-    }),
-  ));
-
-test("a pane whose shell is not up yet is started in again, not failed", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
-      const result = yield* session(started("r1"), {
-        herdr: new FakeHerdr(
-          rig.pluginEnv({
-            FAKE_HERDR_FAIL: `{"agent start":"agent target pane 1-2 is not an available shell"}`,
-            FAKE_HERDR_FAIL_TIMES: "2",
-          }),
-        ),
-      });
-      expect(result._tag === "Success" && result.success.note).toBe("done");
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(3);
-    }),
-  ));
-
-test("an agent blocked during startup is waited for, not taken for a failed start", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
-      // herdr answers agent_not_ready at once and keeps the name: the agent is there,
-      // behind a first-run dialog a human answers.
-      const result = yield* session(started("r1"), {
-        herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_BLOCK_START: "2" })),
-      });
-      expect(result._tag === "Success" && result.success.note).toBe("done");
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
-      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain("blocked during startup");
+      expect(cmds).not.toContain("terminal.run");
     }),
   ));
 
@@ -5687,45 +5714,43 @@ const settled = (runId: string): Reached =>
     return status === "suspended" || status === "failed";
   });
 
-const parkedOn = (failing: string) =>
+const parkedOn = (herdr: Herdr) =>
   Effect.gen(function* () {
-    yield* interrupted("r1", settled("r1"), {
-      herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_FAIL: failing })),
-    });
+    yield* interrupted("r1", settled("r1"), { herdr });
     expect(yield* statusNow("r1")).toBe("suspended");
     return yield* controlOf(PARKED, "r1");
   });
 
-test("a start herdr refused parks, saying what herdr said", () =>
+test("a start core refused parks, saying what core said", () =>
   runEffect(
     Effect.gen(function* () {
-      const why = yield* parkedOn(`{"agent start":"claude exited: no API key"}`);
+      const why = yield* parkedOn(new Refusing({ "terminal.run": "claude exited: no API key" }));
       expect(why).toContain("claude exited: no API key");
       expect(why).toContain(promptPath("r1"));
     }),
   ));
 
-test("a herdr that cannot say what it has parks the work rather than starting an agent", () =>
+test("a core that cannot say what it has parks the work rather than starting an agent", () =>
   runEffect(
     Effect.gen(function* () {
-      const why = yield* parkedOn(`{"agent list":"herdr is not answering"}`);
-      expect(why).toContain("herdr cannot say which agents it has");
-      expect(why).toContain("herdr is not answering");
+      const why = yield* parkedOn(new Refusing({ "terminal.list": "core is not answering" }));
+      expect(why).toContain("core cannot say which agents it has");
+      expect(why).toContain("core is not answering");
       expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("herdr-unavailable");
       // What uncertainty must never be rounded down to.
       expect(why).toContain("Nothing here says the agent did no work.");
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(0);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(0);
     }),
   ));
 
 test("a step whose work was never sent parks, naming the file its work is in", () =>
   runEffect(
     Effect.gen(function* () {
-      const why = yield* parkedOn(`{"agent prompt":"herdr lost the connection"}`);
+      const why = yield* parkedOn(new Refusing({ "terminal.send": "core lost the connection" }));
       expect(why).toContain("was not given its work");
-      expect(why).toContain("herdr lost the connection");
+      expect(why).toContain("core lost the connection");
       expect(why).toContain(promptPath("r1"));
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
     }),
   ));
 
@@ -5737,7 +5762,7 @@ test("a stop closes the agent this Run launched, and says what it could not clos
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
       yield* session(started("r1"));
       const refused = yield* session(halted("r1"), {
-        herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_FAIL: `{"pane close":"pane is busy"}` })),
+        herdr: new Refusing({ "terminal.kill": "pane is busy" }),
       });
       expect(refused.stopped).toEqual([]);
       expect(Arr.join(refused.left, "\n")).toContain(agentFor("r1"));
@@ -5750,43 +5775,39 @@ test("a stop leaves another process that took the Run's agent name", () =>
     Effect.gen(function* () {
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
       yield* session(started("r1"));
-      yield* rig.reincarnate(agentFor("r1"));
+      yield* rig.dropAgent(agentFor("r1"));
+      yield* rig.addAgent(agentFor("r1"));
       expect(yield* session(halted("r1"))).toEqual({ stopped: [], left: [] });
-      expect(yield* rig.cmds()).not.toContain("pane close");
+      expect(yield* rig.cmds()).not.toContain("terminal.kill");
     }),
   ));
 
-test("a stop of a Run that launched no agent needs nothing from herdr", () =>
+test("a stop of a Run that launched no agent needs nothing from core", () =>
   runEffect(
     Effect.gen(function* () {
-      const halt = yield* session(halted("r1"), {
-        herdr: new FakeHerdr(
-          rig.pluginEnv({ FAKE_HERDR_FAIL: `{"agent list":"herdr is not answering"}` }),
-        ),
-      });
+      const halt = yield* session(halted("r1"), { herdr: coreGone() });
       expect(halt).toEqual({ stopped: [], left: [] });
-      expect(yield* rig.cmds()).not.toContain("agent list");
+      expect(yield* rig.cmds()).not.toContain("terminal.list");
     }),
   ));
 
 /** Another Run's implementer, live in this checkout and registered as it. */
 const liveImplementer = Effect.gen(function* () {
-  yield* rig.addAgent("impl-live", "9-1");
-  const env = rig.pluginEnv();
-  yield* registerAgent(scopeFor(env, rig.projectDir), {
+  const at = yield* rig.addAgent("impl-live", rig.projectDir, { run: "r-building" });
+  yield* registerAgent(scopeFor(rig.projectDir), {
     role: "implementer",
     agent: "impl-live",
-    paneId: "9-1",
+    paneId: at,
     workspaceId: null,
     runId: "r-building",
     workflow: "implement",
     at: "2026-09-23T10:00:00Z",
-    incarnation: { terminalId: "term-impl-live", agentSession: null },
+    incarnation: { terminalId: at, agentSession: null, backend: "core" },
   }).pipe(Effect.provide(recordsAt(dir)));
 });
 
 /** A herdr that takes a prompt and never answers, so nobody can say it arrived. */
-class SilentPrompts extends FakeHerdr {
+class SilentPrompts extends Herdr {
   override agentPrompt() {
     return Effect.fail(new HerdrError({ message: "herdr went away mid-prompt", detail: "" }));
   }
@@ -5836,23 +5857,17 @@ test("a hand-off nobody can say arrived parks until a human says what became of 
   ));
 
 /** An agent of some Run, live and registered here as herdr started it. */
-const liveIn = Effect.fn("test.liveIn")(function* (
-  runId: string,
-  role: string,
-  agent: string,
-  paneId: string,
-) {
-  yield* rig.addAgent(agent, paneId);
-  const env = rig.pluginEnv();
-  yield* registerAgent(scopeFor(env, rig.projectDir), {
+const liveIn = Effect.fn("test.liveIn")(function* (runId: string, role: string, agent: string) {
+  const at = yield* rig.addAgent(agent, rig.projectDir, { run: runId });
+  yield* registerAgent(scopeFor(rig.projectDir), {
     role,
     agent,
-    paneId,
+    paneId: at,
     workspaceId: null,
     runId,
     workflow: "plan",
     at: "2026-09-30T10:00:00Z",
-    incarnation: { terminalId: `term-${agent}`, agentSession: null },
+    incarnation: { terminalId: at, agentSession: null, backend: "core" },
   }).pipe(Effect.provide(recordsAt(dir)));
 });
 
@@ -5971,11 +5986,11 @@ test("a placed Run has a handoffs directory before any agent of it is launched",
 test("a question and a hand-off stay in the asking Run's lineage, whoever else registered the role here", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* liveIn("r-plan", "planner", "plan-grill", "9-1");
-      yield* liveIn("r-plan.implement", "implementer", "plan-build", "9-2");
+      yield* liveIn("r-plan", "planner", "plan-grill");
+      yield* liveIn("r-plan.implement", "implementer", "plan-build");
       // Started later from the same place, in the same roles.
-      yield* liveIn("r-other", "planner", "other-grill", "9-3");
-      yield* liveIn("r-other.implement", "implementer", "other-build", "9-4");
+      yield* liveIn("r-other", "planner", "other-grill");
+      yield* liveIn("r-other.implement", "implementer", "other-build");
       const kept = yield* registeredAt(dir);
       expect(Arr.map(kept, (entry) => entry.agent)).toEqual([
         "plan-grill",
@@ -6015,8 +6030,7 @@ test("a question and a hand-off stay in the asking Run's lineage, whoever else r
 test("seats launched together all stay registered, and a gone agent's entry leaves with the next registration", () =>
   runEffect(
     Effect.gen(function* () {
-      const env = rig.pluginEnv();
-      const scope = scopeFor(env, rig.projectDir);
+      const scope = scopeFor(rig.projectDir);
       const seat = (agent: string, runId: string, at: string) => ({
         role: "reviewer",
         agent,
@@ -6040,8 +6054,7 @@ test("seats launched together all stay registered, and a gone agent's entry leav
 test("a lineage lookup leaves every register as it found it, and registrations at once all land", () =>
   runEffect(
     Effect.gen(function* () {
-      const env = rig.pluginEnv();
-      const scope = scopeFor(env, rig.projectDir);
+      const scope = scopeFor(rig.projectDir);
       const elsewhere = { ...scope, session: `${rig.root}/other-herd.sock` };
       const seat = (agent: string) => ({
         role: "reviewer",
@@ -6110,13 +6123,7 @@ const isSet = (name: string, runId: string) =>
 
 /** What was typed into an agent's pane, in order, without a leading delivery token. */
 const prompts = (calls: ReadonlyArray<Call>) =>
-  Arr.map(
-    Arr.filter(
-      calls,
-      (call) => (call.argv ?? [])[0] === "agent" && (call.argv ?? [])[1] === "prompt",
-    ),
-    (call) => pipe((call.argv ?? [])[3] ?? "", Str.replace(/^collie-delivery:\S+\n/, "")),
-  );
+  Arr.map(sentTexts(calls), Str.replace(/^collie-delivery:\S+\n/, ""));
 
 /** One thing an operator says to the run's agent, through the host's own service. */
 const say = (runId: string, text: string, request: string, mode?: "boundary" | "now") =>
@@ -6198,7 +6205,7 @@ test("an unsupported busy delivery survives restart and reaches the idle agent o
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
       const codex = { harness: "codex", model: "default" };
       yield* session(started("r1"), codex);
-      const busy = new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" }));
+      const busy = new Statuses(["working"]);
       const text = "Revise the plan.\n  Keep my exact words.  ";
       for (let attempt = 0; attempt < 2; attempt++) {
         const queued = yield* session(say("r1", text, "queued-1", "now"), {
@@ -6251,7 +6258,7 @@ test.each([true, false])(
               }),
             ),
           ),
-          { herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })) },
+          { herdr: new Statuses(["working"]) },
         );
         expect(queued).toMatchObject({ delivered: false, queued: true });
         const retry = Agents.pipe(
@@ -6297,7 +6304,7 @@ test("a queued retry keeps its accepted recipient even when the retry names a mi
       const queued = yield* session(
         say("r1", "Keep this recipient.", "accepted-recipient", "now"),
         {
-          herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })),
+          herdr: new Statuses(["working"]),
         },
       );
       expect(queued).toMatchObject({ delivered: false, queued: true });
@@ -6361,22 +6368,27 @@ test.each([
             }),
           ),
         ),
-        { herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })) },
+        { herdr: new Statuses(["working"]) },
       );
       expect(queued).toMatchObject({ delivered: false, queued: true });
       const next = yield* session(
         Agents.pipe(Effect.flatMap((agents) => agents.launch({ ...ask, sequence: 2 }))),
       );
       expect(next.agent).not.toBe(first.agent);
+      yield* until(
+        new Herdr(rig.pluginEnv())
+          .agentStatus(first.agent)
+          .pipe(Effect.map((status) => status === "idle")),
+      );
       yield* session(tendIdle);
       yield* session(tendIdle);
       const comments = Arr.filter(
         yield* rig.calls(),
         (call) =>
-          call.cmd === "agent prompt" &&
-          pipe(call.argv?.[3] ?? "", Str.includes("Only the named planner")),
+          call.cmd === "terminal.send" &&
+          pipe(String(call.params?.text), Str.includes("Only the named planner")),
       );
-      expect(Arr.map(comments, (call) => call.argv?.[2])).toEqual([first.agent]);
+      expect(Arr.map(comments, (call) => call.params?.terminal)).toEqual([first.agent]);
     }),
   ),
 );
@@ -6401,7 +6413,7 @@ test("a queued operation follows a harness switch and preserves its long comment
             }),
           ),
         ),
-        { herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })) },
+        { herdr: new Statuses(["working"]) },
       );
       const next = yield* session(
         Effect.gen(function* () {
@@ -6422,17 +6434,22 @@ test("a queued operation follows a harness switch and preserves its long comment
           });
         }),
       );
+      yield* until(
+        new Herdr(rig.pluginEnv())
+          .agentStatus(next.agent)
+          .pipe(Effect.map((status) => status === "idle")),
+      );
       yield* session(tendIdle);
       yield* session(tendIdle);
       const calls = Arr.filter(
         yield* rig.calls(),
         (call) =>
-          call.cmd === "agent prompt" &&
-          call.argv?.[2] === next.agent &&
-          pipe(call.argv?.[3] ?? "", Str.includes("Their message is in")),
+          call.cmd === "terminal.send" &&
+          call.params?.terminal === next.agent &&
+          pipe(String(call.params?.text), Str.includes("Their message is in")),
       );
       expect(calls).toHaveLength(1);
-      const typed = calls[0]?.argv?.[3] ?? "";
+      const typed = String(calls[0]?.params?.text);
       expect(typed).toContain("From the human, in Desktop");
       const file = /Their message is in (\S+)\./.exec(typed)?.[1];
       expect(file).toBeDefined();
@@ -6449,7 +6466,7 @@ test("an uncertain queued submission is retained and never automatically repeate
       yield* session(started("r1"), codex);
       yield* session(say("r1", "keep this once", "uncertain-queue", "now"), {
         ...codex,
-        herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })),
+        herdr: new Statuses(["working"]),
       });
       yield* session(tendIdle, { herdr: new SilentPrompts(rig.pluginEnv()) });
       yield* session(tendIdle);
@@ -6478,12 +6495,12 @@ test(
         yield* rig.queueOutputs([{ verdict: "clean", note: "after the hold" }]);
         // Submitted rather than awaited: held work parks, so there is nothing to wait for.
         yield* interrupted("r1", suspended("r1"));
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(0);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(0);
 
         yield* control("hold", "r1", false);
         const result = yield* releasedInto("r1");
         expect(result._tag === "Success" && result.success.note).toBe("after the hold");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -6500,21 +6517,21 @@ test(
         yield* interrupted("r1", stoppedOnce("r1", "Your task for this step"));
         // The agent was launched and is still holding the work: stopping a Run is not
         // halting its agent, which is its own action.
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
 
         yield* control("stop", "r1", false);
         yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"resumed"}`);
         const result = yield* releasedInto("r1");
         expect(result._tag === "Success" && result.success.note).toBe("resumed");
         // One launch across the stop: the wait came back to the agent that was recorded.
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
 );
 
 /** An operator stopping the Run once its repair has gone out. */
-class StopsAtRepair extends FakeHerdr {
+class StopsAtRepair extends Herdr {
   override agentPrompt(target: string, text: string) {
     const stop = pipe(text, Str.includes("not usable")) ? control("stop", "r1", true) : Effect.void;
     return super.agentPrompt(target, text).pipe(Effect.tap(() => stop));
@@ -6541,7 +6558,7 @@ test(
         yield* control("stop", "r1", false);
         const result = yield* releasedInto("r1");
         expect(result._tag === "Success" && result.success.note).toBe("again");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(2);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(2);
       }),
     ),
   120_000,
@@ -6551,7 +6568,7 @@ test(
  * A dialog up when the repair goes out, and an operator stopping the Run then: the stop
  * closes the agent, so every later try finds no agent to take it.
  */
-class ClosedAtRepair extends FakeHerdr {
+class ClosedAtRepair extends Herdr {
   private tries = 0;
   override agentPrompt(target: string, text: string) {
     if (!pipe(text, Str.includes("not usable"))) return super.agentPrompt(target, text);
@@ -6585,7 +6602,7 @@ test(
         expect(result._tag === "Success" && result.success.note).toBe("after the stop");
         // The halted agent is started again with its prompt, and what it writes is read:
         // nobody is asked to repair an Output that agent never wrote.
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(2);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(2);
         expect(sent(yield* rig.calls(), "not usable")).toBe(0);
       }),
     ),
@@ -6611,7 +6628,7 @@ test(
         yield* control("stop", "r1", false);
         const result = yield* releasedInto("r1");
         expect(result._tag === "Success" && result.success.note).toBe("on its own");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -6672,12 +6689,11 @@ test("a list of work is one agent's, each item its own prompt and its own Output
       expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
       // One agent for the whole list, which is what makes the second item a hand-off
       // rather than an agent reading its way back in.
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
-      const start =
-        Option.getOrUndefined(
-          Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "agent start"),
-        )?.argv ?? [];
-      expect(start).toContain(agentName("r1", "sweep", null, 1));
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
+      const start = Option.getOrUndefined(
+        Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "terminal.run"),
+      );
+      expect(start?.params?.name).toBe(agentName("r1", "sweep", null, 1));
       // Kept apart all the same: an item's prompt and its Output are its own.
       expect(yield* read(`${dir}/agents/r1/01-api.prompt.md`)).toContain("Do 01-api.");
       expect(yield* read(`${dir}/agents/r1/02-ui.prompt.md`)).toContain("Do 02-ui.");
@@ -6691,7 +6707,7 @@ test("an item whose identity is not a name of its own starts no agent at all", (
       expect(result._tag === "Failure" && result.failure.reason).toBe(
         'operation "../escape" contains a path separator',
       );
-      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toEqual([]);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toEqual([]);
     }),
   ));
 
@@ -6730,7 +6746,7 @@ test("instructions naming what nothing fills are refused before any tab or agent
         "review: its instructions name {{plan.file}}, {{not a name}}, which nothing this work was given fills",
       );
       const cmds = yield* rig.cmds();
-      expect(Arr.filter(cmds, (cmd) => cmd === "tab create" || cmd === "agent start")).toEqual([]);
+      expect(Arr.filter(cmds, (cmd) => cmd === "terminal.run")).toEqual([]);
     }),
   ));
 
@@ -6846,7 +6862,7 @@ const builderBusy = Effect.gen(function* () {
 });
 
 /** A pane that takes every prompt without herdr seeing a turn come of it. */
-class BusyPanes extends FakeHerdr {
+class BusyPanes extends Herdr {
   override agentPrompt(target: string, text: string) {
     return super.agentPrompt(target, text).pipe(Effect.as("unobserved" as const));
   }
@@ -7068,7 +7084,7 @@ const slowCompaction = () => {
   return { state, ports };
 };
 
-const until = (reached: Reached) =>
+const until = <E, R>(reached: Effect.Effect<boolean, E, R>) =>
   Effect.gen(function* () {
     for (let tries = 0; !(yield* reached); tries++) {
       if (tries === 3_000) return yield* Effect.die(new Error("never got that far"));
@@ -7289,27 +7305,45 @@ test("a boundary whose context cannot be sampled records no context line, never 
   ));
 
 /** What a reused agent was asked and told, and what herdr said of it, in order. */
-class Watched extends FakeHerdr {
+class Watched extends Herdr {
   readonly seen: string[] = [];
+  private prompted = false;
+  // Held until the boundary says it waits: any number of earlier polls may read it first.
+  constructor(private readonly held: AgentStatus) {
+    super(rig.pluginEnv());
+  }
   override agentStatus(target: string) {
-    return super
-      .agentStatus(target)
-      .pipe(Effect.tap((status) => Effect.sync(() => this.seen.push(status))));
+    const held = this.held;
+    const prompted = this.prompted;
+    return Effect.all([
+      super.agentStatus(target),
+      FileSystem.FileSystem.use((fs) => fs.readFileString(`${dir}/agents/r1/agents.log`)).pipe(
+        Effect.map(Str.includes("still working; 02-ui waits for its turn to end")),
+        Effect.orElseSucceed(() => false),
+      ),
+    ]).pipe(
+      Effect.map(([actual, waited]) => {
+        const status = !prompted || actual === "working" ? actual : waited ? "idle" : held;
+        this.seen.push(status);
+        return status;
+      }),
+    );
   }
   override agentPrompt(target: string, text: string) {
+    this.prompted = true;
     this.seen.push(`prompt ${/([^/\s]+)\.prompt\.md/.exec(text)?.[1] ?? text}`);
     return super.agentPrompt(target, text);
   }
 }
 
 /** The two-item list with its agent's status scripted, over the compaction limit. */
-const listedWhile = (status: string, herdr?: FakeHerdr) =>
+const listedWhile = (held: AgentStatus, herdr?: Herdr) =>
   Effect.gen(function* () {
     yield* rig.queueOutputs([
       { verdict: "clean", note: "first" },
       { verdict: "clean", note: "second" },
     ]);
-    const watched = herdr ?? new Watched(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: status }));
+    const watched = herdr ?? new Watched(held);
     const seen = watched instanceof Watched ? watched.seen : [];
     const full = fullContext([]).claude!;
     const ports: CompactionPorts = {
@@ -7344,11 +7378,11 @@ const listedWhile = (status: string, herdr?: FakeHerdr) =>
     return { result, seen };
   });
 
-for (const busy of ["working", "blocked"])
+for (const busy of ["working", "blocked"] as const)
   test(`a reused agent herdr reports ${busy} is given nothing until it is idle`, () =>
     runEffect(
       Effect.gen(function* () {
-        const { result, seen } = yield* listedWhile(`idle,${busy},${busy},${busy},idle`);
+        const { result, seen } = yield* listedWhile(busy);
         expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
         const boundary = seen.slice(seen.indexOf("prompt 01-api") + 1);
         expect(boundary).toContain(busy);
@@ -7364,7 +7398,7 @@ for (const busy of ["working", "blocked"])
     ));
 
 /** herdr cannot say what the agent is doing. */
-class Unreadable extends FakeHerdr {
+class Unreadable extends Herdr {
   override agentStatus() {
     return Effect.fail(
       new HerdrError({
@@ -7377,7 +7411,7 @@ class Unreadable extends FakeHerdr {
 
 for (const [what, run] of [
   ["unknown", () => listedWhile("unknown")],
-  ["unreadable", () => listedWhile("", new Unreadable(rig.pluginEnv()))],
+  ["unreadable", () => listedWhile("idle", new Unreadable(rig.pluginEnv()))],
 ] as const)
   test(`a reused agent whose status is ${what} is given its work as before`, () =>
     runEffect(
@@ -7411,11 +7445,7 @@ const busyAfterFirst = <A, E>(
         Layer.provideMerge(
           agentsLayer({
             ...hostOf(),
-            herdr: new FakeHerdr(
-              rig.pluginEnv({
-                FAKE_HERDR_AGENT_STATUS: "idle,working",
-              }),
-            ),
+            herdr: new Statuses(["idle", "working"]),
             collectMs: 30_000,
           }),
         ),
@@ -7451,10 +7481,7 @@ test("a steer reaches an agent whose boundary is waiting for its turn to end", (
 test("a stop while the boundary waits ends the wait, and nothing more is typed", () =>
   runEffect(
     Effect.gen(function* () {
-      const reads = Effect.map(
-        rig.calls(),
-        (calls) => Arr.filter(calls, (call) => call.cmd === "agent get").length,
-      );
+      const reads = Effect.map(rig.calls(), (calls) => calls.length);
       const { before, after } = yield* busyAfterFirst(
         Effect.gen(function* () {
           yield* waitingAtBoundary;
@@ -7495,13 +7522,12 @@ const listingSession = <A, E>(run: Effect.Effect<A, E, WorkflowEngine.WorkflowEn
 const ITEMS = { items: "01-api,02-ui", agent: "sweep" };
 const sweeper = agentName("r1", "sweep", null, 1);
 
-/** A Task whose workspace herdr has open, and a Run of it the host admitted. */
+/** An open Task, and a Run of it the host admitted. */
 const inTask = (runId: string) =>
   Effect.gen(function* () {
-    yield* rig.addWorkspace("wT", "Project | Work", rig.projectDir);
     yield* writeTask({
       id: "task-1",
-      workspace: "wT",
+      workspace: null,
       label: "Project | Work",
       cwd: rig.projectDir,
       created_at: "2026-09-23T00:00:00.000Z",
@@ -7557,124 +7583,50 @@ const resumedList = (runId: string) =>
     );
   });
 
-/** Which workspace each tab was asked for in, in order. */
-const tabsIn = (calls: ReadonlyArray<Call>) =>
+/** The Task each agent was labelled with, in order. */
+const tasksOf = (calls: ReadonlyArray<Call>) =>
   Arr.map(
-    Arr.filter(calls, (call) => call.cmd === "tab create"),
+    Arr.filter(calls, (call) => call.cmd === "terminal.run"),
     (call) => {
-      const argv = call.argv ?? [];
-      return argv[argv.indexOf("--workspace") + 1] ?? "";
+      const labels = call.params?.labels;
+      return isJsonObject(labels) && isString(labels.task) ? labels.task : undefined;
     },
   );
 
-const firstDone = FileSystem.FileSystem.pipe(
-  Effect.flatMap((fs) =>
-    fs.writeFileString(`${dir}/agents/r1/01-api.json`, `{"verdict":"clean","note":"first"}`),
-  ),
-  Effect.orDie,
-);
+/** The first item's Output, written by hand, and its agent's turn ended after it. */
+const firstDone = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs
+    .writeFileString(`${dir}/agents/r1/01-api.json`, `{"verdict":"clean","note":"first"}`)
+    .pipe(Effect.orDie);
+  const [started] = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run");
+  yield* core.report(String(started?.params?.name), "idle");
+});
 
 test(
-  "a Run's own stop leaves its Task's workspace as it was, and the resume goes on to the next item in it",
+  "a Run's own stop leaves its agent as it was, and the resume goes on to the next item with it",
   () =>
     runEffect(
       Effect.gen(function* () {
         yield* inTask("r1");
-        yield* rig.queueOutputs([null, { verdict: "clean", note: "second" }]);
+        // The first item's agent works on, so no reminder takes the second item's Output.
+        yield* rig.queueOutputs([
+          { writes: [], output: null, then: "working" },
+          { verdict: "clean", note: "second" },
+        ]);
         yield* stoppedAtFirst("r1");
 
-        // The agent is in the Task's workspace, not the one the host was started from, and
-        // the workflow's half of a stop parks the Run without touching a tab or a workspace.
-        expect(tabsIn(yield* rig.calls())).toEqual(["wT"]);
-        const closing = (cmd: string) => pipe(cmd, Str.endsWith(" close"));
+        // The agent is the Task's, and the workflow's half of a stop parks the Run without
+        // ending it.
+        expect(tasksOf(yield* rig.calls())).toEqual(["task-1"]);
+        const closing = (cmd: string) => cmd === "terminal.kill";
         expect(Arr.filter(yield* rig.cmds(), closing)).toEqual([]);
 
         yield* firstDone;
         const result = yield* resumedList("r1");
         expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
         expect(Arr.filter(yield* rig.cmds(), closing)).toEqual([]);
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toEqual([]);
-      }).pipe(Effect.provide(recordsAt(dir))),
-    ),
-  120_000,
-);
-
-test(
-  "a Task workspace that closed behind a stopped Run is reopened on its checkout, and nothing done is redone",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* inTask("r1");
-        yield* rig.queueOutputs([null, { verdict: "clean", note: "second" }]);
-        yield* stoppedAtFirst("r1");
-        // Its last pane went and herdr dropped the workspace, with the agent in it.
-        yield* rig.closeWorkspace("wT", [sweeper]);
-
-        yield* firstDone;
-        const result = yield* resumedList("r1");
-        expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
-        // The first item was sent once, before the stop, and collected after it.
-        expect(sent(yield* rig.calls(), "01-api.prompt.md")).toBe(1);
-
-        const task = yield* readTask("task-1");
-        const reopened = task?.workspace ?? "";
-        expect(reopened).not.toBe("wT");
-        const create = Option.getOrUndefined(
-          Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "workspace create"),
-        );
-        expect(create?.argv).toContain(rig.projectDir);
-        // Every id this Run's place is known by is the new one: the Task, the pane the new
-        // agent was started in — the shell the reopened workspace came with, not a tab
-        // beside it — and the register a later step looks the agent up in.
-        expect(tabsIn(yield* rig.calls())).toEqual(["wT"]);
-        const starts = Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent start");
-        expect(starts.at(-1)?.argv).toEqual(expect.arrayContaining(["--pane", `${reopened}-p1`]));
-        const registered = yield* everyRegistered;
-        expect(
-          Option.getOrUndefined(Arr.findFirst(registered, (entry) => entry.agent === sweeper))
-            ?.workspaceId,
-        ).toBe(reopened);
-      }).pipe(Effect.provide(recordsAt(dir))),
-    ),
-  120_000,
-);
-
-test(
-  "a Task workspace that closed with its checkout gone parks the Run and says how to repair it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* inTask("r1");
-        yield* rig.closeWorkspace("wT", []);
-        yield* fs.remove(rig.projectDir, { recursive: true });
-
-        yield* listingSession(
-          listing
-            .execute({ runId: "r1", input: ITEMS }, { discard: true })
-            .pipe(Effect.andThen(Effect.sleep(Duration.millis(900)))),
-        );
-
-        const status = yield* listingSession(
-          Effect.gen(function* () {
-            const engine = yield* WorkflowEngine.WorkflowEngine;
-            const id = yield* listing.executionId({ runId: "r1", input: ITEMS });
-            return pollStatus(yield* engine.poll(listing, id), "agent-listing").status;
-          }),
-        );
-        expect(status).toBe("suspended");
-        const why = yield* controlOf(PARKED, "r1");
-        expect(why).toContain("wT");
-        expect(why).toContain(rig.projectDir);
-        expect(why).toContain("collie run resume r1");
-        expect(why).toContain("collie run start");
-        // Nothing was started against a workspace nobody can open a tab in.
-        const cmds = yield* rig.cmds();
-        expect(Arr.filter(cmds, (cmd) => cmd === "tab create" || cmd === "agent start")).toEqual(
-          [],
-        );
-        expect(Arr.filter(cmds, (cmd) => cmd === "workspace create")).toEqual([]);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }).pipe(Effect.provide(recordsAt(dir))),
     ),
   120_000,
@@ -7692,13 +7644,10 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
       );
       expect(fresh._tag === "Ok" && fresh.task).toBeNull();
       expect(fresh._tag === "Ok" ? fresh.label : null).toEqual(expect.any(String));
-      expect(yield* rig.cmds()).not.toContain("workspace create");
 
-      yield* rig.startSocket();
-      yield* rig.addWorkspace("wT", "Project | Work", rig.projectDir);
       const task = {
         id: "task-1",
-        workspace: "wT",
+        workspace: null,
         label: "Project | Work",
         cwd: rig.projectDir,
         created_at: "2026-09-23T00:00:00.000Z",
@@ -7710,22 +7659,6 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
       );
       expect(again._tag === "Ok" && again.task).toEqual(task);
       expect(again._tag === "Ok" ? again.label : "").toBeNull();
-      expect(yield* rig.cmds()).not.toContain("workspace.focus");
-      // One cleanup closed is continued all the same: its first agent reopens it.
-      const closed = { ...task, workspace: "wGone" };
-      const reopening = yield* taskFor(
-        env,
-        { mode: "continue", task: closed },
-        { workflow: "review", inputs: {} },
-      );
-      expect(reopening._tag === "Ok" && reopening.task).toEqual(closed);
-
-      // Outside herdr there is nowhere to open one, and a Run that starts no agent needs none.
-      const outside = { ...env, workspaceId: null, socketPath: null };
-      const none = yield* taskFor(outside, { mode: "new" }, { workflow: "tally", inputs: {} });
-      expect(none._tag === "Ok" && none.task).toBeNull();
-      expect(none._tag === "Ok" ? none.label : "").toBeNull();
-      expect(yield* rig.cmds()).not.toContain("workspace create");
     }),
   ));
 
@@ -7781,30 +7714,25 @@ test("a title the human gave names the Task, and one that says nothing is not ta
     }),
   ));
 
-test("a Task Collie named for its workflow alone is renamed for its work, and one a human renamed is not", () =>
+test("a Task Collie named for its workflow alone is renamed for its work, and one named for its work is not", () =>
   runEffect(
     Effect.gen(function* () {
-      const env = rig.pluginEnv();
       const fs = yield* FileSystem.FileSystem;
       const plan = `${rig.root}/runs/run-9/plan`;
       yield* fs.makeDirectory(plan, { recursive: true });
       yield* fs.writeFileString(`${plan}/SPEC.md`, "# Spec: Stop the stale offer banner\n");
-      yield* rig.addWorkspace("wP", "Collie | Plan new work", rig.projectDir);
-      yield* rig.addWorkspace("wH", "Offer banner, by hand", rig.projectDir);
-      yield* rig.addWorkspace("wN", "Collie | Passkey bridge race", rig.projectDir);
-      const kept = (id: string, workspace: string, label: string) =>
+      const kept = (id: string, label: string) =>
         writeTask({
           id,
-          workspace,
+          workspace: null,
           label,
           cwd: rig.projectDir,
           created_at: "2026-10-26T00:00:00.000Z",
         });
-      yield* kept("task-p", "wP", "Collie | Plan new work");
-      yield* kept("task-h", "wH", "Collie | Plan new work");
-      yield* kept("task-g", "wGone", "Collie | Implement plan");
-      yield* kept("task-n", "wN", "Collie | Passkey bridge race");
-      yield* kept("task-c", "wGone", "Collie | Implement plan");
+      yield* kept("task-p", "Collie | Plan new work");
+      yield* kept("task-g", "Collie | Implement plan");
+      yield* kept("task-n", "Collie | Passkey bridge race");
+      yield* kept("task-c", "Collie | Implement plan");
       // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
       const goal = { then: "", goal: "Design Tune-up performance workflow" };
       const runs = [
@@ -7816,7 +7744,6 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
           created: "2026-09-15T10:00:00Z",
           settled: { inputs: { plan } },
         }),
-        runFacts({ id: "r-h", workflow: "plan", task: "task-h", settled: { inputs: goal } }),
         // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
         runFacts({ id: "r-g", task: "task-g", settled: { inputs: { plan, then: "" } } }),
         runFacts({ id: "r-n", workflow: "plan", task: "task-n", settled: { inputs: goal } }),
@@ -7829,31 +7756,19 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
         }),
       ];
 
-      yield* retitleGenericTasks(env, new Herdr(env), runs);
+      yield* retitleGenericTasks(runs);
 
       const label = (id: string) => readTask(id).pipe(Effect.map((task) => task?.label));
-      const live = new Map(
-        Arr.map(yield* new Herdr(env).workspaceList(), (one) => [one.workspaceId, one.label]),
-      );
       expect(yield* label("task-p")).toBe("Collie | Design Tune-up performance workflow");
-      expect(live.get("wP")).toBe("Collie | Design Tune-up performance workflow");
       expect(yield* label("task-g")).toBe("Collie | Stop the stale offer banner");
       expect(yield* label("task-c")).toBe("Collie | Stop the stale offer banner");
-      expect(yield* label("task-h")).toBe("Collie | Plan new work");
-      expect(live.get("wH")).toBe("Offer banner, by hand");
       expect(yield* label("task-n")).toBe("Collie | Passkey bridge race");
-      expect(live.get("wN")).toBe("Collie | Passkey bridge race");
     }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
-test("a Task on a core Machine is renamed in its record alone, and core is asked nothing", () =>
+test("a Task is renamed in its record alone, and core is asked nothing", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* rig.startCore();
-      yield* fs.makeDirectory(rig.userDir, { recursive: true });
-      yield* fs.writeFileString(`${rig.userDir}/config.json`, '{ "terminal_backend": "core" }');
-      const env = rig.pluginEnv({ HERDR_SOCKET_PATH: "" });
       yield* writeTask({
         id: "task-k",
         workspace: null,
@@ -7863,7 +7778,7 @@ test("a Task on a core Machine is renamed in its record alone, and core is asked
       });
       const goal = { goal: "Design Tune-up performance workflow" };
 
-      yield* retitleGenericTasks(env, new Herdr(env), [
+      yield* retitleGenericTasks([
         runFacts({ id: "r-k", workflow: "plan", task: "task-k", settled: { inputs: goal } }),
       ]);
 
@@ -7878,114 +7793,14 @@ test("a Task on a core Machine is renamed in its record alone, and core is asked
     }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
-test("a Task's workspace is looked for in its own Herd, where a workspace of the same id is another's", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const env = rig.pluginEnv();
-      const fs = yield* FileSystem.FileSystem;
-      const other = `${rig.root}/other.sock`;
-      yield* fs.writeFileString(
-        `${rig.logPath}.sessions.json`,
-        encodeJson([
-          { name: "main", socket_path: rig.socketPath },
-          { name: "other", socket_path: other },
-        ]),
-      );
-      yield* rig.addWorkspace(
-        "w1",
-        "Collie | Plan new work",
-        rig.projectDir,
-        false,
-        rig.socketPath,
-      );
-      yield* rig.addWorkspace("w1", "Offer banner, by hand", rig.projectDir, false, other);
-      yield* writeTask({
-        id: "task-o",
-        workspace: "w1",
-        label: "Collie | Plan new work",
-        cwd: rig.projectDir,
-        herd: yield* herdOf(other),
-        created_at: "2026-10-26T00:00:00.000Z",
-      });
-      const goal = { goal: "Design Tune-up performance workflow" };
-
-      yield* retitleGenericTasks(env, new Herdr(env), [
-        runFacts({ id: "r-o", workflow: "plan", task: "task-o", settled: { inputs: goal } }),
-      ]);
-
-      expect((yield* readTask("task-o"))?.label).toBe("Collie | Plan new work");
-      const main = yield* new Herdr(env).workspaceList();
-      expect(Arr.map(main, (one) => one.label)).toEqual(["Collie | Plan new work"]);
-    }).pipe(Effect.provide(recordsAt(dir))),
-  ));
-
-test.each(["listing", "renaming"] as const)(
-  "a Task edited during workspace %s keeps the external edit",
-  (during) =>
-    runEffect(
-      Effect.gen(function* () {
-        const env = rig.pluginEnv();
-        const task = {
-          id: "task-edit",
-          workspace: "wEdit",
-          label: "Collie | Plan new work",
-          cwd: rig.projectDir,
-          created_at: "2026-10-26T00:00:00.000Z",
-        };
-        const edited = { ...task, label: "Collie | Renamed by hand", root_pane: "human-pane" };
-        yield* rig.addWorkspace(task.workspace, task.label, task.cwd);
-        yield* writeTask(task);
-        class EditingHerdr extends FakeHerdr {
-          override sessionList() {
-            return Effect.succeed([]);
-          }
-          override workspaceList() {
-            return super
-              .workspaceList()
-              .pipe(
-                Effect.tap(() =>
-                  during === "listing"
-                    ? writeTask(edited).pipe(Effect.provide(recordsAt(dir)), Effect.orDie)
-                    : Effect.void,
-                ),
-              );
-          }
-          override workspaceRename(id: string, label: string) {
-            return super
-              .workspaceRename(id, label)
-              .pipe(
-                Effect.tap(() =>
-                  during === "renaming"
-                    ? writeTask(edited).pipe(Effect.provide(recordsAt(dir)), Effect.orDie)
-                    : Effect.void,
-                ),
-              );
-          }
-        }
-        yield* retitleGenericTasks(env, new EditingHerdr(env), [
-          runFacts({
-            id: "run-edit",
-            workflow: "plan",
-            task: task.id,
-            settled: { inputs: { goal: "Design the banner" } },
-          }),
-        ]);
-        expect(yield* readTask(task.id)).toEqual(edited);
-        if (during === "listing")
-          expect((yield* new FakeHerdr(env).workspaceList())[0]?.label).toBe(task.label);
-      }).pipe(Effect.provide(recordsAt(dir))),
-    ),
-);
-
 test(
   "a Task's label is renamed under its lock, never over a Run holding it",
   () =>
     runEffect(
       Effect.gen(function* () {
-        const env = rig.pluginEnv();
         yield* writeTask({
           id: "task-p",
-          workspace: "wGone",
+          workspace: null,
           label: "Collie | Plan new work",
           cwd: rig.projectDir,
           created_at: "2026-10-26T00:00:00.000Z",
@@ -8000,44 +7815,15 @@ test(
         ];
         const label = readTask("task-p").pipe(Effect.map((task) => task?.label));
 
-        yield* withTaskLock("task-p", retitleGenericTasks(env, new Herdr(env), runs));
+        yield* withTaskLock("task-p", retitleGenericTasks(runs));
         expect(yield* label).toBe("Collie | Plan new work");
 
-        yield* retitleGenericTasks(env, new Herdr(env), runs);
+        yield* retitleGenericTasks(runs);
         expect(yield* label).toBe("Collie | Design Tune-up performance workflow");
       }).pipe(Effect.provide(recordsAt(dir))),
     ),
   30_000,
 );
-
-test("a start kept here is the workspace it was started from: its Task, or a new one the host keeps there", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* rig.addWorkspace("wH", "Monorepo | Mine", rig.projectDir);
-      const env = { ...rig.pluginEnv(), workspaceId: "wH" };
-      const about = { workflow: "implement", inputs: { plan: "FRO-343" } };
-
-      const made = yield* taskFor(env, { mode: "here" }, about);
-      const here = made._tag === "Ok" ? made.here : null;
-      expect(here).toMatchObject({ workspace: "wH", label: "Monorepo | Mine", cwd: env.cwd });
-      // Nothing to open: the Run goes where whoever started it is.
-      expect(made._tag === "Ok" ? made.label : "").toBeNull();
-      expect(yield* rig.cmds()).not.toContain("workspace create");
-      // Only the host writes a Task.
-      expect(yield* listTasks).toEqual([]);
-
-      const task = yield* taskKeptIn(here!);
-      expect(task).toMatchObject({ workspace: "wH", label: "Monorepo | Mine", cwd: env.cwd });
-      // Kept there, so a second start here is the same Task rather than another one.
-      expect((yield* taskKeptIn(here!)).id).toBe(task.id);
-      expect(yield* readTask(task.id)).toEqual(task);
-
-      const outside = yield* taskFor({ ...env, workspaceId: null }, { mode: "here" }, about);
-      expect(
-        outside._tag === "Rejected" && outside.result.ok === false && outside.result.error.code,
-      ).toBe("workspace_required");
-    }).pipe(Effect.provide(memoryRecords)),
-  ));
 
 const encodeJson = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
@@ -8053,6 +7839,22 @@ const claudeControls = (): CompactionPorts => ({
   claude: { ...COMPACTION_PORTS.claude!, gate: Effect.void },
 });
 
+class UnreadyClaude extends Herdr {
+  constructor() {
+    super(rig.pluginEnv());
+  }
+  override agentLaunch(options: Parameters<Herdr["agentLaunch"]>[0]) {
+    return super.agentLaunch(options).pipe(
+      Effect.tap(() =>
+        Effect.gen(function* () {
+          const dir = yield* controlDir(rig.pluginEnv().stateDir, options.name);
+          yield* (yield* FileSystem.FileSystem).remove(`${dir}/events.jsonl`, { force: true });
+        }).pipe(Effect.orDie),
+      ),
+    );
+  }
+}
+
 /** Claude drawing its status line: the first call into the agent's control dir. */
 const statusLineCall = (agent: string) =>
   Effect.gen(function* () {
@@ -8061,7 +7863,7 @@ const statusLineCall = (agent: string) =>
   });
 
 const untilStarted = Effect.gen(function* () {
-  while (!(yield* rig.cmds()).includes("agent start")) yield* Effect.sleep(Duration.millis(10));
+  while (!(yield* rig.cmds()).includes("terminal.run")) yield* Effect.sleep(Duration.millis(10));
 });
 
 test("the first prompt to a new agent waits for the harness to say it is up, not only herdr", () =>
@@ -8079,9 +7881,9 @@ test("the first prompt to a new agent waits for the harness to say it is up, not
       const [result] = yield* Effect.all(
         [
           session(started("r1"), {
+            herdr: new UnreadyClaude(),
             compactAtTokens: 1000,
             ports: claudeControls(),
-            herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_HARNESS_SILENT: "1" })),
           }),
           claudeComesUp,
         ],
@@ -8100,15 +7902,15 @@ test(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
         yield* interrupted("r1", suspended("r1"), {
+          herdr: new UnreadyClaude(),
           compactAtTokens: 1000,
           ports: claudeControls(),
-          herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_HARNESS_SILENT: "1" })),
           readyMs: 300,
         });
         expect(yield* statusNow("r1")).toBe("suspended");
         const why = yield* controlOf(PARKED, "r1");
         expect(why).toContain(agentFor("r1"));
-        expect(why).toMatch(/pane 1-\d+/);
+        expect(why).toMatch(/pane t\d+/);
         expect(sent(yield* rig.calls(), "Your task for this step")).toBe(0);
       }),
     ),
@@ -8130,7 +7932,6 @@ test(
                 Effect.fail(new Cause.UnknownError(undefined, "its endpoint has 3 threads on it")),
             },
           },
-          herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_HARNESS_SILENT: "1" })),
           readyMs: 300,
         });
         expect(yield* controlOf(PARKED, "r1")).toContain("its endpoint has 3 threads on it");
@@ -8146,12 +7947,8 @@ test("a step pointer the harness took is recorded as Collie's, with its delivery
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
       yield* session(started("r1"));
       const pointer = Option.getOrUndefined(
-        Arr.findFirst(
-          yield* rig.calls(),
-          (call) =>
-            call.cmd === "agent prompt" && pipe(call.argv?.[3] ?? "", Str.includes("Your task")),
-        ),
-      )?.argv?.[3];
+        Arr.findFirst(sentTexts(yield* rig.calls()), Str.includes("Your task")),
+      );
       const [step] = yield* steps("r1");
       // What Claude's UserPromptSubmit hook is given: the prompt exactly as it was typed.
       const dir = yield* controlDir(hostOf().env.stateDir, agentFor("r1"));
@@ -8174,14 +7971,39 @@ test("a step pointer the harness took is recorded as Collie's, with its delivery
     }),
   ));
 
-/** A just-started agent: herdr sees it busy booting when the prompt goes out, then idle. */
-const promptNotTaken = (lost: "enter" | "text") =>
-  new FakeHerdr(
-    rig.pluginEnv({ FAKE_HERDR_PROMPT_LOST: lost, FAKE_HERDR_AGENT_STATUS: "working,idle" }),
-  );
+/** A prompt that never reached the agent's box: core answered, and nothing was typed. */
+class TextLost extends Herdr {
+  lost = true;
+  readonly typed: string[] = [];
+  override agentPrompt(target: string, text: string) {
+    if (!this.lost) return super.agentPrompt(target, text);
+    this.typed.push(text);
+    return Effect.succeed("unobserved" as const);
+  }
+}
+
+/** A just-started agent whose prompt did not go in: its Enter lost, or its text. */
+const promptNotTaken = (lost: "enter" | "text") => {
+  if (lost === "text") return new TextLost(rig.pluginEnv());
+  core.stallNextSend();
+  return new Herdr(rig.pluginEnv());
+};
+
+/** Each text the step's prompt was typed as, to core or lost on the way. */
+const pointersTyped = (calls: ReadonlyArray<Call>, herdr: Herdr) =>
+  sent(calls, "Your task for this step") +
+  (herdr instanceof TextLost
+    ? Arr.filter(herdr.typed, Str.includes("Your task for this step")).length
+    : 0);
 
 const enters = (calls: ReadonlyArray<Call>) =>
-  Arr.filter(calls, (call) => call.cmd === "agent send-keys" && call.argv?.[3] === "enter").length;
+  Arr.filter(
+    calls,
+    (call) =>
+      call.cmd === "terminal.keys" &&
+      Arr.isArray(call.params?.keys) &&
+      Arr.contains(call.params.keys, "enter"),
+  ).length;
 
 test(
   "a step pointer whose Enter was lost is sent with one Enter, never the text again",
@@ -8208,16 +8030,14 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
-        yield* interrupted("r1", parked("r1"), {
-          herdr: promptNotTaken("text"),
-          confirmGraceMs: 300,
-        });
+        const herdr = promptNotTaken("text");
+        yield* interrupted("r1", parked("r1"), { herdr, confirmGraceMs: 300 });
         const why = yield* controlOf(PARKED, "r1");
         const [step] = yield* steps("r1");
         expect(why).toContain(step!.id);
-        expect(why).toMatch(/pane 1-\d+/);
+        expect(why).toMatch(/pane t\d+/);
         const calls = yield* rig.calls();
-        expect(sent(calls, "Your task for this step")).toBe(1);
+        expect(pointersTyped(calls, herdr)).toBe(1);
         expect(enters(calls)).toBe(0);
       }),
     ),
@@ -8244,8 +8064,9 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        const herdr = promptNotTaken("text");
         yield* interrupted("r1", parked("r1"), {
-          herdr: promptNotTaken("text"),
+          herdr,
           confirmGraceMs: 300,
           collectMs: OUTLASTS_IO,
         });
@@ -8254,7 +8075,7 @@ test(
         yield* rig.queueOutputs([{ verdict: "clean", note: "sent again" }]);
         const result = yield* releasedInto("r1", { collectMs: OUTLASTS_IO });
         expect(result._tag === "Success" && result.success.note).toBe("sent again");
-        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+        expect(pointersTyped(yield* rig.calls(), herdr)).toBe(2);
         expect(new Set(Arr.map(yield* steps("r1"), (one) => one.id)).size).toBe(2);
       }),
     ),
@@ -8266,10 +8087,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const env = rig.pluginEnv({
-          FAKE_HERDR_PROMPT_LOST: "text",
-          FAKE_HERDR_AGENT_STATUS: "working,idle",
-        });
+        const herdr = new TextLost(rig.pluginEnv());
         yield* session(
           Effect.gen(function* () {
             const engine = yield* WorkflowEngine.WorkflowEngine;
@@ -8287,19 +8105,19 @@ test(
               yield* TestClock.withLive(Effect.sleep("10 millis"));
             }
             yield* reconciled("r1", "not-sent");
-            delete env.raw.FAKE_HERDR_PROMPT_LOST;
+            herdr.lost = false;
             yield* rig.queueOutputs([{ verdict: "clean", note: "same host" }]);
             yield* engine.resume(work, yield* work.executionId(payload));
             const result = yield* work.execute(payload).pipe(Effect.result);
             expect(result._tag === "Success" && result.success.note).toBe("same host");
             const calls = yield* rig.calls();
-            expect(sent(calls, "Your task for this step")).toBe(2);
-            expect(Arr.filter(calls, (call) => call.cmd === "agent start")).toHaveLength(1);
+            expect(pointersTyped(calls, herdr)).toBe(2);
+            expect(Arr.filter(calls, (call) => call.cmd === "terminal.run")).toHaveLength(1);
             const delivered = yield* steps("r1");
             expect(Arr.map(delivered, (one) => one.attempt)).toEqual([1, 2]);
             expect(new Set(Arr.map(delivered, (one) => one.id)).size).toBe(2);
           }),
-          { herdr: new FakeHerdr(env), confirmGraceMs: 300, collectMs: 300_000 },
+          { herdr, confirmGraceMs: 300, collectMs: 300_000 },
         );
       }),
     ),
@@ -8319,8 +8137,8 @@ test(
         });
         yield* reconciled("r1", "not-sent");
 
-        // herdr answers `no agent` for every prompt from the second on: the resend.
-        const refusing = new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_FAIL_PROMPT_FROM: "1" }));
+        // Core refuses the resend.
+        const refusing = new Refusing({ "terminal.send": `no agent ${agentFor("r1")}` });
         yield* session(
           Effect.gen(function* () {
             const engine = yield* WorkflowEngine.WorkflowEngine;
@@ -8349,8 +8167,9 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        const herdr = promptNotTaken("text");
         yield* interrupted("r1", parked("r1"), {
-          herdr: promptNotTaken("text"),
+          herdr,
           confirmGraceMs: 300,
         });
         yield* reconciled("r1", "sent");
@@ -8358,7 +8177,7 @@ test(
         yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"typed by hand"}`);
         const result = yield* releasedInto("r1");
         expect(result._tag === "Success" && result.success.note).toBe("typed by hand");
-        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+        expect(pointersTyped(yield* rig.calls(), herdr)).toBe(1);
       }),
     ),
   120_000,
@@ -8379,11 +8198,12 @@ test("a stop closes a Claude agent's pane even while its controls are locked, ha
     }),
   ));
 
-/** What was typed into the agent's pane, in order, as herdr was asked to run it. */
-const paneLines = (calls: ReadonlyArray<Call>) =>
-  Arr.flatMap(calls, (call) =>
-    call.argv?.[0] === "pane" && call.argv[1] === "run" ? [call.argv[3] ?? ""] : [],
-  );
+/** The environment the first agent was started with, as core was given it. */
+const launchEnv = (calls: ReadonlyArray<Call>) => {
+  const env = Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "terminal.run"))
+    ?.params?.env;
+  return Schema.is(Schema.Record(Schema.String, Schema.String))(env) ? env : {};
+};
 
 const withProfile = (profile: AgentProfile) =>
   configured(encodeJson({ agent_profile: encodeJson(profile) }));
@@ -8730,7 +8550,6 @@ test.each([
         /claude_?[Ss]ubagents/,
       );
       expect(everyLaunch(yield* rig.calls())).toEqual([]);
-      expect(yield* rig.cmds()).not.toContain("tab create");
     }),
   ),
 );
@@ -8743,7 +8562,7 @@ test.each(["2.1.200 (Claude Code)", null])(
         clearing = { claudeSubagents: { cacheTtl: "1h" } };
         yield* interrupted("r1", suspended("r1"), { version: () => Effect.succeed(installed) });
         expect(yield* controlOf(PARKED, "r1")).toContain("requires Claude Code 2.1.242");
-        expect(yield* rig.cmds()).not.toContain("tab create");
+        expect(yield* rig.cmds()).not.toContain("terminal.run");
       }),
     ),
 );
@@ -8854,8 +8673,15 @@ test("with no agent profile a launch types and passes what it always has", () =>
       const after = (yield* rig.calls()).slice(before.length);
 
       const same = (calls: ReadonlyArray<Call>, runId: string) =>
-        Arr.map([...paneLines(calls), ...launchArgs(calls)], (said) =>
-          pipe(said, Str.replaceAll(runId, "<run>")),
+        Arr.map(
+          [
+            ...Arr.map(Rec.toEntries(launchEnv(calls)), ([name, value]) => `${name}=${value}`),
+            ...Arr.map(launchArgs(calls), (value, at) =>
+              launchArgs(calls)[at - 1] === "--session-id" ? "<session>" : value,
+            ),
+          ],
+          (said) =>
+            pipe(said, Str.replaceAll(agentFor(runId), "<agent>"), Str.replaceAll(runId, "<run>")),
         );
       expect(same(after, "r2")).toEqual(same(before, "r1"));
       // Its own, for the Run's autoMode block alone.
@@ -8892,7 +8718,7 @@ test("with no agent profile Claude's settings file is what Collie always wrote",
     }),
   ));
 
-test("a profile's environment is set in the pane before the harness starts, and a file-held value is written nowhere", () =>
+test("a profile's environment is what the harness starts with, and a file-held value is written nowhere of Collie's", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -8909,25 +8735,16 @@ test("a profile's environment is set in the pane before the harness starts, and 
       yield* session(started("r1"));
 
       const calls = yield* rig.calls();
-      const typed = paneLines(calls);
-      expect(typed).toContain("export PONYTAIL_DEFAULT_MODE=off");
-      expect(typed).toContain(
-        `IFS= read -r DEPLOY_TOKEN < ${rig.root}/secrets/token; export DEPLOY_TOKEN`,
-      );
-      const startAt = Option.getOrElse(
-        Arr.findFirstIndex(calls, (call) => call.argv?.[1] === "start"),
-        () => -1,
-      );
-      const lastTyped = Option.getOrElse(
-        Arr.findLastIndex(calls, (call) => call.argv?.[0] === "pane" && call.argv[1] === "run"),
-        () => -1,
-      );
-      expect(lastTyped).toBeLessThan(startAt);
+      // Core is handed the value to start the terminal with; nothing of Collie's keeps it.
+      expect(launchEnv(calls)).toMatchObject({
+        PONYTAIL_DEFAULT_MODE: "off",
+        DEPLOY_TOKEN: secret,
+      });
 
       const leaked: string[] = [];
       for (const path of yield* fs.readDirectory(rig.root, { recursive: true })) {
         const at = `${rig.root}/${path}`;
-        if (at === `${rig.root}/secrets/token`) continue;
+        if (at === `${rig.root}/secrets/token` || at === rig.logPath) continue;
         if ((yield* fs.stat(at)).type !== "File") continue;
         if (
           pipe(
@@ -8938,9 +8755,7 @@ test("a profile's environment is set in the pane before the harness starts, and 
           leaked.push(path);
       }
       expect(leaked).toEqual([]);
-      expect(Arr.filter(calls, (call) => pipe(JSON.stringify(call), Str.includes(secret)))).toEqual(
-        [],
-      );
+      expect(Arr.join(launchArgs(calls), " ")).not.toContain(secret);
     }),
   ));
 
@@ -8959,8 +8774,7 @@ test("a file-held value that is not 0600 parks the launch by its path, and opens
       expect(why).toContain(`${rig.root}/token is mode 0644, not 0600`);
       expect(why).not.toContain("hunter2");
       const cmds = yield* rig.cmds();
-      expect(cmds).not.toContain("tab create");
-      expect(cmds).not.toContain("agent start");
+      expect(cmds).not.toContain("terminal.run");
     }),
   ));
 
@@ -9206,9 +9020,7 @@ test(
             yield* until(waitsForMemory("r1"));
             yield* spend(60_000);
             const cmds = yield* rig.cmds();
-            expect(
-              Arr.filter(cmds, (cmd) => cmd === "tab create" || cmd === "agent start"),
-            ).toEqual([]);
+            expect(Arr.filter(cmds, (cmd) => cmd === "terminal.run")).toEqual([]);
             expect(yield* runLogOf("r1")).toContain(
               `${agentFor("r1")}'s launch: waiting for memory on `,
             );
@@ -9226,7 +9038,7 @@ test(
           { collectMs: 400 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("after");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -9249,7 +9061,7 @@ test(
             yield* spend(60_000);
           }),
         );
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toEqual([]);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toEqual([]);
         expect(yield* runLogOf("r1")).toContain("stopped after waiting");
       }),
     ),

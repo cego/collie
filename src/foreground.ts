@@ -1,10 +1,15 @@
 // Interactive reads come first (ADR-draft-a-runs-record-is-read-from-its-hosts-run-model, D6):
-// a background pass waits at each slice boundary while a front-door answer is being served.
+// a background pass waits at each slice boundary while a front-door answer is being served,
+// for no longer than it has worked since it was last held, so answers that never stop
+// still leave background passes at least half of the time.
 
-import { Channel, Context, Effect, Fiber, FileSystem, Latch, Layer, Stream } from "effect";
+import { Channel, Clock, Context, Effect, Fiber, FileSystem, Latch, Layer, Stream } from "effect";
 
 /** The longest a slice boundary or a stream's first value holds a pass. */
 export const PATIENCE = "250 millis";
+const PATIENCE_MS = 250;
+/** How long a pass works before a boundary holds it, so a hold is never only a timer's cost. */
+const SLICE_MS = 10;
 
 export interface ForegroundApi {
   /** `effect`, holding background slices except while it awaits physical I/O or a dependency. */
@@ -116,6 +121,8 @@ export const foregroundFileSystem = (fs: FileSystem.FileSystem): FileSystem.File
 export const makeForeground = Effect.gen(function* () {
   const idle = yield* Latch.make(true);
   let serving = 0;
+  /** When a boundary last stopped holding background work; never, at first. */
+  let resumed = -Infinity;
   const hold = (lease: ForegroundApi) => {
     if (!live.has(lease) || held.has(lease)) return Effect.void;
     held.add(lease);
@@ -181,14 +188,27 @@ export const makeForeground = Effect.gen(function* () {
       Effect.flatMap(Serving, (lease) =>
         lease !== null && live.has(lease) ? lease.wait(effect) : effect,
       ),
-    boundary: Effect.suspend(() =>
-      servedNow()
-        ? Effect.void
-        : Effect.andThen(
-            Effect.yieldNow,
-            idle.await.pipe(Effect.timeoutOption(PATIENCE), Effect.asVoid),
+    // Held at most as long as background work ran since its last hold: one answer gets the
+    // full patience, and answers that never stop cannot starve a pass of more than half.
+    boundary: Effect.suspend(() => {
+      if (servedNow()) return Effect.void;
+      if (serving === 0) return Effect.yieldNow;
+      return Effect.flatMap(Clock.currentTimeMillis, (now) => {
+        const worked = now - resumed;
+        if (worked < SLICE_MS) return Effect.yieldNow;
+        const share = Math.min(PATIENCE_MS, worked);
+        return Effect.andThen(
+          Effect.yieldNow,
+          idle.await.pipe(
+            Effect.timeoutOption(share),
+            Effect.andThen(Clock.currentTimeMillis),
+            Effect.map((at) => {
+              resumed = at;
+            }),
           ),
-    ),
+        );
+      });
+    }),
   };
   return foreground;
 });

@@ -3,6 +3,7 @@
 // its checkout, with its harness's resume of the session recorded at launch. The host is
 // the real registry, engine and agents; the Codex agent's App Server is the stand-in.
 
+import { Herdr } from "../src/herdr";
 import { launchesAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -13,13 +14,12 @@ import { Deferred, Effect, Fiber, FileSystem, Layer, Result, Schema, flow, pipe 
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import type { SqlClient } from "effect/sql";
 import type { PlatformServices } from "../src/platform";
-import { Rig, FakeHerdr, type Call } from "./support/recorder";
+import { Rig, type Call } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { fixtures } from "./support/host";
 import { TestClock } from "effect/testing";
 import { Agents, agentsLayer, type AgentHost, type RunNow } from "../src/agents";
 import { endAgent } from "../src/agent-end";
-import type { Backend } from "../src/herdr";
 import { readControl } from "../src/compaction";
 import { processAbsent } from "../src/processes";
 import { launchDir, readLaunches, recordLaunch, stemOf } from "../src/launches";
@@ -36,6 +36,7 @@ import { agentName } from "../src/naming";
 import { deliveredTo, hostRecords, hostRunRecords, recordsAt } from "./support/records";
 import { RELAUNCH, RunRecords } from "../src/run-records";
 import { appendLine } from "../src/steering";
+import { registerAgent, scopeFor } from "../src/registry";
 import { COMPACT_AT_TOKENS } from "../src/settings";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
 import { isString } from "../src/schema";
@@ -53,7 +54,7 @@ beforeEach(() =>
       yield* fs.makeDirectory(rig.userDir, { recursive: true });
       yield* fs.writeFileString(
         `${rig.userDir}/config.json`,
-        '{ "compact_at_tokens": 0, "trust": "never", "terminal_backend": "core" }',
+        '{ "compact_at_tokens": 0, "trust": "never" }',
       );
       yield* fs.writeFileString(
         standIn(),
@@ -115,13 +116,13 @@ const remindersSpent = (runId: string) =>
 
 const THREAD = "019a0000-0000-7000-8000-00000000c0de";
 const standIn = () => `${rig.root}/codex-server.json`;
-const env = () => rig.pluginEnv({ HC_SOCKET: `${rig.root}/hc.sock`, HERDR_SOCKET_PATH: "" });
+const env = () => rig.pluginEnv({ HC_SOCKET: `${rig.root}/hc.sock` });
 const dir = () => env().stateDir;
 
 const hostOf = (): AgentHost => ({
   dir: dir(),
   env: env(),
-  herdr: new FakeHerdr(env()),
+  herdr: new Herdr(env()),
   harness: "claude",
   model: "opus",
   permissions: "auto",
@@ -163,7 +164,7 @@ const hosted = <A, E>(
   run.pipe(
     Effect.provide(
       registryLayer(dir(), {
-        placing: { herdr: new FakeHerdr(env()), env: env() },
+        placing: { herdr: new Herdr(env()), env: env() },
         userDir: rig.userDir,
       }).pipe(
         Layer.provideMerge(agentsLayer(host)),
@@ -171,7 +172,7 @@ const hosted = <A, E>(
           foundationLayer({
             dir: dir(),
             userDir: rig.userDir,
-            placing: { herdr: new FakeHerdr(env()), env: env() },
+            placing: { herdr: new Herdr(env()), env: env() },
           }),
         ),
       ),
@@ -276,9 +277,9 @@ test(
         let agents: typeof Agents.Service | undefined;
         let recovering: string | null = null;
         const competitions: Array<Fiber.Fiber<void>> = [];
-        class CompetingRecovery extends FakeHerdr {
-          override paneClose(pane: string, backend?: Backend) {
-            return super.paneClose(pane, backend).pipe(
+        class CompetingRecovery extends Herdr {
+          override terminalKill(address: string) {
+            return super.terminalKill(address).pipe(
               Effect.tap(() => {
                 if (agents === undefined || recovering === null) return Effect.void;
                 // Detached: recovery interrupts the fiber closing the pane, and a child would end with it.
@@ -819,8 +820,8 @@ test("quota incident publication waits for an admitted core recovery", () =>
       );
       const launching = yield* Deferred.make<void>();
       const proceed = yield* Deferred.make<void>();
-      class HeldLaunch extends FakeHerdr {
-        override agentLaunch(opts: Parameters<FakeHerdr["agentLaunch"]>[0]) {
+      class HeldLaunch extends Herdr {
+        override agentLaunch(opts: Parameters<Herdr["agentLaunch"]>[0]) {
           return Deferred.succeed(launching, undefined).pipe(
             Effect.andThen(Deferred.await(proceed)),
             Effect.andThen(super.agentLaunch(opts)),
@@ -887,7 +888,7 @@ test("one Run's core recovery does not hold up another Run's revive", () =>
     Effect.gen(function* () {
       const listing = yield* Deferred.make<void>();
       const proceed = yield* Deferred.make<void>();
-      class HeldList extends FakeHerdr {
+      class HeldList extends Herdr {
         override agentList() {
           return Deferred.succeed(listing, undefined).pipe(
             Effect.andThen(Deferred.await(proceed)),
@@ -1012,38 +1013,90 @@ test("core recovery resumes each agent only after its own quota wait clears", ()
   ));
 
 test(
-  "a host started on a Machine set to herdr starts again an agent core lost after the Machine switched to core",
+  "a host started over an agent recorded before core neither asks herdr about it nor starts it again",
   () =>
     runEffect(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         const core = yield* rig.startCore();
         yield* rig.queueOutputs([null]);
-        const config = `${rig.userDir}/config.json`;
-        const backend = (name: string) =>
-          fs.writeFileString(
-            config,
-            `{ "compact_at_tokens": 0, "trust": "never", "terminal_backend": "${name}" }`,
-          );
-        yield* backend("herdr");
-        const again = yield* hosted(
+        const { runId, agent } = yield* hosted(
           Effect.gen(function* () {
-            // Long enough for the host to have read the setting it started on.
-            yield* TestClock.withLive(Effect.sleep("500 millis"));
-            yield* backend("core");
             const runId = yield* started("pi", "r1");
             const agent = agentName(runId, "pi", null, 1);
             yield* idleAfterItsStep(agent);
-            const before = coreCalls(yield* rig.calls()).length;
-            yield* core.lose;
-            const launches = yield* until(
-              () => Effect.flatMap(rig.calls(), (calls) => launchesSince(calls, before)),
-              (launches) => launches.length > 0,
-            );
-            return { agent, launches };
+            return { runId, agent };
           }),
         );
-        expect(Arr.map(again.launches, (launch) => launch.name)).toEqual([again.agent]);
+        // What a Herdr 1 start left: a register row with no backend, and no start record.
+        yield* registerAgent(scopeFor(rig.projectDir), {
+          role: "pi",
+          agent,
+          paneId: "1-9",
+          workspaceId: "w1",
+          runId,
+          workflow: "relaunched",
+          at: "2026-09-09T09:00:00Z",
+          incarnation: { terminalId: agent, agentSession: null },
+        }).pipe(Effect.provide(recordsAt(dir())));
+        yield* hostRunRecords(dir).setControl(RELAUNCH, runId, null, agent);
+        yield* core.lose;
+        const before = coreCalls(yield* rig.calls()).length;
+
+        yield* hosted(
+          until(
+            () =>
+              hostRecords(
+                dir(),
+                RunRecords.use((records) => records.control(PARK_CAUSE, runId)),
+              ).pipe(Effect.orElseSucceed(() => null)),
+            (cause) => cause !== null,
+          ),
+        );
+        expect(yield* launchesSince(yield* rig.calls(), before)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a host starts again an agent resumed on core, though its Herdr 1 register row remains",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const core = yield* rig.startCore();
+        yield* rig.queueOutputs([null]);
+        const { runId, agent } = yield* hosted(
+          Effect.gen(function* () {
+            const runId = yield* started("pi", "r1");
+            const agent = agentName(runId, "pi", null, 1);
+            yield* idleAfterItsStep(agent);
+            return { runId, agent };
+          }),
+        );
+        // Herdr 1 kept its row in a register named by its socket and workspace.
+        yield* registerAgent(
+          { session: `${rig.root}/herdr.sock`, workspaceId: "w1", cwd: rig.projectDir },
+          {
+            role: "pi",
+            agent,
+            paneId: "1-9",
+            workspaceId: "w1",
+            runId,
+            workflow: "relaunched",
+            at: "2026-09-09T09:00:00Z",
+            incarnation: { terminalId: agent, agentSession: null },
+          },
+        ).pipe(Effect.provide(recordsAt(dir())));
+        yield* hostRunRecords(dir).setControl(RELAUNCH, runId, null, agent);
+        yield* core.lose;
+        const before = coreCalls(yield* rig.calls()).length;
+
+        yield* hosted(
+          until(
+            () => Effect.flatMap(rig.calls(), (calls) => launchesSince(calls, before)),
+            (launches) => Arr.some(launches, (one) => one.name === agent),
+          ),
+        );
       }),
     ),
   120_000,
@@ -1073,9 +1126,9 @@ test(
         const { ended, left } = yield* Effect.gen(function* () {
           const agents = yield* Agents;
           const recoveries: Array<Fiber.Fiber<void>> = [];
-          class ExitSeenWhileClosing extends FakeHerdr {
-            override paneClose(paneId: string, backend?: Backend) {
-              return super.paneClose(paneId, backend).pipe(
+          class ExitSeenWhileClosing extends Herdr {
+            override terminalKill(address: string) {
+              return super.terminalKill(address).pipe(
                 Effect.andThen(Effect.forkChild(agents.resumeLost(runId, runningNow))),
                 Effect.map((recovery) => {
                   recoveries.push(recovery);
@@ -1085,7 +1138,7 @@ test(
           }
           const herdr = new ExitSeenWhileClosing(env());
           const ended = yield* endAgent(
-            { herdr, stateDir: dir(), ports: {}, log: () => Effect.void, cwd: rig.projectDir },
+            { herdr, stateDir: dir(), ports: {}, log: () => Effect.void },
             launched,
             "it ran out",
             "close",
@@ -1118,8 +1171,8 @@ test(
         const launching = Deferred.makeUnsafe<void>();
         const go = Deferred.makeUnsafe<void>();
         let held = false;
-        class HeldLaunch extends FakeHerdr {
-          override agentLaunch(opts: Parameters<FakeHerdr["agentLaunch"]>[0]) {
+        class HeldLaunch extends Herdr {
+          override agentLaunch(opts: Parameters<Herdr["agentLaunch"]>[0]) {
             if (!held) return super.agentLaunch(opts);
             return Deferred.succeed(launching, undefined).pipe(
               Effect.andThen(Deferred.await(go)),
@@ -1138,7 +1191,7 @@ test(
             held = true;
             yield* core.lose;
             yield* Deferred.await(launching);
-            const herdr = new FakeHerdr(env());
+            const herdr = new Herdr(env());
             const ending = yield* Effect.forkChild(
               endAgent(
                 {
@@ -1146,7 +1199,6 @@ test(
                   stateDir: dir(),
                   ports: {},
                   log: () => Effect.void,
-                  cwd: rig.projectDir,
                 },
                 launched,
                 "it ran out",

@@ -33,8 +33,8 @@ test("collie connections --json reads the host's envelope, including the account
           env: {
             ...process.env,
             HOME: dir,
-            HERDR_PLUGIN_ROOT: root,
-            HERDR_PLUGIN_STATE_DIR: state,
+            COLLIE_ROOT: root,
+            COLLIE_STATE_DIR: state,
             COLLIE_USER_DIR: `${dir}/config`,
           },
         });

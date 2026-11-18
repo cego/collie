@@ -4,9 +4,7 @@
 //! that tracks the mouse asks.
 
 use crate::config::{CursorShape, Look};
-use crate::input::{
-    Held, KeyAction, Pointer, Screen, key_action, links_in, mouse_of, pane_where, scroll_of,
-};
+use crate::input::{Held, KeyAction, Pointer, Screen, key_action, links_in, pane_where};
 use crate::keys::typed;
 use crate::paint::Painter;
 use crate::pane::Pane;
@@ -14,7 +12,7 @@ use crate::vt::{ALT_SCROLL, CursorStyle, Frame, Rgb, ScreenPoint, Unit, Vt};
 use base64::Engine;
 use collie_desktop_protocol::client::RpcError;
 use collie_desktop_protocol::generated::{
-    ActionFailed, At, Command, TerminalEvent, TerminalInput, TerminalMouseAction, Type,
+    ActionFailed, At, Command, TerminalEvent, TerminalInput, Type,
 };
 use ghostty_sys::*;
 use rune::{
@@ -65,17 +63,6 @@ impl Button {
             Button::Right => GHOSTTY_MOUSE_BUTTON_RIGHT,
             Button::Back => GHOSTTY_MOUSE_BUTTON_EIGHT,
             Button::Forward => GHOSTTY_MOUSE_BUTTON_NINE,
-        }
-    }
-
-    /// As a window event numbers it, which `terminal-input` names for herdr.
-    fn number(self) -> u8 {
-        match self {
-            Button::Left => 0,
-            Button::Middle => 1,
-            Button::Right => 2,
-            Button::Back => 3,
-            Button::Forward => 4,
         }
     }
 }
@@ -603,30 +590,11 @@ impl Tab {
         self.on_core && !mods.shift && self.vt.borrow().mouse_tracking()
     }
 
-    fn herdr(&self, action: TerminalMouseAction, button: Button, mouse: &Mouse) {
-        let pointer = Pointer {
-            x: f64::from(mouse.x),
-            y: f64::from(mouse.y),
-            held: held(mouse.mods),
-        };
-        if let Some(command) = mouse_of(action, button.number(), &pointer, &self.screen()) {
-            self.send(command);
-        }
-    }
-
     /// A press, drag or release over the grid: reported to a program that tracks the mouse,
     /// otherwise a selection by cell, word or line, a click on a link, or a middle-click
     /// paste of the selection.
     pub fn pointer(&mut self, mouse: Mouse) {
         let cell = self.cell_at(mouse.x, mouse.y);
-        if !self.on_core {
-            let action = match mouse.phase {
-                Phase::Down => TerminalMouseAction::Down,
-                Phase::Move => TerminalMouseAction::Drag,
-                Phase::Up => TerminalMouseAction::Up,
-            };
-            self.herdr(action, mouse.button, &mouse);
-        }
         match mouse.phase {
             Phase::Down => {
                 self.focus(true);
@@ -735,18 +703,7 @@ impl Tab {
     /// mouse gets its press and release.
     pub fn secondary(&mut self, x: f32, y: f32, mods: Mods) {
         self.focus(true);
-        if !self.on_core {
-            let mouse = Mouse {
-                phase: Phase::Down,
-                button: Button::Right,
-                x,
-                y,
-                clicks: 1,
-                mods,
-            };
-            self.herdr(TerminalMouseAction::Down, Button::Right, &mouse);
-            self.herdr(TerminalMouseAction::Up, Button::Right, &mouse);
-        } else if self.reporting(mods) {
+        if self.reporting(mods) {
             self.report(GHOSTTY_MOUSE_ACTION_PRESS, Some(Button::Right), mods, x, y);
             self.report(
                 GHOSTTY_MOUSE_ACTION_RELEASE,
@@ -838,17 +795,6 @@ impl Tab {
     pub fn wheel(&mut self, wheel: &WheelEvent) -> bool {
         // Rune's delta moves the content; the DOM's, which `terminal-input` reads, the view.
         let delta_y = -wheel.dy;
-        if !self.on_core {
-            let pointer = Pointer {
-                x: f64::from(wheel.x),
-                y: f64::from(wheel.y),
-                held: held(wheel.mods),
-            };
-            if let Some(scroll) = scroll_of(f64::from(delta_y), &pointer, &self.screen()) {
-                self.send(scroll);
-            }
-            return true;
-        }
         let Some(grid) = self.grid() else { return true };
         let reporting = self.reporting(wheel.mods);
         // A notch is one report to a program, and three lines of history.
@@ -986,14 +932,6 @@ struct Drawing {
     rows: Vec<Pixels>,
     cursor: Option<(u16, u16, u16, Pixels)>,
     bg: Rgb,
-}
-
-fn held(mods: Mods) -> Held {
-    Held {
-        shift: mods.shift,
-        ctrl: mods.ctrl,
-        alt: mods.alt,
-    }
 }
 
 fn mods_of(mods: Mods) -> GhosttyMods {

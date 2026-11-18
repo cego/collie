@@ -24,6 +24,7 @@ import { slackApi } from "../src/slack";
 import { findingsIn } from "../src/output";
 import { writeTask } from "../src/task";
 import { registerAgent, scopeFor } from "../src/registry";
+import { isString } from "../src/schema";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
 const TARGET = `https://${PROJECT}/-/merge_requests/7`;
@@ -288,7 +289,7 @@ test("an unplaced or ambiguous review request says why once and starts after it 
     }),
   ));
 
-test("an empty review-request listing refreshes a changed login on the next round", () =>
+test("idle review-request rounds list for the account glab switched to", () =>
   host.runEffect(
     Effect.gen(function* () {
       yield* repository;
@@ -301,14 +302,19 @@ test("an empty review-request listing refreshes a changed login on the next roun
           yield* host.mergeWatched;
           yield* until(
             () => Effect.sync(() => listings(forge).length),
-            (count) => count > 0,
+            (count) => count >= 1,
           );
-          yield* forge.set(model(head, { login: "bob" }));
+          // The old token is refused and ForgeHttp retries with the new one, so no round sees a 401.
+          yield* forge.set({ ...(yield* forge.model()), token: "ann-token", login: "ann" });
           yield* until(
-            () => Effect.sync(() => forge.requests()),
-            (requests) =>
-              Arr.some(requests, (one) => Str.includes("reviewer_username=bob")(one.url)),
-          ).pipe(Effect.timeout("1 minute"));
+            () =>
+              Effect.sync(() =>
+                Arr.filter(forge.requests(), (one) =>
+                  Str.includes("reviewer_username=ann")(one.url),
+                ),
+              ),
+            (listed) => listed.length > 0,
+          );
           expect(yield* runsHere).toEqual([]);
         }),
       );
@@ -972,7 +978,7 @@ test.each(["major", "minor"] as const)(
         yield* git(["checkout", "-q", "-b", "feature"]);
         const head = yield* pushed("Task work");
         const forge = yield* host.gitlab(model(head));
-        yield* rig.addAgent("impl-live", "9-1");
+        const paneId = yield* rig.addAgent("impl-live");
         yield* rig.queueOutputs([review([{ ...F1, severity }])]);
         yield* host.session(
           forge,
@@ -993,15 +999,15 @@ test.each(["major", "minor"] as const)(
               task: "task-human",
               options: { branch: "feature" },
             });
-            yield* registerAgent(scopeFor(host.env(), rig.projectDir), {
+            yield* registerAgent(scopeFor(rig.projectDir), {
               role: "implementer",
               agent: "impl-live",
-              paneId: "9-1",
+              paneId,
               workspaceId: null,
               runId: building.runId,
               workflow: "placed",
               at: "2026-11-12T09:00:00Z",
-              incarnation: { terminalId: "term-impl-live", agentSession: null },
+              incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
             });
             yield* configured(true);
             yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
@@ -1055,12 +1061,101 @@ test.each(["major", "minor"] as const)(
             const handed = Arr.filter(
               yield* rig.calls(),
               (one) =>
-                one.argv?.[0] === "agent" &&
-                one.argv?.[1] === "prompt" &&
-                one.argv?.[2] === "impl-live",
+                one.cmd === "terminal.send" &&
+                one.params?.terminal === "impl-live" &&
+                isString(one.params.text) &&
+                one.params.text.includes(`${improved.runId}/findings.json`),
             );
             expect(handed).toHaveLength(1);
-            expect(handed[0]?.argv?.[3]).toContain(`${improved.runId}/findings.json`);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "Improve's second hand-off to a live implementer waits for its own push",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        yield* repository;
+        yield* git(["checkout", "-q", "-b", "feature"]);
+        const first = yield* pushed("Task work");
+        const forge = yield* host.gitlab(model(first));
+        const paneId = yield* rig.addAgent("impl-live");
+        yield* rig.queueOutputs([
+          review([F1]),
+          review([{ ...F1, status: "fixed" }, F2]),
+          review([{ ...F1, status: "fixed" }, F2]),
+        ]);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            yield* writeTask({
+              id: "task-human",
+              workspace: null,
+              label: "The human's work",
+              cwd: rig.projectDir,
+              created_at: "2026-11-12T09:00:00Z",
+            });
+            const registry = yield* Registry;
+            const building = yield* registry.start({
+              generation: yield* registry.load(`${fixtures}/placed.workflow.ts`),
+              request: "building",
+              project: rig.projectDir,
+              input: { work: "keep feature", ending: "succeed" },
+              task: "task-human",
+              options: { branch: "feature" },
+            });
+            yield* registerAgent(scopeFor(rig.projectDir), {
+              role: "implementer",
+              agent: "impl-live",
+              paneId,
+              workspaceId: null,
+              runId: building.runId,
+              workflow: "placed",
+              at: "2026-11-12T09:00:00Z",
+              incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
+            });
+            yield* configured(false);
+            yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+            const parent = yield* registry.start({
+              generation: yield* registry.load(yield* entryOf("review")),
+              request: "review-task",
+              project: rig.projectDir,
+              input: { target: TARGET },
+              task: "task-human",
+            });
+            yield* until(
+              () => asked(parent.runId),
+              (rows) => rows.length > 0,
+            );
+            const improved = yield* registry.invoke({
+              runId: parent.runId,
+              offer: "improve",
+              input: {},
+              request: "improve-twice",
+            });
+            yield* until(
+              () => host.watchOf(improved.runId, TARGET),
+              (row) => row?.name === "improved-head",
+            );
+            yield* host.mergeWatched;
+            const second = yield* pushed("guard the input");
+            yield* forge.set(model(second, { ancestry: { [second]: [first] } }));
+            yield* TestClock.adjust("6 minutes");
+            const settled = yield* until(
+              () =>
+                Effect.all({
+                  watch: host.watchOf(improved.runId, TARGET),
+                  starts: host.agentStarts,
+                }),
+              (one) => one.watch?.name === "improved-head-2" || one.starts.length > 2,
+            );
+            expect(settled.watch?.name).toBe("improved-head-2");
+            expect(settled.watch?.cursor.head).toBe(second);
+            expect(settled.starts).toHaveLength(2);
           }),
         );
       }),
@@ -1081,9 +1176,11 @@ test.each(["major", "minor"] as const)(
         yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
         yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
         const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
+        // The fixer works on until its Output is written by hand, so no reminder takes the
+        // second review's.
         yield* rig.queueOutputs([
           review([{ ...F1, severity }]),
-          null,
+          { writes: [], output: null, then: "working" },
           review([{ ...F1, severity, status: "fixed" }]),
         ]);
         yield* host.session(
@@ -1147,6 +1244,11 @@ test.each(["major", "minor"] as const)(
                 checks: [],
               }),
             );
+            const fixer = Arr.findLast(
+              yield* rig.calls(),
+              (one) => one.cmd === "terminal.run",
+            ).pipe(Option.getOrThrow);
+            yield* (yield* rig.startCore()).report(String(fixer.params?.name), "idle");
             const done = yield* until(
               () => host.status(improved.runId),
               (view) => view?.status.status === "complete" || view?.status.status === "failed",
@@ -1157,8 +1259,8 @@ test.each(["major", "minor"] as const)(
             ]);
             expect(yield* host.agentStarts).toHaveLength(3);
             const launched = Arr.map(
-              Arr.filter(yield* rig.calls(), (one) => one.cmd === "agent start"),
-              (one) => one.argv?.[2],
+              Arr.filter(yield* rig.calls(), (one) => one.cmd === "terminal.run"),
+              (one) => one.params?.name,
             );
             expect(new Set(launched).size).toBe(3);
           }),

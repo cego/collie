@@ -20,11 +20,13 @@ test(
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
           yield* fs.writeFileString(outputs, encode([{ verdict: "done" }, null]));
-          const started = yield* collie(
-            world,
-            ["run", "start", "step-proof", "--input", "goal=verify"],
-            { FAKE_HERDR_OUTPUTS: outputs },
-          );
+          const started = yield* collie(world, [
+            "run",
+            "start",
+            "step-proof",
+            "--input",
+            "goal=verify",
+          ]);
           expect(started.envelope).toMatchObject({ ok: true });
           const { runId } = yield* Schema.decodeUnknownEffect(
             Schema.Struct({ runId: Schema.String }),
@@ -52,7 +54,7 @@ test(
           const verified = yield* collie(
             world,
             ["verify", "--name", "second-proof", "--", process.execPath, "-e", script],
-            { HERDR_PANE_ID: entry.paneId },
+            { COLLIE_AGENT: entry.agent },
           );
           expect(verified.envelope).toMatchObject({ ok: true });
           expect(verified.exit).toBe(1);

@@ -1,8 +1,7 @@
 // Records what Desktop's `terminal` stream sends for a pane, as NDJSON `TerminalEvent`s: the
-// events `openTerminal` makes once the Run's pane is found, from herdr's controller for a herdr
-// pane or core's attach for a core terminal, while typing each `--type` once the pane is idle.
+// events `openTerminal` makes once the core terminal is attached, while typing each `--type`
+// once the terminal is idle.
 //
-//   bun desktop/core/record-terminal.ts --pane <herdr pane> --out <file> --type 'ls\r'
 //   bun desktop/core/record-terminal.ts --core <core terminal> --out <file>
 
 import { parseArgs } from "node:util";
@@ -15,7 +14,6 @@ import type { PaneAt } from "../../src/board-model";
 const { values: flags } = parseArgs({
   args: Bun.argv.slice(2),
   options: {
-    pane: { type: "string" },
     core: { type: "string" },
     out: { type: "string" },
     cols: { type: "string", default: "100" },
@@ -24,18 +22,15 @@ const { values: flags } = parseArgs({
     idle: { type: "string", default: "1500" },
   },
 });
-if (flags.out === undefined || (flags.pane === undefined) === (flags.core === undefined)) {
-  console.error("usage: --out <file> and one of --pane <herdr pane> or --core <core terminal>");
+if (flags.out === undefined || flags.core === undefined) {
+  console.error("usage: --out <file> --core <core terminal>");
   process.exit(2);
 }
 const out = flags.out;
 const idle = Number(flags.idle);
 const place = { session: null, workspace: "recording", tab: null };
 // A core terminal is addressed by its core id in both fields.
-const at: PaneAt =
-  flags.core === undefined
-    ? { ...place, pane: flags.pane! }
-    : { ...place, pane: flags.core, core: flags.core };
+const at: PaneAt = { ...place, pane: flags.core, core: flags.core };
 
 let lastEvent = Date.now();
 const lines: Array<string> = [];

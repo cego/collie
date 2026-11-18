@@ -20,9 +20,12 @@ import {
   Result,
 } from "effect";
 import type { PlatformServices } from "../../src/platform";
+import { currentEnv } from "../../src/env";
+import { Herdr } from "../../src/herdr";
 import { exec } from "./command";
 import { runEffect, suiteEnv } from "./effect";
-import { writeFakeHerdrShim } from "./fake-herdr-core";
+import { serveFakeHc, type FakeHc } from "./fake-hc";
+import { armTripwire, untripped } from "./herdr-tripwire";
 import { fixtures, root, stopHost, until } from "./host";
 import { answering } from "./forwarding";
 import { marked } from "./sweep";
@@ -80,16 +83,15 @@ export const collie = Effect.fn("World.collie")(function* (
     env: {
       PATH: yield* Config.String("PATH").pipe(Config.withDefault("/usr/bin:/bin")),
       HOME: world.home,
-      HERDR_PLUGIN_ROOT: world.install,
-      HERDR_PLUGIN_STATE_DIR: world.state,
+      COLLIE_ROOT: world.install,
+      COLLIE_STATE_DIR: world.state,
       COLLIE_USER_DIR: world.config,
       COLLIE_CWD: world.project,
       // The host a client starts is this same program, as an installation's would be.
       COLLIE_HOST: asCommand(command),
       ...suite,
-      // The world's own herdr, which `proves` set: this env is otherwise built from nothing.
-      HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH,
-      FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG,
+      // The world's own core, which `proves` set: this env is otherwise built from nothing.
+      HC_SOCKET: Bun.env.HC_SOCKET,
       ...extra,
     },
     stdout: "pipe",
@@ -135,14 +137,14 @@ export const save = (into: string, names: ReadonlyArray<string>) =>
   }).pipe(Effect.orDie);
 
 /**
- * The fake herdr on `HERDR_BIN_PATH` and harnesses on `PATH`, set in the process
- * environment too while the world lasts: a host is a child that inherits them, not a reader
- * of this world's Config.
+ * Harnesses on `PATH` behind the tripwire's `herdr`, and a fake core on `HC_SOCKET`, set in
+ * the process environment too while the world lasts: a host is a child that inherits them,
+ * not a reader of this world's Config.
  */
-const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
+const fakesIn = Effect.fn("World.fakesIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
-  const bin = `${dir}/herdr`;
-  yield* writeFakeHerdrShim(bin).pipe(Effect.orDie);
+  const tripwire = yield* armTripwire(dir);
+  yield* Effect.addFinalizer(() => tripwire.stop);
   // A host asks `claude --help` before an agent starts; the operator's claude, run under a
   // loaded suite, is slow enough to time a test out. Anything else fails, as on CI.
   const harnesses = `${dir}/harnesses`;
@@ -156,19 +158,20 @@ const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
     .pipe(Effect.orDie);
   for (const harness of ["codex", "pi", "opencode"])
     yield* fs.writeFileString(`${harnesses}/${harness}`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-  const set = {
-    HERDR_BIN_PATH: bin,
-    FAKE_HERDR_LOG: `${dir}/herdr-calls.jsonl`,
-    PATH: `${harnesses}:/usr/bin:/bin`,
-  };
+  const socket = `${dir}/hc.sock`;
+  const core = yield* serveFakeHc(
+    socket,
+    `${dir}/core-calls.jsonl`,
+    yield* Effect.scope,
+    `${dir}/home/outputs.json`,
+  );
+  const set = { HC_SOCKET: socket, PATH: `${tripwire.binDir}:${harnesses}:/usr/bin:/bin` };
   yield* Effect.acquireRelease(
     Effect.sync(() => {
-      const before = {
-        HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH,
-        FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG,
-        PATH: Bun.env.PATH,
-      };
-      Object.assign(Bun.env, set, { PATH: `${harnesses}:${Bun.env.PATH ?? ""}` });
+      const before = { HC_SOCKET: Bun.env.HC_SOCKET, PATH: Bun.env.PATH };
+      Object.assign(Bun.env, set, {
+        PATH: `${tripwire.binDir}:${harnesses}:${Bun.env.PATH ?? ""}`,
+      });
       return before;
     }),
     (before) =>
@@ -178,7 +181,7 @@ const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
           else Bun.env[key] = value;
       }),
   );
-  return set;
+  return { set, tripwire, core };
 });
 
 /**
@@ -202,7 +205,7 @@ const neverModelled = (world: World) =>
 
 export const proves = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
+  body: (world: World, core: FakeHc) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   modules: ReadonlyArray<string>,
 ) =>
   runEffect(
@@ -221,14 +224,14 @@ export const proves = <A, E>(
       // Before the directory goes, or a host left running can write it back.
       yield* Effect.addFinalizer(() =>
         stopHost(world.state).pipe(
-          // A herdr call can outlive the host that started it, and so can this process's
-          // answer to it. Let this world's commands and answers finish before removing their
-          // log directory, which an answer would write back; another world's are left alone.
+          // A forwarded call can outlive the host that started it, and so can this process's
+          // answer to it. Let this world's finish before removing their directory, which an
+          // answer would write back; another world's are left alone.
           Effect.andThen(
             until(
               () =>
                 Effect.sync(() => {
-                  const log = { FAKE_HERDR_LOG: `${dir}/herdr-calls.jsonl` };
+                  const log = { HC_SOCKET: `${dir}/hc.sock` };
                   return (marker === "" ? 0 : marked(marker, log).length) + answering(log);
                 }),
               (left) => left === 0,
@@ -260,11 +263,12 @@ export const proves = <A, E>(
           .pipe(Effect.orDie);
       const command = yield* collieCommand;
       const suite = yield* suiteEnv;
-      // A herdr of the world's own, for this process and the host it starts: the real one
+      // A core of the world's own, for this process and the host it starts: the real one
       // is not on a CI runner, and on a desk it is the operator's live session.
-      const herdr = yield* fakeHerdrIn(dir);
-      return yield* body(world).pipe(
+      const fakes = yield* fakesIn(dir);
+      return yield* body(world, fakes.core).pipe(
         Effect.tap(() => (modelOff ? neverModelled(world) : Effect.void)),
+        Effect.tap(() => untripped(fakes.tripwire)),
         Effect.scoped,
         Effect.provide(
           ConfigProvider.layer(
@@ -272,15 +276,26 @@ export const proves = <A, E>(
               COLLIE_HOST: asCommand(command),
               COLLIE_TEST_BINARY: command.length === 1 ? command[0] : undefined,
               ...suite,
-              HERDR_PLUGIN_ROOT: world.install,
-              HERDR_PLUGIN_STATE_DIR: world.state,
+              COLLIE_ROOT: world.install,
+              COLLIE_STATE_DIR: world.state,
               COLLIE_USER_DIR: world.config,
               HOME: world.home,
               COLLIE_CWD: world.project,
-              ...herdr,
+              ...fakes.set,
             }),
           ),
         ),
       );
     }).pipe(Effect.scoped),
   );
+
+/** The Run's agent, once its first turn ends, waits at its own prompt as one in a dialog does. */
+export const blockedAtItsPrompt = (core: FakeHc) =>
+  Effect.gen(function* () {
+    const herdr = new Herdr(yield* currentEnv.pipe(Effect.orDie));
+    const [agent] = yield* until(
+      () => herdr.agentList(),
+      (all) => Arr.some(all, (one) => one.status === "idle"),
+    );
+    yield* core.report(agent!.name, "blocked");
+  });

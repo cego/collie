@@ -378,7 +378,7 @@ export const CollieUsage = async () => ({
 });
 `;
 
-/** Args for `herdr agent start ... -- <args>`. */
+/** The harness argv an agent is started with in its core terminal. */
 export function startArgs(
   harness: HarnessAdapter,
   model: string,

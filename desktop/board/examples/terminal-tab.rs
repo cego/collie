@@ -93,7 +93,7 @@ fn poll(app: &mut App, t: f64, _: &mut rune::Tx) -> bool {
     }
     match state.as_str() {
         "ended" => tab.shown(event(
-            json!({"_tag": "Ended", "reason": "herdr's controller exited 1"}),
+            json!({"_tag": "Ended", "reason": "core's connection exited 1"}),
         )),
         "failed" => {
             tab.failed_with("Build box's core: SocketError: An error occurred during Read".into())

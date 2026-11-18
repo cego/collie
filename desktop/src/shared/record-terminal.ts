@@ -13,15 +13,12 @@ import { ROLES } from "../../../src/steer-target";
 export const offersTerminal = (asOf: number | null, chosen: string | undefined) =>
   asOf === null || chosen === "terminal";
 
-/** Only Go to pane, finding no pane to show, opens herdr's own client instead. */
-export const opensHerdrWithoutPane = (asked: string | null) => asked === "terminal";
-
 /** One live agent of the Task, as the Terminal tab's switcher offers it. */
 export interface AgentTab {
   readonly name: string;
   readonly run: string;
   readonly label: string;
-  /** herdr's status, or `ended` for the agent shown once the board no longer lists it. */
+  /** Core's status, or `ended` for the agent shown once the board no longer lists it. */
   readonly state: string;
   readonly now: string | null;
   readonly shown: boolean;
@@ -29,7 +26,7 @@ export interface AgentTab {
 
 /**
  * The card's live agents, and the one `shown` kept while it is shown though it has ended.
- * Each is its role, numbered where several share one; its herdr name where it has none.
+ * Each is its role, numbered where several share one; its agent name where it has none.
  */
 export const agentTabs = (
   agents: ReadonlyArray<BoardAgent>,
@@ -195,13 +192,6 @@ export const askedFor = (
     ) ?? null
   );
 };
-
-/**
- * Whether a pane not found opens herdr's own client: for Go to pane until a pick, so a host
- * whose focus names no pane still does what it did before.
- */
-export const opensHerdrForNoPane = (wentToPane: boolean, picked: AgentTab | null) =>
-  wentToPane && picked === null;
 
 /**
  * The Terminal tab's switches between panes, each started once `release` has let the pane

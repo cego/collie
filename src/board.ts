@@ -17,7 +17,7 @@ import { readAhead, RunRecords, type RunRecordsApi } from "./run-records";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
-import { LEADING_GLYPH, type AgentInfo } from "./herdr";
+import type { AgentInfo } from "./herdr";
 import { latest, readDispositions, refRuns } from "./disposition";
 import { readSeen, seenSince } from "./seen";
 import { runTitle } from "./naming";
@@ -739,6 +739,9 @@ function withoutPaths(text: string): string {
   );
 }
 
+/** The status glyph a Herdr 1 workspace label led with, which older Task labels keep. */
+const LEADING_GLYPH = /^[^\p{L}\p{N}\s]+\s+/u;
+
 /** What the Task is called, and whose project it is: the workspace label's two halves. */
 function namesOf(label: string, run: RunFacts) {
   const clean = withoutPaths(Str.trim(pipe(label, Str.replace(LEADING_GLYPH, ""))));
@@ -791,7 +794,7 @@ function agentsOf(
         name: agent.name,
         role: entry.role,
         status: agent.status,
-        now: agent.title,
+        now: null,
         run: run.id,
       });
     }

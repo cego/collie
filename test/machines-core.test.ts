@@ -51,12 +51,6 @@ const desktopCollie = (side: Side) =>
     ...command,
   ]);
 
-/** Sets `side`'s terminal backend, as the human switches it. */
-const setBackend = (side: Side, backend: "core" | "herdr") =>
-  Effect.flatMap(FileSystem.FileSystem, (fs) =>
-    fs.writeFileString(`${side.world.config}/config.json`, `{ "terminal_backend": "${backend}" }`),
-  ).pipe(Effect.orDie);
-
 const SECOND = {
   id: "second",
   label: "second",
@@ -108,7 +102,6 @@ test(
             ]);
           }),
         ["attended.workflow.ts"],
-        { core: true },
       ),
     ),
   120_000,
@@ -141,7 +134,6 @@ test(
             expect((yield* rosterOf(collie)).roster).toEqual([]);
           }),
         ["attended.workflow.ts"],
-        { core: true },
       ),
     ),
   120_000,
@@ -161,7 +153,7 @@ test(
             yield* first.ssh.drop;
 
             const retried = yield* Effect.scoped(
-              Effect.flatMap(connect(first.core!.socketPath), (hc) =>
+              Effect.flatMap(connect(first.core.socketPath), (hc) =>
                 hc.call("machine.connect", { machine: "second" }),
               ),
             ).pipe(Effect.orDie);
@@ -181,24 +173,22 @@ test(
             expect(again?.params).toMatchObject({ machine: "second", code: 0 });
           }),
         ["attended.workflow.ts"],
-        { core: true },
       ),
     ),
   120_000,
 );
 
 test(
-  "switching a paired Machine to core forgets no pairing, lists it as not added, and connect adds it",
+  "a paired Machine core does not have is listed as not added, keeps its pairing, and connect adds it",
   () =>
     runEffect(
       twoMachines(
         "collie-core-switch-",
         (first, second) =>
           Effect.gen(function* () {
-            yield* setBackend(first, "herdr");
             yield* first.lists([second]);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
-            yield* setBackend(first, "core");
+            yield* first.lists([]);
 
             const listed = yield* first.cli(["machine", "list"]);
             expect(listed.envelope.data).toMatchObject({
@@ -217,34 +207,6 @@ test(
             ]);
           }),
         ["attended.workflow.ts"],
-        { core: true },
-      ),
-    ),
-  120_000,
-);
-
-test(
-  "a Machine set to herdr reads herdr's machine list and never asks core for its machines",
-  () =>
-    runEffect(
-      twoMachines(
-        "collie-core-herdr-",
-        (first, second) =>
-          Effect.gen(function* () {
-            yield* setBackend(first, "herdr");
-            yield* first.lists([second]);
-            const collie = yield* desktopCollie(first);
-
-            const listed = yield* rosterOf(collie);
-            expect(listed.backend).toBe("herdr");
-            expect(Arr.map(listed.roster, (machine) => machine.label)).toEqual(["second"]);
-            expect((yield* first.cli(["machine", "list"])).envelope.ok).toBe(true);
-            const herdrLog = yield* (yield* FileSystem.FileSystem).readFileString(first.herdrLog);
-            expect(herdrLog).toContain("machine list");
-            expect(yield* called(first, "machine.list")).toEqual([]);
-          }),
-        ["attended.workflow.ts"],
-        { core: true },
       ),
     ),
   120_000,

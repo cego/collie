@@ -3,7 +3,7 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { Effect, Option, Schema, flow, Result } from "effect";
 import { Command, Flag } from "effect/cli";
-import manifest from "../../herdr-plugin.toml";
+import manifest from "../../package.json";
 import { attempt, say } from "../envelope";
 import { onboard as onboardMachine, type OnboardEvent, type StepStatus } from "../onboard";
 import { HELLE_TOKEN_STEPS } from "../helle-url";

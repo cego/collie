@@ -20,7 +20,7 @@ for (const surface of ["chat", "Desktop record"] as const)
           parked: "herdr is down",
           recovery: ["rechecked uncleared — herdr did not answer"],
         });
-        const env = readEnv({ HERDR_PLUGIN_STATE_DIR: root, COLLIE_CWD: root });
+        const env = readEnv({ COLLIE_STATE_DIR: root, COLLIE_CWD: root });
         if (surface === "chat") {
           const text = yield* runFacts(env, run, [run], Effect.succeed([]));
           expect(text).toContain("Parked: herdr-unavailable · Collie rechecks");

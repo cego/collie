@@ -1,3 +1,5 @@
+import { Herdr } from "../../src/herdr";
+import { isString } from "../../src/schema";
 import { hostRecords, hostRunRecords, launchesAt, overHost } from "./records";
 // The shipped workflows as modules, run the way a user's own module is run.
 //
@@ -44,7 +46,7 @@ import {
 } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import * as SqlClient from "effect/sql/SqlClient";
-import { Rig, FakeHerdr } from "./recorder";
+import { Rig } from "./recorder";
 import { exec } from "./command";
 import { fastForward, runEffect as runShared } from "./effect";
 import { FakeBin } from "./bin";
@@ -153,6 +155,7 @@ import { usageOf } from "../../src/usage-ledger-model";
 import type { CompactionPorts } from "../../src/compaction";
 import { PARK_CAUSES, ParkCause } from "../../src/park-cause";
 import { recheckPark } from "../../src/park-recheck";
+import { GOLDEN, matchGolden } from "../../tools/prompt-golden";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
@@ -248,8 +251,8 @@ const once = (name: string, body: () => Promise<void>, timeout?: number) => {
 /** The installation is this checkout, so the shipped personas are the ones found. */
 const hostOf = (): AgentHost => ({
   dir,
-  env: rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab }),
-  herdr: new FakeHerdr(rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab })),
+  env: rig.pluginEnv({ COLLIE_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab }),
+  herdr: new Herdr(rig.pluginEnv({ COLLIE_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab })),
   harness: "claude",
   model: "opus",
   permissions: "auto",
@@ -772,15 +775,11 @@ const recommendedOf = (
 const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
   result._tag === "Success" ? String(result.success) : "";
 
-/** Every message herdr was asked to deliver, in order; each names the work it is about. */
+/** Every message core was asked to type into an agent, in order; each names its work. */
 const prompts = () =>
-  rig.calls().pipe(
-    Effect.map((calls) =>
-      Arr.map(
-        Arr.filter(calls, (call) => call.cmd === "agent prompt"),
-        (call) => call.argv?.[3] ?? "",
-      ),
-    ),
+  Effect.map(
+    agentPrompts(),
+    Arr.map((call) => String(call.params?.text)),
   );
 
 /** The Clearance line typed with an operation's step message, or "" for none. */
@@ -1058,7 +1057,6 @@ scenario(
           Agents.pipe(Effect.flatMap((agents) => agents.askRoute("planner", ["r-impl", "r-plan"]))),
         );
         expect(route).toContain(`collie_do deliver to r-plan, agent ${planner.agent}`);
-        expect(route).not.toContain("herdr agent prompt");
         const sent = yield* session(
           Agents.pipe(
             Effect.flatMap((agents) =>
@@ -1111,7 +1109,7 @@ scenario(
         // the spec, which is why the spec needs no second telling of what was decided.
         const starts = yield* rig
           .cmds()
-          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
+          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
         expect(starts).toHaveLength(1);
 
         const sent = yield* prompts();
@@ -1996,12 +1994,12 @@ scenario(
           ...BUILT,
           criteria: [{ criterion, met: "the scenario shows it" }],
         });
-        // The faster ticket's Output is written by hand, once its builder has measured.
+        // The faster ticket's builder works on while it measures; its Output is written by hand.
         yield* rig.queueOutputs([
           GRILLED,
           SPEC,
           TICKETS,
-          null,
+          { writes: [], output: null, then: "working" },
           builtFor("search reads its own index"),
           CLEAN_SYNTHESIS,
           OPENED,
@@ -2068,15 +2066,15 @@ scenario(
           `${agents}/01-faster.md.json`,
           asJson(builtFor("search answers in less time")),
         );
+        yield* (yield* rig.startCore()).report(`${build}-build-r1`, "idle");
         yield* Fiber.join(running);
         yield* bin.restore();
 
         const plain = yield* asked(build, "02-plain.md");
         expect(plain).not.toContain("collie measure");
         // Rendered by 7d15bed3, before tickets named a benchmark plan.
-        expect(unrooted(plain)).toBe(
-          yield* readText(`${ROOT}test/fixtures/plain-ticket-build.prompt.txt`),
-        );
+        yield* matchGolden(unrooted(plain));
+        expect(unrooted(plain)).toBe(yield* readText(GOLDEN));
 
         const mr = pipe(yield* asked(build, "mr"), Str.replace(/\s+/g, " "));
         expect(verdictsOf(final)).toEqual(["bench.count gain", "bench.size no-change"]);
@@ -2156,7 +2154,7 @@ scenario(
         // and then the planner, told what was found rather than sent to read it.
         const starts = yield* rig
           .cmds()
-          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
+          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
         expect(starts).toHaveLength(2);
         expect(yield* prompts()).toHaveLength(5);
         expect(yield* asked("r-plan-two", "second-opinion-1")).toContain(
@@ -2194,18 +2192,19 @@ const fork = (name: Shipped, id: string, agents: string) =>
 
 const launched = () =>
   rig.calls().pipe(
-    Effect.map((calls) =>
-      Arr.map(
-        Arr.filter(
-          Arr.map(calls, (call) => call.argv ?? []),
-          (argv) => argv[1] === "start",
-        ),
-        (argv) => ({
-          kind: argv[argv.indexOf("--kind") + 1],
-          args: Arr.join(argv.slice(argv.indexOf("--") + 1), " "),
-        }),
+    Effect.flatMap((calls) =>
+      Effect.forEach(
+        Arr.filter(calls, (call) => call.cmd === "terminal.run"),
+        (call) =>
+          Schema.decodeUnknownEffect(Schema.Array(Schema.String))(call.params?.argv).pipe(
+            Effect.map((argv) => ({
+              kind: Option.getOrElse(Arr.last(Str.split(argv[0] ?? "", "/")), () => ""),
+              args: Arr.join(argv, " "),
+            })),
+          ),
       ),
     ),
+    Effect.orDie,
   );
 
 const REVIEW = {
@@ -2622,7 +2621,7 @@ for (const name of ["gitlab", "github"] as const) {
         Effect.gen(function* () {
           const { bin, forge } = yield* reviewing();
           const runId = `r-review-input-${name}`;
-          yield* rig.queueOutputs([null]);
+          yield* rig.queueOutputs(byHand([null]));
           const status = yield* driven(
             { entry: shipped("review"), runId, input: { target } },
             (run) =>
@@ -3517,7 +3516,7 @@ scenario(
         expect(
           Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-1"))?.prompt,
         ).toContain("HEAD is not a branch, so there is nothing to fix on it");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -3600,7 +3599,7 @@ scenario(
         expect(
           Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-2"))?.prompt,
         ).toContain("HEAD is not a branch, so there is nothing to fix on it");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
 
         yield* answered({ ...review, decision: "post-2", value: "Don't post" });
         const fs = yield* FileSystem.FileSystem;
@@ -3691,17 +3690,16 @@ scenario(
       Effect.gen(function* () {
         yield* rig.queueOutputs([SYNTHESIS, SYNTHESIS]);
         // The implementer of the Run this review was started from, live and registered as it.
-        yield* rig.addAgent("impl-live", "9-1");
-        const env = hostOf().env;
-        yield* registerAgent(scopeFor(env, rig.projectDir), {
+        const paneId = yield* rig.addAgent("impl-live").pipe(Effect.orDie);
+        yield* registerAgent(scopeFor(rig.projectDir), {
           role: "implementer",
           agent: "impl-live",
-          paneId: "9-1",
+          paneId,
           workspaceId: null,
           runId: "r-building",
           workflow: "implement",
           at: "2026-09-23T10:00:00Z",
-          incarnation: { terminalId: "term-impl-live", agentSession: null },
+          incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
         }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         const target = "branch:main...HEAD";
         yield* parked({
@@ -3726,7 +3724,7 @@ scenario(
         expect(handed).toHaveLength(1);
         expect(handed[0]).toContain(`${runDir(dir, "r-review-live")}/review.md`);
         // One agent, the lone reviewer; the fix went to the one already here.
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
 
         // Collie cannot see that agent finish, so the human says when to look again, and
         // the next review is a follow-up of this one rather than a fresh start.
@@ -4340,6 +4338,10 @@ const planOf = (
     }
     return where;
   });
+
+/** Outputs where each null is a step the scenario does by hand, its agent working until then. */
+const byHand = (outputs: ReadonlyArray<Schema.Json | null>) =>
+  Arr.map(outputs, (one) => one ?? { writes: [], output: null, owed: true });
 
 const BUILT = {
   verdict: "clean",
@@ -5127,18 +5129,8 @@ scenario(
         // its own, because it may not vouch for the change.
         const starts = yield* rig
           .cmds()
-          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
+          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
         expect(starts).toHaveLength(2);
-        // Tabs open in the order their agents started, whatever the workflow is called.
-        const tabs = yield* rig.calls().pipe(
-          Effect.map((calls) =>
-            Arr.map(
-              Arr.filter(calls, (call) => call.cmd === "tab create"),
-              (call) => call.argv?.[(call.argv?.indexOf("--label") ?? -2) + 1],
-            ),
-          ),
-        );
-        expect(tabs).toEqual(["Implementer", "Reviewer · review-1"]);
         // The second ticket is handed what the first left, not the whole transcript.
         const second = yield* asked("r-impl", "02-second.md");
         expect(second).toContain("Ticket: 02-second.md — the second one");
@@ -5268,7 +5260,7 @@ scenario(
         ]);
         yield* approve("r-live", ["unit"]);
         // The first ticket's Output is written by hand, once the plan has moved under it.
-        yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs(byHand([null, BUILT, CLEAN_SYNTHESIS, OPENED]));
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-live", input: { plan, ...FINISH } }),
         );
@@ -5308,7 +5300,7 @@ scenario(
           { file: "01-first.md", title: "the first one", checks: "unit" },
         ]);
         yield* approve("r-grow", ["unit"]);
-        yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs(byHand([null, BUILT, CLEAN_SYNTHESIS, OPENED]));
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-grow", input: { plan, ...FINISH } }),
         );
@@ -5566,7 +5558,7 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
         const runId = "r-missing-review-spec";
         yield* approve(runId, ["unit"]);
-        yield* rig.queueOutputs([null, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs(byHand([null, CLEAN_SYNTHESIS, OPENED]));
         yield* resumeImplementPark(
           { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
           `${plan}/SPEC.md cannot be read`,
@@ -5662,13 +5654,15 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-amended", ["unit"]);
-        yield* rig.queueOutputs([
-          null,
-          { ...BUILT, criteria: [{ criterion: AMENDED, met: "src/audit.ts" }] },
-          BUILT,
-          CLEAN_SYNTHESIS,
-          OPENED,
-        ]);
+        yield* rig.queueOutputs(
+          byHand([
+            null,
+            { ...BUILT, criteria: [{ criterion: AMENDED, met: "src/audit.ts" }] },
+            BUILT,
+            CLEAN_SYNTHESIS,
+            OPENED,
+          ]),
+        );
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-amended", input: { plan, ...FINISH } }),
         );
@@ -5729,13 +5723,15 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-lead", ["unit"]);
-        yield* rig.queueOutputs([
-          null,
-          { ...BUILT, criteria: [{ criterion: COUNTED_AMENDED, met: "test/logged.test.ts" }] },
-          BUILT,
-          CLEAN_SYNTHESIS,
-          OPENED,
-        ]);
+        yield* rig.queueOutputs(
+          byHand([
+            null,
+            { ...BUILT, criteria: [{ criterion: COUNTED_AMENDED, met: "test/logged.test.ts" }] },
+            BUILT,
+            CLEAN_SYNTHESIS,
+            OPENED,
+          ]),
+        );
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-lead", input: { plan, ...FINISH } }),
         );
@@ -5791,14 +5787,16 @@ scenario(
         const named = "**Named.** Each one is named in the log.";
         const amended = "**Named. Each one is named in the log.** Each name is quoted.";
         yield* approve("r-lead-back", ["unit"]);
-        yield* rig.queueOutputs([
-          { ...BUILT, criteria: [{ criterion: COUNTED, met: "test/count.test.ts" }] },
-          null,
-          { ...BUILT, criteria: [{ criterion: amended, met: "test/quoted.test.ts" }] },
-          BUILT,
-          CLEAN_SYNTHESIS,
-          OPENED,
-        ]);
+        yield* rig.queueOutputs(
+          byHand([
+            { ...BUILT, criteria: [{ criterion: COUNTED, met: "test/count.test.ts" }] },
+            null,
+            { ...BUILT, criteria: [{ criterion: amended, met: "test/quoted.test.ts" }] },
+            BUILT,
+            CLEAN_SYNTHESIS,
+            OPENED,
+          ]),
+        );
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-lead-back", input: { plan, ...FINISH } }),
         );
@@ -5857,14 +5855,16 @@ scenario(
         ]);
         const amended = "**Checks.** The second is checked twice.";
         yield* approve("r-shared-lead", ["unit"]);
-        yield* rig.queueOutputs([
-          { ...BUILT, criteria: [{ criterion: "Checks.", met: "test/check.test.ts" }] },
-          null,
-          { ...BUILT, criteria: [{ criterion: amended, met: "test/twice.test.ts" }] },
-          BUILT,
-          CLEAN_SYNTHESIS,
-          OPENED,
-        ]);
+        yield* rig.queueOutputs(
+          byHand([
+            { ...BUILT, criteria: [{ criterion: "Checks.", met: "test/check.test.ts" }] },
+            null,
+            { ...BUILT, criteria: [{ criterion: amended, met: "test/twice.test.ts" }] },
+            BUILT,
+            CLEAN_SYNTHESIS,
+            OPENED,
+          ]),
+        );
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-shared-lead", input: { plan, ...FINISH } }),
         );
@@ -5911,22 +5911,24 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-old-words", ["unit"]);
-        yield* rig.queueOutputs([
-          {
-            ...BUILT,
-            criteria: [
-              {
-                criterion: "**Counted.** Every registry is counted once.",
-                met: "test/count.test.ts",
-              },
-            ],
-          },
-          null,
-          { ...BUILT, criteria: [{ criterion: AMENDED, met: "src/audit.ts" }] },
-          BUILT,
-          CLEAN_SYNTHESIS,
-          OPENED,
-        ]);
+        yield* rig.queueOutputs(
+          byHand([
+            {
+              ...BUILT,
+              criteria: [
+                {
+                  criterion: "**Counted.** Every registry is counted once.",
+                  met: "test/count.test.ts",
+                },
+              ],
+            },
+            null,
+            { ...BUILT, criteria: [{ criterion: AMENDED, met: "src/audit.ts" }] },
+            BUILT,
+            CLEAN_SYNTHESIS,
+            OPENED,
+          ]),
+        );
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-old-words", input: { plan, ...FINISH } }),
         );
@@ -6723,22 +6725,20 @@ scenario(
           ],
           `${dir}/runs/r-planner/plan`,
         );
-        // Named for this pass: herdr's forgetting outlives the rig.
         const planner = `planner-${idOf("plan")}`;
-        yield* rig.addAgent(planner, "9-1");
-        const env = hostOf().env;
-        yield* registerAgent(scopeFor(env, rig.projectDir), {
+        const paneId = yield* rig.addAgent(planner).pipe(Effect.orDie);
+        yield* registerAgent(scopeFor(rig.projectDir), {
           role: "planner",
           agent: planner,
-          paneId: "9-1",
+          paneId,
           workspaceId: null,
           runId: "r-planner",
           workflow: "plan",
           at: "2026-09-23T10:00:00Z",
-          incarnation: { terminalId: `term-${planner}`, agentSession: null },
+          incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
         }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         yield* approve("r-planned", ["unit"]);
-        yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs(byHand([null, BUILT, CLEAN_SYNTHESIS, OPENED]));
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-planned", input: { plan, ...FINISH } }),
         );
@@ -6748,7 +6748,7 @@ scenario(
             fs.exists(`${agents}/01-first.md.prompt.md`).pipe(Effect.orElseSucceed(() => false)),
           (there) => there,
         );
-        rig.dropAgent(planner);
+        yield* rig.dropAgent(planner).pipe(Effect.orDie);
         yield* fs.writeFileString(`${agents}/01-first.md.json`, asJson(BUILT));
         const result = yield* Fiber.join(running);
         yield* bin.restore();
@@ -6999,7 +6999,7 @@ const implementing = (
       })),
     );
     yield* approve(runId, ["unit"]);
-    yield* rig.queueOutputs(outputs);
+    yield* rig.queueOutputs(byHand(outputs));
     const running = yield* Effect.forkChild(
       ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }),
     );
@@ -7169,7 +7169,7 @@ const builtUntilParked = (
       })),
     );
     yield* approve(runId, ["unit"]);
-    yield* rig.queueOutputs(outputs);
+    yield* rig.queueOutputs(byHand(outputs));
     const running = yield* Effect.forkChild(
       ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }),
     );
@@ -8290,7 +8290,7 @@ scenario(
         expect(
           yield* rig
             .cmds()
-            .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start"))),
+            .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run"))),
         ).toHaveLength(3);
         const fixing = yield* asked("r-impl-fix", "fix-1");
         expect(fixing).toContain("the guard is on the wrong side");
@@ -9399,7 +9399,7 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        const line = `nuxi: job nuxi-job failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a flake, so it is not settled.`;
+        const line = `nuxi: job nuxi-job failed on ${pipe(head, Str.slice(0, 12))}, naming no failed test, then passed when retried — a flake, so it is not settled.`;
         expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(line);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
@@ -12209,7 +12209,7 @@ const parkRecheck = (runId: string, mr: string, cwd: string) =>
     return yield* recheckPark(
       { runId, cwd, branch: "feature", mr, park: { cause, kind: PARK_CAUSES[cause].kind } },
       dir,
-      { sessionList: () => Effect.die("a park recheck here must not ask herdr") },
+      { agentList: () => Effect.die("a park recheck here must not ask core") },
     );
   }).pipe(
     Effect.provide(
@@ -12417,16 +12417,16 @@ scenario(
           yield* approve("r-impl-inv", []);
           yield* rig.queueOutputs([null]);
 
-          // Its agent writes nothing, which parks it for that; never for having no checks.
+          // Its agent ends its turn having written nothing, which parks it for that; never for having no checks.
           const why = yield* parkedOn({
             entry: shipped("implement"),
             runId: "r-impl-inv",
             input: { plan: "why is the board slow?", ...FINISH },
             options: { outcome: "investigation" },
           });
-          expect(why).toContain("has written nothing to");
+          expect(why).toContain("without writing");
           expect(why).not.toContain("approved");
-          expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+          expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
         }),
       ),
     ),
@@ -14144,7 +14144,7 @@ scenario(
 );
 
 scenario(
-  "a Release whose check is left to CI's test job records a retried pass of a test the branch does not touch as unsettled, naming the job and the head",
+  "a Release whose check is left to CI's test job records a retried pass of a test the branch does not touch as unsettled, naming the job, the head and the failed test",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -14188,7 +14188,64 @@ scenario(
         yield* bin.restore();
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(
-          `unsettled: check: job test failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a Flake, so this Run has not settled it.`,
+          `unsettled: check: job test failed on ${pipe(head, Str.slice(0, 12))} in test "an old thing settles on its first try", then passed when retried — a Flake, so this Run has not settled it.`,
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a Release whose retried job failed in two tests the branch does not touch names both in its unsettled line",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head } = yield* releasable("gitlab", {
+          jobs: [
+            {
+              name: "test",
+              state: "passed",
+              id: 101,
+              attempts: [
+                {
+                  id: 1,
+                  state: "failed",
+                  trace: Arr.join(
+                    [
+                      failedTrace(
+                        "test/old-thing.test.ts",
+                        "an old thing settles on its first try",
+                      ),
+                      failedTrace("test/other-thing.test.ts", "another old thing settles"),
+                    ],
+                    "\r\n",
+                  ),
+                },
+              ],
+            },
+          ],
+        });
+        const runId = "r-release-flakes";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([PACKAGED]);
+        yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: RELEASING.gitlab.target },
+            host: releaseHost(),
+          },
+          (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Finish");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(
+          `unsettled: check: job test failed on ${pipe(head, Str.slice(0, 12))} in tests "an old thing settles on its first try", "another old thing settles", then passed when retried — a Flake, so this Run has not settled it.`,
         );
       }),
     ),
@@ -18242,9 +18299,9 @@ for (const name of ["gitlab", "github"] as const) {
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
           expect(yield* runLog(runId)).toContain(`shared by the operator: ${mr} in #frontend`);
-          expect(Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent start")).toHaveLength(
-            1,
-          );
+          expect(
+            Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run"),
+          ).toHaveLength(1);
           expect(slack.calls).toEqual([]);
         }),
       ),
@@ -21862,8 +21919,15 @@ const DefaultOf = Schema.Struct({ default: Schema.Json });
 const schemaDefault = (drawn: Schema.Json | null) =>
   Option.getOrNull(Schema.decodeUnknownOption(DefaultOf)(drawn))?.default ?? null;
 
-const agentPrompts = () =>
-  rig.calls().pipe(Effect.map((calls) => Arr.filter(calls, (call) => call.cmd === "agent prompt")));
+function agentPrompts() {
+  return rig
+    .calls()
+    .pipe(
+      Effect.map((calls) =>
+        Arr.filter(calls, (call) => call.cmd === "terminal.send" && isString(call.params?.text)),
+      ),
+    );
+}
 
 once("self-improve takes improvements as a whole number and runs as checkout or machine", () => {
   const decode = flow(
@@ -25360,6 +25424,7 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
     runEffect(
       Effect.gen(function* () {
         rig = yield* Rig.make();
+        yield* rig.startCore();
         slack = fakeSlack();
         const fs = yield* FileSystem.FileSystem;
         dir = `${rig.root}/host`;

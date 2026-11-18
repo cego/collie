@@ -98,12 +98,7 @@ fn every_setting_shows_under_its_group_with_its_value_and_its_default_in_its_uni
         "Unset: shares nothing"
     );
     let keys: Vec<String> = rows(&held).into_iter().map(|r| r.key).collect();
-    for kept_apart in [
-        "gitlab_host",
-        "terminal_backend",
-        "worktrees_directory",
-        "zoom",
-    ] {
+    for kept_apart in ["gitlab_host", "worktrees_directory", "zoom"] {
         assert!(
             !keys.contains(&kept_apart.to_string()),
             "{kept_apart} is shown"
@@ -1360,7 +1355,7 @@ fn connections_are_read_again_when_an_onboarding_such_as_linears_setup_ends() {
         "_tag": "Onboarding", "job": "job-linear",
         "machine": { "profile": "vm", "name": "vm" },
         "run": { "steps": [{ "step": "linear", "title": "Linear", "status": "done" }],
-            "asked": null, "ready": true, "reason": null, "at": 9 } }))
+            "ready": true, "reason": null, "at": 9 } }))
     .unwrap();
     runtime.state.apply(ended.clone());
     settle(&harness, &mut runtime, 1000.0);
