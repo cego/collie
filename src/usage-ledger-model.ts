@@ -867,16 +867,15 @@ export function usageOf(
       };
     },
   );
+  const recoveries = Arr.filter(
+    requests,
+    (one) =>
+      recovering.has(sessionKey({ agent: one.agent, session: one.parent ?? one.session })) ||
+      retried(one),
+  );
   return {
     totals: tally(requests),
-    recovery: tally(
-      Arr.filter(
-        requests,
-        (one) =>
-          recovering.has(sessionKey({ agent: one.agent, session: one.parent ?? one.session })) ||
-          retried(one),
-      ),
-    ),
+    recovery: recoveries.length === 0 && requests.length > 0 ? ZERO : tally(recoveries),
     steps: Arr.map(
       grouped(requests, (one) => one.step),
       ([step, spent]) => ({ step, ...spent }),

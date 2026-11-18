@@ -1722,7 +1722,8 @@ counted once, at its largest figures.
 A category a harness does not report is `null`, never `0`: Codex may report no cache
 creation, and a Claude transcript may name no reasoning. A total is `null` where any
 request it adds up did not report that category, so a Run whose agents ran on different
-harnesses shows `null` rather than one harness's part. `startup` is a session's start-up
+harnesses shows `null` rather than one harness's part. Only a Run with no requests at all
+has every total `null`; one that spent nothing on recovery shows its `recovery` as `0`. `startup` is a session's start-up
 context in characters, by part: `system`, `persona`, `project`, `tools` and `skills`. Each
 is `null` where the harness's records do not show it; today Codex shows its system prompt,
 its tool list and its project instructions, every harness has the persona Collie gave it,

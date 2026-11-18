@@ -264,6 +264,21 @@ test("a category one agent's harness does not report leaves the Run's total for 
   expect(usage.totals).toMatchObject({ requests: 2, output: 9, cacheCreation: null });
 });
 
+test("a Run that spent nothing on recovery reports its recovery as 0, and only a Run with no requests as unavailable", () => {
+  const usage = usageOf([
+    spent("build", "m1", { input: 1, cacheRead: 2, cacheCreation: 3, output: 4 }),
+  ]);
+  expect(usage.recovery).toEqual({
+    requests: 0,
+    input: 0,
+    cacheRead: 0,
+    cacheCreation: 0,
+    output: 0,
+    reasoning: 0,
+  });
+  expect(usageOf([]).recovery.output).toBeNull();
+});
+
 type Tokens = { input: number; cacheRead: number; cacheCreation: number | null; output: number };
 
 const request = (
