@@ -42,6 +42,8 @@ export const suiteEnv = Config.all({
   COLLIE_TEST_FILE: Config.String("COLLIE_TEST_FILE").pipe(Config.withDefault("")),
   COLLIE_PROC: Config.String("COLLIE_PROC").pipe(Config.withDefault("")),
   COLLIE_MEMORY_EVERY: Config.String("COLLIE_MEMORY_EVERY").pipe(Config.withDefault("")),
+  // A host holds no file watch: one that comes back fails the test that started it.
+  COLLIE_HOST_REFUSES: Config.succeed("true"),
   // Never the human's core: a test that wants one starts the rig's and names its socket.
   HC_SOCKET: Config.succeed("/nonexistent/collie-test/hc.sock"),
 }).pipe(Config.map((env) => ({ ...env, ...GIT_QUIET })));

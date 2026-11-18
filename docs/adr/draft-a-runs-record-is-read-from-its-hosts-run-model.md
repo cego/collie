@@ -2,6 +2,9 @@
 
 **Status: proposed** by run-a0ae10bb; to be built by its plan.
 
+**Amended** by [ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs](draft-the-board-is-a-projection-of-facts-the-host-syncs.md):
+D1's state-directory watch is gone, and the cards D6 derives are persisted as a projection.
+
 **Amends:** [ADR-0038](0038-the-host-builds-and-serves-the-board.md), its consequence that "a
 drawer's Run details come from the host too, on a subscription of their own". They still do. This
 ADR says what the subscription is read from, and what it promises about freshness.

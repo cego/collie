@@ -455,7 +455,7 @@ A worktree is **settled**, and only then removed, when all five hold
    their own run would;
 4. its work has landed: no Task whose Runs used it still owes anything on it, as the
    board derives it (**Landed** in `CONTEXT.md`), and the merge watch read its merge
-   request as merged or closed, on GitHub or GitLab (`board/mr-states.json`), the board
+   request as merged or closed, on GitHub or GitLab (`collie_merge_requests` in `host.db`), the board
    says what settled it, or, with neither, its branch is gone from the remote; an open
    merge request keeps it, and a board that could not be built leaves only the remote
    branch to go by;
@@ -1894,17 +1894,14 @@ its time.
   The board is read from the host's Run model (`src/run-model.ts`,
   [ADR-draft-a-runs-record-is-read-from-its-hosts-run-model](adr/draft-a-runs-record-is-read-from-its-hosts-run-model.md)).
   It keeps each Run's disk inputs in memory, and a change dirties only the Runs it names:
-  host writes before and after the write; the state directory's watch, before the
-  board's debounce; another process's SQLite commit, seen within 250 ms through
-  `PRAGMA data_version`; and a branch moving in a checkout whose head a card reads, through
-  a watch on that checkout's git directories. When all checkout watches are registered,
-  the model invalidates its earlier head reads and publishes a change, covering commits
-  made before registration. It retains one change for a board that subscribes after the
-  first build, so that refresh cannot be lost. A read overtaken by invalidation retries.
-  A missing file is kept as its error's data, not as
-  the error, since every live `Error` slows each collection of the heap. If the recursive watch
-  fails, the model reads from disk, and every read takes a new revision, so nothing derived
-  before is reused. Engine status and clock-derived
+  host writes before and after the write; a path another process wrote and told the host
+  of through the front door's `wrote`; an agent's turn starting or ending, which reads its
+  Run's directories again; and another process's SQLite commit, seen within 250 ms through
+  `PRAGMA data_version`. Nothing is watched
+  ([ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs](adr/draft-the-board-is-a-projection-of-facts-the-host-syncs.md)).
+  A read overtaken by invalidation retries. A missing file is kept as its error's data, not
+  as the error, since every live `Error` slows each collection of the heap. Engine status
+  and clock-derived
   fields remain live. Each change to a Run takes the next number of the host's one sequence,
   and each board item carries the highest of its Runs' as its revision. `run_model: false`
   restores the from-disk build at the next host start; the model is then never filled. The
@@ -1913,6 +1910,17 @@ its time.
   the model's epoch and highest revision, and `--since` returns each Run whose facts or
   files moved past it, so a restart's new epoch makes an older token `stale_cursor`;
   the Flow that `run show` and `collie_run` carry is the record's, below.
+- **The board is a projection** (`src/card-rows.ts`,
+  [ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs](adr/draft-the-board-is-a-projection-of-facts-the-host-syncs.md)).
+  Each Task's card is a row in `collie_cards` with the digest of what it was derived from.
+  A host's first Snapshot is those rows, `confirmed: false`, which the door thread answers
+  from its own read-only connection until the engine serves; the first pass confirms each
+  whose digest still holds and sends an Upsert for the rest, and `host.log` says how many
+  it confirmed. A card's derivation reads only the Run model and rows the syncers keep:
+  the Merge watch's `collie_merge_requests` and forge logins, git sync's `collie_branches`
+  (`src/branches.ts`), `collie_module_revisions` and `collie_connections`. Each syncer is a
+  side job (`src/side-jobs.ts`), with a 5-minute backstop for what changed outside Collie.
+  `bench/board-reads/first.ts` times host start to first Snapshot on a snapshot copy.
 - **A Run's record is read from the model** (`src/record.ts`, D3 to D5 of that ADR). It
   reads only the Runs its Task's rows name (`related` in `src/engine.ts`): the Task's, their
   parents and children, Runs they asked for, and the Runs sharing its plan. A `runDetail`

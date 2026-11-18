@@ -32,6 +32,7 @@ import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
 import { offerChoices, offerFields, offerInput, StepResult, type RunDetail } from "./board-model";
 import { gitlabHostOf, loadDefaults, savedReach, setSetting } from "./config";
+import { tellHost } from "./tell-host";
 import { reachOf, savedFirst } from "./reach";
 import { parseSetting, settingText } from "./settings";
 import { herdDir, machineHerd } from "./steering";
@@ -1160,6 +1161,8 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       const parsed = parseSetting(command.key, command.value);
       if ("refused" in parsed) return parsed.refused;
       return yield* setSetting(env.userDir, command.key, parsed.value, yield* nowIso).pipe(
+        // The host offers it to its peers once told, since nothing watches the user directory.
+        Effect.tap(() => tellHost(env.stateDir, [`${env.userDir}/config.json`])),
         // What was written, so the note cannot disagree with the file.
         Effect.as(`${command.key} is now ${settingText(parsed.value) || "unset"}`),
         Effect.catch((cause) => Effect.succeed(`${command.key}: ${reason(cause)}`)),

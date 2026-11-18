@@ -17,6 +17,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, FileSystem, Schema } from "effect";
 import { loadEntry, revisionOf } from "./engine";
+import { RevisionRows } from "./module-revisions";
 import { jsonSchemaFor, type WorkflowEntry } from "./sdk";
 import { Declared, Fault, LAYERS, type EntryLayer } from "./definitions-model";
 
@@ -119,6 +120,21 @@ export const discover: (
   },
 );
 
+/**
+ * A directory's revision: the kept one on a synced read, else computed now and kept
+ * (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs).
+ */
+export const revisionIn = Effect.fn("Discovery.revisionIn")(function* (dir: string) {
+  const kept = yield* RevisionRows;
+  if (kept?.synced === true) {
+    const known = yield* kept.rows.of(dir);
+    if (known !== null) return known;
+  }
+  const revision = yield* revisionOf(dir);
+  if (kept !== null) yield* kept.rows.put(dir, revision);
+  return revision;
+});
+
 /** What one file in one layer says it is, or why it could not say. */
 type Claim =
   | { readonly kind: "entry"; readonly id: string; readonly path: string; readonly found: Found }
@@ -135,7 +151,7 @@ type Claim =
  * inside it does not turn that into a request for somebody else's `review`.
  */
 const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
-  const revision = yield* revisionOf(root.dir);
+  const revision = yield* revisionIn(root.dir);
   const claims: Array<Claim> = [];
   for (const path of yield* entryFiles(root.dir)) {
     const read = yield* loadEntry(path, revision).pipe(Effect.result);
