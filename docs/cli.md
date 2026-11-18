@@ -1838,7 +1838,9 @@ files such as `node_modules` are not. `--prepare '<command>'` runs first in that
 such as an install of what the tree ignores. Its words are split on spaces, with no shell,
 and it implies `--isolated`. The checkout is made under the Run's state as a Measurement's
 base tree is (`git worktree add --detach`, of a commit of exactly that tree), one per
-check and tree, and reused while it is clean. Cleanup removes it once the Run has ended.
+check, command and tree, and reused while it is clean. An executable inside the repository,
+such as `./check.sh`, runs from the checkout, and the record names it by its path in the
+checkout asked. Cleanup removes it once the Run has ended.
 The record names the checkout and the prepare's command, exit status and seconds as
 `isolated`. A failing prepare records the check `fail` at `stage: "prepare"`, with the
 prepare's exit status and output, and never runs the command; that is never a pass, even
