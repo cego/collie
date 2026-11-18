@@ -1,16 +1,16 @@
 // Recording an agent's usage into its Run's ledger: its harness's records read from where
 // the last read stopped, attributed to the step, head, model and effort each request was
-// made under, and appended to the Run's metrics only where they add something.
+// made under, and appended to the ledger only where they add something. The ledger is a
+// journal of its own, so the metrics every hot path reads whole stay small.
 //
-// Run where the host already reads a context sample, when an agent is ended and when a
-// Run settles; a read that fails records nothing and fails nothing.
+// A read that fails records nothing and fails nothing.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Order from "effect/Order";
 import * as Rec from "effect/Record";
 import { Effect, FileSystem, Option, Schema } from "effect";
-import { appendMetric, readMetrics } from "./metrics";
+import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { readControl, readingContext, type CompactionPorts } from "./compaction";
 import { launchDir, readLaunches, stemOf, type Launched } from "./launches";
 import { shell } from "./mr";
@@ -22,7 +22,7 @@ import {
   Source,
   type Reading,
   type Startup,
-  type UsageEntry,
+  UsageEntry,
 } from "./usage-ledger-model";
 
 export interface LedgerDeps {
@@ -45,6 +45,20 @@ export interface LedgerAgent {
   readonly cwd: string;
   readonly dir: string;
 }
+
+const UsageJson = Schema.fromJsonString(UsageEntry);
+const ledgerPath = (runDir: string) => runJournal(runDir, "usage.jsonl");
+
+export const appendUsage = (runDir: string, entry: UsageEntry) =>
+  appendRunJournal(ledgerPath(runDir), UsageJson, entry);
+
+/** A Run's ledger rows, from its evidence directory; none where it cannot be read. */
+export const readUsage = Effect.fn("UsageLedger.read")(function* (runDir: string) {
+  const none: UsageEntry[] = [];
+  return yield* readRunJournal(ledgerPath(runDir), UsageJson).pipe(
+    Effect.orElseSucceed(() => none),
+  );
+});
 
 const STATE = "ledger.json";
 const LedgerState = Schema.Struct({
@@ -138,9 +152,7 @@ export const recordFrom = Effect.fn("UsageLedger.recordFrom")(function* (
   const sources = Arr.dedupeWith([...state.sources, ...found], (a, b) => a.path === b.path);
   const { readings, offsets } = yield* readNew(sources, state.offsets);
   const evidence = `${deps.dir}/evidence/${at.run}`;
-  const ledger = ledgerOf(
-    Arr.getSomes(Arr.map(yield* readMetrics(evidence), (line) => Option.fromNullishOr(line.usage))),
-  );
+  const ledger = ledgerOf(yield* readUsage(evidence));
   const launches = Arr.sortWith(
     Arr.filter(
       yield* readLaunches(at.run).pipe(Effect.orElseSucceed(() => [])),
@@ -232,15 +244,7 @@ export const recordFrom = Effect.fn("UsageLedger.recordFrom")(function* (
     [...batch.requests.values(), ...batch.happenings.values(), ...batch.sessions.values()],
     (entry) => adds(ledger, entry),
   );
-  for (const entry of fresh)
-    yield* appendMetric(evidence, {
-      at: entry.what === "session" ? now : entry.at,
-      kind: "usage",
-      subject: entry.agent,
-      value: 0,
-      note: entry.what,
-      usage: entry,
-    });
+  for (const entry of fresh) yield* appendUsage(evidence, entry);
   yield* fs.makeDirectory(agent.dir, { recursive: true });
   yield* fs.writeFileString(
     stateFile,

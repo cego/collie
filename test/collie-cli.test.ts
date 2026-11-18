@@ -13,7 +13,7 @@ import { installFakeSkills } from "./support/defs";
 import { testBunfig } from "./support/packages";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
-import { recordFrom } from "../src/usage-ledger";
+import { appendUsage, recordFrom } from "../src/usage-ledger";
 import { hosted, settledRun } from "./support/hosted";
 import { evidenceDir } from "../src/engine";
 import { connect, frontDoor, socketOf } from "../src/host";
@@ -946,30 +946,23 @@ test(
           findings: ReadonlyArray<{ readonly severity: string; readonly title: string }>,
         ) =>
           Effect.gen(function* () {
-            yield* appendMetric(evidenceDir(world.state, run.id), {
+            yield* appendUsage(evidenceDir(world.state, run.id), {
+              what: "request",
+              key: `${run.id}-m1`,
               at: "2026-11-18T10:00:00.000Z",
-              kind: "usage",
-              subject: "build",
-              value: 0,
-              note: "",
-              usage: {
-                what: "request",
-                key: `${run.id}-m1`,
-                at: "2026-11-18T10:00:00.000Z",
-                agent: "build",
-                session: "s1",
-                parent: null,
-                step: "build",
-                harness: "claude",
-                model: null,
-                effort: null,
-                head: null,
-                input: 1,
-                cacheRead: 2,
-                cacheCreation: 3,
-                output,
-                reasoning: null,
-              },
+              agent: "build",
+              session: "s1",
+              parent: null,
+              step: "build",
+              harness: "claude",
+              model: null,
+              effort: null,
+              head: null,
+              input: 1,
+              cacheRead: 2,
+              cacheCreation: 3,
+              output,
+              reasoning: null,
             });
             const reviewed = join(world.state, `${run.id}-review.json`);
             const listed = Arr.map(

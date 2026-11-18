@@ -8,7 +8,7 @@ import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { fakeChannel } from "./support/compaction";
 import { readMetrics } from "../src/metrics";
-import { recordFrom } from "../src/usage-ledger";
+import { readUsage, recordFrom } from "../src/usage-ledger";
 import { usageOf, type Source } from "../src/usage-ledger-model";
 import { COMPACTION_PORTS, writeEvent } from "../src/compactors";
 import { opencodeUsage } from "../src/harness";
@@ -39,8 +39,23 @@ const recorded = (harness: string, sources: ReadonlyArray<Source>, heal = false)
       { harness, cwd: root, dir: `${root}/controls` },
       sources,
     );
-    return usageOf(yield* readMetrics(`${root}/evidence/r1`));
+    return usageOf(yield* readUsage(`${root}/evidence/r1`));
   });
+
+test("recording usage leaves the metrics journal, which hot paths read whole, as it was", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      yield* recordFrom(
+        { dir: root },
+        { run: "r1", agent: "build" },
+        { harness: "codex", cwd: root, dir: `${root}/controls` },
+        [at("codex.jsonl")],
+      );
+      expect(yield* readMetrics(`${root}/evidence/r1`)).toEqual([]);
+    }),
+  ));
 
 test("Claude's transcript: a streamed request counts once at its largest, and a resumed session adds only what is new", () =>
   runEffect(
@@ -145,7 +160,7 @@ test("Claude's sub-agents are read beside their parent, keyed to it, and counted
         { harness: "claude", cwd: root, dir: controls },
         sources,
       );
-      const usage = usageOf(yield* readMetrics(`${root}/evidence/r1`));
+      const usage = usageOf(yield* readUsage(`${root}/evidence/r1`));
       expect(usage.totals).toEqual({
         requests: 4,
         input: 23,
@@ -180,7 +195,8 @@ test("a session's start, peak, compactions, tool payload and retries are its own
         repairs: 1,
         recovery: false,
       });
-      expect(usage.recovery.requests).toBe(0);
+      // m4 follows the reminder and m5 the repair: their turns are recovery, not the session.
+      expect(usage.recovery).toMatchObject({ requests: 2, output: 30 });
     }),
   ));
 
@@ -268,7 +284,7 @@ test("OpenCode's usage plugin writes what the reader counts: finished messages, 
         { harness: "opencode", cwd: root, dir: `${root}/controls` },
         [{ path: file, format: "opencode", parent: null }],
       );
-      const usage = usageOf(yield* readMetrics(`${root}/evidence/r1`));
+      const usage = usageOf(yield* readUsage(`${root}/evidence/r1`));
       expect(usage.totals).toEqual({
         requests: 2,
         input: 57,

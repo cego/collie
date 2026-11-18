@@ -21,7 +21,6 @@ import type { Metrics } from "./board-model";
 import { epochMs } from "./time";
 import { ParkCause } from "./park-cause";
 import { ProducerReport } from "./narrative-model";
-import { UsageEntry } from "./usage-ledger-model";
 
 export const RecoveryAction = Schema.Literals(["reminded", "rechecked", "resumed", "healed"]);
 export type RecoveryAction = typeof RecoveryAction.Type;
@@ -86,7 +85,6 @@ export const MetricSchema = Schema.Struct({
     "checkpoint",
     "recovery",
     "report",
-    "usage",
   ]),
   /** What it is about: an agent, a step, a verification name, a ticket. */
   subject: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
@@ -113,7 +111,6 @@ export const MetricSchema = Schema.Struct({
   /** A `report` line's standing, and the issue it was filed as or linked to. */
   publication: Schema.optionalKey(Publication),
   issue: Schema.optionalKey(Schema.String),
-  usage: Schema.optionalKey(UsageEntry),
   /** How many paths of each class moved under an unstable verification. */
   moved: Schema.optionalKey(
     Schema.Struct({ tracked: Schema.Int, untracked: Schema.Int, lockfile: Schema.Int }),

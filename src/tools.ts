@@ -21,7 +21,8 @@
 // means a person" shortcut would read it as human. Attribution, never a gate.
 
 import { readMetrics } from "./metrics";
-import { usageLines, usageOf } from "./usage-ledger-model";
+import { readUsage } from "./usage-ledger";
+import { descendantsOf, usageLines, usageOf, withChildren } from "./usage-ledger-model";
 import * as Rec from "effect/Record";
 import { withArtefacts } from "./artefact-client";
 import * as Arr from "effect/Array";
@@ -271,51 +272,51 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
             ),
           )
         : input.list === true
-        ? answer(runListFacts(env, input))
-        : input.ref !== undefined
-          ? input.run === undefined
-            ? Effect.succeed(
-                refused(
-                  "collie_run",
-                  "ref reads one Run's reference, so it takes run",
-                  TAKES.collie_run,
-                ),
-              )
-            : answer(refLines(env, "collie_run", input.run, input.ref, input))
-          : Arr.some(LINE_FIELDS, (key) => input[key] !== undefined)
-            ? Effect.succeed(
-                refused(
-                  "collie_run",
-                  "start, count and search read a reference, which takes ref",
-                  TAKES.collie_run,
-                ),
-              )
-            : Arr.some(LIST_FILTERS, (key) => input[key] !== undefined)
+          ? answer(runListFacts(env, input))
+          : input.ref !== undefined
+            ? input.run === undefined
               ? Effect.succeed(
                   refused(
                     "collie_run",
-                    `${Arr.join(
-                      Arr.filter(LIST_FILTERS, (key) => input[key] !== undefined),
-                      ", ",
-                    )} only filter a listing, which takes "list": true`,
+                    "ref reads one Run's reference, so it takes run",
                     TAKES.collie_run,
                   ),
                 )
-              : answer(
-                  onSelectedRun(
-                    env,
-                    selected,
-                    input,
+              : answer(refLines(env, "collie_run", input.run, input.ref, input))
+            : Arr.some(LINE_FIELDS, (key) => input[key] !== undefined)
+              ? Effect.succeed(
+                  refused(
                     "collie_run",
-                    (run) =>
-                      said(
-                        runAnswer(env, run, reads).pipe(
-                          Effect.provide(recordsReadLayer(env.stateDir)),
-                        ),
-                      ),
-                    reads?.related ?? reads?.runs,
+                    "start, count and search read a reference, which takes ref",
+                    TAKES.collie_run,
                   ),
-                ),
+                )
+              : Arr.some(LIST_FILTERS, (key) => input[key] !== undefined)
+                ? Effect.succeed(
+                    refused(
+                      "collie_run",
+                      `${Arr.join(
+                        Arr.filter(LIST_FILTERS, (key) => input[key] !== undefined),
+                        ", ",
+                      )} only filter a listing, which takes "list": true`,
+                      TAKES.collie_run,
+                    ),
+                  )
+                : answer(
+                    onSelectedRun(
+                      env,
+                      selected,
+                      input,
+                      "collie_run",
+                      (run) =>
+                        said(
+                          runAnswer(env, run, reads).pipe(
+                            Effect.provide(recordsReadLayer(env.stateDir)),
+                          ),
+                        ),
+                      reads?.related ?? reads?.runs,
+                    ),
+                  ),
     collie_workspaces: () => answer(workspaceFacts(env)),
     collie_receipts: (input) =>
       answer(
@@ -686,7 +687,26 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
           "```",
         ];
   const movement = yield* branchMovement(run);
-  const usage = ["", "### Usage", "", ...usageLines(usageOf(yield* readMetrics(run.evidence)))];
+  const spentIn = (evidence: string) =>
+    Effect.gen(function* () {
+      return usageOf(yield* readUsage(evidence), yield* readMetrics(evidence));
+    });
+  const children = yield* Effect.forEach(
+    descendantsOf(
+      Arr.map(runs, (one) => ({ runId: one.id, parent: one.parent })),
+      run.id,
+    ),
+    (child) =>
+      Effect.gen(function* () {
+        const found = Arr.findFirst(runs, (one) => one.id === child);
+        return {
+          runId: child,
+          usage: Option.isNone(found) ? null : yield* spentIn(found.value.evidence),
+        };
+      }),
+  );
+  const spent = withChildren(yield* spentIn(run.evidence), children);
+  const usage = ["", "### Usage", "", ...usageLines(spent)];
   return Arr.join(
     [
       ...running,

@@ -54,7 +54,7 @@ const Keys = {
   step: Schema.String,
 };
 
-/** One row of the ledger, as a `usage` metric line carries it. */
+/** One row of the ledger. */
 export const UsageEntry = Schema.Union([
   Schema.Struct({
     what: Schema.Literal("request"),
@@ -566,13 +566,15 @@ export const readSource = (source: Source, text: string): Reading => {
   }
 };
 
-/** Null only where neither reported anything. */
-const plus = (a: Count, b: Count): Count => (a === null ? b : b === null ? a : a + b);
+/** Unavailable where either part is: a total of what was reported would read as the whole. */
+const plus = (a: Count, b: Count): Count => (a === null || b === null ? null : a + b);
 const larger = (a: Count, b: Count): Count => (a === null ? b : b === null ? a : Math.max(a, b));
 
-/** One request's context: everything it was sent, cached or not. */
+/** One request's context: everything it was sent, cached or not, of what its harness reports. */
 export const contextOf = (one: Categories): Count =>
-  plus(plus(one.input, one.cacheRead), one.cacheCreation);
+  Arr.reduce([one.cacheRead, one.cacheCreation], one.input, (sum: Count, part) =>
+    sum === null ? part : sum + (part ?? 0),
+  );
 
 /** The largest each field any copy of a request reported, keeping where it was first seen. */
 const mergeRequest = (kept: RequestEntry, more: RequestEntry): RequestEntry => ({
@@ -641,6 +643,30 @@ export function adds(ledger: Ledger, entry: UsageEntry): boolean {
   return kept === undefined || larger(kept.chars, entry.chars) !== kept.chars;
 }
 
+/**
+ * Whether a request was recovery: one in a Heal's session or a session opened by a repair,
+ * or one its agent made in the same step after Collie sent a repair or an Output reminder.
+ */
+export function recoveryOf(ledger: Ledger): (one: RequestEntry) => boolean {
+  const retries = Arr.filter(
+    [...ledger.happenings.values()],
+    (one) => one.parent === null && (one.what === "repair" || one.what === "reminder"),
+  );
+  return (one) => {
+    const owner = sessionKey({ agent: one.agent, session: one.parent ?? one.session });
+    return (
+      ledger.sessions.get(owner)?.recovery === true ||
+      Arr.some(
+        retries,
+        (retry) =>
+          sessionKey(retry) === owner &&
+          retry.step === one.step &&
+          epochMs(retry.at) <= epochMs(one.at),
+      )
+    );
+  };
+}
+
 export interface Tally extends Categories {
   readonly requests: number;
 }
@@ -656,33 +682,71 @@ const NOTHING: Tally = {
   reasoning: null,
 };
 
+const ZERO: Tally = {
+  requests: 0,
+  input: 0,
+  cacheRead: 0,
+  cacheCreation: 0,
+  output: 0,
+  reasoning: 0,
+};
+
 const tally = (rows: ReadonlyArray<Categories>): Tally =>
-  Arr.reduce(rows, NOTHING, (sum, one) => ({
-    requests: sum.requests + 1,
-    input: plus(sum.input, one.input),
-    cacheRead: plus(sum.cacheRead, one.cacheRead),
-    cacheCreation: plus(sum.cacheCreation, one.cacheCreation),
-    output: plus(sum.output, one.output),
-    reasoning: plus(sum.reasoning, one.reasoning),
-  }));
+  rows.length === 0
+    ? NOTHING
+    : Arr.reduce(rows, ZERO, (sum, one) => ({
+        requests: sum.requests + 1,
+        input: plus(sum.input, one.input),
+        cacheRead: plus(sum.cacheRead, one.cacheRead),
+        cacheCreation: plus(sum.cacheCreation, one.cacheCreation),
+        output: plus(sum.output, one.output),
+        reasoning: plus(sum.reasoning, one.reasoning),
+      }));
 
-const sum = (a: Tally, b: Tally): Tally => ({
-  requests: a.requests + b.requests,
-  input: plus(a.input, b.input),
-  cacheRead: plus(a.cacheRead, b.cacheRead),
-  cacheCreation: plus(a.cacheCreation, b.cacheCreation),
-  output: plus(a.output, b.output),
-  reasoning: plus(a.reasoning, b.reasoning),
-});
+const sum = (a: Tally, b: Tally): Tally =>
+  a.requests === 0
+    ? b
+    : b.requests === 0
+      ? a
+      : {
+          requests: a.requests + b.requests,
+          input: plus(a.input, b.input),
+          cacheRead: plus(a.cacheRead, b.cacheRead),
+          cacheCreation: plus(a.cacheCreation, b.cacheCreation),
+          output: plus(a.output, b.output),
+          reasoning: plus(a.reasoning, b.reasoning),
+        };
 
-/** A Run's usage with what its child Runs spent: each listed, and all added to its own. */
+interface Parented {
+  readonly runId: string;
+  readonly parent: string | null;
+}
+
+/** Every Run started under `runId`, and those started under them. */
+export function descendantsOf(runs: ReadonlyArray<Parented>, runId: string): Array<string> {
+  return Arr.flatMap(
+    Arr.filter(runs, (one: Parented) => one.parent === runId),
+    (one: Parented) => [one.runId, ...descendantsOf(runs, one.runId)],
+  );
+}
+
+/**
+ * A Run's usage with what its child Runs spent: each listed, and all added to its own. A
+ * child whose usage could not be read (null) leaves every category of the total unavailable.
+ */
 export const withChildren = (
   own: Usage,
-  children: ReadonlyArray<{ readonly runId: string; readonly usage: Usage }>,
+  children: ReadonlyArray<{ readonly runId: string; readonly usage: Usage | null }>,
 ): Usage => ({
   ...own,
-  children: Arr.map(children, ({ runId, usage }) => ({ runId, ...usage.totals })),
-  withChildren: Arr.reduce(children, own.totals, (total, { usage }) => sum(total, usage.totals)),
+  children: Arr.map(children, ({ runId, usage }) =>
+    usage === null ? { runId, ...NOTHING, unreadable: true } : { runId, ...usage.totals },
+  ),
+  withChildren: Arr.some(children, ({ usage }) => usage === null)
+    ? NOTHING
+    : Arr.reduce(children, own.totals, (total, { usage }) =>
+        usage === null ? total : sum(total, usage.totals),
+      ),
 });
 
 /** Each value of `by` and what its requests spent, in the order first seen. */
@@ -712,7 +776,7 @@ export interface SessionUsage extends Tally {
 
 export interface Usage {
   readonly totals: Tally;
-  /** What recovery sessions spent. */
+  /** What recovery spent: Heal and repair sessions, and each repair's and reminder's turn. */
   readonly recovery: Tally;
   readonly steps: ReadonlyArray<{ readonly step: string } & Tally>;
   readonly heads: ReadonlyArray<{ readonly head: string } & Tally>;
@@ -724,7 +788,7 @@ export interface Usage {
     readonly context: Count;
   }>;
   /** Each Run this one started, and those started under them, by what they spent. */
-  readonly children?: ReadonlyArray<{ readonly runId: string } & Tally>;
+  readonly children?: ReadonlyArray<{ readonly runId: string; readonly unreadable?: true } & Tally>;
   /** `totals` with every child Run's added. */
   readonly withChildren?: Tally;
 }
@@ -732,9 +796,12 @@ export interface Usage {
 const byTime = <A extends { readonly at: string }>(rows: ReadonlyArray<A>) =>
   Arr.sortWith(rows, (one) => epochMs(one.at), Order.Number);
 
-/** A Run's usage as `run metrics` shows it, from its metric lines. */
-export function usageOf(lines: ReadonlyArray<Metric>): Usage {
-  const ledger = ledgerOf(Arr.getSomes(Arr.map(lines, (line) => Option.fromNullishOr(line.usage))));
+/** A Run's usage as `run metrics` shows it, from its ledger and its metric lines' rounds. */
+export function usageOf(
+  entries: ReadonlyArray<UsageEntry>,
+  lines: ReadonlyArray<Metric> = [],
+): Usage {
+  const ledger = ledgerOf(entries);
   const requests = byTime([...ledger.requests.values()]);
   const happenings = [...ledger.happenings.values()];
   const own = Arr.filter(requests, (one) => one.parent === null);
@@ -785,9 +852,10 @@ export function usageOf(lines: ReadonlyArray<Metric>): Usage {
   const recovering = new Set(
     Arr.map(
       Arr.filter(sessions, (one) => one.recovery),
-      (one) => one.session,
+      sessionKey,
     ),
   );
+  const retried = recoveryOf(ledger);
   const rounds = Arr.map(
     Arr.filter(lines, (line) => line.kind === "round"),
     (line) => {
@@ -801,7 +869,14 @@ export function usageOf(lines: ReadonlyArray<Metric>): Usage {
   );
   return {
     totals: tally(requests),
-    recovery: tally(Arr.filter(requests, (one) => recovering.has(one.parent ?? one.session))),
+    recovery: tally(
+      Arr.filter(
+        requests,
+        (one) =>
+          recovering.has(sessionKey({ agent: one.agent, session: one.parent ?? one.session })) ||
+          retried(one),
+      ),
+    ),
     steps: Arr.map(
       grouped(requests, (one) => one.step),
       ([step, spent]) => ({ step, ...spent }),
@@ -845,9 +920,15 @@ export function usageLines(usage: Usage): ReadonlyArray<string> {
       ...(one.startup === null ? [] : [`    ${startupLine(one.startup)}`]),
       ...Arr.map(one.subagents, (sub) => `    sub-agent ${sub.session}: ${tallyLine(sub)}`),
     ]),
-    ...Arr.map(usage.children ?? [], (child) => `  child Run ${child.runId}: ${tallyLine(child)}`),
+    ...Arr.map(usage.children ?? [], (child) =>
+      child.unreadable === true
+        ? `  child Run ${child.runId}: its records could not be read`
+        : `  child Run ${child.runId}: ${tallyLine(child)}`,
+    ),
     ...(usage.withChildren === undefined || (usage.children ?? []).length === 0
       ? []
-      : [`tokens with child Runs: ${tallyLine(usage.withChildren)}`]),
+      : Arr.some(usage.children ?? [], (child) => child.unreadable === true)
+        ? ["tokens with child Runs: unavailable"]
+        : [`tokens with child Runs: ${tallyLine(usage.withChildren)}`]),
   ];
 }

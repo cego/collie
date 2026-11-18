@@ -12,7 +12,7 @@ import {
   type FailureLike,
   type Metric,
 } from "../src/metrics";
-import { usageLines, usageOf, withChildren } from "../src/usage-ledger-model";
+import { usageLines, usageOf, withChildren, type UsageEntry } from "../src/usage-ledger-model";
 import { compareSets, interventionsIn, trialLines, type TrialRun } from "../src/trial-model";
 
 const failure = (over: Partial<FailureLike> = {}): FailureLike => ({
@@ -169,26 +169,22 @@ const spent = (
   agent: string,
   key: string,
   tokens: { input: number; cacheRead: number; cacheCreation: number | null; output: number },
-): Metric =>
-  line({
-    kind: "usage",
-    subject: agent,
-    usage: {
-      what: "request",
-      key,
-      at: "2026-09-11T10:00:00.000Z",
-      agent,
-      session: agent,
-      parent: null,
-      step: "triage",
-      harness: "claude",
-      model: null,
-      effort: null,
-      head: null,
-      reasoning: null,
-      ...tokens,
-    },
-  });
+  harness = "claude",
+): UsageEntry => ({
+  what: "request",
+  key,
+  at: "2026-09-11T10:00:00.000Z",
+  agent,
+  session: agent,
+  parent: null,
+  step: "triage",
+  harness,
+  model: null,
+  effort: null,
+  head: null,
+  reasoning: null,
+  ...tokens,
+});
 
 test("a Run's cost is its own usage plus each child Run's, by category, with each child listed", () => {
   const own = usageOf([
@@ -229,67 +225,94 @@ test("a Run's cost is its own usage plus each child Run's, by category, with eac
     requests: 4,
     input: 10,
     cacheRead: 100,
-    cacheCreation: 300,
+    cacheCreation: null,
     output: 10000,
     reasoning: null,
   });
   expect(usageLines(cost)).toContain(
-    "tokens with child Runs: 4 requests: output 10000 (reasoning unavailable of it), cache read 100, cache creation 300, uncached input 10",
+    "tokens with child Runs: 4 requests: output 10000 (reasoning unavailable of it), cache read 100, cache creation unavailable, uncached input 10",
   );
+});
+
+test("a child Run whose records cannot be read is listed as such, and leaves the total with child Runs unavailable", () => {
+  const own = usageOf([
+    spent("triage", "m1", { input: 1, cacheRead: 10, cacheCreation: 100, output: 1000 }),
+  ]);
+  const cost = withChildren(own, [{ runId: "r-gone", usage: null }]);
+  expect(cost.children).toEqual([
+    {
+      runId: "r-gone",
+      unreadable: true,
+      requests: 0,
+      input: null,
+      cacheRead: null,
+      cacheCreation: null,
+      output: null,
+      reasoning: null,
+    },
+  ]);
+  expect(cost.withChildren?.output).toBeNull();
+  expect(usageLines(cost)).toContain("  child Run r-gone: its records could not be read");
+  expect(usageLines(cost)).toContain("tokens with child Runs: unavailable");
+});
+
+test("a category one agent's harness does not report leaves the Run's total for it unavailable", () => {
+  const usage = usageOf([
+    spent("claude-agent", "c1", { input: 1, cacheRead: 2, cacheCreation: 500, output: 3 }),
+    spent("codex-agent", "x1", { input: 4, cacheRead: 5, cacheCreation: null, output: 6 }, "codex"),
+  ]);
+  expect(usage.totals).toMatchObject({ requests: 2, output: 9, cacheCreation: null });
 });
 
 type Tokens = { input: number; cacheRead: number; cacheCreation: number | null; output: number };
 
-const request = (session: string, key: string, at: string, tokens: Tokens, agent = "build") =>
-  line({
-    kind: "usage",
-    subject: agent,
-    usage: {
-      what: "request",
-      key,
-      at: `2026-11-18T${at}:00.000Z`,
-      agent,
-      session,
-      parent: null,
-      step: "build",
-      harness: "claude",
-      model: null,
-      effort: null,
-      head: null,
-      reasoning: null,
-      ...tokens,
-    },
-  });
+const request = (
+  session: string,
+  key: string,
+  at: string,
+  tokens: Tokens,
+  agent = "build",
+): UsageEntry => ({
+  what: "request",
+  key,
+  at: `2026-11-18T${at}:00.000Z`,
+  agent,
+  session,
+  parent: null,
+  step: "build",
+  harness: "claude",
+  model: null,
+  effort: null,
+  head: null,
+  reasoning: null,
+  ...tokens,
+});
 
-const healing = (session: string) =>
-  line({
-    kind: "usage",
-    subject: "heal",
-    usage: {
-      what: "session",
-      agent: "heal",
-      session,
-      harness: "claude",
-      recovery: true,
-      startup: { system: null, persona: null, project: null, tools: null, skills: null },
-    },
-  });
+const healing = (session: string): UsageEntry => ({
+  what: "session",
+  agent: "heal",
+  session,
+  harness: "claude",
+  recovery: true,
+  startup: { system: null, persona: null, project: null, tools: null, skills: null },
+});
 
-const compacted = (session: string) =>
-  line({
-    kind: "usage",
-    subject: "build",
-    usage: {
-      what: "compaction",
-      key: `${session}-compaction`,
-      at: "2026-11-18T10:06:00.000Z",
-      agent: "build",
-      session,
-      parent: null,
-      step: "build",
-      chars: null,
-    },
-  });
+const happened = (
+  what: "compaction" | "reminder" | "repair",
+  session: string,
+  at: string,
+  step = "build",
+): UsageEntry => ({
+  what,
+  key: `${session}-${what}-${at}`,
+  at: `2026-11-18T${at}:00.000Z`,
+  agent: "build",
+  session,
+  parent: null,
+  step,
+  chars: null,
+});
+const compacted = (session: string) => happened("compaction", session, "10:06");
 
 const spentOnly = (tokens: Tokens) => [request("s1", `k-${tokens.output}`, "10:00", tokens)];
 
@@ -299,7 +322,7 @@ const trialRun = (
 ): TrialRun => ({
   runId,
   created: "2026-11-18T10:00:00.000Z",
-  lines: over.lines ?? spentOnly({ input: 1, cacheRead: 0, cacheCreation: 1, output: 1 }),
+  usage: over.usage ?? spentOnly({ input: 1, cacheRead: 0, cacheCreation: 1, output: 1 }),
   audit:
     over.audit === undefined
       ? { reviews: [[]], checks: null, interventions: 0, ended: null }
@@ -324,7 +347,7 @@ const firstSet = [
   {
     case: "a",
     run: trialRun("A1", {
-      lines: [
+      usage: [
         request("s1", "a1", "10:00", { input: 10, cacheRead: 0, cacheCreation: 100, output: 50 }),
         request("s1", "a2", "10:05", { input: 5, cacheRead: 100, cacheCreation: 20, output: 30 }),
         compacted("s1"),
@@ -352,7 +375,7 @@ const firstSet = [
   {
     case: "b",
     run: trialRun("A2", {
-      lines: spentOnly({ input: 20, cacheRead: 0, cacheCreation: 200, output: 100 }),
+      usage: spentOnly({ input: 20, cacheRead: 0, cacheCreation: 200, output: 100 }),
       audit: audited({ severity: "major", title: "lost write" }),
       records: {
         reviews: [
@@ -367,7 +390,7 @@ const firstSet = [
   {
     case: "c",
     run: trialRun("A3", {
-      lines: spentOnly({ input: 30, cacheRead: 0, cacheCreation: 300, output: 150 }),
+      usage: spentOnly({ input: 30, cacheRead: 0, cacheCreation: 300, output: 150 }),
       audit: null,
       records: { interventions: 2, ended: null },
     }),
@@ -378,7 +401,7 @@ const secondSet = [
   {
     case: "a",
     run: trialRun("B1", {
-      lines: spentOnly({ input: 8, cacheRead: 0, cacheCreation: 80, output: 40 }),
+      usage: spentOnly({ input: 8, cacheRead: 0, cacheCreation: 80, output: 40 }),
       audit: audited(),
       records: { checks: { passed: 2, of: 2 }, ended: "2026-11-18T10:20:00.000Z" },
     }),
@@ -386,7 +409,7 @@ const secondSet = [
   {
     case: "b",
     run: trialRun("B2", {
-      lines: spentOnly({ input: 10, cacheRead: 0, cacheCreation: 100, output: 60 }),
+      usage: spentOnly({ input: 10, cacheRead: 0, cacheCreation: 100, output: 60 }),
       audit: audited({ severity: "blocker", title: "w" }, { severity: "major", title: "v" }),
       records: { checks: { passed: 2, of: 2 }, ended: "2026-11-18T10:40:00.000Z" },
     }),
@@ -394,7 +417,7 @@ const secondSet = [
   {
     case: "c",
     run: trialRun("B3", {
-      lines: spentOnly({ input: 12, cacheRead: 0, cacheCreation: 120, output: 80 }),
+      usage: spentOnly({ input: 12, cacheRead: 0, cacheCreation: 120, output: 80 }),
       audit: audited(),
       records: { interventions: 1, ended: "2026-11-18T10:10:00.000Z" },
     }),
@@ -514,7 +537,7 @@ test("a token category one Run of a set never reported is unavailable for the se
       {
         case: null,
         run: trialRun("A2", {
-          lines: spentOnly({ input: 1, cacheRead: 2, cacheCreation: null, output: 3 }),
+          usage: spentOnly({ input: 1, cacheRead: 2, cacheCreation: null, output: 3 }),
         }),
       },
     ],
@@ -584,7 +607,7 @@ test("repeats of a case are reported per Run and as the case's median and range"
   const repeats = (prefix: string, outputs: ReadonlyArray<number>) =>
     Arr.map(outputs, (output, at) => ({
       case: "x",
-      run: trialRun(`${prefix}${at + 1}`, { lines: spent(output) }),
+      run: trialRun(`${prefix}${at + 1}`, { usage: spent(output) }),
     }));
   const report = compareSets({
     compare: repeats("A", [10, 30, 20]),
@@ -649,4 +672,54 @@ test("a finding a reviewer's seat raised and its synthesis repeated with an id i
     planted: {},
   });
   expect(report.cases[0]!.compare.median.defectsFound).toBe(1);
+});
+
+test("a repair's and an Output reminder's turns are recovery, from when Collie sent each to the end of its step", () => {
+  const tokens = (output: number) => ({ input: 1, cacheRead: 0, cacheCreation: 0, output });
+  const entries = [
+    request("s1", "w1", "10:00", tokens(100)),
+    request("s1", "w2", "10:05", tokens(200)),
+    happened("reminder", "s1", "10:06"),
+    request("s1", "r1", "10:07", tokens(30)),
+    { ...request("s1", "n1", "10:20", tokens(400)), step: "fix" },
+    happened("repair", "s1", "10:21", "fix"),
+    { ...request("s1", "r2", "10:22", tokens(5)), step: "fix" },
+  ];
+  expect(usageOf(entries).recovery).toMatchObject({ requests: 2, output: 35 });
+  const report = compareSets({
+    compare: [{ case: null, run: trialRun("A1", { usage: entries }) }],
+    against: [],
+    planted: {},
+  });
+  expect(report.cases[0]!.compare.median).toMatchObject({
+    "startup.output": 100,
+    "work.output": 600,
+    "recovery.output": 35,
+    "total.output": 735,
+  });
+});
+
+test("escaped defects are the audit's final review's blocking findings, not every seat's", () => {
+  const report = compareSets({
+    compare: [
+      {
+        case: null,
+        run: trialRun("A1", {
+          audit: {
+            reviews: [
+              [{ severity: "major", title: "lost write", file: "src/a.ts" }],
+              [{ severity: "blocker", title: "rejected by the synthesis", file: "src/b.ts" }],
+              [{ id: "F1", severity: "major", title: "lost write", file: "src/a.ts" }],
+            ],
+            checks: null,
+            interventions: 0,
+            ended: null,
+          },
+        }),
+      },
+    ],
+    against: [],
+    planted: {},
+  });
+  expect(report.cases[0]!.compare.median.escapedDefects).toBe(1);
 });

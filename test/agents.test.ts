@@ -74,7 +74,8 @@ import {
 } from "../src/engine";
 import { readStepLines } from "../src/steps";
 import { readMetrics } from "../src/metrics";
-import { usageOf, type Source } from "../src/usage-ledger-model";
+import { usageOf, type Source, type UsageEntry } from "../src/usage-ledger-model";
+import { readUsage } from "../src/usage-ledger";
 import { measuresOf } from "../src/outcomes";
 import { launchDir, recordLaunch, stemOf } from "../src/launches";
 import { Collected } from "../src/agents";
@@ -9600,7 +9601,7 @@ const recording = (sources: ReadonlyArray<Source>): CompactionPorts => ({
 
 const ledgered = { compactAtTokens: 1_000_000 };
 const usageLines = (runId: string) =>
-  readMetrics(evidenceDir(dir, runId)).pipe(Effect.provide(recordsAt(dir)));
+  readUsage(evidenceDir(dir, runId)).pipe(Effect.provide(recordsAt(dir)));
 
 test("a session's start-up lists each part its harness exposes, with its size, and the rest unavailable", () =>
   runEffect(
@@ -9653,14 +9654,8 @@ test("requests an agent made after its last delivery are in the ledger once it i
       yield* fs.makeDirectory(`${dir}/late`, { recursive: true });
       yield* fs.writeFileString(transcript, claudeRequest("A", "2026-11-17T10:00:00.000Z", 5));
       yield* rig.queueOutputs([{ verdict: "clean", note: "built" }]);
-      const keys = (
-        lines: ReadonlyArray<{ readonly usage?: { readonly what: string; readonly key?: string } }>,
-      ) =>
-        Arr.getSomes(
-          Arr.map(lines, (line) =>
-            line.usage?.what === "request" ? Option.fromNullishOr(line.usage.key) : Option.none(),
-          ),
-        );
+      const keys = (entries: ReadonlyArray<UsageEntry>) =>
+        Arr.flatMap(entries, (one) => (one.what === "request" ? [one.key] : []));
       const [ended, settled] = yield* session(
         Effect.gen(function* () {
           const agents = yield* Agents;

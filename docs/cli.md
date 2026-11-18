@@ -1711,22 +1711,23 @@ counted once, at its largest figures.
 | Field          | What it says                                                                                                                                                                                                                                                                 |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `totals`       | `requests`, and the tokens in each category: `input` (uncached), `cacheRead`, `cacheCreation`, `output`, and `reasoning`, which is part of `output`, not added to it.                                                                                                        |
-| `recovery`     | The same, for sessions that were recovery: a Heal's, or one whose first prompt was an Output repair.                                                                                                                                                                         |
+| `recovery`     | The same, for recovery: a Heal's sessions, one whose first prompt was an Output repair, and each request an agent made in a step after Collie sent it an Output repair or reminder.                                                                                          |
 | `steps[]`      | The same per `step`: the work the agent was given last before each request.                                                                                                                                                                                                  |
 | `heads[]`      | The same per `head`: the newest commit of the agent's checkout made by the time of the request.                                                                                                                                                                              |
 | `sessions[]`   | Per `agent` and harness `session`, with its `harness`, `model`, `effort` and `recovery`: the same categories, `initialContext` and `peakContext` (all a request was sent), `compactions`, `toolResultChars`, `reminders` and `repairs`, its `startup` and its `subagents[]`. |
-| `rounds[]`     | Each review `round`, when it started (`at`), and the `context` the reviewed agent had then.                                                                                                                                                                                  |
-| `children[]`   | Each Run this one started, and those started under them, by `runId`: the same categories, from its own ledger.                                                                                                                                                               |
-| `withChildren` | `totals` with every child Run's added: what the Run cost, its child Runs included, as a `self-improve` Run's Improvements are.                                                                                                                                               |
+| `rounds[]`     | Each review `round`, when it started (`at`), and the `context` of the Run's last request before it, whichever of its agents made it.                                                                                                                                         |
+| `children[]`   | Each Run this one started, and those started under them, by `runId`: the same categories, from its own ledger. One whose records could not be read is `unreadable`.                                                                                                          |
+| `withChildren` | `totals` with every child Run's added: what the Run cost, its child Runs included, as a `self-improve` Run's Improvements are; unavailable where a child Run is unreadable.                                                                                                  |
 
 A category a harness does not report is `null`, never `0`: Codex may report no cache
-creation, and a Claude transcript may name no reasoning. A total is `null` only when
-no request reported it. `startup` is a session's start-up context in characters, by part:
-`system`, `persona`, `project`, `tools` and `skills`. Each is `null` where the harness's
-records do not show it; today Codex shows its system prompt, its tool list and its project
-instructions, every harness has the persona Collie gave it, and none shows its skills. An
-agent with no controls — `compact_at_tokens` 0 and nothing to ask — has no records to read
-and no ledger.
+creation, and a Claude transcript may name no reasoning. A total is `null` where any
+request it adds up did not report that category, so a Run whose agents ran on different
+harnesses shows `null` rather than one harness's part. `startup` is a session's start-up
+context in characters, by part: `system`, `persona`, `project`, `tools` and `skills`. Each
+is `null` where the harness's records do not show it; today Codex shows its system prompt,
+its tool list and its project instructions, every harness has the persona Collie gave it,
+and none shows its skills. An agent with no controls — `compact_at_tokens` 0 and nothing to
+ask — has no records to read and no ledger.
 
 Terminal activity is not on this list, on purpose. A changing pane says an agent is alive;
 it does not say anything was produced. The pane clock is liveness; this is progress.
@@ -1760,19 +1761,19 @@ finished Runs and after a host restart.
 
 Each Run's `figures`:
 
-| Figure                    | What it is                                                                                                                                                                                                                             |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `<phase>.<category>`      | Tokens per category (`output`, `cacheRead`, `cacheCreation`, `input`, `reasoning`) for each phase: `startup` (each session's first request), `work` (the rest), `recovery` (recovery sessions, as `recovery` above) and their `total`. |
-| `sessions`, `compactions` | Agent sessions, and the compactions in them.                                                                                                                                                                                           |
-| `peakContext`             | The most any one request was sent.                                                                                                                                                                                                     |
-| `accepted`                | 1 where the Run's final review by its own reviewers carried nothing blocking and every required Check passed on its final tree; else 0. No merge request is needed, so a trial in a checkout with no forge is judged the same.         |
-| `checksPassed`            | 1 where every required Check passed on the Run's final tree, 0 where one did not, `null` where the Run never finished.                                                                                                                 |
-| `defectsFound`            | Blocking findings the Run's own reviewers raised, each counted once however many rounds it stood. Findings the builder reported are not counted.                                                                                       |
-| `escapedDefects`          | Blocking findings of the Run's audit; `null` with no audit.                                                                                                                                                                            |
-| `reopenedFindings`        | Findings a review marked fixed and a later one marked open again.                                                                                                                                                                      |
-| `plantedCaught`           | 1 or 0 where the case names a planted regression; `null` where it names none.                                                                                                                                                          |
-| `interventions`           | Answers, steers, follow-ups, deliveries, resumes and holds on the Run, from its audit trail, by anyone outside it: a human, chat, or another Run's agent such as a trial's operator. The Run's own agents and Collie's hosts are not.  |
-| `wallMs`                  | From the Run's start to its finish; `null` where it has not finished.                                                                                                                                                                  |
+| Figure                    | What it is                                                                                                                                                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<phase>.<category>`      | Tokens per category (`output`, `cacheRead`, `cacheCreation`, `input`, `reasoning`) for each phase: `startup` (each session's first request), `work` (the rest), `recovery` (as `recovery` above) and their `total`.                   |
+| `sessions`, `compactions` | Agent sessions, and the compactions in them.                                                                                                                                                                                          |
+| `peakContext`             | The most any one request was sent.                                                                                                                                                                                                    |
+| `accepted`                | 1 where the Run's final review by its own reviewers carried nothing blocking and every required Check passed on its final tree; else 0. No merge request is needed, so a trial in a checkout with no forge is judged the same.        |
+| `checksPassed`            | 1 where every required Check passed on the Run's final tree, 0 where one did not, `null` where the Run never finished.                                                                                                                |
+| `defectsFound`            | Blocking findings the Run's own reviewers raised, each counted once however many rounds it stood. Findings the builder reported are not counted.                                                                                      |
+| `escapedDefects`          | Blocking findings of the final review of the Run's audit; `null` with no audit.                                                                                                                                                       |
+| `reopenedFindings`        | Findings a review marked fixed and a later one marked open again.                                                                                                                                                                     |
+| `plantedCaught`           | 1 or 0 where the case names a planted regression; `null` where it names none.                                                                                                                                                         |
+| `interventions`           | Answers, steers, follow-ups, deliveries, resumes and holds on the Run, from its audit trail, by anyone outside it: a human, chat, or another Run's agent such as a trial's operator. The Run's own agents and Collie's hosts are not. |
+| `wallMs`                  | From the Run's start to its finish; `null` where it has not finished.                                                                                                                                                                 |
 
 Each set adds its Runs' figures up (`peakContext` is the largest), and gives each token
 figure per accepted change: the figure divided by the set's accepted Runs. A set with none

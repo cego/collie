@@ -153,6 +153,7 @@ import { fixtures, until } from "./host";
 import { BUILD } from "../../src/host";
 import { metricsOf, readMetrics } from "../../src/metrics";
 import { usageOf } from "../../src/usage-ledger-model";
+import { readUsage } from "../../src/usage-ledger";
 import type { CompactionPorts } from "../../src/compaction";
 import { PARK_CAUSES, ParkCause } from "../../src/park-cause";
 import { recheckPark } from "../../src/park-recheck";
@@ -5320,7 +5321,7 @@ scenario(
 
         const lines = yield* readMetrics(evidenceDir(dir, "r-tokens"));
         expect(metricsOf(lines, "2026-01-01T00:00:00.000Z").slices).toEqual({ done: 2, total: 2 });
-        const usage = usageOf(lines);
+        const usage = usageOf(yield* readUsage(evidenceDir(dir, "r-tokens")), lines);
         expect(Arr.map(usage.rounds, (one) => one.round)).toEqual(["review#1"]);
         expect(Arr.map(usage.sessions, (one) => one.agent)).toEqual([
           "r-tokens-build-r1",

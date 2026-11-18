@@ -57,7 +57,7 @@ export const compareRuns = Effect.fn("Trial.compare")(function* (
       (client) =>
         Effect.all({
           view: client.run({ runId }),
-          lines: client.runMetrics({ runId }),
+          usage: client.runUsage({ runId }),
           records: client.runTrial({ runId }),
         }),
       door,
@@ -76,7 +76,7 @@ export const compareRuns = Effect.fn("Trial.compare")(function* (
           run: {
             runId,
             created: got.value.view?.created ?? "",
-            lines: got.value.lines,
+            usage: got.value.usage,
             records: got.value.records,
             audit: audited === null ? null : audited.value.records,
           },

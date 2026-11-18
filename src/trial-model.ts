@@ -4,15 +4,20 @@
 
 import * as Arr from "effect/Array";
 import * as Num from "effect/Number";
-import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Rec from "effect/Record";
 import { Schema } from "effect";
 import type { AuditLine } from "./audit";
 import { findingKey } from "./output";
-import type { Metric } from "./metrics";
 import { epochMs } from "./time";
-import { ledgerOf, sessionKey, usageOf, type Count } from "./usage-ledger-model";
+import {
+  ledgerOf,
+  recoveryOf,
+  sessionKey,
+  usageOf,
+  type Count,
+  type UsageEntry,
+} from "./usage-ledger-model";
 
 /** A finding as any reviewer's Output gives it: a reassessment names only its id and status. */
 export const ReviewedFinding = Schema.Struct({
@@ -39,7 +44,7 @@ export type TrialRecords = typeof TrialRecords.Type;
 export interface TrialRun {
   readonly runId: string;
   readonly created: string;
-  readonly lines: ReadonlyArray<Metric>;
+  readonly usage: ReadonlyArray<UsageEntry>;
   readonly records: TrialRecords;
   /** The records of the review Run that audited its final tree, or null for none. */
   readonly audit: TrialRecords | null;
@@ -172,7 +177,16 @@ function ledgerOfReviews(reviews: ReadonlyArray<ReadonlyArray<ReviewedFinding>>)
   return {
     raised: raised.size,
     reopened: reopened.size,
-    finalBlocking: Arr.some(last, (key) => blocking(latest.get(key) ?? {})),
+    /** The last review's blocking findings, by file and title. */
+    finalBlocking: new Set(
+      Arr.map(
+        Arr.filter(
+          Arr.map(last, (key) => latest.get(key) ?? {}),
+          blocking,
+        ),
+        named,
+      ),
+    ).size,
     names: (planted: Planted) =>
       Arr.some(
         [...latest.values()],
@@ -181,25 +195,26 @@ function ledgerOfReviews(reviews: ReadonlyArray<ReadonlyArray<ReviewedFinding>>)
   };
 }
 
-const plus = (a: number, b: Count) => a + (b ?? 0);
+const plus = (a: Count, b: Count): Count => (a === null || b === null ? null : a + b);
 
-/** What one Run spent by phase: each session's first request, the rest, and recovery sessions. */
-function phasesOf(lines: ReadonlyArray<Metric>) {
-  const usage = usageOf(lines);
+/** What one Run spent by phase: each session's first request, recovery, and the rest. */
+function phasesOf(entries: ReadonlyArray<UsageEntry>) {
+  const usage = usageOf(entries);
   const recovering = new Set(
     Arr.map(
       Arr.filter(usage.sessions, (one) => one.recovery),
       sessionKey,
     ),
   );
-  const ledger = ledgerOf(Arr.getSomes(Arr.map(lines, (line) => Option.fromNullishOr(line.usage))));
+  const ledger = ledgerOf(entries);
+  const retried = recoveryOf(ledger);
   const requests = Arr.sortWith(
     [...ledger.requests.values()],
     (one) => epochMs(one.at),
     Order.Number,
   );
   const opened = new Set<string>();
-  const sums = new Map<Phase, Record<Category, number>>(
+  const sums = new Map<Phase, Record<Category, Count>>(
     Arr.map(PHASES, (phase) => [
       phase,
       { output: 0, cacheRead: 0, cacheCreation: 0, input: 0, reasoning: 0 },
@@ -209,17 +224,17 @@ function phasesOf(lines: ReadonlyArray<Metric>) {
     const owner = sessionKey({ agent: one.agent, session: one.parent ?? one.session });
     const first = one.parent === null && !opened.has(owner);
     if (one.parent === null) opened.add(owner);
-    const phase: Phase = recovering.has(owner) ? "recovery" : first ? "startup" : "work";
+    const phase: Phase =
+      recovering.has(owner) || retried(one) ? "recovery" : first ? "startup" : "work";
     for (const at of [phase, "total"] as const) {
       const sum = sums.get(at)!;
       for (const category of CATEGORIES) sum[category] = plus(sum[category], one[category]);
     }
   }
-  const reported = (category: Category) => Arr.some(requests, (one) => one[category] !== null);
   const figures = tabulate(
     TOKENS,
     (one) => one.measure,
-    ({ phase, category }) => (reported(category) ? sums.get(phase)![category] : null),
+    ({ phase, category }) => (requests.length === 0 ? null : sums.get(phase)![category]),
   );
   return { figures, usage };
 }
@@ -227,7 +242,7 @@ function phasesOf(lines: ReadonlyArray<Metric>) {
 const flag = (value: boolean | null) => (value === null ? null : value ? 1 : 0);
 
 function figuresOf(run: TrialRun, planted: Planted | undefined): Figures {
-  const { figures, usage } = phasesOf(run.lines);
+  const { figures, usage } = phasesOf(run.usage);
   const { records } = run;
   const reviewed = records.reviews.length === 0 ? null : ledgerOfReviews(records.reviews);
   const audit =
@@ -244,10 +259,10 @@ function figuresOf(run: TrialRun, planted: Planted | undefined): Figures {
     sessions: usage.sessions.length,
     compactions: Arr.reduce(usage.sessions, 0, (sum, one) => sum + one.compactions),
     peakContext: peaks.length === 0 ? null : Math.max(...peaks),
-    accepted: flag(reviewed !== null && !reviewed.finalBlocking && checksPassed === true),
+    accepted: flag(reviewed !== null && reviewed.finalBlocking === 0 && checksPassed === true),
     checksPassed: flag(checksPassed),
     defectsFound: reviewed?.raised ?? null,
-    escapedDefects: audit === null ? null : audit.raised,
+    escapedDefects: audit === null ? null : audit.finalBlocking,
     reopenedFindings: reviewed?.reopened ?? null,
     plantedCaught:
       planted === undefined ? null : flag(reviewed !== null && reviewed.names(planted)),
