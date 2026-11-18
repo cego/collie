@@ -280,6 +280,34 @@ test("a follow-up of a Run still going is not offered and starts nothing, and a 
     [],
   ));
 
+test("a self follow-up of a Run started without the input it carries starts", () =>
+  proves(
+    "collie-actions-absent-",
+    (world) =>
+      Effect.gen(function* () {
+        const project = yield* projectOf(world);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const { runId } = yield* client
+          .start({ project, id: "lingers", request: "req-1", input: {} })
+          .pipe(Effect.orDie);
+        yield* until(
+          () => client.run({ runId }),
+          (view) => view?.status.status === "suspended",
+        ).pipe(Effect.orDie);
+        yield* client
+          .control({ runId, control: "stop", set: true, request: "stop-1" })
+          .pipe(Effect.orDie);
+        const carried = yield* client
+          .invoke({ runId, offer: "carry-on", input: {}, request: "act-1" })
+          .pipe(Effect.orDie);
+        expect((yield* client.run({ runId: carried.runId }).pipe(Effect.orDie))?.parent).toBe(
+          runId,
+        );
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));
+
 test("an offer the module no longer makes starts nothing, however recently it was listed", () =>
   proves(
     "collie-actions-stale-",

@@ -8,7 +8,7 @@ export default defineWorkflow({
   id: "lingers",
   title: "Wait to be told",
   description: "Asks one question, and offers to carry on whenever it is asked.",
-  input: Schema.Struct({ note: Schema.String }),
+  input: Schema.Struct({ note: Schema.optionalKey(Schema.String) }),
   hints: { note: "goal" },
   output: Schema.String,
   followUps: [
