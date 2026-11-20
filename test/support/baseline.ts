@@ -8470,6 +8470,61 @@ scenario(
 );
 
 scenario(
+  "two tickets' reviews give their findings different ledger ids",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-ledger-two";
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit" },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve(runId, ["unit"]);
+        yield* putFact(runId, "features.json", `{"review_delta":true,"findings_ledger":true}`);
+        const blocked = {
+          ...BUILT,
+          verdict: "findings",
+          findings: [
+            { severity: "blocker", title: "the guard is on the wrong side", file: "a.ts" },
+          ],
+        };
+        const first = { severity: "minor", title: "a name that says less than it does" };
+        const second = { severity: "minor", title: "a comment that repeats its line" };
+        yield* rig.queueOutputs([
+          blocked,
+          { ...CLEAN_SYNTHESIS, findings: [first] },
+          blocked,
+          { ...CLEAN_SYNTHESIS, findings: [second] },
+          OPENED,
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* operationsOf(runId)).toEqual([
+          "01-first.md",
+          "01-first.md.review-1",
+          "02-second.md",
+          "02-second.md.review-1",
+          "mr",
+        ]);
+        const opening = yield* asked(runId, "mr");
+        expect(opening).toContain(`${runId}-F1: open — [minor] ${first.title}`);
+        expect(opening).toContain(`${runId}-F2: open — [minor] ${second.title}`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "an implement Run restarted between two review rounds keeps its findings' ledger ids",
   () =>
     runEffect(

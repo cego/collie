@@ -498,7 +498,7 @@ test("an implement ticket's first review gives its finding the Run's first id, a
     }),
   ));
 
-test("a later round's reviewer who leaves out an earlier finding is asked to return its status", () =>
+test("a later round's review that leaves out an earlier finding fails the Run, naming the finding whose status it must return", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([

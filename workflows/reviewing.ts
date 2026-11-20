@@ -454,7 +454,6 @@ export const followUp = (ask: {
     );
   });
 
-/** A ledger's finding a review has closed. */
 const isResolved = (finding: Finding) =>
   finding.status === "fixed" || finding.status === "obsolete";
 
