@@ -86,7 +86,7 @@ import { isoAt, nowIso } from "../src/time";
 import { readCards, writeCheckpoint } from "../src/cards";
 import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
-import { HandOver, OutgoingFields, type HandOverGiven } from "../src/hand-over";
+import { HandOver, OutgoingFields, buildHandOver, type HandOverGiven } from "../src/hand-over";
 import { readRunJournal, runJournal } from "../src/journal";
 import { appendVerification, type Verification } from "../src/verify";
 import { Triage } from "../workflows/retrospective";
@@ -4713,6 +4713,36 @@ test("the agent taking over reads the Run's progress once: in its prompt, not ag
       expect(count("unit")).toBe(1);
     }).pipe(Effect.scoped),
   ));
+
+test("a criterion a criteria hand-back answered not met after an earlier met is handed over unclaimed", () => {
+  const record = buildHandOver({
+    revision: 1,
+    run: "r1",
+    step: "build",
+    agent: "builder",
+    incarnation: 1,
+    given: {
+      criteria: ["the cache is warmed"],
+      answers: [
+        { criterion: "the cache is warmed", met: "cache.test.ts, recorded as unit" },
+        { criterion: "the cache is warmed", met: "not met: the warm-up races the first read" },
+      ],
+    },
+    goal: null,
+    constraints: [],
+    plan: null,
+    checkout: { head: "abc", branch: "work", dirty: false },
+    base: null,
+    verifications: [],
+    checks: [],
+    asked: [],
+    transcript: null,
+    reports: "reports",
+  });
+  expect(record.criteria).toEqual([
+    { criterion: "the cache is warmed", claimed: null, proved: [] },
+  ]);
+});
 
 /** Two pieces of work on one agent; the second runs out, after the first said what it decided. */
 const Said = Schema.Struct({ verdict: Schema.String, ...OutgoingFields });

@@ -119,11 +119,9 @@ export const buildHandOver = (state: HandOverState): HandOver => {
     (one) => one.expect === "pass" && one.result === "pass" && one.end.head_sha === checkout.head,
   );
   const criteria = Arr.map(given.criteria ?? [], (criterion) => {
-    const answer = Arr.findLast(
-      given.answers ?? [],
-      (one) => one.criterion === criterion && !NOT_MET.test(one.met),
-    );
-    const claimed = answer._tag === "Some" ? answer.value.met : null;
+    const answer = Arr.findLast(given.answers ?? [], (one) => one.criterion === criterion);
+    const claimed =
+      answer._tag === "Some" && !NOT_MET.test(answer.value.met) ? answer.value.met : null;
     return {
       criterion,
       claimed,
