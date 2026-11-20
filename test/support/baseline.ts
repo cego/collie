@@ -8928,7 +8928,8 @@ scenario(
             "reviewing.ts": `${ROOT}test/fixtures/reviewing.before-ledger.ts.txt`,
           }),
         };
-        // Admitted as that release's host admitted it, with no features record.
+        // Admitted as that release's host admitted it: its features record has no ledger or plan.
+        yield* putFact(runId, "features.json", `{"review_delta":true}`);
         yield* running(release, () =>
           until(
             () => wasAsked(runId, "fix-1"),
@@ -8941,7 +8942,7 @@ scenario(
         );
         yield* bin.restore();
         expect(outcomeText(status)).toBe(OPENED.mr_url);
-        expect(yield* factOf(runId, "features.json")).toBeNull();
+        expect(yield* factOf(runId, "features.json")).toBe(`{"review_delta":true}`);
         expect(yield* asked(runId, "review-2-1")).not.toContain("Earlier findings ledger");
         expect(yield* asked(runId, "mr")).not.toContain(`${runId}-F1`);
       }),
@@ -9460,7 +9461,8 @@ scenario(
           runId,
           input: { plan: "Count the registries.", ...FINISH },
         };
-        // Admitted as that release's host admitted it, with no features record.
+        // Admitted as that release's host admitted it: its features record has no ledger or plan.
+        yield* putFact(runId, "features.json", `{"review_delta":true}`);
         yield* running(release, () =>
           until(
             () => wasAsked(runId, "build"),
@@ -9474,7 +9476,7 @@ scenario(
         yield* bin.restore();
 
         expect(outcomeText(status)).toBe(OPENED.mr_url);
-        expect(yield* factOf(runId, "features.json")).toBeNull();
+        expect(yield* factOf(runId, "features.json")).toBe(`{"review_delta":true}`);
         expect(yield* operationsOf(runId)).toEqual(["build", "review-1", "mr"]);
       }),
     ),

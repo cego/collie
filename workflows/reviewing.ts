@@ -506,7 +506,6 @@ export const rally = (ask: {
   readonly resume?: { readonly previous: Rallied; readonly reviewers: string };
   /** The findings ledger its first round is given; absent, no round has one. */
   readonly ledger?: ReadonlyArray<Finding>;
-  /** Ids the Run gave findings outside this rally. */
   readonly taken?: ReadonlyArray<string>;
   /** Integrates the default branch, answering with what a review is diffed against. */
   readonly integrate: (

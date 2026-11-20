@@ -1678,7 +1678,6 @@ const builderRally = (ask: {
 interface Handing {
   plan: string | null;
   ticket: string | null;
-  /** The builder's last Output. */
   said: Outgoing | undefined;
   readonly sessions: "run" | "ticket" | "round";
   /** The agent the work is on now, the operation it last finished, and who it took over from. */

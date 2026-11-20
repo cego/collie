@@ -73,7 +73,6 @@ export interface HandOverGiven {
   readonly criteria?: ReadonlyArray<string>;
   /** The work's last decoded Output's answers to them. */
   readonly answers?: ReadonlyArray<{ readonly criterion: string; readonly met: string }>;
-  /** The Checks the ticket names. */
   readonly checks?: ReadonlyArray<string>;
   readonly findings?: ReadonlyArray<Finding>;
   /** The head the findings were reviewed at. */
@@ -96,7 +95,6 @@ export interface HandOverState {
   readonly checkout: CheckoutNow;
   readonly base: string | null;
   readonly verifications: ReadonlyArray<Verification>;
-  /** The Run's Checks, by name. */
   readonly checks: ReadonlyArray<string>;
   readonly asked: ReadonlyArray<AskedQuestion>;
   readonly transcript: string | null;

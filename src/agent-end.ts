@@ -233,7 +233,7 @@ const paneProcesses = Effect.fnUntraced(function* (
     ...(current === undefined || current.pid === recorded?.pid ? [] : [current]),
   ];
   if (named.length === 0) return { unconfirmed: "no process of its pane could be named" };
-  const roots: number[] = [];
+  const roots: SeenProcess[] = [];
   const noted: SeenProcess[] = [];
   for (const root of named) {
     const now = yield* processOf(root.pid);
@@ -243,7 +243,7 @@ const paneProcesses = Effect.fnUntraced(function* (
       return {
         unconfirmed: `its pane's processes could not be listed (${reason(session.failure)})`,
       };
-    roots.push(root.pid);
+    roots.push(root);
     if (now !== null) noted.push(root);
     for (const one of session.success) noted.push({ pid: one.pid, started: one.started });
   }
@@ -257,17 +257,21 @@ const paneProcesses = Effect.fnUntraced(function* (
  * after the grace a hang-up gets is sent one SIGTERM, as a Codex server's session is.
  */
 const settled = Effect.fnUntraced(function* (
-  roots: ReadonlyArray<number>,
+  roots: ReadonlyArray<SeenProcess>,
   noted: ReadonlyArray<SeenProcess>,
   budgetMs: number,
 ) {
   const start = yield* Clock.currentTimeMillis;
   const running = Effect.gen(function* () {
     const found = [...noted];
-    // A process started as the pane closed is in its session too.
-    for (const root of roots)
-      for (const one of yield* sessionOf(root).pipe(Effect.orElseSucceed(() => [])))
+    // A process started as the pane closed is in its session too, while its root's pid is
+    // not another process's.
+    for (const root of roots) {
+      const now = yield* processOf(root.pid);
+      if (now !== null && now.started !== root.started) continue;
+      for (const one of yield* sessionOf(root.pid).pipe(Effect.orElseSucceed(() => [])))
         found.push({ pid: one.pid, started: one.started });
+    }
     const distinct = Arr.dedupeWith(
       found,
       (one, other) => one.pid === other.pid && one.started === other.started,
