@@ -341,7 +341,10 @@ before and after. A tree is its content: committing exactly the bytes a Verifica
 leaves it on the same tree, and changing any of them does not. A result whose snapshots
 differ is `unstable`, never `pass`, and names the paths that moved, each classed tracked,
 untracked or lockfile. While Collie collects one itself on a checkout, deliveries to the
-Run's agents working there are held until it ends. One recorded with `--expect fail` reproduces a failure
+Run's agents working there are held until it ends. One run **isolated** (`--isolated`, or
+`isolated: true` on a Check) runs in a detached checkout of the tree it starts on, after an
+optional recorded `prepare`, so edits in the Worktree cannot move it. Its record still
+proves that start tree, and a failed `prepare` records it failed at stage `prepare`. One recorded with `--expect fail` reproduces a failure
 and is never a pass: on the current tree it proves no Check, and on an earlier tree it is
 history, so the Check still owes a pass on the final tree. An agent's statement about tests
 is a **claim**, and is shown as one.
@@ -850,7 +853,14 @@ Run's end, `ci` for a check left to CI, read from the merge request's pipeline, 
 owes its pass here, as one that passed only earlier does; neither is a failure. Past that one `recheck`, a check is not run whole again on a tree it already
 failed on: after a gate fix that left the tree as it was, the records on that tree stand.
 A resume of a Run held unproved is the exception, because a repair can be outside the tree:
-each check still failing there runs whole once more (ADR-0034, amended 2026-10-19). The pass is the Workflow's declaration, never read off its
+each check still failing there runs whole once more (ADR-0034, amended 2026-10-19). A pass
+on this tree is relied on only if this host collected it: a restart is when something
+outside the tree may have been repaired, so a restarted host runs the check again. Where no
+record is relied on, the Run's log says why, with one reason: no record, another command,
+another tree, an unstable or expected-red record, another environment, or a record from
+before this host started. Identical requests for a check while it runs (same Run, command,
+directory, tree and environment) share its one process and one record, which says it
+answered each. The pass is the Workflow's declaration, never read off its
 id. While it runs, the card and chat say the check, the pass, how long it has run against
 how long it usually takes, and where its output is being written (ADR-0042).
 

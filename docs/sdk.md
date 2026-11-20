@@ -1586,6 +1586,17 @@ Whether a Run's rounds are told this is fixed when the Run starts, as `Place.fea
 no record started on an earlier release and keeps that release's rounds, so its replay meets
 no Activity it did not record.
 
+Before each round's review opens, `rally` runs the Run's checks marked `before_review` on the
+builder's tree, through `checkedBeforeReview`: each through `host.verify`, inside one Activity
+per attempt, so the records land in the journal like any check's. A failing one goes to the
+rally's `fix` as a blocking finding naming the check and the `verification:<id>` reference to
+its output, and no reviewer starts until every marked check passes on the fixed tree. After
+`ROUNDS` such fixes the rally halts with `before_review_failed`, and the failing checks are the
+halted review's findings, which a resumed rally hands its first fix. The review workflow's
+"Fix findings" calls it after each fix Collie runs. The gate reuses a marked check's pass on a
+tree that has not moved since, as it does any check's, with no cache of its own. It runs only
+for a Run whose `Place.features` say `before_review`.
+
 `ReviewOutputSchema`, `FixOutputSchema` and `SynthesisSchema` are the shapes those steps
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the
 shipped steps are held to, not a copy of it.

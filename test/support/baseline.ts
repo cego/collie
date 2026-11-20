@@ -8417,6 +8417,92 @@ scenario(
   120_000,
 );
 
+/** `unit` and a `static` that runs `argv` before review, frozen for the Run. */
+const freezeMarked = (runId: string, executable: string, argv: ReadonlyArray<string>) =>
+  freeze(runId, [
+    { name: "unit", executable: "true", argv: [], cwd: rig.projectDir },
+    { name: "static", executable, argv, cwd: rig.projectDir, before_review: true },
+  ]);
+const staticRecords = (runId: string) =>
+  Effect.map(readVerifications(evidenceDir(dir, runId)), (all) =>
+    Arr.filter(all, (one) => one.name === "static"),
+  );
+
+scenario(
+  "an implement Run started with a marked static check that fails once fixes it before one review round, on the fixed tree",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-static";
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve(runId, ["unit"]);
+        yield* freezeMarked(runId, "test", ["-f", "lint-ok"]);
+        yield* putFact(runId, "features.json", `{"review_delta":true,"before_review":true}`);
+        yield* rig.queueOutputs([
+          BUILT,
+          {
+            writes: [{ path: `${rig.projectDir}/lint-ok`, text: "fixed\n" }],
+            output: { verdict: "clean", fixed: [], checks: [] },
+          },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "before-review-1-fix-1")).toContain(
+          `check "static" failed before review`,
+        );
+        expect(yield* wasAsked(runId, "review-1")).toBe(true);
+        expect(yield* wasAsked(runId, "review-2-1")).toBe(false);
+        // The review opened on the tree the fix left, and the gate took the pass made there.
+        expect(Arr.map(yield* staticRecords(runId), (one) => one.result)).toEqual(["fail", "pass"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "an implement Run started on the release before checks ran before review resumes mid-ticket on this one and runs none before its review",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-unmarked";
+        const { bin, options } = yield* fixedOnce(runId);
+        // Not unit's command, which the host would answer with unit's record.
+        yield* freezeMarked(runId, "test", ["-d", "."]);
+        const release = {
+          ...options,
+          entry: yield* released(`${ROOT}test/fixtures/reviewing.before-static.ts.txt`),
+        };
+        yield* running(release, () =>
+          until(
+            () => wasAsked(runId, "fix-1"),
+            (asked) => asked,
+          ),
+        );
+        yield* released(`${ROOT}workflows/reviewing.ts`);
+        const status = yield* driven({ ...release, restarted: true }, (run) =>
+          Effect.andThen(run.resume, ended(run.status)),
+        );
+        yield* bin.restore();
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* factOf(runId, "features.json")).toBeNull();
+        const statics = yield* staticRecords(runId);
+        expect(statics.length).toBeGreaterThan(0);
+        expect(Arr.map(statics, (one) => one.pass)).toEqual(Arr.map(statics, () => "gate"));
+      }),
+    ),
+  120_000,
+);
+
 once("no shipped prompt sends an agent to a step directory a Run no longer has", () =>
   runEffect(
     Effect.gen(function* () {

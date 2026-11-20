@@ -3429,11 +3429,19 @@ const frontDoorHandlers = (
               );
             }),
           ),
-        verify: ({ runId, name, executable, argv, cwd, expect, again }, { client }) =>
+        verify: (
+          { runId, name, executable, argv, cwd, expect, again, isolated, prepare },
+          { client },
+        ) =>
           Stream.unwrap(
             Effect.gen(function* () {
               const view = yield* known(runId);
-              const { collect, insideRun } = yield* Effect.promise(() => import("./verify"));
+              const { collect, insideRun, missSaid } = yield* Effect.promise(
+                () => import("./verify"),
+              );
+              const { baseTreesDir } = yield* Effect.promise(() => import("./base-tree"));
+              const isolation =
+                isolated === true || prepare !== undefined ? { prepare } : undefined;
               const { noteVerification } = yield* Effect.promise(() => import("./metrics"));
               const where = cwd ?? view.cwd;
               if (!(yield* insideRun(where, { cwd: view.cwd, worktree: null })))
@@ -3445,7 +3453,7 @@ const frontDoorHandlers = (
                 const { record } = check;
                 if (record === null)
                   return yield* new HostRefused({
-                    reason: `invalid_state: "${check.check}" is one of this Run's Checks and has no record on this tree; Collie's gate runs it itself, on the final tree.`,
+                    reason: `invalid_state: "${check.check}" is one of this Run's Checks and no record answers for it (${missSaid(check.miss)}); Collie's gate runs it itself, on the final tree.`,
                   });
                 const log = record.log === undefined ? "" : `; its log is ${record.log}`;
                 return Stream.make(
@@ -3457,7 +3465,7 @@ const frontDoorHandlers = (
                   { _tag: "Result" as const, verification: record, ran: false },
                 );
               }
-              const recorded =
+              const found =
                 again === true
                   ? null
                   : yield* reliance.recorded(runId, {
@@ -3466,7 +3474,9 @@ const frontDoorHandlers = (
                       argv,
                       cwd: where,
                       expect,
+                      ...(isolation !== undefined && { isolated: isolation }),
                     });
+              const recorded = found?.record ?? null;
               if (recorded !== null) {
                 const log = recorded.log === undefined ? "" : `; its log is ${recorded.log}`;
                 return Stream.make(
@@ -3483,6 +3493,7 @@ const frontDoorHandlers = (
                   Effect.gen(function* () {
                     const echo = (stream: "stdout" | "stderr") => (text: string) =>
                       Queue.offer(queue, { _tag: "Output", stream, text }).pipe(Effect.asVoid);
+                    if (found?.miss) yield* echo("stderr")(`running it: ${missSaid(found.miss)}\n`);
                     const from = whoOf(client).from;
                     const step =
                       from?.run === runId
@@ -3536,6 +3547,12 @@ const frontDoorHandlers = (
                           log,
                           step: step?.step,
                           place: step?.place,
+                          ...(isolation !== undefined && {
+                            isolated: {
+                              ...isolation,
+                              checkouts: baseTreesDir(env.stateDir, runId),
+                            },
+                          }),
                         },
                         {
                           stdout: echo("stdout"),

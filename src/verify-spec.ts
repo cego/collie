@@ -15,6 +15,16 @@ import { pipe as pipe_ } from "effect/Function";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { CommandLine } from "effect/process";
 import { addressOf, RunRecords } from "./run-records";
+import { PrepareSchema } from "./verify-model";
+
+/** Why a check cannot be marked as it is, or undefined where it can. */
+export const markRefused = (spec: {
+  readonly ci?: string;
+  readonly before_review?: boolean;
+}): string | undefined =>
+  spec.ci !== undefined && spec.before_review === true
+    ? "a check left to CI cannot run before review: nobody runs it locally"
+    : undefined;
 
 /**
  * Exactly what Collie runs for a check, bound argument by argument: the wrapper is part
@@ -28,7 +38,13 @@ export const VerifySpecSchema = Schema.Struct({
   cwd: Schema.String,
   /** The merge request pipeline job that proves it: nobody runs it locally (ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job). */
   ci: Schema.optionalKey(Schema.String),
-});
+  /** Run in a detached checkout of its start tree, so edits in the Worktree cannot move it. */
+  isolated: Schema.optionalKey(Schema.Boolean),
+  /** Run first in that checkout, recorded with the check. */
+  prepare: Schema.optionalKey(PrepareSchema),
+  /** Run on the builder's tree before a review round opens; a failure goes back to the builder. */
+  before_review: Schema.optionalKey(Schema.Boolean),
+}).check(Schema.makeFilter(markRefused));
 export type VerifySpec = Schema.Schema.Type<typeof VerifySpecSchema>;
 
 const decodeGiven = Schema.decodeUnknownResult(Schema.fromJsonString(VerifySpecSchema));
