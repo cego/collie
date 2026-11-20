@@ -5036,7 +5036,7 @@ const firstCommits = Effect.gen(function* () {
     "the first ticket",
   );
   firstCommit = yield* headNow;
-  yield* ticketOutput("01-first.md", JSON.stringify(SAID_FIRST));
+  yield* ticketOutput("01-first.md", `{"verdict":"clean","decisions":["Keep one registry"]}`);
 }).pipe(Effect.orDie, Effect.forkScoped);
 
 /** Whether `before`'s terminal was killed before `after` was first started: one writer at a time. */

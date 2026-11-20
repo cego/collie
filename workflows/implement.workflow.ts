@@ -139,7 +139,7 @@ const inlinePlanRefusal = (
       (one) =>
         one.status !== "fixed" &&
         one.status !== "obsolete" &&
-        !Arr.some(texts, (text) => text.includes(one.title)),
+        !Arr.some(texts, Str.includes(one.title)),
     );
     return dropped.length === 0
       ? null
@@ -1652,7 +1652,7 @@ const builderRally = (ask: {
             handOver: handOverOf(ask.handing, {
               ...proofOf(ask.handing, ask.build?.item),
               findings: open,
-              ...(head ? { reviewed: head } : {}),
+              reviewed: head ?? "",
             }),
             role: "implementer",
             pushes: true,
