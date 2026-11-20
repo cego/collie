@@ -455,12 +455,12 @@ export interface AgentsApi {
       "revision" | "goal" | "constraints" | "plan" | "checkout" | "reports"
     > & { readonly cwd: string },
   ) => Effect.Effect<HandOver>;
-  /** The head and plan revision a hand-over is held to at dispatch. */
+  /** What of the checkout a hand-over is held to at dispatch. */
   readonly atCheckout: (cwd: string, plan: string | null) => Effect.Effect<AtDispatch>;
   /** Keeps what a stale hand-over's park rechecks. */
   readonly handOverStale: (
     runId: string,
-    seen: AtDispatch & { readonly cwd: string; readonly dir: string | null },
+    seen: Omit<AtDispatch, "dirty"> & { readonly cwd: string; readonly dir: string | null },
   ) => Effect.Effect<void>;
   /**
    * What an agent is told about asking for a decision its work does not cover: the pane
@@ -1261,7 +1261,12 @@ export const agentWork = <
         const dispatched = yield* atDispatch(handed, agents.atCheckout(work.cwd, plan), rebuild);
         if (dispatched === null) {
           const seen = yield* agents.atCheckout(work.cwd, plan);
-          yield* agents.handOverStale(runId, { ...seen, cwd: work.cwd, dir: plan });
+          yield* agents.handOverStale(runId, {
+            head: seen.head,
+            plan: seen.plan,
+            cwd: work.cwd,
+            dir: plan,
+          });
           yield* host.parked(
             runId,
             `${successor}'s hand-over was rebuilt once and the checkout moved again (head ${seen.head}, plan revision ${seen.plan ?? "none"}): no agent takes the work from a stale picture. This Run goes on once the checkout holds still`,
@@ -4656,10 +4661,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         }),
       ).pipe(Effect.orDie),
     atCheckout: (cwd, plan) =>
-      Effect.all({
-        head: Effect.map(checkoutOf(cwd), (now) => now.head),
-        plan: planOf(plan),
-      }),
+      Effect.all({ now: checkoutOf(cwd), plan: planOf(plan) }).pipe(
+        Effect.map(({ now, plan }) => ({ head: now.head, plan, dirty: now.dirty })),
+      ),
     handOverStale: (runId, seen) =>
       under(rememberStaleHandOver(`${host.dir}/runs/${runId}`, seen)).pipe(Effect.orDie),
     stepMessage: (ask) => {

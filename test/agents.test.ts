@@ -4833,6 +4833,29 @@ test("a hand-over whose head moved before it went out is rebuilt once at the new
     }).pipe(Effect.scoped),
   ));
 
+test("a hand-over built over a clean checkout that is dirty when it goes out is rebuilt to say whose the uncommitted work is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dirty = [false, true];
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "over the dirty tree" }]);
+      yield* Effect.forkScoped(runsOut(agentFor("r1")));
+      yield* session(started("r1"), {
+        ...chain,
+        collectMs: 30_000,
+        checkout: () =>
+          Effect.sync(() => ({
+            head: "aaaaaaaaaaaaaaaa",
+            branch: "work",
+            dirty: dirty.length > 1 ? dirty.shift()! : dirty[0]!,
+          })),
+      });
+
+      const prompt = yield* successorPrompt();
+      expect(prompt).toContain("## Hand-over (revision 2)");
+      expect(prompt).toContain(`The uncommitted work is ${agentFor("r1")}'s`);
+    }).pipe(Effect.scoped),
+  ));
+
 test("a hand-over whose head moves again after it was rebuilt parks the Run as hand-over-stale and starts no agent", () =>
   runEffect(
     Effect.gen(function* () {

@@ -231,14 +231,17 @@ export const renderHandOver = (record: HandOver, why: string): string =>
     "\n",
   );
 
-/** The head and plan revision a record is held to at dispatch. */
+/** What of the checkout a record is held to at dispatch. */
 export interface AtDispatch {
   readonly head: string;
   readonly plan: string | null;
+  readonly dirty: boolean;
 }
 
 const current = (record: HandOver, now: AtDispatch) =>
-  record.head === now.head && record.plan === now.plan;
+  record.head === now.head &&
+  record.plan === now.plan &&
+  (record.uncommitted !== null) === now.dirty;
 
 /**
  * The record to dispatch: this one where it still matches the checkout, else one rebuilt
