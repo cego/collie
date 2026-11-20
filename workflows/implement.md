@@ -300,7 +300,9 @@ list each in the description by its title.
 {{ledger}}
 
 Where the list above is not empty, it is every finding the reviews raised, each with its id
-and where it ended up. Name each one in the description by that id and status.
+and the status the last review round gave it. Name each one in the description by that id
+and status. A fix after the last review does not update them: where one is listed above,
+say the statuses are as of the last review round.
 
 {{unsettled}}
 
