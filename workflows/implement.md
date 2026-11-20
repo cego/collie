@@ -111,7 +111,7 @@ background job.
 
 {{proof}}
 
-{{session.ask}}
+{{session.ask}}{{handing}}
 
 Then write your Output, plus the outcome fields above where they name any. `clean` means
 the whole scope is built and the tests pass; anything else is `findings`, one entry per
@@ -421,6 +421,13 @@ lines allow.
 {{refusal}}
 
 Then write your Output, with `issues_dir` set to `{{run.dir}}/plan/issues`.
+
+## handing
+
+Another agent takes this work over after you: the next ticket's, or the one that delivers
+the change. Collie hands it the checkout, the journal, the findings and the questions; what
+only you know goes in your Output for it: `decisions` it should keep, `rejected` approaches
+and why, and your `next_action`.
 
 ## review.pipeline
 

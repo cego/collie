@@ -5342,6 +5342,201 @@ scenario(
   120_000,
 );
 
+const THREE_TICKETS = [
+  { file: "01-first.md", title: "the first one", checks: "unit" },
+  { file: "02-second.md", title: "the second one", checks: "unit" },
+  { file: "03-third.md", title: "the third one", checks: "unit" },
+];
+const GUARD_FINDING = {
+  severity: "major",
+  title: "the guard is on the wrong side",
+  file: "src/a.ts",
+};
+const FOUND_GUARD = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [GUARD_FINDING] };
+const FIXED_GUARD = {
+  verdict: "clean",
+  fixed: [{ title: GUARD_FINDING.title, file: GUARD_FINDING.file }],
+  checks: [],
+};
+
+/** A Run that records it started under this `agent_sessions`, as its host would have. */
+const sessionsUnder = (runId: string, sessions: "run" | "ticket" | "round", plans = false) =>
+  putFact(
+    runId,
+    "features.json",
+    `{"review_delta":true,"findings_ledger":true,"inline_plan":${plans},"agent_sessions":"${sessions}"}`,
+  );
+
+/** Each implementer operation of a Run, and the agent it ran on. */
+const implementedOn = (runId: string) =>
+  Effect.map(launchesAt(dir, runId), (launches) =>
+    Arr.map(
+      Arr.filter(launches, (one) => one.role === "implementer"),
+      (one) => [one.operation, one.agent],
+    ),
+  );
+
+/** Whether `before`'s terminal was killed before `after` was first started. */
+const quietBefore = (runId: string, before: string, after: string) =>
+  Effect.gen(function* () {
+    const ended = Option.getOrUndefined(
+      Arr.findFirst(yield* launchesAt(dir, runId), (one) => one.agent === before),
+    )?.terminalId;
+    const calls = yield* rig.calls();
+    const killed = Arr.findFirstIndex(
+      calls,
+      (call) =>
+        call.cmd === "terminal.kill" && ended !== undefined && call.params?.terminal === ended,
+    );
+    const started = Arr.findFirstIndex(
+      calls,
+      (call) => call.cmd === "terminal.run" && call.params?.name === after,
+    );
+    return Option.isSome(killed) && Option.isSome(started) && killed.value < started.value;
+  });
+
+/** A three-ticket plan whose final review finds one thing, fixed in one round. */
+const threeTicketsReviewed = (runId: string, sessions: "run" | "ticket") =>
+  Effect.gen(function* () {
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    yield* noGitlabMrs(bin);
+    yield* repository();
+    const plan = yield* planOf(THREE_TICKETS);
+    yield* approve(runId, ["unit"]);
+    yield* sessionsUnder(runId, sessions);
+    yield* rig.queueOutputs([
+      BUILT,
+      BUILT,
+      BUILT,
+      FOUND_GUARD,
+      FIXED_GUARD,
+      { ...CLEAN_SYNTHESIS, findings: [{ ...GUARD_FINDING, id: `${runId}-F1`, status: "fixed" }] },
+      OPENED,
+    ]);
+    const result = yield* ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } });
+    yield* bin.restore();
+    expect(said(result)).toBe(OPENED.mr_url);
+  });
+
+scenario(
+  "under agent_sessions: run, every ticket, the final fix and the merge request run on the one builder",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-sess-run";
+        yield* threeTicketsReviewed(runId, "run");
+        const build = agentName(runId, "build", null, 1);
+        expect(yield* implementedOn(runId)).toEqual([
+          ["01-first.md", build],
+          ["02-second.md", build],
+          ["03-third.md", build],
+          ["fix-1", build],
+          ["mr", build],
+        ]);
+        expect(yield* asked(runId, "02-second.md")).not.toContain("## Hand-over");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "under agent_sessions: ticket, each later ticket is built by an agent of its own and delivery by another, each taking over from a Quiet predecessor",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-sess-ticket";
+        yield* threeTicketsReviewed(runId, "ticket");
+        const head = yield* revParse("HEAD");
+        const build = agentName(runId, "build", null, 1);
+        const second = agentName(runId, "build-02-second", null, 1);
+        const third = agentName(runId, "build-03-third", null, 1);
+        const deliver = agentName(runId, "deliver", null, 1);
+        expect(yield* implementedOn(runId)).toEqual([
+          ["01-first.md", build],
+          ["02-second.md", second],
+          ["03-third.md", third],
+          ["fix-1", deliver],
+          ["mr", deliver],
+        ]);
+        for (const [before, after, operation, revision] of [
+          [build, second, "02-second.md", 1],
+          [second, third, "03-third.md", 2],
+          [third, deliver, "fix-1", 3],
+        ] as const) {
+          expect(yield* quietBefore(runId, before, after)).toBe(true);
+          const first = yield* asked(runId, operation);
+          expect(first).toContain(`## Hand-over (revision ${revision})`);
+          expect(first).toContain(`from ${before}, incarnation 1`);
+          expect(first).toContain(`head ${pipe(head, Str.slice(0, 12))}`);
+        }
+        expect(yield* asked(runId, "mr")).not.toContain("## Hand-over");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "under agent_sessions: round, each review-fix round of a ticket runs on a fresh fixer that takes over from a Quiet predecessor and is handed the open finding ids",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-sess-round";
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf(Arr.take(THREE_TICKETS, 2));
+        yield* approve(runId, ["unit"]);
+        yield* sessionsUnder(runId, "round");
+        const later = { severity: "major", title: "the count is off by one", file: "src/b.ts" };
+        yield* rig.queueOutputs([
+          { ...BUILT, verdict: "findings", findings: [GUARD_FINDING] },
+          FOUND_GUARD,
+          FIXED_GUARD,
+          {
+            ...CLEAN_SYNTHESIS,
+            verdict: "findings",
+            findings: [{ ...GUARD_FINDING, id: `${runId}-F1`, status: "fixed" }, later],
+          },
+          { verdict: "clean", fixed: [{ title: later.title, file: later.file }], checks: [] },
+          {
+            ...CLEAN_SYNTHESIS,
+            findings: [
+              { ...GUARD_FINDING, id: `${runId}-F1`, status: "fixed" },
+              { ...later, id: `${runId}-F2`, status: "fixed" },
+            ],
+          },
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const build = agentName(runId, "build", null, 1);
+        const first = agentName(runId, "fix-01-first-1", null, 1);
+        const second = agentName(runId, "fix-01-first-2", null, 1);
+        const fixes = Arr.filter(yield* implementedOn(runId), ([operation]) =>
+          pipe(operation ?? "", Str.includes("fix")),
+        );
+        expect(Arr.map(fixes, ([, agent]) => agent)).toEqual([first, second]);
+        expect(yield* quietBefore(runId, build, first)).toBe(true);
+        expect(yield* quietBefore(runId, first, second)).toBe(true);
+        expect(
+          yield* quietBefore(runId, second, agentName(runId, "build-02-second", null, 1)),
+        ).toBe(true);
+        const [one, two] = Arr.map(fixes, ([operation]) => operation ?? "");
+        expect(yield* asked(runId, one ?? "")).toContain(`${runId}-F1 (open)`);
+        expect(yield* asked(runId, two ?? "")).toContain(`${runId}-F2 (open)`);
+      }),
+    ),
+  120_000,
+);
+
 scenario(
   "tickets added and removed while one is being built are the plan the next one comes from",
   () =>
@@ -8790,6 +8985,65 @@ scenario(
         const opening = yield* asked(runId, "mr");
         for (const one of THREE_PLANNED) expect(opening).toContain(`- ${one.file} — ${one.title}`);
         expect(yield* implementersOf(runId)).toEqual([`${runId}-build-r1`]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "under agent_sessions: ticket and inline_plan: on, words planned as one ticket start exactly one builder agent, which plans and builds them",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-sess-one";
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        yield* approve(runId, ["unit"]);
+        yield* sessionsUnder(runId, "ticket", true);
+        yield* rig.queueOutputs([
+          plannedAs(runId, [{ file: "01-only.md", title: "the only one", blockedBy: "None" }]),
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan: "Count the registries.", ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* operationsOf(runId)).toEqual(["plan", "build", "review-1", "mr"]);
+        expect(yield* implementersOf(runId)).toEqual([agentName(runId, "build", null, 1)]);
+        expect(yield* agentStarts()).toBe(2);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "under agent_sessions: ticket, a one-ticket plan starts exactly one builder agent",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-sess-one-plan";
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf(Arr.take(THREE_TICKETS, 1));
+        yield* approve(runId, ["unit"]);
+        yield* sessionsUnder(runId, "ticket");
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* implementersOf(runId)).toEqual([agentName(runId, "build", null, 1)]);
+        expect(yield* agentStarts()).toBe(2);
       }),
     ),
   120_000,

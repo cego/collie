@@ -90,6 +90,27 @@ test("a Run's pane is the terminal of the first agent asked for that core still 
     }),
   ));
 
+test("Go to pane on a Run whose builder work moved on opens the live builder's pane, and delivery's once it takes over", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const sessions = [{ herd: null, herdr: new Herdr(rig.pluginEnv()) }];
+      const first = registered("build-r1", "ended-1");
+      const second = yield* rig.addAgent("build-02-r1");
+      // Newest first, as the host asks.
+      expect((yield* focusPane(sessions, [registered("build-02-r1", second), first]))?.core).toBe(
+        second,
+      );
+      const deliver = yield* rig.addAgent("deliver-r1");
+      expect(
+        (yield* focusPane(sessions, [
+          registered("deliver-r1", deliver),
+          registered("build-02-r1", "ended-2"),
+          first,
+        ]))?.core,
+      ).toBe(deliver);
+    }),
+  ));
+
 test("a core that does not answer has no agents, and no pane to go to", () =>
   runEffect(
     Effect.gen(function* () {

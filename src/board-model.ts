@@ -222,6 +222,9 @@ export const Decision = Schema.Union([Question, Proposal]);
 export type Decision = typeof Decision.Type;
 
 /** One live agent of the Task, as a card counts them and a search matches them. */
+/** A card agent's status once core no longer has it. */
+export const ENDED_AGENT = "ended";
+
 export const BoardAgent = Schema.Struct({
   /** herdr's own name for it, which carries the role it was started as. */
   name: Schema.String,
@@ -2669,7 +2672,9 @@ export function flowActions(
   const offered = (node: FlowRun, lane: FlowLane, facts: FlowActionFacts): FlowRun => {
     let primary: FlowAction | null = null;
     const actions: FlowAction[] = [];
-    const live = node.agent != null && Arr.some(view.agents, (one) => one.name === node.agent);
+    const live =
+      node.agent != null &&
+      Arr.some(view.agents, (one) => one.name === node.agent && one.status !== ENDED_AGENT);
     const proposal = node.proposal ?? facts.proposal ?? undefined;
     if (node.link !== undefined) {
       if (node.link.run !== null) primary = "open";

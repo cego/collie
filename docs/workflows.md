@@ -129,6 +129,11 @@ The value is fixed on the Run when it starts. A Run started with it `off`, or be
 setting existed, builds in one pass as before. A restarted Run builds from the plan it
 recorded and does not plan again.
 
+Under the shared setting `agent_sessions: ticket` (default `run`), each ticket after the
+first is built by an agent of its own, and the merge request by `deliver`; `round` also
+gives each review-fix round a fresh fixer. See
+[Which agent does a Run's work](using.md#which-agent-does-a-runs-work).
+
 `repo` is one repository's share of a plan that spans several, as the tickets' `Repo:`
 line names it, and `change` is one Change of that share, as their `Change:` line names it:
 given them, the build step builds only those tickets and leaves the rest to their own run.

@@ -410,6 +410,12 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description:
       "Whether an implement Run given anything but a plan first writes one into its own directory and builds its tickets one at a time (on), or builds it in one pass (off). Fixed on a Run when it starts.",
   }),
+  choice("agent_sessions", ["run", "ticket", "round"], "run", {
+    group: "Runs",
+    label: "Agents per implement Run",
+    description:
+      "Whether an implement Run builds every ticket on one agent (run), gives each ticket an agent of its own and delivery another (ticket), or also gives each review-fix round a fresh fixer (round). Fixed on a Run when it starts.",
+  }),
   of("slack.notification_channel", "text", "", {
     group: "Notifications",
     label: "Post notifications to",

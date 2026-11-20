@@ -4892,6 +4892,406 @@ test(
   120_000,
 );
 
+/** Two tickets on agents of their own, then delivery on a third, as implement runs them under `ticket`. */
+const tickets = enveloped({ name: "agent-tickets", input: {}, success: Verdict });
+let ticketsGiven: HandOverGiven = {};
+const ticketsBody = tickets.toLayer((payload) =>
+  Effect.gen(function* () {
+    const first = yield* agentWork({
+      operation: "01-first.md",
+      agent: "build",
+      cwd: rig.projectDir,
+      instructions: "Build the first ticket.",
+      output: Said,
+      handOver: ticketsGiven,
+    });
+    const second = yield* agentWork({
+      operation: "02-second.md",
+      agent: "build-02-second",
+      takesOver: { agent: "build", why: "finished 01-first.md" },
+      cwd: rig.projectDir,
+      instructions: "Build the second ticket.",
+      output: Said,
+      handOver: { ...ticketsGiven, ticket: "02-second.md", said: first },
+    });
+    return yield* agentWork({
+      operation: "mr",
+      agent: "deliver",
+      takesOver: { agent: "build-02-second", why: "finished 02-second.md" },
+      cwd: rig.projectDir,
+      instructions: "Open the merge request.",
+      output: Verdict,
+      handOver: { ...ticketsGiven, said: second },
+    });
+  }).pipe(asRun(payload, "agent-tickets")),
+);
+beforeEach(() => {
+  ticketsGiven = {};
+});
+const ticketsRun = (over?: Partial<AgentHost>) =>
+  session(
+    tickets.execute({ runId: "r1", input: {} }).pipe(Effect.result, Effect.provide(ticketsBody)),
+    { collectMs: 30_000, ...over },
+  );
+/** A host that goes once the tickets' work has got as far as `reached` says. */
+const ticketsUntil = (reached: Reached, over?: Partial<AgentHost>) =>
+  session(
+    Effect.gen(function* () {
+      yield* tickets.execute({ runId: "r1", input: {} }, { discard: true });
+      for (let tries = 0; !(yield* reached); tries++) {
+        if (tries === 3_000) return yield* Effect.die(new Error("r1 never got that far"));
+        yield* TestClock.withLive(Effect.sleep("10 millis"));
+      }
+    }).pipe(Effect.provide(ticketsBody)),
+    { collectMs: 30_000, ...over },
+  );
+const onTicket = (name: string, sequence = 1) => agentName("r1", name, null, sequence);
+const ticketOutput = (operation: string, text: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.writeFileString(`${dir}/agents/r1/${operation}.json`, text)),
+  );
+const SAID_FIRST = { verdict: "clean", decisions: ["Keep one registry"] };
+const OPENED_MR = { verdict: "clean", note: "opened" };
+const MR_OPENED = `{"verdict":"clean","note":"opened"}`;
+/** Writes `operation`'s Output once its step is given, as an agent started after a restart does. */
+const writesWhenGiven = (operation: string, text: string) =>
+  Effect.gen(function* () {
+    while (sent(yield* rig.calls(), `${operation}.prompt.md`) === 0)
+      yield* TestClock.withLive(Effect.sleep("10 millis"));
+    yield* ticketOutput(operation, text);
+  }).pipe(Effect.orDie, Effect.forkScoped);
+
+/** Whether `before`'s terminal was killed before `after` was first started: one writer at a time. */
+const quietFirst = (before: string, after: string) =>
+  Effect.gen(function* () {
+    const ended = Option.getOrUndefined(
+      Arr.findFirst(yield* launchesAt(dir, "r1"), (one) => one.agent === before),
+    )?.terminalId;
+    const calls = yield* rig.calls();
+    const killed = Arr.findFirstIndex(
+      calls,
+      (call) =>
+        call.cmd === "terminal.kill" && ended !== undefined && call.params?.terminal === ended,
+    );
+    const run = Arr.findFirstIndex(
+      calls,
+      (call) => call.cmd === "terminal.run" && call.params?.name === after,
+    );
+    return Option.isSome(killed) && Option.isSome(run) && killed.value < run.value;
+  });
+
+/** Each agent the Run started, the step deliveries it sent, and the hand-over revisions it wrote. */
+const ticketsLedger = Effect.gen(function* () {
+  const steps = Arr.filter(yield* deliveredTo(dir, "r1"), (one) => one.cause.kind === "step");
+  const revisions = yield* hostRecords(
+    dir,
+    readRunJournal(
+      runJournal(`${dir}/runs/r1`, "hand-overs.jsonl"),
+      Schema.fromJsonString(HandOver),
+    ),
+  );
+  return {
+    agents: Arr.map(yield* agentsAt(dir, "r1"), ({ agent }) => agent),
+    steps: Arr.map(steps, (one) => one.cause.ref),
+    revisions: Arr.map(revisions, (one) => one.revision),
+  };
+});
+const ONE_EACH = {
+  agents: [onTicket("build"), onTicket("build-02-second"), onTicket("deliver")],
+  steps: ["01-first.md", "02-second.md", "mr"],
+  revisions: [1, 2],
+};
+
+test(
+  "a ticket boundary ends the outgoing agent and finds it Quiet before the next ticket's agent starts, and that agent is first handed the hand-over",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const head = yield* committed;
+        yield* rig.queueOutputs([SAID_FIRST, { verdict: "clean" }, OPENED_MR]);
+        const result = yield* ticketsRun();
+
+        expect(result._tag === "Success" && result.success.note).toBe("opened");
+        expect(yield* ticketsLedger).toEqual(ONE_EACH);
+        expect(yield* quietFirst(onTicket("build"), onTicket("build-02-second"))).toBe(true);
+        expect(yield* quietFirst(onTicket("build-02-second"), onTicket("deliver"))).toBe(true);
+        const second = yield* read(`${dir}/agents/r1/02-second.md.prompt.md`);
+        expect(second).toContain(
+          `You take over 02-second.md (ticket 02-second.md) of r1 from ${onTicket("build")}, incarnation 1, which stopped because it finished 01-first.md.`,
+        );
+        expect(second).toContain(`head ${pipe(head, Str.slice(0, 12))}`);
+        expect(second).toContain(`${onTicket("build")} decided:\n- Keep one registry`);
+        expect(yield* read(`${dir}/agents/r1/mr.prompt.md`)).toContain("## Hand-over (revision 2)");
+        expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+          `02-second.md: ${onTicket("build")} finished 01-first.md; build-02-second takes its work over`,
+        );
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "a host crash just before a boundary's hand-over is sent, and a plan changed while it was down, send one rebuilt hand-over to one new agent",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const head = yield* committed;
+        const plan = `${rig.root}/plan`;
+        yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
+        yield* fs.writeFileString(`${plan}/issues/02-second.md`, "- [ ] it counts\n");
+        ticketsGiven = { plan };
+        yield* rig.queueOutputs([SAID_FIRST]);
+        let reads = 0;
+        // The record is read once as it is built; the read before it goes out never answers.
+        const stalls: Partial<AgentHost> = {
+          checkout: () =>
+            Effect.suspend(() =>
+              ++reads >= 2 ? Effect.never : Effect.succeed({ head, branch: "work", dirty: false }),
+            ),
+        };
+        yield* ticketsUntil(
+          Effect.sync(() => reads >= 2),
+          stalls,
+        );
+        expect(yield* ticketsLedger).toEqual({
+          agents: [onTicket("build")],
+          steps: ["01-first.md"],
+          revisions: [1],
+        });
+        yield* fs.writeFileString(`${plan}/issues/02-second.md`, "- [ ] it counts twice\n");
+        yield* writesWhenGiven("02-second.md", `{"verdict":"clean"}`);
+        yield* writesWhenGiven("mr", MR_OPENED);
+        const result = yield* ticketsRun();
+
+        expect(result._tag === "Success" && result.success.note).toBe("opened");
+        expect(yield* ticketsLedger).toEqual({ ...ONE_EACH, revisions: [1, 2, 3] });
+        expect(yield* read(`${dir}/agents/r1/02-second.md.prompt.md`)).toContain(
+          "## Hand-over (revision 2)",
+        );
+        expect(yield* quietFirst(onTicket("build"), onTicket("build-02-second"))).toBe(true);
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test.each([
+  { boundary: "a ticket boundary", operation: "02-second.md", outputs: [SAID_FIRST, null] },
+  {
+    boundary: "the last boundary, into deliver",
+    operation: "mr",
+    outputs: [SAID_FIRST, { verdict: "clean" }, null],
+  },
+])(
+  "a host crash just after $boundary's hand-over is sent, with the step delivered again, leaves one delivery to one new agent",
+  ({ operation, outputs }) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* committed;
+        yield* rig.queueOutputs(outputs);
+        yield* ticketsUntil(prompted(`${operation}.prompt.md`));
+        const owner = operation === "mr" ? "deliver" : "build-02-second";
+        const prompt = yield* read(`${dir}/agents/r1/${operation}.prompt.md`);
+        yield* session(
+          Effect.gen(function* () {
+            return yield* (yield* Agents).launch({
+              runId: "r1",
+              operation,
+              role: operation,
+              agent: owner,
+              workflow: "agent-tickets",
+              task: null,
+              cwd: rig.projectDir,
+              prompt,
+              output: `${dir}/agents/r1/${operation}.json`,
+              skill: null,
+              harness: "claude",
+              model: "opus",
+              effort: null,
+              permissions: null,
+            });
+          }),
+        );
+        yield* ticketOutput(operation, operation === "mr" ? MR_OPENED : `{"verdict":"clean"}`);
+        if (operation !== "mr") yield* writesWhenGiven("mr", MR_OPENED);
+        const result = yield* ticketsRun();
+
+        expect(result._tag === "Success" && result.success.note).toBe("opened");
+        expect(yield* ticketsLedger).toEqual(ONE_EACH);
+        expect(
+          Arr.filter(
+            yield* rig.calls(),
+            (call) => call.cmd === "terminal.run" && call.params?.name === onTicket(owner),
+          ),
+        ).toHaveLength(1);
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "a resume after a host restart mid-ticket carries on with that ticket's agent and starts none",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* committed;
+        yield* rig.queueOutputs([SAID_FIRST, null]);
+        yield* ticketsUntil(prompted("02-second.md.prompt.md"));
+        yield* ticketOutput("02-second.md", `{"verdict":"clean"}`);
+        yield* writesWhenGiven("mr", MR_OPENED);
+        const result = yield* ticketsRun();
+
+        expect(result._tag === "Success" && result.success.note).toBe("opened");
+        expect(yield* ticketsLedger).toEqual(ONE_EACH);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(3);
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "a wait across a restart, an answer to its question and an Output repair during a ticket go to that ticket's agent and start none",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* committed;
+        yield* rig.queueOutputs([SAID_FIRST, null]);
+        yield* ticketsUntil(prompted("02-second.md.prompt.md"));
+        const result = yield* session(
+          Effect.gen(function* () {
+            yield* tickets.execute({ runId: "r1", input: {} }, { discard: true });
+            yield* fs.writeFileString(
+              hostLockOf(rig.pluginEnv().stateDir),
+              `{"pid":${process.pid},"start":null}`,
+            );
+            yield* recordClaudeEvent(
+              yield* controlDir(rig.pluginEnv().stateDir, onTicket("build-02-second")),
+              askedTwo,
+            );
+            const [first, second] = yield* questionsOf(2);
+            yield* answer(first!.decision, "SQLite");
+            yield* answer(second!.decision, "lint");
+            yield* until(prompted(ANSWERED));
+            yield* ticketOutput("02-second.md", `{"verdict":3}`);
+            yield* until(prompted("not usable"));
+            yield* ticketOutput("02-second.md", `{"verdict":"clean"}`);
+            yield* writesWhenGiven("mr", MR_OPENED);
+            return yield* tickets.execute({ runId: "r1", input: {} }).pipe(Effect.result);
+          }).pipe(Effect.scoped, Effect.provide(ticketsBody)),
+          { collectMs: 120_000 },
+        );
+
+        expect(result._tag === "Success" && result.success.note).toBe("opened");
+        expect(yield* ticketsLedger).toEqual(ONE_EACH);
+        const toSecond = sentTexts(
+          Arr.filter(
+            yield* rig.calls(),
+            (call) =>
+              call.cmd === "terminal.send" && call.params?.terminal === onTicket("build-02-second"),
+          ),
+        );
+        expect([
+          Arr.some(toSecond, Str.includes(ANSWERED)),
+          Arr.some(toSecond, Str.includes("not usable")),
+        ]).toEqual([true, true]);
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "a question pending when a ticket ends is handed to the next ticket's agent by name and choices",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* committed;
+        yield* session(
+          Store.pipe(
+            Effect.flatMap((store) =>
+              store.asking({
+                run: "r1",
+                decision: "which-store",
+                prompt: "Which store holds the registry?",
+                options: [
+                  { id: "memory", title: "In memory" },
+                  { id: "redis", title: "Redis" },
+                ],
+              }),
+            ),
+          ),
+        );
+        yield* rig.queueOutputs([SAID_FIRST, { verdict: "clean" }, OPENED_MR]);
+        const result = yield* ticketsRun();
+
+        expect(result._tag === "Success" && result.success.note).toBe("opened");
+        expect(yield* read(`${dir}/agents/r1/02-second.md.prompt.md`)).toContain(
+          "Pending questions:\n- which-store, choices memory, redis",
+        );
+        expect(yield* ticketsLedger).toEqual(ONE_EACH);
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "a quota Fallback mid-ticket keeps the ticket's agent name for the agent that takes it over",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* committed;
+        yield* rig.queueOutputs([SAID_FIRST, null, { verdict: "clean" }, OPENED_MR]);
+        yield* Effect.forkScoped(runsOut(onTicket("build-02-second"), 2));
+        const result = yield* ticketsRun(chain);
+
+        expect(result._tag === "Success" && result.success.note).toBe("opened");
+        const agents = Arr.map(yield* agentsAt(dir, "r1"), ({ agent }) => agent);
+        expect(agents).toEqual([
+          onTicket("build"),
+          onTicket("build-02-second"),
+          onTicket("build-02-second", 2),
+          onTicket("deliver"),
+        ]);
+        expect(yield* quietFirst(onTicket("build-02-second"), onTicket("build-02-second", 2))).toBe(
+          true,
+        );
+        expect(yield* quietFirst(onTicket("build-02-second", 2), onTicket("deliver"))).toBe(true);
+        expect(yield* read(`${dir}/agents/r1/mr.prompt.md`)).toContain(
+          `from ${onTicket("build-02-second", 2)}, incarnation 2`,
+        );
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "a late turn of a ticket's agent after it was stopped changes nothing for the agent that took its work over",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* committed;
+        yield* rig.queueOutputs([SAID_FIRST, null]);
+        yield* ticketsUntil(prompted("02-second.md.prompt.md"));
+        yield* recordClaudeEvent(
+          yield* controlDir(rig.pluginEnv().stateDir, onTicket("build")),
+          rateLimited,
+        );
+        yield* FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) =>
+            fs.writeFileString(`${dir}/agents/r1/01-first.md.json`, `{"verdict":"findings"}`),
+          ),
+        );
+        yield* ticketOutput("02-second.md", `{"verdict":"clean"}`);
+        yield* writesWhenGiven("mr", MR_OPENED);
+        const result = yield* ticketsRun(chain);
+
+        expect(result._tag === "Success" && result.success.note).toBe("opened");
+        expect(yield* ticketsLedger).toEqual(ONE_EACH);
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
 test("when nothing has room the agent that ran out is kept, and the Run parks saying when usage resets", () =>
   runEffect(
     Effect.gen(function* () {

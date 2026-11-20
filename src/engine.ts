@@ -584,6 +584,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly review_delta?: boolean;
       readonly findings_ledger?: boolean;
       readonly inline_plan?: boolean;
+      readonly agent_sessions?: "run" | "ticket" | "round";
     };
     /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
     readonly authority: {

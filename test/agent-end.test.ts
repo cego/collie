@@ -415,3 +415,51 @@ test("a Fallback's close parks on an agent it cannot prove is this Run's, and cl
       expect(yield* terminalKills).toEqual([]);
     }),
   ));
+
+test("a ticket's agent whose pane leaves a child that will not stop parks its boundary on predecessor-not-quiet, saying it finished its ticket", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const tree = yield* paneTree(IGNORES_TERM);
+      const terminalId = yield* paneOn(tree.shell);
+      const retired = yield* Agents.pipe(
+        Effect.flatMap((agents) =>
+          agents.retire(
+            { ...launchedImpl, harness: "pi", terminalId },
+            "02-second.md: impl finished 01-first.md; build-02-second takes its work over",
+            "finished 01-first.md",
+          ),
+        ),
+        Effect.flip,
+        Effect.provide(agentsWith(500)),
+        Effect.scoped,
+      );
+      expect(yield* processOf(tree.child)).not.toBeNull();
+      expect(retired.cause).toBe("predecessor-not-quiet");
+      expect(retired.reason).toContain(
+        "It finished 01-first.md, and no agent takes its work until it has stopped",
+      );
+    }).pipe(Effect.scoped),
+  ));
+
+test.each([
+  "02-second.md: impl finished 01-first.md; build-02-second takes its work over",
+  "mr: impl finished 02-second.md; deliver takes its work over",
+])(
+  "a check a ticket's agent left running in the background is stopped before the close of %s succeeds",
+  (line) =>
+    runEffect(
+      Effect.gen(function* () {
+        const tree = yield* paneTree(SURVIVES_HANGUP);
+        const terminalId = yield* paneOn(tree.shell);
+        yield* Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.retire({ ...launchedImpl, terminalId }, line, "finished its ticket"),
+          ),
+          Effect.provide(agentsWith(3_000)),
+          Effect.scoped,
+        );
+        expect(yield* processOf(tree.child)).toBeNull();
+        expect(yield* terminalKills).toEqual([terminalId]);
+      }).pipe(Effect.scoped),
+    ),
+);

@@ -15,6 +15,8 @@ export const RunFeatures = Schema.Struct({
   findings_ledger: Schema.optionalKey(Schema.Boolean),
   /** An implement Run plans a source that is not a plan before building it. */
   inline_plan: Schema.optionalKey(Schema.Boolean),
+  /** Which agents an implement Run's tickets, fix rounds and delivery run on. */
+  agent_sessions: Schema.optionalKey(Schema.Literals(["run", "ticket", "round"])),
 });
 export type RunFeatures = typeof RunFeatures.Type;
 
@@ -27,7 +29,14 @@ export const recordFeatures = Effect.fn("RunFeatures.record")(function* (
   userDir: string,
 ) {
   const config = yield* readConfig(userDir).pipe(Effect.orElseSucceed((): YamlMap => ({})));
-  const features = { ...CURRENT_FEATURES, inline_plan: config.inline_plan === "on" };
+  const features: RunFeatures = {
+    ...CURRENT_FEATURES,
+    inline_plan: config.inline_plan === "on",
+    agent_sessions:
+      config.agent_sessions === "ticket" || config.agent_sessions === "round"
+        ? config.agent_sessions
+        : "run",
+  };
   const text = yield* Schema.encodeEffect(FeaturesJson)(features).pipe(Effect.orDie);
   yield* RunRecords.use((records) => records.put(run, FEATURES_FILE, text));
 });

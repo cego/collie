@@ -85,6 +85,7 @@ import {
   readMrRef,
   forgeOfRef,
   readyToRelease,
+  ENDED_AGENT,
   SECTIONS,
   sectionOf,
   shippingLabel,
@@ -769,6 +770,9 @@ function basename(path: string): string {
   return Str.split(pipe(path, Str.replace(/\/+$/, "")), "/").at(-1) ?? path;
 }
 
+/** The role whose work moves from agent to agent under `agent_sessions: ticket`. */
+const BUILDER_ROLE = "implementer";
+
 /** Each Run's registered agents, grouped once for every card a build asks about. */
 const groupedRegistered = new WeakMap<ReadonlyArray<AgentEntry>, Map<string, AgentEntry[]>>();
 const registeredByRun = (registered: ReadonlyArray<AgentEntry>) => {
@@ -786,7 +790,8 @@ const registeredByRun = (registered: ReadonlyArray<AgentEntry>) => {
 
 /**
  * The Task's agents herdr still has. One entry per live agent, however many Runs it
- * worked for: a card counts agents, not the work they took.
+ * worked for: a card counts agents, not the work they took. A Run whose builder work moved
+ * on from agent to agent also lists, `ended`, each builder before the live one.
  */
 function agentsOf(
   runs: ReadonlyArray<RunFacts>,
@@ -797,8 +802,18 @@ function agentsOf(
   const byRun = registeredByRun(registered);
   const found = new Map<string, BoardAgent>();
   for (const run of runs) {
-    for (const entry of byRun.get(run.id) ?? []) {
+    const own = byRun.get(run.id) ?? [];
+    const building = Arr.some(own, (entry) => entry.role === BUILDER_ROLE && live.has(entry.agent));
+    for (const entry of own) {
       const agent = live.get(entry.agent);
+      if (agent === undefined && building && entry.role === BUILDER_ROLE && !found.has(entry.agent))
+        found.set(entry.agent, {
+          name: entry.agent,
+          role: entry.role,
+          status: ENDED_AGENT,
+          now: null,
+          run: run.id,
+        });
       if (agent === undefined || found.has(agent.name)) continue;
       const fallback = Arr.findFirst(fallbacks, (one) => one.agent === agent.name);
       found.set(agent.name, {
@@ -1942,8 +1957,12 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 readiness,
                 summary: leader.summary,
                 agent:
-                  Option.getOrUndefined(Arr.findFirst(agents, (one) => one.run === leader.id))
-                    ?.name ?? null,
+                  Option.getOrUndefined(
+                    Arr.findFirst(
+                      agents,
+                      (one) => one.run === leader.id && one.status !== ENDED_AGENT,
+                    ),
+                  )?.name ?? null,
                 planReady,
                 abandoned: abandoned && at > 0 ? agoMs(at, now) : null,
                 decision,
@@ -2185,7 +2204,7 @@ export function whereItIs(view: TaskView): string {
 
 /** How many agents are on it, or nothing where herdr has none left. */
 export function agentCount(view: TaskView): string {
-  const n = view.agents.length;
+  const n = Arr.filter(view.agents, (one) => one.status !== ENDED_AGENT).length;
   return n === 0 ? "" : `${n} ${n === 1 ? "agent" : "agents"}`;
 }
 

@@ -41,6 +41,7 @@ import {
   stepFailed,
   wholeRunsOwed,
   type Finding,
+  type HandOverGiven,
   type Snapshot,
   type SynthesisReport,
   type Template,
@@ -49,6 +50,7 @@ import {
 } from "collie";
 import { CommandLine } from "effect/process";
 import { Result } from "effect";
+import type * as Types from "effect/Types";
 import { Effect, FileSystem, Schema, Stream } from "effect";
 import { connection } from "./connections.ts";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
@@ -190,6 +192,10 @@ export interface Delivery<I extends Told, O extends Opened> {
   /** The agent that fixes and opens the merge request, and its role. */
   readonly agent: string;
   readonly role: string;
+  /** The agent `agent` takes the work over from, where it has not yet run. */
+  readonly takesOver?: { readonly agent: string; readonly why: string };
+  /** What only the workflow knows of the work, for an agent taking it over. */
+  readonly handOver?: HandOverGiven;
   readonly input: I;
   readonly checksNow: Effect.Effect<string, never, Needs>;
   readonly prompts: {
@@ -273,6 +279,16 @@ const spawned = (
  * The gate, the merge request and CI's proof, answering with the merge request's URL, or why
  * the branch had nothing to land.
  */
+/** The agent a delivery step goes to, with what it needs to take the work over. */
+const deliveredBy = (ask: Pick<Delivery<Told, Opened>, "agent" | "takesOver" | "handOver">) => {
+  const on: Types.Mutable<Pick<Delivery<Told, Opened>, "agent" | "takesOver" | "handOver">> = {
+    agent: ask.agent,
+  };
+  if (ask.takesOver !== undefined) on.takesOver = ask.takesOver;
+  if (ask.handOver !== undefined) on.handOver = ask.handOver;
+  return on;
+};
+
 export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =>
   Effect.gen(function* () {
     const host = yield* Host;
@@ -438,7 +454,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           }));
           const fixed = yield* agentWork({
             operation: `gate-fix-${at}`,
-            agent: ask.agent,
+            ...deliveredBy(ask),
             role: ask.role,
             pushes: true,
             instructions: ask.prompts.fix,
@@ -673,7 +689,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         });
         const opened = yield* agentWork({
           operation: attempt === 1 ? "mr" : `mr-${attempt}`,
-          agent: ask.agent,
+          ...deliveredBy(ask),
           role: ask.role,
           pushes: true,
           // Not merging: only a message of its own asks for that.
@@ -882,7 +898,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       const fixed = yield* ciFix(
         agentWork({
           operation: `ci-fix-${at}`,
-          agent: ask.agent,
+          ...deliveredBy(ask),
           role: ask.role,
           pushes: true,
           instructions: ask.prompts.ciFix,

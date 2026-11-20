@@ -103,6 +103,19 @@ describe("Collie's settings", () => {
     });
   });
 
+  test("each Run's agents are one for the Run until another policy is chosen", () => {
+    expect(settingOf("agent_sessions")).toMatchObject({
+      kind: "choice",
+      choices: ["run", "ticket", "round"],
+      fallback: "run",
+    });
+    for (const value of ["run", "ticket", "round"])
+      expect(parseSetting("agent_sessions", value)).toEqual({ value });
+    expect(parseSetting("agent_sessions", "slice")).toEqual({
+      refused: 'agent_sessions has to be one of run, ticket, round, not "slice"',
+    });
+  });
+
   test("share a release for approval only once turned on, and in the channel named", () => {
     expect(settingOf("release.share_for_approval")).toMatchObject({
       kind: "boolean",
@@ -226,6 +239,7 @@ describe("Each setting explains itself", () => {
       "release.approval_channel",
       "review.follow_through",
       "inline_plan",
+      "agent_sessions",
     ],
     Board: ["scope", "density", "board_quiet_ms", "run_model"],
     Chat: ["flock_chat.proactive", "machine_rule", "standing_direction", "proactive"],

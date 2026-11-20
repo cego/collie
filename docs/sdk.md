@@ -1484,7 +1484,11 @@ a list of _work_ needs.
   items already finished left behind — their work, their commits, what was verified while
   they ran — for the next item's prompt. `agent` on `agentWork` puts several items on one
   agent, which is what the baseline does: one implementer, each item its own prompt and its
-  own Output.
+  own Output. Give an item a new `agent` with `takesOver: { agent, why }` and the agent
+  before it is ended and found Quiet first, and the new one's first delivery is the
+  host's **Hand-over** ([`CONTEXT.md`](../CONTEXT.md)). The shipped `implement` does that
+  per ticket under the shared setting `agent_sessions: ticket`, recorded on the Run as
+  `place.features.agent_sessions`.
 
 ```ts
 const tickets = yield * orderedTicketsOf(asked.plan);

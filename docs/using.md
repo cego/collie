@@ -3384,6 +3384,12 @@ See [Claude subagents](#claude-subagents).
 own directory before building: `off`, the default, or `on`. A Run keeps the value it started
 with. See [`implement`](workflows.md#implement).
 
+`agent_sessions` says which agents an implement Run's work runs on: `run`, the default,
+builds everything on one agent; `ticket` gives each ticket after the first an agent of its
+own and delivery another; `round` also gives each review-fix round a fresh fixer. A Run
+keeps the value it started with. See
+[Which agent does a Run's work](#which-agent-does-a-runs-work).
+
 `output_submit` says how an agent hands in its Output: `file`, the default, or `tool`, which
 also offers it the `collie_submit` tool. See
 [Having an agent do the work](sdk.md#having-an-agent-do-the-work).
@@ -3498,6 +3504,22 @@ chat is given it after its own prompt. It says that work which cannot be wrong, 
 **Tautology**, proves nothing: a builder makes none, and a reviewer or judge raises each one
 it finds. It also holds the code comment rules. Fork it like any persona to change what
 every agent is told; [authoring](authoring.md#every-agent) says how.
+
+### Which agent does a Run's work
+
+An implement Run starts one builder, `build`, and under `agent_sessions: run` it plans,
+builds every ticket, fixes and opens the merge request on it. Under `ticket`, each later
+ticket is built by `build-<ticket>` (the ticket's file name without `.md`), and the final
+review's fixes, the merge request and the CI fix by `deliver`. Under `round`, each
+review-fix round also gets its own fixer, `fix-<ticket>-<n>` or `fix-final-<n>`. Work that
+stays on `build`, such as a single ticket, never moves.
+
+At each move the outgoing agent is ended and must be Quiet before the next one starts; one
+that will not stop parks the Run on `predecessor-not-quiet` until it has. The new agent's
+first message is the host's Hand-over: the head and plan it starts from, the criteria met
+and their proof, the open findings, the pending questions and what the outgoing agent said
+it decided. A wait, a repair, an answer or a restart stays with the agent doing the work.
+On the board each builder is a tab, the live one marked, and Go to pane opens it.
 
 ### Collie's tools per role
 

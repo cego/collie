@@ -133,6 +133,7 @@ const prompts = {
     ticket: Schema.Struct({ file: text, title: text }),
     progress: text,
     session: Schema.Struct({ ask: text }),
+    handing: text,
     obstacle: text,
     criteria: text,
     measure: text,
@@ -264,8 +265,10 @@ const CRITERIA_TRIES = 2;
 /** Hand-backs of what stopped an integration — a commit can uncover a conflict. */
 const MERGE_TRIES = 2;
 
-/** One agent for the whole Run, so its model is named once and the fixes know the build. */
+/** The Run's first agent, which builds everything under `agent_sessions: run`. */
 const BUILDER = "build";
+/** Who fixes the final review's findings onward under `agent_sessions: ticket` and `round`. */
+const DELIVERER = "deliver";
 
 const RELEASE = "Release";
 const STAGE = "Stage";
@@ -560,7 +563,7 @@ export default defineWorkflow({
           for (let tries = 1; tries <= MERGE_TRIES && !settles(merged); tries++) {
             yield* agentWork({
               operation: tries === 1 ? operation : `${operation}-${tries}`,
-              agent: BUILDER,
+              ...onHolder(handing),
               role: "implementer",
               pushes: true,
               instructions: prompts.merge,
@@ -589,7 +592,16 @@ export default defineWorkflow({
       const restateKind = Effect.map(kindNow, (outcome) => {
         input = { ...input, inputs: { ...input.inputs, outcome } };
       });
-      const handing: Handing = { plan: null, ticket: null, said: undefined };
+      const handing: Handing = {
+        plan: null,
+        ticket: null,
+        said: undefined,
+        sessions: place.features?.agent_sessions ?? "run",
+        agent: BUILDER,
+        last: "",
+        from: null,
+        fixes: new Map(),
+      };
       const rallyAsk = {
         rounds: { n: 0 },
         cwd,
@@ -635,7 +647,7 @@ export default defineWorkflow({
               const operation = attempt === 1 ? "plan" : `plan-${attempt}`;
               yield* agentWork({
                 operation,
-                agent: BUILDER,
+                ...onHolder(handing),
                 role: "implementer",
                 instructions: prompts.plan,
                 input: { ...input, source: sectionOf(`source.${source.kind}`, input), refusal },
@@ -869,6 +881,8 @@ export default defineWorkflow({
         const ticket = whole && built.size === 0 ? null : next;
         if (ticket === undefined) break;
         rallied = null;
+        if (ticket !== null && built.size > 0 && handing.sessions !== "run")
+          handTo(handing, `${BUILDER}-${pipe_(ticket.file, Str.replace(/\.md$/, ""))}`);
         let attempt = 0;
         const nextBuild = building(
           Effect.gen(function* () {
@@ -894,7 +908,7 @@ export default defineWorkflow({
             handing.ticket = ticket?.file ?? null;
             build = yield* agentWork({
               operation,
-              agent: BUILDER,
+              ...onHolder(handing),
               handOver: handOverOf(handing, {
                 criteria: given,
                 checks: ticket?.checks ?? [],
@@ -909,6 +923,8 @@ export default defineWorkflow({
                 ticket: { file: ticket?.file ?? "", title: ticket?.title ?? "" },
                 progress: renderProgress(handed),
                 session,
+                handing:
+                  handing.sessions === "run" ? "" : `\n\n${content.sections.get("handing") ?? ""}`,
                 criteria:
                   ticket === null && work.kind === "linear"
                     ? "Every checkbox in the issue's description. Copy the description into the spec word for word, its checkboxes included, and answer each one."
@@ -934,6 +950,7 @@ export default defineWorkflow({
               output: Built,
             });
             handing.said = build;
+            handing.last = operation;
             // A Linear issue's criteria are read from its description as the builder copied it.
             let spec: ReadonlyArray<string> | null = given;
             for (let reading = 1; ; reading++) {
@@ -1065,7 +1082,7 @@ export default defineWorkflow({
               yield* restateKind;
               const answered = yield* agentWork({
                 operation: `${operation}.criteria-${turn}`,
-                agent: BUILDER,
+                ...onHolder(handing),
                 handOver: handOverOf(handing, {
                   criteria,
                   answers,
@@ -1086,6 +1103,7 @@ export default defineWorkflow({
                 output: Built,
               });
               handing.said = answered;
+              handing.last = `${operation}.criteria-${turn}`;
               const after = yield* treeAt(`${operation}.criteria-${turn}.after`);
               answers = [...answers, ...boundTo(criteria, answered.criteria ?? [])];
               assumptions.push(...(answered.assumptions ?? []));
@@ -1189,6 +1207,9 @@ export default defineWorkflow({
         return yield* new WorkflowError({ reason: "nothing was built" });
       // The builder may have named the checks, and every prompt from here shows them.
       input = { ...input, verify: yield* checksNow };
+      // Work that stayed on its first agent keeps it to the end.
+      const delivers = handing.sessions !== "run" && handing.agent !== BUILDER;
+      if (delivers && handing.sessions === "ticket") handTo(handing, DELIVERER);
 
       if (rallied === null || rallied.unreviewed !== "") {
         rallied = kept(
@@ -1239,11 +1260,13 @@ export default defineWorkflow({
           name: "builder-answers",
           execute: host.record(runId, renderAnswered(answeredFor)),
         });
+      if (delivers) handTo(handing, DELIVERER);
       const delivered = yield* deliver({
         cwd,
         source: { value: source.value, kind: source.kind },
         onto: onto ?? undefined,
-        agent: BUILDER,
+        ...onHolder(handing),
+        handOver: handOverOf(handing, { findings: [...ledger.values()] }),
         role: "implementer",
         input,
         checksNow,
@@ -1596,9 +1619,15 @@ const builderRally = (ask: {
           : `Review the built part of this plan: ${Arr.join(ask.build.completed, ", ")}. Later tickets have not started and are outside this review, including its scope judgement. Check these findings reported by the implementer:\n${formatFindings(ask.build.findings)}`,
       fix: ({ operation, at, proves, findings, open }) =>
         Effect.gen(function* () {
+          if (ask.handing.sessions === "round") {
+            const item = ask.build === undefined ? "final" : ask.build.item;
+            const round = (ask.handing.fixes.get(item) ?? 0) + 1;
+            ask.handing.fixes.set(item, round);
+            handTo(ask.handing, `fix-${pipe_(item, Str.replace(/\.md$/, ""))}-${round}`);
+          }
           const fixed = yield* agentWork({
             operation,
-            agent: BUILDER,
+            ...onHolder(ask.handing),
             handOver: handOverOf(ask.handing, { findings: open }),
             role: "implementer",
             pushes: true,
@@ -1614,6 +1643,7 @@ const builderRally = (ask: {
             output: FixOutputSchema,
           });
           ask.handing.said = fixed;
+          ask.handing.last = operation;
           return fixed;
         }),
     });
@@ -1625,7 +1655,35 @@ interface Handing {
   ticket: string | null;
   /** The builder's last Output. */
   said: Outgoing | undefined;
+  readonly sessions: "run" | "ticket" | "round";
+  /** The agent the work is on now, the operation it last finished, and who it took over from. */
+  agent: string;
+  last: string;
+  from: TakeOver | null;
+  /** Fix rounds so far, by ticket, under `round`. */
+  readonly fixes: Map<string, number>;
 }
+
+/** The work goes on to `agent`, which takes it over from the agent that had it. */
+const handTo = (handing: Handing, agent: string) => {
+  if (agent === handing.agent) return;
+  handing.from = {
+    agent: handing.agent,
+    why: handing.last === "" ? "had this work before" : `finished ${handing.last}`,
+  };
+  handing.agent = agent;
+};
+
+interface TakeOver {
+  readonly agent: string;
+  readonly why: string;
+}
+
+/** The agent work goes to now, and the one it takes over from, where it does. */
+const onHolder = (handing: Handing): { agent: string; takesOver?: TakeOver } =>
+  handing.from === null
+    ? { agent: handing.agent }
+    : { agent: handing.agent, takesOver: handing.from };
 
 const handOverOf = (
   handing: Handing,

@@ -505,8 +505,17 @@ export interface AgentsApi {
    * its launch; null where none has.
    */
   readonly stopped: (launched: Launched, since?: number) => Effect.Effect<string | null>;
-  /** Closes this one agent's pane, with `line` in the Run's log; parks unless it is gone. */
-  readonly retire: (launched: Launched, line: string) => Effect.Effect<void, AgentParked>;
+  /**
+   * Closes this one agent's pane, with `line` in the Run's log; parks unless it is gone.
+   * `ended` says why another agent takes its work: `ran out` where none is given.
+   */
+  readonly retire: (
+    launched: Launched,
+    line: string,
+    ended?: string,
+  ) => Effect.Effect<void, AgentParked>;
+  /** The latest launch of the agent this Run's work names `agent`; null where it has none. */
+  readonly lastLaunch: (runId: string, agent: string) => Effect.Effect<Launched | null>;
   /** A line in the Run's log. */
   readonly say: (runId: string, line: string) => Effect.Effect<void>;
   /** The step message as it will first be typed, token included, and its prompt's path. */
@@ -763,6 +772,11 @@ interface Doing<Output extends OutputContract> {
   readonly seat?: Seat;
   /** What only the workflow knows of this work, for a hand-over to an agent taking it over. */
   readonly handOver?: HandOverGiven;
+  /**
+   * The agent whose work this continues, where `agent` has not yet run in this Run: it is
+   * ended and found Quiet first, and `agent` is first handed the host's hand-over.
+   */
+  readonly takesOver?: { readonly agent: string; readonly why: string };
 }
 
 /**
@@ -1218,12 +1232,101 @@ export const agentWork = <
         }
         return launched;
       });
-    let current = yield* Activity.make({
-      name: `${work.operation}.launch`,
-      success: Launched,
-      error: AgentUncertain,
-      execute: launching(ask),
-    });
+    const handOverFrom = (outgoing: Launched, transcript: string | null) =>
+      Effect.gen(function* () {
+        const evidence = yield* host.evidence(runId, work.cwd);
+        return yield* agents.handOver({
+          run: runId,
+          step: work.operation,
+          agent: outgoing.agent,
+          incarnation: outgoing.sequence ?? 1,
+          cwd: work.cwd,
+          given: given.handOver ?? {},
+          base: evidence.mergeBase ?? null,
+          verifications: evidence.verifications,
+          checks: Arr.map(yield* host.approved(runId), (one) => one.name),
+          asked: yield* host.asked(runId),
+          transcript,
+        });
+      });
+    const plan = given.handOver?.plan ?? null;
+    /** The prompt carrying `handed`, rebuilt once where the checkout moved; parks where it moves again. */
+    const dispatching = (
+      handed: HandOver,
+      rebuild: Effect.Effect<HandOver>,
+      successor: string,
+      why: string,
+    ) =>
+      Effect.gen(function* () {
+        const dispatched = yield* atDispatch(handed, agents.atCheckout(work.cwd, plan), rebuild);
+        if (dispatched === null) {
+          const seen = yield* agents.atCheckout(work.cwd, plan);
+          yield* agents.handOverStale(runId, { ...seen, cwd: work.cwd, dir: plan });
+          yield* host.parked(
+            runId,
+            `${successor}'s hand-over was rebuilt once and the checkout moved again (head ${seen.head}, plan revision ${seen.plan ?? "none"}): no agent takes the work from a stale picture. This Run goes on once the checkout holds still`,
+            "hand-over-stale",
+          );
+          return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
+        }
+        return renderPrompt({ ...parts, handover: renderHandOver(dispatched, why) }).text;
+      });
+    const takingOver = given.takesOver;
+    const predecessor =
+      takingOver === undefined || work.agent === undefined
+        ? null
+        : yield* Activity.make({
+            name: `${work.operation}.take-over`,
+            success: Schema.NullOr(Launched),
+            execute: Effect.gen(function* () {
+              if ((yield* agents.lastLaunch(runId, work.agent!)) !== null) return null;
+              return yield* agents.lastLaunch(runId, takingOver.agent);
+            }),
+          });
+    let current: Launched;
+    if (predecessor === null || takingOver === undefined) {
+      current = yield* Activity.make({
+        name: `${work.operation}.launch`,
+        success: Launched,
+        error: AgentUncertain,
+        execute: launching(ask),
+      });
+    } else {
+      const handed = yield* Activity.make({
+        name: `${work.operation}.take-over.hand-over`,
+        success: HandOver,
+        execute: handOverFrom(predecessor, null),
+      });
+      yield* Activity.make({
+        name: `${work.operation}.take-over.close`,
+        error: AgentUncertain,
+        execute: parkedWhenStuck(
+          agents.retire(
+            predecessor,
+            `${work.operation}: ${predecessor.agent} ${takingOver.why}; ${work.agent} takes its work over`,
+            takingOver.why,
+          ),
+          host,
+          work.runId,
+        ),
+      });
+      current = yield* Activity.make({
+        name: `${work.operation}.launch`,
+        success: Launched,
+        error: AgentUncertain,
+        execute: Effect.gen(function* () {
+          if (yield* host.stopRequested(runId))
+            return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
+          ask.prompt = yield* dispatching(
+            handed,
+            handOverFrom(predecessor, null),
+            work.agent ?? work.operation,
+            `it ${takingOver.why}`,
+          );
+          return yield* launching(ask);
+        }),
+      });
+    }
     let currentAsk: AgentAsk = ask;
     let collected = yield* reminding(
       work.operation,
@@ -1288,40 +1391,20 @@ export const agentWork = <
       }
       const sequence = (current.sequence ?? 1) + 1;
       const successor = agentName(runId, work.agent ?? work.operation, null, sequence);
-      const outgoing = current;
-      const handOverNow = Effect.gen(function* () {
-        const evidence = yield* host.evidence(runId, work.cwd);
-        return yield* agents.handOver({
-          run: runId,
-          step: work.operation,
-          agent: outgoing.agent,
-          incarnation: outgoing.sequence ?? 1,
-          cwd: work.cwd,
-          given: given.handOver ?? {},
-          base: evidence.mergeBase ?? null,
-          verifications: evidence.verifications,
-          checks: Arr.map(yield* host.approved(runId), (one) => one.name),
-          asked: yield* host.asked(runId),
-          transcript: out.transcript,
-        });
-      });
+      const handOverNow = handOverFrom(current, out.transcript);
       const handed = yield* Activity.make({
         name: `${work.operation}.fallback-${n}.hand-over`,
         success: HandOver,
         execute: handOverNow,
       });
-      const promptWith = (record: HandOver) =>
-        renderPrompt({
-          ...parts,
-          handover: renderHandOver(record, `its subscription ran out (${out.why}) on ${said(on)}`),
-        }).text;
+      const ranOutWhy = `its subscription ran out (${out.why}) on ${said(on)}`;
       const nextAsk: Types.Mutable<AgentAsk> = {
         ...currentAsk,
         harness: next.harness,
         model: next.model,
         effort: next.effort,
         sequence,
-        prompt: promptWith(handed),
+        prompt: renderPrompt({ ...parts, handover: renderHandOver(handed, ranOutWhy) }).text,
         // The chain's first agent, which is what a later ask for this agent may still name.
         from: currentAsk.from ?? on,
         why: out.why,
@@ -1356,23 +1439,7 @@ export const agentWork = <
             yield* host.parked(runId, null);
             return CollectedBeforeFallback.make({ text: late });
           }
-          const plan = given.handOver?.plan ?? null;
-          const dispatched = yield* atDispatch(
-            handed,
-            agents.atCheckout(work.cwd, plan),
-            handOverNow,
-          );
-          if (dispatched === null) {
-            const seen = yield* agents.atCheckout(work.cwd, plan);
-            yield* agents.handOverStale(runId, { ...seen, cwd: work.cwd, dir: plan });
-            yield* host.parked(
-              runId,
-              `${successor}'s hand-over was rebuilt once and the checkout moved again (head ${seen.head}, plan revision ${seen.plan ?? "none"}): no agent takes the work from a stale picture. This Run goes on once the checkout holds still`,
-              "hand-over-stale",
-            );
-            return yield* Workflow.suspend(instance);
-          }
-          nextAsk.prompt = promptWith(dispatched);
+          nextAsk.prompt = yield* dispatching(handed, handOverNow, successor, ranOutWhy);
           return yield* launching(nextAsk);
         }),
       });
@@ -4264,15 +4331,15 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     stopMs: host.stopMs,
   });
 
-  const retire = (launched: Launched, line: string) =>
+  const retire = (launched: Launched, line: string, done = "ran out") =>
     under(
       Effect.gen(function* () {
         const parked = (why: string) =>
           new AgentParked({
             operation: launched.operation,
-            reason: `${launched.agent} ran out and must stop before another agent takes its work, but ${why}. Close it and resume.`,
+            reason: `${launched.agent} ${done} and must stop before another agent takes its work, but ${why}. Close it and resume.`,
           });
-        const ended = yield* endAgent(endsOf(launched.runId), launched, "it ran out", "close").pipe(
+        const ended = yield* endAgent(endsOf(launched.runId), launched, `it ${done}`, "close").pipe(
           Effect.mapError((failure) =>
             failure._tag === "AgentsUnlisted"
               ? parked(
@@ -4293,7 +4360,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           });
           return yield* new AgentParked({
             operation: launched.operation,
-            reason: `${ended.reason}. It ran out, and no agent takes its work until it has stopped; this Run goes on once it has`,
+            reason: `${ended.reason}. It ${done}, and no agent takes its work until it has stopped; this Run goes on once it has`,
             cause: "predecessor-not-quiet",
           });
         }
@@ -4740,6 +4807,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         }).pipe(Effect.orDie),
       ),
     retire,
+    lastLaunch: (runId, agent) =>
+      under(
+        Effect.map(launchesOf(runId), (launches) =>
+          Option.getOrNull(Arr.findLast(launches, (one) => launchedAs(one, agent))),
+        ),
+      ),
     say: (runId, line) => under(log(runId, line)),
     handOff,
     halt,

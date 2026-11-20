@@ -38,6 +38,7 @@ test(
             review_delta: true,
             findings_ledger: true,
             inline_plan: false,
+            agent_sessions: "run",
           });
           yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
@@ -62,6 +63,29 @@ test(
         yield* setSetting(world.config, "inline_plan", "off", "2026-11-18T00:00:01.000Z");
         expect(yield* hostRecords(world.state, featuresOf(started.runId))).toMatchObject({
           inline_plan: true,
+        });
+        yield* until(
+          () => client.run({ runId: started.runId }).pipe(Effect.orDie),
+          (view) => view !== null && isSettled(view),
+        );
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a Run started under agent_sessions: ticket records it, and keeps it once the setting changes",
+  () =>
+    hosted("hw-features-sessions-", ({ world }) =>
+      Effect.gen(function* () {
+        yield* setSetting(world.config, "agent_sessions", "ticket", "2026-11-20T00:00:00.000Z");
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const started = yield* client
+          .start({ project: world.project, id: "hello", request: "sessions", input: { name: "" } })
+          .pipe(Effect.orDie);
+        yield* setSetting(world.config, "agent_sessions", "run", "2026-11-20T00:00:01.000Z");
+        expect(yield* hostRecords(world.state, featuresOf(started.runId))).toMatchObject({
+          agent_sessions: "ticket",
         });
         yield* until(
           () => client.run({ runId: started.runId }).pipe(Effect.orDie),
