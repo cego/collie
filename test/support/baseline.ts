@@ -5478,6 +5478,56 @@ scenario(
 );
 
 scenario(
+  "under agent_sessions: round, a one-ticket Run's final review fix runs on fix-final-1 and its merge request on deliver, each handed the ticket's criteria",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-sess-round-final";
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ ...THREE_TICKETS[0]!, body: `\n- [ ] ${GUARDED}\n` }]);
+        yield* approve(runId, ["unit"]);
+        yield* sessionsUnder(runId, "round");
+        yield* rig.queueOutputs([
+          {
+            ...BUILT,
+            criteria: [{ criterion: GUARDED, met: "test/guard.test.ts, recorded as unit" }],
+          },
+          FOUND_GUARD,
+          FIXED_GUARD,
+          {
+            ...CLEAN_SYNTHESIS,
+            findings: [{ ...GUARD_FINDING, id: `${runId}-F1`, status: "fixed" }],
+          },
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const build = agentName(runId, "build", null, 1);
+        const fixer = agentName(runId, "fix-final-1", null, 1);
+        const deliver = agentName(runId, "deliver", null, 1);
+        expect(yield* implementedOn(runId)).toEqual([
+          ["build", build],
+          ["fix-1", fixer],
+          ["mr", deliver],
+        ]);
+        expect(yield* quietBefore(runId, build, fixer)).toBe(true);
+        expect(yield* quietBefore(runId, fixer, deliver)).toBe(true);
+        for (const operation of ["fix-1", "mr"])
+          expect(yield* asked(runId, operation)).toContain(`${GUARDED} — claimed`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "under agent_sessions: round, each review-fix round of a ticket runs on a fresh fixer that takes over from a Quiet predecessor and is handed the open finding ids",
   () =>
     runEffect(

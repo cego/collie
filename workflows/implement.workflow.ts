@@ -1211,8 +1211,8 @@ export default defineWorkflow({
       // The builder may have named the checks, and every prompt from here shows them.
       input = { ...input, verify: yield* checksNow };
       // Work that stayed on its first agent keeps it to the end.
-      const delivers = handing.sessions !== "run" && handing.agent !== BUILDER;
-      if (delivers && handing.sessions === "ticket") handTo(handing, DELIVERER);
+      const delivers = () => handing.sessions !== "run" && handing.agent !== BUILDER;
+      if (delivers() && handing.sessions === "ticket") handTo(handing, DELIVERER);
 
       if (rallied === null || rallied.unreviewed !== "") {
         rallied = kept(
@@ -1263,7 +1263,7 @@ export default defineWorkflow({
           name: "builder-answers",
           execute: host.record(runId, renderAnswered(answeredFor)),
         });
-      if (delivers) handTo(handing, DELIVERER);
+      if (delivers()) handTo(handing, DELIVERER);
       const delivered = yield* deliver({
         cwd,
         source: { value: source.value, kind: source.kind },
