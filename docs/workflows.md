@@ -117,7 +117,10 @@ source's section, and builds nothing. The plan is then read like a plan Run's:
 
 - A plan the plan reading refuses goes back to that step once with the reason, and the Run
   halts if it is refused again. So does a plan with no ticket, one whose tickets name another
-  repository, or one with a criterion in `SPEC.md` that no ticket carries.
+  repository, or one with a criterion in `SPEC.md`, or a checkbox in a text source, that no
+  ticket carries word for word.
+- Each ticket's `**Checks:**` line names the Run's checks, or the names its builder records
+  through `collie verify --name`, or `None`: the gate looks for a pass under each name.
 - One ticket is built in one pass on the same agent.
 - Several tickets are built one at a time, in their `Blocked by` order, as a plan's are, and
   the merge request names each.

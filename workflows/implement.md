@@ -28,7 +28,8 @@ The work source above is a `{{inputs.plan_kind}}`:
 {{source}}
 
 Where a ticket's `**Checks:**` line names one of this run's checks above, it is not a
-command for you to run: the gate proves it on the final tree.
+command for you to run: the gate proves it on the final tree. Any other name on it is
+yours to record, exactly as written: `collie verify --name <that name> -- <the command>`.
 
 This run has a checkout of its own, on the branch it is building: Collie resolved the
 branch and opened the worktree before you started, so never create a branch or switch
@@ -401,7 +402,10 @@ and no commits. `{{run.dir}}/plan/SPEC.md` is the spec, and each ticket is
 
 - a `**Repo:** .` line;
 - a `**Blocked by:**` line naming the numbers of the tickets it waits for, or `None`;
-- a `**Checks:**` line saying what proves it;
+- a `**Checks:**` line naming, comma-separated, the verifications that prove it: one of
+  this run's checks above, or a name its builder records with `collie verify --name
+  <name> -- <command>`, such as the test files it touches; or `None`. The gate holds the
+  ticket to a passing verification under each name exactly as written;
 - its acceptance criteria as a checkbox list, `- [ ] …`.
 
 Copy every checkbox in `SPEC.md`, word for word, into the ticket that answers it. The
