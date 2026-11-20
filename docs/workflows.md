@@ -112,13 +112,14 @@ before it builds, so every run leaves the same audit trail.
 
 Under the shared setting `inline_plan: on` (default `off`), a Run whose source is anything
 but a plan directory starts with a **Plan** step of its own. The implementer, on the `build`
-agent, writes `SPEC.md` and one ticket per piece into the Run's `plan/`, following its
-source's section, and builds nothing. The plan is then read like a plan Run's:
+agent, writes `SPEC.md` and one ticket per piece into the Run's `plan/`, following a
+planning version of its source's section, and builds nothing. The plan is then read like a plan Run's:
 
 - A plan the plan reading refuses goes back to that step once with the reason, and the Run
   halts if it is refused again. So does a plan with no ticket, one whose tickets name another
   repository, or one with a criterion in `SPEC.md`, or a checkbox in a text source, that no
-  ticket carries word for word.
+  ticket carries word for word. The same goes for a review source's finding that is still
+  open and named in no ticket.
 - Each ticket's `**Checks:**` line names the Run's checks, or the names its builder records
   through `collie verify --name`, or `None`: the gate looks for a pass under each name.
 - One ticket is built in one pass on the same agent.
