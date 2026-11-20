@@ -154,6 +154,8 @@ export interface ReviewAsk {
   /** Ids this Run already gave findings outside `ledger`, which a new finding never takes. */
   readonly taken?: ReadonlyArray<string>;
   readonly head?: string;
+  /** The checkout head a ledgered round reviewed, which its findings are recorded at. */
+  readonly stamped?: string;
   readonly changes?: string;
   /** A follow-up round's prior head, what changed since it and what is still open; see `followUp`. */
   readonly delta?: string;
@@ -281,14 +283,19 @@ export const reviewPass = (ask: ReviewAsk) =>
             ...finding,
             id: identity,
             status,
-            head: ask.head ?? "",
+            head: ask.head ?? ask.stamped ?? "",
             note: status === earlier?.status ? (earlier.note ?? "") : "",
           });
         }
         for (const earlier of before) {
           if (Arr.some(findings, (one) => one.id === earlier.id)) continue;
           if (Arr.some(report.fixed, (one) => findingKey(one) === findingKey(earlier)))
-            findings.push({ ...earlier, status: "fixed", head: ask.head ?? "", note: "" });
+            findings.push({
+              ...earlier,
+              status: "fixed",
+              head: ask.head ?? ask.stamped ?? "",
+              note: "",
+            });
           else
             return yield* new WorkflowError({
               reason: `review omitted earlier finding ${earlier.id ?? earlier.title}; return its status`,
@@ -562,15 +569,16 @@ export const rally = (ask: {
           yield* repair;
           const merged = yield* ask.integrate(`${prefix}merge-${at}`);
           const proves = yield* ask.proves;
-          const head = delta
-            ? yield* Activity.make({
-                name: `${prefix}review-head-${at}`,
-                success: Schema.String,
-                execute: host.reviewedHead({ target: "", cwd: ask.cwd }),
-              })
-            : "";
+          const head =
+            delta || ledger !== undefined
+              ? yield* Activity.make({
+                  name: `${prefix}review-head-${at}`,
+                  success: Schema.String,
+                  execute: host.reviewedHead({ target: "", cwd: ask.cwd }),
+                })
+              : "";
           const given =
-            prior === null || head === ""
+            !delta || prior === null || head === ""
               ? ""
               : yield* followUp({
                   name: `${prefix}review-changes-${at}`,
@@ -599,6 +607,7 @@ export const rally = (ask: {
                   : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
             prefix,
             ledger,
+            stamped: head,
             taken: ask.taken,
             reviewers: ask.resume?.reviewers,
             obstacle: ask.obstacle,

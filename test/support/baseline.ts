@@ -8751,6 +8751,13 @@ scenario(
           `${runId}-F1: fixed — [blocker] the guard is on the wrong side (src/a.ts)`,
         );
         expect(opening).toContain(`${runId}-F2: open — [minor] a name that says less than it does`);
+        const head = Str.trim(
+          yield* Effect.promise(() => Bun.$`git rev-parse HEAD`.cwd(rig.projectDir).quiet().text()),
+        );
+        const second = yield* asked(runId, "review-2-1");
+        expect(second).toContain(`"id": "${runId}-F1"`);
+        expect(second).toContain(`"head": "${head}"`);
+        expect(second).not.toContain(`"head": ""`);
       }),
     ),
   120_000,
