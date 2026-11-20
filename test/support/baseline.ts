@@ -5359,6 +5359,8 @@ const FIXED_GUARD = {
   checks: [],
 };
 
+const GUARDED = "the guard turns an empty list away";
+
 /** A Run that records it started under this `agent_sessions`, as its host would have. */
 const sessionsUnder = (runId: string, sessions: "run" | "ticket" | "round", plans = false) =>
   putFact(
@@ -5484,12 +5486,20 @@ scenario(
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* noGitlabMrs(bin);
         yield* repository();
-        const plan = yield* planOf(Arr.take(THREE_TICKETS, 2));
+        const plan = yield* planOf([
+          { ...THREE_TICKETS[0]!, body: `\n- [ ] ${GUARDED}\n` },
+          THREE_TICKETS[1]!,
+        ]);
         yield* approve(runId, ["unit"]);
         yield* sessionsUnder(runId, "round");
         const later = { severity: "major", title: "the count is off by one", file: "src/b.ts" };
         yield* rig.queueOutputs([
-          { ...BUILT, verdict: "findings", findings: [GUARD_FINDING] },
+          {
+            ...BUILT,
+            verdict: "findings",
+            findings: [GUARD_FINDING],
+            criteria: [{ criterion: GUARDED, met: "test/guard.test.ts, recorded as unit" }],
+          },
           FOUND_GUARD,
           FIXED_GUARD,
           {
@@ -5532,6 +5542,14 @@ scenario(
         const [one, two] = Arr.map(fixes, ([operation]) => operation ?? "");
         expect(yield* asked(runId, one ?? "")).toContain(`${runId}-F1 (open)`);
         expect(yield* asked(runId, two ?? "")).toContain(`${runId}-F2 (open)`);
+        const head = yield* revParse("HEAD");
+        for (const operation of [one, two]) {
+          const handed = yield* asked(runId, operation ?? "");
+          expect(handed).toContain(
+            `${GUARDED} — claimed, unproved: test/guard.test.ts, recorded as unit`,
+          );
+          expect(handed).toContain(`They were reviewed at ${pipe(head, Str.slice(0, 12))}`);
+        }
       }),
     ),
   120_000,

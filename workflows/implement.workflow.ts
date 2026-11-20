@@ -601,6 +601,7 @@ export default defineWorkflow({
         last: "",
         from: null,
         fixes: new Map(),
+        proof: new Map(),
       };
       const rallyAsk = {
         rounds: { n: 0 },
@@ -1012,6 +1013,7 @@ export default defineWorkflow({
             const assumptions = [...(build.assumptions ?? [])];
             const commits = [...(build.commits ?? [])];
             let criteria = spec;
+            handing.proof.set(item, { criteria, answers, checks: ticket?.checks ?? [] });
             let unmet: ReadonlyArray<Finding> = [];
             // Another hand-back on an unchanged tree cannot move a blocker, so a stall asks instead.
             let blockers: ReadonlyArray<Finding> = [];
@@ -1106,6 +1108,7 @@ export default defineWorkflow({
               handing.last = `${operation}.criteria-${turn}`;
               const after = yield* treeAt(`${operation}.criteria-${turn}.after`);
               answers = [...answers, ...boundTo(criteria, answered.criteria ?? [])];
+              handing.proof.set(item, { criteria, answers, checks: ticket?.checks ?? [] });
               assumptions.push(...(answered.assumptions ?? []));
               commits.push(...(answered.commits ?? []));
               blockers = sameTree(after, before)
@@ -1266,7 +1269,7 @@ export default defineWorkflow({
         source: { value: source.value, kind: source.kind },
         onto: onto ?? undefined,
         ...onHolder(handing),
-        handOver: handOverOf(handing, { findings: [...ledger.values()] }),
+        handOver: handOverOf(handing, { ...proofOf(handing), findings: [...ledger.values()] }),
         role: "implementer",
         input,
         checksNow,
@@ -1617,7 +1620,7 @@ const builderRally = (ask: {
         ask.build === undefined
           ? (ask.obstacle ?? "")
           : `Review the built part of this plan: ${Arr.join(ask.build.completed, ", ")}. Later tickets have not started and are outside this review, including its scope judgement. Check these findings reported by the implementer:\n${formatFindings(ask.build.findings)}`,
-      fix: ({ operation, at, proves, findings, open }) =>
+      fix: ({ operation, at, proves, findings, open, head }) =>
         Effect.gen(function* () {
           if (ask.handing.sessions === "round") {
             const item = ask.build === undefined ? "final" : ask.build.item;
@@ -1628,7 +1631,11 @@ const builderRally = (ask: {
           const fixed = yield* agentWork({
             operation,
             ...onHolder(ask.handing),
-            handOver: handOverOf(ask.handing, { findings: open }),
+            handOver: handOverOf(ask.handing, {
+              ...proofOf(ask.handing, ask.build?.item),
+              findings: open,
+              ...(head ? { reviewed: head } : {}),
+            }),
             role: "implementer",
             pushes: true,
             instructions: prompts.fix,
@@ -1662,7 +1669,22 @@ interface Handing {
   from: TakeOver | null;
   /** Fix rounds so far, by ticket, under `round`. */
   readonly fixes: Map<string, number>;
+  /** Each built item's criteria, its latest answers to them and its Checks. */
+  readonly proof: Map<string, Proof>;
 }
+
+type Proof = Required<Pick<HandOverGiven, "criteria" | "answers" | "checks">>;
+
+/** What proves `item`, or every built item where none is named. */
+const proofOf = (handing: Handing, item?: string): Proof => {
+  const one = item === undefined ? undefined : handing.proof.get(item);
+  const all = item === undefined ? [...handing.proof.values()] : one === undefined ? [] : [one];
+  return {
+    criteria: Arr.flatMap(all, (one) => one.criteria),
+    answers: Arr.flatMap(all, (one) => one.answers),
+    checks: Arr.dedupe(Arr.flatMap(all, (one) => one.checks)),
+  };
+};
 
 /** The work goes on to `agent`, which takes it over from the agent that had it. */
 const handTo = (handing: Handing, agent: string) => {
@@ -1687,7 +1709,7 @@ const onHolder = (handing: Handing): { agent: string; takesOver?: TakeOver } =>
 
 const handOverOf = (
   handing: Handing,
-  about: Pick<HandOverGiven, "criteria" | "answers" | "checks" | "findings">,
+  about: Pick<HandOverGiven, "criteria" | "answers" | "checks" | "findings" | "reviewed">,
 ): HandOverGiven => {
   let given: HandOverGiven = about;
   if (handing.plan !== null) given = { ...given, plan: handing.plan };

@@ -59,6 +59,8 @@ export const HandOver = Schema.Struct({
   transcript: Schema.NullOr(Schema.String),
   reports: Schema.String,
   said: Schema.optionalKey(Outgoing),
+  /** The head the findings were reviewed at. */
+  reviewed: Schema.optionalKey(Schema.String),
 });
 export type HandOver = typeof HandOver.Type;
 
@@ -74,6 +76,8 @@ export interface HandOverGiven {
   /** The Checks the ticket names. */
   readonly checks?: ReadonlyArray<string>;
   readonly findings?: ReadonlyArray<Finding>;
+  /** The head the findings were reviewed at. */
+  readonly reviewed?: string;
   /** The outgoing agent's last Output. */
   readonly said?: Outgoing;
 }
@@ -176,6 +180,7 @@ export const buildHandOver = (state: HandOverState): HandOver => {
     if (next_action !== undefined) own.next_action = next_action;
     record.said = own;
   }
+  if (given.reviewed) record.reviewed = given.reviewed;
   return record;
 };
 
@@ -213,6 +218,11 @@ export const renderHandOver = (record: HandOver, why: string): string =>
         "Open findings:",
         Arr.map(record.findings, (one) => `${one.id} (${one.status}): ${one.title}`),
       ),
+      ...(record.reviewed === undefined
+        ? []
+        : [
+            `They were reviewed at ${short(record.reviewed)}: \`git diff ${record.reviewed}\` is what was done since.`,
+          ]),
       ...listed(
         "Pending questions:",
         Arr.map(

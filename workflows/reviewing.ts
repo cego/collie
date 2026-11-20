@@ -518,8 +518,9 @@ export const rally = (ask: {
     readonly at: number;
     readonly proves: string;
     readonly findings: string;
-    /** The findings it is to fix, as listed. */
     readonly open: ReadonlyArray<Finding>;
+    /** The head the round reviewed; "" or absent where it was not read. */
+    readonly head?: string;
   }) => Effect.Effect<typeof FixOutputSchema.Type, WorkflowError, Needs>;
 }): Effect.Effect<Rallied, WorkflowError, Needs> =>
   Effect.gen(function* () {
@@ -685,6 +686,7 @@ export const rally = (ask: {
             proves,
             findings: formatFindings(round.live),
             open: round.live,
+            head,
           });
           // A dispute is carried, not re-argued: the next review either answers it with a
           // rebuttal or it stops driving the loop. One renewed after a rebuttal carries its new
