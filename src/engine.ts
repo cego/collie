@@ -2015,6 +2015,42 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      * role's first seat, and keeps its own persona and instructions.
      */
     readonly seat?: Seat;
+    /** What only the workflow knows of this work, for a hand-over to an agent taking it over. */
+    readonly handOver?: HandOverGiven;
+    /**
+     * The agent whose work this continues, where \`agent\` has not yet run in this Run: it is
+     * ended and found Quiet first, and \`agent\` is first handed the host's hand-over.
+     */
+    readonly takesOver?: { readonly agent: string; readonly why: string };
+  }
+
+  /** What an agent may say beside its Output for whoever takes its work over. */
+  export const OutgoingFields: {
+    readonly decisions: Schema.optionalKey<Schema.$Array<Schema.String>>;
+    readonly rejected: Schema.optionalKey<Schema.$Array<Schema.String>>;
+    readonly next_action: Schema.optionalKey<Schema.String>;
+  };
+  export interface Outgoing {
+    readonly decisions?: ReadonlyArray<string>;
+    readonly rejected?: ReadonlyArray<string>;
+    readonly next_action?: string;
+  }
+
+  /** What only the workflow knows of the work a hand-over is about. */
+  export interface HandOverGiven {
+    readonly ticket?: string;
+    /** The plan directory, whose digest is the plan revision. */
+    readonly plan?: string;
+    /** The ticket's acceptance criteria, from its checkboxes. */
+    readonly criteria?: ReadonlyArray<string>;
+    /** The work's last decoded Output's answers to them. */
+    readonly answers?: ReadonlyArray<{ readonly criterion: string; readonly met: string }>;
+    readonly checks?: ReadonlyArray<string>;
+    readonly findings?: ReadonlyArray<Finding>;
+    /** The head the findings were reviewed at. */
+    readonly reviewed?: string;
+    /** The outgoing agent's last Output. */
+    readonly said?: Outgoing;
   }
 
   /** A message handed to the live agent in this role of a Run this one came from, or null. */
@@ -2432,7 +2468,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     }>;
   }, unknown, never, never>;
   export const SynthesisSchema: Schema.Codec<SynthesisReport, unknown, never, never>;
-  export const FixOutputSchema: Schema.Codec<FixReport, unknown, never, never>;
+  export const FixOutputSchema: Schema.Codec<FixReport & Outgoing, unknown, never, never>;
   export const MrOutputSchema: Schema.Codec<
     { readonly pushed: boolean; readonly mr_url?: string | null; readonly note?: string },
     unknown,
