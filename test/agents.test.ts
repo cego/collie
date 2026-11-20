@@ -18,7 +18,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
-import { SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
+import { IGNORES_TERM, SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
 import { processOf } from "../src/processes";
 import type { PlatformServices } from "../src/platform";
 import {
@@ -4978,8 +4978,10 @@ const ticketsBody = tickets.toLayer((payload) =>
     });
   }).pipe(asRun(payload, "agent-tickets")),
 );
+let firstCommit: string | null = null;
 beforeEach(() => {
   ticketsGiven = {};
+  firstCommit = null;
 });
 const ticketsRun = (over?: Partial<AgentHost>) =>
   session(
@@ -5014,6 +5016,29 @@ const writesWhenGiven = (operation: string, text: string) =>
     yield* ticketOutput(operation, text);
   }).pipe(Effect.orDie, Effect.forkScoped);
 
+const headNow = Effect.map(
+  Effect.suspend(() => inProject("rev-parse", "HEAD")),
+  Str.trim,
+);
+/** The first ticket's agent commits, then writes its Output, once its step is given. */
+const firstCommits = Effect.gen(function* () {
+  while (sent(yield* rig.calls(), "01-first.md.prompt.md") === 0)
+    yield* TestClock.withLive(Effect.sleep("10 millis"));
+  yield* inProject(
+    "-c",
+    "user.email=t@t",
+    "-c",
+    "user.name=t",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "the first ticket",
+  );
+  firstCommit = yield* headNow;
+  yield* ticketOutput("01-first.md", JSON.stringify(SAID_FIRST));
+}).pipe(Effect.orDie, Effect.forkScoped);
+
 /** Whether `before`'s terminal was killed before `after` was first started: one writer at a time. */
 const quietFirst = (before: string, after: string) =>
   Effect.gen(function* () {
@@ -5033,7 +5058,11 @@ const quietFirst = (before: string, after: string) =>
     return Option.isSome(killed) && Option.isSome(run) && killed.value < run.value;
   });
 
-/** Each agent the Run started, the step deliveries it sent, and the hand-over revisions it wrote. */
+/**
+ * Each agent the Run started, the step deliveries it sent and the hand-over revisions it wrote;
+ * whether each agent was closed before the next started, and whether the first ticket's commit
+ * is in the checkout with every hand-over at it.
+ */
 const ticketsLedger = Effect.gen(function* () {
   const steps = Arr.filter(yield* deliveredTo(dir, "r1"), (one) => one.cause.kind === "step");
   const revisions = yield* hostRecords(
@@ -5043,16 +5072,34 @@ const ticketsLedger = Effect.gen(function* () {
       Schema.fromJsonString(HandOver),
     ),
   );
+  const agents = Arr.map(yield* agentsAt(dir, "r1"), ({ agent }) => agent);
+  const head = yield* headNow;
+  const contains = (commit: string) =>
+    Effect.promise(() =>
+      Bun.$`git merge-base --is-ancestor ${commit} HEAD`.cwd(rig.projectDir).nothrow().quiet(),
+    ).pipe(Effect.map((done) => done.exitCode === 0));
   return {
-    agents: Arr.map(yield* agentsAt(dir, "r1"), ({ agent }) => agent),
+    agents,
     steps: Arr.map(steps, (one) => one.cause.ref),
     revisions: Arr.map(revisions, (one) => one.revision),
+    oneWriter: Arr.every(
+      yield* Effect.forEach(Arr.zip(agents, Arr.drop(agents, 1)), ([before, after]) =>
+        quietFirst(before, after),
+      ),
+      (one) => one,
+    ),
+    kept:
+      firstCommit !== null &&
+      (yield* contains(firstCommit)) &&
+      Arr.every(revisions, (one) => one.head === head),
   };
 });
 const ONE_EACH = {
   agents: [onTicket("build"), onTicket("build-02-second"), onTicket("deliver")],
   steps: ["01-first.md", "02-second.md", "mr"],
   revisions: [1, 2],
+  oneWriter: true,
+  kept: true,
 };
 
 test(
@@ -5060,14 +5107,14 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const head = yield* committed;
-        yield* rig.queueOutputs([SAID_FIRST, { verdict: "clean" }, OPENED_MR]);
+        yield* committed;
+        yield* rig.queueOutputs([null, { verdict: "clean" }, OPENED_MR]);
+        yield* firstCommits;
         const result = yield* ticketsRun();
 
         expect(result._tag === "Success" && result.success.note).toBe("opened");
         expect(yield* ticketsLedger).toEqual(ONE_EACH);
-        expect(yield* quietFirst(onTicket("build"), onTicket("build-02-second"))).toBe(true);
-        expect(yield* quietFirst(onTicket("build-02-second"), onTicket("deliver"))).toBe(true);
+        const head = yield* headNow;
         const second = yield* read(`${dir}/agents/r1/02-second.md.prompt.md`);
         expect(second).toContain(
           `You take over 02-second.md (ticket 02-second.md) of r1 from ${onTicket("build")}, incarnation 1, which stopped because it finished 01-first.md.`,
@@ -5089,18 +5136,21 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const head = yield* committed;
+        yield* committed;
         const plan = `${rig.root}/plan`;
         yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
         yield* fs.writeFileString(`${plan}/issues/02-second.md`, "- [ ] it counts\n");
         ticketsGiven = { plan };
-        yield* rig.queueOutputs([SAID_FIRST]);
+        yield* rig.queueOutputs([null]);
+        yield* firstCommits;
         let reads = 0;
         // The record is read once as it is built; the read before it goes out never answers.
         const stalls: Partial<AgentHost> = {
           checkout: () =>
             Effect.suspend(() =>
-              ++reads >= 2 ? Effect.never : Effect.succeed({ head, branch: "work", dirty: false }),
+              ++reads >= 2
+                ? Effect.never
+                : Effect.map(headNow, (head) => ({ head, branch: "work", dirty: false })),
             ),
         };
         yield* ticketsUntil(
@@ -5111,6 +5161,8 @@ test(
           agents: [onTicket("build")],
           steps: ["01-first.md"],
           revisions: [1],
+          oneWriter: true,
+          kept: true,
         });
         yield* fs.writeFileString(`${plan}/issues/02-second.md`, "- [ ] it counts twice\n");
         yield* writesWhenGiven("02-second.md", `{"verdict":"clean"}`);
@@ -5122,18 +5174,17 @@ test(
         expect(yield* read(`${dir}/agents/r1/02-second.md.prompt.md`)).toContain(
           "## Hand-over (revision 2)",
         );
-        expect(yield* quietFirst(onTicket("build"), onTicket("build-02-second"))).toBe(true);
       }).pipe(Effect.scoped),
     ),
   120_000,
 );
 
 test.each([
-  { boundary: "a ticket boundary", operation: "02-second.md", outputs: [SAID_FIRST, null] },
+  { boundary: "a ticket boundary", operation: "02-second.md", outputs: [null, null] },
   {
     boundary: "the last boundary, into deliver",
     operation: "mr",
-    outputs: [SAID_FIRST, { verdict: "clean" }, null],
+    outputs: [null, { verdict: "clean" }, null],
   },
 ])(
   "a host crash just after $boundary's hand-over is sent, with the step delivered again, leaves one delivery to one new agent",
@@ -5142,6 +5193,7 @@ test.each([
       Effect.gen(function* () {
         yield* committed;
         yield* rig.queueOutputs(outputs);
+        yield* firstCommits;
         yield* ticketsUntil(prompted(`${operation}.prompt.md`));
         const owner = operation === "mr" ? "deliver" : "build-02-second";
         const prompt = yield* read(`${dir}/agents/r1/${operation}.prompt.md`);
@@ -5188,7 +5240,8 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* committed;
-        yield* rig.queueOutputs([SAID_FIRST, null]);
+        yield* rig.queueOutputs([null, null]);
+        yield* firstCommits;
         yield* ticketsUntil(prompted("02-second.md.prompt.md"));
         yield* ticketOutput("02-second.md", `{"verdict":"clean"}`);
         yield* writesWhenGiven("mr", MR_OPENED);
@@ -5209,7 +5262,8 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* committed;
-        yield* rig.queueOutputs([SAID_FIRST, null]);
+        yield* rig.queueOutputs([null, null]);
+        yield* firstCommits;
         yield* ticketsUntil(prompted("02-second.md.prompt.md"));
         const result = yield* session(
           Effect.gen(function* () {
@@ -5274,7 +5328,8 @@ test(
             ),
           ),
         );
-        yield* rig.queueOutputs([SAID_FIRST, { verdict: "clean" }, OPENED_MR]);
+        yield* rig.queueOutputs([null, { verdict: "clean" }, OPENED_MR]);
+        yield* firstCommits;
         const result = yield* ticketsRun();
 
         expect(result._tag === "Success" && result.success.note).toBe("opened");
@@ -5293,22 +5348,22 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* committed;
-        yield* rig.queueOutputs([SAID_FIRST, null, { verdict: "clean" }, OPENED_MR]);
+        yield* rig.queueOutputs([null, null, { verdict: "clean" }, OPENED_MR]);
+        yield* firstCommits;
         yield* Effect.forkScoped(runsOut(onTicket("build-02-second"), 2));
         const result = yield* ticketsRun(chain);
 
         expect(result._tag === "Success" && result.success.note).toBe("opened");
-        const agents = Arr.map(yield* agentsAt(dir, "r1"), ({ agent }) => agent);
-        expect(agents).toEqual([
-          onTicket("build"),
-          onTicket("build-02-second"),
-          onTicket("build-02-second", 2),
-          onTicket("deliver"),
-        ]);
-        expect(yield* quietFirst(onTicket("build-02-second"), onTicket("build-02-second", 2))).toBe(
-          true,
-        );
-        expect(yield* quietFirst(onTicket("build-02-second", 2), onTicket("deliver"))).toBe(true);
+        expect(yield* ticketsLedger).toMatchObject({
+          agents: [
+            onTicket("build"),
+            onTicket("build-02-second"),
+            onTicket("build-02-second", 2),
+            onTicket("deliver"),
+          ],
+          oneWriter: true,
+          kept: true,
+        });
         expect(yield* read(`${dir}/agents/r1/mr.prompt.md`)).toContain(
           `from ${onTicket("build-02-second", 2)}, incarnation 2`,
         );
@@ -5323,7 +5378,8 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* committed;
-        yield* rig.queueOutputs([SAID_FIRST, null]);
+        yield* rig.queueOutputs([null, null]);
+        yield* firstCommits;
         yield* ticketsUntil(prompted("02-second.md.prompt.md"));
         yield* recordClaudeEvent(
           yield* controlDir(rig.pluginEnv().stateDir, onTicket("build")),
@@ -5339,6 +5395,67 @@ test(
         const result = yield* ticketsRun(chain);
 
         expect(result._tag === "Success" && result.success.note).toBe("opened");
+        expect(yield* ticketsLedger).toEqual(ONE_EACH);
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "a ticket's agent whose pane leaves a child that will not stop parks the Run on predecessor-not-quiet, and the next ticket's agent is never started",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* committed;
+        const tree = yield* paneTree(IGNORES_TERM);
+        core.runsAs(tree.shell);
+        yield* rig.queueOutputs([null]);
+        yield* firstCommits;
+        yield* ticketsUntil(parked("r1"), { stopMs: 500 });
+
+        expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("predecessor-not-quiet");
+        expect(yield* processOf(tree.child)).not.toBeNull();
+        expect(yield* ticketsLedger).toMatchObject({
+          agents: [onTicket("build")],
+          steps: ["01-first.md"],
+        });
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "a check a ticket's agent left running in the background is stopped before the next ticket's agent starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* committed;
+        const tree = yield* paneTree(SURVIVES_HANGUP);
+        core.runsAs(tree.shell);
+        const aliveAtTakeover = yield* Ref.make<boolean | null>(null);
+        yield* Effect.forkScoped(
+          Effect.gen(function* () {
+            const startedYet = rig.calls().pipe(
+              Effect.map((calls) =>
+                Arr.some(
+                  calls,
+                  (call) =>
+                    call.cmd === "terminal.run" &&
+                    call.params?.name === onTicket("build-02-second"),
+                ),
+              ),
+              Effect.orElseSucceed(() => false),
+            );
+            while (!(yield* startedYet)) yield* TestClock.withLive(Effect.sleep("1 millis"));
+            yield* Ref.set(aliveAtTakeover, (yield* processOf(tree.child)) !== null);
+          }),
+        );
+        yield* rig.queueOutputs([null, { verdict: "clean" }, OPENED_MR]);
+        yield* firstCommits;
+        const result = yield* ticketsRun({ stopMs: 3_000 });
+
+        expect(result._tag === "Success" && result.success.note).toBe("opened");
+        expect(yield* Ref.get(aliveAtTakeover)).toBe(false);
         expect(yield* ticketsLedger).toEqual(ONE_EACH);
       }).pipe(Effect.scoped),
     ),
