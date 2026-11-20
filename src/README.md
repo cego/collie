@@ -136,6 +136,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `trust.ts`             | Whether a harness will work in a directory, or stop and ask first                                                           |
 | `agent-start.ts`       | An agent's start names its checkout and every Input, or is refused with what fills each                                     |
 | `agent-end.ts`         | The one end of a Run's agent: proved its own, stopped, Quiet, its pane closed, the end logged                               |
+| `hand-over.ts`         | The record an agent taking over another's work reads first, built from host state and refused when stale                    |
 | `projects.ts`          | The Projects root, where it came from, and the checkouts under it                                                           |
 | `route.ts`             | Where a start from the Home goes: a URL's checkout by remote, else one routing call                                         |
 | `worktree.ts`          | The checkout a mutating Run owns, keyed by its branch, and pruning the settled ones                                         |

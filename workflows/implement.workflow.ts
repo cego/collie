@@ -24,6 +24,7 @@ import {
   FindingSchema,
   FixOutputSchema,
   IntegrationSchema,
+  OutgoingFields,
   PrerequisiteStandingSchema,
   Agents,
   Children,
@@ -60,7 +61,9 @@ import {
   unmetCriteria,
   type Criterion,
   type Finding,
+  type HandOverGiven,
   type Handed,
+  type Outgoing,
   type Integration,
   type Slice,
 } from "collie";
@@ -202,6 +205,7 @@ const Built = Schema.Struct({
   assumptions: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
     description: "each decision you made that the spec did not settle, and why, one sentence each",
   }),
+  ...OutgoingFields,
 });
 
 /** One Change a plan names, by the key its waves name it by. */
@@ -585,12 +589,14 @@ export default defineWorkflow({
       const restateKind = Effect.map(kindNow, (outcome) => {
         input = { ...input, inputs: { ...input.inputs, outcome } };
       });
+      const handing: Handing = { plan: null, ticket: null, said: undefined };
       const rallyAsk = {
         rounds: { n: 0 },
         cwd,
         proves: kindNow,
         risks: place.options.risks ?? "",
         integrate: integrated,
+        handing,
       };
 
       // An agent's start gives every Input, one it leaves out as "" (docs/cli.md): an empty
@@ -655,6 +661,7 @@ export default defineWorkflow({
           }),
         );
       const work = planned ? { kind: "plan-dir", value: planDir } : source;
+      handing.plan = work.kind === "plan-dir" ? work.value : null;
 
       // The tickets as they stand at each boundary: one added, removed or reordered while
       // another is being built is the plan from then on, and what is built stays built by
@@ -884,9 +891,15 @@ export default defineWorkflow({
                 ? criteriaIn(work.value)
                 : Arr.flatMap(tickets, (one) => one.criteria));
             yield* restateKind;
+            handing.ticket = ticket?.file ?? null;
             build = yield* agentWork({
               operation,
               agent: BUILDER,
+              handOver: handOverOf(handing, {
+                criteria: given,
+                checks: ticket?.checks ?? [],
+                findings: [...ledger.values()],
+              }),
               role: "implementer",
               pushes: true,
               instructions: prompts.build,
@@ -920,6 +933,7 @@ export default defineWorkflow({
               },
               output: Built,
             });
+            handing.said = build;
             // A Linear issue's criteria are read from its description as the builder copied it.
             let spec: ReadonlyArray<string> | null = given;
             for (let reading = 1; ; reading++) {
@@ -1052,6 +1066,12 @@ export default defineWorkflow({
               const answered = yield* agentWork({
                 operation: `${operation}.criteria-${turn}`,
                 agent: BUILDER,
+                handOver: handOverOf(handing, {
+                  criteria,
+                  answers,
+                  checks: ticket?.checks ?? [],
+                  findings: [...ledger.values()],
+                }),
                 role: "implementer",
                 pushes: true,
                 instructions: prompts.criteria,
@@ -1065,6 +1085,7 @@ export default defineWorkflow({
                 },
                 output: Built,
               });
+              handing.said = answered;
               const after = yield* treeAt(`${operation}.criteria-${turn}.after`);
               answers = [...answers, ...boundTo(criteria, answered.criteria ?? [])];
               assumptions.push(...(answered.assumptions ?? []));
@@ -1546,6 +1567,7 @@ const builderRally = (ask: {
   readonly resume?: { readonly attempt: number; readonly previous: Rallied };
   readonly ledger?: ReadonlyArray<Finding>;
   readonly taken?: ReadonlyArray<string>;
+  readonly handing: Handing;
   readonly integrate: (
     operation: string,
   ) => Effect.Effect<
@@ -1572,11 +1594,12 @@ const builderRally = (ask: {
         ask.build === undefined
           ? (ask.obstacle ?? "")
           : `Review the built part of this plan: ${Arr.join(ask.build.completed, ", ")}. Later tickets have not started and are outside this review, including its scope judgement. Check these findings reported by the implementer:\n${formatFindings(ask.build.findings)}`,
-      fix: ({ operation, at, proves, findings }) =>
+      fix: ({ operation, at, proves, findings, open }) =>
         Effect.gen(function* () {
-          return yield* agentWork({
+          const fixed = yield* agentWork({
             operation,
             agent: BUILDER,
+            handOver: handOverOf(ask.handing, { findings: open }),
             role: "implementer",
             pushes: true,
             instructions: prompts.fix,
@@ -1590,6 +1613,27 @@ const builderRally = (ask: {
             },
             output: FixOutputSchema,
           });
+          ask.handing.said = fixed;
+          return fixed;
         }),
     });
   });
+
+/** What the builder's work is, as a hand-over to an agent taking it over needs it. */
+interface Handing {
+  plan: string | null;
+  ticket: string | null;
+  /** The builder's last Output. */
+  said: Outgoing | undefined;
+}
+
+const handOverOf = (
+  handing: Handing,
+  about: Pick<HandOverGiven, "criteria" | "answers" | "checks" | "findings">,
+): HandOverGiven => {
+  let given: HandOverGiven = about;
+  if (handing.plan !== null) given = { ...given, plan: handing.plan };
+  if (handing.ticket !== null) given = { ...given, ticket: handing.ticket };
+  if (handing.said !== undefined) given = { ...given, said: handing.said };
+  return given;
+};

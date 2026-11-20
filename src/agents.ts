@@ -16,7 +16,20 @@ import * as Cause from "effect/Cause";
 
 import { Foreground } from "./foreground";
 import { ParkCause } from "./park-cause";
-import { rememberNotQuiet } from "./park-recheck";
+import { rememberNotQuiet, rememberStaleHandOver } from "./park-recheck";
+import {
+  HandOver,
+  atDispatch,
+  buildHandOver,
+  planRevision,
+  renderHandOver,
+  type AtDispatch,
+  type CheckoutNow,
+  type HandOverGiven,
+  type HandOverState,
+} from "./hand-over";
+import { readIntent } from "./intent";
+import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import * as Struct from "effect/Struct";
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
@@ -165,7 +178,7 @@ import { isSuperseded, isUnanswered } from "./store";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue, type Queued } from "./delivery-queue";
-import { verifyingOf, type Verifying } from "./verify";
+import { treeOf, verifyingOf, type Verifying } from "./verify";
 import { agentName, launchedAs, legacyAgentName, reason, unsafePathComponent } from "./naming";
 import { machineName } from "./peers";
 import type { MachineCatalogue } from "./harness-choice";
@@ -435,6 +448,20 @@ export interface AgentsApi {
   readonly outputSubmit: Effect.Effect<"file" | "tool">;
   /** What this Run's `attachments/` holds now, which its next prompt lists. */
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
+  /** The Run's next hand-over revision, built from host state and kept beside every earlier one. */
+  readonly handOver: (
+    about: Omit<
+      HandOverState,
+      "revision" | "goal" | "constraints" | "plan" | "checkout" | "reports"
+    > & { readonly cwd: string },
+  ) => Effect.Effect<HandOver>;
+  /** The head and plan revision a hand-over is held to at dispatch. */
+  readonly atCheckout: (cwd: string, plan: string | null) => Effect.Effect<AtDispatch>;
+  /** Keeps what a stale hand-over's park rechecks. */
+  readonly handOverStale: (
+    runId: string,
+    seen: AtDispatch & { readonly cwd: string; readonly dir: string | null },
+  ) => Effect.Effect<void>;
   /**
    * What an agent is told about asking for a decision its work does not cover: the pane
    * of whoever is live in that role in this Run's lineage — `Place.lineage` — and
@@ -734,6 +761,8 @@ interface Doing<Output extends OutputContract> {
    * role's first seat, and keeps its own persona and instructions.
    */
   readonly seat?: Seat;
+  /** What only the workflow knows of this work, for a hand-over to an agent taking it over. */
+  readonly handOver?: HandOverGiven;
 }
 
 /**
@@ -1259,16 +1288,40 @@ export const agentWork = <
       }
       const sequence = (current.sequence ?? 1) + 1;
       const successor = agentName(runId, work.agent ?? work.operation, null, sequence);
+      const outgoing = current;
+      const handOverNow = Effect.gen(function* () {
+        const evidence = yield* host.evidence(runId, work.cwd);
+        return yield* agents.handOver({
+          run: runId,
+          step: work.operation,
+          agent: outgoing.agent,
+          incarnation: outgoing.sequence ?? 1,
+          cwd: work.cwd,
+          given: given.handOver ?? {},
+          base: evidence.mergeBase ?? null,
+          verifications: evidence.verifications,
+          checks: Arr.map(yield* host.approved(runId), (one) => one.name),
+          asked: yield* host.asked(runId),
+          transcript: out.transcript,
+        });
+      });
+      const handed = yield* Activity.make({
+        name: `${work.operation}.fallback-${n}.hand-over`,
+        success: HandOver,
+        execute: handOverNow,
+      });
+      const promptWith = (record: HandOver) =>
+        renderPrompt({
+          ...parts,
+          handover: renderHandOver(record, `its subscription ran out (${out.why}) on ${said(on)}`),
+        }).text;
       const nextAsk: Types.Mutable<AgentAsk> = {
         ...currentAsk,
         harness: next.harness,
         model: next.model,
         effort: next.effort,
         sequence,
-        prompt: renderPrompt({
-          ...parts,
-          handover: handover({ on, why: out.why, transcript: out.transcript }),
-        }).text,
+        prompt: promptWith(handed),
         // The chain's first agent, which is what a later ask for this agent may still name.
         from: currentAsk.from ?? on,
         why: out.why,
@@ -1303,6 +1356,23 @@ export const agentWork = <
             yield* host.parked(runId, null);
             return CollectedBeforeFallback.make({ text: late });
           }
+          const plan = given.handOver?.plan ?? null;
+          const dispatched = yield* atDispatch(
+            handed,
+            agents.atCheckout(work.cwd, plan),
+            handOverNow,
+          );
+          if (dispatched === null) {
+            const seen = yield* agents.atCheckout(work.cwd, plan);
+            yield* agents.handOverStale(runId, { ...seen, cwd: work.cwd, dir: plan });
+            yield* host.parked(
+              runId,
+              `${successor}'s hand-over was rebuilt once and the checkout moved again (head ${seen.head}, plan revision ${seen.plan ?? "none"}): no agent takes the work from a stale picture. This Run goes on once the checkout holds still`,
+              "hand-over-stale",
+            );
+            return yield* Workflow.suspend(instance);
+          }
+          nextAsk.prompt = promptWith(dispatched);
           return yield* launching(nextAsk);
         }),
       });
@@ -1692,19 +1762,6 @@ function renderPrompt(parts: PromptParts) {
   return { text, unfilled };
 }
 
-/** What an agent taking over from one that ran out is told (ADR-0049 D8). */
-export function handover(ranOut: {
-  readonly on: AgentChoice;
-  readonly why: string;
-  readonly transcript: string | null;
-}): string {
-  const where =
-    ranOut.transcript === null
-      ? ""
-      : ` Its conversation is at ${ranOut.transcript}; read it if you need what it was told or decided.`;
-  return `Another agent (${said(ranOut.on)}) started this work and stopped because its subscription ran out (${ranOut.why}). Whatever it changed is in the checkout: read \`git status\` and \`git diff\` before you start, and carry on rather than start over.${where}`;
-}
-
 function attachmentsSection(attachments: ReadonlyArray<Attachment>): string {
   if (attachments.length === 0) return "";
   return Arr.join(
@@ -1783,6 +1840,8 @@ export interface AgentHost {
   readonly help?: typeof installedHelp;
   /** How a launch's helpers run Collie; this binary where left out. */
   readonly self?: ReadonlyArray<string>;
+  /** The checkout as Git has it; `git status` where left out. */
+  readonly checkout?: (cwd: string) => Effect.Effect<CheckoutNow>;
 }
 
 type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp | Records;
@@ -4491,8 +4550,51 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     );
 
+  const checkoutOf = (cwd: string) =>
+    host.checkout?.(cwd) ??
+    under(
+      Effect.map(treeOf(cwd), ({ head_sha, branch, dirty }) => ({ head: head_sha, branch, dirty })),
+    );
+  const planOf = (plan: string | null | undefined) =>
+    plan == null
+      ? Effect.succeed(null)
+      : under(planRevision(plan)).pipe(Effect.orElseSucceed(() => null));
+  const handOverJournal = (runId: string) =>
+    runJournal(`${host.dir}/runs/${runId}`, "hand-overs.jsonl");
+  const HandOverJson = Schema.fromJsonString(HandOver);
+
   return {
     outputFor,
+    handOver: (about) =>
+      under(
+        Effect.gen(function* () {
+          const at = handOverJournal(about.run);
+          const earlier = yield* readRunJournal(at, HandOverJson).pipe(
+            Effect.orElseSucceed(() => []),
+          );
+          const intent = yield* readIntent(`${host.dir}/runs/${about.run}`).pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          const record = buildHandOver({
+            ...about,
+            revision: earlier.length + 1,
+            goal: intent?.goal ?? null,
+            constraints: Arr.map(intent?.constraints ?? [], (one) => one.text),
+            plan: yield* planOf(about.given.plan),
+            checkout: yield* checkoutOf(about.cwd),
+            reports: `${host.dir}/runs/${about.run}/handoffs`,
+          });
+          yield* appendRunJournal(at, HandOverJson, record);
+          return record;
+        }),
+      ).pipe(Effect.orDie),
+    atCheckout: (cwd, plan) =>
+      Effect.all({
+        head: Effect.map(checkoutOf(cwd), (now) => now.head),
+        plan: planOf(plan),
+      }),
+    handOverStale: (runId, seen) =>
+      under(rememberStaleHandOver(`${host.dir}/runs/${runId}`, seen)).pipe(Effect.orDie),
     stepMessage: (ask) => {
       const prompt = promptFile(ask);
       const text = stepText(adapterFor(ask.harness ?? host.harness), ask, prompt);

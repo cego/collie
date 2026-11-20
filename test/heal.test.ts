@@ -617,6 +617,19 @@ test("a park whose Heal started is not owed another, and its next one is the sec
   expect(healNth("p", recoveries)).toBe(2);
 });
 
+test("a hand-over-stale park is rechecked and never healed", () => {
+  expect(parkOf("hand-over-stale").kind).toBe("rechecks");
+  expect(
+    passedOver({
+      cause: "hand-over-stale",
+      isHeal: false,
+      on: true,
+      waitsOnYou: false,
+      recoveries: [],
+    }),
+  ).toBe("only what its recheck reads can clear its cause");
+});
+
 test("a herdr-unavailable park whose three resumes ran out needs you and is never healed", () => {
   const resumed = (park: string) => ({
     at: `2026-11-13T00:00:0${park}Z`,

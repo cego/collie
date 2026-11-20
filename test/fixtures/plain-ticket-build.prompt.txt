@@ -270,6 +270,24 @@ That file must match this contract. Where a field carries a description, it is a
         "type": "string"
       },
       "description": "each decision you made that the spec did not settle, and why, one sentence each"
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "what you decided that the next agent should keep"
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "approaches you tried or weighed and turned down, and why"
+    },
+    "next_action": {
+      "type": "string",
+      "description": "what you would do next, had you more turns"
     }
   },
   "required": [

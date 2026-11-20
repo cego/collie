@@ -86,6 +86,9 @@ import { isoAt, nowIso } from "../src/time";
 import { readCards, writeCheckpoint } from "../src/cards";
 import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
+import { HandOver, OutgoingFields, type HandOverGiven } from "../src/hand-over";
+import { readRunJournal, runJournal } from "../src/journal";
+import { appendVerification, type Verification } from "../src/verify";
 import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, reconcile } from "../src/steering";
@@ -4522,13 +4525,14 @@ test("an agent that runs out mid-work is closed and replaced by one on the next 
       ).toBe(true);
       const prompt = yield* read(`${dir}/agents/r1/review.r2.prompt.md`);
       const handed = Option.getOrElse(
-        pipe(prompt, Str.indexOf("Another agent (claude/opus) started this work")),
+        pipe(prompt, Str.indexOf("## Hand-over (revision 1)")),
         () => -1,
       );
       expect(handed).toBeGreaterThan(-1);
       expect(handed).toBeLessThan(
         Option.getOrElse(pipe(prompt, Str.indexOf("OUTPUT_PATH:")), () => -1),
       );
+      expect(prompt).toContain("its subscription ran out (rate_limit) on claude/opus");
       expect(prompt).toContain("Its conversation is at /home/mk/.claude/projects/p/s-out.jsonl");
       expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
         `review: claude/opus ran out (rate_limit) — continuing on codex/default as ${successor}`,
@@ -4563,6 +4567,330 @@ test("a repair after a Fallback goes to the agent that took over, and starts no 
       expect([promptedTo(agentFor("r1")), promptedTo(successor)]).toEqual([1, 2]);
     }).pipe(Effect.scoped),
   ));
+
+/** Work whose hand-over facts are what the test gives it. */
+const handingOver = enveloped({ name: "agent-handing-over", input: {}, success: Verdict });
+let handOverGiven: HandOverGiven = {};
+const handingOverBody = handingOver.toLayer((payload) =>
+  Effect.suspend(() =>
+    agentWork({
+      operation: "review",
+      role: "reviewer",
+      workflow: "agent-handing-over",
+      cwd: rig.projectDir,
+      instructions:
+        "Build the ticket.\n\nWhat the tickets before it left:\n- 01-schema.md — Add the schema\n    verified: unit: pass",
+      output: Verdict,
+      handOver: handOverGiven,
+    }),
+  ).pipe(asRun(payload, "agent-handing-over")),
+);
+const handsOver = (over?: Partial<AgentHost>) =>
+  session(
+    handingOver
+      .execute({ runId: "r1", input: {} })
+      .pipe(Effect.result, Effect.provide(handingOverBody)),
+    { ...chain, collectMs: 30_000, ...over },
+  );
+
+const inProject = (...args: ReadonlyArray<string>) =>
+  Effect.promise(() => Bun.$`git ${args}`.cwd(rig.projectDir).quiet().text());
+/** The project as a checkout with one commit, and that commit. */
+const committed = Effect.gen(function* () {
+  yield* inProject("init", "-q", "-b", "work");
+  yield* inProject(
+    "-c",
+    "user.email=t@t",
+    "-c",
+    "user.name=t",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "start",
+  );
+  return Str.trim(yield* inProject("rev-parse", "HEAD"));
+});
+
+const passed = (name: string, head: string): Verification => ({
+  id: `v-${name}-${pipe(head, Str.slice(0, 7))}`,
+  run: "r1",
+  name,
+  executable: "/usr/bin/true",
+  argv: [],
+  cwd: rig.projectDir,
+  start: { head_sha: head, fingerprint: "f" },
+  end: { head_sha: head, fingerprint: "f" },
+  exit: 0,
+  seconds: 1,
+  expect: "pass",
+  tail: { stdout: "", stderr: "" },
+  result: "pass",
+  at: "2026-11-20T09:00:00Z",
+  by: "agent",
+});
+
+const successorPrompt = (operation = "review") =>
+  read(`${dir}/agents/r1/${operation}.r2.prompt.md`);
+
+test("a Fallback's new agent is first handed the record of the host's state: head, plan revision, criteria with their records, open findings and pending questions", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const head = yield* committed;
+      const plan = `${rig.root}/plan`;
+      yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
+      yield* fs.writeFileString(`${plan}/SPEC.md`, "# Cache\n");
+      yield* fs.writeFileString(`${plan}/issues/03-cache.md`, "- [ ] the cache is warmed\n");
+      yield* appendVerification(evidenceDir(dir, "r1"), passed("unit", head));
+      yield* appendVerification(evidenceDir(dir, "r1"), passed("misses", "0000000older"));
+      yield* session(
+        Store.pipe(
+          Effect.flatMap((store) =>
+            store.asking({
+              run: "r1",
+              decision: "which-store",
+              prompt: "Which store holds the cache?",
+              options: [
+                { id: "memory", title: "In memory" },
+                { id: "redis", title: "Redis" },
+              ],
+            }),
+          ),
+        ),
+      );
+      handOverGiven = {
+        ticket: "03-cache.md",
+        plan,
+        criteria: ["the cache is warmed", "misses are logged", "the cache is bounded"],
+        answers: [
+          { criterion: "the cache is warmed", met: "cache.test.ts, recorded as unit" },
+          { criterion: "misses are logged", met: "misses.test.ts, recorded as misses" },
+          { criterion: "the cache is bounded", met: "not met: no eviction yet" },
+        ],
+        checks: ["misses"],
+        findings: [
+          { id: "r1-F1", status: "open", severity: "major", title: "warming races the first read" },
+          { id: "r1-F2", status: "fixed", severity: "minor", title: "a typo in the log line" },
+        ],
+      };
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "finished on codex" }]);
+      yield* Effect.forkScoped(runsOut(agentFor("r1")));
+      const result = yield* handsOver();
+
+      expect(result._tag === "Success" && result.success.note).toBe("finished on codex");
+      const prompt = yield* successorPrompt();
+      expect(prompt).toContain(`head ${pipe(head, Str.slice(0, 12))}`);
+      expect(prompt).toMatch(/Plan revision: [0-9a-f]{16}\n/);
+      expect(prompt).toContain(
+        `the cache is warmed — claimed met: cache.test.ts, recorded as unit; records v-unit-${pipe(head, Str.slice(0, 7))}`,
+      );
+      expect(prompt).toContain(
+        "misses are logged — claimed, unproved: misses.test.ts, recorded as misses",
+      );
+      expect(prompt).toContain("the cache is bounded — not claimed");
+      expect(prompt).toContain("Checks still owed: misses.");
+      expect(prompt).toContain("r1-F1 (open): warming races the first read");
+      expect(prompt).not.toContain("r1-F2");
+      expect(prompt).toContain("which-store, choices memory, redis");
+    }).pipe(Effect.scoped),
+  ));
+
+test("the agent taking over reads the Run's progress once: in its prompt, not again in the hand-over", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const head = yield* committed;
+      yield* appendVerification(evidenceDir(dir, "r1"), passed("unit", head));
+      handOverGiven = { ticket: "02-cache.md", criteria: ["the cache is warmed"] };
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "finished on codex" }]);
+      yield* Effect.forkScoped(runsOut(agentFor("r1")));
+      yield* handsOver();
+
+      const prompt = yield* successorPrompt();
+      const count = (text: string) => Str.split(prompt, text).length - 1;
+      expect(prompt).toContain("## Hand-over (revision 1)");
+      expect(count("01-schema.md")).toBe(1);
+      expect(count("unit")).toBe(1);
+    }).pipe(Effect.scoped),
+  ));
+
+/** Two pieces of work on one agent; the second runs out, after the first said what it decided. */
+const Said = Schema.Struct({ verdict: Schema.String, ...OutgoingFields });
+const twoSteps = enveloped({ name: "agent-two-steps", input: {}, success: Verdict });
+const twoStepsBody = twoSteps.toLayer((payload) =>
+  Effect.gen(function* () {
+    const built = yield* agentWork({
+      operation: "build",
+      agent: "builder",
+      cwd: rig.projectDir,
+      instructions: "Build.",
+      output: Said,
+    });
+    return yield* agentWork({
+      operation: "fix",
+      agent: "builder",
+      cwd: rig.projectDir,
+      instructions: "Fix.",
+      output: Verdict,
+      handOver: { said: built },
+    });
+  }).pipe(asRun(payload, "agent-two-steps")),
+);
+
+test("the agent taking over is handed the outgoing agent's decisions, rejected approaches and next action word for word", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* committed;
+      const said = {
+        verdict: "clean",
+        decisions: ["Keep the cache per process, not shared"],
+        rejected: ["A Redis cache: the deploy has no Redis"],
+        next_action: "Bound the cache at 1000 entries",
+      };
+      yield* rig.queueOutputs([said, null, { verdict: "clean", note: "fixed on codex" }]);
+      yield* Effect.forkScoped(runsOut(agentName("r1", "builder", null, 1), 2));
+      const result = yield* session(
+        twoSteps
+          .execute({ runId: "r1", input: {} })
+          .pipe(Effect.result, Effect.provide(twoStepsBody)),
+        { ...chain, collectMs: 30_000 },
+      );
+
+      expect(result._tag === "Success" && result.success.note).toBe("fixed on codex");
+      const prompt = yield* successorPrompt("fix");
+      const outgoing = agentName("r1", "builder", null, 1);
+      expect(prompt).toContain(`${outgoing} decided:\n- Keep the cache per process, not shared`);
+      expect(prompt).toContain(`${outgoing} rejected:\n- A Redis cache: the deploy has no Redis`);
+      expect(prompt).toContain(`${outgoing}'s next action: Bound the cache at 1000 entries`);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a fix Output written before the outgoing agent's own fields still decodes", () => {
+  expect(
+    flow(
+      Schema.decodeUnknownResult(FixOutputSchema),
+      Result.getOrThrow,
+    )({ verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] }),
+  ).toMatchObject({ verdict: "clean" });
+});
+
+/** A checkout whose head reads as each of `heads` in turn, then stays at the last. */
+const headsReading = (heads: Array<string>): Partial<AgentHost> => ({
+  checkout: () =>
+    Effect.sync(() => ({
+      head: heads.length > 1 ? heads.shift()! : heads[0]!,
+      branch: "work",
+      dirty: false,
+    })),
+});
+
+test("a hand-over whose head moved before it went out is rebuilt once at the new head", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "at the new head" }]);
+      yield* Effect.forkScoped(runsOut(agentFor("r1")));
+      const result = yield* session(started("r1"), {
+        ...chain,
+        collectMs: 30_000,
+        ...headsReading(["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"]),
+      });
+
+      expect(result._tag === "Success" && result.success.note).toBe("at the new head");
+      const prompt = yield* successorPrompt();
+      expect(prompt).toContain("## Hand-over (revision 2)");
+      expect(prompt).toContain("head bbbbbbbbbbbb");
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["claude", "codex"]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a hand-over whose head moves again after it was rebuilt parks the Run as hand-over-stale and starts no agent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "never" }]);
+      yield* Effect.forkScoped(runsOut(agentFor("r1")));
+      yield* interrupted("r1", parked("r1"), {
+        ...chain,
+        ...headsReading([
+          "aaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbb",
+          "bbbbbbbbbbbbbbbb",
+          "cccccccccccccccc",
+        ]),
+      });
+
+      expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("hand-over-stale");
+      expect(yield* controlOf(PARKED, "r1")).toContain("head cccccccccccccccc");
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["claude"]);
+    }).pipe(Effect.scoped),
+  ));
+
+test(
+  "a hand-over sent before a host crash, delivered again and replayed, is one delivery to one new agent",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null, null]);
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Effect.forkScoped(runsOut(agentFor("r1")));
+            yield* interrupted("r1", prompted("Your task for this step", 2), chain);
+          }),
+        );
+        const successor = agentName("r1", "review", null, 2);
+        const again = yield* session(
+          Effect.gen(function* () {
+            return yield* (yield* Agents).launch({
+              runId: "r1",
+              operation: "review",
+              role: "reviewer",
+              agent: null,
+              workflow: "agent-work",
+              task: null,
+              cwd: rig.projectDir,
+              prompt: yield* successorPrompt(),
+              output: outputPath("r1"),
+              skill: null,
+              harness: "codex",
+              model: "default",
+              effort: null,
+              permissions: null,
+              sequence: 2,
+            });
+          }),
+        );
+        expect(again.agent).toBe(successor);
+        yield* FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) =>
+            fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"from the new agent"}`),
+          ),
+        );
+        const result = yield* session(started("r1"), chain);
+
+        expect(result._tag === "Success" && result.success.note).toBe("from the new agent");
+        const steps = Arr.filter(
+          yield* deliveredTo(dir, "r1"),
+          (one) => one.cause.kind === "step" && one.cause.ref === "review.r2",
+        );
+        expect(steps).toHaveLength(1);
+        expect(Arr.map(yield* agentsAt(dir, "r1"), ({ agent }) => agent)).toEqual([
+          agentFor("r1"),
+          successor,
+        ]);
+        expect(
+          Arr.filter(harnessesStarted(yield* rig.calls()), (one) => one === "codex"),
+        ).toHaveLength(1);
+        const revisions = yield* hostRecords(
+          dir,
+          readRunJournal(
+            runJournal(`${dir}/runs/r1`, "hand-overs.jsonl"),
+            Schema.fromJsonString(HandOver),
+          ),
+        );
+        expect(Arr.map(revisions, (one) => one.revision)).toEqual([1]);
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
 
 test("when nothing has room the agent that ran out is kept, and the Run parks saying when usage resets", () =>
   runEffect(

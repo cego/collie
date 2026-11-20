@@ -83,6 +83,7 @@ beyond it, then the chain. Collie records the chosen agent before anything start
 the choice it fell back from and why.
 
 **D8. An agent that runs out mid-work is stopped, and a new agent takes over its work.**
+_Amended 2026-11-20: the hand-over is now a record the host builds; see that amendment._
 An agent has run out when the subscription it draws on reads Exhausted, or when its
 harness reports that it stopped on its limit. If its Output is not yet written, Collie
 closes it, because Claude would otherwise go on in the same checkout at the reset. Then
@@ -177,6 +178,37 @@ another. It now moves as work does, on the same judgement.
   before opens with a line of Desktop's own: from what, to what and why. Where nothing has
   room, the turn runs on the conversation's own choice, and the line says so (D4). A move
   never refuses or holds a message.
+
+## Amended 2026-11-20: D8's hand-over is a record the host builds
+
+**Status: accepted.**
+
+D8's three-line hand-over told the new agent that the checkout held the work and where the
+transcript was. It gave no decisions, findings or proof, so the new agent re-read history
+the host already held. This is D4 of ADR-draft-a-ticket-is-built-by-an-agent-of-its-own,
+shipped on the Fallback path first.
+
+- **The record.** The new agent's prompt carries a **Hand-over** (CONTEXT.md) instead. The
+  host builds it from its own state:
+  - the Run, step, ticket, and the outgoing agent and its incarnation;
+  - the Intent's goal and constraints, and the plan revision;
+  - the branch, base and head, and whose any uncommitted work is;
+  - the ticket's criteria claimed met by the work's last Output, with the passing records
+    at the head that each answer names, and the Checks still owed;
+  - open findings by ledger id, pending questions, and the transcript and reports.
+- **What the outgoing agent adds.** Its decisions, rejected approaches and next action come
+  only from its last Output, through new optional fields on the build and fix contracts. An
+  Output without them still decodes, and a Fallback mid-turn has none.
+- **Revisions.** Each record is kept in the Run's records under the next revision number.
+- **Refused when stale.** When the new agent is launched, the record's head and plan
+  revision are checked against the checkout. If either moved, it is rebuilt once. If it
+  still does not match, the Run parks on `hand-over-stale`, which rechecks and never heals,
+  and no agent starts.
+- **Sent once.** The record goes out in the new agent's first delivery, inside the
+  Fallback's launch Activity, so a replay or a duplicate delivery neither sends it again nor
+  starts another agent.
+- **Never proof.** What the record lists are claims and record ids; the gate still reads the
+  journal.
 
 ## Amended 2026-10-21: Usage is a page of Desktop's own
 

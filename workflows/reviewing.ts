@@ -511,6 +511,8 @@ export const rally = (ask: {
     readonly at: number;
     readonly proves: string;
     readonly findings: string;
+    /** The findings it is to fix, as listed. */
+    readonly open: ReadonlyArray<Finding>;
   }) => Effect.Effect<typeof FixOutputSchema.Type, WorkflowError, Needs>;
 }): Effect.Effect<Rallied, WorkflowError, Needs> =>
   Effect.gen(function* () {
@@ -528,21 +530,23 @@ export const rally = (ask: {
     const repair = Effect.gen(function* () {
       const resumed = ask.resume;
       if (resumed === undefined) return;
+      const open = [
+        ...Arr.filter(
+          resumed.previous.reviewed.findings,
+          (one) =>
+            !Arr.some(
+              resumed.previous.disputes,
+              (dispute) => findingKey(dispute) === findingKey(one),
+            ),
+        ),
+        ...resumed.previous.disputes,
+      ];
       const fixed = yield* ask.fix({
         operation: `${prefix}fix`,
         at: 1,
         proves: yield* ask.proves,
-        findings: formatFindings([
-          ...Arr.filter(
-            resumed.previous.reviewed.findings,
-            (one) =>
-              !Arr.some(
-                resumed.previous.disputes,
-                (dispute) => findingKey(dispute) === findingKey(one),
-              ),
-          ),
-          ...resumed.previous.disputes,
-        ]),
+        findings: formatFindings(open),
+        open,
       });
       const settled = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
       disputed = [
@@ -671,6 +675,7 @@ export const rally = (ask: {
             at,
             proves,
             findings: formatFindings(round.live),
+            open: round.live,
           });
           // A dispute is carried, not re-argued: the next review either answers it with a
           // rebuttal or it stops driving the loop. One renewed after a rebuttal carries its new

@@ -97,7 +97,10 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
     `predecessor-not-quiet` rechecks what a stopped agent left running in its pane, as the
     Run's `not-quiet.jsonl` records it, and clears once none of it is still running and no
     control record of that agent is kept
-    ([ADR-0059](0059-a-stopped-agent-is-stopped-where-its-turn-runs.md)).
+    ([ADR-0059](0059-a-stopped-agent-is-stopped-where-its-turn-runs.md)). `hand-over-stale`
+    rechecks a Fallback's checkout, as the Run's `hand-over-stale.jsonl` records it, and
+    clears once its head and plan revision are the same at two readings
+    ([ADR-0049](0049-work-goes-to-an-agent-with-usage-left.md), "Amended 2026-11-20").
   - **`needs you`:** what the host cannot do about it alone, such as an Output still
     absent after two reminders, a failure that parks its Step for correcting (`step-failed`,
     [ADR-draft-a-fixable-failure-parks-its-step](draft-a-fixable-failure-parks-its-step.md)),
@@ -111,8 +114,8 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
     forge that will not merge (`review-blocked`), whose own poll leaves the park once that is
     repaired. That park goes straight to you, without a Heal (D7). It is also set on
     `herdr-unavailable`: a Heal launches its agent through core too, so it cannot run while
-    core cannot list agents. And it is set on `predecessor-not-quiet`, whose recheck clears
-    it.
+    core cannot list agents. And it is set on `predecessor-not-quiet` and `hand-over-stale`,
+    whose rechecks clear them.
 - **What it shows:** the cause, each recovery action taken, and that action's outcome. The
   Run's record shows them, and so do the card, `run show` and chat's reads.
 - **Its identity:** `<cause>-<hash>` of the Run, the cause and the evidence that cause is

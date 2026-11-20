@@ -83,6 +83,9 @@ import { disputesIn } from "../../src/proactive";
 import { AwaitingJson, awaitingLine } from "../../src/awaiting";
 import { installFakeSkills } from "./defs";
 import { Agents, agentsLayer, type AgentHost } from "../../src/agents";
+import { agentName } from "../../src/naming";
+import { controlDir } from "../../src/compaction";
+import { COMPACTION_PORTS, recordClaudeEvent } from "../../src/compactors";
 import {
   Children,
   Host,
@@ -248,6 +251,9 @@ const once = (name: string, body: () => Promise<void>, timeout?: number) => {
   shippedOnly.push(() => test(name, () => withForges(body), timeout));
 };
 
+/** What a scenario changes of the agents' host. */
+let hostOver: Partial<AgentHost> = {};
+
 /** The installation is this checkout, so the shipped personas are the ones found. */
 const hostOf = (): AgentHost => ({
   dir,
@@ -259,6 +265,7 @@ const hostOf = (): AgentHost => ({
   compactAtTokens: 0,
   pollMs: 20,
   collectMs: 1000,
+  ...hostOver,
 });
 
 /** Children as the host admits them, recorded rather than run: this suite is the parent. */
@@ -5245,6 +5252,91 @@ scenario(
           ["01-first.md", "done"],
           ["02-second.md", "done"],
         ]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a builder whose quota runs out mid-ticket is Quiet before its successor starts, and the successor is first handed the hand-over at the current head",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit" },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-quota", ["unit"]);
+        hostOver = {
+          fallbacks: Effect.succeed(["codex"]),
+          help: () => Effect.succeed(""),
+          ports: Struct.omit(COMPACTION_PORTS, ["codex"]),
+        };
+        yield* rig.queueOutputs([BUILT, null, BUILT, CLEAN_SYNTHESIS, OPENED]);
+        const running = yield* Effect.forkChild(
+          ran({ entry: shipped("implement"), runId: "r-quota", input: { plan, ...FINISH } }),
+        );
+        const builder = agentName("r-quota", "build", null, 1);
+        const successor = agentName("r-quota", "build", null, 2);
+        yield* until(
+          () =>
+            rig.calls().pipe(
+              Effect.map((calls) =>
+                Arr.some(
+                  calls,
+                  (call) =>
+                    call.cmd === "terminal.send" &&
+                    pipe(String(call.params?.text), Str.includes("02-second.md.prompt.md")),
+                ),
+              ),
+              Effect.orElseSucceed(() => false),
+            ),
+          (there) => there,
+        );
+        const head = yield* revParse("HEAD");
+        yield* recordClaudeEvent(
+          yield* controlDir(rig.pluginEnv().stateDir, builder),
+          flow(
+            Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+            Result.getOrThrow,
+          )({
+            session_id: "s-out",
+            hook_event_name: "StopFailure",
+            error: "rate_limit",
+            transcript_path: "/home/mk/.claude/projects/p/s-out.jsonl",
+          }),
+        );
+        const result = yield* Fiber.join(running);
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const calls = yield* rig.calls();
+        const ranOut = Option.getOrUndefined(
+          Arr.findFirst(yield* launchesAt(dir, "r-quota"), (one) => one.agent === builder),
+        );
+        const closed = Arr.findFirstIndex(
+          calls,
+          (call) =>
+            call.cmd === "terminal.kill" &&
+            ranOut?.terminalId !== undefined &&
+            call.params?.terminal === ranOut.terminalId,
+        );
+        const started = Arr.findFirstIndex(
+          calls,
+          (call) => call.cmd === "terminal.run" && call.params?.name === successor,
+        );
+        expect(
+          Option.isSome(closed) && Option.isSome(started) && closed.value < started.value,
+        ).toBe(true);
+        const first = yield* fs.readFileString(`${dir}/agents/r-quota/02-second.md.r2.prompt.md`);
+        expect(first).toContain("## Hand-over (revision 1)");
+        expect(first).toContain(`head ${pipe(head, Str.slice(0, 12))}`);
+        expect(first).toContain("You take over 02-second.md (ticket 02-second.md) of r-quota");
+        expect(Str.split(first, "- 01-first.md — the first one")).toHaveLength(2);
       }),
     ),
   120_000,
@@ -26470,6 +26562,7 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
         childRuns = new Map();
         startsAfter = new Map();
         startSignals = new Map();
+        hostOver = {};
         yield* fs.makeDirectory(dir, { recursive: true });
         yield* fs.makeDirectory(rig.projectDir, { recursive: true });
         // The skills the shipped personas and steps name, installed where this machine

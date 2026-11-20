@@ -365,6 +365,31 @@ the card's agent (`BoardAgent.fallback`), which Desktop draws under the sentence
 `collie usage` prints. An agent that has gone has no work left to move, and is not named.
 It is worked out at launch, so it reads usage as it stood then.
 
+### The hand-over
+
+A Fallback mid-work builds its successor's hand-over in `src/hand-over.ts`, in the Activity
+`<operation>.fallback-<n>.hand-over`. The host's side:
+
+- `agents.handOver` reads the Intent, the plan revision (`planRevision`: a sha256 over every
+  file's path and content under the plan directory) and the checkout (`AgentHost.checkout`,
+  `git status` through `treeOf` by default);
+- `agentWork` adds the journal, the base and the Run's Checks from `host.evidence` and
+  `host.approved`, and the pending questions from `host.asked`.
+
+The workflow passes what only it knows as `AgentWork.handOver`. Implement passes the ticket,
+the plan directory, the ticket's criteria, the last Output's answers to them, the ticket's
+Checks, the ledger's findings, and the builder's last Output. `buildHandOver` keeps only what
+that Output said under `decisions`, `rejected` and `next_action`. Each record is appended to
+the Run's `hand-overs.jsonl` journal, its revision one past the last.
+
+At launch, inside `<operation>.fallback-<n>.launch`, `atDispatch` compares the record's head
+and plan revision with `agents.atCheckout`. If either moved, it builds the record once more.
+If that one does not match either, the checkout is appended to `hand-over-stale.jsonl` and
+the Run parks on `hand-over-stale`. Its recheck reads the head and plan revision again: it
+clears when they equal the last ones recorded, and otherwise records them and waits. Because
+the record is rendered into the launch's prompt, the step delivery's causal key in the
+Dispatcher's ledger is what keeps a duplicate or a replay from sending it twice.
+
 ## A workflow made of workflows
 
 `child({ runId, invocation, workflow, input })` starts another workflow as part of a Run
