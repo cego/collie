@@ -5225,6 +5225,8 @@ scenario(
         expect(second).toContain("made the registry one");
         // What this Run will be held to, named before it starts rather than guessed at.
         expect(second).toContain(`- unit: true (in ${rig.projectDir})`);
+        // Only a plan the Run wrote itself is listed ticket by ticket in its merge request.
+        expect(yield* asked("r-impl", "mr")).not.toContain("- 01-first.md — the first one");
         // And the card a slice landing leaves, whether or not the agent wrote its own.
         expect(yield* factOf("r-impl", "steering/progress/01-first.json")).toContain(
           `"status":"done"`,

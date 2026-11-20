@@ -1234,10 +1234,14 @@ export default defineWorkflow({
         tickets: Arr.map(tickets, (ticket) => ({ file: ticket.file, checks: ticket.checks })),
         roots: evidenceRoots(place.dir, cwd, source.value),
         rallied,
-        built: Arr.join(
-          Arr.flatMap(handed, (one) => (one.title === "" ? [] : [`- ${one.item} — ${one.title}`])),
-          "\n",
-        ),
+        built: planned
+          ? Arr.join(
+              Arr.flatMap(handed, (one) =>
+                one.title === "" ? [] : [`- ${one.item} — ${one.title}`],
+              ),
+              "\n",
+            )
+          : "",
         ledger: ledger.size === 0 ? "" : formatFindings([...ledger.values()]),
         unsettled: [...assumed, ...afterMerged],
         integrate: integrated,

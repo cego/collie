@@ -141,7 +141,7 @@ interface Fixing {
 }
 
 interface Opening {
-  /** The tickets built one at a time, a line each; empty where the work was built in one pass. */
+  /** The tickets of a plan the Run wrote itself, built one at a time, a line each; else empty. */
   readonly built?: string;
   /** Every finding the reviews gave a ledger id, at its latest status; empty where none did. */
   readonly ledger?: string;
