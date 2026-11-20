@@ -1116,7 +1116,12 @@ fn card(
     }
 
     // Where it is, how old, as of when, its agents; and the one action that ends its wait.
-    let agents = match task.agents.len() {
+    let working = task
+        .agents
+        .iter()
+        .filter(|one| one.status != crate::record::agents::ENDED)
+        .count();
+    let agents = match working {
         0 => None,
         1 => Some("1 agent".to_string()),
         n => Some(format!("{n} agents")),

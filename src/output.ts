@@ -11,6 +11,7 @@ import { checkProof, owesNothingHere, unstableWhy, type CheckProof } from "./che
 import type { Measurement } from "./measurement-model";
 import type { CheckCommand, Snapshot, Verification } from "./verify";
 import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
+import { OutgoingFields } from "./hand-over";
 
 /** Present and not only whitespace: a required judgement nobody wrote is not one. */
 const said = (field: string) =>
@@ -306,6 +307,7 @@ export const FixOutputSchema = Schema.Struct({
   fixed: optionalList(FixedSchema),
   disputed: optionalList(FindingSchema),
   checks: optionalList(CheckSchema),
+  ...OutgoingFields,
 }).pipe(listed());
 
 /**

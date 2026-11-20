@@ -440,3 +440,75 @@ test("round 1 and the final review of the integrated tree read the whole change 
       }
     }),
   ));
+
+/** The shipped rally given an implement ticket's ledger, which starts empty. */
+const ledgerRally = (runId: string) =>
+  Effect.gen(function* () {
+    const base = Str.trim(
+      (yield* exec(["git", "rev-parse", "HEAD"], { cwd: rig.projectDir })).stdout,
+    );
+    const entry = yield* loadEntry(`${fixtures}/ledger-rally.workflow.ts`);
+    const made = entry.make(`ledger-rally@${runId}`);
+    // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
+    const result = yield* made.workflow
+      .execute({ runId, input: { cwd: rig.projectDir, base } })
+      .pipe(Effect.provide(made.layer), Effect.result);
+    const fs = yield* FileSystem.FileSystem;
+    return {
+      result,
+      second: yield* fs
+        .readFileString(`${dir}/agents/${runId}/review-2-1.prompt.md`)
+        .pipe(Effect.orElseSucceed(() => "")),
+    };
+  }).pipe(
+    Effect.provide(
+      agentsLayer(hostOf()).pipe(
+        Layer.provideMerge(
+          Layer.succeed(Children)(Children.of({ start: nothing, result: nothing })),
+        ),
+        Layer.provideMerge(foundationLayer({ dir, userDir: rig.userDir })),
+      ),
+    ),
+    Effect.scoped,
+    Effect.orDie,
+  );
+
+const fixedEmptyList = {
+  verdict: "clean",
+  fixed: [{ title: "empty list", file: "src/thing.ts" }],
+  checks: [],
+};
+
+test("an implement ticket's first review gives its finding the Run's first id, and the next round keeps that id with its new status", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "findings", summary: "a blocker", findings: [blocker("empty list")] },
+        fixedEmptyList,
+        {
+          verdict: "clean",
+          summary: "fixed",
+          findings: [{ ...blocker("empty list"), status: "fixed" }],
+        },
+      ]);
+      const ran = yield* ledgerRally("r-ledger");
+      expect(ran.second).toContain('"id": "r-ledger-F1"');
+      expect(ran.second).toContain('"status": "open"');
+      expect(said(ran.result)).toBe('[{"id":"r-ledger-F1","status":"fixed","title":"empty list"}]');
+    }),
+  ));
+
+test("a later round's review that leaves out an earlier finding fails the Run, naming the finding whose status it must return", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "findings", summary: "a blocker", findings: [blocker("empty list")] },
+        fixedEmptyList,
+        { verdict: "clean", summary: "nothing left" },
+      ]);
+      const ran = yield* ledgerRally("r-omit");
+      expect(ran.result._tag === "Failure" && String(ran.result.failure)).toContain(
+        "review omitted earlier finding r-omit-F1; return its status",
+      );
+    }),
+  ));

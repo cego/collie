@@ -30,6 +30,8 @@ import { focusPane, liveHerds } from "../src/herds";
 import { connect } from "../src/hc";
 import { askWith, piTools } from "./support/pi";
 import { isString } from "../src/schema";
+import { startedOf } from "../src/processes";
+import { SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
 
 let rig: Rig;
 let dir: string;
@@ -231,6 +233,31 @@ test("a Run on a core Machine launches, prompts, reads and stops its Claude agen
       expect(killed).toBeGreaterThan(read);
       expect(Arr.filter(onCore, (call) => call.cmd === "terminal.get")).toEqual([]);
     }),
+  ));
+
+test("an agent started on core records the process its terminal runs, as its pane's root", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const core = yield* rig.startCore();
+      yield* quietConfig;
+      yield* rig.queueOutputs([{ verdict: "clean" }]);
+      const { shell } = yield* paneTree(SURVIVES_HANGUP);
+      const started = yield* startedOf(shell);
+      core.runsAs(shell);
+      const result = yield* session(
+        Effect.gen(function* () {
+          const done = yield* work.execute({ runId: "r1", input: {} }).pipe(Effect.result);
+          yield* (yield* Agents).halt("r1");
+          return done;
+        }),
+        coreOnly(core),
+      );
+      expect(result._tag === "Success" && result.success).toEqual({ verdict: "clean" });
+      expect((yield* launchedAt(dir, "r1", "review")).root).toEqual({
+        pid: shell,
+        started: started!,
+      });
+    }).pipe(Effect.scoped),
   ));
 
 test("an agent on core is started with Collie's own names for its root and state directory, and no Herdr 1 name", () =>

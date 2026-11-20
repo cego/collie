@@ -110,6 +110,31 @@ work. What was resolved is recorded with its kind, and the build prompt reads bo
 `linear` and `text` the implementer writes the spec and a task list into the run's `plan/`
 before it builds, so every run leaves the same audit trail.
 
+Under the shared setting `inline_plan: on` (default `off`), a Run whose source is anything
+but a plan directory starts with a **Plan** step of its own. The implementer, on the `build`
+agent, writes `SPEC.md` and one ticket per piece into the Run's `plan/`, following a
+planning version of its source's section, and builds nothing. The plan is then read like a plan Run's:
+
+- A plan the plan reading refuses goes back to that step once with the reason, and the Run
+  halts if it is refused again. So does a plan with no ticket, one whose tickets name another
+  repository, or one with a criterion in `SPEC.md`, or a checkbox in a text source, that no
+  ticket carries word for word. The same goes for a review source's finding that is still
+  open and named in no ticket.
+- Each ticket's `**Checks:**` line names the Run's checks, or the names its builder records
+  through `collie verify --name`, or `None`: the gate looks for a pass under each name.
+- One ticket is built in one pass on the same agent.
+- Several tickets are built one at a time, in their `Blocked by` order, as a plan's are, and
+  the merge request names each.
+
+The value is fixed on the Run when it starts. A Run started with it `off`, or before the
+setting existed, builds in one pass as before. A restarted Run builds from the plan it
+recorded and does not plan again.
+
+Under the shared setting `agent_sessions: ticket` (default `run`), each ticket after the
+first is built by an agent of its own, and the merge request by `deliver`; `round` also
+gives each review-fix round a fresh fixer. See
+[Which agent does a Run's work](using.md#which-agent-does-a-runs-work).
+
 `repo` is one repository's share of a plan that spans several, as the tickets' `Repo:`
 line names it, and `change` is one Change of that share, as their `Change:` line names it:
 given them, the build step builds only those tickets and leaves the rest to their own run.

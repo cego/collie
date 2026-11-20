@@ -290,6 +290,10 @@ pub enum Cause {
     GateFixUnproved,
     #[serde(rename = "step-failed")]
     StepFailed,
+    #[serde(rename = "predecessor-not-quiet")]
+    PredecessorNotQuiet,
+    #[serde(rename = "hand-over-stale")]
+    HandOverStale,
     #[serde(rename = "unknown")]
     Unknown,
 }

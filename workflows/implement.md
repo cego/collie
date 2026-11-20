@@ -28,7 +28,8 @@ The work source above is a `{{inputs.plan_kind}}`:
 {{source}}
 
 Where a ticket's `**Checks:**` line names one of this run's checks above, it is not a
-command for you to run: the gate proves it on the final tree.
+command for you to run: the gate proves it on the final tree. Any other name on it is
+yours to record, exactly as written: `collie verify --name <that name> -- <the command>`.
 
 This run has a checkout of its own, on the branch it is building: Collie resolved the
 branch and opened the worktree before you started, so never create a branch or switch
@@ -110,7 +111,7 @@ background job.
 
 {{proof}}
 
-{{session.ask}}
+{{session.ask}}{{handing}}
 
 Then write your Output, plus the outcome fields above where they name any. `clean` means
 the whole scope is built and the tests pass; anything else is `findings`, one entry per
@@ -129,7 +130,9 @@ The review found:
 {{findings}}
 
 That is one review, synthesised from every reviewer that looked at this branch, so each
-finding arrives once and already reconciled. Apply the ones you agree with, as fixup
+finding arrives once and already reconciled. A finding that starts with an id
+(`<run>-F<n>: <status>`) keeps that id in every later review and in the merge request.
+Apply the ones you agree with, as fixup
 commits on this branch. For any finding you believe is wrong, do not apply it — record it
 under `disputed` with your reason. The next review may accept that reason explicitly or
 answer it with a rebuttal. A blocking dispute left unresolved parks the rally for the
@@ -289,6 +292,18 @@ Where the lines above are not empty, a fix after the last review was checked by 
 tests and dispositions and not by a reviewer: say so in the description, in one sentence, and list
 what that fix changed. Where findings were left open as non-blocking, list them too.
 
+{{built}}
+
+Where the list above is not empty, this work was built as those tickets, one at a time:
+list each in the description by its title.
+
+{{ledger}}
+
+Where the list above is not empty, it is every finding the reviews raised, each with its id
+and the status the last review round gave it. Name each one in the description by that id
+and status. A fix after the last review does not update them: where one is listed above,
+say the statuses are as of the last review round.
+
 {{unsettled}}
 
 Where the list above is not empty, put each question in the description under
@@ -376,11 +391,77 @@ repaired. The {{mr.noun}}'s ordinary state is `minor`: approvals still needed, a
 still running, failures that were there before this Run. Collie records each `minor` one
 and notes it on the {{mr.noun}}.
 
+## plan
+
+Plan this work before any of it is built. The work source above is a
+`{{inputs.plan_kind}}`:
+
+{{source}}
+
+Write what it says the spec and the tickets hold, and build nothing in this step: no code
+and no commits. `{{run.dir}}/plan/SPEC.md` is the spec, and each ticket is
+`{{run.dir}}/plan/issues/NN-<slug>.md`, numbered from 01. Each ticket carries:
+
+- a `**Repo:** .` line;
+- a `**Blocked by:**` line naming the numbers of the tickets it waits for, or `None`;
+- a `**Checks:**` line naming, comma-separated, the verifications that prove it: one of
+  this run's checks above, or a name its builder records with `collie verify --name
+  <name> -- <command>`, such as the test files it touches; or `None`. The gate holds the
+  ticket to a passing verification under each name exactly as written;
+- its acceptance criteria as a checkbox list, `- [ ] …`.
+
+Copy every checkbox in `SPEC.md`, word for word, into the ticket that answers it. The
+verifications above are the gate's and never a ticket's criterion.
+
+Work that is one piece is one ticket, which you then build in one pass. Cut more only
+where each piece can be built, reviewed and committed before the next starts: once this
+step is done, Collie hands you the tickets one at a time, in the order their `Blocked by`
+lines allow.
+
+{{refusal}}
+
+A `collie verify` you started in the background is reported to you when it ends,
+so you may end your turn waiting on it. Never end a turn waiting on any other
+background job.
+
+Then write your Output, with `issues_dir` set to `{{run.dir}}/plan/issues`.
+
+## handing
+
+Another agent takes this work over after you: the next ticket's, or the one that delivers
+the change. Collie hands it the checkout, the journal, the findings and the questions; what
+only you know goes in your Output for it: `decisions` it should keep, `rejected` approaches
+and why, and your `next_action`.
+
 ## review.pipeline
 
 A pipeline on this change's final head is not yours to require: the Merge request step
 starts and proves it once the merge request is open. A missing or skipped pipeline on the
 head is never a finding.
+
+## plan.review
+
+A review of work that already exists. `{{inputs.plan}}/review.md` is the review, and the
+same findings as JSON are `{{inputs.plan}}/findings.json`. Copy its findings into the spec
+and write one ticket per finding still open, worst severity first, naming the finding's
+title word for word. The fixes land on the branch that was reviewed, which this checkout
+is already on.
+
+## plan.linear
+
+A Linear issue id. Fetch it with the Linear MCP (`get_issue`) and copy its description into
+the spec word for word, checkboxes included.
+
+## plan.followup
+
+A finished run's outcome needs more work. `{{inputs.plan}}` names it as
+`followup:<run id>`; that run's open drift, which the `collie_run` tool shows, and the text in
+`{{run.dir}}/plan/SPEC.md` are the spec. Write one ticket per open report.
+
+## plan.text
+
+The work in the human's own words. Write the spec from the text. Where the text does not
+settle something, decide it the way the text most plausibly means, and say so in the spec.
 
 ## source.plan-dir
 

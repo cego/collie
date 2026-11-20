@@ -369,6 +369,23 @@ export class Herdr {
     );
   }
 
+  /** The pid of the program in the live terminal at `address`, or null where core names none. */
+  terminalRoot(address: string): HerdrEffect<number | null> {
+    return this.onCore((socket) =>
+      coreCall(socket, "terminal.list", {}).pipe(
+        Effect.map(
+          (listed) =>
+            Option.getOrUndefined(
+              Arr.findFirst(
+                listed.terminals,
+                (one) => one.state === "live" && one.address === address,
+              ),
+            )?.pid ?? null,
+        ),
+      ),
+    );
+  }
+
   /** Ends the terminal at `address`, and the program in it. */
   terminalKill(address: string): HerdrEffect<void> {
     return this.onCore((socket) =>

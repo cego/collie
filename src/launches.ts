@@ -73,6 +73,8 @@ export const Launched = Schema.Struct({
   terminalId: Schema.optionalKey(Schema.String),
   /** The harness session herdr reported for it, which a pane herdr restores resumes. */
   agentSession: Schema.optionalKey(AgentSession),
+  /** The process at its pane's root when it started, whose session is the pane's processes. */
+  root: Schema.optionalKey(Schema.Struct({ pid: Schema.Finite, started: Schema.String })),
   step: Schema.optionalKey(LaunchedIn),
   /** How it was told to hand in its Output: its tool server is fixed at launch. */
   outputSubmit: Schema.optionalKey(Schema.Literals(["file", "tool"])),
