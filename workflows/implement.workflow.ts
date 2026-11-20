@@ -103,7 +103,7 @@ const sectionOf = (section: string, input: typeof Implementing.Type) =>
   );
 
 /** Why a plan the Run wrote cannot be built one ticket at a time in its checkout; null where it can. */
-const inlinePlanRefusal = (plan: string, root: string) =>
+const inlinePlanRefusal = (plan: string, root: string, stated: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const read = yield* planReposOf(plan, root);
@@ -113,13 +113,15 @@ const inlinePlanRefusal = (plan: string, root: string) =>
     if (!isSingleRepo(read))
       return "its tickets name more than this checkout: give every ticket **Repo:** .";
     const owned = new Set(Arr.flatMap(tickets, (one) => one.criteria));
-    const unowned = Arr.filter(
-      criteriaIn(yield* fs.readFileString(`${plan}/SPEC.md`)),
-      (one) => !owned.has(one),
+    const unowned = Arr.dedupe(
+      Arr.filter(
+        [...criteriaIn(yield* fs.readFileString(`${plan}/SPEC.md`)), ...stated],
+        (one) => !owned.has(one),
+      ),
     );
     return unowned.length === 0
       ? null
-      : `these criteria in SPEC.md are no ticket's: ${Arr.join(unowned, "; ")}. Copy each, word for word, into the ticket that answers it`;
+      : `these criteria of SPEC.md or the work you were given are no ticket's: ${Arr.join(unowned, "; ")}. Copy each, word for word, into the ticket that answers it`;
   }).pipe(Effect.catch((cause) => Effect.succeed(`${plan} cannot be read: ${cause.message}`)));
 
 const prompts = {
@@ -636,7 +638,11 @@ export default defineWorkflow({
               const refused = yield* Activity.make({
                 name: `${operation}.check`,
                 success: Schema.NullOr(Schema.String),
-                execute: inlinePlanRefusal(planDir, cwd),
+                execute: inlinePlanRefusal(
+                  planDir,
+                  cwd,
+                  source.kind === "text" ? criteriaIn(source.value) : [],
+                ),
               });
               if (refused === null) break;
               if (attempt === PLAN_TRIES)

@@ -8541,13 +8541,23 @@ const plansFirst = (runId: string) =>
 /** A planning step's turn: the spec and these tickets written into the Run's plan, then its Output. */
 const plannedAs = (
   runId: string,
-  tickets: ReadonlyArray<{ file: string; title: string; blockedBy: string }>,
+  tickets: ReadonlyArray<{
+    file: string;
+    title: string;
+    blockedBy: string;
+    repo?: string;
+    criteria?: ReadonlyArray<string>;
+  }>,
+  spec = "# The spec\n",
 ) => ({
   writes: [
-    { path: `${runDir(dir, runId)}/plan/SPEC.md`, text: "# The spec\n" },
+    { path: `${runDir(dir, runId)}/plan/SPEC.md`, text: spec },
     ...Arr.map(tickets, (one) => ({
       path: `${runDir(dir, runId)}/plan/issues/${one.file}`,
-      text: `# ${one.title}\n\n**Repo:** .\n\n**Blocked by:** ${one.blockedBy}\n\n**Checks:** unit\n`,
+      text: `# ${one.title}\n\n**Repo:** ${one.repo ?? "."}\n\n**Blocked by:** ${one.blockedBy}\n\n**Checks:** unit\n${Arr.join(
+        Arr.map(one.criteria ?? [], (criterion) => `\n- [ ] ${criterion}`),
+        "",
+      )}\n`,
     })),
   ],
   output: { issues_dir: `${runDir(dir, runId)}/plan/issues` },
@@ -8648,8 +8658,15 @@ scenario(
         yield* approve(runId, ["unit"]);
         yield* plansFirst(runId);
         yield* rig.queueOutputs([
-          plannedAs(runId, [{ file: "01-only.md", title: "the only one", blockedBy: "None" }]),
-          BUILT,
+          plannedAs(runId, [
+            {
+              file: "01-only.md",
+              title: "the only one",
+              blockedBy: "None",
+              criteria: ["errors are logged"],
+            },
+          ]),
+          { ...BUILT, criteria: [{ criterion: "errors are logged", met: "a.test.ts" }] },
           CLEAN_SYNTHESIS,
           OPENED,
         ]);
@@ -8657,7 +8674,7 @@ scenario(
         const result = yield* ran({
           entry: shipped("implement"),
           runId,
-          input: { plan: "Count the registries.", ...FINISH },
+          input: { plan: "Count the registries.\n\n- [ ] errors are logged\n", ...FINISH },
         });
         yield* bin.restore();
 
@@ -8758,6 +8775,76 @@ scenario(
     ),
   120_000,
 );
+
+for (const unbuildable of [
+  {
+    what: "holds no ticket",
+    words: "Count the registries.",
+    plan: (runId: string) => plannedAs(runId, []),
+    why: "holds no ticket",
+  },
+  {
+    what: "names another checkout",
+    words: "Count the registries.",
+    plan: (runId: string) =>
+      plannedAs(runId, [
+        { file: "01-first.md", title: "the first one", blockedBy: "None", repo: "elsewhere" },
+      ]),
+    checkout: "elsewhere",
+    why: "give every ticket **Repo:** .",
+  },
+  {
+    what: "leaves a criterion of its spec to no ticket",
+    words: "Count the registries.",
+    plan: (runId: string) =>
+      plannedAs(
+        runId,
+        [{ file: "01-first.md", title: "the first one", blockedBy: "None" }],
+        "# The spec\n\n- [ ] errors are logged\n",
+      ),
+    why: "errors are logged",
+  },
+  {
+    what: "leaves a criterion of the human's words to no ticket",
+    words: "Count the registries.\n\n- [ ] errors are logged\n",
+    plan: (runId: string) =>
+      plannedAs(runId, [{ file: "01-first.md", title: "the first one", blockedBy: "None" }]),
+    why: "errors are logged",
+  },
+])
+  scenario(
+    `under inline_plan: on, a plan that ${unbuildable.what} goes back to planning once, and halts naming why`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const runId = "r-inline-unbuildable";
+          yield* repository();
+          if ("checkout" in unbuildable)
+            yield* FileSystem.FileSystem.pipe(
+              Effect.andThen((fs) =>
+                fs.makeDirectory(`${rig.projectDir}/${unbuildable.checkout}/.git`, {
+                  recursive: true,
+                }),
+              ),
+            );
+          yield* approve(runId, ["unit"]);
+          yield* plansFirst(runId);
+          yield* rig.queueOutputs([unbuildable.plan(runId), unbuildable.plan(runId)]);
+
+          const result = yield* ran({
+            entry: shipped("implement"),
+            runId,
+            input: { plan: unbuildable.words, ...FINISH },
+          });
+
+          expect(result._tag).toBe("Failure");
+          expect(yield* asked(runId, "plan-2")).toContain(unbuildable.why);
+          expect(reasonOf(result)).toContain(unbuildable.why);
+          expect(yield* operationsOf(runId)).toEqual(["plan", "plan-2"]);
+        }),
+      ),
+    120_000,
+  );
 
 scenario(
   "under inline_plan: on, a Run restarted after planning builds from the recorded plan and plans nothing again",
