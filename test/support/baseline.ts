@@ -9053,6 +9053,8 @@ scenario(
         const planning = yield* asked(runId, "plan");
         expect(planning).toContain("The work in the human's own words.");
         expect(planning).toContain("build nothing in this step");
+        expect(planning).not.toContain("decided to build, then build");
+        expect(planning).not.toContain("`assumptions`");
         expect(yield* asked(runId, "01-first.md")).toContain(
           `Work source (plan-dir): ${runDir(dir, runId)}/plan`,
         );
@@ -9219,6 +9221,43 @@ scenario(
           "review-1",
           "mr",
         ]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "under inline_plan: on, a review planned with one of its findings in no ticket goes back to planning once, and halts naming it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-dropped";
+        const fs = yield* FileSystem.FileSystem;
+        yield* repository();
+        const reviewed = `${rig.root}/reviewed-dropped`;
+        yield* fs.makeDirectory(reviewed, { recursive: true });
+        yield* fs.writeFileString(`${reviewed}/review.md`, "# Review\n\nTwo things are wrong.\n");
+        yield* fs.writeFileString(
+          `${reviewed}/findings.json`,
+          `[{"severity":"major","title":"the guard is wrong"},{"severity":"minor","title":"a name"},{"severity":"minor","title":"a typo","status":"fixed"}]`,
+        );
+        yield* approve(runId, ["unit"]);
+        yield* plansFirst(runId);
+        const dropped = plannedAs(runId, [
+          { file: "01-guard.md", title: "the guard is wrong", blockedBy: "None" },
+        ]);
+        yield* rig.queueOutputs([dropped, dropped]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan: reviewed, ...FINISH },
+        });
+
+        expect(result._tag).toBe("Failure");
+        const why = "these findings of the review are no ticket's: a name.";
+        expect(yield* asked(runId, "plan-2")).toContain(why);
+        expect(reasonOf(result)).toContain(why);
       }),
     ),
   120_000,
@@ -9392,7 +9431,9 @@ scenario(
 
         expect(said(result)).toBe(OPENED.mr_url);
         expect(yield* operationsOf(runId)).toEqual(["build", "review-1", "mr"]);
-        expect(yield* asked(runId, "build")).toContain("Work source (text): Count the registries.");
+        const build = yield* asked(runId, "build");
+        expect(build).toContain("Work source (text): Count the registries.");
+        expect(build).not.toContain("inline_plan");
       }),
     ),
   120_000,

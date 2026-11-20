@@ -45,6 +45,7 @@ import {
   PlanOutputSchema,
   defineWorkflow,
   evidenceRoots,
+  findingsIn,
   formatFindings,
   identityProblem,
   isBlocking,
@@ -106,9 +107,14 @@ const sectionOf = (section: string, input: typeof Implementing.Type) =>
   );
 
 /** Why a plan the Run wrote cannot be built one ticket at a time in its checkout; null where it can. */
-const inlinePlanRefusal = (plan: string, root: string, stated: ReadonlyArray<string>) =>
+const inlinePlanRefusal = (
+  plan: string,
+  root: string,
+  source: { readonly kind: string; readonly value: string },
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const stated = source.kind === "text" ? criteriaIn(source.value) : [];
     const read = yield* planReposOf(plan, root);
     if (read.refusal !== null) return read.refusal.message;
     const tickets = yield* orderedTicketsOf(plan);
@@ -122,9 +128,25 @@ const inlinePlanRefusal = (plan: string, root: string, stated: ReadonlyArray<str
         (one) => !owned.has(one),
       ),
     );
-    return unowned.length === 0
+    if (unowned.length > 0)
+      return `these criteria of SPEC.md or the work you were given are no ticket's: ${Arr.join(unowned, "; ")}. Copy each, word for word, into the ticket that answers it`;
+    if (source.kind !== "review") return null;
+    const texts = yield* Effect.forEach(tickets, (one) =>
+      fs.readFileString(`${plan}/issues/${one.file}`),
+    );
+    const dropped = Arr.filter(
+      yield* findingsIn(source.value),
+      (one) =>
+        one.status !== "fixed" &&
+        one.status !== "obsolete" &&
+        !Arr.some(texts, (text) => text.includes(one.title)),
+    );
+    return dropped.length === 0
       ? null
-      : `these criteria of SPEC.md or the work you were given are no ticket's: ${Arr.join(unowned, "; ")}. Copy each, word for word, into the ticket that answers it`;
+      : `these findings of the review are no ticket's: ${Arr.join(
+          Arr.map(dropped, (one) => one.title),
+          "; ",
+        )}. Name each, word for word, in the ticket that fixes it`;
   }).pipe(Effect.catch((cause) => Effect.succeed(`${plan} cannot be read: ${cause.message}`)));
 
 const prompts = {
@@ -651,17 +673,13 @@ export default defineWorkflow({
                 ...onHolder(handing),
                 role: "implementer",
                 instructions: prompts.plan,
-                input: { ...input, source: sectionOf(`source.${source.kind}`, input), refusal },
+                input: { ...input, source: sectionOf(`plan.${source.kind}`, input), refusal },
                 output: PlanOutputSchema,
               });
               const refused = yield* Activity.make({
                 name: `${operation}.check`,
                 success: Schema.NullOr(Schema.String),
-                execute: inlinePlanRefusal(
-                  planDir,
-                  cwd,
-                  source.kind === "text" ? criteriaIn(source.value) : [],
-                ),
+                execute: inlinePlanRefusal(planDir, cwd, source),
               });
               if (refused === null) break;
               if (attempt === PLAN_TRIES)

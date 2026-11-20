@@ -435,6 +435,30 @@ A pipeline on this change's final head is not yours to require: the Merge reques
 starts and proves it once the merge request is open. A missing or skipped pipeline on the
 head is never a finding.
 
+## plan.review
+
+A review of work that already exists. `{{inputs.plan}}/review.md` is the review, and the
+same findings as JSON are `{{inputs.plan}}/findings.json`. Copy its findings into the spec
+and write one ticket per finding still open, worst severity first, naming the finding's
+title word for word. The fixes land on the branch that was reviewed, which this checkout
+is already on.
+
+## plan.linear
+
+A Linear issue id. Fetch it with the Linear MCP (`get_issue`) and copy its description into
+the spec word for word, checkboxes included.
+
+## plan.followup
+
+A finished run's outcome needs more work. `{{inputs.plan}}` names it as
+`followup:<run id>`; that run's open drift, which the `collie_run` tool shows, and the text in
+`{{run.dir}}/plan/SPEC.md` are the spec. Write one ticket per open report.
+
+## plan.text
+
+The work in the human's own words. Write the spec from the text. Where the text does not
+settle something, decide it the way the text most plausibly means, and say so in the spec.
+
 ## source.plan-dir
 
 A plan is already written. `{{inputs.plan}}/SPEC.md` is the spec and
@@ -457,9 +481,6 @@ under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix. A 
 disagree with is `disputed` with a reason, exactly as in a fix round — never silently
 skipped.
 
-Under the `inline_plan: on` setting, this is written by a planning step of its own before
-anything is built, and the tickets are then built one at a time, as a plan's are.
-
 ## source.linear
 
 A Linear issue id. Fetch it with the Linear MCP (`get_issue`) and treat its description as
@@ -471,9 +492,6 @@ own — a regression test, or the test files that hold its behaviour — name th
 command, and run it through `collie verify`. Clear work states its acceptance checks
 before it starts; deciding afterwards what would have counted is not a check.
 
-Under the `inline_plan: on` setting, this is written by a planning step of its own before
-anything is built, and the tickets are then built one at a time, as a plan's are.
-
 ## source.followup
 
 A finished run's outcome needs more work. `{{inputs.plan}}` names it as
@@ -482,9 +500,6 @@ A finished run's outcome needs more work. `{{inputs.plan}}` names it as
 `{{run.dir}}/plan/issues/`. This checkout is already on the branch that run built, and its
 merge request is updated rather than replaced — the parent run is finished and immutable,
 so nothing you do belongs in it.
-
-Under the `inline_plan: on` setting, this is written by a planning step of its own before
-anything is built, and the tickets are then built one at a time, as a plan's are.
 
 ## source.text
 
@@ -497,9 +512,6 @@ and run it through `collie verify`. Clear work states its acceptance checks befo
 starts; deciding afterwards what would have counted is not a check. Where the text does
 not settle something, decide it the way the text most plausibly means, and record the
 decision under `assumptions`.
-
-Under the `inline_plan: on` setting, this is written by a planning step of its own before
-anything is built, and the tickets are then built one at a time, as a plan's are.
 
 ## outcome.unspecified
 
