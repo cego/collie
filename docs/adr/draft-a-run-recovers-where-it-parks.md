@@ -94,6 +94,10 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
     or the merge request merged or closed. A Review wait's own poll and the Run's CI fix round
     can still clear it, so it never goes to a Heal. `herdr-unavailable` rechecks by listing
     agents on core as a launch does, so it clears only when a launch's first call would succeed.
+    `predecessor-not-quiet` rechecks what a stopped agent left running in its pane, as the
+    Run's `not-quiet.jsonl` records it, and clears once none of it is still running and no
+    control record of that agent is kept
+    ([ADR-0059](0059-a-stopped-agent-is-stopped-where-its-turn-runs.md)).
   - **`needs you`:** what the host cannot do about it alone, such as an Output still
     absent after two reminders, a failure that parks its Step for correcting (`step-failed`,
     [ADR-draft-a-fixable-failure-parks-its-step](draft-a-fixable-failure-parks-its-step.md)),
@@ -107,7 +111,8 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
     forge that will not merge (`review-blocked`), whose own poll leaves the park once that is
     repaired. That park goes straight to you, without a Heal (D7). It is also set on
     `herdr-unavailable`: a Heal launches its agent through core too, so it cannot run while
-    core cannot list agents.
+    core cannot list agents. And it is set on `predecessor-not-quiet`, whose recheck clears
+    it.
 - **What it shows:** the cause, each recovery action taken, and that action's outcome. The
   Run's record shows them, and so do the card, `run show` and chat's reads.
 - **Its identity:** `<cause>-<hash>` of the Run, the cause and the evidence that cause is
