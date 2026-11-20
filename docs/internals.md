@@ -378,12 +378,15 @@ A Fallback mid-work builds its successor's hand-over in `src/hand-over.ts`, in t
 
 The workflow passes what only it knows as `AgentWork.handOver`. Implement passes the ticket,
 the plan directory, the ticket's criteria, the last Output's answers to them, the ticket's
-Checks, the ledger's findings, and the builder's last Output. `buildHandOver` keeps only what
+Checks, the ledger's findings, the builder's last Output, and for a fix the head its findings
+were reviewed at (`reviewed`), which the record renders as a `git diff` starting point. `buildHandOver` keeps only what
 that Output said under `decisions`, `rejected` and `next_action`. Each record is appended to
 the Run's `hand-overs.jsonl` journal, its revision one past the last.
 
-At launch, inside `<operation>.fallback-<n>.launch`, `atDispatch` compares the record's head
-and plan revision with `agents.atCheckout`. If either moved, it builds the record once more.
+At launch, inside `<operation>.fallback-<n>.launch`, `atDispatch` compares the record's head,
+plan revision and whether it has uncommitted work with `agents.atCheckout`. If any changed,
+for instance the outgoing agent left work uncommitted after the record was built, it builds
+the record once more.
 If that one does not match either, the checkout is appended to `hand-over-stale.jsonl` and
 the Run parks on `hand-over-stale`. Its recheck reads the head and plan revision again: it
 clears when they equal the last ones recorded, and otherwise records them and waits. Because

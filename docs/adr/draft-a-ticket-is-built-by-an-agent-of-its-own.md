@@ -37,8 +37,9 @@ ADR stays proposed.
 
 **D4. The hand-over is one revisioned record the host builds** (ADR-0049's amendment of
 2026-11-20, **Hand-over** in `CONTEXT.md`). It goes out in the new agent's first delivery,
-once per new agent, at every boundary and every Fallback. One whose head or plan revision
-no longer matches the checkout is rebuilt once, then parks on `hand-over-stale`.
+once per new agent, at every boundary and every Fallback. One whose head, plan revision or
+uncommitted work no longer matches the checkout is rebuilt once, then parks on
+`hand-over-stale`. A fixer's names the head its findings were reviewed at.
 
 **D5. Nothing new starts where nothing changed.** A wait, a duplicate delivery, a restart,
 a crash replay, an Output reminder or repair, and an answer to a pending question go to the

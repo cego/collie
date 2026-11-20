@@ -1686,7 +1686,6 @@ interface Handing {
   from: TakeOver | null;
   /** Fix rounds so far, by ticket, under `round`. */
   readonly fixes: Map<string, number>;
-  /** Each built item's criteria, its latest answers to them and its Checks. */
   readonly proof: Map<string, Proof>;
 }
 

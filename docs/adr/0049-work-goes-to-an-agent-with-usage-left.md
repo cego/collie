@@ -195,13 +195,15 @@ shipped on the Fallback path first.
   - the branch, base and head, and whose any uncommitted work is;
   - the ticket's criteria claimed met by the work's last Output, with the passing records
     at the head that each answer names, and the Checks still owed;
-  - open findings by ledger id, pending questions, and the transcript and reports.
+  - open findings by ledger id, and in a fix the head they were reviewed at;
+  - pending questions, and the transcript and reports.
 - **What the outgoing agent adds.** Its decisions, rejected approaches and next action come
   only from its last Output, through new optional fields on the build and fix contracts. An
   Output without them still decodes, and a Fallback mid-turn has none.
 - **Revisions.** Each record is kept in the Run's records under the next revision number.
-- **Refused when stale.** When the new agent is launched, the record's head and plan
-  revision are checked against the checkout. If either moved, it is rebuilt once. If it
+- **Refused when stale.** When the new agent is launched, the record's head, plan
+  revision and whether there is uncommitted work are checked against the checkout. If any
+  changed, it is rebuilt once. If it
   still does not match, the Run parks on `hand-over-stale`, which rechecks and never heals,
   and no agent starts.
 - **Sent once.** The record goes out in the new agent's first delivery, inside the
