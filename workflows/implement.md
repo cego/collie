@@ -420,6 +420,10 @@ lines allow.
 
 {{refusal}}
 
+A `collie verify` you started in the background is reported to you when it ends,
+so you may end your turn waiting on it. Never end a turn waiting on any other
+background job.
+
 Then write your Output, with `issues_dir` set to `{{run.dir}}/plan/issues`.
 
 ## handing
