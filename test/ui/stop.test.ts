@@ -41,7 +41,9 @@ const EMPTY: AppState = {
 
 const until = Effect.fn("stop.until")(function* (what: string, ready: () => boolean) {
   for (let tries = 0; tries < 200; tries++) {
-    if (ready()) return;
+    if (ready()) {
+      return;
+    }
     yield* Effect.sleep("5 millis");
   }
   return yield* new Cause.TimeoutError(`${what} never happened`);
@@ -106,8 +108,9 @@ test("stopping three at once holds all three, and undo takes back all three", ()
         const acted: Array<Command> = [];
         const driven = yield* driveBridge(held(acted));
 
-        for (const runId of ["run:a", "run:b", "run:c"])
+        for (const runId of ["run:a", "run:b", "run:c"]) {
           driven.dispatch({ _tag: "StopRun", runId });
+        }
         yield* until("all three marks", () => driven.state().stopping.length === 3);
         expect(acted).toEqual([]);
 
@@ -126,8 +129,9 @@ test("three stops nobody took back are three stops", () =>
         const acted: Array<Command> = [];
         const driven = yield* driveBridge(held(acted));
 
-        for (const runId of ["run:a", "run:b", "run:c"])
+        for (const runId of ["run:a", "run:b", "run:c"]) {
           driven.dispatch({ _tag: "StopRun", runId });
+        }
         yield* until("all three stops", () => acted.length === 3);
 
         const stopped = Arr.map(acted, (command) =>

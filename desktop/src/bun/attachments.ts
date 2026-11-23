@@ -44,11 +44,15 @@ export const describeAttachment = Effect.fn("Attachments.describe")(function* (
   dir: string,
   id: string,
 ) {
-  if (!validId(id)) return null;
+  if (!validId(id)) {
+    return null;
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = `${storeOf(dir)}/${id}`;
   const info = yield* fs.stat(path).pipe(Effect.option);
-  if (Option.isNone(info) || info.value.type !== "File") return null;
+  if (Option.isNone(info) || info.value.type !== "File") {
+    return null;
+  }
   const name = pipe_(id, Str.slice(65));
   return {
     id,
@@ -63,7 +67,9 @@ const scaledPath = (dir: string, id: string) =>
   `${storeOf(dir)}/${pipe_(id, Str.slice(0, 64))}/.scaled/${pipe_(id, Str.slice(65))}`;
 
 export const scaledCopy = Effect.fn("Attachments.scaledCopy")(function* (dir: string, id: string) {
-  if (!validId(id)) return null;
+  if (!validId(id)) {
+    return null;
+  }
   const path = scaledPath(dir, id);
   return (yield* (yield* FileSystem.FileSystem).exists(path)) ? path : null;
 });
@@ -112,15 +118,27 @@ const keep = Effect.fn("Attachments.keep")(function* (
 export const stagePath = Effect.fn("Attachments.stagePath")(function* (dir: string, path: string) {
   const fs = yield* FileSystem.FileSystem;
   const name = Str.split(path, "/").at(-1) ?? "";
-  if (!plainName(name)) return { refused: `${path} is not a file's name` };
+  if (!plainName(name)) {
+    return { refused: `${path} is not a file's name` };
+  }
   const info = yield* fs.stat(path).pipe(Effect.option);
-  if (Option.isNone(info)) return { refused: `${path} cannot be read` };
-  if (info.value.type === "Directory") return { refused: `${path} is a directory` };
-  if (info.value.type !== "File") return { refused: `${path} is not a file` };
+  if (Option.isNone(info)) {
+    return { refused: `${path} cannot be read` };
+  }
+  if (info.value.type === "Directory") {
+    return { refused: `${path} is a directory` };
+  }
+  if (info.value.type !== "File") {
+    return { refused: `${path} is not a file` };
+  }
   const why = capRefusal([], { name, size: Number(info.value.size) });
-  if (why !== null) return { refused: why };
+  if (why !== null) {
+    return { refused: why };
+  }
   const bytes = yield* fs.readFile(path).pipe(Effect.option);
-  if (Option.isNone(bytes)) return { refused: `${path} cannot be read` };
+  if (Option.isNone(bytes)) {
+    return { refused: `${path} cannot be read` };
+  }
   return yield* keep(dir, name, bytes.value, "");
 });
 
@@ -130,25 +148,37 @@ export const stageAttachment = Effect.fn("Attachments.stage")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (!plainName(part.name)) return yield* refused(`${part.name} is not a file's name`);
-  if (!/^[\w-]+$/.test(part.key)) return yield* refused(`${part.key} is not a transfer's key`);
-  if (part.scaledOf !== undefined && !validId(part.scaledOf))
+  if (!plainName(part.name)) {
+    return yield* refused(`${part.name} is not a file's name`);
+  }
+  if (!/^[\w-]+$/.test(part.key)) {
+    return yield* refused(`${part.key} is not a transfer's key`);
+  }
+  if (part.scaledOf !== undefined && !validId(part.scaledOf)) {
     return yield* refused(`${part.scaledOf} is not an attachment`);
+  }
   const why = capRefusal([], part);
-  if (why !== null) return yield* refused(why);
+  if (why !== null) {
+    return yield* refused(why);
+  }
   const decoded = Base64.decode(part.content);
-  if (Result.isFailure(decoded)) return yield* refused(`a part of ${part.name} is not base64`);
+  if (Result.isFailure(decoded)) {
+    return yield* refused(`a part of ${part.name} is not base64`);
+  }
   const bytes = decoded.success;
   const partial = `${storeOf(dir)}/.partial/${part.key}`;
   yield* fs.makeDirectory(path.dirname(partial), { recursive: true });
   const held =
     part.offset === 0 ? 0 : yield* fs.stat(partial).pipe(Effect.map((info) => Number(info.size)));
-  if (held !== part.offset)
+  if (held !== part.offset) {
     return yield* refused(
       `${part.name} arrived out of order: ${held} bytes held, part at ${part.offset}`,
     );
+  }
   yield* fs.writeFile(partial, bytes, { flag: part.offset === 0 ? "w" : "a" });
-  if (part.offset + bytes.length < part.size) return null;
+  if (part.offset + bytes.length < part.size) {
+    return null;
+  }
   const whole = yield* fs.readFile(partial);
   if (whole.length !== part.size) {
     yield* fs.remove(partial);
@@ -170,7 +200,9 @@ export const readAttachment = Effect.fn("Attachments.read")(function* (
   offset = 0,
 ) {
   const held = yield* describeAttachment(dir, id);
-  if (held === null) return yield* refused(`Desktop no longer has ${id}`);
+  if (held === null) {
+    return yield* refused(`Desktop no longer has ${id}`);
+  }
   const fs = yield* FileSystem.FileSystem;
   return yield* Effect.scoped(
     Effect.gen(function* () {

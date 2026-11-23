@@ -54,14 +54,17 @@ const parsed = (text: string) =>
 const fromSecretTool = (tool: string) =>
   Effect.gen(function* () {
     const found = new Map<string, string>();
-    if (which(tool) === null) return found;
+    if (which(tool) === null) {
+      return found;
+    }
     for (const key of ENTRIES) {
       // WARNING: a locked keyring may wait on an unlock prompt; Desktop's launch does not.
       const ran = yield* ranWith([tool, "lookup", "service", "collie-desktop", "key", key]).pipe(
         Effect.timeoutOption("5 seconds"),
       );
-      if (Option.isSome(ran) && ran.value.code === 0 && ran.value.out !== "")
+      if (Option.isSome(ran) && ran.value.code === 0 && ran.value.out !== "") {
         found.set(key, ran.value.out);
+      }
     }
     return found;
   });
@@ -91,12 +94,16 @@ export const credentialsFile: (
     });
   const load = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    if (yield* fs.exists(file)) return parsed(yield* fs.readFileString(file));
+    if (yield* fs.exists(file)) {
+      return parsed(yield* fs.readFileString(file));
+    }
     const found = yield* fromSecretTool(secretTool).pipe(
       Effect.orElseSucceed(() => new Map<string, string>()),
     );
     // WARNING: written only with something in it, so a keyring that did not answer is asked again.
-    if (found.size > 0) yield* write(found);
+    if (found.size > 0) {
+      yield* write(found);
+    }
     return found;
   });
   const locked = <A>(effect: Effect.Effect<A, PlatformError, FileSystem.FileSystem>) =>
@@ -136,7 +143,9 @@ export const secretsFor = (keyring: Keyring) =>
     let text = "";
     for (const [name, key] of lines) {
       const value = yield* keyring.lookup(key);
-      if (value !== null) text += `${name}=${value}\n`;
+      if (value !== null) {
+        text += `${name}=${value}\n`;
+      }
     }
     return text;
   });
@@ -349,12 +358,13 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
     ),
   ).pipe(Effect.timeoutOption(LOGIN_LIMIT));
   const ended = Option.isSome(code) && code.value === 0;
-  if (!ended)
+  if (!ended) {
     yield* run.step({
       ...login,
       status: "failed",
       detail: "the login did not finish",
       command: "claude auth login",
     });
+  }
   return { ended, run: run.current() };
 }, Effect.scoped);

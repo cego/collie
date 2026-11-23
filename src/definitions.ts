@@ -103,7 +103,9 @@ export const layers = Effect.fn("Definitions.layers")(function* (env: {
 const markdownFiles = Effect.fn("Definitions.markdownFiles")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (!(yield* fs.exists(dir))) return [];
+  if (!(yield* fs.exists(dir))) {
+    return [];
+  }
   return Arr.map(
     Arr.filter(yield* fs.readDirectory(dir), (f) => pipe_(f, Str.endsWith(".md"))).sort(),
     (f) => path.join(dir, f),
@@ -139,8 +141,12 @@ const parsePersona = Effect.fn("Definitions.parsePersona")(function* (
     path: file,
     layer,
   };
-  if (isString(data.extends)) persona.extends = data.extends;
-  if (isString(data.forked_from_hash)) persona.forkedFromHash = data.forked_from_hash;
+  if (isString(data.extends)) {
+    persona.extends = data.extends;
+  }
+  if (isString(data.forked_from_hash)) {
+    persona.forkedFromHash = data.forked_from_hash;
+  }
   return persona;
 });
 
@@ -183,11 +189,13 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
   const parsed = new Map<string, T>();
   for (const path of yield* markdownFiles(pathSvc.join(layer.dir, kind))) {
     const result = yield* Effect.result(parse(path, layer.name));
-    if (Result.isSuccess(result)) parsed.set(result.success.name, result.success);
-    else
+    if (Result.isSuccess(result)) {
+      parsed.set(result.success.name, result.success);
+    } else {
       errors.push(
         `${path}: ${result.failure instanceof Error ? result.failure.message : String(result.failure)}`,
       );
+    }
   }
 
   const settled = new Set<string>();
@@ -200,9 +208,13 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
     FileSystem.FileSystem | Path.Path | Digest.Digest
   > = (name, chain) =>
     Effect.gen(function* () {
-      if (settled.has(name)) return;
+      if (settled.has(name)) {
+        return;
+      }
       const def = parsed.get(name);
-      if (!def) return;
+      if (!def) {
+        return;
+      }
       settled.add(name);
 
       const parentName = def.extends;
@@ -214,8 +226,9 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
         errors.push(`${def.path}: extends cycle (${Arr.join([...chain, parentName], " → ")})`);
         return;
       }
-      if (parsed.has(parentName) && parentName !== name)
+      if (parsed.has(parentName) && parentName !== name) {
         yield* resolve(parentName, [...chain, name]);
+      }
 
       const parent = into.get(parentName);
       if (!parent) {
@@ -224,13 +237,17 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
       }
       into.set(name, yield* withParentHash(merge(parent, def), into));
     });
-  for (const name of parsed.keys()) yield* resolve(name, []);
+  for (const name of parsed.keys()) {
+    yield* resolve(name, []);
+  }
 });
 
 const withParentHash = Effect.fn("Definitions.withParentHash")(function* <
   T extends Provenance & { name: string },
 >(def: T, into: Map<string, T>) {
-  if (!def.forkedFromHash) return def;
+  if (!def.forkedFromHash) {
+    return def;
+  }
   const shadowed = into.get(def.name);
   const parentHash = shadowed ? yield* readHash(shadowed.path) : undefined;
   return parentHash ? { ...def, parentHash } : def;
@@ -253,7 +270,11 @@ function mergePersona(parent: PersonaDef, child: PersonaDef) {
 
 function pick<T, K extends keyof T>(from: T, keys: Array<K>) {
   const out: Partial<T> = {};
-  for (const key of keys) if (from[key] !== undefined) out[key] = from[key];
+  for (const key of keys) {
+    if (from[key] !== undefined) {
+      out[key] = from[key];
+    }
+  }
   return out;
 }
 
@@ -261,11 +282,15 @@ function mergeBody(parent: string, child: string) {
   const a = bodySections(parent);
   const b = bodySections(child);
   const sections = new Map(a.sections);
-  for (const [name, text] of b.sections) sections.set(name, text);
+  for (const [name, text] of b.sections) {
+    sections.set(name, text);
+  }
 
   const preamble = Str.trim(b.preamble) === "" ? a.preamble : b.preamble;
   const parts = [Str.trim(preamble)];
-  for (const [name, text] of sections) parts.push(`## ${name}\n\n${text}`);
+  for (const [name, text] of sections) {
+    parts.push(`## ${name}\n\n${text}`);
+  }
   return `${Arr.join(
     Arr.filter(parts, (p) => p !== ""),
     "\n\n",
@@ -284,7 +309,9 @@ export function bodySections(body: string) {
   let current: string | null = null;
   let buf: Array<string> = [];
   const flush = () => {
-    if (current !== null) sections.set(current, Str.trim(Arr.join(buf, "\n")));
+    if (current !== null) {
+      sections.set(current, Str.trim(Arr.join(buf, "\n")));
+    }
     buf = [];
   };
   for (const line of lines) {
@@ -294,8 +321,11 @@ export function bodySections(body: string) {
       current = m[1]!;
       continue;
     }
-    if (current === null) preamble.push(line);
-    else buf.push(line);
+    if (current === null) {
+      preamble.push(line);
+    } else {
+      buf.push(line);
+    }
   }
   flush();
   return { preamble: Str.trim(Arr.join(preamble, "\n")), sections };
@@ -309,7 +339,9 @@ export const skillFile = Effect.fn("Definitions.skillFile")(function* (
   const path = yield* Path.Path;
   for (const dir of dirs) {
     const file = path.join(dir, name, "SKILL.md");
-    if (yield* fs.exists(file)) return file;
+    if (yield* fs.exists(file)) {
+      return file;
+    }
   }
   return null;
 });

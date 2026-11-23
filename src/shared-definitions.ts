@@ -46,8 +46,11 @@ const throughLink = Effect.fn("SharedDefinitions.throughLink")(function* (
   path: string,
 ) {
   const parts = Str.split(path, "/");
-  for (let at = 1; at <= parts.length; at++)
-    if (yield* isLink(`${userDir}/${Arr.join(parts.slice(0, at), "/")}`)) return true;
+  for (let at = 1; at <= parts.length; at++) {
+    if (yield* isLink(`${userDir}/${Arr.join(parts.slice(0, at), "/")}`)) {
+      return true;
+    }
+  }
   return false;
 });
 
@@ -67,13 +70,19 @@ const onDisk = Effect.fn("SharedDefinitions.onDisk")(function* (userDir: string)
   const found: Array<SharedDefinition> = [];
   for (const kind of KINDS) {
     const dir = `${userDir}/${kind}`;
-    if (!(yield* fs.exists(dir)) || (yield* isLink(dir))) continue;
+    if (!(yield* fs.exists(dir)) || (yield* isLink(dir))) {
+      continue;
+    }
     for (const name of (yield* fs.readDirectory(dir)).sort()) {
       const path = `${kind}/${name}`;
-      if (!shareable(path) || (yield* isLink(`${dir}/${name}`))) continue;
+      if (!shareable(path) || (yield* isLink(`${dir}/${name}`))) {
+        continue;
+      }
       const info = yield* fs.stat(`${dir}/${name}`);
       const mtime = Option.getOrUndefined(info.mtime);
-      if (info.type !== "File" || mtime === undefined) continue;
+      if (info.type !== "File" || mtime === undefined) {
+        continue;
+      }
       found.push({
         path,
         base64: base64(yield* fs.readFile(`${dir}/${name}`)),
@@ -128,8 +137,9 @@ const readShared = Effect.fn("SharedDefinitions.read")(function* (userDir: strin
   if (
     (yield* Schema.encodeEffect(Seen)(next).pipe(Effect.orDie)) !==
     (yield* Schema.encodeEffect(Seen)(seen).pipe(Effect.orDie))
-  )
+  ) {
     yield* writeSeen(userDir, next);
+  }
   return [...present, ...gone].sort((a, b) => pipe_(a.path, Str.localeCompare(b.path)));
 });
 
@@ -151,32 +161,40 @@ export const takeDefinitions = (
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const outside = Option.getOrUndefined(Arr.findFirst(given, (one) => !shareable(one.path)));
-      if (outside !== undefined)
+      if (outside !== undefined) {
         return yield* new DefinitionRefused({
           reason: `${outside.path} is not a file directly in the user Layer's workflows/ or personas/`,
         });
+      }
       const malformed = Option.getOrUndefined(
         Arr.findFirst(
           given,
           (one) => Number.isNaN(epochMs(one.at)) || (one.base64 !== null && !isBase64(one.base64)),
         ),
       );
-      if (malformed !== undefined)
+      if (malformed !== undefined) {
         return yield* new DefinitionRefused({
           reason: `${malformed.path}'s edit has a malformed time or content`,
         });
+      }
       const held = yield* readShared(userDir, now);
       let seen = yield* readSeen(userDir);
       for (const edit of latestEdits(held, given, byPath).take) {
         const file = `${userDir}/${edit.path}`;
         const had = Option.getOrUndefined(Arr.findFirst(held, (one) => one.path === edit.path));
         const content = had?.base64 ?? null;
-        if (yield* throughLink(userDir, edit.path)) continue;
+        if (yield* throughLink(userDir, edit.path)) {
+          continue;
+        }
         // WARNING: saved by hand since it was read: left alone.
-        if ((yield* modifiedAt(file)) !== (content === null ? null : had?.at)) continue;
+        if ((yield* modifiedAt(file)) !== (content === null ? null : had?.at)) {
+          continue;
+        }
         if (had !== undefined && content !== null && content !== edit.base64) {
           const replaced = `replaced/${had.at}/${edit.path}`;
-          if (yield* throughLink(userDir, replaced)) continue;
+          if (yield* throughLink(userDir, replaced)) {
+            continue;
+          }
           const kept = `${userDir}/${replaced}`;
           yield* fs.makeDirectory(
             pipe_(
@@ -193,8 +211,9 @@ export const takeDefinitions = (
             `${edit.path} ${edit.base64 === null ? "removed" : "replaced"} by a later edit from ${by}; it is kept at ${kept}`,
           );
         }
-        if (edit.base64 === null) yield* fs.remove(file, { force: true });
-        else {
+        if (edit.base64 === null) {
+          yield* fs.remove(file, { force: true });
+        } else {
           yield* fs.makeDirectory(
             pipe_(
               file,

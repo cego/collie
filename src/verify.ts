@@ -140,19 +140,25 @@ export const treeOf: (cwd: string) => Effect.Effect<
       Effect.map((info) => Number(info.size)),
       Effect.orElseSucceed(() => 0),
     );
-    if (bytes > FINGERPRINT_MAX_BYTES) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
+    if (bytes > FINGERPRINT_MAX_BYTES) {
+      return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
+    }
   }
   const { tree, unmeasured } = place === null ? { tree: "" } : yield* workingTree(cwd, place.index);
-  if (unmeasured !== undefined)
+  if (unmeasured !== undefined) {
     return { head_sha, fingerprint: UNMEASURED, unmeasured, branch, dirty };
+  }
   const parts = [tree];
   for (const sub of changedSubmodules(entries)) {
     const inner = yield* treeOf(path.join(root, sub));
-    if (inner.fingerprint === TOO_LARGE) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
-    if (inner.fingerprint === UNMEASURED || inner.fingerprint === "")
+    if (inner.fingerprint === TOO_LARGE) {
+      return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
+    }
+    if (inner.fingerprint === UNMEASURED || inner.fingerprint === "") {
       return inner.unmeasured === undefined
         ? { head_sha, fingerprint: UNMEASURED, branch, dirty }
         : { head_sha, fingerprint: UNMEASURED, unmeasured: inner.unmeasured, branch, dirty };
+    }
     parts.push(`${sub}=${inner.fingerprint}`);
   }
   return { head_sha, fingerprint: Arr.join(parts, " "), branch, dirty };
@@ -174,8 +180,9 @@ const changedSubmodules = (entries: string) => {
       sub !== undefined &&
       sub[0] === "S" &&
       (sub[2] === "M" || sub[3] === "U")
-    )
+    ) {
       found.push(Arr.join(Arr.drop(rest, kind === "1" ? 5 : 6), " "));
+    }
   }
   return found;
 };
@@ -190,10 +197,13 @@ const unstagedPaths = (entries: string) => {
     }
     const [kind, xy = "", ...rest] = Str.split(record, " ");
     original = kind === "2";
-    if (kind === "?") found.push(Arr.join([xy, ...rest], " "));
-    else if (kind === "u") found.push(Arr.join(Arr.drop(rest, 8), " "));
-    else if ((kind === "1" || kind === "2") && xy[1] !== ".")
+    if (kind === "?") {
+      found.push(Arr.join([xy, ...rest], " "));
+    } else if (kind === "u") {
+      found.push(Arr.join(Arr.drop(rest, 8), " "));
+    } else if ((kind === "1" || kind === "2") && xy[1] !== ".") {
       found.push(Arr.join(Arr.drop(rest, kind === "1" ? 6 : 7), " "));
+    }
   }
   return found;
 };
@@ -218,12 +228,18 @@ const placeOf = Effect.fn("Verify.placeOf")(function* (cwd: string) {
   const path = yield* Path.Path;
   const dotGit = yield* dotGitOf(cwd);
   const known = places.get(cwd);
-  if (known !== undefined && known.dotGit === dotGit) return known;
+  if (known !== undefined && known.dotGit === dotGit) {
+    return known;
+  }
   const said = yield* git(["rev-parse", "--git-path", "index", "--show-cdup"], cwd);
-  if (said.code !== 0) return null;
+  if (said.code !== 0) {
+    return null;
+  }
   const [index, cdup = ""] = Str.split(said.stdout, "\n");
   const place = { index: path.resolve(cwd, index), root: path.resolve(cwd, cdup) };
-  if (cdup === "" && dotGit !== null) places.set(cwd, { ...place, dotGit });
+  if (cdup === "" && dotGit !== null) {
+    places.set(cwd, { ...place, dotGit });
+  }
   return place;
 });
 
@@ -254,7 +270,9 @@ const stageAndWrite = Effect.fn("Verify.stageAndWrite")(
             }
           }
           const added = yield* shell("git", ["add", "-A"], cwd, env);
-          if (added.code !== 0) return unmeasuredBy("add", added);
+          if (added.code !== 0) {
+            return unmeasuredBy("add", added);
+          }
           const tree = yield* shell("git", ["write-tree"], cwd, env);
           return tree.code === 0
             ? { tree: Str.trim(tree.stdout) }
@@ -291,7 +309,9 @@ export function resultOf(
   exit: number,
   expect: Verification["expect"] = "pass",
 ) {
-  if (!sameTree(start, end)) return "unstable";
+  if (!sameTree(start, end)) {
+    return "unstable";
+  }
   // WARNING: the exit code alone is never the verdict: an unstable tree says nothing about either expectation.
   return (exit === 0) === (expect === "pass") ? "pass" : "fail";
 }
@@ -333,12 +353,16 @@ export const movedBetween = Effect.fn("Verify.movedBetween")(
     const measured = (tree: string | undefined): tree is string =>
       tree !== undefined && tree !== "" && tree !== TOO_LARGE && tree !== UNMEASURED;
     const place = yield* placeOf(cwd);
-    if (place === null || !measured(from) || !measured(to) || from === to) return [];
+    if (place === null || !measured(from) || !measured(to) || from === to) {
+      return [];
+    }
     const diff = yield* git(
       ["diff-tree", "-r", "-z", "--no-renames", "--name-status", from, to],
       place.root,
     );
-    if (diff.code !== 0) return [];
+    if (diff.code !== 0) {
+      return [];
+    }
     const fields = Arr.filter(Str.split(diff.stdout, "\0"), Str.isNonEmpty);
     const changed = Arr.map(Arr.chunksOf(fields, 2), ([status, path = ""]) => ({
       path,
@@ -382,7 +406,9 @@ const identityOf = (executable: string) =>
       ":",
     );
     const known = digests.get(key);
-    if (known !== undefined) return `${real}@${known}`;
+    if (known !== undefined) {
+      return `${real}@${known}`;
+    }
     const digest = Bun.hash(yield* fs.readFile(real)).toString(16);
     digests.set(key, digest);
     return `${real}@${digest}`;
@@ -391,10 +417,14 @@ const identityOf = (executable: string) =>
 const packageRoots = Effect.fn("Verify.packageRoots")(function* (cwd: string) {
   const path = yield* Path.Path;
   const top = yield* git(["rev-parse", "--show-toplevel"], cwd);
-  if (top.code !== 0) return [cwd];
+  if (top.code !== 0) {
+    return [cwd];
+  }
   const root = Str.trim(top.stdout);
   const listed = yield* git(["ls-files", "-z", "--", ":(glob)**/package.json"], root);
-  if (listed.code !== 0) return [cwd];
+  if (listed.code !== 0) {
+    return [cwd];
+  }
   const files = Arr.filter(Str.split(listed.stdout, "\0"), (file) => file !== "");
   return Arr.map(files, (file) => path.join(root, path.dirname(file)));
 });
@@ -419,15 +449,22 @@ const installedAt = Effect.fn("Verify.installedAt")(function* (root: string) {
       error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
     ),
   );
-  if (names === null) return `${root}:absent`;
+  if (names === null) {
+    return `${root}:absent`;
+  }
   const lines = [root];
   for (const name of Arr.sort(names, Order.String)) {
-    if (pipe(name, Str.startsWith(".")) && name !== ".bin") continue;
+    if (pipe(name, Str.startsWith(".")) && name !== ".bin") {
+      continue;
+    }
     const { line, scope } = yield* identityLine(name, path.join(modules, name));
     lines.push(line);
-    if (!scope) continue;
-    for (const inner of Arr.sort(yield* fs.readDirectory(path.join(modules, name)), Order.String))
+    if (!scope) {
+      continue;
+    }
+    for (const inner of Arr.sort(yield* fs.readDirectory(path.join(modules, name)), Order.String)) {
       lines.push((yield* identityLine(`${name}/${inner}`, path.join(modules, name, inner))).line);
+    }
   }
   return Arr.join(lines, "\n");
 });
@@ -439,8 +476,12 @@ export const environmentOf = Effect.fn("Verify.environmentOf")(
       const found = Bun.which(runtime, { PATH: Bun.env.PATH ?? "" });
       parts.push(`${runtime}=${found === null ? "" : yield* identityOf(found)}`);
     }
-    for (const name of TOOLCHAIN_VARIABLES) parts.push(`${name}=${Bun.env[name] ?? ""}`);
-    for (const root of yield* packageRoots(cwd)) parts.push(yield* installedAt(root));
+    for (const name of TOOLCHAIN_VARIABLES) {
+      parts.push(`${name}=${Bun.env[name] ?? ""}`);
+    }
+    for (const root of yield* packageRoots(cwd)) {
+      parts.push(yield* installedAt(root));
+    }
     return Bun.hash(Arr.join(parts, "\n")).toString(16);
   },
   Effect.orElseSucceed(() => null),
@@ -519,9 +560,13 @@ export const insideRun = Effect.fn("Verify.insideRun")(function* (
     fs.realPath(dir).pipe(Effect.orElseSucceed(() => path.resolve(dir)));
   const here = yield* real(cwd);
   for (const root of [run.cwd, run.worktree]) {
-    if (root === null) continue;
+    if (root === null) {
+      continue;
+    }
     const inside = yield* real(root);
-    if (here === inside || pipe(here, Str.startsWith(`${inside}${path.sep}`))) return true;
+    if (here === inside || pipe(here, Str.startsWith(`${inside}${path.sep}`))) {
+      return true;
+    }
   }
   return false;
 });
@@ -531,7 +576,9 @@ export const resolveExecutable = Effect.fn("Verify.resolveExecutable")(function*
   cwd: string,
 ) {
   const path = yield* Path.Path;
-  if (pipe(executable, Str.includes(path.sep))) return path.resolve(cwd, executable);
+  if (pipe(executable, Str.includes(path.sep))) {
+    return path.resolve(cwd, executable);
+  }
   // WARNING: Bun.which, not `command -v`: command is a shell builtin, and no check runs through a shell.
   return Bun.which(executable, { PATH: Bun.env.PATH ?? "" });
 });
@@ -575,8 +622,9 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   echo?: Echo,
 ) {
   const absolute = yield* resolveExecutable(what.executable, what.cwd);
-  if (absolute === null)
+  if (absolute === null) {
     return yield* new VerifyRefused({ why: `nothing on PATH called "${what.executable}"` });
+  }
 
   const environment = yield* environmentOf(absolute, what.cwd);
   const start = yield* fingerprint(what.cwd);
@@ -590,7 +638,9 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
     yield* fs.writeFileString(what.log, "", { flag: "a" }).pipe(Effect.orDie);
   }
   const toLog = (chunk: string) => {
-    if (what.log === undefined || handle.logged) return Effect.void;
+    if (what.log === undefined || handle.logged) {
+      return Effect.void;
+    }
     const next = logged(chunk, already);
     already = next.logged;
     return next.text === ""
@@ -634,11 +684,17 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
           : Effect.die(cause),
       ),
     );
-  if (handle.id === null) return yield* Effect.never;
-  if (echo?.started !== undefined) yield* echo.started(handle.id);
+  if (handle.id === null) {
+    return yield* Effect.never;
+  }
+  if (echo?.started !== undefined) {
+    yield* echo.started(handle.id);
+  }
   if (echo?.said !== undefined) {
     const pid = yield* handle.pid;
-    if (pid !== null) yield* echo.said(`"${what.name}" started, pid ${pid}`);
+    if (pid !== null) {
+      yield* echo.said(`"${what.name}" started, pid ${pid}`);
+    }
   }
   // WARNING: only each stream's tail is kept, so a long-running check cannot grow memory.
   const drain = (stream: typeof handle.stdout, shown?: (text: string) => Effect.Effect<void>) =>
@@ -672,7 +728,9 @@ const readCheck = Effect.fn("Verify.readCheck")(function* (id: string, name: str
   const found = yield* (yield* CheckProcesses)
     .finished(id)
     .pipe(Effect.mapError(noVerdict(name, "output", "read")));
-  if (found === null) return yield* Effect.die(`check ${id} has no record to finish it from`);
+  if (found === null) {
+    return yield* Effect.die(`check ${id} has no record to finish it from`);
+  }
   return {
     ...found,
     tail: { stdout: tail(found.output.stdout), stderr: tail(found.output.stderr) },
@@ -761,15 +819,21 @@ export const collect = (runDir: string, what: Collected, echo?: Echo) =>
   );
 
 function passOf(given: CheckOf["pass"]) {
-  if (given === undefined || !Schema.is(Pass)(given.pass)) return undefined;
+  if (given === undefined || !Schema.is(Pass)(given.pass)) {
+    return undefined;
+  }
   return given.round === undefined
     ? { pass: given.pass }
     : { pass: given.pass, round: given.round };
 }
 
 function passFields(given: CheckPass | undefined) {
-  if (given === undefined) return {};
-  if (given.round === undefined) return { pass: given.pass };
+  if (given === undefined) {
+    return {};
+  }
+  if (given.round === undefined) {
+    return { pass: given.pass };
+  }
   return { pass: given.pass, round: given.round };
 }
 
@@ -792,13 +856,15 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
   const match = Option.getOrUndefined(
     Arr.findFirst(approved, (entry) => entry.name === spec.name && sameCommand(entry, spec)),
   );
-  if (!match)
+  if (!match) {
     return yield* new VerifyRefused({
       why: `"${spec.name}" is not among this Run's checks, argument for argument`,
     });
+  }
   const cwd = yield* checkCwd(run, spec);
-  if (!(yield* insideRun(cwd, run)))
+  if (!(yield* insideRun(cwd, run))) {
     return yield* new VerifyRefused({ why: `"${cwd}" is not inside run ${run.id}` });
+  }
   return yield* collect(runDir, {
     run: run.id,
     name: spec.name,
@@ -821,8 +887,9 @@ export const rerunTest = Effect.fn("Verify.rerunTest")(function* (
   log?: string,
 ) {
   const cwd = yield* checkCwd(run, spec);
-  if (!(yield* insideRun(cwd, run)))
+  if (!(yield* insideRun(cwd, run))) {
     return yield* new VerifyRefused({ why: `"${cwd}" is not inside run ${run.id}` });
+  }
   return yield* collect(runDir, {
     run: run.id,
     name: spec.name,
@@ -880,7 +947,9 @@ function latestRecord(
   const latest = Option.getOrUndefined(
     Arr.findLast(records, (one) => sameCommand(one, wanted) && !staleAgainst(one, now)),
   );
-  if (latest === undefined || wanted.environment === null) return null;
+  if (latest === undefined || wanted.environment === null) {
+    return null;
+  }
   const holds = latest.environment === wanted.environment && epochMs(latest.at) > epochMs(since);
   return holds ? latest : null;
 }
@@ -900,7 +969,9 @@ export const recordFor = Effect.fn("Verify.recordFor")(function* (
 ) {
   const cwd = yield* checkCwd(run, spec);
   const executable = yield* resolveExecutable(spec.executable, cwd);
-  if (executable === null) return null;
+  if (executable === null) {
+    return null;
+  }
   return latestRecord(
     yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => [])),
     { executable, argv: spec.argv, cwd, environment: yield* environmentOf(executable, cwd) },

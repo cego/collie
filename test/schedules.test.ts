@@ -48,8 +48,9 @@ const scheduled = (world: World, name: string) =>
         ),
       );
       const prefix = `schedule:${name}:`;
-      if (start !== undefined && pipe(start.request, Str.startsWith(prefix)))
+      if (start !== undefined && pipe(start.request, Str.startsWith(prefix))) {
         found.push({ run, occurrence: pipe(start.request, Str.slice(prefix.length)), line: start });
+      }
     }
     return found.sort((one, other) => pipe(one.occurrence, Str.localeCompare(other.occurrence)));
   });
@@ -101,8 +102,11 @@ test("a due Schedule admits one Run per occurrence, as the schedule Actor, and i
           (now) => ["run", "refused"].includes(now.schedules[0]?.last?.outcome.kind ?? ""),
         );
         const last = list.schedules[0]?.last?.outcome;
-        if (last?.kind === "refused") expect(last.reason).toBe("the Schedule was paused");
-        else expect(last).toMatchObject({ kind: "run", status: "complete" });
+        if (last?.kind === "refused") {
+          expect(last.reason).toBe("the Schedule was paused");
+        } else {
+          expect(last).toMatchObject({ kind: "run", status: "complete" });
+        }
         expect(list.machine).toEqual({ installation, hostname: hostname() });
         expect(list.schedules[0]).toMatchObject({
           machine: { installation, hostname: hostname() },
@@ -568,8 +572,11 @@ test("a host whose engine lost an active Schedule's execution starts it again", 
         yield* addAsking(world, "lost", "*/2 * * * * *");
         yield* stopHost(world.state);
         const before = new Set(Arr.map(yield* scheduled(world, "lost"), (one) => one.run));
-        for (const name of yield* fs.readDirectory(world.state))
-          if (pipe(name, Str.startsWith("host.db"))) yield* fs.remove(`${world.state}/${name}`);
+        for (const name of yield* fs.readDirectory(world.state)) {
+          if (pipe(name, Str.startsWith("host.db"))) {
+            yield* fs.remove(`${world.state}/${name}`);
+          }
+        }
         yield* listed(world);
         const [run] = yield* until(
           () =>

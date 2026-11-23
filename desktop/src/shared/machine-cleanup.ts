@@ -116,13 +116,15 @@ const rowOf = (
     warn: true,
     ...over,
   });
-  if (sweep?.state === "running")
+  if (sweep?.state === "running") {
     return row(
       shown.state === "live" ? "Cleaning…" : `Cleaning… waiting for ${shown.name} to reconnect`,
       { warn: false },
     );
-  if (sweep?.state === "failed")
+  }
+  if (sweep?.state === "failed") {
     return row("Not cleaned", { reason: sweep.reason, tryAgain: true });
+  }
   if (sweep?.state === "done") {
     const { remove, keep, bytes } = sweep.report;
     return row(remove.length === 0 ? "Nothing removed" : `Freed ${humanBytes(bytes)}`, {
@@ -137,11 +139,15 @@ const rowOf = (
       note: shown.state === "unreachable" || shown.state === "sso" ? STILL_SWEPT : null,
     });
   }
-  if (read?.state === "reading")
+  if (read?.state === "reading") {
     return row(`Reading… ${Math.max(0, Math.floor((now - read.since) / 1000))} s`);
-  if (read === undefined)
+  }
+  if (read === undefined) {
     return row("It wasn't connected when Cleanup read.", { readAgain: readable });
-  if (read.state === "failed") return row(read.problem, { readAgain: readable });
+  }
+  if (read.state === "failed") {
+    return row(read.problem, { readAgain: readable });
+  }
   const { remove, keep, bytes } = read.report;
   return row(remove.length === 0 ? "Nothing to remove now" : `Would free ${humanBytes(bytes)}`, {
     choosable: true,

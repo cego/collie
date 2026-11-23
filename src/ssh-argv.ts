@@ -41,18 +41,28 @@ export const viaTarget = (via: string) => {
   for (let at = 0; at < via.length; at++) {
     const char = via[at]!;
     if (quoted) {
-      if (char === "'") quoted = false;
-      else word += char;
+      if (char === "'") {
+        quoted = false;
+      } else {
+        word += char;
+      }
     } else if (char === "'") {
       quoted = true;
       word ??= "";
-    } else if (char === "\\") word = (word ?? "") + (via[++at] ?? "");
-    else if (/\s/.test(char)) {
-      if (word !== undefined) words.push(word);
+    } else if (char === "\\") {
+      word = (word ?? "") + (via[++at] ?? "");
+    } else if (/\s/.test(char)) {
+      if (word !== undefined) {
+        words.push(word);
+      }
       word = undefined;
-    } else word = (word ?? "") + char;
+    } else {
+      word = (word ?? "") + char;
+    }
   }
-  if (word !== undefined) words.push(word);
+  if (word !== undefined) {
+    words.push(word);
+  }
   return words.at(-1) ?? "";
 };
 

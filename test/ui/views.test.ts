@@ -89,9 +89,10 @@ const seed = Effect.fn("viewsTest.seed")(function* (opts: {
       strategies: { target: "diff-target" },
     },
   });
-  if (opts.review !== undefined)
+  if (opts.review !== undefined) {
     yield* fs.writeFileString(path.join(run.dir, REVIEW_FILE), opts.review);
-  if (opts.findings !== undefined)
+  }
+  if (opts.findings !== undefined) {
     yield* fs.writeFileString(
       path.join(run.dir, FINDINGS_FILE),
       encodeFindings(
@@ -103,6 +104,7 @@ const seed = Effect.fn("viewsTest.seed")(function* (opts: {
         })),
       ),
     );
+  }
   runs = [run, ...runs];
   return run;
 });
@@ -229,7 +231,9 @@ effectTest("a run's detail is its inputs and its review", function* () {
   const detail = yield* detailOf(run);
 
   expect(detail).not.toBeNull();
-  if (!detail) return;
+  if (!detail) {
+    return;
+  }
   expect(detail.title).toBe("Review · !3");
   expect(detail.inputs).toContainEqual({ name: "target", value: "mr:host/g/p!3", source: "" });
   expect(detail.review._tag).toBe("Text");
@@ -262,7 +266,9 @@ effectTest("a run with no review says so", function* () {
 
   const detail = yield* detailOf(run);
 
-  if (!detail) throw new Error("expected a detail");
+  if (!detail) {
+    throw new Error("expected a detail");
+  }
   expect(detail.review).toEqual({ _tag: "None", reason: "this run wrote no review.md" });
 });
 
@@ -271,7 +277,9 @@ effectTest("a review too big to read is capped and says so", function* () {
 
   const detail = yield* detailOf(run);
 
-  if (!detail || detail.review._tag !== "Text") throw new Error("expected review text");
+  if (!detail || detail.review._tag !== "Text") {
+    throw new Error("expected review text");
+  }
   expect(detail.review.truncated).toBe(true);
   expect(detail.review.text.length).toBe(64 * 1024);
 });
@@ -311,7 +319,9 @@ effectTest("the log tail is the end of a long log, and only when it is asked for
 
   const on = yield* detailOf(run, { tail: true });
 
-  if (on?.tail?._tag !== "Text") throw new Error("expected tail text");
+  if (on?.tail?._tag !== "Text") {
+    throw new Error("expected tail text");
+  }
   expect(on.tail.truncated).toBe(true);
   expect(on.tail.text).toContain("line 19999");
   expect(on.tail.text).not.toContain("line 0\n");

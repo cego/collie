@@ -79,7 +79,9 @@ export class Rig {
     const disk = this.disk(50);
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      for (const dir of dirs) yield* fs.makeDirectory(dir, { recursive: true });
+      for (const dir of dirs) {
+        yield* fs.makeDirectory(dir, { recursive: true });
+      }
       yield* memory;
       yield* disk;
     });
@@ -128,7 +130,9 @@ export class Rig {
   }
 
   startCore() {
-    if (this.served !== null) return Effect.succeed(this.served);
+    if (this.served !== null) {
+      return Effect.succeed(this.served);
+    }
     const socketPath = this.coreSocket;
     const logPath = this.logPath;
     const queuePath = this.path.join(this.root, "outputs.json");
@@ -196,7 +200,9 @@ export class Rig {
     const logPath = this.logPath;
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      if (!(yield* fs.exists(logPath))) return [];
+      if (!(yield* fs.exists(logPath))) {
+        return [];
+      }
       const text = yield* fs.readFileString(logPath);
       // WARNING: A line with no newline yet is still being written.
       const whole = Str.split(text, "\n").slice(0, -1);
@@ -217,11 +223,15 @@ export class Rig {
     const tripwire = this.tripwire;
     return Effect.gen(function* () {
       yield* tripwire.stop;
-      if (coreScope) yield* Scope.close(coreScope, Exit.void);
+      if (coreScope) {
+        yield* Scope.close(coreScope, Exit.void);
+      }
       const tripped = yield* Effect.exit(untripped(tripwire));
       const fs = yield* FileSystem.FileSystem;
       yield* fs.remove(root, { recursive: true, force: true });
-      if (Exit.isFailure(tripped)) return yield* Effect.failCause(tripped.cause);
+      if (Exit.isFailure(tripped)) {
+        return yield* Effect.failCause(tripped.cause);
+      }
     });
   }
 }

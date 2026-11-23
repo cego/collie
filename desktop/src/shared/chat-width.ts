@@ -45,7 +45,9 @@ export const chatWidthControl = (
   };
   return {
     told: (saved: number | undefined) => {
-      if (saving === 0 && before === null) view.chosen.value = saved;
+      if (saving === 0 && before === null) {
+        view.chosen.value = saved;
+      }
     },
     startDrag: (x: number, window: number) => {
       begin();
@@ -53,11 +55,15 @@ export const chatWidthControl = (
     },
     drag: (x: number, window: number) => {
       const from = view.dragging.value;
-      if (from !== null) view.chosen.value = dragged(from, x, window);
+      if (from !== null) {
+        view.chosen.value = dragged(from, x, window);
+      }
     },
     nudge: (key: string, window: number) => {
       const width = nudged(view.chosen.value, window, key);
-      if (width === null) return false;
+      if (width === null) {
+        return false;
+      }
       begin();
       view.chosen.value = width;
       return true;

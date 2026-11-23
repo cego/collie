@@ -85,7 +85,9 @@ const CoreConfig = Schema.Struct({ socket: opt(Schema.String) });
 export const coreSocket = Effect.fn("Hc.coreSocket")(function* (
   raw: Readonly<Record<string, string | undefined>>,
 ) {
-  if (raw.HC_SOCKET) return raw.HC_SOCKET;
+  if (raw.HC_SOCKET) {
+    return raw.HC_SOCKET;
+  }
   const fs = yield* FileSystem.FileSystem;
   const config = `${raw.XDG_CONFIG_HOME || `${raw.HOME ?? ""}/.config`}/herdr-core/config.toml`;
   const configured = yield* fs.readFileString(config).pipe(
@@ -93,12 +95,17 @@ export const coreSocket = Effect.fn("Hc.coreSocket")(function* (
     Effect.map((parsed) => Schema.decodeOption(CoreConfig)(parsed)),
     Effect.orElseSucceed(() => Option.none()),
   );
-  if (Option.isSome(configured) && configured.value.socket) return configured.value.socket;
+  if (Option.isSome(configured) && configured.value.socket) {
+    return configured.value.socket;
+  }
   const session = raw.HC_SESSION || "default";
-  if (raw.XDG_RUNTIME_DIR) return `${raw.XDG_RUNTIME_DIR}/herdr-core/${session}.sock`;
+  if (raw.XDG_RUNTIME_DIR) {
+    return `${raw.XDG_RUNTIME_DIR}/herdr-core/${session}.sock`;
+  }
   const runtime = `/run/user/${process.getuid?.() ?? 0}`;
-  if (yield* fs.exists(runtime).pipe(Effect.orElseSucceed(() => false)))
+  if (yield* fs.exists(runtime).pipe(Effect.orElseSucceed(() => false))) {
     return `${runtime}/herdr-core/${session}.sock`;
+  }
   const state = raw.XDG_STATE_HOME || `${raw.HOME ?? ""}/.local/state`;
   return `${state}/herdr-core/${session}/${session}.sock`;
 });
@@ -146,19 +153,27 @@ const decodeOr = <S extends Schema.Decoder<unknown>>(schema: S, data: Schema.Jso
   Option.getOrUndefined(Schema.decodeOption(schema)(data));
 
 export function applyNote(snapshot: HcSnapshot, note: HcNote) {
-  if (note.method === "missed") return snapshotOf(note.params);
-  if (note.method === "heartbeat" || note.params.seq <= snapshot.seq) return snapshot;
+  if (note.method === "missed") {
+    return snapshotOf(note.params);
+  }
+  if (note.method === "heartbeat" || note.params.seq <= snapshot.seq) {
+    return snapshot;
+  }
   const { seq, type, terminal: at = "", data } = note.params;
   const terminals = new Map(snapshot.terminals);
   const current = terminals.get(at);
   const patch = (fields: Partial<HcTerminal> | undefined) => {
-    if (current && fields) terminals.set(at, { ...current, ...fields });
+    if (current && fields) {
+      terminals.set(at, { ...current, ...fields });
+    }
   };
   switch (type) {
     case "created":
     case "restarted": {
       const record = decodeOr(HcTerminal, data);
-      if (record) terminals.set(at, record);
+      if (record) {
+        terminals.set(at, record);
+      }
       break;
     }
     case "removed":
@@ -166,8 +181,11 @@ export function applyNote(snapshot: HcSnapshot, note: HcNote) {
       break;
     case "labels": {
       const labels = decodeOr(LabelsData, data);
-      if (labels?.record) terminals.set(at, labels.record);
-      else patch(labels && { labels: labels.labels });
+      if (labels?.record) {
+        terminals.set(at, labels.record);
+      } else {
+        patch(labels && { labels: labels.labels });
+      }
       break;
     }
     case "turn":
@@ -271,7 +289,9 @@ export const connectOver = Effect.fn("Hc.connectOver")(function* (
   const channel = (id: number) =>
     Effect.gen(function* () {
       const found = channels.get(id);
-      if (found) return found;
+      if (found) {
+        return found;
+      }
       const made = yield* Queue.unbounded<Frame>();
       channels.set(id, made);
       return made;
@@ -288,7 +308,9 @@ export const connectOver = Effect.fn("Hc.connectOver")(function* (
     }
     pending.delete(message.id);
     // WARNING: Framed mode starts with the bytes after the hello reply, which are still to be parsed.
-    if (framesAfter.delete(message.id) && message.result !== undefined) framed = true;
+    if (framesAfter.delete(message.id) && message.result !== undefined) {
+      framed = true;
+    }
     return Deferred.succeed(reply, message).pipe(Effect.asVoid);
   };
 
@@ -296,29 +318,40 @@ export const connectOver = Effect.fn("Hc.connectOver")(function* (
     for (;;) {
       if (!framed) {
         const end = buffer.indexOf(10);
-        if (end < 0) return;
+        if (end < 0) {
+          return;
+        }
         const line = new TextDecoder().decode(buffer.subarray(0, end));
         buffer = buffer.subarray(end + 1);
         const message = decodeMessage(line);
-        if (Option.isSome(message)) yield* receive(message.value);
+        if (Option.isSome(message)) {
+          yield* receive(message.value);
+        }
         continue;
       }
-      if (buffer.length < 9) return;
+      if (buffer.length < 9) {
+        return;
+      }
       const view = new DataView(buffer.buffer, buffer.byteOffset);
       const id = view.getUint32(0, true);
       const kind = view.getUint8(4);
       const length = view.getUint32(5, true);
-      if (buffer.length < 9 + length) return;
+      if (buffer.length < 9 + length) {
+        return;
+      }
       const payload = buffer.slice(9, 9 + length);
       buffer = buffer.subarray(9 + length);
       if (id === 0 && kind === Kind.DATA) {
         const message = decodeMessage(new TextDecoder().decode(payload));
-        if (Option.isSome(message)) yield* receive(message.value);
+        if (Option.isSome(message)) {
+          yield* receive(message.value);
+        }
         continue;
       }
       yield* Queue.offer(yield* channel(id), { kind, payload });
-      if (kind === Kind.DATA && credit === "on read")
+      if (kind === Kind.DATA && credit === "on read") {
         yield* write(frame(id, Kind.CREDIT, u32(payload.length)));
+      }
     }
   });
 
@@ -333,7 +366,9 @@ export const connectOver = Effect.fn("Hc.connectOver")(function* (
   yield* Effect.forkScoped(
     Effect.forever(
       Effect.gen(function* () {
-        for (const chunk of yield* pull) buffer = join(buffer, chunk);
+        for (const chunk of yield* pull) {
+          buffer = join(buffer, chunk);
+        }
         yield* drain;
       }),
     ).pipe(Effect.ignore, Effect.ensuring(closed)),
@@ -344,17 +379,20 @@ export const connectOver = Effect.fn("Hc.connectOver")(function* (
       const id = nextId++;
       const reply = yield* Deferred.make<Message, HcError>();
       pending.set(id, reply);
-      if (method === "hello" && params.framed === true) framesAfter.add(id);
+      if (method === "hello" && params.framed === true) {
+        framesAfter.add(id);
+      }
       const text = yield* encodeJson({ jsonrpc: "2.0", id, method, params }).pipe(Effect.orDie);
       const bytes = new TextEncoder().encode(framed ? text : `${text}\n`);
       yield* write(framed ? frame(0, Kind.DATA, bytes) : bytes);
       const message = yield* Deferred.await(reply);
-      if (message.error)
+      if (message.error) {
         return yield* new HcError({
           method,
           message: message.error.message,
           kind: message.error.data?.kind ?? "error",
         });
+      }
       const decoder: Schema.Decoder<HcReply<M>> = replies[method];
       return yield* Schema.decodeEffect(decoder)(message.result).pipe(
         Effect.mapError(

@@ -25,6 +25,8 @@ export const awaitingLine = (wait: Awaiting) => `Waiting for ${wait.on}.`;
 
 export function overdueLine(wait: Awaiting, now: number) {
   const patience = patienceOf(wait.who);
-  if (patience === null || now - epochMs(wait.since) <= patience.ms) return null;
+  if (patience === null || now - epochMs(wait.since) <= patience.ms) {
+    return null;
+  }
   return `Waiting for ${wait.on} for over ${patience.said}, which is longer than it should take. See what holds it up.`;
 }

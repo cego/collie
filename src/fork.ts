@@ -62,13 +62,14 @@ export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
   const path = pathSvc.join(dir, `${name}.md`);
 
   const unsafe = unsafePathComponent(name);
-  if (unsafe)
+  if (unsafe) {
     return {
       ok: false as const,
       code: "invalid_input" as const,
       path,
       message: `target name "${name}" ${unsafe}`,
     };
+  }
 
   if (path === source) {
     return {
@@ -89,13 +90,14 @@ export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
     Effect.as(false),
     Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.succeed(true)),
   );
-  if (exists)
+  if (exists) {
     return {
       ok: false as const,
       code: "target_exists" as const,
       path,
       message: `${path} already exists — edit it instead`,
     };
+  }
 
   return opts.full
     ? {

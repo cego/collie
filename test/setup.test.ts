@@ -41,7 +41,9 @@ const machine = (
     const published = `${dir}/releases/${at}`;
     yield* fs.makeDirectory(published, { recursive: true });
     yield* fs.writeFile(`${published}/${ASSET}`, runner);
-    if (sign) yield* fs.writeFileString(`${published}/${ASSET}.p256.sig`, `${sign(runner)}\n`);
+    if (sign) {
+      yield* fs.writeFileString(`${published}/${ASSET}.p256.sig`, `${sign(runner)}\n`);
+    }
     const stubs = `${dir}/stubs`;
     yield* fs.makeDirectory(stubs, { recursive: true });
     const stub = (name: string, body: string) =>

@@ -55,7 +55,9 @@ export function claudeTrust(home: string, backupDir: string) {
 
   const readRaw = Effect.fn("Trust.readRaw")(function* () {
     const fs = yield* FileSystem.FileSystem;
-    if (!(yield* fs.exists(configPath))) return null;
+    if (!(yield* fs.exists(configPath))) {
+      return null;
+    }
     return yield* fs.readFileString(configPath).pipe(Effect.orElseSucceed(() => null));
   });
 
@@ -70,7 +72,9 @@ export function claudeTrust(home: string, backupDir: string) {
 
   const state = Effect.fn("Trust.state")(function* (cwd: string) {
     const { config } = yield* readConfig();
-    if (config === null) return "unknown" as const;
+    if (config === null) {
+      return "unknown" as const;
+    }
     return trustedIn(config, yield* paths(cwd)) ? ("trusted" as const) : ("untrusted" as const);
   });
 
@@ -87,7 +91,9 @@ export function claudeTrust(home: string, backupDir: string) {
   const writeGrant = Effect.fn("Trust.writeGrant")(function* (cwd: string) {
     for (let attempt = 0; attempt < GRANT_ATTEMPTS; attempt++) {
       const result = yield* tryGrant(cwd);
-      if (result !== CHANGED) return result;
+      if (result !== CHANGED) {
+        return result;
+      }
     }
     return { ok: false, message: `${configPath} kept changing under the grant; nothing written` };
   });
@@ -106,14 +112,18 @@ export function claudeTrust(home: string, backupDir: string) {
       };
     }
     const cwds = yield* paths(cwd);
-    if (trustedIn(config, cwds)) return { ok: true, message: `${cwd} is already trusted` };
+    if (trustedIn(config, cwds)) {
+      return { ok: true, message: `${cwd} is already trusted` };
+    }
 
     const entries = projects(config);
     config.projects = entries;
     for (const projectPath of cwds) {
       const current = entries[projectPath];
       const updated: YamlMap = { mcpServers: {} };
-      if (isYamlMap(current)) Object.assign(updated, current);
+      if (isYamlMap(current)) {
+        Object.assign(updated, current);
+      }
       updated.hasTrustDialogAccepted = true;
       entries[projectPath] = updated;
     }

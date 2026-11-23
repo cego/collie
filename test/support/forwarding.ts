@@ -88,7 +88,9 @@ const once = Semaphore.makeUnsafe(1);
 const socket = once.withPermits(1)(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    if (listening !== null && (yield* fs.exists(listening.path))) return listening.path;
+    if (listening !== null && (yield* fs.exists(listening.path))) {
+      return listening.path;
+    }
     listening?.server.close();
     // WARNING: Read from Bun.env, the preload's, whatever Config provider the test runs under.
     const root = Bun.env[MARKER];

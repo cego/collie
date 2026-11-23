@@ -22,9 +22,13 @@ export const planDirOf = Effect.fn("RunDetail.planDirOf")(function* (run: RunFac
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const own = path.join(run.dir, PLAN_DIR);
-  if (yield* fs.exists(own)) return own;
+  if (yield* fs.exists(own)) {
+    return own;
+  }
   const work = workSourceOf(run.settled);
-  if (work === null) return null;
+  if (work === null) {
+    return null;
+  }
   const kind =
     work.kind !== ""
       ? work.kind
@@ -32,7 +36,9 @@ export const planDirOf = Effect.fn("RunDetail.planDirOf")(function* (run: RunFac
           Effect.map((found) => found.kind),
           Effect.orElseSucceed(() => "text"),
         );
-  if (kind !== "plan-dir") return null;
+  if (kind !== "plan-dir") {
+    return null;
+  }
   return (yield* fs.exists(work.value)) ? work.value : null;
 });
 
@@ -43,9 +49,13 @@ const fields = (text: string) => Arr.filter(Str.split(text, "\0"), (field) => fi
 
 const mergeBase = Effect.fn("RunDetail.mergeBase")(function* (root: string, branch: string) {
   for (const base of ["origin/HEAD", "origin/main", "origin/master", "main", "master"]) {
-    if (base === branch) continue;
+    if (base === branch) {
+      continue;
+    }
     const found = yield* git(root, ["merge-base", base, branch]);
-    if (found.code === 0 && Str.trim(found.stdout) !== "") return Str.trim(found.stdout);
+    if (found.code === 0 && Str.trim(found.stdout) !== "") {
+      return Str.trim(found.stdout);
+    }
   }
   return null;
 });
@@ -58,7 +68,9 @@ const rootOf = Effect.fn("RunDetail.rootOf")(function* (cwd: string) {
   const there = yield* (yield* FileSystem.FileSystem)
     .exists(cwd)
     .pipe(Effect.orElseSucceed(() => false));
-  if (!there) return null;
+  if (!there) {
+    return null;
+  }
   const top = yield* git(cwd, ["rev-parse", "--show-toplevel"]);
   return top.code === 0 ? Str.trim(top.stdout) : null;
 });
@@ -68,18 +80,25 @@ export const runDiff = Effect.fn("RunDetail.runDiff")(function* (at: {
   readonly branch: string;
   readonly live: boolean;
 }) {
-  if (pipe_(at.branch, Str.startsWith("-"))) return null;
+  if (pipe_(at.branch, Str.startsWith("-"))) {
+    return null;
+  }
   const root = yield* rootOf(at.cwd);
-  if (root === null) return null;
+  if (root === null) {
+    return null;
+  }
   const base = yield* mergeBase(root, at.branch);
-  if (base === null) return null;
+  if (base === null) {
+    return null;
+  }
   const range = at.live ? [base] : [base, at.branch];
   const named = fields(
     (yield* git(root, ["diff", "-z", "--no-renames", "--name-status", ...range])).stdout,
   );
   const status = new Map<string, DiffFile["status"]>();
-  for (let next = 0; next + 1 < named.length; next += 2)
+  for (let next = 0; next + 1 < named.length; next += 2) {
     status.set(named[next + 1]!, statusOf(named[next]!));
+  }
   const files: Array<DiffFile> = Arr.map(
     fields((yield* git(root, ["diff", "-z", "--no-renames", "--numstat", ...range])).stdout),
     (field) => {
@@ -154,7 +173,9 @@ const readKept = (dir: string) =>
 
 const headOf = Effect.fn("RunDetail.headOf")(function* (cwd: string, branch: string) {
   const root = yield* rootOf(cwd);
-  if (root === null || pipe_(branch, Str.startsWith("-"))) return null;
+  if (root === null || pipe_(branch, Str.startsWith("-"))) {
+    return null;
+  }
   const head = yield* git(root, ["rev-parse", "--verify", `${branch}^{commit}`]);
   return head.code === 0 ? Str.trim(head.stdout) : null;
 });
@@ -162,11 +183,15 @@ const headOf = Effect.fn("RunDetail.headOf")(function* (cwd: string, branch: str
 export const diffOf = Effect.fn("RunDetail.diffOf")(function* (run: RunFacts) {
   const fs = yield* FileSystem.FileSystem;
   const final = settled(run);
-  if (run.branch === null) return null;
+  if (run.branch === null) {
+    return null;
+  }
   const head = final ? yield* headOf(run.cwd, run.branch) : null;
   if (final) {
     const kept = yield* readKept(run.dir);
-    if (kept._tag === "Some" && (head === null || kept.value.head === head)) return kept.value.diff;
+    if (kept._tag === "Some" && (head === null || kept.value.head === head)) {
+      return kept.value.diff;
+    }
   }
   const diff = yield* runDiff({ cwd: run.cwd, branch: run.branch, live: !final });
   if (head !== null && diff !== null) {
@@ -191,8 +216,9 @@ export const keepDiffs = Effect.fn("RunDetail.keepDiffs")(function* (
   kept: Set<string>,
 ) {
   for (const run of runs) {
-    if (!settled(run)) kept.delete(run.id);
-    else if (run.branch !== null && !kept.has(run.id)) {
+    if (!settled(run)) {
+      kept.delete(run.id);
+    } else if (run.branch !== null && !kept.has(run.id)) {
       yield* diffOf(run);
       kept.add(run.id);
     }
@@ -208,7 +234,9 @@ const inside = Effect.fn("RunDetail.inside")(function* (root: string, relative: 
   const path = yield* Path.Path;
   const top = yield* fs.realPath(root).pipe(Effect.option);
   const real = yield* fs.realPath(path.join(root, relative)).pipe(Effect.option);
-  if (top._tag === "None" || real._tag === "None") return null;
+  if (top._tag === "None" || real._tag === "None") {
+    return null;
+  }
   return pipe_(real.value, Str.startsWith(`${top.value}${path.sep}`)) ? real.value : null;
 });
 
@@ -245,7 +273,9 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
     Effect.scoped(
       Effect.gen(function* () {
         const info = yield* fs.stat(file);
-        if (info.type !== "File") return yield* refused(`${ref} is not a file`);
+        if (info.type !== "File") {
+          return yield* refused(`${ref} is not a file`);
+        }
         const size = Number(info.size);
         const handle = yield* fs.open(file, { flag: "r" });
         yield* handle.seek(BigInt(part.offset), "start");
@@ -274,7 +304,9 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
       return yield* under(run.dir, "log.txt", "log").pipe(Effect.orElseSucceed(() => text("")));
     case "diff": {
       const key = `${run.id}|${name}`;
-      if (part.offset > 0 && lastPatch?.key === key) return text(lastPatch.text);
+      if (part.offset > 0 && lastPatch?.key === key) {
+        return text(lastPatch.text);
+      }
       const patch = (content: string) => {
         lastPatch = { key, text: content };
         return text(content);
@@ -285,8 +317,9 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
           Option.getOrUndefined(Arr.findFirst(present.files, (one) => one.path === name)),
         ),
       );
-      if (diff === null || file === undefined)
+      if (diff === null || file === undefined) {
         return yield* refused(`${name} is not in ${run.id}'s diff`);
+      }
       if (!diff.live) {
         const kept = yield* readKept(run.dir);
         return patch(kept._tag === "Some" ? (kept.value.patches[name] ?? "") : "");
@@ -315,12 +348,16 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
       return yield* under(handoffsDir(run.dir), name, "handoff note");
     case "plan": {
       const dir = yield* planDirOf(run).pipe(Effect.orElseSucceed(() => null));
-      if (dir === null) return yield* refused(`${run.id} has no plan`);
+      if (dir === null) {
+        return yield* refused(`${run.id} has no plan`);
+      }
       return yield* under(dir, name, "plan file");
     }
     case "file": {
       const root = yield* rootOf(run.cwd);
-      if (root === null) return yield* refused(`${run.id} has no checkout left to read`);
+      if (root === null) {
+        return yield* refused(`${run.id} has no checkout left to read`);
+      }
       return yield* under(root, name, "file");
     }
     case "verification": {
@@ -330,7 +367,9 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
           (one) => one.id === name,
         ),
       );
-      if (found === undefined) return yield* refused(`${run.id} has no verification ${name}`);
+      if (found === undefined) {
+        return yield* refused(`${run.id} has no verification ${name}`);
+      }
       return text(
         Arr.join(
           Arr.filter([found.tail.stdout, found.tail.stderr], (one) => one !== ""),

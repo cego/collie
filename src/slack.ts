@@ -110,18 +110,21 @@ const slackCall = (token: string | null, client?: HttpClient.HttpClient) => {
           ? HttpClient.execute(request).pipe(Effect.provide(FetchHttpClient.layer))
           : client.execute(request)
       ).pipe(Effect.mapError(() => `Slack ${method} could not be reached`));
-      if (response.status < 200 || response.status >= 300)
+      if (response.status < 200 || response.status >= 300) {
         return yield* Effect.fail(`Slack ${method}: HTTP ${response.status}`);
+      }
       const json = yield* response.json.pipe(
         Effect.mapError(() => `Slack ${method} returned an unreadable answer`),
       );
       const status = Schema.decodeUnknownOption(
         Schema.Struct({ ok: Schema.Boolean, error: Schema.optionalKey(Schema.String) }),
       )(json);
-      if (Option.isNone(status))
+      if (Option.isNone(status)) {
         return yield* Effect.fail(`Slack ${method} returned an unreadable answer`);
-      if (!status.value.ok)
+      }
+      if (!status.value.ok) {
         return yield* Effect.fail(safe(`Slack ${method}: ${status.value.error ?? "refused"}`));
+      }
       const decoded = Schema.decodeOption(schema)(json);
       return Option.isSome(decoded)
         ? decoded.value
@@ -197,10 +200,15 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
           timestamp: ts,
           full: "true",
         });
-        for (const one of got.message.reactions ?? [])
-          if (one.users.includes(owner.user_id)) missing.delete(one.name);
+        for (const one of got.message.reactions ?? []) {
+          if (one.users.includes(owner.user_id)) {
+            missing.delete(one.name);
+          }
+        }
         for (const name of wanted) {
-          if (!missing.has(name)) continue;
+          if (!missing.has(name)) {
+            continue;
+          }
           yield* call("reactions.add", Schema.Struct({}), { channel, timestamp: ts, name }).pipe(
             Effect.catchIf(
               (reason) => reason === "Slack reactions.add: already_reacted",
@@ -248,8 +256,9 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
                 ),
               ),
             ) ?? "";
-          if (cursor && seen.has(cursor))
+          if (cursor && seen.has(cursor)) {
             return yield* Effect.fail("Slack conversations.list repeated its cursor; try again");
+          }
           seen.add(cursor);
         } while (cursor);
         return channels;

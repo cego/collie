@@ -9,7 +9,9 @@ test("a definitions catch-up waits for every watch, so a save made before they a
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const userDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-definition-changes-" });
-      for (const kind of ["workflows", "personas"]) yield* fs.makeDirectory(`${userDir}/${kind}`);
+      for (const kind of ["workflows", "personas"]) {
+        yield* fs.makeDirectory(`${userDir}/${kind}`);
+      }
       const watching = yield* Deferred.make<void>();
       const watchedFs: FileSystem.FileSystem = {
         ...fs,

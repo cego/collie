@@ -79,11 +79,13 @@ const submitted = Effect.fn("test.submitted")(function* (
   log: Array<Attempted> = [],
 ) {
   const { state: sending, does } = stepped(state, { kind, request: offered });
-  if (does?.kind !== "send") return { state: sending, request: null, failed: null };
+  if (does?.kind !== "send") {
+    return { state: sending, request: null, failed: null };
+  }
   const exit = yield* act(reached, does.request, does.action, (line) =>
     Effect.sync(() => log.push(line)),
   ).pipe(Effect.exit);
-  if (Exit.isSuccess(exit))
+  if (Exit.isSuccess(exit)) {
     return {
       state: stepped(sending, {
         kind: "replied",
@@ -94,6 +96,7 @@ const submitted = Effect.fn("test.submitted")(function* (
       request: does.request,
       failed: null,
     };
+  }
   const failed = failureOf(exit.cause);
   return {
     state: stepped(sending, {

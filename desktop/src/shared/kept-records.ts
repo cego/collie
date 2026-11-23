@@ -63,11 +63,12 @@ const total = (set: KeptSet) =>
 
 const trimmed = (set: KeptSet) => {
   let kept: KeptSet = { ...set, recent: Arr.take(set.recent, RECENT) };
-  while (total(kept) > CAP_BYTES && (kept.prefetched !== null || kept.recent.length > 0))
+  while (total(kept) > CAP_BYTES && (kept.prefetched !== null || kept.recent.length > 0)) {
     kept =
       kept.prefetched !== null
         ? { ...kept, prefetched: null }
         : { ...kept, recent: Arr.dropRight(kept.recent, 1) };
+  }
   const keys = keptKeys(kept);
   return { ...kept, bytes: new Map(Arr.filter([...kept.bytes], ([key]) => keys.has(key))) };
 };
@@ -108,21 +109,27 @@ export const keptHolder = (
   const held = new Map<string, () => void>();
   const sync = () => {
     const keys = keptKeys(set);
-    for (const [key, release] of held)
+    for (const [key, release] of held) {
       if (!keys.has(key)) {
         held.delete(key);
         release();
       }
+    }
     for (const key of keys) {
-      if (held.has(key) || !keptKeys(set).has(key)) continue;
+      if (held.has(key) || !keptKeys(set).has(key)) {
+        continue;
+      }
       // WARNING: held before hold runs, which may tell a size and so trim at once.
       held.set(key, () => {});
       const release = hold(key, (bytes) => {
         set = sized(set, key, bytes);
         sync();
       });
-      if (held.has(key)) held.set(key, release);
-      else release();
+      if (held.has(key)) {
+        held.set(key, release);
+      } else {
+        release();
+      }
     }
   };
   return {
@@ -131,13 +138,17 @@ export const keptHolder = (
       sync();
     },
     closed: (key: string) => {
-      if (set.open !== key) return;
+      if (set.open !== key) {
+        return;
+      }
       set = closed(set);
       sync();
     },
     pointed: (key: string | null) => {
       set = pointed(set, key, now());
-      if (key === null) return;
+      if (key === null) {
+        return;
+      }
       later(POINT_MS, () => {
         set = settled(set, now());
         sync();

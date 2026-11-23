@@ -208,8 +208,9 @@ test("a new head that does not descend from the cursor's head is a force push; u
 });
 
 test("a merged or closed merge request is ended, whatever else changed", () => {
-  for (const state of ["merged", "closed"] as const)
+  for (const state of ["merged", "closed"] as const) {
     expect(
       judge({ cursor, observed: null, reading: reading({ state, head: H2 }), now: T0 }).verdict,
     ).toEqual({ _tag: "Ended", state });
+  }
 });

@@ -46,16 +46,21 @@ export const monitorOf: (
 ) => MonitorScale = (clients, monitors, pid, title) => {
   const listed = Schema.decodeOption(HyprClients)(clients);
   const shown = Schema.decodeOption(HyprMonitors)(monitors);
-  if (Option.isNone(listed) || Option.isNone(shown))
+  if (Option.isNone(listed) || Option.isNone(shown)) {
     return unknown("Hyprland's answer could not be read");
+  }
   const mine = Arr.filter(listed.value, (client) => client.pid === pid);
   const window =
     Option.getOrUndefined(Arr.findFirst(mine, (client) => client.title === title)) ?? mine[0];
-  if (window === undefined) return unknown("Hyprland lists no window of Desktop's");
+  if (window === undefined) {
+    return unknown("Hyprland lists no window of Desktop's");
+  }
   const monitor = Option.getOrUndefined(
     Arr.findFirst(shown.value, ({ id }) => id === window.monitor),
   );
-  if (monitor === undefined) return unknown("Hyprland lists no monitor for Desktop's window");
+  if (monitor === undefined) {
+    return unknown("Hyprland lists no monitor for Desktop's window");
+  }
   const { name, width, height, scale } = monitor;
   return { _tag: "Known", name, width, height, scale };
 };

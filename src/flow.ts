@@ -165,7 +165,7 @@ export function laneOf(facts: LaneFacts) {
         forecasts.push({ at: line.at, steps: line.steps });
         break;
       case "enter":
-        if (!runs.has(line.key))
+        if (!runs.has(line.key)) {
           runs.set(line.key, {
             key: line.key,
             meta: line.step,
@@ -176,19 +176,26 @@ export function laneOf(facts: LaneFacts) {
             failed: null,
             attempts: [{ at: line.at, cause: null }],
           });
+        }
         break;
       case "leave": {
         const one = runs.get(line.key);
-        if (one !== undefined && one.left === null) one.left = line.at;
+        if (one !== undefined && one.left === null) {
+          one.left = line.at;
+        }
         break;
       }
       case "fail": {
         const one = runs.get(line.key);
-        if (one !== undefined) one.failed = { at: line.at, why: line.why };
+        if (one !== undefined) {
+          one.failed = { at: line.at, why: line.why };
+        }
         break;
       }
       case "entry":
-        if (line.cause !== null) entries.push({ at: line.at, cause: line.cause });
+        if (line.cause !== null) {
+          entries.push({ at: line.at, cause: line.cause });
+        }
         break;
       case "question":
         questionIn.set(line.name, line.key);
@@ -200,10 +207,13 @@ export function laneOf(facts: LaneFacts) {
         break;
     }
   }
-  for (const one of runs.values())
-    for (const entry of entries)
-      if (entry.at > one.entered && (one.left === null || entry.at < one.left))
+  for (const one of runs.values()) {
+    for (const entry of entries) {
+      if (entry.at > one.entered && (one.left === null || entry.at < one.left)) {
         one.attempts.push({ at: entry.at, cause: entry.cause });
+      }
+    }
+  }
 
   const declared = forecasts.length > 0 || runs.size > 0;
   // WARNING: a launch from before Steps were recorded names its Step by the key it replayed under.
@@ -212,7 +222,9 @@ export function laneOf(facts: LaneFacts) {
   const keyOfLaunch = new Map<string, string>();
   for (const { launch } of facts.launches) {
     const key = stepKeyOf(launch);
-    if (key !== undefined) keyOfLaunch.set(launch.operation, key);
+    if (key !== undefined) {
+      keyOfLaunch.set(launch.operation, key);
+    }
   }
   const questionKey = (name: string) => {
     const asker = askerOf(name);
@@ -242,7 +254,9 @@ export function laneOf(facts: LaneFacts) {
         (one.left === null || proof.at <= one.left),
     );
   const whyFor = (state: FlowState, one: StepRun) => {
-    if (state !== "failed") return null;
+    if (state !== "failed") {
+      return null;
+    }
     const last = Option.getOrUndefined(
       Arr.findLast(proofsFor(one), (proof) => proof.at >= one.attempts.at(-1)!.at),
     );
@@ -261,14 +275,28 @@ export function laneOf(facts: LaneFacts) {
   };
 
   const stateOfRun = (one: StepRun) => {
-    if (one.left !== null) return "done";
+    if (one.left !== null) {
+      return "done";
+    }
     const retried = one.attempts.at(-1)!.at;
-    if (one.failed !== null && one.failed.at >= retried) return "failed";
-    if (run.state === "stopped") return "stopped";
-    if (run.state === "failed") return "failed";
-    if (run.state === "succeeded" || run.state === "ended") return "done";
-    if (Arr.some(questionsFor(one.key), (asked) => asked.open)) return "needs-you";
-    if (facts.wakes !== null) return "waiting";
+    if (one.failed !== null && one.failed.at >= retried) {
+      return "failed";
+    }
+    if (run.state === "stopped") {
+      return "stopped";
+    }
+    if (run.state === "failed") {
+      return "failed";
+    }
+    if (run.state === "succeeded" || run.state === "ended") {
+      return "done";
+    }
+    if (Arr.some(questionsFor(one.key), (asked) => asked.open)) {
+      return "needs-you";
+    }
+    if (facts.wakes !== null) {
+      return "waiting";
+    }
     return "running";
   };
 
@@ -361,8 +389,9 @@ export function laneOf(facts: LaneFacts) {
   const latest = forecasts.at(-1) ?? null;
 
   const callsOf = new Map<string, Array<StepRun>>();
-  for (const one of runs.values())
+  for (const one of runs.values()) {
     callsOf.set(one.meta.id, [...(callsOf.get(one.meta.id) ?? []), one]);
+  }
   const stepNode: (id: string) => FlowNode = (id) => {
     const calls = callsOf.get(id) ?? [];
     const meta = calls.at(-1)!.meta;
@@ -452,12 +481,15 @@ export function laneOf(facts: LaneFacts) {
   const happened: Array<{ readonly at: string; readonly node: FlowNode }> = [];
   const seen = new Set<string>();
   for (const one of runs.values()) {
-    if (seen.has(one.meta.id)) continue;
+    if (seen.has(one.meta.id)) {
+      continue;
+    }
     seen.add(one.meta.id);
     happened.push({ at: one.entered, node: stepNode(one.meta.id) });
   }
-  for (const node of undeclaredNodes(facts, keyOfLaunch, questionKey, childIn, ended))
+  for (const node of undeclaredNodes(facts, keyOfLaunch, questionKey, childIn, ended)) {
     happened.push(node);
+  }
   happened.sort((one, other) => pipe(one.at, Str.localeCompare(other.at)));
   const nodes = inPathOrder(
     Arr.map(happened, (one) => one.node),
@@ -511,7 +543,9 @@ export function laneOf(facts: LaneFacts) {
     };
   }
   withReadiness(nodes, facts.readiness);
-  if (facts.offer !== null) nodes.push(offerNode(facts.offer));
+  if (facts.offer !== null) {
+    nodes.push(offerNode(facts.offer));
+  }
 
   return {
     run: run.id,
@@ -528,10 +562,14 @@ export function laneOf(facts: LaneFacts) {
 export { flowNotice } from "./flow-timing";
 
 function inPathOrder(happened: ReadonlyArray<FlowNode>, path: ReadonlyArray<FlowNode>) {
-  if (path.length === 0) return [...happened];
+  if (path.length === 0) {
+    return [...happened];
+  }
   const ordered = [...path];
   Arr.forEach(happened, (node, at) => {
-    if (ordered.includes(node)) return;
+    if (ordered.includes(node)) {
+      return;
+    }
     const before = happened[at - 1];
     ordered.splice(before === undefined ? 0 : ordered.indexOf(before) + 1, 0, node);
   });
@@ -567,7 +605,9 @@ function undeclaredNodes(
     Array<{ readonly launch: Launched; readonly done: boolean }>
   >();
   for (const one of facts.launches) {
-    if (one.launch.step !== undefined || keyOfLaunch.has(one.launch.operation)) continue;
+    if (one.launch.step !== undefined || keyOfLaunch.has(one.launch.operation)) {
+      continue;
+    }
     operations.set(one.launch.operation, [...(operations.get(one.launch.operation) ?? []), one]);
   }
   for (const [operation, launches] of operations) {
@@ -603,7 +643,9 @@ function undeclaredNodes(
     });
   }
   for (const one of facts.questions) {
-    if (askerOf(one.name) !== null || questionKey(one.name) !== undefined) continue;
+    if (askerOf(one.name) !== null || questionKey(one.name) !== undefined) {
+      continue;
+    }
     const state: FlowState = one.open
       ? "needs-you"
       : one.answered == null && (run.state === "stopped" || run.state === "failed")
@@ -627,7 +669,7 @@ function undeclaredNodes(
     });
   }
   const loose = Arr.filter(facts.children, (child) => !childIn.has(child.id));
-  for (const child of Arr.filter(loose, (one) => one.wave === null))
+  for (const child of Arr.filter(loose, (one) => one.wave === null)) {
     nodes.push({
       at: child.created,
       node: {
@@ -643,6 +685,7 @@ function undeclaredNodes(
         link: child.link,
       },
     });
+  }
   const repos = Arr.filter(loose, (one) => one.wave !== null);
   if (repos.length > 0) {
     const runs = [...Arr.map(repos, linkRun), ...Arr.map(facts.toCome, toComeRun)];
@@ -711,8 +754,11 @@ const toComeRun: (repo: { readonly repo: string; readonly wave: number }) => Flo
 
 const fanState = (runs: ReadonlyArray<FlowRun>, ended: boolean) => {
   const states = new Set(Arr.map(runs, (one) => one.state));
-  for (const state of ["needs-you", "running", "waiting", "failed", "stopped"] as const)
-    if (states.has(state)) return state;
+  for (const state of ["needs-you", "running", "waiting", "failed", "stopped"] as const) {
+    if (states.has(state)) {
+      return state;
+    }
+  }
   return states.has("expected") && !ended ? "running" : "done";
 };
 
@@ -724,12 +770,16 @@ const heldUp = (nodes: ReadonlyArray<FlowNode>) => {
     ),
     () => -1,
   );
-  if (going >= 0) return going;
+  if (going >= 0) {
+    return going;
+  }
   const next = Option.getOrElse(
     Arr.findFirstIndex(nodes, (node) => node.state === "expected"),
     () => -1,
   );
-  if (next >= 0) return next;
+  if (next >= 0) {
+    return next;
+  }
   return Option.getOrElse(
     Arr.findLastIndex(nodes, (node) => node.started !== null),
     () => -1,
@@ -737,13 +787,19 @@ const heldUp = (nodes: ReadonlyArray<FlowNode>) => {
 };
 
 function withWait(nodes: Array<FlowNode>, wait: LaneWait | null) {
-  if (wait === null) return;
+  if (wait === null) {
+    return;
+  }
   const at = heldUp(nodes);
   const node = nodes[at];
   // WARNING: an open question is already what the node waits on; no wait is added.
-  if (node === undefined || (node.state === "needs-you" && node.wait === null)) return;
+  if (node === undefined || (node.state === "needs-you" && node.wait === null)) {
+    return;
+  }
   // WARNING: a failed Step already says why its Run parked.
-  if (wait.wait === "parked" && Arr.some(nodes, (one) => one.state === "failed")) return;
+  if (wait.wait === "parked" && Arr.some(nodes, (one) => one.state === "failed")) {
+    return;
+  }
   nodes[at] = {
     ...node,
     state: wait.needsYou ? "needs-you" : "waiting",
@@ -753,12 +809,16 @@ function withWait(nodes: Array<FlowNode>, wait: LaneWait | null) {
 }
 
 function withReadiness(nodes: Array<FlowNode>, readiness: string | null) {
-  if (readiness === null) return;
+  if (readiness === null) {
+    return;
+  }
   const at = Option.getOrElse(
     Arr.findLastIndex(nodes, (node) => node.produces === "merge-request" && node.state === "done"),
     () => -1,
   );
-  if (at >= 0) nodes[at] = { ...nodes[at]!, said: readiness };
+  if (at >= 0) {
+    nodes[at] = { ...nodes[at]!, said: readiness };
+  }
 }
 
 const offerNode: (offer: { readonly id: string; readonly title: string }) => FlowNode = (
@@ -809,7 +869,9 @@ function undeclaredSaid(
 }
 
 export function currentOf(lane: FlowLane) {
-  if (lane.execution !== "running" && lane.execution !== "suspended") return null;
+  if (lane.execution !== "running" && lane.execution !== "suspended") {
+    return null;
+  }
   const at = Option.getOrUndefined(
     Arr.findLast(
       lane.nodes,
@@ -933,10 +995,18 @@ export function linkSaid(child: {
   readonly mrState: MrState | null;
   readonly current: string | null;
 }) {
-  if (child.mr !== null) return `${mrNumber(child.mr)} ${child.mrState ?? "open"}`;
-  if (going(child.state)) return child.current;
-  if (child.state === "failed") return firstLine(child.note ?? "") || "Failed";
-  if (child.finished === null) return null;
+  if (child.mr !== null) {
+    return `${mrNumber(child.mr)} ${child.mrState ?? "open"}`;
+  }
+  if (going(child.state)) {
+    return child.current;
+  }
+  if (child.state === "failed") {
+    return firstLine(child.note ?? "") || "Failed";
+  }
+  if (child.finished === null) {
+    return null;
+  }
   return minutes(epochMs(child.finished) - epochMs(child.created));
 }
 

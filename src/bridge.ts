@@ -21,8 +21,12 @@ const whereFrom = Effect.fn("Bridge.whereFrom")(function* (client: string | null
     ),
   );
   let where: Where = {};
-  if (client !== null) where = { ...where, client };
-  if (ssh !== undefined && ssh !== "") where = { ...where, ssh };
+  if (client !== null) {
+    where = { ...where, client };
+  }
+  if (ssh !== undefined && ssh !== "") {
+    where = { ...where, ssh };
+  }
   return Struct.keys(where).length === 0 ? undefined : where;
 });
 
@@ -61,9 +65,11 @@ export const bridge = Effect.fn("Bridge")(function* (
     ready: () => process.stdout.write(`${BRIDGE_READY}\n`),
     write: (chunk) => {
       process.stdout.write(chunk);
-      if (mark !== null)
-        for (const runId of relayed.answered(fromHost.decode(chunk, { stream: true })))
+      if (mark !== null) {
+        for (const runId of relayed.answered(fromHost.decode(chunk, { stream: true }))) {
           run(mark("bridge:relay", runId));
+        }
+      }
     },
     end: (done) => {
       process.stdin.destroy();
@@ -71,7 +77,9 @@ export const bridge = Effect.fn("Bridge")(function* (
     },
     read: (deliver, done) => {
       process.stdin.on("data", (chunk: Buffer) => {
-        if (mark !== null) relayed.asked(toHost.decode(chunk, { stream: true }));
+        if (mark !== null) {
+          relayed.asked(toHost.decode(chunk, { stream: true }));
+        }
         deliver(chunk);
       });
       process.stdin.on("end", done);

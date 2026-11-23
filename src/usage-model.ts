@@ -94,8 +94,11 @@ export interface Used {
 function busiest(windows: ReadonlyArray<UsageWindow>) {
   let found: UsageWindow | null = null;
   const weight = (window: UsageWindow) => (isFull(window) ? 101 : window.usedPercent);
-  for (const window of windows)
-    if (found === null || weight(window) > weight(found)) found = window;
+  for (const window of windows) {
+    if (found === null || weight(window) > weight(found)) {
+      found = window;
+    }
+  }
   if (found === null) {
     const returned: Used | null = null;
     return returned;
@@ -146,7 +149,9 @@ export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number) 
   let warn = false;
   for (const reading of readings) {
     const used = busiestWindow(reading, now);
-    if (used === null) continue;
+    if (used === null) {
+      continue;
+    }
     warn ||= used.usedPercent >= WARN_PERCENT;
     parts.push(`${reading.subscription} ${usedPhrase(used)}`);
   }

@@ -148,14 +148,16 @@ export default defineWorkflow({
       arguments: {},
       inputs: { target: "diff-target", previous: "run-id" },
       eligible: (facts) => {
-        if (facts.review?.owned !== true)
+        if (facts.review?.owned !== true) {
           throw new Error("Collie never pushes to someone else's branch");
+        }
         if (
           facts.openFindings === 0 ||
           facts.review.head === "" ||
           facts.review.head !== facts.review.reviewed
-        )
+        ) {
           throw new Error("no finding is open at the current head");
+        }
         return true;
       },
     },
@@ -181,13 +183,15 @@ export default defineWorkflow({
         reading === null || reading.state === "ok"
           ? requested
           : { ...requested, target: "worktree" };
-      if (reading !== null && reading.state !== "ok")
+      if (reading !== null && reading.state !== "ok") {
         yield* host.record(
           run.id,
           `Reviews the local diff only: ${reading.detail}. Fix: ${reading.fix}`,
         );
-      if ((yield* panelOf("reviewer")).length > 1)
+      }
+      if ((yield* panelOf("reviewer")).length > 1) {
         yield* forecast([reviewRound, synthesisStep, menu]);
+      }
       const kind = targetKind(asked.target);
       const headAt = (round: number) =>
         Activity.make({
@@ -253,10 +257,11 @@ export default defineWorkflow({
             ledger ?? [],
             (one) => (one.status ?? "open") === "open" && one.head === earlierHead,
           ))
-      )
+      ) {
         return yield* new WorkflowError({
           reason: "Improve requires open findings at the current head on your own branch",
         });
+      }
       const changesAt = (round: number, earlier: string) =>
         earlier === "" || kind !== "mr"
           ? Effect.succeed("")
@@ -346,8 +351,9 @@ export default defineWorkflow({
             if (
               wanted.includes("white_check_mark") &&
               !(yield* host.approvedAt({ target: asked.target, cwd: place.cwd, head }))
-            )
+            ) {
               return;
+            }
             const message = yield* host.reviewSlack({
               runId: run.id,
               target: asked.target,
@@ -381,13 +387,17 @@ export default defineWorkflow({
           });
           yield* fact(`follow-posted-${round}`, answer.message);
           const signature = answer.ok ? answer.signature : undefined;
-          if (signature === undefined) return review;
+          if (signature === undefined) {
+            return review;
+          }
           const signed = {
             ...review,
             findings: Arr.map(review.findings, (one) => ({ ...one, note: one.note || signature })),
           };
           yield* leaveReview(place.dir, signed);
-          if (signed.findings.length > 0) yield* slackAt(round, "posted", ["memo"]);
+          if (signed.findings.length > 0) {
+            yield* slackAt(round, "posted", ["memo"]);
+          }
           return signed;
         });
       const cleanAt = (review: SynthesisReport) =>
@@ -417,9 +427,13 @@ export default defineWorkflow({
         let changedComments: ReadonlyArray<string> = [];
         const droppedByHuman = new Set<string>();
         for (let round = 1; ; round += 1) {
-          if (reading.state !== "open") return { done: `${label} is ${reading.state}` };
+          if (reading.state !== "open") {
+            return { done: `${label} is ${reading.state}` };
+          }
           head = reading.head;
-          if (head !== reviewedAt) droppedByHuman.clear();
+          if (head !== reviewedAt) {
+            droppedByHuman.clear();
+          }
           const replies = reading.replies ?? [];
           const affected = Arr.filter(
             ledger ?? [],
@@ -504,8 +518,9 @@ export default defineWorkflow({
               yield* fact(`dispute-said-${round}-${index + 1}`, `${identity}: ${decision.answer}`);
             }
             last = settled;
-            if (interrupted !== null) woke = interrupted;
-            else {
+            if (interrupted !== null) {
+              woke = interrupted;
+            } else {
               const canApprove: boolean = !kept && cleanAt(settled);
               if (canApprove) {
                 const approved = yield* Activity.make({
@@ -520,7 +535,9 @@ export default defineWorkflow({
                   }),
                 });
                 yield* fact(`dispute-approved-${round}`, approved.message);
-                if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
+                if (!approved.ok) {
+                  return yield* new WorkflowError({ reason: approved.message });
+                }
                 yield* slackAt(round, "dispute-approved", ["white_check_mark"]);
               }
               const resumed = { ...watching, cursor: { ...watching.cursor, headOnly: kept } };
@@ -533,10 +550,11 @@ export default defineWorkflow({
               error: WorkflowError,
               execute: host.pinHead({ runId: run.id, target: asked.target, head }),
             });
-            if ("refused" in pinned)
+            if ("refused" in pinned) {
               return yield* new WorkflowError({
                 reason: `no checkout of ${label} at ${head}: ${pinned.refused}`,
               });
+            }
             const reviewed: SynthesisReport | null =
               "moved" in pinned
                 ? null
@@ -557,18 +575,19 @@ export default defineWorkflow({
                 Effect.asVoid,
               ),
             });
-            if (reviewed === null)
+            if (reviewed === null) {
               yield* fact(
                 `follow-moved-${round}`,
                 `the head of ${label} moved while reviewing ${head}; nothing posted, the findings carry to the next round`,
               );
-            else {
+            } else {
               last = yield* postedAt(reviewed, round);
               ledger = last.findings;
               reviewedAt = head;
             }
-            if (reviewed === null || !cleanAt(reviewed)) woke = yield* watch(watching);
-            else if (
+            if (reviewed === null || !cleanAt(reviewed)) {
+              woke = yield* watch(watching);
+            } else if (
               yield* Activity.make({
                 name: `follow-approved-${round}`,
                 success: Schema.Boolean,
@@ -586,8 +605,9 @@ export default defineWorkflow({
                 },
                 { ...watching, name: `approve-${round}` },
               );
-              if (said._tag !== "Answered") woke = said;
-              else {
+              if (said._tag !== "Answered") {
+                woke = said;
+              } else {
                 const approved =
                   said.answer === APPROVE
                     ? yield* Activity.make({
@@ -604,7 +624,9 @@ export default defineWorkflow({
                     : null;
                 if (approved !== null) {
                   yield* fact(`approve-said-${round}`, approved.message);
-                  if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
+                  if (!approved.ok) {
+                    return yield* new WorkflowError({ reason: approved.message });
+                  }
                   yield* slackAt(round, "approved", ["white_check_mark"]);
                 }
                 woke = yield* watch(
@@ -613,7 +635,9 @@ export default defineWorkflow({
               }
             }
           }
-          if (woke._tag === "Ended") return { done: `${label} was ${woke.state}` };
+          if (woke._tag === "Ended") {
+            return { done: `${label} was ${woke.state}` };
+          }
           forcePush = woke.change.forcePush === true;
           commentsOnly = !woke.change.newHead && woke.change.pipeline === null;
           changedComments = woke.change.comments;
@@ -633,7 +657,9 @@ export default defineWorkflow({
               ),
             )
           : null;
-      if (followed?.done !== undefined) return followed.done;
+      if (followed?.done !== undefined) {
+        return followed.done;
+      }
       let synthesis: SynthesisReport = improving
         ? {
             verdict: "findings",
@@ -780,7 +806,9 @@ export default defineWorkflow({
         );
         for (const conflict of conflictingDispositions(synthesis)) {
           const line = `review ${reviews}: ${conflict}`;
-          if (conflicts.has(line)) continue;
+          if (conflicts.has(line)) {
+            continue;
+          }
           conflicts.add(line);
           yield* host.record(run.id, line);
         }
@@ -812,7 +840,9 @@ export default defineWorkflow({
                   ? "nothing blocking is left"
                   : `the rally ran ${ROUNDS} rounds and findings remain`;
             yield* host.record(run.id, `rally settled after review ${reviews}: ${settled}`);
-            if (improving) return settled;
+            if (improving) {
+              return settled;
+            }
           }
         }
         if (!fixing) {
@@ -854,13 +884,19 @@ export default defineWorkflow({
             seen = null;
           }
         }
-        if (chosen === FIX && round.go === "fix") seen = { at: reviews, keys: round.keys };
-        if (chosen === DONE) return `${synthesis.findings.length} finding(s), not posted`;
+        if (chosen === FIX && round.go === "fix") {
+          seen = { at: reviews, keys: round.keys };
+        }
+        if (chosen === DONE) {
+          return `${synthesis.findings.length} finding(s), not posted`;
+        }
 
         if (chosen === POST) {
           const note = reviewNote(synthesis, ledger, head);
           const noteFile = `${place.dir}/review-note.md`;
-          if (note !== "") yield* fs.writeFileString(noteFile, note).pipe(Effect.orDie);
+          if (note !== "") {
+            yield* fs.writeFileString(noteFile, note).pipe(Effect.orDie);
+          }
           const posted =
             note === ""
               ? { ok: true, message: "no findings changed; no review note posted" }
@@ -889,7 +925,9 @@ export default defineWorkflow({
           }
           yield* host.record(run.id, posted.message);
           if (posted.ok) {
-            if (!approve) return posted.message;
+            if (!approve) {
+              return posted.message;
+            }
             const approved = yield* Activity.make({
               name: `approve-review-${reviews}`,
               success: Posted,
@@ -902,7 +940,9 @@ export default defineWorkflow({
               }),
             });
             yield* host.record(run.id, approved.message);
-            if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
+            if (!approved.ok) {
+              return yield* new WorkflowError({ reason: approved.message });
+            }
             return `${posted.message}; ${approved.message}`;
           }
           postRefusal = posted.message;
@@ -945,9 +985,12 @@ export default defineWorkflow({
               cursor: { head, seen: [], pipeline: "none", headOnly: true },
               author: to,
             });
-            if (changed._tag === "Ended") return `${mrLabel(asked.target)} was ${changed.state}`;
-            if (fixContext?.following)
+            if (changed._tag === "Ended") {
+              return `${mrLabel(asked.target)} was ${changed.state}`;
+            }
+            if (fixContext?.following) {
               return `findings handed to ${to}; the Follow-through reviews its push`;
+            }
             synthesis = yield* reviewedAgain((reviews += 1), "");
             continue;
           }
@@ -1001,8 +1044,9 @@ export default defineWorkflow({
           run.id,
           `${operation}: fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,
         );
-        if (improving && fixContext?.following)
+        if (improving && fixContext?.following) {
           return `fixed ${fixed.fixed.length}; the Follow-through reviews the pushed head`;
+        }
         disputed = [
           ...disputed,
           ...Arr.filter(
@@ -1024,15 +1068,21 @@ const reviewNote = (
   previous: ReadonlyArray<Finding> | undefined,
   head: string,
 ) => {
-  if (previous === undefined) return renderPublicReview(review);
+  if (previous === undefined) {
+    return renderPublicReview(review);
+  }
   const published = Arr.filter(previous, (one) => Boolean(one.note));
-  if (previous.length > 0 && published.length === 0) return renderPublicReview(review);
+  if (previous.length > 0 && published.length === 0) {
+    return renderPublicReview(review);
+  }
   const shown = Arr.filter(review.findings, (one) => one.internal !== true);
   const added = Arr.filter(shown, (one) => !Arr.some(published, (old) => old.id === one.id));
   const changed = Arr.filter(shown, (one) =>
     Arr.some(published, (old) => old.id === one.id && old.status !== one.status),
   );
-  if (added.length === 0 && changed.length === 0) return "";
+  if (added.length === 0 && changed.length === 0) {
+    return "";
+  }
   const stillOpen = Arr.filter(
     shown,
     (one) =>

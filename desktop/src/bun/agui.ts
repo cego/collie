@@ -110,13 +110,17 @@ export const step: (
   message: SdkMessage,
 ) => readonly [AguiState, ReadonlyArray<AguiEvent>] = (state, message) => {
   const known = decodeKnown(message);
-  if (Option.isNone(known)) return [state, []];
+  if (Option.isNone(known)) {
+    return [state, []];
+  }
   const read = known.value;
   const begun: Array<AguiEvent> = [];
   let now = state;
   // WARNING: a turn begins with the model's first word, or ends without one.
   if (now.run === null) {
-    if (read.type === "user") return [now, []];
+    if (read.type === "user") {
+      return [now, []];
+    }
     const run = `${now.thread}:${now.turns + 1}`;
     now = { ...now, turns: now.turns + 1, run };
     begun.push({ type: "RUN_STARTED", threadId: now.thread, runId: run });
@@ -179,7 +183,9 @@ export const step: (
         }
         case "content_block_delta": {
           const open = now.blocks.get(event.index);
-          if (open === undefined) return [now, begun];
+          if (open === undefined) {
+            return [now, begun];
+          }
           const delta = event.delta;
           const said: AguiEvent =
             delta.type === "text_delta"
@@ -191,7 +197,9 @@ export const step: (
         }
         case "content_block_stop": {
           const open = now.blocks.get(event.index);
-          if (open === undefined) return [now, begun];
+          if (open === undefined) {
+            return [now, begun];
+          }
           const blocks = new Map(now.blocks);
           blocks.delete(event.index);
           const closed: Array<AguiEvent> =

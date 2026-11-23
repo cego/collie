@@ -122,7 +122,9 @@ export const save = (into: string, names: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(into, { recursive: true });
-    for (const name of names) yield* fs.copyFile(`${fixtures}/${name}`, `${into}/${name}`);
+    for (const name of names) {
+      yield* fs.copyFile(`${fixtures}/${name}`, `${into}/${name}`);
+    }
   }).pipe(Effect.orDie);
 
 // WARNING: A host is a child that inherits the process environment, not this world's Config.
@@ -140,8 +142,9 @@ const fakesIn = Effect.fn("World.fakesIn")(function* (dir: string) {
       { mode: 0o755 },
     )
     .pipe(Effect.orDie);
-  for (const harness of ["codex", "pi", "opencode"])
+  for (const harness of ["codex", "pi", "opencode"]) {
     yield* fs.writeFileString(`${harnesses}/${harness}`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  }
   const socket = `${dir}/hc.sock`;
   const core = yield* serveFakeHc(
     socket,
@@ -160,9 +163,13 @@ const fakesIn = Effect.fn("World.fakesIn")(function* (dir: string) {
     }),
     (before) =>
       Effect.sync(() => {
-        for (const [key, value] of Rec.toEntries(before))
-          if (value === undefined) delete Bun.env[key];
-          else Bun.env[key] = value;
+        for (const [key, value] of Rec.toEntries(before)) {
+          if (value === undefined) {
+            delete Bun.env[key];
+          } else {
+            Bun.env[key] = value;
+          }
+        }
       }),
   );
   return { set, tripwire, core };
@@ -175,10 +182,11 @@ const neverModelled = (world: World) =>
       .pipe(Effect.orElseSucceed(() => ""));
     const started = Str.split(log, "host started").length - 1;
     const off = Str.split(log, "the Run model is off").length - 1;
-    if (Str.includes("the Run model holds")(log) || off !== started)
+    if (Str.includes("the Run model holds")(log) || off !== started) {
       return yield* Effect.die(
         new Error(`a host filled its Run model with run_model false:\n${log}`),
       );
+    }
   });
 
 export const proves = <A, E>(
@@ -231,10 +239,11 @@ export const proves = <A, E>(
       yield* save(world.user, modules);
       const modelOff =
         (yield* Config.String("COLLIE_TEST_RUN_MODEL").pipe(Config.withDefault(""))) === "off";
-      if (modelOff)
+      if (modelOff) {
         yield* fs
           .writeFileString(`${world.config}/config.json`, `{"run_model": false}\n`)
           .pipe(Effect.orDie);
+      }
       const command = yield* collieCommand;
       const suite = yield* suiteEnv;
       // WARNING: Never the operator's live core, which on a desk is the real one.

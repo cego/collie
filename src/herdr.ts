@@ -106,20 +106,26 @@ const watching = new Map<string, Deferred.Deferred<{ current: HcSnapshot }, Herd
 const watched = (socket: string) =>
   Effect.suspend(() => {
     const found = watching.get(socket);
-    if (found !== undefined) return Deferred.await(found);
+    if (found !== undefined) {
+      return Deferred.await(found);
+    }
     const ready = Deferred.makeUnsafe<{ current: HcSnapshot }, HerdrError>();
     watching.set(socket, ready);
     const follow = Effect.gen(function* () {
       const hc = yield* connectCore(socket);
       const view = { current: snapshotOf(yield* hc.call("events.subscribe", {})) };
       yield* Deferred.succeed(ready, view);
-      for (;;) view.current = applyNote(view.current, yield* Queue.take(hc.notes));
+      for (;;) {
+        view.current = applyNote(view.current, yield* Queue.take(hc.notes));
+      }
     }).pipe(
       Effect.scoped,
       Effect.mapError(coreFailure),
       Effect.onExit((exit) =>
         Effect.suspend(() => {
-          if (watching.get(socket) === ready) watching.delete(socket);
+          if (watching.get(socket) === ready) {
+            watching.delete(socket);
+          }
           return exit._tag === "Failure"
             ? Deferred.failCause(ready, exit.cause).pipe(Effect.asVoid)
             : Effect.void;
@@ -145,7 +151,9 @@ export class Herdr {
     readonly labels: Readonly<Record<string, string>>;
   }) {
     const env: Record<string, string> = {};
-    if (this.env.raw.PATH !== undefined) env.PATH = this.env.raw.PATH;
+    if (this.env.raw.PATH !== undefined) {
+      env.PATH = this.env.raw.PATH;
+    }
     Object.assign(env, opts.env);
     const returned: HerdrEffect<string> = this.onCore((socket) =>
       coreCall(socket, "terminal.run", {
@@ -213,8 +221,12 @@ export class Herdr {
     const returned: HerdrEffect<Submission> = this.onCore((socket) =>
       Effect.gen(function* () {
         const sent = yield* coreCall(socket, "terminal.send", { terminal: target, text });
-        if (sent.started === true) return "observed";
-        if (sent.started !== false) return "unobserved";
+        if (sent.started === true) {
+          return "observed";
+        }
+        if (sent.started !== false) {
+          return "unobserved";
+        }
         yield* coreCall(socket, "terminal.keys", { terminal: target, keys: ["enter"] });
         return "pressed";
       }),
@@ -267,7 +279,9 @@ export class Herdr {
   agentsAlive(names: ReadonlyArray<string>) {
     const ask = (name: string) => this.agentStatus(name);
     const returned: Effect.Effect<AgentsAlive, never, PlatformServices> = Effect.gen(function* () {
-      if (names.length === 0) return "absent" as const;
+      if (names.length === 0) {
+        return "absent" as const;
+      }
       let verdict: AgentsAlive = "absent";
       for (const name of names) {
         const status = yield* ask(name).pipe(
@@ -276,9 +290,12 @@ export class Herdr {
           ),
         );
         // WARNING: Idle is alive: it holds its name and terminal, so a new start under that name would collide.
-        if (status === "working" || status === "blocked" || status === "idle")
+        if (status === "working" || status === "blocked" || status === "idle") {
           return "live" as const;
-        if (status === "gone" || status === "done") continue;
+        }
+        if (status === "gone" || status === "done") {
+          continue;
+        }
         verdict = "unverified";
       }
       return verdict;
@@ -300,13 +317,14 @@ export class Herdr {
           Option.getOrUndefined,
         );
         const terminal = seen ?? (yield* coreCall(socket, "terminal.get", { terminal: target }));
-        if (terminal.state !== "live")
+        if (terminal.state !== "live") {
           return yield* new HerdrError({
             message: `core has no live ${target}`,
             detail: terminal.state,
             code: "agent_not_found",
             answered: true,
           });
+        }
         return coreStatus(terminal);
       }),
     );

@@ -24,8 +24,9 @@ const hostThrough = (
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-start-" });
     const state = `${root}/state`;
     yield* fs.makeDirectory(state);
-    if (installation !== undefined)
+    if (installation !== undefined) {
       yield* fs.writeFileString(`${state}/installation`, `${installation}\n`);
+    }
     const { COLLIE_PROC } = yield* suiteEnv;
     const env = {
       HOME: root,

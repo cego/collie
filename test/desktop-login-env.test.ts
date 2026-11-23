@@ -46,8 +46,11 @@ const setFor = (name: string, value: string) =>
     }),
     (was) =>
       Effect.sync(() => {
-        if (was === undefined) delete Bun.env[name];
-        else Bun.env[name] = was;
+        if (was === undefined) {
+          delete Bun.env[name];
+        } else {
+          Bun.env[name] = was;
+        }
       }),
   );
 

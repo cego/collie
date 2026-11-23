@@ -7,7 +7,7 @@ import { registerAgent } from "../src/registry";
 import { hosted, hostedRun } from "./support/hosted";
 import { recordsAt } from "./support/records";
 
-for (const collision of [false, true])
+for (const collision of [false, true]) {
   test(`a legacy launch cannot deliver to a core terminal that reuses its agent name (terminal id reused: ${collision})`, () =>
     hosted("collie-legacy-core-delivery-", ({ world, env }) =>
       Effect.gen(function* () {
@@ -57,3 +57,4 @@ for (const collision of [false, true])
         expect(result.delivered).toBe(false);
       }),
     ));
+}

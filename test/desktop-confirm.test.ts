@@ -175,8 +175,9 @@ test("actions.log keeps a JSON line per attempt with ids and kinds only, and sta
       expect(second).toMatchObject({ request: "say-1", kind: "Deliver", ended: "accepted" });
       expect(kept).not.toContain("the-answer-value");
       expect(kept).not.toContain("the-deliver-text");
-      for (const request of ["ask-7", "ask-8", "ask-9"])
+      for (const request of ["ask-7", "ask-8", "ask-9"]) {
         yield* act(answering([accepted(true)]).reached, request, answer, log);
+      }
       expect(yield* fs.readFileString(`${dir}/actions.log.1`)).toContain('"ask-6"');
       expect((yield* fs.stat(`${dir}/actions.log`)).size).toBeLessThanOrEqual(600);
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
@@ -224,7 +225,9 @@ test("board and chat writers ending at once at the rotation boundary keep every 
         ended: "accepted",
       });
       const first = yield* actionsLog(dir, 350);
-      for (const request of ["ask-a", "ask-b"]) yield* first(line(request));
+      for (const request of ["ask-a", "ask-b"]) {
+        yield* first(line(request));
+      }
       const second = yield* actionsLog(dir, 350);
       yield* Effect.all([first(line("ask-c")), second(line("ask-d"))], {
         concurrency: "unbounded",
@@ -236,7 +239,8 @@ test("board and chat writers ending at once at the rotation boundary keep every 
         ],
         "",
       );
-      for (const request of ["ask-a", "ask-b", "ask-c", "ask-d"])
+      for (const request of ["ask-a", "ask-b", "ask-c", "ask-d"]) {
         expect(kept).toContain(`"${request}"`);
+      }
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));

@@ -248,8 +248,9 @@ export const relatedOf = (
     return fact === undefined ? [] : [fact];
   });
   const listed = new Set(Arr.map(known, (one) => one.id));
-  if (self === undefined || !listed.has(runId) || Arr.some(also, (id) => !listed.has(id)))
+  if (self === undefined || !listed.has(runId) || Arr.some(also, (id) => !listed.has(id))) {
     return null;
+  }
   const own = new Set(
     Arr.map(
       Arr.filter(known, (one) => (self.task === null ? one.id === runId : one.task === self.task)),
@@ -367,12 +368,20 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
               read.delete(run);
               offers.delete(run);
             }
-            for (const [run, offered] of message.offers) offers.set(run, offered);
+            for (const [run, offered] of message.offers) {
+              offers.set(run, offered);
+            }
             model?.gone(message.gone);
-            if (message.order !== null) order = message.order;
-            if (order.length > 0) Deferred.doneUnsafe(firstListed, Effect.succeed(order));
+            if (message.order !== null) {
+              order = message.order;
+            }
+            if (order.length > 0) {
+              Deferred.doneUnsafe(firstListed, Effect.succeed(order));
+            }
             Deferred.doneUnsafe(migrated, Effect.void);
-            if (message.alive !== undefined) alive = message.alive;
+            if (message.alive !== undefined) {
+              alive = message.alive;
+            }
             return PubSub.publish(writes, undefined);
           });
         case "Wrote":
@@ -418,7 +427,6 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
                 ? Effect.succeed(held)
                 : ask({ _tag: "Offers", runId }).pipe(
                     // WARNING: the engine answers an `Offers` ask with the Run's offers.
-                    // WARNING: the engine answers an Offers ask with the Run's offers.
                     Effect.map((asked) => asked as ReadonlyArray<OfferView>),
                   );
             },
@@ -428,9 +436,10 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
                 const current =
                   held !== null &&
                   Arr.every(held, (one) => read.get(one.id) === model.factsAt(one.id));
-                if (current) return held;
+                if (current) {
+                  return held;
+                }
                 // WARNING: the engine answers a `Related` ask with the Runs it read, as `Listed`.
-                // WARNING: the engine answers a Related ask with the Runs it read, as Listed.
                 const runs = (yield* ask({
                   _tag: "Related",
                   runId,
@@ -444,7 +453,6 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
                 ? Effect.succeed(null)
                 : ask({ _tag: "Mr", run, fresh }).pipe(
                     // WARNING: the engine answers an `Mr` ask with the merge watch's panel.
-                    // WARNING: the engine answers an Mr ask with the merge watch's panel.
                     Effect.map((panel) => panel as MrPanel | null),
                   ),
           };
@@ -495,12 +503,13 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           const runs = Arr.take(yield* Deferred.await(firstListed), WARMING);
           const context = yield* withRecords;
           const began = yield* Clock.currentTimeMillis;
-          for (const runId of runs)
+          for (const runId of runs) {
             yield* recordFrames(
               unheard,
               { runId, tail: true, pages: 1, refreshMr: false, parts: true },
               Stream.never,
             ).pipe(Stream.runHead, Effect.provideContext(context), Effect.ignore);
+          }
           const ms = (yield* Clock.currentTimeMillis) - began;
           port.post({ _tag: "Warmed", runs: runs.length, ms });
         }),
@@ -513,8 +522,12 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           disconnects: localGone,
           send: (conn: number, frame: RpcMessage.FromServerEncoded) => {
             const to = conns.get(conn);
-            if (to === undefined) return Effect.void;
-            if (frame._tag === "Exit") to.local.delete(frame.requestId);
+            if (to === undefined) {
+              return Effect.void;
+            }
+            if (frame._tag === "Exit") {
+              to.local.delete(frame.requestId);
+            }
             return to.write(frame);
           },
           end: () => Effect.void,
@@ -551,9 +564,15 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           : frame._tag === "Ack" || frame._tag === "Interrupt"
             ? held.has(frame.requestId)
             : false;
-      if (frame._tag === "Request" && mine) held.add(frame.id);
-      if (mine || frame._tag === "Eof") Queue.offerUnsafe(local, { conn, frame });
-      if (!mine) port.post({ _tag: "Request", conn, frame });
+      if (frame._tag === "Request" && mine) {
+        held.add(frame.id);
+      }
+      if (mine || frame._tag === "Eof") {
+        Queue.offerUnsafe(local, { conn, frame });
+      }
+      if (!mine) {
+        port.post({ _tag: "Request", conn, frame });
+      }
     };
     yield* Effect.forkScoped(
       server.run((client) =>
@@ -578,8 +597,11 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
             local: held,
             write: (frame) =>
               Effect.sync(() => {
-                if (Queue.sizeUnsafe(outbox) >= OUTBOX_LIMIT) Deferred.doneUnsafe(ended, Exit.void);
-                else Queue.offerUnsafe(outbox, frame);
+                if (Queue.sizeUnsafe(outbox) >= OUTBOX_LIMIT) {
+                  Deferred.doneUnsafe(ended, Exit.void);
+                } else {
+                  Queue.offerUnsafe(outbox, frame);
+                }
               }),
           });
           yield* Effect.addFinalizer(() =>
@@ -593,12 +615,14 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
             const { pull } = yield* client.reader;
             for (;;) {
               const chunks = yield* pull;
-              for (const chunk of chunks)
+              for (const chunk of chunks) {
                 // WARNING: what a client sends the host is its RPC client's encoded frames.
                 for (const frame of parser.decode(
                   chunk,
-                ) as ReadonlyArray<RpcMessage.FromClientEncoded>)
+                ) as ReadonlyArray<RpcMessage.FromClientEncoded>) {
                   route(conn, held, frame);
+                }
+              }
             }
           });
           yield* Effect.raceFirst(reading, Deferred.await(ended));

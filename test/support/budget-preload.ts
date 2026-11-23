@@ -10,7 +10,9 @@ const scope = Scope.makeUnsafe();
 
 await Effect.runPromise(
   Effect.gen(function* () {
-    if (Option.isSome(yield* Config.option(Config.String(HOLD_ENV)))) return;
+    if (Option.isSome(yield* Config.option(Config.String(HOLD_ENV)))) {
+      return;
+    }
     const override = yield* Config.option(Config.String("COLLIE_TEST_BUDGET"));
     const budget = budgetOf(availableParallelism(), Option.getOrUndefined(override));
     const share = shareOf(budget, "small");

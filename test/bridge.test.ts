@@ -30,13 +30,19 @@ const afterReady = (from: ReadableStream<Uint8Array>) => {
   return from.pipeThrough(
     new TransformStream<Uint8Array, Uint8Array | string>({
       transform: (chunk, out) => {
-        if (ready) return out.enqueue(chunk);
+        if (ready) {
+          return out.enqueue(chunk);
+        }
         seen += decoder.decode(chunk, { stream: true });
         const at = Option.getOrElse(pipe_(seen, Str.indexOf(READY)), () => -1);
-        if (at === -1) return;
+        if (at === -1) {
+          return;
+        }
         ready = true;
         const rest = pipe_(seen, Str.slice(at + READY.length));
-        if (rest !== "") out.enqueue(rest);
+        if (rest !== "") {
+          out.enqueue(rest);
+        }
       },
     }),
   );

@@ -51,18 +51,21 @@ export const paintedOf = (flow: Flow, installation: string) =>
 const listed = (names: ReadonlyArray<string>) => `"${Arr.join(names, ", ")}"`;
 
 export const differences = (shown: Painted, host: Painted) => {
-  if (shown.length !== host.length || Arr.some(shown, (row, at) => row.name !== host[at]!.name))
+  if (shown.length !== host.length || Arr.some(shown, (row, at) => row.name !== host[at]!.name)) {
     return [
       `rows are ${listed(Arr.map(shown, (row) => row.name))}, not ${listed(Arr.map(host, (row) => row.name))}`,
     ];
+  }
   return Arr.flatMap(shown, (row, at) => {
     const expected = host[at]!;
-    if (row.nodes.length !== expected.nodes.length)
+    if (row.nodes.length !== expected.nodes.length) {
       return [`${row.name}: ${row.nodes.length} nodes, not ${expected.nodes.length}`];
+    }
     return Arr.flatMap(row.nodes, (node, i) => {
       const want = expected.nodes[i]!;
-      if (node.name !== want.name)
+      if (node.name !== want.name) {
         return [`${row.name}: node ${i + 1} is "${node.name}", not "${want.name}"`];
+      }
       return [
         ...(node.attempts === want.attempts
           ? []

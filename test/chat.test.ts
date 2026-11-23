@@ -156,7 +156,9 @@ test("both harnesses are wired to the same Collie reads", () => {
     "/s/herd/abc",
     "news.jsonl",
   );
-  for (const tool of TOOLS) expect(extension).toContain(tool.name);
+  for (const tool of TOOLS) {
+    expect(extension).toContain(tool.name);
+  }
   expect(extension).toContain("pi.registerTool");
   expect(extension).toContain('"tools", "call"');
   // WARNING: Both adapters read the same Collie; two answers about two Herds is the failure this prevents.
@@ -218,7 +220,6 @@ test("both adapters are told about the same Collie, in one place", () =>
       const extension = yield* fs.readFileString(files.extension);
       const config = decodeJson(yield* fs.readFileString(files.mcpConfig));
       // WARNING: the file was written by `claudeSettings` two lines above, whose one shape this names.
-      // WARNING: the hook was written by claudeSettings above, whose one shape this names.
       const hook = decodeJson(yield* fs.readFileString(files.settings)) as {
         hooks: {
           UserPromptSubmit: Array<{ hooks: Array<{ command: string }> }>;
@@ -230,10 +231,12 @@ test("both adapters are told about the same Collie, in one place", () =>
       const heard = hook.hooks.UserPromptSubmit[0]!.hooks[1]!.command;
       expect(heard).toEndWith("/bin/collie chat heard");
       expect(hook.hooks.Stop[0]!.hooks[0]!.command).toBe(heard);
-      for (const [key, value] of Rec.toEntries(serverEnv))
+      for (const [key, value] of Rec.toEntries(serverEnv)) {
         expect(heard).toContain(`${key}=${value}`);
-      for (const [key, value] of Rec.toEntries(serverEnv))
+      }
+      for (const [key, value] of Rec.toEntries(serverEnv)) {
         expect(command).toContain(`${key}=${value}`);
+      }
       for (const [key, value] of Rec.toEntries(serverEnv)) {
         expect(extension).toContain(`"${key}":"${value}"`);
         expect(config).toMatchObject({ mcpServers: { collie: { env: { [key]: value } } } });
@@ -267,7 +270,9 @@ test.each([
           });
         yield* write(`${root}/plugin/prompts/collie-chat.md`, "You are Collie's chat.\n");
         yield* write(`${root}/plugin/personas/every-agent.md`, "The installation's rule.\n");
-        if (user) yield* write(`${root}/user/personas/every-agent.md`, "The user's rule.\n");
+        if (user) {
+          yield* write(`${root}/user/personas/every-agent.md`, "The user's rule.\n");
+        }
         const files = yield* writeLaunchFiles({
           dir: `${root}/chat`,
           pluginRoot: `${root}/plugin`,
@@ -376,12 +381,15 @@ const launchedChat = (opts: {
     yield* bin.add(opts.harness ?? "claude", "exit 0");
     const fs = yield* FileSystem.FileSystem;
     const env = rig.pluginEnv();
-    if (opts.config !== undefined)
+    if (opts.config !== undefined) {
       yield* fs.writeFileString(`${env.userDir}/config.json`, opts.config);
-    if (opts.settingsSet !== undefined)
+    }
+    if (opts.settingsSet !== undefined) {
       yield* fs.writeFileString(`${env.userDir}/settings-set.json`, opts.settingsSet);
-    if (opts.recorded !== undefined)
+    }
+    if (opts.recorded !== undefined) {
       yield* writeChat(yield* chatPath(env.stateDir, KEY), opts.recorded);
+    }
     const lines: Array<string> = [];
     const ensured = yield* startChat(
       new Herdr(env),

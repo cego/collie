@@ -193,10 +193,16 @@ const generator = () => {
     code: (name: string) => string,
   ) => {
     const had = bySource.get(source);
-    if (had !== undefined) return had;
+    if (had !== undefined) {
+      return had;
+    }
     const free = (name: string) => !named.has(name) && !PRELUDE.has(name);
     const chosen = Option.getOrElse(Arr.findFirst([wanted, `${within}${wanted}`], free), () => {
-      for (let n = 2; ; n++) if (free(`${within}${wanted}${n}`)) return `${within}${wanted}${n}`;
+      for (let n = 2; ; n++) {
+        if (free(`${within}${wanted}${n}`)) {
+          return `${within}${wanted}${n}`;
+        }
+      }
     });
     bySource.set(source, chosen);
     named.set(chosen, { source, code: "" });
@@ -294,7 +300,9 @@ const generator = () => {
   const part = (document: Document, wanted: string) => {
     definitions = document.definitions;
     const { schema } = document;
-    if (schema.type === "null" || schema.not !== undefined) return;
+    if (schema.type === "null" || schema.not !== undefined) {
+      return;
+    }
     typeOf(schema, wanted, "");
   };
 
@@ -302,8 +310,12 @@ const generator = () => {
 };
 
 const schemaOf = (rpc: Rpc.AnyWithProps, part: (typeof SPOKEN)[number][1]) => {
-  if (part === "payload") return rpc.payloadSchema;
-  if (part === "error") return rpc.errorSchema;
+  if (part === "payload") {
+    return rpc.payloadSchema;
+  }
+  if (part === "error") {
+    return rpc.errorSchema;
+  }
   return RpcSchema.isStreamSchema(rpc.successSchema)
     ? rpc.successSchema.success
     : rpc.successSchema;
@@ -351,13 +363,17 @@ class Stale extends Data.TaggedError("Stale")<{ readonly path: string }> {
   }
 }
 
-if (import.meta.main)
+if (import.meta.main) {
   BunRuntime.runMain(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const fresh = yield* rustTypes;
-      if (Bun.argv[2] === "--write") return yield* fs.writeFileString(GENERATED, fresh);
-      if ((yield* fs.readFileString(GENERATED)) !== fresh)
+      if (Bun.argv[2] === "--write") {
+        return yield* fs.writeFileString(GENERATED, fresh);
+      }
+      if ((yield* fs.readFileString(GENERATED)) !== fresh) {
         return yield* new Stale({ path: GENERATED });
+      }
     }).pipe(Effect.provide(BunServices.layer)),
   );
+}

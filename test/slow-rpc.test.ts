@@ -18,7 +18,9 @@ const warnedAsking = <E>(
   Effect.gen(function* () {
     const warned: Array<string> = [];
     const logger = Logger.make(({ logLevel, message }) => {
-      if (logLevel === "Warn") warned.push(String(message));
+      if (logLevel === "Warn") {
+        warned.push(String(message));
+      }
     });
     yield* Effect.scoped(Effect.flatMap(RpcTest.makeClient(Probe), ask)).pipe(
       Effect.provide(

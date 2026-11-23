@@ -55,10 +55,18 @@ export const ProducerReport = Schema.Struct({
 type ReportFields = Types.Mutable<typeof ProducerReport.Type>;
 export const reportFields = (source: ReportFields) => {
   const fields: ReportFields = {};
-  if (source.summary !== undefined) fields.summary = concise(source.summary);
-  if (source.blocker !== undefined) fields.blocker = concise(source.blocker);
-  if (source.next_action !== undefined) fields.next_action = concise(source.next_action);
-  if (source.report !== undefined) fields.report = source.report;
+  if (source.summary !== undefined) {
+    fields.summary = concise(source.summary);
+  }
+  if (source.blocker !== undefined) {
+    fields.blocker = concise(source.blocker);
+  }
+  if (source.next_action !== undefined) {
+    fields.next_action = concise(source.next_action);
+  }
+  if (source.report !== undefined) {
+    fields.report = source.report;
+  }
   return fields;
 };
 
@@ -75,7 +83,9 @@ const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Res
 
 export const narrativeOf = <A>(value: A) => {
   const decoded = Schema.decodeUnknownOption(NarrativeOutput)(value);
-  if (Option.isNone(decoded)) return {};
+  if (Option.isNone(decoded)) {
+    return {};
+  }
   const said = decoded.value;
   const narrative = Arr.join(
     [
@@ -94,7 +104,9 @@ export const narrativeOf = <A>(value: A) => {
     ],
     "\n\n",
   );
-  if (Str.trim(narrative) === "") return {};
+  if (Str.trim(narrative) === "") {
+    return {};
+  }
   return {
     narrative,
     ...reportFields({

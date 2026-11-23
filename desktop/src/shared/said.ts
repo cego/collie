@@ -11,7 +11,9 @@ export const saidOf = (cause: Cause.Cause<Error | string>) => {
   const failed = Option.getOrUndefined(Arr.findFirst(cause.reasons, Cause.isFailReason));
   if (failed !== undefined) {
     const { error } = failed;
-    if (Predicate.isString(error)) return error;
+    if (Predicate.isString(error)) {
+      return error;
+    }
     return Schema.is(ActionFailed)(error)
       ? error.reason
       : Schema.is(RpcClientError.RpcClientError)(error)
@@ -19,6 +21,8 @@ export const saidOf = (cause: Cause.Cause<Error | string>) => {
         : error.message;
   }
   const died = Option.getOrUndefined(Arr.findFirst(cause.reasons, Cause.isDieReason));
-  if (died === undefined) return RENEWED;
+  if (died === undefined) {
+    return RENEWED;
+  }
   return Predicate.isError(died.defect) ? died.defect.message : String(died.defect);
 };

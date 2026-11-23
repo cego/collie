@@ -29,7 +29,7 @@ const recorded = (world: World, count: number, parked: ReadonlyArray<number> = [
   Effect.gen(function* () {
     const store = yield* Store;
     const records = yield* RunRecords;
-    for (let n = 0; n < count; n++)
+    for (let n = 0; n < count; n++) {
       yield* store.admit({
         request: idOf(n),
         run: idOf(n),
@@ -43,7 +43,10 @@ const recorded = (world: World, count: number, parked: ReadonlyArray<number> = [
         task: null,
         parent: null,
       });
-    for (const n of parked) yield* records.setControl(PARKED, idOf(n), "waits on a human");
+    }
+    for (const n of parked) {
+      yield* records.setControl(PARKED, idOf(n), "waits on a human");
+    }
   }).pipe(Effect.provide(foundationLayer({ dir: world.state })), Effect.scoped, Effect.orDie);
 
 const list = (world: World, args: ReadonlyArray<string> = []) =>
@@ -87,8 +90,9 @@ test("--status parked lists only the parked Runs, and --since a cursor only the 
         expect(parked.complete).toBe(true);
 
         const before = yield* pageOf((yield* list(world)).envelope);
-        for (const n of [2, 9])
+        for (const n of [2, 9]) {
           expect((yield* collie(world, ["run", "hold", idOf(n), "--reason", "test"])).exit).toBe(0);
+        }
         const since = yield* pageOf((yield* list(world, ["--since", before.cursor])).envelope);
         expect(Arr.map(since.runs, (one) => one.runId)).toEqual([idOf(9), idOf(2)]);
       }),

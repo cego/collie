@@ -47,7 +47,9 @@ const program = Effect.gen(function* () {
   const byNumber = new Map<string, Array<string>>();
   for (const name of onBase) {
     const number = numberOf(name);
-    if (number !== undefined) byNumber.set(number, [...(byNumber.get(number) ?? []), name]);
+    if (number !== undefined) {
+      byNumber.set(number, [...(byNumber.get(number) ?? []), name]);
+    }
   }
   for (const [number, names] of byNumber) {
     if (names.length > 1) {
@@ -58,7 +60,9 @@ const program = Effect.gen(function* () {
   }
 
   const drafts = Arr.filter(Arr.map(onBranch, slugOf), (slug) => slug !== undefined).sort();
-  if (drafts.length === 0) return yield* Effect.log("No draft ADRs to number.");
+  if (drafts.length === 0) {
+    return yield* Effect.log("No draft ADRs to number.");
+  }
 
   let highest = Math.max(
     0,
@@ -95,7 +99,9 @@ const program = Effect.gen(function* () {
   for (const file of new Set(files)) {
     const path = `${root}/${file}`;
     const text = yield* fs.readFileString(path).pipe(Effect.option);
-    if (Option.isNone(text) || pipe_(text.value, Str.includes("\0"))) continue;
+    if (Option.isNone(text) || pipe_(text.value, Str.includes("\0"))) {
+      continue;
+    }
     const rewritten = rewrite(text.value);
     if (rewritten !== text.value) {
       yield* fs.writeFileString(path, rewritten);

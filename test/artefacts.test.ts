@@ -66,10 +66,11 @@ test("the host discovers only Run collections and retains their selected revisio
         expect(Arr.map(shown.items, (one) => one.ref)).toEqual(
           Arr.map(found.items, (one) => one.ref),
         );
-        for (const item of found.items)
+        for (const item of found.items) {
           expect((yield* door.runFile({ runId, ref: item.ref, offset: 0, length: 1 })).size).toBe(
             item.size,
           );
+        }
         const note = Option.getOrThrow(
           Arr.findFirst(found.items, (one) => one.ref === "handoff:nested/note.txt"),
         );

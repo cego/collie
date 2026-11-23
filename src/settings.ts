@@ -409,8 +409,9 @@ export const SETTINGS: ReadonlyArray<Setting> = [
 function fallbackProblem(entry: string) {
   const at = Option.getOrElse(pipe(entry, Str.indexOf("/")), () => -1);
   const harness = at === -1 ? entry : pipe(entry, Str.slice(0, at));
-  if (!Arr.some(HARNESS_NAMES, (name) => name === harness))
+  if (!Arr.some(HARNESS_NAMES, (name) => name === harness)) {
     return `"${entry}" names no harness Collie has (${Arr.join(HARNESS_NAMES, ", ")})`;
+  }
   return at === entry.length - 1 ? `"${entry}" names no model after its /` : null;
 }
 
@@ -447,9 +448,13 @@ export const settingOf = (key: string) =>
 // WARNING: empty is unset (an empty harness fails every Run); a number arrives as a number, since loadDefaults ignores strings.
 export function parseSetting(key: string, typed: string) {
   const setting = settingOf(key);
-  if (setting === undefined) return { refused: `${key} is not one of Collie's settings` };
+  if (setting === undefined) {
+    return { refused: `${key} is not one of Collie's settings` };
+  }
   const said = Str.trim(typed);
-  if (said === "") return { value: null };
+  if (said === "") {
+    return { value: null };
+  }
   switch (setting.kind) {
     case "number":
       // WARNING: within the safe integers too: a threshold no Run can use fails every launch.
@@ -475,7 +480,9 @@ export function parseSetting(key: string, typed: string) {
               Arr.findFirst(Arr.map(items, fallbackProblem), (one) => one !== null),
             )
           : null;
-      if (bad !== undefined && bad !== null) return { refused: `fallbacks: ${bad}` };
+      if (bad !== undefined && bad !== null) {
+        return { refused: `fallbacks: ${bad}` };
+      }
       return { value: items.length === 0 ? null : items };
     }
     case "json": {
@@ -487,10 +494,11 @@ export function parseSetting(key: string, typed: string) {
         const window = autoCompactWindowOf(typed);
         return "refused" in window ? window : { value: window.window };
       }
-      if (key === "standing_direction" && said.length > STANDING_DIRECTION_MOST)
+      if (key === "standing_direction" && said.length > STANDING_DIRECTION_MOST) {
         return {
           refused: `standing_direction takes at most ${STANDING_DIRECTION_MOST.toLocaleString("en")} characters, not ${said.length.toLocaleString("en")}`,
         };
+      }
       return key === "gitlab_host" && !isHostName(said)
         ? {
             refused: `gitlab_host has to be a host name, such as gitlab.example.com, not "${typed}"`,
@@ -510,7 +518,9 @@ export function settingShown(key: string, stored: string) {
 export function settingStored(key: string, typed: string) {
   const per = msPer(key);
   const said = Str.trim(typed);
-  if (per === undefined || said === "") return { stored: said };
+  if (per === undefined || said === "") {
+    return { stored: said };
+  }
   const minutes = Number(said);
   return Number.isFinite(minutes) && minutes >= 0
     ? { stored: String(Math.round(minutes * per)) }
@@ -518,8 +528,12 @@ export function settingStored(key: string, typed: string) {
 }
 
 export function settingText(value: SettingValue | null) {
-  if (value === null) return "";
-  if (isString(value)) return value;
+  if (value === null) {
+    return "";
+  }
+  if (isString(value)) {
+    return value;
+  }
   return Arr.isArray<typeof value>(value)
     ? Arr.join(
         Arr.map(value, (part) =>

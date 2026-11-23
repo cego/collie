@@ -158,7 +158,9 @@ test("sibling children that share a long prefix get agents of their own", () => 
     agentName(`run-053c5b9d.implement.implement-gitlab.cego.dk-${repo}`, step, null, 1),
   );
   expect(crowded[0]).not.toBe(crowded[1]);
-  for (const name of crowded) expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+  for (const name of crowded) {
+    expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+  }
   expect(agentName("run-053c5b9d", "build", null, 1)).toBe("run-053c5b9d-build-r1");
 });
 
@@ -167,7 +169,9 @@ test("two steps of one Run that differ only where the name is cut get agents of 
     agentName("run-053c5b9d", step, null, 1),
   );
   expect(seats[0]).not.toBe(seats[1]);
-  for (const name of seats) expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+  for (const name of seats) {
+    expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+  }
   const panel = Arr.map(["security", "standards"], (seat) =>
     agentName("run-053c5b9d", "review", `claude-opus-${seat}`, 1),
   );

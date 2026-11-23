@@ -14,8 +14,9 @@ export const handoffsIn = Effect.fn("Handoffs.in")(function* (runDir: string) {
     .readDirectory(dir, { recursive: true })
     .pipe(Effect.orElseSucceed(() => []))).sort((a, b) => pipe_(a, Str.localeCompare(b)))) {
     const info = yield* fs.stat(path.join(dir, name)).pipe(Effect.option);
-    if (info._tag === "Some" && info.value.type === "File")
+    if (info._tag === "Some" && info.value.type === "File") {
       kept.push({ name, bytes: Number(info.value.size) });
+    }
   }
   return kept;
 });

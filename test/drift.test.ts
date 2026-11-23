@@ -406,8 +406,9 @@ const checkout = Effect.fn("DriftTest.checkout")(function* (prefix: string) {
       "-m",
       "first",
     ],
-  ])
+  ]) {
     yield* exec(["git", ...args], { cwd: dir });
+  }
   return dir;
 });
 
@@ -419,8 +420,9 @@ const committed = Effect.fn("DriftTest.committed")(function* (
   const git = (args: Array<string>) =>
     exec(["git", "-c", "user.email=t@example.com", "-c", "user.name=t", ...args], { cwd: dir });
   const base = Str.trim((yield* git(["rev-parse", "HEAD"])).stdout);
-  for (const [name, text] of Rec.toEntries(files))
+  for (const [name, text] of Rec.toEntries(files)) {
     yield* fs.writeFileString(`${dir}/${name}`, text);
+  }
   yield* git(["add", ...Rec.keys(files)]);
   yield* git(["commit", "-qm", "work"]);
   return base;

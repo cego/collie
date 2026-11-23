@@ -103,7 +103,9 @@ export default defineWorkflow({
           options: [{ id: IMPLEMENT, recommended: true }, STOP],
         }),
       );
-      if (next === STOP) return `${report.report}: stopped there`;
+      if (next === STOP) {
+        return `${report.report}: stopped there`;
+      }
 
       const children = yield* Children;
       const child = yield* children.start({

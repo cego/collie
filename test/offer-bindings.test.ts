@@ -65,8 +65,9 @@ test("Merge and Release say what they ship, ask only for a human's option, and s
           ["release", "Release", "release", "Merges it, tags it and deploys the tag."],
           ["merge", "Merge", "merge", "Merges it and stops: nothing is tagged or deployed."],
         ]);
-        for (const offer of offers)
+        for (const offer of offers) {
           expect(Rec.keys((yield* drawn(offer.arguments)).properties)).toEqual(["notify"]);
+        }
 
         const started = yield* client
           .invoke({ runId, offer: "merge", input: { notify: false }, request: "act-1" })

@@ -94,8 +94,9 @@ const onBranch = Effect.fn("test.onBranch")(function* (world: World, branch: str
   for (const args of [
     ["checkout", "-q", "-b", branch],
     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"],
-  ])
+  ]) {
     yield* exec(["git", ...args], { cwd: world.project });
+  }
 });
 
 const onTheBoard = Effect.fn("test.onTheBoard")(function* (world: World) {
@@ -423,8 +424,9 @@ test("a start from the board is placed, never asked where: one routing call over
           );
           const reserved = Arr.filter(budget, (line) => line.kind === "reserve");
           expect(reserved).toHaveLength(2);
-          for (const line of reserved)
+          for (const line of reserved) {
             expect(line).toMatchObject({ model: "haiku", effort: "low" });
+          }
         }),
       );
     }),

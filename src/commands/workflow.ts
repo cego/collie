@@ -31,7 +31,9 @@ const workflowList = Command.make("list", {}, () =>
     yield* attempt(
       Effect.gen(function* () {
         const resolved = yield* discoveryContext(global);
-        if (resolved._tag === "ContextFailure") return resolved.result;
+        if (resolved._tag === "ContextFailure") {
+          return resolved.result;
+        }
         const saved = yield* savedModules(resolved.env);
         const modules = yield* Effect.forEach(saved.entries, readModule);
         const rows = Arr.map(
@@ -149,7 +151,9 @@ const workflowCheck = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* discoveryContext(global);
-          if (resolved._tag === "ContextFailure") return resolved.result;
+          if (resolved._tag === "ContextFailure") {
+            return resolved.result;
+          }
           const saved = yield* savedModules(resolved.env);
           const claimed = claimedIds(saved);
           const named = Option.isSome(workflow) ? workflow.value : null;
@@ -195,7 +199,9 @@ const workflowShow = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* discoveryContext(global);
-          if (resolved._tag === "ContextFailure") return resolved.result;
+          if (resolved._tag === "ContextFailure") {
+            return resolved.result;
+          }
           const saved = yield* savedModules(resolved.env);
           const module = Option.getOrUndefined(
             Arr.findFirst(saved.entries, (one) => one.id === workflow),
@@ -235,7 +241,9 @@ const forkModule = Effect.fn("Workflow.forkModule")(function* (
   },
 ) {
   const refused = notAnId(options.id);
-  if (refused) return refused;
+  if (refused) {
+    return refused;
+  }
   const entry = yield* loadEntry(options.from.path).pipe(Effect.result);
   if (entry._tag === "Failure") {
     return err("operation_failed", `${options.from.path}: ${entry.failure.message}`);
@@ -254,7 +262,9 @@ const notAnId = (id: string) =>
     : err("invalid_input", `"${id}" is not a workflow id: lower case, digits and dashes.`);
 
 const asWritten = (written: Written, did: string) => {
-  if (!written.ok) return err("target_exists", written.message, { path: written.path });
+  if (!written.ok) {
+    return err("target_exists", written.message, { path: written.path });
+  }
   const note =
     written.toolchain === null
       ? ""
@@ -282,7 +292,9 @@ const workflowCreate = Command.make(
     mutating("workflow-create", request, (env) =>
       Effect.gen(function* () {
         const refused = notAnId(workflow);
-        if (refused) return refused;
+        if (refused) {
+          return refused;
+        }
         return asWritten(yield* createEntry({ dir: moduleDir(env, layer), id: workflow }), "Wrote");
       }),
     ),
@@ -308,7 +320,9 @@ const workflowFork = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const base = yield* context(global, false);
-          if (base._tag === "ContextFailure") return base.result;
+          if (base._tag === "ContextFailure") {
+            return base.result;
+          }
           return yield* mutation(base.env, "workflow-fork", request, (_id) =>
             Effect.gen(function* () {
               const module = Option.getOrUndefined(

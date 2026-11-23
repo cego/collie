@@ -128,11 +128,12 @@ export const piEvents = (thread: string) => {
         parentMessageId: `${thread}:${message}`,
       });
     }
-    if (args !== undefined)
+    if (args !== undefined) {
       events.push(
         { type: "TOOL_CALL_ARGS", toolCallId: id, delta: stringifyJson(args) },
         { type: "TOOL_CALL_END", toolCallId: id },
       );
+    }
     return events;
   };
   const step: (record: PiRecord) => ReadonlyArray<AguiEvent> = (record) => {
@@ -141,7 +142,9 @@ export const piEvents = (thread: string) => {
         // WARNING: Pi may start another low-level run while recovering; it is still this message.
         return [];
       case "message_start":
-        if (record.message.role === "assistant") message++;
+        if (record.message.role === "assistant") {
+          message++;
+        }
         return [];
       case "message_update": {
         const event = record.assistantMessageEvent;
@@ -186,7 +189,9 @@ export const piEvents = (thread: string) => {
           },
         ];
       case "message_end": {
-        if (record.message.role !== "assistant") return [];
+        if (record.message.role !== "assistant") {
+          return [];
+        }
         const counts = record.message.usage;
         usage = {
           input_tokens: usage.input_tokens + (counts?.input ?? 0),
@@ -211,12 +216,18 @@ export const piEvents = (thread: string) => {
         ];
       }
       case "auto_retry_end":
-        if (!record.success) error = record.finalError;
+        if (!record.success) {
+          error = record.finalError;
+        }
         return [];
       case "response":
-        if (record.command !== "prompt") return [];
-        if (!record.success || record.data?.disposition === "handled") command = false;
-        if (!record.success)
+        if (record.command !== "prompt") {
+          return [];
+        }
+        if (!record.success || record.data?.disposition === "handled") {
+          command = false;
+        }
+        if (!record.success) {
           return [
             {
               type: "RUN_ERROR",
@@ -224,6 +235,7 @@ export const piEvents = (thread: string) => {
               message: record.error ?? "Pi refused the prompt.",
             },
           ];
+        }
         return record.data?.disposition === "handled"
           ? [{ type: "RUN_FINISHED", threadId: thread, runId: runId() }]
           : [];

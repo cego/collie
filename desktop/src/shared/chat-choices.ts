@@ -82,10 +82,14 @@ const unsetModel = (harness: string, pi: PiConfig) =>
     : (HARNESS_MODELS[harness]?.defaultModel ?? DEFAULT_MODEL);
 
 const piLevel = (configured: string, available: ReadonlyArray<string>) => {
-  if (available.includes(configured)) return configured;
+  if (available.includes(configured)) {
+    return configured;
+  }
   const order = HARNESS_MODELS.pi?.efforts ?? [];
   const at = order.indexOf(configured);
-  if (at < 0) return available[0] ?? null;
+  if (at < 0) {
+    return available[0] ?? null;
+  }
   return (
     Option.getOrUndefined(Arr.findFirst(order.slice(at), (level) => available.includes(level))) ??
     Option.getOrUndefined(Arr.findLast(order.slice(0, at), (level) => available.includes(level))) ??
@@ -192,7 +196,7 @@ export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | nu
   );
   const set = settings.chatModel;
   const effortSet = settings.chatEffort;
-  if (entry === undefined || entry.offered.from === "reading")
+  if (entry === undefined || entry.offered.from === "reading") {
     return {
       harness: harnessSelect,
       model: {
@@ -218,6 +222,7 @@ export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | nu
         null,
       ),
     };
+  }
   const offer = entry.offered;
   const modelLabel = (id: string) =>
     Option.getOrUndefined(Arr.findFirst(offer.models, (model) => model.id === id))?.label ??
@@ -318,7 +323,9 @@ export const rememberChoice = (
   settings: DesktopSettings,
   choices: ChatChoices | null,
 ) => {
-  if (choices === null) return remembered;
+  if (choices === null) {
+    return remembered;
+  }
   const set = setChoice(settings);
   return set.harness === choices.heldOn
     ? set
@@ -378,12 +385,14 @@ export const choiceNotices = (settings: DesktopSettings, choices: ChatChoices | 
     choices.runsOn === null ||
     offer === undefined ||
     offer.from === "reading"
-  )
+  ) {
     return { waiting, reply: null };
+  }
   const next = runsAsOffered(set, offer);
   const runs = choices.runsOn;
-  if (runs.harness === next.harness && runs.model === next.model && runs.effort === next.effort)
+  if (runs.harness === next.harness && runs.model === next.model && runs.effort === next.effort) {
     return { waiting, reply: null };
+  }
   const current = resolvedLabel(runs, choices);
   const label = resolvedLabel(next, choices);
   return {
@@ -438,18 +447,26 @@ export const stopDraft = (
           Arr.flatMap(said, (part) => (part.type === "text" ? [part.content] : [])),
           "\n",
         );
-    if (text !== "") words.push(text);
-    if (!isString(said))
+    if (text !== "") {
+      words.push(text);
+    }
+    if (!isString(said)) {
       files.push(...Arr.flatMap(said, (part) => Option.toArray(attachedIn(part))));
-    if (about === null && !isString(content))
+    }
+    if (about === null && !isString(content)) {
       about = Option.getOrNull(decodeAbout(content.metadata?.about));
+    }
   }
-  if (draft.text !== "") words.push(draft.text);
+  if (draft.text !== "") {
+    words.push(draft.text);
+  }
   const seen = new Set<string>();
   return {
     text: Arr.join(words, "\n\n"),
     files: Arr.filter([...files, ...draft.files], ({ id }) => {
-      if (seen.has(id)) return false;
+      if (seen.has(id)) {
+        return false;
+      }
       seen.add(id);
       return true;
     }),

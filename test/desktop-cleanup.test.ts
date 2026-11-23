@@ -28,8 +28,9 @@ const installed = (dir: string) =>
       '{"version":"0.36.0","hash":"running","channel":"stable"}',
     );
     yield* fs.makeDirectory(`${root}/self-extraction`, { recursive: true });
-    for (const name of ["running.tar", "older.tar", "running.tar.previous"])
+    for (const name of ["running.tar", "older.tar", "running.tar.previous"]) {
       yield* fs.writeFileString(`${root}/self-extraction/${name}`, pipe_("x", Str.repeat(4096)));
+    }
     return root;
   });
 
@@ -52,10 +53,12 @@ test("macOS cleanup reads the installed app and keeps its running runner and tar
       );
       yield* fs.writeFileString(bundle, '{"version":"0.36.0","hash":"running"}');
       yield* fs.makeDirectory(`${root}/self-extraction`, { recursive: true });
-      for (const name of ["running.tar", "older.tar"])
+      for (const name of ["running.tar", "older.tar"]) {
         yield* fs.writeFileString(`${root}/self-extraction/${name}`, "x");
-      for (const version of ["0.34.0", "0.36.0", "0.37.0"])
+      }
+      for (const version of ["0.34.0", "0.36.0", "0.37.0"]) {
         yield* fs.makeDirectory(`${root}/runners/${version}`, { recursive: true });
+      }
       const found = yield* desktopSweeper(root, `${home}/state`, bundle).judge;
       expect(Arr.map(found.remove, (item) => item.target).sort()).toEqual([
         `${root}/runners/0.34.0`,
@@ -103,8 +106,9 @@ test("Desktop keeps the running and the newest runner copy, and 30 days of usage
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-" });
       const root = yield* installed(dir);
-      for (const version of ["0.34.0", "0.36.0", "0.37.0"])
+      for (const version of ["0.34.0", "0.36.0", "0.37.0"]) {
         yield* fs.makeDirectory(`${root}/runners/${version}`, { recursive: true });
+      }
       const now = yield* Clock.currentTimeMillis;
       const at = (days: number) => DateTime.formatIso(DateTime.makeUnsafe(now - days * DAY_MS));
       yield* fs.makeDirectory(`${dir}/state`);
@@ -129,7 +133,9 @@ test("a dead Desktop's ssh control directory is removed, and a live one's kept",
       yield* Effect.promise(() => gone.exited);
       const dead = `${tmp}/${sshControlsPrefix(gone.pid)}abc`;
       const live = `${tmp}/${sshControlsPrefix(process.pid)}def`;
-      for (const one of [dead, live]) yield* fs.makeDirectory(one);
+      for (const one of [dead, live]) {
+        yield* fs.makeDirectory(one);
+      }
 
       expect(yield* sweepSshControls(tmp, Bun.env)).toEqual([dead]);
       expect(yield* fs.exists(live)).toBe(true);

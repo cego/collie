@@ -79,7 +79,9 @@ test("the inventory skips dependencies, Git metadata, caches and tool directorie
         `${root}/.npm/_cacache/repo`,
         `${root}/.bun/install/cache/repo`,
       ];
-      for (const dir of skipped) yield* fs.makeDirectory(`${dir}/.git`, { recursive: true });
+      for (const dir of skipped) {
+        yield* fs.makeDirectory(`${dir}/.git`, { recursive: true });
+      }
       const wide = Array.from({ length: 40 }, (_, i) => `${root}/own/node_modules/p${i}`);
       yield* Effect.forEach(
         Arr.flatMap(wide, (dir) =>
@@ -139,8 +141,9 @@ test("the walk keeps at most eight filesystem calls in flight however wide the t
       const root = `${tmp}/home`;
       const names = ["a", "b", "c", "d"];
       let level = [root];
-      for (let depth = 0; depth < 5; depth++)
+      for (let depth = 0; depth < 5; depth++) {
         level = Arr.flatMap(level, (dir) => Arr.map(names, (name) => `${dir}/${name}`));
+      }
       yield* Effect.forEach(level, (dir) => fs.makeDirectory(dir, { recursive: true }), {
         concurrency: 32,
       });

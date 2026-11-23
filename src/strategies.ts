@@ -31,20 +31,28 @@ export type TargetKind = "mr" | "branch" | "worktree";
 
 // WARNING: mr: is read the way parseMrTarget reads it, so mr:group/app is no kind.
 export function targetKind(value: string) {
-  if (parseMrTarget(value) !== null) return "mr";
-  if (pipe(value, Str.startsWith("branch:"))) return "branch";
+  if (parseMrTarget(value) !== null) {
+    return "mr";
+  }
+  if (pipe(value, Str.startsWith("branch:"))) {
+    return "branch";
+  }
   return Str.trim(value) === "worktree" ? "worktree" : "";
 }
 
 // WARNING: validation allows one field per exclusive strategy, so the first is the only one.
 export function settledBy(where: Settled, strategy: InputStrategy) {
   const name = fieldsWithStrategy(where.strategies ?? {}, strategy)[0];
-  if (name === undefined) return null;
+  if (name === undefined) {
+    return null;
+  }
   const value =
     Option.getOrUndefined(
       Option.map(Option.fromNullishOr(where.inputs[name]), (present) => Str.trim(present)),
     ) ?? "";
-  if (value === "") return null;
+  if (value === "") {
+    return null;
+  }
   return {
     name,
     value,
@@ -55,8 +63,12 @@ export function settledBy(where: Settled, strategy: InputStrategy) {
 
 // WARNING: a work source's kind cannot be told from its text: it is whatever settling recorded.
 function kindOf(strategy: InputStrategy, name: string, where: Settled) {
-  if (strategy === "diff-target") return targetKind(where.inputs[name] ?? "");
-  if (strategy === "plan-dir") return "plan-dir";
+  if (strategy === "diff-target") {
+    return targetKind(where.inputs[name] ?? "");
+  }
+  if (strategy === "plan-dir") {
+    return "plan-dir";
+  }
   return where.inputs[`${name}_kind`] ?? "";
 }
 
@@ -93,21 +105,25 @@ export function launchInputProblem(
   fields: ReadonlyArray<string>,
   given: Readonly<Record<string, InputStrategy>>,
 ) {
-  if (fields.length === 0) return null;
+  if (fields.length === 0) {
+    return null;
+  }
   const hints = named(given);
   const launch = Arr.filter(Rec.keys(hints), (name) =>
     EXCLUSIVE_STRATEGIES.includes(hints[name] ?? ""),
   ).sort();
-  if (launch.length === 0)
+  if (launch.length === 0) {
     return `no input is the launch Input: hint one of ${Arr.join(
       Arr.map([...fields].sort(), (name) => `"${name}"`),
       ", ",
     )} as ${Arr.join(EXCLUSIVE_STRATEGIES.slice(0, -1), ", ")} or ${EXCLUSIVE_STRATEGIES.at(-1)}`;
-  if (new Set(Arr.map(launch, (name) => hints[name])).size > 1)
+  }
+  if (new Set(Arr.map(launch, (name) => hints[name])).size > 1) {
     return `${Arr.join(
       Arr.map(launch, (name) => `"${name}"`),
       " and ",
     )} are both launch Inputs; a workflow has one`;
+  }
   return null;
 }
 

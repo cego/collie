@@ -19,7 +19,9 @@ export interface SpecHeading {
 const HEADING = /^h([1-6])$/;
 
 const textOf: (node: Node) => string = (node) => {
-  if (!Arr.isArray(node)) return node;
+  if (!Arr.isArray(node)) {
+    return node;
+  }
   const [tag, , ...children] = node;
   return tag === null ? "" : Arr.join(Arr.map(children, textOf), "");
 };
@@ -28,15 +30,19 @@ export const specHeadings = (spec: string) =>
   parseMarkdown(Str.trim(spec), { plugins: SAFE_PLUGINS }).then(({ nodes }) => {
     const found: Array<{ level: number; text: string }> = [];
     const visit = (node: Node) => {
-      if (!Arr.isArray(node) || node[0] === null) return;
+      if (!Arr.isArray(node) || node[0] === null) {
+        return;
+      }
       const [tag, , ...children] = node;
       const level = HEADING.exec(tag)?.[1];
-      if (level !== undefined)
+      if (level !== undefined) {
         found.push({
           level: Number(level),
           text: Str.trim(pipe(textOf(node), Str.replaceAll(/\s+/g, " "))),
         });
-      else Arr.forEach(children, visit);
+      } else {
+        Arr.forEach(children, visit);
+      }
     };
     Arr.forEach(nodes, visit);
     return Arr.map(found, (heading, position) => ({ ...heading, position }));

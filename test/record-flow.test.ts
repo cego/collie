@@ -80,7 +80,9 @@ test("a lane reads stop attribution only while its Run is stopped", () =>
           Effect.provideService(RunRecords, {
             ...records,
             lastOf: (some, journal, kinds) => {
-              if (some.includes(run.id) && journal === AUDIT_FILE) reads++;
+              if (some.includes(run.id) && journal === AUDIT_FILE) {
+                reads++;
+              }
               return records.lastOf(some, journal, kinds);
             },
           }),

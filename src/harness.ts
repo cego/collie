@@ -47,7 +47,9 @@ export function isPermissionMode(value: string | undefined): value is Permission
 
 // WARNING: Kept as written even when not a string: a dropped `permissions: false` would fall back to auto and approve its own calls.
 export function permissionsAsWritten(value: YamlValue | undefined) {
-  if (value === undefined) return undefined;
+  if (value === undefined) {
+    return undefined;
+  }
   return isString(value) ? value : stringifyJson(value);
 }
 
@@ -80,8 +82,9 @@ export const claudeForbidsBypass = Effect.fn("Harness.claudeForbidsBypass")(func
     if (
       Option.isSome(settings) &&
       settings.value.permissions?.disableBypassPermissionsMode === "disable"
-    )
+    ) {
       return true;
+    }
   }
   return false;
 });
@@ -311,12 +314,16 @@ const helps = new Map<string, string>();
 // WARNING: Empty, and not cached, where the harness cannot be run.
 export const installedHelp = Effect.fn("Harness.installedHelp")(function* (kind: string) {
   const known = helps.get(kind);
-  if (known !== undefined) return known;
+  if (known !== undefined) {
+    return known;
+  }
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const help = yield* spawner
     .string(ChildProcess.make(kind, ["--help"], { extendEnv: true }))
     .pipe(Effect.orElseSucceed(() => ""));
-  if (help !== "") helps.set(kind, help);
+  if (help !== "") {
+    helps.set(kind, help);
+  }
   return help;
 });
 
@@ -326,9 +333,13 @@ export const autoCompactWindowFor = Effect.fn("Harness.autoCompactWindowFor")(fu
   help: typeof installedHelp,
 ) {
   const flag = harness.autoCompactFlag;
-  if (flag === undefined) return { passed: null, leftOff: null };
+  if (flag === undefined) {
+    return { passed: null, leftOff: null };
+  }
   const window = autoCompactWindowOf(String(written));
-  if ("refused" in window) return window;
+  if ("refused" in window) {
+    return window;
+  }
   return new RegExp(`${flag}(?![\\w-])`).test(yield* help(harness.kind))
     ? { passed: window.window, leftOff: null }
     : { passed: null, leftOff: `${harness.kind} --help does not list ${flag}` };
@@ -350,7 +361,9 @@ export interface SessionArgs {
 
 export const sessionArgs = (harness: string, session: StartSession) => {
   const { id } = session;
-  if (!session.resumed) return { lead: [], tail: ["--session-id", id] };
+  if (!session.resumed) {
+    return { lead: [], tail: ["--session-id", id] };
+  }
   switch (harness) {
     case "codex":
       return { lead: ["resume", id], tail: [] };

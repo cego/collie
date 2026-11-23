@@ -323,7 +323,9 @@ test("an explicit reconciliation works from automation and stops an unknown bloc
     state: "superseded",
     note: "reconciled as not-sent by human:req-2",
   });
-  if ("error" in settled) throw new Error(settled.error);
+  if ("error" in settled) {
+    throw new Error(settled.error);
+  }
   expect(blocked([unknown, settled], unknown.causal_key)).toBeNull();
 });
 

@@ -349,8 +349,9 @@ test("report retries keep distinct Heals without repeating refusals while judgin
     Effect.gen(function* () {
       const env = rig.pluginEnv();
       const evidence = `${env.stateDir}/evidence/run-parked`;
-      for (const heal of ["run-heal", "run-heal-2"])
+      for (const heal of ["run-heal", "run-heal-2"]) {
         yield* appendMetric(evidence, { ...healedLine, heal, recoveryId: `heal:${heal}` });
+      }
       const view: RunView = {
         runId: "run-parked",
         workflow: "any",
@@ -556,10 +557,11 @@ test("retained findings of earlier Heals link to the issues already filed for th
           ["run-750ea061", "taken-delivery-left-unknown-blocks-reminders", 445],
           ["run-d6af1e3b", "compaction-completion-lost-to-write-failure", 446],
         ] as const;
-        for (const [heal, key, number] of historical)
+        for (const [heal, key, number] of historical) {
           expect(
             yield* report(host, pending({ key }, { heal, judged: "recovered" }), new Map()),
           ).toMatchObject({ publication: "linked", issue: `https://${COLLIE}/issues/${number}` });
+        }
         expect(writes(forge)).toEqual([]);
       }),
   ));

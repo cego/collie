@@ -43,7 +43,9 @@ export const carryIntoFlock = Effect.fn("Settings.carryIntoFlock")(function* (
 ) {
   const { proactive, machineRule, ...own } = yield* readSettings(dir);
   const flock = yield* readFlockSettings(dir);
-  if (proactive === undefined && machineRule === undefined) return flock;
+  if (proactive === undefined && machineRule === undefined) {
+    return flock;
+  }
   const carried = Arr.reduce(
     [
       ["machine_rule", machineRule ?? ""],
@@ -51,7 +53,9 @@ export const carryIntoFlock = Effect.fn("Settings.carryIntoFlock")(function* (
     ] as const,
     flock,
     (held, [key, typed]) => {
-      if (typed === "" || held.settings[key] !== undefined) return held;
+      if (typed === "" || held.settings[key] !== undefined) {
+        return held;
+      }
       const edited = editSetting(held, key, typed, now);
       return "refused" in edited ? held : edited;
     },
@@ -140,11 +144,12 @@ export const chatChoice = (
   offers: Offers = {},
 ) => {
   const harness = settings.chatHarness ?? DEFAULT_CHAT_HARNESS;
-  if (!CHAT_HARNESSES.includes(harness))
+  if (!CHAT_HARNESSES.includes(harness)) {
     return {
       ok: false as const,
       problem: `the Flock chat has no harness called "${harness}" (${Arr.join(CHAT_HARNESSES, ", ")})`,
     };
+  }
   const resolved = resolveChoice(
     [
       {
@@ -173,11 +178,12 @@ export const chatChoice = (
     harness === "pi" &&
     settings.chatModel !== undefined &&
     !pipe_(settings.chatModel, Str.includes("/"))
-  )
+  ) {
     return {
       ok: false as const,
       problem: `${resolved.problem}. Write provider/model, for example openai-codex/gpt-6.1-sol.`,
     };
+  }
   return resolved;
 };
 
@@ -192,8 +198,9 @@ export const changeSettings = (
     change.chatHarness === undefined &&
     change.chatModel === undefined &&
     change.chatEffort === undefined
-  )
+  ) {
     return changed;
+  }
   const checked = chatChoice(changed, flock, offers);
   return checked.ok ? changed : { refused: checked.problem };
 };
@@ -215,7 +222,9 @@ export const heldSettings = Effect.fn("Settings.held")(function* (
       Effect.gen(function* () {
         const now = SubscriptionRef.getUnsafe(held);
         const changed = changeSettings(now, flock(), change, yield* offers(now));
-        if ("refused" in changed) return yield* new ActionFailed({ reason: changed.refused });
+        if ("refused" in changed) {
+          return yield* new ActionFailed({ reason: changed.refused });
+        }
         yield* writeSettings(dir, changed).pipe(
           Effect.mapError((error) => new ActionFailed({ reason: error.message })),
         );

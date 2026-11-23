@@ -37,7 +37,9 @@ const chunks = (count: number) =>
   );
 
 const untraced = (frame: ToMain) => {
-  if (frame._tag !== "Request") return frame;
+  if (frame._tag !== "Request") {
+    return frame;
+  }
   const { traceId: _, spanId: __, sampled: ___, ...kept } = frame;
   return kept;
 };
@@ -167,8 +169,9 @@ const updateFixtures = Effect.gen(function* () {
     ],
     { stdio: ["ignore", "inherit", "inherit"] },
   );
-  if ((yield* Effect.promise(() => tarred.exited)) !== 0)
+  if ((yield* Effect.promise(() => tarred.exited)) !== 0) {
     return yield* Effect.die("tar could not write the bundle fixture");
+  }
   yield* Effect.promise(() => Bun.$`rm -rf ${work}`.quiet());
   const tar = yield* Effect.promise(() => Bun.file(`${dir}/bundle.tar`).bytes());
   const truncated = tar.slice(0, 2100);

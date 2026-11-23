@@ -677,8 +677,9 @@ test.each([
   ["a GitHub checkout", "github.com/cego/collie", "mr:github.com/cego/collie#30", "#30"],
   ["a GitLab checkout", "gitlab.cego.dk/cego/app", "mr:gitlab.cego.dk/cego/app!30", "!30"],
 ])("#30, !30 and 30 typed in %s are its forge's own merge request", (_, project, value, label) => {
-  for (const typed of ["#30", "!30", "30"])
+  for (const typed of ["#30", "!30", "30"]) {
     expect(classifyTarget(typed, "main", project)).toMatchObject({ kind: "mr", value, label });
+  }
 });
 
 test("a diff-target given on the command line is normalised, not just shaped", () =>

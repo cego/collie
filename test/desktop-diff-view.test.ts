@@ -699,11 +699,12 @@ describe("the tree's layout over a monorepo change", () => {
         row: row.node.key,
         name: true,
       });
-      if (row.node.kind === "file")
+      if (row.node.kind === "file") {
         expect({ row: row.node.key, counts: drawn.counts }).toEqual({
           row: row.node.key,
           counts: true,
         });
+      }
     }
   });
 

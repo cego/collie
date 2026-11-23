@@ -80,15 +80,18 @@ export const disputesIn = Effect.fn("Proactive.disputesIn")(function* (
   runs: ReadonlyArray<Pick<RunFacts, "id" | "dir">>,
 ) {
   const out: Array<Event> = [];
-  for (const run of runs)
-    for (const reply of yield* readReplies(run.dir).pipe(Effect.orElseSucceed(() => [])))
-      if (reply.kind === "disputed")
+  for (const run of runs) {
+    for (const reply of yield* readReplies(run.dir).pipe(Effect.orElseSucceed(() => []))) {
+      if (reply.kind === "disputed") {
         out.push({
           run: run.id,
           key: `${run.id}:disputed:${reply.comment}`,
           significance: "consequential",
           text: `Run ${run.id} replied for you on ${mrLabel(reply.mr)}, disputing ${reply.comment}:\n${reply.body}\nShould it stand?`,
         });
+      }
+    }
+  }
   return out;
 });
 
@@ -105,35 +108,39 @@ function causesOf(
     text: `Run ${run.id} (${about}) is waiting on me (${asked.name}). What is it asking, and what turns on the answer?`,
   }));
   const drifted = drifting.get(run.id);
-  if (drifted !== undefined && !settled(run))
+  if (drifted !== undefined && !settled(run)) {
     out.push({
       run: run.id,
       key: `${run.id}:drift:${drifted}`,
       significance: "decision",
       text: `Run ${run.id} (${about}) drifted from ${drifted} and Collie could not correct it. What is it doing instead, and should it be stopped or steered?`,
     });
-  if (run.state === "waiting" && run.asking.length === 0 && run.park?.kind !== "rechecks")
+  }
+  if (run.state === "waiting" && run.asking.length === 0 && run.park?.kind !== "rechecks") {
     out.push({
       run: run.id,
       key: `${run.id}:parked:${run.note ?? ""}`,
       significance: "consequential",
       text: `Run ${run.id} (${about}) parked its work${run.note === null ? "" : `: ${run.note}`}. What does it need, and from whom?`,
     });
+  }
   const shippable = ready.get(run.id);
-  if (shippable !== undefined)
+  if (shippable !== undefined) {
     out.push({
       run: run.id,
       key: `${run.id}:ready:${shippable.at}`,
       significance: "try-it",
       text: `Run ${run.id} (${about}): ${shippable.sentence}`,
     });
-  if (settled(run))
+  }
+  if (settled(run)) {
     out.push({
       run: run.id,
       key: `${run.id}:ended:${run.state}`,
       significance: "consequential",
       text: `Run ${run.id} (${about}) ended ${run.state}. What came of it, and is there anything left to do?`,
     });
+  }
   return out;
 }
 
@@ -141,10 +148,14 @@ export function idleAgain(views: ReadonlyArray<TaskView>, seen: Set<string>) {
   const idle = new Map<string, Reopened>();
   for (const view of views) {
     const reopened = view.reopened ?? null;
-    if (reopened === null) continue;
-    if (reopened.status === "working") seen.add(reopened.delivery);
-    else if (reopened.status !== "blocked" && seen.delete(reopened.delivery))
+    if (reopened === null) {
+      continue;
+    }
+    if (reopened.status === "working") {
+      seen.add(reopened.delivery);
+    } else if (reopened.status !== "blocked" && seen.delete(reopened.delivery)) {
       idle.set(view.run, reopened);
+    }
   }
   return idle;
 }

@@ -9,29 +9,32 @@ import type { Attention } from "./board-model";
 
 export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: RunFacts) {
   const asked = run.asking[0];
-  if (asked !== undefined)
+  if (asked !== undefined) {
     return {
       category: "question",
       reason: "question",
       explanation: `${run.id} is waiting on "${asked.name}": ${asked.prompt}`,
       actions: ["answer", "show"],
     } satisfies Attention;
+  }
   // WARNING: below a question (the human is waited on) and above completed (a drifted finish is not what was asked).
   const unresolved = yield* driftUnresolved(run.dir);
-  if (unresolved !== null)
+  if (unresolved !== null) {
     return {
       category: "drift",
       reason: "drift_unresolved",
       explanation: `${run.id} drifted from ${unresolved} and Collie could not correct it; \`run drift\` shows what it found.`,
       actions: ["drift", "steer", "show"],
     } satisfies Attention;
-  if (settled(run) && (yield* crossRunPending(run.dir)))
+  }
+  if (settled(run) && (yield* crossRunPending(run.dir))) {
     return {
       category: "drift",
       reason: "cross_run_pending",
       explanation: `${run.id} and its related runs were never checked against each other; nobody was left to do it.`,
       actions: ["drift", "steer", "show"],
     } satisfies Attention;
+  }
   const after = ["show", "actions"];
   switch (run.state) {
     case "ended":
@@ -70,13 +73,14 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: 
         actions: ["show", "stop"],
       } satisfies Attention;
     case "running":
-      if (!run.held && run.awaiting !== null)
+      if (!run.held && run.awaiting !== null) {
         return {
           category: "none",
           reason: "awaiting",
           explanation: `${run.id} is waiting for ${run.awaiting.on}, which ${run.awaiting.who === null ? "comes by itself" : `${run.awaiting.who} acts on`}.`,
           actions: ["show", "stop"],
         } satisfies Attention;
+      }
       return run.held
         ? ({
             category: "none",
@@ -115,7 +119,9 @@ const driftNote = (dir: string) =>
   readDrift(dir).pipe(
     Effect.map((lines) => {
       const open = openReports(lines);
-      if (open.length === 0) return "";
+      if (open.length === 0) {
+        return "";
+      }
       const blocking = Arr.filter(open, (report) => report.severity === "block").length;
       return ` ${open.length} open drift report${open.length === 1 ? "" : "s"}${blocking > 0 ? `, ${blocking} blocking` : ""}.`;
     }),

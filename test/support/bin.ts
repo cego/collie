@@ -11,11 +11,15 @@ export const fixtureBinary = (kind: "ssh" | "codex") =>
         const provided = yield* Config.String(
           kind === "ssh" ? "COLLIE_TEST_FAKE_SSH" : "COLLIE_TEST_CODEX_SERVER",
         ).pipe(Config.withDefault(""));
-        if (provided !== "") return provided;
+        if (provided !== "") {
+          return provided;
+        }
         const home = yield* Config.String("HOME");
         const fs = yield* FileSystem.FileSystem;
         const file = `${home}/collie-fixtures/${kind}`;
-        if (yield* fs.exists(file)) return file;
+        if (yield* fs.exists(file)) {
+          return file;
+        }
         yield* fs.makeDirectory(`${home}/collie-fixtures`, { recursive: true });
         const built = yield* Effect.promise(() =>
           Bun.build({
@@ -28,11 +32,12 @@ export const fixtureBinary = (kind: "ssh" | "codex") =>
             compile: { outfile: file },
           }),
         );
-        if (!built.success)
+        if (!built.success) {
           return yield* new Cause.UnknownError(
             built.logs,
             `Could not build the ${kind} protocol fixture`,
           );
+        }
         return file;
       }).pipe(Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv())),
     ),

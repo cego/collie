@@ -20,7 +20,9 @@ const handlers = Group.toLayer({
 
 const until = (done: () => boolean) =>
   Effect.gen(function* () {
-    while (!done()) yield* Effect.sleep("10 millis");
+    while (!done()) {
+      yield* Effect.sleep("10 millis");
+    }
   }).pipe(Effect.timeout("2 seconds"));
 
 const served = Effect.gen(function* () {

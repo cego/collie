@@ -98,7 +98,9 @@ type Needs =
 
 const remoteHead = (cwd: string, branch: string) =>
   Effect.gen(function* () {
-    if (branch === "") return { ok: true, head: null } as const;
+    if (branch === "") {
+      return { ok: true, head: null } as const;
+    }
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const handle = yield* spawner.spawn(
       ChildProcess.make("git", ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`], {
@@ -112,9 +114,12 @@ const remoteHead = (cwd: string, branch: string) =>
       { concurrency: "unbounded" },
     );
     // WARNING: --exit-code: 2 is no such ref; any other non-zero means origin did not answer.
-    if (code === 2) return { ok: true, head: null } as const;
-    if (code !== 0)
+    if (code === 2) {
+      return { ok: true, head: null } as const;
+    }
+    if (code !== 0) {
       return { ok: false, reason: Str.trim(said) || `git ls-remote exited ${code}` } as const;
+    }
     return { ok: true, head: Str.split(Str.trim(listed), "\t")[0] || null } as const;
   }).pipe(
     Effect.scoped,
@@ -291,11 +296,19 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           const unmoved = since !== undefined && sameTree(since, journal.final);
           const whole = why.pass === "recheck" ? wholeRunsOwed(journal) : null;
           for (const spec of owedLocally(checks)) {
-            if (now.includes(spec.name)) continue;
-            if (whole !== null && !whole.includes(spec.name)) continue;
-            if (unmoved && checkProof(journal, spec.name, "collie").last !== undefined) continue;
+            if (now.includes(spec.name)) {
+              continue;
+            }
+            if (whole !== null && !whole.includes(spec.name)) {
+              continue;
+            }
+            if (unmoved && checkProof(journal, spec.name, "collie").last !== undefined) {
+              continue;
+            }
             const ran = yield* host.verify({ runId, name: spec.name, cwd, ...why });
-            if (ran.result === "pass") now.push(spec.name);
+            if (ran.result === "pass") {
+              now.push(spec.name);
+            }
           }
           const { final } = yield* host.evidence(runId, cwd);
           return {
@@ -314,16 +327,18 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       for (const { check, test } of rerunsOwed({
         ...(yield* host.evidence(runId, cwd)),
         approved,
-      }))
+      })) {
         yield* host.verify({ runId, name: check, cwd, pass: "rerun", test });
+      }
       // WARNING: a base that cannot be reached exempts nothing.
       for (const { check, test } of baselinesOwed({
         ...(yield* host.evidence(runId, cwd)),
         approved,
-      }))
+      })) {
         yield* host
           .verify({ runId, name: check, cwd, at: "default-base", test })
           .pipe(Effect.ignore);
+      }
       return approved;
     });
     const settleFailed = Effect.fn("deliver.settleFailed")(function* (gaps: {
@@ -331,7 +346,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       readonly fixable: ReadonlyArray<string>;
       readonly tree?: { readonly head: string; readonly fingerprint: string };
     }) {
-      if (gaps.fixable.length === 0) return gaps;
+      if (gaps.fixable.length === 0) {
+        return gaps;
+      }
       reruns += 1;
       const reread = yield* Activity.make({
         name: `rerun.${reruns}`,
@@ -350,8 +367,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       Effect.gen(function* () {
         let gaps = yield* settleFailed(yield* gapsNow({ pass: "gate" }));
         // WARNING: a check that fails then passes on the same tree is a flake; a Run ending on one proved nothing.
-        if (gaps.fixable.length > 0)
+        if (gaps.fixable.length > 0) {
           gaps = yield* settleFailed(yield* gapsNow({ pass: "recheck" }));
+        }
         let unreviewed = rallied.unreviewed;
         let fixes = 0;
         let stalled: { readonly at: number; readonly disputed: ReadonlyArray<Finding> } | null =
@@ -404,8 +422,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             }
           }
           gaps = yield* settleFailed(yield* gapsNow({ pass: "fix", round: at }, before));
-          if (stalledFix(before, gaps.tree, findings, fixed))
+          if (stalledFix(before, gaps.tree, findings, fixed)) {
             stalled = { at, disputed: fixed.disputed ?? [] };
+          }
           if (reviewedAgain) {
             unreviewed = "";
             continue;
@@ -461,11 +480,12 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                   proof.state === "passed" || resumed || whole.includes(spec.name)
                     ? yield* host.verify({ runId, name: spec.name, cwd, pass: "recheck" })
                     : proof.last;
-                if (relied !== undefined)
+                if (relied !== undefined) {
                   yield* host.record(
                     runId,
                     `proof: ${spec.name} relies on verification ${relied.id}`,
                   );
+                }
               }
               yield* settleTests;
             });
@@ -473,17 +493,20 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             const unprovedPark = `${dir}/proof-parked-unproved`;
             const resumed = yield* fs.exists(unprovedPark).pipe(Effect.orDie);
             yield* rely(resumed);
-            if (resumed) yield* fs.remove(unprovedPark).pipe(Effect.orDie);
+            if (resumed) {
+              yield* fs.remove(unprovedPark).pipe(Effect.orDie);
+            }
             if (stalled !== null) {
               const standing = Arr.filter(
                 (yield* readGaps(approved, reviewed)).fixable,
                 (gap) => !undisputed(gap),
               );
-              if (standing.length > 0)
+              if (standing.length > 0) {
                 yield* host.record(
                   runId,
                   `outcome unproved: ${Arr.join(standing, "; ")}; gate fix ${stalled.at} disputed them and changed nothing`,
                 );
+              }
             }
             let missing = yield* reading;
             if (missing.fixable.length > 0) {
@@ -499,7 +522,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               const checked = (yield* host.evidence(runId, cwd)).final;
               yield* ask.integrate("merge-proof");
               const now = (yield* host.evidence(runId, cwd)).final;
-              if (!sameTree(now, checked)) yield* rely(false);
+              if (!sameTree(now, checked)) {
+                yield* rely(false);
+              }
               reviewed = {
                 on: (yield* host.evidence(runId, cwd)).final,
                 reviewed: yield* review(
@@ -508,10 +533,11 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               };
               missing = yield* reading;
             }
-            if (missing.gaps.length > 0)
+            if (missing.gaps.length > 0) {
               return yield* new WorkflowError({
                 reason: `Outcome ${reviewedAgain ? "still unproved after a fresh review" : "unproved, and no reviewer can change that"}: ${Arr.join(missing.gaps, "; ")}. Continue with a follow-up Run to repair the work.`,
               });
+            }
             yield* host.parked(runId, null);
           }),
         });
@@ -551,17 +577,20 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           `${check}: ${name} (${file}) also fails at ${pipe_(at, Str.slice(0, 12))}, where this branch leaves the default branch, so it failed before this Run's changes.`,
       ),
     ];
-    if (unsettled.length > 0)
+    if (unsettled.length > 0) {
       yield* Activity.make({
         name: "unsettled",
         execute: host.record(runId, `unsettled: ${Arr.join(unsettled, "; ")}`),
       });
+    }
     const nothing = yield* Activity.make({
       name: "nothing-to-land",
       success: Schema.NullOr(Schema.String),
       execute: host.nothingToLand(runId, cwd),
     });
-    if (nothing !== null) return { nothing };
+    if (nothing !== null) {
+      return { nothing };
+    }
     const leftToCi = Arr.filter(checks, (spec) => spec.ci !== undefined);
     const mrUrl = yield* mergeRequest(
       Effect.gen(function* () {
@@ -590,13 +619,17 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         // WARNING: a park per attempt, so a resume asks again rather than replaying the undone Output.
         const parkedAt = (attempt: number) => `${dir}/mr-parked-${attempt}`;
         let attempt = 1;
-        while (yield* fs.exists(parkedAt(attempt)).pipe(Effect.orDie)) attempt += 1;
+        while (yield* fs.exists(parkedAt(attempt)).pipe(Effect.orDie)) {
+          attempt += 1;
+        }
         const remoteBefore = yield* Activity.make({
           name: attempt === 1 ? "mr-remote-head" : `mr-remote-head-${attempt}`,
           success: Schema.NullOr(Schema.String),
           execute: Effect.gen(function* () {
             const read = yield* remoteHead(cwd, ready.branch ?? "");
-            if (read.ok) return read.head;
+            if (read.ok) {
+              return read.head;
+            }
             const reason = `Cannot read ${ready.branch}'s head on origin: ${read.reason}. Repair it, then resume ${runId}.`;
             yield* host.record(runId, reason);
             yield* stepFailed(reason);
@@ -683,7 +716,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                   "\n",
                 )}`,
               });
-              if (posted.ok) return yield* host.parked(runId, null);
+              if (posted.ok) {
+                return yield* host.parked(runId, null);
+              }
               const reason = `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message}. Repair it, then resume ${runId}.`;
               yield* host.record(runId, reason);
               yield* stepFailed(reason);
@@ -696,7 +731,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           name: "mr-pipeline",
           execute: Effect.gen(function* () {
             const head = (yield* host.evidence(runId, cwd)).final.head_sha;
-            if (head !== remoteBefore) return;
+            if (head !== remoteBefore) {
+              return;
+            }
             const at = pipe_(head, Str.slice(0, 12));
             const answer = yield* host.startPipeline({ runId, cwd });
             if (answer._tag === "Failed") {
@@ -744,7 +781,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             });
             if ("proved" in read) {
               const flaked = read.proved.job?.flaked ?? [];
-              if (read.retried === true)
+              if (read.retried === true) {
                 yield* told(
                   `unsettled: ${spec.name}: job ${job} failed on ${pipe_(read.proved.end.head_sha, Str.slice(0, 12))}${
                     flaked.length === 0
@@ -755,13 +792,14 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                         )}`
                   }, then passed when retried — a flake, so it is not settled.`,
                 );
-            } else if (read.before !== undefined)
+              }
+            } else if (read.before !== undefined) {
               yield* told(
                 read.before.branch === undefined
                   ? `unsettled: ${spec.name}: job ${job} also fails at ${pipe_(read.before.at, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this branch's changes (failed there too: ${Arr.join(read.before.jobs, ", ")}).`
                   : `unsettled: ${spec.name}: job ${job} also fails on its target branch ${read.before.branch} at ${pipe_(read.before.at, Str.slice(0, 12))}${read.before.url === null ? "" : ` (${read.before.url})`}, so the failure is the target's, not this branch's (failed there too: ${Arr.join(read.before.jobs, ", ")}).`,
               );
-            else if (read.state === "failed")
+            } else if (read.state === "failed") {
               failed.push({
                 name: spec.name,
                 job,
@@ -769,10 +807,13 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                 log: read.log,
                 unproved: read.unproved,
               });
-            else unproved.push(read.unproved);
+            } else {
+              unproved.push(read.unproved);
+            }
           }
-          if (yield* host.stopRequested(runId))
+          if (yield* host.stopRequested(runId)) {
             return yield* Workflow.suspend(yield* WorkflowInstance);
+          }
           const why =
             unproved.length > 0
               ? `Outcome unproved: ${Arr.join([...unproved, ...Arr.map(failed, (one) => one.unproved)], "; ")}`
@@ -796,7 +837,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           return { failed, tree: yield* treeNow };
         }),
       });
-      if (read.failed.length === 0) break;
+      if (read.failed.length === 0) {
+        break;
+      }
       ciFixes += 1;
       const at = ciFixes;
       const findings = Arr.map(read.failed, (one) => ({
@@ -840,9 +883,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         });
         break;
       }
-      if (ask.moved !== undefined && after.head !== read.tree.head)
+      if (ask.moved !== undefined && after.head !== read.tree.head) {
         latest = yield* ask.moved({ pass: "ci", round: at });
-      else {
+      } else {
         const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
         yield* Activity.make({
           name: `ci-unreviewed.${at}`,

@@ -32,8 +32,13 @@ export interface RunLine {
 
 function withDescendants(rows: ReadonlyArray<RunLine>, run: string) {
   const family = [run];
-  for (let at = 0; at < family.length; at++)
-    for (const row of rows) if (row.parent === family[at]) family.push(row.run);
+  for (let at = 0; at < family.length; at++) {
+    for (const row of rows) {
+      if (row.parent === family[at]) {
+        family.push(row.run);
+      }
+    }
+  }
   return family;
 }
 
@@ -45,8 +50,9 @@ export function mergeRequestFor(
 ) {
   for (const run of withDescendants(rows, prerequisite.run)) {
     const detail = details.get(run);
-    if (detail?.mr != null && detail.repo === repo && detail.change === prerequisite.change)
+    if (detail?.mr != null && detail.repo === repo && detail.change === prerequisite.change) {
       return detail.mr;
+    }
   }
   return null;
 }
@@ -80,7 +86,7 @@ function oneOf(
     return returned;
   }
   const parentOf = new Map(Arr.map(rows, (row) => [row.run, row.parent] as const));
-  for (let at: string | null | undefined = asking.run; at != null; at = parentOf.get(at))
+  for (let at: string | null | undefined = asking.run; at != null; at = parentOf.get(at)) {
     if (at === prerequisite.run) {
       const returned: One = {
         _tag: "Never",
@@ -88,6 +94,7 @@ function oneOf(
       };
       return returned;
     }
+  }
   const mr = mergeRequestFor(prerequisite, asking.repo, rows, details);
   if (mr === null) {
     const returned: One =

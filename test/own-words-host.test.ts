@@ -148,8 +148,9 @@ test("a chat's file tools are refused the human's sessions on a Machine; Desktop
         expect(searched.text).not.toContain("pull requests");
         const fs = yield* FileSystem.FileSystem;
         yield* fs.makeDirectory(`${world.home}/.codex`);
-        for (const history of [".claude/history.jsonl", ".codex/history.jsonl"])
+        for (const history of [".claude/history.jsonl", ".codex/history.jsonl"]) {
           yield* fs.writeFileString(`${world.home}/${history}`, `{"display":"${TYPED}"}\n`);
+        }
         yield* fs.symlink(`${world.home}/.claude`, `${world.home}/link`);
         const asked = [
           yield* chat.grep({ pattern: "pull requests", path: world.home, outputMode: "content" }),

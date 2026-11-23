@@ -81,8 +81,11 @@ const withOutput = (fields: Record<string, YamlValue>, over: Partial<Collected> 
   const build: Record<string, YamlValue> = {};
   const review: Record<string, YamlValue> = {};
   for (const [key, value] of Rec.toEntries(fields)) {
-    if (JUDGEMENTS.has(key)) review[key] = value;
-    else build[key] = value;
+    if (JUDGEMENTS.has(key)) {
+      review[key] = value;
+    } else {
+      build[key] = value;
+    }
   }
   return collected({
     outputs: new Map<string, YamlValue>([
@@ -104,7 +107,9 @@ const claimedByTheImplementer = (fields: Record<string, YamlValue>) =>
   });
 
 test("every kind is a kind, and nothing else is", () => {
-  for (const kind of KINDS) expect(isOutcome(kind)).toBe(true);
+  for (const kind of KINDS) {
+    expect(isOutcome(kind)).toBe(true);
+  }
   expect(isOutcome("feature ")).toBe(false);
   expect(isOutcome("chore")).toBe(false);
   expect(isOutcome("")).toBe(false);
@@ -120,8 +125,9 @@ test("a Run with no check named is a gap its implementer closes by naming the ch
   expect(evidenceGaps("unspecified", got)).toEqual([noCheckNamed]);
   expect(checkGaps("feature", got)).toContain(noCheckNamed);
   expect(noCheckNamed).toContain("collie run intent verification");
-  for (const kind of ["investigation", "plan", "review"] as const)
+  for (const kind of ["investigation", "plan", "review"] as const) {
     expect(evidenceGaps(kind, got)).not.toContain(noCheckNamed);
+  }
 });
 
 test("the approved set has to pass here, now, as its own command", () => {
@@ -734,7 +740,9 @@ test("every kind has a rule, so a new one cannot be added without one", () => {
   const empty = collected({ approved: [], verifications: [] });
   const silent: Array<Outcome> = [];
   for (const kind of KINDS) {
-    if (evidenceGaps(kind, empty).length === 0) silent.push(kind);
+    if (evidenceGaps(kind, empty).length === 0) {
+      silent.push(kind);
+    }
   }
   expect(silent).toEqual([]);
 });
@@ -1230,7 +1238,9 @@ test("each piece of a performance Run's proof, taken away alone, is a gap naming
       expect.stringContaining("behavior_preserved"),
       expect.stringContaining("measurement_valid"),
     ]);
-    for (const gap of gaps) expect(gap).toContain("not of this tree");
+    for (const gap of gaps) {
+      expect(gap).toContain("not of this tree");
+    }
   }
   expect(
     alone(

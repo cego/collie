@@ -90,8 +90,11 @@ test("an install that omits the compiler or keeps an older Effect is an unavaila
         }),
         (before) =>
           Effect.sync(() => {
-            if (before === undefined) delete Bun.env.BUN_CONFIG_SKIP_INSTALL_PACKAGES;
-            else Bun.env.BUN_CONFIG_SKIP_INSTALL_PACKAGES = before;
+            if (before === undefined) {
+              delete Bun.env.BUN_CONFIG_SKIP_INSTALL_PACKAGES;
+            } else {
+              Bun.env.BUN_CONFIG_SKIP_INSTALL_PACKAGES = before;
+            }
           }),
       );
       const stale = yield* provisionToolchain(dir).pipe(Effect.result);
@@ -107,7 +110,9 @@ const layers = Effect.fn("AuthoringTest.layers")(function* (prefix: string) {
     userDir: `${dir}/install/user`,
     project: `${dir}/project`,
   });
-  for (const root of roots) yield* fs.makeDirectory(root.dir, { recursive: true });
+  for (const root of roots) {
+    yield* fs.makeDirectory(root.dir, { recursive: true });
+  }
   const dirOf = (layer: EntryLayer) =>
     Option.getOrUndefined(Arr.findFirst(roots, (root) => root.layer === layer))!.dir;
   return {
@@ -582,6 +587,8 @@ test("reported is the one workflow declaration that closes after its report", ()
       );
       const bad = yield* loadEntry(path).pipe(Effect.result);
       expect(bad._tag).toBe("Failure");
-      if (bad._tag === "Failure") expect(bad.failure.message).toContain("closes");
+      if (bad._tag === "Failure") {
+        expect(bad.failure.message).toContain("closes");
+      }
     }).pipe(Effect.scoped),
   ));

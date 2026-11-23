@@ -87,7 +87,9 @@ test("every scenario resolves to the file whose register call runs it", () =>
             Str.match(/register\("(shipped|unrelated)", (\d+)\)/),
           ),
         );
-        if (call === null) continue;
+        if (call === null) {
+          continue;
+        }
         registered++;
         for (const name of shares[Number(call[2])]!) {
           const full = call[1] === "unrelated" ? `${name} (under an unrelated id)` : name;

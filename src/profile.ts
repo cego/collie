@@ -61,13 +61,14 @@ export function parseProfile(text: string) {
     return returned;
   }
   for (const [role, given] of Rec.toEntries(roles.value)) {
-    for (const key of Struct.keys(given))
+    for (const key of Struct.keys(given)) {
       if (key !== "env" && key !== "claude") {
         const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
           refused: `${role}.${key} is neither env nor claude`,
         };
         return returned;
       }
+    }
     const claude = Fields(given.claude ?? {});
     if (Option.isNone(claude)) {
       const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
@@ -97,7 +98,7 @@ export function parseProfile(text: string) {
     };
     return returned;
   }
-  for (const [role, one] of Rec.toEntries(decoded.value))
+  for (const [role, one] of Rec.toEntries(decoded.value)) {
     for (const [name, value] of Rec.toEntries(one.env ?? {})) {
       if (!ENV_NAME.test(name)) {
         const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
@@ -105,7 +106,9 @@ export function parseProfile(text: string) {
         };
         return returned;
       }
-      if (!isLiteral(value)) continue;
+      if (!isLiteral(value)) {
+        continue;
+      }
       const removed = scrub(`${name}=${value}`).removed;
       if (removed.length > 0) {
         const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
@@ -114,6 +117,7 @@ export function parseProfile(text: string) {
         return returned;
       }
     }
+  }
   const returned: { readonly profile: AgentProfile } | { readonly refused: string } = {
     profile: decoded.value,
   };
@@ -143,10 +147,11 @@ export const envLines = (env: Env, home: string) =>
 export const envValues = Effect.fn("Profile.envValues")(function* (env: Env, home: string) {
   const fs = yield* FileSystem.FileSystem;
   const values: Record<string, string> = {};
-  for (const [name, value] of Rec.toEntries(env))
+  for (const [name, value] of Rec.toEntries(env)) {
     values[name] = isLiteral(value)
       ? value
       : (Str.split(yield* fs.readFileString(expand(value.file, home)), "\n")[0] ?? "");
+  }
   return values;
 });
 
@@ -157,13 +162,18 @@ export const envFileProblems = Effect.fn("Profile.envFileProblems")(function* (
   const fs = yield* FileSystem.FileSystem;
   const problems: Array<string> = [];
   for (const value of Rec.values(env)) {
-    if (isLiteral(value)) continue;
+    if (isLiteral(value)) {
+      continue;
+    }
     const path = expand(value.file, home);
     const info = yield* fs.stat(path).pipe(Effect.option);
-    if (Option.isNone(info)) problems.push(`${path} does not exist`);
-    else if (info.value.type !== "File") problems.push(`${path} is not a file`);
-    else if ((info.value.mode & 0o777) !== 0o600)
+    if (Option.isNone(info)) {
+      problems.push(`${path} does not exist`);
+    } else if (info.value.type !== "File") {
+      problems.push(`${path} is not a file`);
+    } else if ((info.value.mode & 0o777) !== 0o600) {
       problems.push(`${path} is mode 0${(info.value.mode & 0o777).toString(8)}, not 0600`);
+    }
   }
   return problems;
 });

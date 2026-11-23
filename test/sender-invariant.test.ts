@@ -20,7 +20,9 @@ const sources = Effect.fn("test.sources")(function* () {
         stack.push(full);
         continue;
       }
-      if (!pipe(name, Str.endsWith(".ts")) && !pipe(name, Str.endsWith(".tsx"))) continue;
+      if (!pipe(name, Str.endsWith(".ts")) && !pipe(name, Str.endsWith(".tsx"))) {
+        continue;
+      }
       found.push({ name: path.relative(srcDir, full), text: yield* fs.readFileString(full) });
     }
   }

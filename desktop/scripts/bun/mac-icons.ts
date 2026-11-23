@@ -19,7 +19,9 @@ const SIZES = [
 
 const program = Effect.gen(function* () {
   const os = yield* Config.String("ELECTROBUN_OS").pipe(Config.withDefault(""));
-  if (os !== "macos") return;
+  if (os !== "macos") {
+    return;
+  }
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   yield* fs.makeDirectory(ICONSET, { recursive: true });
@@ -35,8 +37,9 @@ const program = Effect.gen(function* () {
       [child.exitCode, child.stderr.pipe(Stream.decodeText(), Stream.mkString)],
       { concurrency: "unbounded" },
     );
-    if (exitCode !== 0)
+    if (exitCode !== 0) {
       return yield* new Cause.UnknownError(exitCode, `sips could not make ${name}: ${stderr}`);
+    }
   }
 });
 

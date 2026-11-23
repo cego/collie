@@ -71,7 +71,9 @@ export const host = Command.make(
   },
   (flags) =>
     Effect.gen(function* () {
-      if (Option.isSome(flags.dir)) return yield* serve(flags.dir.value).pipe(Effect.scoped);
+      if (Option.isSome(flags.dir)) {
+        return yield* serve(flags.dir.value).pipe(Effect.scoped);
+      }
       const global = yield* root;
       yield* printResult(
         err("invalid_input", "collie host needs --dir, or `restart`."),

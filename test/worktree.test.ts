@@ -109,7 +109,9 @@ const liveAgent = Effect.fn("worktreeTest.liveAgent")(function* (
   const terminalId = yield* rig.addAgent(name, cwd, { run: entry?.runId ?? "other-run" });
   const core = yield* rig.startCore();
   yield* core.report(name, status);
-  if (foregroundCwd !== undefined) core.cd(name, foregroundCwd);
+  if (foregroundCwd !== undefined) {
+    core.cd(name, foregroundCwd);
+  }
   if (entry !== undefined) {
     registered = Arr.map(registered, (one) =>
       one === entry ? { ...one, paneId: terminalId } : one,
@@ -1956,7 +1958,9 @@ const renovateCheckout = (inputs: Record<string, string> = {}, cwd = rig.project
         const run = Option.getOrUndefined(
           Arr.findFirst(recorded, (one) => one.worktree?.path === at),
         );
-        if (run === undefined) return null;
+        if (run === undefined) {
+          return null;
+        }
         const release = Effect.sync(() => {
           releases += 1;
           return releasedAs;
@@ -2171,7 +2175,9 @@ test("the repository a checkout belongs to is git's, never the directory's own n
       // WARNING: a Renovate checkout is always named renovate and a branch-owning one after its branch, so the basename lies.
       const roaming = join(rig.root, ".collie", "worktrees", "project", "roaming");
       const owned = join(rig.root, ".collie", "worktrees", "project", "add-picker");
-      for (const at of [roaming, owned]) yield* fs.makeDirectory(at, { recursive: true });
+      for (const at of [roaming, owned]) {
+        yield* fs.makeDirectory(at, { recursive: true });
+      }
       yield* fakeGitWithCheckouts([
         { path: rig.projectDir, branch: "master" },
         { path: owned, branch: "add-picker" },
@@ -3421,7 +3427,7 @@ const sharedCheckout = Effect.fn("worktreeTest.sharedCheckout")(function* (
     ref: `${second.id}; ${OWED_MR}`,
     note: null,
   });
-  if (abandoned)
+  if (abandoned) {
     yield* recordDisposition(second.dir, {
       at: "2026-09-14T09:40:00Z",
       by: "mk",
@@ -3429,6 +3435,7 @@ const sharedCheckout = Effect.fn("worktreeTest.sharedCheckout")(function* (
       ref: "",
       note: null,
     });
+  }
   recorded = [first, second];
   yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
   yield* fs.writeFileString(
@@ -3491,15 +3498,15 @@ test("a shared checkout whose merge request the forge read merged goes, saying i
     }),
   ));
 
-for (const taskless of [false, true])
-  for (const answer of ["closed", "unknown", "board-failed"])
+for (const taskless of [false, true]) {
+  for (const answer of ["closed", "unknown", "board-failed"]) {
     test(`owed ${taskless ? "virtual" : "recorded"} Task keeps its checkout with ${answer} evidence and a deleted remote branch`, () =>
       runOnPath(
         Effect.gen(function* () {
           const { at } = yield* sharedCheckout("open");
           yield* settledGit({ "ls-remote --heads origin": "" });
           recorded = [{ ...recorded[1]!, task: taskless ? null : SHARED_TASK.id }];
-          if (answer === "unknown")
+          if (answer === "unknown") {
             yield* recordDisposition(recorded[0]!.dir, {
               at: "2026-09-14T09:40:00Z",
               by: "mk",
@@ -3507,6 +3514,7 @@ for (const taskless of [false, true])
               ref: "a later attempt",
               note: null,
             });
+          }
           const fs = yield* FileSystem.FileSystem;
           yield* fs.writeFileString(
             `${rig.stateDir}/board/mr-states.json`,
@@ -3543,6 +3551,8 @@ for (const taskless of [false, true])
           expect((yield* asked()).includes(`worktree remove ${at}`)).toBe(false);
         }),
       ));
+  }
+}
 
 test("a Task abandoned on its leading Run gives up its checkout and, after its hour, its workspace", () =>
   runOnPath(
@@ -3602,7 +3612,9 @@ test("a Renovate clone no Run uses and no checkout is left of goes; one a Run us
       const repository = "gitlab.example/group/kept";
       const used = `${root}/${Bun.hash(repository).toString(16)}`;
       const unused = `${root}/abc`;
-      for (const clone of [used, unused]) yield* fs.makeDirectory(clone, { recursive: true });
+      for (const clone of [used, unused]) {
+        yield* fs.makeDirectory(clone, { recursive: true });
+      }
       yield* fakeGitAnswering({ "worktree list --porcelain": String.raw`worktree $PWD\n` });
       const runs = [
         runFacts({

@@ -112,7 +112,9 @@ export const neededInputs: (entry: Found, given: Given) => Failure | null = (ent
       given.text[field.name] === undefined &&
       given.json[field.name] === undefined,
   );
-  if (missing.length === 0) return null;
+  if (missing.length === 0) {
+    return null;
+  }
   return err(
     "needs_input",
     `${entry.id} needs ${Arr.join(
@@ -179,13 +181,15 @@ const refused: (cause: HostFailure) => Failure = (cause) => {
   switch (cause._tag) {
     case "HostRefused":
       // WARNING: Input refusals are exit 2, not exit 1.
-      if (pipe_(cause.reason, Str.startsWith(`${REFUSED_INPUT}:`)))
+      if (pipe_(cause.reason, Str.startsWith(`${REFUSED_INPUT}:`))) {
         return err(
           "invalid_input",
           Str.trim(pipe_(cause.reason, Str.slice(REFUSED_INPUT.length + 1))),
         );
-      if (pipe_(cause.reason, Str.startsWith(`${NEEDS_INPUT}:`)))
+      }
+      if (pipe_(cause.reason, Str.startsWith(`${NEEDS_INPUT}:`))) {
         return err("needs_input", Str.trim(pipe_(cause.reason, Str.slice(NEEDS_INPUT.length + 1))));
+      }
       return pipe_(cause.reason, Str.startsWith("invalid_state:"))
         ? err("invalid_state", Str.trim(pipe_(cause.reason, Str.slice("invalid_state:".length))))
         : err("operation_failed", cause.reason);
@@ -220,10 +224,16 @@ export type Door = FrontDoor | Asker;
 const isFrontDoor = Schema.is(FrontDoor);
 
 const declaring: (door: Door, stamp?: string) => Declaration = (door, stamp?) => {
-  if (isFrontDoor(door)) return { frontDoor: door };
+  if (isFrontDoor(door)) {
+    return { frontDoor: door };
+  }
   let declared: Declaration = { frontDoor: door.origin, ...voiceOf(door) };
-  if (door.from !== undefined) declared = { ...declared, from: door.from };
-  if (stamp !== undefined) declared = { ...declared, stamp };
+  if (door.from !== undefined) {
+    declared = { ...declared, from: door.from };
+  }
+  if (stamp !== undefined) {
+    declared = { ...declared, stamp };
+  }
   return declared;
 };
 
@@ -234,15 +244,20 @@ export const ensurePaired = Effect.fn("Lifecycle.ensurePaired")(function* (
   env: PluginEnv,
   name: string,
 ) {
-  if (Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name)) return;
+  if (Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name)) {
+    return;
+  }
   const machine = Option.getOrUndefined(
     Arr.findFirst(yield* herdrMachines(env), (one) => one.label === name),
   );
-  if (machine === undefined) return yield* notListed(name);
-  if (env.pairs !== true)
+  if (machine === undefined) {
+    return yield* notListed(name);
+  }
+  if (env.pairs !== true) {
     return yield* new HostRefused({
       reason: `invalid_state: ${name} is not paired yet; a command in a terminal pairs it`,
     });
+  }
   yield* Effect.scoped(
     Effect.gen(function* () {
       const local = yield* connect(env.stateDir);
@@ -297,14 +312,16 @@ const openAndWake = (
     const machine =
       listed ??
       (target !== undefined || paired ? { label: name, target: target ?? name } : undefined);
-    if (machine === undefined) return yield* notListed(name);
+    if (machine === undefined) {
+      return yield* notListed(name);
+    }
     const opened = yield* openConnection(env.stateDir, machine, { said });
     let added = false;
-    if (listed !== undefined)
+    if (listed !== undefined) {
       yield* new Herdr(env)
         .machineDial(name)
         .pipe(Effect.mapError(coreRefused(name)), Effect.provide(Path.layer));
-    else if (paired) {
+    } else if (paired) {
       yield* addToCore(env, name, machine.target, opened.path);
       added = true;
     }
@@ -341,9 +358,12 @@ const relayHeader: (door: Door | undefined, stamp?: string) => RelayHeader = (do
     !isFrontDoor(door) &&
     door.from?.run !== undefined &&
     door.from.agent !== undefined
-  )
+  ) {
     header = { ...header, sender: { run: door.from.run, agent: door.from.agent } };
-  if (header.as === "host" && stamp !== undefined) header = { ...header, stamp };
+  }
+  if (header.as === "host" && stamp !== undefined) {
+    header = { ...header, stamp };
+  }
   return header;
 };
 
@@ -449,7 +469,9 @@ export const asksRun: <A>(
   door?: Door,
 ) =>
   Effect.gen(function* () {
-    if (env.machine !== undefined) return yield* asks(env, question, door);
+    if (env.machine !== undefined) {
+      return yield* asks(env, question, door);
+    }
     const asked: Array<string> = [];
     const away: Array<string> = [];
     const tryOn = (machine: string | null) =>
@@ -457,7 +479,9 @@ export const asksRun: <A>(
         Effect.gen(function* () {
           const client = yield* reach(env, machine, door);
           asked.push(machine ?? machineName());
-          if ((yield* client.run({ runId })) === null) return null;
+          if ((yield* client.run({ runId })) === null) {
+            return null;
+          }
           return yield* question(client).pipe(
             Effect.map((value) => ({ ok: true as const, value, machine })),
             Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause))),
@@ -465,15 +489,21 @@ export const asksRun: <A>(
         }),
       ).pipe(
         Effect.catch((cause: HostFailure) => {
-          if (machine === null) return Effect.succeed(refusal(cause));
+          if (machine === null) {
+            return Effect.succeed(refusal(cause));
+          }
           away.push(`${machine} (${refusal(cause).error.message})`);
           return Effect.succeed(null);
         }),
       );
     if (yield* anyRuns(env)) {
       const here = yield* tryOn(null);
-      if (here !== null) return here;
-    } else asked.push(machineName());
+      if (here !== null) {
+        return here;
+      }
+    } else {
+      asked.push(machineName());
+    }
     const peers = Arr.map(yield* peersOf(env.stateDir), (peer) => peer.name);
     const unpaired =
       env.pairs === true
@@ -484,7 +514,9 @@ export const asksRun: <A>(
         : [];
     for (const name of [...peers, ...unpaired]) {
       const there = yield* tryOn(name);
-      if (there !== null) return there;
+      if (there !== null) {
+        return there;
+      }
     }
     return err(
       "run_not_found",
@@ -514,14 +546,17 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
   const unattachable = yield* attachmentRefusal(options.attachments ?? []).pipe(
     Effect.orElseSucceed(() => null),
   );
-  if (unattachable !== null) return err("invalid_input", unattachable);
+  if (unattachable !== null) {
+    return err("invalid_input", unattachable);
+  }
   // WARNING: A start on another Machine opens its own Task and reads no defaults here.
   const elsewhere = env.machine !== undefined;
-  if (elsewhere && options.task.mode !== "new")
+  if (elsewhere && options.task.mode !== "new") {
     return err(
       "invalid_input",
       `A Run started on ${env.machine} opens a Task there; --task names this Machine's.`,
     );
+  }
   const defaults = elsewhere
     ? null
     : yield* readDefaults(yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env.cwd)))).pipe(
@@ -571,8 +606,9 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
         : answered,
     ),
   );
-  if (started.ok && !elsewhere)
+  if (started.ok && !elsewhere) {
     yield* rememberReach(env, options.door, options.id, options.input.text, options.options);
+  }
   return started;
 });
 
@@ -591,12 +627,18 @@ const rememberReach = Effect.fn("Lifecycle.rememberReach")(function* (
   text: Readonly<Record<string, string>>,
   launch: Readonly<Record<string, string>> | undefined,
 ) {
-  if (!LAUNCH_DOORS.includes(isFrontDoor(door) ? door : door.origin)) return;
+  if (!LAUNCH_DOORS.includes(isFrontDoor(door) ? door : door.origin)) {
+    return;
+  }
   const module = yield* moduleFor(env, workflow);
   const reach = module === null || !("inputs" in module) ? null : reachOf(module.inputs);
   const value = reach === null ? undefined : text[reach.name];
-  if (reach === null || value === undefined) return;
-  if (!Arr.some(reach.choices, (choice) => choice.value === value)) return;
+  if (reach === null || value === undefined) {
+    return;
+  }
+  if (!Arr.some(reach.choices, (choice) => choice.value === value)) {
+    return;
+  }
   yield* setSharedSetting(env, {
     door,
     key: reachKey(workflow, yield* launchProject(env.cwd, launch?.workspace)),
@@ -684,10 +726,13 @@ export const flockRunPage = Effect.fn("Lifecycle.flockRunPage")(function* (
   let unreadable: string | null = null;
   if ((yield* anyRuns(env)) || env.machine !== undefined) {
     const local = yield* asks(env, (client) => client.runPage(pageAsked(here)));
-    if (local.ok) answers.push({ machine: here, page: local.value });
-    else unreadable = local.error.message;
+    if (local.ok) {
+      answers.push({ machine: here, page: local.value });
+    } else {
+      unreadable = local.error.message;
+    }
   }
-  if (env.machine === undefined)
+  if (env.machine === undefined) {
     for (const peer of yield* peersOf(env.stateDir)) {
       const read = yield* Effect.scoped(
         connectPeer(env.stateDir, peer.name, { as: "cli", client: machineName() }).pipe(
@@ -695,25 +740,29 @@ export const flockRunPage = Effect.fn("Lifecycle.flockRunPage")(function* (
           Effect.result,
         ),
       );
-      if (read._tag === "Success") answers.push({ machine: peer.name, page: read.success });
-      else
+      if (read._tag === "Success") {
+        answers.push({ machine: peer.name, page: read.success });
+      } else {
         machines.push({
           machine: peer.name,
           state: "away",
           note: refusal(read.failure).error.message,
         });
+      }
     }
+  }
   const epochs = Rec.fromEntries(Arr.map(answers, ({ machine, page }) => [machine, page.epoch]));
   const stale = restarted(
     { ...asked.epochs, ...Rec.map(asked.since ?? {}, (mark) => mark.epoch) },
     epochs,
   );
-  if (stale.length > 0)
+  if (stale.length > 0) {
     return err(
       "stale_cursor",
       `The host on ${Arr.join(stale, ", ")} has started again since that token was given; list again from the first page or a fresh cursor.`,
       { machines: [...stale] },
     );
+  }
   const merged = Arr.flatMap(answers, ({ machine, page }) => {
     const views = new Map(Arr.map(page.views ?? [], (view) => [view.runId, view]));
     return Arr.map(page.runs, (summary) => ({
@@ -824,10 +873,14 @@ export const watchRun: <R>(
     const opened = yield* reach(env, found.ok ? found.machine : (env.machine ?? null)).pipe(
       Effect.result,
     );
-    if (opened._tag === "Failure") return refusal(opened.failure);
+    if (opened._tag === "Failure") {
+      return refusal(opened.failure);
+    }
     let known = false;
     return yield* Stream.runForEachWhile(opened.success.watch({ runId }), (view) => {
-      if (view === null) return Effect.succeed(false);
+      if (view === null) {
+        return Effect.succeed(false);
+      }
       known = true;
       return each(view).pipe(Effect.map((enough) => !enough));
     }).pipe(
@@ -840,7 +893,9 @@ export const watchRun: <R>(
 
 const boardStream = (env: PluginEnv) =>
   Effect.gen(function* () {
-    if (env.machine !== undefined) return (yield* reach(env, env.machine)).board();
+    if (env.machine !== undefined) {
+      return (yield* reach(env, env.machine)).board();
+    }
     yield* connect(env.stateDir);
     return (yield* frontDoor(socketOf(env.stateDir))).board();
   });
@@ -855,8 +910,9 @@ export const boardSnapshot: (
   Effect.scoped(
     Effect.gen(function* () {
       const first = yield* Stream.runHead(yield* boardStream(env));
-      if (first._tag === "Some" && first.value._tag === "Snapshot")
+      if (first._tag === "Some" && first.value._tag === "Snapshot") {
         return { ok: true as const, value: first.value };
+      }
       return err("operation_failed", "The workflow host sent no board.");
     }).pipe(Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause)))),
   );
@@ -883,7 +939,9 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (
       switch (message._tag) {
         case "Snapshot":
           tasks.clear();
-          for (const task of message.tasks) tasks.set(task.id, task);
+          for (const task of message.tasks) {
+            tasks.set(task.id, task);
+          }
           live = true;
           lost = null;
           return Deferred.succeed(first, undefined).pipe(Effect.andThen(notice));
@@ -951,8 +1009,9 @@ export interface DetailKey {
 
 const detailStream = (env: PluginEnv, key: DetailKey) =>
   Effect.gen(function* () {
-    if (env.machine !== undefined)
+    if (env.machine !== undefined) {
       return (yield* reach(env, env.machine)).runDetail({ ...key }).pipe(Stream.map(recordIn));
+    }
     yield* connect(env.stateDir);
     return (yield* frontDoor(socketOf(env.stateDir)))
       .runDetail({ ...key })
@@ -987,13 +1046,17 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
   return (key: DetailKey | null) => {
     const returned: Effect.Effect<RunDetail | null> = Effect.gen(function* () {
       if (key === null) {
-        if (open !== null) yield* Fiber.interrupt(open.fiber);
+        if (open !== null) {
+          yield* Fiber.interrupt(open.fiber);
+        }
         open = null;
         return null;
       }
       const showingKey = `${key.runId}|${key.tail}|${key.pages}`;
       if (open === null || open.key !== showingKey || key.refreshMr) {
-        if (open !== null) yield* Fiber.interrupt(open.fiber);
+        if (open !== null) {
+          yield* Fiber.interrupt(open.fiber);
+        }
         const first = yield* Deferred.make<void>();
         let refreshMr = key.refreshMr;
         const follow = Effect.scoped(
@@ -1129,11 +1192,14 @@ export const controlRun: (
 export const controlled: (
   answered: { readonly ok: true; readonly value: typeof Controlled.Type } | Failure,
 ) => OpResult = (answered) => {
-  if (!answered.ok) return answered;
+  if (!answered.ok) {
+    return answered;
+  }
   const done = answered.value;
   const left = leftSaid(done);
-  if (left !== null)
+  if (left !== null) {
     return err("operation_failed", left, { run: done.runId, left: [...done.left] });
+  }
   if (done.closed !== undefined) {
     return {
       ok: true as const,
@@ -1204,7 +1270,9 @@ export const resumeRun: (
     (client) =>
       Effect.gen(function* () {
         const done = yield* client.resume({ runId: options.runId, request: options.request });
-        if (!done.applied) return yield* new HostRefused({ reason: done.detail });
+        if (!done.applied) {
+          return yield* new HostRefused({ reason: done.detail });
+        }
         return yield* client.run({ runId: options.runId });
       }),
     options.door,
@@ -1278,26 +1346,37 @@ export const rememberChecks = Effect.fn("lifecycle.rememberChecks")(function* (
 ) {
   const { runId } = options;
   const intent = yield* readIntent(runDir(env.stateDir, runId));
-  if (intent === null) return err("invalid_state", `Run ${runId} has no Intent`);
+  if (intent === null) {
+    return err("invalid_state", `Run ${runId} has no Intent`);
+  }
   const fs = yield* FileSystem.FileSystem;
   const present: Array<string> = [];
-  for (const dir of options.checkouts)
-    if (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))) present.push(dir);
-  if (present.length === 0)
+  for (const dir of options.checkouts) {
+    if (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))) {
+      present.push(dir);
+    }
+  }
+  if (present.length === 0) {
     return err("invalid_state", `Run ${runId}'s checkout is gone, so its remote cannot be read`);
+  }
   const project = yield* projectHere(present[0]!, shell);
-  if (project === null)
+  if (project === null) {
     return err("invalid_state", `Run ${runId}'s checkout has no remote to remember its checks by`);
+  }
   const specs = intent.authority.run_verification;
-  if (specs.length === 0) return err("invalid_state", `Run ${runId} has no checks to remember`);
+  if (specs.length === 0) {
+    return err("invalid_state", `Run ${runId} has no checks to remember`);
+  }
   const file = rememberedFile(env.userDir, project);
-  if (file === null)
+  if (file === null) {
     return err("invalid_state", `${project} is not a remote a file can be named by`);
-  if (!options.replace && (yield* fs.exists(file)))
+  }
+  if (!options.replace && (yield* fs.exists(file))) {
     return err(
       "invalid_state",
       `${file} already holds this repository's checks; overwrite it with replace (--replace)`,
     );
+  }
   yield* fs.makeDirectory(
     pipe_(
       file,
@@ -1379,10 +1458,12 @@ export const steerRun: (
     options.door,
   ).pipe(
     Effect.map((answered) => {
-      if (!answered.ok) return answered;
+      if (!answered.ok) {
+        return answered;
+      }
       const { sent, route } = answered.value;
       const data = { run: options.runId, ...sent };
-      if (sent.delivered || sent.queued === true)
+      if (sent.delivered || sent.queued === true) {
         return {
           ok: true as const,
           data,
@@ -1405,6 +1486,7 @@ export const steerRun: (
             sent.redacted,
           ),
         };
+      }
       // WARNING: Never read as delivered when nothing was sent.
       const why = Arr.join(
         Arr.filter(
@@ -1437,7 +1519,9 @@ const followUpRoute: (
 ) => Effect.Effect<string | null> = (client, options) =>
   Effect.gen(function* () {
     const view = yield* client.run({ runId: options.runId });
-    if (view === null) return null;
+    if (view === null) {
+      return null;
+    }
     const offers = yield* client.offers({ runId: options.runId }).pipe(
       Effect.orElseSucceed(() => {
         const returned: ReadonlyArray<OfferView> = [];
@@ -1447,8 +1531,9 @@ const followUpRoute: (
     const offered = Option.getOrUndefined(
       Arr.findFirst(offers, (one) => one.kind === "follow-up" && one.run === undefined),
     );
-    if (offered !== undefined)
+    if (offered !== undefined) {
       return `${options.runId} has finished and its agent is gone: carry this on with its follow-up offer "${offered.id}", giving the message as its input.`;
+    }
     return `${options.runId} has finished and its agent is gone, and it offers no follow-up: start a new Run on ${view.branch === null ? "its branch" : `its branch ${view.branch}`}.`;
   }).pipe(Effect.orElseSucceed(() => null));
 
@@ -1755,14 +1840,16 @@ export const flockSchedules = Effect.fn("Lifecycle.flockSchedules")(function* (
   door: Door,
 ) {
   const local = yield* scheduleListing(env, door);
-  if (!local.ok) return local;
+  if (!local.ok) {
+    return local;
+  }
   const schedules = [...local.value.schedules];
   const machines: Array<{
     readonly machine: string;
     readonly state: "away";
     readonly note: string;
   }> = [];
-  if (env.machine === undefined)
+  if (env.machine === undefined) {
     for (const peer of yield* peersOf(env.stateDir)) {
       const read = yield* Effect.scoped(
         reach(env, peer.name, door).pipe(
@@ -1770,14 +1857,17 @@ export const flockSchedules = Effect.fn("Lifecycle.flockSchedules")(function* (
           Effect.result,
         ),
       );
-      if (read._tag === "Success") schedules.push(...read.success.schedules);
-      else
+      if (read._tag === "Success") {
+        schedules.push(...read.success.schedules);
+      } else {
         machines.push({
           machine: peer.name,
           state: "away",
           note: refusal(read.failure).error.message,
         });
+      }
     }
+  }
   return { ok: true as const, value: { machine: local.value.machine, schedules, machines } };
 });
 
@@ -1845,12 +1935,13 @@ export const steerAbout: (
   ).pipe(Effect.map((answered) => (answered.ok ? opResultOf(answered.value) : answered)));
 
 const opResultOf: (said: SteerOutcome) => OpResult = (said) => {
-  if (said.ok)
+  if (said.ok) {
     return {
       ok: true,
       data: Predicate.isObject(said.data) ? said.data : { said: said.data },
       human: said.human,
     };
+  }
   const failed = Schema.decodeUnknownOption(ExpectedError)({
     code: said.code,
     message: said.human,
@@ -2070,7 +2161,9 @@ export const machineList = (env: PluginEnv) => asks(env, (client) => client.peer
 export const machinesListed = (env: PluginEnv) =>
   Effect.gen(function* () {
     const read = yield* asks(env, (client) => client.peers());
-    if (!read.ok) return read;
+    if (!read.ok) {
+      return read;
+    }
     const backend = "core" as const;
     const roster = yield* herdrMachines(env);
     const listed = new Set(Arr.map(roster, (machine) => machine.label));
@@ -2127,7 +2220,9 @@ export const machineForget = (env: PluginEnv, name: string) =>
       const unpaired = yield* asks({ ...env, machine: undefined }, (client) =>
         client.unpair({ machine: name }),
       );
-      if (!unpaired.ok) return yield* new HostRefused({ reason: unpaired.error.message });
+      if (!unpaired.ok) {
+        return yield* new HostRefused({ reason: unpaired.error.message });
+      }
       yield* new Herdr(env).machineRemove(name).pipe(
         Effect.catchIf(
           (cause) => cause.code === "machine_unknown",
@@ -2171,10 +2266,14 @@ export const verifyRun = Effect.fn("Lifecycle.verifyRun")(function* (
   door: Door,
 ) {
   const found = yield* asksRun(env, request.runId, () => Effect.void, door);
-  if (!found.ok) return found;
+  if (!found.ok) {
+    return found;
+  }
   const client = yield* reach(env, found.machine, door);
   const events = client.verify(request);
-  if (found.machine !== null) return { ok: true as const, events };
+  if (found.machine !== null) {
+    return { ok: true as const, events };
+  }
   return {
     ok: true as const,
     events: followVerify(env.stateDir, events, (again) =>
@@ -2196,7 +2295,9 @@ export const measureRun = Effect.fn("Lifecycle.measureRun")(function* (
   door: Door,
 ) {
   const found = yield* asksRun(env, request.runId, () => Effect.void, door);
-  if (!found.ok) return found;
+  if (!found.ok) {
+    return found;
+  }
   const client = yield* reach(env, found.machine, door);
   return { ok: true as const, events: client.measure(request) };
 });
@@ -2217,7 +2318,9 @@ export const reportFor = Effect.fn("Report.for")(function* (env: PluginEnv, sinc
         ),
       }),
     );
-    if (!asked.ok) return asked;
+    if (!asked.ok) {
+      return asked;
+    }
     metrics.set(view.runId, metricsOf(asked.value.metrics, view.created));
     recorded.set(view.runId, asked.value);
   }

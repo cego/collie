@@ -111,12 +111,16 @@ export const makeForeground = Effect.gen(function* () {
   let serving = 0;
   let resumed = -Infinity;
   const hold = (lease: ForegroundApi) => {
-    if (!live.has(lease) || held.has(lease)) return Effect.void;
+    if (!live.has(lease) || held.has(lease)) {
+      return Effect.void;
+    }
     held.add(lease);
     return ++serving === 1 ? idle.close : Effect.void;
   };
   const release = (lease: ForegroundApi) => {
-    if (!held.delete(lease)) return Effect.void;
+    if (!held.delete(lease)) {
+      return Effect.void;
+    }
     return --serving === 0 ? idle.open : Effect.void;
   };
   const foreground: ForegroundApi = {
@@ -141,8 +145,9 @@ export const makeForeground = Effect.gen(function* () {
                     () => effect,
                     () =>
                       Effect.suspend(() => {
-                        if (!priority && --dependencies === 0 && live.has(served))
+                        if (!priority && --dependencies === 0 && live.has(served)) {
                           active.add(served);
+                        }
                         return --waiting === 0 ? hold(served) : Effect.void;
                       }),
                   );
@@ -176,11 +181,17 @@ export const makeForeground = Effect.gen(function* () {
         lease !== null && live.has(lease) ? lease.wait(effect) : effect,
       ),
     boundary: Effect.suspend(() => {
-      if (servedNow()) return Effect.void;
-      if (serving === 0) return Effect.yieldNow;
+      if (servedNow()) {
+        return Effect.void;
+      }
+      if (serving === 0) {
+        return Effect.yieldNow;
+      }
       return Effect.flatMap(Clock.currentTimeMillis, (now) => {
         const worked = now - resumed;
-        if (worked < SLICE_MS) return Effect.yieldNow;
+        if (worked < SLICE_MS) {
+          return Effect.yieldNow;
+        }
         const share = Math.min(PATIENCE_MS, worked);
         return Effect.andThen(
           Effect.yieldNow,

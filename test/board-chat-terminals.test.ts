@@ -40,8 +40,9 @@ test("a host starts the board and chat as core terminals of their own, and each 
           (calls) =>
             runsOf(calls, "collie-board").length > 0 && runsOf(calls, "collie-chat").length > 0,
         );
-        for (const name of ["collie-board", "collie-chat"])
+        for (const name of ["collie-board", "collie-chat"]) {
           expect(runsOf(started, name)[0]?.params).toMatchObject({ name, no_parent: true });
+        }
 
         yield* writeConfigValue(world.config, "chat_harness", "pi");
         yield* core.exit("collie-board", 0);
@@ -152,8 +153,9 @@ test("a whole Run uses core for its agents and Home, without a legacy layout rec
         const herds = yield* fs
           .readDirectory(`${world.state}/herd`)
           .pipe(Effect.orElseSucceed(() => []));
-        for (const herd of herds)
+        for (const herd of herds) {
           expect(yield* fs.exists(`${world.state}/herd/${herd}/home.json`)).toBe(false);
+        }
       }).pipe(Effect.orDie),
     ["relaunched.workflow.ts"],
   ));

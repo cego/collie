@@ -92,7 +92,9 @@ test("Merge loads and selects the Release offer from the single merge request's 
   });
   const action = primaryAction(view);
   expect(action?.kind).toBe("offer");
-  if (action?.kind !== "offer") throw new Error("expected the Merge offer");
+  if (action?.kind !== "offer") {
+    throw new Error("expected the Merge offer");
+  }
 
   const dialog = offeringOf(view.run, action.offer);
   const offersByRun = new Map<string, ReadonlyArray<OfferView>>([
@@ -101,7 +103,9 @@ test("Merge loads and selects the Release offer from the single merge request's 
   ]);
   const chosen = chosenOffer(offersByRun.get(dialog.runId) ?? [], dialog.offer);
   expect(chosen).toBeDefined();
-  if (chosen === undefined) throw new Error("the advertised Release could not be selected");
+  if (chosen === undefined) {
+    throw new Error("the advertised Release could not be selected");
+  }
   expect(invokeOf(dialog.runId, chosen, {})).toEqual({
     _tag: "Invoke",
     runId: "r-implementation",

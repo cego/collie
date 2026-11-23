@@ -54,16 +54,24 @@ export function knownModel(
   model: string,
   extra: ReadonlyArray<string> = [],
 ) {
-  if (model === DEFAULT_MODEL) return true;
-  if (Arr.contains(harness.models, model) || Arr.contains(extra, model)) return true;
+  if (model === DEFAULT_MODEL) {
+    return true;
+  }
+  if (Arr.contains(harness.models, model) || Arr.contains(extra, model)) {
+    return true;
+  }
   return harness.modelPattern?.test(model) ?? false;
 }
 
 export function modelHint(harness: HarnessModels, extra: ReadonlyArray<string> = []) {
   const known = [DEFAULT_MODEL, ...harness.models, ...extra];
   const parts: Array<string> = [];
-  if (known.length > 0) parts.push(Arr.join(known, ", "));
-  if (harness.modelPattern) parts.push(`or anything matching ${harness.modelPattern.source}`);
+  if (known.length > 0) {
+    parts.push(Arr.join(known, ", "));
+  }
+  if (harness.modelPattern) {
+    parts.push(`or anything matching ${harness.modelPattern.source}`);
+  }
   return Arr.join(parts, " ");
 }
 
@@ -106,8 +114,12 @@ export const preferencesFromOptions = Effect.fn("Harness.preferencesFromOptions"
 
 export const ceilingIn = (options: Preferences) => {
   const ceiling: { -readonly [K in keyof Preferences]: Preferences[K] } = preferencesIn(options);
-  if (options.upTo !== undefined) ceiling.upTo = options.upTo;
-  if (options.otherwise !== undefined) ceiling.otherwise = options.otherwise;
+  if (options.upTo !== undefined) {
+    ceiling.upTo = options.upTo;
+  }
+  if (options.otherwise !== undefined) {
+    ceiling.otherwise = options.otherwise;
+  }
   return ceiling;
 };
 
@@ -134,7 +146,9 @@ export function foldPreferences(layers: ReadonlyArray<Preferences | undefined>) 
   let effort: string | undefined;
   let claudeSubagents: ClaudeSubagents | undefined;
   for (const layer of layers) {
-    if (layer === undefined) continue;
+    if (layer === undefined) {
+      continue;
+    }
     if (layer.harness !== undefined && layer.harness !== harness) {
       harness = layer.harness;
       model = undefined;
@@ -144,7 +158,7 @@ export function foldPreferences(layers: ReadonlyArray<Preferences | undefined>) 
     model = layer.model ?? model;
     effort = layer.effort ?? effort;
     const subagents = layer.claudeSubagents;
-    if (subagents !== undefined)
+    if (subagents !== undefined) {
       claudeSubagents = {
         ...claudeSubagents,
         ...Rec.fromEntries(
@@ -154,6 +168,7 @@ export function foldPreferences(layers: ReadonlyArray<Preferences | undefined>) 
           ),
         ),
       };
+    }
   }
   const returned: Pick<Preferences, "harness" | "model" | "effort" | "claudeSubagents"> =
     Rec.fromEntries(
@@ -273,7 +288,9 @@ export function resolveChoice(
   }
   if (harness === "claude" && claudeSubagents !== undefined) {
     for (const layer of layers) {
-      if (layer?.claudeSubagents === undefined) continue;
+      if (layer?.claudeSubagents === undefined) {
+        continue;
+      }
       const checked = decodeSubagents(layer.claudeSubagents);
       if (checked._tag === "Failure") {
         const returned:
@@ -335,7 +352,9 @@ export function foldCeiling(layers: ReadonlyArray<Preferences | undefined>) {
   let harness: string | undefined;
   let ceiling: Preferences = {};
   for (const layer of layers) {
-    if (layer === undefined) continue;
+    if (layer === undefined) {
+      continue;
+    }
     if (layer.harness !== undefined && layer.harness !== harness) {
       harness = layer.harness;
       ceiling = {};
@@ -467,8 +486,11 @@ export function resolveWithRoom(
       extraModels,
       catalogue,
     );
-    if (next.ok) candidates.push({ choice: next.choice });
-    else skipped.push(`fallback ${text} skipped: ${next.problem}`);
+    if (next.ok) {
+      candidates.push({ choice: next.choice });
+    } else {
+      skipped.push(`fallback ${text} skipped: ${next.problem}`);
+    }
   }
   const whys: Array<string> = [];
   let first: string | null = null;

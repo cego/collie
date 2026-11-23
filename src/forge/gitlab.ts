@@ -168,7 +168,9 @@ export function mrDetails<R>(ref: MrRef, cwd: string, run: Runner<R>) {
     const where = whereOf(ref);
     const named = ref.project ?? (yield* projectHere(cwd, run));
     const reached = projectRest({ ...ref, project: named }, cwd);
-    if (!reached.ok) return { _tag: "Unavailable", reason: reached.reason } satisfies MrUnavailable;
+    if (!reached.ok) {
+      return { _tag: "Unavailable", reason: reached.reason } satisfies MrUnavailable;
+    }
     const { rest, login, project } = reached;
     const route = `${project}/merge_requests/${ref.iid}`;
     const [read, approvals, discussions] = yield* Effect.all(
@@ -179,19 +181,22 @@ export function mrDetails<R>(ref: MrRef, cwd: string, run: Runner<R>) {
       ],
       { concurrency: "unbounded" },
     );
-    if (!read.ok)
+    if (!read.ok) {
       return {
         _tag: "Unavailable",
         reason: `could not read ${where}: ${read.reason}`,
         transient: read.transient,
       } satisfies MrUnavailable;
-    for (const part of [approvals, discussions])
-      if (!part.ok && part.transient)
+    }
+    for (const part of [approvals, discussions]) {
+      if (!part.ok && part.transient) {
         return {
           _tag: "Unavailable",
           reason: part.reason,
           transient: true,
         } satisfies MrUnavailable;
+      }
+    }
     const mr = read.value;
     const draft = mr.draft === true || mr.work_in_progress === true;
     const pipeline = mr.head_pipeline?.status ?? mr.pipeline?.status ?? "";
@@ -257,10 +262,18 @@ function approvalsLine(
 ) {
   const required = requiredOrNull ?? undefined;
   const left = leftOrNull ?? undefined;
-  if (required === undefined && left === undefined) return "";
-  if (left === 0) return "approved";
-  if (required === undefined) return `${left} still needed`;
-  if (left === undefined) return `${required} approval(s) required`;
+  if (required === undefined && left === undefined) {
+    return "";
+  }
+  if (left === 0) {
+    return "approved";
+  }
+  if (required === undefined) {
+    return `${left} still needed`;
+  }
+  if (left === undefined) {
+    return `${required} approval(s) required`;
+  }
   return `${left} of ${required} still needed`;
 }
 
@@ -312,10 +325,14 @@ export function pipelineChecks(status: string) {
 export function gitlabForProject<R>(project: string | null, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
     const glab = yield* run("glab", ["--version"], cwd);
-    if (glab.code !== 0) return { ok: false, reason: "glab is not installed" };
+    if (glab.code !== 0) {
+      return { ok: false, reason: "glab is not installed" };
+    }
 
     const host = hostOf(project);
-    if (!host) return { ok: true, reason: "" };
+    if (!host) {
+      return { ok: true, reason: "" };
+    }
     return yield* loginReadiness(glabLoginTo(host), cwd, run);
   });
 }
@@ -365,29 +382,44 @@ const MergeBase = Schema.Struct({ id: optionalText });
 
 export function liveTier(ref: MrRef, mergedSha: string, cwd: string) {
   return Effect.gen(function* () {
-    if (mergedSha === "") return null;
+    if (mergedSha === "") {
+      return null;
+    }
     const api = projectRest(ref, cwd);
-    if (!api.ok) return null;
+    if (!api.ok) {
+      return null;
+    }
     const environments = yield* api.rest(Environments, "environments");
-    if (!environments.ok) return null;
+    if (!environments.ok) {
+      return null;
+    }
     const tiers = new Map<string, DeployTier>();
     for (const env of environments.value) {
-      if (env.tier === "production" || env.tier === "staging") tiers.set(env.name, env.tier);
+      if (env.tier === "production" || env.tier === "staging") {
+        tiers.set(env.name, env.tier);
+      }
     }
-    if (tiers.size === 0) return null;
+    if (tiers.size === 0) {
+      return null;
+    }
     const deployments = yield* api.rest(
       Deployments,
       "deployments?status=success&order_by=created_at&sort=desc&per_page=50",
     );
-    if (!deployments.ok) return null;
+    if (!deployments.ok) {
+      return null;
+    }
     const live = new Map<string, string>();
     for (const deployment of deployments.value) {
-      if (tiers.has(deployment.environment.name) && !live.has(deployment.environment.name))
+      if (tiers.has(deployment.environment.name) && !live.has(deployment.environment.name)) {
         live.set(deployment.environment.name, deployment.sha);
+      }
     }
     const carries = (sha: string) =>
       Effect.gen(function* () {
-        if (sha === mergedSha) return true;
+        if (sha === mergedSha) {
+          return true;
+        }
         const base = yield* api.rest(
           MergeBase,
           `repository/merge_base?refs[]=${mergedSha}&refs[]=${sha}`,
@@ -396,7 +428,9 @@ export function liveTier(ref: MrRef, mergedSha: string, cwd: string) {
       });
     for (const tier of ["production", "staging"] as const) {
       for (const [name, sha] of live) {
-        if (tiers.get(name) === tier && (yield* carries(sha))) return tier;
+        if (tiers.get(name) === tier && (yield* carries(sha))) {
+          return tier;
+        }
       }
     }
     return null;
@@ -406,27 +440,45 @@ export function liveTier(ref: MrRef, mergedSha: string, cwd: string) {
 function deployed(ref: MrRef, tier: DeployTier, cwd: string) {
   const returned: Effect.Effect<DeployedRead, never, ForgeHttp> = Effect.gen(function* () {
     const reached = projectRest(ref, cwd);
-    if (!reached.ok) return reached;
+    if (!reached.ok) {
+      return reached;
+    }
     const { rest } = reached;
     const names = new Set<string>();
     for (let page = 1; ; page++) {
       const listed = yield* rest(Environments, `environments?per_page=100&page=${page}`);
-      if (!listed.ok) return listed;
-      for (const env of listed.value) if (env.tier === tier) names.add(env.name);
-      if (listed.value.length < 100) break;
+      if (!listed.ok) {
+        return listed;
+      }
+      for (const env of listed.value) {
+        if (env.tier === tier) {
+          names.add(env.name);
+        }
+      }
+      if (listed.value.length < 100) {
+        break;
+      }
     }
-    if (names.size === 0) return { ok: true, sha: null };
+    if (names.size === 0) {
+      return { ok: true, sha: null };
+    }
     for (let page = 1; ; page++) {
       const newest = yield* rest(
         Deployments,
         `deployments?status=success&order_by=created_at&sort=desc&per_page=100&page=${page}`,
       );
-      if (!newest.ok) return newest;
+      if (!newest.ok) {
+        return newest;
+      }
       const found = Option.getOrUndefined(
         Arr.findFirst(newest.value, (one) => names.has(one.environment.name)),
       );
-      if (found !== undefined) return { ok: true, sha: found.sha };
-      if (newest.value.length < 100) return { ok: true, sha: null };
+      if (found !== undefined) {
+        return { ok: true, sha: found.sha };
+      }
+      if (newest.value.length < 100) {
+        return { ok: true, sha: null };
+      }
     }
   });
   return returned;
@@ -456,7 +508,9 @@ function stagingEnvironments<R>(
 ) {
   const returned: Effect.Effect<StagingRead, never, ForgeHttp> = Effect.gen(function* () {
     const api = projectRest(ref, cwd);
-    if (!api.ok) return api;
+    if (!api.ok) {
+      return api;
+    }
     const unread = (reason: string) => ({
       ok: false as const,
       reason: `GitLab could not read ${ref.project}'s stage environments: ${reason}`,
@@ -464,9 +518,17 @@ function stagingEnvironments<R>(
     const names: Array<string> = [];
     for (let page = 1; ; page++) {
       const listed = yield* api.rest(Environments, `environments?per_page=100&page=${page}`);
-      if (!listed.ok) return unread(listed.reason);
-      for (const env of listed.value) if (env.tier === "staging") names.push(env.name);
-      if (listed.value.length < 100) break;
+      if (!listed.ok) {
+        return unread(listed.reason);
+      }
+      for (const env of listed.value) {
+        if (env.tier === "staging") {
+          names.push(env.name);
+        }
+      }
+      if (listed.value.length < 100) {
+        break;
+      }
     }
     const environments: Array<StagingEnvironment> = [];
     const builtFrom = new Map<string, boolean>();
@@ -478,11 +540,19 @@ function stagingEnvironments<R>(
           Schema.Array(EnvironmentDeployment),
           `deployments?environment=${encodeURIComponent(name)}&order_by=created_at&sort=desc&per_page=100&page=${page}`,
         );
-        if (!newest.ok) return unread(newest.reason);
+        if (!newest.ok) {
+          return unread(newest.reason);
+        }
         for (const one of newest.value) {
-          if (live === null && one.status === "success") live = one.sha;
-          if (hasCommit || commit === null) continue;
-          if (jobs !== undefined && !jobs.includes(one.deployable?.name ?? "")) continue;
+          if (live === null && one.status === "success") {
+            live = one.sha;
+          }
+          if (hasCommit || commit === null) {
+            continue;
+          }
+          if (jobs !== undefined && !jobs.includes(one.deployable?.name ?? "")) {
+            continue;
+          }
           if (one.sha === commit) {
             hasCommit = true;
           } else if (
@@ -493,14 +563,18 @@ function stagingEnvironments<R>(
             let matches = builtFrom.get(one.sha);
             if (matches === undefined) {
               const parents = yield* api.rest(Commit, `repository/commits/${one.sha}`);
-              if (!parents.ok) return unread(parents.reason);
+              if (!parents.ok) {
+                return unread(parents.reason);
+              }
               matches = parents.value.parent_ids.includes(commit);
               builtFrom.set(one.sha, matches);
             }
             hasCommit = matches;
           }
         }
-        if (newest.value.length < 100) break;
+        if (newest.value.length < 100) {
+          break;
+        }
       }
       environments.push({ name, live, hasCommit });
     }
@@ -531,7 +605,9 @@ const mrsFrom: (
   cwd,
 ) => {
   const reached = projectRest({ project, iid: "" }, cwd);
-  if (!reached.ok) return Effect.succeed({ ok: false, reason: reached.reason });
+  if (!reached.ok) {
+    return Effect.succeed({ ok: false, reason: reached.reason });
+  }
   const query = `source_branch=${encodeURIComponent(branch)}&state=${state}`;
   return Effect.map(
     pagesAs(BranchMr, reached.login, cwd, `${reached.project}/merge_requests?${query}`),
@@ -549,12 +625,16 @@ function forBranch(project: string, branch: string, cwd: string) {
   const returned: Effect.Effect<ForBranch, never, ForgeHttp> = Effect.map(
     mrsFrom(project, branch, "opened", cwd),
     (listed) => {
-      if (!listed.ok) return listed;
+      if (!listed.ok) {
+        return listed;
+      }
       const mr =
         Option.getOrUndefined(
           Arr.findFirst(listed.value, (one) => one.merge_when_pipeline_succeeds === true),
         ) ?? listed.value[0];
-      if (mr === undefined) return { ok: true, open: null };
+      if (mr === undefined) {
+        return { ok: true, open: null };
+      }
       const iid = String(mr.iid);
       return {
         ok: true,
@@ -582,14 +662,22 @@ const wildcard = (pattern: string) =>
 function protects(project: string, branch: string, cwd: string) {
   return Effect.gen(function* () {
     const host = hostOf(project);
-    if (host === null) return null;
+    if (host === null) {
+      return null;
+    }
     const route = `projects/${encodeURIComponent(pipe(project, Str.slice(host.length + 1)))}`;
     const login = glabLoginTo(host);
     const repo = yield* requestAs(DefaultBranch, login, cwd, route);
-    if (!repo.ok) return null;
-    if (repo.value.default_branch === branch) return true;
+    if (!repo.ok) {
+      return null;
+    }
+    if (repo.value.default_branch === branch) {
+      return true;
+    }
     const rules = yield* pagesAs(ProtectedBranch, login, cwd, `${route}/protected_branches`);
-    if (!rules.ok) return null;
+    if (!rules.ok) {
+      return null;
+    }
     return Arr.some(rules.value, (rule) => wildcard(rule.name).test(branch));
   });
 }
@@ -598,7 +686,9 @@ function fromBranch(project: string, branch: string, cwd: string) {
   const returned: Effect.Effect<FromBranchList, never, ForgeHttp> = Effect.map(
     mrsFrom(project, branch, "all", cwd),
     (listed) => {
-      if (!listed.ok) return listed;
+      if (!listed.ok) {
+        return listed;
+      }
       return {
         ok: true,
         mrs: Arr.map(listed.value, (mr) => {
@@ -658,10 +748,14 @@ function job(ref: MrRef, name: string, cwd: string) {
   const returned: Effect.Effect<JobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
-    if (!reached.ok) return reached;
+    if (!reached.ok) {
+      return reached;
+    }
     const { rest } = reached;
     const mr = yield* rest(MrHead, `merge_requests/${ref.iid}`);
-    if (!mr.ok) return { ok: false, reason: `could not read ${where}: ${mr.reason}` };
+    if (!mr.ok) {
+      return { ok: false, reason: `could not read ${where}: ${mr.reason}` };
+    }
     const head = mr.value.sha ?? "";
     const target = mr.value.target_branch ?? null;
     const pipeline = mr.value.head_pipeline ?? null;
@@ -675,24 +769,30 @@ function job(ref: MrRef, name: string, cwd: string) {
       retryOf: [],
       target,
     } as const;
-    if (pipeline === null) return waiting;
+    if (pipeline === null) {
+      return waiting;
+    }
     let merge: string | null = null;
     if (pipeline.sha && pipeline.sha !== head) {
       const commit = yield* rest(Commit, `repository/commits/${pipeline.sha}`);
-      if (!commit.ok)
+      if (!commit.ok) {
         return {
           ok: false,
           reason: `GitLab would not say which head ${where}'s pipeline ${pipeline.id} at ${pipeline.sha} was built from: ${commit.reason}`,
         };
-      if (!commit.value.parent_ids.includes(head)) return waiting;
+      }
+      if (!commit.value.parent_ids.includes(head)) {
+        return waiting;
+      }
       merge = pipeline.sha;
     }
     const found = yield* jobIn(reached, cwd, pipeline.id, name);
-    if (!found.ok)
+    if (!found.ok) {
       return {
         ok: false,
         reason: `could not list the jobs of ${where}'s pipeline ${pipeline.id}: ${found.reason}`,
       };
+    }
     return { ok: true, head, ...found.value, merge, target };
   });
   return returned;
@@ -751,7 +851,9 @@ export const MONTHS = [
 // WARNING: glab writes expiry in Go's RFC 822 layout, in the Machine's own zone.
 export function glabExpiry(said: string) {
   const m = /^(\d{2}) (\w{3}) (\d{2}) (\d{2}):(\d{2}) (\S+)$/.exec(Str.trim(said));
-  if (m === null) return null;
+  if (m === null) {
+    return null;
+  }
   const [, day, month, year, hour, minute, zone = ""] = m;
   const offset = /^([+-])(\d{2})(\d{2})$/.exec(zone);
   const timeZone =
@@ -780,8 +882,9 @@ type Rest = <S extends Schema.Decoder<unknown>>(
 
 const projectRest = (ref: MrRef, cwd: string) => {
   const host = hostOf(ref.project);
-  if (host === null || ref.project === null)
+  if (host === null || ref.project === null) {
     return { ok: false, reason: `${whereOf(ref)} names no GitLab project` } as const;
+  }
   const login = glabLoginTo(host);
   const project = `projects/${encodeURIComponent(pipe(ref.project, Str.slice(host.length + 1)))}`;
   const rest: Rest = (schema, route) => requestAs(schema, login, cwd, `${project}/${route}`);
@@ -795,7 +898,9 @@ const pipelineJobs = (reached: Reached, cwd: string, id: number) =>
 
 const jobIn = (reached: Reached, cwd: string, id: number, name: string) =>
   Effect.map(pipelineJobs(reached, cwd, id), (listed) => {
-    if (!listed.ok) return listed;
+    if (!listed.ok) {
+      return listed;
+    }
     const [found, ...before] = Arr.filter(listed.value, (one) => one.name === name);
     const failed = Arr.filter(before, (one) => one.status === "failed");
     return {
@@ -821,12 +926,18 @@ function failedAttempt(ref: MrRef, id: string, cwd: string) {
   return Effect.gen(function* () {
     const unread: FailedAttempt = { url: null, tests: [], jobs: null };
     const reached = projectRest(ref, cwd);
-    if (!reached.ok) return unread;
+    if (!reached.ok) {
+      return unread;
+    }
     const attempt = yield* reached.rest(AttemptJob, `jobs/${id}`);
-    if (!attempt.ok) return unread;
+    if (!attempt.ok) {
+      return unread;
+    }
     const url = attempt.value.web_url ?? null;
     const jobs = yield* pipelineJobs(reached, cwd, attempt.value.pipeline.id);
-    if (!jobs.ok) return { url, tests: [], jobs: null };
+    if (!jobs.ok) {
+      return { url, tests: [], jobs: null };
+    }
     const self = Option.getOrUndefined(Arr.findFirst(jobs.value, (one) => String(one.id) === id));
     const ended = (one: typeof Job.Type) => epochMs(one.finished_at ?? "");
     const selfAttempts = pipe(
@@ -843,10 +954,18 @@ function failedAttempt(ref: MrRef, id: string, cwd: string) {
         Option.getOrUndefined,
       );
     const failed = Arr.filter(jobs.value, (one) => {
-      if (one.status !== "failed") return false;
-      if (self === undefined) return true;
-      if (one.name === self.name) return one === self;
-      if (Number.isNaN(ended(one)) || Number.isNaN(ended(self))) return true;
+      if (one.status !== "failed") {
+        return false;
+      }
+      if (self === undefined) {
+        return true;
+      }
+      if (one.name === self.name) {
+        return one === self;
+      }
+      if (Number.isNaN(ended(one)) || Number.isNaN(ended(self))) {
+        return true;
+      }
       return attemptOf(one) === self;
     });
     const traces = yield* Effect.forEach(failed, (one) =>
@@ -876,45 +995,54 @@ function baseJob(ref: MrRef, name: string, cwd: string) {
   const returned: Effect.Effect<BaseJobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
-    if (!reached.ok) return reached;
+    if (!reached.ok) {
+      return reached;
+    }
     const { rest } = reached;
     const mr = yield* rest(MrBase, `merge_requests/${ref.iid}`);
-    if (!mr.ok) return { ok: false, reason: `could not read ${where}: ${mr.reason}` };
+    if (!mr.ok) {
+      return { ok: false, reason: `could not read ${where}: ${mr.reason}` };
+    }
     const base = mr.value.diff_refs?.base_sha;
     const target = mr.value.target_branch;
-    if (!base || !target)
+    if (!base || !target) {
       return {
         ok: false,
         reason: `GitLab would not say where ${where} leaves its target branch`,
       };
+    }
     const latest = (query: string) =>
       Effect.map(rest(Pipelines, `pipelines?${query}&per_page=1`), (listed) =>
         listed.ok ? ({ ok: true, value: listed.value[0] } as const) : listed,
       );
     const at = yield* latest(`sha=${base}`);
-    if (!at.ok)
+    if (!at.ok) {
       return {
         ok: false,
         reason: `could not list the pipelines of ${where}'s target: ${at.reason}`,
       };
+    }
     const tip = at.value === undefined ? yield* latest(`ref=${encodeURIComponent(target)}`) : at;
-    if (!tip.ok)
+    if (!tip.ok) {
       return {
         ok: false,
         reason: `could not list the pipelines of ${where}'s target: ${tip.reason}`,
       };
+    }
     const pipeline = tip.value;
-    if (pipeline === undefined)
+    if (pipeline === undefined) {
       return {
         ok: false,
         reason: `no pipeline at ${pipe(base, Str.slice(0, 12))} or on ${target}`,
       };
+    }
     const found = yield* jobIn(reached, cwd, pipeline.id, name);
-    if (!found.ok)
+    if (!found.ok) {
       return {
         ok: false,
         reason: `could not list the jobs of pipeline ${pipeline.id}: ${found.reason}`,
       };
+    }
     return {
       ok: true,
       at: pipeline.sha,
@@ -930,26 +1058,35 @@ function targetJob(ref: MrRef, name: string, cwd: string) {
   const returned: Effect.Effect<TargetJobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
-    if (!reached.ok) return reached;
+    if (!reached.ok) {
+      return reached;
+    }
     const mr = yield* reached.rest(MrBase, `merge_requests/${ref.iid}`);
-    if (!mr.ok) return { ok: false, reason: `could not read ${where}: ${mr.reason}` };
+    if (!mr.ok) {
+      return { ok: false, reason: `could not read ${where}: ${mr.reason}` };
+    }
     const branch = mr.value.target_branch;
-    if (!branch) return { ok: false, reason: `GitLab would not say what ${where} targets` };
+    if (!branch) {
+      return { ok: false, reason: `GitLab would not say what ${where} targets` };
+    }
     const listed = yield* reached.rest(
       Pipelines,
       `pipelines?ref=${encodeURIComponent(branch)}&per_page=1`,
     );
-    if (!listed.ok)
+    if (!listed.ok) {
       return { ok: false, reason: `could not list the pipelines on ${branch}: ${listed.reason}` };
+    }
     const pipeline = listed.value[0];
-    if (pipeline === undefined)
+    if (pipeline === undefined) {
       return { ok: true, branch, at: null, state: "missing", url: null, id: null };
+    }
     const found = yield* jobIn(reached, cwd, pipeline.id, name);
-    if (!found.ok)
+    if (!found.ok) {
       return {
         ok: false,
         reason: `could not list the jobs of pipeline ${pipeline.id}: ${found.reason}`,
       };
+    }
     const { state, url, id } = found.value;
     return { ok: true, branch, at: pipeline.sha, state, url, id };
   });
@@ -1024,7 +1161,9 @@ function approvalOf(
   changesRequested: boolean,
 ) {
   const requiring = Arr.filter(rules, (rule) => rule.required > 0);
-  if (requiring.length === 0) return changesRequested ? "changes were requested" : "";
+  if (requiring.length === 0) {
+    return changesRequested ? "changes were requested" : "";
+  }
   return Arr.join(
     Arr.flatMap(requiring, (rule) => {
       const others = Arr.filter(rule.by, (who) => who !== login).length;
@@ -1042,15 +1181,23 @@ function readReview(ref: MrRef, cwd: string) {
   const returned: Effect.Effect<ReviewRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
-    if (!reached.ok) return reached;
+    if (!reached.ok) {
+      return reached;
+    }
     const { rest } = reached;
     const login = yield* viewerLogin(reached.login, cwd);
-    if (login === null) return { ok: false, reason: "glab will not say who it is logged in as" };
+    if (login === null) {
+      return { ok: false, reason: "glab will not say who it is logged in as" };
+    }
     const route = `merge_requests/${ref.iid}`;
     const mr = yield* rest(ReviewMr, route);
-    if (!mr.ok) return mr;
+    if (!mr.ok) {
+      return mr;
+    }
     const approved = yield* rest(ReviewApprovals, `${route}/approvals`);
-    if (!approved.ok) return approved;
+    if (!approved.ok) {
+      return approved;
+    }
     const listed = Arr.map(approved.value.approved_by ?? [], (one) => one.user.username);
     // WARNING: approval state is a Premium or Ultimate feature; elsewhere approvals read as one rule.
     const state = yield* rest(ApprovalState, `${route}/approval_state`);
@@ -1078,11 +1225,12 @@ function readReview(ref: MrRef, cwd: string) {
         Discussions,
         `${route}/discussions?per_page=${PAGE}&page=${page}`,
       );
-      if (!discussions.ok)
+      if (!discussions.ok) {
         return {
           ok: false,
           reason: `could not read ${where}'s discussions: ${discussions.reason}`,
         };
+      }
       for (const discussion of discussions.value) {
         const thread = discussion.individual_note ? null : discussion.id;
         const resolvable = Arr.filter(discussion.notes, (note) => note.resolvable === true);
@@ -1090,9 +1238,10 @@ function readReview(ref: MrRef, cwd: string) {
           thread !== null &&
           resolvable.length > 0 &&
           Arr.every(resolvable, (note) => Boolean(note.resolved))
-        )
+        ) {
           resolved.add(thread);
-        for (const note of discussion.notes)
+        }
+        for (const note of discussion.notes) {
           comments.push({
             id: String(note.id),
             url: `${web}#note_${note.id}`,
@@ -1108,8 +1257,11 @@ function readReview(ref: MrRef, cwd: string) {
             file: note.position?.new_path ?? note.position?.old_path ?? null,
             line: note.position?.new_line ?? note.position?.old_line ?? null,
           });
+        }
       }
-      if (discussions.value.length < PAGE) break;
+      if (discussions.value.length < PAGE) {
+        break;
+      }
     }
     const said = mr.value;
     const changesRequested = said.detailed_merge_status === "requested_changes";
@@ -1143,7 +1295,9 @@ function readReview(ref: MrRef, cwd: string) {
 function reply(ref: MrRef, to: Pick<ForgeComment, "thread">, body: string, cwd: string) {
   return Effect.gen(function* () {
     const reached = projectRest(ref, cwd);
-    if (!reached.ok) return reached;
+    if (!reached.ok) {
+      return reached;
+    }
     const route =
       to.thread === null
         ? `merge_requests/${ref.iid}/notes`
@@ -1165,7 +1319,9 @@ function merge(ref: MrRef, head: string, cwd: string) {
   const returned: Effect.Effect<MergeAnswer, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
-    if (!reached.ok) return { _tag: "Refused", reason: reached.reason };
+    if (!reached.ok) {
+      return { _tag: "Refused", reason: reached.reason };
+    }
     const route = `merge_requests/${ref.iid}`;
     const merging = yield* request(reached.login, cwd, "PUT", `${reached.project}/${route}/merge`, {
       sha: head,
@@ -1179,8 +1335,10 @@ function merge(ref: MrRef, head: string, cwd: string) {
       return { _tag: "Merged", merged: merged === null ? "" : mergedSha(merged) };
     }
     const refusal = `GitLab refused to merge ${where}: ${merging.reason}`;
-    if (mr === null) return { _tag: "Refused", reason: refusal };
-    if (mr.state === "merged")
+    if (mr === null) {
+      return { _tag: "Refused", reason: refusal };
+    }
+    if (mr.state === "merged") {
       return {
         _tag: "AlreadyMerged",
         merged: mergedSha(mr),
@@ -1188,7 +1346,10 @@ function merge(ref: MrRef, head: string, cwd: string) {
         by: mr.merge_user?.username ?? mr.merged_by?.username ?? "",
         at: mr.merged_at ?? "",
       };
-    if ((mr.sha ?? "") !== head) return { _tag: "HeadMoved", head: mr.sha ?? "" };
+    }
+    if ((mr.sha ?? "") !== head) {
+      return { _tag: "HeadMoved", head: mr.sha ?? "" };
+    }
     return { _tag: "Refused", reason: refusal };
   });
   return returned;
@@ -1197,7 +1358,9 @@ function merge(ref: MrRef, head: string, cwd: string) {
 function retryJob(ref: MrRef, id: string, cwd: string) {
   return Effect.gen(function* () {
     const reached = projectRest(ref, cwd);
-    if (!reached.ok) return reached;
+    if (!reached.ok) {
+      return reached;
+    }
     const ran = yield* request(reached.login, cwd, "POST", `${reached.project}/jobs/${id}/retry`);
     return ran.ok
       ? { ok: true, reason: "" }
@@ -1217,32 +1380,41 @@ function startPipeline(ref: MrRef, head: string, cwd: string) {
   const returned: Effect.Effect<PipelineStart, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
     const reached = projectRest(ref, cwd);
-    if (!reached.ok) return { _tag: "Failed", reason: reached.reason };
+    if (!reached.ok) {
+      return { _tag: "Failed", reason: reached.reason };
+    }
     const { rest, login, project } = reached;
     const on = yield* rest(ShaPipelines, `pipelines?sha=${head}`);
-    if (!on.ok)
+    if (!on.ok) {
       return { _tag: "Failed", reason: `could not list the pipelines on ${head}: ${on.reason}` };
+    }
     const running = Arr.findFirst(on.value, (one) => one.status !== "skipped");
-    if (Option.isSome(running)) return { _tag: "Has", url: running.value.web_url ?? "" };
+    if (Option.isSome(running)) {
+      return { _tag: "Has", url: running.value.web_url ?? "" };
+    }
     const started = (answer: Answered<unknown>) =>
       Effect.gen(function* () {
-        if (!answer.ok)
+        if (!answer.ok) {
           return {
             _tag: "Failed",
             reason: `could not start a pipeline for ${where}: ${answer.reason}`,
           } as const;
+        }
         const pipeline = Option.getOrUndefined(
           Schema.decodeUnknownOption(StartedPipeline)(answer.value),
         );
         const url = pipeline?.web_url ?? "";
         const sha = pipeline?.sha ?? "";
-        if (sha === head) return { _tag: "Started", url } as const;
+        if (sha === head) {
+          return { _tag: "Started", url } as const;
+        }
         const merged =
           pipeline?.ref === `refs/merge-requests/${ref.iid}/merge`
             ? yield* rest(Commit, `repository/commits/${sha}`)
             : null;
-        if (merged?.ok === true && merged.value.parent_ids[1] === head)
+        if (merged?.ok === true && merged.value.parent_ids[1] === head) {
           return { _tag: "Started", url } as const;
+        }
         return {
           _tag: "Failed",
           reason: `GitLab started ${url || "a pipeline"} for ${where} on ${sha === "" ? "a revision it did not name" : pipe(sha, Str.slice(0, 12))}, not on ${pipe(head, Str.slice(0, 12))}`,
@@ -1254,21 +1426,25 @@ function startPipeline(ref: MrRef, head: string, cwd: string) {
       "POST",
       `${project}/merge_requests/${ref.iid}/pipelines`,
     );
-    if (asMr.ok || asMr.status !== 400) return yield* started(asMr);
+    if (asMr.ok || asMr.status !== 400) {
+      return yield* started(asMr);
+    }
     const mr = yield* rest(SourceBranch, `merge_requests/${ref.iid}`);
-    if (!mr.ok || !mr.value.source_branch)
+    if (!mr.ok || !mr.value.source_branch) {
       return {
         _tag: "Failed",
         reason: `could not read ${where}'s source branch: ${mr.ok ? "GitLab named none" : mr.reason}`,
       };
+    }
     const asBranch = yield* request(
       login,
       cwd,
       "POST",
       `${project}/pipeline?ref=${encodeURIComponent(mr.value.source_branch)}`,
     );
-    if (!asBranch.ok && asBranch.status === 400)
+    if (!asBranch.ok && asBranch.status === 400) {
       return { _tag: "NoneByRules", message: asBranch.reason };
+    }
     return yield* started(asBranch);
   });
   return returned;
@@ -1290,7 +1466,9 @@ const PipelineState = Schema.Struct({ status: Schema.String });
 function pipelineStatus(url: string, cwd: string) {
   return Effect.gen(function* () {
     const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(Str.trim(url));
-    if (!m) return null;
+    if (!m) {
+      return null;
+    }
     const [, host, project, id] = m;
     // WARNING: the address is agent text; only a host the human logged glab in to is asked.
     const said = yield* requestAs(
@@ -1312,12 +1490,16 @@ const PipelineIdentity = Schema.Struct({
 function tagPipeline(ref: MrRef, tag: string, cwd: string) {
   const returned: Effect.Effect<TagPipelineRead, never, ForgeHttp> = Effect.gen(function* () {
     const reached = projectRest(ref, cwd);
-    if (!reached.ok) return reached;
+    if (!reached.ok) {
+      return reached;
+    }
     const pipelines = yield* reached.rest(
       Pipelines,
       `pipelines?ref=${encodeURIComponent(tag)}&order_by=id&sort=desc&per_page=1`,
     );
-    if (!pipelines.ok) return pipelines;
+    if (!pipelines.ok) {
+      return pipelines;
+    }
     const newest = pipelines.value[0];
     return {
       ok: true,
@@ -1330,18 +1512,26 @@ function tagPipeline(ref: MrRef, tag: string, cwd: string) {
 function pipeline(url: string, cwd: string) {
   const returned: Effect.Effect<PipelineRead, never, ForgeHttp> = Effect.gen(function* () {
     const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(Str.trim(url));
-    if (!m) return { ok: false, reason: `${url} is not a GitLab pipeline` };
+    if (!m) {
+      return { ok: false, reason: `${url} is not a GitLab pipeline` };
+    }
     const [, host, project, id] = m;
     const login = glabLoginTo(host!, true);
     const route = `projects/${encodeURIComponent(project!)}/pipelines/${id}`;
     const status = yield* requestAs(PipelineIdentity, login, cwd, route);
-    if (!status.ok) return status;
+    if (!status.ok) {
+      return status;
+    }
     const jobs: Array<(typeof Jobs.Type)[number]> = [];
     for (let page = 1; ; page++) {
       const some = yield* requestAs(Jobs, login, cwd, `${route}/jobs?per_page=100&page=${page}`);
-      if (!some.ok) return some;
+      if (!some.ok) {
+        return some;
+      }
       jobs.push(...some.value);
-      if (some.value.length < 100) break;
+      if (some.value.length < 100) {
+        break;
+      }
     }
     return {
       ok: true,
@@ -1365,7 +1555,9 @@ function clone<R>(project: string, into: string, cwd: string, run: Runner<R>) {
     const token = Str.trim(
       (yield* run("glab", ["config", "get", "token", "--host", host], cwd)).stdout,
     );
-    if (token === "") return { ok: false, reason: `could not authenticate to ${host}` };
+    if (token === "") {
+      return { ok: false, reason: `could not authenticate to ${host}` };
+    }
     const credentials = Buffer.from(`oauth2:${token}`).toString("base64");
     const cloned = yield* run("git", ["clone", "--quiet", `https://${project}.git`, into], cwd, {
       GIT_CONFIG_COUNT: "1",
@@ -1383,7 +1575,9 @@ export const gitlab: Forge = {
   reviewChanges: (ref, previous, head, cwd, run) =>
     Effect.gen(function* () {
       const project = ref.project ?? (yield* projectHere(cwd, run));
-      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      if (project === null) {
+        return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      }
       return yield* reviewChanges(
         glabLoginTo(hostOf(project) ?? "gitlab.com"),
         project,
@@ -1469,8 +1663,9 @@ export const gitlab: Forge = {
   approve: (ref, head, cwd, run) =>
     Effect.gen(function* () {
       const project = ref.project ?? (yield* projectHere(cwd, run));
-      if (project === null)
+      if (project === null) {
         return { ok: false, message: `${whereOf(ref)} names no GitLab project` };
+      }
       return yield* approveReview(
         glabLoginTo(hostOf(project) ?? "gitlab.com"),
         project,
@@ -1482,7 +1677,9 @@ export const gitlab: Forge = {
   descends: (ref, previous, head, cwd, run) =>
     Effect.gen(function* () {
       const project = ref.project ?? (yield* projectHere(cwd, run));
-      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      if (project === null) {
+        return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      }
       return yield* descendsFrom(
         glabLoginTo(hostOf(project) ?? "gitlab.com"),
         project,
@@ -1494,7 +1691,9 @@ export const gitlab: Forge = {
   approvedAt: (ref, login, head, cwd, run) =>
     Effect.gen(function* () {
       const project = ref.project ?? (yield* projectHere(cwd, run));
-      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      if (project === null) {
+        return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      }
       return yield* approvedAt(
         glabLoginTo(hostOf(project) ?? "gitlab.com"),
         project,
@@ -1507,7 +1706,9 @@ export const gitlab: Forge = {
   findNote: (ref, signature, cwd, run) =>
     Effect.gen(function* () {
       const project = ref.project ?? (yield* projectHere(cwd, run));
-      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      if (project === null) {
+        return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      }
       return yield* findReviewNote(
         glabLoginTo(hostOf(project) ?? "gitlab.com"),
         project,
@@ -1519,8 +1720,9 @@ export const gitlab: Forge = {
   post: (ref, body, cwd, run) =>
     Effect.gen(function* () {
       const project = ref.project ?? (yield* projectHere(cwd, run));
-      if (project === null)
+      if (project === null) {
         return { ok: false, message: `${whereOf(ref)} names no GitLab project` };
+      }
       return yield* postReview(
         glabLoginTo(hostOf(project) ?? "gitlab.com"),
         project,

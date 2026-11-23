@@ -36,20 +36,30 @@ const callerReaches = Effect.fn("collie.callerReaches")(function* (
   view: RunView,
   caller: string | null,
 ) {
-  if (caller === null) return false;
-  if (view.parent === caller || view.requestedBy?.run === caller) return true;
+  if (caller === null) {
+    return false;
+  }
+  if (view.parent === caller || view.requestedBy?.run === caller) {
+    return true;
+  }
   const trail = yield* readAudit(runDir(env.stateDir, caller)).pipe(
     Effect.provide(recordsReadLayer(env.stateDir)),
     Effect.orElseSucceed(() => []),
   );
-  if (Arr.some(trail, (line) => steered(line, view.runId))) return true;
+  if (Arr.some(trail, (line) => steered(line, view.runId))) {
+    return true;
+  }
   const intent = yield* readIntent(runDir(env.stateDir, caller)).pipe(
     Effect.provide(recordsReadLayer(env.stateDir)),
     Effect.orElseSucceed(() => null),
   );
-  if (pipe_(intent?.goal ?? "", Str.includes(view.runId))) return true;
+  if (pipe_(intent?.goal ?? "", Str.includes(view.runId))) {
+    return true;
+  }
   const own = yield* asks(env, (client) => client.run({ runId: caller }));
-  if (!own.ok || own.value === null) return false;
+  if (!own.ok || own.value === null) {
+    return false;
+  }
   const inputs = yield* Schema.encodeEffect(UnknownJson)(own.value.input).pipe(
     Effect.orElseSucceed(() => ""),
   );
@@ -58,8 +68,12 @@ const callerReaches = Effect.fn("collie.callerReaches")(function* (
 
 export const outOfReach = Effect.fn("collie.outOfReach")(
   function* (env: PluginEnv, view: RunView, machine: string | null, scope: RunScope) {
-    if (machine !== null || scope.task === null || view.task === scope.task) return null;
-    if (yield* callerReaches(env, view, scope.caller)) return null;
+    if (machine !== null || scope.task === null || view.task === scope.task) {
+      return null;
+    }
+    if (yield* callerReaches(env, view, scope.caller)) {
+      return null;
+    }
     const workspace =
       view.task === null
         ? null
@@ -88,22 +102,32 @@ export const readRunLines = Effect.fn("RunRead.readRunLines")(function* (
   asked: LinesAsked,
 ) {
   const badPattern = linesError(asked);
-  if (badPattern !== null) return err("invalid_input", badPattern);
+  if (badPattern !== null) {
+    return err("invalid_input", badPattern);
+  }
   const found = yield* asksRun(env, runId, (client) => client.run({ runId }));
-  if (!found.ok) return found;
-  if (found.value === null)
+  if (!found.ok) {
+    return found;
+  }
+  if (found.value === null) {
     return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
+  }
   const refused = yield* outOfReach(env, found.value, found.machine, scope);
-  if (refused !== null) return refused;
+  if (refused !== null) {
+    return refused;
+  }
   const read = yield* asks({ ...env, machine: found.machine ?? undefined }, (client) =>
     wholeText((offset) => client.runFile({ runId, ref, offset })),
   );
-  if (!read.ok) return read;
-  if (read.value === null)
+  if (!read.ok) {
+    return read;
+  }
+  if (read.value === null) {
     return err(
       "invalid_input",
       `${ref} is not text: it is read by bytes, not by line, in Desktop or with collie run artefact read.`,
     );
+  }
   return { ok: true as const, data: linesOf(ref, read.value, asked) };
 });
 

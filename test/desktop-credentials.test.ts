@@ -218,14 +218,17 @@ test("onboarding gives the runner Desktop's secrets on stdin, and forwards and o
             port: 0,
             fetch: (request) => {
               const path = new URL(request.url).pathname;
-              if (path === `/0.40.0/collie-${platform}`) return new Response(bytes);
-              if (path === `/0.40.0/collie-${platform}.sig`)
+              if (path === `/0.40.0/collie-${platform}`) {
+                return new Response(bytes);
+              }
+              if (path === `/0.40.0/collie-${platform}.sig`) {
                 return new Response(
                   signRelease(
                     bytes,
                     key.privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
                   ),
                 );
+              }
               return new Response("no", { status: 404 });
             },
           }),

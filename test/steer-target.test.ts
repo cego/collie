@@ -71,7 +71,8 @@ test("an agent is found by the name it was launched under, though its operations
     { agent, operation: "01-a.md", role: "implementer", done: true, runId, sequence: 1 },
     { agent, operation: "02-b.md", role: "implementer", done: true, runId, sequence: 1 },
   ];
-  for (const asked of [{ agent: "build" }, { operation: "build" }, { to: "build" }])
+  for (const asked of [{ agent: "build" }, { operation: "build" }, { to: "build" }]) {
     expect(steerTarget(tickets, asked, launchedAs)).toMatchObject({ operation: "02-b.md" });
+  }
   expect(steerTarget(tickets, { agent: "review" }, launchedAs)).toBeUndefined();
 });

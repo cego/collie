@@ -66,10 +66,11 @@ test("failed CI is an opt-in repair even without approval, with its forge identi
 test("failed CI preserves terminal, conflict, moved-head and fresh-comment precedence", () => {
   const options = { ...at, returnConflicts: true, returnFailedCi: true };
   const failed = { pipeline: { state: "failed" as const, name: "build" } };
-  for (const state of ["merged", "closed"] as const)
+  for (const state of ["merged", "closed"] as const) {
     expect(standingOf(read({ ...failed, state }), options)._tag).toBe(
       state === "merged" ? "Merged" : "Closed",
     );
+  }
   expect(
     standingOf(
       read({ ...failed, head: MOVED, mergeable: { state: "blocked", said: "conflict" } }),

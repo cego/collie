@@ -41,7 +41,9 @@ function nameWith(
   legacy: boolean,
 ) {
   const whole = layout(slug, stepId, variantKey, `r${seq}`, legacy);
-  if (!whole.cut) return whole.name;
+  if (!whole.cut) {
+    return whole.name;
+  }
   const sum = pipe(
     Bun.hash(stringifyJson([slug, stepId, variantKey])).toString(36),
     Str.slice(-DIGEST),
@@ -83,8 +85,12 @@ function layout(
     return { name: head ? `${head}-${tail}` : tail, cut: core !== step || head !== clean };
   };
   const full = fitted(MAX);
-  if (/^[a-z]/.test(full.name)) return full;
-  if (legacy) return { ...full, name: pipe(`w${full.name}`, Str.slice(0, MAX)) };
+  if (/^[a-z]/.test(full.name)) {
+    return full;
+  }
+  if (legacy) {
+    return { ...full, name: pipe(`w${full.name}`, Str.slice(0, MAX)) };
+  }
   const shorter = fitted(MAX - 1);
   return { ...shorter, name: `w${shorter.name}` };
 }
@@ -101,12 +107,19 @@ export function stepLabel(slug: string, stepId: string, variantKey: string | nul
 
 // WARNING: workflow-controlled names become path components, so a definition must not be able to name a file outside the run.
 export function unsafePathComponent(value: string) {
-  if (value === "") return "is empty";
-  if (value === "." || value === "..") return `is "${value}"`;
-  if (pipe(value, Str.includes("/")) || pipe(value, Str.includes("\\")))
+  if (value === "") {
+    return "is empty";
+  }
+  if (value === "." || value === "..") {
+    return `is "${value}"`;
+  }
+  if (pipe(value, Str.includes("/")) || pipe(value, Str.includes("\\"))) {
     return "contains a path separator";
+  }
   // WARNING: NUL fails filesystem calls and a newline corrupts a forked name's frontmatter, so both are refused here.
-  if (/\p{Cc}/u.test(value)) return "contains a control character";
+  if (/\p{Cc}/u.test(value)) {
+    return "contains a control character";
+  }
   return null;
 }
 
@@ -139,13 +152,21 @@ export function runName(workflow: string, slug: string) {
 }
 
 export function targetLabel(workflow: string, slug: string, target: string) {
-  if (target === "worktree") return "worktree";
+  if (target === "worktree") {
+    return "worktree";
+  }
   const mr = parseMrTarget(target);
-  if (mr) return `${mrWords(mr).sign}${mr.iid}`;
+  if (mr) {
+    return `${mrWords(mr).sign}${mr.iid}`;
+  }
   if (pipe(target, Str.startsWith("branch:"))) {
     const [base, head = ""] = Str.split(pipe(target, Str.slice(7)), "...");
-    if (!opaque(head)) return head;
-    if (!opaque(base)) return base;
+    if (!opaque(head)) {
+      return head;
+    }
+    if (!opaque(base)) {
+      return base;
+    }
     return "diff";
   }
   return runName(workflow, slug);

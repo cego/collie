@@ -650,8 +650,9 @@ test("implement started to prove performance is refused at the front door, namin
         "connections.ts",
         "measuring.ts",
         "measuring.md",
-      ])
+      ]) {
         yield* fs.copyFile(`${shipped}/${name}`, `${world.user}/${name}`).pipe(Effect.orDie);
+      }
       const client = yield* connect(world.state).pipe(Effect.orDie);
       const refused = yield* client
         .start({

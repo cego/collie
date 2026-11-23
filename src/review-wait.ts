@@ -189,13 +189,15 @@ export function settleAnswers(round: {
         : answer?.commit !== undefined && round.onHead.includes(answer.commit)
           ? `Fixed in \`${pipe(answer.commit, Str.slice(0, 8))}\`: ${answer.note}`
           : null;
-    if (says === null) carried.push(comment);
-    else
+    if (says === null) {
+      carried.push(comment);
+    } else {
       replies.push({
         id: comment.id,
         kind: answer!.answer,
         body: `${comment.url}\n\n${says}`,
       });
+    }
   }
   return { replies, carried };
 }

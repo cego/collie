@@ -19,15 +19,19 @@ test("markdown keeps headings and emphasis when CLI colour is disabled", () =>
       try {
         const styled = yield* Effect.promise(() => styledMarkdown("# Heading\n\n**emphasis**", 40));
         const chunks = styled?.chunks ?? [];
-        for (const text of ["Heading", "emphasis"])
+        for (const text of ["Heading", "emphasis"]) {
           expect(
             (Option.getOrUndefined(
               Arr.findFirst(chunks, (chunk) => pipe(chunk.text, Str.includes(text))),
             )?.attributes ?? 0) & TextAttributes.BOLD,
           ).toBe(TextAttributes.BOLD);
+        }
       } finally {
-        if (previous === undefined) delete Bun.env.NO_COLOR;
-        else Bun.env.NO_COLOR = previous;
+        if (previous === undefined) {
+          delete Bun.env.NO_COLOR;
+        } else {
+          Bun.env.NO_COLOR = previous;
+        }
       }
     }),
   ));

@@ -78,10 +78,18 @@ export const append = Effect.fn("Conversation.append")(function* (
     role: turn.role,
     text: sanitise(redact(turn.text), roots),
   };
-  if (turn.target !== undefined) written.target = turn.target;
-  if (turn.card !== undefined) written.card = turn.card;
-  if (turn.proposal !== undefined) written.proposal = turn.proposal;
-  if (turn.evaluatorCall !== undefined) written.evaluator_call = turn.evaluatorCall;
+  if (turn.target !== undefined) {
+    written.target = turn.target;
+  }
+  if (turn.card !== undefined) {
+    written.card = turn.card;
+  }
+  if (turn.proposal !== undefined) {
+    written.proposal = turn.proposal;
+  }
+  if (turn.evaluatorCall !== undefined) {
+    written.evaluator_call = turn.evaluatorCall;
+  }
   yield* ensureLockDir(file);
   yield* withLock(
     `${file}.lock`,
@@ -104,7 +112,9 @@ export const append = Effect.fn("Conversation.append")(function* (
 });
 
 function sanitise(text: string, roots: ReadonlyArray<string>) {
-  if (roots.length === 0) return text;
+  if (roots.length === 0) {
+    return text;
+  }
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
   return text.replaceAll(/(^|\s)(\/[^\s'"`)]+)/g, (whole, lead: string, found: string) =>
     insideKnown(found, roots) ? whole : `${lead}<external>`,
@@ -126,7 +136,10 @@ export const pendingProposals = Effect.fn("Conversation.pendingProposals")(funct
   stillPending: (id: string) => boolean,
 ) {
   const ids = new Set<string>();
-  for (const turn of yield* read(file))
-    if (turn.proposal !== undefined && stillPending(turn.proposal)) ids.add(turn.proposal);
+  for (const turn of yield* read(file)) {
+    if (turn.proposal !== undefined && stillPending(turn.proposal)) {
+      ids.add(turn.proposal);
+    }
+  }
   return [...ids];
 });

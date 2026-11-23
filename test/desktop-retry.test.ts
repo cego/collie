@@ -12,9 +12,15 @@ const scripted = (subscriptions: ReadonlyArray<string>) => {
   let at = 0;
   return Stream.suspend(() => {
     const now = subscriptions[at++] ?? "fail";
-    if (now === "fail") return Stream.fail(new ActionFailed({ reason: "the host refused" }));
-    if (now === "interrupt") return Stream.fromEffect(Effect.interrupt);
-    if (pipe_(now, Str.endsWith("."))) return Stream.make(pipe_(now, Str.slice(0, -1)));
+    if (now === "fail") {
+      return Stream.fail(new ActionFailed({ reason: "the host refused" }));
+    }
+    if (now === "interrupt") {
+      return Stream.fromEffect(Effect.interrupt);
+    }
+    if (pipe_(now, Str.endsWith("."))) {
+      return Stream.make(pipe_(now, Str.slice(0, -1)));
+    }
     return pipe_(now, Str.endsWith("!"))
       ? Stream.make(pipe_(now, Str.slice(0, -1))).pipe(
           Stream.concat(Stream.fail(new ActionFailed({ reason: "the host refused" }))),

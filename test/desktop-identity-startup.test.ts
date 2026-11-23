@@ -71,7 +71,9 @@ test("startup identity: a malformed identity fails as one unreachable route and 
         const events = `${home}/events.jsonl`;
         const result = yield* opening("malformed", events).pipe(Effect.exit);
         expect(Exit.isFailure(result)).toBe(true);
-        if (Exit.isSuccess(result)) return;
+        if (Exit.isSuccess(result)) {
+          return;
+        }
         expect(Option.getOrUndefined(Cause.findErrorOption(result.cause))).toMatchObject({
           state: "unreachable",
         });
@@ -95,7 +97,9 @@ test("startup identity: a ready bridge whose host stays silent is bounded at fiv
           yield* TestClock.adjust("5 seconds");
           const result = yield* Fiber.join(pending);
           expect(Exit.isFailure(result)).toBe(true);
-          if (Exit.isSuccess(result)) return;
+          if (Exit.isSuccess(result)) {
+            return;
+          }
           expect(Option.getOrUndefined(Cause.findErrorOption(result.cause))).toMatchObject({
             state: "unreachable",
             reason: "the host did not identify itself within 5 seconds",

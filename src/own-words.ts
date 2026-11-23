@@ -99,13 +99,16 @@ const recordsOf = (text: string, types?: ReadonlySet<string>) => {
   const records: Array<JsonObject> = [];
   const lines = Str.split(text, "\n");
   for (const [index, line] of Arr.map(Arr.dropRight(lines, 1), (line, i) => [i, line] as const)) {
-    if (Str.trim(line) === "") continue;
+    if (Str.trim(line) === "") {
+      continue;
+    }
     const record = pipe(decodeLine(line), Option.filter(isJsonObject), Option.getOrUndefined);
     const type = record?.["type"];
-    if (record === undefined || (types !== undefined && !(isString(type) && types.has(type))))
+    if (record === undefined || (types !== undefined && !(isString(type) && types.has(type)))) {
       return record === undefined
         ? `line ${index + 1} is not a record`
         : `line ${index + 1} is of type ${isString(type) ? type : "none"}, which it does not know`;
+    }
     records.push(record);
   }
   return records;
@@ -196,10 +199,16 @@ const withoutReminders = (text: string) =>
   Str.trim(pipe(text, Str.replaceAll(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")));
 
 const typedText = (content: Json | undefined, kind: string) => {
-  if (isString(content)) return content;
-  if (!isJsonArray(content)) return undefined;
+  if (isString(content)) {
+    return content;
+  }
+  if (!isJsonArray(content)) {
+    return undefined;
+  }
   const types = Arr.map(content, (block) => stringAt(block, "type"));
-  if (!Arr.every(types, (type) => type === kind || type === "image")) return undefined;
+  if (!Arr.every(types, (type) => type === kind || type === "image")) {
+    return undefined;
+  }
   const texts = Arr.filter(
     Arr.map(content, (block) => stringAt(block, "text")),
     isString,
@@ -212,10 +221,14 @@ const claudeSession = (records: ReadonlyArray<JsonObject>, stem: string) => {
   let delivered = false;
   const said: Array<Said> = [];
   for (const line of records) {
-    if (line["type"] !== "user") continue;
+    if (line["type"] !== "user") {
+      continue;
+    }
     cwd = stringAt(line, "cwd") ?? cwd;
     const raw = typedText(objectAt(line, "message")?.["content"], "text");
-    if (raw === undefined) continue;
+    if (raw === undefined) {
+      continue;
+    }
     delivered ||= pipe(raw, Str.includes(DELIVERY));
     const kind = stringAt(objectAt(line, "origin"), "kind");
     if (
@@ -224,11 +237,14 @@ const claudeSession = (records: ReadonlyArray<JsonObject>, stem: string) => {
       line["isVisibleInTranscriptOnly"] === true ||
       line["isSidechain"] === true ||
       (kind !== undefined && kind !== "human")
-    )
+    ) {
       continue;
+    }
     const typed = withoutReminders(raw);
     const at = stringAt(line, "timestamp");
-    if (typed !== "" && !injected(typed) && at !== undefined) said.push({ at, text: typed });
+    if (typed !== "" && !injected(typed) && at !== undefined) {
+      said.push({ at, text: typed });
+    }
   }
   return { ids: [stem], cwd, said, delivered };
 };
@@ -247,16 +263,24 @@ const codexSession = (records: ReadonlyArray<JsonObject>) => {
       spawned = objectAt(payload, "source")?.["subagent"] !== undefined;
       continue;
     }
-    if (line["type"] !== "response_item") continue;
-    if (stringAt(payload, "type") !== "message" || stringAt(payload, "role") !== "user") continue;
+    if (line["type"] !== "response_item") {
+      continue;
+    }
+    if (stringAt(payload, "type") !== "message" || stringAt(payload, "role") !== "user") {
+      continue;
+    }
     const at = stringAt(line, "timestamp");
     const content = payload?.["content"];
     for (const block of isJsonArray(content) ? content : []) {
       const raw = stringAt(block, "type") === "input_text" ? stringAt(block, "text") : undefined;
-      if (raw === undefined) continue;
+      if (raw === undefined) {
+        continue;
+      }
       delivered ||= pipe(raw, Str.includes(DELIVERY));
       const typed = Str.trim(raw);
-      if (typed !== "" && !injected(typed) && at !== undefined) said.push({ at, text: typed });
+      if (typed !== "" && !injected(typed) && at !== undefined) {
+        said.push({ at, text: typed });
+      }
     }
   }
   return { ids, cwd, said: spawned ? [] : said, delivered };
@@ -274,13 +298,19 @@ const piSession = (records: ReadonlyArray<JsonObject>) => {
       continue;
     }
     const message = objectAt(line, "message");
-    if (line["type"] !== "message" || stringAt(message, "role") !== "user") continue;
+    if (line["type"] !== "message" || stringAt(message, "role") !== "user") {
+      continue;
+    }
     const raw = typedText(message?.["content"], "text");
-    if (raw === undefined) continue;
+    if (raw === undefined) {
+      continue;
+    }
     delivered ||= pipe(raw, Str.includes(DELIVERY));
     const typed = Str.trim(raw);
     const at = stringAt(line, "timestamp");
-    if (typed !== "" && !injected(typed) && at !== undefined) said.push({ at, text: typed });
+    if (typed !== "" && !injected(typed) && at !== undefined) {
+      said.push({ at, text: typed });
+    }
   }
   return { ids, cwd, said, delivered };
 };
@@ -321,7 +351,9 @@ const openCodeStore = (file: string, since: number | null) =>
       const db = new Database(file, { readonly: true });
       try {
         const count = decodeCount(db.query("SELECT count(*) AS n FROM session").get()).n;
-        if (since === null) return { count, sessions: [] };
+        if (since === null) {
+          return { count, sessions: [] };
+        }
         const collies = new Set(
           Arr.map(
             decodeSessions(
@@ -353,10 +385,16 @@ const openCodeStore = (file: string, since: number | null) =>
           for (const row of parts) {
             const part = pipe(decodeLine(row.part), Option.getOrUndefined);
             const raw = stringAt(part, "type") === "text" ? stringAt(part, "text") : undefined;
-            if (raw === undefined) continue;
+            if (raw === undefined) {
+              continue;
+            }
             const typed = Str.trim(raw);
-            if (isJsonObject(part) && part["synthetic"] === true) continue;
-            if (typed !== "" && !injected(typed)) said.push({ at: isoAt(row.at), text: typed });
+            if (isJsonObject(part) && part["synthetic"] === true) {
+              continue;
+            }
+            if (typed !== "" && !injected(typed)) {
+              said.push({ at: isoAt(row.at), text: typed });
+            }
           }
           const first = parts[0];
           return {
@@ -418,7 +456,9 @@ const recordedAgentSessions = Effect.fn("OwnWords.recordedAgentSessions")(functi
 ) {
   const fs = yield* FileSystem.FileSystem;
   const file = `${stateDir}/host.db`;
-  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) return new Set<string>();
+  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) {
+    return new Set<string>();
+  }
   return yield* Effect.try(() => {
     const db = new Database(file, { readonly: true });
     try {
@@ -451,8 +491,9 @@ const isHuman = (line: JsonObject) => {
 const startedWords = Effect.fn("OwnWords.startedWords")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const file = `${stateDir}/host.db`;
-  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))))
+  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) {
     return new Map<string, string>();
+  }
   return yield* Effect.try({
     try: () => {
       const db = new Database(file, { readonly: true });
@@ -463,7 +504,9 @@ const startedWords = Effect.fn("OwnWords.startedWords")(function* (stateDir: str
         )) {
           const by = objectAt(pipe(decodeLine(placing), Option.getOrUndefined), "started");
           const words = stringAt(by, "words");
-          if (words !== undefined && stringAt(by, "door") !== "chat") started.set(run, words);
+          if (words !== undefined && stringAt(by, "door") !== "chat") {
+            started.set(run, words);
+          }
         }
         return started;
       } finally {
@@ -513,8 +556,11 @@ const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, re
             .all("operations.jsonl"),
         )) {
           const trail = byRun.get(run);
-          if (trail === undefined) byRun.set(run, [line]);
-          else trail.push(line);
+          if (trail === undefined) {
+            byRun.set(run, [line]);
+          } else {
+            trail.push(line);
+          }
         }
         return byRun;
       } finally {
@@ -535,13 +581,17 @@ const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, re
     }
     const lines = Arr.filter(records, isHuman);
     entries += lines.length;
-    if (!reading) continue;
+    if (!reading) {
+      continue;
+    }
     const seen = new Set<string>();
     for (const line of lines) {
       const text = typedIn(line, started, run);
       const at = stringAt(line, "at");
       const typed = text === undefined ? "" : Str.trim(text);
-      if (typed === "" || at === undefined || seen.has(typed)) continue;
+      if (typed === "" || at === undefined || seen.has(typed)) {
+        continue;
+      }
       seen.add(typed);
       words.push({ source: "collie", at, cwd: null, text: typed, run });
     }
@@ -574,9 +624,11 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
       skipped += 1;
       return;
     }
-    for (const { at, text } of session.said)
-      if (since === null || epochMs(at) >= since)
+    for (const { at, text } of session.said) {
+      if (since === null || epochMs(at) >= since) {
         messages.push({ source, at, cwd: session.cwd, text });
+      }
+    }
   };
 
   for (const store of fileStores(places.home)) {
@@ -601,7 +653,9 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
         Effect.map((info) => Option.getOrUndefined(info.mtime)),
         Effect.orElseSucceed(() => undefined),
       );
-      if (modified !== undefined && since !== null && modified.getTime() < since) continue;
+      if (modified !== undefined && since !== null && modified.getTime() < since) {
+        continue;
+      }
       const text = yield* fs.readFileString(path).pipe(Effect.result);
       const records =
         text._tag === "Failure" ? String(text.failure) : recordsOf(text.success, store.types);
@@ -622,30 +676,32 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
   }
 
   const openCode = openCodeFile(places.home);
-  if (!(yield* fs.exists(openCode).pipe(Effect.orElseSucceed(() => false))))
+  if (!(yield* fs.exists(openCode).pipe(Effect.orElseSucceed(() => false)))) {
     stores.push(notThere("opencode", openCode));
-  else {
+  } else {
     const read = yield* openCodeStore(openCode, since).pipe(Effect.result);
-    if (read._tag === "Failure")
+    if (read._tag === "Failure") {
       stores.push({
         ...notThere("opencode", openCode),
         found: "unreadable",
         why: read.failure,
       });
-    else {
+    } else {
       stores.push({
         source: "opencode",
         where: openCode,
         found: "read",
         sessions: read.success.count,
       });
-      for (const session of read.success.sessions) take("opencode", session, session.ids);
+      for (const session of read.success.sessions) {
+        take("opencode", session, session.ids);
+      }
     }
   }
 
   const runs = `${places.stateDir}/host.db`;
   const collie = yield* collieWords(places.stateDir, since !== null).pipe(Effect.result);
-  if (collie._tag === "Failure")
+  if (collie._tag === "Failure") {
     stores.push(
       (yield* fs.exists(runs).pipe(Effect.orElseSucceed(() => false)))
         ? {
@@ -655,7 +711,7 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
           }
         : notThere("collie", runs),
     );
-  else {
+  } else {
     stores.push({
       source: "collie",
       where: runs,
@@ -663,8 +719,11 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
       sessions: collie.success.entries,
       ...collie.success.unread,
     });
-    for (const one of collie.success.words)
-      if (since === null || epochMs(one.at) >= since) messages.push(one);
+    for (const one of collie.success.words) {
+      if (since === null || epochMs(one.at) >= since) {
+        messages.push(one);
+      }
+    }
   }
   const returned: Gathered = { stores, messages, skipped };
   return returned;
@@ -683,7 +742,9 @@ export const readOwnWords = Effect.fn("OwnWords.read")(function* (places: OwnPla
     Arr.map(gathered.messages, (message) => {
       const clean = redact(message.text);
       const one = { ...message, text: pipe(clean, Str.slice(0, MOST_IN_ONE)) };
-      if (one.text !== clean) cutOnes.add(one);
+      if (one.text !== clean) {
+        cutOnes.add(one);
+      }
       return one;
     }),
   );

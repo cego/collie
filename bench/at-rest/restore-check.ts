@@ -8,8 +8,9 @@ mkdirSync(`${root}.scratch/at-rest`, { recursive: true });
 const directory = mkdtempSync(`${root}.scratch/at-rest/restore-check-`);
 try {
   const cold = `${directory}/cold`;
-  for (const path of ["node_modules/effect", "fresh", "bin", "cold/bench/at-rest"])
+  for (const path of ["node_modules/effect", "fresh", "bin", "cold/bench/at-rest"]) {
     mkdirSync(`${directory}/${path}`, { recursive: true });
+  }
   for (const path of ["node_modules/effect", "fresh"]) {
     writeFileSync(
       `${directory}/${path}/package.json`,
@@ -27,8 +28,9 @@ try {
     "#!/bin/sh\nmkdir -p node_modules\ncp -R ../fresh node_modules/effect\n",
     { mode: 0o755 },
   );
-  for (const file of ["restore.ts", "snapshot.ts", "history.json", "history.tar.gz"])
+  for (const file of ["restore.ts", "snapshot.ts", "history.json", "history.tar.gz"]) {
     cpSync(`${root}bench/at-rest/${file}`, `${cold}/bench/at-rest/${file}`);
+  }
   writeFileSync(
     `${cold}/bench/at-rest/world.ts`,
     `import { CommandLine } from "effect/process";

@@ -40,7 +40,6 @@ export function parseYaml(src: string) {
   let parsed: YamlValue;
   try {
     // WARNING: the parser yields nulls, booleans, numbers and strings in maps and sequences, which is exactly YamlValue.
-    // WARNING: the parser yields only nulls, booleans, numbers and strings in maps and sequences, which is YamlValue.
     parsed = Yaml.parse(src) as YamlValue;
   } catch (cause) {
     throw new YamlError({ message: cause instanceof Error ? cause.message : String(cause) });
@@ -59,8 +58,9 @@ function unquote(raw: string) {
   if (pipe(raw, Str.startsWith('"')) && pipe(raw, Str.endsWith('"')) && raw.length > 1) {
     return pipe(raw, Str.slice(1, -1), Str.replaceAll(/\\(.)/g, "$1"));
   }
-  if (pipe(raw, Str.startsWith("'")) && pipe(raw, Str.endsWith("'")) && raw.length > 1)
+  if (pipe(raw, Str.startsWith("'")) && pipe(raw, Str.endsWith("'")) && raw.length > 1) {
     return pipe(raw, Str.slice(1, -1));
+  }
   return raw;
 }
 
@@ -68,7 +68,9 @@ function unquote(raw: string) {
 export function setFrontmatterKey(text: string, key: string, value: string) {
   const lines = Str.split(text, "\n");
   const written = `${key}: ${yamlScalar(value)}`;
-  if (!FENCE.test(withoutBom(lines[0] ?? ""))) return `---\n${written}\n---\n\n${text}`;
+  if (!FENCE.test(withoutBom(lines[0] ?? ""))) {
+    return `---\n${written}\n---\n\n${text}`;
+  }
   const close = Option.getOrElse(
     Arr.findFirstIndex(lines, (line, i) => i > 0 && FENCE.test(line)),
     () => -1,
@@ -78,13 +80,18 @@ export function setFrontmatterKey(text: string, key: string, value: string) {
     Arr.findFirstIndex(lines, (line, i) => i > 0 && i < end && topLevelKey(line) === key),
     () => -1,
   );
-  if (at < 0) lines.splice(1, 0, written);
-  else lines[at] = written;
+  if (at < 0) {
+    lines.splice(1, 0, written);
+  } else {
+    lines[at] = written;
+  }
   return Arr.join(lines, "\n");
 }
 
 function topLevelKey(line: string) {
-  if (/^\s/.test(line)) return null;
+  if (/^\s/.test(line)) {
+    return null;
+  }
   const m = KEY.exec(Str.trim(line));
   return m ? unquote(m[1]!) : null;
 }
@@ -103,11 +110,15 @@ function withoutBom(line: string) {
 export function parseDocument(text: string) {
   const normalised = withoutBom(text);
   const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(normalised);
-  if (!m) return { data: {}, body: Str.trim(normalised) };
+  if (!m) {
+    return { data: {}, body: Str.trim(normalised) };
+  }
   const parsed = parseYaml(m[1]!);
   // WARNING: a block of only comments parses to null: frontmatter with no keys, not a failed mapping.
   const data = parsed === null ? {} : parsed;
-  if (!isYamlMap(data)) throw new YamlError({ message: "frontmatter must be a mapping" });
+  if (!isYamlMap(data)) {
+    throw new YamlError({ message: "frontmatter must be a mapping" });
+  }
   return {
     data,
     body: Str.trim(pipe(normalised, Str.slice(m[0].length))),

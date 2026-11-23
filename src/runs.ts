@@ -95,11 +95,15 @@ const stateOf: (view: RunView) => RunState = (view) => {
       return stopped ? "stopped" : "failed";
     // WARNING: a stop suspends the Run; otherwise only a question or a parked Run is waiting.
     case "suspended":
-      if (stopped) return "stopped";
+      if (stopped) {
+        return "stopped";
+      }
       return view.parked !== null || Arr.some(view.waiting, isUnanswered) ? "waiting" : "running";
     // WARNING: concurrent work can keep the Run pending while one Activity is parked.
     case "pending":
-      if (stopped) return "stopped";
+      if (stopped) {
+        return "stopped";
+      }
       return view.parked !== null ? "waiting" : "running";
   }
 };
@@ -141,10 +145,18 @@ export const factsOfView: (stateDir: string, view: RunView) => RunFacts = (state
         options: one.options,
       };
       const hold = holdPath(one, view.controls.includes(HOLD));
-      if (hold !== undefined) asked.hold = hold;
-      if (one.shortfall != null) asked.shortfall = one.shortfall;
-      if (one.shipping != null) asked.shipping = one.shipping;
-      if (one.steer != null) asked.steer = one.steer;
+      if (hold !== undefined) {
+        asked.hold = hold;
+      }
+      if (one.shortfall != null) {
+        asked.shortfall = one.shortfall;
+      }
+      if (one.shipping != null) {
+        asked.shipping = one.shipping;
+      }
+      if (one.steer != null) {
+        asked.steer = one.steer;
+      }
       return asked;
     },
   ),
@@ -198,8 +210,12 @@ const isAsking: (view: RunView, one: RunView["waiting"][number]) => boolean = (v
 };
 
 const executionOf: (view: RunView) => Execution = (view) => {
-  if (view.controls.includes(STOP)) return "stopped";
-  if (view.diagnostic !== null && view.status.status === "pending") return "died";
+  if (view.controls.includes(STOP)) {
+    return "stopped";
+  }
+  if (view.diagnostic !== null && view.status.status === "pending") {
+    return "died";
+  }
   switch (view.status.status) {
     case "pending":
       return "running";

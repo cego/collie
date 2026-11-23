@@ -90,7 +90,9 @@ import type { ActionsLog, Attempted, Unconfirmed } from "./sent";
 
 const children = new Set<Bun.Subprocess>();
 export const endChildren = () => {
-  for (const child of children) child.kill();
+  for (const child of children) {
+    child.kill();
+  }
 };
 
 export const spawned = <C extends Bun.Subprocess>(start: () => C) =>
@@ -171,15 +173,21 @@ const afterReady = (from: ReadableStream<Uint8Array>, onReady: () => void) => {
     new TransformStream<Uint8Array, Uint8Array>(
       {
         transform: (chunk, out) => {
-          if (ready) return out.enqueue(chunk);
+          if (ready) {
+            return out.enqueue(chunk);
+          }
           // WARNING: searched as bytes, so a character split across chunks reaches the host whole.
           seen = Buffer.concat([seen, chunk]);
           const at = seen.indexOf(marker);
-          if (at === -1) return;
+          if (at === -1) {
+            return;
+          }
           ready = true;
           onReady();
           const rest = seen.subarray(at + marker.length);
-          if (rest.length > 0) out.enqueue(rest);
+          if (rest.length > 0) {
+            out.enqueue(rest);
+          }
         },
       },
       undefined,
@@ -527,10 +535,11 @@ const machineConnect = Effect.fn("Desktop.machineConnect")(function* (
     Promise.all([new Response(child.stdout).text(), child.exited]),
   );
   const answer = Schema.decodeOption(Connected)(Str.trim(out));
-  if (Option.isSome(answer))
+  if (Option.isSome(answer)) {
     return answer.value.ok
       ? answer.value.data.path
       : yield* Effect.fail(unreachable(answer.value.error.message));
+  }
   return yield* Effect.fail(
     unreachable(said() || `${CommandLine.display(command)} exited ${code}`),
   );
@@ -569,7 +578,9 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
           Effect.as(true),
           Effect.orElseSucceed(() => false),
         );
-        if (checked) return path;
+        if (checked) {
+          return path;
+        }
       }
       path = yield* machineConnect(collie, machine, heard).pipe(
         Effect.ensuring(Effect.sync(() => void (unheard = undefined))),
@@ -577,7 +588,9 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
       return path;
     }),
   );
-  if (!lazy) yield* connected.pipe(Effect.ignore, Effect.forkScoped);
+  if (!lazy) {
+    yield* connected.pipe(Effect.ignore, Effect.forkScoped);
+  }
   const riding = (remote: string) =>
     connected.pipe(Effect.map((at) => riderArgv(at, machine.target, remote, ssh)));
   const used = <A>(effect: Effect.Effect<A, RouteFailure>) =>
@@ -594,7 +607,9 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
         let told = false;
         waiting = (said) =>
           told ? Effect.void : Effect.suspend(() => ((told = true), waitingOnSso(said)));
-        if (unheard !== undefined) yield* waiting(unheard);
+        if (unheard !== undefined) {
+          yield* waiting(unheard);
+        }
         const at = yield* connected;
         return yield* openDoors(route.machine, (as) =>
           riderArgv(at, machine.target, remoteCollie(bridgeCommand([], client, as)), ssh),
@@ -615,7 +630,9 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
       );
     },
   };
-  if (!pairs) return route;
+  if (!pairs) {
+    return route;
+  }
   let paired = false;
   const pairing = yield* Semaphore.make(1);
   return {
@@ -782,7 +799,9 @@ export const linkRoute = (
     pair: fallback.pair?.pipe(
       Effect.tap((failure) =>
         Effect.sync(() => {
-          if (failure === null) paired = true;
+          if (failure === null) {
+            paired = true;
+          }
         }),
       ),
     ),
@@ -912,8 +931,9 @@ export const flockStream = <D extends BoardSource>(
             yield* Queue.clear(reopens[at]!);
             const door = yield* route.open(waitingOnSso);
             const identity = door.identity;
-            if (identity?.protocol !== undefined && identity.protocol > PROTOCOL + 1)
+            if (identity?.protocol !== undefined && identity.protocol > PROTOCOL + 1) {
               return yield* Effect.fail(tooNew(route, identity.build));
+            }
             if (
               readDoors !== undefined &&
               identity?.installation !== undefined &&
@@ -923,7 +943,9 @@ export const flockStream = <D extends BoardSource>(
               readDoors.set(profile, door);
               yield* Effect.addFinalizer(() =>
                 Effect.sync(() => {
-                  if (readDoors.get(profile) === door) readDoors.delete(profile);
+                  if (readDoors.get(profile) === door) {
+                    readDoors.delete(profile);
+                  }
                 }),
               );
             }
@@ -962,7 +984,9 @@ export const flockStream = <D extends BoardSource>(
               Stream.takeUntil((item) => "_tag" in item),
               Stream.tap((item) =>
                 Effect.gen(function* () {
-                  if ("_tag" in item) return;
+                  if ("_tag" in item) {
+                    return;
+                  }
                   const { machine, message } = item;
                   doors.set(machine.installation, door);
                   if (
@@ -970,8 +994,9 @@ export const flockStream = <D extends BoardSource>(
                     buildVerdict(message, version) !== "upgrade" ||
                     upgrading.has(machine.installation) ||
                     (yield* Deferred.isDone(due))
-                  )
+                  ) {
                     return;
+                  }
                   upgrading.add(machine.installation);
                   yield* Deferred.succeed(due, {
                     installation: machine.installation,
@@ -981,8 +1006,11 @@ export const flockStream = <D extends BoardSource>(
               ),
               Stream.ensuring(
                 Effect.sync(() => {
-                  for (const [installation, held] of doors)
-                    if (held === door) doors.delete(installation);
+                  for (const [installation, held] of doors) {
+                    if (held === door) {
+                      doors.delete(installation);
+                    }
+                  }
                 }),
               ),
             );
@@ -1079,9 +1107,10 @@ export const flockStream = <D extends BoardSource>(
               Stream.catch((failure) =>
                 Stream.unwrap(
                   Effect.gen(function* () {
-                    if (done.has(at) || (yield* Deferred.isDone(displaced[at]!)))
+                    if (done.has(at) || (yield* Deferred.isDone(displaced[at]!))) {
                       return Stream.empty;
-                    if (failure.state === "reopen")
+                    }
+                    if (failure.state === "reopen") {
                       return Stream.unwrap(
                         Effect.as(Queue.clear(wakes[at]!), afterFailures(0)),
                       ).pipe(
@@ -1093,6 +1122,7 @@ export const flockStream = <D extends BoardSource>(
                           },
                         ]),
                       );
+                    }
                     const lost = Stream.fromEffect(lostItem(route, failure.state, failure.reason));
                     if (failure.state === "update-desktop") {
                       done.add(at);
@@ -1136,16 +1166,18 @@ export const flockStream = <D extends BoardSource>(
         });
       const removedAt = (place: number) => places.get(routeAt[place]!.machine.profile) !== place;
       const changed = (change: RouteChange<D>) => {
-        if (change._tag === "Add")
+        if (change._tag === "Add") {
           return places.has(change.route.machine.profile)
             ? Stream.empty
             : Stream.unwrap(added(change.route));
+        }
         const at = places.get(change.profile);
-        if (change._tag === "Wake")
+        if (change._tag === "Wake") {
           return at === undefined
             ? Stream.empty
             : Stream.fromEffectDrain(Queue.offer(wakes[at]!, undefined));
-        if (change._tag === "Reopen")
+        }
+        if (change._tag === "Reopen") {
           return at === undefined
             ? Stream.empty
             : Stream.fromEffectDrain(
@@ -1154,15 +1186,21 @@ export const flockStream = <D extends BoardSource>(
                     Arr.filter([...(yield* Ref.get(owners))], ([, owner]) => owner.at === at),
                     ([installation]) => installation,
                   );
-                  if (Arr.some(owned, (installation) => upgradingNow.has(installation))) return;
+                  if (Arr.some(owned, (installation) => upgradingNow.has(installation))) {
+                    return;
+                  }
                   // WARNING: asked again even where the last upgrade succeeded and did not move.
-                  for (const installation of owned) upgrading.delete(installation);
+                  for (const installation of owned) {
+                    upgrading.delete(installation);
+                  }
                   yield* Queue.offer(reopens[at]!, undefined);
                   yield* Queue.offer(wakes[at]!, undefined);
                 }),
               );
-        if (at === undefined)
+        }
+        if (at === undefined) {
           return Stream.fromEffectDrain(Deferred.succeed(change.done, undefined));
+        }
         places.delete(change.profile);
         done.add(at);
         const shown = new Set<string>();
@@ -1170,11 +1208,12 @@ export const flockStream = <D extends BoardSource>(
           Effect.gen(function* () {
             yield* Ref.update(owners, (now) => {
               const kept = new Map(now);
-              for (const [installation, owner] of now)
+              for (const [installation, owner] of now) {
                 if (owner.at === at) {
                   shown.add(installation);
                   kept.delete(installation);
                 }
+              }
               return kept;
             });
             yield* Deferred.succeed(removed[at]!, undefined);
@@ -1249,13 +1288,14 @@ const over = <A, R>({ machine }: Reached, call: Effect.Effect<A, Refused, R>, re
   call.pipe(
     Effect.mapError(refusal(request)),
     Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause))
+      if (Cause.hasInterruptsOnly(cause)) {
         return Effect.fail(
           new ActionFailed({
             request,
             reason: `${machine.name}'s connection was renewed before this finished`,
           }),
         );
+      }
       const misfit = Option.getOrUndefined(Arr.findFirst(cause.reasons, Cause.isDieReason))?.defect;
       // WARNING: the RPC client dies on a misfit, with its schema issue as the defect's cause.
       return Predicate.isError(misfit) && SchemaIssue.isIssue(misfit.cause)
@@ -1407,7 +1447,9 @@ export const act = (
           text: action.text,
         };
         // WARNING: JSON has no undefined, so an absent step is left out.
-        if (action.step !== undefined) deliver.step = action.step;
+        if (action.step !== undefined) {
+          deliver.step = action.step;
+        }
         return door
           .act({
             actions: [deliver],
@@ -1469,7 +1511,9 @@ export const actOn = (
 ) => {
   const door = doors.get(installation);
   const why = unsent ?? (door === undefined ? "that Machine is not connected" : undefined);
-  if (why === undefined) return act(door!, request, action, log);
+  if (why === undefined) {
+    return act(door!, request, action, log);
+  }
   const machine = door?.machine.name ?? installation;
   const { about } = aboutOf(action);
   return log({
@@ -1534,12 +1578,16 @@ export class DoorMap<D> extends Map<string, D> {
     return this.#changed;
   }
   override set(installation: string, door: D) {
-    if (this.get(installation) === door) return this;
+    if (this.get(installation) === door) {
+      return this;
+    }
     super.set(installation, door);
     return this.#wake();
   }
   override delete(installation: string) {
-    if (!super.delete(installation)) return false;
+    if (!super.delete(installation)) {
+      return false;
+    }
     this.#wake();
     return true;
   }
@@ -1748,7 +1796,9 @@ export const usageOn = ({ profile, name }: KnownMachine, door: Pick<Door, "usage
       orElse: () => Effect.fail(new ActionFailed({ reason: "its host did not answer in time" })),
     }),
     Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+      if (Cause.hasInterruptsOnly(cause)) {
+        return Effect.interrupt;
+      }
       const failed = Cause.findErrorOption(cause);
       const defect = Cause.findDefect(cause);
       const problem = Option.isSome(failed)
@@ -1772,7 +1822,9 @@ export const cataloguesOn = (
       orElse: () => Effect.die("its host did not answer in time"),
     }),
     Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+      if (Cause.hasInterruptsOnly(cause)) {
+        return Effect.interrupt;
+      }
       const detail = Str.split(Cause.pretty(cause), "\n")[0];
       return Effect.succeed({
         profile,
@@ -1803,7 +1855,9 @@ export const machineOwnOn: (
         orElse: () => Effect.die("its host did not answer in time"),
       }),
       Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.interrupt;
+        }
         const failed = Cause.findErrorOption(cause);
         const problem = Option.isSome(failed)
           ? reasonOf(failed.value)
@@ -1852,7 +1906,9 @@ export const schedulesOn = (
       ),
     ),
     Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+      if (Cause.hasInterruptsOnly(cause)) {
+        return Effect.interrupt;
+      }
       const defect = Cause.findDefect(cause);
       return Effect.succeed(
         defect._tag === "Success" &&
@@ -1873,7 +1929,9 @@ export const cleanupOn = (doors: DoorMap<Reached>, profile: string) =>
     const found = Option.getOrUndefined(
       Arr.findFirst([...doors], ([, door]) => door.machine.profile === profile),
     );
-    if (found === undefined) return failed("That Machine isn't connected.");
+    if (found === undefined) {
+      return failed("That Machine isn't connected.");
+    }
     const [installation, first] = found;
     let waiting = false;
     const askOver: (door: Reached) => Effect.Effect<CleanupReport, ActionFailed> = (door) =>
@@ -1882,20 +1940,24 @@ export const cleanupOn = (doors: DoorMap<Reached>, profile: string) =>
         return Effect.exit(door.desktop.cleanup());
       }).pipe(
         Effect.flatMap((exit) => {
-          if (Exit.isSuccess(exit)) return Effect.succeed(exit.value);
+          if (Exit.isSuccess(exit)) {
+            return Effect.succeed(exit.value);
+          }
           const error = Cause.findErrorOption(exit.cause);
           if (
             Cause.hasInterruptsOnly(exit.cause) ||
             (Option.isSome(error) && error.value._tag === "RpcClientError")
-          )
+          ) {
             return Effect.suspend(() => {
               waiting = true;
               return nextDoor(doors, installation, door);
             }).pipe(Effect.flatMap(askOver));
-          if (Option.isSome(error))
+          }
+          if (Option.isSome(error)) {
             return failed(
               error.value._tag === "HostRefused" ? error.value.reason : error.value.message,
             );
+          }
           const defect = Cause.findDefect(exit.cause);
           return failed(
             defect._tag === "Success" &&
@@ -1946,13 +2008,14 @@ export const sweepOn = (
       note(attempt, ended, logged).pipe(
         Effect.andThen(Effect.fail(new ActionFailed({ request, reason }))),
       );
-    if (door === undefined)
+    if (door === undefined) {
       return failed(
         0,
         "not-sent",
         `Not sent to ${name}: that Machine is not connected.`,
         "that Machine is not connected",
       );
+    }
     let attempt = 0;
     let waiting = false;
     const sendOver: (door: Reached) => Effect.Effect<CleanupReport, ActionFailed> = (door) =>
@@ -1962,14 +2025,16 @@ export const sweepOn = (
         return Effect.exit(door.desktop.sweep({ request }));
       }).pipe(
         Effect.flatMap((exit) => {
-          if (Exit.isSuccess(exit)) return note(attempt, "accepted").pipe(Effect.as(exit.value));
+          if (Exit.isSuccess(exit)) {
+            return note(attempt, "accepted").pipe(Effect.as(exit.value));
+          }
           const error = Cause.findErrorOption(exit.cause);
           const lost = Cause.hasInterruptsOnly(exit.cause)
             ? "the connection was renewed before this finished"
             : Option.isSome(error) && error.value._tag === "RpcClientError"
               ? reasonOf(error.value)
               : undefined;
-          if (lost !== undefined)
+          if (lost !== undefined) {
             return note(attempt, "failed", lost).pipe(
               Effect.andThen(
                 Effect.suspend(() => {
@@ -1979,6 +2044,7 @@ export const sweepOn = (
               ),
               Effect.flatMap(sendOver),
             );
+          }
           return Option.isSome(error)
             ? failed(attempt, "refused", reasonOf(error.value))
             : // WARNING: with no error in it, the cause holds only defects and interrupts.

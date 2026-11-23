@@ -62,7 +62,9 @@ const launched = (
     harness,
     terminalId,
   };
-  if (agentSession !== undefined) launch.agentSession = agentSession;
+  if (agentSession !== undefined) {
+    launch.agentSession = agentSession;
+  }
   return recordLaunch(launch);
 };
 

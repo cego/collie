@@ -283,8 +283,11 @@ test("modules are staged where only this account can write, and a cache others c
       const was = Bun.env.XDG_CACHE_HOME;
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          if (was === undefined) delete Bun.env.XDG_CACHE_HOME;
-          else Bun.env.XDG_CACHE_HOME = was;
+          if (was === undefined) {
+            delete Bun.env.XDG_CACHE_HOME;
+          } else {
+            Bun.env.XDG_CACHE_HOME = was;
+          }
         }),
       );
       Bun.env.XDG_CACHE_HOME = cache;

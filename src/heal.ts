@@ -44,14 +44,23 @@ export const passedOver = (facts: {
   readonly recoveries: ReadonlyArray<Metric>;
 }) => {
   const entry = PARK_CAUSES[facts.cause];
-  if (entry.kind !== "asks-agent" && entry.neverHeals === true)
+  if (entry.kind !== "asks-agent" && entry.neverHeals === true) {
     return entry.kind === "needs-you"
       ? "only a person can act on its cause"
       : "only what its recheck reads can clear its cause";
-  if (facts.isHeal) return "it is itself a Heal";
-  if (!facts.on) return "recovery.heal is off";
-  if (facts.waitsOnYou) return "it already waits on you";
-  if (healsIn(facts.recoveries).length >= HEALS_PER_RUN) return `it has had ${HEALS_PER_RUN} Heals`;
+  }
+  if (facts.isHeal) {
+    return "it is itself a Heal";
+  }
+  if (!facts.on) {
+    return "recovery.heal is off";
+  }
+  if (facts.waitsOnYou) {
+    return "it already waits on you";
+  }
+  if (healsIn(facts.recoveries).length >= HEALS_PER_RUN) {
+    return `it has had ${HEALS_PER_RUN} Heals`;
+  }
   return null;
 };
 

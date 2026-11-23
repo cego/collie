@@ -41,7 +41,9 @@ const silentEngine = (
       door({
         post: (message) => {
           heard.push(message);
-          if (message._tag === "Listening") Deferred.doneUnsafe(listening, Effect.void);
+          if (message._tag === "Listening") {
+            Deferred.doneUnsafe(listening, Effect.void);
+          }
         },
         listen: (receive) => {
           tell = receive;
@@ -70,7 +72,9 @@ const silentEngine = (
 
 const until = (done: () => boolean) =>
   Effect.gen(function* () {
-    while (!done()) yield* Effect.sleep("10 millis");
+    while (!done()) {
+      yield* Effect.sleep("10 millis");
+    }
   }).pipe(Effect.timeout("4 seconds"));
 
 test("the door answers a Run's record and the host's identity while the engine answers nothing", () =>
@@ -437,15 +441,18 @@ test("a client that stops reading, then goes, leaves every other client answered
       b.socket.write(requestLine("b", "toasts"));
       yield* until(() => Option.isSome(passed("b")));
       const connB = Option.getOrThrow(passed("b"));
-      if (connA._tag !== "Request" || connB._tag !== "Request") return;
+      if (connA._tag !== "Request" || connB._tag !== "Request") {
+        return;
+      }
 
       const big = pipe("x", Str.repeat(64 * 1024));
-      for (let i = 0; i < 256; i++)
+      for (let i = 0; i < 256; i++) {
         tell({
           _tag: "Response",
           conn: connA.conn,
           frame: { _tag: "Chunk", requestId: "a", values: [big] },
         });
+      }
       yield* Effect.sleep("200 millis");
       a.socket.end();
       a.socket.terminate();

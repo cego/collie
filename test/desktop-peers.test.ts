@@ -85,7 +85,9 @@ test("a link upgrade replaces the far host even while Local is a development che
           yield* exec(["git", "init", "-q", "-b", "development"], { cwd: first.world.install });
           const current = yield* collieCommand;
           const newer = current.length === 1 ? current[0]! : `${second.world.home}/newer-collie`;
-          if (current.length !== 1) yield* releaseBinary(newer, BUILD);
+          if (current.length !== 1) {
+            yield* releaseBinary(newer, BUILD);
+          }
           const older = `${second.world.home}/older-collie`;
           yield* releaseBinary(older, "0.0.1");
           const bin = Str.split(second.env.PATH!, ":")[0];

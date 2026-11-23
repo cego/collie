@@ -114,11 +114,12 @@ export const registeredLayer = Layer.effect(Registered)(
             alive === undefined
               ? []
               : Arr.filter(others, (e) => !live.has(e) && epochMs(e.at) < epochMs(alive.listedAt));
-          if (dropped.length > 0)
+          if (dropped.length > 0) {
             yield* sql`
               DELETE FROM collie_agents
               WHERE register = ${register} AND agent IN ${sql.in(Arr.map(dropped, (e) => e.agent))}
             `;
+          }
           yield* sql`
             INSERT OR REPLACE INTO collie_agents (register, agent, record)
             VALUES (${register}, ${entry.agent}, ${encodeAgentEntry(entry)})
@@ -207,7 +208,9 @@ export const lineageAgent = Effect.fn("lineageAgent")(function* (
     const found = Option.getOrUndefined(
       Arr.findLast(live, (e) => e.role === role && e.runId === runId),
     );
-    if (found !== undefined) return found;
+    if (found !== undefined) {
+      return found;
+    }
   }
   return null;
 });

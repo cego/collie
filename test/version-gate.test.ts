@@ -16,7 +16,9 @@ function versionsAnswering(
   const asked: Array<Array<unknown>> = [];
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.sync(() => {
-      if (command._tag === "StandardCommand") asked.push([command.command, ...command.args]);
+      if (command._tag === "StandardCommand") {
+        asked.push([command.command, ...command.args]);
+      }
       const { code, stdout } = answers.shift() ?? { code: 1, stdout: "" };
       return ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(1),

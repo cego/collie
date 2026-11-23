@@ -90,7 +90,9 @@ describe("keeping the chat's width", () => {
       return promise;
     });
     const finishSaves = () => {
-      for (const done of pending.splice(0)) done();
+      for (const done of pending.splice(0)) {
+        done();
+      }
     };
     return { view, saves, kept, finishSaves };
   };
@@ -118,7 +120,9 @@ describe("keeping the chat's width", () => {
 
   test("saves a held arrow key once, when the nudging stops", () => {
     const { view, saves, kept } = control(500);
-    for (let repeat = 0; repeat < 5; repeat += 1) kept.nudge("ArrowLeft", 1400);
+    for (let repeat = 0; repeat < 5; repeat += 1) {
+      kept.nudge("ArrowLeft", 1400);
+    }
     expect(view.chosen.value).toBe(580);
     expect(saves).toEqual([]);
     void kept.settle();

@@ -19,11 +19,12 @@ const stopCompletely = (state: string) =>
   Effect.gen(function* () {
     const owner = yield* ownerOf(state);
     yield* stopHost(state);
-    if (owner !== null)
+    if (owner !== null) {
       yield* until(
         () => signalProcess(owner.pid),
         (alive) => !alive,
       );
+    }
   });
 
 const stepDeliveries = (state: string, runId: string) =>
@@ -69,9 +70,13 @@ const withCore = <A, E>(
           }),
           (before) =>
             Effect.sync(() => {
-              for (const [key, value] of Rec.toEntries(before))
-                if (value === undefined) delete Bun.env[key];
-                else Bun.env[key] = value;
+              for (const [key, value] of Rec.toEntries(before)) {
+                if (value === undefined) {
+                  delete Bun.env[key];
+                } else {
+                  Bun.env[key] = value;
+                }
+              }
             }),
         );
         return yield* body(world, core).pipe(
@@ -98,7 +103,9 @@ const parkedAgent = Effect.fn("test.parkedAgent")(function* (world: World) {
     (one) => one?.status.status === "suspended" && one.parked !== null,
   );
   const found = yield* stepDeliveries(world.state, runId);
-  if (found.length === 0) throw new Error(`parked before delivery: ${view?.parked}`);
+  if (found.length === 0) {
+    throw new Error(`parked before delivery: ${view?.parked}`);
+  }
   const [delivery] = found;
   expect(view?.parked).toContain(delivery!.id);
   return { client, runId, delivery: delivery!, old: view!.parked };
@@ -445,10 +452,11 @@ test("a resume does not hand other Runs' recorded answers again", () =>
             );
             expect(resumed.applied).toBe(true);
             expect(Duration.toMillis(took)).toBeLessThan(4000);
-            for (const other of others)
+            for (const other of others) {
               expect((yield* client.run({ runId: other.runId }).pipe(Effect.orDie))?.parked).toBe(
                 other.parked,
               );
+            }
           }),
         );
         yield* stopCompletely(world.state);

@@ -40,7 +40,9 @@ export const reportsLayer = (opts: {
       const close = (view: RunView) =>
         Effect.gen(function* () {
           const stopped = yield* agents.halt(view.runId);
-          if (stopped.left.length > 0) return { done: false, note: Arr.join(stopped.left, "; ") };
+          if (stopped.left.length > 0) {
+            return { done: false, note: Arr.join(stopped.left, "; ") };
+          }
           return { done: true, note: "The Run's agents are closed." };
         });
 
@@ -58,7 +60,9 @@ export const reportsLayer = (opts: {
             unreached,
             closed: false,
           });
-          if (who === undefined) return undelivered("No agent requested this Run.");
+          if (who === undefined) {
+            return undelivered("No agent requested this Run.");
+          }
           const peer =
             who.machine.installation === opts.installation
               ? null
@@ -68,8 +72,9 @@ export const reportsLayer = (opts: {
                     (one) => one.installation === who.machine.installation,
                   ),
                 );
-          if (peer === undefined)
+          if (peer === undefined) {
             return undelivered(`The requesting Machine ${who.machine.name} is no longer paired.`);
+          }
           const launches = yield* readLaunches(view.runId);
           const agent = launches.at(-1)?.agent;
           const actor: Asker = {
@@ -100,13 +105,19 @@ export const reportsLayer = (opts: {
               }),
             actor,
           ).pipe(Effect.timeoutOption("15 seconds"));
-          if (Option.isNone(sent))
+          if (Option.isNone(sent)) {
             return undelivered("Delivery was not confirmed within 15 seconds.", true);
+          }
           const answer = sent.value;
-          if (!answer.ok) return undelivered(answer.error.message, answer.unreached === true);
-          if (!answer.value.delivered)
+          if (!answer.ok) {
+            return undelivered(answer.error.message, answer.unreached === true);
+          }
+          if (!answer.value.delivered) {
             return undelivered(answer.value.detail || "The requesting agent is gone.");
-          if (opts.crashAt === "reported") yield* signalProcess(yield* currentPid, "SIGKILL");
+          }
+          if (opts.crashAt === "reported") {
+            yield* signalProcess(yield* currentPid, "SIGKILL");
+          }
           return {
             state: "delivered" as const,
             at,
@@ -133,7 +144,9 @@ export const reportsLayer = (opts: {
         });
 
       const sweep = Effect.gen(function* () {
-        if (!(yield* fs.exists(socketOf(env.stateDir)))) return;
+        if (!(yield* fs.exists(socketOf(env.stateDir)))) {
+          return;
+        }
         const views = yield* Effect.forEach(
           Arr.filter(yield* store.reportsPending, owesReport),
           (row) => registry.view(row.run),
@@ -176,23 +189,31 @@ export const reportsLayer = (opts: {
           );
           const owed = [];
           for (const view of views) {
-            if (view?.requestedBy?.machine.installation !== peer.installation) continue;
+            if (view?.requestedBy?.machine.installation !== peer.installation) {
+              continue;
+            }
             const notices = yield* owedRunLinks(env, view, peer);
             const report = view.report;
             const untold =
               isSettled(view) &&
               (report === undefined ||
                 (report.state === "undelivered" && report.unreached === true));
-            if (notices.length > 0 || untold) owed.push({ view, notices });
+            if (notices.length > 0 || untold) {
+              owed.push({ view, notices });
+            }
           }
           if (owed.length === 0) {
             yield* Effect.logInfo(`${peer.name} is linked: nothing is owed to it`);
             return true;
           }
-          if (!(yield* answers(peer))) return false;
+          if (!(yield* answers(peer))) {
+            return false;
+          }
           let sent = 0;
           for (const { view, notices } of owed) {
-            for (const notice of notices) yield* resendRunLink(env, view, peer, notice);
+            for (const notice of notices) {
+              yield* resendRunLink(env, view, peer, notice);
+            }
             sent += notices.length;
             const report = view.report;
             if (
@@ -214,10 +235,14 @@ export const reportsLayer = (opts: {
           const linked = yield* due.size === 0
             ? Effect.asSome(Queue.take(opts.linked))
             : Queue.take(opts.linked).pipe(Effect.timeoutOption("5 seconds"));
-          if (Option.isSome(linked)) due.set(linked.value.installation, linked.value);
-          for (const [installation, peer] of due)
-            if (!(yield* opts.live(installation)) || (yield* resend(peer)))
+          if (Option.isSome(linked)) {
+            due.set(linked.value.installation, linked.value);
+          }
+          for (const [installation, peer] of due) {
+            if (!(yield* opts.live(installation)) || (yield* resend(peer))) {
               due.delete(installation);
+            }
+          }
         }).pipe(Effect.forever),
       );
     }),

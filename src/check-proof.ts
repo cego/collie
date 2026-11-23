@@ -78,13 +78,23 @@ export function checkProof(got: Journal, name: string, unmatched: Unmatched = "a
 }
 
 function stateOf(runs: ReadonlyArray<Verification>, last: Verification | undefined) {
-  if (last !== undefined && passed(last)) return "passed";
+  if (last !== undefined && passed(last)) {
+    return "passed";
+  }
   const latest = last ?? runs.at(-1);
-  if (latest === undefined) return "never";
+  if (latest === undefined) {
+    return "never";
+  }
   // WARNING: an earlier-tree record is no failure here, so the check still owes a pass.
-  if (last === undefined && latest.expect === "fail") return "earlier";
-  if (latest.result === "fail" || latest.expect === "fail") return "failed";
-  if (latest.result === "unstable") return "unstable";
+  if (last === undefined && latest.expect === "fail") {
+    return "earlier";
+  }
+  if (latest.result === "fail" || latest.expect === "fail") {
+    return "failed";
+  }
+  if (latest.result === "unstable") {
+    return "unstable";
+  }
   return "earlier";
 }
 

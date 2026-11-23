@@ -162,8 +162,9 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
               cwd: WORKSPACE,
             },
           );
-          if (built.exitCode !== 0)
+          if (built.exitCode !== 0) {
             throw new Error(`cargo could not build the roundtrip binary: ${built.stderr}`);
+          }
           roundtrip = `${WORKSPACE}target/debug/roundtrip`;
         }),
       ),
@@ -394,7 +395,9 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
           ),
         });
         expect(ran.exitCode).toBe(0);
-        if (ran.exitCode !== 0) throw new Error(ran.stderr);
+        if (ran.exitCode !== 0) {
+          throw new Error(ran.stderr);
+        }
         const back: ReadonlyArray<Frame> = yield* Effect.forEach(
           Str.split(Str.trim(ran.stdout), "\n"),
           (line) => fromLine(line),

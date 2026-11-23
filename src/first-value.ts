@@ -10,7 +10,9 @@ export const firstValueTimed = <A, E, R>(
     Effect.map(Clock.currentTimeMillis, (started) => {
       let first = true;
       return Stream.tap(stream, () => {
-        if (!first) return Effect.void;
+        if (!first) {
+          return Effect.void;
+        }
         first = false;
         return Effect.flatMap(Clock.currentTimeMillis, (now) =>
           now - started > SLOW_RPC_MS ? slow(now - started) : Effect.void,

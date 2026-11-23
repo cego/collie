@@ -5,7 +5,9 @@ import type { Density } from "../settings";
 const TWO_COLUMN_MIN = 80;
 
 export function columnsFor(width: number, density: Density) {
-  if (width < TWO_COLUMN_MIN) return 1;
+  if (width < TWO_COLUMN_MIN) {
+    return 1;
+  }
   return density === "compact" ? 3 : 2;
 }
 
@@ -54,13 +56,21 @@ export function stepGlyph(state: StepState) {
 }
 
 export function cardEdge(view: TaskView) {
-  if (view.decision !== null) return view.decision.kind === "proposal" ? C.red : C.amber;
+  if (view.decision !== null) {
+    return view.decision.kind === "proposal" ? C.red : C.amber;
+  }
   return null;
 }
 
 export function sentenceColour(view: TaskView) {
-  if (view.decision !== null) return C.text;
-  if (view.state === "quiet") return C.purple;
-  if (view.state === "failed") return C.red;
+  if (view.decision !== null) {
+    return C.text;
+  }
+  if (view.state === "quiet") {
+    return C.purple;
+  }
+  if (view.state === "failed") {
+    return C.red;
+  }
   return C.muted;
 }

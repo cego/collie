@@ -47,7 +47,9 @@ const handlers = Rpcs.toLayer({
   runDetail: () => Stream.make(null).pipe(Stream.concat(Stream.never)),
   read: ({ input }) =>
     Effect.suspend(() => {
-      if (input.break === "exit") process.exit(23);
+      if (input.break === "exit") {
+        process.exit(23);
+      }
       if (input.break === "socket") {
         const libc = dlopen(
           process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6",
@@ -59,7 +61,9 @@ const handlers = Rpcs.toLayer({
         libc.symbols.shutdown(1, 1);
         libc.close();
       }
-      if (input.break === "rpc") process.stdout.write("broken-json\n");
+      if (input.break === "rpc") {
+        process.stdout.write("broken-json\n");
+      }
       return input.break === undefined
         ? identity({ channel: channel!, generation: generation!, pid: process.pid }).pipe(
             Effect.orDie,

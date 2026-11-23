@@ -39,7 +39,9 @@ test("a timer refresh leaves covered readers free, but a write during it waits f
         Stream.runHead,
         Effect.forkScoped,
       );
-      for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
+      for (let turn = 0; turn < 10; turn++) {
+        yield* Effect.yieldNow;
+      }
       expect(yield* Deferred.isDone(seen)).toBe(false);
       yield* Queue.offer(release, undefined);
       expect(yield* Queue.take(entered)).toBe(3);

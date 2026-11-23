@@ -51,12 +51,18 @@ export const checkoutsUnder = Effect.fn("Projects.checkoutsUnder")(function* (ro
         found.push(dir);
         return;
       }
-      if (depth === DEPTH) return;
+      if (depth === DEPTH) {
+        return;
+      }
       const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
       for (const name of names) {
-        if (pipe_(name, Str.startsWith(".")) || name === SKIPPED) continue;
+        if (pipe_(name, Str.startsWith(".")) || name === SKIPPED) {
+          continue;
+        }
         const child = path.join(dir, name);
-        if (yield* isDirectory(child)) yield* visit(child, depth + 1);
+        if (yield* isDirectory(child)) {
+          yield* visit(child, depth + 1);
+        }
       }
     });
   yield* visit(root, 0);
@@ -78,11 +84,14 @@ export const repositoryCheckout = Effect.fn("Projects.repositoryCheckout")(funct
     pipe_(named, Str.startsWith("/")) ||
     pipe_(named, Str.startsWith(".")) ||
     pipe_(named, Str.startsWith("~"))
-  )
+  ) {
     return null;
+  }
   const project = projectFromRemote(pipe_(named, Str.replace(/\/+$/, "")));
   const bare = project === null && /^[^/:\s]+(?:\/[^/:\s]+)+$/.test(named);
-  if (project === null && !bare) return null;
+  if (project === null && !bare) {
+    return null;
+  }
   const root = yield* projectsRoot(env);
   const found: Array<{ path: string; remote: string }> = [];
   for (const path of yield* checkoutsUnder(root.path)) {
@@ -111,7 +120,9 @@ export const repositoryCheckout = Effect.fn("Projects.repositoryCheckout")(funct
       }
     }
   }
-  if (found.length === 1) return found[0]!;
+  if (found.length === 1) {
+    return found[0]!;
+  }
   return {
     error:
       found.length === 0

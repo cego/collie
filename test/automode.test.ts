@@ -168,8 +168,9 @@ test("a created branch a GitLab wildcard rule or a GitHub ruleset matches gets n
         branch: "release/2.0",
         rulesets: ["release/*"],
       });
-      for (const { block } of [gitlab, github])
+      for (const { block } of [gitlab, github]) {
         expect(Arr.some(block.allow, (one) => pipe_(one, Str.startsWith(HISTORY)))).toBe(false);
+      }
     }),
   ));
 
@@ -295,6 +296,7 @@ test("only a human door or chat starts a Run with words: an agent, a Schedule or
     door: "chat",
     words: "fix login please",
   });
-  for (const origin of ["agent", "schedule", "cli", "driver", "host"])
+  for (const origin of ["agent", "schedule", "cli", "driver", "host"]) {
     expect(startedOf(origin, "said", input, undefined)).toBeUndefined();
+  }
 });

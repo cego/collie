@@ -55,8 +55,13 @@ beforeEach(() =>
 afterEach(() =>
   runEffect(
     Effect.gen(function* () {
-      for (const event of yield* events())
-        for (const pid of [event.pid, event.child]) if (pid !== undefined) kill(pid);
+      for (const event of yield* events()) {
+        for (const pid of [event.pid, event.child]) {
+          if (pid !== undefined) {
+            kill(pid);
+          }
+        }
+      }
       yield* rig.close();
     }),
   ),
@@ -275,7 +280,9 @@ const closedByHand = Effect.gen(function* () {
   const one = Option.getOrUndefined(
     Arr.findFirst(yield* herdr.agentList(), (listed) => listed.name === agent),
   );
-  if (one !== undefined) yield* herdr.terminalKill(one.paneId);
+  if (one !== undefined) {
+    yield* herdr.terminalKill(one.paneId);
+  }
 }).pipe(Effect.orDie);
 
 const working = (over: Partial<StandIn> = {}) =>
@@ -423,15 +430,21 @@ test.each([true, false])(
         // WARNING: Reaped, not only a zombie: the stop proves the server's absence by ESRCH.
         const loseServer = Effect.gen(function* () {
           kill(pid);
-          while (!(yield* processAbsent(pid))) yield* TestClock.withLive(Effect.sleep("10 millis"));
+          while (!(yield* processAbsent(pid))) {
+            yield* TestClock.withLive(Effect.sleep("10 millis"));
+          }
         }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
-        if (alreadyGone) yield* loseServer;
+        if (alreadyGone) {
+          yield* loseServer;
+        }
         let reads = 0;
         // WARNING: This platform can inspect live processes but cannot find a dead parent's session.
         const withoutSessions = {
           ...fs,
           exists: (path: string) => {
-            if (path !== "/proc/self/stat") return fs.exists(path);
+            if (path !== "/proc/self/stat") {
+              return fs.exists(path);
+            }
             reads++;
             return !alreadyGone && reads === 2
               ? loseServer.pipe(Effect.as(false))
@@ -473,7 +486,9 @@ test("a process the first stop noted is still the server's after the server has 
 
       yield* release();
       const pid = yield* serverPid();
-      while (alive(pid)) yield* TestClock.withLive(Effect.sleep("20 millis"));
+      while (alive(pid)) {
+        yield* TestClock.withLive(Effect.sleep("20 millis"));
+      }
       expect(alive(child)).toBe(true);
 
       expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
@@ -521,8 +536,9 @@ test("a server that acknowledges but never exits is left, acknowledged, with its
       expect(halt.stopped).toEqual([]);
       expect(halt.left).toHaveLength(1);
       expect(halt.left[0]).toContain(`${agent} is not stopped: acknowledged`);
-      for (const id of [THREAD, TURN, `pid ${pid}`, "ws://127.0.0.1:"])
+      for (const id of [THREAD, TURN, `pid ${pid}`, "ws://127.0.0.1:"]) {
         expect(halt.left[0]).toContain(id);
+      }
       expect(yield* panesClosed()).toBe(0);
       expect(alive(pid)).toBe(true);
       expect(yield* recorded()).toMatchObject({
@@ -633,7 +649,9 @@ for (const [what, over, edit, why] of [
     runEffect(
       Effect.gen(function* () {
         yield* working(over());
-        if (edit !== null) yield* editControl(edit);
+        if (edit !== null) {
+          yield* editControl(edit);
+        }
         const halt = yield* halted();
         expect(halt.stopped).toEqual([]);
         expect(Arr.join(halt.left, "\n")).toMatch(/is not stopped: failed/);
@@ -701,8 +719,9 @@ test("the agents log has each state reached with the full ids, and only a quiet 
           "ws://127.0.0.1:",
           `pid ${yield* serverPid()}`,
           transcript,
-        ])
+        ]) {
           expect(line).toContain(fact);
+        }
       }
       expect(Arr.some(lines, (one) => pipe_(one, Str.includes(`stopped ${agent}`)))).toBe(true);
     }),
@@ -766,10 +785,14 @@ const until = (reached: Reached, over?: Partial<AgentHost>, resume = false) =>
     Effect.gen(function* () {
       const engine = yield* WorkflowEngine.WorkflowEngine;
       const payload = { runId: "r1", input: { skip: false } };
-      if (resume) yield* engine.resume(work, yield* work.executionId(payload));
+      if (resume) {
+        yield* engine.resume(work, yield* work.executionId(payload));
+      }
       yield* work.execute(payload, { discard: true });
       for (let tries = 0; !(yield* reached); tries++) {
-        if (tries === 3000) return yield* Effect.die(new Error("r1 never got that far"));
+        if (tries === 3000) {
+          return yield* Effect.die(new Error("r1 never got that far"));
+        }
         yield* TestClock.withLive(Effect.sleep("10 millis"));
       }
     }),
@@ -829,14 +852,17 @@ test("a restart beside a Codex turn that has not stopped parks, and starts its s
       );
       expect(yield* agentStarts()).toEqual(["codex"]);
       const why = yield* parkedWhy();
-      for (const fact of [agent, THREAD, TURN, "ws://127.0.0.1:", `pid ${yield* serverPid()}`])
+      for (const fact of [agent, THREAD, TURN, "ws://127.0.0.1:", `pid ${yield* serverPid()}`]) {
         expect(why).toContain(fact);
+      }
       expect(yield* recorded()).not.toBeNull();
 
       yield* release();
       const old = yield* serverPid();
       for (let tries = 0; !(yield* processAbsent(old)); tries++) {
-        if (tries === 3000) return yield* Effect.die(new Error(`server ${old} never exited`));
+        if (tries === 3000) {
+          return yield* Effect.die(new Error(`server ${old} never exited`));
+        }
         yield* TestClock.withLive(Effect.sleep("10 millis"));
       }
       yield* serve({ threads: [{ id: SUB_THREAD, cwd: rig.projectDir }] });
@@ -861,7 +887,9 @@ const successor = agentName("r1", "build", null, 2);
 const fallback = { fallbacks: Effect.succeed(["claude"]) };
 const untilRunOut = { writes: [], output: null, owed: true };
 const runsOut = Effect.gen(function* () {
-  while (!(yield* given)) yield* TestClock.withLive(Effect.sleep("10 millis"));
+  while (!(yield* given)) {
+    yield* TestClock.withLive(Effect.sleep("10 millis"));
+  }
   yield* recordClaudeEvent(
     `${rig.root}/state/compaction/${agent}`,
     asJson({
@@ -1013,7 +1041,9 @@ test("the sweep keeps an unlisted agent's record while its server is not Quiet, 
 
       yield* release();
       const pid = yield* serverPid();
-      while (alive(pid)) yield* TestClock.withLive(Effect.sleep("20 millis"));
+      while (alive(pid)) {
+        yield* TestClock.withLive(Effect.sleep("20 millis"));
+      }
       const second = yield* sweep([sweeper], `${rig.root}/state`, "host");
       expect(Arr.map(second.remove, (one) => one.target)).toEqual([
         `${rig.root}/state/compaction/${agent}`,
@@ -1293,7 +1323,7 @@ const unreadable: ReadonlyArray<
     }),
   ],
 ];
-for (const [what, spoil] of unreadable)
+for (const [what, spoil] of unreadable) {
   test(`a stop that meets ${what} does not say it stopped everything`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -1309,6 +1339,7 @@ for (const [what, spoil] of unreadable)
         kill(stranded);
       }),
     ));
+}
 
 class StoppedWhileStarting extends NeverAdmits {
   halts: Array<{ readonly stopped: ReadonlyArray<string>; readonly left: ReadonlyArray<string> }> =

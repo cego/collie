@@ -36,7 +36,9 @@ interface World {
 const save = (into: string, names: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    for (const name of names) yield* fs.copyFile(`${fixtures}/${name}`, `${into}/${name}`);
+    for (const name of names) {
+      yield* fs.copyFile(`${fixtures}/${name}`, `${into}/${name}`);
+    }
   }).pipe(Effect.orDie);
 
 const write = (file: string, text: string) =>

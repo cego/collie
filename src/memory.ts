@@ -39,14 +39,19 @@ export const linuxMemory = Effect.fn("Memory.linux")(function* (proc: string) {
   const text = yield* fs.readFileString(meminfo).pipe(Effect.orElseSucceed(() => ""));
   const available = kB(text, "MemAvailable");
   const total = kB(text, "MemTotal");
-  if (available === null || total === null || total === 0) return unknown(meminfo);
+  if (available === null || total === null || total === 0) {
+    return unknown(meminfo);
+  }
   const pressureFile = `${proc}/pressure/memory`;
-  if (!(yield* fs.exists(pressureFile).pipe(Effect.orElseSucceed(() => false))))
+  if (!(yield* fs.exists(pressureFile).pipe(Effect.orElseSucceed(() => false)))) {
     return { known: true, available, total, pressure: null } satisfies Memory;
+  }
   const pressure = /^full avg10=(\d+(?:\.\d+)?)\b/m.exec(
     yield* fs.readFileString(pressureFile).pipe(Effect.orElseSucceed(() => "")),
   );
-  if (pressure === null) return unknown(pressureFile);
+  if (pressure === null) {
+    return unknown(pressureFile);
+  }
   return { known: true, available, total, pressure: Number(pressure[1]) } satisfies Memory;
 });
 
@@ -60,7 +65,9 @@ export const macMemory = Effect.fn("Memory.mac")(function* <R>(run: Runner<R>) {
     );
   const level = yield* value("kern.memorystatus_level");
   const total = yield* value("hw.memsize");
-  if (level === null || total === null || total === 0 || level > 100) return unknown("sysctl");
+  if (level === null || total === null || total === 0 || level > 100) {
+    return unknown("sysctl");
+  }
   return { known: true, available: (total * level) / 100, total, pressure: null } satisfies Memory;
 });
 
@@ -69,7 +76,9 @@ export const readMemory = (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
 ) => {
   const proc = env.raw[PROC_ENV];
-  if (proc) return linuxMemory(proc);
+  if (proc) {
+    return linuxMemory(proc);
+  }
   return process.platform === "darwin"
     ? macMemory(run)
     : process.platform === "linux"

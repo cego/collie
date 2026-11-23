@@ -31,7 +31,9 @@ export function placedByUrl(words: string, candidates: ReadonlyArray<Placeable>)
     const project =
       mrRefOf(url)?.project ??
       projectFromRemote(pipe_(url, Str.replace(/\/-\/.*$/, ""), Str.replace(/\/+$/, "")));
-    if (project === null) continue;
+    if (project === null) {
+      continue;
+    }
     const found = Option.getOrUndefined(
       Arr.findFirst(
         candidates,
@@ -41,7 +43,9 @@ export function placedByUrl(words: string, candidates: ReadonlyArray<Placeable>)
           ) === Str.toLowerCase(project),
       ),
     );
-    if (found !== undefined) return found;
+    if (found !== undefined) {
+      return found;
+    }
   }
   return null;
 }
@@ -76,10 +80,16 @@ export const routed = Effect.fn("Route.routed")(function* (
   words: string,
   candidates: ReadonlyArray<Placeable>,
 ) {
-  if (deps === null || candidates.length === 0) return null;
+  if (deps === null || candidates.length === 0) {
+    return null;
+  }
   const route = yield* askOnce(deps, "routing", routePack(words, candidates));
-  if (route === null || !("answer" in route)) return null;
-  if (route.answer !== "one" || route.checkouts.length !== 1) return null;
+  if (route === null || !("answer" in route)) {
+    return null;
+  }
+  if (route.answer !== "one" || route.checkouts.length !== 1) {
+    return null;
+  }
   return (
     Option.getOrUndefined(Arr.findFirst(candidates, (one) => one.path === route.checkouts[0])) ??
     null

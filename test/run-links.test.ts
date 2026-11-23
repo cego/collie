@@ -50,10 +50,17 @@ const linksTo = (side: Side, requester: string, run: string) =>
   flowOf(side, requester).pipe(
     Effect.map((flow) => {
       const links: Array<FlowRun> = [];
-      for (const lane of flow.lanes)
-        if (lane.run === requester)
-          for (const node of lane.nodes)
-            for (const link of node.links ?? []) if (link.link?.run === run) links.push(link);
+      for (const lane of flow.lanes) {
+        if (lane.run === requester) {
+          for (const node of lane.nodes) {
+            for (const link of node.links ?? []) {
+              if (link.link?.run === run) {
+                links.push(link);
+              }
+            }
+          }
+        }
+      }
       return links;
     }),
   );

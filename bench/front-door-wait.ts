@@ -18,7 +18,9 @@ await runEffect(
         { state: world.state, socket: socketOf(world.state) },
         { home: homedir(), env: userEnv },
       );
-      if (refused !== null) return yield* Effect.die(new Error(refused));
+      if (refused !== null) {
+        return yield* Effect.die(new Error(refused));
+      }
       const fs = yield* FileSystem.FileSystem;
       yield* fs.remove(live, { recursive: true, force: true });
       yield* enterWorld;
@@ -62,18 +64,23 @@ await runEffect(
                   verify.push(Number((yield* Clock.currentTimeNanos) - began) / 1_000_000);
                   first = false;
                 }
-                if (event._tag === "Result") result = event.verification.result === "pass";
+                if (event._tag === "Result") {
+                  result = event.verification.result === "pass";
+                }
               }),
             ),
           );
-        if (first || !result) return yield* Effect.die(new Error("verify did not pass"));
+        if (first || !result) {
+          return yield* Effect.die(new Error("verify did not pass"));
+        }
         const started = yield* Clock.currentTimeNanos;
         const answer = yield* door.read({
           tool: "collie_run",
           input: { run: fixture.settled[at]! },
         });
-        if (!Str.includes(fixture.settled[at]!)(answer))
+        if (!Str.includes(fixture.settled[at]!)(answer)) {
           return yield* Effect.die(new Error("collie_run did not answer for the requested Run"));
+        }
         read.push(Number((yield* Clock.currentTimeNanos) - started) / 1_000_000);
       }
       yield* stopHost(world.state);
@@ -81,7 +88,9 @@ await runEffect(
         Str.matchAll(/^\d+ board:built (\d+)$/gm)(yield* fs.readFileString(recordMarksFile)),
         (match) => Number(match[1]),
       );
-      if (builds.length === 0) return yield* Effect.die(new Error("no board builds collected"));
+      if (builds.length === 0) {
+        return yield* Effect.die(new Error("no board builds collected"));
+      }
       yield* Console.log(
         yield* Schema.encodeEffect(
           Schema.fromJsonString(Schema.Record(Schema.String, Schema.Finite)),

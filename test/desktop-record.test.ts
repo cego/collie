@@ -670,7 +670,9 @@ describe("a drawn mark", () => {
     const render = () => {
       const due = queued;
       queued = [];
-      for (const callback of due) callback();
+      for (const callback of due) {
+        callback();
+      }
       seen.push("painted");
     };
     afterPaint(frame, () => seen.push("marked"));

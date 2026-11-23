@@ -347,14 +347,17 @@ const repairedProject = Effect.gen(function* () {
   return { root, repo, base, harness, repair, plan, git, write, commit, readings };
 });
 
-for (const squashed of [false, true])
+for (const squashed of [false, true]) {
   test(`a base that holds ${squashed ? "one squashed commit" : "carried copies"} of its repaired harness, under other SHAs, is sampled as it is`, () =>
     runEffect(
       Effect.gen(function* () {
         const { root, repo, harness, repair, plan, git, write, commit, readings } =
           yield* repairedProject;
-        if (squashed) yield* git("merge", "--squash", repair);
-        else yield* git("cherry-pick", harness, repair);
+        if (squashed) {
+          yield* git("merge", "--squash", repair);
+        } else {
+          yield* git("cherry-pick", harness, repair);
+        }
         const carried = squashed
           ? yield* commit("squashed")
           : Str.trim((yield* git("rev-parse", "HEAD")).stdout);
@@ -367,6 +370,7 @@ for (const squashed of [false, true])
         expect(readings(measured, "candidate")).toEqual([14, 14]);
       }),
     ));
+}
 
 test("a base that holds a copy of only the first harness commit gets the rest applied", () =>
   runEffect(

@@ -44,7 +44,9 @@ const mount = Effect.fn("flow.mount")(function* (ask: Pending["ask"], width = 80
         ),
         () => -1,
       );
-      if (y < 0) throw new Error(`no line containing ${stringifyJson(text)}`);
+      if (y < 0) {
+        throw new Error(`no line containing ${stringifyJson(text)}`);
+      }
       return y;
     },
   };
@@ -152,7 +154,9 @@ test("the cursor moves, and follows the list when the filter shortens it", () =>
     Effect.gen(function* () {
       const flow = yield* mount(menu());
 
-      for (let n = 0; n < 3; n++) flow.mockInput.pressArrow("down");
+      for (let n = 0; n < 3; n++) {
+        flow.mockInput.pressArrow("down");
+      }
       yield* flow.flush;
       expect(Str.split(flow.frame(), "\n")[flow.lineOf("review —")]).toContain("❯");
 

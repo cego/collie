@@ -53,8 +53,9 @@ test("the same thing that happened is one piece of news, however often it is not
 test("news older than one batch is still deduplicated", () =>
   runEffect(
     Effect.gen(function* () {
-      for (let n = 0; n < NEWS_BATCH + 5; n++)
+      for (let n = 0; n < NEWS_BATCH + 5; n++) {
         yield* append(file, { key: `r${n}:ended`, run: `r${n}`, text: `Run r${n} ended.` });
+      }
       expect(yield* append(file, { key: "r0:ended", run: "r0", text: "Run r0 ended." })).toBe(
         false,
       );
@@ -64,8 +65,9 @@ test("news older than one batch is still deduplicated", () =>
 test("a burst becomes one batch that says what it left out, not a turn each", () =>
   runEffect(
     Effect.gen(function* () {
-      for (let n = 0; n < NEWS_BATCH + 5; n++)
+      for (let n = 0; n < NEWS_BATCH + 5; n++) {
         yield* append(file, { key: `r${n}:ended`, run: `r${n}`, text: `Run r${n} ended.` });
+      }
       const batch = pending(yield* read(file));
       expect(batch.items).toHaveLength(NEWS_BATCH);
       expect(batch.omitted).toBe(5);
@@ -109,8 +111,9 @@ test("every approved trigger is news, and activity alone is not", () => {
   expect(eventsIn(triggers)).toHaveLength(triggers.length);
   expect(eventsIn([record({ id: "r8" })], new Map([["r8", "stay in src"]]))).toHaveLength(1);
 
-  for (const busy of [record({ state: "running" }), record({ held: true })])
+  for (const busy of [record({ state: "running" }), record({ held: true })]) {
     expect(eventsIn([busy])).toEqual([]);
+  }
 });
 
 test("what one conversation read is still news to another", () =>
@@ -136,10 +139,11 @@ test("news whose cause has gone drops out of every batch and stays in the journa
       expect(yield* supersede(file, (item) => item.key !== "r1:parked:x")).toBe(1);
       expect(yield* supersede(file, (item) => item.key !== "r1:parked:x")).toBe(0);
       const lines = yield* read(file);
-      for (const conversation of [NATIVE, "flock@pc"])
+      for (const conversation of [NATIVE, "flock@pc"]) {
         expect(Arr.map(pending(lines, conversation).items, (item) => item.key)).toEqual([
           "r2:ended:failed",
         ]);
+      }
       expect(uncertain(lines, NATIVE)).toEqual([]);
       expect(Arr.some(lines, (line) => line.kind === "item" && line.key === "r1:parked:x")).toBe(
         true,
@@ -163,7 +167,9 @@ test("a resumed halt, an answered question and a disposed finished Run no longer
     record({ id: "r3", state: "succeeded" }),
   ];
   const now = holding(after, new Map(), new Set(["r3"]));
-  for (const key of keys) expect([key, now.has(key)]).toEqual([key, false]);
+  for (const key of keys) {
+    expect([key, now.has(key)]).toEqual([key, false]);
+  }
   expect(holding(after).has("r3:ended:succeeded")).toBe(true);
 });
 
@@ -224,13 +230,14 @@ test("each item says how much it matters, and one written before items did is ro
 test("a conversation that takes every pending item is not limited to one batch", () =>
   runEffect(
     Effect.gen(function* () {
-      for (let n = 0; n < NEWS_BATCH + 5; n++)
+      for (let n = 0; n < NEWS_BATCH + 5; n++) {
         yield* append(file, {
           key: `r${n}:ended`,
           run: `r${n}`,
           text: `Run r${n} ended.`,
           significance: "consequential",
         });
+      }
       expect(pending(yield* read(file), "flock@pc", Infinity)).toMatchObject({ omitted: 0 });
       expect(pending(yield* read(file), "flock@pc", Infinity).items).toHaveLength(NEWS_BATCH + 5);
     }),

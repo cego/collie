@@ -60,8 +60,12 @@ const refusal = (samples: MetricSamples) => {
     ["base", samples.base],
     ["candidate", samples.candidate],
   ] as const) {
-    if (values.length < 2) return `${side} has ${values.length} sample(s), at least 2 are needed`;
-    if (!Arr.every(values, Number.isFinite)) return `${side} has a non-finite sample`;
+    if (values.length < 2) {
+      return `${side} has ${values.length} sample(s), at least 2 are needed`;
+    }
+    if (!Arr.every(values, Number.isFinite)) {
+      return `${side} has a non-finite sample`;
+    }
   }
   return null;
 };
@@ -75,11 +79,13 @@ export const judge = (
 ) =>
   Effect.gen(function* () {
     const reason = refusal(samples);
-    if (reason !== null) return yield* new MeasurementRefused({ metric: samples.metric, reason });
+    if (reason !== null) {
+      return yield* new MeasurementRefused({ metric: samples.metric, reason });
+    }
 
     const ratio = ratioOf(median(samples.candidate), median(samples.base));
     const difference = median(samples.candidate) - median(samples.base);
-    if (exact && (varies(samples.base) || varies(samples.candidate)))
+    if (exact && (varies(samples.base) || varies(samples.candidate))) {
       return {
         metric: samples.metric,
         ratio,
@@ -87,6 +93,7 @@ export const judge = (
         verdict: "inconclusive" as const,
         held: false,
       };
+    }
 
     const random = yield* Random.Random;
     const resample = (values: ReadonlyArray<number>) =>

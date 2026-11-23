@@ -93,8 +93,9 @@ const listen = (state: string, open: (url: string) => Effect.Effect<void>, url: 
             port: SLACK_CALLBACK_PORT,
             fetch: (request) => {
               const at = new URL(request.url);
-              if (at.pathname !== SLACK_CALLBACK_PATH)
+              if (at.pathname !== SLACK_CALLBACK_PATH) {
                 return new Response("Not found", { status: 404 });
+              }
               Deferred.doneUnsafe(arrived, Effect.succeed(at.searchParams));
               return new Response(
                 "<!doctype html><title>Collie</title><p>You can close this tab.</p>",
@@ -114,13 +115,17 @@ const listen = (state: string, open: (url: string) => Effect.Effect<void>, url: 
         orElse: () => Effect.fail("Slack sign-in got no answer within 5 minutes; sign in again"),
       }),
     );
-    if (answer.get("state") !== state)
+    if (answer.get("state") !== state) {
       return yield* Effect.fail("Slack's answer was not for this sign-in, so nothing was kept");
+    }
     const error = answer.get("error");
-    if (error === "access_denied") return yield* Effect.fail("Slack sign-in was cancelled");
+    if (error === "access_denied") {
+      return yield* Effect.fail("Slack sign-in was cancelled");
+    }
     const code = answer.get("code");
-    if (error !== null || code === null)
+    if (error !== null || code === null) {
       return yield* Effect.fail(`Slack sign-in failed: ${error ?? "no code"}`);
+    }
     return code;
   }).pipe(Effect.scoped);
 
@@ -176,20 +181,24 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
       { client_id: id, code, code_verifier: verifier, redirect_uri: SLACK_REDIRECT_URL },
       options.client,
     );
-    if (answer.access_token !== undefined)
+    if (answer.access_token !== undefined) {
       return yield* Effect.fail("Slack's answer carried a bot token, so nothing was kept");
+    }
     const tokens = userTokens(answer);
-    if (answer.authed_user === undefined || tokens === null)
+    if (answer.authed_user === undefined || tokens === null) {
       return yield* Effect.fail("Slack's answer had no user token, so nothing was kept");
-    if (!Arr.contains(Str.split(tokens.scope, ","), "chat:write"))
+    }
+    if (!Arr.contains(Str.split(tokens.scope, ","), "chat:write")) {
       return yield* Effect.fail(
         "Slack did not grant chat:write, so nothing was kept; sign in again and allow it",
       );
+    }
     const owner = yield* slackApi(tokens.access, options.client).tokenOwner();
-    if (owner.bot_id !== undefined || owner.user_id !== answer.authed_user.id)
+    if (owner.bot_id !== undefined || owner.user_id !== answer.authed_user.id) {
       return yield* Effect.fail(
         `Slack says the token is ${owner.user_id}'s, not ${answer.authed_user.id}'s, so nothing was kept`,
       );
+    }
     const grant: SlackUserGrant = {
       clientId: id,
       accessToken: tokens.access,
@@ -208,13 +217,19 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
   const renew = (now: boolean) =>
     Effect.gen(function* () {
       const before = yield* kept;
-      if (before === null) return null;
+      if (before === null) {
+        return null;
+      }
       return yield* lock.withPermits(1)(
         Effect.gen(function* () {
           const grant = yield* kept;
-          if (grant === null || grant.refreshToken !== before.refreshToken) return null;
+          if (grant === null || grant.refreshToken !== before.refreshToken) {
+            return null;
+          }
           const left = grant.expiresAt - (yield* Clock.currentTimeMillis);
-          if (!now && trouble === null && left > Duration.toMillis(RENEW_BEFORE)) return null;
+          if (!now && trouble === null && left > Duration.toMillis(RENEW_BEFORE)) {
+            return null;
+          }
           const tokens = yield* slackOAuth(
             {
               client_id: grant.clientId,
@@ -247,8 +262,12 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
 
   const channels = Effect.gen(function* () {
     const before = yield* kept;
-    if (before === null) return yield* Effect.fail(SIGN_IN_TO_PICK);
-    if (before.expiresAt <= (yield* Clock.currentTimeMillis)) yield* renew(true);
+    if (before === null) {
+      return yield* Effect.fail(SIGN_IN_TO_PICK);
+    }
+    if (before.expiresAt <= (yield* Clock.currentTimeMillis)) {
+      yield* renew(true);
+    }
     const grant = (yield* kept) ?? before;
     return yield* slackApi(grant.accessToken, options.client)
       .channels()

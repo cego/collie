@@ -59,7 +59,9 @@ test("a held lock names its holder once, then the wait as it grows, and falls qu
       const say = (line: string) =>
         Effect.gen(function* () {
           said.push(line);
-          if (Arr.filter(said, (one) => STILL.test(one)).length === 2) yield* fs.remove(lock);
+          if (Arr.filter(said, (one) => STILL.test(one)).length === 2) {
+            yield* fs.remove(lock);
+          }
         }).pipe(Effect.orDie);
       let atStart = -1;
       const suite = Effect.sync(() => (atStart = said.length)).pipe(
@@ -74,7 +76,9 @@ test("a held lock names its holder once, then the wait as it grows, and falls qu
       expect(named).toContain("sleep 30");
       expect(named).toMatch(/since \w{3} \w{3} +\d+ \d\d:\d\d:\d\d \d{4}/);
       expect(waited.length).toBeGreaterThanOrEqual(2);
-      for (const line of waited) expect(line).toMatch(STILL);
+      for (const line of waited) {
+        expect(line).toMatch(STILL);
+      }
       expect(said).toHaveLength(atStart);
     }).pipe(Effect.scoped),
   ));

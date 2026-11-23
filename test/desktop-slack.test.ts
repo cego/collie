@@ -53,10 +53,11 @@ test("the notification row offers the channels the human is in, and no direct me
       expect(
         "refused" in saved ? saved.refused : saved.settings["slack.notification_channel"]?.value,
       ).toBe("C456");
-      for (const outside of ["C123", "dm", "U789"])
+      for (const outside of ["C123", "dm", "U789"]) {
         expect(pickSlackDestination(outside, yours)).toEqual({
           refused: "Pick a channel you're in, or refresh Slack",
         });
+      }
     }),
   ));
 
@@ -92,10 +93,11 @@ test("the approval row offers the channels the human is in and refuses any other
       expect(pickSlackDestination("C456", yours)).toEqual({
         value: "C456",
       });
-      for (const outside of ["C123", "C999"])
+      for (const outside of ["C123", "C999"]) {
         expect(pickSlackDestination(outside, yours)).toEqual({
           refused: "Pick a channel you're in, or refresh Slack",
         });
+      }
       expect(pickSlackDestination("", yours)).toEqual({ value: "" });
     }),
   ));

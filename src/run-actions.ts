@@ -100,7 +100,9 @@ export function followUpField(drawn: Schema.Json | null) {
 
 export const registerRunExecutors = Effect.fn("runActions.register")(function* () {
   // WARNING: a second registration would claim an action kind twice, so a repeat call returns early.
-  if (registeredKinds().length > 0) return;
+  if (registeredKinds().length > 0) {
+    return;
+  }
   const failed: (note: string) => ExecutionResult = (note) => ({ state: "failed", note });
   const settled: (result: OpResult | Failure) => ExecutionResult = (result) =>
     result.ok ? { state: "applied", note: result.human } : failed(result.error.message);
@@ -221,12 +223,14 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       }
       const amended = yield* updateIntent(dir, (intent) =>
         Effect.gen(function* () {
-          if (intent === null)
+          if (intent === null) {
             return yield* Effect.fail(`Run "${action.run}" has no Intent to amend`);
-          if (intent.version !== action.base_version)
+          }
+          if (intent.version !== action.base_version) {
             return yield* Effect.fail(
               `the Intent is v${intent.version}, not v${action.base_version}`,
             );
+          }
           // WARNING: a constraint is semantic: a model's words are not a rule Collie can check by itself.
           return amendIntent(
             intent,
@@ -263,7 +267,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         request: by.requestId,
         door: by,
       });
-      if (!granted.ok) return failed(granted.error.message);
+      if (!granted.ok) {
+        return failed(granted.error.message);
+      }
       const dir = runDir(env.stateDir, action.run);
       // WARNING: an Intent that failed to follow the grant is reported as such, not as the grant failing.
       const unlisted = yield* updateIntent(dir, (intent) =>
@@ -295,7 +301,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   registerExecutor("remember_verification", (action, _by, env) =>
     Effect.gen(function* () {
       const run = yield* findRun(env, action.run);
-      if (run === null) return failed(`no run "${action.run}"`);
+      if (run === null) {
+        return failed(`no run "${action.run}"`);
+      }
       const remembered = yield* rememberChecks(env, {
         runId: action.run,
         checkouts: [run.cwd, run.project],
@@ -345,10 +353,14 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
             ? repository
             : { found: { cwd: repository.path, label: named ?? "" } }
           : yield* workspaceNamed(env, named);
-      if (where !== null && "error" in where) return failed(where.error);
+      if (where !== null && "error" in where) {
+        return failed(where.error);
+      }
       const own =
         where === null ? null : yield* collieOwnRefusal(env, where.found.label, where.found.cwd);
-      if (own !== null) return failed(own);
+      if (own !== null) {
+        return failed(own);
+      }
       const rooted = where === null ? env : { ...env, cwd: where.found.cwd };
       const fields = Rec.toEntries(action.inputs);
       const input = {
@@ -356,15 +368,20 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         json: {},
       };
       const launch = Rec.fromEntries(Arr.filter(fields, ([name]) => name in RESERVED_INPUTS));
-      if (atRoot) launch.workspace = PROJECTS_ROOT_OPTION;
-      else if (repository !== null && named !== undefined) launch.workspace = named;
+      if (atRoot) {
+        launch.workspace = PROJECTS_ROOT_OPTION;
+      } else if (repository !== null && named !== undefined) {
+        launch.workspace = named;
+      }
       const saved = yield* moduleFor(rooted, action.workflow);
       if (saved !== null && "inputs" in saved) {
         const refused = yield* agentStartRefusal(rooted, saved, input, {
           named: atRoot ? (yield* projectsRoot(env)).path : (where?.found.cwd ?? null),
           fix: CHAT_CHECKOUT_FIX,
         });
-        if (refused !== null) return failed(refused.error.message);
+        if (refused !== null) {
+          return failed(refused.error.message);
+        }
       }
       const started = yield* startRun(rooted, {
         door: by,
@@ -395,17 +412,22 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     Effect.gen(function* () {
       // WARNING: the named workspace's scope, never this process's: a Run reads its defaults where it was started.
       const where = yield* workspaceNamed(env, action.workspace);
-      if (where === null) return failed("update_defaults has to name a workspace");
-      if ("error" in where) return failed(where.error);
+      if (where === null) {
+        return failed("update_defaults has to name a workspace");
+      }
+      if ("error" in where) {
+        return failed(where.error);
+      }
       const scope = scopeFor(where.found.cwd);
       const file = yield* defaultsPath(env.stateDir, scopeKey(scope));
       const current = (yield* readDefaults(file)) ?? EMPTY_DEFAULTS;
       if (action.change === "remove-constraint") {
         // WARNING: ids are hashes of the text, so a prose name matches none and is refused, not reported as applied.
-        if (!Arr.some(current.constraints, (c) => c.id === action.text))
+        if (!Arr.some(current.constraints, (c) => c.id === action.text)) {
           return failed(
             `no default constraint "${action.text}" in ${where.found.label}; remove one by the id \`collie_installation\` lists`,
           );
+        }
         const next = {
           ...current,
           constraints: Arr.filter(current.constraints, (c) => c.id !== action.text),
@@ -414,7 +436,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         return { state: "applied" as const, note: describeDefaults(next) };
       }
       const parsed = parseConstraint(action.text, "warn");
-      if ("error" in parsed) return failed(parsed.error);
+      if ("error" in parsed) {
+        return failed(parsed.error);
+      }
       const constraint = { ...parsed, source: "workspace-default" as const, since: 1 };
       const next = {
         ...current,
@@ -429,12 +453,15 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   registerExecutor("fork_definition", (action, _by, env) =>
     Effect.gen(function* () {
-      if (action.what !== "persona")
+      if (action.what !== "persona") {
         return failed("a workflow is forked with `collie workflow fork`, which writes a module");
+      }
       const layer = action.layer ?? "user";
       const available = yield* layers(env);
       const found = (yield* loadDefinitions(available)).personas.get(action.name);
-      if (!found) return failed(`No persona "${action.name}".`);
+      if (!found) {
+        return failed(`No persona "${action.name}".`);
+      }
       const result = yield* forkResolvedDefinition(
         { path: found.path, kind: "personas", steps: [], body: found.body },
         available[layer].dir,
@@ -466,7 +493,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           listing.unreadable === null
             ? Arr.filter(yield* listTasks, (task) => !isOpen(task) && !owned.has(task.id))
             : [];
-        for (const task of gone) yield* removeTask(task.id);
+        for (const task of gone) {
+          yield* removeTask(task.id);
+        }
         return {
           state: "applied" as const,
           note: `forgot ${gone.length} closed Tasks`,
@@ -495,11 +524,16 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       let workspace = named;
       if (named !== "" && named !== PROJECTS_ROOT_OPTION && !pipe_(named, Str.startsWith("/"))) {
         const repository = yield* repositoryCheckout(env, named);
-        if (repository !== null && "error" in repository) return failed(repository.error);
-        if (repository !== null) workspace = repository.path;
-        else {
+        if (repository !== null && "error" in repository) {
+          return failed(repository.error);
+        }
+        if (repository !== null) {
+          workspace = repository.path;
+        } else {
           const where = yield* workspaceNamed(env, named);
-          if (where !== null && "error" in where) return failed(where.error);
+          if (where !== null && "error" in where) {
+            return failed(where.error);
+          }
           workspace = where?.found.cwd ?? "";
         }
       }
@@ -522,10 +556,11 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     ["schedule_pause", "pause"],
     ["schedule_resume", "resume"],
     ["schedule_remove", "remove"],
-  ] as const)
+  ] as const) {
     registerExecutor(kind, (action, by, env) =>
       scheduleChange(env, by, { change, name: action.name }, action.machine),
     );
+  }
   registerExecutor("cleanup", (action, by, env) =>
     onThisMachine(
       action.machine,
@@ -576,11 +611,12 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
   // WARNING: without registration every action is refused as executor_missing, which would misstate this build.
   yield* registerRunExecutors();
   const file = yield* journalOf(proposalId);
-  if (file === null)
+  if (file === null) {
     return yield* new ProposalRefused({
       refused: "not_found",
       detail: `no proposal "${proposalId}"`,
     });
+  }
   const proposal = Option.getOrUndefined(
     Arr.findFirst(
       yield* readProposals(file),
@@ -592,7 +628,9 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
     const intent = yield* readIntent(runDir(env.stateDir, target.run)).pipe(
       Effect.orElseSucceed(() => null),
     );
-    if (intent !== null) versions.set(target.run, intent.version);
+    if (intent !== null) {
+      versions.set(target.run, intent.version);
+    }
   }
 
   const judged = yield* confirmProposal(
@@ -602,8 +640,9 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
     actor,
     versions,
   );
-  if ("refused" in judged)
+  if ("refused" in judged) {
     return yield* new ProposalRefused({ refused: judged.refused, detail: judged.detail });
+  }
 
   const results: Array<StepResult> = [];
   const expectedVersions = { ...judged.proposal.intent_versions };
@@ -638,7 +677,9 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
       const state = action.kind === "none" ? "applied" : "failed";
       const note = action.kind === "none" ? action.why : action.question;
       yield* settle(index, state, note);
-      if (action.kind === "ask_human") break;
+      if (action.kind === "ask_human") {
+        break;
+      }
       continue;
     }
     const executor = executorFor(action.kind);
@@ -661,9 +702,12 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
       env,
     );
     yield* settle(index, outcome.state, outcome.note);
-    if (outcome.state === "failed" && "run" in action) failedRuns.add(action.run);
-    if (outcome.state !== "failed" && action.kind === "update_intent")
+    if (outcome.state === "failed" && "run" in action) {
+      failedRuns.add(action.run);
+    }
+    if (outcome.state !== "failed" && action.kind === "update_intent") {
       expectedVersions[action.run] = action.base_version + 1;
+    }
   }
   return { proposal: proposalId, results } satisfies ProposalCarried;
   // WARNING: a hung-up client must not cut steps off from their record.
@@ -720,7 +764,9 @@ export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
     }
     const outcome = yield* executor(action, stepOf(actor, index), env);
     results.push({ kind: action.kind, state: outcome.state, note: outcome.note ?? "" });
-    if (outcome.state === "failed") break;
+    if (outcome.state === "failed") {
+      break;
+    }
   }
   return results;
 });
@@ -732,12 +778,16 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
 ) {
   const id = "run" in action ? action.run : null;
   const run = id === null ? null : yield* findRun(env, id);
-  if (run === null) return admit(action, emptyAdmission());
+  if (run === null) {
+    return admit(action, emptyAdmission());
+  }
   const live = yield* new Herdr(env).agentList().pipe(Effect.orElseSucceed(() => []));
   const agent = "agent" in action ? (action.agent ?? null) : null;
   // WARNING: refused rather than read as no version, or a corrupt file would pass as having none to disagree with.
   const intent = yield* readIntent(run.dir).pipe(Effect.orElseSucceed(() => "unreadable" as const));
-  if (intent === "unreadable") return `${run.id}'s Intent cannot be read`;
+  if (intent === "unreadable") {
+    return `${run.id}'s Intent cannot be read`;
+  }
   const bound = proposal?.card;
   const here = bound === undefined ? null : yield* fingerprint(run.cwd);
   const now = here === null ? null : `${here.head_sha}:${here.fingerprint}`;

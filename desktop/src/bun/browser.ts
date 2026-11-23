@@ -11,9 +11,10 @@ const FIELD_CODE = /^(%[a-zA-Z]|@@u?)$/;
 
 const commandOf = (entry: string) => {
   let group = "";
-  for (const line of Arr.map(Str.split(entry, "\n"), (one) => Str.trim(one)))
-    if (pipe_(line, Str.startsWith("["))) group = line;
-    else if (group === "[Desktop Entry]" && /^Exec\s*=/.test(line))
+  for (const line of Arr.map(Str.split(entry, "\n"), (one) => Str.trim(one))) {
+    if (pipe_(line, Str.startsWith("["))) {
+      group = line;
+    } else if (group === "[Desktop Entry]" && /^Exec\s*=/.test(line)) {
       return Arr.map(
         Arr.filter(
           Arr.map(
@@ -37,6 +38,8 @@ const commandOf = (entry: string) => {
         ),
         (word) => pipe_(word, Str.replaceAll("%%", "%")),
       );
+    }
+  }
   return [];
 };
 
@@ -60,7 +63,9 @@ export const appWindowFor = (url: string) =>
     );
     for (const dir of dataDirs()) {
       const entry = yield* fs.readFileString(`${dir}/applications/${id}`).pipe(Effect.option);
-      if (entry._tag === "Some") return appWindow(id, entry.value, url);
+      if (entry._tag === "Some") {
+        return appWindow(id, entry.value, url);
+      }
     }
     return null;
   }).pipe(Effect.orElseSucceed(() => null));

@@ -21,10 +21,12 @@ const keys = Arr.map(SETTINGS, (setting) => setting.key);
 describe("Collie's settings", () => {
   test("numeric setting values reject non-finite numbers", () => {
     const decode = Schema.decodeUnknownResult(SettingValue);
-    for (const value of [Infinity, -Infinity, Number.NaN])
+    for (const value of [Infinity, -Infinity, Number.NaN]) {
       expect(Result.isFailure(decode(value))).toBe(true);
-    for (const value of [0, -1, 0.5, Number.MAX_VALUE])
+    }
+    for (const value of [0, -1, 0.5, Number.MAX_VALUE]) {
       expect(Result.getOrThrow(decode(value))).toBe(value);
+    }
   });
 
   test("are every default a Run reads, the per-harness models and every notification", () => {
@@ -62,8 +64,9 @@ describe("Collie's settings", () => {
     expect(harness.kind).toBe("choice");
     expect([...harness.choices].sort()).toEqual(harnessNames());
     expect(harness.fallback).toBe("claude");
-    for (const setting of Arr.filter(SETTINGS, (one) => one.kind === "choice"))
+    for (const setting of Arr.filter(SETTINGS, (one) => one.kind === "choice")) {
       expect(setting.choices).toContain(setting.fallback);
+    }
   });
 
   test("parse what was typed into the value written", () => {
@@ -175,10 +178,11 @@ describe("Claude Code's auto-compact window", () => {
   });
 
   test("refuses anything else, Claude Code's shorthands included, naming the range", () => {
-    for (const typed of ["99999", "1000001", "500k", "1M", "-5", "400000.5", "big"])
+    for (const typed of ["99999", "1000001", "500k", "1M", "-5", "400000.5", "big"]) {
       expect(parseSetting("claude_auto_compact_window", typed)).toEqual({
         refused: `${RANGE}, not "${typed}"`,
       });
+    }
   });
 });
 
@@ -224,13 +228,14 @@ describe("Each setting explains itself", () => {
 
   test("under a group, with a plain name and a sentence on what it changes", () => {
     expect<ReadonlyArray<string>>(SETTING_GROUPS).toEqual(Rec.keys(PLACED));
-    for (const [group, placed] of Rec.toEntries(PLACED))
+    for (const [group, placed] of Rec.toEntries(PLACED)) {
       expect(
         Arr.map(
           Arr.filter(SETTINGS, (setting) => setting.group === group),
           ({ key }) => key,
         ).sort(),
       ).toEqual([...placed].sort());
+    }
     for (const setting of SETTINGS) {
       expect(setting.label).not.toBe("");
       expect(setting.description).not.toBe("");
@@ -247,7 +252,9 @@ describe("Each setting explains itself", () => {
     expect(said("compact_at_tokens")).toContain("0 turns compaction off");
     expect(said("idle_close_ms")).toContain("0 never closes one");
     expect(said("effort")).toContain("Unset");
-    for (const key of ["scope", "density", "questions"]) expect(said(key)).toContain("TUI");
+    for (const key of ["scope", "density", "questions"]) {
+      expect(said(key)).toContain("TUI");
+    }
     expect(said("proactive")).toContain("Native chat");
     expect(said("proactive")).toContain("Flock chat");
   });
@@ -262,10 +269,11 @@ describe("Each setting explains itself", () => {
     expect(settingStored("quiet_ms", "")).toEqual({ stored: "" });
     expect(settingStored("quiet_ms", ".5")).toEqual({ stored: "30000" });
     expect(parseSetting("quiet_ms", "900000")).toEqual({ value: 900_000 });
-    for (const typed of ["-1", "ten"])
+    for (const typed of ["-1", "ten"]) {
       expect(settingStored("board_quiet_ms", typed)).toEqual({
         refused: `board_quiet_ms has to be a number of minutes, not "${typed}"`,
       });
+    }
   });
 
   test("an idle agent closes after an hour by default, and 0 is never", () => {

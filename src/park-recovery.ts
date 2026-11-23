@@ -62,16 +62,20 @@ export const recoveryFailing = (
     const herds = yield* liveHerds(herdr, env).pipe(Effect.orElseSucceed(() => []));
     const key = `recovery-failing:${machineName()}`;
     for (const herd of new Set([own, ...Arr.map(herds, (one) => one.herd)])) {
-      if (herd === null) continue;
+      if (herd === null) {
+        continue;
+      }
       const file = yield* newsPath(env.stateDir, herd);
-      if (failing !== null)
+      if (failing !== null) {
         yield* appendNews(file, {
           key,
           run: failing.run,
           text: failing.text,
           significance: "consequential",
         });
-      else yield* supersede(file, (item) => item.key !== key);
+      } else {
+        yield* supersede(file, (item) => item.key !== key);
+      }
     }
   });
 
@@ -107,14 +111,18 @@ export const recoverParks = <E, R>(opts: {
     const prior = yield* readJournal(roundsFile, RoundJson).pipe(Effect.orElseSucceed(() => []));
     let failures = 0;
     for (const line of Arr.reverse(prior)) {
-      if (!line.failed) break;
+      if (!line.failed) {
+        break;
+      }
       failures += 1;
     }
     const noteRound = (failed: boolean, run: string) =>
       Effect.gen(function* () {
         yield* appendJournal(roundsFile, RoundJson, { at: yield* nowIso, failed });
         failures = failed ? failures + 1 : 0;
-        if (failed && failures < 3) return;
+        if (failed && failures < 3) {
+          return;
+        }
         yield* recoveryFailing(
           opts.env,
           opts.herdr,
@@ -155,8 +163,9 @@ export const recoverParks = <E, R>(opts: {
                 view.park == null ||
                 view.park.kind !== "rechecks" ||
                 PARK_CAUSES[view.park.cause].kind !== "rechecks"
-              )
+              ) {
                 return;
+              }
               const key = `${view.runId}:${view.park.id ?? view.created}:${view.park.since ?? ""}`;
               present.add(key);
               const now = yield* Clock.currentTimeMillis;
@@ -180,9 +189,13 @@ export const recoverParks = <E, R>(opts: {
                 panel?._tag === "Unavailable" && ASKS_FORGE.has(view.park.cause)
                   ? rateLimitedUntil(panel.reason)
                   : null;
-              if (limited !== null) wait.next = Math.max(wait.next, limited + RATE_LIMIT_MARGIN_MS);
+              if (limited !== null) {
+                wait.next = Math.max(wait.next, limited + RATE_LIMIT_MARGIN_MS);
+              }
               waits.set(key, wait);
-              if (now < wait.next) return;
+              if (now < wait.next) {
+                return;
+              }
               checked = true;
               const { cleared, note, error } = yield* recheckPark(
                 view,
@@ -208,7 +221,9 @@ export const recoverParks = <E, R>(opts: {
                 (rateLimitedUntil(note) ?? 0) + RATE_LIMIT_MARGIN_MS,
               );
               yield* appendMetric(dir, line);
-              if (!cleared) return;
+              if (!cleared) {
+                return;
+              }
               const attempt =
                 Arr.filter(
                   actions,
@@ -237,7 +252,11 @@ export const recoverParks = <E, R>(opts: {
           }),
         { concurrency: 2, discard: true },
       );
-      for (const key of waits.keys()) if (!present.has(key)) waits.delete(key);
+      for (const key of waits.keys()) {
+        if (!present.has(key)) {
+          waits.delete(key);
+        }
+      }
       if (failed) {
         yield* noteRound(true, candidates[0]?.view.runId ?? "");
         return;
@@ -249,12 +268,15 @@ export const recoverParks = <E, R>(opts: {
             if (
               configValue(yield* readConfig(opts.env.userDir), "recovery.resume") === false ||
               (yield* machineMemory(opts.env)).short
-            )
+            ) {
               return;
+            }
             const dir = `${opts.env.stateDir}/evidence/${view.runId}`;
             if (fresh) {
               yield* appendMetric(dir, { ...claimed, at: yield* nowIso });
-              if (crashAt === "claimed") yield* signalProcess(yield* currentPid, "SIGKILL");
+              if (crashAt === "claimed") {
+                yield* signalProcess(yield* currentPid, "SIGKILL");
+              }
             }
             const result = yield* opts.resume(view, claimed.recoveryId!, claimed.park!);
             const ended = yield* Clock.currentTimeMillis;
@@ -267,8 +289,9 @@ export const recoverParks = <E, R>(opts: {
           }),
         { concurrency: 2, discard: true },
       );
-      if (checked || candidates.length > 0)
+      if (checked || candidates.length > 0) {
         yield* noteRound(false, candidates[0]?.view.runId ?? "");
+      }
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("recovery round failed", cause).pipe(
@@ -345,9 +368,11 @@ export const healParks = <E, R, E2, R2>(opts: {
           (line) => line.action === "healed" && !healInFlight(line) && line.outcome !== "skipped",
         ).sort((a, b) => Str.localeCompare(b.at)(a.at));
         const last = ended.slice(-3);
-        if (last.length === 0) return;
+        if (last.length === 0) {
+          return;
+        }
         const failing = last.length === 3 && Arr.every(last, (line) => line.outcome === "failed");
-        if (failing || last.at(-1)?.outcome !== "failed")
+        if (failing || last.at(-1)?.outcome !== "failed") {
           yield* recoveryFailing(
             opts.env,
             opts.herdr,
@@ -358,6 +383,7 @@ export const healParks = <E, R, E2, R2>(opts: {
                 }
               : null,
           );
+        }
       });
     const healLines = new Map<string, ReadonlyArray<Metric>>();
     const judging = Effect.gen(function* () {
@@ -410,8 +436,12 @@ export const healParks = <E, R, E2, R2>(opts: {
             Schema.decodeUnknownOption(HealOutput)(heal.status.value),
           );
           const finding: Types.Mutable<Pick<Metric, "finding" | "diagnosisComplete">> = {};
-          if (output !== null) finding.finding = output.finding;
-          if (output?.diagnosis_complete === false) finding.diagnosisComplete = false;
+          if (output !== null) {
+            finding.finding = output.finding;
+          }
+          if (output?.diagnosis_complete === false) {
+            finding.diagnosisComplete = false;
+          }
           const words = said(output, heal.runId);
           let report: ReportAddress | undefined = output?.report;
           const catalogue = yield* Effect.serviceOption(Artefacts);
@@ -460,8 +490,12 @@ export const healParks = <E, R, E2, R2>(opts: {
           );
         }
       }
-      if (judged) yield* noteFailures(recoveriesIn(all));
-      if (flying || claims.length === 0 || (yield* machineMemory(opts.env)).short) return;
+      if (judged) {
+        yield* noteFailures(recoveriesIn(all));
+      }
+      if (flying || claims.length === 0 || (yield* machineMemory(opts.env)).short) {
+        return;
+      }
       // WARNING: read after the claims, so a park written by a claim is in what is read.
       const now = new Map(Arr.map(yield* opts.views, (view) => [view.runId, view] as const));
       for (const { view, claim } of claims.sort((a, b) =>
@@ -475,7 +509,9 @@ export const healParks = <E, R, E2, R2>(opts: {
           });
           continue;
         }
-        if (waitsOnYou(current)) continue;
+        if (waitsOnYou(current)) {
+          continue;
+        }
         const healer = (yield* healOn(opts.env.userDir))
           ? yield* healerFor(opts.env, current.project)
           : null;
@@ -493,7 +529,9 @@ export const healParks = <E, R, E2, R2>(opts: {
           continue;
         }
         const heal = yield* opts.start(current, healer.id, claim.recoveryId!, claim.park!);
-        if (crashAt === "heal-claimed") yield* signalProcess(yield* currentPid, "SIGKILL");
+        if (crashAt === "heal-claimed") {
+          yield* signalProcess(yield* currentPid, "SIGKILL");
+        }
         yield* close(current, claim, {
           outcome: "started",
           heal,
@@ -524,7 +562,7 @@ export const healParks = <E, R, E2, R2>(opts: {
           ),
         );
         // WARNING: an unchanged retry is not recorded again, so a lasting refusal stays one line.
-        if (last?.publication !== reported.publication || last.note !== reported.note)
+        if (last?.publication !== reported.publication || last.note !== reported.note) {
           yield* appendMetric(evidence(item.run), {
             at: yield* nowIso,
             kind: "report",
@@ -534,8 +572,10 @@ export const healParks = <E, R, E2, R2>(opts: {
             value: 0,
             ...reported,
           });
-        if (reported.issue !== undefined && reported.publication !== "uncertain")
+        }
+        if (reported.issue !== undefined && reported.publication !== "uncertain") {
           known.set(item.finding.key, reported.issue);
+        }
         const delay = Math.min((retries.get(item.heal)?.delay ?? base / 2) * 2, base * 60);
         retries.set(item.heal, {
           next:

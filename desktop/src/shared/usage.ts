@@ -75,8 +75,11 @@ export const usageAccounts = (
   live: ReadonlyArray<string>,
 ) => {
   const groups = new Map<string, UsageAccount>();
-  for (const profile of live)
-    for (const { name, readings } of Arr.filter(machines, (machine) => machine.profile === profile))
+  for (const profile of live) {
+    for (const { name, readings } of Arr.filter(
+      machines,
+      (machine) => machine.profile === profile,
+    )) {
       for (const reading of readings) {
         const key = accountKey(reading, name);
         const held = groups.get(key);
@@ -93,6 +96,8 @@ export const usageAccounts = (
           machines: [...(held?.machines ?? []), { machine: name, reading }],
         });
       }
+    }
+  }
   return [...groups.values()].sort(
     (a, b) =>
       SUBSCRIPTIONS.indexOf(a.subscription) - SUBSCRIPTIONS.indexOf(b.subscription) ||
@@ -109,11 +114,14 @@ export const usageEntries = (
     newest === null ? [] : [{ key, ...newest }],
   );
   const accounts = new Map<Subscription, number>();
-  for (const { reading } of shown)
+  for (const { reading } of shown) {
     accounts.set(reading.subscription, (accounts.get(reading.subscription) ?? 0) + 1);
+  }
   return Arr.flatMap(shown, ({ key, reading, machine }) => {
     const used = busiestWindow(reading, now);
-    if (used === null) return [];
+    if (used === null) {
+      return [];
+    }
     const label =
       accounts.get(reading.subscription)! > 1 && reading.accountLabel !== null
         ? ` ${reading.accountLabel}`
@@ -190,7 +198,9 @@ export const usagePage = (
   const sections = Arr.flatMap(
     usageAccounts(machines, live),
     ({ key, account, newest, machines: readers }) => {
-      if (account === null && newest === null) return [];
+      if (account === null && newest === null) {
+        return [];
+      }
       const titled =
         newest?.reading ??
         Arr.reduce(Arr.drop(readers, 1), Option.getOrThrow(Arr.head(readers)), (a, b) =>

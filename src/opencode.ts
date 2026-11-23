@@ -76,7 +76,9 @@ const send = Effect.fn("OpenCode.send")(function* (
     const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""));
     return yield* failed(`${what} answered ${response.status}: ${pipe_(body, Str.slice(0, 200))}`);
   }
-  if (response.status === 204) return null;
+  if (response.status === 204) {
+    return null;
+  }
   return yield* response.json.pipe(Effect.mapError((cause) => failed(`${what}: ${reason(cause)}`)));
 }, Effect.provide(FetchHttpClient.layer));
 
@@ -121,16 +123,24 @@ export const messages = Effect.fn("OpenCode.messages")(function* (base: string, 
 // WARNING: reasoning tokens are left out on purpose, as OpenCode's own overflow predicate leaves them out.
 export function contextTokens(message: OpenCodeMessage) {
   const tokens = message.info.tokens;
-  if (!tokens) return null;
+  if (!tokens) {
+    return null;
+  }
   return tokens.total ?? tokens.input + tokens.output + tokens.cache.read + tokens.cache.write;
 }
 
 // WARNING: null after a compaction, and unfinished messages are skipped: the newest then measures nothing of the rebuilt context.
 export function currentContext(all: ReadonlyArray<OpenCodeMessage>) {
   for (const message of [...all].reverse()) {
-    if (message.info.role !== "assistant") continue;
-    if (message.info.mode === COMPACTION_MODE) return null;
-    if (!message.info.finish) continue;
+    if (message.info.role !== "assistant") {
+      continue;
+    }
+    if (message.info.mode === COMPACTION_MODE) {
+      return null;
+    }
+    if (!message.info.finish) {
+      continue;
+    }
     return contextTokens(message);
   }
   return null;
@@ -139,7 +149,9 @@ export function currentContext(all: ReadonlyArray<OpenCodeMessage>) {
 export function sessionModel(all: ReadonlyArray<OpenCodeMessage>) {
   for (const message of [...all].reverse()) {
     const { providerID, modelID } = message.info;
-    if (providerID && modelID) return { providerID, modelID };
+    if (providerID && modelID) {
+      return { providerID, modelID };
+    }
   }
   return null;
 }
@@ -221,7 +233,9 @@ const decodeMessageError = Schema.decodeUnknownOption(MessageError);
 
 function describe(error: OpenCodeMessage["info"]["error"]) {
   const named = decodeMessageError(error);
-  if (named._tag === "None") return "the compaction reported an error";
+  if (named._tag === "None") {
+    return "the compaction reported an error";
+  }
   return named.value.data?.message ?? named.value.name ?? "the compaction reported an error";
 }
 

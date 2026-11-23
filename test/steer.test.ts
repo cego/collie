@@ -304,7 +304,9 @@ test("a dry run prints what it would propose and records nothing", () =>
         requestId: "req-4",
       });
       expect(result.ok).toBe(true);
-      if (result.ok) expect(result.human).toContain("hold it while you look");
+      if (result.ok) {
+        expect(result.human).toContain("hold it while you look");
+      }
 
       const proposals = yield* readProposals(herdKey);
       expect(Arr.filter(proposals, (line) => line.kind === "proposal")).toEqual([]);
@@ -323,7 +325,9 @@ test("a model that answers outside its schema is not acted on", () =>
         requestId: "req-5",
       });
       expect(result).toMatchObject({ ok: false });
-      if (!result.ok) expect(result.error.message).toContain("evaluator_invalid_output");
+      if (!result.ok) {
+        expect(result.error.message).toContain("evaluator_invalid_output");
+      }
 
       const budget = yield* readBudget(yield* budgetPath(stateDir, herdKey));
       expect(Arr.filter(budget, (line) => line.kind === "settle")).toMatchObject([

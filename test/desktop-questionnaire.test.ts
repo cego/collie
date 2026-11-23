@@ -468,11 +468,12 @@ describe("keyboard", () => {
   ] satisfies ReadonlyArray<{ rule: string; events: Array<Event> }>)(
     "no key moves the selection $rule",
     ({ events }) => {
-      for (const name of ["ArrowDown", "ArrowUp", "Home", "End"])
+      for (const name of ["ArrowDown", "ArrowUp", "Home", "End"]) {
         expect({ name, checked: checked(choice(), [...events, key(name)]) }).toEqual({
           name,
           checked: ["pg"],
         });
+      }
       expect(checked(choice(), [...events, key("ArrowDown"), key("ArrowDown"), key(" ")])).toEqual([
         "pg",
       ]);

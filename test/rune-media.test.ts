@@ -24,7 +24,9 @@ test.skipIf(process.platform !== "linux")(
         expect(libdir.code).toBe(0);
         const searches: Array<Array<string>> = [];
         const run: typeof shell = (command, args, cwd, env) => {
-          if (command === "dpkg-query") searches.push(args);
+          if (command === "dpkg-query") {
+            searches.push(args);
+          }
           return shell(command, args, cwd, env);
         };
         yield* bundleLinuxMedia(
@@ -60,7 +62,9 @@ test.skipIf(process.platform !== "linux")(
           missing,
         ).pipe(Effect.exit);
         expect(Exit.isFailure(refused)).toBe(true);
-        if (Exit.isFailure(refused)) expect(Cause.pretty(refused.cause)).toContain(unowned);
+        if (Exit.isFailure(refused)) {
+          expect(Cause.pretty(refused.cause)).toContain(unowned);
+        }
       }),
     ),
 );

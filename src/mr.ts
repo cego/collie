@@ -59,7 +59,9 @@ export const keepCredentialHelper = Effect.fn("mr.keepCredentialHelper")(functio
   yield* run("git", ["config", "--local", "--unset-all", key], checkout);
   for (const value of ["", helper]) {
     const set = yield* run("git", ["config", "--local", "--add", key, value], checkout);
-    if (set.code !== 0) return { ok: false, reason: whatItSaid(set) || `git could not set ${key}` };
+    if (set.code !== 0) {
+      return { ok: false, reason: whatItSaid(set) || `git could not set ${key}` };
+    }
   }
   return { ok: true, reason: "" };
 });
@@ -104,21 +106,27 @@ export function postNote<R>(
 ) {
   const returned: Effect.Effect<Posted, never, R | ForgeHttp> = Effect.gen(function* () {
     const mr = parseMrTarget(options.target);
-    if (!mr)
+    if (!mr) {
       return { ok: false, message: `${options.target || "this run"} is not a merge request` };
+    }
     const here =
       mr.project === null
         ? yield* forgeHere(options.cwd, run, options.gitlabHost)
         : { ok: true as const, forge: forgeOf(mr) };
-    if (!here.ok) return { ok: false, message: here.reason };
-    if (here.forge.name !== forgeOf(mr).name)
+    if (!here.ok) {
+      return { ok: false, message: here.reason };
+    }
+    if (here.forge.name !== forgeOf(mr).name) {
       return {
         ok: false,
         message: `${options.target} is a GitLab target, but this checkout is on GitHub`,
       };
+    }
     const forge = here.forge;
     const ready = yield* forge.ready(mr.project, options.cwd, run);
-    if (!ready.ok) return { ok: false, message: ready.reason };
+    if (!ready.ok) {
+      return { ok: false, message: ready.reason };
+    }
     const me = yield* forge.login(options.cwd, run, mr.project);
     if (me !== null && (yield* assignedTo(mr, me, options.cwd, run))) {
       return {
@@ -129,31 +137,36 @@ export function postNote<R>(
     let body = options.body;
     if (options.review !== undefined) {
       const { runId, head, round } = options.review;
-      if (me === null || head === "")
+      if (me === null || head === "") {
         return {
           ok: false,
           message: `could not sign the review: the forge did not report the login and reviewed head`,
         };
+      }
       const signature = `<!-- collie:${runId} round ${round} at ${head} by ${me} -->`;
       const found = yield* forge.findNote(mr, signature, options.cwd, run);
-      if (!found.ok)
+      if (!found.ok) {
         return {
           ok: false,
           message: `could not read the review before posting: ${found.reason}`,
         };
-      if (found.value)
+      }
+      if (found.value) {
         return { ok: true, message: `posted the review to ${options.target}`, signature };
+      }
       const current = yield* forge.details(mr, options.cwd, run);
-      if (current._tag !== "Details")
+      if (current._tag !== "Details") {
         return {
           ok: false,
           message: `could not read ${options.target} before posting: ${current.reason}`,
         };
-      if (!["open", "opened", "draft"].includes(current.state) || current.head !== head)
+      }
+      if (!["open", "opened", "draft"].includes(current.state) || current.head !== head) {
         return {
           ok: false,
           message: `${options.target} is no longer open at ${head}; no review posted`,
         };
+      }
       body = `Review at ${head}\n\n${Str.trimEnd(body)}\n\n${signature}`;
       const posted = yield* forge.post(mr, body, options.cwd, run);
       return posted.ok ? { ...posted, signature } : posted;
@@ -229,9 +242,13 @@ export function projectHere<R>(cwd: string, run: Runner<R>) {
   const returned: Effect.Effect<string | null, never, R> = Effect.gen(function* () {
     for (const remote of ["origin", "upstream"]) {
       const url = yield* run("git", ["remote", "get-url", remote], cwd);
-      if (url.code !== 0) continue;
+      if (url.code !== 0) {
+        continue;
+      }
       const project = projectFromRemote(url.stdout);
-      if (project) return project;
+      if (project) {
+        return project;
+      }
     }
     return null;
   });
@@ -240,13 +257,18 @@ export function projectHere<R>(cwd: string, run: Runner<R>) {
 export function mrIdIn<R>(mr: string, cwd: string, run: Runner<R>) {
   const returned: Effect.Effect<string | null, never, R> = Effect.gen(function* () {
     const id = mrId(mr);
-    if (id !== null) return id;
+    if (id !== null) {
+      return id;
+    }
     const said = Str.trim(mr);
-    if (readMrRef(said, { project: null }) === null && readMrRef(`mr:${said}`) === null)
+    if (readMrRef(said, { project: null }) === null && readMrRef(`mr:${said}`) === null) {
       return null;
+    }
     const known = checkouts.get(cwd);
     const project = known ?? (yield* projectHere(cwd, run));
-    if (project !== null) checkouts.set(cwd, project);
+    if (project !== null) {
+      checkouts.set(cwd, project);
+    }
     return mrId(mr, { project });
   });
   return returned;
@@ -288,7 +310,9 @@ export function productionCarries<R>(
 ) {
   const returned: Effect.Effect<boolean, never, R | ForgeHttp> = Effect.gen(function* () {
     const here = yield* forgeHere(cwd, run, gitlabHost);
-    if (!here.ok) return false;
+    if (!here.ok) {
+      return false;
+    }
     const ref = { project: here.project, iid: "" };
     return (yield* here.forge.liveTier(ref, sha, cwd, run)) === "production";
   });
@@ -299,11 +323,17 @@ export function productionCarries<R>(
 export function autoMergingHere<R>(cwd: string, run: Runner<R>, gitlabHost?: string) {
   const returned: Effect.Effect<string | null, string, R | ForgeHttp> = Effect.gen(function* () {
     const here = yield* forgeHere(cwd, run, gitlabHost);
-    if (!here.ok) return null;
+    if (!here.ok) {
+      return null;
+    }
     const branch = Str.trim((yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).stdout);
-    if (branch === "HEAD" || branch === "") return null;
+    if (branch === "HEAD" || branch === "") {
+      return null;
+    }
     const found = yield* here.forge.forBranch(here.project, branch, cwd, run);
-    if (!found.ok) return yield* Effect.fail(found.reason);
+    if (!found.ok) {
+      return yield* Effect.fail(found.reason);
+    }
     return found.open?.autoMerge === true ? found.open.url : null;
   });
   return returned;
@@ -329,8 +359,9 @@ export function resolveAssignee<R>(
   project: string | null = null,
 ) {
   const returned: Effect.Effect<string | null, never, R | ForgeHttp> = Effect.gen(function* () {
-    if (configured !== undefined && isString(configured) && Str.trim(configured) !== "")
+    if (configured !== undefined && isString(configured) && Str.trim(configured) !== "") {
       return Str.trim(configured);
+    }
     return yield* forge.login(cwd, run, project);
   });
   return returned;
@@ -341,14 +372,22 @@ export function linearIssues<R>(opts: { cwd: string } & Settled, run: Runner<R>)
     const found: Array<string> = [];
     const add = (id: string) => {
       const up = Str.toUpperCase(id);
-      if (!found.includes(up)) found.push(up);
+      if (!found.includes(up)) {
+        found.push(up);
+      }
     };
 
     const work = workSourceOf(opts);
-    if (work?.kind === "linear") for (const id of matchAll(work.value)) add(id);
+    if (work?.kind === "linear") {
+      for (const id of matchAll(work.value)) {
+        add(id);
+      }
+    }
 
     const branch = yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd);
-    for (const id of matchAll(branch.stdout)) add(id);
+    for (const id of matchAll(branch.stdout)) {
+      add(id);
+    }
     return found;
   });
   return returned;
@@ -388,12 +427,17 @@ export function prepareMergeRequest<R>(
       ref?.project != null
         ? { ok: true as const, forge: forgeOf(ref), project: ref.project }
         : yield* forgeHere(opts.cwd, run, opts.gitlabHost);
-    if (!here.ok) return unavailable(here.reason);
-    if (ref !== null && here.forge.name !== forgeOf(ref).name)
+    if (!here.ok) {
+      return unavailable(here.reason);
+    }
+    if (ref !== null && here.forge.name !== forgeOf(ref).name) {
       return unavailable(`${opts.target} is a GitLab target, but this checkout is on GitHub`);
+    }
     const { forge, project } = here;
     const ready = yield* forge.ready(project, opts.cwd, run);
-    if (!ready.ok) return unavailable(ready.reason, ready.cause);
+    if (!ready.ok) {
+      return unavailable(ready.reason, ready.cause);
+    }
     const assignee = yield* resolveAssignee(
       opts.cwd,
       opts.assignees?.[forge.name],
@@ -401,8 +445,9 @@ export function prepareMergeRequest<R>(
       run,
       project,
     );
-    if (assignee === null && forge.name === "github")
+    if (assignee === null && forge.name === "github") {
       return unavailable("gh did not report a GitHub login", "forge-unavailable");
+    }
     const branch = Str.trim(
       (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd)).stdout,
     );
@@ -411,7 +456,9 @@ export function prepareMergeRequest<R>(
       branch === "HEAD" || branch === ""
         ? { ok: true as const, open: null }
         : yield* forge.forBranch(project, branch, opts.cwd, run);
-    if (!found.ok) return unavailable(found.reason, "forge-unavailable");
+    if (!found.ok) {
+      return unavailable(found.reason, "forge-unavailable");
+    }
     const work = {
       cwd: opts.cwd,
       inputs: { source: opts.source?.value ?? "", source_kind: opts.source?.kind ?? "" },

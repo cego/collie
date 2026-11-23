@@ -71,14 +71,18 @@ const holding = () => {
   );
   const advance = (ms: number) => {
     now += ms;
-    for (const one of Arr.filter(due, ({ at }) => at <= now)) one.run();
+    for (const one of Arr.filter(due, ({ at }) => at <= now)) {
+      one.run();
+    }
   };
   return { holder, held, sizes, advance };
 };
 
 test("a record closed is still held, and the oldest past eight is let go", () => {
   const { holder, held } = holding();
-  for (const key of Arr.makeBy(10, (at) => `r-${at}`)) holder.opened(key);
+  for (const key of Arr.makeBy(10, (at) => `r-${at}`)) {
+    holder.opened(key);
+  }
   expect([...held].sort()).toEqual(Arr.makeBy(9, (at) => `r-${at + 1}`).sort());
   holder.closed("r-9");
   expect(held.has("r-9")).toBe(true);

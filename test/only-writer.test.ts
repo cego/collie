@@ -486,8 +486,9 @@ test("a conversation's News receipts are the host's, once per request, and that 
           ["news", "chat", "n-1"],
           ["news", "chat", "n-2"],
         ]);
-        for (let n = 0; n < NEWS_TRAIL + 5; n++)
+        for (let n = 0; n < NEWS_TRAIL + 5; n++) {
           yield* client.news({ ...asked, request: `more-${n}` });
+        }
         const kept = yield* auditAt(world.state, trail);
         yield* stopHost(world.state);
         expect(kept).toHaveLength(NEWS_TRAIL);

@@ -57,7 +57,9 @@ export const printResult = Effect.fn("collie.printResult")(function* (
         : result.error.message,
   );
   // WARNING: exit status has no Effect equivalent, so it is set on the process.
-  if (!result.ok) process.exitCode = REJECTED.includes(result.error.code) ? 2 : 1;
+  if (!result.ok) {
+    process.exitCode = REJECTED.includes(result.error.code) ? 2 : 1;
+  }
 }, Effect.orDie);
 
 // WARNING: a defect must still end in one envelope, never empty streams and a bare exit status.
@@ -106,11 +108,12 @@ const readReceipt = Effect.fn("collie.readReceipt")(function* (file: string) {
 
 // WARNING: failures carry the request id too, so a retry replays rather than starting a second Run.
 function withRequestId(result: Result, id: string) {
-  if (!result.ok)
+  if (!result.ok) {
     return err(result.error.code, result.error.message, {
       ...result.error.details,
       requestId: id,
     });
+  }
   return { ...result, data: { ...result.data, requestId: id } };
 }
 
@@ -124,17 +127,23 @@ export const mutation = Effect.fn("collie.mutation")(function* (
   const pathSvc = yield* Path.Path;
   const id = yield* requestId(requested);
   const path = yield* receiptPath(env, operation, id);
-  if (yield* fs.exists(path)) return yield* readReceipt(path);
+  if (yield* fs.exists(path)) {
+    return yield* readReceipt(path);
+  }
   yield* fs.makeDirectory(pathSvc.dirname(path), { recursive: true });
   const lock = `${path}.lock`;
   return yield* withLock(
     lock,
     Effect.gen(function* () {
-      if (yield* fs.exists(path)) return yield* readReceipt(path);
+      if (yield* fs.exists(path)) {
+        return yield* readReceipt(path);
+      }
       return err("operation_failed", `Request "${id}" is already in progress.`, { requestId: id });
     }),
     Effect.gen(function* () {
-      if (yield* fs.exists(path)) return yield* readReceipt(path);
+      if (yield* fs.exists(path)) {
+        return yield* readReceipt(path);
+      }
       const tmp = `${path}.${yield* currentPid}.tmp`;
       const save = (value: Result) =>
         fs

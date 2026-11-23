@@ -56,7 +56,11 @@ export const appendDrift = Effect.fn("Drift.append")(function* (runDir: string, 
 
 export function currentReports(lines: ReadonlyArray<DriftLine>) {
   const newest = new Map<string, DriftReport>();
-  for (const line of lines) if (line.kind !== "skipped") newest.set(line.id, line);
+  for (const line of lines) {
+    if (line.kind !== "skipped") {
+      newest.set(line.id, line);
+    }
+  }
   return [...newest.values()];
 }
 
@@ -102,17 +106,24 @@ export function matchesGlob(glob: string, path: string) {
 export function flattenOutput(json: string) {
   const flat: Record<string, string> = {};
   const decoded = decodeUnknown(json);
-  if (decoded._tag === "None") return flat;
+  if (decoded._tag === "None") {
+    return flat;
+  }
   const stack: Array<{ prefix: string; node: unknown }> = [{ prefix: "", node: decoded.value }];
   while (stack.length > 0) {
     const { prefix, node } = stack.pop()!;
     if (isRecord(node)) {
-      if (prefix !== "") flat[prefix] = encodeUnknown(node);
-      for (const [key, child] of Rec.toEntries(node))
+      if (prefix !== "") {
+        flat[prefix] = encodeUnknown(node);
+      }
+      for (const [key, child] of Rec.toEntries(node)) {
         stack.push({ prefix: prefix === "" ? key : `${prefix}.${key}`, node: child });
+      }
       continue;
     }
-    if (prefix === "") continue;
+    if (prefix === "") {
+      continue;
+    }
     flat[prefix] = isString(node) ? node : encodeUnknown(node);
   }
   return flat;
@@ -150,10 +161,13 @@ function violation(
 export function checkRules(intent: Intent, facts: RuleFacts, at_: string) {
   const found: Array<DriftReport> = [];
   for (const constraint of intent.constraints) {
-    if (constraint.kind !== "rule" || constraint.rule === undefined) continue;
+    if (constraint.kind !== "rule" || constraint.rule === undefined) {
+      continue;
+    }
     const evidence = breachOf(constraint.rule, facts);
-    if (evidence !== null)
+    if (evidence !== null) {
       found.push(violation(constraint, intent.run, intent.version, at_, evidence));
+    }
   }
   return found;
 }
@@ -167,7 +181,9 @@ const whole = (evidence: ReadonlyArray<Ref> | null) =>
   evidence === null ? null : { evidence, truncated: false };
 
 function breachOf(rule: RuleSpec, facts: RuleFacts) {
-  if (rule.kind !== "protected_paths") return whole(refsOf(rule, facts));
+  if (rule.kind !== "protected_paths") {
+    return whole(refsOf(rule, facts));
+  }
   // WARNING: the globs are where change is allowed; every file outside them is reported.
   const outside = Arr.filter(
     facts.changedFiles,
@@ -275,7 +291,9 @@ export class TreeUnread extends Data.TaggedError("TreeUnread")<{ reason: string 
 // WARNING: a failing git diff is not an unchanged tree; it must never read as empty.
 export const gitOutput = Effect.fn("Drift.gitOutput")(function* (args: Array<string>, cwd: string) {
   const ran = yield* shell("git", args, cwd);
-  if (ran.code === 0) return ran.stdout;
+  if (ran.code === 0) {
+    return ran.stdout;
+  }
   return yield* new TreeUnread({
     reason: `git ${Arr.join(args, " ")} exited ${ran.code}: ${Str.split(Str.trim(ran.stderr ?? ""), "\n")[0]}`,
   });
@@ -320,14 +338,18 @@ export function splitDiff(diff: string) {
   let path: string | null = null;
   let lines: Array<string> = [];
   const flush = () => {
-    if (path === null) return;
-    if (looksSecret(path)) blocks.push({ path, diff: "<redacted>", truncated: false });
-    else
+    if (path === null) {
+      return;
+    }
+    if (looksSecret(path)) {
+      blocks.push({ path, diff: "<redacted>", truncated: false });
+    } else {
       blocks.push({
         path,
         diff: Arr.join(lines.slice(0, MAX_LINES_PER_FILE), "\n"),
         truncated: lines.length > MAX_LINES_PER_FILE,
       });
+    }
     lines = [];
   };
   for (const line of Str.split(diff, "\n")) {
@@ -337,7 +359,9 @@ export function splitDiff(diff: string) {
       path = header[2] ?? header[1] ?? null;
       continue;
     }
-    if (path !== null) lines.push(line);
+    if (path !== null) {
+      lines.push(line);
+    }
   }
   flush();
   return blocks;
@@ -400,7 +424,9 @@ export function newReports(found: ReadonlyArray<DriftReport>, existing: Readonly
   for (const report of found) {
     const key = findingKey(report.constraint, report.evidence);
     const open = known.get(key);
-    if (open !== undefined && open.intent_version >= report.intent_version) continue;
+    if (open !== undefined && open.intent_version >= report.intent_version) {
+      continue;
+    }
     const next = open === undefined ? report : movedTo(open, report);
     known.set(key, next);
     fresh.push(next);
@@ -419,7 +445,9 @@ export const fileReport = Effect.fn("Drift.fileReport")(function* (
 ) {
   const before = yield* readDrift(runDir).pipe(Effect.orElseSucceed(() => []));
   const [next] = newReports([report], before);
-  if (next === undefined) return false;
+  if (next === undefined) {
+    return false;
+  }
   yield* appendDrift(runDir, next).pipe(Effect.ignore);
   return true;
 });
@@ -522,9 +550,15 @@ export interface ShownWork {
 }
 
 export const citedIn = (shown: ShownWork, worktree: string) => (ref: Ref) => {
-  if (ref.path === undefined) return null;
-  if (ref.kind === "output") return shown.outputs.includes(ref.path) ? ref : null;
-  if (ref.kind !== "diff") return null;
+  if (ref.path === undefined) {
+    return null;
+  }
+  if (ref.kind === "output") {
+    return shown.outputs.includes(ref.path) ? ref : null;
+  }
+  if (ref.kind !== "diff") {
+    return null;
+  }
   const file = pipe(ref.path, Str.startsWith(`${worktree}/`))
     ? pipe(ref.path, Str.slice(worktree.length + 1))
     : ref.path;
@@ -542,7 +576,9 @@ export function judgedReport(
 ) {
   const evidence = Arr.flatMap(report.evidence, (ref) => {
     const work = cited(ref);
-    if (work !== null) return [work];
+    if (work !== null) {
+      return [work];
+    }
     return ref.path === undefined || insideKnown(ref.path, roots) ? [ref] : [];
   });
   const returned: DriftReport = {
@@ -573,10 +609,13 @@ export const askJudgement = Effect.fn("Drift.askJudgement")(function* (
   pack: string,
 ) {
   const checked = yield* flagsPresent(deps.evaluator).pipe(Effect.result);
-  if (checked._tag === "Failure")
+  if (checked._tag === "Failure") {
     return notAsked(`the evaluator is unavailable: ${checked.failure.reason}`);
+  }
   const missing = checked.success;
-  if (missing.length > 0) return notAsked(`the evaluator is missing ${Arr.join(missing, ", ")}`);
+  if (missing.length > 0) {
+    return notAsked(`the evaluator is missing ${Arr.join(missing, ", ")}`);
+  }
 
   // WARNING: usage is recorded, never enforced; no call is refused over a count.
   const callId = yield* deps.newId;
@@ -609,7 +648,9 @@ export const judge = Effect.fn("Drift.judge")(function* (
 ) {
   const semantic = Arr.filter(intent.constraints, (constraint) => constraint.kind === "semantic");
   // WARNING: with no semantic constraint there is nothing to report against, so no call is made.
-  if (semantic.length === 0) return NOTHING;
+  if (semantic.length === 0) {
+    return NOTHING;
+  }
 
   const read = yield* evidenceFor(what.worktree, judgementPaths(intent), what.base).pipe(
     Effect.result,
@@ -702,18 +743,32 @@ export function decideCorrections(
   ctx: CorrectionContext,
 ) {
   const authority = intent.authority;
-  if (!authority.auto_correct) return [];
-  if (ctx.held) return [];
+  if (!authority.auto_correct) {
+    return [];
+  }
+  if (ctx.held) {
+    return [];
+  }
   // WARNING: a human is typing into that agent; Collie does not take turns with them.
-  if (ctx.overridden) return [];
+  if (ctx.overridden) {
+    return [];
+  }
   // WARNING: on a harness that hides external submissions, correcting needs exclusive steering.
-  if (!ctx.attributable && !authority.exclusive_steering) return [];
+  if (!ctx.attributable && !authority.exclusive_steering) {
+    return [];
+  }
 
   const corrections: Array<Correction> = [];
   for (const report of open) {
-    if (report.intent_version !== intent.version) continue;
-    if (ctx.inFlight.has(report.constraint)) continue;
-    if ((ctx.sent[report.constraint] ?? 0) >= authority.max_corrections_per_constraint) continue;
+    if (report.intent_version !== intent.version) {
+      continue;
+    }
+    if (ctx.inFlight.has(report.constraint)) {
+      continue;
+    }
+    if ((ctx.sent[report.constraint] ?? 0) >= authority.max_corrections_per_constraint) {
+      continue;
+    }
     const urgent = report.severity === "block" && authority.now_allowed && ctx.nowProven;
     corrections.push({ report, mode: urgent ? "now" : "boundary" });
   }
@@ -745,9 +800,11 @@ export function correctionsSent(
   deliveries: ReadonlyArray<{ readonly cause: { readonly kind: string; readonly ref: string } }>,
 ) {
   const counted: Record<string, number> = {};
-  for (const delivery of deliveries)
-    if (delivery.cause.kind === "correction")
+  for (const delivery of deliveries) {
+    if (delivery.cause.kind === "correction") {
       counted[delivery.cause.ref] = (counted[delivery.cause.ref] ?? 0) + 1;
+    }
+  }
   return counted;
 }
 
@@ -868,13 +925,17 @@ export const appendElection = (file: string, line: ElectionLine) =>
 
 // WARNING: a pending line wakes every Driver in the Herd, not only siblings; a parent may never run again.
 export function shouldStand(lines: ReadonlyArray<ElectionLine>, hasSiblings: boolean) {
-  if (hasSiblings) return true;
+  if (hasSiblings) {
+    return true;
+  }
   return pendingEvaluation(lines) !== null;
 }
 
 export function alreadyStood(lines: ReadonlyArray<ElectionLine>, run: string) {
   const pending = pendingEvaluation(lines);
-  if (pending === null) return false;
+  if (pending === null) {
+    return false;
+  }
   return Arr.some(
     lines,
     (line) => line.kind === "candidate" && line.run === run && line.at >= pending.since,
@@ -885,13 +946,15 @@ export function alreadyStood(lines: ReadonlyArray<ElectionLine>, run: string) {
 export function pendingEvaluation(lines: ReadonlyArray<ElectionLine>) {
   let latest: PendingEvaluation | null = null;
   for (const line of lines) {
-    if (line.kind === "pending") latest = line;
-    else if (
+    if (line.kind === "pending") {
+      latest = line;
+    } else if (
       line.kind === "evaluated" &&
       latest !== null &&
       Arr.every(latest.runs, (run) => line.runs.includes(run))
-    )
+    ) {
       latest = null;
+    }
   }
   return latest;
 }
@@ -905,8 +968,11 @@ export const EXTRA_PASSES = 2;
 export function evaluatedFor(lines: ReadonlyArray<ElectionLine>, run: string) {
   let answered = false;
   for (const line of lines) {
-    if (line.kind === "evaluated") answered = line.runs.includes(run);
-    else if (line.kind === "dirty" || line.kind === "pending") answered = false;
+    if (line.kind === "evaluated") {
+      answered = line.runs.includes(run);
+    } else if (line.kind === "dirty" || line.kind === "pending") {
+      answered = false;
+    }
   }
   return answered;
 }

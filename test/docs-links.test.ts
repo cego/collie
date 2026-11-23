@@ -11,9 +11,14 @@ function resolve(from: string, link: string) {
   const parts = Str.split(`${Arr.join(Str.split(from, "/").slice(0, -1), "/")}/${link}`, "/");
   const out: Array<string> = [];
   for (const part of parts) {
-    if (part === "." || part === "") continue;
-    if (part === ".." && out.length > 0 && out.at(-1) !== "..") out.pop();
-    else out.push(part);
+    if (part === "." || part === "") {
+      continue;
+    }
+    if (part === ".." && out.length > 0 && out.at(-1) !== "..") {
+      out.pop();
+    } else {
+      out.push(part);
+    }
   }
   return Arr.join(out, "/");
 }
@@ -54,10 +59,13 @@ test("every link between the repository's documents resolves, anchors included",
       for (const file of files) {
         const text = yield* fs.readFileString(`${ROOT}/${file}`);
         for (const [, link] of pipe(text, Str.matchAll(/\]\(([^)\s]+)\)/g))) {
-          if (pipe(link!, Str.startsWith("http")) || pipe(link!, Str.startsWith("mailto:")))
+          if (pipe(link!, Str.startsWith("http")) || pipe(link!, Str.startsWith("mailto:"))) {
             continue;
+          }
           const [path, anchor] = Str.split(link!, "#");
-          if (path !== "" && !pipe(path, Str.endsWith(".md"))) continue;
+          if (path !== "" && !pipe(path, Str.endsWith(".md"))) {
+            continue;
+          }
           const target = path === "" ? file : resolve(file, path);
           if (!files.includes(target)) {
             broken.push(`${file} -> ${link} (no such file)`);
@@ -99,7 +107,9 @@ test("every plain-text ADR reference names an ADR that exists", () =>
           Str.matchAll(/ADR-(?:(\d{4})|draft-([a-z0-9]+(?:-[a-z0-9]+)*))/g),
         )) {
           const exists = number !== undefined ? numbers.has(number) : drafts.has(slug);
-          if (!exists) dangling.push(`${file}: ${mention}`);
+          if (!exists) {
+            dangling.push(`${file}: ${mention}`);
+          }
         }
       }
       expect(dangling).toEqual([]);

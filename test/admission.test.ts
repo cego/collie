@@ -304,7 +304,9 @@ const stranded = (
     yield* fs.remove(gate).pipe(Effect.orDie);
     const host = yield* openHost(state);
     yield* fs.copyFile(`${fixtures}/held-wake.workflow.ts`, module).pipe(Effect.orDie);
-    for (const runId of unaccepted) yield* host.ask({ op: "poll", id: "held-wake", runId });
+    for (const runId of unaccepted) {
+      yield* host.ask({ op: "poll", id: "held-wake", runId });
+    }
     const client = yield* connect(state).pipe(Effect.orDie);
     const idOf = (name: string) =>
       runDirOf(state, name).pipe(

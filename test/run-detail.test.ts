@@ -172,10 +172,11 @@ test("the replies a Run posted to reviewers are on its record, in run show and t
             body: "Not changed: a map costs more here",
           },
         ];
-        for (const reply of replies)
+        for (const reply of replies) {
           yield* recordReply(runDir(world.state, runId), reply).pipe(
             Effect.provide(recordsAt(world.state)),
           );
+        }
 
         const shown = yield* collie(world, ["run", "show", runId]);
         expect(shown.envelope.data).toMatchObject({ replies });
@@ -297,7 +298,9 @@ test.skipIf(process.getuid?.() === 0)(
           const env = yield* currentEnv.pipe(Effect.orDie);
           const defects: Array<string> = [];
           const kept = Logger.make(({ logLevel, cause }) => {
-            if (Cause.hasDies(cause)) defects.push(`${logLevel} ${Cause.pretty(cause)}`);
+            if (Cause.hasDies(cause)) {
+              defects.push(`${logLevel} ${Cause.pretty(cause)}`);
+            }
           });
           yield* Effect.gen(function* () {
             const detailOf = yield* followRunDetail(env);
@@ -538,8 +541,9 @@ test("a reference never follows a link out of the directory it belongs to", () =
 
         yield* fs.writeFileString(`${run.dir}/plan/issues/02-b.md`, "a—b");
         const parts = [];
-        for (const offset of [0, 2, 4])
+        for (const offset of [0, 2, 4]) {
           parts.push(yield* fetchRef(run, "plan:issues/02-b.md", { offset, length: 2 }));
+        }
         expect(Arr.every(parts, (part) => part.encoding === "base64")).toBe(true);
         const joined = Arr.flatMap(parts, (part) => [...Buffer.from(part.content, "base64")]);
         expect(new TextDecoder().decode(new Uint8Array(joined))).toBe("a—b");
@@ -565,8 +569,9 @@ test("an attachment is fetched by name, and never from outside the Run's attachm
           content: "Ag==",
           size: 3,
         });
-        for (const ref of ["attachment:linked.png", "attachment:../log.txt"])
+        for (const ref of ["attachment:linked.png", "attachment:../log.txt"]) {
           expect((yield* fetchRef(run, ref).pipe(Effect.flip))._tag).toBe("HostRefused");
+        }
       }),
     ).pipe(Effect.provide(forgeHttpLayer)),
   ));

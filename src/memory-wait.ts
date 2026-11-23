@@ -42,8 +42,9 @@ const waitsOf = (runId: string) =>
     const waits: Array<MemoryWait> = [];
     for (const row of rows) {
       const decoded = Schema.decodeOption(MemoryWaitJson)(row.data);
-      if (Option.isSome(decoded) && now - decoded.value.read <= 3 * decoded.value.every)
+      if (Option.isSome(decoded) && now - decoded.value.read <= 3 * decoded.value.every) {
         waits.push(decoded.value);
+      }
     }
     return waits.sort((a, b) => a.since - b.since);
   });
@@ -76,8 +77,9 @@ export const waitForMemory = (opts: {
           : yield* machineMemory(opts.env).pipe(
               Effect.orElseSucceed(() => ({ memory: null, short: false })),
             );
-      if (memory.short && memory.memory !== null && memory.memory.known)
+      if (memory.short && memory.memory !== null && memory.memory.known) {
         return { on: "memory", sentence: memorySentence(memory.memory) } as const;
+      }
       const low = Arr.findFirst(
         yield* readDisk(opts.env, [opts.stateDir, ...(opts.checkout ? [opts.checkout] : [])]).pipe(
           Effect.orElseSucceed(() => []),
@@ -92,7 +94,9 @@ export const waitForMemory = (opts: {
         : null;
     });
     const first = yield* read;
-    if (first === null) return "free";
+    if (first === null) {
+      return "free";
+    }
     let short: { readonly on: string; readonly sentence: string } = first;
     const stopped = opts.stopped ?? Effect.succeed(false);
     const fs = yield* FileSystem.FileSystem;
@@ -128,19 +132,25 @@ export const waitForMemory = (opts: {
       for (;;) {
         yield* Effect.sleep(period);
         const now = yield* read;
-        if (now === null) return;
+        if (now === null) {
+          return;
+        }
         short = now;
         yield* mark(now.sentence);
       }
     });
     const untilStopped = Effect.gen(function* () {
-      while (!(yield* stopped)) yield* Effect.sleep(Duration.min(period, Duration.seconds(1)));
+      while (!(yield* stopped)) {
+        yield* Effect.sleep(Duration.min(period, Duration.seconds(1)));
+      }
     });
     return yield* Effect.gen(function* () {
       const sentence = first.sentence;
       yield* mark(sentence);
       yield* log(`${opts.what}: ${sentence}`);
-      if (opts.say !== undefined) yield* opts.say(sentence);
+      if (opts.say !== undefined) {
+        yield* opts.say(sentence);
+      }
       const ended = yield* Effect.raceFirst(
         freed.pipe(Effect.as("waited" as const)),
         untilStopped.pipe(Effect.as("stopped" as const)),

@@ -26,8 +26,12 @@ export const shareBoard = <A, E, R, R2>(options: {
       const started = yield* Clock.currentTimeMillis;
       const built = yield* options.build;
       const took = (yield* Clock.currentTimeMillis) - started;
-      if (mark !== null) yield* mark("board:built", String(took));
-      if (took > SLOW_BUILD_MS) yield* Effect.logWarning(`the board took ${took} ms to build`);
+      if (mark !== null) {
+        yield* mark("board:built", String(took));
+      }
+      if (took > SLOW_BUILD_MS) {
+        yield* Effect.logWarning(`the board took ${took} ms to build`);
+      }
       rest = Math.min(took, MAX_REST_MS);
       return built;
     });
@@ -103,18 +107,23 @@ export const boardMessages = <R>(options: {
         );
         const out: Array<BoardMessage> = [];
         for (const view of views) {
-          if (told?.get(view.id)?.text !== now.get(view.id)!.text)
+          if (told?.get(view.id)?.text !== now.get(view.id)!.text) {
             out.push({ _tag: "Upsert", seq: ++seq, task: view });
+          }
         }
         for (const id of told?.keys() ?? []) {
-          if (!now.has(id)) out.push({ _tag: "Remove", seq: ++seq, id });
+          if (!now.has(id)) {
+            out.push({ _tag: "Remove", seq: ++seq, id });
+          }
         }
         told = now;
         return out;
       };
       return options.boards.pipe(
         Stream.flatMap((views) => {
-          if (told !== null) return Stream.fromIterable(changesTo(views));
+          if (told !== null) {
+            return Stream.fromIterable(changesTo(views));
+          }
           changesTo(views);
           return Stream.make({ _tag: "Snapshot", ...options.head, tasks: views, seq });
         }),

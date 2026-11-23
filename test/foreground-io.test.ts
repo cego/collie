@@ -191,8 +191,9 @@ test.each(["value", "error", "cancel"] as const)(
             yield* Deferred.await(entered);
             yield* clock.adjust("251 millis");
             expect(answer.pollUnsafe()).toBeUndefined();
-            if (outcome === "cancel") yield* Fiber.interrupt(answer);
-            else {
+            if (outcome === "cancel") {
+              yield* Fiber.interrupt(answer);
+            } else {
               yield* Deferred.succeed(release, undefined);
               expect(yield* Fiber.join(answer)).toEqual(
                 outcome === "error" ? failure : Result.succeed(["fresh"]),

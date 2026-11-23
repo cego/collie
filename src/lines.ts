@@ -37,12 +37,16 @@ export function refText(ref: Ref) {
 }
 
 function resultTone(result: Card["verifications"][number]["result"]) {
-  if (result === "fail") return "bad";
+  if (result === "fail") {
+    return "bad";
+  }
   return result === "pass" ? "plain" : "dim";
 }
 
 function resultNote(result: Card["verifications"][number]["result"]) {
-  if (result === "stale") return " (against an older tree)";
+  if (result === "stale") {
+    return " (against an older tree)";
+  }
   return result === "unstable" ? " (not repeatable)" : "";
 }
 
@@ -53,7 +57,9 @@ export function cardLines(card: Card) {
       "accent",
     ),
   ];
-  if (card.requested.goal !== null) lines.push(line(`asked for: ${card.requested.goal}`));
+  if (card.requested.goal !== null) {
+    lines.push(line(`asked for: ${card.requested.goal}`));
+  }
   for (const constraint of card.requested.constraints) {
     lines.push(line(`constraint: ${constraint}`, "dim", 1));
   }
@@ -90,7 +96,9 @@ export function cardLines(card: Card) {
   )) {
     lines.push(line(`${name}: ${String(where)}`, "dim", 1));
   }
-  if (card.narrative !== null) lines.push(line(`Collie: ${card.narrative}`, "dim", 1));
+  if (card.narrative !== null) {
+    lines.push(line(`Collie: ${card.narrative}`, "dim", 1));
+  }
   return lines;
 }
 
@@ -102,7 +110,9 @@ export function driftLines(report: DriftReport, undelivered = false) {
       report.severity === "block" ? "bad" : "plain",
     ),
   ];
-  for (const ref of report.evidence) lines.push(line(refText(ref), "dim", 2));
+  for (const ref of report.evidence) {
+    lines.push(line(refText(ref), "dim", 2));
+  }
   if (report.evidence_truncated) {
     lines.push(line("(the evidence was cut to its bound)", "dim", 2));
   }
@@ -118,7 +128,9 @@ export function deliveryLine(delivery: Delivery) {
 }
 
 export function newsLines(news: { waiting: number; uncertain: number }) {
-  if (news.waiting === 0) return [];
+  if (news.waiting === 0) {
+    return [];
+  }
   return [
     line(
       `${news.waiting} development(s) Collie has noticed and not yet told the conversation.`,
@@ -244,7 +256,9 @@ export function marksOf(marks: RunMarks) {
 
 export function worstOf(marks: ReadonlyArray<RunMarks>) {
   for (const [key, glyph] of MARKS) {
-    if (Arr.some(marks, (mark) => mark[key])) return glyph;
+    if (Arr.some(marks, (mark) => mark[key])) {
+      return glyph;
+    }
   }
   return "";
 }

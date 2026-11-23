@@ -162,7 +162,9 @@ const main = Effect.gen(function* () {
     });
   for (const thread of config.threads) {
     turns.set(thread.id, []);
-    if (thread.turn) yield* begin(thread.id, thread.turn.id, thread.turn.writes);
+    if (thread.turn) {
+      yield* begin(thread.id, thread.turn.id, thread.turn.writes);
+    }
   }
   const exitWhenIdle = Effect.suspend(() =>
     draining && running().length === 0 && !config.neverExit
@@ -177,9 +179,13 @@ const main = Effect.gen(function* () {
     draining = true;
   }).pipe(Effect.andThen(exitWhenIdle));
   const release = Effect.gen(function* () {
-    if (!(yield* fs.exists(`${config.events}.release`))) return;
+    if (!(yield* fs.exists(`${config.events}.release`))) {
+      return;
+    }
     for (const turn of running()) {
-      if (turn.timer) yield* Fiber.interrupt(turn.timer);
+      if (turn.timer) {
+        yield* Fiber.interrupt(turn.timer);
+      }
       turn.status = "completed";
     }
     yield* exitWhenIdle;
@@ -191,8 +197,11 @@ const main = Effect.gen(function* () {
     dispatch(
       Effect.gen(function* () {
         yield* record({ signal: "SIGTERM" });
-        if (interrupted < (config.lateDrain ?? 0)) drainPending = true;
-        else yield* drain;
+        if (interrupted < (config.lateDrain ?? 0)) {
+          drainPending = true;
+        } else {
+          yield* drain;
+        }
       }),
     ),
   );
@@ -219,10 +228,14 @@ const main = Effect.gen(function* () {
     Effect.gen(function* () {
       const { id, method, params = {} } = yield* Schema.decodeEffect(Request)(String(raw));
       yield* record({ method, params });
-      if (method === config.dropOn) return ws.close();
+      if (method === config.dropOn) {
+        return ws.close();
+      }
       const send = (key: "result" | "error", value: Schema.Json) => {
         const message: Record<string, Schema.Json> = {};
-        if (id !== undefined) message.id = id;
+        if (id !== undefined) {
+          message.id = id;
+        }
         message[key] = value;
         return ws.send(encode(message));
       };
@@ -265,7 +278,9 @@ const main = Effect.gen(function* () {
               : thread?.unlistable
                 ? { code: -32_601, message: "list_turns is not supported yet" }
                 : undefined);
-          if (refusal) return refuse(refusal.message, refusal.code);
+          if (refusal) {
+            return refuse(refusal.message, refusal.code);
+          }
           const held = threadId === undefined ? [] : (turns.get(threadId) ?? []);
           return reply({
             data: Arr.map(Arr.reverse(held), (turn) => ({ id: turn.id, status: turn.status })),
@@ -279,14 +294,20 @@ const main = Effect.gen(function* () {
           const turn = Option.getOrUndefined(
             Arr.findFirst(running(), (one) => Arr.contains(held, one) && one.id === turnId),
           );
-          if (threadId === undefined || turn === undefined)
+          if (threadId === undefined || turn === undefined) {
             return refuse("no active turn to interrupt");
+          }
           reply({});
-          if (config.ignoreInterrupt) return;
-          if (turn.timer) yield* Fiber.interrupt(turn.timer);
+          if (config.ignoreInterrupt) {
+            return;
+          }
+          if (turn.timer) {
+            yield* Fiber.interrupt(turn.timer);
+          }
           turn.status = "interrupted";
-          if (config.continuation && !draining)
+          if (config.continuation && !draining) {
             yield* begin(threadId, `${turn.id}-continued`, thread?.turn?.writes);
+          }
           interrupted += 1;
           if (drainPending && interrupted >= (config.lateDrain ?? 0)) {
             drainPending = false;

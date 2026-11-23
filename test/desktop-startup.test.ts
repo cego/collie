@@ -68,7 +68,9 @@ test("startup read connection: the identity-checked door is available before the
           expect(closed).toBe(0);
 
           yield* Deferred.succeed(mayArrive, undefined);
-          while (!Arr.some(told, (item) => "message" in item)) yield* Effect.yieldNow;
+          while (!Arr.some(told, (item) => "message" in item)) {
+            yield* Effect.yieldNow;
+          }
           expect(Arr.filter(told, (item) => "message" in item)).toMatchObject([
             { machine: { installation: "vm" }, message: { _tag: "Snapshot", installation: "vm" } },
           ]);
@@ -106,7 +108,9 @@ test("startup read connection: removing an alias keeps another route to the same
           () => {},
           readDoors,
         ).pipe(Stream.runDrain, Effect.forkScoped);
-        while (subscribed < 2) yield* Effect.yieldNow;
+        while (subscribed < 2) {
+          yield* Effect.yieldNow;
+        }
         const second = readDoors.get("second");
         expect(readDoors.has("first")).toBe(true);
         expect(second).toBeDefined();

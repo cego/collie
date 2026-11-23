@@ -76,12 +76,18 @@ export const discover: (
     for (const root of roots) {
       const claims = yield* claimsIn(root);
       for (const [id, claimants] of byId(claims)) {
-        if (settled.has(id)) continue;
+        if (settled.has(id)) {
+          continue;
+        }
         settled.add(id);
         const only = claimants.length === 1 ? claimants[0] : undefined;
-        if (only === undefined) problems.push(...ambiguous(id, root.layer, claimants));
-        else if (only.kind === "entry") entries.push(only.found);
-        else problems.push({ id, layer: root.layer, path: only.path, message: only.message });
+        if (only === undefined) {
+          problems.push(...ambiguous(id, root.layer, claimants));
+        } else if (only.kind === "entry") {
+          entries.push(only.found);
+        } else {
+          problems.push({ id, layer: root.layer, path: only.path, message: only.message });
+        }
       }
     }
     return {
@@ -147,7 +153,9 @@ export const declaredBy = (entry: WorkflowEntry) =>
 
 const byId = (claims: ReadonlyArray<Claim>) => {
   const grouped = new Map<string, Array<Claim>>();
-  for (const claim of claims) grouped.set(claim.id, [...(grouped.get(claim.id) ?? []), claim]);
+  for (const claim of claims) {
+    grouped.set(claim.id, [...(grouped.get(claim.id) ?? []), claim]);
+  }
   return grouped;
 };
 

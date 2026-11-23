@@ -139,7 +139,9 @@ export const LANDED_STATES: ReadonlySet<MrState> = new Set(["merged", "on-stage"
 const DEPLOYED = { "on-stage": " On stage.", "in-prod": " In production." } as const;
 
 const finishedAt = Effect.fn("Board.finishedAt")(function* (run: RunFacts) {
-  if (run.finished !== null) return epochMs(run.finished);
+  if (run.finished !== null) {
+    return epochMs(run.finished);
+  }
   const at = yield* finishedOnRecord(run.dir);
   return at === null ? null : epochMs(at);
 });
@@ -162,14 +164,18 @@ const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
   live: ReadonlyMap<string, AgentInfo>,
 ) {
   const ended = yield* finishedAt(run);
-  if (ended === null) return null;
+  if (ended === null) {
+    return null;
+  }
   const steer = Arr.filter(
     yield* deliveriesOf(run.id),
     (one) => one.cause.kind === "steer" && SENT_STATES.has(one.state) && epochMs(one.at) > ended,
   )
     .sort((a, b) => pipe(a.at, Str.localeCompare(b.at)))
     .at(-1);
-  if (steer === undefined) return null;
+  if (steer === undefined) {
+    return null;
+  }
   return {
     delivery: steer.id,
     agent: steer.agent,
@@ -189,7 +195,9 @@ const supersedingOf = Effect.fn("Board.supersedingOf")(function* (
       const status = live.get(one)?.status;
       return status === "working" || status === "blocked";
     }).pipe(Option.getOrUndefined) ?? messaged.at(-1);
-  if (agent === undefined) return null;
+  if (agent === undefined) {
+    return null;
+  }
   return {
     agent,
     told: yield* toldBy(stateDir, run.id, agent),
@@ -325,22 +333,30 @@ function severalSentence(mrs: ReadonlyArray<SaidMr>, historical = false) {
 }
 
 function verbOf(facts: Sentence) {
-  if (facts.verb !== null) return facts.verb;
-  if (facts.step === null) return "Starting";
+  if (facts.verb !== null) {
+    return facts.verb;
+  }
+  if (facts.step === null) {
+    return "Starting";
+  }
   const id = facts.step.id;
   const kind = pipe(id, Str.slice(Option.getOrElse(pipe(id, Str.lastIndexOf(".")), () => -1) + 1));
   return VERBS.get(kind) ?? VERBS.get(Str.split(kind, "-")[0]) ?? "Working on it";
 }
 
 function roundOf(step: Sentence["step"]) {
-  if (!step?.round) return "";
+  if (!step?.round) {
+    return "";
+  }
   const { at, of } = step.round;
   return of === null ? `, round ${at}` : `, round ${at} of ${of}`;
 }
 
 export function stepOfOperation(operation: string) {
   const ticket = /^(\d+)-.*\.md$/.exec(operation);
-  if (ticket) return { step: { id: "build", round: null }, verb: `Building ticket ${ticket[1]}` };
+  if (ticket) {
+    return { step: { id: "build", round: null }, verb: `Building ticket ${ticket[1]}` };
+  }
   const seat = /^review-(?:(\d+)-.)?/.exec(operation);
   if (seat) {
     return {
@@ -349,7 +365,9 @@ export function stepOfOperation(operation: string) {
     };
   }
   const counted = /^(.+?)-(\d+)$/.exec(operation);
-  if (counted === null) return { step: { id: operation, round: null }, verb: null };
+  if (counted === null) {
+    return { step: { id: operation, round: null }, verb: null };
+  }
   return {
     step: { id: counted[1]!, round: { at: Number(counted[2]), of: null } },
     verb: null,
@@ -361,7 +379,9 @@ function times(n: number) {
 }
 
 function clause(repos: ReadonlyArray<string>, singular: string, plural: string) {
-  if (repos.length === 0) return [];
+  if (repos.length === 0) {
+    return [];
+  }
   return [`${Arr.join(repos, ", ")} ${repos.length === 1 ? singular : plural}`];
 }
 
@@ -429,28 +449,37 @@ function doneSentence(
   answered: Sentence["answered"] = null,
 ) {
   if (disposition === null) {
-    if (planReady) return "Plan ready to implement.";
-    if (mr === null)
+    if (planReady) {
+      return "Plan ready to implement.";
+    }
+    if (mr === null) {
       return summary === null || Str.trim(summary) === ""
         ? "Finished; nothing merged yet."
         : `Completed. It reported: “${pipe(Str.trim(summary), Str.replaceAll(/\s+/g, " "))}”`;
-    if (mrState !== null && LANDED_STATES.has(mrState))
+    }
+    if (mrState !== null && LANDED_STATES.has(mrState)) {
       return `Merged as ${mrLabel(mr)}.${mrState === "on-stage" || mrState === "in-prod" ? DEPLOYED[mrState] : ""}`;
+    }
     if (mrState === "closed") {
       const ref = readMrRef(mr);
       const noun = ref === null ? "merge request" : mrWords(ref).noun;
       return `${Str.toUpperCase(noun[0]!)}${pipe(noun, Str.slice(1))} ${mrLabel(mr)} closed without merging.`;
     }
-    if (answered == null) return openSentence(mr, checks, agent, readiness);
-    if (answered.ago === null) return `${mrLabel(mr)} has not been read.`;
+    if (answered == null) {
+      return openSentence(mr, checks, agent, readiness);
+    }
+    if (answered.ago === null) {
+      return `${mrLabel(mr)} has not been read.`;
+    }
     const lacking = readiness?.missing[0];
     return `${mrLabel(mr)} was last read as open${lacking === undefined ? "" : `, but ${lacking.said}`}.`;
   }
   switch (disposition.kind) {
     case "merged": {
       const deployed = mrState === "on-stage" || mrState === "in-prod" ? DEPLOYED[mrState] : "";
-      if (disposition.by === "gitlab" || disposition.by === "github")
+      if (disposition.by === "gitlab" || disposition.by === "github") {
         return (disposition.ref === "" ? "Merged." : `Merged as ${disposition.ref}.`) + deployed;
+      }
       return (
         (disposition.ref === ""
           ? `Merged ${disposition.ago}.`
@@ -465,8 +494,9 @@ function doneSentence(
 }
 
 function failedSentence(facts: Sentence) {
-  if (facts.failure !== null)
+  if (facts.failure !== null) {
     return `Stopped after ${facts.failure.name} failed ${times(facts.failure.times)} in a row.`;
+  }
   return facts.note === null ? "Stopped without finishing." : `Stopped: ${facts.note}.`;
 }
 
@@ -475,13 +505,20 @@ function stalledSentence(facts: Sentence) {
 }
 
 function workingSentence(facts: Sentence) {
-  if (facts.checking !== null) return facts.checking;
-  if (facts.awaiting != null) return facts.awaiting;
-  if (facts.reopened !== null)
+  if (facts.checking !== null) {
+    return facts.checking;
+  }
+  if (facts.awaiting != null) {
+    return facts.awaiting;
+  }
+  if (facts.reopened !== null) {
     return facts.reopened.told === null
       ? `Working on what you told ${facts.reopened.agent}.`
       : `Working on what you told ${facts.reopened.agent}: “${facts.reopened.told}”.`;
-  if (facts.resumed !== null) return `Resumed with “${facts.resumed}”.`;
+  }
+  if (facts.resumed !== null) {
+    return `Resumed with “${facts.resumed}”.`;
+  }
   if (facts.wave !== null) {
     const wave = waveSentence(facts.wave);
     return facts.silent === null ? wave : `${wave} Silent for ${facts.silent}.`;
@@ -495,10 +532,15 @@ export function sentenceFor(facts: Sentence) {
     (facts.state === "failed" || facts.state === "stopped" || facts.state === "abandoned") &&
     facts.disposition === null &&
     facts.mr !== null
-  )
+  ) {
     return `${facts.state === "failed" ? failedSentence(facts) : facts.state === "stopped" ? "Stopped by you." : "Its Driver died."} ${doneSentence(null, facts.mr, facts.mrState, false, facts.checks, facts.agent, facts.summary, facts.readiness ?? null, facts.answered)}${answeredLine(facts.answered)}`;
-  if (facts.decision !== null) return decisionSentence(facts.decision);
-  if (facts.memory != null) return facts.memory;
+  }
+  if (facts.decision !== null) {
+    return decisionSentence(facts.decision);
+  }
+  if (facts.memory != null) {
+    return facts.memory;
+  }
   switch (facts.state) {
     case "done":
       return `${
@@ -533,9 +575,12 @@ export function sentenceFor(facts: Sentence) {
 }
 
 function answeredLine(answered: Sentence["answered"]) {
-  if (answered == null) return "";
-  if (answered.ago === null)
+  if (answered == null) {
+    return "";
+  }
+  if (answered.ago === null) {
     return ` ${answered.forge} could not be read; it has not answered yet.`;
+  }
   return answered.failed
     ? ` ${answered.forge} could not be read; it last answered ${answered.ago}.`
     : ` ${answered.forge} last answered ${answered.ago}.`;
@@ -572,23 +617,41 @@ function stateOf(
   stalled: boolean,
   checking: boolean,
 ) {
-  if (decision !== null) return "blocked";
-  if (checking) return "active";
-  if (status === "stopped") return "stopped";
-  if (status === "failed") return "failed";
-  if (status === "succeeded" || status === "ended") return "done";
+  if (decision !== null) {
+    return "blocked";
+  }
+  if (checking) {
+    return "active";
+  }
+  if (status === "stopped") {
+    return "stopped";
+  }
+  if (status === "failed") {
+    return "failed";
+  }
+  if (status === "succeeded" || status === "ended") {
+    return "done";
+  }
   // WARNING: under the endings, since only a Run still going can be waiting for anyone.
-  if (stalled) return "blocked";
+  if (stalled) {
+    return "blocked";
+  }
   return silent ? "quiet" : "active";
 }
 
 export function lastFailure(records: ReadonlyArray<Pick<Verification, "name" | "result">>) {
   const last = records.at(-1);
-  if (last === undefined || last.result !== "fail") return null;
+  if (last === undefined || last.result !== "fail") {
+    return null;
+  }
   let times = 0;
   for (const record of [...records].reverse()) {
-    if (record.name !== last.name) continue;
-    if (record.result !== "fail") break;
+    if (record.name !== last.name) {
+      continue;
+    }
+    if (record.result !== "fail") {
+      break;
+    }
     times += 1;
   }
   return { name: last.name, times };
@@ -616,8 +679,11 @@ export function checksAt(
   );
   const at = head ?? counted.at(-1)?.record.end.head_sha ?? "";
   const newest = new Map<string, Verification>();
-  for (const { name, record } of counted)
-    if (at !== "" && record.end.head_sha === at) newest.set(name, record);
+  for (const { name, record } of counted) {
+    if (at !== "" && record.end.head_sha === at) {
+      newest.set(name, record);
+    }
+  }
   const red = Option.getOrUndefined(
     Arr.findFirst([...newest.entries()], ([, record]) => !passed(record)),
   );
@@ -634,7 +700,9 @@ export function checksAt(
 }
 
 export const readBranchHead = Effect.fn("Board.readBranchHead")(function* (run: RunFacts) {
-  if (run.branch === null) return null;
+  if (run.branch === null) {
+    return null;
+  }
   const read = yield* shell(
     "git",
     ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`],
@@ -645,10 +713,14 @@ export const readBranchHead = Effect.fn("Board.readBranchHead")(function* (run: 
 });
 
 const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
-  if (run.branch === null) return null;
+  if (run.branch === null) {
+    return null;
+  }
   const key = `${run.cwd}\0${run.branch}`;
   const known = heads.get(key);
-  if (known !== undefined && now - known.at < HEAD_FOR_MS) return known.sha;
+  if (known !== undefined && now - known.at < HEAD_FOR_MS) {
+    return known.sha;
+  }
   const head = yield* readBranchHead(run);
   heads.set(key, { at: now, sha: head });
   return head;
@@ -670,8 +742,9 @@ const LEADING_GLYPH = /^[^\p{L}\p{N}\s]+\s+/u;
 function namesOf(label: string, run: RunFacts) {
   const clean = withoutPaths(Str.trim(pipe(label, Str.replace(LEADING_GLYPH, ""))));
   const at = Option.getOrElse(pipe(clean, Str.indexOf(" | ")), () => -1);
-  if (at >= 0)
+  if (at >= 0) {
     return { project: pipe(clean, Str.slice(0, at)), name: pipe(clean, Str.slice(at + 3)) };
+  }
   const name = runTitle(run);
   const named = clean === "" || clean === name;
   const project = named ? basename(run.project) : pipe(name, Str.includes(clean)) ? "" : clean;
@@ -685,12 +758,17 @@ function basename(path: string) {
 const groupedRegistered = new WeakMap<ReadonlyArray<AgentEntry>, Map<string, Array<AgentEntry>>>();
 const registeredByRun = (registered: ReadonlyArray<AgentEntry>) => {
   const kept = groupedRegistered.get(registered);
-  if (kept !== undefined) return kept;
+  if (kept !== undefined) {
+    return kept;
+  }
   const byRun = new Map<string, Array<AgentEntry>>();
   for (const entry of registered) {
     const known = byRun.get(entry.runId);
-    if (known === undefined) byRun.set(entry.runId, [entry]);
-    else known.push(entry);
+    if (known === undefined) {
+      byRun.set(entry.runId, [entry]);
+    } else {
+      known.push(entry);
+    }
   }
   groupedRegistered.set(registered, byRun);
   return byRun;
@@ -707,7 +785,9 @@ function agentsOf(
   for (const run of runs) {
     for (const entry of byRun.get(run.id) ?? []) {
       const agent = live.get(entry.agent);
-      if (agent === undefined || found.has(agent.name)) continue;
+      if (agent === undefined || found.has(agent.name)) {
+        continue;
+      }
       const fallback = Arr.findFirst(fallbacks, (one) => one.agent === agent.name);
       found.set(agent.name, {
         name: agent.name,
@@ -733,8 +813,12 @@ const resumedWith = Effect.fn("Board.resumedWith")(function* (run: RunFacts) {
   const last = Option.getOrUndefined(
     yield* lastAudit(run.dir, null).pipe(Effect.orElseSucceed(() => Option.none())),
   );
-  if (last?.operation !== "answer") return null;
-  if (((yield* lastOrdered(run.id))?.at ?? 0) > epochMs(last.at)) return null;
+  if (last?.operation !== "answer") {
+    return null;
+  }
+  if (((yield* lastOrdered(run.id))?.at ?? 0) > epochMs(last.at)) {
+    return null;
+  }
   const answered = Schema.decodeUnknownOption(Answered)(last.result);
   return Option.isSome(answered) ? answered.value.value : null;
 });
@@ -751,7 +835,9 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
   const started = new Map<string, RunFacts>();
   for (const child of children) {
     const key = changeKey({ path: child.repo ?? "", change: child.change ?? undefined });
-    if (!started.has(key)) started.set(key, child);
+    if (!started.has(key)) {
+      started.set(key, child);
+    }
   }
   const planned = plan === null || plan.refusal !== null ? [] : plan.waves;
   const unplanned = Arr.filter([...started.keys()], (repo) => !planned.flat().includes(repo));
@@ -798,8 +884,12 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
 
 // WARNING: a stop suspends a Run, so its parent waits on it forever; a finished child hands back its own work.
 const over: (run: RunFacts, runs: ReadonlyArray<RunFacts>) => boolean = (run, runs) => {
-  if (ended(run)) return true;
-  if (run.asking.length > 0 || run.parked !== null) return false;
+  if (ended(run)) {
+    return true;
+  }
+  if (run.asking.length > 0 || run.parked !== null) {
+    return false;
+  }
   const children = Arr.filter(runs, (one) => one.parent === run.id);
   return (
     Arr.some(children, (child) => child.state === "stopped" || !ended(child)) &&
@@ -821,7 +911,9 @@ const dispositionOf = Effect.fn("Board.dispositionOf")(function* (runs: Readonly
   let newest: Disposition | null = null;
   for (const run of runs) {
     const seen = latest(yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])));
-    if (seen !== null && (newest === null || epochMs(seen.at) > epochMs(newest.at))) newest = seen;
+    if (seen !== null && (newest === null || epochMs(seen.at) > epochMs(newest.at))) {
+      newest = seen;
+    }
   }
   return newest;
 });
@@ -847,8 +939,11 @@ function mrsOf(
   const byId = new Map<string, { id: string; mr: string; runs: Array<RunFacts> }>();
   for (const { run, mr, id } of carried) {
     const known = byId.get(id);
-    if (known === undefined) byId.set(id, { id, mr, runs: [run] });
-    else known.runs.push(run);
+    if (known === undefined) {
+      byId.set(id, { id, mr, runs: [run] });
+    } else {
+      known.runs.push(run);
+    }
   }
   const least = (entry: { runs: Array<RunFacts> }, of: (run: RunFacts) => number) =>
     Math.min(...Arr.map(entry.runs, of));
@@ -908,7 +1003,9 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
         refRuns(line.ref, machine),
         Effect.fnUntraced(function* (word) {
           const target = runs.get(word);
-          if (target === undefined || cardOf.get(word) === card) return false;
+          if (target === undefined || cardOf.get(word) === card) {
+            return false;
+          }
           const other = yield* mrIdOf(target);
           return carried !== null && other !== null
             ? carried === other
@@ -958,21 +1055,25 @@ const dispositionLine = (line: Disposition) =>
   line.ref === "" ? line.kind : `${line.kind} ${mrLabel(line.ref)}`;
 
 const branchOwed = Effect.fn("Board.branchOwed")(function* (run: RunFacts) {
-  if (run.branch === null) return null;
+  if (run.branch === null) {
+    return null;
+  }
   const nothing = yield* RunRecords.use((records) => records.fact(run.id, NOTHING_TO_LAND));
   return nothing !== null ? null : run.branch;
 });
 
 const nothingToFile = Effect.fn("Board.nothingToFile")(function* (runs: ReadonlyArray<RunFacts>) {
-  for (const run of runs)
+  for (const run of runs) {
     if (
       filed({
         branch: yield* branchOwed(run),
         mr: mrOf(run),
         planIssues: yield* planIssuesIn(run.dir),
       })
-    )
+    ) {
       return false;
+    }
+  }
   return true;
 });
 
@@ -1016,8 +1117,12 @@ export interface KeptCards {
 const cardKey = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 const nextChange = (then: number, now: number) => {
-  if (!(then > 0)) return Infinity;
-  if (now < then) return then;
+  if (!(then > 0)) {
+    return Infinity;
+  }
+  if (now < then) {
+    return then;
+  }
   const size = Option.getOrElse(
     Arr.findFirst([86_400_000, 3_600_000, 60_000], (unit) => now - then >= unit),
     () => 1000,
@@ -1095,20 +1200,28 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
   const present = new Map(Arr.map(all, (run) => [run.id, run.task]));
   const runsById = new Map(Arr.map(all, (run) => [run.id, run]));
   const repoRunsOf = new Map<string, Array<RunFacts>>();
-  for (const run of all)
-    if (run.repo !== null && run.parent !== null && present.get(run.parent) === run.task)
+  for (const run of all) {
+    if (run.repo !== null && run.parent !== null && present.get(run.parent) === run.task) {
       repoRunsOf.set(run.parent, [...(repoRunsOf.get(run.parent) ?? []), run]);
+    }
+  }
   const groups = new Map<string, Array<RunFacts>>();
   for (const run of all) {
-    if (run.parent !== null && repoRunsOf.get(run.parent)?.includes(run)) continue;
+    if (run.parent !== null && repoRunsOf.get(run.parent)?.includes(run)) {
+      continue;
+    }
     const key = run.task ?? run.id;
     groups.set(key, [...(groups.get(key) ?? []), run]);
   }
 
   const cardOf = new Map<string, string>();
-  for (const [key, runs] of groups)
-    for (const run of runs)
-      for (const one of [run, ...(repoRunsOf.get(run.id) ?? [])]) cardOf.set(one.id, key);
+  for (const [key, runs] of groups) {
+    for (const run of runs) {
+      for (const one of [run, ...(repoRunsOf.get(run.id) ?? [])]) {
+        cardOf.set(one.id, key);
+      }
+    }
+  }
 
   const flowInputs = yield* flowInputsFor(opts.env, all);
   const leaders = Arr.map([...groups.values()], leaderOf);
@@ -1127,15 +1240,17 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
       Effect.gen(function* () {
         const children = Arr.flatMap(runs, (run) => repoRunsOf.get(run.id) ?? []);
         const everyRun = [...runs, ...children];
-        if (opts.only !== undefined && !Arr.some(everyRun, (run) => run.id === opts.only))
+        if (opts.only !== undefined && !Arr.some(everyRun, (run) => run.id === opts.only)) {
           return null;
+        }
         const missingCheckouts = new Map<string, boolean>();
-        for (const run of everyRun)
+        for (const run of everyRun) {
           missingCheckouts.set(
             run.id,
             run.worktree !== null &&
               !(yield* fs.exists(run.worktree.path).pipe(Effect.orElseSucceed(() => true))),
           );
+        }
         const pending = Arr.flatMap(everyRun, (run) => pendingFor(proposals, run.id, now));
         const fallbacks = fallbacksOf(
           Arr.flatten([...(yield* launchesOf(Arr.map(everyRun, (run) => run.id))).values()]),
@@ -1176,7 +1291,9 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               ]);
         const kept = cards?.kept.get(id);
         if (kept !== undefined && kept.key === key) {
-          if (now < kept.due) return kept.view;
+          if (now < kept.due) {
+            return kept.view;
+          }
           const again = kept.retimed?.(now);
           if (again != null) {
             cards!.kept.set(id, { ...kept, ...again });
@@ -1221,9 +1338,13 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const checking = Arr.filter(everyRun, (run) => checked.has(run.id));
         const leader = leaderOf(runs);
         let issues = 0;
-        for (const run of runs) issues = Math.max(issues, yield* planIssuesIn(run.dir));
+        for (const run of runs) {
+          issues = Math.max(issues, yield* planIssuesIn(run.dir));
+        }
         let owed: string | null = null;
-        for (const run of everyRun) owed ??= yield* branchOwed(run);
+        for (const run of everyRun) {
+          owed ??= yield* branchOwed(run);
+        }
         const ledgers = new Map(
           yield* Effect.forEach(everyRun, (run) =>
             Effect.map(
@@ -1260,7 +1381,11 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           };
         });
         const effectiveStates = new Map(mrStates);
-        for (const one of fates) if (one.state !== null) effectiveStates.set(one.id, one.state);
+        for (const one of fates) {
+          if (one.state !== null) {
+            effectiveStates.set(one.id, one.state);
+          }
+        }
         const branchKey = (run: RunFacts) => `${run.project}\n${run.branch}`;
         const withMr = new Set(
           Arr.map(
@@ -1274,8 +1399,9 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           if (
             ((yield* branchOwed(one.run)) === null || withMr.has(key)) &&
             (one.mr === null || one.id !== null)
-          )
+          ) {
             continue;
+          }
           const runs = branches.get(key) ?? [];
           runs.push(one.run.id);
           branches.set(key, runs);
@@ -1326,8 +1452,9 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               asking: false,
             }).landed) &&
           !(yield* unseenReport(leader))
-        )
+        ) {
           return keep(null, Infinity);
+        }
         const agents = agentsOf(everyRun, registered, live, fallbacks);
         const waits = new Map(
           yield* Effect.forEach(everyRun, (run) =>
@@ -1580,15 +1707,15 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             epochMs(current.read) <= now &&
             now - epochMs(current.read) <= 2 * MERGE_POLL_MS &&
             epochMs(current.asked ?? current.read) <= epochMs(current.read);
-          if ("head" in go && (!fresh || current?.head !== go.head))
+          if ("head" in go && (!fresh || current?.head !== go.head)) {
             shippingFailure = `This Go no longer holds for ${short(go.head)}: the head moved or the forge answer is stale.`;
-          else if (go.action === "deploy" && (!matches || !proof?.proved))
+          } else if (go.action === "deploy" && (!matches || !proof?.proved)) {
             shippingFailure = `Stage proof does not hold: ${proof?.why ?? "no stage proof for this head or tag"}.`;
-          else if (go.action !== "deploy" && !gate.readiness.ready)
+          } else if (go.action !== "deploy" && !gate.readiness.ready) {
             shippingFailure = gate.readiness.missing[0]?.said ?? "the shipping gates do not hold";
-          else if (held !== undefined || check !== null || stalled !== null)
+          } else if (held !== undefined || check !== null || stalled !== null) {
             shippingFailure = "The Run is held, checking or waiting in an agent's pane.";
-          else {
+          } else {
             shipping = go.action;
             shippingMr = mrOf(owner);
           }
@@ -1635,14 +1762,18 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const offer =
           offered === null || planReady ? offered : { ...offered, run: shippingOwner.id };
         const holders = new Map<string, string | null>();
-        for (const run of everyRun)
-          if (waitsOf(run).held) holders.set(run.id, (yield* holderOf(run))?.by ?? null);
+        for (const run of everyRun) {
+          if (waitsOf(run).held) {
+            holders.set(run.id, (yield* holderOf(run))?.by ?? null);
+          }
+        }
         const checksOf = new Map<string, RunningCheck | null>();
-        for (const run of runs)
+        for (const run of runs) {
           checksOf.set(
             run.id,
             run === checkOf ? check : yield* runningCheck(run, all, markers, now),
           );
+        }
         const flow = yield* taskFlowFor(
           opts.env,
           {
@@ -1714,8 +1845,9 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             facts === undefined ||
             ref === null ||
             (facts.read === undefined && facts.asked === undefined)
-          )
+          ) {
             return [];
+          }
           const read = facts.read === undefined ? null : epochMs(facts.read);
           return [
             {
@@ -1880,7 +2012,9 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           });
           return keep(shown, Math.min(now + GOING_EVERY_MS, ...expires));
         }
-        if (leader.branch !== null) return keep(shown, now + 60_000);
+        if (leader.branch !== null) {
+          return keep(shown, now + 60_000);
+        }
         const leaves = last + FINISHED_FOR_MS + 1;
         const retimed = (now: number) =>
           now >= leaves
@@ -1899,8 +2033,13 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
       }),
     { concurrency: opts.cards === undefined ? READS_AT_ONCE : 1 },
   ).pipe(Effect.provideService(Launches, launches), Effect.provideService(Deliveries, deliveries));
-  if (opts.only === undefined && opts.cards !== undefined)
-    for (const id of opts.cards.kept.keys()) if (!groups.has(id)) opts.cards.kept.delete(id);
+  if (opts.only === undefined && opts.cards !== undefined) {
+    for (const id of opts.cards.kept.keys()) {
+      if (!groups.has(id)) {
+        opts.cards.kept.delete(id);
+      }
+    }
+  }
   return sortBoard(Arr.filter(views, (view) => view !== null));
 });
 
@@ -1962,8 +2101,12 @@ export function workingLabel(working: ReadonlyArray<TaskView>) {
 }
 
 export function finishedLabel(finished: ReadonlyArray<TaskView>, open: boolean, now?: number) {
-  if (finished.length === 0) return "Earlier work";
-  if (open) return `Finished · ${finished.length}`;
+  if (finished.length === 0) {
+    return "Earlier work";
+  }
+  if (open) {
+    return `Finished · ${finished.length}`;
+  }
   const today =
     now === undefined
       ? finished
@@ -1974,7 +2117,9 @@ export function finishedLabel(finished: ReadonlyArray<TaskView>, open: boolean, 
 }
 
 export function whereItIs(view: TaskView) {
-  if (view.steps.length === 0) return "";
+  if (view.steps.length === 0) {
+    return "";
+  }
   return (
     Option.getOrUndefined(Arr.findFirst(view.steps, (step) => step.state !== "done"))?.name ??
     "done"

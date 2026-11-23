@@ -7,7 +7,9 @@ export const LOG_BYTES = 8 * 1024 * 1024;
 export const KEPT_BYTES = 16 * 1024;
 
 export const logged = (chunk: string, already: number) => {
-  if (already > LOG_BYTES) return { text: "", logged: already };
+  if (already > LOG_BYTES) {
+    return { text: "", logged: already };
+  }
   const bytes = Buffer.byteLength(chunk, "utf8");
   const room = LOG_BYTES - already;
   const text =
@@ -36,7 +38,9 @@ export const supervise = Effect.fn("CheckSupervisor.supervise")(function* ([
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   // WARNING: the host reading these may be gone; the check must run on without it.
   const relays = { stdout: process.stdout, stderr: process.stderr };
-  for (const stream of [relays.stdout, relays.stderr]) stream.on("error", () => {});
+  for (const stream of [relays.stdout, relays.stderr]) {
+    stream.on("error", () => {});
+  }
   const kept = { stdout: new Uint8Array(), stderr: new Uint8Array() };
   const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
   let already = 0;
@@ -58,11 +62,14 @@ export const supervise = Effect.fn("CheckSupervisor.supervise")(function* ([
     Effect.gen(function* () {
       kept[name] = Buffer.concat([kept[name], chunk]).subarray(-KEPT_BYTES);
       relays[name].write(chunk);
-      if (log === "") return;
+      if (log === "") {
+        return;
+      }
       const next = logged(decoders[name].decode(chunk, { stream: true }), already);
       already = next.logged;
-      if (next.text !== "")
+      if (next.text !== "") {
         yield* fs.writeFileString(log, next.text, { flag: "a" }).pipe(Effect.ignore);
+      }
     });
   const exit = yield* Effect.scoped(
     Effect.gen(function* () {

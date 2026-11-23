@@ -72,7 +72,9 @@ export function Drawer(props: DrawerProps) {
 
   const intent = () => {
     const held = props.detail?.intent;
-    if (!held) return [{ text: "no intent recorded for this run", fg: C.dim }];
+    if (!held) {
+      return [{ text: "no intent recorded for this run", fg: C.dim }];
+    }
     return [
       { text: held.goal ?? "no goal recorded", mark: "›", markFg: C.blue },
       ...Arr.map(held.constraints, (text) => ({ text, mark: "¬", markFg: C.amber, fg: C.muted })),
@@ -135,7 +137,9 @@ export function Drawer(props: DrawerProps) {
 
   const parked = () => {
     const park = props.view.park;
-    if (park == null) return [];
+    if (park == null) {
+      return [];
+    }
     const entry = PARK_CAUSES[park.cause];
     return [
       { text: parkLine(park), mark: "◆", markFg: C.amber },
@@ -145,7 +149,9 @@ export function Drawer(props: DrawerProps) {
 
   const proposed = () => {
     const decision = props.view.decision;
-    if (decision?.kind !== "proposal") return [];
+    if (decision?.kind !== "proposal") {
+      return [];
+    }
     return [
       { text: decision.text },
       ...Arr.map(decision.actions, (action) => ({
@@ -280,7 +286,9 @@ export function Drawer(props: DrawerProps) {
             <Button
               label={item.label}
               onPress={() => {
-                if (item.disabled !== true) props.onAct(item.command);
+                if (item.disabled !== true) {
+                  props.onAct(item.command);
+                }
               }}
             />
           )}
@@ -561,7 +569,9 @@ function Markdown(props: { text: string }) {
   );
   let node: TextRenderable | undefined;
   createEffect(() => {
-    if (node) node.content = (styled.state === "ready" && styled()) || text();
+    if (node) {
+      node.content = (styled.state === "ready" && styled()) || text();
+    }
   });
   return (
     <text
@@ -656,8 +666,12 @@ function MergeRequest(props: {
 }) {
   const details = () => (props.panel?._tag === "Details" ? props.panel : null);
   const instead = () => {
-    if (props.panel?._tag === "Unavailable") return props.panel.reason;
-    if (props.url !== null) return props.url;
+    if (props.panel?._tag === "Unavailable") {
+      return props.panel.reason;
+    }
+    if (props.url !== null) {
+      return props.url;
+    }
     return "no merge request yet — opened by the mr step";
   };
   const ref = () => (props.url === null ? null : readMrRef(props.url));

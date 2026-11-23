@@ -26,7 +26,9 @@ class FakeInput {
   }
 
   off(_event: "data", listener: (buffer: Buffer) => void) {
-    if (this.listener === listener) this.listener = null;
+    if (this.listener === listener) {
+      this.listener = null;
+    }
   }
 
   send(key: string) {

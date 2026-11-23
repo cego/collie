@@ -146,7 +146,9 @@ const runner = (dir: string) =>
     let out = "";
     while (!pipe_(out, Str.includes("\n"))) {
       const { value, done } = yield* Effect.promise(() => reader.read());
-      if (done) throw new Error(`the runner ended before it held: ${out}`);
+      if (done) {
+        throw new Error(`the runner ended before it held: ${out}`);
+      }
       out += new TextDecoder().decode(value);
     }
     const child = Number(Str.trim(out));
@@ -180,8 +182,11 @@ test.each(["whole", "small"] as const)(
         );
         expect(yield* Effect.promise(() => child.exited)).toBe(0);
         const priority = Number(yield* fs.readFileString(result));
-        if (kind === "whole") expect(priority).toBeGreaterThanOrEqual(10);
-        else expect(priority).toBe(getPriority());
+        if (kind === "whole") {
+          expect(priority).toBeGreaterThanOrEqual(10);
+        } else {
+          expect(priority).toBe(getPriority());
+        }
       }),
     ),
 );
@@ -282,7 +287,9 @@ test("a hold is given back only once the process started on it is gone, even one
         }),
       );
       const lives = yield* signalProcess(child.pid);
-      if (lives) child.kill("SIGKILL");
+      if (lives) {
+        child.kill("SIGKILL");
+      }
       expect({ lives, store: yield* entriesOf(dir) }).toEqual({ lives: false, store: [] });
     }),
   ));
@@ -370,8 +377,11 @@ const bare = (tmp: string, notes: string, hold?: string) =>
           COLLIE_TEST_BUDGET: "8",
           COLLIE_BARE_NOTES: notes,
         };
-        if (hold === undefined) delete env[HOLD_ENV];
-        else env[HOLD_ENV] = hold;
+        if (hold === undefined) {
+          delete env[HOLD_ENV];
+        } else {
+          env[HOLD_ENV] = hold;
+        }
         return Bun.spawn(["bun", "test", SMALL_FILE], {
           cwd: REPO,
           stdout: "ignore",

@@ -81,11 +81,12 @@ test("each honest test in the fixture has a check seen failing on an earlier tre
         (item) => item.id,
       );
       expect(honestTests).toHaveLength(4);
-      for (const id of honestTests)
+      for (const id of honestTests) {
         expect(
           Option.getOrUndefined(
             Arr.findFirst(checks, (line) => pipe(line, Str.startsWith(`- ${id}: pass`))),
           ),
         ).toEndWith("on this tree, at 2026-10-21T00:00:00Z; seen failing on an earlier tree");
+      }
     }),
   ));

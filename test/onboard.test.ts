@@ -195,9 +195,12 @@ test("a bare Machine gets Collie and Claude Code without installing Herdr", () =
       for (const step of ["collie", "claude", "path", "prepare", "doctor"]) {
         expect(statusOf(events, step)).toBe("done");
       }
-      for (const step of ["system", "claude-login", "gitlab", "push"])
+      for (const step of ["system", "claude-login", "gitlab", "push"]) {
         expect(statusOf(events, step)).toBe("in_place");
-      for (const step of ["helle", "linear"]) expect(statusOf(events, step)).toBe("skipped");
+      }
+      for (const step of ["helle", "linear"]) {
+        expect(statusOf(events, step)).toBe("skipped");
+      }
       expect(yield* read(`${root}/release/package.json`)).toContain(manifest.version);
       expect(yield* (yield* FileSystem.FileSystem).exists(`${root}/.git`)).toBe(false);
       expect(yield* read(`${home}/curl-calls`)).not.toContain("https://herdr.dev/install.sh");
@@ -686,8 +689,11 @@ test("Claude Code is asked whether it is logged in with the whole environment, n
       expect(statusOf(events, "claude-login")).toBe("in_place");
     }),
   ).finally(() => {
-    if (user === undefined) delete Bun.env.USER;
-    else Bun.env.USER = user;
+    if (user === undefined) {
+      delete Bun.env.USER;
+    } else {
+      Bun.env.USER = user;
+    }
   });
 });
 
@@ -706,8 +712,11 @@ test("attended Linear login keeps the ambient environment and onboarding's overr
         (was) =>
           Effect.sync(() => {
             for (const [name, value] of Rec.toEntries(was)) {
-              if (value === undefined) delete Bun.env[name];
-              else Bun.env[name] = value;
+              if (value === undefined) {
+                delete Bun.env[name];
+              } else {
+                Bun.env[name] = value;
+              }
             }
           }),
       );

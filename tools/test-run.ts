@@ -59,7 +59,9 @@ export const kindOf = (args: ReadonlyArray<string>, budget: Budget) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const { paths, changed } = yield* namedBy(args);
-    if (paths.length === 0) return changed ? "small" : "whole";
+    if (paths.length === 0) {
+      return changed ? "small" : "whole";
+    }
     const directories = yield* Effect.filter(paths, (path) =>
       fs.stat(path).pipe(
         Effect.map((info) => info.type === "Directory"),
@@ -131,15 +133,22 @@ export const prepareTimings = Effect.fn("prepareTimings")(function* (
   timings: string,
   seed: string,
 ) {
-  if (targeted) return;
+  if (targeted) {
+    return;
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const text = yield* fs.readFileString((yield* exists(timings)) ? timings : seed);
   const recorded = decodeTimings(text);
-  if (Option.isNone(recorded)) return;
+  if (Option.isNone(recorded)) {
+    return;
+  }
   const files: Record<string, number> = {};
-  for (const [file, duration] of Rec.toEntries(recorded.value.files))
-    if (yield* exists(file)) files[file] = duration;
+  for (const [file, duration] of Rec.toEntries(recorded.value.files)) {
+    if (yield* exists(file)) {
+      files[file] = duration;
+    }
+  }
   yield* fs.makeDirectory(path.dirname(timings), { recursive: true });
   yield* fs.writeFileString(timings, `${encodeTimings({ ...recorded.value, files })}\n`);
 });
@@ -149,9 +158,11 @@ const byDurationDescending = ([, a]: readonly [string, number], [, b]: readonly 
 
 export const averageTimings = (records: ReadonlyArray<Readonly<Record<string, number>>>) => {
   const seen = new Map<string, Array<number>>();
-  for (const files of records)
-    for (const [file, duration] of Rec.toEntries(files))
+  for (const files of records) {
+    for (const [file, duration] of Rec.toEntries(files)) {
       seen.set(file, [...(seen.get(file) ?? []), duration]);
+    }
+  }
   return Rec.fromEntries(
     Arr.sort(
       Arr.map(
@@ -181,7 +192,9 @@ export const seedFrom = Effect.fn("seedFrom")(function* (
 
 const ranked = (lines: ReadonlyArray<string>, top: number, indent = 0) => {
   const counts = new Map<string, number>();
-  for (const line of lines) counts.set(line, (counts.get(line) ?? 0) + 1);
+  for (const line of lines) {
+    counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
   return Arr.map(
     Arr.take(
       Arr.sort([...counts], ([a, x], [b, y]) => Num.Order(y, x) || Str.localeCompare(b)(a)),

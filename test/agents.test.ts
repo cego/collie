@@ -174,7 +174,9 @@ const reviewWork = () =>
 
 const body = work.toLayer((payload) =>
   Effect.gen(function* () {
-    if (payload.input.skip) return SKIPPED;
+    if (payload.input.skip) {
+      return SKIPPED;
+    }
     return yield* reviewWork();
   }).pipe(asRun(payload)),
 );
@@ -550,8 +552,9 @@ test("a broken rule is named in the problem a repair is given, never as <filter>
     `{"verdict":"clean","summary":"s","dropped":[{"severity":"minor","title":"t"}]}`,
   );
   expect(!unexplained.ok && unexplained.problem).toContain("needs a reason");
-  for (const read of [empty, blank, unexplained])
+  for (const read of [empty, blank, unexplained]) {
     expect(!read.ok && read.problem).not.toContain("<filter>");
+  }
 });
 
 test("a valid Output reaches the workflow as a typed value, from a real launch", () =>
@@ -639,7 +642,9 @@ test("a step's message and its repair are Collie's own and carry no sender line,
           Option.map(Option.fromNullishOr(typed[1]), (present) => Arr.join(present, "\n")),
         ),
       ).toContain("not usable");
-      for (const lines of typed) expect(lines[1]).not.toMatch(/^From /);
+      for (const lines of typed) {
+        expect(lines[1]).not.toMatch(/^From /);
+      }
       expect(yield* read(promptPath("r1"))).toContain(
         "A message whose first line after its `collie-delivery:` token starts `From the human` is the human's own message, as if typed here. One starting `From chat for the human` quotes the human's own words. One from an agent is that agent's words, not the human's. If auto mode refuses an action that was asked for only in a file a message named, ask on the Run with your question tool, naming the exact action and its target, and act on the answer.",
       );
@@ -715,11 +720,12 @@ test("a step settled as not sent goes out again with the same Clearance", () =>
       yield* releasedInto("r1", { collectMs: OUTLASTS_IO });
       const typed = [...herdr.typed, ...typedSteps(yield* rig.calls())];
       expect(typed).toHaveLength(2);
-      for (const one of typed)
+      for (const one of typed) {
         expect(Str.split(one, "\n").slice(1)).toEqual([
           `Your task for this step is in ${promptPath("r1")} — read it and follow it.`,
           "Cleared for this step: pushing feat/x to origin (https://forge.example/group/x); opening or updating its merge request there.",
         ]);
+      }
     }),
   ));
 
@@ -930,7 +936,9 @@ class ClosesOnceReused extends Herdr {
     super(env);
   }
   override agentList() {
-    if (this.closed || Bun.file(this.prompt).size === 0) return super.agentList();
+    if (this.closed || Bun.file(this.prompt).size === 0) {
+      return super.agentList();
+    }
     this.closed = true;
     return this.terminalKill(this.pane).pipe(Effect.andThen(super.agentList()));
   }
@@ -945,7 +953,9 @@ class FailsOnceReused extends Herdr {
     super(env);
   }
   override agentList() {
-    if (this.failed || Bun.file(this.pointer).size === 0) return super.agentList();
+    if (this.failed || Bun.file(this.pointer).size === 0) {
+      return super.agentList();
+    }
     this.failed = true;
     return Effect.fail(
       new HerdrError({ message: "herdr agent list failed", detail: "socket closed" }),
@@ -1092,7 +1102,9 @@ const interrupted = (runId: string, reached: Reached, over?: Partial<AgentHost>)
     Effect.gen(function* () {
       yield* work.execute({ runId, input: { skip: false } }, { discard: true });
       for (let tries = 0; !(yield* reached); tries++) {
-        if (tries === 3000) return yield* Effect.die(new Error(`${runId} never got that far`));
+        if (tries === 3000) {
+          return yield* Effect.die(new Error(`${runId} never got that far`));
+        }
         yield* TestClock.withLive(Effect.sleep("10 millis"));
       }
     }),
@@ -1231,7 +1243,9 @@ const managedCodex = Effect.gen(function* () {
     (children) =>
       Effect.forEach(children, (child) =>
         Effect.gen(function* () {
-          if (child.exitCode === null) child.kill();
+          if (child.exitCode === null) {
+            child.kill();
+          }
           yield* Effect.promise(() => child.exited);
         }),
       ),
@@ -1358,12 +1372,15 @@ test.each([false, true])(
           child.kill();
           yield* Effect.promise(() => child.exited);
         });
-        if (replay)
+        if (replay) {
           yield* session(Effect.forkChild(started("r1")).pipe(Effect.andThen(killServer)), over);
+        }
         const result = yield* session(
           Effect.gen(function* () {
             const fiber = yield* Effect.forkChild(started("r1"));
-            if (!replay) yield* killServer;
+            if (!replay) {
+              yield* killServer;
+            }
             yield* until(prompted("Your task for this step", 2));
             expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
             yield* fs.writeFileString(outputPath("r1"), '{"verdict":"clean","note":"recovered"}');
@@ -1479,7 +1496,9 @@ test.each([
             yield* spend(20_000);
             expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
             expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
-            if (stranger !== null) expect(stranger.exitCode).toBe(null);
+            if (stranger !== null) {
+              expect(stranger.exitCode).toBe(null);
+            }
             herdr.stale = false;
             yield* fs.writeFileString(
               outputPath("r1"),
@@ -1743,9 +1762,12 @@ test.each([
           unhealthy = true;
           const controls = `${yield* controlDir(hostOf().env.stateDir, agentFor("r1"))}/control.json`;
           const saved = yield* fs.readFileString(controls);
-          if (failure === "missing controls" || failure === "transient controls")
+          if (failure === "missing controls" || failure === "transient controls") {
             yield* fs.remove(controls);
-          if (failure === "invalid controls") yield* fs.writeFileString(controls, "{");
+          }
+          if (failure === "invalid controls") {
+            yield* fs.writeFileString(controls, "{");
+          }
           if (failure === "unreadable controls") {
             yield* fs.remove(controls);
             yield* fs.makeDirectory(controls);
@@ -1757,7 +1779,9 @@ test.each([
           const transient = failure === "transient" || failure === "transient controls";
           yield* spend(transient ? 500 : 4000);
           if (transient) {
-            if (failure === "transient controls") yield* fs.writeFileString(controls, saved);
+            if (failure === "transient controls") {
+              yield* fs.writeFileString(controls, saved);
+            }
             unhealthy = false;
             yield* spend(4000);
             expect(yield* controlOf(PARKED, "r1")).toBe("");
@@ -1803,12 +1827,15 @@ test.each([false, true])(
           managed.children[0]!.kill();
           yield* Effect.promise(() => managed.children[0]!.exited);
         });
-        if (replay)
+        if (replay) {
           yield* session(Effect.forkChild(started("r1")).pipe(Effect.andThen(lose)), over);
+        }
         yield* session(
           Effect.gen(function* () {
             yield* Effect.forkChild(started("r1"));
-            if (!replay) yield* lose;
+            if (!replay) {
+              yield* lose;
+            }
             yield* until(controlOf(PARKED, "r1").pipe(Effect.map(Str.includes("--reconcile"))));
             expect(yield* controlOf(PARKED, "r1")).toContain("--reconcile");
             expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
@@ -1857,12 +1884,15 @@ test.each([
           managed.children[0]!.kill();
           yield* Effect.promise(() => managed.children[0]!.exited);
         });
-        if (replay)
+        if (replay) {
           yield* session(Effect.forkChild(started("r1")).pipe(Effect.andThen(lose)), over);
+        }
         yield* session(
           Effect.gen(function* () {
             yield* Effect.forkChild(started("r1"));
-            if (!replay) yield* lose;
+            if (!replay) {
+              yield* lose;
+            }
             yield* until(parked("r1"));
             expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
             expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
@@ -1958,13 +1988,17 @@ test.each(["before detection", "repair collection"] as const)(
             managed.state.reachable = false;
             managed.children[0]!.kill();
             yield* Effect.promise(() => managed.children[0]!.exited);
-            if (when === "before detection")
+            if (when === "before detection") {
               yield* fs.writeFileString(
                 outputPath("r1"),
                 '{"verdict":"clean","note":"finished before retirement"}',
               );
-            if (when === "repair collection") yield* until(prompted("Your task for this step", 2));
-            else yield* spend(20_000);
+            }
+            if (when === "repair collection") {
+              yield* until(prompted("Your task for this step", 2));
+            } else {
+              yield* spend(20_000);
+            }
             expect(everyLaunch(yield* rig.calls()), yield* controlOf(PARKED, "r1")).toHaveLength(
               when === "before detection" ? 1 : 2,
             );
@@ -2029,7 +2063,9 @@ test.each(["before retirement", "during retirement"] as const)(
               ),
             );
             herdr.stale = true;
-            if (when === "before retirement") yield* fs.writeFileString(outputPath("r1"), partial);
+            if (when === "before retirement") {
+              yield* fs.writeFileString(outputPath("r1"), partial);
+            }
             managed.state.reachable = false;
             managed.children[0]!.kill();
             yield* Effect.promise(() => managed.children[0]!.exited);
@@ -2248,8 +2284,9 @@ test("an agent is still collected while its Run is parked past its budget", () =
                     ),
                   ) &&
                   marked === undefined
-                )
+                ) {
                   marked = yield* collecting.has(runId, agentFor(runId));
+                }
                 yield* host.parked(runId, why);
               }),
           });
@@ -2321,7 +2358,9 @@ test("a restart while the Run is collected past its budget reattaches and return
 
 const untilParked = (runId: string) =>
   Effect.gen(function* () {
-    while (!(yield* parked(runId))) yield* TestClock.withLive(Effect.sleep("10 millis"));
+    while (!(yield* parked(runId))) {
+      yield* TestClock.withLive(Effect.sleep("10 millis"));
+    }
     return "parked" as const;
   });
 
@@ -2337,14 +2376,16 @@ class BusyUntilWritten extends Herdr {
   }
 }
 
-for (const busy of ["working", "blocked"] as const)
+for (const busy of ["working", "blocked"] as const) {
   test(`an agent herdr reports ${busy} far past the budget is collected, never parked`, () =>
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([null]);
         const herdr = new BusyUntilWritten(busy);
         const writes = Effect.gen(function* () {
-          while (herdr.reads < 100) yield* TestClock.withLive(Effect.sleep("10 millis"));
+          while (herdr.reads < 100) {
+            yield* TestClock.withLive(Effect.sleep("10 millis"));
+          }
           yield* (yield* FileSystem.FileSystem).writeFileString(
             outputPath("r1"),
             `{"verdict":"clean","note":"after the suite"}`,
@@ -2363,6 +2404,7 @@ for (const busy of ["working", "blocked"] as const)
         );
       }),
     ));
+}
 
 class RewritingAfterRepair extends Herdr {
   rewriting = false;
@@ -2382,8 +2424,9 @@ test("a repaired Output caught half rewritten is judged when the agent's turn en
       yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
       const herdr = new RewritingAfterRepair();
       const rewrites = Effect.gen(function* () {
-        while (!(yield* prompted("not usable")))
+        while (!(yield* prompted("not usable"))) {
           yield* TestClock.withLive(Effect.sleep("10 millis"));
+        }
         herdr.rewriting = true;
         yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean"}`);
         yield* TestClock.withLive(Effect.sleep("300 millis"));
@@ -2414,8 +2457,9 @@ class FinishingWhileAsked extends Herdr {
         yield* fs.writeFileString(outputPath("r1"), HALF);
         return "working" as const;
       }
-      if (now === HALF)
+      if (now === HALF) {
         yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"as it ended"}`);
+      }
       return "idle" as const;
     }).pipe(Effect.orDie);
   }
@@ -2427,8 +2471,9 @@ test("a repaired Output finished between its read and the turn ending is read ag
       yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
       const herdr = new FinishingWhileAsked(yield* FileSystem.FileSystem);
       const repairing = Effect.gen(function* () {
-        while (!(yield* prompted("not usable")))
+        while (!(yield* prompted("not usable"))) {
           yield* TestClock.withLive(Effect.sleep("10 millis"));
+        }
         herdr.repairing = true;
       });
       const result = yield* session(
@@ -2442,7 +2487,7 @@ test("a repaired Output finished between its read and the turn ending is read ag
 for (const [what, herdr] of [
   ["unknown", () => new UnseenTurn(rig.pluginEnv())],
   ["unreadable", () => new Unreadable(rig.pluginEnv())],
-] as const)
+] as const) {
   test(`an agent whose status is ${what} and that writes nothing parks as idle-budget once the budget is spent idle`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -2460,6 +2505,7 @@ for (const [what, herdr] of [
         expect(Arr.map(yield* halts("r1"), (line) => line.cause)).toEqual(["idle-budget"]);
       }),
     ));
+}
 
 class Turns extends Herdr {
   private working = 0;
@@ -2479,9 +2525,15 @@ class Turns extends Herdr {
   override agentStatus(target: string) {
     return super.agentStatus(target).pipe(
       Effect.map((status) => {
-        if (status === "working") return status;
-        if (this.working === 0) return this.prompted > 0 ? this.ending : ("idle" as const);
-        if (!this.going) this.working -= 1;
+        if (status === "working") {
+          return status;
+        }
+        if (this.working === 0) {
+          return this.prompted > 0 ? this.ending : ("idle" as const);
+        }
+        if (!this.going) {
+          this.working -= 1;
+        }
         return "working" as const;
       }),
     );
@@ -2576,7 +2628,9 @@ test("a host stopped once its first reminder went out does not send that reminde
       const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null, null]);
       const remindedOnce: Reached = Effect.gen(function* () {
-        if ((yield* reminders).length === 0) return false;
+        if ((yield* reminders).length === 0) {
+          return false;
+        }
         yield* TestClock.withLive(Effect.sleep("300 millis"));
         return true;
       }).pipe(Effect.orElseSucceed(() => false));
@@ -2622,13 +2676,14 @@ const enteredBehindHeldReminder = (landed: boolean) =>
       { herdr: new HeldReminder(), collectMs: 600_000 },
     );
     const held = Option.getOrThrow(yield* heldReminder("r1"));
-    if (landed)
+    if (landed) {
       yield* writeEvent(yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")), {
         session: null,
         kind: "submit",
         reason: "collie",
         delivery: held.id,
       });
+    }
     const result = yield* session(
       Effect.raceFirst(
         Effect.gen(function* () {
@@ -2762,8 +2817,9 @@ const asksTwo = Effect.gen(function* () {
       yield* deliveredTo(dir, "r1"),
       (one) => one.cause.kind === "step" && one.state === "acknowledged",
     )
-  )
+  ) {
     yield* TestClock.withLive(Effect.sleep("10 millis"));
+  }
   yield* fs.writeFileString(
     hostLockOf(rig.pluginEnv().stateDir),
     `{"pid":${process.pid},"start":null}`,
@@ -2776,7 +2832,9 @@ const questionsOf = (count: number) =>
     const store = yield* Store;
     for (;;) {
       const asked = yield* store.asked("r1");
-      if (asked.length >= count) return asked;
+      if (asked.length >= count) {
+        return asked;
+      }
       yield* TestClock.withLive(Effect.sleep("10 millis"));
     }
   });
@@ -2791,8 +2849,9 @@ const answer = (decision: string, value: string, answerer?: AuditLine["actor"]) 
 const spend = (ms: number) =>
   Effect.gen(function* () {
     const until = (yield* Clock.currentTimeMillis) + ms;
-    while ((yield* Clock.currentTimeMillis) < until)
+    while ((yield* Clock.currentTimeMillis) < until) {
       yield* TestClock.withLive(Effect.sleep("10 millis"));
+    }
   });
 
 test("an agent's two questions are open Decisions on its Run, and both answers go back as one Delivery", () =>
@@ -2816,7 +2875,9 @@ test("an agent's two questions are open Decisions on its Run, and both answers g
           expect(sent(yield* rig.calls(), ANSWERED)).toBe(0);
 
           yield* answer("ask-review-2", "1");
-          while (!(yield* prompted(ANSWERED))) yield* TestClock.withLive(Effect.sleep("10 millis"));
+          while (!(yield* prompted(ANSWERED))) {
+            yield* TestClock.withLive(Effect.sleep("10 millis"));
+          }
           yield* spend(5000);
           const calls = yield* rig.calls();
           expect(sent(calls, ANSWERED)).toBe(1);
@@ -2853,7 +2914,9 @@ test("an answered question's pending delivery is not interrupted by an Output re
       const herdr = new (class extends UnseenTurn {
         override agentPrompt(...args: Parameters<Herdr["agentPrompt"]>) {
           const sent = super.agentPrompt(...args);
-          if (!pipe(args[1], Str.includes(ANSWERED))) return sent;
+          if (!pipe(args[1], Str.includes(ANSWERED))) {
+            return sent;
+          }
           return Effect.gen(function* () {
             awaitingReply = true;
             yield* Deferred.succeed(replying, undefined);
@@ -2916,8 +2979,9 @@ test("answers from different senders each reach the agent under their own sender
             origin: "board",
             requestId: "answer-ask-review-2",
           });
-          while (!(yield* prompted("is answered", 2)))
+          while (!(yield* prompted("is answered", 2))) {
             yield* TestClock.withLive(Effect.sleep("10 millis"));
+          }
           const typed = Arr.filter(sentTexts(yield* rig.calls()), Str.includes("is answered"));
           expect(typed).toHaveLength(2);
           expect(
@@ -2961,7 +3025,9 @@ test("an open question pauses an idle agent's Output budget, which runs again on
 
           yield* answer("ask-review-1", "Postgres");
           yield* answer("ask-review-2", "lint");
-          while (!(yield* parked("r1"))) yield* TestClock.withLive(Effect.sleep("10 millis"));
+          while (!(yield* parked("r1"))) {
+            yield* TestClock.withLive(Effect.sleep("10 millis"));
+          }
         }),
         {
           herdr: new UnseenTurn(rig.pluginEnv()),
@@ -3060,8 +3126,9 @@ test("a question whose agent core still has, or whose core cannot be asked, stay
   runEffect(
     Effect.gen(function* () {
       yield* finishedThenAsked;
-      for (const herdr of [new Herdr(rig.pluginEnv()), coreGone()])
+      for (const herdr of [new Herdr(rig.pluginEnv()), coreGone()]) {
         yield* session(tendR1, { herdr });
+      }
       expect(yield* answersOfR1).toEqual([null, null]);
 
       yield* rig.dropAgent(agentFor("r1"));
@@ -3138,7 +3205,9 @@ class BusyPane extends Herdr {
   }
   override agentPrompt(target: string, text: string) {
     const busy = this.times === 0 || this.refused < this.times;
-    if (busy) this.refused += 1;
+    if (busy) {
+      this.refused += 1;
+    }
     return core
       .report(target, busy ? "blocked" : "idle")
       .pipe(Effect.andThen(super.agentPrompt(target, text)));
@@ -3153,11 +3222,15 @@ class Refusing extends Herdr {
     times = Infinity,
   ) {
     super(rig.pluginEnv());
-    for (const method of Rec.keys(refusals)) this.left.set(method, times);
+    for (const method of Rec.keys(refusals)) {
+      this.left.set(method, times);
+    }
   }
   private refusing<A>(method: string, asked: Effect.Effect<A, HerdrError, PlatformServices>) {
     const left = this.left.get(method) ?? 0;
-    if (left <= 0) return asked;
+    if (left <= 0) {
+      return asked;
+    }
     this.left.set(method, left - 1);
     return Effect.fail(
       new HerdrError({
@@ -3765,7 +3838,7 @@ for (const identity of [
   "another generation",
   "another Run",
   "another alias",
-])
+]) {
   test(`a listed legacy numeric agent with ${identity} starts no duplicate`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -3812,6 +3885,7 @@ for (const identity of [
         }
       }),
     ));
+}
 
 test("an exhaustion result is observed only after its operation's usage wait is durable", () =>
   runEffect(
@@ -3952,8 +4026,9 @@ test("a replay after a restart starts the agent the work fell back to, whatever 
       expect(result._tag === "Success" && result.success.note).toBe("back");
       const calls = yield* rig.calls();
       expect(harnessesStarted(calls)).toEqual(["codex", "codex"]);
-      for (const argv of everyLaunch(calls))
+      for (const argv of everyLaunch(calls)) {
         expect(argv).toContain("--dangerously-bypass-hook-trust");
+      }
     }),
   ));
 
@@ -3973,7 +4048,9 @@ const runsOut = (agent: string, times = 1) =>
       Effect.map((calls) => sent(calls, "Your task for this step") >= times),
       Effect.orElseSucceed(() => false),
     );
-    while (!(yield* given)) yield* TestClock.withLive(Effect.sleep("10 millis"));
+    while (!(yield* given)) {
+      yield* TestClock.withLive(Effect.sleep("10 millis"));
+    }
     yield* recordClaudeEvent(yield* controlDir(rig.pluginEnv().stateDir, agent), rateLimited);
   }).pipe(Effect.orDie);
 
@@ -3991,8 +4068,9 @@ test("a waiting agent switches when a fallback is configured after it ran out", 
           yield* runsOut(agentFor("r1"));
           while (
             !pipe(yield* read(`${dir}/agents/r1/agents.log`), Str.includes("nothing has room"))
-          )
+          ) {
             yield* TestClock.withLive(Effect.sleep("10 millis"));
+          }
           fallbacks = ["codex/gpt-6.1-sol"];
           yield* TestClock.adjust("1 minute");
         }),
@@ -4056,7 +4134,9 @@ interface PiHost {
 
 const stopsOnError = (agent: string, error: string, after = "Your task for this step") =>
   Effect.gen(function* () {
-    while (!(yield* prompted(after))) yield* TestClock.withLive(Effect.sleep("10 millis"));
+    while (!(yield* prompted(after))) {
+      yield* TestClock.withLive(Effect.sleep("10 millis"));
+    }
     const control = yield* controlDir(rig.pluginEnv().stateDir, agent);
     yield* (yield* FileSystem.FileSystem).makeDirectory(control, { recursive: true });
     yield* COMPACTION_PORTS.pi!.install({
@@ -4405,7 +4485,9 @@ test("quota incident publication waits for an admitted managed-server revival", 
         ...fs,
         writeFileString: (path, data, options) =>
           Effect.sync(() => {
-            if (pipe(path, Str.startsWith(wait))) writing = true;
+            if (pipe(path, Str.startsWith(wait))) {
+              writing = true;
+            }
           }).pipe(Effect.andThen(fs.writeFileString(path, data, options))),
       };
       const ports: CompactionPorts = {
@@ -4727,7 +4809,7 @@ test("a quota fallback keeps valid late Output written while retiring its manage
     }).pipe(Effect.scoped),
   ));
 
-for (const recovery of ["a newer matching reset", "its known reset passing"])
+for (const recovery of ["a newer matching reset", "its known reset passing"]) {
   test(`a spent subscription recovers on ${recovery} without resuming the Run`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -4765,8 +4847,9 @@ for (const recovery of ["a newer matching reset", "its known reset passing"])
             const waiting = yield* Effect.forkChild(started("r1"));
             yield* until(parkedSays("before writing"));
             expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
-            if (recovery === "its known reset passing") yield* TestClock.adjust("3 minutes");
-            else {
+            if (recovery === "its known reset passing") {
+              yield* TestClock.adjust("3 minutes");
+            } else {
               machine = {
                 ...available,
                 at: isoAt(yield* Clock.currentTimeMillis),
@@ -4795,6 +4878,7 @@ for (const recovery of ["a newer matching reset", "its known reset passing"])
         expect(yield* isSet(PARKED, "r1")).toBe(false);
       }),
     ));
+}
 
 test("a spent subscription stays unavailable without proof that its exhausted window reset", () =>
   runEffect(
@@ -5134,8 +5218,11 @@ test("a legacy spent subscription decodes without exhaustion metadata and recove
                 on: { harness: "codex", model: "default", effort: null },
               },
             ]);
-            if (hasReset) expect(chosen.why).toBeUndefined();
-            else expect(chosen.why).toStartWith("nothing has room");
+            if (hasReset) {
+              expect(chosen.why).toBeUndefined();
+            } else {
+              expect(chosen.why).toStartWith("nothing has room");
+            }
           }
         }),
         {
@@ -5730,7 +5817,9 @@ test("a hand-off nobody can say arrived parks until a human says what became of 
         "tester",
         "2026-09-23T10:01:00Z",
       );
-      if ("error" in settled) throw new Error(settled.error);
+      if ("error" in settled) {
+        throw new Error(settled.error);
+      }
       yield* appendLine(settled).pipe(Effect.provide(recordsAt(dir)));
       const after = yield* session(handedOff);
       expect(after._tag === "Success" && after.success).toMatchObject({
@@ -5964,7 +6053,9 @@ const stoppedOnce = (runId: string, about: string) => {
   let stopped = false;
   return Effect.gen(function* () {
     if (!stopped) {
-      if (!(yield* prompted(about))) return false;
+      if (!(yield* prompted(about))) {
+        return false;
+      }
       yield* TestClock.withLive(Effect.sleep("100 millis"));
       yield* control("stop", runId, true);
       stopped = true;
@@ -6118,7 +6209,7 @@ const collieCheckRunning = (ends: "exits" | "crashes") =>
       },
     ]).pipe(Effect.provide(recordsAt(dir)));
     const store = yield* Store;
-    if ((yield* store.run("r1")) === null)
+    if ((yield* store.run("r1")) === null) {
       yield* store.admit({
         request: "req-r1",
         run: "r1",
@@ -6132,6 +6223,7 @@ const collieCheckRunning = (ends: "exits" | "crashes") =>
         task: null,
         parent: null,
       });
+    }
     const check = yield* Effect.forkChild(
       Host.pipe(
         Effect.flatMap((host) =>
@@ -6237,8 +6329,9 @@ test("an answer to an agent's question waits while Collie's Check collects proof
           yield* TestClock.withLive(Effect.sleep("3 seconds"));
           expect(yield* prompted("are answered")).toBe(false);
           yield* controls.setControl(VERIFYING, "r1", null);
-          while (!(yield* prompted("are answered")))
+          while (!(yield* prompted("are answered"))) {
             yield* TestClock.withLive(Effect.sleep("10 millis"));
+          }
         }),
         { collectMs: 120_000, pollMs: 200 },
       );
@@ -6298,8 +6391,11 @@ test.each([true, false])(
         ).toBe(true);
         expect(comments[0]).not.toContain("Replacement");
         expect(comments[0]).not.toContain("From the human, in the CLI");
-        if (attributed) expect(comments[0]).toContain("From the human, in Desktop");
-        else expect(comments[0]).toBe(text);
+        if (attributed) {
+          expect(comments[0]).toContain("From the human, in Desktop");
+        } else {
+          expect(comments[0]).toBe(text);
+        }
       }),
     ),
 );
@@ -6565,7 +6661,9 @@ test("a stop while the repair is awaited parks the wait, and the resume starts t
 class ClosedAtRepair extends Herdr {
   private tries = 0;
   override agentPrompt(target: string, text: string) {
-    if (!pipe(text, Str.includes("not usable"))) return super.agentPrompt(target, text);
+    if (!pipe(text, Str.includes("not usable"))) {
+      return super.agentPrompt(target, text);
+    }
     this.tries += 1;
     const code = this.tries === 1 ? "agent_blocked" : "agent_not_found";
     const refused = new HerdrError({ message: code, detail: "", code, answered: true });
@@ -7055,7 +7153,9 @@ const slowCompaction = () => {
 const until = <E, R>(reached: Effect.Effect<boolean, E, R>) =>
   Effect.gen(function* () {
     for (let tries = 0; !(yield* reached); tries++) {
-      if (tries === 3000) return yield* Effect.die(new Error("never got that far"));
+      if (tries === 3000) {
+        return yield* Effect.die(new Error("never got that far"));
+      }
       yield* TestClock.withLive(Effect.sleep("10 millis"));
     }
   });
@@ -7317,7 +7417,7 @@ const listedWhile = (held: AgentStatus, herdr?: Herdr) =>
     return { result, seen };
   });
 
-for (const busy of ["working", "blocked"] as const)
+for (const busy of ["working", "blocked"] as const) {
   test(`a reused agent herdr reports ${busy} is given nothing until it is idle`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -7335,6 +7435,7 @@ for (const busy of ["working", "blocked"] as const)
         ).toHaveLength(1);
       }),
     ));
+}
 
 class Unreadable extends Herdr {
   override agentStatus() {
@@ -7350,7 +7451,7 @@ class Unreadable extends Herdr {
 for (const [what, run] of [
   ["unknown", () => listedWhile("unknown")],
   ["unreadable", () => listedWhile("idle", new Unreadable(rig.pluginEnv()))],
-] as const)
+] as const) {
   test(`a reused agent whose status is ${what} is given its work as before`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -7358,6 +7459,7 @@ for (const [what, run] of [
         expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
       }),
     ));
+}
 
 const waitingAtBoundary = Effect.gen(function* () {
   yield* rig.queueOutputs([
@@ -7367,8 +7469,12 @@ const waitingAtBoundary = Effect.gen(function* () {
   yield* listing.execute({ runId: "r1", input: ITEMS }, { discard: true });
   for (let tries = 0; ; tries++) {
     const log = yield* read(`${dir}/agents/r1/agents.log`).pipe(Effect.orElseSucceed(() => ""));
-    if (pipe(log, Str.includes("still working; 02-ui"))) return;
-    if (tries === 3000) return yield* Effect.die(new Error("the boundary never waited"));
+    if (pipe(log, Str.includes("still working; 02-ui"))) {
+      return;
+    }
+    if (tries === 3000) {
+      return yield* Effect.die(new Error("the boundary never waited"));
+    }
     yield* TestClock.withLive(Effect.sleep("10 millis"));
   }
 });
@@ -7492,8 +7598,9 @@ const stoppedAtFirst = (runId: string) =>
     yield* listingSession(
       Effect.gen(function* () {
         yield* listing.execute({ runId, input: ITEMS }, { discard: true });
-        while (!(yield* prompted("01-api.prompt.md")))
+        while (!(yield* prompted("01-api.prompt.md"))) {
           yield* TestClock.withLive(Effect.sleep("10 millis"));
+        }
         yield* TestClock.withLive(Effect.sleep("100 millis"));
         yield* control("stop", runId, true);
         yield* Effect.sleep(Duration.millis(900));
@@ -7779,7 +7886,9 @@ const statusLineCall = (agent: string) =>
   });
 
 const untilStarted = Effect.gen(function* () {
-  while (!(yield* rig.cmds()).includes("terminal.run")) yield* Effect.sleep(Duration.millis(10));
+  while (!(yield* rig.cmds()).includes("terminal.run")) {
+    yield* Effect.sleep(Duration.millis(10));
+  }
 });
 
 test("the first prompt to a new agent waits for the harness to say it is up, not only herdr", () =>
@@ -7881,14 +7990,18 @@ class TextLost extends Herdr {
   lost = true;
   readonly typed: Array<string> = [];
   override agentPrompt(target: string, text: string) {
-    if (!this.lost) return super.agentPrompt(target, text);
+    if (!this.lost) {
+      return super.agentPrompt(target, text);
+    }
     this.typed.push(text);
     return Effect.succeed("unobserved" as const);
   }
 }
 
 const promptNotTaken = (lost: "enter" | "text") => {
-  if (lost === "text") return new TextLost(rig.pluginEnv());
+  if (lost === "text") {
+    return new TextLost(rig.pluginEnv());
+  }
   core.stallNextSend();
   return new Herdr(rig.pluginEnv());
 };
@@ -7948,7 +8061,9 @@ const reconciled = (runId: string, as: "sent" | "not-sent") =>
     const [step] = yield* steps(runId);
     expect(why).toContain(`--reconcile ${step!.id} --as sent|not-sent`);
     const settled = reconcile(yield* ledgerOf(dir, step!.incarnation), step!.id, as, "tester", "t");
-    if ("error" in settled) throw new Error(settled.error);
+    if ("error" in settled) {
+      throw new Error(settled.error);
+    }
     yield* appendLine(settled).pipe(Effect.provide(recordsAt(dir)));
   });
 
@@ -7983,13 +8098,17 @@ test("a parked collection resumes on the same host and resends only the reconcil
           yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
           yield* work.execute(payload, { discard: true });
           for (let tries = 0; !(yield* parked("r1")); tries++) {
-            if (tries === 500) throw new Error("collection never parked");
+            if (tries === 500) {
+              throw new Error("collection never parked");
+            }
             yield* TestClock.withLive(Effect.sleep("10 millis"));
           }
           const [first] = yield* steps("r1");
           expect(yield* controlOf(PARKED, "r1")).toContain(first!.id);
           for (let tries = 0; !(yield* suspended("r1")); tries++) {
-            if (tries === 100) throw new Error("parked collection never suspended");
+            if (tries === 100) {
+              throw new Error("parked collection never suspended");
+            }
             yield* TestClock.withLive(Effect.sleep("10 millis"));
           }
           yield* reconciled("r1", "not-sent");
@@ -8028,8 +8147,9 @@ test("a resend herdr refuses parks saying the next resume tries again, and it do
           const payload = { runId: "r1", input: { skip: false } };
           yield* engine.resume(work, yield* work.executionId(payload));
           yield* work.execute(payload, { discard: true });
-          while (!pipe(yield* controlOf(PARKED, "r1"), Str.includes("tries again")))
+          while (!pipe(yield* controlOf(PARKED, "r1"), Str.includes("tries again"))) {
             yield* TestClock.withLive(Effect.sleep("10 millis"));
+          }
         }),
         { herdr: refusing, collectMs: OUTLASTS_IO },
       );
@@ -8497,7 +8617,9 @@ test.each([0, 1000])(
           "kibana-dashboards": "name-only",
           "elastic-audit": "off",
         });
-        if (compactAtTokens > 0) expect(text).toContain('"hooks"');
+        if (compactAtTokens > 0) {
+          expect(text).toContain('"hooks"');
+        }
       }),
     ),
 );
@@ -8670,11 +8792,13 @@ test.each([
           ),
           Effect.scoped,
         );
-        if (matches) expect(result._tag).toBe("Success");
-        else
+        if (matches) {
+          expect(result._tag).toBe("Success");
+        } else {
           expect(result._tag === "Failure" ? result.failure.reason : "").toContain(
             "different Claude subagent policy",
           );
+        }
         expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
       }),
     ),
@@ -8768,15 +8892,20 @@ test("a profile's environment is what the harness starts with, and a file-held v
       const leaked: Array<string> = [];
       for (const path of yield* fs.readDirectory(rig.root, { recursive: true })) {
         const at = `${rig.root}/${path}`;
-        if (at === `${rig.root}/secrets/token` || at === rig.logPath) continue;
-        if ((yield* fs.stat(at)).type !== "File") continue;
+        if (at === `${rig.root}/secrets/token` || at === rig.logPath) {
+          continue;
+        }
+        if ((yield* fs.stat(at)).type !== "File") {
+          continue;
+        }
         if (
           pipe(
             yield* fs.readFileString(at).pipe(Effect.orElseSucceed(() => "")),
             Str.includes(secret),
           )
-        )
+        ) {
           leaked.push(path);
+        }
       }
       expect(leaked).toEqual([]);
       expect(Arr.join(launchArgs(calls), " ")).not.toContain(secret);

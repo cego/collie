@@ -91,7 +91,9 @@ const mount = Effect.fn("selection.mount")(function* (state: AppState) {
         ),
         () => -1,
       );
-      if (y < 0) throw new Error(`no line containing ${stringifyJson(text)}`);
+      if (y < 0) {
+        throw new Error(`no line containing ${stringifyJson(text)}`);
+      }
       return y;
     },
     click: (x: number, y: number) =>

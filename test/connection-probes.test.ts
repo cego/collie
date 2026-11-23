@@ -30,16 +30,22 @@ test("GitLab is read on the host Collie works against, never glab's default, and
         Effect.sync(() => {
           const said = Arr.join(args, " ");
           asked.push(said);
-          if (said === "config get host --global") return { code: 0, stdout: glab.host };
+          if (said === "config get host --global") {
+            return { code: 0, stdout: glab.host };
+          }
           const token = /^config get token --host (\S+)$/.exec(said);
-          if (token !== null) return { code: 0, stdout: glab.hosts[token[1]!]?.token ?? "" };
-          if (said === "api --hostname gitlab.cego.dk user")
+          if (token !== null) {
+            return { code: 0, stdout: glab.hosts[token[1]!]?.token ?? "" };
+          }
+          if (said === "api --hostname gitlab.cego.dk user") {
             return { code: 0, stdout: '{"username":"mk"}' };
+          }
           if (
             cmd === "env" &&
             said === "GITLAB_HOST=gitlab.com glab api --hostname gitlab.com user"
-          )
+          ) {
             return { code: 0, stdout: '{"username":"mk-on-gitlab-com"}' };
+          }
           throw new Error(`unexpected glab ${said}`);
         });
       expect(yield* probeGitlab(rig.pluginEnv(), run)).toEqual({
@@ -95,8 +101,11 @@ test("GitHub names the active gh account, distinguishes absent from invalid, and
         });
         expect(asked).toEqual(["gh auth status --active --hostname github.com"]);
         expect(found.state).toBe(state);
-        if (found.state === "ok") expect(found.account).toBe("mk");
-        else expect(found.fix).toBe("gh auth login --hostname github.com --web");
+        if (found.state === "ok") {
+          expect(found.account).toBe("mk");
+        } else {
+          expect(found.fix).toBe("gh auth login --hostname github.com --web");
+        }
         expect(
           yield* Schema.encodeEffect(Schema.fromJsonString(ConnectionReading))(found).pipe(
             Effect.orDie,

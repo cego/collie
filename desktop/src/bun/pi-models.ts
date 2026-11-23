@@ -99,8 +99,12 @@ export const readPiModels = (
           });
           while (true) {
             const answer = yield* Queue.take(answers);
-            if (answer.id !== id || answer.command !== type) continue;
-            if (!answer.success) return yield* Effect.fail(answer.error ?? `Pi refused ${type}`);
+            if (answer.id !== id || answer.command !== type) {
+              continue;
+            }
+            if (!answer.success) {
+              return yield* Effect.fail(answer.error ?? `Pi refused ${type}`);
+            }
             return answer.data;
           }
         });
@@ -110,7 +114,9 @@ export const readPiModels = (
         );
         return yield* Effect.forEach(models, (model) =>
           Effect.gen(function* () {
-            if (model.provider === "" || model.id === "") return [];
+            if (model.provider === "" || model.id === "") {
+              return [];
+            }
             const id = `${model.provider}/${model.id}`;
             let efforts: ReadonlyArray<string> = [];
             if (model.reasoning) {

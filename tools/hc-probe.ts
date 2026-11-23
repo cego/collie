@@ -61,13 +61,19 @@ const fetchPinned = Effect.fn("HcProbe.fetchPinned")(function* (dir: string) {
   );
   const on = target();
   const want = pin.sha256[on];
-  if (want === undefined) return yield* fail(`hc-pin.json pins no hc for ${on}`);
+  if (want === undefined) {
+    return yield* fail(`hc-pin.json pins no hc for ${on}`);
+  }
   const url = `https://releases.herdr.dev/core/${pin.version}/herdr-core-${on}.tar.gz`;
   const response = yield* HttpClient.get(url);
-  if (response.status !== 200) return yield* fail(`${url} answered ${response.status}`);
+  if (response.status !== 200) {
+    return yield* fail(`${url} answered ${response.status}`);
+  }
   const bytes = new Uint8Array(yield* response.arrayBuffer);
   const got = yield* digest.digestHex(Digest.sha256, bytes);
-  if (got !== want) return yield* fail(`${url} hashed ${got}, but hc-pin.json says ${want}`);
+  if (got !== want) {
+    return yield* fail(`${url} hashed ${got}, but hc-pin.json says ${want}`);
+  }
   yield* fs.writeFile(`${dir}/hc.tar.gz`, bytes);
   yield* run("tar", ["-xzf", `${dir}/hc.tar.gz`, "-C", dir, "herdr-core"], {});
   yield* Console.error(`hc ${pin.version} ${on} sha256 ${got}`);
@@ -99,7 +105,9 @@ const run = Effect.fn("HcProbe.run")(function* (
     ],
     { concurrency: "unbounded" },
   );
-  if (code !== 0) return yield* fail(`${command} ${Arr.join(args, " ")} exited ${code}: ${stderr}`);
+  if (code !== 0) {
+    return yield* fail(`${command} ${Arr.join(args, " ")} exited ${code}: ${stderr}`);
+  }
   return stdout;
 }, Effect.scoped);
 
@@ -121,12 +129,16 @@ const fingerprint = Effect.fn("HcProbe.fingerprint")(function* (dirs: ReadonlyAr
 
 const runningFrom = Effect.fn("HcProbe.runningFrom")(function* (binary: string) {
   const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists("/proc/self/exe"))) return [];
+  if (!(yield* fs.exists("/proc/self/exe"))) {
+    return [];
+  }
   const pids = Arr.filter(yield* fs.readDirectory("/proc"), (name) => /^\d+$/.test(name));
   const running: Array<string> = [];
   for (const pid of pids) {
     const exe = yield* fs.readLink(`/proc/${pid}/exe`).pipe(Effect.orElseSucceed(() => ""));
-    if (exe === binary || exe === `${binary} (deleted)`) running.push(pid);
+    if (exe === binary || exe === `${binary} (deleted)`) {
+      running.push(pid);
+    }
   }
   return running;
 });
@@ -147,7 +159,9 @@ const untilRead = (hc: HcConnection, terminal: string, line: string) =>
     Effect.gen(function* () {
       for (;;) {
         const read = yield* hc.call("terminal.read", { terminal });
-        if (Arr.some(pipe(read.text, Str.split("\n")), (l) => Str.trimEnd(l) === line)) return read;
+        if (Arr.some(pipe(read.text, Str.split("\n")), (l) => Str.trimEnd(l) === line)) {
+          return read;
+        }
         yield* Effect.sleep("100 millis");
       }
     }),
@@ -188,8 +202,9 @@ const plain = Effect.fn("HcProbe.plain")(function* (socket: string, cwd: string)
           note.method === "event" &&
           note.params.type === "finished" &&
           note.params.terminal === echo.address
-        )
+        ) {
           return;
+        }
       }
     }),
   );
@@ -240,8 +255,12 @@ const framed = Effect.fn("HcProbe.framed")(function* (socket: string, cwd: strin
       Effect.gen(function* () {
         while (!done()) {
           const frame = yield* Queue.take(frames);
-          if (frame.kind === Kind.DATA) output += decoder.decode(frame.payload);
-          if (frame.kind === Kind.CLOSE) close = frame.payload;
+          if (frame.kind === Kind.DATA) {
+            output += decoder.decode(frame.payload);
+          }
+          if (frame.kind === Kind.CLOSE) {
+            close = frame.payload;
+          }
         }
       }),
     );
@@ -291,11 +310,15 @@ const TURN_SECONDS = 300;
 
 const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: string, name: string) {
   const argv = harnessArgv(name);
-  if (argv === undefined) return yield* fail(`no harness ${name}: claude, codex or pi`);
+  if (argv === undefined) {
+    return yield* fail(`no harness ${name}: claude, codex or pi`);
+  }
   // WARNING: as Collie's launch does, so Claude opens at its prompt and not its folder-trust dialog.
   if (name === "claude") {
     const granted = yield* claudeTrust(yield* Config.String("HOME"), `${cwd}/..`).grant(cwd);
-    if (!granted.ok) return yield* fail(granted.message);
+    if (!granted.ok) {
+      return yield* fail(granted.message);
+    }
   }
   const events = yield* connect(socket);
   yield* events.call("hello", { generation: 1 });
@@ -320,9 +343,12 @@ const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: str
       while (!(yield* done())) {
         snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
         const word = statusOf();
-        if (word !== null && words.at(-1) !== word) words.push(word);
-        if (word === "blocked" || word === "error")
+        if (word !== null && words.at(-1) !== word) {
+          words.push(word);
+        }
+        if (word === "blocked" || word === "error") {
           return yield* fail(`${name} reported ${word}:\n${yield* screen}`);
+        }
       }
     }).pipe(
       Effect.timeoutOrElse({
@@ -400,8 +426,12 @@ const piQuestion = Effect.fn("HcProbe.piQuestion")(function* (socket: string, di
       while (!(yield* done())) {
         snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
         const word = statusOf();
-        if (word !== null && words.at(-1) !== word) words.push(word);
-        if (word === "error") return yield* fail(`pi reported error:\n${yield* screen}`);
+        if (word !== null && words.at(-1) !== word) {
+          words.push(word);
+        }
+        if (word === "error") {
+          return yield* fail(`pi reported error:\n${yield* screen}`);
+        }
       }
     }).pipe(
       Effect.timeoutOrElse({
@@ -529,9 +559,12 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
         snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
         for (const [address, seen] of words) {
           const word = snapshot.terminals.get(address)?.status?.state ?? null;
-          if (word !== null && seen.at(-1) !== word) seen.push(word);
-          if (word === "blocked" || word === "error")
+          if (word !== null && seen.at(-1) !== word) {
+            seen.push(word);
+          }
+          if (word === "blocked" || word === "error") {
             return yield* fail(`${address} reported ${word}:\n${yield* screen(address)}`);
+          }
         }
       }
     }).pipe(
@@ -557,8 +590,11 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
   // WARNING: settled by the screen, not status, so a run without the reporter still gets this far.
   yield* until("each agent to answer its first prompt", () =>
     Effect.gen(function* () {
-      for (const one of agents)
-        if (!pipe(yield* screen(one.address), Str.includes(one.first.answer))) return false;
+      for (const one of agents) {
+        if (!pipe(yield* screen(one.address), Str.includes(one.first.answer))) {
+          return false;
+        }
+      }
       return Arr.every(agents, (one) => workedThenIdle(reported(one.address)) || !reporter);
     }),
   );
@@ -625,7 +661,9 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
     Arr.join(before, "\0") === Arr.join(yield* settings, "\0"),
     "OpenCode's settings files to be the same before and after",
   );
-  for (const one of agents) yield* api.call("terminal.kill", { terminal: one.address });
+  for (const one of agents) {
+    yield* api.call("terminal.kill", { terminal: one.address });
+  }
 });
 
 const WORD = "MARMALADE";
@@ -650,7 +688,9 @@ const resume = Effect.fn("HcProbe.resume")(function* (
   const agent = `probe-${name}`;
   if (name === "claude") {
     const granted = yield* claudeTrust(home, `${cwd}/..`).grant(cwd);
-    if (!granted.ok) return yield* fail(granted.message);
+    if (!granted.ok) {
+      return yield* fail(granted.message);
+    }
   }
   const sessionFile = `${dir}/${agent}.session`;
   const plugin = `${dir}/${agent}.status.js`;
@@ -695,9 +735,12 @@ const resume = Effect.fn("HcProbe.resume")(function* (
           while (!(yield* done())) {
             snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
             const word = snapshot.terminals.get(terminal.address)?.status?.state ?? null;
-            if (word !== null && words.at(-1) !== word) words.push(word);
-            if (word === "blocked" || word === "error")
+            if (word !== null && words.at(-1) !== word) {
+              words.push(word);
+            }
+            if (word === "blocked" || word === "error") {
               return yield* fail(`${name} reported ${word}:\n${yield* screen}`);
+            }
           }
         }).pipe(
           Effect.timeoutOrElse({
@@ -735,18 +778,22 @@ const resume = Effect.fn("HcProbe.resume")(function* (
         ? ["opencode", "--prompt", REMEMBER]
         : [...(harnessArgv(name) ?? []), ...sessionArgs(name, { id: chosen, resumed: false }).tail];
   const before = yield* started(first);
-  if (name === "opencode")
+  if (name === "opencode") {
     yield* before.until(`${name} to answer its first prompt`, () =>
       Effect.succeed(before.settled(0)),
     );
-  else yield* before.told(REMEMBER);
+  } else {
+    yield* before.told(REMEMBER);
+  }
   const recorded =
     name === "codex"
       ? yield* withCodex(server?.endpoint ?? "", (client) => boundThread(client, cwd))
       : name === "opencode"
         ? yield* fs.readFileString(sessionFile)
         : chosen;
-  if (recorded === null) return yield* fail(`${name} has no session to resume`);
+  if (recorded === null) {
+    return yield* fail(`${name} has no session to resume`);
+  }
   yield* Console.error(`${name}: told the word in session ${recorded}; stopping core`);
 
   yield* restart;
@@ -798,7 +845,9 @@ const resume = Effect.fn("HcProbe.resume")(function* (
     const from = after.words.length;
     yield* promptAsync(served.endpoint, recorded, RECALL);
     yield* after.until(`${name} to answer`, () => Effect.succeed(after.settled(from)));
-  } else yield* after.told(RECALL);
+  } else {
+    yield* after.told(RECALL);
+  }
   // WARNING: Claude reports done before it has drawn its answer.
   const shown = yield* after.screen.pipe(
     Effect.repeat({
@@ -836,7 +885,9 @@ const resume = Effect.fn("HcProbe.resume")(function* (
   }
   yield* Console.error(`${name}: started again in session ${recorded}, answered ${RECALLED}`);
   yield* (yield* connect(socket)).call("terminal.kill", { terminal: after.address });
-  if (again?.pid !== undefined) yield* terminate(again.pid);
+  if (again?.pid !== undefined) {
+    yield* terminate(again.pid);
+  }
 });
 
 const program = Effect.gen(function* () {
@@ -853,8 +904,9 @@ const program = Effect.gen(function* () {
   const before = yield* fingerprint(defaults);
 
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hc-probe-" });
-  for (const sub of ["state", "config", "run"])
+  for (const sub of ["state", "config", "run"]) {
     yield* fs.makeDirectory(`${dir}/${sub}`, { mode: 0o700 });
+  }
   const binary = yield* fetchPinned(dir);
   const socket = `${dir}/run/hc.sock`;
   // WARNING: only what hc and the probe's shells need; nothing that names a live core, herdr or agent.
@@ -901,7 +953,9 @@ const program = Effect.gen(function* () {
   );
   yield* run(binary, ["server", "stop", "--json"], env).pipe(Effect.ignore);
   const left = yield* runningFrom(binary);
-  for (const pid of left) process.kill(Number(pid));
+  for (const pid of left) {
+    process.kill(Number(pid));
+  }
   const after = yield* fingerprint(defaults);
 
   const problems = [
@@ -913,7 +967,9 @@ const program = Effect.gen(function* () {
     ),
     ...Arr.map(Arr.difference(before, after), (line) => `core's default directories lost ${line}`),
   ];
-  for (const problem of problems) yield* Console.error(problem);
+  for (const problem of problems) {
+    yield* Console.error(problem);
+  }
   yield* Console.error(problems.length === 0 ? "probe: every reply decoded" : "probe: FAILED");
   return problems.length === 0 ? 0 : 1;
 });

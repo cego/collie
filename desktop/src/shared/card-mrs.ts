@@ -21,7 +21,9 @@ export interface FlockMr extends CardMr {
 
 const scalarOf = (task: TaskView) => {
   const ref = task.mr === null ? null : readMrRef(task.mr);
-  if (ref === null || task.mr === null) return [];
+  if (ref === null || task.mr === null) {
+    return [];
+  }
   const words = mrWords(ref);
   return [
     {
@@ -71,8 +73,9 @@ export const flockMrs = (cards: FlockCards) => {
       if (seen === undefined) {
         shown.set(mr.id, { mr, links: [{ key, machine, installation }] });
         firstOn.set(key, [...(firstOn.get(key) ?? []), mr.id]);
-      } else if (!Arr.some(seen.links, (link) => link.key === key))
+      } else if (!Arr.some(seen.links, (link) => link.key === key)) {
         seen.links.push({ key, machine, installation });
+      }
     }
   }
   const drawn = new Map<string, ReadonlyArray<FlockMr>>();
@@ -82,7 +85,9 @@ export const flockMrs = (cards: FlockCards) => {
       const { mr, links } = shown.get(id)!;
       return { ...mr, links };
     });
-    if (held.get(key)! > 1 || Arr.some(rows, ({ links }) => links.length > 1)) drawn.set(key, rows);
+    if (held.get(key)! > 1 || Arr.some(rows, ({ links }) => links.length > 1)) {
+      drawn.set(key, rows);
+    }
   }
   return drawn;
 };

@@ -42,7 +42,9 @@ export const rememberFailedCi = (dir: string, target: typeof FailedCi.Type) =>
     const last = (yield* readRunJournal(failedCiJournal(dir), FailedCi).pipe(
       Effect.orElseSucceed(() => []),
     )).at(-1);
-    if (last?.head === target.head && last.mr === target.mr) return;
+    if (last?.head === target.head && last.mr === target.mr) {
+      return;
+    }
     yield* appendRunJournal(failedCiJournal(dir), FailedCi, target);
   });
 
@@ -144,33 +146,47 @@ export const recheckPark = (
       }
       case "target-red": {
         const latest = yield* lastCiTargets(stateDir, view.runId);
-        if (latest.size === 0) return reply(false, "no parked CI job recorded");
+        if (latest.size === 0) {
+          return reply(false, "no parked CI job recorded");
+        }
         const passed: Array<string> = [];
         for (const target of latest.values()) {
           const ref = mrRefOf(target.mr);
-          if (ref === null) return reply(false, `job ${target.job} has no merge request`);
+          if (ref === null) {
+            return reply(false, `job ${target.job} has no merge request`);
+          }
           const read = yield* forgeOf(ref).targetJob(ref, target.job, target.cwd, shell);
-          if (!read.ok) return reply(false, read.reason, true);
-          if (read.state !== "passed")
+          if (!read.ok) {
+            return reply(false, read.reason, true);
+          }
+          if (read.state !== "passed") {
             return reply(false, `job ${target.job} is ${read.state} on ${read.branch}`);
+          }
           passed.push(`${target.job} on ${read.branch} at ${read.at ?? ""}`);
         }
         return reply(true, `passed: ${Arr.join(passed, ", ")}`);
       }
       case "ci-job-absent": {
         const latest = yield* lastCiTargets(stateDir, view.runId);
-        if (latest.size === 0) return reply(false, "no parked CI job recorded");
+        if (latest.size === 0) {
+          return reply(false, "no parked CI job recorded");
+        }
         for (const target of latest.values()) {
           const ref = mrRefOf(target.mr);
-          if (ref === null) return reply(false, `job ${target.job} has no merge request`);
+          if (ref === null) {
+            return reply(false, `job ${target.job} has no merge request`);
+          }
           const read = yield* forgeOf(ref).job(ref, target.job, target.cwd, shell);
-          if (!read.ok) return reply(false, read.reason, true);
+          if (!read.ok) {
+            return reply(false, read.reason, true);
+          }
           if (
             read.head !== target.head ||
             read.state === "missing" ||
             (read.state === "pending" && read.id === null && read.url === null)
-          )
+          ) {
             return reply(false, `job ${target.job} absent at ${target.head}`);
+          }
         }
         return reply(true, `jobs ${Arr.join([...latest.keys()], ", ")} present at parked head`);
       }
@@ -180,26 +196,38 @@ export const recheckPark = (
           FailedCi,
         ).pipe(Effect.orElseSucceed(() => []));
         const target = targets.at(-1);
-        if (target === undefined) return reply(false, "no failed pipeline recorded");
+        if (target === undefined) {
+          return reply(false, "no failed pipeline recorded");
+        }
         const ref = mrRefOf(target.mr);
-        if (ref === null) return reply(false, `${target.mr} is not a merge request`);
+        if (ref === null) {
+          return reply(false, `${target.mr} is not a merge request`);
+        }
         const read = yield* forgeOf(ref).readReview(ref, target.cwd, shell);
-        if (!read.ok) return reply(false, read.reason, true);
-        if (read.state !== "open") return reply(true, `${target.mr} is ${read.state}`);
-        if (read.head !== target.head) return reply(true, `head moved to ${read.head}`);
+        if (!read.ok) {
+          return reply(false, read.reason, true);
+        }
+        if (read.state !== "open") {
+          return reply(true, `${target.mr} is ${read.state}`);
+        }
+        if (read.head !== target.head) {
+          return reply(true, `head moved to ${read.head}`);
+        }
         return read.pipeline.state === "failed"
           ? reply(false, `${target.name} still failed at ${target.head}`)
           : reply(true, `the pipeline at ${target.head} is ${read.pipeline.state}`);
       }
       case "forge-unavailable": {
         let ref = mrRefOf(view.mr);
-        for (const [name, value] of Rec.toEntries(view.input ?? {}))
+        for (const [name, value] of Rec.toEntries(view.input ?? {})) {
           if (
             ref === null &&
             view.strategies?.[name] === "diff-target" &&
             Schema.is(Schema.String)(value)
-          )
+          ) {
             ref = mrRefOf(value);
+          }
+        }
         if (ref !== null) {
           const read = yield* forgeOf(ref).details(ref, view.cwd, shell);
           return read._tag === "Details"
@@ -207,7 +235,9 @@ export const recheckPark = (
             : reply(false, read.reason, true);
         }
         const project = yield* projectHere(view.cwd, shell);
-        if (project === null) return reply(false, "no forge project recorded");
+        if (project === null) {
+          return reply(false, "no forge project recorded");
+        }
         const branch = view.branch ?? "HEAD";
         const read = yield* forgeOf({ project, iid: "" }).forBranch(
           project,
@@ -219,7 +249,9 @@ export const recheckPark = (
       }
       case "delivery-unsettled": {
         const held = yield* lastUnsettled(`${stateDir}/runs/${view.runId}`);
-        if (held === undefined) return reply(false, "no unsettled delivery recorded");
+        if (held === undefined) {
+          return reply(false, "no unsettled delivery recorded");
+        }
         const now = newestById(yield* readLedger(held.terminal)).get(held.delivery);
         return now === undefined || !isSettledDelivery(now)
           ? reply(false, `delivery ${held.delivery} is ${now?.state ?? "not in its ledger"}`)

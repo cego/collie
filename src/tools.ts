@@ -127,7 +127,9 @@ const said = <E, R>(effect: Effect.Effect<string, E, R>) =>
   );
 
 const toolDoor = Effect.fn("Tools.door")(function* (env: PluginEnv) {
-  if (env.asker !== undefined) return env.asker;
+  if (env.asker !== undefined) {
+    return env.asker;
+  }
   const run = env.raw.COLLIE_RUN;
   const agent = env.raw.COLLIE_AGENT;
   return run && agent
@@ -166,15 +168,17 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
                 : found.failure.reason;
           }
           const runId = input.run!;
-          if (input.ref !== undefined)
+          if (input.ref !== undefined) {
             return yield* refLines(env, "collie_artefacts", runId, input.ref, input);
+          }
           const door = yield* toolDoor(env);
           if (input.id !== undefined && input.revision !== undefined) {
             if (input.offset === undefined) {
               const asked = linesAsked(input);
               const badPattern = linesError(asked);
-              if (badPattern !== null)
+              if (badPattern !== null) {
                 return refused("collie_artefacts", badPattern, TAKES.collie_artefacts);
+              }
               const lines = yield* readArtefactLines(
                 env,
                 runId,
@@ -183,8 +187,12 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
                 asked,
                 door,
               );
-              if (!lines.ok) return lines.error.message;
-              if (lines.value !== null) return asJson(lines.value);
+              if (!lines.ok) {
+                return lines.error.message;
+              }
+              if (lines.value !== null) {
+                return asJson(lines.value);
+              }
             }
             const done = yield* asksArtefactRun(
               env,
@@ -341,12 +349,15 @@ export const callTool = (env: PluginEnv, name: string, input: JsonObject) =>
       : (name === "collie_run" || name === "collie_receipts") && isString(input.run)
         ? Effect.gen(function* () {
             const run = input.run;
-            if (!isString(run)) return "A Run id is required.";
+            if (!isString(run)) {
+              return "A Run id is required.";
+            }
             if (
               env.machine === undefined &&
               ((yield* findRun(env, run)) !== null || (yield* peersOf(env.stateDir)).length === 0)
-            )
+            ) {
               return yield* answered(env, name, input, true);
+            }
             const found = yield* asksRun(
               env,
               run,
@@ -359,11 +370,13 @@ export const callTool = (env: PluginEnv, name: string, input: JsonObject) =>
 
 const submitted = Effect.fn("Tools.submitted")(function* (env: PluginEnv, input: JsonObject) {
   const decoded = decodeStrict(SubmitInput)(input);
-  if (Result.isFailure(decoded))
+  if (Result.isFailure(decoded)) {
     return refused("collie_submit", decoded.failure, 'It takes {"output": <your Output>}.');
+  }
   const run = env.raw.COLLIE_RUN;
-  if (!run || !env.raw.COLLIE_AGENT)
+  if (!run || !env.raw.COLLIE_AGENT) {
     return "collie_submit hands in a Run agent's Output, and this is no Run's agent. Nothing was written.";
+  }
   const done = yield* asksRun(
     env,
     run,
@@ -403,7 +416,9 @@ export const SUBMIT = listed(SubmitTool);
 
 const selectionOf = Effect.fn("Tools.selection")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-  if (key === null) return null;
+  if (key === null) {
+    return null;
+  }
   return yield* readSelection(yield* selectionPath(env.stateDir, key)).pipe(
     Effect.orElseSucceed(() => null),
   );
@@ -415,14 +430,18 @@ const isSettle = (action: Action | Settle): action is Settle =>
 const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: JsonObject) {
   const selected = yield* onSelection(env, input);
   const decoded = decodeAsked(selected.input);
-  if (Result.isFailure(decoded))
+  if (Result.isFailure(decoded)) {
     return refusedActions("collie_do", selected.input, decoded.failure, TAKES.collie_do);
+  }
   const actions = decoded.success.actions;
-  if (actions.length === 0) return "collie_do needs an action. Ask which one they meant.";
+  if (actions.length === 0) {
+    return "collie_do needs an action. Ask which one they meant.";
+  }
   const asked: ReadonlySet<string> = new Set([...ASKED_KINDS, ...SETTLE_KINDS]);
   const wrong = Arr.filter(actions, (action) => !asked.has(action.kind));
-  if (wrong.length > 0)
+  if (wrong.length > 0) {
     return `collie_do does not carry out ${Arr.join([...new Set(Arr.map(wrong, (a) => a.kind))], ", ")}: that is collie_propose's, which carries it out in the same call.`;
+  }
   const requestId =
     decoded.success.request_id ?? (yield* (yield* SecureRandom.SecureRandom).uuidV4());
   const door: Door = yield* toolDoor(env);
@@ -438,7 +457,9 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
         );
     said.push(`${done.kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
     // WARNING: what follows a failure was asked on the assumption it did not happen.
-    if (done.state === "failed") break;
+    if (done.state === "failed") {
+      break;
+    }
   }
   return Arr.join(said, "\n");
 });
@@ -506,12 +527,13 @@ const settle = Effect.fn("Tools.settle")(function* (
       (client) => client.run({ runId: action.run }),
       door,
     );
-    if (!found.ok || found.value === null)
+    if (!found.ok || found.value === null) {
       return {
         kind: action.kind,
         state: "failed",
         note: found.ok ? `no Run "${action.run}"` : found.error.message,
       };
+    }
     const run = found.value;
     const done = yield* disposeRun(env, {
       door,
@@ -555,7 +577,9 @@ export const checkLines = Effect.fn("Tools.checkLines")(function* (
   const check = yield* runningCheck(run, every, markers, now);
   const memory = yield* memoryWaitOf(run.id);
   const waiting = memory === null ? [] : [waitLine(memory)];
-  if (check === null) return waiting;
+  if (check === null) {
+    return waiting;
+  }
   return [
     ...waiting,
     `Check running: ${check.sentence}`,
@@ -632,10 +656,13 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
 
 const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv, after?: string) {
   const skip = after === undefined ? 0 : Number(after);
-  if (!Number.isInteger(skip) || skip < 0)
+  if (!Number.isInteger(skip) || skip < 0) {
     return refused("collie_herd", `"${after}" is not a next this tool gave`, TAKES.collie_herd);
+  }
   const read = yield* boardSnapshot(env);
-  if (!read.ok) return `- (the board could not be read: ${read.error.message})`;
+  if (!read.ok) {
+    return `- (the board could not be read: ${read.error.message})`;
+  }
   const views = read.value.tasks;
   const now = yield* Clock.currentTimeMillis;
   return herdLines(views, now, skip);
@@ -691,10 +718,13 @@ const runListFacts = Effect.fn("Tools.runListFacts")(function* (
     },
     null,
   );
-  if (!read.ok) return refused("collie_run", read.message, TAKES.collie_run);
+  if (!read.ok) {
+    return refused("collie_run", read.message, TAKES.collie_run);
+  }
   const listed = yield* flockRunPage(env, read.asked);
-  if (!listed.ok)
+  if (!listed.ok) {
     return `collie_run could not list (${listed.error.code}): ${listed.error.message}`;
+  }
   return asJson({
     runs: Arr.map(listed.runs, ({ machine, summary, view }) => ({ ...(view ?? summary), machine })),
     complete: listed.complete,
@@ -711,7 +741,9 @@ const modelsFacts = Effect.fn("Tools.modelsFacts")(function* (
   harness: string | undefined,
 ) {
   const read = yield* catalogueReadings(env, yield* toolDoor(env));
-  if (!read.ok) return `- (the models could not be read: ${read.error.message})`;
+  if (!read.ok) {
+    return `- (the models could not be read: ${read.error.message})`;
+  }
   return modelsLines(read.value, harness);
 });
 
@@ -731,9 +763,13 @@ const wantsRun = (action: JsonObject) => {
 
 const onSelection = Effect.fn("Tools.onSelection")(function* (env: PluginEnv, input: JsonObject) {
   const loose = decodeLoose(input);
-  if (loose._tag === "None" || !Arr.some(loose.value.actions, wantsRun)) return { input, on: null };
+  if (loose._tag === "None" || !Arr.some(loose.value.actions, wantsRun)) {
+    return { input, on: null };
+  }
   const on = yield* selectionOf(env);
-  if (on === null) return { input, on: null };
+  if (on === null) {
+    return { input, on: null };
+  }
   const filled = Arr.map(loose.value.actions, (action) =>
     wantsRun(action) ? { ...action, run: on.run } : action,
   );
@@ -751,17 +787,21 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   const named = input.run ?? null;
   const on = named === null && selected ? yield* selectionOf(env) : null;
   const id = named ?? on?.run ?? null;
-  if (id === null && !selected) return `${tool} takes {"run": "<run id>"}.`;
-  if (id === null)
+  if (id === null && !selected) {
+    return `${tool} takes {"run": "<run id>"}.`;
+  }
+  if (id === null) {
     return `${tool} takes {"run": "<run id>"}, or answers about the board's selection when there is one. The board has nothing selected — collie_herd lists the Runs there are.`;
+  }
   const run =
     runs === undefined
       ? yield* findRun(env, id)
       : (Option.getOrUndefined(Arr.findFirst(yield* runs, (one) => one.id === id)) ?? null);
-  if (run === null)
+  if (run === null) {
     return on === null
       ? `No Run "${id}". collie_herd lists the ones there are.`
       : `The board has "${on.name}" selected, but Collie has no Run "${id}" any more.`;
+  }
   const text = yield* answer(run);
   return on === null
     ? text
@@ -772,8 +812,9 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof Ho
   const { task, reason } = input;
   const on = input.run === undefined && task === undefined ? yield* selectionOf(env) : null;
   const run = input.run ?? on?.run;
-  if (run === undefined && task === undefined)
+  if (run === undefined && task === undefined) {
     return "collie_hold needs a run or a task to hold, and the board has nothing open. Ask which one they meant.";
+  }
   const why = reason ?? "asked in chat";
   const requestId = yield* (yield* SecureRandom.SecureRandom).uuidV4();
 
@@ -810,7 +851,9 @@ const reachLine = (
   reach: Reach | null,
   reached: ReadonlyArray<{ workflow: string; project: string; value: string }>,
 ) => {
-  if (reach === null) return [];
+  if (reach === null) {
+    return [];
+  }
   const choices = Arr.join(
     Arr.map(reach.choices, (choice) => `"${choice.value}" ${choice.title}`),
     " · ",
@@ -868,14 +911,18 @@ const reportFacts = Effect.fn("Tools.reportFacts")(function* (
   env: PluginEnv,
   since: string | null,
 ) {
-  if (since !== null && Number.isNaN(epochMs(since))) return `"since" is not a date: ${since}`;
+  if (since !== null && Number.isNaN(epochMs(since))) {
+    return `"since" is not a date: ${since}`;
+  }
   const done = yield* reportFor(env, since);
   return done.ok ? reportLines(done.report, done.unreadable) : done.error.message;
 });
 
 const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-  if (key === null) return "Collie cannot reach core, so it has nothing to report.";
+  if (key === null) {
+    return "Collie cannot reach core, so it has nothing to report.";
+  }
   const door = yield* toolDoor(env);
   const read = yield* settleNewsFor(env, {
     door,
@@ -892,7 +939,9 @@ const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
 
 const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run: string) {
   const found = yield* findRun(env, run);
-  if (found === null) return `No Run "${run}".`;
+  if (found === null) {
+    return `No Run "${run}".`;
+  }
   const now = yield* Clock.currentTimeMillis;
   const proposals = pendingFor(yield* hostRunProposals(env, run), run, now);
   const asked = yield* asks(env, (client) => client.deliveries({ runId: run }));
@@ -945,11 +994,15 @@ const definitionFacts = Effect.fn("Tools.definitions")(function* (
     const module = Option.getOrUndefined(
       Arr.findFirst(saved.entries, (one) => one.id === asked.workflow),
     );
-    if (module) return moduleFacts(yield* readModule(module), yield* checkModule(module));
+    if (module) {
+      return moduleFacts(yield* readModule(module), yield* checkModule(module));
+    }
     const broken = Option.getOrUndefined(
       Arr.findFirst(saved.problems, (one) => one.id === asked.workflow),
     );
-    if (broken) return `${broken.path} will not load: ${broken.message}`;
+    if (broken) {
+      return `${broken.path} will not load: ${broken.message}`;
+    }
     return `No Workflow "${asked.workflow}".`;
   }
   return Arr.join(

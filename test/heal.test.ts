@@ -421,10 +421,11 @@ test("a Heal's agent may deliver to and resume the Run it heals, and nothing els
           { kind: "take_offer", run: runId, offer: "carry-on" },
           { kind: "deliver", run: other.runId, text: "Carry on." },
         ];
-        for (const action of refused)
+        for (const action of refused) {
           expect(yield* asHealer(world, healer, [action])).toContain(
             `${healer.runId} is a Heal of ${runId}`,
           );
+        }
         const controls = client.run({ runId }).pipe(
           Effect.map((view) => view?.controls),
           Effect.orDie,
@@ -519,7 +520,9 @@ test("a park whose Run is held, stopped or waiting on a Decision needs you at on
           (yield* collie(world, ["run", "stop", stopped!.runId, "--request-id", "stopped"]))
             .envelope.ok,
         ).toBe(true);
-        for (const one of runs) yield* fs.writeFileString(one.cue, "now").pipe(Effect.orDie);
+        for (const one of runs) {
+          yield* fs.writeFileString(one.cue, "now").pipe(Effect.orDie);
+        }
         for (const one of runs) {
           const lines = yield* until(
             () => one.client.runMetrics({ runId: one.runId }).pipe(Effect.orDie),
@@ -666,13 +669,14 @@ test("one Heal runs at a time on a Machine: the next park waits until the first 
           { writes: [], output: null, status: "working" },
         ]);
         const parked = [];
-        for (const name of ["first", "second"])
+        for (const name of ["first", "second"]) {
           parked.push(
             yield* started(world, "parks-for", {
               causes: "unknown",
               entries: `${world.home}/${name}`,
             }),
           );
+        }
         const { client } = parked[0]!;
         const allHeals = client.runs({ task: null }).pipe(
           Effect.map((views) => Arr.filter(views, (view) => view.heals !== undefined)),
@@ -766,13 +770,14 @@ test("the third Heal in a row to fail raises the recovery-failing News as it is 
     (world, core) =>
       Effect.gen(function* () {
         const runs: Array<{ runId: string; client: Client }> = [];
-        for (const name of ["first", "second", "third"])
+        for (const name of ["first", "second", "third"]) {
           runs.push(
             yield* started(world, "parks-for", {
               causes: "unknown",
               entries: `${world.home}/${name}`,
             }),
           );
+        }
         const failedOf = (one: { runId: string; client: Client }) =>
           one.client.runMetrics({ runId: one.runId }).pipe(
             Effect.map((lines) =>
@@ -780,11 +785,12 @@ test("the third Heal in a row to fail raises the recovery-failing News as it is 
             ),
             Effect.orDie,
           );
-        for (const one of runs)
+        for (const one of runs) {
           yield* until(
             () => failedOf(one),
             (failed) => failed,
           );
+        }
         const file = yield* newsPath(
           world.state,
           yield* herdOf(core.socketPath).pipe(Effect.orDie),

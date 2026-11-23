@@ -21,7 +21,9 @@ export const shiftHistory = (directory: string, by: number) => {
         for (const column of db
           .query<{ name: string; type: string }, []>(`PRAGMA table_info(${identifier(name)})`)
           .all()) {
-          if (!/TEXT|CHAR/i.test(column.type)) continue;
+          if (!/TEXT|CHAR/i.test(column.type)) {
+            continue;
+          }
           const table = identifier(name);
           const field = identifier(column.name);
           const update = db.query(`UPDATE ${table} SET ${field} = ? WHERE rowid = ?`);
@@ -31,7 +33,9 @@ export const shiftHistory = (directory: string, by: number) => {
             )
             .all()) {
             const after = shiftDates(row.value, by);
-            if (after !== row.value) update.run(after, row.id);
+            if (after !== row.value) {
+              update.run(after, row.id);
+            }
           }
         }
       }
@@ -45,16 +49,23 @@ export const shiftHistory = (directory: string, by: number) => {
   }
   const files = (path: string) => {
     for (const file of readdirSync(path, { withFileTypes: true })) {
-      if (file.name === ".git" || file.name === ".bun" || file.name.startsWith("host.db")) continue;
+      if (file.name === ".git" || file.name === ".bun" || file.name.startsWith("host.db")) {
+        continue;
+      }
       const child = `${path}/${file.name}`;
-      if (file.isDirectory()) files(child);
-      else if (file.isFile()) {
+      if (file.isDirectory()) {
+        files(child);
+      } else if (file.isFile()) {
         const times = statSync(child);
         const before = readFileSync(child, "utf8");
         const after = shiftDates(before, by);
-        if (after !== before) writeFileSync(child, after);
+        if (after !== before) {
+          writeFileSync(child, after);
+        }
         utimesSync(child, (times.atimeMs + by) / 1000, (times.mtimeMs + by) / 1000);
-      } else throw new Error(`unexpected fixture entry: ${child}`);
+      } else {
+        throw new Error(`unexpected fixture entry: ${child}`);
+      }
     }
   };
   files(directory);

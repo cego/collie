@@ -42,11 +42,12 @@ test("a Run this host does not know can never land", () => {
 });
 
 test("this Run or one of its ancestors can never land before it", () => {
-  for (const run of ["run-plan.implement", "run-plan"])
+  for (const run of ["run-plan.implement", "run-plan"]) {
     expect(judged([{ run, change: null }], [[run, detail()]])).toEqual({
       _tag: "Never",
       why: `${run} is this Run or one it came out of, so its Change cannot be waited on: name a ticket of this plan on **Blocked by:** instead`,
     });
+  }
 });
 
 test("no merge request yet while the named Run goes on is waiting", () => {

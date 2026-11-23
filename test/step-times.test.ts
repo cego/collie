@@ -101,7 +101,9 @@ test("the host learns B from three completed Runs and keeps its usual time after
           yield* until(() => made.workflow.poll(execution), Option.isSome);
           yield* start("four");
           expect((yield* read("four")).nodes[0]!.usual).toBe(12 * 60_000);
-          for (const id of ["one", "two", "three"]) yield* store.accepted(id);
+          for (const id of ["one", "two", "three"]) {
+            yield* store.accepted(id);
+          }
           expect(yield* store.retire(["one", "two", "three"], () => Effect.void)).toEqual([
             "one",
             "two",

@@ -38,8 +38,11 @@ const terminalStdin = Effect.acquireRelease(
       },
       on: {
         value: (event: string, handler: (...args: Array<unknown>) => void) => {
-          if (event === "data") listener = handler;
-          else on(event, handler);
+          if (event === "data") {
+            listener = handler;
+          } else {
+            on(event, handler);
+          }
           return stdin;
         },
         configurable: true,
@@ -48,8 +51,12 @@ const terminalStdin = Effect.acquireRelease(
       off: {
         value: (event: string, handler: (...args: Array<unknown>) => void) => {
           if (event === "data") {
-            if (listener === handler) listener = null;
-          } else off(event, handler);
+            if (listener === handler) {
+              listener = null;
+            }
+          } else {
+            off(event, handler);
+          }
           return stdin;
         },
         configurable: true,
@@ -63,8 +70,11 @@ const terminalStdin = Effect.acquireRelease(
       send: (key: string) => listener?.(Buffer.from(key)),
       restore: () => {
         for (const [name, descriptor] of own) {
-          if (descriptor === undefined) Reflect.deleteProperty(stdin, name);
-          else Object.defineProperty(stdin, name, descriptor);
+          if (descriptor === undefined) {
+            Reflect.deleteProperty(stdin, name);
+          } else {
+            Object.defineProperty(stdin, name, descriptor);
+          }
         }
       },
     };

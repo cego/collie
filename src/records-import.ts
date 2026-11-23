@@ -54,8 +54,9 @@ export const importReports = Effect.fn("RecordsImport.reports")(function* (state
     const raw = yield* fs
       .readFileString(path.join(stateDir, "runs", row.run, "report.json"))
       .pipe(orMissing(""));
-    if (Option.isSome(decode(raw)))
+    if (Option.isSome(decode(raw))) {
       yield* sql`UPDATE collie_runs SET report = ${raw} WHERE run = ${row.run}`;
+    }
   }
 });
 
@@ -73,10 +74,13 @@ export const importLedgers = Effect.fn("RecordsImport.ledgers")(function* (state
   const sql = yield* SqlClient.SqlClient;
   const root = path.join(stateDir, "agents");
   for (const ledger of yield* fs.readDirectory(root).pipe(orMissing<ReadonlyArray<string>>([]))) {
-    if (!/^[0-9a-f]+$/.test(ledger)) continue;
+    if (!/^[0-9a-f]+$/.test(ledger)) {
+      continue;
+    }
     const raw = yield* fs.readFileString(path.join(root, ledger, LEDGER_FILE)).pipe(orMissing(""));
-    for (const line of journalLines(raw))
+    for (const line of journalLines(raw)) {
       yield* sql`INSERT INTO collie_deliveries (ledger, line) VALUES (${ledger}, ${line})`;
+    }
   }
 });
 
@@ -89,9 +93,11 @@ export const importProposals = Effect.fn("RecordsImport.proposals")(function* (s
     const raw = yield* fs
       .readFileString(path.join(root, journal, "proposals.jsonl"))
       .pipe(orMissing(""));
-    for (const line of journalLines(raw))
-      if (Option.isSome(decodeProposalLineOption(line)))
+    for (const line of journalLines(raw)) {
+      if (Option.isSome(decodeProposalLineOption(line))) {
         yield* sql`INSERT INTO collie_proposals (journal, line) VALUES (${journal}, ${line})`;
+      }
+    }
   }
 });
 
@@ -101,14 +107,17 @@ export const importRegisters = Effect.fn("RecordsImport.registers")(function* (s
   const sql = yield* SqlClient.SqlClient;
   const root = path.join(stateDir, "agents");
   for (const name of yield* fs.readDirectory(root).pipe(orMissing<ReadonlyArray<string>>([]))) {
-    if (!Str.endsWith(".json")(name)) continue;
+    if (!Str.endsWith(".json")(name)) {
+      continue;
+    }
     const raw = yield* fs.readFileString(path.join(root, name)).pipe(orMissing(""));
     const register = Str.slice(0, -".json".length)(name);
-    for (const entry of Option.getOrElse(decodeRegisterOption(raw), () => []))
+    for (const entry of Option.getOrElse(decodeRegisterOption(raw), () => [])) {
       yield* sql`
         INSERT OR REPLACE INTO collie_agents (register, agent, record)
         VALUES (${register}, ${entry.agent}, ${encodeAgentEntry(entry)})
       `;
+    }
   }
 });
 
@@ -118,11 +127,14 @@ export const importTasks = Effect.fn("RecordsImport.tasks")(function* (stateDir:
   const sql = yield* SqlClient.SqlClient;
   const root = path.join(stateDir, "tasks");
   for (const name of yield* fs.readDirectory(root).pipe(orMissing<ReadonlyArray<string>>([]))) {
-    if (!Str.endsWith(".json")(name)) continue;
+    if (!Str.endsWith(".json")(name)) {
+      continue;
+    }
     const raw = Str.trim(yield* fs.readFileString(path.join(root, name)).pipe(orMissing("")));
     const task = Option.getOrUndefined(decodeTaskOption(raw));
-    if (task !== undefined)
+    if (task !== undefined) {
       yield* sql`INSERT OR REPLACE INTO collie_tasks (id, record) VALUES (${task.id}, ${raw})`;
+    }
   }
 });
 
@@ -135,7 +147,9 @@ export const importLaunches = Effect.fn("RecordsImport.launches")(function* (sta
     const dir = path.join(root, run);
     const names = yield* fs.readDirectory(dir).pipe(orMissing<ReadonlyArray<string>>([]));
     const launched = Arr.filter(names, Str.endsWith(LAUNCH_SUFFIX));
-    if (launched.length === 0) continue;
+    if (launched.length === 0) {
+      continue;
+    }
     const orderFile = path.join(dir, LAUNCH_ORDER);
     const order = Str.split(yield* fs.readFileString(orderFile).pipe(orMissing("")), "\n");
     const orderedAt = yield* fs.stat(orderFile).pipe(
@@ -145,7 +159,9 @@ export const importLaunches = Effect.fn("RecordsImport.launches")(function* (sta
     for (const name of launched) {
       const raw = Str.trim(yield* fs.readFileString(path.join(dir, name)).pipe(orMissing("")));
       const read = decodeLaunchOption(raw);
-      if (Option.isNone(read)) continue;
+      if (Option.isNone(read)) {
+        continue;
+      }
       const stem = stemOf(read.value);
       const at = order.lastIndexOf(stem);
       yield* sql`
@@ -169,7 +185,9 @@ const writtenIn = Effect.fn("RecordsImport.writtenIn")(function* (dir: string) {
     );
   let newest = 0;
   for (const name of yield* fs.readDirectory(dir).pipe(orMissing<ReadonlyArray<string>>([]))) {
-    if (name === "diff.json" || name === "operations.jsonl" || name === "log-index.json") continue;
+    if (name === "diff.json" || name === "operations.jsonl" || name === "log-index.json") {
+      continue;
+    }
     if (name !== "steering") {
       newest = Math.max(newest, yield* at(path.join(dir, name)));
       continue;
@@ -177,9 +195,11 @@ const writtenIn = Effect.fn("RecordsImport.writtenIn")(function* (dir: string) {
     const inside = yield* fs
       .readDirectory(path.join(dir, name))
       .pipe(orMissing<ReadonlyArray<string>>([]));
-    for (const entry of inside)
-      if (entry !== "disposition.jsonl" && entry !== "seen.jsonl")
+    for (const entry of inside) {
+      if (entry !== "disposition.jsonl" && entry !== "seen.jsonl") {
         newest = Math.max(newest, yield* at(path.join(dir, name, entry)));
+      }
+    }
   }
   return newest;
 });
@@ -198,20 +218,26 @@ const legacyFacts = Effect.fn("RecordsImport.legacyFacts")(function* (
   const found: Array<{ readonly name: string; readonly file: string }> = [];
   for (const name of LEGACY_FACTS) {
     const file = localName(area, name);
-    if (file !== null) found.push({ name, file: `${dir}/${file}` });
+    if (file !== null) {
+      found.push({ name, file: `${dir}/${file}` });
+    }
   }
   for (const prefix of LEGACY_FACT_PREFIXES) {
     const file = localName(area, prefix);
-    if (file === null) continue;
+    if (file === null) {
+      continue;
+    }
     const parent = parentOf(file);
     for (const entry of yield* fs
       .readDirectory(`${dir}/${parent}`)
-      .pipe(orMissing<ReadonlyArray<string>>([])))
-      if (Str.startsWith(file)(`${parent}/${entry}`))
+      .pipe(orMissing<ReadonlyArray<string>>([]))) {
+      if (Str.startsWith(file)(`${parent}/${entry}`)) {
         found.push({
           name: recordName(area, `${parent}/${entry}`),
           file: `${dir}/${parent}/${entry}`,
         });
+      }
+    }
   }
   return found;
 });
@@ -226,17 +252,22 @@ export const importRunRecords = Effect.fn("RecordsImport.runRecords")(function* 
       const dir = path.join(root, run);
       for (const journal of LEGACY_JOURNALS) {
         const file = localName(area, journal);
-        if (file === null) continue;
+        if (file === null) {
+          continue;
+        }
         const raw = yield* fs.readFileString(path.join(dir, file)).pipe(orMissing(""));
         const lines = TEXT_JOURNALS.has(journal) ? textLines(raw) : journalLines(raw);
-        for (const [seq, line] of lines.entries())
+        for (const [seq, line] of lines.entries()) {
           yield* sql`
             INSERT INTO collie_run_lines (run, journal, seq, line) VALUES (${run}, ${journal}, ${seq}, ${line})
           `;
+        }
       }
       for (const { name, file } of yield* legacyFacts(area, dir)) {
         const data = yield* fs.readFileString(file).pipe(orMissing<string | null>(null));
-        if (data === null) continue;
+        if (data === null) {
+          continue;
+        }
         yield* sql`
           INSERT INTO collie_run_facts (run, name, data) VALUES (${run}, ${name}, ${data})
         `;
@@ -251,30 +282,36 @@ export const importRunRecords = Effect.fn("RecordsImport.runRecords")(function* 
       yield* writtenIn(path.join(stateDir, "agents", run)),
       yield* writtenIn(path.join(stateDir, "evidence", run)),
     );
-    if (at > 0) yield* sql`INSERT INTO collie_run_activity (run, at) VALUES (${run}, ${at})`;
+    if (at > 0) {
+      yield* sql`INSERT INTO collie_run_activity (run, at) VALUES (${run}, ${at})`;
+    }
   }
   for (const control of yield* legacyControls(stateDir)) {
     const data = yield* fs.readFileString(control.file).pipe(orMissing<string | null>(null));
-    if (data === null) continue;
+    if (data === null) {
+      continue;
+    }
     const rows =
       control.control === NOTIFIED
         ? Arr.map(textLines(data), (line) => ({ ...control, key: line, data: "" }))
         : [{ ...control, data }];
-    for (const row of rows)
+    for (const row of rows) {
       yield* sql`
         INSERT OR REPLACE INTO collie_controls (control, run, key, data)
         VALUES (${row.control}, ${row.run}, ${row.key}, ${row.data})
       `;
+    }
   }
   yield* keepStepTimes(null);
   const kept = yield* fs
     .readFileString(path.join(stateDir, "step-durations.json"))
     .pipe(orMissing(""));
-  for (const one of Option.getOrElse(Schema.decodeOption(KeptStepTimes)(kept), () => []))
+  for (const one of Option.getOrElse(Schema.decodeOption(KeptStepTimes)(kept), () => [])) {
     yield* sql`
       INSERT OR IGNORE INTO collie_step_times (run, key, workflow, step, at, ms)
       VALUES (${one.run}, ${one.key}, ${one.workflow}, ${one.step}, ${one.at}, ${Math.round(one.ms)})
     `;
+  }
   yield* trimStepTimes;
 });
 
@@ -299,39 +336,48 @@ const legacyControls = Effect.fn("RecordsImport.legacyControls")(function* (stat
   const list = (dir: string) => fs.readDirectory(dir).pipe(orMissing<ReadonlyArray<string>>([]));
   const found: Array<{ control: string; run: string; key: string; file: string }> = [];
   for (const name of yield* list(stateDir)) {
-    if (Str.endsWith(".new")(name)) continue;
+    if (Str.endsWith(".new")(name)) {
+      continue;
+    }
     const root = ROOT_CONTROL.exec(name);
     if (root !== null) {
       found.push({ control: root[1]!, run: root[2]!, key: "", file: `${stateDir}/${name}` });
       continue;
     }
     const awaited = AWAITED_DIR.exec(name);
-    if (awaited !== null)
-      for (const child of yield* list(`${stateDir}/${name}`))
+    if (awaited !== null) {
+      for (const child of yield* list(`${stateDir}/${name}`)) {
         found.push({
           control: AWAITED,
           run: awaited[1]!,
           key: child,
           file: `${stateDir}/${name}/${child}`,
         });
+      }
+    }
   }
-  for (const run of yield* list(`${stateDir}/relaunch`))
-    for (const agent of yield* list(`${stateDir}/relaunch/${run}`))
-      if (Str.endsWith(".json")(agent))
+  for (const run of yield* list(`${stateDir}/relaunch`)) {
+    for (const agent of yield* list(`${stateDir}/relaunch/${run}`)) {
+      if (Str.endsWith(".json")(agent)) {
         found.push({
           control: RELAUNCH,
           run,
           key: Str.slice(0, -".json".length)(agent),
           file: `${stateDir}/relaunch/${run}/${agent}`,
         });
-  for (const check of yield* list(`${stateDir}/running-checks`))
-    if (Str.endsWith(".json")(check))
+      }
+    }
+  }
+  for (const check of yield* list(`${stateDir}/running-checks`)) {
+    if (Str.endsWith(".json")(check)) {
       found.push({
         control: RUNNING_CHECK,
         run: "",
         key: Str.slice(0, -".json".length)(check),
         file: `${stateDir}/running-checks/${check}`,
       });
+    }
+  }
   return found;
 });
 
@@ -365,9 +411,12 @@ export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* 
   const [latest] = yield* sql<{ readonly migration_id: number; readonly name: string }>`
     SELECT migration_id, name FROM collie_migrations ORDER BY migration_id DESC LIMIT 1
   `;
-  if (latest === undefined || latest.migration_id < RUN_RECORDS_MIGRATION_ID) return false;
-  if (latest.migration_id > RUN_RECORDS_MIGRATION_ID)
+  if (latest === undefined || latest.migration_id < RUN_RECORDS_MIGRATION_ID) {
+    return false;
+  }
+  if (latest.migration_id > RUN_RECORDS_MIGRATION_ID) {
     return yield* new LaterMigration({ migration: `${latest.migration_id}_${latest.name}` });
+  }
   const written = new Map<string, Array<string>>();
   const write = Effect.fnUntraced(function* (run: string, file: string, text: string) {
     yield* fs.makeDirectory(path.dirname(file), { recursive: true });
@@ -384,40 +433,55 @@ export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* 
     journal.lines.push(row.line);
     journals.set(file, journal);
   }
-  for (const [file, { run, lines }] of journals)
+  for (const [file, { run, lines }] of journals) {
     yield* write(run, file, `${Arr.join(lines, "\n")}\n`);
+  }
   const facts = yield* sql<{ run: string; name: string; data: string }>`
     SELECT run, name, data FROM collie_run_facts
   `;
-  for (const row of facts) yield* write(row.run, legacyPath(stateDir, row.run, row.name), row.data);
+  for (const row of facts) {
+    yield* write(row.run, legacyPath(stateDir, row.run, row.name), row.data);
+  }
   const kept = new Set(Arr.map(facts, (row) => legacyPath(stateDir, row.run, row.name)));
-  for (const area of AREAS)
+  for (const area of AREAS) {
     for (const run of yield* fs
       .readDirectory(path.join(stateDir, area))
-      .pipe(orMissing<ReadonlyArray<string>>([])))
-      for (const { file } of yield* legacyFacts(area, path.join(stateDir, area, run)))
-        if (!kept.has(file)) yield* fs.remove(file).pipe(orMissing<void>(undefined));
+      .pipe(orMissing<ReadonlyArray<string>>([]))) {
+      for (const { file } of yield* legacyFacts(area, path.join(stateDir, area, run))) {
+        if (!kept.has(file)) {
+          yield* fs.remove(file).pipe(orMissing<void>(undefined));
+        }
+      }
+    }
+  }
   const controls = yield* sql<{ control: string; run: string; key: string; data: string }>`
     SELECT control, run, key, data FROM collie_controls ORDER BY control, run, key
   `;
   const notified = new Map<string, Array<string>>();
-  for (const row of controls)
-    if (row.control === NOTIFIED)
+  for (const row of controls) {
+    if (row.control === NOTIFIED) {
       notified.set(row.run, [...(notified.get(row.run) ?? []), row.key]);
-    else yield* write("", controlPath(stateDir, row), row.data);
-  for (const [run, said] of notified)
+    } else {
+      yield* write("", controlPath(stateDir, row), row.data);
+    }
+  }
+  for (const [run, said] of notified) {
     yield* write(
       "",
       controlPath(stateDir, { control: NOTIFIED, run, key: "" }),
       `${Arr.join(said, "\n")}\n`,
     );
+  }
   const set = new Set(
     Arr.map(controls, (row) =>
       controlPath(stateDir, row.control === NOTIFIED ? { ...row, key: "" } : row),
     ),
   );
-  for (const { file } of yield* legacyControls(stateDir))
-    if (!set.has(file)) yield* fs.remove(file).pipe(orMissing<void>(undefined));
+  for (const { file } of yield* legacyControls(stateDir)) {
+    if (!set.has(file)) {
+      yield* fs.remove(file).pipe(orMissing<void>(undefined));
+    }
+  }
   yield* write(
     "",
     path.join(stateDir, "step-durations.json"),
@@ -429,8 +493,11 @@ export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* 
   );
   for (const { run, at } of yield* sql<{ run: string; at: number }>`
     SELECT run, at FROM collie_run_activity
-  `)
-    for (const file of written.get(run) ?? []) yield* fs.utimes(file, at / 1000, at / 1000);
+  `) {
+    for (const file of written.get(run) ?? []) {
+      yield* fs.utimes(file, at / 1000, at / 1000);
+    }
+  }
   yield* Effect.gen(function* () {
     yield* sql`DROP TABLE collie_run_lines`;
     yield* sql`DROP TABLE collie_run_facts`;

@@ -434,13 +434,14 @@ test("one Measurement holds the Machine while the next waits on its card, a Stop
         );
         const waiting = yield* Effect.forkChild(measuring(world, extra, waiter, base, gated));
         const ending = yield* Effect.forkChild(measuring(world, extra, stopped, base, gated));
-        for (const runId of [waiter, stopped])
+        for (const runId of [waiter, stopped]) {
           expect(
             (yield* until(
               () => shown(runId),
               (one) => one.run.awaiting !== null,
             )).run.awaiting?.on,
           ).toContain(`Measurement ${holder}-measurement-`);
+        }
 
         yield* collie(world, ["run", "stop", stopped], extra);
         const ended = yield* Fiber.join(ending);

@@ -82,13 +82,19 @@ function fake() {
 test("proven is a recorded date, attribution and the other harnesses are not, and a boundary needs nothing proven", () =>
   runEffect(
     Effect.gen(function* () {
-      for (const row of Rec.values(CAPABILITIES))
+      for (const row of Rec.values(CAPABILITIES)) {
         for (const [capability, record] of Rec.toEntries(row)) {
-          if (record.status === "proven") expect(record.tested_at).not.toBeNull();
-          else expect(record.tested_at).toBeNull();
+          if (record.status === "proven") {
+            expect(record.tested_at).not.toBeNull();
+          } else {
+            expect(record.tested_at).toBeNull();
+          }
           // WARNING: Attribution needs a human at a Collie-launched agent's pane; no agent pressing keys can record it.
-          if (capability === "attribution") expect(record.status).toBe("unproven");
+          if (capability === "attribution") {
+            expect(record.status).toBe("unproven");
+          }
         }
+      }
       const proven = Arr.flatMap(Rec.toEntries(CAPABILITIES), ([harness, row]) =>
         Arr.flatMap(Rec.toEntries(row), ([capability, record]) =>
           record.status === "proven" ? [`${harness}.${capability}`] : [],

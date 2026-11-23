@@ -34,9 +34,13 @@ const withoutNpx = Effect.fn("prepareTest.withoutNpx")(function* () {
   const tools = `${home}/tools`;
   yield* fs.makeDirectory(tools, { recursive: true });
   for (const dir of ["/usr/bin", "/bin"]) {
-    if (!(yield* fs.exists(dir))) continue;
+    if (!(yield* fs.exists(dir))) {
+      continue;
+    }
     for (const name of yield* fs.readDirectory(dir)) {
-      if (name === "npx") continue;
+      if (name === "npx") {
+        continue;
+      }
       yield* Effect.ignore(fs.symlink(`${dir}/${name}`, `${tools}/${name}`));
     }
   }

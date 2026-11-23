@@ -33,15 +33,18 @@ export function steerTarget<C extends Candidate>(
   const { agent, operation, to } = asked;
   const named = (one: C, name: string) =>
     one.operation === name || one.agent === name || launchedAs(one, name);
-  if (agent !== undefined)
+  if (agent !== undefined) {
     return Option.getOrUndefined(
       Arr.findLast(launches, (one) => one.agent === agent || launchedAs(one, agent)),
     );
-  if (operation !== undefined)
+  }
+  if (operation !== undefined) {
     return Option.getOrUndefined(Arr.findLast(launches, (one) => named(one, operation)));
+  }
   const roles = to === undefined ? undefined : rolesFor(to);
-  if (to !== undefined && roles === undefined)
+  if (to !== undefined && roles === undefined) {
     return Option.getOrUndefined(Arr.findLast(launches, (one) => named(one, to)));
+  }
   const newest = Arr.filter(
     launches,
     (one, at) => !Arr.some(launches.slice(at + 1), (later) => later.agent === one.agent),
@@ -49,7 +52,9 @@ export function steerTarget<C extends Candidate>(
   const among =
     roles === undefined ? newest : Arr.filter(newest, (one) => roles.includes(one.role));
   const active = Option.getOrUndefined(Arr.findLast(among, (one) => !one.done));
-  if (active !== undefined || roles !== undefined) return active ?? among.at(-1);
+  if (active !== undefined || roles !== undefined) {
+    return active ?? among.at(-1);
+  }
   return (
     Option.getOrUndefined(Arr.findLast(among, (one) => BUILDER_ROLES.includes(one.role))) ??
     launches.at(-1)

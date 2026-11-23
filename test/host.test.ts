@@ -157,8 +157,11 @@ test("a host started in a directory an update then deletes keeps answering from 
         }),
         (was) =>
           Effect.sync(() => {
-            if (was === undefined) delete Bun.env.LD_PRELOAD;
-            else Bun.env.LD_PRELOAD = was;
+            if (was === undefined) {
+              delete Bun.env.LD_PRELOAD;
+            } else {
+              Bun.env.LD_PRELOAD = was;
+            }
           }),
       );
       const who = yield* Effect.scoped(
@@ -618,8 +621,9 @@ const runsAHeldCheck = (watch: string) =>
       ["init", "-q"],
       ["-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A"],
       ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "first"],
-    ])
+    ]) {
       yield* exec(["git", ...args], { cwd: project });
+    }
 
     const { who, runId } = yield* Effect.scoped(
       Effect.gen(function* () {
@@ -951,8 +955,9 @@ const runsOnAnOlderHost = Effect.gen(function* () {
     ["init", "-q"],
     ["-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A"],
     ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "first"],
-  ])
+  ]) {
     yield* exec(["git", ...args], { cwd: project });
+  }
   yield* Effect.addFinalizer(() => fs.writeFileString(`${notes}/release`, "").pipe(Effect.ignore));
   const began = yield* Clock.currentTimeMillis;
   const { old, runId, started } = yield* Effect.scoped(
@@ -1458,7 +1463,7 @@ test("a host that takes the connection and never answers is reported rather than
           Effect.flatMap((client) => client.identity().pipe(Effect.timeoutOption("1 second"))),
         ),
       ).pipe(fastForward, Effect.result);
-      if (outcome._tag === "Success")
+      if (outcome._tag === "Success") {
         throw new Error(
           `stopped host unexpectedly accepted a client: ${Bun.inspect({
             stopped: who,
@@ -1468,6 +1473,7 @@ test("a host that takes the connection and never answers is reported rather than
             log: yield* fs.readFileString(outputOf(state)).pipe(Effect.orElseSucceed(() => "")),
           })}`,
         );
+      }
       const refused = outcome.failure;
       if (refused._tag !== "HostUnavailable") {
         throw new Error(`connected, or refused with ${refused._tag}`);

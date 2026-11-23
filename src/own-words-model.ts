@@ -46,7 +46,9 @@ export const withinCaps = <M extends OwnMessage>(messages: ReadonlyArray<M>) => 
   let characters = 0;
   let kept = 0;
   for (const { text } of newest) {
-    if (kept >= MOST_MESSAGES || characters + text.length > MOST_CHARACTERS) break;
+    if (kept >= MOST_MESSAGES || characters + text.length > MOST_CHARACTERS) {
+      break;
+    }
     characters += text.length;
     kept += 1;
   }

@@ -60,7 +60,9 @@ const refusalOf = (port: UpdaterPort, prepared: Prepared, key: string) =>
             "the signature",
           );
     const bytes = yield* fs.readFile(prepared.tar).pipe(Effect.orElseSucceed(() => null));
-    if (bytes === null) return GONE;
+    if (bytes === null) {
+      return GONE;
+    }
     const verified = verifyRelease(bytes, signature, key);
     return verified.ok ? null : verified.reason;
   });
@@ -68,9 +70,13 @@ const refusalOf = (port: UpdaterPort, prepared: Prepared, key: string) =>
 const verified = (port: UpdaterPort, key: string) =>
   Effect.gen(function* () {
     const prepared = yield* port.prepared;
-    if (prepared === null || prepared.hash === (yield* port.hash)) return null;
+    if (prepared === null || prepared.hash === (yield* port.hash)) {
+      return null;
+    }
     const refused = yield* refusalOf(port, prepared, key);
-    if (refused === null) return { _tag: "Ready", version: prepared.version } satisfies UpdateNews;
+    if (refused === null) {
+      return { _tag: "Ready", version: prepared.version } satisfies UpdateNews;
+    }
     yield* port.discard;
     return { _tag: "Refused", version: prepared.version, reason: refused } satisfies UpdateNews;
   });
@@ -105,7 +111,9 @@ export const updatesOf = (
     const settled = verified(port, key).pipe(
       Effect.tap((news) =>
         Effect.sync(() => {
-          if (news?._tag === "Refused" && news.reason !== GONE) refused = news;
+          if (news?._tag === "Refused" && news.reason !== GONE) {
+            refused = news;
+          }
         }),
       ),
     );
@@ -113,14 +121,22 @@ export const updatesOf = (
       unreached = true;
       const now = yield* SubscriptionRef.get(latest);
       // WARNING: a ready update stays ready while Desktop looks for a newer one.
-      if (now._tag !== "Ready") yield* say({ _tag: "Checking" });
+      if (now._tag !== "Ready") {
+        yield* say({ _tag: "Checking" });
+      }
       const found = yield* within(port.check, CHECK_WITHIN, "the check");
       unreached = false;
-      if (!found.available) return yield* say({ _tag: "UpToDate", version });
-      if (refused?.version === found.version) return yield* say(refused);
+      if (!found.available) {
+        return yield* say({ _tag: "UpToDate", version });
+      }
+      if (refused?.version === found.version) {
+        return yield* say(refused);
+      }
       const ready = yield* settled;
       if (ready?.version !== found.version) {
-        if (ready?._tag !== "Ready") yield* say({ _tag: "Downloading", version: found.version });
+        if (ready?._tag !== "Ready") {
+          yield* say({ _tag: "Downloading", version: found.version });
+        }
         yield* within(port.download, DOWNLOAD_WITHIN, "the download");
       }
       const news = yield* settled;
@@ -138,12 +154,18 @@ export const updatesOf = (
       const prepared = yield* port.prepared;
       const now = yield* SubscriptionRef.get(latest);
       const said = (now._tag === "Ready" || now._tag === "Refused") && now.version;
-      if (prepared === null || running !== undefined || said === prepared.version) return;
+      if (prepared === null || running !== undefined || said === prepared.version) {
+        return;
+      }
       const news = yield* settled;
-      if (news !== null) yield* say(news);
+      if (news !== null) {
+        yield* say(news);
+      }
     }).pipe(Effect.ignore, Effect.provideService(FileSystem.FileSystem, fs));
     const check = Effect.suspend(() => {
-      if (running !== undefined) return Deferred.await(running);
+      if (running !== undefined) {
+        return Deferred.await(running);
+      }
       const done = Deferred.makeUnsafe<UpdateNews>();
       running = done;
       return once.pipe(
@@ -155,7 +177,9 @@ export const updatesOf = (
     });
     let due = 0;
     const scheduled = Effect.gen(function* () {
-      if ((yield* Clock.currentTimeMillis) < due) return yield* staged;
+      if ((yield* Clock.currentTimeMillis) < due) {
+        return yield* staged;
+      }
       const news = yield* check;
       const next = news._tag === "Failed" && unreached ? RETRY : every;
       due = (yield* Clock.currentTimeMillis) + Duration.toMillis(Duration.fromInputUnsafe(next));
@@ -166,15 +190,25 @@ export const updatesOf = (
 
 export const restartToUpdate = (port: UpdaterPort, key: string = RELEASE_PUBLIC_KEY) =>
   Effect.gen(function* () {
-    if (!(yield* released(port))) return yield* Effect.fail(CHECKOUT);
+    if (!(yield* released(port))) {
+      return yield* Effect.fail(CHECKOUT);
+    }
     const news = yield* verified(port, key);
-    if (news === null) return yield* Effect.fail("there is no update ready");
-    if (news._tag === "Refused") return yield* Effect.fail(news.reason);
+    if (news === null) {
+      return yield* Effect.fail("there is no update ready");
+    }
+    if (news._tag === "Refused") {
+      return yield* Effect.fail(news.reason);
+    }
     yield* port.apply;
   });
 
 export const applyAtLaunch = (port: UpdaterPort, key: string = RELEASE_PUBLIC_KEY) =>
   Effect.gen(function* () {
-    if (!(yield* released(port))) return;
-    if ((yield* verified(port, key))?._tag === "Ready") yield* port.apply;
+    if (!(yield* released(port))) {
+      return;
+    }
+    if ((yield* verified(port, key))?._tag === "Ready") {
+      yield* port.apply;
+    }
   });

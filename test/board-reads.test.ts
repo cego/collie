@@ -150,7 +150,7 @@ test("a board build touches no file or directory an older build kept a Run's rec
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-io-" });
       const runs = [];
-      for (const id of ["r1", "r2", "r3"])
+      for (const id of ["r1", "r2", "r3"]) {
         runs.push(
           yield* madeRun(dir, {
             id,
@@ -160,6 +160,7 @@ test("a board build touches no file or directory an older build kept a Run's rec
             finished: id === "r1" ? null : "2026-09-13T09:00:00Z",
           }),
         );
+      }
       const touched: Array<string> = [];
       const noted =
         <A extends ReadonlyArray<unknown>, B>(use: (path: string, ...rest: A) => B) =>

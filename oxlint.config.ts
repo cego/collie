@@ -42,7 +42,6 @@ const unfit = {
 const migrating = {
   "@nkzw/no-instanceof": "off",
   "array-callback-return": "off",
-  curly: "off",
   eqeqeq: "off",
   "no-case-declarations": "off",
   "no-console": "off",

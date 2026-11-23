@@ -417,10 +417,12 @@ const markedBy = (installation: string) =>
     const found = new Map<string, Array<Marked>>();
     for (const { pid, started, bound } of yield* boundProcesses([CHECK_INSTALLATION, CHECK_ID])) {
       const id = bound[CHECK_ID];
-      if (pid === process.pid || bound[CHECK_INSTALLATION] !== installation || id === undefined)
+      if (pid === process.pid || bound[CHECK_INSTALLATION] !== installation || id === undefined) {
         continue;
-      if ((yield* groupOf(pid)) !== null)
+      }
+      if ((yield* groupOf(pid)) !== null) {
         found.set(id, [...(found.get(id) ?? []), { pid, started }]);
+      }
     }
     return found;
   });
@@ -461,8 +463,14 @@ const signal = (
         kill(target, name);
       } catch {}
     };
-    if (proved.group !== null) send(-proved.group);
-    for (const one of proved.marked) if (yield* stillRunning(one)) send(one.pid);
+    if (proved.group !== null) {
+      send(-proved.group);
+    }
+    for (const one of proved.marked) {
+      if (yield* stillRunning(one)) {
+        send(one.pid);
+      }
+    }
   });
 
 const goneWithin = (
@@ -488,9 +496,13 @@ export const endCheck = Effect.fn("CheckProcesses.endCheck")(function* (
   kill: Kill = processKill,
 ) {
   const proved = yield* provedOf(record, installation);
-  if (isGone(proved)) return true;
+  if (isGone(proved)) {
+    return true;
+  }
   yield* signal(proved, "SIGTERM", kill);
-  if (yield* goneWithin(record, installation, 2000)) return true;
+  if (yield* goneWithin(record, installation, 2000)) {
+    return true;
+  }
   yield* signal(yield* provedOf(record, installation), "SIGKILL", kill);
   return yield* goneWithin(record, installation, 1000);
 });
@@ -599,8 +611,12 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       for (;;) {
         const running = yield* stillRunning(record.leader);
         const exit = yield* exitIn(fs, dir, record.id).pipe(Effect.option);
-        if (Option.isSome(exit)) return exit.value;
-        if (!running) return yield* exitIn(fs, dir, record.id);
+        if (Option.isSome(exit)) {
+          return exit.value;
+        }
+        if (!running) {
+          return yield* exitIn(fs, dir, record.id);
+        }
         yield* Effect.sleep("250 millis");
       }
     }).pipe(Effect.provideContext(services));
@@ -608,7 +624,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const left = Effect.gen(function* () {
     const found = new Map<string, Leftover>();
     for (const record of yield* runningChecks.pipe(Effect.provideService(RunRecords, records))) {
-      if (ours.has(record.id)) continue;
+      if (ours.has(record.id)) {
+        continue;
+      }
       found.set(record.id, {
         id: record.id,
         run: record.run,
@@ -621,7 +639,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       });
     }
     for (const [id, ones] of yield* markedBy(installation)) {
-      if (found.has(id) || ours.has(id)) continue;
+      if (found.has(id) || ours.has(id)) {
+        continue;
+      }
       const first = Arr.reduce(Arr.drop(ones, 1), Option.getOrThrow(Arr.head(ones)), (least, one) =>
         one.pid < least.pid ? one : least,
       );
@@ -662,13 +682,16 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         : (yield* endCheck(proof, installation, kill))
           ? "ended"
           : "still running";
-      if (outcome !== "still running") yield* removeRecord(fs, records, dir, leftover.id);
+      if (outcome !== "still running") {
+        yield* removeRecord(fs, records, dir, leftover.id);
+      }
       const line = saidOf(leftover, outcome);
       yield* Effect.logInfo(line);
-      if (options.onRun !== undefined)
+      if (options.onRun !== undefined) {
         yield* options
           .onRun(leftover, outcome, line)
           .pipe(Effect.provideService(RunRecords, records));
+      }
       return outcome;
     }).pipe(Effect.provideContext(services));
 
@@ -681,7 +704,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     return markedBy(installation).pipe(
       Effect.onExit((exit) =>
         Effect.sync(() => {
-          if (looking === deferred) looking = undefined;
+          if (looking === deferred) {
+            looking = undefined;
+          }
           Deferred.doneUnsafe(deferred, Exit.isSuccess(exit) ? exit : Exit.succeed(new Map()));
         }),
       ),
@@ -693,7 +718,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         const ones = look.get(id) ?? [];
         yield* signal({ group: null, marked: ones }, name, kill);
         const known = new Map(Arr.map(found.get(id) ?? [], (one) => [one.pid, one]));
-        for (const one of ones) known.set(one.pid, one);
+        for (const one of ones) {
+          known.set(one.pid, one);
+        }
         found.set(id, [...known.values()]);
       }),
     );
@@ -702,10 +729,13 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     Effect.gen(function* () {
       for (const id of ids) {
         const entry = collecting.get(id);
-        if (entry !== undefined)
+        if (entry !== undefined) {
           yield* signal(yield* provedIn(entry.record, new Map()), name, kill);
+        }
       }
-      for (const id of ids) yield* signal({ group: null, marked: found.get(id) ?? [] }, name, kill);
+      for (const id of ids) {
+        yield* signal({ group: null, marked: found.get(id) ?? [] }, name, kill);
+      }
       const earlier = looking;
       yield* Effect.all(
         [
@@ -722,23 +752,27 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
 
   const clearOf = (run: string, say: (line: string) => Effect.Effect<void>) =>
     Effect.gen(function* () {
-      if (stopping) return;
+      if (stopping) {
+        return;
+      }
       const leftovers = Arr.filter(yield* left, (leftover) => leftover.run === run);
       const surviving = yield* Effect.forEach(
         leftovers,
         (leftover) =>
           Effect.gen(function* () {
-            if (yield* stillRuns(leftover))
+            if (yield* stillRuns(leftover)) {
               yield* say(`${withPid(leftover)}: ending it before this check starts`);
+            }
             return (yield* endLeftover(leftover)) === "still running" ? [leftover] : [];
           }),
         { concurrency: "unbounded" },
       ).pipe(Effect.map((ones) => ones.flat()));
       const [first] = surviving;
-      if (first !== undefined && !stopping)
+      if (first !== undefined && !stopping) {
         return yield* new CheckRefused({
           why: `${withPid(first)}, survived SIGTERM and SIGKILL, so this check did not start`,
         });
+      }
     });
 
   const begin = <H extends { readonly pid: number }, E>(
@@ -751,7 +785,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     supervised = false,
   ) =>
     Effect.gen(function* () {
-      if (stopping) return null;
+      if (stopping) {
+        return null;
+      }
       const began = yield* nowIso;
       const id = yield* newId(check.run, began);
       ours.add(id);
@@ -760,7 +796,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       // WARNING: uninterruptible from spawn to finalizer, so no interruption leaves a check unended.
       return yield* Effect.uninterruptible(
         Effect.gen(function* () {
-          if (stopping) return null;
+          if (stopping) {
+            return null;
+          }
           spawning.set(id, { check, ended: false, settled: false });
           const { handle, record, entry } = yield* Effect.gen(function* () {
             const handle = yield* spawn(
@@ -800,7 +838,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
             Effect.ensuring(Effect.sync(() => spawning.delete(id))),
           );
           yield* Effect.addFinalizer(() => endOwn(entry));
-          if (entry.ended) yield* signalAll([id], killing ? "SIGKILL" : "SIGTERM");
+          if (entry.ended) {
+            yield* signalAll([id], killing ? "SIGKILL" : "SIGTERM");
+          }
           yield* records.setControl(RUNNING_CHECK, "", encodeCheckRecord(record), id);
           return { handle, entry };
         }),
@@ -811,7 +851,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     collecting.pipe(
       Effect.exit,
       Effect.flatMap((exit) => {
-        if (entry.ended || entry.handed) return Effect.never;
+        if (entry.ended || entry.handed) {
+          return Effect.never;
+        }
         entry.settled = true;
         return exit;
       }),
@@ -824,7 +866,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       );
       if (Option.isSome(taken)) {
         const running = yield* claim(taken.value.entry.record.id);
-        if (running !== null) return running;
+        if (running !== null) {
+          return running;
+        }
       }
       return yield* runAnew(check, command, say);
     });
@@ -854,7 +898,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       supervisor !== undefined,
     ).pipe(
       Effect.flatMap((begun) => {
-        if (begun === null) return Effect.succeed(endedCheck);
+        if (begun === null) {
+          return Effect.succeed(endedCheck);
+        }
         const { handle, entry } = begun;
         const { id } = entry.record;
         const ends = nothingKept();
@@ -874,13 +920,14 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
           collectedOf(entry),
         );
         // WARNING: a supervised check is finished from its supervisor's files, which may not exist yet.
-        if (entry.supervised)
+        if (entry.supervised) {
           return Effect.succeed({
             ...running,
             pid: commandPid(fs, dir, id, handle),
             exit: handle.exitCode.pipe(Effect.andThen(exitIn(fs, dir, id))),
             logged: true,
           });
+        }
         return Effect.acquireRelease(
           Effect.sync(() => kept.set(id, ends)),
           () => Effect.sync(() => kept.delete(id)),
@@ -891,7 +938,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const claim: CheckProcessesApi["claim"] = (id) =>
     Effect.gen(function* () {
       const entry = unclaimed.get(id)?.entry;
-      if (entry === undefined) return null;
+      if (entry === undefined) {
+        return null;
+      }
       unclaimed.delete(id);
       yield* Effect.addFinalizer(() => endOwn(entry));
       return {
@@ -908,9 +957,13 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const finished: CheckProcessesApi["finished"] = (id) =>
     Effect.gen(function* () {
       const finishing = yield* readFinishing(fs, dir, id).pipe(Effect.orElseSucceed(() => null));
-      if (finishing === null) return null;
+      if (finishing === null) {
+        return null;
+      }
       const own = kept.get(id);
-      if (own !== undefined) return { ...finishing, output: textOf(own) };
+      if (own !== undefined) {
+        return { ...finishing, output: textOf(own) };
+      }
       const outputs = outputsOf(dir, id);
       const [stdout, stderr] = yield* Effect.all([
         fs.readFile(outputs.stdout),
@@ -929,7 +982,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const handOver = Effect.sync(() => {
     const handed: Array<string> = [];
     for (const entry of collecting.values()) {
-      if (!entry.supervised || entry.ended || entry.settled) continue;
+      if (!entry.supervised || entry.ended || entry.settled) {
+        continue;
+      }
       entry.handed = true;
       handed.push(entry.record.id);
     }
@@ -940,7 +995,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     stopping = true;
     const ended: Array<CheckOf> = [];
     for (const entry of [...own(), ...spawning.values()]) {
-      if (entry.ended || entry.settled) continue;
+      if (entry.ended || entry.settled) {
+        continue;
+      }
       entry.ended = true;
       ended.push(entry.check);
     }
@@ -951,20 +1008,30 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const killEnded = Effect.gen(function* () {
     stopping = true;
     killing = true;
-    for (const entry of own()) entry.ended = true;
+    for (const entry of own()) {
+      entry.ended = true;
+    }
     yield* signalAll(unended(), "SIGKILL");
     const until = (yield* Clock.currentTimeMillis) + KILL_WAIT;
     for (;;) {
       const marked = yield* markedBy(installation);
       for (const entry of own()) {
         const proved = yield* provedIn(entry.record, marked);
-        if (isGone(proved)) yield* forget(entry.record.id);
-        else yield* signal(proved, "SIGKILL", kill);
+        if (isGone(proved)) {
+          yield* forget(entry.record.id);
+        } else {
+          yield* signal(proved, "SIGKILL", kill);
+        }
       }
-      for (const id of spawning.keys())
+      for (const id of spawning.keys()) {
         yield* signal({ group: null, marked: marked.get(id) ?? [] }, "SIGKILL", kill);
-      if (own().length === 0 && spawning.size === 0) return;
-      if ((yield* Clock.currentTimeMillis) >= until) return;
+      }
+      if (own().length === 0 && spawning.size === 0) {
+        return;
+      }
+      if ((yield* Clock.currentTimeMillis) >= until) {
+        return;
+      }
       yield* Effect.sleep("100 millis");
     }
   }).pipe(Effect.provideContext(services));
@@ -976,13 +1043,16 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
           !handed.checks.includes(record.id) ||
           record.host.pid !== handed.host.pid ||
           record.host.started !== handed.host.started
-        )
+        ) {
           continue;
+        }
         const proved =
           (yield* stillRunning(record.leader)) &&
           (yield* groupOf(record.leader.pid)) === record.leader.group;
         const exited = yield* fs.exists(outputsOf(dir, record.id).exit);
-        if (!proved && !exited) continue;
+        if (!proved && !exited) {
+          continue;
+        }
         const taken: CheckRecord = { ...record, host };
         yield* records.setControl(RUNNING_CHECK, "", encodeCheckRecord(taken), record.id);
         const entry: Collecting = {
@@ -1007,10 +1077,12 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       }
     }).pipe(Effect.ignore({ log: "Warn" }));
 
-  if (options.handedOver !== undefined)
+  if (options.handedOver !== undefined) {
     yield* takeOver(options.handedOver).pipe(Effect.provideContext(services));
-  if (options.sweep)
+  }
+  if (options.sweep) {
     yield* Effect.forEach(yield* left, endLeftover, { concurrency: "unbounded", discard: true });
+  }
   const returned: CheckProcessesApi = {
     run,
     finished,

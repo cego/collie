@@ -21,7 +21,9 @@ const indexOf = Effect.fn("RunLog.index")(function* (dir: string) {
   const known = yield* fs
     .readFileString(`${dir}/${LOG_INDEX}`)
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Index)), Effect.option);
-  if (Option.isSome(known) && known.value.bytes === size) return known.value;
+  if (Option.isSome(known) && known.value.bytes === size) {
+    return known.value;
+  }
   const counted =
     size === 0
       ? { lines: 0, ended: true }
@@ -68,7 +70,9 @@ export const readLogTail: (
 ) => Effect.Effect<LogTail | null, PlatformError, FileSystem.FileSystem> = Effect.fn("RunLog.tail")(
   function* (dir: string, cap: number) {
     const fs = yield* FileSystem.FileSystem;
-    if (!(yield* fs.exists(`${dir}/log.txt`))) return null;
+    if (!(yield* fs.exists(`${dir}/log.txt`))) {
+      return null;
+    }
     const index = yield* indexOf(dir);
     const from = Math.max(0, index.bytes - cap);
     const raw = yield* fs

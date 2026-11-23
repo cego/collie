@@ -17,7 +17,7 @@ for (const [name, action] of [
   ["gitlab", "approval"],
   ["github", "post"],
   ["github", "approval"],
-] as const)
+] as const) {
   test(`the shipped host recovers a ${name} review accepted before its Activity recorded the ${action}`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -50,8 +50,9 @@ for (const [name, action] of [
                       : "/comments",
                 )(url) ||
                 held
-              )
+              ) {
                 return response;
+              }
               held = true;
               accepted.resolve();
               return release.promise.then(() => response);
@@ -84,7 +85,9 @@ for (const [name, action] of [
         ).toBe(true);
         yield* Effect.promise(() => accepted.promise).pipe(Effect.timeout("30 seconds"));
         expect(Rec.values((yield* forge.model()).notes ?? {}).flat()).toHaveLength(1);
-        if (action === "approval") expect((yield* forge.model()).approved).toHaveLength(1);
+        if (action === "approval") {
+          expect((yield* forge.model()).approved).toHaveLength(1);
+        }
         yield* first.child.kill({ killSignal: "SIGKILL" });
         yield* first.child.exitCode.pipe(Effect.ignore);
         release.resolve();
@@ -124,6 +127,7 @@ for (const [name, action] of [
         yield* next.stop;
       }),
     ));
+}
 
 test("a second approval Activity in the same Run is not taken for an interrupted first", () =>
   runEffect(

@@ -69,7 +69,9 @@ test("the checkouts are the real ones, never a worktree, a hidden one or a depen
         ".hidden/repo/.git",
         "web/node_modules/dep/.git",
       ];
-      for (const dir of dirs) yield* fs.makeDirectory(`${root}/${dir}`, { recursive: true });
+      for (const dir of dirs) {
+        yield* fs.makeDirectory(`${root}/${dir}`, { recursive: true });
+      }
       yield* fs.makeDirectory(`${root}/worktree`, { recursive: true });
       yield* fs.writeFileString(`${root}/worktree/.git`, "gitdir: /elsewhere/.git/worktrees/w\n");
 
@@ -89,10 +91,11 @@ test("a repository URL or owner/name finds this Machine's origin or upstream che
         "cego/collie",
         "https://github.com/cego/collie",
         "git@github.com:cego/collie.git",
-      ])
+      ]) {
         expect(yield* workspaceNamed(rig.pluginEnv(), named)).toMatchObject({
           found: { cwd: rig.projectDir },
         });
+      }
       yield* exec(["git", "remote", "set-url", "origin", "git@github.com:mk/fork.git"], {
         cwd: rig.projectDir,
       });
@@ -205,7 +208,9 @@ test("interleaved remote branch fetches place each checkout on its own fetched c
       yield* bin.restore();
       for (const [index, one] of placed.entries()) {
         expect(one).not.toHaveProperty("error");
-        if ("error" in one) continue;
+        if ("error" in one) {
+          continue;
+        }
         expect(one.branchBase).toBe(heads[index]);
         const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
           cwd: one.project,

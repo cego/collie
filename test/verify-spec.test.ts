@@ -96,7 +96,9 @@ test("a file that does not decode names itself, and never reads as approving not
       yield* writeText(file, `[{"name":"tests","executable":"bun"}]`);
       const result = yield* approvedFrom({ cwd, userDir }).pipe(Effect.result);
       expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") expect(String(result.failure)).toContain(file);
+      if (result._tag === "Failure") {
+        expect(String(result.failure)).toContain(file);
+      }
     }),
   ));
 
@@ -146,7 +148,9 @@ test("a remembered file that does not decode names itself", () =>
       yield* writeText(file, `[{"name":"tests"}]`);
       const result = yield* approvedFrom({ cwd, userDir, project: REPO }).pipe(Effect.result);
       expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") expect(String(result.failure)).toContain(file);
+      if (result._tag === "Failure") {
+        expect(String(result.failure)).toContain(file);
+      }
     }),
   ));
 

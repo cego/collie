@@ -16,7 +16,9 @@ export const upgrade = Command.make("upgrade", { to: toFlag }, ({ to }) =>
       Effect.gen(function* () {
         // WARNING: needs no workspace: upgrading is about this installation and must work from a plain shell.
         const resolved = yield* context(global, false);
-        if (resolved._tag === "ContextFailure") return resolved.result;
+        if (resolved._tag === "ContextFailure") {
+          return resolved.result;
+        }
         return yield* upgradeInstallation(resolved.env, { to: Option.getOrUndefined(to) });
       }),
       global.json,

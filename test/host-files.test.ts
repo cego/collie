@@ -53,8 +53,9 @@ test("a chat channel reads, finds, writes and edits its Machine's files, and is 
         );
 
         yield* fs.makeDirectory(`${world.project}/many`);
-        for (let n = 0; n < 105; n++)
+        for (let n = 0; n < 105; n++) {
           yield* fs.writeFileString(`${world.project}/many/f${n}.ts`, `needle ${n}\n`);
+        }
         const found = yield* door.glob({ pattern: "**/*.ts", path: world.project });
         expect(found.paths).toHaveLength(100);
         expect(found.omitted).toBe(5);
@@ -225,7 +226,9 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
       const dir = yield* inTemp("collie-search-bound-");
       for (const sub of ["a", "b", "c"]) {
         yield* fs.makeDirectory(`${dir}/${sub}`);
-        for (let n = 0; n < 4; n++) yield* fs.writeFileString(`${dir}/${sub}/f${n}.ts`, "needle\n");
+        for (let n = 0; n < 4; n++) {
+          yield* fs.writeFileString(`${dir}/${sub}/f${n}.ts`, "needle\n");
+        }
       }
       // WARNING: a link back up is not followed, so the walk ends.
       yield* fs.symlink(dir, `${dir}/a/loop`);
@@ -240,9 +243,11 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
         [".env", [`${dir}/.env`]],
         ["**/.env", [`${dir}/.env`]],
         ["**/*.yml", []],
-      ] as const)
-        for (const root of [dir, `${dir}/`])
+      ] as const) {
+        for (const root of [dir, `${dir}/`]) {
           expect((yield* globFiles(pattern, root)).paths).toEqual([...found]);
+        }
+      }
       expect((yield* globFiles("a/*.ts", `${dir}/`)).paths).toHaveLength(4);
       expect((yield* globFiles("a/*{.ts,.js}", dir)).paths).toHaveLength(4);
       expect((yield* globFiles("{.env,.envrc}", dir)).paths).toEqual([`${dir}/.env`]);
@@ -256,10 +261,11 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
         () =>
           Effect.gen(function* () {
             expect((yield* globFiles("**/*.nomatch", dir)).paths).toEqual([]);
-            if (process.getuid?.() !== 0)
+            if (process.getuid?.() !== 0) {
               expect(Result.isFailure(yield* Effect.result(globFiles("*", `${dir}/locked`)))).toBe(
                 true,
               );
+            }
           }),
         () => fs.chmod(`${dir}/locked`, 0o755).pipe(Effect.orDie),
       );
@@ -317,11 +323,12 @@ test("a glob finds dot paths only where its pattern names them, newest first", (
         ["src/**", ["src/deep/b.ts", "src/a.ts"]],
         ["**/.hidden/*", ["src/.hidden/x.ts"]],
         ["*.{ts,js}", []],
-      ] as const)
+      ] as const) {
         expect({ pattern, found: yield* found(pattern) }).toEqual({
           pattern,
           found: [...expected],
         });
+      }
     }),
   ));
 
@@ -336,8 +343,9 @@ test("a grep answers its matches past a file it cannot read, and cuts a long lin
       yield* fs.chmod(`${dir}/locked.txt`, 0o000);
       const content = yield* grepFiles({ pattern: "needle", path: dir, outputMode: "content" });
       expect(content.text).toContain(`${dir}/a.txt:needle`);
-      for (const line of Str.split(content.text, "\n"))
+      for (const line of Str.split(content.text, "\n")) {
         expect(line.length).toBeLessThanOrEqual(LINE_LIMIT);
+      }
       const files = yield* grepFiles({ pattern: "needle", path: dir });
       expect(files.text).toContain(`${dir}/a.txt`);
     }),

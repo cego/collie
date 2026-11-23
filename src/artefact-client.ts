@@ -35,11 +35,13 @@ export const uploadArtefact = Effect.fn("Artefacts.upload")(function* (
   const unreadable = (cause: PlatformError) =>
     new HostRefused({ reason: `${source}: ${cause.message}` });
   const info = yield* fs.stat(source).pipe(Effect.mapError(unreadable));
-  if (info.type !== "File" || Number(info.size) > ATTACHMENT_BYTES)
+  if (info.type !== "File" || Number(info.size) > ATTACHMENT_BYTES) {
     return yield* new HostRefused({ reason: "Upload needs a regular file of at most 100 MiB" });
+  }
   const bytes = yield* fs.readFile(source).pipe(Effect.mapError(unreadable));
-  if (bytes.length > ATTACHMENT_BYTES)
+  if (bytes.length > ATTACHMENT_BYTES) {
     return yield* new HostRefused({ reason: "The source grew beyond 100 MiB" });
+  }
   const sha256 = sha256Hex(bytes);
   for (let offset = 0; ; offset += PART_BYTES) {
     const result = yield* client.upload({
@@ -49,10 +51,13 @@ export const uploadArtefact = Effect.fn("Artefacts.upload")(function* (
       offset,
       content: Buffer.from(bytes.subarray(offset, offset + PART_BYTES)).toString("base64"),
     });
-    if (result.path !== null) return result.path;
-    if (offset + PART_BYTES >= bytes.length)
+    if (result.path !== null) {
+      return result.path;
+    }
+    if (offset + PART_BYTES >= bytes.length) {
       return yield* new HostRefused({
         reason: "The destination did not retain the complete upload",
       });
+    }
   }
 });

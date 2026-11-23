@@ -149,8 +149,9 @@ export const holdPath = (
   question: { readonly options: ReadonlyArray<unknown>; readonly asker?: string | null },
   held: boolean,
 ) => {
-  if (question.asker != null || question.options.length === 0 || question.options.length >= 3)
+  if (question.asker != null || question.options.length === 0 || question.options.length >= 3) {
     return undefined;
+  }
   return held ? { offered: false, why: "Run already held" } : { offered: true, why: null };
 };
 
@@ -291,24 +292,38 @@ export function readyToRelease(facts: ReleaseFacts) {
   const missing: Array<MissingFact> = [];
   const lack = (fact: MissingFact["fact"], said: string, settling = false) =>
     missing.push({ fact, said, settling });
-  if (!facts.succeeded) lack("succeeded", "the leading Run has not succeeded");
-  if (facts.mr === null) lack("mr-open", "there is no merge request");
-  else {
+  if (!facts.succeeded) {
+    lack("succeeded", "the leading Run has not succeeded");
+  }
+  if (facts.mr === null) {
+    lack("mr-open", "there is no merge request");
+  } else {
     const label = mrLabel(facts.mr);
-    if (facts.mrState === null)
+    if (facts.mrState === null) {
       lack("mr-open", `the forge has not said whether ${label} is open`, true);
-    else if (facts.mrState !== "open") lack("mr-open", `${label} is ${facts.mrState}`);
-    if (facts.draft) lack("not-draft", `${label} is a draft`);
+    } else if (facts.mrState !== "open") {
+      lack("mr-open", `${label} is ${facts.mrState}`);
+    }
+    if (facts.draft) {
+      lack("not-draft", `${label} is a draft`);
+    }
     const checks = facts.checks ?? { state: "unchecked" };
-    if (checks.state === "failed")
+    if (checks.state === "failed") {
       lack("checks", `${checks.name} failed at ${pipe(checks.at, Str.slice(0, 7))}`);
-    else if (checks.state === "running") lack("checks", "Collie's checks are still running", true);
-    else if (checks.state === "unchecked")
+    } else if (checks.state === "running") {
+      lack("checks", "Collie's checks are still running", true);
+    } else if (checks.state === "unchecked") {
       lack("checks", "its checks have not all run at its head");
-    if (facts.ci === null) lack("ci", "the forge has not been asked about its pipeline", true);
-    else if (facts.ci.state === "failed") lack("ci", `${facts.ci.name} failed in CI`);
-    else if (facts.ci.state === "running") lack("ci", "CI is still running", true);
-    else if (facts.ci.state === "unknown") lack("ci", "its pipeline has not passed at its head");
+    }
+    if (facts.ci === null) {
+      lack("ci", "the forge has not been asked about its pipeline", true);
+    } else if (facts.ci.state === "failed") {
+      lack("ci", `${facts.ci.name} failed in CI`);
+    } else if (facts.ci.state === "running") {
+      lack("ci", "CI is still running", true);
+    } else if (facts.ci.state === "unknown") {
+      lack("ci", "its pipeline has not passed at its head");
+    }
     if (
       facts.unreadable ||
       facts.read === null ||
@@ -317,17 +332,19 @@ export function readyToRelease(facts: ReleaseFacts) {
       facts.now - facts.read > 2 * MERGE_POLL_MS ||
       facts.head === null ||
       facts.head !== facts.readHead
-    )
+    ) {
       lack("mergeable", "the forge answer is stale, unreadable or not at the current head", true);
-    else if (facts.mergeable === null)
+    } else if (facts.mergeable === null) {
       lack("mergeable", "the forge has not said whether it can merge", true);
-    else if (facts.mergeable.state === "blocked")
+    } else if (facts.mergeable.state === "blocked") {
       lack("mergeable", `the forge says it cannot merge: ${facts.mergeable.said}`);
-    else if (facts.mergeable.state === "unknown")
+    } else if (facts.mergeable.state === "unknown") {
       lack("mergeable", "the forge is still working out whether it can merge", true);
+    }
   }
-  if (facts.blocking > 0)
+  if (facts.blocking > 0) {
     lack("review", `${facts.blocking} blocking review finding(s) are unresolved`);
+  }
   return { ready: missing.length === 0, missing };
 }
 
@@ -678,7 +695,9 @@ export const choiceSaid = (on: {
 
 export const ranOn = (agent: RunAgent) => {
   const on = choiceSaid(agent);
-  if (agent.from !== null) return `${on} (fell back from ${choiceSaid(agent.from)}: ${agent.why})`;
+  if (agent.from !== null) {
+    return `${on} (fell back from ${choiceSaid(agent.from)}: ${agent.why})`;
+  }
   return agent.why === null ? on : `${on} (${agent.why})`;
 };
 
@@ -1066,9 +1085,12 @@ export const Controlled = Schema.Struct({
 
 // WARNING: a stop that could not make an agent Quiet is a failed operation, never 'Stopped'.
 export const leftSaid = (done: typeof Controlled.Type) => {
-  if (done.left.length === 0) return null;
-  if (done.closed !== undefined)
+  if (done.left.length === 0) {
+    return null;
+  }
+  if (done.closed !== undefined) {
     return `${done.runId} has finished, but ${Arr.join(done.left, "; ")}.`;
+  }
   const what = `${done.set ? done.control : `un${done.control}`} ${done.runId}`;
   return `Recorded ${what}, but ${Arr.join(done.left, "; ")}.`;
 };
@@ -1773,14 +1795,20 @@ export function readMrRef(text: string, typedIn?: { readonly project: string | n
   const target = MR_TARGET.exec(said);
   if (target) {
     const [, project = "", sign, iid] = target;
-    if (project === "") return { project: null, iid: iid! };
+    if (project === "") {
+      return { project: null, iid: iid! };
+    }
     const ref = { project, iid: iid! };
     return (sign === "#") === (forgeOfRef(ref) === "github") ? ref : null;
   }
   const url = readMrUrl(said);
-  if (url) return url;
+  if (url) {
+    return url;
+  }
   const short = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(said);
-  if (short) return { project: `github.com/${short[1]}`, iid: short[2]! };
+  if (short) {
+    return { project: `github.com/${short[1]}`, iid: short[2]! };
+  }
   const typed = typedIn === undefined ? null : /^[!#]?(\d+)$/.exec(said);
   return typed ? { project: typedIn!.project, iid: typed[1]! } : null;
 }
@@ -1886,7 +1914,9 @@ export function mrSet(text: string) {
         | null = { unresolved: one };
       return returned;
     }
-    if (!named.has(id)) named.set(id, { id, target: words.target, url: words.url });
+    if (!named.has(id)) {
+      named.set(id, { id, target: words.target, url: words.url });
+    }
   }
   const returned:
     | {
@@ -1907,7 +1937,9 @@ export function waitsOnOf(
   branches: ReadonlyMap<string, { readonly source?: string; readonly target?: string }>,
 ) {
   const target = branches.get(id)?.target ?? "";
-  if (target === "") return [];
+  if (target === "") {
+    return [];
+  }
   const sources = Arr.filter(
     ids,
     (other) => other !== id && branches.get(other)?.source === target,
@@ -1945,7 +1977,9 @@ export type OfferInput =
 
 export const offerFields = (drawn: Schema.Json | null) => {
   const takes = decodeArguments(drawn);
-  if (takes._tag === "None") return [];
+  if (takes._tag === "None") {
+    return [];
+  }
   const required = takes.value.required ?? [];
   return Arr.map(Rec.toEntries(takes.value.properties ?? {}), ([name, schema]) => {
     const field = Option.getOrElse(decodeField(schema), () => NO_FIELD);
@@ -1976,9 +2010,14 @@ export const offerInput: (
   for (const field of offerFields(drawn)) {
     const read = readEntry(field, typed[field.name]);
     if (read._tag === "Unset") {
-      if (field.required) errors[field.name] = `${field.label} needs a value`;
-    } else if (read._tag === "Refused") errors[field.name] = `${field.label} ${read.why}`;
-    else input[field.name] = read.value;
+      if (field.required) {
+        errors[field.name] = `${field.label} needs a value`;
+      }
+    } else if (read._tag === "Refused") {
+      errors[field.name] = `${field.label} ${read.why}`;
+    } else {
+      input[field.name] = read.value;
+    }
   }
   return Rec.isEmptyRecord(errors) ? { _tag: "Valid", input } : { _tag: "Invalid", errors };
 };
@@ -1991,8 +2030,9 @@ export const givenOfferInput = (
   return Rec.fromEntries(
     Arr.map(Rec.toEntries(given), ([name, text]) => {
       const field = fields.get(name);
-      if (field?.control.kind === "list")
+      if (field?.control.kind === "list") {
         return [name, Option.getOrElse(parseJson(text), () => text)] as const;
+      }
       const read = field === undefined ? null : readEntry(field, text);
       return [name, read?._tag === "Read" ? read.value : text] as const;
     }),
@@ -2010,13 +2050,16 @@ export const offerChoices = (field: OfferField) => {
     ? []
     : [{ key: "unset", label: "Not set", entry: undefined }];
   const { control } = field;
-  if (control.kind === "boolean")
+  if (control.kind === "boolean") {
     return [
       ...unset,
       { key: "true", label: "Yes", entry: "true" },
       { key: "false", label: "No", entry: "false" },
     ];
-  if (control.kind !== "enum") return [];
+  }
+  if (control.kind !== "enum") {
+    return [];
+  }
   return [
     ...unset,
     ...Arr.map(optionEntries(control.options), (entry, at) => ({
@@ -2054,10 +2097,13 @@ const decodeField = Schema.decodeUnknownOption(DrawnField);
 const isText = Schema.is(Schema.String);
 
 const controlOf: (field: DrawnField) => OfferControl = (field) => {
-  if (field.enum !== undefined) return { kind: "enum", options: field.enum };
+  if (field.enum !== undefined) {
+    return { kind: "enum", options: field.enum };
+  }
   const anyOf = field.anyOf ?? [];
-  if (Arr.isReadonlyArrayNonEmpty(anyOf) && Arr.every(anyOf, (one) => one.enum !== undefined))
+  if (Arr.isReadonlyArrayNonEmpty(anyOf) && Arr.every(anyOf, (one) => one.enum !== undefined)) {
     return { kind: "enum", options: Arr.flatMap(anyOf, (one) => one.enum ?? []) };
+  }
   const number = Arr.some(anyOf, (one) => one.type === "number");
   switch (number ? "number" : field.type) {
     case "string":
@@ -2090,13 +2136,18 @@ const labelOf = (name: string) =>
   pipe(name, Str.replaceAll("_", " "), Str.replaceAll("-", " "), Str.capitalize);
 
 const entryOf = (control: OfferControl, value: Schema.Json) => {
-  if (control.kind === "list" && Arr.isArray(value) && Arr.every(value, isText))
+  if (control.kind === "list" && Arr.isArray(value) && Arr.every(value, isText)) {
     return Arr.join(value, "\n");
+  }
   if (control.kind === "enum") {
     const at = Arr.findFirstIndex(control.options, (one) => encodeJson(one) === encodeJson(value));
-    if (Option.isSome(at)) return optionEntries(control.options)[at.value]!;
+    if (Option.isSome(at)) {
+      return optionEntries(control.options)[at.value]!;
+    }
   }
-  if (isText(value) && control.kind === "text") return value;
+  if (isText(value) && control.kind === "text") {
+    return value;
+  }
   return encodeJson(value);
 };
 
@@ -2106,7 +2157,9 @@ type Entry =
   | { readonly _tag: "Refused"; readonly why: string };
 
 const readEntry: (field: OfferField, entry: string | undefined) => Entry = (field, entry) => {
-  if (entry === undefined) return { _tag: "Unset" };
+  if (entry === undefined) {
+    return { _tag: "Unset" };
+  }
   const { control } = field;
   if (control.kind === "enum") {
     const entries = optionEntries(control.options);
@@ -2122,7 +2175,9 @@ const readEntry: (field: OfferField, entry: string | undefined) => Entry = (fiel
     );
   }
   const text = Str.trim(entry);
-  if (text === "") return { _tag: "Unset" };
+  if (text === "") {
+    return { _tag: "Unset" };
+  }
   switch (control.kind) {
     case "text":
       return { _tag: "Read", value: entry };
@@ -2133,7 +2188,9 @@ const readEntry: (field: OfferField, entry: string | undefined) => Entry = (fiel
     case "number":
     case "integer": {
       const value = Number(text);
-      if (!Number.isFinite(value)) return { _tag: "Refused", why: "must be a number" };
+      if (!Number.isFinite(value)) {
+        return { _tag: "Refused", why: "must be a number" };
+      }
       return control.kind === "integer" && !Number.isInteger(value)
         ? { _tag: "Refused", why: "must be a whole number" }
         : { _tag: "Read", value };
@@ -2145,7 +2202,9 @@ const readEntry: (field: OfferField, entry: string | undefined) => Entry = (fiel
       };
     case "json": {
       const parsed = parseJson(text);
-      if (Option.isNone(parsed)) return { _tag: "Refused", why: "is not valid JSON" };
+      if (Option.isNone(parsed)) {
+        return { _tag: "Refused", why: "is not valid JSON" };
+      }
       return holdsRefusal(control.holds, parsed.value) ?? { _tag: "Read", value: parsed.value };
     }
   }
@@ -2155,10 +2214,12 @@ const holdsRefusal: (holds: "object" | "array" | null, value: Schema.Json) => En
   holds,
   value,
 ) => {
-  if (holds === "object" && !isJsonObject(value))
+  if (holds === "object" && !isJsonObject(value)) {
     return { _tag: "Refused", why: "must be a JSON object" };
-  if (holds === "array" && !Arr.isArray(value))
+  }
+  if (holds === "array" && !Arr.isArray(value)) {
     return { _tag: "Refused", why: "must be a JSON list" };
+  }
   return null;
 };
 const isJsonObject = Schema.is(Schema.Record(Schema.String, Schema.Json));
@@ -2210,31 +2271,41 @@ export function flowActions(
     const live = node.agent != null && Arr.some(view.agents, (one) => one.name === node.agent);
     const proposal = node.proposal ?? facts.proposal ?? undefined;
     if (node.link !== undefined) {
-      if (node.link.run !== null) primary = "open";
-      if (node.link.canResume === true && node.link.machine === lane.machine) actions.push("retry");
+      if (node.link.run !== null) {
+        primary = "open";
+      }
+      if (node.link.canResume === true && node.link.machine === lane.machine) {
+        actions.push("retry");
+      }
     } else if (node.kind === "offer") {
-      if (node.id === `offer:${view.offer?.id}` && lane.run === (view.offer?.run ?? view.run))
+      if (node.id === `offer:${view.offer?.id}` && lane.run === (view.offer?.run ?? view.run)) {
         primary = "start";
+      }
     } else if (
       Arr.some(node.questions, (one) => one.id !== undefined && (one.open ?? one.answered === null))
     ) {
       primary = "answer";
-      if (live) actions.push("terminal");
-    } else if (node.wait === "proposal" && proposal !== undefined) primary = "proposal";
-    else if (node.wait === "hold" && facts.held) primary = "continue";
-    else if (
+      if (live) {
+        actions.push("terminal");
+      }
+    } else if (node.wait === "proposal" && proposal !== undefined) {
+      primary = "proposal";
+    } else if (node.wait === "hold" && facts.held) {
+      primary = "continue";
+    } else if (
       node.kind !== "release" &&
       (node.state === "failed" || node.state === "stopped") &&
       facts.canResume
-    )
+    ) {
       primary = "retry";
-    else if (
+    } else if (
       node.url !== undefined &&
       (node.kind === "release" || node.produces === "merge-request")
-    )
+    ) {
       primary = "open";
-    else if (live && node.state === "done") actions.push("tell");
-    else if (
+    } else if (live && node.state === "done") {
+      actions.push("tell");
+    } else if (
       live &&
       (node.wait === "stalled" ||
         node.wait === "parked" ||
@@ -2243,7 +2314,9 @@ export function flowActions(
       primary = "terminal";
       actions.push("tell");
     }
-    if (node.log != null) actions.push("log");
+    if (node.log != null) {
+      actions.push("log");
+    }
     const running = ["running", "suspended"].includes(lane.execution) || facts.canResume;
     const step = node.declared && ["agent", "check", "question", "workflow"].includes(node.kind);
     const target =
@@ -2262,7 +2335,9 @@ export function flowActions(
               ),
             )
           : undefined;
-    if (running && step && target?.declared && !target.offPath) actions.push("pause");
+    if (running && step && target?.declared && !target.offPath) {
+      actions.push("pause");
+    }
     if (
       running &&
       step &&
@@ -2277,11 +2352,15 @@ export function flowActions(
             (present) => Arr.some(present.runs, (one) => one.state === "expected"),
           ),
         ))
-    )
+    ) {
       actions.push("note");
-    if (primary === "retry" && step) actions.push("retry-noted");
-    if (node.kind === "check" || node.produces === "evidence" || (node.evidence ?? 0) > 0)
+    }
+    if (primary === "retry" && step) {
+      actions.push("retry-noted");
+    }
+    if (node.kind === "check" || node.produces === "evidence" || (node.evidence ?? 0) > 0) {
       actions.push("evidence");
+    }
     return {
       ...node,
       primary,
@@ -2297,9 +2376,15 @@ export function flowActions(
         ? isSettled(view.state)
         : !["running", "suspended"].includes(lane.execution);
     const actions: Array<FlowLaneAction> = [];
-    if (!settled) actions.push(facts.held ? "release" : "hold", "stop");
-    if (facts.canResume) actions.push("resume");
-    if (lane.run === view.run && view.state === "done") actions.push("follow-up");
+    if (!settled) {
+      actions.push(facts.held ? "release" : "hold", "stop");
+    }
+    if (facts.canResume) {
+      actions.push("resume");
+    }
+    if (lane.run === view.run && view.state === "done") {
+      actions.push("follow-up");
+    }
     return {
       ...lane,
       actions,
@@ -2323,7 +2408,9 @@ export function flowActions(
           runs: node.runs,
         }));
   const release = flow.release === null ? null : releaseOf(flow.release);
-  if (flow.releases === undefined) return { ...flow, lanes, release };
+  if (flow.releases === undefined) {
+    return { ...flow, lanes, release };
+  }
   const releases = Arr.map(flow.releases, (row) => ({ ...row, nodes: releaseOf(row.nodes) }));
   return { ...flow, lanes, release, releases };
 }
@@ -2395,8 +2482,12 @@ export function mrNounOf(mr: string) {
 
 export function openMrLabel(mr: MrRef, primary: boolean, named?: string) {
   const github = forgeOfRef(mr) === "github";
-  if (named !== undefined) return `${github ? "Open PR" : "Open MR"} ${named}`;
-  if (primary) return github ? "Open PR" : "Open MR";
+  if (named !== undefined) {
+    return `${github ? "Open PR" : "Open MR"} ${named}`;
+  }
+  if (primary) {
+    return github ? "Open PR" : "Open MR";
+  }
   return github ? "Open pull request" : "Open merge request";
 }
 
@@ -2408,17 +2499,29 @@ export function disposeLabel(action: DisposeAction) {
 
 export function cardActions(view: TaskView) {
   const actions: Array<CardAction> = [{ kind: "go-to-tab" }];
-  if (!isSettled(view.state)) actions.push({ kind: "steer" }, { kind: "attach" });
+  if (!isSettled(view.state)) {
+    actions.push({ kind: "steer" }, { kind: "attach" });
+  }
   const several = severalOf(view);
   const mr = mrRefOf(view.mr);
-  if (several.length > 0) actions.push(...Arr.map(several, openEach));
-  else if (mr !== null) actions.push({ kind: "open-mr", mr });
-  for (const offer of view.offers ?? (view.offer === null ? [] : [view.offer]))
+  if (several.length > 0) {
+    actions.push(...Arr.map(several, openEach));
+  } else if (mr !== null) {
+    actions.push({ kind: "open-mr", mr });
+  }
+  for (const offer of view.offers ?? (view.offer === null ? [] : [view.offer])) {
     actions.push({ kind: "offer", offer });
-  if (view.check !== null) actions.push({ kind: "check-output" });
+  }
+  if (view.check !== null) {
+    actions.push({ kind: "check-output" });
+  }
   actions.push({ kind: "offers" });
-  if (canResume(view.state)) actions.push({ kind: "resume" });
-  if (view.state === "done") actions.push({ kind: "follow-up" });
+  if (canResume(view.state)) {
+    actions.push({ kind: "resume" });
+  }
+  if (view.state === "done") {
+    actions.push({ kind: "follow-up" });
+  }
   if (!isSettled(view.state)) {
     actions.push({ kind: "hold", set: view.held === null }, { kind: "stop" });
   }
@@ -2483,9 +2586,11 @@ export function primaryAction(view: TaskView) {
 }
 
 export function dispositionActions(view: TaskView) {
-  if (!isSettled(view.state)) return [];
+  if (!isSettled(view.state)) {
+    return [];
+  }
   const several = severalOf(view);
-  if (several.length > 0)
+  if (several.length > 0) {
     return Arr.flatMap(several, (one) =>
       Arr.map(
         one.state === "closed"
@@ -2494,22 +2599,33 @@ export function dispositionActions(view: TaskView) {
         (kind) => disposeEach(one, kind),
       ),
     );
+  }
   const kinds: Array<DispositionKind> = ["merged", "abandoned"];
-  if (view.mrState === "closed") kinds.push("superseded");
+  if (view.mrState === "closed") {
+    kinds.push("superseded");
+  }
   return Arr.map(kinds, (kind) => dispose(view, kind));
 }
 
 export type Section = "needs-you" | "ready-to-ship" | "working" | "waiting" | "finished";
 
 export function shippingLabel(view: Pick<TaskView, "shipping" | "offer">) {
-  if (view.shipping == null) return "";
-  if (view.shipping === "merge") return `${view.offer?.title ?? "Merge"}: `;
+  if (view.shipping == null) {
+    return "";
+  }
+  if (view.shipping === "merge") {
+    return `${view.offer?.title ?? "Merge"}: `;
+  }
   return view.shipping === "stage" ? "Stage: " : "Deploy: ";
 }
 
 export function sectionOf(view: Pick<TaskView, "state" | "landed" | "shipping">) {
-  if (view.state === "blocked") return view.shipping == null ? "needs-you" : "ready-to-ship";
-  if (view.state === "active" || view.state === "quiet") return "working";
+  if (view.state === "blocked") {
+    return view.shipping == null ? "needs-you" : "ready-to-ship";
+  }
+  if (view.state === "active" || view.state === "quiet") {
+    return "working";
+  }
   return view.landed ? "finished" : view.shipping == null ? "waiting" : "ready-to-ship";
 }
 
@@ -2615,7 +2731,9 @@ export function headerSentence(views: ReadonlyArray<TaskView>, now?: number) {
 
 export function mrLabel(mr: string) {
   const ref = readMrRef(mr);
-  if (ref) return mrWords(ref).label;
+  if (ref) {
+    return mrWords(ref).label;
+  }
   const bare = pipe(mr, Str.startsWith("mr:")) ? pipe(mr, Str.slice(3)) : mr;
   const host = /^[^/!]+\.[^/!]+\/(.+)$/.exec(bare);
   return host ? host[1]! : bare;

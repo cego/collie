@@ -65,10 +65,14 @@ export interface Judgement {
 
 export const collieRunOf = (body: string) => {
   const last = Arr.last(Arr.filter(Str.split(Str.trimEnd(body), "\n"), (line) => line !== ""));
-  if (last._tag === "None") return null;
+  if (last._tag === "None") {
+    return null;
+  }
   for (const signature of SIGNATURES) {
     const run = signature.exec(Str.trim(last.value))?.[1];
-    if (run !== undefined) return run;
+    if (run !== undefined) {
+      return run;
+    }
   }
   return null;
 };

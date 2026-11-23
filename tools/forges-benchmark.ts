@@ -34,10 +34,14 @@ const githubCli = Effect.fn("benchmark.githubCli")(function* (ref: MrRef, name: 
   const repo = pipe_(ref.project!, Str.slice("github.com/".length));
   const view = yield* run("gh", ["pr", "view", ref.iid, "--repo", repo, "--json", "headRefOid"]);
   const head = decoded(Schema.Struct({ headRefOid: Schema.String }), view.stdout)?.headRefOid;
-  if (head === undefined) return yield* Effect.die(`gh could not read ${repo}#${ref.iid}`);
+  if (head === undefined) {
+    return yield* Effect.die(`gh could not read ${repo}#${ref.iid}`);
+  }
   const query = `check_name=${encodeURIComponent(name)}`;
   const listed = yield* run("gh", ["api", `repos/${repo}/commits/${head}/check-runs?${query}`]);
-  if (listed.code !== 0) return yield* Effect.die(`gh could not list the check runs on ${head}`);
+  if (listed.code !== 0) {
+    return yield* Effect.die(`gh could not list the check runs on ${head}`);
+  }
 });
 
 const GitlabMr = Schema.Struct({
@@ -55,22 +59,32 @@ const gitlabCli = Effect.fn("benchmark.gitlabCli")(function* (ref: MrRef, name: 
   const host = Str.split(project, "/")[0];
   const path = encodeURIComponent(pipe_(project, Str.slice(host.length + 1)));
   yield* run("glab", ["--version"]);
-  if ((yield* run("glab", ["auth", "status", "--hostname", host])).code !== 0)
+  if ((yield* run("glab", ["auth", "status", "--hostname", host])).code !== 0) {
     return yield* Effect.die(`glab is not logged in to ${host}`);
+  }
   const api = (route: string) =>
     run("glab", ["api", "--hostname", host, "-X", "GET", `projects/${path}/${route}`]);
   const view = yield* run("glab", ["mr", "view", ref.iid, "--repo", project, "-F", "json"]);
   const mr = decoded(GitlabMr, view.stdout);
-  if (mr === undefined) return yield* Effect.die(`glab could not read ${project}!${ref.iid}`);
+  if (mr === undefined) {
+    return yield* Effect.die(`glab could not read ${project}!${ref.iid}`);
+  }
   const pipeline = mr.head_pipeline;
-  if (pipeline == null) return;
-  if (pipeline.sha && pipeline.sha !== mr.sha) yield* api(`repository/commits/${pipeline.sha}`);
+  if (pipeline == null) {
+    return;
+  }
+  if (pipeline.sha && pipeline.sha !== mr.sha) {
+    yield* api(`repository/commits/${pipeline.sha}`);
+  }
   for (let page = 1; ; page++) {
     const listed = yield* api(`pipelines/${pipeline.id}/jobs?per_page=100&page=${page}`);
     const jobs = decoded(GitlabJobs, listed.stdout);
-    if (jobs === undefined)
+    if (jobs === undefined) {
       return yield* Effect.die(`glab could not list the jobs of ${pipeline.id}`);
-    if (Arr.some(jobs, (one) => one.name === name) || jobs.length < 100) return;
+    }
+    if (Arr.some(jobs, (one) => one.name === name) || jobs.length < 100) {
+      return;
+    }
   }
 });
 
@@ -102,17 +116,22 @@ const GITHUB_FIELDS = Arr.join(
 const githubDetailsCli = Effect.fn("benchmark.githubDetailsCli")(function* (ref: MrRef) {
   const repo = pipe_(ref.project!, Str.slice("github.com/".length));
   const view = yield* run("gh", ["pr", "view", ref.iid, "--repo", repo, "--json", GITHUB_FIELDS]);
-  if (view.code !== 0) return yield* Effect.die(`gh could not read ${repo}#${ref.iid}`);
+  if (view.code !== 0) {
+    return yield* Effect.die(`gh could not read ${repo}#${ref.iid}`);
+  }
 });
 
 const gitlabDetailsCli = Effect.fn("benchmark.gitlabDetailsCli")(function* (ref: MrRef) {
   const project = ref.project!;
   const host = Str.split(project, "/")[0];
   yield* run("glab", ["--version"]);
-  if ((yield* run("glab", ["auth", "status", "--hostname", host])).code !== 0)
+  if ((yield* run("glab", ["auth", "status", "--hostname", host])).code !== 0) {
     return yield* Effect.die(`glab is not logged in to ${host}`);
+  }
   const view = yield* run("glab", ["mr", "view", ref.iid, "--repo", project, "-F", "json"]);
-  if (view.code !== 0) return yield* Effect.die(`glab could not read ${project}!${ref.iid}`);
+  if (view.code !== 0) {
+    return yield* Effect.die(`glab could not read ${project}!${ref.iid}`);
+  }
 });
 
 const timed = <R>(read: Effect.Effect<void, never, R>) =>
@@ -142,9 +161,13 @@ const forgesProgram = Effect.gen(function* () {
     { url: values.gitlab, name: values["gitlab-job"], job: gitlabCli, details: gitlabDetailsCli },
   ];
   for (const { url, name = "", job, details } of measured) {
-    if (url === undefined || (reading === "job" && name === "")) continue;
+    if (url === undefined || (reading === "job" && name === "")) {
+      continue;
+    }
     const ref = mrRefOf(url);
-    if (ref === null) return yield* Effect.die(`${url} is not a merge request`);
+    if (ref === null) {
+      return yield* Effect.die(`${url} is not a merge request`);
+    }
     const forge = forgeOf(ref);
     const cli = reading === "job" ? job(ref, name) : details(ref);
     const library =
@@ -165,10 +188,11 @@ const forgesProgram = Effect.gen(function* () {
     for (const [transport, times] of [
       [forge.cli, cliTimes],
       ["forges", libraryTimes],
-    ] satisfies Array<[string, Array<number>]>)
+    ] satisfies Array<[string, Array<number>]>) {
       rows.push(
         `| ${forge.display} | ${url} | ${transport} | ${reads} | ${quantile(times, 0.5).toFixed(0)} ms | ${quantile(times, 0.9).toFixed(0)} ms |`,
       );
+    }
   }
   const go = Arr.every(medians, (one) => one.library <= one.cli);
   yield* Console.log(

@@ -174,8 +174,9 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
         Effect.gen(function* () {
           const ledger = incarnationKey(line.incarnation);
           yield* sql`INSERT INTO collie_deliveries (ledger, line) VALUES (${ledger}, ${encodeLedgerLine(line)})`;
-          if (isDelivery(line))
+          if (isDelivery(line)) {
             yield* markWorked(line.run).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+          }
           const runs = isDelivery(line)
             ? [line.run]
             : Arr.map(
@@ -196,8 +197,11 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
             let corrupt = 0;
             for (const row of rows) {
               const line = decodeLedgerLine(row.line);
-              if (Option.isSome(line)) lines.push(line.value);
-              else corrupt += 1;
+              if (Option.isSome(line)) {
+                lines.push(line.value);
+              } else {
+                corrupt += 1;
+              }
             }
             return { lines, corrupt };
           }),
@@ -217,8 +221,9 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
             `.pipe(
               Effect.map((rows) => {
                 const byRun = new Map<string, Array<string>>();
-                for (const row of rows)
+                for (const row of rows) {
                   byRun.set(row.run, [...(byRun.get(row.run) ?? []), row.line]);
+                }
                 return byRun;
               }),
               Effect.orDie,
@@ -257,7 +262,9 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
       ),
       forget: (runs) =>
         Effect.gen(function* () {
-          if (runs.length === 0) return;
+          if (runs.length === 0) {
+            return;
+          }
           yield* sql`
             DELETE FROM collie_deliveries WHERE ledger IN (
               SELECT ledger FROM collie_deliveries WHERE run IS NOT NULL GROUP BY ledger
@@ -282,7 +289,11 @@ export const readLedgerWhole = (incarnation: string) =>
 
 export function newestById(lines: ReadonlyArray<LedgerLine>) {
   const newest = new Map<string, Delivery>();
-  for (const line of lines) if (isDelivery(line)) newest.set(line.id, line);
+  for (const line of lines) {
+    if (isDelivery(line)) {
+      newest.set(line.id, line);
+    }
+  }
   const returned: Map<string, Delivery> = newest;
   return returned;
 }
@@ -321,10 +332,18 @@ export const overriddenRuns = Deliveries.use((ledgers) => ledgers.overridden);
 export function blocked(lines: ReadonlyArray<LedgerLine>, causal_key: string, resending?: string) {
   let found: Delivery | null = null;
   for (const delivery of newestById(lines).values()) {
-    if (delivery.causal_key !== causal_key) continue;
-    if (TERMINAL_STATES.has(delivery.state)) continue;
-    if (delivery.id === resending && delivery.state === "deferred") continue;
-    if (found === null || delivery.at > found.at) found = delivery;
+    if (delivery.causal_key !== causal_key) {
+      continue;
+    }
+    if (TERMINAL_STATES.has(delivery.state)) {
+      continue;
+    }
+    if (delivery.id === resending && delivery.state === "deferred") {
+      continue;
+    }
+    if (found === null || delivery.at > found.at) {
+      found = delivery;
+    }
   }
   const returned: Delivery | null = found;
   return returned;
@@ -334,7 +353,9 @@ export function deferralsOf(lines: ReadonlyArray<LedgerLine>, id: string) {
   let since: string | null = null;
   let count = 0;
   for (const line of lines) {
-    if (!isDelivery(line) || line.id !== id || line.state === "reserved") continue;
+    if (!isDelivery(line) || line.id !== id || line.state === "reserved") {
+      continue;
+    }
     if (line.state !== "deferred") {
       since = null;
       count = 0;
@@ -355,9 +376,13 @@ export function settleStaleReservations(
 ) {
   const settled: Array<Delivery> = [];
   for (const delivery of newestById(lines).values()) {
-    if (delivery.state !== "reserved") continue;
+    if (delivery.state !== "reserved") {
+      continue;
+    }
     const reservedAt = epochMs(delivery.at);
-    if (Number.isNaN(reservedAt) || nowMs - reservedAt < submitTimeoutMs) continue;
+    if (Number.isNaN(reservedAt) || nowMs - reservedAt < submitTimeoutMs) {
+      continue;
+    }
     settled.push({
       ...delivery,
       at,
@@ -372,7 +397,9 @@ export function settleStaleReservations(
 export function overrideActive(lines: ReadonlyArray<LedgerLine>) {
   let active = false;
   for (const line of lines) {
-    if (isDelivery(line)) continue;
+    if (isDelivery(line)) {
+      continue;
+    }
     active = line.kind === "manual_override";
   }
   return active;
@@ -429,10 +456,11 @@ export const herdKey = Effect.fn("Steering.herdKey")(function* <R>(
   fromStatus: () => Effect.Effect<string | null, never, R>,
 ) {
   const socket = socketPath ?? (yield* fromStatus());
-  if (socket === null || socket === "")
+  if (socket === null || socket === "") {
     return yield* new HerdrUnreachable({
       why: "no socket path",
     });
+  }
   const fs = yield* FileSystem.FileSystem;
   const real = yield* fs.realPath(socket).pipe(Effect.orElseSucceed(() => socket));
   return digest(real);
@@ -543,7 +571,9 @@ export const appendBudget = Effect.fn("Steering.appendBudget")(function* (
   file: string,
   lines: ReadonlyArray<BudgetLine>,
 ) {
-  if (lines.length === 0) return;
+  if (lines.length === 0) {
+    return;
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });

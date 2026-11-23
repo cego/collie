@@ -28,8 +28,9 @@ export const userEnv = { ...Bun.env };
 
 export const enterWorld = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  for (const dir of [world.user, world.state, world.home, world.project, world.bin])
+  for (const dir of [world.user, world.state, world.home, world.project, world.bin]) {
     yield* fs.makeDirectory(dir, { recursive: true });
+  }
   yield* fs.writeFileString(`${world.home}/.bunfig.toml`, testBunfig);
   yield* fs.writeFileString(
     `${world.bin}/claude`,

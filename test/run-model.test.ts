@@ -409,7 +409,7 @@ test("a branch head read before its checkout is watched is read again, so a move
     }).pipe(Effect.scoped),
   ));
 
-for (const late of [false, true])
+for (const late of [false, true]) {
   test(`a commit before checkout watch registration completes publishes an autonomous invalidation${late ? " to a late subscriber" : ""}`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -469,6 +469,7 @@ for (const late of [false, true])
         expect(yield* model.head(run)).toBe(second);
       }).pipe(Effect.scoped),
     ));
+}
 
 test("a branch head read while its checkout moves is not kept, so the move reaches the next read", () =>
   runEffect(
@@ -497,8 +498,9 @@ test("a branch head read while its checkout moves is not kept, so the move reach
                 !gate.armed ||
                 command._tag !== "StandardCommand" ||
                 !command.args.includes("--verify")
-              )
+              ) {
                 return Effect.void;
+              }
               gate.armed = false;
               return handle.exitCode.pipe(
                 Effect.andThen(Deferred.succeed(gate.answered, undefined)),

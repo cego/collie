@@ -69,8 +69,9 @@ export class NoHostDb extends Data.TaggedError("NoHostDb")<{ readonly stateDir: 
 // WARNING: A read fails until the host has made and migrated host.db; the poll retries.
 export const hostRecords = <A, E>(stateDir: string, read: Effect.Effect<A, E, Records>) =>
   Effect.gen(function* () {
-    if (!(yield* (yield* FileSystem.FileSystem).exists(`${stateDir}/host.db`).pipe(Effect.orDie)))
+    if (!(yield* (yield* FileSystem.FileSystem).exists(`${stateDir}/host.db`).pipe(Effect.orDie))) {
       return yield* new NoHostDb({ stateDir });
+    }
     return yield* read.pipe(
       Effect.provide(recordsReadLayer(stateDir)),
       Effect.catchCause(() => Effect.fail(new NoHostDb({ stateDir }))),

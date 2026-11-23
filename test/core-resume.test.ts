@@ -70,8 +70,9 @@ afterEach(() =>
       );
       for (const line of Str.split(events, "\n")) {
         const one = Schema.decodeOption(Started)(line);
-        if (Option.isSome(one))
+        if (Option.isSome(one)) {
           yield* Effect.ignore(Effect.try(() => process.kill(one.value.pid, "SIGKILL")));
+        }
       }
       yield* rig.close();
     }),
@@ -85,9 +86,12 @@ const until = <A, E, R>(read: () => Effect.Effect<A, E, R>, wanted: (value: A) =
   Effect.gen(function* () {
     for (let tries = 0; ; tries++) {
       const value = yield* read();
-      if (wanted(value)) return value;
-      if (tries === 3000)
+      if (wanted(value)) {
+        return value;
+      }
+      if (tries === 3000) {
         return yield* Effect.die(new Error(`never got there: ${Bun.inspect(value)}`));
+      }
       yield* TestClock.withLive(Effect.sleep("20 millis"));
     }
   });
@@ -262,7 +266,9 @@ test("a dead owned server on core resumes its conversation once despite competin
         override terminalKill(address: string) {
           return super.terminalKill(address).pipe(
             Effect.tap(() => {
-              if (agents === undefined || recovering === null) return Effect.void;
+              if (agents === undefined || recovering === null) {
+                return Effect.void;
+              }
               // WARNING: Detached: recovery interrupts the fiber closing the pane, and a child would end with it.
               return Effect.forkDetach(agents.resumeLost(recovering, runningNow)).pipe(
                 Effect.tap((fiber) => Effect.sync(() => competitions.push(fiber))),
@@ -478,8 +484,9 @@ test("a core holder loss mid-Run starts each agent of the Run again in its own s
       );
       const of = (operation: string) =>
         Option.getOrThrow(Arr.findFirst(again, (launch) => launch.name === named(operation)));
-      for (const operation of ["claude", "codex", "opencode", "pi"])
+      for (const operation of ["claude", "codex", "opencode", "pi"]) {
         expect(of(operation).cwd).toBe(rig.projectDir);
+      }
       expect(after(of("claude").argv, "--resume")).toBe(sessions.claude.value);
       expect(of("claude").argv).not.toContain("--session-id");
       expect(of("codex").argv.slice(0, 3)).toEqual(["codex", "resume", THREAD]);
@@ -643,7 +650,7 @@ for (const [hasSession, sessionOnlyAnchor, outcome] of [
   [true, false, "resumes only the latest session"],
   [false, false, "never borrows an earlier generation's session"],
   [true, true, "follows later work from a session-only anchor"],
-] as const)
+] as const) {
   test(`core recovery of collided legacy generations ${outcome}`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -703,13 +710,14 @@ for (const [hasSession, sessionOnlyAnchor, outcome] of [
             });
           }
           const runRecords = yield* RunRecords;
-          if (sessionOnlyAnchor)
+          if (sessionOnlyAnchor) {
             yield* runRecords.setControl(
               RELAUNCH,
               runId,
               asJson({ ...Struct.omit(ask, ["prompt"]), sequence: 2 }),
               latest.agent,
             );
+          }
           const moved = yield* runRecords.control(RELAUNCH, runId, latest.agent);
           expect(moved).not.toBeNull();
           yield* runRecords.setControl(RELAUNCH, runId, null, latest.agent);
@@ -722,9 +730,9 @@ for (const [hasSession, sessionOnlyAnchor, outcome] of [
           const resumed = yield* launchesSince(yield* rig.calls(), before);
           expect(Arr.map(resumed, (one) => one.name)).toEqual([collided]);
           expect(after(resumed[0]!.argv, "--resume")).not.toBe(earlier.agentSession?.value);
-          if (hasSession)
+          if (hasSession) {
             expect(after(resumed[0]!.argv, "--resume")).toBe(latest.agentSession?.value);
-          else {
+          } else {
             expect(resumed[0]!.argv).not.toContain("--resume");
             expect(resumed[0]!.argv).toContain("--session-id");
           }
@@ -754,6 +762,7 @@ for (const [hasSession, sessionOnlyAnchor, outcome] of [
         );
       }),
     ));
+}
 
 test("quota incident publication waits for an admitted core recovery", () =>
   runEffect(
@@ -785,7 +794,9 @@ test("quota incident publication waits for an admitted core recovery", () =>
         ...fs,
         writeFileString: (path, data, options) =>
           Effect.sync(() => {
-            if (Str.startsWith(wait)(path)) writing = true;
+            if (Str.startsWith(wait)(path)) {
+              writing = true;
+            }
           }).pipe(Effect.andThen(fs.writeFileString(path, data, options))),
       };
       yield* core.lose;
@@ -1104,7 +1115,9 @@ test("an agent ended while core's recovery is starting it again stays ended", ()
       let held = false;
       class HeldLaunch extends Herdr {
         override agentLaunch(opts: Parameters<Herdr["agentLaunch"]>[0]) {
-          if (!held) return super.agentLaunch(opts);
+          if (!held) {
+            return super.agentLaunch(opts);
+          }
           return Deferred.succeed(launching, undefined).pipe(
             Effect.andThen(Deferred.await(go)),
             Effect.andThen(super.agentLaunch(opts)),

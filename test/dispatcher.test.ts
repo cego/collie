@@ -84,8 +84,9 @@ test("each door's Delivery names its sender on its first line, and Collie's own 
   expect(firstLine({ origin: "cli-tty" })).toMatch(
     new RegExp(`^From the human, in a terminal, ${MINUTE}\\.$`),
   );
-  for (const door of ["cli", "driver", "evaluator", "schedule"] as const)
+  for (const door of ["cli", "driver", "evaluator", "schedule"] as const) {
     expect(firstLine({ origin: door })).toMatch(new RegExp(`^From ${door}, ${MINUTE}\\.$`));
+  }
   expect(firstLine({ origin: "chat" })).toMatch(new RegExp(`^From chat, ${MINUTE}\\.$`));
   const chatting = firstLine({
     origin: "chat",
@@ -213,12 +214,15 @@ function fake(
         agentPrompt: (target: string, text: string) =>
           Effect.gen(function* () {
             calls.push(`agentPrompt ${target} ${text}`);
-            if (options.onPrompt) yield* options.onPrompt;
+            if (options.onPrompt) {
+              yield* options.onPrompt;
+            }
             const prompted = Arr.filter(calls, (call) =>
               pipe_(call, Str.startsWith("agentPrompt")),
             ).length;
-            if (options.fail && prompted <= (options.failing ?? Infinity))
+            if (options.fail && prompted <= (options.failing ?? Infinity)) {
               return yield* options.fail;
+            }
             return options.saw ?? ("observed" as const);
           }),
       },
@@ -620,7 +624,7 @@ const holdingTheLedger = {
     transaction(fake().deps, entry, () => until),
 };
 
-for (const [holder, hold] of Rec.toEntries(holdingTheLedger))
+for (const [holder, hold] of Rec.toEntries(holdingTheLedger)) {
   test(`a patient submission waits out ${holder} on the agent's ledger, then delivers once`, () =>
     runEffect(
       fastForward(
@@ -638,8 +642,9 @@ for (const [holder, hold] of Rec.toEntries(holdingTheLedger))
           const submitting = yield* Effect.forkScoped(
             submitPatiently(h.deps, entry, "read the prompt file", draft),
           );
-          while ((yield* Clock.currentTimeMillis) - from < 20_000)
+          while ((yield* Clock.currentTimeMillis) - from < 20_000) {
             yield* TestClock.withLive(Effect.sleep("5 millis"));
+          }
 
           expect(submitting.pollUnsafe()).toBeUndefined();
           expect(prompted(h.calls)).toBe(0);
@@ -657,6 +662,7 @@ for (const [holder, hold] of Rec.toEntries(holdingTheLedger))
         }),
       ),
     ));
+}
 
 test("an interrupt presses nothing in a pane whose harness has not been shown to take one", () =>
   runEffect(

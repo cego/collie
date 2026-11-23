@@ -27,12 +27,15 @@ export const readWhole = Effect.fn("Carried.readWhole")(function* (
   for (;;) {
     const part = yield* machine.door.readFile({ path, offset, length: PART_BYTES });
     first ??= part;
-    if (part.size > most) return yield* tooLarge(`${machine.name}:${path}`);
+    if (part.size > most) {
+      return yield* tooLarge(`${machine.name}:${path}`);
+    }
     const bytes = Base64.decode(part.content).pipe(Result.getOrElse(() => new Uint8Array()));
     parts.push(bytes);
     offset += bytes.length;
-    if (bytes.length === 0 || offset >= part.size || enough(bytes))
+    if (bytes.length === 0 || offset >= part.size || enough(bytes)) {
       return { file: first, bytes: new Uint8Array(Buffer.concat(parts)) };
+    }
   }
 });
 
@@ -50,7 +53,9 @@ const uploaded = Effect.fn("Carried.upload")(function* (
   uploads.set(machine.name, known);
   const now = yield* Clock.currentTimeMillis;
   const held = known.get(sha256);
-  if (held !== undefined && now - held.at < REMEMBERED) return held.path;
+  if (held !== undefined && now - held.at < REMEMBERED) {
+    return held.path;
+  }
   for (let offset = 0; ; offset += PART_BYTES) {
     const part = bytes.subarray(offset, offset + PART_BYTES);
     const { path } = yield* machine.door.upload({
@@ -64,8 +69,9 @@ const uploaded = Effect.fn("Carried.upload")(function* (
       known.set(sha256, { path, at: now });
       return path;
     }
-    if (offset + PART_BYTES >= bytes.length)
+    if (offset + PART_BYTES >= bytes.length) {
       return yield* new HostRefused({ reason: `${machine.name} did not keep ${name}` });
+    }
   }
 });
 
@@ -81,11 +87,14 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
         Arr.map(present, ({ path }) => path),
       ),
     );
-  if (named === undefined || named.length === 0) return given;
-  if (!machine.board.files)
+  if (named === undefined || named.length === 0) {
+    return given;
+  }
+  if (!machine.board.files) {
     return yield* new HostRefused({
       reason: `${machine.name}'s Collie does not take files; upgrade Collie on ${machine.name}. Nothing was done there.`,
     });
+  }
   const fs = yield* FileSystem.FileSystem;
   const paths: Array<string> = [];
   for (const one of named) {
@@ -98,8 +107,9 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
         : undefined;
     const path = on === undefined ? one : pipe_(one, Str.slice(colon + 1));
     const name = Str.split(path, "/").at(-1) ?? path;
-    if (on?.name === machine.name) paths.push(path);
-    else if (on !== undefined)
+    if (on?.name === machine.name) {
+      paths.push(path);
+    } else if (on !== undefined) {
       paths.push(
         yield* uploaded(
           flock.uploaded,
@@ -108,18 +118,23 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
           (yield* readWhole(yield* reach(on), path, undefined, ATTACHMENT_BYTES)).bytes,
         ),
       );
-    else if (pipe_(path, Str.startsWith("/"))) {
+    } else if (pipe_(path, Str.startsWith("/"))) {
       const unreadable = () =>
         new HostRefused({ reason: `${path} cannot be read on this computer` });
       const info = yield* fs.stat(path).pipe(Effect.mapError(unreadable));
-      if (info.type !== "File") return yield* unreadable();
-      if (Number(info.size) > ATTACHMENT_BYTES) return yield* tooLarge(path);
+      if (info.type !== "File") {
+        return yield* unreadable();
+      }
+      if (Number(info.size) > ATTACHMENT_BYTES) {
+        return yield* tooLarge(path);
+      }
       const bytes = yield* fs.readFile(path).pipe(Effect.mapError(unreadable));
       paths.push(yield* uploaded(flock.uploaded, machine, name, bytes));
-    } else
+    } else {
       return yield* new HostRefused({
         reason: `${one} is neither a path on this computer nor <machine>:<path>. Nothing was done.`,
       });
+    }
   }
   return paths;
 });
@@ -136,24 +151,26 @@ export const placeStaged = Effect.fn("Carried.place")(function* (
   dir: string,
   ids: ReadonlyArray<string>,
 ) {
-  if (!machine.files)
+  if (!machine.files) {
     return yield* new HostRefused({
       reason: `${machine.name}'s Collie does not take files; upgrade Collie on ${machine.name}. Nothing was pasted.`,
     });
+  }
   const fs = yield* FileSystem.FileSystem;
   const copies = [];
   for (const id of ids) {
     const copy = yield* describeAttachment(dir, id);
     const name = copy?.name ?? Str.split(id, "/").at(-1) ?? id;
     const bytes = copy === null ? undefined : yield* fs.readFile(copy.path).pipe(Effect.option);
-    if (bytes === undefined || Option.isNone(bytes))
+    if (bytes === undefined || Option.isNone(bytes)) {
       return yield* new HostRefused({
         reason: `${name} is no longer held by Desktop; paste it again`,
       });
+    }
     copies.push({ name, bytes: bytes.value });
   }
   const paths: Array<string> = [];
-  for (const { name, bytes } of copies)
+  for (const { name, bytes } of copies) {
     paths.push(
       yield* uploaded(held, machine, name, bytes).pipe(
         Effect.mapError(
@@ -164,5 +181,6 @@ export const placeStaged = Effect.fn("Carried.place")(function* (
         ),
       ),
     );
+  }
   return paths;
 });

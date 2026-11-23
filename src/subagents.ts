@@ -36,25 +36,44 @@ export function parseSubagents(text: string) {
 }
 
 export function subagentVersion(policy: ClaudeSubagents) {
-  if (policy.forceModel !== undefined) return "2.1.257";
-  if (policy.model !== undefined) return "2.1.251";
-  if (policy.cacheTtl !== undefined) return "2.1.242";
-  if (policy.maxDepth !== undefined || policy.maxConcurrent !== undefined) return "2.1.217";
+  if (policy.forceModel !== undefined) {
+    return "2.1.257";
+  }
+  if (policy.model !== undefined) {
+    return "2.1.251";
+  }
+  if (policy.cacheTtl !== undefined) {
+    return "2.1.242";
+  }
+  if (policy.maxDepth !== undefined || policy.maxConcurrent !== undefined) {
+    return "2.1.217";
+  }
   return "2.1.63";
 }
 
 export function subagentSettings(policy: ClaudeSubagents) {
   const settings: Record<string, Schema.Json> = {};
   const env: Record<string, string> = {};
-  if (policy.model !== undefined) env.CLAUDE_CODE_SUBAGENT_MODEL = policy.model;
-  if (policy.forceModel !== undefined)
+  if (policy.model !== undefined) {
+    env.CLAUDE_CODE_SUBAGENT_MODEL = policy.model;
+  }
+  if (policy.forceModel !== undefined) {
     env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE = policy.forceModel ? "1" : "0";
-  if (policy.maxDepth !== undefined)
+  }
+  if (policy.maxDepth !== undefined) {
     env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH = String(policy.maxDepth);
-  if (policy.maxConcurrent !== undefined)
+  }
+  if (policy.maxConcurrent !== undefined) {
     env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS = String(policy.maxConcurrent);
-  if (Rec.keys(env).length > 0) settings.env = env;
-  if (policy.cacheTtl !== undefined) settings.subagentPromptCacheTtl = policy.cacheTtl;
-  if (policy.enabled === false) settings.permissions = { deny: ["Agent"] };
+  }
+  if (Rec.keys(env).length > 0) {
+    settings.env = env;
+  }
+  if (policy.cacheTtl !== undefined) {
+    settings.subagentPromptCacheTtl = policy.cacheTtl;
+  }
+  if (policy.enabled === false) {
+    settings.permissions = { deny: ["Agent"] };
+  }
   return settings;
 }

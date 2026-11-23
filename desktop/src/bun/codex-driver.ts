@@ -99,15 +99,20 @@ const appServer = Effect.fnUntraced(function* (
     Stream.splitLines,
     Stream.runForEach((line) => {
       const message = Option.getOrUndefined(decodeMessage(line));
-      if (message === undefined) return Effect.void;
-      if (message.method !== undefined)
+      if (message === undefined) {
+        return Effect.void;
+      }
+      if (message.method !== undefined) {
         return Queue.offer(heard, {
           id: message.id,
           method: message.method,
           params: message.params,
         });
+      }
       const waiting = isNumber(message.id) ? pending.get(message.id) : undefined;
-      if (waiting === undefined) return Effect.void;
+      if (waiting === undefined) {
+        return Effect.void;
+      }
       pending.delete(Number(message.id));
       return message.error === undefined
         ? Deferred.succeed(waiting, message.result ?? null)
@@ -120,7 +125,9 @@ const appServer = Effect.fnUntraced(function* (
         const why = new CodexError({
           message: Str.trim(yield* Fiber.join(said)) || `Codex ended its session (exit ${code}).`,
         });
-        for (const waiting of pending.values()) yield* Deferred.fail(waiting, why);
+        for (const waiting of pending.values()) {
+          yield* Deferred.fail(waiting, why);
+        }
         pending.clear();
         yield* Queue.fail(heard, why);
       }),
@@ -286,7 +293,9 @@ const codexEvents = (thread: string) => {
   const runId = () => `${thread}:${turn}`;
   const startTool: (item: Item) => Array<AguiEvent> = (item) => {
     const tool = toolOf(item);
-    if (tool === undefined || tools.has(item.id)) return [];
+    if (tool === undefined || tools.has(item.id)) {
+      return [];
+    }
     tools.add(item.id);
     return [
       {
@@ -351,23 +360,30 @@ const codexEvents = (thread: string) => {
           onNone: () => [],
           onSome: ({ item }) => {
             if (item.type === "agentMessage") {
-              if (texts.has(item.id)) return [{ type: "TEXT_MESSAGE_END", messageId: item.id }];
-              if (item.text === undefined || item.text === "") return [];
+              if (texts.has(item.id)) {
+                return [{ type: "TEXT_MESSAGE_END", messageId: item.id }];
+              }
+              if (item.text === undefined || item.text === "") {
+                return [];
+              }
               return [
                 { type: "TEXT_MESSAGE_START", messageId: item.id, role: "assistant" },
                 { type: "TEXT_MESSAGE_CONTENT", messageId: item.id, delta: item.text },
                 { type: "TEXT_MESSAGE_END", messageId: item.id },
               ];
             }
-            if (item.type === "reasoning")
+            if (item.type === "reasoning") {
               return reasons.has(item.id)
                 ? [
                     { type: "REASONING_MESSAGE_END", messageId: item.id },
                     { type: "REASONING_END", messageId: item.id },
                   ]
                 : [];
+            }
             const tool = toolOf(item);
-            if (tool === undefined) return [];
+            if (tool === undefined) {
+              return [];
+            }
             return [
               ...startTool(item),
               {
@@ -385,7 +401,9 @@ const codexEvents = (thread: string) => {
         return [];
       case "thread/tokenUsage/updated":
         Option.map(decodeUsage(params), ({ turnId: of, tokenUsage: { last } }) => {
-          if (of !== turnId) return;
+          if (of !== turnId) {
+            return;
+          }
           usage = {
             input_tokens: usage.input_tokens + last.inputTokens - last.cachedInputTokens,
             output_tokens: usage.output_tokens + last.outputTokens,
@@ -399,10 +417,13 @@ const codexEvents = (thread: string) => {
         return Option.match(decodeTurn(params), {
           onNone: () => [],
           onSome: ({ turn: ended }) => {
-            if (turnId !== undefined && ended.id !== turnId) return [];
+            if (turnId !== undefined && ended.id !== turnId) {
+              return [];
+            }
             const error = ended.status === "failed" ? ended.error : undefined;
-            if (error === undefined || error === null)
+            if (error === undefined || error === null) {
               return [{ type: "RUN_FINISHED", threadId: thread, runId: runId() }];
+            }
             limited = error.codexErrorInfo === "usageLimitExceeded";
             return [
               {
@@ -445,14 +466,17 @@ const inputOf = (content: string | ReadonlyArray<ContentBlock>, note: string) =>
   const blocks = isString(content) ? [{ type: "text" as const, text: content }] : content;
   const text = (words: string) => ({ type: "text", text: words, text_elements: [] });
   const partOf: (block: ContentBlock) => ReadonlyArray<JsonObject> = (block) => {
-    if (block.type === "text") return [text(block.text)];
-    if (block.type === "image")
+    if (block.type === "text") {
+      return [text(block.text)];
+    }
+    if (block.type === "image") {
       return [
         {
           type: "image",
           url: `data:${block.source.media_type};base64,${block.source.data}`,
         },
       ];
+    }
     return [];
   };
   return [...Arr.flatMap(blocks, partOf), ...(note === "" ? [] : [text(`${NOTE}\n${note}`)])];
@@ -497,7 +521,9 @@ const entryOf: (item: Item) => ReadonlyArray<Schema.Json> = (item) => {
           ];
     default: {
       const tool = toolOf(item);
-      if (tool === undefined) return [];
+      if (tool === undefined) {
+        return [];
+      }
       return [
         {
           ...of,
@@ -644,20 +670,23 @@ export const codexDriver: (
         Stream.fromQueue(server.heard).pipe(
           Stream.runForEach(({ id: asked, method, params }) =>
             Effect.gen(function* () {
-              if (asked !== undefined) return yield* server.refuse(asked, method);
+              if (asked !== undefined) {
+                return yield* server.refuse(asked, method);
+              }
               if (method === "item/started") {
                 const item = Option.getOrUndefined(decodeItem(params))?.item;
                 if (
                   item?.type === "mcpToolCall" &&
                   item.server === SERVER &&
                   item.tool === "AskUserQuestion"
-                )
+                ) {
                   yield* endpoint.question(
                     item.id,
                     Schema.is(Schema.Record(Schema.String, Schema.Json))(item.arguments)
                       ? item.arguments
                       : {},
                   );
+                }
               }
               const events = state.step(method, params);
               if (Arr.some(events, ends)) {
@@ -673,7 +702,9 @@ export const codexDriver: (
           Effect.catch(({ message }) => Queue.fail(output, message)),
         );
       const connect = Effect.gen(function* () {
-        if (command === null) return yield* new CodexError({ message: NOT_INSTALLED });
+        if (command === null) {
+          return yield* new CodexError({ message: NOT_INSTALLED });
+        }
         const { url, token } = yield* endpoint.start;
         const server = yield* appServer(
           command,
@@ -693,8 +724,9 @@ export const codexDriver: (
         const { account, requiresOpenaiAuth } = yield* server
           .call("account/read", {})
           .pipe(Effect.flatMap(decodeAccount));
-        if (account === null && requiresOpenaiAuth)
+        if (account === null && requiresOpenaiAuth) {
           return yield* new CodexError({ message: SIGNED_OUT });
+        }
         const resumed = yield* server
           .call("thread/resume", { threadId: yield* threadOf(id), ...setting })
           .pipe(
@@ -702,7 +734,9 @@ export const codexDriver: (
             Effect.asSome,
             Effect.catchIf(unknownThread, () => Effect.succeedNone),
           );
-        if (Option.isSome(resumed)) return { server, thread: resumed.value.thread.id };
+        if (Option.isSome(resumed)) {
+          return { server, thread: resumed.value.thread.id };
+        }
         const { thread } = yield* server
           .call("thread/start", setting)
           .pipe(Effect.flatMap(decodeThreadRef));
@@ -738,7 +772,9 @@ export const codexDriver: (
             started = yield* Clock.currentTimeMillis;
             yield* Queue.offer(output, state.begin());
             const on = yield* connected;
-            if (Option.isNone(on)) return;
+            if (Option.isNone(on)) {
+              return;
+            }
             const asked = yield* on.value.server
               .call("turn/start", {
                 threadId: on.value.thread,
@@ -747,19 +783,23 @@ export const codexDriver: (
                 ...(effort !== null && { effort }),
               })
               .pipe(Effect.flatMap(decodeTurnStarted), Effect.result);
-            if (Result.isSuccess(asked)) state.started(asked.success.turn.id);
-            else
+            if (Result.isSuccess(asked)) {
+              state.started(asked.success.turn.id);
+            } else {
               yield* Queue.offer(output, {
                 type: "RUN_ERROR",
                 runId: id,
                 message: asked.failure.message,
               });
+            }
           }),
         events: Stream.fromQueue(output),
         interrupt: Effect.gen(function* () {
           const on = yield* connected;
           const turnId = state.turnId();
-          if (Option.isNone(on) || turnId === undefined) return;
+          if (Option.isNone(on) || turnId === undefined) {
+            return;
+          }
           yield* on.value.server
             .call("turn/interrupt", { threadId: on.value.thread, turnId })
             .pipe(Effect.ignore);

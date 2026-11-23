@@ -363,7 +363,9 @@ test("a chained build is the same Task, on a worktree of its own", () =>
             `${fixtures}/builds.workflow.ts`,
           ]);
           const started = yield* start(chains!, { request: "r1", task: task.id });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           const parent = yield* finished(started.success.runId);
           const child = yield* registry.view(`${started.success.runId}.build`);
           return { parent, child };
@@ -405,7 +407,9 @@ test("a child that is work of its own is a Task of its own, on its checkout", ()
             `${fixtures}/builds.workflow.ts`,
           ]);
           const started = yield* start(spins!, { request: "r1", task: task.id });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           const parent = yield* finished(started.success.runId);
           const child = yield* registry.view(`${started.success.runId}.build`);
           return { parent, child };
@@ -445,14 +449,18 @@ test("a child that is work of its own joins the open Task working its target bra
             text: { work: "Add a picker" },
             taskLabel: "Project | Picker",
           });
-          if (built._tag === "Failure") return yield* Effect.die(built.failure);
+          if (built._tag === "Failure") {
+            return yield* Effect.die(built.failure);
+          }
           const build = yield* finished(built.success.runId);
           const spun = yield* start(spins!, {
             request: "parent",
             task: parentTask.id,
             text: { target: `branch:master...${LOGIN}/add-a-picker` },
           });
-          if (spun._tag === "Failure") return yield* Effect.die(spun.failure);
+          if (spun._tag === "Failure") {
+            return yield* Effect.die(spun.failure);
+          }
           const parent = yield* finished(spun.success.runId);
           return { build, parent, child: yield* registry.view(`${spun.success.runId}.build`) };
         }),
@@ -548,7 +556,9 @@ test("a follow-up builds on its parent's branch, in its parent's worktree", () =
             text: { work: "Add a picker" },
             taskLabel: "Project | Picker",
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           const parent = yield* finished(started.success.runId);
           const child = yield* registry
             .invoke({
@@ -591,7 +601,9 @@ test("a start whose branch's checkout path is held works one slot along, and its
             text: { work: "Add a picker" },
             taskLabel: "Project | Picker",
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           return {
             run: yield* finished(started.success.runId),
             log: yield* fs.readFileString(`${dir()}/runs/${started.success.runId}/log.txt`),
@@ -619,7 +631,9 @@ test("a stopped Run on a branch offers no follow-up, since it could be resumed i
             text: { work: "Add a picker" },
             taskLabel: "Project | Picker",
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           const runId = started.success.runId;
           yield* until(
             () => store.asked(runId),
@@ -655,7 +669,9 @@ test("a fresh Task is rooted at the checkout its first Run was given, and its ag
             text: { work: "Add a picker" },
             taskLabel: "Project | Picker",
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           const done = yield* finished(started.success.runId);
           const offers = yield* registry.offers(started.success.runId);
           return { ...done!, offers: Arr.map(offers, (one) => one.id) };
@@ -775,14 +791,18 @@ test("implement started on a plan that spans repositories cuts no checkout, and 
         `${rig.projectDir}/web/.collie/verify.json`,
         '[{"name":"web-unit","executable":"true","argv":[],"cwd":"worktree"}]',
       );
-      for (const repo of ["api", "web"]) yield* checksCommitted(`${rig.projectDir}/${repo}`);
+      for (const repo of ["api", "web"]) {
+        yield* checksCommitted(`${rig.projectDir}/${repo}`);
+      }
 
       const seen = yield* hosted(
         Effect.gen(function* () {
           const registry = yield* Registry;
           const [implement] = yield* loaded(registry, [shipped("implement")]);
           const started = yield* start(implement!, { request: "r1", text: { plan } });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           const runId = started.success.runId;
           const [api, approved] = yield* until(
             () =>
@@ -836,7 +856,9 @@ test("implement on a plan of two Changes in one repository builds the first on t
           const registry = yield* Registry;
           const [implement] = yield* loaded(registry, [shipped("implement")]);
           const started = yield* start(implement!, { request: "r1", text: { plan } });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           const runId = started.success.runId;
           const first = yield* until(
             () => registry.view(`${runId}.implement-.`),
@@ -860,7 +882,9 @@ test("implement on a plan of two Changes in one repository builds the first on t
               workspace: rig.projectDir,
             },
           });
-          if (stacking._tag === "Failure") return yield* Effect.die(stacking.failure);
+          if (stacking._tag === "Failure") {
+            return yield* Effect.die(stacking.failure);
+          }
           const stacked = yield* until(
             () => registry.view(stacking.success.runId),
             (view) => view?.branch != null,
@@ -1028,7 +1052,9 @@ for (const { following, retry, name } of [
                 input: { plan, then: following },
               })
               .pipe(Effect.result);
-            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            if (started._tag === "Failure") {
+              return yield* Effect.die(started.failure);
+            }
             const runId = started.success.runId;
             if (following === "finish") {
               expect((yield* finished(runId))?.status.status).toBe("complete");
@@ -1130,7 +1156,9 @@ test("an empty set given with a start is none given, and the project's verify.js
         }),
       );
       expect(refusedWith(started)).toBe("");
-      if (started._tag === "Success") expect(yield* frozen(started.success.runId)).toEqual([UNIT]);
+      if (started._tag === "Success") {
+        expect(yield* frozen(started.success.runId)).toEqual([UNIT]);
+      }
     }),
   ));
 
@@ -1163,7 +1191,9 @@ test("a chained child is held to its parent's checks, grants included, rather th
               task: task.id,
             })
             .pipe(Effect.result);
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           yield* finished(started.success.runId);
           return started.success.runId;
         }),
@@ -1204,7 +1234,9 @@ test("a Run started in a checkout with a remote begins with the checks remembere
         }),
       );
       expect(refusedWith(started)).toBe("");
-      if (started._tag === "Success") expect(yield* frozen(started.success.runId)).toEqual([UNIT]);
+      if (started._tag === "Success") {
+        expect(yield* frozen(started.success.runId)).toEqual([UNIT]);
+      }
     }),
   ));
 
@@ -1299,13 +1331,17 @@ test("a roaming start takes over the checkout a failed Run of the repository lef
           const registry = yield* Registry;
           const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
           const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
-          if (first._tag === "Failure") return yield* Effect.die(first.failure);
+          if (first._tag === "Failure") {
+            return yield* Effect.die(first.failure);
+          }
           const failed = yield* finished(first.success.runId);
           yield* exec(["git", "checkout", "--quiet", "-b", "renovate/left", "master"], {
             cwd: roaming,
           });
           const again = yield* start(roams!, { request: "r2", text: { work: "again" } });
-          if (again._tag === "Failure") return yield* Effect.die(again.failure);
+          if (again._tag === "Failure") {
+            return yield* Effect.die(again.failure);
+          }
           return { failed, retried: yield* finished(again.success.runId) };
         }),
       );
@@ -1348,7 +1384,9 @@ test("self-improve started on a checkout works in a fresh worktree detached at o
             text: { runs: "checkout" },
             options: { workspace: rig.projectDir },
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           return yield* finished(started.success.runId);
         }),
       );
@@ -1377,7 +1415,9 @@ test("a roaming start is refused the checkout of a Run that may still go on, sto
             `${fixtures}/roams-and-waits.workflow.ts`,
           ]);
           const waiting = yield* start(waits!, { request: "r1", text: { work: "wait" } });
-          if (waiting._tag === "Failure") return yield* Effect.die(waiting.failure);
+          if (waiting._tag === "Failure") {
+            return yield* Effect.die(waiting.failure);
+          }
           yield* until(
             () => registry.view(waiting.success.runId),
             (view) => view?.status.status === "suspended",
@@ -1436,7 +1476,9 @@ const withOrigin = Effect.gen(function* () {
 const endedIn = (roams: Generation, request: string) =>
   Effect.gen(function* () {
     const started = yield* start(roams, { request, text: { work: "fail" } });
-    if (started._tag === "Failure") return yield* Effect.die(started.failure);
+    if (started._tag === "Failure") {
+      return yield* Effect.die(started.failure);
+    }
     const view = yield* finished(started.success.runId);
     return { runId: started.success.runId, at: view?.worktree?.path ?? "" };
   });
@@ -1454,7 +1496,9 @@ test("a roaming start passes over the checkout an ended Run left changes in, and
           yield* fs.writeFileString(`${roaming}/left.txt`, "work");
           const kept = yield* headOf(roaming);
           const next = yield* start(roams!, { request: "r2", text: { work: "next" } });
-          if (next._tag === "Failure") return yield* Effect.die(next.failure);
+          if (next._tag === "Failure") {
+            return yield* Effect.die(next.failure);
+          }
           return {
             left: left.runId,
             kept,
@@ -1486,7 +1530,9 @@ test("the cleanup sweep removes a clean roaming checkout an ended Run left past 
           yield* endedIn(roams!, "r1");
           yield* fs.writeFileString(`${roaming}/left.txt`, "work");
           const next = yield* start(roams!, { request: "r2", text: { work: "next" } });
-          if (next._tag === "Failure") return yield* Effect.die(next.failure);
+          if (next._tag === "Failure") {
+            return yield* Effect.die(next.failure);
+          }
           yield* finished(next.success.runId);
           return Arr.map(yield* registry.views(null), (view) => factsOfView(dir(), view));
         }),
@@ -1529,7 +1575,9 @@ test("a roaming start passes over the checkout an ended Run left a commit on no 
           yield* committing(roaming, "commit", "--quiet", "--allow-empty", "-m", "kept");
           const kept = yield* headOf(roaming);
           const next = yield* start(roams!, { request: "r2", text: { work: "next" } });
-          if (next._tag === "Failure") return yield* Effect.die(next.failure);
+          if (next._tag === "Failure") {
+            return yield* Effect.die(next.failure);
+          }
           return {
             kept,
             view: yield* finished(next.success.runId),
@@ -1558,7 +1606,9 @@ test("a roaming start takes over the next checkout an ended Run left clean rathe
           yield* fs.writeFileString(`${roaming}/left.txt`, "work");
           const first = yield* endedIn(roams!, "r2");
           const next = yield* start(roams!, { request: "r3", text: { work: "next" } });
-          if (next._tag === "Failure") return yield* Effect.die(next.failure);
+          if (next._tag === "Failure") {
+            return yield* Effect.die(next.failure);
+          }
           return {
             first,
             view: yield* finished(next.success.runId),
@@ -1642,7 +1692,9 @@ test("a roaming start passes over another clone's checkout of the same name and 
           const registry = yield* Registry;
           const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
           const next = yield* start(roams!, { request: "r1", text: { work: "next" } });
-          if (next._tag === "Failure") return yield* Effect.die(next.failure);
+          if (next._tag === "Failure") {
+            return yield* Effect.die(next.failure);
+          }
           return {
             view: yield* finished(next.success.runId),
             log: yield* logOf(next.success.runId),
@@ -1724,7 +1776,9 @@ test("a roaming claim that fails past a kept checkout leaves nothing behind, and
             view.worktree === null ? [] : [view.worktree.path],
           );
           const next = yield* start(roams!, { request: "r4", text: { work: "next" } });
-          if (next._tag === "Failure") return yield* Effect.die(next.failure);
+          if (next._tag === "Failure") {
+            return yield* Effect.die(next.failure);
+          }
           return { unfetched, unadded, recorded, view: yield* finished(next.success.runId) };
         }),
       );
@@ -1749,7 +1803,9 @@ test("a roaming start is refused an ended Run's checkout while another Run works
             `${fixtures}/waits-here.workflow.ts`,
           ]);
           const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
-          if (first._tag === "Failure") return yield* Effect.die(first.failure);
+          if (first._tag === "Failure") {
+            return yield* Effect.die(first.failure);
+          }
           yield* finished(first.success.runId);
 
           const borrower = yield* start(waits!, {
@@ -1757,7 +1813,9 @@ test("a roaming start is refused an ended Run's checkout while another Run works
             project: roaming,
             text: { work: "wait" },
           });
-          if (borrower._tag === "Failure") return yield* Effect.die(borrower.failure);
+          if (borrower._tag === "Failure") {
+            return yield* Effect.die(borrower.failure);
+          }
           yield* until(
             () => registry.view(borrower.success.runId),
             (view) => view?.status.status === "suspended",
@@ -1826,7 +1884,9 @@ test("a roaming start is refused an ended Run's checkout while a Run works in it
             `${fixtures}/waits-here.workflow.ts`,
           ]);
           const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
-          if (first._tag === "Failure") return yield* Effect.die(first.failure);
+          if (first._tag === "Failure") {
+            return yield* Effect.die(first.failure);
+          }
           yield* finished(first.success.runId);
           yield* (yield* FileSystem.FileSystem).symlink(roaming, link);
           const borrower = yield* start(waits!, {
@@ -1834,7 +1894,9 @@ test("a roaming start is refused an ended Run's checkout while a Run works in it
             options: { workspace: link },
             text: { work: "wait" },
           });
-          if (borrower._tag === "Failure") return yield* Effect.die(borrower.failure);
+          if (borrower._tag === "Failure") {
+            return yield* Effect.die(borrower.failure);
+          }
           yield* until(
             () => registry.view(borrower.success.runId),
             (view) => view?.status.status === "suspended",
@@ -1874,7 +1936,9 @@ test("a roaming start is refused an ended Run's checkout where moving it would o
           const registry = yield* Registry;
           const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
           const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
-          if (first._tag === "Failure") return yield* Effect.die(first.failure);
+          if (first._tag === "Failure") {
+            return yield* Effect.die(first.failure);
+          }
           yield* finished(first.success.runId);
           // WARNING: the default branch tracks a file the checkout holds as ignored, so git keeps it as its own.
           yield* fs.writeFileString(`${rig.projectDir}/.git/info/exclude`, "generated.txt\n");
@@ -1902,7 +1966,9 @@ test("a roaming start is refused an ended Run's checkout while an agent works in
           const registry = yield* Registry;
           const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
           const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
-          if (first._tag === "Failure") return yield* Effect.die(first.failure);
+          if (first._tag === "Failure") {
+            return yield* Effect.die(first.failure);
+          }
           yield* finished(first.success.runId);
           at = yield* rig.addAgent("claude", roaming);
           return refusedWith(yield* start(roams!, { request: "r2", text: { work: "next" } }));
@@ -1923,7 +1989,9 @@ test("a roaming start is refused an ended Run's checkout while core will not lis
           const registry = yield* Registry;
           const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
           const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
-          if (first._tag === "Failure") return yield* Effect.die(first.failure);
+          if (first._tag === "Failure") {
+            return yield* Effect.die(first.failure);
+          }
           yield* finished(first.success.runId);
           return refusedWith(yield* start(roams!, { request: "r2", text: { work: "next" } }));
         }),
@@ -1944,7 +2012,9 @@ test("a roaming start is refused an ended Run's checkout while an agent no Run r
           const registry = yield* Registry;
           const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
           const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
-          if (first._tag === "Failure") return yield* Effect.die(first.failure);
+          if (first._tag === "Failure") {
+            return yield* Effect.die(first.failure);
+          }
           yield* finished(first.success.runId);
           at = yield* rig.addAgent("claude", rig.projectDir);
           (yield* rig.startCore()).cd("claude", roaming);
@@ -1966,7 +2036,9 @@ test("a roaming start is refused an ended Run's checkout while a server of an ag
           const registry = yield* Registry;
           const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
           const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
-          if (first._tag === "Failure") return yield* Effect.die(first.failure);
+          if (first._tag === "Failure") {
+            return yield* Effect.die(first.failure);
+          }
           yield* finished(first.success.runId);
           const fs = yield* FileSystem.FileSystem;
           const control = `${dir()}/compaction/r1-worker`;
@@ -2008,7 +2080,9 @@ test("a stop ends the Run's agent and keeps its Task, and a resume starts the wo
             text: { work: "Add a picker" },
             task: task.id,
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           const runId = started.success.runId;
           yield* until(
             () => rig.cmds().pipe(Effect.orDie),
@@ -2048,7 +2122,9 @@ test("a stop that cannot close the Run's agent says so rather than confirming it
             text: { work: "Add a picker" },
             task: task.id,
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           yield* until(
             () => rig.cmds().pipe(Effect.orDie),
             (cmds) => cmds.includes("terminal.send"),
@@ -2086,7 +2162,9 @@ test("an offer of a plan that spans repositories is refused, and says how to bui
             `${fixtures}/builds.workflow.ts`,
           ]);
           const started = yield* start(planned!, { request: "r1", text: { goal: "two repos" } });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           const runId = started.success.runId;
           yield* finished(runId);
           const issues = `${runDir(dir(), runId)}/plan/issues`;
@@ -2127,14 +2205,18 @@ test("a Run that asks for a worktree of its own gets one, and a fresh Task takes
             options: { workspace: "new" },
             task: task.id,
           });
-          if (own._tag === "Failure") return yield* Effect.die(own.failure);
+          if (own._tag === "Failure") {
+            return yield* Effect.die(own.failure);
+          }
           const fresh = yield* start(builds!, {
             request: "r2",
             text: { work: "Add a menu" },
             options: { workspace: "new" },
             taskLabel: "Project | Menu",
           });
-          if (fresh._tag === "Failure") return yield* Effect.die(fresh.failure);
+          if (fresh._tag === "Failure") {
+            return yield* Effect.die(fresh.failure);
+          }
           return {
             own: yield* finished(own.success.runId),
             fresh: yield* finished(fresh.success.runId),
@@ -2175,7 +2257,9 @@ test("a branch git already has a worktree of is given that one, never a second",
             options: { workspace: "new" },
             task: task.id,
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           return yield* finished(started.success.runId);
         }),
       );
@@ -2221,7 +2305,9 @@ const chainedFrom = (options: {
         text: options.text,
         task: "task-1",
       });
-      if (started._tag === "Failure") return yield* Effect.die(started.failure);
+      if (started._tag === "Failure") {
+        return yield* Effect.die(started.failure);
+      }
       const runId = started.success.runId;
       yield* until(
         () => store.asked(runId),
@@ -2300,7 +2386,9 @@ test("a review's findings built in a full implement run are built on the branch 
             text: { target: "branch:master...picker" },
             task: "task-1",
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           const runId = started.success.runId;
           yield* until(
             () => store.asked(runId),
@@ -2437,7 +2525,9 @@ test("a fresh start about a branch an open Task works is that Task's; one about 
             ],
           ] as const) {
             const started = yield* start(generation, ask);
-            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            if (started._tag === "Failure") {
+              return yield* Effect.die(started.failure);
+            }
             ids.push(started.success.runId);
             yield* finished(started.success.runId);
           }
@@ -2465,7 +2555,9 @@ const builtByAChild = (
       task,
       text: mr === "" ? {} : { mr },
     });
-    if (started._tag === "Failure") return yield* Effect.die(started.failure);
+    if (started._tag === "Failure") {
+      return yield* Effect.die(started.failure);
+    }
     yield* finished(started.success.runId);
     return started.success.runId;
   });
@@ -2492,7 +2584,9 @@ test("a fresh start on the branch an open Task's child built joins that Task, wi
             text: { target: `branch:master...${LOGIN}/add-a-picker` },
             taskLabel: "Project | Review",
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           return yield* finished(started.success.runId);
         }),
       );
@@ -2519,7 +2613,9 @@ test("a fresh start on the merge request an open Task's child opened joins that 
             text: { target: MR_TARGET },
             taskLabel: "Project | Release",
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           return yield* finished(started.success.runId);
         }),
       );
@@ -2545,14 +2641,17 @@ const builtFromItsPlan = (mrState: MrState | null) =>
         const plan = `${runDir(dir(), planner)}/plan`;
         yield* fs.makeDirectory(plan, { recursive: true });
         yield* fs.writeFileString(`${plan}/SPEC.md`, "# Add a picker\n");
-        if (mrState !== null)
+        if (mrState !== null) {
           yield* storedAnswers(dir(), new Map([["gitlab.example.com/group/app!355", mrState]]));
+        }
         const started = yield* start(builds!, {
           request: "r-by-hand",
           text: { work: plan },
           taskLabel: "Project | By hand",
         });
-        if (started._tag === "Failure") return yield* Effect.die(started.failure);
+        if (started._tag === "Failure") {
+          return yield* Effect.die(started.failure);
+        }
         return { runId: started.success.runId, view: yield* finished(started.success.runId) };
       }),
     );
@@ -2596,7 +2695,9 @@ test("a fresh start on a closed Task's merge request joins it", () =>
             text: { mr: MR_TARGET },
             taskLabel: "Project | Release",
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           return yield* finished(started.success.runId);
         }),
       );
@@ -2635,7 +2736,9 @@ test("a fresh start on a merge request two Tasks share joins the one whose Run h
               text: { target: MR_TARGET },
               task,
             });
-            if (named._tag === "Failure") return yield* Effect.die(named.failure);
+            if (named._tag === "Failure") {
+              return yield* Effect.die(named.failure);
+            }
             yield* finished(named.success.runId);
           }
           const started = yield* start(targeted!, {
@@ -2643,7 +2746,9 @@ test("a fresh start on a merge request two Tasks share joins the one whose Run h
             text: { target: MR_TARGET },
             taskLabel: "Project | Release",
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           return yield* finished(started.success.runId);
         }),
       );
@@ -2671,7 +2776,9 @@ test("a fresh start joins the Task whose merge request it names in any case, and
             text: { target: MR_TARGET },
             task: "task-1",
           });
-          if (named._tag === "Failure") return yield* Effect.die(named.failure);
+          if (named._tag === "Failure") {
+            return yield* Effect.die(named.failure);
+          }
           yield* finished(named.success.runId);
           return yield* Effect.forEach(
             ["mr:GitLab.example.com/Group/App!355", "mr:gitlab.other.com/group/app!355"],
@@ -2682,7 +2789,9 @@ test("a fresh start joins the Task whose merge request it names in any case, and
                   text: { target },
                   taskLabel: "Project | Release",
                 });
-                if (started._tag === "Failure") return yield* Effect.die(started.failure);
+                if (started._tag === "Failure") {
+                  return yield* Effect.die(started.failure);
+                }
                 return yield* finished(started.success.runId);
               }),
           );
@@ -2717,14 +2826,18 @@ test("a legacy bare merge request target joins the Task given it in full in its 
               text: { target: first },
               task: id,
             });
-            if (named._tag === "Failure") return yield* Effect.die(named.failure);
+            if (named._tag === "Failure") {
+              return yield* Effect.die(named.failure);
+            }
             yield* finished(named.success.runId);
             const started = yield* start(targeted!, {
               request: `r-${id}-fresh`,
               text: { target: fresh },
               taskLabel: "Project | Release",
             });
-            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            if (started._tag === "Failure") {
+              return yield* Effect.die(started.failure);
+            }
             return yield* finished(started.success.runId);
           }),
         );
@@ -2736,7 +2849,7 @@ test("a legacy bare merge request target joins the Task given it in full in its 
 for (const [closed, given] of [
   ["closed", { closed_at: "2026-09-24T00:00:00.000Z" }],
   ["kept in a Herdr 1 workspace", { workspace: "w-herdr" }],
-] as const)
+] as const) {
   test(`a fresh start on the branch of a Task ${closed} is a Task of its own`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -2757,7 +2870,9 @@ for (const [closed, given] of [
               text: { target: `branch:master...${LOGIN}/add-a-picker` },
               taskLabel: "Project | Review",
             });
-            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            if (started._tag === "Failure") {
+              return yield* Effect.die(started.failure);
+            }
             return yield* finished(started.success.runId);
           }),
         );
@@ -2766,6 +2881,7 @@ for (const [closed, given] of [
         expect(review?.task).not.toBeNull();
       }).pipe(Effect.provide(recordsAt(dir()))),
     ));
+}
 
 test("forgetting a Run removes its row, its launches and what the engine kept of it, and leaves a claim alone", () =>
   runEffect(
@@ -2780,7 +2896,9 @@ test("forgetting a Run removes its row, its launches and what the engine kept of
           const ids: Array<string> = [];
           for (const request of ["r1", "r2"]) {
             const started = yield* start(hello!, { request, text: { name: "you" } });
-            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            if (started._tag === "Failure") {
+              return yield* Effect.die(started.failure);
+            }
             ids.push(started.success.runId);
             yield* finished(started.success.runId);
           }
@@ -2806,7 +2924,7 @@ test("forgetting a Run removes its row, its launches and what the engine kept of
             readonly n: number;
           }>`SELECT count(*) AS n FROM cluster_messages WHERE entity_id = ${execution}`;
           const before = (yield* count)[0]?.n;
-          for (const runId of ids)
+          for (const runId of ids) {
             yield* recordLaunch({
               agent: `${runId}-build`,
               output: "/dev/null",
@@ -2818,6 +2936,7 @@ test("forgetting a Run removes its row, its launches and what the engine kept of
               harness: "claude",
               agentSession: { kind: "id", value: `${runId}-session` },
             });
+          }
           const forgotten = yield* registry.retire([gone, "run-claimed"]);
           const messages = yield* count;
           return {
@@ -3051,12 +3170,14 @@ test.each([
               ? { work, ending: "succeed" }
               : { work, mr: REVIEWED, child: "asks" },
           );
-          if (which === "placed") yield* finished(started.runId);
-          else
+          if (which === "placed") {
+            yield* finished(started.runId);
+          } else {
             yield* until(
               () => registry.view(`${started.runId}.asks-1`),
               (child) => child?.status.status === "suspended",
             );
+          }
           const stage = yield* startWith(checksOut!, "r2", { mr: REVIEWED }, started.runId);
           return yield* finished(stage.runId);
         }),
@@ -3091,8 +3212,9 @@ test.each([
         );
         yield* git("branch", "feature");
         const first = `${rig.root}/.collie/worktrees/project/feature`;
-        for (const slot of [first, `${first}-2`, `${first}-3`])
+        for (const slot of [first, `${first}-2`, `${first}-3`]) {
           yield* fs.makeDirectory(slot, { recursive: true });
+        }
         const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (made) =>
           made.restore(),
         );
@@ -3221,7 +3343,9 @@ test("a mutating Run works in a checkout git made under the worktrees directory,
             text: { work: "Add a picker" },
             taskLabel: "Project | Picker",
           });
-          if (started._tag === "Failure") return yield* Effect.die(started.failure);
+          if (started._tag === "Failure") {
+            return yield* Effect.die(started.failure);
+          }
           return yield* finished(started.success.runId);
         }),
       );
@@ -3271,7 +3395,9 @@ test("a start on the branch of a Task joins it until an hour after it is Finishe
               text,
               taskLabel: `Project | ${request}`,
             });
-            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            if (started._tag === "Failure") {
+              return yield* Effect.die(started.failure);
+            }
             return (yield* finished(started.success.runId))?.task ?? "";
           }),
         );

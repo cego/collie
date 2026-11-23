@@ -78,8 +78,9 @@ test("Run cleanup removes only its own catalogue and copies, and upload cleanup 
       );
 
       const weekAgo = (yield* Clock.currentTimeMillis) / 1000 - 8 * 24 * 60 * 60;
-      for (const name of yield* fs.readDirectory(`${rig.stateDir}/uploads`))
+      for (const name of yield* fs.readDirectory(`${rig.stateDir}/uploads`)) {
         yield* fs.utimes(`${rig.stateDir}/uploads/${name}`, weekAgo, weekAgo);
+      }
       const uploads = yield* sweep([uploadsSweeper(rig.stateDir)], rig.stateDir, "host");
       expect(Arr.map(uploads.remove, (one) => one.kind)).toEqual(["upload"]);
       expect(yield* fs.exists(upload.path!)).toBe(false);

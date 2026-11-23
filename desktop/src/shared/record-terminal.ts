@@ -62,8 +62,12 @@ export interface Address {
 
 export const addressOf = (who: Readonly<Address>) => {
   const address: Address = {};
-  if (who.agent !== undefined) address.agent = who.agent;
-  if (who.to !== undefined) address.to = who.to;
+  if (who.agent !== undefined) {
+    address.agent = who.agent;
+  }
+  if (who.to !== undefined) {
+    address.to = who.to;
+  }
   return address;
 };
 
@@ -78,7 +82,9 @@ export const deliveryChoices = (
 ) => {
   const tabs = recipients(launches, live);
   const byName = Arr.map(tabs, (tab) => ({ key: tab.name, label: tab.label, agent: tab.name }));
-  if (tabs.length === 0) return [];
+  if (tabs.length === 0) {
+    return [];
+  }
   const roles = new Set(
     Arr.flatMap(tabs, (tab) =>
       Arr.ensure(
@@ -140,8 +146,10 @@ export const askedFor = (
   picked: AgentTab | null,
   requested?: string,
 ) => {
-  if (picked !== null) return picked;
-  if (requested !== undefined)
+  if (picked !== null) {
+    return picked;
+  }
+  if (requested !== undefined) {
     return (
       Option.getOrUndefined(
         Arr.findFirst(agentTabs(agents, null), (one) => one.name === requested),
@@ -154,6 +162,7 @@ export const askedFor = (
         shown: false,
       }
     );
+  }
   const busy = atWork(agents, run);
   return (
     Option.getOrUndefined(
@@ -171,7 +180,9 @@ export const switches = (release: () => Promise<void>) => {
     to: (open: () => void) => {
       const mine = ++newest;
       return letGo().then(() => {
-        if (mine === newest) open();
+        if (mine === newest) {
+          open();
+        }
       });
     },
     stop: () => {

@@ -30,8 +30,9 @@ test("an old host's absent capability refuses catalogue writes with an upgrade e
         Effect.sync(() => ++writes),
       ).pipe(Effect.result);
       expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
+      if (result._tag === "Failure") {
         expect(result.failure).toMatchObject({ reason: expect.stringContaining("Upgrade") });
+      }
       expect(writes).toBe(0);
     }),
   ));

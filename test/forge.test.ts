@@ -100,8 +100,8 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
-    if (name === "gitlab")
-      for (const flag of ["collapsed", "too_large"])
+    if (name === "gitlab") {
+      for (const flag of ["collapsed", "too_large"]) {
         test(`refuses a re-review when GitLab marks a file ${flag}`, () => {
           const fake = fakeForge(name, model(name, { ancestry: { [HEAD]: [MERGED] } }));
           const layer = forgeHttpTest(fake.run, (url, init) =>
@@ -125,6 +125,8 @@ for (const name of ["gitlab", "github"] as const) {
             }).pipe(Effect.provide(layer)),
           );
         });
+      }
+    }
 
     test("pins approval to the reviewed head", () => {
       const fake = fakeForge(name, model(name));
@@ -177,13 +179,14 @@ for (const name of ["gitlab", "github"] as const) {
       );
     });
 
-    if (name === "github")
+    if (name === "github") {
       test("withdraws an approval if a push races with GitHub accepting it", () => {
         const fake = fakeForge(name, model(name));
         const layer = forgeHttpTest(fake.run, (url, init) =>
           fake.fetch(url, init).then((response) => {
-            if (Str.endsWith("/reviews")(url) && init?.method === "POST")
+            if (Str.endsWith("/reviews")(url) && init?.method === "POST") {
               fake.set({ ...fake.model(), mrs: [mr(name, { head: MERGED })] });
+            }
             return response;
           }),
         );
@@ -199,8 +202,9 @@ for (const name of ["gitlab", "github"] as const) {
           }).pipe(Effect.provide(layer)),
         );
       });
+    }
 
-    if (name === "github")
+    if (name === "github") {
       test("reports a still-active approval and its review id when a racing push cannot be dismissed", () => {
         const fake = fakeForge(name, model(name));
         const dismissals: Array<string> = [];
@@ -210,8 +214,9 @@ for (const name of ["gitlab", "github"] as const) {
             return Promise.resolve(new Response("Forbidden", { status: 403 }));
           }
           return fake.fetch(url, init).then((response) => {
-            if (Str.endsWith("/reviews")(url) && init?.method === "POST")
+            if (Str.endsWith("/reviews")(url) && init?.method === "POST") {
               fake.set({ ...fake.model(), mrs: [mr(name, { head: MERGED })] });
+            }
             return response;
           });
         });
@@ -230,6 +235,7 @@ for (const name of ["gitlab", "github"] as const) {
           }).pipe(Effect.provide(layer)),
         );
       });
+    }
 
     test("finds only the note whose last line signs this Run, round and head", () => {
       const signature = `<!-- collie:run-one round 1 at ${HEAD} by me -->`;
@@ -327,7 +333,7 @@ for (const name of ["gitlab", "github"] as const) {
       );
     });
 
-    if (name === "github")
+    if (name === "github") {
       test("a later changes-requested review replaces the login's approval", () => {
         const fake = fakeForge(name, model(name));
         const layer = forgeHttpTest(fake.run, (url, init) =>
@@ -351,12 +357,15 @@ for (const name of ["gitlab", "github"] as const) {
           }).pipe(Effect.provide(layer)),
         );
       });
+    }
 
-    if (name === "github")
+    if (name === "github") {
       test("a dismissal on a later review page cancels the login's approval", () => {
         const fake = fakeForge(name, model(name));
         const layer = forgeHttpTest(fake.run, (url, init) => {
-          if (!Str.includes("/reviews?")(url)) return fake.fetch(url, init);
+          if (!Str.includes("/reviews?")(url)) {
+            return fake.fetch(url, init);
+          }
           const page = new URL(url).searchParams.get("page");
           return Promise.resolve(
             Response.json(
@@ -381,6 +390,7 @@ for (const name of ["gitlab", "github"] as const) {
           }).pipe(Effect.provide(layer)),
         );
       });
+    }
 
     test("opens a merge request with its complete description and destination", () =>
       runEffect(
@@ -470,7 +480,7 @@ for (const name of ["gitlab", "github"] as const) {
     for (const [failure, fault] of [
       ["5xx", { status: 503 }],
       ["network", "network"],
-    ] as const)
+    ] as const) {
       test(`sends issue creation only once on a ${failure} failure and asks for inspection`, () => {
         const fake = fakeForge(name, model(name, { httpFault: fault }));
         return runEffect(
@@ -483,12 +493,15 @@ for (const name of ["gitlab", "github"] as const) {
               fake.run,
             );
             expect(filed.ok).toBe(false);
-            if (filed.ok) throw new Error("issue creation should be unavailable");
+            if (filed.ok) {
+              throw new Error("issue creation should be unavailable");
+            }
             expect(filed.reason).toContain("before retrying");
             expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
           }).pipe(Effect.provide(fake.layer)),
         );
       });
+    }
 
     test("an issue write the forge refuses says so, with nothing to inspect", () => {
       const fake = fakeForge(name, model(name, { refusesIssueWrite: 403 }));
@@ -504,7 +517,9 @@ for (const name of ["gitlab", "github"] as const) {
           const noted = yield* forge.commentIssue(PROJECT[name], 1, "Evidence", "/w", fake.run);
           for (const refused of [filed, noted]) {
             expect(refused.ok).toBe(false);
-            if (refused.ok) continue;
+            if (refused.ok) {
+              continue;
+            }
             expect(refused.reason).toContain("403");
             expect(refused.reason).not.toContain("before retrying");
           }
@@ -574,7 +589,9 @@ for (const name of ["gitlab", "github"] as const) {
             .fileIssue(PROJECT[name], "Problem", "Details", "/w", fake.run)
             .pipe(Effect.provide(fake.layer));
           expect(filed).toMatchObject({ ok: true, number: 3 });
-          if (!filed.ok) throw new Error(filed.reason);
+          if (!filed.ok) {
+            throw new Error(filed.reason);
+          }
           expect(filed.url).toBe(
             `https://${PROJECT[name]}/${name === "gitlab" ? "-/issues" : "issues"}/3`,
           );
@@ -646,7 +663,9 @@ for (const name of ["gitlab", "github"] as const) {
             .issues(PROJECT[name], "/w", fake.run)
             .pipe(Effect.provide(fake.layer));
           expect(listed.ok).toBe(true);
-          if (!listed.ok) throw new Error(listed.reason);
+          if (!listed.ok) {
+            throw new Error(listed.reason);
+          }
           expect(listed.issues).toHaveLength(103);
           expect(listed.issues.at(-1)?.number).toBe(103);
         }),
@@ -879,12 +898,13 @@ for (const name of ["gitlab", "github"] as const) {
     test("says whether the reviewed branch comes from a fork", () =>
       runEffect(
         Effect.gen(function* () {
-          for (const fork of [false, true])
+          for (const fork of [false, true]) {
             expect(
               yield* against(name, model(name, { mrs: [mr(name, { fork })] }), (run) =>
                 forge.details(ref(name), "/w", run),
               ),
             ).toMatchObject({ fork });
+          }
         }),
       ));
 
@@ -937,8 +957,8 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
-    if (name === "gitlab")
-      for (const part of ["approvals", "discussions"])
+    if (name === "gitlab") {
+      for (const part of ["approvals", "discussions"]) {
         test(`a transient failure reading ${part} makes the merge request unavailable`, () => {
           const fake = fakeForge(name, model(name));
           const layer = forgeHttpTest(fake.run, (url, init) =>
@@ -954,6 +974,8 @@ for (const name of ["gitlab", "github"] as const) {
             }).pipe(Effect.provide(layer)),
           );
         });
+      }
+    }
 
     test("posts one review note over HTTP without approving", () => {
       const fake = fakeForge(name, model(name));
@@ -975,12 +997,13 @@ for (const name of ["gitlab", "github"] as const) {
     for (const [failure, fault] of [
       ["5xx", { status: 503 }],
       ["network", "network"],
-    ] as const)
+    ] as const) {
       test(`keeps the posted note when approval has a ${failure} failure, without sending it again`, () => {
         const fake = fakeForge(name, model(name));
         const layer = forgeHttpTest(fake.run, (url, init) => {
-          if (pipe(url, Str.endsWith(name === "github" ? "/reviews" : "/approve")))
+          if (pipe(url, Str.endsWith(name === "github" ? "/reviews" : "/approve"))) {
             fake.set({ ...fake.model(), httpFault: fault });
+          }
           return fake.fetch(url, init);
         });
         return runEffect(
@@ -995,6 +1018,7 @@ for (const name of ["gitlab", "github"] as const) {
           }).pipe(Effect.provide(layer)),
         );
       });
+    }
 
     test("reports an approval the forge refuses, with the note still posted", () => {
       const fake = fakeForge(name, model(name, { refusesApproval: true }));
@@ -2134,12 +2158,13 @@ for (const name of ["gitlab", "github"] as const) {
             },
           ],
         });
-        for (const over of [{ installed: false }, { loggedIn: [] }])
+        for (const over of [{ installed: false }, { loggedIn: [] }]) {
           expect(
             (yield* against(name, model(name, { mrs, ...over }), (run) =>
               forge.fromBranch(PROJECT[name], "me/x", "/w", run),
             )).ok,
           ).toBe(false);
+        }
       }),
     ));
 
@@ -2166,7 +2191,7 @@ for (const name of ["gitlab", "github"] as const) {
           "failed",
           "skipped",
           "cancelled",
-        ] as const)
+        ] as const) {
           expect(
             yield* read({
               jobs: [
@@ -2184,6 +2209,7 @@ for (const name of ["gitlab", "github"] as const) {
             retryOf: [],
             target: "main",
           });
+        }
         expect(yield* read({ jobs: [{ name: "lint", state: "passed" }] })).toEqual({
           ok: true,
           head: HEAD,
@@ -2194,8 +2220,9 @@ for (const name of ["gitlab", "github"] as const) {
           retryOf: [],
           target: "main",
         });
-        for (const rest of [{ installed: false }, { loggedIn: [] }])
+        for (const rest of [{ installed: false }, { loggedIn: [] }]) {
           expect((yield* read({ jobs: [] }, rest)).ok).toBe(false);
+        }
       }),
     ));
 
@@ -2319,7 +2346,9 @@ for (const name of ["gitlab", "github"] as const) {
           const dir = yield* fs.makeTempDirectoryScoped({ prefix: "forge-template-" });
           expect(yield* forge.template(dir)).toBe(null);
           const parent = Arr.join(Str.split(where, "/").slice(0, -1), "/");
-          if (parent !== "") yield* fs.makeDirectory(`${dir}/${parent}`, { recursive: true });
+          if (parent !== "") {
+            yield* fs.makeDirectory(`${dir}/${parent}`, { recursive: true });
+          }
           yield* fs.writeFileString(`${dir}/${where}`, "## Description\n");
           expect(yield* forge.template(dir)).toBe(where);
         }
@@ -2417,11 +2446,12 @@ for (const name of ["gitlab", "github"] as const) {
             { cwd: clone, env },
           );
 
-          for (const _ of [1, 2])
+          for (const _ of [1, 2]) {
             expect(yield* FORGES[name].credentials(PROJECT[name], clone, shell)).toEqual({
               ok: true,
               reason: "",
             });
+          }
           expect((yield* fill).stdout).toContain("password=first-token\n");
           yield* onPath.set(model(name, { token: "second-token" }));
           expect((yield* fill).stdout).toContain("password=second-token\n");
@@ -2519,7 +2549,9 @@ test("a GitLab merged-results pipeline counts for the head it was built from, an
       ).toMatchObject({ ok: true, state: "pending" });
       const unshown = yield* read({ pipelineAt: MERGE }, {});
       expect(unshown.ok).toBe(false);
-      if (!unshown.ok) expect(unshown.reason).toContain(MERGE);
+      if (!unshown.ok) {
+        expect(unshown.reason).toContain(MERGE);
+      }
     }),
   ));
 
@@ -2562,13 +2594,14 @@ for (const name of ["gitlab", "github"] as const) {
       );
     });
 
-    for (const outcome of ["merged", "head moved"] as const)
+    for (const outcome of ["merged", "head moved"] as const) {
       test(`a merge returning 503 is sent once and reads that it ${outcome}`, () => {
         const fake = fakeForge(name, model(name, { mrs: [mr(name, { mergedSha: MERGED })] }));
         const layer = forgeHttpTest(fake.run, (input, init = {}) => {
           const merging = init.method === "PUT" && pipe(input, Str.endsWith("/merge"));
-          if (merging && outcome === "head moved")
+          if (merging && outcome === "head moved") {
             fake.set({ ...fake.model(), mrs: [mr(name, { head: "new-head" })] });
+          }
           return fake
             .fetch(input, init)
             .then((response) =>
@@ -2596,8 +2629,9 @@ for (const name of ["gitlab", "github"] as const) {
           }).pipe(Effect.provide(layer)),
         );
       });
+    }
 
-    for (const threaded of [false, true])
+    for (const threaded of [false, true]) {
       test(`replies ${threaded ? "in a thread" : "on the merge request"} over HTTP from a cold login`, () => {
         const fake = fakeForge(
           name,
@@ -2631,6 +2665,7 @@ for (const name of ["gitlab", "github"] as const) {
           }).pipe(Effect.provide(fake.layer)),
         );
       });
+    }
 
     test("reads a review over HTTP from a cold login", () => {
       const fake = fakeForge(
@@ -2688,7 +2723,9 @@ for (const name of ["gitlab", "github"] as const) {
               { id: 15, author: "me", at: at(20), body: "Pushed a fix" },
             ],
           });
-          if (!review.ok) throw new Error(review.reason);
+          if (!review.ok) {
+            throw new Error(review.reason);
+          }
           expect(review).toMatchObject({
             login: "me",
             state: "open",
@@ -2749,7 +2786,9 @@ for (const name of ["gitlab", "github"] as const) {
             ],
             resolved: [thread(31)],
           });
-          if (!review.ok) throw new Error(review.reason);
+          if (!review.ok) {
+            throw new Error(review.reason);
+          }
           const answered = Rec.fromEntries(
             Arr.map(
               Arr.filter(review.comments, (one) => one.external),
@@ -2812,7 +2851,9 @@ for (const name of ["gitlab", "github"] as const) {
           const review = yield* forge
             .readReview(ref(name), "/w", fake.run)
             .pipe(Effect.provide(fake.layer));
-          if (!review.ok) throw new Error(review.reason);
+          if (!review.ok) {
+            throw new Error(review.reason);
+          }
           expect(
             Arr.map(
               Arr.filter(review.comments, (one) => one.external),
@@ -2917,7 +2958,9 @@ for (const name of ["gitlab", "github"] as const) {
             .readReview(ref(name), "/w", fake.run)
             .pipe(Effect.provide(fake.layer));
           expect(review.ok).toBe(false);
-          if (!review.ok) expect(review.reason).toContain(CLI[name]);
+          if (!review.ok) {
+            expect(review.reason).toContain(CLI[name]);
+          }
           expect(
             (yield* forge
               .reply(ref(name), { thread: null }, "x", "/w", fake.run)
@@ -2945,7 +2988,9 @@ for (const name of ["gitlab", "github"] as const) {
                   { reviewsRequired: { classic: 1 } },
                 );
           expect(review).toMatchObject({ ok: true, approved: false, approvers: [] });
-          if (review.ok) expect(review.unapproved).toContain("me's own");
+          if (review.ok) {
+            expect(review.unapproved).toContain("me's own");
+          }
         }),
       ));
   });
@@ -2978,7 +3023,9 @@ test("GitHub reads a review comment beyond the first HTTP page", () => {
   return runEffect(
     Effect.gen(function* () {
       const review = yield* FORGES.github.readReview(ref("github"), "/w", fake.run);
-      if (!review.ok) throw new Error(review.reason);
+      if (!review.ok) {
+        throw new Error(review.reason);
+      }
       expect(review.comments).toHaveLength(101);
       expect(review.comments[100]).toMatchObject({
         id: "101",
@@ -2997,7 +3044,9 @@ test("GitHub reads a review comment beyond the first HTTP page", () => {
 });
 
 const approval = (review: ReviewRead) => {
-  if (!review.ok) throw new Error(review.reason);
+  if (!review.ok) {
+    throw new Error(review.reason);
+  }
   return { approved: review.approved, approvers: review.approvers };
 };
 
@@ -3019,7 +3068,7 @@ for (const snapshot of [
   },
   { change: "removed approval", earlier: ["alice"], current: [], approved: false, names: [] },
   { change: "self-only approval", earlier: ["alice"], current: ["me"], approved: false, names: [] },
-])
+]) {
   test(`GitLab approval snapshot: a ${snapshot.change} supplies both rule readiness and current human names`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -3035,6 +3084,7 @@ for (const snapshot of [
         });
       }),
     ));
+}
 
 test("GitLab approval snapshot: optional human approvals remain visible when there are no rules", () =>
   runEffect(
@@ -3110,7 +3160,9 @@ test("GitLab's system notes and access-token bots are not external", () =>
           { id: 3, author: "dependabot", kind: "bot", at: "2026-10-20T10:02:00Z", body: "Bump" },
         ],
       });
-      if (!review.ok) throw new Error(review.reason);
+      if (!review.ok) {
+        throw new Error(review.reason);
+      }
       expect(Arr.map(review.comments, (one) => [one.kind, one.external])).toEqual([
         ["system", false],
         ["bot", false],
@@ -3171,14 +3223,18 @@ test("GitHub's approval stands without Collie's only where the base branch's req
         { reviewsRequired: { classic: 1 }, protectionDown: true },
       );
       expect(unread).toMatchObject({ ok: true, approved: false });
-      if (unread.ok) expect(unread.unapproved).toContain("me's own approval stands");
+      if (unread.ok) {
+        expect(unread.unapproved).toContain("me's own approval stands");
+      }
       const owners = yield* reviewOn(
         "github",
         { reviews: [review(1, "alice", "APPROVED"), review(2, "me", "APPROVED")] },
         { reviewsRequired: { classic: 1, codeOwners: true } },
       );
       expect(owners).toMatchObject({ ok: true, approved: false });
-      if (owners.ok) expect(owners.unapproved).toContain("code owners");
+      if (owners.ok) {
+        expect(owners.unapproved).toContain("code owners");
+      }
     }),
   ));
 
@@ -3202,7 +3258,7 @@ test("GitHub with no review required is approved unless an external reviewer ask
         ],
       });
       expect(asked).toMatchObject({ ok: true, approved: false, changesRequested: true });
-      if (asked.ok)
+      if (asked.ok) {
         expect(asked.comments).toEqual([
           expect.objectContaining({
             id: "1",
@@ -3212,6 +3268,7 @@ test("GitHub with no review required is approved unless an external reviewer ask
             external: true,
           }),
         ]);
+      }
       const byBot = yield* reviewOn("github", {
         reviews: [
           {
@@ -3295,7 +3352,7 @@ for (const name of ["gitlab", "github"] as const) {
   };
 
   describe(`the ${name} forge over HTTP`, () => {
-    for (const [operation, ask] of Rec.toEntries(asked))
+    for (const [operation, ask] of Rec.toEntries(asked)) {
       test(`answers ${operation} from a cold start with requests, running only credential reads`, () => {
         const fake = jobbed();
         return runEffect(
@@ -3306,6 +3363,7 @@ for (const name of ["gitlab", "github"] as const) {
           }).pipe(Effect.provide(fake.layer)),
         );
       });
+    }
 
     test("answers a 404 as unavailable, naming the status", () => {
       const fake = jobbed();
@@ -3318,7 +3376,9 @@ for (const name of ["gitlab", "github"] as const) {
             fake.run,
           );
           expect(read.ok).toBe(false);
-          if (!read.ok) expect(read.reason).toContain("404");
+          if (!read.ok) {
+            expect(read.reason).toContain("404");
+          }
         }).pipe(Effect.provide(fake.layer)),
       );
     });
@@ -3349,7 +3409,9 @@ for (const name of ["gitlab", "github"] as const) {
         Effect.gen(function* () {
           const read = yield* job(fake);
           expect(read.ok).toBe(false);
-          if (!read.ok) expect(read.reason).toContain(RELOGIN[name]);
+          if (!read.ok) {
+            expect(read.reason).toContain(RELOGIN[name]);
+          }
           expect(fake.requests).toHaveLength(2);
           expect(fake.calls).toEqual([...READ_ONCE[name], ...READ_ONCE[name]]);
         }).pipe(Effect.provide(fake.layer)),
@@ -3402,7 +3464,9 @@ for (const name of ["gitlab", "github"] as const) {
         Effect.gen(function* () {
           const read = yield* job(fake);
           expect(read.ok).toBe(false);
-          if (!read.ok) expect(read.reason).toContain("2026-10-23T12:00:00.000Z");
+          if (!read.ok) {
+            expect(read.reason).toContain("2026-10-23T12:00:00.000Z");
+          }
         }).pipe(Effect.provide(fake.layer)),
       );
     });
@@ -3413,7 +3477,9 @@ for (const name of ["gitlab", "github"] as const) {
         Effect.gen(function* () {
           const read = yield* job(fake);
           expect(read.ok).toBe(false);
-          if (!read.ok) expect(read.reason).toContain("could not be reached");
+          if (!read.ok) {
+            expect(read.reason).toContain("could not be reached");
+          }
         }).pipe(Effect.provide(fake.layer)),
       );
     });
@@ -3613,8 +3679,9 @@ describe("GitHub's merge where the base branch requires a merge queue", () => {
           return { ...rest, dequeuedFor: "a required status check failed" };
         });
         expect(answer._tag).toBe("Refused");
-        if (answer._tag === "Refused")
+        if (answer._tag === "Refused") {
           expect(answer.reason).toContain("a required status check failed");
+        }
         expect(fake.model().mrs[0]?.state).toBe("open");
       }),
     ));
@@ -3625,7 +3692,9 @@ describe("GitHub's merge where the base branch requires a merge queue", () => {
         const fake = queueing();
         const answer = yield* mergeQueued(fake);
         expect(answer._tag).toBe("Refused");
-        if (answer._tag === "Refused") expect(answer.reason).toContain("after 2 hours");
+        if (answer._tag === "Refused") {
+          expect(answer.reason).toContain("after 2 hours");
+        }
         expect(fake.model().dequeued).toEqual([`${PROJECT.github}#30`]);
         expect(fake.model().mrs[0]?.queued).toBeUndefined();
       }),
@@ -3822,7 +3891,7 @@ test("GitHub reads its panel through the served HTTP face", () =>
     }),
   ));
 
-for (const name of ["gitlab", "github"] as const)
+for (const name of ["gitlab", "github"] as const) {
   describe(`the ${name} forge's protection over HTTP`, () => {
     test("reads protection for an unpushed branch from a cold start, running only credential reads", () => {
       const fake = fakeForge(name, model(name, { protectedBranches: [{ name: "release/*" }] }));
@@ -3840,14 +3909,16 @@ for (const name of ["gitlab", "github"] as const)
     for (const [failure, fault] of [
       ["403", { status: 403 }],
       ["network", "network"],
-    ] as const)
+    ] as const) {
       test(`answers unknown protection on ${failure}, never unprotected`, () =>
         runEffect(
           overHttp(name, { httpFault: fault }, (fake) =>
             FORGES[name].protects(PROJECT[name], "me/x", "/w", fake.run),
           ).pipe(Effect.map((protectedBranch) => expect(protectedBranch).toBeNull())),
         ));
+    }
   });
+}
 
 for (const name of ["gitlab", "github"] as const) {
   test(`the ${name} forge reads deployed over HTTP from a cold login`, () => {

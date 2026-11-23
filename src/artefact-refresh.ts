@@ -21,7 +21,9 @@ export const refreshJobs = () => {
   const refresh = <R>(job: RefreshJob<R>) =>
     Effect.gen(function* () {
       const running = pending.get(job.key);
-      if (running !== undefined) return yield* Deferred.await(running);
+      if (running !== undefined) {
+        return yield* Deferred.await(running);
+      }
       const done = yield* Deferred.make<boolean>();
       pending.set(job.key, done);
       return yield* permits
@@ -73,8 +75,11 @@ export const refreshJobs = () => {
   const pass = <R>(jobs: ReadonlyArray<RefreshJob<R>>) =>
     Effect.gen(function* () {
       const keys = new Set(Arr.map(jobs, (job) => job.key));
-      for (const key of checked.keys())
-        if (!keys.has(key) && !pending.has(key)) checked.delete(key);
+      for (const key of checked.keys()) {
+        if (!keys.has(key) && !pending.has(key)) {
+          checked.delete(key);
+        }
+      }
       yield* schedule(jobs);
     });
   return { refresh, pass, schedule, status, due };

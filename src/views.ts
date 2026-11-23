@@ -82,10 +82,16 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
   for (const run of runs) {
     const parts: Array<string> = [run.state];
     const open = yield* openFindingsIn(run.dir);
-    if (open > 0) parts.push(`${open} finding(s) open`);
+    if (open > 0) {
+      parts.push(`${open} finding(s) open`);
+    }
     const duration = ranFor(run);
-    if (duration) parts.push(duration);
-    if (run.mr) parts.push(run.mr);
+    if (duration) {
+      parts.push(duration);
+    }
+    if (run.mr) {
+      parts.push(run.mr);
+    }
     rows.push({
       id: run.id,
       dir: run.dir,
@@ -151,21 +157,27 @@ const TAIL_CAP = 8 * 1024;
 const capped = Effect.fn("Views.capped")(function* (file: string, cap: number) {
   const fs = yield* FileSystem.FileSystem;
   const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => null));
-  if (info === null) return null;
+  if (info === null) {
+    return null;
+  }
   // WARNING: read to the cap, never the whole file: an agent's output can be any size.
   const text = yield* fs.stream(file, { bytesToRead: cap }).pipe(
     Stream.decodeText(),
     Stream.mkString,
     Effect.orElseSucceed(() => null),
   );
-  if (text === null) return null;
+  if (text === null) {
+    return null;
+  }
   return { _tag: "Text" as const, text, truncated: Number(info.size) > cap };
 });
 
 export const tailed = Effect.fn("Views.tailed")(function* (file: string, cap: number) {
   const fs = yield* FileSystem.FileSystem;
   const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => null));
-  if (info === null) return null;
+  if (info === null) {
+    return null;
+  }
   const from = Math.max(0, Number(info.size) - cap);
   const text = yield* fs.stream(file, { offset: from }).pipe(
     Stream.decodeText(),
@@ -210,7 +222,9 @@ const buildPlan = Effect.fn("Views.buildPlan")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const dir = yield* planDirOf(run);
-  if (dir === null) return null;
+  if (dir === null) {
+    return null;
+  }
 
   const spec =
     (yield* capped(path.join(dir, "SPEC.md"), cap)) ??
@@ -247,21 +261,31 @@ const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
   const path = yield* Path.Path;
   const finished = new Set<string>();
   const dir = yield* planDirOf(run);
-  if (dir === null) return finished;
+  if (dir === null) {
+    return finished;
+  }
   const issues = path.join(dir, "issues");
   const isPlan = (other: string | null | undefined) =>
     other != null && path.resolve(other) === path.resolve(dir);
   let tickets: Array<{ file: string; text: string | null }> | undefined;
   for (const one of runs) {
-    if (one.state !== "succeeded") continue;
+    if (one.state !== "succeeded") {
+      continue;
+    }
     const mayShare =
       isPlan(path.join(one.dir, PLAN_DIR)) || isPlan(workSourceOf(one.settled)?.value);
-    if (!mayShare || !isPlan(yield* planDirOf(one).pipe(Effect.orElseSucceed(() => null))))
+    if (!mayShare || !isPlan(yield* planDirOf(one).pipe(Effect.orElseSucceed(() => null)))) {
       continue;
-    for (const { checkpoint } of yield* readCheckpoints(one.dir))
-      if (checkpoint.status === "done") finished.add(checkpoint.ticket);
+    }
+    for (const { checkpoint } of yield* readCheckpoints(one.dir)) {
+      if (checkpoint.status === "done") {
+        finished.add(checkpoint.ticket);
+      }
+    }
     const launches = yield* readLaunches(one.id);
-    if (launches.length === 0) continue;
+    if (launches.length === 0) {
+      continue;
+    }
     tickets ??= yield* ticketRepoLines(issues);
     const known = one.repo ? Arr.filter(tickets, (t) => t.text !== null) : tickets;
     const mine = Arr.map(
@@ -274,12 +298,20 @@ const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
     );
     for (const launch of launches) {
       const output = yield* writtenAt(launch.output);
-      if (output === undefined) continue;
-      if (mine.includes(launch.operation)) finished.add(launch.operation);
-      if (launch.operation !== "build") continue;
+      if (output === undefined) {
+        continue;
+      }
+      if (mine.includes(launch.operation)) {
+        finished.add(launch.operation);
+      }
+      if (launch.operation !== "build") {
+        continue;
+      }
       for (const file of mine) {
         const written = yield* writtenAt(path.join(issues, file));
-        if (written !== undefined && written <= output) finished.add(file);
+        if (written !== undefined && written <= output) {
+          finished.add(file);
+        }
       }
     }
   }
@@ -343,14 +375,18 @@ const planStamps = Effect.fn("Views.planStamps")(function* (run: RunFacts) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const dir = yield* planDirOf(run);
-  if (dir === null) return "";
+  if (dir === null) {
+    return "";
+  }
   const issues = path.join(dir, "issues");
   const files = Arr.filter(
     yield* fs.readDirectory(issues).pipe(Effect.orElseSucceed(() => [])),
     (name) => pipe(name, Str.endsWith(".md")),
   ).sort();
   const stamps = [`SPEC.md=${yield* stampOf(path.join(dir, "SPEC.md"))}`];
-  for (const file of files) stamps.push(`${file}=${yield* stampOf(path.join(issues, file))}`);
+  for (const file of files) {
+    stamps.push(`${file}=${yield* stampOf(path.join(issues, file))}`);
+  }
   return Arr.join(stamps, "\n");
 });
 
@@ -364,11 +400,15 @@ const plannedFor = Effect.fn("Views.plannedFor")(function* (
   runs: ReadonlyArray<RunFacts>,
 ) {
   const finished = yield* finishedTickets(run, runs);
-  if (!plans || !settled(run)) return yield* buildPlan(run, cap, finished);
+  if (!plans || !settled(run)) {
+    return yield* buildPlan(run, cap, finished);
+  }
   const key = `${run.id}:${cap}`;
   const stamps = `${yield* planStamps(run)}\nfinished=${Arr.join([...finished].sort(), ",")}`;
   const kept = plans.get(key);
-  if (kept?.stamps === stamps) return kept.plan;
+  if (kept?.stamps === stamps) {
+    return kept.plan;
+  }
   const plan = yield* buildPlan(run, cap, finished);
   plans.set(key, { stamps, plan });
   return plan;
@@ -400,10 +440,13 @@ const evidenceIn = Effect.fn("Views.evidenceIn")(function* (dir: string) {
   for (const name of (yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))).sort(
     (a, b) => pipe(a, Str.localeCompare(b)),
   )) {
-    if (pipe(name, Str.endsWith(".jsonl"))) continue;
+    if (pipe(name, Str.endsWith(".jsonl"))) {
+      continue;
+    }
     const info = yield* fs.stat(path.join(dir, name)).pipe(Effect.option);
-    if (info._tag === "Some" && info.value.type === "File")
+    if (info._tag === "Some" && info.value.type === "File") {
       kept.push({ name, bytes: Number(info.value.size) });
+    }
   }
   return kept;
 });
@@ -451,7 +494,9 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
         Option.getOrUndefined(Arr.findFirst(present, (one) => one.id === opts.runId)),
       ),
     ) ?? (yield* findRun(opts.env, opts.runId));
-  if (!run) return null;
+  if (!run) {
+    return null;
+  }
 
   const parts = opts.parts ?? true;
   const texts = parts
@@ -554,10 +599,18 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     flow: opts.flow ?? undefined,
   };
   let shown = detail;
-  if (run.narratives !== undefined) shown = { ...shown, narratives: run.narratives };
-  if (run.park !== undefined) shown = { ...shown, park: run.park };
-  if (run.recovery !== undefined) shown = { ...shown, recovery: run.recovery };
-  if (progress !== null) shown = { ...shown, branchProgress: progress };
+  if (run.narratives !== undefined) {
+    shown = { ...shown, narratives: run.narratives };
+  }
+  if (run.park !== undefined) {
+    shown = { ...shown, park: run.park };
+  }
+  if (run.recovery !== undefined) {
+    shown = { ...shown, recovery: run.recovery };
+  }
+  if (progress !== null) {
+    shown = { ...shown, branchProgress: progress };
+  }
   return shown;
 });
 
@@ -573,8 +626,11 @@ function flatten(raw: YamlMap, prefix = "") {
   const out: Array<{ key: string; value: string }> = [];
   for (const [key, value] of Rec.toEntries(raw)) {
     const dotted = prefix === "" ? key : `${prefix}.${key}`;
-    if (isYamlMap(value)) out.push(...flatten(value, dotted));
-    else out.push({ key: dotted, value: scalar(value) });
+    if (isYamlMap(value)) {
+      out.push(...flatten(value, dotted));
+    } else {
+      out.push({ key: dotted, value: scalar(value) });
+    }
   }
   const returned: Array<{ key: string; value: string }> = out;
   return returned;
@@ -643,7 +699,11 @@ export const buildMachineOwn = Effect.fn("Views.buildMachineOwn")(function* (env
         ),
     ),
   };
-  if (isString(root)) own.projectsRoot = root;
-  if (isString(chat)) own.chatHarness = chat;
+  if (isString(root)) {
+    own.projectsRoot = root;
+  }
+  if (isString(chat)) {
+    own.chatHarness = chat;
+  }
   return own;
 });

@@ -8,7 +8,9 @@ import { factsOfView } from "../../src/runs";
 import { stringifyJson } from "../../src/json";
 
 // WARNING: a Collie entry asked to start a host would start this file again, so it must never start one.
-if (Bun.argv.slice(2).some((arg) => arg !== "--open")) process.exit(2);
+if (Bun.argv.slice(2).some((arg) => arg !== "--open")) {
+  process.exit(2);
+}
 Bun.env.COLLIE_HOST = "/bin/false";
 
 const NOW = Date.parse("2026-11-16T16:00:00Z");
@@ -24,7 +26,9 @@ const result = await runtime.runPromise(
   Effect.scoped(
     Effect.gen(function* () {
       const open_ms = performance.now() - opened;
-      if (Bun.argv.includes("--open")) return { open_ms };
+      if (Bun.argv.includes("--open")) {
+        return { open_ms };
+      }
       const env = readEnv({
         HERDR_PLUGIN_STATE_DIR: state,
         COLLIE_CWD: root,

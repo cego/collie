@@ -27,31 +27,35 @@ export const bundleHc = Effect.fn("HcRelease.bundle")(function* (
   const path = yield* Path.Path;
   const on = hcTarget(target);
   const want = pin.sha256[on];
-  if (want === undefined)
+  if (want === undefined) {
     return yield* new HcRefused({ message: `hc-pin.json pins no hc for ${on}` });
+  }
   const name = `herdr-core-${on}.tar.gz`;
   const kept = path.join(from.cache, pin.version, name);
   const cached = yield* fs.readFile(kept).pipe(Effect.option);
   let bytes: Uint8Array;
-  if (Option.isSome(cached) && sha256Hex(cached.value) === want) bytes = cached.value;
-  else {
+  if (Option.isSome(cached) && sha256Hex(cached.value) === want) {
+    bytes = cached.value;
+  } else {
     const url = `${from.releases}/core/${pin.version}/${name}`;
     const response = yield* HttpClient.get(url).pipe(
       Effect.provide(FetchHttpClient.layer),
       Effect.mapError((cause) => new HcRefused({ message: `${url}: ${cause.message}` })),
     );
-    if (response.status !== 200)
+    if (response.status !== 200) {
       return yield* new HcRefused({ message: `${url} answered ${response.status}` });
+    }
     bytes = new Uint8Array(
       yield* response.arrayBuffer.pipe(
         Effect.mapError((cause) => new HcRefused({ message: `${url}: ${cause.message}` })),
       ),
     );
     const got = sha256Hex(bytes);
-    if (got !== want)
+    if (got !== want) {
       return yield* new HcRefused({
         message: `${url} hashed ${got}, but hc-pin.json says ${want} for ${on}`,
       });
+    }
     yield* fs.makeDirectory(path.dirname(kept), { recursive: true });
     yield* fs.writeFile(kept, bytes);
   }

@@ -57,7 +57,9 @@ function serve() {
     websocket: {
       message(ws, raw) {
         const decoded = decodeRequest(raw);
-        if (decoded._tag === "None") return;
+        if (decoded._tag === "None") {
+          return;
+        }
         const { id, method, params } = decoded.value;
         fake.calls.push(method);
         const reply = (result: Answer) => {
@@ -407,13 +409,18 @@ onMachineWith("codex")(
         expect(yield* read("v2/ThreadReadResponse.json")).toContain(`"parentThreadId"`);
         const thread = yield* read("v2/ThreadReadResponse.json");
         expect(thread).toContain(`"path"`);
-        for (const status of ["active", "idle", "notLoaded", "systemError"])
+        for (const status of ["active", "idle", "notLoaded", "systemError"]) {
           expect(thread).toContain(`"${status}"`);
+        }
         const interrupt = yield* read("v2/TurnInterruptParams.json");
-        for (const field of ["threadId", "turnId"]) expect(interrupt).toContain(`"${field}"`);
+        for (const field of ["threadId", "turnId"]) {
+          expect(interrupt).toContain(`"${field}"`);
+        }
         expect(yield* read("v2/ThreadTurnsListResponse.json")).toContain(`"status"`);
         const turnsList = yield* read("v2/ThreadTurnsListParams.json");
-        for (const field of ["sortDirection", "limit"]) expect(turnsList).toContain(`"${field}"`);
+        for (const field of ["sortDirection", "limit"]) {
+          expect(turnsList).toContain(`"${field}"`);
+        }
         expect(notifications).toContain(`"contextCompaction"`);
         for (const status of ["completed", "interrupted", "failed", "inProgress"]) {
           expect(notifications).toContain(`"${status}"`);

@@ -64,8 +64,9 @@ const proc = (files: Record<string, string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(`${dir}/proc/pressure`, { recursive: true });
-    for (const [name, text] of Rec.toEntries(files))
+    for (const [name, text] of Rec.toEntries(files)) {
       yield* fs.writeFileString(`${dir}/proc/${name}`, text);
+    }
     return `${dir}/proc`;
   });
 

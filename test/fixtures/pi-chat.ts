@@ -71,7 +71,9 @@ for await (const chunk of Bun.stdin.stream()) {
       emit({ type: "agent_settled", aborted: true });
       continue;
     }
-    if (command.type !== "prompt") continue;
+    if (command.type !== "prompt") {
+      continue;
+    }
     if (
       Option.getOrUndefined(
         Option.map(Option.fromNullishOr(command.message), (present) =>
@@ -139,10 +141,12 @@ for await (const chunk of Bun.stdin.stream()) {
           Effect.gen(function* () {
             const local = Bun.file(`${process.cwd()}/.pi/${name}`);
             const global = Bun.file(`${childEnv().PI_CODING_AGENT_DIR}/${name}`);
-            if (yield* Effect.promise(() => local.exists()))
+            if (yield* Effect.promise(() => local.exists())) {
               return yield* Effect.promise(() => local.text());
-            if (yield* Effect.promise(() => global.exists()))
+            }
+            if (yield* Effect.promise(() => global.exists())) {
               return yield* Effect.promise(() => global.text());
+            }
             return "";
           }),
         );
@@ -227,8 +231,9 @@ for await (const chunk of Bun.stdin.stream()) {
           pipe(present___, Str.startsWith("hold")),
         ),
       )
-    )
+    ) {
       continue;
+    }
     emit({ type: "message_start", message: { role: "assistant" } });
     update("thinking_start");
     update("thinking_delta", { delta: "Considering" });

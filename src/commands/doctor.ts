@@ -11,10 +11,16 @@ export const doctor = Command.make("doctor", { gitlabHost: gitlabHostFlag }, ({ 
       Effect.gen(function* () {
         // WARNING: needs no workspace; it must work from a plain shell, where nothing is set up yet.
         const resolved = yield* context(global, false);
-        if (resolved._tag === "ContextFailure") return resolved.result;
+        if (resolved._tag === "ContextFailure") {
+          return resolved.result;
+        }
         const env = withGitlabHost(resolved.env, gitlabHost);
-        if ("ok" in env) return env;
-        if (env.machine !== undefined) return yield* doctorOn(env, gitlabHost, yield* cliDoor(env));
+        if ("ok" in env) {
+          return env;
+        }
+        if (env.machine !== undefined) {
+          return yield* doctorOn(env, gitlabHost, yield* cliDoor(env));
+        }
         return yield* checkInstallation(env);
       }),
       global.json,

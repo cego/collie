@@ -89,7 +89,9 @@ const openedAt = (settings: DesktopSettings) =>
   openedOn((driver) =>
     Effect.gen(function* () {
       const resolved = yield* opensOn(settings, NO_FLOCK_SETTINGS, Effect.succeed({}));
-      if (!resolved.ok) return yield* Effect.die(resolved.problem);
+      if (!resolved.ok) {
+        return yield* Effect.die(resolved.problem);
+      }
       yield* driver.open("conversation", resolved.choice.model, resolved.choice.effort);
     }),
   );
@@ -128,8 +130,9 @@ test("this computer's file tools and Bash are on and allowed, no setting source 
     "mcp__collie__collie_do",
     "mcp__collie__collie_read",
     "mcp__collie__collie_helle",
-  ])
+  ]) {
     expect(options.allowedTools).toContain(name);
+  }
   expect(options.allowedTools).not.toContain("AskUserQuestion");
   expect(options.systemPrompt).not.toContain("no shell and no file access");
   expect(options.systemPrompt).toContain("<machine>:<path>");

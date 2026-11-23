@@ -61,7 +61,9 @@ const main = Effect.gen(function* () {
     );
   const ask = (path: string, request: Request) =>
     Effect.gen(function* () {
-      if (!(yield* fs.exists(path))) return null;
+      if (!(yield* fs.exists(path))) {
+        return null;
+      }
       return yield* Effect.callback<string | null>((resume) => {
         const conn = createConnection(path);
         let answer = "";
@@ -80,7 +82,9 @@ const main = Effect.gen(function* () {
     Effect.gen(function* () {
       const forwards = new Map<string, Server>();
       const finish = () => {
-        for (const server of forwards.values()) server.close();
+        for (const server of forwards.values()) {
+          server.close();
+        }
         process.exit(0);
       };
       const unlink = yield* Effect.cached(fs.remove(path, { force: true }));
@@ -94,7 +98,9 @@ const main = Effect.gen(function* () {
           dispatch(
             Effect.gen(function* () {
               const mapped = yield* farPort(Number(hostPort));
-              if (conn.destroyed) return;
+              if (conn.destroyed) {
+                return;
+              }
               out = createConnection({ host: "127.0.0.1", port: mapped });
               conn.pipe(out);
               out.pipe(conn);
@@ -116,15 +122,21 @@ const main = Effect.gen(function* () {
         let line = "";
         conn.on("data", (chunk) => {
           line += chunk.toString("utf8");
-          if (!Str.includes("\n")(line)) return;
+          if (!Str.includes("\n")(line)) {
+            return;
+          }
           dispatch(
             Effect.gen(function* () {
               const asked = yield* Schema.decodeEffect(RequestJson)(line);
               const reply = (answer: string) => {
                 conn.end(`${answer}\n`);
               };
-              if (asked.op === "check") return reply("ok");
-              if (asked.op === "forward") return forward(asked.spec!, reply);
+              if (asked.op === "check") {
+                return reply("ok");
+              }
+              if (asked.op === "forward") {
+                return forward(asked.spec!, reply);
+              }
               if (asked.op === "cancel") {
                 forwards.get(asked.spec!)?.close();
                 forwards.delete(asked.spec!);
@@ -155,7 +167,9 @@ const main = Effect.gen(function* () {
       return yield* Effect.never;
     });
   const argv = Arr.drop(process.argv, 2);
-  if (argv[0] === "--master") return yield* master(argv[1]!);
+  if (argv[0] === "--master") {
+    return yield* master(argv[1]!);
+  }
   if (argv[0] === "-G") {
     process.stdout.write("hostname 127.0.0.1\nport 22\n");
     return process.exit(0);
@@ -169,16 +183,24 @@ const main = Effect.gen(function* () {
   let at = 0;
   for (; at < argv.length; at++) {
     const word = argv[at]!;
-    if (word === "-S") path = argv[++at];
-    else if (word === "-F") config = argv[++at];
-    else if (word === "-O") verb = argv[++at];
-    else if (word === "-L") spec = argv[++at];
-    else if (word === "-o") {
+    if (word === "-S") {
+      path = argv[++at];
+    } else if (word === "-F") {
+      config = argv[++at];
+    } else if (word === "-O") {
+      verb = argv[++at];
+    } else if (word === "-L") {
+      spec = argv[++at];
+    } else if (word === "-o") {
       const [key, value] = Str.split(argv[++at]!, "=");
       options.set(key, value ?? "");
-    } else if (word === "-M") isMaster = true;
-    else if (word === "-T" || word === "-N") continue;
-    else break;
+    } else if (word === "-M") {
+      isMaster = true;
+    } else if (word === "-T" || word === "-N") {
+      continue;
+    } else {
+      break;
+    }
   }
   const target = argv[at] ?? "";
   const command = Arr.join(Arr.drop(argv, at + 1), " ");
@@ -189,7 +211,9 @@ const main = Effect.gen(function* () {
       return yield* Effect.sleep(1000).pipe(Effect.repeat(Schedule.forever));
     }
     process.stderr.write(`Authenticated to ${target}\n`);
-    if (options.get("ControlPersist") !== "yes") return yield* master(path!);
+    if (options.get("ControlPersist") !== "yes") {
+      return yield* master(path!);
+    }
     const child = yield* spawner.spawn(
       ChildProcess.make(
         process.execPath,
@@ -215,7 +239,9 @@ const main = Effect.gen(function* () {
         schedule: Schedule.spaced(20),
       }),
     );
-    if (ready === "ok") return process.exit(0);
+    if (ready === "ok") {
+      return process.exit(0);
+    }
     yield* Effect.sleep(20);
     process.stderr.write(`ControlSocket ${path} could not be bound\n`);
     return process.exit(255);
@@ -238,14 +264,17 @@ const main = Effect.gen(function* () {
     const request = spec === undefined ? { op: verb } : { op: verb, spec };
     const answer = yield* ask(path ?? "", request);
     if (answer === "ok") {
-      if (verb === "check") process.stderr.write("Master running\n");
+      if (verb === "check") {
+        process.stderr.write("Master running\n");
+      }
       return process.exit(0);
     }
     process.stderr.write(answer ?? `Control socket connect(${path}): No such file or directory\n`);
     return process.exit(255);
   }
-  if (path !== undefined && (yield* fs.exists(`${dir}/drops-before-ride`)))
+  if (path !== undefined && (yield* fs.exists(`${dir}/drops-before-ride`))) {
     yield* ask(path, { op: "drop" });
+  }
   const rides =
     path !== undefined && options.get("ControlMaster") === "no"
       ? (yield* ask(path, { op: "check" })) === "ok"

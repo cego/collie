@@ -70,7 +70,9 @@ function itemsIn(lines: ReadonlyArray<string>, item: RegExp) {
   let open: Array<string> | null = null;
   let fenced = false;
   for (const line of lines) {
-    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced;
+    }
     const found = fenced ? null : item.exec(line);
     if (found) {
       open = [Str.trim(found[1]!)];
@@ -80,9 +82,11 @@ function itemsIn(lines: ReadonlyArray<string>, item: RegExp) {
       open !== null &&
       /^\s+\S/.test(line) &&
       !/^\s+([-*+]|\d+[.)])\s/.test(line)
-    )
+    ) {
       open.push(Str.trim(line));
-    else open = null;
+    } else {
+      open = null;
+    }
   }
   const returned: Array<string> = Arr.map(items, (parts) => Arr.join(parts, " "));
   return returned;
@@ -278,8 +282,11 @@ function refuse(kind: PlanRefusal["kind"], message: string) {
 
 function indexBy(index: Map<string, Array<string>>, key: string, file: string) {
   const files = index.get(key);
-  if (files) files.push(file);
-  else index.set(key, [file]);
+  if (files) {
+    files.push(file);
+  } else {
+    index.set(key, [file]);
+  }
 }
 
 // WARNING: a plan naming one repository by path is not single-repo: it needs a run rooted there.
@@ -362,7 +369,9 @@ export function readPlanRepos(
 
   // WARNING: checked before the single-repository shortcut, so one plan is never judged differently as one repo or two.
   const claiming = new Map<string, Array<string>>();
-  for (const ticket of parsed) indexBy(claiming, ticket.id, ticket.file);
+  for (const ticket of parsed) {
+    indexBy(claiming, ticket.id, ticket.file);
+  }
   const twice = Arr.filter([...claiming.values()], (files) => files.length > 1);
   if (twice.length > 0) {
     const outcome: PlanRepos = refuse(
@@ -410,7 +419,9 @@ export function readPlanRepos(
         Arr.some(ticket.blockedBy, (id) => ids.has(id)) &&
         Arr.some(cyclic, (other) => other.blockedBy.includes(ticket.id)),
     );
-    if (stuck.length === cyclic.length) break;
+    if (stuck.length === cyclic.length) {
+      break;
+    }
     cyclic = stuck;
   }
   if (cyclic.length > 0) {
@@ -458,9 +469,11 @@ export function readPlanRepos(
   const clashing: Array<string> = [];
   for (const ticket of placed) {
     const first = firstOf.get(keyOf(ticket));
-    if (first === undefined) firstOf.set(keyOf(ticket), ticket);
-    else if (first.repo !== ticket.repo || first.change !== ticket.change)
+    if (first === undefined) {
+      firstOf.set(keyOf(ticket), ticket);
+    } else if (first.repo !== ticket.repo || first.change !== ticket.change) {
       clashing.push(`${named(first)} and ${named(ticket)}`);
+    }
   }
   if (clashing.length > 0) {
     const outcome: PlanRepos = refuse(
@@ -491,7 +504,9 @@ export function readPlanRepos(
     const key = keyOf(ticket);
     for (const id of ticket.blockedBy ?? []) {
       const from = keyOfId.get(id)!;
-      if (from === key) continue;
+      if (from === key) {
+        continue;
+      }
       blockers.get(key)!.add(from);
       const named = interleaving.get(key) ?? [];
       named.push(`${ticket.file} (blocked by ${from})`);
@@ -513,7 +528,9 @@ export function readPlanRepos(
         const waited = Arr.filter(cyclic, (key) =>
           Arr.some(cyclic, (other) => blockers.get(other)!.has(key)),
         );
-        if (waited.length === cyclic.length) break;
+        if (waited.length === cyclic.length) {
+          break;
+        }
         cyclic = waited;
       }
       const interleaved = Arr.flatMap(cyclic, (key) => interleaving.get(key) ?? []);
@@ -525,7 +542,9 @@ export function readPlanRepos(
       );
       return outcome;
     }
-    for (const key of wave) settled.add(key);
+    for (const key of wave) {
+      settled.add(key);
+    }
     waves.push(wave);
   }
 
@@ -581,12 +600,16 @@ export const planReposOf = Effect.fn("Plan.planReposOf")(function* (planDir: str
   const named = new Set<string>(["."]);
   for (const ticket of tickets) {
     const repo = repoUnderRoot(REPO_LINE.exec(ticket.text)?.[1] ?? "");
-    if (repo !== null) named.add(repo);
+    if (repo !== null) {
+      named.add(repo);
+    }
   }
   // WARNING: a .git file is a worktree, and either form is a checkout to root a run at.
   const checkouts = new Set<string>();
   for (const repo of named) {
-    if (yield* fs.exists(path.join(root, repo, ".git"))) checkouts.add(repo);
+    if (yield* fs.exists(path.join(root, repo, ".git"))) {
+      checkouts.add(repo);
+    }
   }
 
   return readPlanRepos(tickets, checkouts);
@@ -623,7 +646,9 @@ export function orderedTickets(
   change = "",
 ) {
   const mine = Arr.filter(tickets, (ticket) => {
-    if (repo === undefined || repo === "") return true;
+    if (repo === undefined || repo === "") {
+      return true;
+    }
     const written = repoUnderRoot(REPO_LINE.exec(ticket.text)?.[1] ?? "");
     return (
       (written === repo || (written === null && repo === ".")) &&
@@ -694,7 +719,9 @@ export const orderedTicketsOf = Effect.fn("Plan.orderedTicketsOf")(function* (
 export const benchmarkRefusalOf = Effect.fn("Plan.benchmarkRefusalOf")(function* (planDir: string) {
   const fs = yield* FileSystem.FileSystem;
   for (const ticket of yield* orderedTicketsOf(planDir)) {
-    if (ticket.benchmark === null) continue;
+    if (ticket.benchmark === null) {
+      continue;
+    }
     const refused = yield* fs.readFileString(benchmarkFile(planDir, ticket.benchmark)).pipe(
       Effect.mapError((cause) => `it cannot be read: ${cause.message}`),
       Effect.flatMap((text) =>
@@ -706,7 +733,9 @@ export const benchmarkRefusalOf = Effect.fn("Plan.benchmarkRefusalOf")(function*
       Effect.flip,
       Effect.option,
     );
-    if (Option.isSome(refused)) return `${ticket.file}: ${ticket.benchmark}: ${refused.value}`;
+    if (Option.isSome(refused)) {
+      return `${ticket.file}: ${ticket.benchmark}: ${refused.value}`;
+    }
   }
   return null;
 });

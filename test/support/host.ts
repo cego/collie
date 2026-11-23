@@ -137,7 +137,9 @@ const Refusal = Schema.Union([
 ]);
 const sentenceOf = (cause: unknown) => {
   const said = Schema.decodeUnknownOption(Refusal)(cause);
-  if (Option.isNone(said)) return String(cause);
+  if (Option.isNone(said)) {
+    return String(cause);
+  }
   return "reason" in said.value ? said.value.reason : said.value.message;
 };
 
@@ -194,15 +196,21 @@ export const openHost = Effect.fn("HostTest.open")(function* (
     Effect.gen(function* () {
       const known = yield* readNames(fs, names);
       const named = known.runs[runId];
-      if (named !== undefined) return named;
-      if (!known.told.includes(runId)) return runId;
+      if (named !== undefined) {
+        return named;
+      }
+      if (!known.told.includes(runId)) {
+        return runId;
+      }
       const claimed = new Set(Rec.values(known.runs));
       const unclaimed = Arr.filter(
         yield* client.runs({ task: null }).pipe(Effect.orDie),
         (view) => !claimed.has(view.runId),
       ).sort((one, other) => pipe_(one.created, Str.localeCompare(other.created)));
       const found = unclaimed[known.told.indexOf(runId)];
-      if (found === undefined) return runId;
+      if (found === undefined) {
+        return runId;
+      }
       yield* writeNames(fs, names, { ...known, runs: { ...known.runs, [runId]: found.runId } });
       return found.runId;
     });
@@ -217,7 +225,9 @@ export const openHost = Effect.fn("HostTest.open")(function* (
           ? client.resume({ runId: target, request })
           : client.control({ runId: target, control: name, set, request })
       ).pipe(Effect.result);
-      if (done._tag === "Failure") return { ok: false, op, detail: sentenceOf(done.failure) };
+      if (done._tag === "Failure") {
+        return { ok: false, op, detail: sentenceOf(done.failure) };
+      }
       // WARNING: A control over work no host runs is recorded as an intent, never a confirmation.
       return { ok: op !== "resume" || done.success.applied, op, detail: done.success.detail };
     });
@@ -464,7 +474,9 @@ export const stopHost = Effect.fn("HostTest.stopHost")(function* (dir: string) {
         ownerOf(dir).pipe(
           Effect.tap((owner) =>
             Effect.sync(() => {
-              if (owner === null || stopped.has(owner.pid)) return;
+              if (owner === null || stopped.has(owner.pid)) {
+                return;
+              }
               stopped.set(owner.pid, owner);
               try {
                 process.kill(owner.pid, "SIGTERM");

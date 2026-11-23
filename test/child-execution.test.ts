@@ -153,8 +153,9 @@ test("two children collected concurrently under their recorded executions each r
       Effect.gen(function* () {
         const parent = yield* parked(world, { notes: "one,two", waits: "" });
         yield* handedOverAsBefore(world, parent);
-        for (const note of ["one", "two"])
+        for (const note of ["one", "two"]) {
           yield* status(world, `${parent}.pace-${note}`, "complete");
+        }
         yield* stopHost(world.state);
 
         yield* answer(world, parent, "go");

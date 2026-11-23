@@ -67,7 +67,9 @@ export const retryCaption = (lane: FlowLane, node: FlowRun) => {
     Arr.filter(lane.nodes, (one) => one.state === "done" && one.id !== node.id),
     (one) => one.title,
   );
-  if (kept.length === 0) return `Runs ${node.title} again.`;
+  if (kept.length === 0) {
+    return `Runs ${node.title} again.`;
+  }
   const names =
     kept.length > 3 ? `${kept[0]} and ${kept.length - 1} more` : Arr.join(kept, " and ");
   return `Keeps ${names} and runs ${node.title} again.`;
@@ -80,7 +82,9 @@ export const desktopFlowAction = (
   installation: string,
   live: boolean,
 ) => {
-  if (!live || (node.primary !== kind && !node.actions?.includes(kind))) return null;
+  if (!live || (node.primary !== kind && !node.actions?.includes(kind))) {
+    return null;
+  }
   const runId = lane.run;
   const stepId =
     Option.getOrUndefined(
@@ -175,7 +179,9 @@ export const desktopFlowAction = (
           (one) => one.id !== undefined && (one.open ?? one.answered === null),
         ),
       );
-      if (asked?.id === undefined) return null;
+      if (asked?.id === undefined) {
+        return null;
+      }
       const question: Question = {
         kind: "question",
         run: runId,
@@ -215,12 +221,13 @@ export const desktopFlowAction = (
           );
     }
     case "open": {
-      if (node.link?.run != null)
+      if (node.link?.run != null) {
         return shown(`Open ${node.title}`, "i-lucide-arrow-up-right", {
           kind: "run",
           run: node.link.run,
           machine: node.link.machine,
         });
+      }
       return node.url === undefined
         ? null
         : shown(node.id === "ci" ? "Open pipeline" : "Open MR", "i-lucide-external-link", {
@@ -243,7 +250,9 @@ export const desktopLaneAction = (
   installation: string,
   live: boolean,
 ) => {
-  if (!live || !lane.actions?.includes(kind)) return null;
+  if (!live || !lane.actions?.includes(kind)) {
+    return null;
+  }
   const runId = lane.run;
   switch (kind) {
     case "hold":
@@ -280,7 +289,9 @@ export const desktopLaneAction = (
 };
 
 export const nextMove = (flow: Flow) => {
-  if (flow.current === null) return null;
+  if (flow.current === null) {
+    return null;
+  }
   const lane = Option.getOrUndefined(
     Arr.findFirst(flow.lanes, (one) => one.run === flow.current!.run),
   );

@@ -40,8 +40,9 @@ test("a reassessment accepts only one status per supplied id and no other output
     { findings: [first, { ...second, reason: " " }] },
     { findings: [first, second], verdict: "clean" },
     { findings: [{ ...first, severity: "minor" }, second] },
-  ])
+  ]) {
     expect(decode(output)._tag).toBe("Failure");
+  }
 });
 
 const agree = <T>(
@@ -93,10 +94,14 @@ test("a review decodes the finding ledger and names an invalid status", () => {
   const invalid = { ...output, findings: [{ ...findings[0], status: "ignored" }] };
   const decoded = Schema.decodeUnknownResult(ReviewOutputSchema)(invalid);
   expect(decoded._tag).toBe("Failure");
-  if (decoded._tag === "Failure") expect(String(decoded.failure)).toContain("status");
+  if (decoded._tag === "Failure") {
+    expect(String(decoded.failure)).toContain("status");
+  }
   const parsed = parseReviewOutput(stringifyJson(invalid), "review.json");
   expect(parsed.ok).toBe(false);
-  if (!parsed.ok) expect(parsed.error).toContain("findings[0].status");
+  if (!parsed.ok) {
+    expect(parsed.error).toContain("findings[0].status");
+  }
 });
 
 const SYNTHESES = [
@@ -169,7 +174,9 @@ test("an older synthesis uses its summary and unmarked findings in the public re
   };
   const decoded = flow(Schema.decodeUnknownResult(SynthesisSchema), Result.getOrThrow)(output);
   const parsed = parseSynthesis(stringifyJson(output), "synthesized.json");
-  if (!parsed.ok) throw new Error(parsed.error);
+  if (!parsed.ok) {
+    throw new Error(parsed.error);
+  }
   expect(decoded).toEqual(parsed.value);
   expect(renderPublicReview(decoded)).toBe(
     "Adds a version flag. It exits with an error.\n\n**Major**\n\n- Exit zero on success\n",

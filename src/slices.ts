@@ -10,7 +10,9 @@ export interface Handed {
 }
 
 export function renderProgress(done: ReadonlyArray<Handed>) {
-  if (done.length === 0) return "(this is the first ticket)";
+  if (done.length === 0) {
+    return "(this is the first ticket)";
+  }
   return Arr.join(
     Arr.map(done, (entry) => {
       const commits =
@@ -33,7 +35,9 @@ export function identityProblem(keys: ReadonlyArray<string>) {
   const seen = new Set<string>();
   for (const key of keys) {
     const unsafe = unsafePathComponent(key);
-    if (unsafe !== null) return `"${key}" cannot identify work: it ${unsafe}`;
+    if (unsafe !== null) {
+      return `"${key}" cannot identify work: it ${unsafe}`;
+    }
     if (seen.has(key)) {
       return `two items of work are called "${key}", so one result would answer for both`;
     }

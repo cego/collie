@@ -626,9 +626,16 @@ function makeStore(stateDir: string | undefined) {
       Effect.sync(() => {
         written++;
         // WARNING: another connection's commit names no Run, and only the host writes a Run's row.
-        if (runs !== undefined) told?.(runs);
-        if (runs === undefined) dirty = "all";
-        else if (dirty !== "all") for (const run of runs) dirty.add(run);
+        if (runs !== undefined) {
+          told?.(runs);
+        }
+        if (runs === undefined) {
+          dirty = "all";
+        } else if (dirty !== "all") {
+          for (const run of runs) {
+            dirty.add(run);
+          }
+        }
       });
     const invalidate = Effect.andThen(wrote(), reactivity.invalidate(RUNS));
     const mutation = <A, E, R>(runs: ReadonlyArray<string>, effect: Effect.Effect<A, E, R>) =>
@@ -643,7 +650,9 @@ function makeStore(stateDir: string | undefined) {
     yield* Effect.forkScoped(
       Effect.gen(function* () {
         const now = yield* dataVersion;
-        if (now === seen) return;
+        if (now === seen) {
+          return;
+        }
         seen = now;
         elsewhere++;
         yield* invalidate;
@@ -746,8 +755,9 @@ function makeStore(stateDir: string | undefined) {
     });
 
     const whyClosed = Effect.fn("Store.whyClosed")(function* (row: DecisionRow) {
-      if (row.answer !== null)
+      if (row.answer !== null) {
         return `"${row.decision}" was already answered "${row.answer}"${row.answerer === null ? "" : ` by ${whoActed(row.answerer)}`}`;
+      }
       const rows = yield* decisionsOf(row.run).pipe(Effect.orDie);
       let newest: DecisionRow | undefined;
       let next = Arr.findFirst(rows, (one) => one.revises === row.decision);
@@ -769,7 +779,9 @@ function makeStore(stateDir: string | undefined) {
     let read: { readonly at: number; readonly rows: ReadonlyArray<RunRow> } | null = null;
     const refreshing = Semaphore.makeUnsafe(1);
     const refresh = Effect.suspend(() => {
-      if (read?.at === written) return Effect.succeed(read.rows);
+      if (read?.at === written) {
+        return Effect.succeed(read.rows);
+      }
       const at = written;
       const which = dirty;
       dirty = new Set();
@@ -801,8 +813,13 @@ function makeStore(stateDir: string | undefined) {
         }),
         Effect.onError(() =>
           Effect.sync(() => {
-            if (which === "all") dirty = "all";
-            else if (dirty !== "all") for (const run of which) dirty.add(run);
+            if (which === "all") {
+              dirty = "all";
+            } else if (dirty !== "all") {
+              for (const run of which) {
+                dirty.add(run);
+              }
+            }
           }),
         ),
       );
@@ -850,7 +867,9 @@ function makeStore(stateDir: string | undefined) {
           : decisionsOfRuns(runs).pipe(
               Effect.map((rows) => {
                 const byRun = new Map<string, Array<DecisionRow>>();
-                for (const row of rows) byRun.set(row.run, [...(byRun.get(row.run) ?? []), row]);
+                for (const row of rows) {
+                  byRun.set(row.run, [...(byRun.get(row.run) ?? []), row]);
+                }
                 return byRun;
               }),
               Effect.orDie,
@@ -893,7 +912,9 @@ function makeStore(stateDir: string | undefined) {
             reason: `run "${answer.run}" is not waiting on a decision called "${answer.decision}"`,
           };
         }
-        if (settled.length > 0) return { _tag: "accepted" as const, row };
+        if (settled.length > 0) {
+          return { _tag: "accepted" as const, row };
+        }
         if (row.request === answer.request && row.answer === answer.value) {
           return { _tag: "repeat" as const, row };
         }
@@ -919,11 +940,12 @@ function makeStore(stateDir: string | undefined) {
           run: superseding.run,
           decision: superseding.decision,
         }).pipe(Effect.orDie);
-        if (row === undefined)
+        if (row === undefined) {
           return {
             _tag: "refused" as const,
             reason: `run "${superseding.run}" is not waiting on a decision called "${superseding.decision}"`,
           };
+        }
         return written.length > 0
           ? { _tag: "accepted" as const, row }
           : { _tag: "refused" as const, reason: yield* whyClosed(row) };
@@ -987,7 +1009,9 @@ function makeStore(stateDir: string | undefined) {
           task: admission.task,
           parent: admission.parent,
         };
-        if (admission.attachments?.length) askedFor.attachments = [...admission.attachments];
+        if (admission.attachments?.length) {
+          askedFor.attachments = [...admission.attachments];
+        }
         const asked = canonical(askedFor);
         const at = yield* nowIso;
         // WARNING: the claim is the insert: the database, not a read, decides which caller made it.
@@ -1013,7 +1037,9 @@ function makeStore(stateDir: string | undefined) {
         if (row === undefined) {
           return yield* Effect.die(new Error(`request "${admission.request}" claimed nothing`));
         }
-        if (claimed.length > 0) return { row, fresh: true };
+        if (claimed.length > 0) {
+          return { row, fresh: true };
+        }
         if (
           row.workflow !== admission.workflow ||
           row.project !== admission.project ||
@@ -1044,7 +1070,9 @@ function makeStore(stateDir: string | undefined) {
             `,
         ).pipe(Effect.orDie);
         const [row] = yield* byRun(run).pipe(Effect.orDie);
-        if (row === undefined) return yield* Effect.die(new Error(`run "${run}" is not admitted`));
+        if (row === undefined) {
+          return yield* Effect.die(new Error(`run "${run}" is not admitted`));
+        }
         return row;
       }),
 
@@ -1067,7 +1095,9 @@ function makeStore(stateDir: string | undefined) {
               const gone: Array<string> = [];
               for (const run of runs) {
                 const row = (yield* byRun(run).pipe(Effect.orDie))[0];
-                if (row === undefined || row.accepted === null) continue;
+                if (row === undefined || row.accepted === null) {
+                  continue;
+                }
                 yield* clear(row);
                 yield* decide(run);
                 yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
@@ -1217,8 +1247,12 @@ const answererText = flow(
 const canonical = (value: Schema.Json) => asJsonText(ordered(value));
 
 const ordered: (value: Schema.Json) => Schema.Json = (value) => {
-  if (Arr.isArray<typeof value>(value)) return Arr.map(value, ordered);
-  if (!isRecord(value)) return value;
+  if (Arr.isArray<typeof value>(value)) {
+    return Arr.map(value, ordered);
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
   return Rec.fromEntries(
     Arr.map(Struct.keys(value).sort(), (key) => [key, ordered(value[key] ?? null)] as const),
   );

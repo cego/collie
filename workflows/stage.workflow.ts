@@ -206,7 +206,9 @@ const stageEach = (members: ReadonlyArray<SetMember>) =>
       Arr.map(ended, (one) => one.line),
       "; ",
     )}`;
-    if (failed > 0) return yield* new WorkflowError({ reason: said });
+    if (failed > 0) {
+      return yield* new WorkflowError({ reason: said });
+    }
     return said;
   });
 
@@ -255,16 +257,20 @@ export default defineWorkflow({
         });
 
       const set = mrSet(asked.mr);
-      if (set !== null && "unresolved" in set)
+      if (set !== null && "unresolved" in set) {
         return yield* fail(
           `${set.unresolved} is not a merge request this Run can find, so nothing was staged`,
         );
-      if (set !== null && set.mrs.length > 1) return yield* stageEach(set.mrs);
+      }
+      if (set !== null && set.mrs.length > 1) {
+        return yield* stageEach(set.mrs);
+      }
       const said = set === null ? asked.mr : set.mrs[0]!.target;
       const ref = readMrRef(said);
       const mr = ref === null ? null : mrUrlOf(ref);
-      if (ref === null || mr === null)
+      if (ref === null || mr === null) {
         return yield* fail(`${said || "an empty mr"} is not a merge request this Run can find`);
+      }
       yield* host.mergeRequest(runId, mr);
       const { cwd } = yield* checkingOut(
         Effect.gen(function* () {
@@ -277,8 +283,9 @@ export default defineWorkflow({
             // WARNING: stage commits and pushes nothing, so the waiting Run's checkout will do.
             execute: host.checkoutReviewed(runId, { inStarter: true }),
           });
-          if ("refused" in checkout)
+          if ("refused" in checkout) {
             return yield* fail(`${mr} has no checkout to stage from: ${checkout.refused}`);
+          }
           return checkout;
         }),
       );
@@ -306,11 +313,15 @@ export default defineWorkflow({
         error: WorkflowError,
         execute: host.review({ runId, cwd, proved: "", seen: [] }),
       });
-      if (start._tag === "Unreadable")
+      if (start._tag === "Unreadable") {
         return yield* fail(`${mr} could not be read: ${start.reason}`);
-      if (start._tag === "Merged")
+      }
+      if (start._tag === "Merged") {
         return yield* fail(`${mr} is merged, so its stage is its release's: nothing was staged`);
-      if (start._tag === "Closed") return yield* fail(`${mr} is closed, so nothing was staged`);
+      }
+      if (start._tag === "Closed") {
+        return yield* fail(`${mr} is closed, so nothing was staged`);
+      }
 
       const assessed = yield* assess(
         agentWork({
@@ -320,13 +331,15 @@ export default defineWorkflow({
         }),
       );
       const evidence = assessed.kind_evidence ? `: ${assessed.kind_evidence}` : "";
-      if (assessed.is_package)
+      if (assessed.is_package) {
         return yield* fail(`${mr} is a package, so there is nothing to stage${evidence}`);
+      }
       const jobs = assessed.stage_jobs?.merge_request ?? [];
-      if (jobs.length === 0)
+      if (jobs.length === 0) {
         return yield* fail(
           `${mr} is an application with no stage deploy job on its merge request's pipeline, so nothing was staged${evidence}`,
         );
+      }
 
       const moveTo = (name: string, head: string) =>
         Activity.make({
@@ -334,7 +347,9 @@ export default defineWorkflow({
           success: Schema.String,
           execute: Effect.gen(function* () {
             const moved = yield* host.fastForward({ runId, cwd, head });
-            if (moved._tag === "Refused") return yield* park(moved.why);
+            if (moved._tag === "Refused") {
+              return yield* park(moved.why);
+            }
             return moved.head;
           }),
         });
@@ -386,7 +401,9 @@ export default defineWorkflow({
                 ? [CLAIMS.wait, { id: CLAIMS.free, recommended: true }, CLAIMS.finish]
                 : [{ id: CLAIMS.wait, recommended: true }, CLAIMS.finish],
             });
-            if (answer === CLAIMS.finish) return null;
+            if (answer === CLAIMS.finish) {
+              return null;
+            }
             free = answer === CLAIMS.free;
           }
           return yield* claimed(
@@ -395,12 +412,20 @@ export default defineWorkflow({
           );
         }),
       );
-      if (first === null) return `${mr} was not staged`;
-      if (first.left === undefined) free = false;
+      if (first === null) {
+        return `${mr} was not staged`;
+      }
+      if (first.left === undefined) {
+        free = false;
+      }
       const held = new Set(first.slugs);
       const take = (claim: { readonly left?: ReadonlyArray<{ slug: string; holder: string }> }) => {
-        for (const one of claim.left ?? []) others.set(one.slug, one.holder);
-        for (const slug of held) others.delete(slug);
+        for (const one of claim.left ?? []) {
+          others.set(one.slug, one.holder);
+        }
+        for (const slug of held) {
+          others.delete(slug);
+        }
       };
       take(first);
       const staged = () => (free && read !== null ? holding(read, held) : deploys.applications);
@@ -499,9 +524,13 @@ export default defineWorkflow({
                 free: true,
                 retaining: true,
               });
-              if (more === null) return FINISHED;
+              if (more === null) {
+                return FINISHED;
+              }
               if (more.left !== undefined) {
-                for (const slug of more.slugs) held.add(slug);
+                for (const slug of more.slugs) {
+                  held.add(slug);
+                }
                 take(more);
               }
             }
@@ -509,7 +538,9 @@ export default defineWorkflow({
           }),
           { round: asks },
         );
-        if (answer === STAGED.again) continue;
+        if (answer === STAGED.again) {
+          continue;
+        }
         if (answer === STAGED.leave) {
           yield* giveBack;
           return `stage carries ${mr} at ${short(head)}, unmerged`;

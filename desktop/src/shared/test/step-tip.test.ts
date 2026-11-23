@@ -59,11 +59,12 @@ test("a keyboard focus shows the tip at once, and a press closes it and is not a
 });
 
 test("blur and Escape close the tip", () => {
-  for (const kind of ["blur", "dismiss"] as const)
+  for (const kind of ["blur", "dismiss"] as const) {
     expect(
       after([
         { kind: "focus", step: "a" },
         { kind, at: 5 },
       ]).tip.open,
     ).toBeNull();
+  }
 });

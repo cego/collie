@@ -120,10 +120,13 @@ export const approvedFrom = Effect.fn("VerifySpec.approvedFrom")(function* (laye
   ];
   for (const { file, text: reading } of files) {
     const text = yield* reading;
-    if (text === null) continue;
+    if (text === null) {
+      continue;
+    }
     const decoded = yield* Schema.decodeEffect(ApprovedJson)(Str.trim(text)).pipe(Effect.result);
-    if (decoded._tag === "Failure")
+    if (decoded._tag === "Failure") {
       return yield* new ApprovedUnreadable({ file, why: String(decoded.failure) });
+    }
     return Arr.map(decoded.success, (spec) => ({ ...spec, argv: [...spec.argv] }));
   }
   const none: Array<VerifySpec> = [];
@@ -139,7 +142,9 @@ export function approvedFor(
 }
 
 export function renderApproved(approved: ReadonlyArray<VerifySpec>) {
-  if (approved.length === 0) return "(no check is named for this Run yet)";
+  if (approved.length === 0) {
+    return "(no check is named for this Run yet)";
+  }
   return Arr.join(
     Arr.map(approved, (spec) =>
       spec.ci === undefined
@@ -161,8 +166,12 @@ export function checkNameOf(executable: string, argv: ReadonlyArray<string>) {
     (word) => !pipe_(word, Str.startsWith("-")),
   );
   const [first] = words;
-  if (!PACKAGE_MANAGERS.has(tool) || first === undefined) return tool;
+  if (!PACKAGE_MANAGERS.has(tool) || first === undefined) {
+    return tool;
+  }
   const script = words.at(-1);
-  if (first === "run" && words.length > 1 && script !== undefined) return script;
+  if (first === "run" && words.length > 1 && script !== undefined) {
+    return script;
+  }
   return /^[\w:-]+$/.test(first) ? `${tool} ${first}` : tool;
 }

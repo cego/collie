@@ -314,8 +314,9 @@ test("plan takes a goal and no ticket, and architecture needs a goal", () =>
 const projectsTree = Effect.fn("test.projectsTree")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-projects-" });
-  for (const checkout of ["app/.git", "group/lib/.git"])
+  for (const checkout of ["app/.git", "group/lib/.git"]) {
     yield* fs.makeDirectory(join(dir, "root", checkout), { recursive: true });
+  }
   yield* fs.makeDirectory(join(dir, "elsewhere"), { recursive: true });
   return { root: join(dir, "root"), elsewhere: join(dir, "elsewhere"), dir };
 });
@@ -371,7 +372,9 @@ test("an agent's start names every Input, an optional one as empty, and is told 
         Schema.Array(Schema.Struct({ name: Schema.String, meaning: Schema.String })),
       )(envelope.error?.details["inputs"]).pipe(Effect.orDie);
       expect(Arr.map(missing, (one) => one.name)).toEqual(["plan", "proves"]);
-      for (const one of missing) expect(one.meaning).not.toBe("");
+      for (const one of missing) {
+        expect(one.meaning).not.toBe("");
+      }
 
       const release = yield* cli(["--json", "run", "start", "release", "--input", "mr=!1"]);
       const releaseMissing = (yield* parseEnvelope(release.stdout)).error?.details["inputs"];
@@ -493,8 +496,12 @@ const documentedStarts = Effect.fn("test.documentedStarts")(function* () {
     const text = yield* fs.readFileString(join(root, file));
     for (const line of Str.split(text, "\n")) {
       const trimmed = Str.trim(line);
-      if (!pipe_(trimmed, Str.startsWith("collie run start "))) continue;
-      if (/[<…]|\\$/.test(trimmed)) continue;
+      if (!pipe_(trimmed, Str.startsWith("collie run start "))) {
+        continue;
+      }
+      if (/[<…]|\\$/.test(trimmed)) {
+        continue;
+      }
       lines.push(trimmed);
     }
   }
@@ -532,8 +539,9 @@ test("every documented start, run inside a checkout, is admitted as written", ()
           "first",
         ],
         ["remote", "add", "upstream", "git@gitlab.example.com:group/app.git"],
-      ])
+      ]) {
         yield* exec(["git", ...args], { cwd: checkout });
+      }
       const bin = join(tree.dir, "bin");
       yield* fs.makeDirectory(bin, { recursive: true });
       yield* fs.writeFileString(join(bin, "glab"), "#!/bin/sh\necho '[]'\n", { mode: 0o755 });
@@ -782,7 +790,6 @@ test("run metrics reports what a Run produced, and says so when it has produced 
       const bare = yield* parseEnvelope(empty.stdout);
       expect(bare.ok).toBe(true);
       // WARNING: the envelope decoded `ok: true` above, and `run metrics` puts exactly these fields in `data` — asserted immediately below, so a shape that changed fails here rather than passing silently.
-      // WARNING: the envelope decoded ok above, and run metrics puts exactly these fields in data, asserted below.
       const data = bare.data as {
         metrics: { timeToFirstEvidence: number | null };
         outcome: string;
@@ -814,8 +821,9 @@ test("run intent remember keeps a Run's checks for its repository, and overwrite
       const worktree = join(world.home, "worktree");
       yield* fs.makeDirectory(worktree, { recursive: true });
       yield* exec(["git", "init", "-q"], { cwd: worktree });
-      for (const cwd of [world.project, worktree])
+      for (const cwd of [world.project, worktree]) {
         yield* exec(["git", "remote", "add", "origin", "git@example.test:team/app.git"], { cwd });
+      }
       const run = yield* settledRun(world, "hello", { workspace: worktree });
       const client = yield* connect(world.state).pipe(Effect.orDie);
       expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);
@@ -871,7 +879,6 @@ test("run report counts every Run by where it ended, and refuses a --since that 
       }).pipe(Effect.provide(recordsAt(world.state)));
       const measured = yield* cli(["--json", "run", "report"], env);
       // WARNING: `run report`'s `data` is the Report; only its peak context is read.
-      // WARNING: run report's data is the Report; only its peak context is read.
       const measures = (yield* parseEnvelope(measured.stdout)).data as {
         measures: {
           peakContext: Array<{ runId: string; tokens: number | null; agent: string | null }>;

@@ -80,7 +80,9 @@ const fakeUpdater = (
       check: Effect.suspend(() => {
         calls.push("check");
         if (feed !== undefined) {
-          if (feed.hangs === true) return Effect.never;
+          if (feed.hangs === true) {
+            return Effect.never;
+          }
           return feed.failing === undefined
             ? Effect.succeed({ available: true, version: feed.version })
             : Effect.fail(feed.failing);
@@ -91,7 +93,9 @@ const fakeUpdater = (
       }),
       download: Effect.gen(function* () {
         calls.push("download");
-        if (options.downloading !== undefined) yield* Deferred.await(options.downloading);
+        if (options.downloading !== undefined) {
+          yield* Deferred.await(options.downloading);
+        }
         const next = preparedOf(feed?.version ?? "0.33.0");
         yield* fs.writeFile(next.tar, options.bytes ?? TAR).pipe(Effect.orDie);
         prepared = next;
@@ -101,12 +105,16 @@ const fakeUpdater = (
         calls.push("discard");
         const tar = prepared?.tar;
         prepared = null;
-        if (tar !== undefined) yield* fs.remove(tar, { force: true }).pipe(Effect.orDie);
+        if (tar !== undefined) {
+          yield* fs.remove(tar, { force: true }).pipe(Effect.orDie);
+        }
       }),
       signatureOf: (name, version) =>
         Effect.suspend(() => {
           calls.push(`signature ${name} from ${version}`);
-          if (options.signatureHangs?.hangs === true) return Effect.never;
+          if (options.signatureHangs?.hangs === true) {
+            return Effect.never;
+          }
           return options.signatureFails === undefined
             ? Effect.succeed(options.signature)
             : Effect.fail(options.signatureFails);

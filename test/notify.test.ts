@@ -337,7 +337,7 @@ test("a notification is posted as the signed-in human, never with a bot token", 
     }),
   ));
 
-for (const destination of ["U789", "W789", "D123"])
+for (const destination of ["U789", "W789", "D123"]) {
   test(`a notification for the person or direct message ${destination} posts nothing and says why on the Run's log`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -359,6 +359,7 @@ for (const destination of ["U789", "W789", "D123"])
         );
       }),
     ));
+}
 
 test("a notification whose sign-in Slack refuses as expired posts nothing and says so on the Run's log", () =>
   runEffect(

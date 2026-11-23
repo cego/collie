@@ -25,9 +25,14 @@ export const readDisk = Effect.fn("Disk.read")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const present: Array<string> = [];
-  for (const dir of dirs)
-    if (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))) present.push(dir);
-  if (present.length === 0) return [];
+  for (const dir of dirs) {
+    if (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))) {
+      present.push(dir);
+    }
+  }
+  if (present.length === 0) {
+    return [];
+  }
   const fake = env.raw[DF_ENV];
   const said = fake
     ? yield* fs.readFileString(fake).pipe(Effect.orElseSucceed(() => ""))
@@ -36,8 +41,9 @@ export const readDisk = Effect.fn("Disk.read")(function* (
   for (const line of Str.split(said, "\n").slice(1)) {
     const [, blocks, , available, , ...mount] = Str.split(Str.trim(line), /\s+/);
     // WARNING: a line of df's complaints, not a filesystem.
-    if (mount.length === 0 || !/^\d+$/.test(blocks ?? "") || !/^\d+$/.test(available ?? ""))
+    if (mount.length === 0 || !/^\d+$/.test(blocks ?? "") || !/^\d+$/.test(available ?? "")) {
       continue;
+    }
     const name = Arr.join(mount, " ");
     mounts.set(name, {
       mount: name,

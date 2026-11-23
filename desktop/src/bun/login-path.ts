@@ -16,7 +16,9 @@ export const loginPath = Effect.fn("Desktop.loginPath")(function* (
   shell: string,
   limit: Duration.Input = "5 seconds",
 ) {
-  if (platform !== "darwin") return null;
+  if (platform !== "darwin") {
+    return null;
+  }
   return yield* Effect.gen(function* () {
     const child = yield* spawned(() =>
       Bun.spawn([shell, "-ilc", `printf '${MARK}%s${MARK}' "$PATH"`], {

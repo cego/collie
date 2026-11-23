@@ -128,15 +128,17 @@ const placed = (flock: FlockChat, named: string) => {
   const machine = Option.getOrUndefined(
     Arr.findFirst(flock.machines(), (one) => one.name === pipe_(named, Str.slice(0, colon))),
   );
-  if (colon <= 0)
+  if (colon <= 0) {
     return Result.fail(
       `${named} names no Machine: write it as <machine>:<path>, one of ${Arr.join(
         Arr.map(flock.machines(), (one) => one.name),
         ", ",
       )}. Files on this computer are read with Read.`,
     );
-  if (machine === undefined)
+  }
+  if (machine === undefined) {
     return Result.fail(`No Machine "${pipe_(named, Str.slice(0, colon))}".`);
+  }
   return Result.succeed({ machine, path: pipe_(named, Str.slice(colon + 1)) });
 };
 
@@ -184,20 +186,25 @@ const read = Effect.fn("FileTools.read")(function* (
   if (shownAs(mediaType) !== undefined && size <= IMAGE_BYTES) {
     const { bytes } = yield* readWhole(machine, path);
     const dimensions = imageSize(bytes);
-    if (dimensions !== null && Math.max(dimensions.width, dimensions.height) <= LONG_EDGE)
+    if (dimensions !== null && Math.max(dimensions.width, dimensions.height) <= LONG_EDGE) {
       return [{ type: "image", data: Base64.encode(bytes), mimeType: mediaType }] as const;
+    }
     return text(
       `${named} is ${mediaType}, ${size} bytes${dimensions === null ? "" : `, ${dimensions.width}×${dimensions.height}`}: not shown, as only an image of at most ${LONG_EDGE} px on its long edge can be.`,
     );
   }
-  if (!textual) return text(`${named} is ${mediaType}, ${size} bytes.`);
+  if (!textual) {
+    return text(`${named} is ${mediaType}, ${size} bytes.`);
+  }
   let seen = 0;
   let taken = 0;
   const { file, bytes } = yield* readWhole(machine, path, (part) => {
     taken += part.length;
     return (seen += newlines(part)) >= from + limit || taken >= READ_BYTES;
   });
-  if (file.size === 0) return text(`${named} is empty.`);
+  if (file.size === 0) {
+    return text(`${named} is empty.`);
+  }
   const lines = Str.split(pipe_(new TextDecoder().decode(bytes), Str.replace(/\n$/, "")), "\n");
   const shown = lines.slice(from - 1, from - 1 + limit);
   return text(
@@ -237,16 +244,24 @@ const answer = Effect.fn("FileTools.answer")(function* (
   switch (name) {
     case "collie_read": {
       const asked = decodeStrict(ReadInput)(input);
-      if (Result.isFailure(asked)) return text(`collie_read: ${asked.failure}`);
+      if (Result.isFailure(asked)) {
+        return text(`collie_read: ${asked.failure}`);
+      }
       const at = where(asked.success.file_path);
-      if (Result.isFailure(at)) return text(at.failure);
+      if (Result.isFailure(at)) {
+        return text(at.failure);
+      }
       return yield* read(yield* readingFiles(at.success.machine), at.success.path, asked.success);
     }
     case "collie_glob": {
       const asked = decodeStrict(GlobInput)(input);
-      if (Result.isFailure(asked)) return text(`collie_glob: ${asked.failure}`);
+      if (Result.isFailure(asked)) {
+        return text(`collie_glob: ${asked.failure}`);
+      }
       const at = where(asked.success.path);
-      if (Result.isFailure(at)) return text(at.failure);
+      if (Result.isFailure(at)) {
+        return text(at.failure);
+      }
       const { path } = at.success;
       const machine = yield* readingFiles(at.success.machine);
       const found = yield* machine.door.glob({ pattern: asked.success.pattern, path });
@@ -254,9 +269,13 @@ const answer = Effect.fn("FileTools.answer")(function* (
     }
     case "collie_grep": {
       const asked = decodeStrict(GrepInput)(input);
-      if (Result.isFailure(asked)) return text(`collie_grep: ${asked.failure}`);
+      if (Result.isFailure(asked)) {
+        return text(`collie_grep: ${asked.failure}`);
+      }
       const at = where(asked.success.path);
-      if (Result.isFailure(at)) return text(at.failure);
+      if (Result.isFailure(at)) {
+        return text(at.failure);
+      }
       const { path } = at.success;
       const machine = yield* readingFiles(at.success.machine);
       const one = asked.success;
@@ -279,9 +298,13 @@ const answer = Effect.fn("FileTools.answer")(function* (
     }
     case "collie_write": {
       const asked = decodeStrict(WriteInput)(input);
-      if (Result.isFailure(asked)) return text(`collie_write: ${asked.failure}`);
+      if (Result.isFailure(asked)) {
+        return text(`collie_write: ${asked.failure}`);
+      }
       const at = where(asked.success.file_path);
-      if (Result.isFailure(at)) return text(at.failure);
+      if (Result.isFailure(at)) {
+        return text(at.failure);
+      }
       const { path } = at.success;
       const machine = yield* takingFiles(writable(at.success.machine));
       yield* declareVoice(flock, machine);
@@ -294,9 +317,13 @@ const answer = Effect.fn("FileTools.answer")(function* (
     }
     case "collie_edit": {
       const asked = decodeStrict(EditInput)(input);
-      if (Result.isFailure(asked)) return text(`collie_edit: ${asked.failure}`);
+      if (Result.isFailure(asked)) {
+        return text(`collie_edit: ${asked.failure}`);
+      }
       const at = where(asked.success.file_path);
-      if (Result.isFailure(at)) return text(at.failure);
+      if (Result.isFailure(at)) {
+        return text(at.failure);
+      }
       const { path } = at.success;
       const machine = yield* takingFiles(writable(at.success.machine));
       yield* declareVoice(flock, machine);

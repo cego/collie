@@ -41,9 +41,12 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
       continue;
     }
     const read = opts.panels.get(row.mr)?.panel;
-    if (read?._tag === "Unavailable" && read.transient)
+    if (read?._tag === "Unavailable" && read.transient) {
       yield* opts.watches.unavailable(row.run, read.reason);
-    if (read?._tag !== "Details") continue;
+    }
+    if (read?._tag !== "Details") {
+      continue;
+    }
     const { verdict, observed } = judge({
       cursor: row.cursor,
       run: row.run,
@@ -51,9 +54,11 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
       reading: readingOf(read),
       now: opts.now,
     });
-    if (!sameObserved(row.observed, observed))
+    if (!sameObserved(row.observed, observed)) {
       yield* opts.watches.observe(row.run, row.name, observed);
-    if (verdict._tag === "Changed" || verdict._tag === "Ended")
+    }
+    if (verdict._tag === "Changed" || verdict._tag === "Ended") {
       yield* opts.watches.wake(row.run, row.name, verdict);
+    }
   }
 });

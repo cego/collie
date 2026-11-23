@@ -157,24 +157,34 @@ export const workspaceNamed: (
 ) => Effect.Effect<WorkspaceNamed, never, PlatformServices> = Effect.fn(
   "operations.workspaceNamed",
 )(function* (env: PluginEnv, named: string | undefined) {
-  if (named === undefined || Str.trim(named) === "") return null;
+  if (named === undefined || Str.trim(named) === "") {
+    return null;
+  }
   const wanted = Str.trim(named);
   const refused: (error: string) => WorkspaceNamed = (error) => ({ error });
   const opened = yield* workspaceForDirectory(env, wanted);
-  if (opened !== null) return opened;
+  if (opened !== null) {
+    return opened;
+  }
   const repository = yield* repositoryCheckout(env, wanted).pipe(Effect.orElseSucceed(() => null));
   if (repository !== null) {
-    if ("error" in repository) return refused(repository.error);
+    if ("error" in repository) {
+      return refused(repository.error);
+    }
     return yield* workspaceForDirectory(env, repository.path);
   }
-  if (pipe(wanted, Str.includes("/")))
+  if (pipe(wanted, Str.includes("/"))) {
     return refused(`no directory "${named}" on this Machine; ${yield* howToName(env)}`);
+  }
   const checkouts = yield* checkoutsNamed(env, wanted);
-  if (checkouts.paths.length === 1) return yield* workspaceForDirectory(env, checkouts.paths[0]!);
-  if (checkouts.paths.length > 1)
+  if (checkouts.paths.length === 1) {
+    return yield* workspaceForDirectory(env, checkouts.paths[0]!);
+  }
+  if (checkouts.paths.length > 1) {
     return refused(
       `"${named}" names ${checkouts.paths.length} checkouts under ${checkouts.root} (${Arr.join(checkouts.paths, ", ")}); say which`,
     );
+  }
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
   return refused(
     `no directory${root === null ? "" : ` or checkout under the Projects root ${root.path}`} is named "${named}"`,
@@ -196,7 +206,9 @@ export const collieOwnRefusal = Effect.fn("operations.collieOwnRefusal")(functio
   named: string,
   cwd: string,
 ) {
-  if (!(yield* inCollieState(env, cwd))) return null;
+  if (!(yield* inCollieState(env, cwd))) {
+    return null;
+  }
   return `"${named}" is ${cwd}, Collie's own namespace, not a checkout; ${yield* howToName(env)}, or projects-root`;
 });
 
@@ -211,7 +223,9 @@ const checkoutsNamed = Effect.fn("operations.checkoutsNamed")(function* (
 ) {
   const path = yield* Path.Path;
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
-  if (root === null || pipe(name, Str.includes("/"))) return { root: "", paths: [] };
+  if (root === null || pipe(name, Str.includes("/"))) {
+    return { root: "", paths: [] };
+  }
   const all = yield* checkoutsUnder(root.path).pipe(Effect.orElseSucceed(() => []));
   const paths = Arr.filter(
     all,
@@ -236,7 +250,9 @@ const workspaceForDirectory: (
     Effect.map((info) => info.type === "Directory"),
     Effect.orElseSucceed(() => false),
   );
-  if (!isDir) return null;
+  if (!isDir) {
+    return null;
+  }
   return { found: { label: path.basename(dir), cwd: dir } };
 });
 
@@ -273,7 +289,9 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
         { root, source },
       );
     }
-    if (target !== manifest.version) return yield* handOff(env, target, source, options.key, run);
+    if (target !== manifest.version) {
+      return yield* handOff(env, target, source, options.key, run);
+    }
     return yield* placeOwn(
       env,
       options.carried === undefined ? carriedRelease() : options.carried,
@@ -307,7 +325,9 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
   const after = yield* head();
   const moved = before !== after;
   const prepared = yield* prepareAndDesktop(env, root, undefined, run);
-  if (!prepared.ok) return prepared;
+  if (!prepared.ok) {
+    return prepared;
+  }
   return {
     ok: true as const,
     data: { root, checkout, before, after, updated: moved, steps: prepared.steps },
@@ -359,7 +379,9 @@ const migrate = Effect.fn("operations.migrate")(function* (
   }
   // WARNING: the release's own runner, since one built from this clone would place the clone's source.
   const placed = yield* handOff(env, target, source, key, run, path.join(env.collieDir, "release"));
-  if (!placed.ok) return placed;
+  if (!placed.ok) {
+    return placed;
+  }
 
   const found = yield* humansIn(root, live, run);
   if (found.length === 0) {
@@ -406,7 +428,9 @@ const humansIn = Effect.fn("operations.humansIn")(function* (
   const found: Array<string> = [];
 
   const status = said(yield* git("status", "--porcelain"));
-  if (status !== "") found.push("changed or untracked files");
+  if (status !== "") {
+    found.push("changed or untracked files");
+  }
   const ignored = Arr.filter(
     Arr.map(
       Arr.filter(
@@ -417,11 +441,15 @@ const humansIn = Effect.fn("operations.humansIn")(function* (
     ),
     (entry) => !INSTALL_IGNORED.has(entry),
   );
-  if (ignored.length > 0) found.push(`ignored files of yours: ${Arr.join(ignored, ", ")}`);
+  if (ignored.length > 0) {
+    found.push(`ignored files of yours: ${Arr.join(ignored, ", ")}`);
+  }
   if (said(yield* git("log", "--branches", "--not", "--remotes", "--oneline")) !== "") {
     found.push("commits no remote branch contains");
   }
-  if (said(yield* git("stash", "list")) !== "") found.push("a stash");
+  if (said(yield* git("stash", "list")) !== "") {
+    found.push("a stash");
+  }
   const worktrees = said(yield* git("worktree", "list", "--porcelain"));
   if (
     worktrees === null ||
@@ -431,8 +459,9 @@ const humansIn = Effect.fn("operations.humansIn")(function* (
     found.push("linked worktrees");
   }
   const checkouts = yield* live;
-  if (checkouts === null) found.push("live Runs on this Machine, which could not be asked about");
-  else if (Arr.some(checkouts, (cwd) => cwd === root || pipe(cwd, Str.startsWith(`${root}/`)))) {
+  if (checkouts === null) {
+    found.push("live Runs on this Machine, which could not be asked about");
+  } else if (Arr.some(checkouts, (cwd) => cwd === root || pipe(cwd, Str.startsWith(`${root}/`)))) {
     found.push("a live Run working in it");
   }
   return found;
@@ -479,7 +508,9 @@ const placeOwn = Effect.fn("operations.placeOwn")(function* (
   yield* (yield* FileSystem.FileSystem).makeDirectory(env.userDir, { recursive: true });
   const hc = yield* placeHc(env, root, is[BUNDLED_HC] ?? null, hcPin.version, run);
   const prepared = yield* prepareAndDesktop(env, root, manifest.version, run);
-  if (!prepared.ok) return prepared;
+  if (!prepared.ok) {
+    return prepared;
+  }
   const data = {
     root,
     checkout: false,
@@ -569,7 +600,9 @@ const handOff = Effect.fn("operations.handOff")(function* (
       output: whatItSaid(ran),
     });
   }
-  if (!answer.value.ok) return { ok: false as const, error: answer.value.error };
+  if (!answer.value.ok) {
+    return { ok: false as const, error: answer.value.error };
+  }
   const data = { ...answer.value.data, checkout: false, version: target };
   return { ok: true as const, data, human: placedReport(env, data) };
 });
@@ -632,7 +665,9 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
     task,
     label,
   });
-  if (choice.mode === "continue") return kept(choice.task);
+  if (choice.mode === "continue") {
+    return kept(choice.task);
+  }
   return kept(null, yield* freshTaskLabel(env, about));
 });
 
@@ -647,10 +682,12 @@ export const clearOverride = Effect.fn("operations.clearOverride")(function* (
   const live: Array<AgentInfo> = yield* herdr.agentList().pipe(Effect.orElseSucceed(() => []));
   const terminalId =
     Option.getOrUndefined(Arr.findFirst(live, (a) => a.name === agent))?.terminalId ?? null;
-  if (terminalId === null)
+  if (terminalId === null) {
     return err("invalid_state", `core has no live agent "${agent}" to clear an override on.`);
-  if (!overrideActive(yield* readLedger(terminalId)))
+  }
+  if (!overrideActive(yield* readLedger(terminalId))) {
     return err("invalid_state", `"${agent}" is not under a manual override.`);
+  }
   yield* appendLine({
     kind: "override_cleared",
     at: yield* nowIso,
@@ -672,15 +709,18 @@ export const request = Effect.fn("operations.request")(function* (
     readonly actor: Actor;
   },
 ) {
-  if (options.actions.length === 0)
+  if (options.actions.length === 0) {
     return err("invalid_input", "A request with no actions changes nothing; say what to do.");
+  }
   const named = [...new Set(Arr.flatMap(options.actions, (a) => ("run" in a ? [a.run] : [])))];
   const known = yield* listRuns(env);
   const runs = new Map<string, RunFacts>();
   for (const id of named) {
     const run = Option.getOrUndefined(Arr.findFirst(known, (one) => one.id === id)) ?? null;
     // WARNING: refused, not retargeted: a guess lands an action on someone else's work.
-    if (run === null) return err("run_not_found", `No Run "${id}".`, { run: id });
+    if (run === null) {
+      return err("run_not_found", `No Run "${id}".`, { run: id });
+    }
     runs.set(id, run);
   }
 
@@ -689,9 +729,12 @@ export const request = Effect.fn("operations.request")(function* (
     const intent = yield* readIntent(run.dir).pipe(
       Effect.orElseSucceed(() => "unreadable" as const),
     );
-    if (intent === "unreadable")
+    if (intent === "unreadable") {
       return err("invalid_state", `${id}'s Intent cannot be read; nothing was proposed.`);
-    if (intent !== null) intents.set(id, { version: intent.version, authority: intent.authority });
+    }
+    if (intent !== null) {
+      intents.set(id, { version: intent.version, authority: intent.authority });
+    }
   }
 
   const registered = yield* everyRegistered;
@@ -738,13 +781,17 @@ const incarnationsFor = Effect.fn("operations.incarnationsFor")(function* (
     ),
   );
   const found: Record<string, string> = {};
-  if (named.size === 0) return found;
+  if (named.size === 0) {
+    return found;
+  }
   const live = yield* new Herdr(env).agentList().pipe(Effect.orElseSucceed(() => []));
   for (const agent of named) {
     const terminalId = Option.getOrUndefined(
       Arr.findFirst(live, (entry) => entry.name === agent),
     )?.terminalId;
-    if (terminalId !== undefined && terminalId !== null) found[agent] = terminalId;
+    if (terminalId !== undefined && terminalId !== null) {
+      found[agent] = terminalId;
+    }
   }
   return found;
 });
@@ -757,7 +804,9 @@ const cardRevision = Effect.fn("operations.cardRevision")(function* (
   run: RunFacts,
   id: string | null,
 ) {
-  if (id === null) return null;
+  if (id === null) {
+    return null;
+  }
   const cards = yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []));
   const card = Option.getOrUndefined(Arr.findFirst(cards, (entry) => entry.id === id));
   return card === undefined ? "unknown" : { id, revision: revisionOf(card.revision) };
@@ -788,15 +837,20 @@ export const steer = Effect.fn("operations.steer")(function* (
     target === null
       ? null
       : (Option.getOrUndefined(Arr.findFirst(known, (one) => one.id === target)) ?? null);
-  if (target === null)
+  if (target === null) {
     return err("invalid_input", "Name the Run this is about with --target.", {
       code: "target_required",
     });
-  if (run === null) return err("run_not_found", `No Run "${target}".`, { run: target });
+  }
+  if (run === null) {
+    return err("run_not_found", `No Run "${target}".`, { run: target });
+  }
   // WARNING: a retry asks nobody again, since a second answer could order the actions differently.
   if (options.dryRun !== true && options.asked !== "event") {
     const before = yield* carriedBefore(deps.herdKey, options.requestId);
-    if (before !== null) return before;
+    if (before !== null) {
+      return before;
+    }
   }
 
   const journal = yield* conversationPath(env.stateDir, deps.herdKey);
@@ -809,8 +863,9 @@ export const steer = Effect.fn("operations.steer")(function* (
 
   // WARNING: read before the call: recorded as {}, the proposal would skip the version gate after the money is spent.
   const intent = yield* readIntent(run.dir).pipe(Effect.orElseSucceed(() => "unreadable" as const));
-  if (intent === "unreadable")
+  if (intent === "unreadable") {
     return err("invalid_state", `${run.id}'s Intent cannot be read; nothing was proposed.`);
+  }
 
   const budget = yield* budgetPath(env.stateDir, deps.herdKey);
   const callId = yield* newRequestId();
@@ -823,12 +878,14 @@ export const steer = Effect.fn("operations.steer")(function* (
     seconds: asked.spent.seconds,
     bytes: asked.spent.bytes,
   });
-  if (asked.value === null)
+  if (asked.value === null) {
     return err("operation_failed", `Collie could not answer: ${asked.error ?? "no answer"}.`);
+  }
 
   const proposed = asked.value;
-  if (!("actions" in proposed))
+  if (!("actions" in proposed)) {
     return err("operation_failed", "Collie answered a question nobody asked.");
+  }
 
   const checked = validate(proposed, {
     runs: new Set([run.id]),
@@ -840,7 +897,7 @@ export const steer = Effect.fn("operations.steer")(function* (
     maxDeliveryBytes: MAX_DELIVERY_BYTES,
   });
 
-  if (options.dryRun)
+  if (options.dryRun) {
     return ok(
       {
         preview: { interpretation: proposed.interpretation, actions: checked },
@@ -848,11 +905,13 @@ export const steer = Effect.fn("operations.steer")(function* (
       },
       previewOf(proposed.interpretation, checked),
     );
+  }
 
   const file = deps.herdKey;
   const bound = yield* cardRevision(run, from);
-  if (bound === "unknown")
+  if (bound === "unknown") {
     return err("invalid_input", `Run ${run.id} has no card "${from}".`, { card: from ?? "" });
+  }
   const proposal: Recorded = {
     interpretation: proposed.interpretation,
     targets: [{ run: run.id }],
@@ -877,7 +936,7 @@ export const steer = Effect.fn("operations.steer")(function* (
   };
   yield* append(journal, from === null ? reply : { ...reply, card: from }, roots);
 
-  if (options.asked !== "event")
+  if (options.asked !== "event") {
     return yield* carryOutProposal(
       env,
       recorded.id,
@@ -885,6 +944,7 @@ export const steer = Effect.fn("operations.steer")(function* (
       { origin: options.origin ?? "cli", requestId: options.requestId },
       true,
     );
+  }
 
   return ok(
     {
@@ -936,10 +996,14 @@ export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: Plugi
       `outcome ${item.outcome}`,
     ];
     const attention = yield* attentionFor(item);
-    if (attention.category !== "none") said.push(attention.explanation);
+    if (attention.category !== "none") {
+      said.push(attention.explanation);
+    }
     lines.push(Arr.join(said, ", "));
   }
-  if (lines.length === 0) return "- (no Runs in this Herd)";
+  if (lines.length === 0) {
+    return "- (no Runs in this Herd)";
+  }
   return Arr.join(
     [
       ...lines,
@@ -1014,13 +1078,19 @@ const answererOf: (actor: AuditLine["actor"]) => string = (actor) => {
 };
 
 const answeredLines = Effect.fn("operations.answeredLines")(function* (run: RunFacts) {
-  if (run.answered.length === 0) return [];
+  if (run.answered.length === 0) {
+    return [];
+  }
   const trail = yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []));
   const by = new Map<string, AuditLine>();
   for (const line of trail) {
-    if (line.operation !== "answer") continue;
+    if (line.operation !== "answer") {
+      continue;
+    }
     const answered = decodeAnswered(line.result);
-    if (answered._tag === "Some" && answered.value.fresh) by.set(answered.value.decision, line);
+    if (answered._tag === "Some" && answered.value.fresh) {
+      by.set(answered.value.decision, line);
+    }
   }
   return [
     "",
@@ -1035,7 +1105,9 @@ const answeredLines = Effect.fn("operations.answeredLines")(function* (run: RunF
 
 const mergeLines = Effect.fn("operations.mergeLines")(function* (env: PluginEnv, run: RunFacts) {
   const lines = run.branch === null ? [] : [`Branch: ${run.branch}`];
-  if (run.mr === null) return lines;
+  if (run.mr === null) {
+    return lines;
+  }
   const watched = yield* watchedOf(env);
   const noun = mrNounOf(run.mr);
   return [
@@ -1061,7 +1133,9 @@ const planLines = Effect.fn("operations.planLines")(function* (run: RunFacts) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const dir = path.join(run.dir, PLAN_DIR);
-  if (!(yield* fs.exists(dir))) return [];
+  if (!(yield* fs.exists(dir))) {
+    return [];
+  }
   const tickets = Arr.filter(
     yield* fs.readDirectory(path.join(dir, "issues")).pipe(Effect.orElseSucceed(() => [])),
     (name) => pipe(name, Str.endsWith(".md")),
@@ -1107,7 +1181,9 @@ const logLines = Effect.fn("operations.logLines")(function* (run: RunFacts) {
           Option.map(Option.fromNullishOr(run.summary), (present) => Str.trim(present)),
         ),
   ).slice(-LOG_LINES_IN_CONTEXT);
-  if (kept.length === 0) return [];
+  if (kept.length === 0) {
+    return [];
+  }
   return [
     "",
     "### Last recorded",
@@ -1181,7 +1257,9 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (
   ];
   const cards = yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []));
   for (const entry of cards.slice(-CARDS_IN_CONTEXT)) {
-    if (lines.at(-1) !== "") lines.push("", "### Cards", "");
+    if (lines.at(-1) !== "") {
+      lines.push("", "### Cards", "");
+    }
     lines.push(
       `- card ${entry.id} (${entry.kind}, ${entry.readiness}, ${entry.significance}) at ${pipe(entry.revision.head_sha, Str.slice(0, 8))}${entry.revision.dirty ? " +dirty" : ""}`,
       `  aligned ${entry.aligned}; cross-run ${entry.cross_run}`,
@@ -1197,10 +1275,11 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (
   const drift = openReports(yield* readDrift(run.dir).pipe(Effect.orElseSucceed(() => [])));
   if (drift.length > 0) {
     lines.push("", "### Open drift", "");
-    for (const report of drift)
+    for (const report of drift) {
       lines.push(
         `- ${report.constraint} (${report.severity}, ${report.kind}): ${report.correction ?? "no correction recorded"}`,
       );
+    }
   }
   return Str.trimEnd(pipe(Arr.join(lines, "\n"), Str.replaceAll(/\n{3,}/g, "\n\n")));
 });
@@ -1250,13 +1329,14 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
       );
     }
     const turns = yield* tail(journal, TURNS_IN_CONTEXT, run.id);
-    if (turns.length > 0)
+    if (turns.length > 0) {
       lines.push(
         "",
         "### Earlier turns about this run",
         "",
         ...Arr.map(turns, (t) => `- ${t.role}: ${t.text}`),
       );
+    }
   }
   return Arr.join(lines, "\n");
 });

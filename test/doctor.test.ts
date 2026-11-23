@@ -126,7 +126,9 @@ function reported(result: OpResult) {
 
 function check(result: OpResult, name: string) {
   const found = Option.getOrUndefined(Arr.findFirst(reported(result), (c) => c.name === name));
-  if (!found) throw new Error(`no check named "${name}"`);
+  if (!found) {
+    throw new Error(`no check named "${name}"`);
+  }
   return found;
 }
 
@@ -187,7 +189,9 @@ test("a healthy machine passes every check and says so", () =>
 
       const result = yield* report();
 
-      if (!result.ok) return yield* Effect.die(new Error(result.error.message));
+      if (!result.ok) {
+        return yield* Effect.die(new Error(result.error.message));
+      }
       expect(result.ok && result.human).toContain("ready");
       const checks = reported(result);
       expect(Arr.every(checks, (c) => c.ok)).toBe(true);
@@ -1036,7 +1040,9 @@ test("only the GitLab host Collie is set to is checked; another one glab knows i
 
       const result = yield* report();
 
-      if (!result.ok) return yield* Effect.die(new Error(result.error.message));
+      if (!result.ok) {
+        return yield* Effect.die(new Error(result.error.message));
+      }
       expect(check(result, "glab").detail).toContain("gitlab.cego.dk");
       expect(check(result, "gitlab token").detail).toContain("gitlab.cego.dk");
       expect(check(result, "git push").detail).toContain("gitlab.cego.dk");
@@ -1082,7 +1088,9 @@ test("--gitlab-host names the host doctor checks, and a URL is refused", () =>
       const pluginEnv = env();
 
       const named = withGitlabHost(pluginEnv, Option.some("gitlab.com"));
-      if ("ok" in named) return yield* Effect.die(new Error(named.error.message));
+      if ("ok" in named) {
+        return yield* Effect.die(new Error(named.error.message));
+      }
       const result = yield* doctor(named, undefined, new Herdr(named));
       expect(check(result, "git push").detail).toContain("gitlab.com");
       expect(check(result, "other gitlabs").detail).toContain("gitlab.cego.dk");
@@ -1097,7 +1105,9 @@ test("--gitlab-host names the host doctor checks, and a URL is refused", () =>
 const checkouts = Effect.fn("doctorTest.checkouts")(function* (names: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem;
   const root = `${rig.root}/projects`;
-  for (const name of names) yield* fs.makeDirectory(`${root}/${name}/.git`, { recursive: true });
+  for (const name of names) {
+    yield* fs.makeDirectory(`${root}/${name}/.git`, { recursive: true });
+  }
   yield* bin.add(
     "git",
     `case "$*" in

@@ -28,7 +28,9 @@ export const writeSelection = Effect.fn("Selection.write")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (on === null) return yield* fs.remove(file, { force: true });
+  if (on === null) {
+    return yield* fs.remove(file, { force: true });
+  }
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
   yield* fs.writeFileString(file, `${encode(on)}\n`);
 });

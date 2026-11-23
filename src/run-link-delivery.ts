@@ -65,20 +65,27 @@ export const notifyRunLink = Effect.fn("RunLinks.notify")(function* (
   phase: RunLinkNotice["phase"],
 ) {
   const who = view.requestedBy;
-  if (who === undefined || who.machine.installation === installation) return;
+  if (who === undefined || who.machine.installation === installation) {
+    return;
+  }
   const dir = `${env.stateDir}/runs/${view.runId}`;
-  if (Arr.some(yield* readLinkDeliveries(dir), (one) => one.phase === phase)) return;
+  if (Arr.some(yield* readLinkDeliveries(dir), (one) => one.phase === phase)) {
+    return;
+  }
   const at = yield* nowIso;
   const peer = yield* peerOf(env, who.machine.installation);
-  if (peer === undefined)
+  if (peer === undefined) {
     return yield* recordLinkDelivery(dir, {
       phase,
       state: "undelivered",
       at,
       note: `The requesting Machine ${who.machine.name} is no longer paired.`,
     }).pipe(Effect.orDie);
+  }
   const stored = Arr.findFirst(yield* readSentNotices(dir), (one) => one.phase === phase);
-  if (Option.isSome(stored)) return yield* send(env, dir, peer, stored.value);
+  if (Option.isSome(stored)) {
+    return yield* send(env, dir, peer, stored.value);
+  }
   const run = factsOfView(env.stateDir, view);
   const lane = yield* laneFor(env, run);
   const current = currentOf(lane);

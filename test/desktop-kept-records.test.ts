@@ -9,7 +9,9 @@ import type { Asked } from "./support/record-doors";
 
 const shownBy = (done: () => boolean) =>
   Effect.gen(function* () {
-    while (!done()) yield* Effect.sleep("5 millis");
+    while (!done()) {
+      yield* Effect.sleep("5 millis");
+    }
   }).pipe(Effect.timeout("2 seconds"));
 
 const said = (records: ReadonlyArray<KeptRecord>) =>

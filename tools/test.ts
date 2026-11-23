@@ -94,7 +94,9 @@ const runSuite = (targeted: boolean, kind: Kind, since: bigint, budget: Budget, 
         const queued = (yield* Clock.monotonicTimeNanos) - since;
         const admittedAt = yield* pressureAt();
         yield* Console.error(`test: ${hold.workers} workers of a budget of ${budget.total}`);
-        if (hold.fewer !== null) yield* Console.error(`test: ${hold.fewer}`);
+        if (hold.fewer !== null) {
+          yield* Console.error(`test: ${hold.fewer}`);
+        }
         const out = yield* binDirectory(targeted);
         const flags = yield* timingFlags(targeted, timings, seed);
         const starts = `${out}/starts`;

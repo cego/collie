@@ -596,7 +596,9 @@ test.each([
   const waiting = task({ state: "done", landed: false, mr });
   const action = primaryAction(waiting);
   expect(action?.kind).toBe("open-mr");
-  if (action?.kind !== "open-mr") return;
+  if (action?.kind !== "open-mr") {
+    return;
+  }
   expect(mrUrlOf(action.mr)).toBe(url);
   expect([openMrLabel(action.mr, true), openMrLabel(action.mr, false)]).toEqual([...open]);
   expect(Arr.some(cardActions(waiting), (one) => one.kind === "open-mr")).toBe(true);

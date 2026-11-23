@@ -23,7 +23,9 @@ test("a role without its own overlay takes *, and one with its own takes only th
   const parsed = parseProfile(
     stringifyJson({ "*": { env: { A: "1" } }, reviewer: { env: { B: "2" } } }),
   );
-  if (!("profile" in parsed)) throw new Error(parsed.refused);
+  if (!("profile" in parsed)) {
+    throw new Error(parsed.refused);
+  }
   expect(roleProfile(parsed.profile, "implementer")).toEqual({ env: { A: "1" } });
   expect(roleProfile(parsed.profile, "reviewer")).toEqual({ env: { B: "2" } });
 });
@@ -40,10 +42,11 @@ test("the setting refuses what the profile cannot be, with the reason", () => {
   expect(refused(stringifyJson({ "*": { claude: { model: "opus" } } }))).toContain(
     "claude.model is not one Collie merges",
   );
-  for (const key of ["autoMode", "permissions"])
+  for (const key of ["autoMode", "permissions"]) {
     expect(refused(stringifyJson({ "*": { claude: { [key]: {} } } }))).toContain(
       `claude.${key} is not one Collie merges`,
     );
+  }
   expect(refused(stringifyJson({ "*": { env: { "BAD NAME": "x" } } }))).toContain(
     '"BAD NAME" is not an environment variable name',
   );

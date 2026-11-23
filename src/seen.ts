@@ -38,7 +38,9 @@ export const seenSince = Effect.fn("Seen.since")(function* (stateDir: string) {
   const text = yield* fs
     .readFileString(yield* sincePath(stateDir))
     .pipe(Effect.option, Effect.map(Option.getOrNull));
-  if (text === null) return null;
+  if (text === null) {
+    return null;
+  }
   const at = epochMs(Str.trim(text));
   return Number.isFinite(at) ? at : null;
 });

@@ -17,8 +17,9 @@ test("the implementer, generalist and investigator say to take down the stack th
         const text = flat(yield* fs.readFileString(`${root}personas/${persona}.md`));
         expect(text).toContain(line);
         const output = Option.getOrElse(pipe(text, Str.indexOf("## Output")), () => -1);
-        if (output >= 0)
+        if (output >= 0) {
           expect(Option.getOrElse(pipe(text, Str.indexOf(line)), () => -1)).toBeLessThan(output);
+        }
       }
     }),
   ));

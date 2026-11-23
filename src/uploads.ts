@@ -26,12 +26,19 @@ export const receive = (stateDir: string, part: UploadPart) =>
 const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, part: UploadPart) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (!/^[0-9a-f]{64}$/.test(part.sha256)) return yield* refused(`${part.sha256} is not a sha256`);
-  // oxlint-disable-next-line no-control-regex -- File names must reject ASCII control bytes and DEL.
-  if (["", ".", "..", ".partial"].includes(part.name) || /[/\\\u0000-\u001f\u007f]/.test(part.name))
+  if (!/^[0-9a-f]{64}$/.test(part.sha256)) {
+    return yield* refused(`${part.sha256} is not a sha256`);
+  }
+  if (
+    ["", ".", "..", ".partial"].includes(part.name) ||
+    // oxlint-disable-next-line no-control-regex -- File names must reject ASCII control bytes and DEL.
+    /[/\\\u0000-\u001f\u007f]/.test(part.name)
+  ) {
     return yield* refused(`${part.name} is not a file's name`);
-  if (part.size > ATTACHMENT_BYTES)
+  }
+  if (part.size > ATTACHMENT_BYTES) {
     return yield* refused(`${part.name} is larger than ${ATTACHMENT_BYTES / 1024 / 1024} MB`);
+  }
   const dir = path.join(uploadsDir(stateDir), part.sha256);
   const whole = path.join(dir, part.name);
   const entries = yield* fs.readDirectory(dir).pipe(
@@ -42,15 +49,21 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   );
   const held = Option.getOrUndefined(Arr.findFirst(entries, (entry) => entry !== ".partial"));
   if (held !== undefined) {
-    if (!entries.includes(part.name)) yield* fs.link(path.join(dir, held), whole);
+    if (!entries.includes(part.name)) {
+      yield* fs.link(path.join(dir, held), whole);
+    }
     const now = (yield* Clock.currentTimeMillis) / 1000;
     yield* fs.utimes(dir, now, now);
     return { path: whole, complete: false };
   }
   const decoded = Base64.decode(part.content);
-  if (Result.isFailure(decoded)) return yield* refused(`a part of ${part.name} is not base64`);
+  if (Result.isFailure(decoded)) {
+    return yield* refused(`a part of ${part.name} is not base64`);
+  }
   const bytes = decoded.success;
-  if (bytes.length > PART_BYTES) return yield* refused(`a part is at most 4 MiB`);
+  if (bytes.length > PART_BYTES) {
+    return yield* refused(`a part is at most 4 MiB`);
+  }
   const partial = path.join(dir, ".partial");
   yield* fs.makeDirectory(dir, { recursive: true });
   const arrived = yield* fs.stat(partial).pipe(
@@ -58,8 +71,9 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
     Effect.orElseSucceed(() => 0),
   );
   // WARNING: a part sent again after it arrived is the same part, not an overrun.
-  if (part.offset + bytes.length <= arrived && part.offset + bytes.length < part.size)
+  if (part.offset + bytes.length <= arrived && part.offset + bytes.length < part.size) {
     return { path: null, complete: false };
+  }
   if (part.offset !== arrived) {
     yield* fs.remove(dir, { recursive: true, force: true });
     return yield* refused(
@@ -67,7 +81,9 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
     );
   }
   yield* fs.writeFile(partial, bytes, { flag: part.offset === 0 ? "w" : "a" });
-  if (part.offset + bytes.length < part.size) return { path: null, complete: false };
+  if (part.offset + bytes.length < part.size) {
+    return { path: null, complete: false };
+  }
   const all = yield* fs.readFile(partial);
   const digest = sha256Hex(all);
   if (all.length !== part.size || digest !== part.sha256) {

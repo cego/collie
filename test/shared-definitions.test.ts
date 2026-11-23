@@ -36,8 +36,9 @@ test("a host reads its shared definitions with their edit times, and takes only 
         yield* put("workflows/mine.md", "the prompt\n", 2);
         yield* put("workflows/helper.ts", "the helper\n", 3);
         yield* put("personas/me.md", "the persona\n", 4);
-        for (const toolchain of ["package.json", "tsconfig.json", "collie.d.ts", "bun.lock"])
+        for (const toolchain of ["package.json", "tsconfig.json", "collie.d.ts", "bun.lock"]) {
           yield* put(`workflows/${toolchain}`, "this Machine's own\n", 5);
+        }
         yield* put("workflows/node_modules/effect/package.json", "{}\n", 5);
         yield* put("workflows/nested/deeper.ts", "not shared\n", 5);
         // WARNING: no editor leftovers or links, which would reach outside the Layer.

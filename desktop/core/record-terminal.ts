@@ -29,7 +29,9 @@ const at: PaneAt = { ...place, pane: flags.core, core: flags.core };
 let lastEvent = Date.now();
 const lines: Array<string> = [];
 const settled = Effect.promise(async () => {
-  while (Date.now() - lastEvent < idle) await Bun.sleep(50);
+  while (Date.now() - lastEvent < idle) {
+    await Bun.sleep(50);
+  }
 });
 
 BunRuntime.runMain(

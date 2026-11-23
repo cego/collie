@@ -250,11 +250,15 @@ test("a build reads every Run's check marker in one read, not one per Run", () =
       const counting: RunRecordsApi = {
         ...records,
         control: (control, run, key) => {
-          if (control === VERIFYING) read.push(run);
+          if (control === VERIFYING) {
+            read.push(run);
+          }
           return records.control(control, run, key);
         },
         everyControl: (control) => {
-          if (control === VERIFYING) read.push("every");
+          if (control === VERIFYING) {
+            read.push("every");
+          }
           return records.everyControl(control);
         },
       };

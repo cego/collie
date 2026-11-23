@@ -60,7 +60,9 @@ const set = Command.make(
     answering((env) =>
       Effect.gen(function* () {
         const parsed = parseSetting(key, value);
-        if ("refused" in parsed) return err("invalid_input", parsed.refused);
+        if ("refused" in parsed) {
+          return err("invalid_input", parsed.refused);
+        }
         return yield* mutation(env, "settings-set", requestId, (id) =>
           Effect.gen(function* () {
             const done = yield* setSharedSetting(env, {
@@ -70,7 +72,9 @@ const set = Command.make(
               at: yield* nowIso,
               request: id,
             });
-            if (!done.ok) return done;
+            if (!done.ok) {
+              return done;
+            }
             return {
               ok: true,
               data: done.value,

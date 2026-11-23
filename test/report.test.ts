@@ -397,7 +397,9 @@ test("a check named only by its executable is counted, wherever the executable w
 
 const halt = (at: string, cause?: Metric["cause"]) => {
   const line: Types.Mutable<Metric> = { at, kind: "halt", subject: "", value: 0, note: "parked" };
-  if (cause !== undefined) line.cause = cause;
+  if (cause !== undefined) {
+    line.cause = cause;
+  }
   return line;
 };
 

@@ -221,7 +221,9 @@ const children = Layer.succeed(Children)(
     start: (ask) =>
       Effect.gen(function* () {
         const after = startsAfter.get(ask.invocation);
-        if (after !== undefined) yield* Deferred.await(startSignal(after));
+        if (after !== undefined) {
+          yield* Deferred.await(startSignal(after));
+        }
         const parent = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
         const runId = `${parent}-${ask.invocation}`;
         const fresh = !admittedChildren.has(runId);
@@ -235,8 +237,9 @@ const children = Layer.succeed(Children)(
           parent !== undefined &&
           !failing.has(ask.invocation) &&
           (!runningChildren.tagsOnly || Str.startsWith("tag-")(ask.invocation))
-        )
+        ) {
           yield* runChild(runningChildren, ask, parent, runId);
+        }
         return {
           runId,
           workflow: ask.workflow,
@@ -247,14 +250,18 @@ const children = Layer.succeed(Children)(
     result: (child) =>
       Effect.gen(function* () {
         const running = childRuns.get(child.invocation);
-        if (runningChildren !== null && running !== undefined)
+        if (runningChildren !== null && running !== undefined) {
           return yield* childEnd(runningChildren, running);
+        }
         const wait = childWaits.get(child.invocation);
-        if (wait !== undefined) yield* Deferred.await(wait);
-        if (failing.has(child.invocation))
+        if (wait !== undefined) {
+          yield* Deferred.await(wait);
+        }
+        if (failing.has(child.invocation)) {
           return yield* new WorkflowError({
             reason: `${child.invocation} failed`,
           });
+        }
         return "done";
       }),
   }),
@@ -347,7 +354,9 @@ const runChild = (
   runId: string,
 ) =>
   Effect.gen(function* () {
-    if (childRuns.has(ask.invocation)) return;
+    if (childRuns.has(ask.invocation)) {
+      return;
+    }
     const made = yield* loaded(modules.get(parent)!, runId);
     yield* admit({
       runId,
@@ -382,7 +391,9 @@ const childDriven = (invocation: string, parent?: Effect.Effect<typeof RunStatus
           const child = childRuns.get(invocation);
           if (child === undefined && parent !== undefined) {
             const status = yield* parent;
-            if (status.status === "failed") throw new Error(status.reason);
+            if (status.status === "failed") {
+              throw new Error(status.reason);
+            }
           }
           return child;
         }),
@@ -540,10 +551,15 @@ const undeclaredWork = () =>
       ),
     );
     const loose: Array<readonly [string, string]> = [];
-    for (const [runId, entry] of modules)
-      if (ours.has(entry))
-        for (const node of (yield* laneRead(runId)).nodes)
-          if (!node.declared) loose.push([runId, node.id]);
+    for (const [runId, entry] of modules) {
+      if (ours.has(entry)) {
+        for (const node of (yield* laneRead(runId)).nodes) {
+          if (!node.declared) {
+            loose.push([runId, node.id]);
+          }
+        }
+      }
+    }
     return loose;
   });
 
@@ -1034,14 +1050,16 @@ scenario(
         expect(yield* asked("r-plan", "spec")).toContain(
           `Write the spec to \`${runDir(dir, "r-plan")}/plan/SPEC.md\``,
         );
-        for (const operation of ["grill", "spec", "tickets"])
+        for (const operation of ["grill", "spec", "tickets"]) {
           expect(yield* asked("r-plan", operation)).not.toContain(UNATTENDED);
+        }
         expect(yield* persona("r-plan", "grill")).toContain("You are a planner");
-        for (const step of ["grill", "spec", "tickets"])
+        for (const step of ["grill", "spec", "tickets"]) {
           expect([step, pipe(yield* asked("r-plan", step), Str.includes("changelog"))]).toEqual([
             step,
             false,
           ]);
+        }
         expect(pipe(yield* persona("r-plan", "grill"), Str.replaceAll(/\s+/g, " "))).toContain(
           "Write a `changelog` only when a step asks for one",
         );
@@ -1440,7 +1458,9 @@ const resumeImplementPark = (
 ) =>
   driven(options, (run) =>
     Effect.gen(function* () {
-      if (hooks.beforePark !== undefined) yield* hooks.beforePark;
+      if (hooks.beforePark !== undefined) {
+        yield* hooks.beforePark;
+      }
       if (hooks.stop !== undefined) {
         yield* stallAsked(run, hooks.stop.decision);
         yield* run.answer(hooks.stop.decision, hooks.stop.answer);
@@ -1468,7 +1488,9 @@ const resumeImplementPark = (
           (line) => line.kind === "fail" && pipe(line.why, Str.includes(reason)),
         ),
       ).toBe(true);
-      if (hooks.beforeResume !== undefined) yield* hooks.beforeResume;
+      if (hooks.beforeResume !== undefined) {
+        yield* hooks.beforeResume;
+      }
       yield* run.resume;
       const [finished, parked] = yield* until(
         () => Effect.zip(run.status, parkedWhy(options.runId)),
@@ -1487,7 +1509,9 @@ const resumeImplementPark = (
       expect(Arr.filter(after, (one) => one.role !== "reviewer")).toEqual(
         Arr.filter(agents, (one) => one.role !== "reviewer"),
       );
-      if (Arr.some(agents, (one) => one.role === "reviewer")) expect(after).toEqual(agents);
+      if (Arr.some(agents, (one) => one.role === "reviewer")) {
+        expect(after).toEqual(agents);
+      }
       expect(yield* asked(options.runId, "mr")).toContain(`Project root: ${rig.projectDir}`);
       expect(yield* parkedWhy(options.runId)).toBe("");
     }),
@@ -1791,7 +1815,9 @@ const ticketed = (
     yield* fs.makeDirectory(issues, { recursive: true });
     yield* fs.writeFileString(`${runDir(dir, runId)}/plan/SPEC.md`, "# The spec\n");
     const named = pipe(file, Str.replace(/\.md$/, ".benchmark.json"));
-    if (benchmark !== undefined) yield* fs.writeFileString(`${issues}/${named}`, asJson(benchmark));
+    if (benchmark !== undefined) {
+      yield* fs.writeFileString(`${issues}/${named}`, asJson(benchmark));
+    }
     yield* fs.writeFileString(
       `${issues}/${file}`,
       Arr.join(
@@ -1892,10 +1918,11 @@ scenario(
           (there) => there,
         );
         const faster = pipe(yield* asked(build, "01-faster.md"), Str.replaceAll(/\s+/g, " "));
-        for (const pass of ["calibration", "final"])
+        for (const pass of ["calibration", "final"]) {
           expect(faster).toMatch(
             new RegExp(`collie measure --base \\S+ --plan ${benchmark} --pass ${pass}`),
           );
+        }
 
         const plan = { ...speedUp([STEADY_PRIMARY, SIZE_GUARDRAIL]) };
         yield* fs.writeFileString(
@@ -2570,7 +2597,7 @@ for (const name of ["gitlab", "github"] as const) {
       ),
   );
 
-  for (const resolution of ["fixed list", "retained finding"] as const)
+  for (const resolution of ["fixed list", "retained finding"] as const) {
     scenario(
       `review ledger on ${name}: new identities preserve earlier resolutions via ${resolution}`,
       () =>
@@ -2629,6 +2656,7 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
   for (const mode of [
     "partial",
@@ -2637,7 +2665,7 @@ for (const name of ["gitlab", "github"] as const) {
     "resolved",
     "clean start",
     "unposted",
-  ] as const)
+  ] as const) {
     scenario(
       `review ledger on ${name}: ${mode === "partial" ? "Review again carries earlier findings and posts the interdiff's status changes" : mode}`,
       () =>
@@ -2774,8 +2802,9 @@ for (const name of ["gitlab", "github"] as const) {
               decision: "post-1",
             });
             const prompt = yield* asked(next, "review-1");
-            if (mode === "clean start") expect(prompt).toContain("Earlier findings ledger:\n[]");
-            else {
+            if (mode === "clean start") {
+              expect(prompt).toContain("Earlier findings ledger:\n[]");
+            } else {
               expect(prompt).toContain('"id": "F1"');
               expect(prompt).toContain('"id": "F2"');
               expect(prompt).toContain('"status": "open"');
@@ -2814,9 +2843,12 @@ for (const name of ["gitlab", "github"] as const) {
               expect(notes[1]).toContain(mode === "resolved" ? "F2: obsolete" : "F2: still open");
               expect(notes[1]).not.toContain("The unchanged handle leaks");
               expect(notes[1]).not.toContain("close the handle");
-              if (mode === "force push") expect(notes[1]).not.toContain("F1: fixed");
-              if (mode === "resolved")
+              if (mode === "force push") {
+                expect(notes[1]).not.toContain("F1: fixed");
+              }
+              if (mode === "resolved") {
                 expect(notes[1]).toContain(`all findings fixed at \`${head}\``);
+              }
             }
             expect((yield* forge.model()).approved ?? []).toHaveLength(
               mode === "resolved" || mode === "clean start" ? 1 : 0,
@@ -2825,6 +2857,7 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
   scenario(
     `a review of a ${name} ${noun} reads it with that forge's commands, and posting a clean one approves it`,
@@ -3642,10 +3675,11 @@ scenario("implement offers Stage as a follow-up on a succeeded Run with its merg
       expect(inputsFor(stage, { runId: "r", runDir: "/r", facts, input: {} })).toEqual({
         mr: OPENED.mr_url,
       });
-      for (const over of [{ succeeded: false }, { mrUrl: null }, { disposed: true }])
+      for (const over of [{ succeeded: false }, { mrUrl: null }, { disposed: true }]) {
         expect(
           Arr.map(offersFrom(declared, { ...facts, ...over }), (offer) => offer.id),
         ).not.toContain("stage");
+      }
     }),
   ),
 );
@@ -4091,7 +4125,9 @@ const preparedRepository = Effect.gen(function* () {
   const home = yield* Config.String("HOME").pipe(
     Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
   );
-  if (prepared?.home === home) return prepared.made;
+  if (prepared?.home === home) {
+    return prepared.made;
+  }
   const made = yield* fs.makeTempDirectory({ directory: home, prefix: "baseline-repository-" });
   const origin = `${made}/origin.git`;
   const project = `${made}/project`;
@@ -4255,7 +4291,7 @@ scenario("repeated recovery retains the original bug reproduction without changi
   ),
 );
 
-for (const feature of [false, true])
+for (const feature of [false, true]) {
   scenario(
     feature
       ? "a feature follow-up on a reviewed head reuses its build claims at Checks"
@@ -4307,11 +4343,12 @@ for (const feature of [false, true])
             ),
           ).toBe(OPENED.mr_url);
           const previous = yield* revParse("HEAD", rig.projectDir);
-          if (!feature)
+          if (!feature) {
             yield* exec(
               ["git", "commit", "--allow-empty", "-qm", "complete post-finish implementation"],
               { cwd: rig.projectDir },
             );
+          }
           yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
           const head = yield* revParse("HEAD", rig.projectDir);
           yield* rig.queueOutputs([
@@ -4371,6 +4408,7 @@ for (const feature of [false, true])
         }),
       ),
   );
+}
 
 const reviewedRecovery = (
   changed?: "pushed head" | "requirements" | "later blocking review",
@@ -4430,11 +4468,12 @@ const reviewedRecovery = (
       yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
       head = yield* revParse("HEAD", rig.projectDir);
     }
-    if (changed === "requirements")
+    if (changed === "requirements") {
       yield* (yield* FileSystem.FileSystem).writeFileString(
         `${plan}/SPEC.md`,
         "# The spec\n\nAlso implement the missing export.\n",
       );
+    }
     if (changed === "later blocking review") {
       const later = { ...review, entry: shipped("review"), runId: "r-later-review" };
       yield* rig.queueOutputs([
@@ -4589,7 +4628,7 @@ for (const [changed, panel] of [
   ["requirements", false],
   ["pushed head", true],
   ["later blocking review", false],
-] as const)
+] as const) {
   scenario(
     `a resumed ${panel ? "panel" : "review"} cannot overwrite ${changed} it never reviewed`,
     () =>
@@ -4618,6 +4657,7 @@ for (const [changed, panel] of [
         }),
       ),
   );
+}
 
 scenario("a follow-up on a reviewed pushed head starts at Checks", () =>
   runEffect(
@@ -4661,7 +4701,7 @@ for (const changed of [
   "additional work",
   "later blocking review",
   "unreadable review record",
-] as const)
+] as const) {
   scenario(`a follow-up rechecks ${changed} before using a reviewed entry`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -4712,8 +4752,9 @@ for (const changed of [
             ["config", "user.email", "test@example.com"],
             ["commit", "--allow-empty", "-qm", "target advanced"],
             ["push", "-q", "origin", "HEAD"],
-          ])
+          ]) {
             yield* exec(["git", ...args], { cwd: other });
+          }
         }
         if (changed === "pushed head") {
           yield* exec(["git", "commit", "--allow-empty", "-qm", "new work after the offer"], {
@@ -4721,11 +4762,12 @@ for (const changed of [
           });
           yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
         }
-        if (changed === "requirements")
+        if (changed === "requirements") {
           yield* fs.writeFileString(
             `${plan}/SPEC.md`,
             "# The spec\n\nAlso implement the missing export.\n",
           );
+        }
         if (changed === "old record" || changed === "green pipeline alone") {
           yield* session(forgetJournal([parent.runId, "r-current-review"], "reviews.jsonl"));
         }
@@ -4755,7 +4797,9 @@ for (const changed of [
             },
           ],
         });
-        if (changed === "green pipeline alone") yield* fs.writeFileString(green.path, green.text);
+        if (changed === "green pipeline alone") {
+          yield* fs.writeFileString(green.path, green.text);
+        }
         yield* rig.queueOutputs([
           ...Arr.replicate(null, consumed),
           { ...CLEAN_SYNTHESIS, verdict: "findings", scope_met: false, findings: [missing] },
@@ -4787,6 +4831,7 @@ for (const changed of [
       }),
     ),
   );
+}
 
 scenario("a recovery takes the reviewed pushed head without replaying its parent", () =>
   runEffect(
@@ -6248,7 +6293,7 @@ for (const [kind, plan] of [
   ["typed text", "Count every registry once"],
   ["Linear issue", "ABC-125"],
   ["follow-up", "followup:r-spec-parent"],
-] as const)
+] as const) {
   scenario(`the spec a ${kind} build wrote is handed to its reviewers`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -6270,8 +6315,9 @@ for (const [kind, plan] of [
       }).pipe((work) => (kind === "Linear issue" ? withLinear(work) : work), Effect.orDie),
     ),
   );
+}
 
-for (const workflow of ["general", "investigate"] as const)
+for (const workflow of ["general", "investigate"] as const) {
   scenario(
     `a ${workflow} agent writes a speed-up criterion's benchmark plan in its handoffs and takes it with collie measure`,
     () =>
@@ -6292,10 +6338,11 @@ for (const workflow of ["general", "investigate"] as const)
           const benchmark = `${runDir(dir, runId)}/handoffs/<slug>.benchmark.json`;
           expect(work).toContain(`\`${benchmark}\``);
           expect(work).toContain("exactly one `primary`");
-          for (const pass of ["calibration", "final"])
+          for (const pass of ["calibration", "final"]) {
             expect(work).toContain(
               `collie measure --base <merge-base> --plan ${benchmark} --pass ${pass}`,
             );
+          }
           expect(work).toContain("Time no A/B comparison yourself");
           expect(work).toContain("answer it with the `final` Measurement's id and those verdicts");
           expect(work).not.toContain("beside its ticket");
@@ -6303,8 +6350,9 @@ for (const workflow of ["general", "investigate"] as const)
         }),
       ),
   );
+}
 
-for (const kind of ["typed text", "Linear issue", "follow-up", "review"] as const)
+for (const kind of ["typed text", "Linear issue", "follow-up", "review"] as const) {
   scenario(
     `a ${kind} builder writes a speed-up criterion's benchmark plan beside its ticket and takes it with collie measure`,
     () =>
@@ -6333,13 +6381,15 @@ for (const kind of ["typed text", "Linear issue", "follow-up", "review"] as cons
           const building = pipe(yield* asked(runId, "build"), Str.replaceAll(/\s+/g, " "));
           const benchmark = `${runDir(dir, runId)}/plan/issues/NN-<slug>.benchmark.json`;
           expect(building).toContain(`beside its ticket, \`${benchmark}\``);
-          for (const pass of ["calibration", "final"])
+          for (const pass of ["calibration", "final"]) {
             expect(building).toContain(
               `collie measure --base <merge-base> --plan ${benchmark} --pass ${pass}`,
             );
+          }
         }).pipe((work) => (kind === "Linear issue" ? withLinear(work) : work), Effect.orDie),
       ),
   );
+}
 
 scenario(
   "the planner route is read again for each ticket, so a planner that has gone is not called live",
@@ -6413,8 +6463,9 @@ const withOrigin = () =>
       ["config", "user.email", "t@example.com"],
       ["config", "user.name", "t"],
       ["remote", "add", "origin", remote],
-    ])
+    ]) {
       yield* git(rig.projectDir, ...args);
+    }
     const fs = yield* FileSystem.FileSystem;
     const commit = (cwd: string, file: string, body: string) =>
       Effect.gen(function* () {
@@ -7321,8 +7372,9 @@ scenario(
         yield* repository();
         yield* exec(["git", "branch", "feature"], { cwd: rig.projectDir });
         const first = `${rig.root}/.collie/worktrees/${Str.split(rig.projectDir, "/").pop()}/feature`;
-        for (const slot of [first, `${first}-2`, `${first}-3`])
+        for (const slot of [first, `${first}-2`, `${first}-3`]) {
           yield* fs.makeDirectory(slot, { recursive: true });
+        }
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve(runId, ["unit"]);
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
@@ -7457,8 +7509,8 @@ scenario("implement started with then=release releases its merge request without
   ),
 );
 
-for (const following of ["finish", "release"])
-  for (const source of ["unavailable Linear", "refused plan"])
+for (const following of ["finish", "release"]) {
+  for (const source of ["unavailable Linear", "refused plan"]) {
     scenario(
       `Flow: implement then=${following} omits What next before rejecting an ${source} source`,
       () =>
@@ -7498,6 +7550,8 @@ for (const following of ["finish", "release"])
           }),
         ),
     );
+  }
+}
 
 scenario(
   "Flow: implement started with then=finish forecasts no What next, and its Steps up to the merge request are done",
@@ -7825,8 +7879,9 @@ scenario(
             expect(said).not.toContain("gh pr list");
           }
         }
-        for (const message of yield* prompts())
+        for (const message of yield* prompts()) {
           expect(message).not.toMatch(/^\/(implement|code-review)\b/);
+        }
         expect(
           yield* rig
             .cmds()
@@ -7895,10 +7950,13 @@ const released = (reviewing: string) =>
     const fs = yield* FileSystem.FileSystem;
     const into = `${rig.root}/release/workflows`;
     yield* fs.makeDirectory(into, { recursive: true });
-    for (const name of yield* fs.readDirectory(`${ROOT}workflows`))
+    for (const name of yield* fs.readDirectory(`${ROOT}workflows`)) {
       yield* fs.copyFile(`${ROOT}workflows/${name}`, `${into}/${name}`);
+    }
     yield* fs.copyFile(reviewing, `${into}/reviewing.ts`);
-    if (!renamed) return `${into}/implement.workflow.ts`;
+    if (!renamed) {
+      return `${into}/implement.workflow.ts`;
+    }
     const entry = `${into}/${idOf("implement")}.workflow.ts`;
     yield* fs.writeFileString(
       entry,
@@ -7949,7 +8007,9 @@ once("no shipped prompt sends an agent to a step directory a Run no longer has",
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       for (const name of yield* fs.readDirectory(`${ROOT}workflows`)) {
-        if (!pipe(name, Str.endsWith(".md"))) continue;
+        if (!pipe(name, Str.endsWith(".md"))) {
+          continue;
+        }
         const text = yield* fs.readFileString(`${ROOT}workflows/${name}`);
         expect([name, /\/steps\//.test(text)]).toEqual([name, false]);
       }
@@ -8078,10 +8138,11 @@ scenario("missing reviewer evidence gets a fresh judgement without a gate fix ch
       expect(yield* prompts()).toHaveLength(4);
       expect(yield* asked("r-gate-judged", "review-5-1")).toContain('"scope_met": true');
       expect(yield* asked("r-gate-judged", "review-5-1")).toContain(`Spec: ${plan}\n`);
-      for (const review of ["review-1", "review-5-1"])
+      for (const review of ["review-1", "review-5-1"]) {
         expect(flat(yield* asked("r-gate-judged", review))).toContain(
           "A missing or skipped pipeline on the head is never a finding",
         );
+      }
     }),
   ),
 );
@@ -8499,20 +8560,22 @@ scenario(
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
         expect(yield* runsOf(`${rig.root}/nuxi-runs`)).toBe(0);
-        for (const operation of ["build", "mr"])
+        for (const operation of ["build", "mr"]) {
           expect(yield* asked(runId, operation)).toContain(
             "- nuxi: left to CI (job nuxi-job), do not run it",
           );
+        }
         const fs = yield* FileSystem.FileSystem;
         const reviews = Arr.filter(
           yield* fs.readDirectory(`${dir}/agents/${runId}`),
           (file) => pipe(file, Str.startsWith("review")) && pipe(file, Str.endsWith(".prompt.md")),
         );
         expect(reviews.length).toBeGreaterThan(0);
-        for (const file of reviews)
+        for (const file of reviews) {
           expect(yield* fs.readFileString(`${dir}/agents/${runId}/${file}`)).toContain(
             "left to CI: proved by nuxi-job on the merge request's head",
           );
+        }
         const [proof, ...more] = yield* ciRecords(runId);
         expect(more).toEqual([]);
         expect(proof).toMatchObject({
@@ -8767,8 +8830,9 @@ scenario(
           `https://${PROJECT.gitlab}/-/jobs/101`,
           CI_LOG(101),
           `collie run publish ${runId} --push-only --request-id <request>`,
-        ])
+        ]) {
           expect(prompt).toContain(text);
+        }
         const [proof, ...more] = yield* ciRecords(runId);
         expect(more).toEqual([]);
         expect(proof).toMatchObject({ name: "nuxi", end: { head_sha: fix.sha } });
@@ -11352,8 +11416,9 @@ scenario(
           "the branch was not pushed",
           "no merge request URL was reported",
           "push denied",
-        ])
+        ]) {
           expect(why).toContain(undone);
+        }
         expect(why).toEndWith(`resume ${runId}.`);
         expect(yield* parkedCause(runId)).toBe("step-failed");
         expect(yield* prompts()).toHaveLength(3);
@@ -11431,8 +11496,9 @@ scenario(
         for (const rule of [
           "`blocker` or `major` only where it leaves delivery undone",
           "is `minor`: approvals still needed, a pipeline still running, failures that were there before this Run",
-        ])
+        ]) {
           expect(prompt).toContain(rule);
+        }
       }),
     ),
 );
@@ -11517,8 +11583,9 @@ const skippedHead = (pushed: boolean, over: Partial<ForgeModel> = {}) =>
       ["checkout", "-q", "-b", branch],
       ["push", "-q", "origin", "HEAD"],
       ...(pushed ? [] : [["commit", "-qm", "the mr agent's", "--allow-empty"]]),
-    ])
+    ]) {
       yield* exec(["git", ...args], { cwd: rig.projectDir });
+    }
     const head = yield* headOf();
     const forge = yield* forgeOnPath(bin, "gitlab", {
       installed: true,
@@ -12020,8 +12087,9 @@ scenario(
         const building = yield* asked("r-impl-none", "build");
         expect(building).toContain("(no check is named for this Run yet)");
         expect(building).toContain("collie run intent verification r-impl-none --name <name>");
-        for (const at of [1, 2, 3, 4])
+        for (const at of [1, 2, 3, 4]) {
           expect(yield* asked("r-impl-none", `gate-fix-${at}`)).toContain("no check is named");
+        }
         expect(yield* parkedWhy("r-impl-none")).toContain("no check is named");
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${dir}/agents/r-impl-none/mr.prompt.md`)).toBe(false);
@@ -12208,8 +12276,9 @@ scenario("a plan directory with no outcome kind is told only its checks have to 
         "INVESTIGATION.md",
         "Instructions nobody ran",
         "migrate-up",
-      ])
+      ]) {
         expect(building).not.toContain(instruction);
+      }
     }),
   ),
 );
@@ -12237,7 +12306,9 @@ const helleAnswers: (claim: "held" | "none", production: "deployed" | "read") =>
               ),
         release: (runId) => Effect.sync(() => (claimed.push(`release ${runId}`), [])),
       });
-      if (production === "read") return answered;
+      if (production === "read") {
+        return answered;
+      }
       return Host.of({
         ...answered,
         defaultHead: () => Effect.succeed(pipe("0", Str.repeat(40))),
@@ -12439,8 +12510,9 @@ scenario("a fork's landing reads its forge, and gets the GitHub content on a Git
       const fs = yield* FileSystem.FileSystem;
       const fork = `${rig.root}/fork-on`;
       yield* fs.makeDirectory(fork, { recursive: true });
-      for (const name of ["renovate.workflow.ts", "renovate.gitlab.md", "renovate.github.md"])
+      for (const name of ["renovate.workflow.ts", "renovate.gitlab.md", "renovate.github.md"]) {
         yield* fs.copyFile(`${ROOT}workflows/${name}`, `${fork}/${name}`);
+      }
       yield* fs.copyFile(`${fixtures}/landing-on.workflow.ts`, `${fork}/landing-on.workflow.ts`);
       const bin = yield* renovatable();
       yield* forgeOnPath(bin, "github", {
@@ -13188,7 +13260,9 @@ const releasable = (name: MrForge, over: Partial<FakeMr> = {}, tagged = true) =>
     yield* exec(["git", "push", "-q", "origin", `${merged}:refs/heads/main`], {
       cwd: rig.projectDir,
     });
-    if (tagged) yield* tagOnOrigin(merged);
+    if (tagged) {
+      yield* tagOnOrigin(merged);
+    }
     yield* exec(["git", "remote", "set-url", "upstream", RELEASING[name].remote], {
       cwd: rig.projectDir,
     });
@@ -13264,14 +13338,18 @@ const releaseHost = <E = never>(
             ? Effect.gen(function* () {
                 claimedFor.push(options.deploys ?? { applications: [], jobs: [] });
                 const says = helle();
-                if (says.adopts === true && !(yield* options.adopting))
+                if (says.adopts === true && !(yield* options.adopting)) {
                   return yield* new WorkflowError({
                     reason: "the Helle claim on project was already yours and was not taken over",
                   });
-                for (const line of says.said ?? []) yield* options.say(line);
+                }
+                for (const line of says.said ?? []) {
+                  yield* options.say(line);
+                }
                 yield* says.waits ?? Effect.void;
-                if ("slugs" in says.held && says.held.slugs.length > 0)
+                if ("slugs" in says.held && says.held.slugs.length > 0) {
                   claimed.push(`claim ${options.runId}`);
+                }
                 return says.held;
               })
             : claimed.lastIndexOf(`claim ${options.runId}`) >
@@ -13299,7 +13377,9 @@ const releaseHost = <E = never>(
               })),
             );
             const mr = yield* factOf(asked.runId, MERGE_REQUEST);
-            if (mr === null) return yield* Effect.die(`${asked.runId} has no merge request`);
+            if (mr === null) {
+              return yield* Effect.die(`${asked.runId} has no merge request`);
+            }
             return yield* takeOver({
               runDir: runDir(dir, asked.runId),
               mr: Str.trim(mr),
@@ -13337,12 +13417,13 @@ const driven = <A, E>(
   session(
     Effect.gen(function* () {
       const childScope = options.runsChildren ? yield* Scope.make() : null;
-      if (childScope !== null)
+      if (childScope !== null) {
         runningChildren = {
           context: yield* Effect.context<SessionServices>(),
           scope: childScope,
           tagsOnly: options.runsChildren === "tags",
         };
+      }
       const made = yield* loaded(options.entry, options.runId);
       const engine = yield* WorkflowEngine.WorkflowEngine;
       const store = yield* Store;
@@ -13360,8 +13441,9 @@ const driven = <A, E>(
                   Deferred.succeed(reached, undefined),
                 ),
             });
-      if (options.restarted !== true)
+      if (options.restarted !== true) {
         yield* admit({ runId: options.runId, workflow: made.workflow.name, input: options.input });
+      }
       const payload = { runId: options.runId, input: options.input };
       return yield* Effect.gen(function* () {
         yield* made.workflow.execute(payload, { discard: true });
@@ -14036,8 +14118,9 @@ scenario(
             line.kind === "enter" ? [Str.split(line.key, "#")[0]] : [],
           );
           expect(enters).toContain("merge");
-          for (const step of ["tag", "stage", "production-go", "production"])
+          for (const step of ["tag", "stage", "production-go", "production"]) {
             expect(enters).not.toContain(step);
+          }
         }
       }),
     ),
@@ -14067,7 +14150,9 @@ scenario(
                   () => Effect.all({ status: child.status, asked: child.asked }),
                   ({ status, asked }) => status.status === "failed" || asked.length > 0,
                 );
-                if (asking.status.status === "failed") throw new Error(asking.status.reason);
+                if (asking.status.status === "failed") {
+                  throw new Error(asking.status.reason);
+                }
                 const go = yield* goAsked(child.asked, "go-1");
                 yield* child.answer("go-1", optionsOf([go], "go-1")[0]!);
                 const end = yield* until(
@@ -14083,7 +14168,9 @@ scenario(
                   () => Effect.all({ status: tagChild.status, asked: tagChild.asked }),
                   ({ status, asked }) => status.status === "failed" || asked.length > 0,
                 );
-                if (ready.status.status === "failed") throw new Error(ready.status.reason);
+                if (ready.status.status === "failed") {
+                  throw new Error(ready.status.reason);
+                }
                 yield* goAsked(tagChild.asked, "production");
                 expect(
                   Arr.filter(yield* tagChild.asked, (row) => row.decision === "production"),
@@ -14584,7 +14671,7 @@ scenario(
 for (const [state, jobs] of [
   ["failing", [{ name: "test", state: "failed", retried: "failed" }]],
   ["not reported", [{ name: "static", state: "passed" }]],
-] as const)
+] as const) {
   scenario(
     `a Release whose check is left to CI's test job is not asked its go while the job is ${state}`,
     () =>
@@ -14622,6 +14709,7 @@ for (const [state, jobs] of [
         }),
       ),
   );
+}
 
 const checkedOutThenAssessed = (runId: string) =>
   Effect.gen(function* () {
@@ -14680,7 +14768,7 @@ const goGiven: (
 {
   const { mr, target } = RELEASING.gitlab;
 
-  for (const given of [{ answered: "board" }, { started: "board" }] as const)
+  for (const given of [{ answered: "board" }, { started: "board" }] as const) {
     scenario(
       `release: a human's Release at an unchanged head is the go (${"started" in given ? "a human took the offer" : "a human answered implement"}), so it merges and tags without asking it again`,
       () =>
@@ -14710,6 +14798,7 @@ const goGiven: (
           }),
         ),
     );
+  }
 
   scenario(
     "release: a human's Release is asked again once the head has moved since it was given",
@@ -14894,8 +14983,9 @@ for (const name of ["gitlab", "github"] as const) {
             `Cleared for this step: a release commit to ${url}'s default branch, where it makes one; pushing an annotated version tag to origin; creating its release there, where the package publishes from its tags; watching the tag's pipeline there, never playing a production job.`,
           );
           const other = new RegExp(`\\b${name === "gitlab" ? "gh" : "glab"}\\b`);
-          for (const step of ["assess", "tag"])
+          for (const step of ["assess", "tag"]) {
             expect(yield* asked(runId, step)).not.toMatch(other);
+          }
           expect(yield* asked(runId, "tag")).toContain(`merged commit is \`${merged}\``);
           yield* checkedOutThenAssessed(runId);
         }),
@@ -15141,7 +15231,7 @@ for (const name of ["gitlab", "github"] as const) {
       ),
   );
 
-  for (const advances of [false, true])
+  for (const advances of [false, true]) {
     scenario(
       `release on ${name}: failed CI ${advances ? "exhausts four advancing repairs across Review wait" : "parks when its fixer claims success without remote progress"} despite green local Checks`,
       () =>
@@ -15208,12 +15298,15 @@ for (const name of ["gitlab", "github"] as const) {
             expect(Arr.dedupe(Arr.map(proofs, (one) => one.end.head_sha)).length).toBe(
               advances ? 6 : 1,
             );
-            if (advances) expect(current).not.toBe(head);
+            if (advances) {
+              expect(current).not.toBe(head);
+            }
             expect((yield* forge.model()).merges ?? []).toEqual([]);
             expect((yield* forge.model()).tags ?? []).toEqual([]);
           }),
         ),
     );
+  }
 
   scenario(
     `release on ${name}: failed CI whose fixer cannot move the head parks as ci-failed, cleared by a new head without a Heal`,
@@ -15371,7 +15464,9 @@ for (const name of ["gitlab", "github"] as const) {
                 awaitReview: (asked) =>
                   host.awaitReview(asked).pipe(
                     Effect.tap((standing) => {
-                      if (!first || standing._tag !== "FailedCi") return Effect.void;
+                      if (!first || standing._tag !== "FailedCi") {
+                        return Effect.void;
+                      }
                       first = false;
                       return changed({ head: moved }).pipe(
                         Effect.orDie,
@@ -15413,7 +15508,7 @@ for (const name of ["gitlab", "github"] as const) {
       ),
   );
 
-  for (const ciCheck of [false, true])
+  for (const ciCheck of [false, true]) {
     scenario(
       `release on ${name}: failed CI already present ${ciCheck ? "is repaired without approval and its CI-backed Check proves the new head" : "is repaired with no local Checks"}`,
       () =>
@@ -15425,7 +15520,9 @@ for (const name of ["gitlab", "github"] as const) {
               ...(ciCheck && { ...UNAPPROVED[name], jobs: [{ name: "test", state: "passed" }] }),
             });
             const runId = `r-ci-entry-${name}`;
-            if (ciCheck) yield* ownCheck(runId);
+            if (ciCheck) {
+              yield* ownCheck(runId);
+            }
             yield* rig.queueOutputs([
               PACKAGED,
               ciRepair(
@@ -15456,22 +15553,24 @@ for (const name of ["gitlab", "github"] as const) {
                     );
                     expect(yield* wasAsked(runId, "fix-1")).toBe(true);
                     const repaired = (yield* forge.model()).mrs[0]!.head!;
-                    if (ciCheck)
+                    if (ciCheck) {
                       yield* until(
                         () => runLog(runId),
                         (log) => Str.includes(`waiting on job test for check on ${repaired}`)(log),
                       );
-                    else
+                    } else {
                       yield* until(
                         () => awaitingOn(runId),
                         (on) => on !== "",
                       );
+                    }
                     expect(repaired).not.toBe(head);
                     expect(yield* run.asked).toEqual([]);
-                    if (ciCheck)
+                    if (ciCheck) {
                       expect(
                         Arr.map(yield* ciRecords(runId), (one) => one.end.head_sha),
                       ).not.toContain(repaired);
+                    }
                     yield* changed({
                       checks: [{ name: "build", state: "passed" }],
                       jobs: [{ name: "test", state: "passed" }],
@@ -15479,11 +15578,12 @@ for (const name of ["gitlab", "github"] as const) {
                     });
                     const go = yield* goAsked(run.asked, "go-1");
                     expect(go.prompt).toContain(pipe(repaired, Str.slice(0, 8)));
-                    if (ciCheck)
+                    if (ciCheck) {
                       expect(Arr.map(yield* ciRecords(runId), (one) => one.end.head_sha)).toEqual([
                         head,
                         repaired,
                       ]);
+                    }
                     yield* run.answer("go-1", "Finish");
                     expect(outcomeText(yield* ended(run.status))).toBe(`${mr} was left open`);
                   }).pipe(Effect.provideService(Clock.Clock, wall)),
@@ -15495,6 +15595,7 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
   scenario(
     `release on ${name}: a failed CI-backed Check and Review wait share four repair rounds`,
@@ -15738,7 +15839,7 @@ for (const name of ["gitlab", "github"] as const) {
       ),
   );
 
-  for (const control of [HOLD, STOP])
+  for (const control of [HOLD, STOP]) {
     scenario(
       `release on ${name}: a ${control} during failed CI handback prevents its fixer and release`,
       () =>
@@ -15781,8 +15882,9 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
-  for (const conflicting of [false, true])
+  for (const conflicting of [false, true]) {
     scenario(
       `release on ${name}: a force-pushed head parks the Run, naming why, with nothing reset${conflicting ? " during a target conflict" : ""}`,
       () =>
@@ -15836,6 +15938,7 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
   scenario(
     `release on ${name}: an auto-merging, closed or hand-merged merge request fails at the start`,
@@ -15972,7 +16075,7 @@ for (const name of ["gitlab", "github"] as const) {
       ),
   );
 
-  for (const branch of ["main", "stable/1"])
+  for (const branch of ["main", "stable/1"]) {
     scenario(
       `release on ${name}: a confirmed target conflict goes to its own fixer and proves the repaired head before asking release go${branch === "main" ? "" : " on a nondefault target"}`,
       () =>
@@ -16073,8 +16176,9 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
-  for (const advances of [false, true])
+  for (const advances of [false, true]) {
     scenario(
       `release on ${name}: a target conflict ${advances ? "still present after four pushed repairs" : "whose fixer leaves the remote head unchanged"} stops visibly without release go`,
       () =>
@@ -16137,12 +16241,15 @@ for (const name of ["gitlab", "github"] as const) {
             expect(yield* readVerifications(evidenceDir(dir, runId))).toEqual([]);
             expect((yield* forge.model()).merges ?? []).toEqual([]);
             expect((yield* forge.model()).tags ?? []).toEqual([]);
-            if (!advances) expect(yield* revParse("HEAD", reviewed)).toBe(head);
+            if (!advances) {
+              expect(yield* revParse("HEAD", reviewed)).toBe(head);
+            }
           }),
         ),
     );
+  }
 
-  for (const held of [false, true])
+  for (const held of [false, true]) {
     scenario(
       `release on ${name}: delayed forge visibility after its conflict repair ${held ? "honors a Hold before reading again" : "gets a fresh read before proving the repaired head"}`,
       () =>
@@ -16165,8 +16272,12 @@ for (const name of ["gitlab", "github"] as const) {
                     Effect.gen(function* () {
                       if (asked.returnConflicts) {
                         reads++;
-                        if (reads === 2) return { _tag: "Conflicting", head } as const;
-                        if (held && reads === 3) yield* setControl(HOLD, runId);
+                        if (reads === 2) {
+                          return { _tag: "Conflicting", head } as const;
+                        }
+                        if (held && reads === 3) {
+                          yield* setControl(HOLD, runId);
+                        }
                       }
                       return yield* host.awaitReview(asked);
                     }),
@@ -16215,6 +16326,7 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
   scenario(
     `release on ${name}: a conflict repair parked for no remote-head progress resumes after an external source repair without repeating its fixer`,
@@ -16267,7 +16379,7 @@ for (const name of ["gitlab", "github"] as const) {
       ),
   );
 
-  for (const detached of [false, true])
+  for (const detached of [false, true]) {
     scenario(
       `release on ${name}: a conflict on a checkout ${detached ? "with detached HEAD" : "on the target branch at the same head"} parks before its fixer`,
       () =>
@@ -16333,8 +16445,9 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
-  for (const conflicting of [false, true])
+  for (const conflicting of [false, true]) {
     scenario(
       `release on ${name}: a checkout with changes its merge request does not carry parks before its checks pass on them${conflicting ? " during a target conflict" : ""}`,
       () =>
@@ -16375,8 +16488,9 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
-  for (const duringWait of [false, true])
+  for (const duringWait of [false, true]) {
     scenario(
       `release on ${name}: a conflicting head pushed ${duringWait ? "during Review wait" : "after go"} is adopted before its own fixer and only the repaired head is proved for a fresh go`,
       () =>
@@ -16408,10 +16522,14 @@ for (const name of ["gitlab", "github"] as const) {
                     expect(yield* checkedAt).toEqual([head]);
                     expect(yield* wasAsked(runId, "fix-1")).toBe(false);
                     expect(yield* run.asked).toEqual([]);
-                  } else yield* goAsked(run.asked, "go-1");
+                  } else {
+                    yield* goAsked(run.asked, "go-1");
+                  }
                   const pushed = yield* pushedBySomebody(head);
                   yield* changed({ head: pushed, mergeable: "conflict" });
-                  if (!duringWait) yield* run.answer("go-1", "Release");
+                  if (!duringWait) {
+                    yield* run.answer("go-1", "Release");
+                  }
                   const started = yield* until(
                     () =>
                       Effect.all({
@@ -16449,6 +16567,7 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
   scenario(
     `release on ${name}: a merge the forge refuses while the merge request still reads ready, and no conflicts with its target, fails the Run and asks no further go`,
@@ -16656,7 +16775,7 @@ for (const name of ["gitlab", "github"] as const) {
       ),
   );
 
-  for (const control of [HOLD, STOP])
+  for (const control of [HOLD, STOP]) {
     scenario(
       `release on ${name}: a ${control} before a confirmed target conflict is read prevents its repair`,
       () =>
@@ -16691,6 +16810,7 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
   scenario(`release on ${name}: a Hold during the review wait suspends the Run`, () =>
     runEffect(
@@ -16821,7 +16941,9 @@ for (const name of ["gitlab", "github"] as const) {
           expect(answering).toContain(commentUrl(name, 41));
           expect(answering).toContain("please rename this");
           expect(answering).toContain("use a map here");
-          for (const quiet of unopened) expect(answering).not.toContain(quiet.body);
+          for (const quiet of unopened) {
+            expect(answering).not.toContain(quiet.body);
+          }
           expect(yield* clearance(runId, "answer-1")).toBe(
             `Cleared for this step: committing to the merge request's source branch on ${url} and pushing it with a plain push, never a force push; never posting or resolving a thread there: Collie replies.`,
           );
@@ -16928,7 +17050,7 @@ for (const name of ["gitlab", "github"] as const) {
       ),
   );
 
-  for (const operation of ["post", "note", "share"] as const)
+  for (const operation of ["post", "note", "share"] as const) {
     scenario(
       `public text on ${name}: ${operation} redacts credentials before checking and sending`,
       () =>
@@ -16954,12 +17076,13 @@ for (const name of ["gitlab", "github"] as const) {
             const sent = yield* session(
               Effect.gen(function* () {
                 const host = yield* Host;
-                if (operation === "share")
+                if (operation === "share") {
                   return yield* host.shareForApproval({
                     runId,
                     cwd: rig.projectDir,
                     channel: "C123",
                   });
+                }
                 return yield* operation === "post"
                   ? host.post({
                       runId,
@@ -16993,6 +17116,7 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
   scenario(
     `public text on ${name}: the !522 review note is refused before it reaches the merge request`,
@@ -17012,8 +17136,9 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(posted.ok).toBe(false);
-          for (const phrase of ["this Run", "collie verify", "review-step", "Tautologies"])
+          for (const phrase of ["this Run", "collie verify", "review-step", "Tautologies"]) {
             expect(posted.message).toContain(`"${phrase}"`);
+          }
           expect(model.notes ?? {}).toEqual({});
         }),
       ),
@@ -17948,7 +18073,9 @@ for (const name of ["gitlab", "github"] as const) {
         Effect.gen(function* () {
           const share = yield* goAsked(run.asked, "share-for-approval");
           expect(share.prompt).toContain("Share it in #frontend yourself");
-          for (const one of said) expect(share.prompt).toContain(one);
+          for (const one of said) {
+            expect(share.prompt).toContain(one);
+          }
           expect(optionsOf([share], "share-for-approval")).toEqual([
             "I shared it",
             "Wait for changes",
@@ -18470,7 +18597,7 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
       ),
   );
 
-  for (const answer of ["Finish", "Release without a Helle claim"])
+  for (const answer of ["Finish", "Release without a Helle claim"]) {
     scenario(
       `release: a claim Helle will not take back parks the release on ${answer}, unmerged, naming it`,
       () =>
@@ -18505,6 +18632,7 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
           }),
         ),
     );
+  }
 
   scenario(
     "release: a claim Helle will not take back parks the release, unmerged, on an answer that reached the engine before the Run awaited it",
@@ -18775,8 +18903,9 @@ for (const name of ["gitlab", "github"] as const) {
           );
           expect(yield* asked(runId, "tag")).toContain("`deploy-stage`");
           const other = new RegExp(`\\b${name === "gitlab" ? "gh" : "glab"}\\b`);
-          for (const step of ["tag", "production"])
+          for (const step of ["tag", "production"]) {
             expect(yield* asked(runId, step)).not.toMatch(other);
+          }
           expect(yield* parkedWhy(runId)).toBe("");
         }),
       ),
@@ -19257,7 +19386,9 @@ for (const name of ["gitlab", "github"] as const) {
             `Cleared for this step: playing ${clearedJob(name)} on ${url}, and no other job.`,
           );
           const other = new RegExp(`\\b${name === "gitlab" ? "gh" : "glab"}\\b`);
-          for (const step of ["stage", "tag"]) expect(yield* asked(runId, step)).not.toMatch(other);
+          for (const step of ["stage", "tag"]) {
+            expect(yield* asked(runId, step)).not.toMatch(other);
+          }
           expect(yield* asked(runId, "tag")).toContain(`merged commit is \`${merged}\``);
         }),
       ),
@@ -20402,7 +20533,7 @@ for (const name of ["gitlab", "github"] as const) {
       ),
   );
 
-  for (const ending of ["Done", "Leave it on stage", "failed stage"])
+  for (const ending of ["Done", "Leave it on stage", "failed stage"]) {
     scenario(
       `stage on ${name}: a refused claim give-back parks on ${ending} and retries it on resume`,
       () =>
@@ -20445,6 +20576,7 @@ for (const name of ["gitlab", "github"] as const) {
           }),
         ),
     );
+  }
 
   scenario(
     `stage on ${name}: a refused claim give-back parks on a Done that reached the engine before the Run awaited it`,
@@ -20511,7 +20643,9 @@ for (const name of ["gitlab", "github"] as const) {
             Effect.gen(function* () {
               helle.events?.push("rollback-started");
               const back = yield* host.readRollback(options);
-              if (back._tag === "Shown") helle.events?.push("rollback-proved");
+              if (back._tag === "Shown") {
+                helle.events?.push("rollback-proved");
+              }
               return back;
             }),
           holders: (asked) =>
@@ -20534,28 +20668,39 @@ for (const name of ["gitlab", "github"] as const) {
             Effect.gen(function* () {
               const needed = neededFor(options.deploys);
               const take = (slug: string) => {
-                if (!held.has(slug)) claimed.push(`claim ${options.runId} ${slug}`);
+                if (!held.has(slug)) {
+                  claimed.push(`claim ${options.runId} ${slug}`);
+                }
                 held.add(slug);
               };
               if (options.free !== true) {
                 claimed.push(`wait ${options.runId}`);
-                if (helle.handedOver !== undefined) yield* Deferred.await(helle.handedOver);
+                if (helle.handedOver !== undefined) {
+                  yield* Deferred.await(helle.handedOver);
+                }
                 Arr.forEach(needed, take);
                 return { slugs: needed };
               }
-              if (helle.unresolved !== undefined) return { unresolved: helle.unresolved };
+              if (helle.unresolved !== undefined) {
+                return { unresolved: helle.unresolved };
+              }
               const left: Array<{ slug: string; holder: string }> = [];
               for (const slug of needed) {
                 const holder = holderOf(slug) ?? helle.racing?.[slug] ?? null;
-                if (holder === null) take(slug);
-                else left.push({ slug, holder });
+                if (holder === null) {
+                  take(slug);
+                } else {
+                  left.push({ slug, holder });
+                }
               }
               return { slugs: [...held].sort(), left };
             }),
           release: (runId) =>
             Effect.sync(() => {
               helle.events?.push("claims-released");
-              for (const slug of [...held].sort()) claimed.push(`release ${runId} ${slug}`);
+              for (const slug of [...held].sort()) {
+                claimed.push(`release ${runId} ${slug}`);
+              }
               held.clear();
               return [];
             }),
@@ -20629,8 +20774,9 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(outcomeText(status)).toContain("stage is rolled back");
-          for (const app of APPS)
+          for (const app of APPS) {
             expect(yield* asked(runId, "stage")).toContain(`\`${appJob(app)}\``);
+          }
           expect(claimed).toEqual([
             `wait ${runId}`,
             ...Arr.map(APPS, (app) => `claim ${runId} ${app}`),
@@ -20675,7 +20821,9 @@ for (const name of ["gitlab", "github"] as const) {
                 recommended: "Stage what is free",
                 shortfall: null,
               });
-              for (const app of DANNS) expect(claims.prompt).toContain(`${app} (Dann)`);
+              for (const app of DANNS) {
+                expect(claims.prompt).toContain(`${app} (Dann)`);
+              }
               expect(claims.prompt).not.toContain("playground (");
               expect(yield* wasAsked(runId, "stage")).toBe(false);
               yield* run.answer("claims-1", "Stage what is free");
@@ -20736,8 +20884,9 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(outcomeText(status)).toContain("stage is rolled back");
-          for (const app of APPS)
+          for (const app of APPS) {
             expect(yield* asked(runId, "stage")).toContain(`\`${appJob(app)}\``);
+          }
           expect(claimed).toContain(`claim ${runId} spilnu`);
         }),
       ),
@@ -21140,10 +21289,12 @@ const improving: HostOverride = Layer.effect(Host)(
           };
         }),
       issues: (_, numbers) => {
-        if (forgeUnavailable)
+        if (forgeUnavailable) {
           return Effect.fail(new WorkflowError({ reason: "no forge login on this Machine" }));
-        if (unlisted && filed.length > 0)
+        }
+        if (unlisted && filed.length > 0) {
           return Effect.fail(new WorkflowError({ reason: "the forge did not answer" }));
+        }
         const filedIssues = Arr.map(filed, ({ title, body }, at) => ({
           number: 101 + at,
           title,
@@ -21151,8 +21302,9 @@ const improving: HostOverride = Layer.effect(Host)(
           url: `https://forge.example/project/issues/${101 + at}`,
         }));
         const all = [...openIssues, ...filedIssues];
-        if (numbers !== undefined)
+        if (numbers !== undefined) {
           return Effect.succeed(Arr.filter(all, ({ number }) => numbers.includes(number)));
+        }
         return Effect.succeed(lagging ? openIssues : all);
       },
       fileIssue: ({ title, body }) =>
@@ -21309,8 +21461,9 @@ once("self-improve takes improvements as a whole number and runs as checkout or 
     runs: "machine",
     improvements: 0,
   });
-  for (const wrong of ["-1", "x", 1.5])
+  for (const wrong of ["-1", "x", 1.5]) {
     expect(() => decode({ runs: "checkout", improvements: wrong })).toThrow();
+  }
   expect(() => decode({ improvements: 2 })).toThrow();
   expect(() => decode({ runs: "everything", improvements: 2 })).toThrow();
   return Promise.resolve();
@@ -21483,8 +21636,9 @@ scenario(
             improvements,
           ),
         ]);
-        for (const { name } of improvements)
+        for (const { name } of improvements) {
           childWaits.set(`improvement-${name}`, Deferred.makeUnsafe<void>());
+        }
         yield* running({ entry: shipped("self-improve"), runId, input, host: improving }, () =>
           until(
             () => Effect.sync(() => started.length),
@@ -22283,7 +22437,7 @@ for (const [what, id, declared] of [
   ["the plan's tolerance", "tolerance", { tolerance: 2 }],
   ["no absolute slack", "absolute", { absolute: 0 }],
   ["it is not exact", "exact", { exact: false }],
-] as const)
+] as const) {
   scenario(
     `a tune-up repair that declares ${what} for a metric is the same plan, and is not calibrated again`,
     () =>
@@ -22307,6 +22461,7 @@ for (const [what, id, declared] of [
         }),
       ),
   );
+}
 
 scenario(
   "a tune-up whose noisy primary names itself as its counter is repaired, never switched to the same plan",
@@ -22338,7 +22493,7 @@ for (const [what, unusable] of [
       opportunities: [{ ...TUNE_DISCOVERED.opportunities[0]!, cites: [] }],
     },
   ],
-] as const)
+] as const) {
   scenario(
     `a tune-up Discover Output with ${what} is refused and repaired, and its research is recorded under the opportunity it changed`,
     () =>
@@ -22376,6 +22531,7 @@ for (const [what, unusable] of [
         }),
       ),
   );
+}
 
 scenario(
   "a tune-up harness commit touching a path outside the harness parks after bounded repairs, naming it",
@@ -22551,7 +22707,7 @@ scenario(
 
 const UNBUILDABLE = (code: number) => ({ executable: "sh", argv: ["-c", `exit ${code}`] });
 
-for (const fixed of [true, false])
+for (const fixed of [true, false]) {
   scenario(
     fixed
       ? "a tune-up whose base cannot be built through its repairs parks at Calibrate, naming the tree, and resumes the unchanged plan"
@@ -22584,11 +22740,12 @@ for (const fixed of [true, false])
                 cwd: rig.projectDir,
               });
               expect(yield* wasAsked(runId, "repair-3")).toBe(false);
-              if (fixed)
+              if (fixed) {
                 yield* FileSystem.FileSystem.pipe(
                   Effect.flatMap((fs) => fs.writeFileString(gate, "fixed")),
                   Effect.orDie,
                 );
+              }
               const turns = [
                 ...stopped,
                 repaired(plan(5), "retry after the prepare environment was checked"),
@@ -22639,6 +22796,7 @@ for (const fixed of [true, false])
         }),
       ),
   );
+}
 
 scenario("a tune-up keeps its harness sample deadline through calibration and repair", () =>
   runEffect(
@@ -23272,7 +23430,7 @@ const finals = (runId: string) =>
     Arr.filter(all, (one) => one.pass === "final"),
   );
 
-for (const pass of ["cycle 1", "final"])
+for (const pass of ["cycle 1", "final"]) {
   scenario(
     `a tune-up whose ${pass === "final" ? "final" : "Cycle"} Measurement the host refuses parks and resumes the measurement`,
     () =>
@@ -23323,7 +23481,9 @@ for (const pass of ["cycle 1", "final"])
                 expect((yield* cyclesMeasured(runId))[0]!.result._tag).toBe("Judged");
                 const [final] = yield* finals(runId);
                 expect(verdictsOf(final!)).toContain("bench.count no-change");
-                if (pass === "final") expect(final!.candidate.head_sha).toBe(head);
+                if (pass === "final") {
+                  expect(final!.candidate.head_sha).toBe(head);
+                }
                 expect(yield* wasAsked(runId, "mr")).toBe(false);
               }).pipe(Effect.scoped),
           );
@@ -23331,6 +23491,7 @@ for (const pass of ["cycle 1", "final"])
         }),
       ),
   );
+}
 
 const verdictsOf = (measured: { readonly result: Measurement["result"] }) =>
   measured.result._tag === "Judged"
@@ -23393,7 +23554,7 @@ scenario(
         expect(body).toContain("| bench.count | primary | 7 | 3 |");
         const [table, evidence] = Str.split(body, "<details>");
         expect(table).toContain(final!.candidate.head_sha);
-        for (const metric of ["bench.count", "bench.size"])
+        for (const metric of ["bench.count", "bench.size"]) {
           for (const side of ["base", "candidate"] as const) {
             const line = Option.getOrUndefined(
               Arr.findFirst(Str.split(evidence!, "\n"), (one) =>
@@ -23411,6 +23572,7 @@ scenario(
               ),
             );
           }
+        }
         for (const text of [
           "bench/bench.sh",
           commit,
@@ -23418,8 +23580,9 @@ scenario(
           final!.base.head_sha,
           final!.candidate.head_sha,
           "sh bench/bench.sh",
-        ])
+        ]) {
           expect(evidence).toContain(text);
+        }
         expect(body).not.toContain(SECRET);
       }),
     ),
@@ -23813,8 +23976,9 @@ scenario(
           "decision progress-1: No",
           "decision progress-2: no, keep improving",
           "decision progress-3: Yes",
-        ])
+        ]) {
           expect(occurrences(log, decided)).toBe(1);
+        }
 
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${rig.projectDir}/bench`)).toBe(false);
@@ -23832,7 +23996,9 @@ scenario(
         expect(yield* readText(`${archive}/plan.json`)).toContain('"paths":["bench"]');
         const raw = yield* readText(`${archive}/measurements.jsonl`);
         const taken = yield* readMeasurements(evidenceDir(dir, runId));
-        for (const one of taken) expect(raw).toContain(one.id);
+        for (const one of taken) {
+          expect(raw).toContain(one.id);
+        }
         const readme = yield* readText(`${archive}/README.md`);
         expect(readme).toContain(`${final!.id} (final)`);
         expect(readme).toContain(`candidate ${final!.candidate.head_sha} with ${commit} applied`);
@@ -24227,10 +24393,11 @@ scenario(
             `external ${pooling}: posted ${ISSUE}`,
             `external ${fts}: ignored`,
             `: existing ${KNOWN.existing}`,
-          ])
+          ]) {
             expect(Option.getOrElse(pipe(log, Str.indexOf(decided)), () => -1)).toBeGreaterThan(
               proved,
             );
+          }
           const report = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-external.md`);
           for (const one of [POOLING, FTS, KNOWN]) {
             expect(report).toContain(one.title);
@@ -24602,13 +24769,14 @@ const withForges = (body: () => Promise<void>) =>
       forgeFaces.clear();
       const bin = yield* FakeBin.make(`${rig.root}/default-forges`);
       yield* Effect.addFinalizer(() => bin.restore());
-      for (const name of ["gitlab", "github"] as const)
+      for (const name of ["gitlab", "github"] as const) {
         yield* forgeOnPath(bin, name, {
           installed: true,
           loggedIn: [FORGE_HOST[name]],
           login: "tester",
           mrs: [],
         });
+      }
       forgeApi = yield* serveForges(
         ...Arr.map(["gitlab", "github"] as const, (name) => ({
           forge: name,
@@ -24627,7 +24795,9 @@ export const split = (names: ReadonlyArray<string>, of: number) => {
     const returned: Array<string> = [];
     return returned;
   });
-  for (const name of names) shares[Bun.hash.crc32(name) % of]!.push(name);
+  for (const name of names) {
+    shares[Bun.hash.crc32(name) % of]!.push(name);
+  }
   return shares;
 };
 
@@ -24693,5 +24863,9 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
       );
     });
   }
-  if (pass === "shipped" && share === 0) for (const one of shippedOnly) one();
+  if (pass === "shipped" && share === 0) {
+    for (const one of shippedOnly) {
+      one();
+    }
+  }
 };

@@ -36,7 +36,9 @@ export const railStepped = (drawn: number, room: number, by: 1 | -1) =>
   sized(RAIL, drawn + by * RAIL.step, room);
 
 export const workspaceKey = (key: Key, focusing: boolean) => {
-  if (isFocusKey(key)) return focusing ? "restore" : "focus";
+  if (isFocusKey(key)) {
+    return focusing ? "restore" : "focus";
+  }
   return key.key === "Escape" && focusing ? "restore" : null;
 };
 
@@ -50,15 +52,18 @@ export const focusHandOff = <T extends Focusable>() => {
   return {
     focus: (active: T | null, inWork: (one: T) => boolean, into: T | null) => {
       left = null;
-      if (active === null || into === null || inWork(active)) return;
+      if (active === null || into === null || inWork(active)) {
+        return;
+      }
       left = { origin: active, into };
       into.focus();
     },
     restore: (active: T | null) => {
       const back = left;
       left = null;
-      if (back?.origin.isConnected && (active === null || active === back.into))
+      if (back?.origin.isConnected && (active === null || active === back.into)) {
         back.origin.focus();
+      }
     },
   };
 };

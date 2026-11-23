@@ -174,10 +174,11 @@ export default defineWorkflow({
             const own = Option.getOrUndefined(
               Arr.findFirst(report.runs, ({ runId }) => runId === run.id),
             );
-            if (own === undefined)
+            if (own === undefined) {
               return yield* new WorkflowError({
                 reason: `${run.id} is not in its Machine's report`,
               });
+            }
             const kept = Arr.filter(
               report.runs,
               ({ runId, parent, project }) =>
@@ -209,7 +210,9 @@ export default defineWorkflow({
         }),
       );
       const quiet = window.runs.length === 0;
-      if (quiet && bound === 0) return `No Runs since ${window.since}`;
+      if (quiet && bound === 0) {
+        return `No Runs since ${window.since}`;
+      }
 
       const kept =
         bound === 0
@@ -251,7 +254,9 @@ export default defineWorkflow({
       const failedToStart = Arr.some(kept.earlier, ({ ended }) =>
         Arr.some(ended, (one) => pipe_(one.ended, Str.startsWith(FAILED_TO_START))),
       );
-      if (quiet && !failedToStart) return `No Runs since ${window.since}`;
+      if (quiet && !failedToStart) {
+        return `No Runs since ${window.since}`;
+      }
 
       const retro = retroStep(
         Activity.make({
@@ -270,7 +275,9 @@ export default defineWorkflow({
           ),
         }),
       );
-      if (!quiet) yield* retro;
+      if (!quiet) {
+        yield* retro;
+      }
 
       const issues = yield* Activity.make({
         name: "issues",
@@ -401,7 +408,9 @@ export default defineWorkflow({
       );
 
       const restarts = restartsOf(kept.earlier, kept.since, open);
-      if (quiet && restarts.length === 0) return `No Runs since ${window.since}`;
+      if (quiet && restarts.length === 0) {
+        return `No Runs since ${window.since}`;
+      }
       const outcomes = new Map(Arr.map(acted, ({ finding, outcome }) => [finding.key, outcome]));
       const filedNumber = (key: string) => {
         const outcome = outcomes.get(key);
@@ -435,14 +444,17 @@ export default defineWorkflow({
         Arr.map(starting, (improvement) =>
           improvementsStep(
             Effect.gen(function* () {
-              if (Result.isFailure(published)) return yield* published.failure;
+              if (Result.isFailure(published)) {
+                return yield* published.failure;
+              }
               const issues = Arr.flatMap(improvement.issues, (number) =>
                 Arr.filter(published.success, (one) => one.number === number),
               );
-              if (issues.length < improvement.issues.length)
+              if (issues.length < improvement.issues.length) {
                 return yield* new WorkflowError({
                   reason: "an issue it fixes could not be read back from the forge",
                 });
+              }
               const child = yield* children.start({
                 invocation: `improvement-${improvement.name}`,
                 workflow: "plan",

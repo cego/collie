@@ -17,7 +17,9 @@ const boardStalled = Effect.gen(function* () {
   for (let waited = 0; ; waited++) {
     const before = sent;
     yield* Effect.sleep("200 millis");
-    if (sent > 0 ? sent === before : waited >= 5) return;
+    if (sent > 0 ? sent === before : waited >= 5) {
+      return;
+    }
   }
 });
 

@@ -28,10 +28,17 @@ export const nativeSummary = (log: string) =>
     let unmatched = 0;
     let clicked: { readonly card: string; readonly at: number } | null = null;
     for (const { name, at, card } of yield* marksIn(log)) {
-      if (name === "record:click") clicked = { card, at };
-      if (name !== "record:usable") continue;
-      if (clicked?.card === card) samples.push(at - clicked.at);
-      else unmatched++;
+      if (name === "record:click") {
+        clicked = { card, at };
+      }
+      if (name !== "record:usable") {
+        continue;
+      }
+      if (clicked?.card === card) {
+        samples.push(at - clicked.at);
+      } else {
+        unmatched++;
+      }
       clicked = null;
     }
     return { ...cell(samples), unmatched };
@@ -43,12 +50,17 @@ const spans = (marks: ReadonlyArray<Mark>, start: string, end: string) => {
   let unmatched = 0;
   for (const { name, at, card } of marks) {
     if (name === start) {
-      if (started.has(card)) unmatched++;
+      if (started.has(card)) {
+        unmatched++;
+      }
       started.set(card, at);
     } else if (name === end) {
       const from = started.get(card);
-      if (from === undefined) unmatched++;
-      else samples.push(at - from);
+      if (from === undefined) {
+        unmatched++;
+      } else {
+        samples.push(at - from);
+      }
       started.delete(card);
     }
   }
@@ -59,9 +71,13 @@ const frameIntervals = (marks: ReadonlyArray<Mark>) => {
   const last = new Map<string, number>();
   const samples: Array<number> = [];
   for (const { name, at, card } of marks) {
-    if (name !== "frame") continue;
+    if (name !== "frame") {
+      continue;
+    }
     const before = last.get(card);
-    if (before !== undefined) samples.push(at - before);
+    if (before !== undefined) {
+      samples.push(at - before);
+    }
     last.set(card, at);
   }
   return cell(samples);
@@ -81,7 +97,7 @@ const said = (numbers: Readonly<Record<string, number>>) =>
     ", ",
   );
 
-if (import.meta.main)
+if (import.meta.main) {
   BunRuntime.runMain(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -90,10 +106,15 @@ if (import.meta.main)
         const text = yield* fs.readFileString(log);
         const name = path.basename(log, ".log");
         const opens = yield* nativeSummary(text);
-        if (opens.n > 0 || opens.unmatched > 0) yield* Console.log(`${name}: ${said(opens)}`);
-        for (const [metric, numbers] of Rec.toEntries(yield* desktopSummary(text)))
-          if (numbers.n > 0 || ("unmatched" in numbers && numbers.unmatched > 0))
+        if (opens.n > 0 || opens.unmatched > 0) {
+          yield* Console.log(`${name}: ${said(opens)}`);
+        }
+        for (const [metric, numbers] of Rec.toEntries(yield* desktopSummary(text))) {
+          if (numbers.n > 0 || ("unmatched" in numbers && numbers.unmatched > 0)) {
             yield* Console.log(`${name} ${metric}: ${said(numbers)}`);
+          }
+        }
       }
     }).pipe(Effect.provide(BunServices.layer)),
   );
+}

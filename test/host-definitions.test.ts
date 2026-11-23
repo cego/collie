@@ -166,9 +166,11 @@ test("a host reads its shipped and user Workflows and Personas in full, without 
         const shown = yield* collie(world, ["persona", "show", "mine"]);
         expect(shown.envelope.data).toEqual({ persona: personas.get("mine") });
 
-        for (const dir of [world.user, `${world.install}/workflows`])
-          for (const made of ["package.json", "node_modules", "bun.lock"])
+        for (const dir of [world.user, `${world.install}/workflows`]) {
+          for (const made of ["package.json", "node_modules", "bun.lock"]) {
             expect(yield* fs.exists(`${dir}/${made}`)).toBe(false);
+          }
+        }
 
         expect(PROTOCOL).toBe(5);
       }).pipe(Effect.orDie),

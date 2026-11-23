@@ -41,12 +41,16 @@ const escalatedDrift = Effect.fn("SideJobs.escalatedDrift")(function* (
 ) {
   const drifting = new Map<string, string>();
   for (const run of runs) {
-    if (settled(run)) continue;
+    if (settled(run)) {
+      continue;
+    }
     const lines = yield* readDrift(run.dir).pipe(Effect.orElseSucceed(() => []));
     const stuck = Option.getOrUndefined(
       Arr.findFirst(currentReports(lines), (report) => report.resolution === "escalated"),
     );
-    if (stuck) drifting.set(run.id, stuck.constraint);
+    if (stuck) {
+      drifting.set(run.id, stuck.constraint);
+    }
   }
   return drifting;
 });
@@ -66,9 +70,13 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
   const gone = retired(yield* readNews(file));
   const disputes = yield* disputesIn(runs);
   const held = holding(runs, drifting, yield* disposed(runs), ready, done);
-  for (const event of disputes) held.add(event.key);
+  for (const event of disputes) {
+    held.add(event.key);
+  }
   for (const event of [...eventsIn(runs, drifting, ready, done), ...disputes]) {
-    if (!held.has(event.key) || (said.has(event.key) && !gone.has(event.key))) continue;
+    if (!held.has(event.key) || (said.has(event.key) && !gone.has(event.key))) {
+      continue;
+    }
     // WARNING: remembered only once it is in the journal, so a failed write is retried next round.
     const queued = yield* appendNews(file, {
       key: event.key,
@@ -76,7 +84,9 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
       text: event.text,
       significance: event.significance,
     }).pipe(Effect.catchCause(() => Effect.succeed(null)));
-    if (queued !== null) yield* remember(dir, event.key, yield* nowIso);
+    if (queued !== null) {
+      yield* remember(dir, event.key, yield* nowIso);
+    }
   }
   yield* supersede(
     file,
@@ -87,10 +97,14 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
 const disposed = Effect.fn("SideJobs.disposed")(function* (runs: ReadonlyArray<RunFacts>) {
   const out = new Set<string>();
   for (const run of runs) {
-    if (!settled(run)) continue;
+    if (!settled(run)) {
+      continue;
+    }
     const lines = yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []));
     const seen = yield* readSeen(run.dir).pipe(Effect.orElseSucceed(() => []));
-    if (latest(lines) !== null || seen.length > 0) out.add(run.id);
+    if (latest(lines) !== null || seen.length > 0) {
+      out.add(run.id);
+    }
   }
   return out;
 });
@@ -102,12 +116,16 @@ const news = Effect.fn("SideJobs.news")(function* (
   views: ReadonlyArray<TaskView>,
   done: ReadonlyMap<string, Reopened>,
 ) {
-  if (!(yield* loadDefaults(env.userDir)).proactive) return;
+  if (!(yield* loadDefaults(env.userDir)).proactive) {
+    return;
+  }
   // WARNING: unread Tasks would put every Run in the host's own Herd and retire the rest's News.
   const herdOfTask = new Map(Arr.map(yield* listTasks, (task) => [task.id, task.herd ?? null]));
   const own = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   for (const { herd } of sessions) {
-    if (herd === null) continue;
+    if (herd === null) {
+      continue;
+    }
     const mine = Arr.filter(
       runs,
       (run) => ((run.task === null ? null : herdOfTask.get(run.task)) ?? own) === herd,
@@ -155,8 +173,12 @@ export const keepTerminals = (env: PluginEnv, herdr: Herdr) =>
     yield* Stream.runForEach(ticks, (tick) =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
-        if (tick === "waited" && failures === 0) return;
-        if (now < notBefore) return;
+        if (tick === "waited" && failures === 0) {
+          return;
+        }
+        if (now < notBefore) {
+          return;
+        }
         if (yield* keepRound(env, herdr)) {
           failures = 0;
           notBefore = 0;
@@ -173,7 +195,7 @@ const keepRound = (env: PluginEnv, herdr: Herdr) =>
     const key = yield* machineHerd(env);
     const cwd = yield* herdDir(env.stateDir, key);
     yield* (yield* FileSystem.FileSystem).makeDirectory(cwd, { recursive: true });
-    if (!(yield* herdr.terminalLive(BOARD_TERMINAL)))
+    if (!(yield* herdr.terminalLive(BOARD_TERMINAL))) {
       yield* herdr.agentLaunch({
         name: BOARD_TERMINAL,
         argv: [...selfCommand(), "board", "--draw"],
@@ -188,10 +210,12 @@ const keepRound = (env: PluginEnv, herdr: Herdr) =>
         },
         labels: {},
       });
-    if (!(yield* herdr.terminalLive(CHAT_TERMINAL)))
+    }
+    if (!(yield* herdr.terminalLive(CHAT_TERMINAL))) {
       return (
         (yield* startChat(herdr, env, key, (line) => Effect.logInfo(line))).kind === "launched"
       );
+    }
     return true;
   }).pipe(
     Effect.catchCause((cause) =>
@@ -289,7 +313,9 @@ export const sideJobs = <E, R>(opts: {
           LOOK_EVERY,
           Effect.gen(function* () {
             const { runs, views } = yield* opts.board;
-            for (const [run, done] of idleAgain(views, workedOn)) finishedTold.set(run, done);
+            for (const [run, done] of idleAgain(views, workedOn)) {
+              finishedTold.set(run, done);
+            }
             yield* news(env, yield* herds, runs, views, finishedTold);
             yield* keepDiffs(runs, kept);
           }),

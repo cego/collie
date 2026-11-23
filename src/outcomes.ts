@@ -60,23 +60,36 @@ export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
   const fs = yield* FileSystem.FileSystem;
   const rounds: Array<{ round: number; of: number }> = [];
   for (const launch of yield* readLaunches(runId)) {
-    if (launch.role !== "reviewer") continue;
+    if (launch.role !== "reviewer") {
+      continue;
+    }
     const prompt = yield* fs
       .readFileString(`${launchDir(stateDir, runId)}/${stemOf(launch)}.prompt.md`)
       .pipe(Effect.orElseSucceed(() => ""));
     const found = ITERATION.exec(prompt);
-    if (found !== null) rounds.push({ round: Number(found[1]), of: Number(found[2]) });
+    if (found !== null) {
+      rounds.push({ round: Number(found[1]), of: Number(found[2]) });
+    }
   }
   const dir = runDir(stateDir, runId);
   const steering: Array<{ kind: SteeringKind; origin: string }> = [];
   const trail = yield* readAudit(dir).pipe(Effect.orElseSucceed(() => []));
-  for (const line of trail)
-    for (const kind of STEERING)
-      if (line.operation === kind) steering.push({ kind, origin: line.actor.origin });
+  for (const line of trail) {
+    for (const kind of STEERING) {
+      if (line.operation === kind) {
+        steering.push({ kind, origin: line.actor.origin });
+      }
+    }
+  }
   const corrections = new Set<string>();
-  for (const delivery of yield* deliveriesOf(runId))
-    if (delivery.cause.kind === "correction") corrections.add(delivery.causal_key);
-  for (const _ of corrections) steering.push({ kind: "correction", origin: "evaluator" });
+  for (const delivery of yield* deliveriesOf(runId)) {
+    if (delivery.cause.kind === "correction") {
+      corrections.add(delivery.causal_key);
+    }
+  }
+  for (const _ of corrections) {
+    steering.push({ kind: "correction", origin: "evaluator" });
+  }
   const verifications = yield* readVerifications(evidenceDir(stateDir, runId)).pipe(
     Effect.orElseSucceed(() => []),
   );
@@ -186,7 +199,9 @@ const counted = (runs: ReadonlyArray<string>) => ({
 });
 
 const median = (values: ReadonlyArray<number>) => {
-  if (values.length === 0) return null;
+  if (values.length === 0) {
+    return null;
+  }
   const sorted = Arr.sortWith(
     values,
     (value) => value,
@@ -260,18 +275,26 @@ export function measuresOf(
       const kept = causeOf(line.cause ?? "unknown");
       kept.runs.push(runId);
       const next = Arr.findFirst(moved, (when) => when > at);
-      if (Option.isSome(next)) kept.waits.push(next.value - at);
-      if (pipe(line.note, Str.includes(COLLECT_EXPIRY))) collectExpiries.push(runId);
-      else {
+      if (Option.isSome(next)) {
+        kept.waits.push(next.value - at);
+      }
+      if (pipe(line.note, Str.includes(COLLECT_EXPIRY))) {
+        collectExpiries.push(runId);
+      } else {
         const reason = reasonOf(line.note);
         reasons.set(reason, [...(reasons.get(reason) ?? []), runId]);
       }
     }
     for (const line of recoveriesIn(metrics)) {
-      if (line.action === undefined) continue;
-      if (line.action === "resumed" && line.outcome !== "resumed") continue;
-      if (line.action === "healed" && (line.outcome === "skipped" || line.outcome === "claimed"))
+      if (line.action === undefined) {
         continue;
+      }
+      if (line.action === "resumed" && line.outcome !== "resumed") {
+        continue;
+      }
+      if (line.action === "healed" && (line.outcome === "skipped" || line.outcome === "claimed")) {
+        continue;
+      }
       const cause = line.cause ?? "unknown";
       const key = `${cause} ${line.action}`;
       const kept = recoveries.get(key) ?? {
@@ -285,12 +308,19 @@ export function measuresOf(
       };
       recoveries.set(key, kept);
       kept.runs.push(runId);
-      if (line.outcome === "output-written") kept.waits.push(line.value);
+      if (line.outcome === "output-written") {
+        kept.waits.push(line.value);
+      }
       if (line.action === "healed" && line.outcome !== "started") {
         kept.healMs += line.value;
-        if (line.outcome === "recovered") kept.waits.push(line.value);
-        else kept.escalations += 1;
-        if (line.outcome === "false-recovery") kept.falseRecoveries += 1;
+        if (line.outcome === "recovered") {
+          kept.waits.push(line.value);
+        } else {
+          kept.escalations += 1;
+        }
+        if (line.outcome === "false-recovery") {
+          kept.falseRecoveries += 1;
+        }
       }
       if (line.action === "resumed") {
         const claim =
@@ -310,8 +340,9 @@ export function measuresOf(
                 (one.since !== undefined && one.since !== line.since)),
           ),
         );
-        if (nextPark?.cause === cause) kept.falseRecoveries += 1;
-        else {
+        if (nextPark?.cause === cause) {
+          kept.falseRecoveries += 1;
+        } else {
           const next = Option.getOrUndefined(Arr.findFirst(moved, (at) => at >= epochMs(claim.at)));
           kept.waits.push(
             next === undefined || line.since === undefined
@@ -322,12 +353,18 @@ export function measuresOf(
       }
     }
     for (const resume of records?.resumes ?? []) {
-      if (originOf(resume.origin) !== "human") continue;
+      if (originOf(resume.origin) !== "human") {
+        continue;
+      }
       const at = epochMs(resume.at);
       const parkedFor = Arr.findLast(halts, (line) => epochMs(line.at) <= at);
-      if (Option.isNone(parkedFor)) continue;
+      if (Option.isNone(parkedFor)) {
+        continue;
+      }
       const parkedAt = epochMs(parkedFor.value.at);
-      if (Arr.some(moved, (when) => when > parkedAt && when < at)) continue;
+      if (Arr.some(moved, (when) => when > parkedAt && when < at)) {
+        continue;
+      }
       causeOf(parkedFor.value.cause ?? "unknown").humanResumes += 1;
     }
     const peak = Arr.reduce<Metric, Metric | null>(
@@ -337,15 +374,20 @@ export function measuresOf(
     );
     peakContext.push({ runId, tokens: peak?.value ?? null, agent: peak?.subject ?? null });
 
-    if (records === null) continue;
+    if (records === null) {
+      continue;
+    }
     const rally = Arr.filter(records.rounds, (one) => one.of > 1);
-    if (rally.length > 0)
+    if (rally.length > 0) {
       rounds.push({
         runId,
         reached: Math.max(...Arr.map(rally, (one) => one.round)),
         cap: Math.max(...Arr.map(rally, (one) => one.of)),
       });
-    if (records.disposition !== null) dispositions[records.disposition].push(runId);
+    }
+    if (records.disposition !== null) {
+      dispositions[records.disposition].push(runId);
+    }
 
     if (records.steering.length > 0) {
       const one = {
@@ -368,7 +410,9 @@ export function measuresOf(
       const seen = new Set<string>();
       let agent = 0;
       for (const one of records.verifications) {
-        if (one.by === "agent") agent += 1;
+        if (one.by === "agent") {
+          agent += 1;
+        }
         const key = stringifyJson([
           one.name,
           one.executable,
@@ -378,9 +422,13 @@ export function measuresOf(
           one.result,
           one.by,
         ]);
-        if (seen.has(key)) repeated.push(runId);
+        if (seen.has(key)) {
+          repeated.push(runId);
+        }
         seen.add(key);
-        if (one.name === executableName(one.executable)) executableOnly.push(runId);
+        if (one.name === executableName(one.executable)) {
+          executableOnly.push(runId);
+        }
       }
       const total = records.verifications.length;
       verifications.push({ runId, total, agent, collie: total - agent });
@@ -455,8 +503,9 @@ export function measuresOf(
               recovered: waits.length,
               toRecover: median(waits),
             };
-            if (action === "resumed" || action === "healed")
+            if (action === "resumed" || action === "healed") {
               result.falseRecoveries = falseRecoveries;
+            }
             if (action === "healed") {
               result.escalations = escalations;
               result.healMs = healMs;

@@ -200,13 +200,14 @@ test("repository is what gitlab-repository was, and the old name is still read a
   expect(strategyNamed("gitlab-repository")).toBe("repository");
   expect(strategyNamed("diff-target")).toBe("diff-target");
   const url = "https://github.com/acme/app";
-  for (const strategy of ["repository", "gitlab-repository"])
+  for (const strategy of ["repository", "gitlab-repository"]) {
     expect(
       repositoryOf({ inputs: { repository: url }, strategies: { repository: strategy } }),
     ).toMatchObject({
       name: "repository",
       value: url,
     });
+  }
   expect(launchInputProblem(["repository"], { repository: "gitlab-repository" })).toBeNull();
   expect(launchInputProblem(["text"], {})).toContain("or repository");
   expect(exclusiveClashes({ a: "repository", b: "gitlab-repository" })).toHaveLength(1);

@@ -15,7 +15,7 @@ import { answering } from "./shared";
 const standing = (peer: PeerView & { readonly added: boolean | null }) => {
   const state =
     peer.state === "away" && peer.since !== null ? `away since ${peer.since}` : peer.state;
-  if (peer.state === "live")
+  if (peer.state === "live") {
     return [
       state,
       ...(peer.transport === "ssh"
@@ -25,6 +25,7 @@ const standing = (peer: PeerView & { readonly added: boolean | null }) => {
           : []),
       ...(peer.failure === null ? [] : [peer.failure]),
     ];
+  }
   const ways = [
     ...(peer.direct === null ? [] : [`direct: ${peer.direct}`]),
     ...(peer.ssh === null ? [] : [`ssh: ${peer.ssh}`]),
@@ -42,7 +43,9 @@ const list = Command.make("list", {}, () =>
   answering((env) =>
     machinesListed(env).pipe(
       Effect.map((read) => {
-        if (!read.ok) return read;
+        if (!read.ok) {
+          return read;
+        }
         const { peers, backend, roster } = read.value;
         return {
           ok: true as const,

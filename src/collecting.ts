@@ -24,8 +24,11 @@ export const collectingLayer = Layer.effect(Collecting)(
       Effect.sync(() => {
         for (const key of keys) {
           const count = (now.get(key) ?? 0) + by;
-          if (count > 0) now.set(key, count);
-          else now.delete(key);
+          if (count > 0) {
+            now.set(key, count);
+          } else {
+            now.delete(key);
+          }
         }
       });
     return Collecting.of({

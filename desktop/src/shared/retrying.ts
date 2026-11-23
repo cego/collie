@@ -51,12 +51,13 @@ export const retrying: <A, E extends Error, R>(
         Stream.catchCause((cause) => {
           const [failed, renewed] = reached ? [0, 0] : [failures, renewals];
           // WARNING: a renewed connection is no trouble: taken again at once, and quietly after that.
-          if (Cause.hasInterruptsOnly(cause))
+          if (Cause.hasInterruptsOnly(cause)) {
             return renewed === 0
               ? after(failed, 1)
               : Stream.fromEffectDrain(wait(renewed)).pipe(
                   Stream.concat(after(failed, renewed + 1)),
                 );
+          }
           return Stream.unwrap(
             Effect.map(Clock.currentTimeMillis, (now) => {
               const retried: Retried<A> = {

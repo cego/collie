@@ -45,7 +45,9 @@ function stateFor(selected: string | null) {
 
 const until = Effect.fn("supersede.until")(function* (what: string, ready: () => boolean) {
   for (let tries = 0; tries < 200; tries++) {
-    if (ready()) return;
+    if (ready()) {
+      return;
+    }
     yield* Effect.sleep("5 millis");
   }
   return yield* new Cause.TimeoutError(`${what} never happened`);
@@ -67,7 +69,9 @@ test("a newer focus interrupts the read in flight, and the newer one lands", () 
             Effect.gen(function* () {
               const which = focus.selected ?? "none";
               started.push(which);
-              if (which === "run:a") yield* Deferred.await(held);
+              if (which === "run:a") {
+                yield* Deferred.await(held);
+              }
               return stateFor(focus.selected);
             }).pipe(
               Effect.onInterrupt(() =>
@@ -107,7 +111,7 @@ test("writes during a refresh let it finish and request one fresh read afterward
         load: () =>
           Effect.gen(function* () {
             const reading = ++reads;
-            if (reading === 2)
+            if (reading === 2) {
               yield* Deferred.await(held).pipe(
                 Effect.onInterrupt(() =>
                   Effect.sync(() => {
@@ -115,6 +119,7 @@ test("writes during a refresh let it finish and request one fresh read afterward
                   }),
                 ),
               );
+            }
             return stateFor(String(reading));
           }),
         act: () => Effect.succeed(null),
@@ -169,7 +174,7 @@ test("host board changes publish without a file write and coalesce behind the cu
           Effect.gen(function* () {
             const reading = ++reads;
             const value = latest;
-            if (reading === 3)
+            if (reading === 3) {
               yield* Deferred.await(held).pipe(
                 Effect.onInterrupt(() =>
                   Effect.sync(() => {
@@ -177,6 +182,7 @@ test("host board changes publish without a file write and coalesce behind the cu
                   }),
                 ),
               );
+            }
             return stateFor(value);
           }),
         act: () => Effect.succeed(null),
@@ -260,8 +266,9 @@ test("a usage audit written by a read does not trigger another read", () =>
           Effect.gen(function* () {
             const reading = ++reads;
             // WARNING: a board refresh asks the host for usage, which appends its audit; bound the loop so a broken build cannot run forever.
-            if (reading > 1 && reading <= 4)
+            if (reading > 1 && reading <= 4) {
               yield* Queue.offer(events, { _tag: "Update", path: "usage/operations.jsonl" });
+            }
             return stateFor(String(reading));
           }),
         act: () => Effect.succeed(null),
@@ -272,7 +279,9 @@ test("a usage audit written by a read does not trigger another read", () =>
             Stream.fromQueue(events).pipe(
               Stream.tap((event) =>
                 Effect.sync(() => {
-                  if (event.path === "usage/operations.jsonl") auditsSeen++;
+                  if (event.path === "usage/operations.jsonl") {
+                    auditsSeen++;
+                  }
                 }),
               ),
             ),

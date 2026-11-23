@@ -160,7 +160,9 @@ const KINDS: ReadonlySet<unknown> = new Set(
 export const refusedAction = (actions: ReadonlyArray<unknown>) => {
   for (const [at, action] of actions.entries()) {
     const decoded = Schema.decodeUnknownResult(ActionSchema)(action);
-    if (Result.isSuccess(decoded)) continue;
+    if (Result.isSuccess(decoded)) {
+      continue;
+    }
     const kind = Predicate.hasProperty(action, "kind") ? action.kind : null;
     return KINDS.has(kind)
       ? `actions[${at}] (kind "${String(kind)}"): ${pipe_(decoded.failure.message, Str.replaceAll(/\s+/g, " "))}`

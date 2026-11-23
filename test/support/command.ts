@@ -4,8 +4,11 @@ import { Effect } from "effect";
 
 const signal = (child: Bun.Subprocess, name: NodeJS.Signals) => {
   try {
-    if (process.platform === "win32") child.kill(name);
-    else process.kill(-child.pid, name);
+    if (process.platform === "win32") {
+      child.kill(name);
+    } else {
+      process.kill(-child.pid, name);
+    }
   } catch {}
 };
 
@@ -59,7 +62,9 @@ export const exec = Effect.fn("test.exec")(
       ],
       { concurrency: "unbounded" },
     );
-    if (handle.signalCode !== null) throw new Error(`command ended by ${handle.signalCode}`);
+    if (handle.signalCode !== null) {
+      throw new Error(`command ended by ${handle.signalCode}`);
+    }
     return { exitCode: Number(exitCode), stdout, stderr } satisfies Ran;
   },
   Effect.scoped,

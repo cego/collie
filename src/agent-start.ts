@@ -79,8 +79,12 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
     });
   }
   for (const field of entry.inputs) {
-    if (field.strategy === "internal") continue;
-    if (given.text[field.name] !== undefined || given.json[field.name] !== undefined) continue;
+    if (field.strategy === "internal") {
+      continue;
+    }
+    if (given.text[field.name] !== undefined || given.json[field.name] !== undefined) {
+      continue;
+    }
     const facts: Array<string> = [];
     if (checkoutNamed && field.strategy === "diff-target") {
       const inferred = yield* inferInput(field.name, "diff-target", {
@@ -90,22 +94,30 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
         Effect.provide(forgeHttpLayer),
         Effect.orElseSucceed(() => null),
       );
-      if (inferred !== null && !inferred.needsAsking && inferred.value !== "")
+      if (inferred !== null && !inferred.needsAsking && inferred.value !== "") {
         facts.push(`${inferred.value} (${inferred.source})`);
+      }
     }
     if (field.strategy === "work-source" || field.strategy === "plan-dir") {
       const runs = yield* listRuns(env).pipe(Effect.orElseSucceed(() => []));
       for (const run of runs) {
-        if (facts.length >= PLANS_OFFERED) break;
-        if (run.state !== "succeeded") continue;
+        if (facts.length >= PLANS_OFFERED) {
+          break;
+        }
+        if (run.state !== "succeeded") {
+          continue;
+        }
         const plan = path.join(run.dir, "plan");
-        if (yield* fs.exists(path.join(plan, "SPEC.md")).pipe(Effect.orElseSucceed(() => false)))
+        if (yield* fs.exists(path.join(plan, "SPEC.md")).pipe(Effect.orElseSucceed(() => false))) {
           facts.push(plan);
+        }
       }
     }
     missing.push({ name: field.name, meaning: meaningOf(field), facts });
   }
-  if (missing.length === 0) return null;
+  if (missing.length === 0) {
+    return null;
+  }
   const names = Arr.join(
     Arr.map(missing, (one) => `"${one.name}"`),
     ", ",
@@ -146,7 +158,9 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
 
 function meaningOf(field: Found["inputs"][number]) {
   const described = Option.getOrUndefined(describedIn(field.schema))?.description ?? "";
-  if (described !== "") return described;
+  if (described !== "") {
+    return described;
+  }
   return field.strategy === null ? "" : strategyMeaning(field.strategy);
 }
 
@@ -160,7 +174,9 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
 ) {
   const named = options?.workspace ?? project;
   const repository = yield* repositoryCheckout(env, named);
-  if (repository !== null && "error" in repository) return repository;
+  if (repository !== null && "error" in repository) {
+    return repository;
+  }
   let cwd = repository?.path ?? project;
   if (
     repository === null &&
@@ -175,8 +191,9 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
       : options.workspace;
     const at = path.resolve(env.cwd, namedPath);
     const found = yield* fs.stat(at).pipe(Effect.option);
-    if (Option.isNone(found) || found.value.type !== "Directory")
+    if (Option.isNone(found) || found.value.type !== "Directory") {
       return { error: `workspace: ${at} is not a directory` };
+    }
     cwd = at;
   }
   const launch = { ...options };
@@ -187,12 +204,15 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
       options?.workspace !== undefined &&
       options.workspace !== "new" &&
       options.workspace !== PROJECTS_ROOT_OPTION)
-  )
+  ) {
     delete launch.workspace;
+  }
   let branchBase: string | undefined;
   if (remote && launch.branch) {
     const valid = yield* shell("git", ["check-ref-format", "--branch", launch.branch], cwd);
-    if (valid.code !== 0) return { error: `"${launch.branch}" is not a branch name.` };
+    if (valid.code !== 0) {
+      return { error: `"${launch.branch}" is not a branch name.` };
+    }
     const from = repository?.remote ?? "origin";
     const ref = `refs/remotes/${from}/${launch.branch}`;
     const fetched = yield* shell(
@@ -200,12 +220,15 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
       ["fetch", from, `+refs/heads/${launch.branch}:${ref}`],
       cwd,
     );
-    if (fetched.code !== 0)
+    if (fetched.code !== 0) {
       return {
         error: `Could not fetch branch "${launch.branch}" from ${from} in ${cwd}: ${Str.trim(fetched.stderr ?? "")}`,
       };
+    }
     const head = yield* shell("git", ["rev-parse", "--verify", `${ref}^{commit}`], cwd);
-    if (head.code !== 0) return { error: `Could not read the fetched branch in ${cwd}.` };
+    if (head.code !== 0) {
+      return { error: `Could not read the fetched branch in ${cwd}.` };
+    }
     branchBase = Str.trim(head.stdout);
   }
   const root =

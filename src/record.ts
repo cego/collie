@@ -70,7 +70,9 @@ const recordCard = (sources: RecordSources, runId: string) =>
     const { env, model } = sources;
     const runs = yield* sources.related(runId, model.planned(runId));
     const run = Arr.findFirst(runs, (one) => one.id === runId);
-    if (run._tag === "None") return null;
+    if (run._tag === "None") {
+      return null;
+    }
     yield* model.note(runs);
     const tasks = yield* Effect.forEach(
       [...new Set(Arr.flatMap(runs, (one) => (one.task === null ? [] : [one.task])))],
@@ -89,17 +91,24 @@ const recordCard = (sources: RecordSources, runId: string) =>
     ).pipe(Effect.orElseSucceed(() => null));
     const found = card?.flow ?? null;
     const ids = Arr.map(runs, (one) => one.id);
-    for (const lane of found?.lanes ?? [])
-      for (const node of lane.nodes)
-        if (FINISHED_STEPS.has(node.state)) model.finishedAt(lane.run, node.id, model.highest(ids));
-        else model.unfinished(lane.run, node.id);
+    for (const lane of found?.lanes ?? []) {
+      for (const node of lane.nodes) {
+        if (FINISHED_STEPS.has(node.state)) {
+          model.finishedAt(lane.run, node.id, model.highest(ids));
+        } else {
+          model.unfinished(lane.run, node.id);
+        }
+      }
+    }
     return { run: run.value, runs, ids, card, flow: found === null ? null : timeless(found) };
   }).pipe(Effect.provideService(FileSystem.FileSystem, sources.model.reading));
 
 export const recordBase = (sources: RecordSources, runId: string, pages: number) =>
   Effect.gen(function* () {
     const base = yield* recordCard(sources, runId);
-    if (base === null) return null;
+    if (base === null) {
+      return null;
+    }
     const { run, runs, ids, card, flow } = base;
     const detail = yield* buildRunDetail({
       env: sources.env,
@@ -111,7 +120,9 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
       flow,
       parts: false,
     });
-    if (detail === null) return null;
+    if (detail === null) {
+      return null;
+    }
     const mrs = card?.view.mrs ?? [];
     return {
       run,
@@ -174,13 +185,14 @@ export const recordFrames = (
         Effect.gen(function* () {
           const at = `${yield* model.checkout(run)}\0${run.state}\0${run.branch}\0${run.cwd}`;
           // WARNING: a going Run's diff includes uncommitted edits no git directory records, so it is read each time.
-          if (kept?.at !== at || kept.diff?.live !== false)
+          if (kept?.at !== at || kept.diff?.live !== false) {
             kept = {
               at,
               diff: yield* diffOf(run).pipe(
                 Effect.provideService(FileSystem.FileSystem, model.reading),
               ),
             };
+          }
           return kept.diff;
         });
       const context = yield* Effect.context<
@@ -234,7 +246,9 @@ export const recordFrames = (
       };
       const whole = Effect.gen(function* () {
         const base = yield* recordBase(sources, key.runId, key.pages);
-        if (base === null) return null;
+        if (base === null) {
+          return null;
+        }
         const filled = yield* Effect.forEach(partsOf(base), (one) => one.value, {
           concurrency: "unbounded",
         });
@@ -256,7 +270,9 @@ export const recordFrames = (
       });
       const unsent = (detail: RunDetail | null) => {
         const text = fingerprint(detail === null ? null : { ...detail, revision: undefined });
-        if (text === sent) return false;
+        if (text === sent) {
+          return false;
+        }
         sent = text;
         return true;
       };
@@ -312,7 +328,9 @@ export const recordFrames = (
             ),
             Stream.drop(1),
             Stream.map((detail) => {
-              if (detail.pending?.length !== 0) return detail;
+              if (detail.pending?.length !== 0) {
+                return detail;
+              }
               const { pending: _, revision: __, ...done } = detail;
               const revision = model.stampRecord(stampKey, key.runId, base.ids, fingerprint(done));
               unsent(done);

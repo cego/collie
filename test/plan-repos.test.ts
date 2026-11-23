@@ -382,15 +382,17 @@ test("under a Projects root that is no repository, a checkout five levels down i
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-plan-root-" });
-      for (const checkout of ["api", "team/platform/services/billing/ledger"])
+      for (const checkout of ["api", "team/platform/services/billing/ledger"]) {
         yield* fs.makeDirectory(`${root}/${checkout}/.git`, { recursive: true });
+      }
       const plan = `${root}/.plan`;
       yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
       for (const one of [
         ticket("01-api", { repo: "api" }),
         ticket("02-ledger", { repo: "team/platform/services/billing/ledger", blockedBy: "01" }),
-      ])
+      ]) {
         yield* fs.writeFileString(`${plan}/issues/${one.file}.md`, one.text);
+      }
 
       const read = yield* planReposOf(plan, root);
       expect(read.refusal).toBeNull();

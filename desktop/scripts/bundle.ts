@@ -65,8 +65,9 @@ const run = Effect.fn("bundle.run")(function* (
     [child.exitCode, child.stderr.pipe(Stream.decodeText(), Stream.mkString)],
     { concurrency: "unbounded" },
   );
-  if (exitCode !== 0)
+  if (exitCode !== 0) {
     return yield* new Cause.UnknownError(exitCode, `${command} failed: ${stderr}`);
+  }
 }, Effect.scoped);
 
 export const compileCore = (outfile: string) =>
@@ -149,7 +150,9 @@ export const macSignings = (env: Env, entitlements: string, app: string) => {
 };
 
 export const notarizeArgs = (env: Env, zip: string) => {
-  if (!macSigning(env).notarize) return null;
+  if (!macSigning(env).notarize) {
+    return null;
+  }
   const submit = ["notarytool", "submit", zip, "--wait"];
   const appleId = Arr.every(
     [env.ELECTROBUN_APPLEID, env.ELECTROBUN_APPLEIDPASS, env.ELECTROBUN_TEAMID],
@@ -181,10 +184,14 @@ const signMac = (env: Env, work: string) => (app: string) =>
     const fs = yield* FileSystem.FileSystem;
     const entitlements = `${work}/entitlements.plist`;
     yield* fs.writeFileString(entitlements, entitlementsPlist);
-    for (const args of macSignings(env, entitlements, app)) yield* run("codesign", args);
+    for (const args of macSignings(env, entitlements, app)) {
+      yield* run("codesign", args);
+    }
     const zip = `${work}/Collie.zip`;
     const notarize = notarizeArgs(env, zip);
-    if (notarize === null) return;
+    if (notarize === null) {
+      return;
+    }
     yield* run("ditto", ["-c", "-k", "--keepParent", app, zip]);
     yield* run("xcrun", notarize);
     yield* run("xcrun", ["stapler", "staple", app]);
@@ -269,10 +276,14 @@ export const assemble = Effect.fn("bundle.assemble")(function* (options: Assembl
       hash,
     }),
   );
-  if (os === "macos")
+  if (os === "macos") {
     yield* fs.writeFileString(path.join(bundle, "Contents/Info.plist"), infoPlist(options.version));
-  else yield* fs.writeFileString(path.join(bundle, "collie-desktop.desktop"), DESKTOP_ENTRY);
-  if (options.prepare !== undefined) yield* options.prepare(bundle);
+  } else {
+    yield* fs.writeFileString(path.join(bundle, "collie-desktop.desktop"), DESKTOP_ENTRY);
+  }
+  if (options.prepare !== undefined) {
+    yield* options.prepare(bundle);
+  }
 
   const artifacts = path.join(options.out, "artifacts");
   yield* fs.makeDirectory(artifacts, { recursive: true });
@@ -307,8 +318,9 @@ const compatibilityManager = (os: Os, arch: string, work: string) =>
       HttpClient.get(`${base}/${file}`).pipe(
         Effect.flatMap((response) =>
           Effect.gen(function* () {
-            if (response.status !== 200)
+            if (response.status !== 200) {
               return yield* new Cause.UnknownError(response.status, `could not download ${file}`);
+            }
             return yield* response.arrayBuffer;
           }),
         ),
@@ -316,11 +328,14 @@ const compatibilityManager = (os: Os, arch: string, work: string) =>
       );
     const tar = Bun.zstdDecompressSync(yield* bytes(archive));
     const signatureName = appliedSignatureOf(archive);
-    if (signatureName === null)
+    if (signatureName === null) {
       return yield* new Cause.UnknownError(null, "the compatibility archive has no signature name");
+    }
     const signature = new TextDecoder().decode(yield* bytes(signatureName));
     const checked = verifyRelease(tar, signature, RELEASE_PUBLIC_KEY);
-    if (!checked.ok) return yield* new Cause.UnknownError(null, checked.reason);
+    if (!checked.ok) {
+      return yield* new Cause.UnknownError(null, checked.reason);
+    }
     const source = `${work}/compatibility`;
     yield* fs.makeDirectory(source, { recursive: true });
     yield* fs.writeFile(`${source}/bundle.tar`, tar);
@@ -413,11 +428,12 @@ const program = Effect.gen(function* () {
                 ["--variable=pluginscannerdir", "gstreamer-1.0"],
                 ROOT,
               );
-              if (libDir.code !== 0 || scannerDir.code !== 0)
+              if (libDir.code !== 0 || scannerDir.code !== 0) {
                 return yield* new Cause.UnknownError(
                   null,
                   "Install the declared GStreamer build and runtime packages before bundling Linux Desktop",
                 );
+              }
               yield* bundleLinuxMedia(
                 bundle,
                 Str.trim(libDir.stdout),
@@ -430,7 +446,7 @@ const program = Effect.gen(function* () {
   yield* Console.log(`built ${bundleNameOf(os)} under ${out}`);
 });
 
-if (import.meta.main)
+if (import.meta.main) {
   BunRuntime.runMain(
     program.pipe(
       Effect.tapCauseIf(
@@ -441,3 +457,4 @@ if (import.meta.main)
     ),
     { disableErrorReporting: true },
   );
+}

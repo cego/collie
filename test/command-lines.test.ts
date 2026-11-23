@@ -51,7 +51,8 @@ test("a Machine's login shell runs collie with the words it was given", () =>
 test("a login under script is handed to script as the words it was built from", () =>
   runEffect(
     Effect.gen(function* () {
-      for (const word of WORDS)
+      for (const word of WORDS) {
         expect(yield* argvOf(scriptLine(word), "script")).toEqual(["-qefc", word, "/dev/null"]);
+      }
     }),
   ));

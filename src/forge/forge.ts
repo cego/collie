@@ -415,21 +415,26 @@ export function forgeOf(ref: MrRef) {
 
 export function forgeOfHost(host: string, gitlabHost?: string) {
   const name = Str.toLowerCase(host);
-  if (name === "github.com") return "github";
+  if (name === "github.com") {
+    return "github";
+  }
   if (
     name ===
       Option.getOrUndefined(
         Option.map(Option.fromNullishOr(gitlabHost), (present) => Str.toLowerCase(present)),
       ) ||
     pipe(name, Str.includes("gitlab"))
-  )
+  ) {
     return "gitlab";
+  }
   return null;
 }
 
 export function mrForgeFacts(target: string) {
   const ref = parseMrTarget(target);
-  if (ref === null) return null;
+  if (ref === null) {
+    return null;
+  }
   const forge = forgeOf(ref);
   return { forge: forge.display, noun: forge.noun, ...forge.review(ref) };
 }

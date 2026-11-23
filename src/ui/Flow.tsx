@@ -46,23 +46,43 @@ function Menu(props: { pending: Pending }) {
 
   createEffect(() => {
     const last = Math.max(0, items().length - 1);
-    if (at() > last) setAt(last);
+    if (at() > last) {
+      setAt(last);
+    }
   });
 
   const answer = () => {
     const chosen = items()[at()];
-    if (chosen) props.pending.answer(chosen.id);
+    if (chosen) {
+      props.pending.answer(chosen.id);
+    }
   };
 
   useKeyboard((key) => {
-    if (key.name === "escape") return props.pending.answer(null);
-    if (key.ctrl && key.name === "c") return props.pending.answer(null);
-    if (key.name === "return") return answer();
-    if (key.name === "up") return setAt((n) => Math.max(0, n - 1));
-    if (key.name === "down") return setAt((n) => Math.min(items().length - 1, n + 1));
-    if (key.name === "backspace") return setQuery((q) => pipe(q, Str.slice(0, -1)));
-    if (key.ctrl && key.name === "u") return setQuery("");
-    if (/^[\u0020-\u007e]$/.test(key.sequence)) return setQuery((q) => q + key.sequence);
+    if (key.name === "escape") {
+      return props.pending.answer(null);
+    }
+    if (key.ctrl && key.name === "c") {
+      return props.pending.answer(null);
+    }
+    if (key.name === "return") {
+      return answer();
+    }
+    if (key.name === "up") {
+      return setAt((n) => Math.max(0, n - 1));
+    }
+    if (key.name === "down") {
+      return setAt((n) => Math.min(items().length - 1, n + 1));
+    }
+    if (key.name === "backspace") {
+      return setQuery((q) => pipe(q, Str.slice(0, -1)));
+    }
+    if (key.ctrl && key.name === "u") {
+      return setQuery("");
+    }
+    if (/^[\u0020-\u007e]$/.test(key.sequence)) {
+      return setQuery((q) => q + key.sequence);
+    }
   });
 
   // WARNING: a paste arrives as its own event, never as keys: without this the field silently drops it.
@@ -107,12 +127,24 @@ function Question(props: { pending: Pending }) {
   const [typed, setTyped] = createSignal(ask._tag === "Question" ? ask.initial : "");
 
   useKeyboard((key) => {
-    if (key.name === "escape") return props.pending.answer(null);
-    if (key.ctrl && key.name === "c") return props.pending.answer(null);
-    if (key.name === "return") return props.pending.answer(typed());
-    if (key.name === "backspace") return setTyped((value) => pipe(value, Str.slice(0, -1)));
-    if (key.ctrl && key.name === "u") return setTyped("");
-    if (/^[\u0020-\u007e]$/.test(key.sequence)) return setTyped((value) => value + key.sequence);
+    if (key.name === "escape") {
+      return props.pending.answer(null);
+    }
+    if (key.ctrl && key.name === "c") {
+      return props.pending.answer(null);
+    }
+    if (key.name === "return") {
+      return props.pending.answer(typed());
+    }
+    if (key.name === "backspace") {
+      return setTyped((value) => pipe(value, Str.slice(0, -1)));
+    }
+    if (key.ctrl && key.name === "u") {
+      return setTyped("");
+    }
+    if (/^[\u0020-\u007e]$/.test(key.sequence)) {
+      return setTyped((value) => value + key.sequence);
+    }
   });
 
   usePasteInto(setTyped);

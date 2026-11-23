@@ -120,7 +120,9 @@ const lags = (row: MachineRow, desktop: DesktopHolds) => {
 
 // WARNING: a part not known yet is not behind.
 export const inSync: (row: MachineRow, desktop: DesktopHolds) => InSync = (row, desktop) => {
-  if (row.state !== "live") return { state: row.state, behind: [] };
+  if (row.state !== "live") {
+    return { state: row.state, behind: [] };
+  }
   const behind = lags(row, desktop);
   return { state: behind.length === 0 ? "in-sync" : "behind", behind };
 };
@@ -157,7 +159,9 @@ export const flockInSyncSaid = (rows: ReadonlyArray<MachineRow>, desktop: Deskto
 export const flockInSync = (rows: ReadonlyArray<MachineRow>, desktop: DesktopHolds) => {
   const lagging = Arr.flatMap(rows, (row) => {
     const { state, behind } = inSync(row, desktop);
-    if (state === "in-sync" || state === "connecting") return [];
+    if (state === "in-sync" || state === "connecting") {
+      return [];
+    }
     return [
       `${row.name}: ${state === "behind" ? `behind on ${Arr.join([...new Set(Arr.map(behind, ({ part }) => part))], " and ")}` : NOT_LIVE_SAID[state]}`,
     ];

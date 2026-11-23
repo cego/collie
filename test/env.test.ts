@@ -134,8 +134,11 @@ test("a process that leaves the launcher starts children without its preload, ke
           }),
           (was) =>
             Effect.sync(() => {
-              if (was === undefined) delete Bun.env[name];
-              else Bun.env[name] = was;
+              if (was === undefined) {
+                delete Bun.env[name];
+              } else {
+                Bun.env[name] = was;
+              }
             }),
         );
       }

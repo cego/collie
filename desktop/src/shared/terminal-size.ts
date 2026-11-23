@@ -13,7 +13,9 @@ export const settledResizes = <Handle>(
   let sent: { cols: number; rows: number } | null = null;
   let pending: { handle: Handle } | null = null;
   const cancel = () => {
-    if (pending !== null) timers.clear(pending.handle);
+    if (pending !== null) {
+      timers.clear(pending.handle);
+    }
     pending = null;
   };
   const tell = (cols: number, rows: number) => {
@@ -31,7 +33,9 @@ export const settledResizes = <Handle>(
       pending = {
         handle: timers.set(() => {
           pending = null;
-          if (sent?.cols !== cols || sent.rows !== rows) tell(cols, rows);
+          if (sent?.cols !== cols || sent.rows !== rows) {
+            tell(cols, rows);
+          }
         }, SETTLE_MS),
       };
     },

@@ -45,7 +45,9 @@ const indented = (text: string) =>
   );
 
 const leftOut = (read: ComputerWords) => {
-  if ("problem" in read) return [`${read.computer}: could not be read: ${read.problem}`];
+  if ("problem" in read) {
+    return [`${read.computer}: could not be read: ${read.problem}`];
+  }
   const { stores, skipped, leftOut, cut } = read.words;
   return Arr.map(
     [
@@ -65,8 +67,9 @@ const leftOut = (read: ComputerWords) => {
 };
 
 export const setupTurn = (procedure: string, read: ReadonlyArray<ComputerWords> | null) => {
-  if (read === null)
+  if (read === null) {
     return `${Str.trim(procedure)}\n\nThe human chose the five questions, so no earlier messages are given.`;
+  }
   const { kept, leftOut: overAll } = withinCaps(
     Arr.flatMap(read, (one) =>
       "words" in one

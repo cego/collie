@@ -467,8 +467,11 @@ const rulesOf = (mr: FakeMr) =>
 
 const standingOf = (reviews: ReadonlyArray<FakeReview>) => {
   const standing = new Map<string, FakeReview>();
-  for (const review of reviews)
-    if (review.state !== "COMMENTED") standing.set(review.author, review);
+  for (const review of reviews) {
+    if (review.state !== "COMMENTED") {
+      standing.set(review.author, review);
+    }
+  }
   return [...standing.values()];
 };
 
@@ -723,7 +726,7 @@ function issueApi(forge: MrForge, model: ForgeModel, route: string, args: Readon
       return returned;
     },
   );
-  if (forge === "github")
+  if (forge === "github") {
     issues.push(
       ...Arr.map(
         Arr.filter(
@@ -745,6 +748,7 @@ function issueApi(forge: MrForge, model: ForgeModel, route: string, args: Readon
         }),
       ),
     );
+  }
   const answer: Answer | null = json(pageOf(route, issues));
   return answer;
 }
@@ -856,7 +860,9 @@ const headJobAt = (model: ForgeModel, project: (mr: FakeMr) => boolean, id: numb
       Arr.findFirstIndex(jobsOf(mr.jobs ?? [], 0), (job) => job.id === id),
       () => -1,
     );
-    if (at !== -1) return { mr, at };
+    if (at !== -1) {
+      return { mr, at };
+    }
   }
   return undefined;
 };
@@ -2075,8 +2081,9 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>) {
       return returned;
     }
     const pages = [];
-    for (let at = 0; at < deployments.length; at += 100)
+    for (let at = 0; at < deployments.length; at += 100) {
       pages.push(deployments.slice(at, at + 100));
+    }
     const returned: Answer = args.includes("--slurp") ? json(pages) : no();
     return returned;
   }
@@ -2281,8 +2288,9 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>) {
       return returned;
     }
     const pages = [];
-    for (let at = 0; at === 0 || at < jobs.length; at += 100)
+    for (let at = 0; at === 0 || at < jobs.length; at += 100) {
       pages.push({ jobs: jobs.slice(at, at + 100) });
+    }
     const returned: Answer = json(args.includes("--slurp") ? pages : pages[0]!);
     return returned;
   }
@@ -2498,7 +2506,9 @@ export function answer(
 ) {
   if (cmd === "env" && args[0] === "-u") {
     let at = 0;
-    while (args[at] === "-u") at += 2;
+    while (args[at] === "-u") {
+      at += 2;
+    }
     const returned: Answered = answer(forge, model, args[at] ?? "", args.slice(at + 1), {
       ...under,
       environment: false,
@@ -2560,9 +2570,12 @@ export function answer(
   }
   const said = forge === "gitlab" ? glab(model, args, under) : gh(model, args);
   let after = model;
-  if (said.oauth !== undefined) after = { ...after, oauth: said.oauth };
-  if (said.filedIssue !== undefined)
+  if (said.oauth !== undefined) {
+    after = { ...after, oauth: said.oauth };
+  }
+  if (said.filedIssue !== undefined) {
     after = { ...after, issues: [...(after.issues ?? []), said.filedIssue] };
+  }
   if (said.issueNoted !== undefined) {
     const { key, body } = said.issueNoted;
     const notes = after.issueNotes ?? {};
@@ -2573,15 +2586,18 @@ export function answer(
     const notes = after.notes ?? {};
     after = { ...after, notes: { ...notes, [key]: [...(notes[key] ?? []), body] } };
   }
-  if (said.cloned !== undefined)
+  if (said.cloned !== undefined) {
     after = { ...after, cloned: [...(after.cloned ?? []), said.cloned] };
-  if (said.approved !== undefined)
+  }
+  if (said.approved !== undefined) {
     after = { ...after, approved: [...(after.approved ?? []), said.approved] };
-  if (said.dismissed !== undefined)
+  }
+  if (said.dismissed !== undefined) {
     after = {
       ...after,
       approved: Arr.filter(after.approved ?? [], (one) => one !== said.dismissed),
     };
+  }
   if (said.retried !== undefined) {
     const { mr, at } = said.retried;
     after = {
@@ -2641,7 +2657,9 @@ export function answer(
       ...after,
       dequeued: [...(after.dequeued ?? []), keyOf(forge, mr)],
       mrs: Arr.map(after.mrs, (one) => {
-        if (one !== mr) return one;
+        if (one !== mr) {
+          return one;
+        }
         const { queued: _, ...rest } = one;
         return rest;
       }),
@@ -2690,7 +2708,9 @@ const GraphqlBody = Schema.fromJsonString(
 
 const graphqlFields = (body: RequestInit["body"]) => {
   const sent = Schema.decodeUnknownOption(GraphqlBody)(body);
-  if (Option.isNone(sent)) return [];
+  if (Option.isNone(sent)) {
+    return [];
+  }
   return [
     "-f",
     `query=${sent.value.query}`,
@@ -2751,17 +2771,23 @@ export function httpFace(
     });
     const model = yield* state.read;
     const fault = model.httpFault;
-    if (fault === "network") return yield* Effect.die(new TypeError("fetch failed"));
-    if (fault === "hold")
+    if (fault === "network") {
+      return yield* Effect.die(new TypeError("fetch failed"));
+    }
+    if (fault === "hold") {
       return yield* Effect.callback<Response>((resume) => {
         const abort = () => {
           aborted.push(input);
           resume(Effect.die(init.signal?.reason));
         };
-        if (init.signal?.aborted) abort();
-        else init.signal?.addEventListener("abort", abort);
+        if (init.signal?.aborted) {
+          abort();
+        } else {
+          init.signal?.addEventListener("abort", abort);
+        }
       });
-    if (fault !== undefined)
+    }
+    if (fault !== undefined) {
       return answered(
         fault.status,
         flow(
@@ -2772,10 +2798,16 @@ export function httpFace(
         }),
         fault.headers,
       );
+    }
     const url = new URL(input);
     const host = forge === "github" ? FORGE_HOST.github : url.host;
-    if (!model.loggedIn.includes(host) || model.revoked === true || token !== tokenOf(forge, model))
+    if (
+      !model.loggedIn.includes(host) ||
+      model.revoked === true ||
+      token !== tokenOf(forge, model)
+    ) {
       return answered(401, `{"message":"401 Unauthorized"}`);
+    }
     const route = `${pipe(url.pathname, Str.slice(API[forge].length))}${url.search}`;
     const args =
       forge === "github"
@@ -2784,7 +2816,9 @@ export function httpFace(
     const reachable = { ...model, installed: true };
     const now = yield* Clock.currentTimeMillis;
     const said = answer(forge, reachable, CLI[forge], args, { now, environment: true });
-    if (said.model !== reachable) yield* state.write({ ...said.model, installed: model.installed });
+    if (said.model !== reachable) {
+      yield* state.write({ ...said.model, installed: model.installed });
+    }
     if (said.ran.code === 0) {
       const headers: Record<string, string> = {};
       const size = Number(url.searchParams.get("per_page"));
@@ -2829,11 +2863,12 @@ export const cliFetch =
               ["api", "--hostname", url.host, "-X", method, ...bodyFields(init.body), route],
               ".",
             );
-        if (ran.code === 0)
+        if (ran.code === 0) {
           return new Response(ran.stdout === "" ? null : ran.stdout, {
             status: ran.stdout === "" ? 204 : 200,
             headers: { "content-type": "application/json" },
           });
+        }
         const status = Number(/^(\d{3})\b/.exec(ran.stderr ?? "")?.[1] ?? "404");
         return new Response(
           yield* Schema.encodeEffect(Said)({ message: ran.stderr || `${status}` }).pipe(
@@ -2903,8 +2938,11 @@ export function fakeForge(forge: MrForge, start: ForgeModel) {
 }
 
 const glabEnvironment = Effect.gen(function* () {
-  for (const name of ["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN"])
-    if ((yield* Config.String(name).pipe(Config.withDefault(""))) !== "") return true;
+  for (const name of ["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN"]) {
+    if ((yield* Config.String(name).pipe(Config.withDefault(""))) !== "") {
+      return true;
+    }
+  }
   return false;
 }).pipe(Effect.orElseSucceed(() => false));
 
@@ -2939,7 +2977,9 @@ export const forgeBin = Effect.fn("forge.bin")(function* (
     environment: yield* glabEnvironment,
   });
   // WARNING: Writing back an unchanged model would undo a test's write that landed since the read.
-  if (said.model !== model) yield* writeModel(file, said.model);
+  if (said.model !== model) {
+    yield* writeModel(file, said.model);
+  }
   return said.ran;
 });
 
@@ -3017,7 +3057,9 @@ export const serveForges = (
             const face = Option.getOrUndefined(
               Arr.findFirst(onPath, (one) => one.forge === forge),
             )?.face;
-            if (face === undefined) return new Response(null, { status: 404 });
+            if (face === undefined) {
+              return new Response(null, { status: 404 });
+            }
             const body = request.body === null ? Promise.resolve(undefined) : request.text();
             return body.then((body) =>
               face(`https://${apiHost}/${Arr.join(rest, "/")}${url.search}`, {

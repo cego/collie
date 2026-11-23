@@ -41,12 +41,18 @@ const fakeMachine = (
     changeSchedule: ({ change, request }) =>
       Effect.suspend(() => {
         const replay = seen.get(request);
-        if (replay !== undefined) return Effect.succeed(replay);
-        if (fails.change === change.change) return refused(`${change.change} broke`);
+        if (replay !== undefined) {
+          return Effect.succeed(replay);
+        }
+        if (fails.change === change.change) {
+          return refused(`${change.change} broke`);
+        }
         const had = schedules.get(change.name);
         let now: ScheduleEntry | null;
         if (change.change === "add") {
-          if (had !== undefined) return refused("already there");
+          if (had !== undefined) {
+            return refused("already there");
+          }
           now = entry(name, {
             name: change.name,
             cron: change.cron,
@@ -56,8 +62,9 @@ const fakeMachine = (
             checkout: change.start.workspace,
           });
           schedules.set(change.name, now);
-        } else if (had === undefined) return refused("no such Schedule");
-        else if (change.change === "remove") {
+        } else if (had === undefined) {
+          return refused("no such Schedule");
+        } else if (change.change === "remove") {
           schedules.delete(change.name);
           now = null;
         } else {

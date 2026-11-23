@@ -30,9 +30,15 @@ const treeOf = (ps: string, root: number, left: (process: Process) => boolean) =
   for (const queue = [root]; queue.length > 0;) {
     const pid = queue.shift()!;
     const found = all.find((one) => one.pid === pid);
-    if (found === undefined || left(found)) continue;
+    if (found === undefined || left(found)) {
+      continue;
+    }
     tree.push(found);
-    for (const child of all) if (child.ppid === pid) queue.push(child.pid);
+    for (const child of all) {
+      if (child.ppid === pid) {
+        queue.push(child.pid);
+      }
+    }
   }
   return tree;
 };
@@ -94,8 +100,9 @@ export const measureStart = (start: {
     const usableAt = yield* fs.readFileString(log).pipe(
       Effect.orElseSucceed(() => ""),
       Effect.flatMap((text) => {
-        if (app.exitCode !== null)
+        if (app.exitCode !== null) {
           return Effect.die(new Error(`Desktop exited ${app.exitCode} before its board`));
+        }
         const marked = Arr.findFirst(Str.split(text, "\n"), (line) =>
           Schema.decodeOption(BoardUsable)(line),
         );

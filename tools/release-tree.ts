@@ -22,8 +22,11 @@ export const releaseFiles = Effect.fn("release.files")(function* (root: string) 
       files.push(entry);
       continue;
     }
-    for (const name of yield* fs.readDirectory(at, { recursive: true }))
-      if ((yield* fs.stat(path.join(at, name))).type === "File") files.push(path.join(entry, name));
+    for (const name of yield* fs.readDirectory(at, { recursive: true })) {
+      if ((yield* fs.stat(path.join(at, name))).type === "File") {
+        files.push(path.join(entry, name));
+      }
+    }
   }
   return files;
 });

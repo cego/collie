@@ -14,10 +14,10 @@ export const atLeast = (inner: Tracer.Tracer, minMs: number) => {
       const span = inner.span(options);
       const end = span.end.bind(span);
       span.end = (endTime, exit) => {
-        if (span.status._tag === "Started" && endTime - span.status.startTime < minNs)
+        if (span.status._tag === "Started" && endTime - span.status.startTime < minNs) {
           // WARNING: the OTLP tracer's span keeps `sampled` as a plain field and reads it at its end to decide whether to export it.
-          // WARNING: the OTLP tracer keeps sampled as a plain field and reads it at span end to decide export.
           (span as { sampled: boolean }).sampled = false;
+        }
         end(endTime, exit);
       };
       return span;
@@ -29,7 +29,9 @@ export const tracingLayer = (version: string) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const endpoint = yield* Config.option(Config.String("OTEL_EXPORTER_OTLP_ENDPOINT"));
-      if (Option.isNone(endpoint)) return Layer.succeed(References.TracerEnabled)(false);
+      if (Option.isNone(endpoint)) {
+        return Layer.succeed(References.TracerEnabled)(false);
+      }
       const minMs = yield* Config.Number("COLLIE_TRACE_MIN_MS").pipe(Config.withDefault(5));
       const resource = { serviceName: "collie-host", serviceVersion: version };
       const tracer = Layer.effect(Tracer.Tracer)(

@@ -8,8 +8,11 @@ export const STOP = "stop";
 export const controlSet = (runId: string, ...controls: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const records = yield* RunRecords;
-    for (const control of controls)
-      if ((yield* records.control(control, runId)) !== null) return true;
+    for (const control of controls) {
+      if ((yield* records.control(control, runId)) !== null) {
+        return true;
+      }
+    }
     return false;
   });
 

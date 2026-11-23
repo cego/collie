@@ -141,7 +141,9 @@ test("paired hosts share the latest settings without Desktop, keep edit times an
             "opus",
             "2099-10-12T16:00:00.000Z",
           );
-          if ("refused" in edited) return yield* Effect.die(new Error(edited.refused));
+          if ("refused" in edited) {
+            return yield* Effect.die(new Error(edited.refused));
+          }
           yield* SubscriptionRef.set(flock, edited);
           yield* sync.syncOn(machines[0]!);
           yield* until(
@@ -184,7 +186,9 @@ test("the newer paired release upgrades the older one, replaces its host and res
           const older = `${first.world.home}/older-collie`;
           const current = yield* collieCommand;
           const newer = current.length === 1 ? current[0]! : `${first.world.home}/newer-collie`;
-          if (current.length !== 1) yield* releaseBinary(newer, BUILD);
+          if (current.length !== 1) {
+            yield* releaseBinary(newer, BUILD);
+          }
           yield* releaseBinary(older, "0.0.1");
           const bin = Str.split(first.env.PATH!, ":")[0];
           const log = `${first.world.home}/upgrades`;

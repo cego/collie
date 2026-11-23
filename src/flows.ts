@@ -130,7 +130,9 @@ const fromBoard = Effect.fn("Flows.fromBoard")(function* (env: PluginEnv) {
 });
 
 function banner(defs: Definitions) {
-  if (defs.errors.length === 0) return undefined;
+  if (defs.errors.length === 0) {
+    return undefined;
+  }
   return Arr.join(
     ["Definitions with errors (skipped):", ...Arr.map(defs.errors, (e) => `  ${e}`)],
     "\n",
@@ -145,7 +147,9 @@ export const continueFlow = Effect.fn("Flows.continueFlow")(function* (
   prompts: FlowPrompts,
 ) {
   const task = yield* pickTask(env, prompts);
-  if (task === null) return 0;
+  if (task === null) {
+    return 0;
+  }
   return yield* pickFlow(herdr, env, prompts, task);
 });
 
@@ -192,7 +196,9 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
     header: headed(`Workflows — ${env.cwd}`),
     footer: "↑↓ move · type to filter · Enter run · Esc cancel",
   });
-  if (!chosen) return 0;
+  if (!chosen) {
+    return 0;
+  }
 
   yield* startChosen(herdr, env, prompts, { workflow: chosen.id, task });
   return 0;
@@ -217,7 +223,9 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   );
   if (module) {
     const started = yield* startModule(herdr, env, prompts, { ...opts, task }, module);
-    if (started === null || "line" in started) return started?.line ?? null;
+    if (started === null || "line" in started) {
+      return started?.line ?? null;
+    }
     const plan = Option.getOrUndefined(Arr.findFirst(saved.entries, plansAGoal));
     if (plan === undefined) {
       yield* bail(
@@ -275,7 +283,9 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     opts.words === undefined
   ) {
     const answer = yield* prompts.ask(WHAT_DO_YOU_WANT);
-    if (answer === null) return null;
+    if (answer === null) {
+      return null;
+    }
     words = Str.trim(answer);
   }
   let at = env;
@@ -313,8 +323,9 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     }
   }
   if (launchInput !== undefined && text[launchInput.name] === undefined) {
-    if (words !== "" && (yield* wordsAre(strategy, words, at.cwd))) text[launchInput.name] = words;
-    else if (strategy === "repository" && (yield* insideCheckout(at.cwd))) {
+    if (words !== "" && (yield* wordsAre(strategy, words, at.cwd))) {
+      text[launchInput.name] = words;
+    } else if (strategy === "repository" && (yield* insideCheckout(at.cwd))) {
       text[launchInput.name] = at.cwd;
       inferred.set(
         launchInput.name,
@@ -323,7 +334,9 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     }
   }
   for (const field of module.inputs) {
-    if (text[field.name] !== undefined) continue;
+    if (text[field.name] !== undefined) {
+      continue;
+    }
     const found =
       field.strategy === null ? null : yield* infer(at, opts, field.name, field.strategy);
     if (found !== null) {
@@ -360,14 +373,18 @@ const startModule = Effect.fn("Flows.startModule")(function* (
       })),
       { header: module.title, footer: "↑↓ how far it goes · Enter start · Esc cancel" },
     );
-    if (chosen === null) return null;
+    if (chosen === null) {
+      return null;
+    }
     text[reach.name] = pipe_(chosen.id, Str.slice(REACH_ROW.length));
   } else if (inferred.size > 0) {
     const confirmed = yield* prompts.menu(
       [{ id: "start", title: `Starting in ${at.cwd}`, subtitle: Arr.join(inputs, " · ") }],
       { header: module.title, footer: "Enter start · Esc cancel" },
     );
-    if (confirmed === null) return null;
+    if (confirmed === null) {
+      return null;
+    }
   }
   const started = yield* startRun(at, {
     door: "board",
@@ -414,11 +431,21 @@ const wordsAre = Effect.fn("Flows.wordsAre")(function* (
   words: string,
   cwd: string,
 ) {
-  if (strategy === "goal" || strategy === "work-source") return true;
-  if (strategy === "repository") return /^(https?:\/\/|git@|\/)/.test(words);
-  if (strategy !== "diff-target") return false;
-  if (readMrRef(words, { project: null }) !== null) return true;
-  if (/\s/.test(words)) return false;
+  if (strategy === "goal" || strategy === "work-source") {
+    return true;
+  }
+  if (strategy === "repository") {
+    return /^(https?:\/\/|git@|\/)/.test(words);
+  }
+  if (strategy !== "diff-target") {
+    return false;
+  }
+  if (readMrRef(words, { project: null }) !== null) {
+    return true;
+  }
+  if (/\s/.test(words)) {
+    return false;
+  }
   const ref = yield* shell("git", ["rev-parse", "--verify", "--quiet", `${words}^{commit}`], cwd);
   return ref.code === 0;
 });
@@ -438,7 +465,9 @@ const infer = Effect.fn("Flows.infer")(function* (
     Effect.provide(forgeHttpLayer),
     Effect.orElseSucceed(() => null),
   );
-  if (settled === null || settled.needsAsking || settled.value === "") return null;
+  if (settled === null || settled.needsAsking || settled.value === "") {
+    return null;
+  }
   return settled;
 });
 
@@ -471,13 +500,17 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
     });
   }
 
-  if (items.length === 0) return yield* bail(prompts, "Nothing to fork.", banner(defs));
+  if (items.length === 0) {
+    return yield* bail(prompts, "Nothing to fork.", banner(defs));
+  }
 
   const chosen = yield* prompts.menu(items, {
     header: headed("Fork a definition", banner(defs)),
     footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
   });
-  if (!chosen) return 0;
+  if (!chosen) {
+    return 0;
+  }
 
   const targets: Array<PickItem> = [
     { id: "user", title: "my layer", subtitle: layerList.user.dir },
@@ -487,7 +520,9 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
     header: `Fork ${chosen.title} into`,
     footer: "↑↓ move · Enter fork · Esc cancel",
   });
-  if (!target) return 0;
+  if (!target) {
+    return 0;
+  }
 
   const source = sources.get(chosen.id)!;
   const how = yield* prompts.menu(
@@ -501,7 +536,9 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
     ],
     { header: `Fork ${chosen.title} how`, footer: "↑↓ move · Enter fork · Esc cancel" },
   );
-  if (!how) return 0;
+  if (!how) {
+    return 0;
+  }
 
   let step: string | undefined;
   if (how.id === "extends" && source.steps.length > 0) {
@@ -512,7 +549,9 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
         footer: "↑↓ move · Enter choose · Esc cancel",
       },
     );
-    if (!which) return 0;
+    if (!which) {
+      return 0;
+    }
     step = which.id;
   }
 
@@ -526,8 +565,12 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
 
 function layerOf(def: Provenance) {
   const parts = [`[${def.layer}]`];
-  if (def.extends) parts.push(`extends ${def.extends}`);
-  if (isStale(def)) parts.push("(stale — the original has changed since this copy)");
+  if (def.extends) {
+    parts.push(`extends ${def.extends}`);
+  }
+  if (isStale(def)) {
+    parts.push("(stale — the original has changed since this copy)");
+  }
   return Arr.join(parts, " ");
 }
 
@@ -537,7 +580,9 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   prompts: FlowPrompts,
 ) {
   const runs = Arr.filter(yield* listRuns(env), (run) => !settled(run));
-  if (runs.length === 0) return yield* bail(prompts, "No runs are still going to pick back up.");
+  if (runs.length === 0) {
+    return yield* bail(prompts, "No runs are still going to pick back up.");
+  }
 
   const items: Array<PickItem> = Arr.map(runs, (run) => ({
     id: run.id,
@@ -549,14 +594,18 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
     header: "Resume a run",
     footer: "↑↓ move · type to filter · Enter resume · Esc cancel",
   });
-  if (!chosen) return 0;
+  if (!chosen) {
+    return 0;
+  }
 
   const resumed = yield* resumeRun(env, {
     door: "board",
     runId: chosen.id,
     request: yield* newRequestId(),
   });
-  if (!resumed.ok) return yield* bail(prompts, `${chosen.id}: ${resumed.error.message}`);
+  if (!resumed.ok) {
+    return yield* bail(prompts, `${chosen.id}: ${resumed.error.message}`);
+  }
   return 0;
 });
 
@@ -577,21 +626,33 @@ const offerArguments = Effect.fn("Flows.offerArguments")(function* (
           Arr.map(choices, (one) => ({ id: one.key, title: one.label })),
           { header: question, footer: "↑↓ move · Enter choose · Esc cancel" },
         );
-        if (chosen === null) return null;
+        if (chosen === null) {
+          return null;
+        }
         const entry = Option.getOrUndefined(
           Arr.findFirst(choices, (one) => one.key === chosen.id),
         )?.entry;
-        if (entry === undefined) delete typed[field.name];
-        else typed[field.name] = entry;
+        if (entry === undefined) {
+          delete typed[field.name];
+        } else {
+          typed[field.name] = entry;
+        }
       } else {
         const answer = yield* prompts.ask(question);
-        if (answer === null) return null;
-        if (answer === "" && !field.required) delete typed[field.name];
-        else typed[field.name] = answer;
+        if (answer === null) {
+          return null;
+        }
+        if (answer === "" && !field.required) {
+          delete typed[field.name];
+        } else {
+          typed[field.name] = answer;
+        }
       }
     }
     const read = offerInput(drawn, typed);
-    if (read._tag === "Valid") return read.input;
+    if (read._tag === "Valid") {
+      return read.input;
+    }
     asking = Arr.filterMap(offerFields(drawn), (field) =>
       read.errors[field.name] === undefined
         ? Result.failVoid
@@ -604,7 +665,9 @@ const confirmed = Effect.fn("Flows.confirmed")(function* (
   prompts: FlowPrompts,
   offer: { readonly title: string; readonly confirm?: string },
 ) {
-  if (offer.confirm === undefined) return true;
+  if (offer.confirm === undefined) {
+    return true;
+  }
   const chosen = yield* prompts.menu(
     [
       { id: "take", title: offer.title, subtitle: offer.confirm },
@@ -622,7 +685,9 @@ export const attachFiles = Effect.fn("Flows.attachFiles")(function* (
 ) {
   const typed = yield* prompts.ask(`Which files go to ${runId}? Paths, separated by spaces`);
   const paths = typedPaths(typed ?? "");
-  if (paths.length === 0) return null;
+  if (paths.length === 0) {
+    return null;
+  }
   const path = yield* Path.Path;
   const done = yield* steerRun(env, {
     door: "board",
@@ -641,14 +706,22 @@ export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
   chosen: string,
 ) {
   const listed = yield* offersOf(env, runId);
-  if ("ok" in listed) return listed.error.message;
+  if ("ok" in listed) {
+    return listed.error.message;
+  }
   const offer = Option.getOrUndefined(
     Arr.findFirst(listed, (one) => one.id === chosen && (one.run ?? runId) === runId),
   );
-  if (offer === undefined) return `${runId} no longer offers ${chosen}`;
-  if (offer.unavailable !== null) return `${offer.title}: ${offer.unavailable}`;
+  if (offer === undefined) {
+    return `${runId} no longer offers ${chosen}`;
+  }
+  if (offer.unavailable !== null) {
+    return `${offer.title}: ${offer.unavailable}`;
+  }
   const input = yield* offerArguments(prompts, offer.arguments);
-  if (input === null || !(yield* confirmed(prompts, offer))) return null;
+  if (input === null || !(yield* confirmed(prompts, offer))) {
+    return null;
+  }
   const done = yield* invokeOffer(env, {
     door: "board",
     runId,
@@ -667,11 +740,17 @@ const CLEAR = "\u001b[2J\u001b[H";
 const WIDTH_FLOOR = 40;
 
 const whyNoRenderer = Effect.fn("Flows.whyNoRenderer")(function* () {
-  if (!process.stdout.isTTY || !process.stdin.isTTY) return "no terminal on this pane";
+  if (!process.stdout.isTTY || !process.stdin.isTTY) {
+    return "no terminal on this pane";
+  }
   const term = yield* Config.option(Config.String("TERM"));
-  if (term._tag === "Some" && term.value === "dumb") return "TERM is dumb";
+  if (term._tag === "Some" && term.value === "dumb") {
+    return "TERM is dumb";
+  }
   const width = process.stdout.columns ?? 0;
-  if (width < WIDTH_FLOOR) return `the pane is ${width} columns, and the app needs ${WIDTH_FLOOR}`;
+  if (width < WIDTH_FLOOR) {
+    return `the pane is ${width} columns, and the app needs ${WIDTH_FLOOR}`;
+  }
   return null;
 });
 
@@ -684,7 +763,9 @@ export const replacedOnDisk = (file: string, every: Duration.Input = "2 seconds"
       Effect.orElseSucceed(() => null),
     );
     const start = yield* inode;
-    if (start === null) return yield* Effect.succeed(Effect.never);
+    if (start === null) {
+      return yield* Effect.succeed(Effect.never);
+    }
     return yield* Effect.succeed(
       inode.pipe(
         Effect.repeat({
@@ -771,7 +852,9 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
         (cause) => Effect.succeed(Str.split(reason(cause), "\n")[0]),
       ),
     ));
-  if (why === null) return 0;
+  if (why === null) {
+    return 0;
+  }
   return yield* textBoard(session, env, why);
 }, Effect.scoped);
 
@@ -884,10 +967,16 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     // WARNING: resolved at Enter, as herdr compacts tab ids; never focused, which turns done into idle.
     case "Jump": {
       const jump = command.jump;
-      if (jump.kind === "agent") return attachLine(jump.agent);
-      if (jump.kind !== "run") return `${jump.label} — nothing to jump to`;
+      if (jump.kind === "agent") {
+        return attachLine(jump.agent);
+      }
+      if (jump.kind !== "run") {
+        return `${jump.label} — nothing to jump to`;
+      }
       const run = yield* runOf(jump.runId);
-      if (!run) return `${jump.label} has gone`;
+      if (!run) {
+        return `${jump.label} has gone`;
+      }
       const agent = Option.getOrUndefined(
         Arr.findLast(
           yield* hostRegistered(env).pipe(Effect.orElseSucceed(() => [])),
@@ -916,14 +1005,18 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         set: command.set,
         request: yield* newRequestId(),
       });
-      if (!held.ok) return held.error.message;
+      if (!held.ok) {
+        return held.error.message;
+      }
       return `${command.set ? "Held" : "Released"} ${command.runId}`;
     }
     case "OpenLog":
       return "a Run keeps no log of its own: its agents' panes are the record";
     case "OpenCheckOutput": {
       const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
+      if (!run) {
+        return `${command.runId} has gone`;
+      }
       return `follow its check with: collie run checks ${run.id} --follow`;
     }
     case "Answer": {
@@ -944,14 +1037,20 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 
     case "ChooseOffer": {
       const listed = yield* offersOf(env, command.runId);
-      if ("ok" in listed) return listed.error.message;
+      if ("ok" in listed) {
+        return listed.error.message;
+      }
       const open = Arr.filter(listed, (one) => one.unavailable === null);
-      if (open.length === 0) return `${command.runId} offers nothing now`;
+      if (open.length === 0) {
+        return `${command.runId} offers nothing now`;
+      }
       const chosen = yield* prompts.menu(
         Arr.map(open, (one, at) => ({ id: String(at), title: one.title, subtitle: one.workflow })),
         { header: `What next for ${command.runId}?` },
       );
-      if (chosen === null) return null;
+      if (chosen === null) {
+        return null;
+      }
       const offer = open[Number(chosen.id)]!;
       return yield* makeOffer(env, prompts, offer.run ?? command.runId, offer.id);
     }
@@ -977,9 +1076,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       const carried = Schema.decodeUnknownOption(CarriedSteps)(
         done.ok ? done.data : done.error.details,
       );
-      for (const step of Option.getOrElse(carried, () => ({ results: [] })).results)
-        if (step.kind === "navigate" && step.state === "applied" && step.run !== null)
+      for (const step of Option.getOrElse(carried, () => ({ results: [] })).results) {
+        if (step.kind === "navigate" && step.state === "applied" && step.run !== null) {
           navigate(step.run);
+        }
+      }
       return done.ok ? done.human : done.error.message;
     }
 
@@ -995,7 +1096,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 
     case "OpenMr": {
       const ref = parseMrTarget(command.target);
-      if (!ref) return `${command.target} is not a merge request`;
+      if (!ref) {
+        return `${command.target} is not a merge request`;
+      }
       // WARNING: an unqualified mr:N resolves from the run's own checkout, never the caller's directory.
       const run = command.runId === null ? null : yield* runOf(command.runId);
       const forge = forgeOf(ref);
@@ -1007,7 +1110,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 
     case "SetDefault": {
       const parsed = parseSetting(command.key, command.value);
-      if ("refused" in parsed) return parsed.refused;
+      if ("refused" in parsed) {
+        return parsed.refused;
+      }
       return yield* setSetting(env.userDir, command.key, parsed.value, yield* nowIso).pipe(
         Effect.as(`${command.key} is now ${settingText(parsed.value) || "unset"}`),
         Effect.catch((cause) => Effect.succeed(`${command.key}: ${reason(cause)}`)),
@@ -1040,7 +1145,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 
     case "FollowUp": {
       const text = yield* prompts.ask(`What still needs doing on ${command.runId}?`);
-      if (text === null || Str.trim(text) === "") return null;
+      if (text === null || Str.trim(text) === "") {
+        return null;
+      }
       const done = yield* followUpRun(env, {
         door: "board",
         runId: command.runId,
@@ -1052,7 +1159,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 
     case "Steer": {
       const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
+      if (!run) {
+        return `${command.runId} has gone`;
+      }
       const said = yield* steerAbout(env, {
         door: "board",
         runId: run.id,
@@ -1066,7 +1175,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 
     case "RecordDisposition": {
       const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
+      if (!run) {
+        return `${command.runId} has gone`;
+      }
       const done = yield* disposeRun(env, {
         door: "board",
         runId: run.id,
@@ -1202,7 +1313,9 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       asking = { index: 0, typed: "" };
       answering = waiting.id;
     }
-    if (!waiting) answering = null;
+    if (!waiting) {
+      answering = null;
+    }
 
     const steering = yield* steeringOf(view);
     const text = renderWorkspace(view, unreadable ?? note ?? undefined, asking, steering);
@@ -1239,9 +1352,13 @@ export const answerKey = Effect.fn("Flows.answerKey")(function* (
   key: string,
 ) {
   const choice = waiting.choice;
-  if (!choice) return { asking };
+  if (!choice) {
+    return { asking };
+  }
   const next = answerFor(choice, asking, key);
-  if (next.value === null) return { asking: next.asking };
+  if (next.value === null) {
+    return { asking: next.asking };
+  }
   const answered = yield* answerRun(env, {
     door: "board",
     runId: waiting.id,
@@ -1263,17 +1380,23 @@ const act = Effect.fn("Flows.act")(function* (
 ) {
   if (/^[1-9]$/.test(key)) {
     const agent = agentForKey(view, key);
-    if (!agent) return null;
+    if (!agent) {
+      return null;
+    }
     return attachLine(agent.agent);
   }
   if (key === "l") {
     const row = view.active[0] ?? view.recent[0];
-    if (!row) return "no run here to open a log for";
+    if (!row) {
+      return "no run here to open a log for";
+    }
     return `${row.title} keeps no log of its own: its agents' panes are the record`;
   }
   if (key === "k") {
     const row = view.active[0];
-    if (!row) return "nothing running here to stop";
+    if (!row) {
+      return "nothing running here to stop";
+    }
     return yield* stopRun(env, row.id);
   }
   return null;
@@ -1311,7 +1434,9 @@ const quietSeen = new Map<string, { at: number; quietMs: number }>();
 const boardQuietMs = Effect.fn("Flows.boardQuietMs")(function* (userDir: string) {
   const now = yield* Clock.currentTimeMillis;
   const seen = quietSeen.get(userDir);
-  if (seen && now - seen.at < QUIET_FOR_MS) return seen.quietMs;
+  if (seen && now - seen.at < QUIET_FOR_MS) {
+    return seen.quietMs;
+  }
   const quietMs = (yield* loadDefaults(userDir)).boardQuietMs;
   quietSeen.set(userDir, { at: now, quietMs });
   return quietMs;
@@ -1368,7 +1493,9 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (session: ControlSession, s
 
 const boardRelease = Effect.fn("Flows.boardRelease")(function* (session: ControlSession) {
   const fs = yield* FileSystem.FileSystem;
-  if (yield* fs.exists(`${session.pluginRoot}/.git`)) return null;
+  if (yield* fs.exists(`${session.pluginRoot}/.git`)) {
+    return null;
+  }
   return yield* newerRelease(
     session.releases ?? RELEASES,
     manifest.version,

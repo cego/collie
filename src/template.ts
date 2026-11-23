@@ -34,8 +34,11 @@ const MENTION = /the `([A-Za-z0-9_-]+)` skill \((?:read|not installed)/g;
 
 export function skillsIn(text: string) {
   const names: Array<string> = [];
-  for (const [, name] of pipe(text, Str.matchAll(SKILL)))
-    if (name && !names.includes(name)) names.push(name);
+  for (const [, name] of pipe(text, Str.matchAll(SKILL))) {
+    if (name && !names.includes(name)) {
+      names.push(name);
+    }
+  }
   return names;
 }
 
@@ -45,8 +48,11 @@ const BRACES = /\{\{[^}]*\}\}/g;
 
 export function expressionsIn(text: string) {
   const names: Array<string> = [];
-  for (const [, name] of pipe(text, Str.replaceAll(SKILL, ""), Str.matchAll(EXPRESSION)))
-    if (name && !names.includes(name)) names.push(name);
+  for (const [, name] of pipe(text, Str.replaceAll(SKILL, ""), Str.matchAll(EXPRESSION))) {
+    if (name && !names.includes(name)) {
+      names.push(name);
+    }
+  }
   return names;
 }
 
@@ -77,10 +83,14 @@ export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions
   const out = withSkills.replaceAll(EXPRESSION, (_all, path: string) => {
     const value = lookup(input, Str.split(path, "."));
     if (value === undefined || value === null) {
-      if (!missing.includes(path)) missing.push(path);
+      if (!missing.includes(path)) {
+        missing.push(path);
+      }
       return "";
     }
-    if (value === "" && pipe(path, Str.startsWith("inputs."))) return NOT_GIVEN;
+    if (value === "" && pipe(path, Str.startsWith("inputs."))) {
+      return NOT_GIVEN;
+    }
     return isText(value) ? value : stringifyJson(value, 2);
   });
   return { text: out, missing };
@@ -89,9 +99,13 @@ export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions
 function lookup(input: YamlMap, path: Array<string>) {
   let node: YamlValue = input;
   for (const key of path) {
-    if (!isYamlMap(node)) return undefined;
+    if (!isYamlMap(node)) {
+      return undefined;
+    }
     const next: YamlValue | undefined = node[key];
-    if (next === undefined) return undefined;
+    if (next === undefined) {
+      return undefined;
+    }
     node = next;
   }
   return node;

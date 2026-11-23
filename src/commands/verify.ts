@@ -114,14 +114,16 @@ export const verify = Command.make(
   },
   ({ runId, cwd, name, expect, again, command }) => {
     const [executable, ...argv] = command;
-    if (executable === undefined)
+    if (executable === undefined) {
       return printResult(err("invalid_input", "verify needs a command to run."), true);
+    }
     const wanted = Option.getOrElse(expect, () => "pass");
-    if (wanted !== "pass" && wanted !== "fail")
+    if (wanted !== "pass" && wanted !== "fail") {
       return printResult(
         err("invalid_input", `--expect is "pass" or "fail", not "${wanted}".`),
         true,
       );
+    }
     return answering((env) =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -129,8 +131,9 @@ export const verify = Command.make(
           const run = Option.getOrElse(runId, () =>
             Schema.is(FrontDoor)(door) ? null : door.from.run,
           );
-          if (run === null)
+          if (run === null) {
             return err("invalid_input", "verify needs --run outside a Run's agent pane.");
+          }
           const request = {
             runId: run,
             name: Option.getOrElse(name, () => checkNameOf(executable, argv)),
@@ -145,7 +148,9 @@ export const verify = Command.make(
             where === undefined ? request : { ...request, cwd: where },
             door,
           );
-          if (!opened.ok) return opened;
+          if (!opened.ok) {
+            return opened;
+          }
           const byAgent = !Schema.is(FrontDoor)(door);
           const readers = { stdout: failureReader(), stderr: failureReader() };
           const shown = yield* echoed();
@@ -176,12 +181,15 @@ export const verify = Command.make(
               ),
             ),
           );
-          if (answered === null)
+          if (answered === null) {
             return err("operation_failed", "The verification ended without a record.");
-          if ("ok" in answered) return answered;
+          }
+          if ("ok" in answered) {
+            return answered;
+          }
           const { verification: record, ran } = answered;
           process.exitCode = record.exit;
-          if (byAgent)
+          if (byAgent) {
             return bounded(
               record,
               ran,
@@ -189,6 +197,7 @@ export const verify = Command.make(
                 ? [...readers.stdout.names(), ...readers.stderr.names()]
                 : Arr.map(record.failed ?? [], (one) => `${one.file} > ${one.name}`),
             );
+          }
           return {
             ok: true as const,
             data: { verification: record, ran },

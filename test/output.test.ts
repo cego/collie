@@ -107,7 +107,9 @@ test("resolved ledger findings leave the rally clean and a dispute remains the h
 
 const ok = (text: string) => {
   const r = parseReviewOutput(text, "review.json");
-  if (!r.ok) throw new Error(r.error);
+  if (!r.ok) {
+    throw new Error(r.error);
+  }
   return r.value;
 };
 const err = (text: string) => {
@@ -160,7 +162,9 @@ test("the schema rejects what a gate could not read", () => {
 
 const synth = (text: string) => {
   const r = parseSynthesis(text, "synthesized.json");
-  if (!r.ok) throw new Error(r.error);
+  if (!r.ok) {
+    throw new Error(r.error);
+  }
   return r.value;
 };
 const synthErr = (text: string) => {
@@ -480,7 +484,9 @@ test("a fix Output carries what it fixed, disputed and checked, keyed like findi
     }),
     "fix.json",
   );
-  if (!parsed.ok) throw new Error(parsed.error);
+  if (!parsed.ok) {
+    throw new Error(parsed.error);
+  }
   expect(parsed.value.fixed).toEqual([
     { file: "cli.js", title: "no exit code", note: "process.exit(1)" },
   ]);
@@ -540,7 +546,9 @@ test("the last fix cannot both fix and dispute a finding, and what it still repo
     PASSED,
   );
   expect(open.ok).toBe(false);
-  if (open.ok) throw new Error("expected halt");
+  if (open.ok) {
+    throw new Error("expected halt");
+  }
   expect(open.halt).toBe("fix_unverified");
   expect(open.reasons).toEqual([
     "the fix reports 1 blocking finding(s) of its own: [major] Rejection unhandled (cli.js)",
@@ -565,7 +573,9 @@ test("a last fix whose own findings are all minor settles and carries them as ou
     },
     PASSED,
   );
-  if (!settled.ok) throw new Error(`expected ok: ${Arr.join(settled.reasons, "; ")}`);
+  if (!settled.ok) {
+    throw new Error(`expected ok: ${Arr.join(settled.reasons, "; ")}`);
+  }
   expect(settled.outstanding).toEqual([nit]);
   expect(settled.attestation).toContain("[minor] Message could be shorter (cli.js)");
 });
@@ -605,7 +615,9 @@ test("the last fix settles the review when every blocking finding is fixed and t
   };
   const settled = settleFinalFix([BLOCKER, MINOR], fix, PASSED);
   expect(settled.ok).toBe(true);
-  if (!settled.ok) throw new Error("expected ok");
+  if (!settled.ok) {
+    throw new Error("expected ok");
+  }
   expect(settled.outstanding).toEqual([MINOR]);
   expect(settled.attestation).toContain("1 blocking finding(s) reported fixed");
   expect(settled.attestation).toContain("1 check(s) verified on this tree");
@@ -687,7 +699,9 @@ test("the last fix is not enough with a missing disposition, a reworded title, a
     PASSED,
   );
   expect(both.ok).toBe(false);
-  if (both.ok) throw new Error("expected halt");
+  if (both.ok) {
+    throw new Error("expected halt");
+  }
   expect(both.halt).toBe("fix_unverified");
   expect(both.reasons).toHaveLength(2);
   expect(both.outstanding).toEqual([BLOCKER, MINOR]);
@@ -705,7 +719,9 @@ test("a serious dispute the latest review left out still blocks the last fix", (
   expect(settled.ok ? "(ok)" : `${settled.halt}: ${Arr.join(settled.reasons, "; ")}`).toBe(
     "dispute_unresolved: disputed blocking finding: [blocker] No exit code (cli.js)",
   );
-  if (settled.ok) throw new Error("expected halt");
+  if (settled.ok) {
+    throw new Error("expected halt");
+  }
   expect(settled.outstanding).toEqual([MAJOR_NEW, { ...BLOCKER, detail: "out of scope" }]);
   const minor = settleFinalFix(
     [MAJOR_NEW],

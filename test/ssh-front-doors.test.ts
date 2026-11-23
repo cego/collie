@@ -35,8 +35,9 @@ const listed = (side: Side, name: string) =>
           (one) => one.name === name,
         ),
       );
-      if (found === undefined)
+      if (found === undefined) {
         throw new Error(`${side.name} does not list ${name}: ${encode(read.envelope)}`);
+      }
       return found;
     }),
   );
@@ -177,7 +178,9 @@ test("a link whose direct way never answers still says it waits on an SSH connec
             pairs: false,
           });
           expect(job.ok).toBe(false);
-          if (!job.ok) expect(job.error.details?.waits).toBe("ssh_connection");
+          if (!job.ok) {
+            expect(job.error.details?.waits).toBe("ssh_connection");
+          }
 
           const dropped = (yield* first.ssh.calls).length;
           const board = yield* first.cli(["--machine", "second", "board"]);

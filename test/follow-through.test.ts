@@ -100,7 +100,9 @@ const pushed = (what: string, ref = MR_REF) =>
 
 const entryOf = (id: string) =>
   Effect.gen(function* () {
-    if (id === "review") return `${ROOT}workflows/review.workflow.ts`;
+    if (id === "review") {
+      return `${ROOT}workflows/review.workflow.ts`;
+    }
     const fs = yield* FileSystem.FileSystem;
     const entry = `${rig.userDir}/workflows/${id}.workflow.ts`;
     yield* fs.makeDirectory(`${rig.userDir}/workflows`, { recursive: true });
@@ -401,8 +403,8 @@ test("!482: a signed fixed claim without a push reassesses only its finding", ()
     }),
   ));
 
-for (const id of ["review", "second-look"])
-  for (const choice of ["Keep", "Drop"])
+for (const id of ["review", "second-look"]) {
+  for (const choice of ["Keep", "Drop"]) {
     test(`${id}: a maintained dispute gets one rebuttal and ${choice} is the human's decision`, () =>
       host.runEffect(
         Effect.gen(function* () {
@@ -523,8 +525,10 @@ for (const id of ["review", "second-look"])
           );
         }),
       ));
+  }
+}
 
-for (const id of ["review", "second-look"])
+for (const id of ["review", "second-look"]) {
   test(`${id}: a reply arriving with a new head runs one full round with both reply labels`, () =>
     host.runEffect(
       Effect.gen(function* () {
@@ -596,8 +600,9 @@ for (const id of ["review", "second-look"])
         );
       }),
     ));
+}
 
-for (const id of ["review", "second-look"])
+for (const id of ["review", "second-look"]) {
   test(`${id}: !481 with Slack — one signed note, one round on the new head, and approval the only answer`, () =>
     host.runEffect(
       Effect.gen(function* () {
@@ -713,6 +718,7 @@ for (const id of ["review", "second-look"])
         );
       }),
     ));
+}
 
 const follows = `${fixtures}/follows-mr.workflow.ts`;
 
@@ -758,7 +764,7 @@ const cardSentence = (runId: string) =>
 for (const [count, why] of [
   [0, "no Slack message found"],
   [2, "2 messages mention it"],
-] as const)
+] as const) {
   test(`${count} candidate Slack messages add no reaction and the card says ${why}`, () =>
     host.runEffect(
       Effect.gen(function* () {
@@ -790,6 +796,7 @@ for (const [count, why] of [
         );
       }),
     ));
+}
 
 test("a restart during reactions, on the first round and at approval, adds each of the three once", () =>
   host.runEffect(
@@ -873,7 +880,7 @@ test("a restart during reactions, on the first round and at approval, adds each 
     }),
   ));
 
-for (const status of [503, 429])
+for (const status of [503, 429]) {
   test(`a GitLab approval write returning ${status} parks and reconciles its accepted approval`, () =>
     host.runEffect(
       Effect.gen(function* () {
@@ -929,6 +936,7 @@ for (const status of [503, 429])
         );
       }),
     ));
+}
 
 test.each(["major", "minor"] as const)(
   "Improve hands a Task's %s findings to its live implementer without launching another agent",
@@ -1335,7 +1343,9 @@ test("pinning an upstream merge request fetches its project instead of the fork'
             head,
           });
           expect(pinned).toHaveProperty("cwd");
-          if (!("cwd" in pinned)) throw new Error("pinning the upstream merge request was refused");
+          if (!("cwd" in pinned)) {
+            throw new Error("pinning the upstream merge request was refused");
+          }
           expect(Str.trim((yield* git(["rev-parse", "HEAD"], pinned.cwd)).stdout)).toBe(head);
         }),
       );
@@ -1405,8 +1415,8 @@ test("a new start after follow-through finishes reviews a reopened merge request
     }),
   ));
 
-for (const following of [true, false])
-  for (const status of [503, 429])
+for (const following of [true, false]) {
+  for (const status of [503, 429]) {
     test(`${following ? "followed" : "manual"} GitHub approval parks before submission on ${status} and recovers once`, () =>
       host.runEffect(
         Effect.gen(function* () {
@@ -1424,10 +1434,18 @@ for (const following of [true, false])
           const api = yield* serveForges({
             forge: "github",
             face: (url, init) => {
-              if (unavailable && posted && Str.endsWith("/pulls/7")(url) && init?.method === "GET")
+              if (
+                unavailable &&
+                posted &&
+                Str.endsWith("/pulls/7")(url) &&
+                init?.method === "GET"
+              ) {
                 return Promise.resolve(Response.json({ message: "unavailable" }, { status }));
+              }
               return forge.face(url, init).then((response) => {
-                if (Str.endsWith("/comments")(url) && init?.method === "POST") posted = true;
+                if (Str.endsWith("/comments")(url) && init?.method === "POST") {
+                  posted = true;
+                }
                 return response;
               });
             },
@@ -1497,13 +1515,15 @@ for (const following of [true, false])
           );
         }),
       ));
+  }
+}
 
 for (const { following, after, refused } of [
   { following: true, after: 503, refused: false },
   { following: false, after: 429, refused: true },
   { following: true, after: "push", refused: false },
   { following: true, after: "push", refused: true },
-] as const)
+] as const) {
   test(`${following ? "followed" : "manual"} GitHub approval fails after ${after} with dismissal ${refused ? "refused" : "accepted"}`, () =>
     host.runEffect(
       Effect.gen(function* () {
@@ -1524,8 +1544,9 @@ for (const { following, after, refused } of [
             runLive(
               Effect.gen(function* () {
                 if (accepted && Str.endsWith("/pulls/7")(url) && init?.method === "GET") {
-                  if (after !== "push")
+                  if (after !== "push") {
                     return Response.json({ message: "temporarily unavailable" }, { status: after });
+                  }
                   const now = yield* forge.model();
                   yield* forge.set({
                     ...now,
@@ -1534,10 +1555,14 @@ for (const { following, after, refused } of [
                 }
                 if (Str.endsWith("/dismissals")(url)) {
                   dismissed += 1;
-                  if (refused) return Response.json({ message: "Forbidden" }, { status: 403 });
+                  if (refused) {
+                    return Response.json({ message: "Forbidden" }, { status: 403 });
+                  }
                 }
                 const response = yield* Effect.promise(() => forge.face(url, init));
-                if (Str.endsWith("/reviews")(url) && init?.method === "POST") accepted = true;
+                if (Str.endsWith("/reviews")(url) && init?.method === "POST") {
+                  accepted = true;
+                }
                 return response;
               }),
             ),
@@ -1591,8 +1616,9 @@ for (const { following, after, refused } of [
         );
       }),
     ));
+}
 
-for (const state of ["closed", "merged"] as const)
+for (const state of ["closed", "merged"] as const) {
   test(`a merge request ${state} during review finishes without posting or asking for approval`, () =>
     host.runEffect(
       Effect.gen(function* () {
@@ -1605,7 +1631,9 @@ for (const state of ["closed", "merged"] as const)
         forge.before(() =>
           runLive(
             Effect.gen(function* () {
-              if (ended || (yield* host.agentStarts).length === 0) return;
+              if (ended || (yield* host.agentStarts).length === 0) {
+                return;
+              }
               ended = true;
               yield* forge.set(model(head, { mrs: [mr(head, { state })] }));
             }),
@@ -1632,6 +1660,7 @@ for (const state of ["closed", "merged"] as const)
         );
       }),
     ));
+}
 
 test("a second start of a followed merge request by the same login is the first Run, whatever it was given", () =>
   host.runEffect(
@@ -1680,7 +1709,7 @@ test("with following off, each start is a Run of its own", () =>
 const signatures = (notes: ReadonlyArray<string>) =>
   Arr.map(notes, (note) => Str.split(note, "\n").at(-1));
 
-for (const id of ["review", "second-look"])
+for (const id of ["review", "second-look"]) {
   test(`${id}: a head moved during a round posts nothing for that round, and the next round reviews the newer head`, () =>
     host.runEffect(
       Effect.gen(function* () {
@@ -1706,7 +1735,9 @@ for (const id of ["review", "second-look"])
           () =>
             moving ??
             runLive(host.agentStarts).then((starts) => {
-              if (starts.length < 2) return;
+              if (starts.length < 2) {
+                return;
+              }
               moving ??= runLive(
                 Effect.gen(function* () {
                   third = yield* pushed("and the other handle");
@@ -1770,6 +1801,7 @@ for (const id of ["review", "second-look"])
         );
       }),
     ));
+}
 
 const begun = (id: string, outputs: ReadonlyArray<Schema.Json>) =>
   Effect.gen(function* () {
@@ -1828,9 +1860,12 @@ test("concurrent forge failures park the initial head read once and recover befo
           : Promise.resolve(),
       );
       forge.after((url, _init, response) => {
-        if (!unavailable || !Str.includes("/merge_requests/7")(url))
+        if (!unavailable || !Str.includes("/merge_requests/7")(url)) {
           return Promise.resolve(response);
-        if (++replies === 3) together.resolve();
+        }
+        if (++replies === 3) {
+          together.resolve();
+        }
         return together.promise.then(() => response);
       });
       yield* host.session(
@@ -1861,8 +1896,8 @@ test("concurrent forge failures park the initial head read once and recover befo
     }),
   ));
 
-for (const id of ["review", "second-look"])
-  for (const status of [503, 429])
+for (const id of ["review", "second-look"]) {
+  for (const status of [503, 429]) {
     test(`${id}: forge ${status} during the wait parks for rechecks and recovers automatically`, () =>
       host.runEffect(
         Effect.gen(function* () {
@@ -1916,9 +1951,11 @@ for (const id of ["review", "second-look"])
           );
         }),
       ));
+  }
+}
 
-for (const id of ["review", "second-look"])
-  for (const status of [503, 429])
+for (const id of ["review", "second-look"]) {
+  for (const status of [503, 429]) {
     test(`${id}: forge ${status} after accepting a review parks its Activity and recovers without a duplicate note`, () =>
       host.runEffect(
         Effect.gen(function* () {
@@ -1926,7 +1963,9 @@ for (const id of ["review", "second-look"])
           let accepted = false;
           let unavailable = true;
           forge.after((url, init, response) => {
-            if (init?.method === "POST" && Str.endsWith("/notes")(url)) accepted = true;
+            if (init?.method === "POST" && Str.endsWith("/notes")(url)) {
+              accepted = true;
+            }
             return Promise.resolve(
               accepted && unavailable
                 ? new Response('{"message":"temporarily unavailable"}', { status })
@@ -1969,6 +2008,8 @@ for (const id of ["review", "second-look"])
           );
         }),
       ));
+  }
+}
 
 for (const id of ["review", "second-look"]) {
   test(`${id}: a push while the approval is asked supersedes the question, and approves only the newer head`, () =>
@@ -2122,8 +2163,9 @@ for (const id of ["review", "second-look"]) {
         let holding = true;
         yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
         forge.after((url, init, response) => {
-          if (!holding || init?.method !== "POST" || !Str.endsWith("/notes")(url))
+          if (!holding || init?.method !== "POST" || !Str.endsWith("/notes")(url)) {
             return Promise.resolve(response);
+          }
           holding = false;
           accepted.resolve();
           return release.promise.then(() => response);

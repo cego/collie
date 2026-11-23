@@ -27,10 +27,11 @@ const registry = new Map<ActionKind, AnyExecutor>();
 
 // WARNING: registering a kind twice is an error, not last-one-wins.
 export function registerExecutor<K extends ActionKind>(kind: K, run: Executor<K>) {
-  if (registry.has(kind)) throw new Error(`two executors registered for "${kind}"`);
+  if (registry.has(kind)) {
+    throw new Error(`two executors registered for "${kind}"`);
+  }
   registry.set(kind, (action, by, env) => {
     // WARNING: `executorFor` is only ever asked for the kind an action carries, so the action reaching this executor is the one variant it was registered for.
-    // WARNING: executorFor is asked only for the kind an action carries, so the action is the variant it was registered for.
     return run(action as Extract<Action, { kind: K }>, by, env);
   });
 }

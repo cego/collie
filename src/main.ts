@@ -11,7 +11,9 @@ const compactionProgram = Effect.gen(function* () {
     Promise.all([Bun.stdin.text(), import("./compactors")]),
   );
   const line = yield* recordClaudeEvent(dir, stdin).pipe(Effect.orElseSucceed(() => ""));
-  if (line !== "") yield* Console.log(line);
+  if (line !== "") {
+    yield* Console.log(line);
+  }
 });
 
 const started = Config.String("COLLIE_TEST_STARTS").pipe(
@@ -45,7 +47,9 @@ if (args[0] === "supervise-check") {
   // WARNING: After the peer closes, writes must error rather than wait on a drain that never comes.
   for (const stream of [process.stdout, process.stderr]) {
     stream.on("error", (error: NodeJS.ErrnoException) => {
-      if (error.code === "EPIPE") process.exit(1);
+      if (error.code === "EPIPE") {
+        process.exit(1);
+      }
     });
   }
   BunRuntime.runMain(

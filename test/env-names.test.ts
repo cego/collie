@@ -26,8 +26,12 @@ const hostedAt = (names: (dir: string) => Record<string, string>) =>
     ] as const;
     const hosted: Array<string> = [];
     for (const [name, dir] of where) {
-      if (yield* fs.exists(socketOf(dir))) hosted.push(name);
-      if (yield* fs.exists(dir)) yield* stopHost(dir);
+      if (yield* fs.exists(socketOf(dir))) {
+        hosted.push(name);
+      }
+      if (yield* fs.exists(dir)) {
+        yield* stopHost(dir);
+      }
     }
     return { ok: listed.exitCode === 0, hosted };
   }).pipe(Effect.scoped);

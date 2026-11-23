@@ -30,13 +30,17 @@ export function statusLineCommand(self: ReadonlyArray<string> = selfCommand()) {
 
 export const statusLineFor = Effect.fn("StatusLine.for")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-  if (key === null) return "";
+  if (key === null) {
+    return "";
+  }
   return selectionLine(yield* readSelection(yield* selectionPath(env.stateDir, key)));
 });
 
 export const promptLineFor = Effect.fn("StatusLine.prompt")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-  if (key === null) return "";
+  if (key === null) {
+    return "";
+  }
   const fs = yield* FileSystem.FileSystem;
   const file = yield* selectionPath(env.stateDir, key);
   const told = `${file}.told`;
@@ -45,7 +49,9 @@ export const promptLineFor = Effect.fn("StatusLine.prompt")(function* (env: Plug
     yield* fs.writeFileString(told, "").pipe(Effect.ignore);
     return promptLine(on);
   }
-  if (!(yield* fs.exists(told).pipe(Effect.orElseSucceed(() => false)))) return "";
+  if (!(yield* fs.exists(told).pipe(Effect.orElseSucceed(() => false)))) {
+    return "";
+  }
   yield* fs.remove(told, { force: true }).pipe(Effect.ignore);
   return "Board: no card open now; questions are about the whole Herd unless one is named.";
 });
@@ -73,9 +79,13 @@ const NONE: StatusLine = { kind: "none" };
 export const readStatusLine = Effect.fn("StatusLine.read")(function* (env: PluginEnv) {
   const settings = yield* readSettings(yield* claudeSettingsPath(env));
   const line = settings?.["statusLine"];
-  if (!isYamlMap(line)) return NONE;
+  if (!isYamlMap(line)) {
+    return NONE;
+  }
   const command = line["command"];
-  if (!isString(command)) return NONE;
+  if (!isString(command)) {
+    return NONE;
+  }
   return command.includes(Arr.join(STATUS_LINE_ARGS, " "))
     ? ({ kind: "ours", command } satisfies StatusLine)
     : ({ kind: "theirs", command } satisfies StatusLine);
@@ -87,14 +97,17 @@ export const installStatusLine = Effect.fn("StatusLine.install")(function* (env:
   const file = yield* claudeSettingsPath(env);
   const found = yield* readStatusLine(env);
   const command = statusLineCommand();
-  if (found.kind === "theirs")
+  if (found.kind === "theirs") {
     return `Claude Code already prints a status line of its own (${found.command}); Collie left it alone. To show the board's selection instead, set statusLine.command in ${file} to: ${command}`;
-  if (found.kind === "ours" && found.command === command)
+  }
+  if (found.kind === "ours" && found.command === command) {
     return `Claude Code already prints the board's selection; ${file} is already configured.`;
+  }
   const settings = yield* readSettings(file);
   // WARNING: refused rather than replaced: a file half-edited by hand loses all of it when rewritten.
-  if (settings === null)
+  if (settings === null) {
     return `Collie could not read ${file}, so it changed nothing. Fix the JSON, or set statusLine.command in it to: ${command}`;
+  }
   settings["statusLine"] = { type: "command", command, padding: 0 };
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
   yield* fs.writeFileString(file, `${encode(settings)}\n`);
@@ -104,7 +117,9 @@ export const installStatusLine = Effect.fn("StatusLine.install")(function* (env:
 const readSettings = Effect.fn("StatusLine.readSettings")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-  if (Str.trim(raw) === "") return {};
+  if (Str.trim(raw) === "") {
+    return {};
+  }
   const found = decode(raw);
   return found._tag === "Some" ? { ...found.value } : null;
 });

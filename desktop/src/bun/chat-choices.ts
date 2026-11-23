@@ -72,8 +72,12 @@ const withList: (
   pi: PiConfig,
   settings: DesktopSettings,
 ) => Offer = (table, list, pi, settings) => {
-  if (list?.from === "table") return { ...table, why: list.why };
-  if (list?.from !== "harness") return table;
+  if (list?.from === "table") {
+    return { ...table, why: list.why };
+  }
+  if (list?.from !== "harness") {
+    return table;
+  }
   const harness = table.unset.harness;
   const typed =
     (settings.chatHarness ?? DEFAULT_CHAT_HARNESS) === harness &&
@@ -141,9 +145,13 @@ export const opensOn = <R>(
 ) =>
   Effect.gen(function* () {
     const checked = chatChoice({ chatHarness: settings.chatHarness }, flock);
-    if (!checked.ok) return checked;
+    if (!checked.ok) {
+      return checked;
+    }
     const { harness } = checked.choice;
-    if (lists !== undefined) yield* lists.ready(harness);
+    if (lists !== undefined) {
+      yield* lists.ready(harness);
+    }
     const config = yield* configFor(harness, pi);
     const offered = withList(
       tableOffer(harness, settings, flock, config),
@@ -152,7 +160,9 @@ export const opensOn = <R>(
       settings,
     );
     const ready = chatChoice(settings, flock, { [harness]: offered });
-    if (!ready.ok) return ready;
+    if (!ready.ok) {
+      return ready;
+    }
     return {
       ok: true as const,
       choice: runsAs(

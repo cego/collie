@@ -87,7 +87,9 @@ export const marked = (
   ];
   return Arr.flatMap(pids, (name) => {
     const pid = Number(name);
-    if (pid === process.pid) return [];
+    if (pid === process.pid) {
+      return [];
+    }
     try {
       const environ = () => readFileSync(`${proc}/${name}/environ`, "utf8");
       let read = environ();
@@ -97,9 +99,13 @@ export const marked = (
         read = environ();
       }
       // WARNING: The exec may finish between the empty read and the stat read.
-      if (read === "") read = environ();
+      if (read === "") {
+        read = environ();
+      }
       const env = `\0${read}\0`;
-      if (!Arr.every(want, (binding) => pipe(env, Str.includes(binding)))) return [];
+      if (!Arr.every(want, (binding) => pipe(env, Str.includes(binding)))) {
+        return [];
+      }
       const command = Str.trim(
         Arr.join(Str.split(readFileSync(`${proc}/${name}/cmdline`, "utf8"), "\0"), " "),
       );
@@ -122,9 +128,13 @@ export const sweepDeadRoots = (dir: string) =>
         Option.map(Option.fromNullishOr(/^collie-test-(\d+)-/.exec(name)), (present) => present[1]),
       ) ?? 0,
     );
-    if (pid <= 0 || alive(pid)) return [];
+    if (pid <= 0 || alive(pid)) {
+      return [];
+    }
     const root = join(dir, name);
-    for (const one of marked(root)) kill(one.pid);
+    for (const one of marked(root)) {
+      kill(one.pid);
+    }
     return removed(root) ? [root] : [];
   });
 
@@ -141,8 +151,11 @@ export const sweepEveryBase = (memory = MEMORY_BASE) =>
 const writable = (dir: string) => {
   try {
     chmodSync(dir, 0o700);
-    for (const entry of readdirSync(dir, { withFileTypes: true }))
-      if (entry.isDirectory()) writable(join(dir, entry.name));
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        writable(join(dir, entry.name));
+      }
+    }
   } catch {}
 };
 

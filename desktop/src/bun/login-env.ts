@@ -21,17 +21,22 @@ const LIMIT = "5 seconds";
 export const parseLoginEnv = (output: string) => {
   const start = Option.getOrElse(pipe_(output, Str.indexOf(BEGIN)), () => -1);
   const found = new Map<string, string>();
-  if (start < 0) return found;
+  if (start < 0) {
+    return found;
+  }
   const remaining = pipe_(output, Str.slice(start + BEGIN.length));
   const end = Option.getOrElse(pipe_(remaining, Str.indexOf(END)), () => -1);
-  if (end < 0) return found;
+  if (end < 0) {
+    return found;
+  }
   for (const entry of Str.split(pipe_(remaining, Str.slice(0, end)), "\0")) {
     const eq = Option.getOrElse(pipe_(entry, Str.indexOf("=")), () => -1);
-    if (eq > 0)
+    if (eq > 0) {
       found.set(
         pipe_(entry, Str.slice(0, eq), Str.replace(/^\n/, "")),
         pipe_(entry, Str.slice(eq + 1)),
       );
+    }
   }
   return found;
 };
@@ -96,7 +101,9 @@ export const agentState = (
       Effect.timeoutOption(limit),
       Effect.ensuring(Effect.sync(() => child.kill())),
     );
-    if (Option.isNone(code)) return "unknown" as const;
+    if (Option.isNone(code)) {
+      return "unknown" as const;
+    }
     return code.value === 0
       ? "holds"
       : code.value === 1
@@ -117,12 +124,20 @@ export const takesLoginAgent = Effect.fn("Desktop.takesLoginAgent")(function* (
   login: string | undefined,
   stateOf: (socket: string) => Effect.Effect<AgentState>,
 ) {
-  if (login === undefined || session === undefined || login === session) return true;
+  if (login === undefined || session === undefined || login === session) {
+    return true;
+  }
   const theirs = yield* stateOf(login);
-  if (theirs === "holds") return true;
+  if (theirs === "holds") {
+    return true;
+  }
   const ours = yield* stateOf(session);
-  if (ours === "holds") return false;
-  if (theirs === "empty") return true;
+  if (ours === "holds") {
+    return false;
+  }
+  if (theirs === "empty") {
+    return true;
+  }
   return ours !== "empty";
 });
 
@@ -142,12 +157,16 @@ export const takeLoginEnv = Effect.gen(function* () {
   const session = env.SSH_AUTH_SOCK;
   const login = taken.get("SSH_AUTH_SOCK");
   const keepsAgent = !(yield* takesLoginAgent(session, login, (socket) => agentState(socket)));
-  if (keepsAgent)
+  if (keepsAgent) {
     yield* Effect.logInfo(
       `Keeping the SSH agent at ${session}: the login shell's at ${login} holds no keys`,
     );
-  for (const [name, value] of taken)
-    if (!(keepsAgent && AGENT_VARIABLES.has(name))) env[name] = value;
+  }
+  for (const [name, value] of taken) {
+    if (!(keepsAgent && AGENT_VARIABLES.has(name))) {
+      env[name] = value;
+    }
+  }
   return true;
 }).pipe(Effect.orElseSucceed(() => false));
 

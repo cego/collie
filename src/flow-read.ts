@@ -135,9 +135,15 @@ const startedIn = Effect.fn("Flow.startedIn")(function* (parent: RunFacts, child
   const started = Option.getOrUndefined(
     Arr.findLast(lines, (line) => line.kind === "child" && line.run === child),
   );
-  if (started?.kind !== "child") return null;
+  if (started?.kind !== "child") {
+    return null;
+  }
   const key = started.key;
-  for (const line of lines) if (line.kind === "enter" && line.key === key) return line.step.id;
+  for (const line of lines) {
+    if (line.kind === "enter" && line.key === key) {
+      return line.step.id;
+    }
+  }
   return null;
 });
 
@@ -213,8 +219,9 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
   const offerOwner = Option.getOrUndefined(
     Arr.findFirst(task.all, (run) => run.id === task.offer?.run),
   );
-  if (offerOwner !== undefined && !Arr.some(rows, (run) => run.id === offerOwner.id))
+  if (offerOwner !== undefined && !Arr.some(rows, (run) => run.id === offerOwner.id)) {
     rows.push(offerOwner);
+  }
   rows.sort((one, other) => pipe_(one.created, Str.localeCompare(other.created)));
   const byId = new Map(Arr.map(rows, (run) => [run.id, run]));
   const inTask = new Set(Arr.map(rows, (run) => run.id));
@@ -259,7 +266,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
       (one) => !inTask.has(one.id) && !repos.includes(one),
     );
     const children: Array<ChildFact> = [];
-    for (const child of own)
+    for (const child of own) {
       children.push({
         id: child.id,
         title: pipe_(child.id, Str.startsWith(`${run.id}.`))
@@ -269,6 +276,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
         link: yield* linkOf(child),
         wave: null,
       });
+    }
     const waves = Arr.filter(task.waves, (one) => one.parent === run.id);
     const planned = (repo: RunFacts) => {
       const at = Option.getOrElse(
@@ -277,7 +285,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
       );
       return at === -1 ? waves.length : at;
     };
-    for (const repo of [...repos].sort((one, other) => planned(one) - planned(other)))
+    for (const repo of [...repos].sort((one, other) => planned(one) - planned(other))) {
       children.push({
         id: repo.id,
         title:
@@ -288,6 +296,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
         link: yield* linkOf(repo),
         wave: Option.getOrUndefined(Arr.findFirst(waves, (one) => one.run === repo.id))?.wave ?? 1,
       });
+    }
     const ownLane = yield* lane(run, {
       children,
       toCome: Arr.filter(waves, (one) => one.run === null),
@@ -336,8 +345,12 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
           node.produces === "merge-request" && mr !== null ? (mrUrlOf(mr) ?? undefined) : node.url,
       };
     });
-    for (const link of Arr.filter(links, (one) => !Arr.some(nodes, (node) => node.id === one.step)))
+    for (const link of Arr.filter(
+      links,
+      (one) => !Arr.some(nodes, (node) => node.id === one.step),
+    )) {
       nodes.push({ ...link.node, offPath: true, runs: [] });
+    }
     const linked = { ...ownLane, nodes };
     const parent = run.parent === null ? undefined : byId.get(run.parent);
     lanes.push(
@@ -362,7 +375,9 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
           }),
   } satisfies Flow;
   const now = yield* Clock.currentTimeMillis;
-  if (task.releases === undefined) return settleFlow(flow, now);
+  if (task.releases === undefined) {
+    return settleFlow(flow, now);
+  }
   const releases = Arr.map(task.releases, (one) => ({
     mr: one.id,
     short: one.short,

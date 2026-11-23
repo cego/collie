@@ -16,7 +16,9 @@ const warnedOver = <A, E, R>(effect: Effect.Effect<A, E, R>, passes: Duration.In
   Effect.gen(function* () {
     const warned: Array<string> = [];
     const logger = Logger.make(({ logLevel, message }) => {
-      if (logLevel === "Warn") warned.push(String(message));
+      if (logLevel === "Warn") {
+        warned.push(String(message));
+      }
     });
     yield* Effect.gen(function* () {
       const running = yield* Effect.forkChild(effect);

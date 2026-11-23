@@ -19,7 +19,9 @@ const personaList = Command.make("list", {}, () =>
     yield* attempt(
       Effect.gen(function* () {
         const resolved = yield* discoveryContext(global);
-        if (resolved._tag === "ContextFailure") return resolved.result;
+        if (resolved._tag === "ContextFailure") {
+          return resolved.result;
+        }
         const defs = yield* definitions(resolved.env);
         const personas = Arr.map(
           [...defs.personas.values()].sort((a, b) => pipe_(a.name, Str.localeCompare(b.name))),
@@ -51,7 +53,9 @@ const personaShow = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* discoveryContext(global);
-          if (resolved._tag === "ContextFailure") return resolved.result;
+          if (resolved._tag === "ContextFailure") {
+            return resolved.result;
+          }
           const found = (yield* definitions(resolved.env)).personas.get(persona);
           return found
             ? {
@@ -78,13 +82,19 @@ const personaFork = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const base = yield* context(global, false);
-          if (base._tag === "ContextFailure") return base.result;
+          if (base._tag === "ContextFailure") {
+            return base.result;
+          }
           return yield* mutation(base.env, "persona-fork", request, (_id) =>
             Effect.gen(function* () {
               const resolved = yield* context(global, layer === "project", layer === "project");
-              if (resolved._tag === "ContextFailure") return resolved.result;
+              if (resolved._tag === "ContextFailure") {
+                return resolved.result;
+              }
               const found = (yield* definitions(resolved.env)).personas.get(persona);
-              if (!found) return err("persona_not_found", `Persona "${persona}" was not found.`);
+              if (!found) {
+                return err("persona_not_found", `Persona "${persona}" was not found.`);
+              }
               const result = yield* forkResolvedDefinition(
                 { path: found.path, kind: "personas", steps: [], body: found.body },
                 yield* layerDir(resolved.env, layer),
@@ -93,7 +103,9 @@ const personaFork = Command.make(
                   full: true,
                 },
               );
-              if (!result.ok) return err(result.code, result.message, { path: result.path });
+              if (!result.ok) {
+                return err(result.code, result.message, { path: result.path });
+              }
               return {
                 ok: true,
                 data: { path: result.path, name, layer },

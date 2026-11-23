@@ -107,19 +107,31 @@ export function leaks(transcript: string) {
   const found: Array<string> = [];
   for (const line of Str.split(transcript, "\n")) {
     const parsed = parseLine(line);
-    if (parsed._tag === "None") continue;
+    if (parsed._tag === "None") {
+      continue;
+    }
     const event = asEvent(parsed.value);
-    if (event._tag === "None") continue;
+    if (event._tag === "None") {
+      continue;
+    }
     const e = event.value;
-    if (pipe_(e.type, Str.startsWith("hook"))) found.push(`${e.type} event`);
+    if (pipe_(e.type, Str.startsWith("hook"))) {
+      found.push(`${e.type} event`);
+    }
     if (e.type === "system" && e.subtype === "init") {
       const offered = Arr.filter(e.tools ?? [], (tool) => tool !== STRUCTURED_OUTPUT);
-      if (offered.length > 0) found.push(`tool(s) offered: ${Arr.join(offered, ", ")}`);
-      if ((e.mcp_servers?.length ?? 0) > 0) found.push(`${e.mcp_servers!.length} MCP server(s)`);
+      if (offered.length > 0) {
+        found.push(`tool(s) offered: ${Arr.join(offered, ", ")}`);
+      }
+      if ((e.mcp_servers?.length ?? 0) > 0) {
+        found.push(`${e.mcp_servers!.length} MCP server(s)`);
+      }
     }
-    for (const block of e.message?.content ?? [])
-      if (block.type === "tool_use" && block.name !== STRUCTURED_OUTPUT)
+    for (const block of e.message?.content ?? []) {
+      if (block.type === "tool_use" && block.name !== STRUCTURED_OUTPUT) {
         found.push(`a tool_use block: ${block.name ?? "unnamed"}`);
+      }
+    }
   }
   return found;
 }
@@ -149,7 +161,9 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
   for (let i = 1; i < calls; i++) {
     const next = yield* one(schema);
     latencies.push(next.ms);
-    if (decoded(next.stdout)) good += 1;
+    if (decoded(next.stdout)) {
+      good += 1;
+    }
   }
 
   const hostile = yield* fs.makeTempDirectoryScoped({ prefix: "collie-probe-hostile-" });

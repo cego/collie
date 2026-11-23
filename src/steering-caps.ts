@@ -92,17 +92,21 @@ export const gate = Effect.fn("SteeringCaps.gate")(function* (
   mode: "boundary" | "now" | "interrupt",
 ) {
   const capability = needed(mode);
-  if (capability === null) return;
+  if (capability === null) {
+    return;
+  }
   const record = rowFor(harness)?.[capability];
-  if (!record || record.status !== "proven")
+  if (!record || record.status !== "proven") {
     return yield* new CapabilityUnproven({
       reason: `capability_unproven:${harness}:${mode}`,
     });
+  }
   const installed = yield* installedVersion(harness);
-  if (installed === null || !atLeast(installed, record.version_floor))
+  if (installed === null || !atLeast(installed, record.version_floor)) {
     return yield* new CapabilityUnproven({
       reason: `capability_unproven:${harness}:${mode} (installed ${installed ?? "unknown"}, tested against ${record.version_floor})`,
     });
+  }
 });
 
 export function interruptKeys(harness: string) {

@@ -47,10 +47,15 @@ export const readLanding = Effect.fn("Landing.read")(function* (runDir: string) 
 
 const lineOf = (record: Landing) => {
   const at = `${record.mr} at ${record.head}`;
-  if (record.state === "attempt") return `landing: attempting to merge ${at}`;
-  if (record.from !== undefined)
+  if (record.state === "attempt") {
+    return `landing: attempting to merge ${at}`;
+  }
+  if (record.from !== undefined) {
     return `landing: took over the merge of ${at} as ${record.sha ?? ""} from ${record.from}`;
-  if (record.state === "landed") return `landing: merged ${at} as ${record.sha ?? ""}`;
+  }
+  if (record.state === "landed") {
+    return `landing: merged ${at} as ${record.sha ?? ""}`;
+  }
   return `landing: withdrew the merge of ${at}: ${record.why ?? ""}`;
 };
 
@@ -92,10 +97,12 @@ export const settleLeft = Effect.fn("Landing.settleLeft")(function* (
   read: Extract<ReviewRead, { readonly ok: true }>,
 ) {
   const settled = settleAttempt(left, read);
-  if (settled._tag === "Landed")
+  if (settled._tag === "Landed") {
     yield* writeLanding(runDir, { ...left, state: "landed", sha: settled.sha });
-  if (settled._tag === "Outside")
+  }
+  if (settled._tag === "Outside") {
     yield* writeLanding(runDir, { ...left, state: "withdrawn", why: outside(settled.by) });
+  }
   return settled;
 });
 
@@ -119,25 +126,29 @@ export const land = Effect.fn("Landing.land")(function* <R>(opts: {
   readonly run: Runner<R>;
 }) {
   const ref = opts.mr === null ? null : mrRefOf(opts.mr);
-  if (opts.mr === null || ref === null)
+  if (opts.mr === null || ref === null) {
     return yield* new WorkflowError({ reason: "this Run has recorded no merge request to merge" });
+  }
   const mr = opts.mr;
   const forge = forgeOf(ref);
   const withdraw = (record: Landing, why: string) =>
     writeLanding(opts.runDir, { ...record, state: "withdrawn", why });
   const left = yield* readLanding(opts.runDir);
   const ours = left !== null && (yield* sameMr(left.mr, mr, opts));
-  if (ours && left.head === opts.head && left.state === "landed" && left.sha !== undefined)
+  if (ours && left.head === opts.head && left.state === "landed" && left.sha !== undefined) {
     return { _tag: "Merged", sha: left.sha } satisfies MergeOutcome;
+  }
   if (ours && left.state === "attempt") {
     const read = yield* forge.readReview(ref, opts.cwd, opts.run);
-    if (!read.ok)
+    if (!read.ok) {
       return yield* new WorkflowError({
         reason: `an earlier attempt to merge ${mr} could not be settled: ${read.reason}`,
       });
+    }
     const settled = yield* settleLeft(opts.runDir, left, read);
-    if (settled._tag === "Landed")
+    if (settled._tag === "Landed") {
       return { _tag: "Merged", sha: settled.sha } satisfies MergeOutcome;
+    }
     if (settled._tag === "Outside") {
       const { sha, by, at } = settled;
       return { _tag: "MergedOutside", sha, by, at } satisfies MergeOutcome;
@@ -213,16 +224,17 @@ export const takeOver = Effect.fn("Landing.takeOver")(function* <R>(opts: {
   readonly run: Runner<R>;
 }) {
   const ref = opts.mr === null ? null : mrRefOf(opts.mr);
-  if (opts.mr === null || ref === null)
+  if (opts.mr === null || ref === null) {
     return yield* new WorkflowError({
       reason: "this Run has recorded no merge request to recover",
     });
+  }
   const mr = opts.mr;
   const refused: (why: string) => Takeover = (why) => ({ _tag: "Refused", why });
   const ended = (runId: string) =>
     Option.getOrUndefined(Arr.findFirst(opts.runs, (one) => one.runId === runId))?.ended ?? null;
   const own = yield* readLanding(opts.runDir);
-  if (own?.state === "landed" && own.from !== undefined && own.sha !== undefined)
+  if (own?.state === "landed" && own.from !== undefined && own.sha !== undefined) {
     return {
       _tag: "TakenOver",
       from: own.from,
@@ -230,28 +242,41 @@ export const takeOver = Effect.fn("Landing.takeOver")(function* <R>(opts: {
       head: own.head,
       failure: ended(own.from)?.failure ?? "",
     } satisfies Takeover;
+  }
   const finished: Array<Lander & { readonly landing: Landing }> = [];
-  for (const one of opts.runs)
-    if (one.landing?.state === "landed" && (yield* sameMr(one.landing.mr, mr, opts)))
+  for (const one of opts.runs) {
+    if (one.landing?.state === "landed" && (yield* sameMr(one.landing.mr, mr, opts))) {
       finished.push({ ...one, landing: one.landing });
+    }
+  }
   const landed = Arr.sortWith(
     finished,
     (value) => value,
     (a, b) => Num.sign(epochMs(b.landing.at) - epochMs(a.landing.at)),
   );
   const newest = landed[0];
-  if (newest === undefined)
+  if (newest === undefined) {
     return refused(`${mr} was merged outside a Release Run: no Run on this host landed it`);
-  if (newest.ended === null) return refused(`${mr} is still being released by ${newest.runId}`);
-  if (newest.ended.succeeded) return refused(`${mr} was already released by ${newest.runId}`);
+  }
+  if (newest.ended === null) {
+    return refused(`${mr} is still being released by ${newest.runId}`);
+  }
+  if (newest.ended.succeeded) {
+    return refused(`${mr} was already released by ${newest.runId}`);
+  }
   const read = yield* forgeOf(ref).readReview(ref, opts.cwd, opts.run);
-  if (!read.ok) return refused(`${mr} could not be read: ${read.reason}`);
+  if (!read.ok) {
+    return refused(`${mr} could not be read: ${read.reason}`);
+  }
   const sha = read.merged?.sha ?? "";
-  if (read.state !== "merged") return refused(`${mr} is ${read.state}, not merged`);
-  if (sha !== newest.landing.sha)
+  if (read.state !== "merged") {
+    return refused(`${mr} is ${read.state}, not merged`);
+  }
+  if (sha !== newest.landing.sha) {
     return refused(
       `${mr} was merged at ${sha}, not at the ${newest.landing.sha ?? ""} ${newest.runId} landed`,
     );
+  }
   yield* writeLanding(opts.runDir, {
     state: "landed",
     mr,

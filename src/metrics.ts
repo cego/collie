@@ -112,9 +112,13 @@ export const noteVerification = (
     value: record.by === "collie" ? 1 : 0,
     note: record.result,
   };
-  if (record.moved === undefined) return appendMetric(runDir, line);
+  if (record.moved === undefined) {
+    return appendMetric(runDir, line);
+  }
   const moved = { tracked: 0, untracked: 0, lockfile: 0 };
-  for (const one of record.moved) moved[one.class] += 1;
+  for (const one of record.moved) {
+    moved[one.class] += 1;
+  }
   return appendMetric(runDir, { ...line, moved });
 };
 
@@ -154,8 +158,11 @@ export const readMetrics = Effect.fn("Metrics.read")(function* (runDir: string) 
 
 export const recoveriesIn = (lines: ReadonlyArray<Metric>) => {
   const latest = new Map<string | number, Metric>();
-  for (const [index, line] of lines.entries())
-    if (line.kind === "recovery") latest.set(line.recoveryId ?? index, line);
+  for (const [index, line] of lines.entries()) {
+    if (line.kind === "recovery") {
+      latest.set(line.recoveryId ?? index, line);
+    }
+  }
   return [...latest.values()];
 };
 
@@ -168,7 +175,9 @@ export interface FailureLike {
 
 // WARNING: Never a halt: a repeat is an obstacle sentence, not evidence the work cannot be done.
 export function repeatedFailure(records: ReadonlyArray<FailureLike>, n: number) {
-  if (n < 2) return null;
+  if (n < 2) {
+    return null;
+  }
   const byName = new Map<string, Array<FailureLike>>();
   for (const record of records) {
     const kept = byName.get(record.name) ?? [];
@@ -177,12 +186,20 @@ export function repeatedFailure(records: ReadonlyArray<FailureLike>, n: number) 
   }
   for (const [name, all] of byName) {
     const last = all.slice(-n);
-    if (last.length < n) continue;
-    if (!Arr.every(last, (record) => record.result === "fail")) continue;
+    if (last.length < n) {
+      continue;
+    }
+    if (!Arr.every(last, (record) => record.result === "fail")) {
+      continue;
+    }
     const first = last[0]!;
-    if (!Arr.every(last, (record) => record.exit === first.exit)) continue;
+    if (!Arr.every(last, (record) => record.exit === first.exit)) {
+      continue;
+    }
     const line = lastLine(first.tail.stderr);
-    if (!Arr.every(last, (record) => lastLine(record.tail.stderr) === line)) continue;
+    if (!Arr.every(last, (record) => lastLine(record.tail.stderr) === line)) {
+      continue;
+    }
     return { name, times: n, exit: first.exit, line };
   }
   return null;
@@ -217,21 +234,30 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string) {
   for (const line of lines) {
     switch (line.kind) {
       case "verification":
-        if (line.note === "pass") verifications.pass += 1;
-        else if (line.note === "fail") verifications.fail += 1;
-        else if (line.note === "unstable") verifications.unstable += 1;
-        if (line.value === 1) verifications.byCollie += 1;
+        if (line.note === "pass") {
+          verifications.pass += 1;
+        } else if (line.note === "fail") {
+          verifications.fail += 1;
+        } else if (line.note === "unstable") {
+          verifications.unstable += 1;
+        }
+        if (line.value === 1) {
+          verifications.byCollie += 1;
+        }
         break;
       case "slice":
         slices.total += 1;
-        if (line.note === "done") slices.done += 1;
+        if (line.note === "done") {
+          slices.done += 1;
+        }
         break;
       case "round":
         rework += 1;
         break;
       case "context":
-        if (peak === null || line.value > peak.tokens)
+        if (peak === null || line.value > peak.tokens) {
           peak = { agent: line.subject, tokens: line.value };
+        }
         break;
       case "halt":
         halts.push(line.note);

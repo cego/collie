@@ -652,10 +652,11 @@ test("what is working or still owed is asked about, and what was abandoned is no
         ["r-working", `${GITLAB}!65`],
         ["r-needs-you", `${GITLAB}!67`],
         ["r-superseded", `${GITLAB}!66`],
-      ] as const)
+      ] as const) {
         expect(
           Arr.map(yield* readDispositions(runDir(stateDir, run)), (line) => [line.by, line.ref]),
         ).toEqual([["gitlab", label]]);
+      }
       expect(Arr.filter(log, (call) => /[ /]68\b/.test(call))).toEqual([]);
     }),
   ));
@@ -1142,7 +1143,9 @@ const merging = Effect.fn("merges.merging")(function* (
       created: "2026-10-15T08:10:00Z",
     }),
   ];
-  for (const over of others) runs.push(yield* of(over));
+  for (const over of others) {
+    runs.push(yield* of(over));
+  }
   const stops: Array<readonly [string, string]> = [];
   const runner = forge("gitlab", {
     ...over.forge,
@@ -1626,7 +1629,7 @@ test("a Task its merge stopped is Finished and reads as the merge; one a human s
       ] as const) {
         const { env, stops, round, stopped, runs } = yield* merging();
         yield* round(TEN);
-        for (const [run, reason] of stops)
+        for (const [run, reason] of stops) {
           yield* recordAudit(runDir(env.stateDir, run), {
             operation: "stop",
             request: `stop-${run}`,
@@ -1635,6 +1638,7 @@ test("a Task its merge stopped is Finished and reads as the merge; one a human s
             result: Schema.Struct({}),
             value: {},
           });
+        }
         stopped();
         const [card] = yield* buildBoard({ env, runs: runs(), now: TEN, quietMs: Infinity });
         expect(sectionOf(card!)).toBe("finished");
@@ -1741,8 +1745,9 @@ const cardAfter = Effect.fn("merges.cardAfter")(function* (
     mr,
     created: "2026-09-17T09:00:00Z",
   });
-  if (passedAt !== undefined)
+  if (passedAt !== undefined) {
     yield* appendVerification(made.evidence, collieRan(made.id, passedAt));
+  }
   const now = epochMs("2026-09-17T10:00:00Z");
   const views = yield* buildBoard({ env, runs: [made], now });
   yield* settleMerges({
@@ -2046,7 +2051,7 @@ const fannedOut = Effect.fn("merges.fannedOut")(function* (
     });
   const parent = yield* of({ id: "r-fan", state: "running" });
   const runs = [parent];
-  for (const { repo, iid } of repos)
+  for (const { repo, iid } of repos) {
     runs.push(
       yield* of({
         id: `r-fan.${repo}`,
@@ -2058,6 +2063,7 @@ const fannedOut = Effect.fn("merges.fannedOut")(function* (
         created: "2026-10-15T08:10:00Z",
       }),
     );
+  }
   return { stateDir, env, runs };
 });
 
@@ -2169,12 +2175,15 @@ const apiMerged = Effect.fn("merges.apiMerged")(function* (
     yield* child("api", API3),
     yield* child("web", WEB8),
   ];
-  for (const over of others) runs.push(yield* of(over));
-  if (lander !== undefined)
+  for (const over of others) {
+    runs.push(yield* of(over));
+  }
+  if (lander !== undefined) {
     yield* writeLanding(
       runDir(stateDir, lander),
       attempt({ state: "landed", sha: "m1", mr: API3 }),
     );
+  }
   const mr = (project: string, iid: string, state: FakeMr["state"]) => ({
     project: `gitlab.cego.dk/cego/${project}`,
     iid,

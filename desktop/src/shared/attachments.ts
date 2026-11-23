@@ -40,8 +40,9 @@ export const capRefusal = (
   held: ReadonlyArray<{ readonly size: number }>,
   adding: { readonly name: string; readonly size: number },
 ) => {
-  if (adding.size > FILE_CAP)
+  if (adding.size > FILE_CAP) {
     return `${adding.name} is ${megabytes(adding.size)}, over the 20 MB one file may be.`;
+  }
   const total = Arr.reduce(held, adding.size, (sum, one) => sum + one.size);
   return total > MESSAGE_CAP
     ? `With ${adding.name} this message's files come to ${megabytes(total)}, over the 30 MB one message may carry.`
@@ -50,7 +51,9 @@ export const capRefusal = (
 
 export const scaledSize = (image: { readonly width: number; readonly height: number }) => {
   const long = Math.max(image.width, image.height);
-  if (long <= LONG_EDGE) return null;
+  if (long <= LONG_EDGE) {
+    return null;
+  }
   const by = LONG_EDGE / long;
   return { width: Math.round(image.width * by), height: Math.round(image.height * by) };
 };
@@ -64,34 +67,44 @@ export const imageSize = (bytes: Uint8Array) => {
     );
   const le24 = (at: number) => view.getUint16(at, true) + (view.getUint8(at + 2) << 16);
   try {
-    if (bytes[0] === 0x89 && tag(1, "PNG") && tag(12, "IHDR"))
+    if (bytes[0] === 0x89 && tag(1, "PNG") && tag(12, "IHDR")) {
       return { width: view.getUint32(16), height: view.getUint32(20) };
-    if (tag(0, "GIF8")) return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+    }
+    if (tag(0, "GIF8")) {
+      return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+    }
     if (tag(0, "RIFF") && tag(8, "WEBP")) {
-      if (tag(12, "VP8X")) return { width: le24(24) + 1, height: le24(27) + 1 };
-      if (tag(12, "VP8 "))
+      if (tag(12, "VP8X")) {
+        return { width: le24(24) + 1, height: le24(27) + 1 };
+      }
+      if (tag(12, "VP8 ")) {
         return {
           width: view.getUint16(26, true) & 0x3f_ff,
           height: view.getUint16(28, true) & 0x3f_ff,
         };
+      }
       if (tag(12, "VP8L")) {
         const bits = view.getUint32(21, true);
         return { width: (bits & 0x3f_ff) + 1, height: ((bits >>> 14) & 0x3f_ff) + 1 };
       }
     }
-    if (bytes[0] === 0xff && bytes[1] === 0xd8)
+    if (bytes[0] === 0xff && bytes[1] === 0xd8) {
       for (let at = 2; at + 9 <= bytes.length;) {
-        if (bytes[at] !== 0xff) return null;
+        if (bytes[at] !== 0xff) {
+          return null;
+        }
         const marker = bytes[at + 1]!;
         if (marker === 0xff) {
           at += 1;
           continue;
         }
         // WARNING: SOF markers, except DHT, JPG and DAC, are the frame headers.
-        if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker))
+        if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
           return { width: view.getUint16(at + 7), height: view.getUint16(at + 5) };
+        }
         at += 2 + view.getUint16(at + 2);
       }
+    }
   } catch {}
   return null;
 };
@@ -121,14 +134,19 @@ export const uriListPaths = (text: string) => {
   const paths: Array<string> = [];
   const refused: Array<string> = [];
   for (const line of Arr.map(Str.split(text, /\r?\n/), (one) => Str.trim(one))) {
-    if (line === "" || pipe(line, Str.startsWith("#"))) continue;
+    if (line === "" || pipe(line, Str.startsWith("#"))) {
+      continue;
+    }
     const url = URL.parse(line);
     const path =
       url?.protocol === "file:" && (url.host === "" || url.host === "localhost")
         ? decoded(url.pathname)
         : null;
-    if (path !== null) paths.push(path);
-    else refused.push(`${line} is not a file on this computer`);
+    if (path !== null) {
+      paths.push(path);
+    } else {
+      refused.push(`${line} is not a file on this computer`);
+    }
   }
   return { paths, refused };
 };
@@ -170,11 +188,14 @@ export const listing = (files: ReadonlyArray<Staged>) =>
 
 export const fromListing = (text: string) => {
   const [first, ...lines] = Str.split(text, "\n");
-  if (first !== ATTACHED) return null;
+  if (first !== ATTACHED) {
+    return null;
+  }
   return Arr.flatMap(lines, (line) => {
     const [, name, mediaType, size, path] = LINE.exec(line) ?? [];
-    if (name === undefined || mediaType === undefined || size === undefined || path === undefined)
+    if (name === undefined || mediaType === undefined || size === undefined || path === undefined) {
       return [];
+    }
     return [
       { id: Arr.join(Str.split(path, "/").slice(-2), "/"), name, size: Number(size), mediaType },
     ];

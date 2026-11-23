@@ -32,7 +32,9 @@ export const mergeRequestsInSlack = (text: string) => {
   for (const match of Str.matchAll(/https?:\/\/[^\s<>|)]+/g)(text)) {
     const ref = readMrRef(match[0]);
     const id = mrId(match[0]);
-    if (ref !== null && id !== null) found.set(id, ref);
+    if (ref !== null && id !== null) {
+      found.set(id, ref);
+    }
   }
   return [...found.values()];
 };
@@ -40,15 +42,19 @@ export const mergeRequestsInSlack = (text: string) => {
 export const targetFromSlack = (link: string, api: ReturnType<typeof slackApi>, target?: string) =>
   Effect.gen(function* () {
     const message = slackMessageRef(link);
-    if (message === null) return yield* Effect.fail("not a Slack message permalink");
+    if (message === null) {
+      return yield* Effect.fail("not a Slack message permalink");
+    }
     const got = yield* api.message(message.channel, message.ts);
     const refs = mergeRequestsInSlack(got.text);
     const ref = refs[0];
-    if (refs.length !== 1 || ref?.project == null)
+    if (refs.length !== 1 || ref?.project == null) {
       return yield* Effect.fail("the Slack message must link exactly one merge request");
+    }
     const resolved = mrTarget(ref.project, ref.iid);
-    if (target !== undefined && mrId(target) !== mrId(resolved))
+    if (target !== undefined && mrId(target) !== mrId(resolved)) {
       return yield* Effect.fail("the Slack message does not link this merge request");
+    }
     return resolved;
   });
 
@@ -97,8 +103,9 @@ export const reconcileReviewSlack = (options: {
             if (
               (one.thread_ts !== undefined && one.thread_ts !== one.ts) ||
               Number(one.ts) * 1000 < epochMs(created)
-            )
+            ) {
               continue;
+            }
             const message = yield* api.message(one.channel, one.ts).pipe(
               Effect.catchIf(
                 (reason) => reason === "Slack message was not found",
@@ -108,8 +115,9 @@ export const reconcileReviewSlack = (options: {
             if (
               message === null ||
               (message.thread_ts !== undefined && message.thread_ts !== message.ts)
-            )
+            ) {
               continue;
+            }
             if (
               Arr.some(
                 mergeRequestsInSlack(message.text),
@@ -117,8 +125,9 @@ export const reconcileReviewSlack = (options: {
                   ref.project !== null &&
                   mrId(mrTarget(ref.project, ref.iid)) === mrId(options.url),
               )
-            )
+            ) {
               unique.set(`${one.channel}:${one.ts}`, { channel: one.channel, ts: one.ts });
+            }
           }
           state.message =
             unique.size === 1
@@ -132,8 +141,9 @@ export const reconcileReviewSlack = (options: {
         }
         yield* keep();
       }
-      if ("why" in state.message)
+      if ("why" in state.message) {
         return { said: state.message.why, trouble: `No Slack reaction: ${state.message.why}` };
+      }
       return yield* api.reconcile(state.message.channel, state.message.ts, state.wanted).pipe(
         Effect.as({ said: `Slack: ${named(state.wanted)}`, trouble: undefined }),
         Effect.catch(({ missing, reason }) => Effect.succeed(lacking(missing, reason))),

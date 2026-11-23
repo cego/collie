@@ -164,9 +164,11 @@ export const launchesLayer = Layer.effect(Launches)(
             `.pipe(
               Effect.map((rows) => {
                 const byRun = new Map<string, Array<Launched>>();
-                for (const row of rows)
-                  for (const one of decoded([row]))
+                for (const row of rows) {
+                  for (const one of decoded([row])) {
                     byRun.set(row.run, [...(byRun.get(row.run) ?? []), one]);
+                  }
+                }
                 return byRun;
               }),
               Effect.orDie,
@@ -179,8 +181,9 @@ export const launchesLayer = Layer.effect(Launches)(
             `.pipe(
               Effect.map((rows) => {
                 const byRun = new Map<string, Array<string>>();
-                for (const row of rows)
+                for (const row of rows) {
                   byRun.set(row.run, [...(byRun.get(row.run) ?? []), row.record]);
+                }
                 return byRun;
               }),
               Effect.orDie,
@@ -268,7 +271,9 @@ export const launchesLayer = Layer.effect(Launches)(
               WHERE run = ${launched.runId} AND stem = ${stemOf(launched)}
             `,
           );
-          if (now === undefined || now.terminalId !== launched.terminalId) return;
+          if (now === undefined || now.terminalId !== launched.terminalId) {
+            return;
+          }
           yield* sql`
             UPDATE collie_launches SET record = ${encodeLaunched({ ...now, agentSession: session })}
             WHERE run = ${launched.runId} AND stem = ${stemOf(launched)}
@@ -347,7 +352,11 @@ export const agentOfLaunch = (one: Launched) => ({
 
 export const fallbacksOf = (launches: ReadonlyArray<Launched>, live: ReadonlySet<string>) => {
   const latest = new Map<string, Launched>();
-  for (const one of launches) if (live.has(one.agent)) latest.set(one.agent, one);
+  for (const one of launches) {
+    if (live.has(one.agent)) {
+      latest.set(one.agent, one);
+    }
+  }
   return Arr.flatMap([...latest.values()], (one) =>
     one.next === undefined
       ? []

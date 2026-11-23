@@ -19,11 +19,15 @@ export const githubChecks = Effect.fn("Doctor.githubChecks")(function* (
   let used = 0;
   for (const checkout of yield* checkoutsUnder((yield* projectsRoot(env)).path)) {
     const here = yield* forgeHere(checkout, run, gitlabHost);
-    if (here.ok && here.forge.name === "github") used += 1;
+    if (here.ok && here.forge.name === "github") {
+      used += 1;
+    }
   }
-  if (used === 0) return [];
+  if (used === 0) {
+    return [];
+  }
   const by = `used by ${used} checkout${used === 1 ? "" : "s"}`;
-  if ((yield* onPath(search, "gh")) === null)
+  if ((yield* onPath(search, "gh")) === null) {
     return [
       {
         name: "gh",
@@ -33,6 +37,7 @@ export const githubChecks = Effect.fn("Doctor.githubChecks")(function* (
         ),
       },
     ] satisfies Array<Check>;
+  }
   const auth = yield* answered(run("gh", ["auth", "status", "--hostname", HOST], env.pluginRoot));
   return [
     {

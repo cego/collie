@@ -40,8 +40,14 @@ export function repositoryOf(cwd: string) {
 
 export function establishedProject(live: LiveNames, repo: string) {
   const wanted = normal(repo);
-  if (wanted === "") return null;
-  for (const prefix of prefixesIn(live)) if (names(normal(prefix), wanted)) return prefix;
+  if (wanted === "") {
+    return null;
+  }
+  for (const prefix of prefixesIn(live)) {
+    if (names(normal(prefix), wanted)) {
+      return prefix;
+    }
+  }
   return null;
 }
 
@@ -88,7 +94,9 @@ export function fallbackName(context: TaskContext, live: LiveNames) {
       )
     : Arr.filter(Str.split(Str.split(from, "/").at(-1) ?? from, /[-_]+/), (word) => word !== "");
   const kept = words.slice(0, FALLBACK_WORDS);
-  while (kept.length > 1 && DANGLING.has(Str.toLowerCase(kept.at(-1)!))) kept.pop();
+  while (kept.length > 1 && DANGLING.has(Str.toLowerCase(kept.at(-1)!))) {
+    kept.pop();
+  }
   return {
     project: establishedProject(live, repo) ?? sentence(pipe_(repo, Str.replaceAll(/[-_]+/g, " "))),
     title: sentence(Arr.join(kept, " ")),
@@ -142,24 +150,34 @@ export const objectiveOf = Effect.fn("tasknames.objectiveOf")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (Str.trim(named) === "" || pipe_(named, Str.includes("\n"))) return named;
+  if (Str.trim(named) === "" || pipe_(named, Str.includes("\n"))) {
+    return named;
+  }
   const at = path.resolve(cwd, named);
   const info = yield* fs.stat(at).pipe(Effect.option);
-  if (info._tag === "None") return named;
+  if (info._tag === "None") {
+    return named;
+  }
   const file =
     info.value.type === "Directory"
       ? path.join(at, "SPEC.md")
       : pipe_(at, Str.endsWith(".md"))
         ? at
         : null;
-  if (file === null) return named;
+  if (file === null) {
+    return named;
+  }
   const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
   for (const line of Str.split(text, "\n")) {
-    if (!/^#+\s/.test(line) && !SPEC_LABEL.test(line)) continue;
+    if (!/^#+\s/.test(line) && !SPEC_LABEL.test(line)) {
+      continue;
+    }
     const said = Str.trim(
       pipe_(Str.trim(pipe_(line, Str.replace(/^#+/, ""))), Str.replace(SPEC_LABEL, "")),
     );
-    if (said !== "") return said;
+    if (said !== "") {
+      return said;
+    }
   }
   return named;
 });
@@ -227,9 +245,13 @@ export const nameTask = Effect.fn("tasknames.nameTask")(function* (
   context: TaskContext,
   live: LiveNames,
 ) {
-  if (deps === null) return fallbackName(context, live);
+  if (deps === null) {
+    return fallbackName(context, live);
+  }
   const answer = yield* askOnce(deps, "naming", namePack(context, live));
-  if (answer === null || !("project" in answer)) return fallbackName(context, live);
+  if (answer === null || !("project" in answer)) {
+    return fallbackName(context, live);
+  }
   return cleanName(answer, context, live);
 });
 
@@ -273,8 +295,9 @@ export const freshTaskLabel = Effect.fn("tasknames.freshTaskLabel")(function* (
   };
   const live = yield* liveNames(env);
   const title = oneLine(about.title ?? "");
-  if (title !== "" && !isGenericTitle(title, about.workflow))
+  if (title !== "" && !isGenericTitle(title, about.workflow)) {
     return taskWorkspaceLabel({ project: fallbackName(context, live).project, title });
+  }
   return taskWorkspaceLabel(yield* nameTask(naming, context, live));
 });
 
@@ -287,8 +310,12 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
     const first = Arr.filter(runs, (run) => run.task === task.id).sort((one, other) =>
       pipe_(one.created, Str.localeCompare(other.created)),
     )[0];
-    if (project === undefined || title === undefined || first === undefined) continue;
-    if (!isGenericTitle(title, first.workflow)) continue;
+    if (project === undefined || title === undefined || first === undefined) {
+      continue;
+    }
+    if (!isGenericTitle(title, first.workflow)) {
+      continue;
+    }
     const named = fallbackName(
       {
         workflow: first.workflow,
@@ -299,13 +326,17 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
       },
       { workspaces: [], tabs: [], panes: [] },
     );
-    if (isGenericTitle(named.title, first.workflow)) continue;
+    if (isGenericTitle(named.title, first.workflow)) {
+      continue;
+    }
     const label = `${project} | ${named.title}`;
     yield* withTaskLockIfFree(
       task.id,
       Effect.gen(function* () {
         const now = yield* readTask(task.id);
-        if (now === null || now.label !== task.label) return;
+        if (now === null || now.label !== task.label) {
+          return;
+        }
         yield* writeTask({ ...now, label });
       }),
     );

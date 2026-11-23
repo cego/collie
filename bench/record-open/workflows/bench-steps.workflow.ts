@@ -15,9 +15,14 @@ export default defineWorkflow({
   output: Schema.String,
   run: ({ input }) =>
     Effect.gen(function* () {
-      for (const one of STEPS.slice(0, Number(input.steps))) yield* one(Effect.void);
-      if (input.live === "yes")
-        for (let round = 1; ; round++) yield* write(Effect.sleep("2 seconds"), { round });
+      for (const one of STEPS.slice(0, Number(input.steps))) {
+        yield* one(Effect.void);
+      }
+      if (input.live === "yes") {
+        for (let round = 1; ; round++) {
+          yield* write(Effect.sleep("2 seconds"), { round });
+        }
+      }
       return `took ${input.steps} Steps`;
     }),
 });

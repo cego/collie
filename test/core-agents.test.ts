@@ -325,7 +325,9 @@ test("an OpenCode agent on core is launched with its reporter and its first prom
 
 const waitFor = <E, R>(reached: Effect.Effect<boolean, E, R>) =>
   Effect.gen(function* () {
-    while (!(yield* reached)) yield* TestClock.withLive(Effect.sleep("10 millis"));
+    while (!(yield* reached)) {
+      yield* TestClock.withLive(Effect.sleep("10 millis"));
+    }
   });
 
 const spend = (ms: number) =>
@@ -431,8 +433,9 @@ test("a pi agent on core asks with its question tool: two Decisions, its next st
           for (const [decision, value] of [
             ["ask-review-1", "SQLite"],
             ["ask-review-2", "lint and typecheck"],
-          ] as const)
+          ] as const) {
             yield* store.settle({ run: "r1", decision, value, request: "a" });
+          }
           yield* waitFor(Effect.map(sends(), (sent) => sent.length === 3));
           const [step, answers, next] = yield* sends();
           expect(step).toContain("/review.prompt.md");

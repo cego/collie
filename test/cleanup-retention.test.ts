@@ -96,8 +96,9 @@ test("a Task whose last Run ended 31 days ago is forgotten: its rows, then its f
         },
       ]);
       expect(forgotten).toEqual([["r1"]]);
-      for (const gone of ["runs/r1", "agents/r1", "evidence/r1", "stop.r1"])
+      for (const gone of ["runs/r1", "agents/r1", "evidence/r1", "stop.r1"]) {
         expect([gone, yield* fs.exists(`${rig.stateDir}/${gone}`)]).toEqual([gone, false]);
+      }
       expect(yield* fs.exists(`${rig.stateDir}/agents/abc/deliveries.jsonl`)).toBe(true);
       expect(yield* readTask("task-1")).toBeNull();
     }),

@@ -31,18 +31,24 @@ export interface Pending {
 
 export const pendingIn = (run: string, lines: ReadonlyArray<Metric>) => {
   const latest = new Map<string, Metric>();
-  for (const line of lines)
-    if (line.kind === "report" && line.heal !== undefined) latest.set(line.heal, line);
+  for (const line of lines) {
+    if (line.kind === "report" && line.heal !== undefined) {
+      latest.set(line.heal, line);
+    }
+  }
   return Arr.flatMap(recoveriesIn(lines), (line) => {
     if (
       line.action !== "healed" ||
       line.heal === undefined ||
       line.finding?.collie_defect !== true ||
       !JUDGED.has(line.outcome ?? "")
-    )
+    ) {
       return [];
+    }
     const last = latest.get(line.heal);
-    if (last?.publication !== undefined && SETTLED.has(last.publication)) return [];
+    if (last?.publication !== undefined && SETTLED.has(last.publication)) {
+      return [];
+    }
     return [
       {
         run,
@@ -71,11 +77,17 @@ export const knownIn = (lines: ReadonlyArray<Metric>) =>
   );
 
 const setAside = ({ judged, finding }: Pending) => {
-  if (judged === "false-recovery")
+  if (judged === "false-recovery") {
     return "its Heal said the Run resumed while it stayed parked, so its finding is not filed as fact";
-  if (!KEY.test(finding.key)) return "its key is not a kebab-case slug";
-  for (const field of ["root_cause", "fix", "regression"] as const)
-    if (Str.trim(finding[field]) === "") return `it does not say its ${field}`;
+  }
+  if (!KEY.test(finding.key)) {
+    return "its key is not a kebab-case slug";
+  }
+  for (const field of ["root_cause", "fix", "regression"] as const) {
+    if (Str.trim(finding[field]) === "") {
+      return `it does not say its ${field}`;
+    }
+  }
   return null;
 };
 
@@ -145,11 +157,14 @@ export interface Reported {
 export const report = (host: HostApi, item: Pending, known: ReadonlyMap<string, string>) =>
   Effect.gen(function* () {
     const why = setAside(item);
-    if (why !== null) return { publication: "not-filed", note: why } satisfies Reported;
+    if (why !== null) {
+      return { publication: "not-filed", note: why } satisfies Reported;
+    }
     const { heal, finding } = item;
     const listed = yield* Effect.result(bounded(host.issues(heal, undefined, "collie"), false));
-    if (Result.isFailure(listed))
+    if (Result.isFailure(listed)) {
       return { publication: "refused", note: listed.failure.reason } satisfies Reported;
+    }
     const open = listed.success;
     const named =
       finding.issue === undefined || finding.issue === null
@@ -163,19 +178,21 @@ export const report = (host: HostApi, item: Pending, known: ReadonlyMap<string, 
       named ??
       Option.getOrUndefined(Arr.findFirst(open, (one) => keysIn(one.body).includes(finding.key)));
     const before = item.commented ?? known.get(finding.key);
-    if (target === undefined && before !== undefined)
+    if (target === undefined && before !== undefined) {
       return {
         publication: "linked",
         issue: before,
         note: `linked to the issue already reported for ${finding.key}`,
       } satisfies Reported;
+    }
     if (target !== undefined) {
-      if (keysIn(target.body).includes(finding.key) || before === target.url)
+      if (keysIn(target.body).includes(finding.key) || before === target.url) {
         return {
           publication: "linked",
           issue: target.url,
           note: `linked to #${target.number}, which already carries ${finding.key}`,
         } satisfies Reported;
+      }
       const commented = yield* Effect.result(
         bounded(
           host.commentIssue({
@@ -187,12 +204,13 @@ export const report = (host: HostApi, item: Pending, known: ReadonlyMap<string, 
           true,
         ),
       );
-      if (Result.isSuccess(commented))
+      if (Result.isSuccess(commented)) {
         return {
           publication: "linked",
           issue: target.url,
           note: `linked to #${target.number} with ${finding.key} as another key for its cause`,
         } satisfies Reported;
+      }
       return sent(commented.failure.reason)
         ? ({
             publication: "uncertain",
@@ -207,12 +225,13 @@ export const report = (host: HostApi, item: Pending, known: ReadonlyMap<string, 
         true,
       ),
     );
-    if (Result.isSuccess(filed))
+    if (Result.isSuccess(filed)) {
       return {
         publication: "filed",
         issue: filed.success.url,
         note: `filed as #${filed.success.number}`,
       } satisfies Reported;
+    }
     return {
       publication: sent(filed.failure.reason) ? "uncertain" : "refused",
       note: filed.failure.reason,

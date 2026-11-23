@@ -11,7 +11,9 @@ const ITEMS = [
 
 const untilAsked = Effect.fn("prompts.untilAsked")(function* (asked: () => boolean) {
   for (let tries = 0; tries < 200; tries++) {
-    if (asked()) return;
+    if (asked()) {
+      return;
+    }
     yield* Effect.sleep("2 millis");
   }
   return yield* new Cause.TimeoutError("nothing was ever asked");

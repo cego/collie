@@ -310,7 +310,9 @@ test("fallback order is saved and entries carry their Subscription usage without
   const changed = changeFallbacks(value, { at: 1, move: "up" });
   const saved = editSetting(NO_FLOCK_SETTINGS, "fallbacks", changed, "2026-10-29T12:00:00Z");
   expect(saved).not.toHaveProperty("refused");
-  if ("refused" in saved) throw new Error(saved.refused);
+  if ("refused" in saved) {
+    throw new Error(saved.refused);
+  }
   expect(saved.settings.fallbacks?.value).toEqual(["codex", "claude/sonnet", "pi/google/gemini"]);
   const view = fallbackList(
     value,

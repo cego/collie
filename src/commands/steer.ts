@@ -38,7 +38,9 @@ export const steer = Command.make(
     answering((env) =>
       Effect.gen(function* () {
         const run = pipe_(target, Str.replace(/^run:/, ""));
-        if (run === "") return err("invalid_input", "--target is `run:<id>`.");
+        if (run === "") {
+          return err("invalid_input", "--target is `run:<id>`.");
+        }
         return yield* mutation(env, "steer", requestId, (id) =>
           Effect.flatMap(cliDoor(env), (door) =>
             steerAbout(env, {
@@ -126,12 +128,16 @@ export const runDeliveries = Command.make(
           (client) => client.deliveries({ runId }),
           yield* cliDoor(env),
         );
-        if (!read.ok) return read;
+        if (!read.ok) {
+          return read;
+        }
         const mine = read.value;
-        if (mine === null) return err("run_not_found", `No Run "${runId}".`);
+        if (mine === null) {
+          return err("run_not_found", `No Run "${runId}".`);
+        }
 
         const settleId = Option.getOrNull(reconcile);
-        if (settleId === null)
+        if (settleId === null) {
           return {
             ok: true as const,
             data: { deliveries: mine },
@@ -148,12 +154,15 @@ export const runDeliveries = Command.make(
                 "\n",
               ) || "Nothing has been sent to this Run's agents.",
           };
+        }
 
         const how = Option.getOrNull(as);
-        if (how !== "sent" && how !== "not-sent")
+        if (how !== "sent" && how !== "not-sent") {
           return err("invalid_input", "--as is `sent` or `not-sent`.");
-        if (!Arr.some(mine, (entry) => entry.id === settleId))
+        }
+        if (!Arr.some(mine, (entry) => entry.id === settleId)) {
           return err("invalid_input", `No delivery "${settleId}" for this Run.`);
+        }
         const door = yield* cliDoor(env);
         return yield* mutation(env, "run-deliveries-reconcile", requestId, (id) =>
           reconcileDelivered(env, { door, runId, delivery: settleId, as: how, request: id }),
@@ -181,10 +190,12 @@ export const proposal = Command.make("proposal").pipe(
         answering((env) =>
           Effect.gen(function* () {
             const at = Number(index);
-            if (!Number.isInteger(at) || at < 0)
+            if (!Number.isInteger(at) || at < 0) {
               return err("invalid_input", "The index is a whole number.");
-            if (as !== "applied" && as !== "not-applied")
+            }
+            if (as !== "applied" && as !== "not-applied") {
               return err("invalid_input", "--as is `applied` or `not-applied`.");
+            }
             const door = yield* cliDoor(env);
             return yield* mutation(env, "proposal-reconcile", requestId, (id) =>
               reconcileProposed(env, { door, proposal: proposalId, index: at, as, request: id }),

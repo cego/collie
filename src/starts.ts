@@ -7,7 +7,9 @@ import { Config, Effect, FileSystem } from "effect";
 export const recordStart = (name: string, args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const file = yield* Config.String("COLLIE_TEST_STARTS").pipe(Config.withDefault(""));
-    if (file === "") return;
+    if (file === "") {
+      return;
+    }
     const at = Option.getOrElse(
       Arr.findFirstIndex(args, (arg) => !pipe_(arg, Str.startsWith("-"))),
       () => -1,

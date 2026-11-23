@@ -33,7 +33,9 @@ const release = (dir: string, sign: (bytes: Uint8Array) => string | null) =>
     const asset = `${dir}/release/linux-x64-collie-desktop-Setup.tar.gz`;
     yield* exec(["tar", "-czf", asset, "-C", setup, "./installer"]);
     const signature = sign(yield* fs.readFile(asset));
-    if (signature !== null) yield* fs.writeFileString(`${asset}.p256.sig`, `${signature}\n`);
+    if (signature !== null) {
+      yield* fs.writeFileString(`${asset}.p256.sig`, `${signature}\n`);
+    }
     return asset;
   });
 
@@ -126,7 +128,9 @@ const macRelease = (dir: string, sign: (bytes: Uint8Array) => string | null) =>
     const asset = `${dir}/release/macos-arm64-collie-desktop.dmg`;
     yield* exec(["tar", "-cf", asset, "-C", volume, "."]);
     const signature = sign(yield* fs.readFile(asset));
-    if (signature !== null) yield* fs.writeFileString(`${asset}.p256.sig`, `${signature}\n`);
+    if (signature !== null) {
+      yield* fs.writeFileString(`${asset}.p256.sig`, `${signature}\n`);
+    }
     yield* fs.writeFileString(
       `${dir}/hdiutil`,
       `#!/bin/sh

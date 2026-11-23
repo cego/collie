@@ -55,8 +55,9 @@ test("a wrapped value import counts as one", () => {
 });
 
 test("views may import pure Effect helpers directly", () => {
-  for (const path of PURE_EFFECT_HELPERS)
+  for (const path of PURE_EFFECT_HELPERS) {
     expect(effectRuntimeImports(`import * as Helpers from "${path}";`)).toEqual([]);
+  }
   // WARNING: a barrel import loads the runtime even when the named export is a pure helper.
   expect(effectRuntimeImports('import { Array } from "effect";')).toEqual(["effect"]);
 });

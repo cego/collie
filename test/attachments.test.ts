@@ -74,8 +74,9 @@ const attending = <A, E>(
           ["shot.png", "a screenshot"],
           ["notes.txt", "some notes"],
           ["late.png", "arrived later"],
-        ])
+        ]) {
           yield* fs.writeFileString(`${world.project}/${name}`, text!).pipe(Effect.orDie);
+        }
         return yield* body(world, (args) => collie(world, args), core).pipe(
           Effect.ensuring(stopHost(world.state)),
         );

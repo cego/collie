@@ -95,11 +95,14 @@ export const context = Effect.fn("collie.context")(function* (
     ? { pairs: true, machine: global.machine.value }
     : { pairs: true };
   const base = { ...baseEnv, ...reach };
-  if (!id)
+  if (!id) {
     return requireScope
       ? contextFailure(err("workspace_required", "This operation requires a workspace."))
       : resolvedContext(base, null);
-  if (!resolveLive) return resolvedContext(base, null);
+  }
+  if (!resolveLive) {
+    return resolvedContext(base, null);
+  }
 
   const named = yield* workspaceNamed(base, id);
   const lookup =
@@ -110,7 +113,9 @@ export const context = Effect.fn("collie.context")(function* (
         : { workspace: named.found, cause: "" };
   if (!lookup.workspace) {
     const details: YamlMap = { workspace: id };
-    if (lookup.cause) details["cause"] = lookup.cause;
+    if (lookup.cause) {
+      details["cause"] = lookup.cause;
+    }
     return contextFailure(err("workspace_not_found", `Workspace "${id}" was not found.`, details));
   }
   return resolvedContext(
@@ -120,12 +125,16 @@ export const context = Effect.fn("collie.context")(function* (
 });
 
 export const discoveryContext = Effect.fn("collie.discoveryContext")(function* (global: Global) {
-  if (Option.isSome(global.workspace)) return yield* context(global, true);
+  if (Option.isSome(global.workspace)) {
+    return yield* context(global, true);
+  }
   // WARNING: an inherited workspace may have closed and there may be no herdr to ask; this is never a reason to fail.
   const tried = yield* context(global, (yield* selected(global)) !== null).pipe(
     Effect.orElseSucceed(() => null),
   );
-  if (tried?._tag === "ResolvedContext") return tried;
+  if (tried?._tag === "ResolvedContext") {
+    return tried;
+  }
   return yield* context({ ...global, workspace: Option.none() }, false);
 });
 
@@ -155,14 +164,22 @@ export const locateRun: (
     _tag: "RunFailure",
     result: err("run_not_found", `Run "${id}" was not found.`, { run: id }),
   };
-  if (unsafePathComponent(id)) return missing;
+  if (unsafePathComponent(id)) {
+    return missing;
+  }
   const dir = runDir(env.stateDir, id);
   const found = yield* asksRun(env, id, (client) => client.run({ runId: id }));
-  if (!found.ok) return { _tag: "RunFailure" as const, result: found };
+  if (!found.ok) {
+    return { _tag: "RunFailure" as const, result: found };
+  }
   const view = found.value;
-  if (view === null) return missing;
+  if (view === null) {
+    return missing;
+  }
   const refused = yield* outOfReach(env, view, found.machine, scope);
-  if (refused !== null) return { _tag: "RunFailure", result: refused };
+  if (refused !== null) {
+    return { _tag: "RunFailure", result: refused };
+  }
   return {
     _tag: "Hosted",
     view,
@@ -214,11 +231,12 @@ export const parseInput: (
   const text: Record<string, string> = {};
   for (const entry of values) {
     const at = Option.getOrElse(pipe_(entry, Str.indexOf("=")), () => -1);
-    if (at <= 0)
+    if (at <= 0) {
       return {
         ok: false,
         error: err("invalid_input", `Input "${entry}" must be key=value.`),
       };
+    }
     text[pipe_(entry, Str.slice(0, at))] = pipe_(entry, Str.slice(at + 1));
   }
   return { ok: true, given: { json: typed, text } };
@@ -274,7 +292,9 @@ export function answering<E, R>(
     yield* attempt(
       Effect.gen(function* () {
         const resolved = yield* context(global, resolveLive);
-        if (resolved._tag === "ContextFailure") return resolved.result;
+        if (resolved._tag === "ContextFailure") {
+          return resolved.result;
+        }
         return yield* apply(resolved.env);
       }),
       global.json,
@@ -303,7 +323,9 @@ export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
     const run = yield* Effect.scoped(
       connect(env.stateDir).pipe(Effect.flatMap((client) => client.agentRun({ agent: named }))),
     ).pipe(Effect.orElseSucceed(() => null));
-    if (run !== null) return { origin: "agent" as const, from: { run, agent: named } };
+    if (run !== null) {
+      return { origin: "agent" as const, from: { run, agent: named } };
+    }
   }
   return cliOrigin({ terminal, agent: named !== "" });
 });
@@ -321,7 +343,9 @@ export const gitlabHostFlag = Flag.String("gitlab-host").pipe(
 );
 
 export const withGitlabHost = (env: PluginEnv, given: Option.Option<string>) => {
-  if (Option.isNone(given)) return env;
+  if (Option.isNone(given)) {
+    return env;
+  }
   if (!isHostName(given.value)) {
     return err("invalid_input", `--gitlab-host has to be a host name, not "${given.value}".`);
   }

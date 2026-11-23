@@ -62,7 +62,9 @@ export const branchChange = Effect.fn("OwnTests.branchChange")(function* (
   const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
   const merged = remote.code === 0 ? remote : yield* git("merge-base", "HEAD", branch);
   const base = Str.trim(merged.stdout);
-  if (merged.code !== 0 || base === "") return { paths: [], added: [] } satisfies BranchChange;
+  if (merged.code !== 0 || base === "") {
+    return { paths: [], added: [] } satisfies BranchChange;
+  }
   const names = yield* git("diff", "--name-only", "--no-renames", "--diff-filter=AM", base, "HEAD");
   const diff = yield* git("diff", "--no-renames", "--unified=0", base, "HEAD");
   return {

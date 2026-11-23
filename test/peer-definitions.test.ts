@@ -28,11 +28,12 @@ test("a definition created, edited, removed or edited on both reaches the other 
               yield* fs.utimes(staged, fileTime(at), fileTime(at));
               yield* fs.rename(staged, file(side, path));
             });
-          for (const side of [first, second])
+          for (const side of [first, second]) {
             yield* fs.writeFileString(
               file(side, "workflows/package.json"),
               `{ "name": "${side.name}" }\n`,
             );
+          }
           yield* fs.writeFileString(file(first, "workflows/forked.workflow.ts"), "forked\n");
 
           yield* first.lists([second]);
@@ -93,10 +94,11 @@ test("a definition created, edited, removed or edited on both reaches the other 
             ),
           ).toBe("first's\n");
 
-          for (const side of [first, second])
+          for (const side of [first, second]) {
             expect(yield* text(side, "workflows/package.json")).toBe(
               `{ "name": "${side.name}" }\n`,
             );
+          }
 
           const shares = Effect.all(
             Arr.map([first, second], (side) =>

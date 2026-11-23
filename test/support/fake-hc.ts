@@ -160,7 +160,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   yield* Scope.addFinalizer(
     scope,
     Effect.sync(() => {
-      for (const served of opencodes.values()) void served.stop(true);
+      for (const served of opencodes.values()) {
+        void served.stop(true);
+      }
     }),
   );
   const ended = (terminal: Terminal) => {
@@ -201,7 +203,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         method: "event",
         params: { seq, type, terminal: at, data },
       }).pipe(Effect.orDie);
-      for (const write of subscribers) yield* write(`${line}\n`);
+      for (const write of subscribers) {
+        yield* write(`${line}\n`);
+      }
     });
   const logged = (cmd: string, params: Schema.Json) =>
     encodeJson({ transport: "core", cmd, params }).pipe(
@@ -213,10 +217,15 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       for (;;) {
         const next = viewer.backlog[0];
         const room = CORE_WINDOW - viewer.uncredited;
-        if (next === undefined || room <= 0) return;
+        if (next === undefined || room <= 0) {
+          return;
+        }
         const sent = next.subarray(0, room);
-        if (sent.length === next.length) viewer.backlog.shift();
-        else viewer.backlog[0] = next.subarray(room);
+        if (sent.length === next.length) {
+          viewer.backlog.shift();
+        } else {
+          viewer.backlog[0] = next.subarray(room);
+        }
         viewer.uncredited += sent.length;
         yield* viewer.write(frameOf(viewer.channel, Kind.DATA, sent));
       }
@@ -254,11 +263,16 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           Effect.flatMap(({ status, owed }) =>
             Effect.gen(function* () {
               yield* setStatus(terminal, status);
-              if (owed === undefined) return;
+              if (owed === undefined) {
+                return;
+              }
               const turn = terminal.turn;
-              while (!(yield* fs.exists(owed).pipe(Effect.orElseSucceed(() => false))))
+              while (!(yield* fs.exists(owed).pipe(Effect.orElseSucceed(() => false)))) {
                 yield* Effect.sleep(TURN);
-              if (terminal.turn === turn) yield* setStatus(terminal, "idle");
+              }
+              if (terminal.turn === turn) {
+                yield* setStatus(terminal, "idle");
+              }
             }),
           ),
         ),
@@ -276,10 +290,12 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         Effect.runPromiseWith(services)(
           Effect.gen(function* () {
             const path = new URL(request.url).pathname;
-            if (request.method === "GET" && path === `/session/${session}`)
+            if (request.method === "GET" && path === `/session/${session}`) {
               return Response.json({ id: session, directory: terminal.cwd });
-            if (request.method !== "POST" || path !== `/session/${session}/prompt_async`)
+            }
+            if (request.method !== "POST" || path !== `/session/${session}/prompt_async`) {
               return new Response("not found", { status: 404 });
+            }
             const body = yield* Effect.promise(() => request.json()).pipe(
               Effect.flatMap(Schema.decodeUnknownEffect(Prompted)),
               Effect.orDie,
@@ -340,9 +356,13 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   const answer = (method: string, params: Schema.JsonObject, link: Link) =>
     Effect.gen(function* () {
       const refused = refusals.get(method);
-      if (refused !== undefined) return { failure: refused };
+      if (refused !== undefined) {
+        return { failure: refused };
+      }
       const canned = answers.get(method);
-      if (canned !== undefined) return { result: canned };
+      if (canned !== undefined) {
+        return { result: canned };
+      }
       switch (method) {
         case "hello":
           return {
@@ -357,10 +377,14 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           };
         case "terminal.run": {
           const cwd = text(params.cwd);
-          if (cwd !== undefined && !(yield* fs.exists(cwd).pipe(Effect.orElseSucceed(() => false))))
+          if (
+            cwd !== undefined &&
+            !(yield* fs.exists(cwd).pipe(Effect.orElseSucceed(() => false)))
+          ) {
             return {
               failure: { code: -32_000, message: "spawn_failed", kind: "spawn_failed" },
             };
+          }
           const program = Arr.filter(Arr.isArray(params.argv) ? params.argv : [], isString)[0];
           const notFound =
             bare &&
@@ -407,10 +431,15 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
               )
               .pipe(Effect.ignore);
           }
-          if (argv[0] === "opencode" && argv.includes("--port")) opencodeServer(terminal, argv);
+          if (argv[0] === "opencode" && argv.includes("--port")) {
+            opencodeServer(terminal, argv);
+          }
           const prompt = argv[argv.indexOf("--prompt") + 1];
-          if (argv.includes("--prompt") && prompt !== undefined) yield* take(terminal, prompt);
-          else yield* setStatus(terminal, blocked ? "blocked" : "idle");
+          if (argv.includes("--prompt") && prompt !== undefined) {
+            yield* take(terminal, prompt);
+          } else {
+            yield* setStatus(terminal, blocked ? "blocked" : "idle");
+          }
           blocked = false;
           return { result: view(terminal) };
         }
@@ -428,14 +457,18 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         }
         case "terminal.send": {
           const found = find(params);
-          if (!found) return notFound(params);
+          if (!found) {
+            return notFound(params);
+          }
           const status = found.status;
-          if (status === "blocked")
+          if (status === "blocked") {
             return {
               failure: { code: -32_000, message: "blocked", kind: "blocked" },
             };
-          if (found.name !== null && onlyReported.has(found.name))
+          }
+          if (found.name !== null && onlyReported.has(found.name)) {
             return { result: { turn: found.turn, started: true, status } };
+          }
           if (stall) {
             stall = false;
             typed.set(found.address, text(params.text) ?? "");
@@ -446,7 +479,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         }
         case "terminal.keys": {
           const found = find(params);
-          if (!found) return notFound(params);
+          if (!found) {
+            return notFound(params);
+          }
           const pending = typed.get(found.address);
           const keys = Arr.isArray(params.keys) ? params.keys : [];
           if (pending !== undefined && keys.includes("enter")) {
@@ -457,16 +492,21 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         }
         case "terminal.kill": {
           const found = find(params);
-          if (!found) return notFound(params);
+          if (!found) {
+            return notFound(params);
+          }
           found.state = "finished";
           yield* emit(found.address, "finished", { reason: "killed" });
           return { result: view(found) };
         }
         case "terminal.attach": {
-          if (!link.framed)
+          if (!link.framed) {
             return { failure: { code: -32_000, message: "needs_framed", kind: "needs_framed" } };
+          }
           const found = find(params);
-          if (!found) return notFound(params);
+          if (!found) {
+            return notFound(params);
+          }
           const viewer: Viewer = {
             channel: link.next++,
             terminal: found,
@@ -500,8 +540,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           return { result: { machines: Arr.map([...machines.values()], machineView) } };
         case "machine.add": {
           const name = text(params.name) ?? text(params.target) ?? "";
-          if (machines.has(name))
+          if (machines.has(name)) {
             return { failure: { code: -32_000, message: "already_added", kind: "already_added" } };
+          }
           const via = text(params.via);
           const added: Added = {
             name,
@@ -512,23 +553,30 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           };
           if (added.via) {
             yield* dial(added);
-            if (added.state !== "connected")
+            if (added.state !== "connected") {
               return {
                 failure: { code: -32_000, message: added.why ?? "", kind: "unreachable" },
               };
+            }
           }
           machines.set(name, added);
           return { result: profile(added) };
         }
         case "machine.connect": {
           const found = machines.get(text(params.machine) ?? "");
-          if (found === undefined) return unknownMachine(params);
-          if (found.via) yield* dial(found);
+          if (found === undefined) {
+            return unknownMachine(params);
+          }
+          if (found.via) {
+            yield* dial(found);
+          }
           return { result: machineView(found) };
         }
         case "machine.rm": {
           const name = text(params.machine) ?? "";
-          if (!machines.delete(name)) return unknownMachine(params);
+          if (!machines.delete(name)) {
+            return unknownMachine(params);
+          }
           return { result: { removed: name } };
         }
         default:
@@ -544,7 +592,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         return json({ jsonrpc: "2.0", id, error: { code, message, data: { kind } } });
       }
       const violation = replyViolation(method, answered.result);
-      if (violation === undefined) return json({ jsonrpc: "2.0", id, result: answered.result });
+      if (violation === undefined) {
+        return json({ jsonrpc: "2.0", id, result: answered.result });
+      }
       return json({
         jsonrpc: "2.0",
         id,
@@ -559,7 +609,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   const streamed = (link: Link, channel: number, kind: number, payload: Uint8Array) =>
     Effect.gen(function* () {
       const viewer = link.viewers.get(channel);
-      if (viewer === undefined) return;
+      if (viewer === undefined) {
+        return;
+      }
       const terminal = viewer.terminal.name;
       const bytes = new DataView(payload.buffer, payload.byteOffset, payload.length);
       switch (kind) {
@@ -601,25 +653,39 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           subscribers.delete(write);
-          for (const viewer of link.viewers.values()) viewing.delete(viewer);
+          for (const viewer of link.viewers.values()) {
+            viewing.delete(viewer);
+          }
         }),
       );
       const request = (line: string) =>
         Effect.gen(function* () {
           const asked = decodeRequest(line);
-          if (Option.isNone(asked)) return;
+          if (Option.isNone(asked)) {
+            return;
+          }
           const { id, method, params: { [SETUP]: setup, ...params } = {} } = asked.value;
           const entry = yield* encodeJson({ transport: "core", cmd: method, method, params });
-          if (setup !== true) yield* fs.writeFileString(logPath, `${entry}\n`, { flag: "a" });
+          if (setup !== true) {
+            yield* fs.writeFileString(logPath, `${entry}\n`, { flag: "a" });
+          }
           const held = holds.get(method);
-          if (held !== undefined) yield* Effect.promise(() => held);
+          if (held !== undefined) {
+            yield* Effect.promise(() => held);
+          }
           const answered = yield* encodeJson(yield* reply(id, method, params, link));
           yield* link.framed
             ? link.write(frameOf(0, Kind.DATA, utf8(answered)))
             : writer.write(`${answered}\n`);
-          if (method === "hello" && params.framed === true) link.framed = true;
-          if (method === "events.subscribe") subscribers.add(write);
-          for (const viewer of link.viewers.values()) yield* pump(viewer);
+          if (method === "hello" && params.framed === true) {
+            link.framed = true;
+          }
+          if (method === "events.subscribe") {
+            subscribers.add(write);
+          }
+          for (const viewer of link.viewers.values()) {
+            yield* pump(viewer);
+          }
         });
       let buffered = new Uint8Array(0);
       for (;;) {
@@ -632,16 +698,22 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         for (;;) {
           if (!link.framed) {
             const end = buffered.indexOf(10);
-            if (end < 0) break;
+            if (end < 0) {
+              break;
+            }
             const line = new TextDecoder().decode(buffered.subarray(0, end));
             buffered = buffered.subarray(end + 1);
             yield* request(line);
             continue;
           }
-          if (buffered.length < 9) break;
+          if (buffered.length < 9) {
+            break;
+          }
           const head = new DataView(buffered.buffer, buffered.byteOffset);
           const length = head.getUint32(5, true);
-          if (buffered.length < 9 + length) break;
+          if (buffered.length < 9 + length) {
+            break;
+          }
           const channel = head.getUint32(0, true);
           const kind = head.getUint8(4);
           const payload = buffered.slice(9, 9 + length);
@@ -660,12 +732,15 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     logPath,
     cd: (name, dir) => {
       const found = find({ terminal: name });
-      if (found !== undefined) found.foregroundCwd = dir;
+      if (found !== undefined) {
+        found.foregroundCwd = dir;
+      }
     },
     roster: (listed) => {
       machines.clear();
-      for (const one of listed)
+      for (const one of listed) {
         machines.set(one.name, { ...one, via: false, state: "connected", why: null });
+      }
     },
     answer: (method, value) => {
       answers.set(method, value);
@@ -694,7 +769,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       stall = true;
     },
     reportedOnly: (names) => {
-      for (const name of names) onlyReported.add(name);
+      for (const name of names) {
+        onlyReported.add(name);
+      }
     },
     startBlocked: () => {
       blocked = true;
@@ -702,7 +779,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     print: (name, text) =>
       Effect.suspend(() => {
         const found = find({ terminal: name });
-        if (found === undefined) return Effect.void;
+        if (found === undefined) {
+          return Effect.void;
+        }
         found.screen = pipe(found.screen + text, Str.slice(-200));
         return Effect.forEach(viewersOf(found), (viewer) => {
           viewer.backlog.push(...chunks(text));
@@ -712,7 +791,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     exit: (name, code) =>
       Effect.suspend(() => {
         const found = find({ terminal: name });
-        if (found === undefined) return Effect.void;
+        if (found === undefined) {
+          return Effect.void;
+        }
         ended(found);
         return Effect.gen(function* () {
           yield* emit(found.address, "finished", { reason: "exited", exit_code: code });
@@ -739,8 +820,11 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       ),
     ),
     startable: (program, can) => {
-      if (can) unstartable.delete(program);
-      else unstartable.add(program);
+      if (can) {
+        unstartable.delete(program);
+      } else {
+        unstartable.add(program);
+      }
     },
     barePath: () => {
       bare = true;

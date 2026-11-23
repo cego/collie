@@ -27,9 +27,13 @@ const hostWith = Effect.fn("test.hostWith")(function* (
     }),
     (before) =>
       Effect.sync(() => {
-        for (const [key, value] of Rec.toEntries(before))
-          if (value === undefined) delete Bun.env[key];
-          else Bun.env[key] = value;
+        for (const [key, value] of Rec.toEntries(before)) {
+          if (value === undefined) {
+            delete Bun.env[key];
+          } else {
+            Bun.env[key] = value;
+          }
+        }
       }),
   );
   return yield* connect(world.state).pipe(Effect.orDie);

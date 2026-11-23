@@ -36,7 +36,9 @@ export const board = Command.make(
       : answering((env) =>
           boardSnapshot(env).pipe(
             Effect.map((read) => {
-              if (!read.ok) return read;
+              if (!read.ok) {
+                return read;
+              }
               const tasks = read.value.tasks;
               return {
                 ok: true as const,

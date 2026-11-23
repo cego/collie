@@ -54,24 +54,26 @@ export const moveSchedule: (asked: {
     { concurrency: "unbounded" },
   );
   const unreachable = Arr.flatMap(listed, (one) => (one._tag === "Failure" ? [one.failure] : []));
-  if (unreachable.length > 0)
+  if (unreachable.length > 0) {
     return {
       ok: false,
       code: "machine_unreachable",
       message: `${Arr.join(unreachable, "; ")}. Nothing was moved.`,
     };
+  }
   const found = Option.getOrUndefined(
     Arr.findFirst(
       Arr.flatMap(listed, (one) => (one._tag === "Success" ? one.success.schedules : [])),
       (one) => one.name === name,
     ),
   );
-  if (found === undefined)
+  if (found === undefined) {
     return {
       ok: false,
       code: "schedule_not_found",
       message: `No Schedule called "${name}" is on ${from.name} or ${to.name}.`,
     };
+  }
 
   const step = (door: ScheduleDoor, change: ScheduleChange) =>
     door
@@ -91,26 +93,29 @@ export const moveSchedule: (asked: {
         ) || found.start.workspace,
     },
   });
-  if (added._tag === "Failure")
+  if (added._tag === "Failure") {
     return {
       ok: false,
       code: "move_failed",
       message: `${to.name} would not take "${name}": ${added.failure}. Nothing was moved.`,
     };
+  }
   const removed = yield* step(from, { change: "remove", name });
-  if (removed._tag === "Failure")
+  if (removed._tag === "Failure") {
     return {
       ok: false,
       code: "move_incomplete",
       message: `"${name}" is added, paused on ${to.name}, but ${from.name} would not remove it: ${removed.failure}. It still fires on ${from.name}.`,
     };
+  }
   const resumed = yield* step(to, { change: "resume", name });
-  if (resumed._tag === "Failure")
+  if (resumed._tag === "Failure") {
     return {
       ok: false,
       code: "move_incomplete",
       message: `"${name}" is removed from ${from.name} and paused on ${to.name}, which would not resume it: ${resumed.failure}.`,
     };
+  }
   return {
     ok: true,
     moved: resumed.success,

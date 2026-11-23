@@ -162,7 +162,9 @@ const rechecksUnderRateLimit = (cause: ParkCause) =>
       Effect.map((lines) => Arr.filter(lines, (line) => line.action === "rechecked").length),
     );
     const settle = Effect.gen(function* () {
-      for (let tries = 0; tries < 50; tries++) yield* TestClock.withLive(Effect.sleep("2 millis"));
+      for (let tries = 0; tries < 50; tries++) {
+        yield* TestClock.withLive(Effect.sleep("2 millis"));
+      }
     });
     for (let at = 10; at <= 90; at += 10) {
       yield* TestClock.adjust("10 seconds");

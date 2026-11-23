@@ -136,7 +136,9 @@ export function inferInput(name: string, strategy: InputStrategy, ctx: InferCont
 
       case "work-source": {
         const candidates = yield* workSourceCandidates(ctx);
-        if (candidates.length === 1) return { ...base, ...candidates[0]! };
+        if (candidates.length === 1) {
+          return { ...base, ...candidates[0]! };
+        }
         return {
           ...base,
           value: "",
@@ -200,7 +202,9 @@ export function defaultBase(run: NonNullable<InferContext["run"]>, cwd: string) 
       }
       for (const candidate of ["main", "master"]) {
         const exists = yield* run("git", ["rev-parse", "--verify", "--quiet", candidate], cwd);
-        if (exists.code === 0) return candidate;
+        if (exists.code === 0) {
+          return candidate;
+        }
       }
       return null;
     });
@@ -231,9 +235,13 @@ export function planDirs(
     const path = yield* Path.Path;
     const found: Array<WorkSourceCandidate> = [];
     for (const run of finishedHere(runs, cwd, task)) {
-      if (found.length >= limit) break;
+      if (found.length >= limit) {
+        break;
+      }
       const dir = path.join(run.dir, "plan");
-      if (!(yield* fs.exists(path.join(dir, "SPEC.md")))) continue;
+      if (!(yield* fs.exists(path.join(dir, "SPEC.md")))) {
+        continue;
+      }
       found.push({
         kind: "plan-dir",
         value: dir,
@@ -261,11 +269,17 @@ export function reviewedTargets(
     const found: Array<Candidate> = [];
     const seen = new Set<string>();
     for (const run of finishedHere(runs, cwd, task)) {
-      if (found.length >= limit) break;
+      if (found.length >= limit) {
+        break;
+      }
       const target = diffTargetOf(run.settled)?.value;
       const kind = targetKind(target ?? "");
-      if (!target || kind === "") continue;
-      if (seen.has(target)) continue;
+      if (!target || kind === "") {
+        continue;
+      }
+      if (seen.has(target)) {
+        continue;
+      }
       seen.add(target);
       const open = yield* openFindingsIn(run.dir);
       const when = ago(run.finished ?? run.created, now);
@@ -291,7 +305,9 @@ export function workSourceCandidates(ctx: InferContext) {
       ? yield* planDirs(ctx.runs, ctx.cwd, PLAN_DIR_CANDIDATES, ctx.task)
       : [];
     const ticket = yield* ticketFromBranch(ctx.run ?? shell, ctx.cwd);
-    if (ticket) candidates.push({ kind: "linear", value: ticket.value, source: ticket.source });
+    if (ticket) {
+      candidates.push({ kind: "linear", value: ticket.value, source: ticket.source });
+    }
     return candidates;
   });
   return returned;
@@ -327,7 +343,9 @@ export function targetCandidates(ctx: InferContext) {
         label: `${words.sign}${open.iid}`,
       });
     } else if (forge !== null) {
-      for (const mine of yield* myOpenMrs(forge, run, ctx.cwd, project)) out.push(mine);
+      for (const mine of yield* myOpenMrs(forge, run, ctx.cwd, project)) {
+        out.push(mine);
+      }
     }
 
     if (inRepo) {
@@ -359,7 +377,9 @@ export function targetCandidates(ctx: InferContext) {
         REVIEWED_TARGETS,
         ctx.task,
       )) {
-        if (!offered.has(remembered.value)) out.push(remembered);
+        if (!offered.has(remembered.value)) {
+          out.push(remembered);
+        }
       }
     }
     return out;
@@ -460,7 +480,9 @@ export function classifyGivenTarget(typed: string, ctx: InferContext) {
     Effect.gen(function* () {
       // WARNING: An already-normalised target is passed through: classifying it again would nest its prefix.
       const kind = targetKind(Str.trim(typed));
-      if (kind !== "") return { kind, value: Str.trim(typed), source: "typed" };
+      if (kind !== "") {
+        return { kind, value: Str.trim(typed), source: "typed" };
+      }
       const run = ctx.run ?? shell;
       const baseRef = (yield* defaultBase(run, ctx.cwd)) ?? "";
       const project = yield* projectHere(ctx.cwd, run);
@@ -476,11 +498,17 @@ export function classifyGivenSet(typed: string, ctx: InferContext) {
     ChildProcessSpawner.ChildProcessSpawner
   > = Effect.gen(function* () {
     const said = mrRefsIn(typed);
-    if (said.length < 2) return null;
+    if (said.length < 2) {
+      return null;
+    }
     const each = yield* Effect.forEach(said, (one) => classifyGivenTarget(one, ctx));
-    if (!Arr.some(each, (one) => one?.kind === "mr")) return null;
+    if (!Arr.some(each, (one) => one?.kind === "mr")) {
+      return null;
+    }
     const at = Arr.findFirstIndex(each, (one) => one?.kind !== "mr");
-    if (Option.isSome(at)) return { unresolved: said[at.value]! };
+    if (Option.isSome(at)) {
+      return { unresolved: said[at.value]! };
+    }
     return {
       value: Arr.join(
         Arr.map(each, (one) => one!.value),
@@ -515,22 +543,27 @@ export function classifyWorkSource(typed: string) {
     const source = "typed";
 
     // WARNING: Named, never inferred from a path: a follow-up reuses the Run's branch and merge request.
-    if (pipe(text, Str.startsWith("followup:")))
+    if (pipe(text, Str.startsWith("followup:"))) {
       return {
         kind: "followup",
         value: text,
         source,
         label: pipe(text, Str.slice("followup:".length)),
       };
+    }
 
     const issue = linearIssueOf(text);
-    if (issue !== null) return { kind: "linear", value: issue, source };
+    if (issue !== null) {
+      return { kind: "linear", value: issue, source };
+    }
 
-    if (yield* isReviewRun(text))
+    if (yield* isReviewRun(text)) {
       return { kind: "review", value: text, source, label: textLabel(path.basename(text)) };
+    }
 
-    if (yield* isPlanDir(text))
+    if (yield* isPlanDir(text)) {
       return { kind: "plan-dir", value: text, source, label: textLabel(path.basename(text)) };
+    }
 
     return { kind: "text", value: text, source, label: textLabel(text) };
   });
@@ -592,7 +625,9 @@ function resolveFromMenu<E, R>(r: Resolution, prompts: InputPrompts<E, R>, spec:
           footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
         })
         .pipe(Effect.orElseSucceed(() => null));
-      if (!chosen) return false;
+      if (!chosen) {
+        return false;
+      }
 
       if (chosen.id !== TYPE_IT) {
         settle(r, candidates[Number(chosen.id)]!);
@@ -600,9 +635,13 @@ function resolveFromMenu<E, R>(r: Resolution, prompts: InputPrompts<E, R>, spec:
       }
 
       const typed = yield* prompts.ask(spec.question).pipe(Effect.orElseSucceed(() => null));
-      if (typed === null || Str.trim(typed) === "") return false;
+      if (typed === null || Str.trim(typed) === "") {
+        return false;
+      }
       const classified = yield* spec.classify(typed, r);
-      if (!classified) return false;
+      if (!classified) {
+        return false;
+      }
       settle(r, classified);
       return true;
     });
@@ -621,9 +660,13 @@ export function settle(
     Partial<Pick<WorkSourceCandidate, "kind" | "label">>,
 ) {
   r.value = candidate.value;
-  if (candidate.kind !== undefined) r.kind = candidate.kind;
+  if (candidate.kind !== undefined) {
+    r.kind = candidate.kind;
+  }
   r.source = candidate.source;
-  if (candidate.label !== undefined) r.label = candidate.label;
+  if (candidate.label !== undefined) {
+    r.label = candidate.label;
+  }
   r.needsAsking = false;
   delete r.candidates;
 }
@@ -651,7 +694,9 @@ function textLabel(text: string) {
   let label = "";
   for (const word of words) {
     const next = label ? `${label}-${word}` : word;
-    if (next.length > 24) break;
+    if (next.length > 24) {
+      break;
+    }
     label = next;
   }
   return label || "work";
@@ -661,7 +706,9 @@ export function inputValues(resolutions: Array<Resolution>) {
   const values: Record<string, string> = {};
   for (const r of resolutions) {
     values[r.name] = r.value;
-    if (r.kind) values[`${r.name}_kind`] = r.kind;
+    if (r.kind) {
+      values[`${r.name}_kind`] = r.kind;
+    }
   }
   return values;
 }
@@ -676,7 +723,9 @@ export function confirmLine(
       r.kind && !pipe(r.value, Str.startsWith(r.kind)) ? `${r.kind} · ${r.source}` : r.source;
     return `${r.name}=${abbreviate(r.value) || "(empty)"} [${where}]`;
   });
-  if (branch?.name) parts.push(`branch=${branch.name} [${branch.source ?? "resolved"}]`);
+  if (branch?.name) {
+    parts.push(`branch=${branch.name} [${branch.source ?? "resolved"}]`);
+  }
   return `${workflow}: ${Arr.join(parts, "  ")}`;
 }
 

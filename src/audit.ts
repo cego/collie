@@ -55,11 +55,16 @@ export const startedBy = (
   const actor = Option.getOrUndefined(
     Arr.findFirst(lines, (line) => line.operation === "start"),
   )?.actor;
-  if (actor?.schedule !== undefined)
+  if (actor?.schedule !== undefined) {
     return `Started by schedule \`${actor.schedule.name}\` for ${actor.schedule.occurrence}`;
+  }
   const door = actor === undefined ? undefined : STARTED_FROM[actor.origin];
-  if (door !== undefined) return `Started from ${door}`;
-  if (run.parent === null) return undefined;
+  if (door !== undefined) {
+    return `Started from ${door}`;
+  }
+  if (run.parent === null) {
+    return undefined;
+  }
   const invocation = pipe_(run.id, Str.startsWith(`${run.parent}.`))
     ? pipe_(run.id, Str.slice(run.parent.length + 1))
     : run.id;
@@ -77,7 +82,9 @@ const fileOf = (runDir: string) => `${runDir}/${AUDIT_FILE}`;
 const ofRun = (dir: string) => runOfDir(parentOf(dir)) === "runs";
 
 export const readAudit = Effect.fn("Audit.read")(function* (dir: string) {
-  if (ofRun(dir)) return yield* readRunJournal(runJournal(dir, AUDIT_FILE), AuditJson);
+  if (ofRun(dir)) {
+    return yield* readRunJournal(runJournal(dir, AUDIT_FILE), AuditJson);
+  }
   return yield* readJournal(fileOf(dir), AuditJson);
 });
 
@@ -85,7 +92,9 @@ export const lastAudit = Effect.fn("Audit.last")(function* (
   dir: string,
   operations: ReadonlyArray<string> | null,
 ) {
-  if (ofRun(dir)) return yield* lastRunJournal(runJournal(dir, AUDIT_FILE), AuditJson, operations);
+  if (ofRun(dir)) {
+    return yield* lastRunJournal(runJournal(dir, AUDIT_FILE), AuditJson, operations);
+  }
   return Arr.findLast(
     yield* readJournal(fileOf(dir), AuditJson),
     (line) => operations === null || operations.includes(line.operation),
@@ -94,7 +103,9 @@ export const lastAudit = Effect.fn("Audit.last")(function* (
 
 export const trimAudit = Effect.fn("Audit.trim")(function* (runDir: string, keep: number) {
   const lines = yield* readAudit(runDir);
-  if (lines.length <= keep) return;
+  if (lines.length <= keep) {
+    return;
+  }
   const fs = yield* FileSystem.FileSystem;
   const encode = flow(Schema.encodeResult(AuditJson), Result.getOrThrow);
   const tmp = `${fileOf(runDir)}.${process.pid}.tmp`;
@@ -144,9 +155,15 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     result: yield* Schema.encodeEffect(line.result)(line.value).pipe(Effect.orDie),
   };
   let full = written;
-  if (line.reason !== undefined) full = { ...full, reason: line.reason };
-  if (line.asked !== undefined) full = { ...full, asked: line.asked };
-  if (line.requested !== undefined) full = { ...full, requested: line.requested };
+  if (line.reason !== undefined) {
+    full = { ...full, reason: line.reason };
+  }
+  if (line.asked !== undefined) {
+    full = { ...full, asked: line.asked };
+  }
+  if (line.requested !== undefined) {
+    full = { ...full, requested: line.requested };
+  }
   yield* ofRun(runDir)
     ? appendRunJournal(runJournal(runDir, AUDIT_FILE), AuditJson, full)
     : appendJournal(fileOf(runDir), AuditJson, full);

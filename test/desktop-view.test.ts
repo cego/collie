@@ -695,8 +695,9 @@ test("a Machine doctor doesn't find onboarded is behind on onboarding, with its 
 });
 
 test("a Machine not live is its state, and one connecting has no verdict", () => {
-  for (const state of ["unreachable", "sso", "no-collie", "update-desktop"] as const)
+  for (const state of ["unreachable", "sso", "no-collie", "update-desktop"] as const) {
     expect(inSync(row({ state, build: "0.30.0" }), DESKTOP)).toEqual({ state, behind: [] });
+  }
   expect(inSync(row({ state: "connecting" }), DESKTOP)).toEqual({
     state: "connecting",
     behind: [],
@@ -869,8 +870,9 @@ test("Add Machine takes a Machine only once its SSH target and label are filled"
     target: "mk@vm",
     label: "vm",
   });
-  for (const blank of ["target", "label"] as const)
+  for (const blank of ["target", "label"] as const) {
     expect(machineToAdd({ target: "mk@vm", label: "vm", [blank]: "  " })).toBeNull();
+  }
 });
 
 const none: BoardState = { selected: null, page: null };

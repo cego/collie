@@ -126,7 +126,7 @@ test("a checks file edited and not committed in the checkout a start is made fro
 for (const [whose, env] of [
   ["", LOGGED_IN],
   [", even where no login names the branch the Run would work on,", { GIT_SSH_COMMAND: "false" }],
-] as const)
+] as const) {
   test(`a base checks file that does not read is refused${whose} naming the ref and the file`, () =>
     proves(
       "collie-checks-at-base-unread-",
@@ -142,3 +142,4 @@ for (const [whose, env] of [
         }),
       ["placed.workflow.ts"],
     ));
+}

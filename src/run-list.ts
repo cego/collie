@@ -31,7 +31,9 @@ export const listStateOf: (run: RunFacts) => ListState = (run) => {
     case "ended":
       return "succeeded";
     default:
-      if (run.asking.length > 0) return "needs-you";
+      if (run.asking.length > 0) {
+        return "needs-you";
+      }
       return run.parked !== null ? "parked" : "live";
   }
 };
@@ -225,33 +227,41 @@ export const listAsked: (
       flags.limit !== null ||
       flags.fields !== null ||
       flags.since !== null
-    )
+    ) {
       return {
         ok: false,
         message: "--after continues a listing under its own filters; give it alone.",
       };
+    }
     const read = readToken(flags.after, "page");
-    if (!read.ok) return read;
+    if (!read.ok) {
+      return read;
+    }
     const { _tag, ...token } = read.token;
     return { ok: true, asked: token };
   }
   const states = Arr.filter(flags.status, (one) => !Schema.is(ListState)(one));
-  if (states.length > 0)
+  if (states.length > 0) {
     return {
       ok: false,
       message: `--status takes ${Arr.join(LIST_STATES, ", ")}; not ${Arr.join(states, ", ")}.`,
     };
-  if (flags.fields !== null && flags.fields !== "summary" && flags.fields !== "full")
+  }
+  if (flags.fields !== null && flags.fields !== "summary" && flags.fields !== "full") {
     return { ok: false, message: `--fields takes summary or full; not ${flags.fields}.` };
+  }
   const full = flags.fields === "full";
   const limit = flags.limit === null ? (full ? null : DEFAULT_LIMIT) : Number(flags.limit);
-  if (limit !== null && (!Number.isInteger(limit) || limit < 1))
+  if (limit !== null && (!Number.isInteger(limit) || limit < 1)) {
     return {
       ok: false,
       message: `--limit takes a whole number of Runs, 1 or more; not ${flags.limit}.`,
     };
+  }
   const since = flags.since === null ? null : readToken(flags.since, "cursor");
-  if (since !== null && !since.ok) return since;
+  if (since !== null && !since.ok) {
+    return since;
+  }
   return {
     ok: true,
     asked: {

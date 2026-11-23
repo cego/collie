@@ -45,10 +45,12 @@ test("model checks accept the alias list, the harness pattern and user extras", 
   expect(knownModel(HARNESSES.opencode!, "sonnet")).toBe(false);
   expect(knownModel(HARNESSES.opencode!, "anthropic/claude-sonnet-4")).toBe(true);
   expect(knownModel(HARNESSES.opencode!, "sonnet", ["sonnet"])).toBe(true);
-  for (const model of ["gpt-6.1-sol", "gpt-5.6-sol", "gpt5", "o3"])
+  for (const model of ["gpt-6.1-sol", "gpt-5.6-sol", "gpt5", "o3"]) {
     expect(knownModel(HARNESSES.codex!, model)).toBe(true);
-  for (const model of ["gpt-sol", "o-3", "gpt-6.1-sol --flag", "anthropic/opus"])
+  }
+  for (const model of ["gpt-sol", "o-3", "gpt-6.1-sol --flag", "anthropic/opus"]) {
     expect(knownModel(HARNESSES.codex!, model)).toBe(false);
+  }
 });
 
 test("effort flags follow the harness's launch interface", () => {
@@ -164,8 +166,9 @@ test("every harness starts in its auto mode, and past its prompts only when bypa
   // WARNING: opencode's --auto approves every call rather than reviewing it, so it has no auto mode.
   expect(permissionsOf("opencode", "anthropic/claude-sonnet-4")).toEqual([]);
   expect(permissionsOf("opencode", "anthropic/claude-sonnet-4", "bypass")).toEqual(["--auto"]);
-  for (const mode of ["auto", "bypass"] as const)
+  for (const mode of ["auto", "bypass"] as const) {
     expect(permissionsOf("pi", "openai-codex/gpt-5.6-sol", mode)).toEqual([]);
+  }
 
   for (const adapter of Rec.values(HARNESSES)) {
     const asked = startArgs(adapter, DEFAULT_MODEL, "/p/i.md", undefined, "harness");
@@ -174,8 +177,9 @@ test("every harness starts in its auto mode, and past its prompts only when bypa
       "--approve-for-me",
       "--dangerously-bypass-approvals-and-sandbox",
       "--auto",
-    ])
+    ]) {
       expect(asked).not.toContain(flag);
+    }
   }
 });
 
@@ -205,8 +209,9 @@ test("Claude Code alone is given its auto-compact window, after everything else 
     "gpt-5",
     "--approve-for-me",
   ]);
-  for (const adapter of ["codex", "opencode", "pi"])
+  for (const adapter of ["codex", "opencode", "pi"]) {
     expect(HARNESSES[adapter]!.autoCompactFlag).toBeUndefined();
+  }
 });
 
 test("Claude Code's managed settings forbid bypass where the file or a drop-in disables it", () =>
@@ -338,20 +343,25 @@ test("each harness wires the whole Collie Toolkit with its Run and agent environ
   for (const id of ["claude", "codex", "pi", "opencode"]) {
     const wired = HARNESSES[id]!.mcp(launch);
     expect(wired.args.length + Rec.keys(wired.env).length).toBeGreaterThan(0);
-    if (id === "claude") expect(wired.args).toEqual(["--mcp-config", launch.config]);
-    if (id === "pi") expect(wired.args).toEqual(["-e", launch.extension]);
+    if (id === "claude") {
+      expect(wired.args).toEqual(["--mcp-config", launch.config]);
+    }
+    if (id === "pi") {
+      expect(wired.args).toEqual(["-e", launch.extension]);
+    }
     if (id === "codex") {
       expect(wired.args).toContain('mcp_servers.collie.command="/bin/collie"');
       expect(wired.args).toContain('mcp_servers.collie.env.COLLIE_RUN="run-source"');
       expect(wired.args).toContain('mcp_servers.collie.env.COLLIE_AGENT="source-agent"');
     }
-    if (id === "opencode")
+    if (id === "opencode") {
       expect(parseJson(Schema.Any, wired.env.OPENCODE_CONFIG_CONTENT!).mcp.collie).toEqual({
         type: "local",
         command: ["/bin/collie", "mcp"],
         environment: launch.env,
         enabled: true,
       });
+    }
   }
 });
 

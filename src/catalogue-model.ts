@@ -95,7 +95,9 @@ export const piEntries = (text: string) => {
   );
   const column = (name: string) => header?.indexOf(name) ?? -1;
   const [provider, model, thinking] = [column("provider"), column("model"), column("thinking")];
-  if (provider < 0 || model < 0 || thinking < 0) return null;
+  if (provider < 0 || model < 0 || thinking < 0) {
+    return null;
+  }
   return Arr.map(
     Arr.filter(rows, (row) => row.length === header.length),
     (row) =>
@@ -108,7 +110,9 @@ export const piEntries = (text: string) => {
 export const opencodeEntries = (text: string) => {
   const lines = Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "");
   const ids = Arr.filter(lines, (line) => /^[^\s/]+\/\S+$/.test(line));
-  if (ids.length === 0 || ids.length < lines.length) return null;
+  if (ids.length === 0 || ids.length < lines.length) {
+    return null;
+  }
   return Arr.map(ids, (id) =>
     entry(id, pipe(id, Str.slice(Option.getOrElse(pipe(id, Str.indexOf("/")), () => -1) + 1))),
   );
@@ -142,7 +146,9 @@ const PAD = 10;
 
 export function modelsLines(catalogues: ReadonlyArray<HarnessCatalogue>, only?: string) {
   const kept = Arr.filter(catalogues, (one) => only === undefined || one.harness === only);
-  if (kept.length === 0) return `${only ?? "No harness"} is not installed on this Machine.`;
+  if (kept.length === 0) {
+    return `${only ?? "No harness"} is not installed on this Machine.`;
+  }
   return Arr.join(
     Arr.flatMap(kept, ({ harness, table, entries }) => [
       ...(table === null ? [] : [`${pipe(harness, Str.padEnd(PAD))}from Collie's table: ${table}`]),

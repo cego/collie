@@ -41,32 +41,38 @@ const filesUnder = (dir: string) =>
 const backdate = (runs: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    for (const run of runs)
+    for (const run of runs) {
       for (const dir of [`${world.state}/runs/${run}`, `${world.state}/evidence/${run}`]) {
-        if (!(yield* fs.exists(dir))) continue;
+        if (!(yield* fs.exists(dir))) {
+          continue;
+        }
         for (const file of filesUnder(dir)) {
           yield* fs.writeFileString(file, earlier(yield* fs.readFileString(file)));
           const at = new Date(statSync(file).mtimeMs - OLD_DAYS * 86_400_000);
           utimesSync(file, at, at);
         }
       }
+    }
     const db = new Database(`${world.state}/host.db`);
     for (const table of ["collie_runs", "collie_decisions"]) {
       const columns = db
         .query<{ name: string; type: string }, []>(`pragma table_info(${table})`)
         .all()
         .filter((column) => column.name !== "run" && column.type === "TEXT");
-      for (const run of runs)
-        for (const { name } of columns)
+      for (const run of runs) {
+        for (const { name } of columns) {
           for (const row of db
             .query<{ rowid: number; text: string }, [string]>(
               `select rowid, "${name}" as text from ${table} where run = ? and "${name}" is not null`,
             )
-            .all(run))
+            .all(run)) {
             db.query(`update ${table} set "${name}" = ? where rowid = ?`).run(
               earlier(row.text),
               row.rowid,
             );
+          }
+        }
+      }
     }
     db.close();
   });
@@ -82,12 +88,13 @@ export const prepare = (
       `${world.user}/bench-steps.workflow.ts`,
     );
     const settled = counts.runs - counts.large - counts.live;
-    if (settled <= counts.old)
+    if (settled <= counts.old) {
       return yield* Effect.die(
         new Error(
           `--runs ${counts.runs} leaves no recent settled Run beside ${counts.old} old ones`,
         ),
       );
+    }
     const small = yield* startEach(
       Array.from({ length: settled }, () => ({
         id: "bench-steps",
@@ -110,7 +117,9 @@ export const prepare = (
     for (;;) {
       const views = yield* client.runs({ task: null });
       const done = views.filter((view) => view.status.status === "complete").length;
-      if (done >= small.length + large.length) break;
+      if (done >= small.length + large.length) {
+        break;
+      }
       yield* Effect.sleep("1 second");
     }
     yield* stopHost(world.state);

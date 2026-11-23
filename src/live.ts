@@ -126,7 +126,9 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
       unattributed: yield* unattributed(run),
       proposal: pendingFor(lines, run.id, now).length > 0,
     };
-    if (Arr.some(Rec.values(mark), (set) => set)) marks[run.id] = mark;
+    if (Arr.some(Rec.values(mark), (set) => set)) {
+      marks[run.id] = mark;
+    }
   }
   let live: Live | null = null;
   if (opts.region) {
@@ -140,7 +142,9 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
     const one = opts.run;
     if (one === null) {
       const cards: Array<Card> = [];
-      for (const run of opts.runs) cards.push(...(cardsOf.get(run.id) ?? []));
+      for (const run of opts.runs) {
+        cards.push(...(cardsOf.get(run.id) ?? []));
+      }
       live = {
         news,
         run: null,
@@ -168,11 +172,17 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
 
 // WARNING: Shown only while auto_correct, exclusive_steering and an invisible harness all hold.
 const unattributed = Effect.fn("Live.unattributed")(function* (run: MarkedRun) {
-  if (run.harnesses.length === 0) return false;
+  if (run.harnesses.length === 0) {
+    return false;
+  }
   const intent = yield* readIntent(run.dir).pipe(Effect.orElseSucceed(() => null));
-  if (intent === null) return false;
+  if (intent === null) {
+    return false;
+  }
   const { auto_correct, exclusive_steering } = intent.authority;
-  if (!auto_correct || !exclusive_steering) return false;
+  if (!auto_correct || !exclusive_steering) {
+    return false;
+  }
   // WARNING: A harness with no row is shown as unproven, never as nothing to say.
   return Arr.some(
     run.harnesses,

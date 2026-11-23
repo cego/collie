@@ -99,7 +99,9 @@ const paced = Effect.fn("Usage.paced")(function* (
     single.withPermits(1)(
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
-        if (shown !== null && now < until) return shown;
+        if (shown !== null && now < until) {
+          return shown;
+        }
         const asked = yield* ask.pipe(
           Effect.timeoutOption(USAGE_CALL_MS),
           Effect.map(
@@ -116,7 +118,9 @@ const paced = Effect.fn("Usage.paced")(function* (
             }),
           ),
         );
-        if (asked.reading.problem === null) good = asked.reading;
+        if (asked.reading.problem === null) {
+          good = asked.reading;
+        }
         shown =
           good !== null && asked.reading.problem !== null
             ? {
@@ -124,7 +128,9 @@ const paced = Effect.fn("Usage.paced")(function* (
                 problem: asked.reading.problem,
               }
             : asked.reading;
-        if (asked.called) until = now + Math.max(USAGE_INTERVAL_MS, asked.retryAfterMs ?? 0);
+        if (asked.called) {
+          until = now + Math.max(USAGE_INTERVAL_MS, asked.retryAfterMs ?? 0);
+        }
         return shown;
       }),
     ),
@@ -251,11 +257,12 @@ export const askClaude: (
     const stored = Option.getOrNull(
       decodeCredentials((yield* login.credentials) ?? ""),
     )?.claudeAiOauth;
-    if (!stored)
+    if (!stored) {
       return {
         reading: problem("claude", now, "Claude Code is not logged in on this Machine"),
         called: false,
       };
+    }
     const account = claudeLogin(
       Option.getOrNull(decodeClaudeJson((yield* login.claudeJson) ?? "")),
       stored.subscriptionType ?? null,
@@ -268,7 +275,7 @@ export const askClaude: (
       };
       return returned;
     };
-    if (stored.expiresAt != null && stored.expiresAt <= now)
+    if (stored.expiresAt != null && stored.expiresAt <= now) {
       return {
         reading: problem(
           "claude",
@@ -278,14 +285,16 @@ export const askClaude: (
         ),
         called: false,
       };
+    }
     const response = yield* HttpClient.execute(
       HttpClientRequest.get(CLAUDE_USAGE_URL).pipe(
         HttpClientRequest.setHeader("Authorization", `Bearer ${stored.accessToken}`),
         HttpClientRequest.setHeader("anthropic-beta", "oauth-2025-04-20"),
       ),
     ).pipe(Effect.result);
-    if (response._tag === "Failure")
+    if (response._tag === "Failure") {
       return failed(`Claude's usage endpoint: ${reason(response.failure)}`);
+    }
     const { status, headers } = response.success;
     if (status === 429) {
       const seconds = Number(headers["retry-after"]);
@@ -294,15 +303,19 @@ export const askClaude: (
         Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null,
       );
     }
-    if (status === 401 || status === 403)
+    if (status === 401 || status === 403) {
       return failed(
         "Claude's usage endpoint refused Claude Code's login; it refreshes when Claude Code next runs",
       );
-    if (status < 200 || status >= 300) return failed(`Claude's usage endpoint answered ${status}`);
+    }
+    if (status < 200 || status >= 300) {
+      return failed(`Claude's usage endpoint answered ${status}`);
+    }
     const body = yield* response.success.json.pipe(Effect.orElseSucceed(() => null));
     const usage = Option.getOrNull(decodeClaudeUsage(body));
-    if (usage === null)
+    if (usage === null) {
       return failed("Claude's usage endpoint answered in a shape Collie does not read");
+    }
     const windows = claudeWindows(usage);
     return {
       reading: {
@@ -328,12 +341,13 @@ export const codexReading: (ask: CodexAsk) => Effect.Effect<Asked> = (ask) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const answered = yield* Effect.result(ask);
-    if (answered._tag === "Failure")
+    if (answered._tag === "Failure") {
       return { reading: problem("chatgpt", now, answered.failure.message), called: true };
+    }
     const login = codexLogin(
       Option.getOrElse(decodeCodexAccount(answered.success.account), () => ({})),
     );
-    if (login.account === null && login.accountLabel === null)
+    if (login.account === null && login.accountLabel === null) {
       return {
         reading: problem(
           "chatgpt",
@@ -342,8 +356,9 @@ export const codexReading: (ask: CodexAsk) => Effect.Effect<Asked> = (ask) =>
         ),
         called: true,
       };
+    }
     const limits = Option.getOrNull(decodeCodexRateLimits(answered.success.rateLimits));
-    if (limits === null)
+    if (limits === null) {
       return {
         reading: problem(
           "chatgpt",
@@ -353,6 +368,7 @@ export const codexReading: (ask: CodexAsk) => Effect.Effect<Asked> = (ask) =>
         ),
         called: true,
       };
+    }
     const usage = codexUsage(limits);
     return {
       reading: {
@@ -380,7 +396,9 @@ const runningCodex = (stateDir: string) =>
       .pipe(Effect.orElseSucceed(() => []));
     for (const agent of agents) {
       const control = yield* readControl(stateDir, agent).pipe(Effect.orElseSucceed(() => null));
-      if (control?.harness === "codex" && control.endpoint !== null) return control.endpoint;
+      if (control?.harness === "codex" && control.endpoint !== null) {
+        return control.endpoint;
+      }
     }
     return null;
   });
@@ -458,14 +476,17 @@ const viaStdio: Effect.Effect<
     Stream.splitLines,
     Stream.mapEffect((line) => {
       const reply = Option.getOrNull(decodeReply(line));
-      if (reply?.id === undefined || reply.id < 2) return Effect.void;
-      if (reply.error)
+      if (reply?.id === undefined || reply.id < 2) {
+        return Effect.void;
+      }
+      if (reply.error) {
         return Effect.fail(
           new Cause.UnknownError(
             reply.error,
             `codex ${reply.id === 2 ? RATE_LIMITS : ACCOUNT}: ${reply.error.message}`,
           ),
         );
+      }
       answers.set(reply.id, reply.result);
       return Effect.void;
     }),
@@ -475,8 +496,9 @@ const viaStdio: Effect.Effect<
       Cause.isUnknownError(cause) ? cause : new Cause.UnknownError(cause, reason(cause)),
     ),
   );
-  if (answers.size < 2)
+  if (answers.size < 2) {
     return yield* new Cause.UnknownError(undefined, "codex app-server stopped before it answered");
+  }
   return { rateLimits: answers.get(2), account: answers.get(3) };
 }).pipe(Effect.scoped);
 

@@ -67,7 +67,9 @@ const manifest = await runEffect(
       yield* Effect.addFinalizer(() => stopHost(world.state));
       const git = (argv: Array<string>) => {
         const result = Bun.spawnSync(["git", ...argv], { cwd: world.project, env: Bun.env });
-        if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+        if (result.exitCode !== 0) {
+          throw new Error(result.stderr.toString());
+        }
       };
       git(["init", "-q", "-b", "main"]);
       writeFileSync(`${world.project}/sample.ts`, "export const sample = 1;\n");
@@ -87,11 +89,12 @@ const manifest = await runEffect(
         "at-rest/workflows/bench-wait",
         "at-rest/workflows/bench-report",
         "at-rest/workflows/bench-active",
-      ])
+      ]) {
         cpSync(
           `${root}bench/${from}.workflow.ts`,
           `${world.user}/${from.split("/").at(-1)}.workflow.ts`,
         );
+      }
       yield* say(`building the fixture with the host at ${root}`);
       const settled = yield* startEach("bench-steps", Number(flags.settled), {
         steps: "16",

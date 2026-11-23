@@ -12,10 +12,14 @@ test("nothing the suite runs spawns a process synchronously", () =>
       const offenders: Array<string> = [];
       for (const dir of ["src", "test"]) {
         for (const name of yield* fs.readDirectory(`${root}${dir}`, { recursive: true })) {
-          if (!/\.tsx?$/.test(name)) continue;
+          if (!/\.tsx?$/.test(name)) {
+            continue;
+          }
           const file = `${dir}/${name}`;
           const text = yield* fs.readFileString(`${root}${file}`);
-          if (/\b(spawn|exec|execFile)Sync\(/.test(text)) offenders.push(file);
+          if (/\b(spawn|exec|execFile)Sync\(/.test(text)) {
+            offenders.push(file);
+          }
         }
       }
       expect(offenders).toEqual([]);

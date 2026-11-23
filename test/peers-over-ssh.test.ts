@@ -34,8 +34,9 @@ const listed = (side: Side, name: string) =>
           (one) => one.name === name,
         ),
       );
-      if (found === undefined)
+      if (found === undefined) {
         throw new Error(`${side.name} does not list ${name}: ${encode(read.envelope)}`);
+      }
       return found;
     }),
   );

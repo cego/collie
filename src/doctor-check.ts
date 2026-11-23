@@ -39,7 +39,9 @@ export const answered = (
 export const onPath = Effect.fn("Doctor.onPath")(function* (search: string, name: string) {
   const path = yield* Path.Path;
   for (const dir of Arr.filter(Str.split(search, ":"), (d) => d !== "")) {
-    if (yield* runnable(path.join(dir, name))) return dir;
+    if (yield* runnable(path.join(dir, name))) {
+      return dir;
+    }
   }
   return null;
 });

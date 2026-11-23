@@ -90,8 +90,9 @@ export const verifiedRunner = Effect.fn("Releases.verifiedRunner")(function* (
   ]).pipe(Effect.option);
   let bytes: Uint8Array;
   let signature: string | null;
-  if (Option.isSome(kept)) [bytes, signature] = kept.value;
-  else {
+  if (Option.isSome(kept)) {
+    [bytes, signature] = kept.value;
+  } else {
     const url = `${releases}/${version}/${asset}`;
     const got = yield* fetched(url);
     if (got === null) {
@@ -106,7 +107,9 @@ export const verifiedRunner = Effect.fn("Releases.verifiedRunner")(function* (
   }
   const verified = verifyRelease(bytes, signature, key);
   if (!verified.ok) {
-    if (Option.isSome(kept)) yield* fs.remove(file, { force: true }).pipe(Effect.ignore);
+    if (Option.isSome(kept)) {
+      yield* fs.remove(file, { force: true }).pipe(Effect.ignore);
+    }
     return yield* new RunnerRefused({
       reason: `${asset} ${version}: ${verified.reason}`,
       missing: false,

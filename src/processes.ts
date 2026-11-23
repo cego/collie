@@ -44,9 +44,13 @@ const procCommand = (pid: number, proc: string) =>
 const fromProc = (pid: number) =>
   Effect.gen(function* () {
     const fields = yield* statFields(pid);
-    if (fields[0] === "Z") return null;
+    if (fields[0] === "Z") {
+      return null;
+    }
     const command = yield* procCommand(pid, PROC);
-    if (command === "") return null;
+    if (command === "") {
+      return null;
+    }
     return {
       pid,
       command,
@@ -64,13 +68,14 @@ const readPs = (args: ReadonlyArray<string>) =>
     );
     const text = yield* Stream.mkString(Stream.decodeText(handle.stdout));
     const code = yield* handle.exitCode;
-    if (code !== 0)
+    if (code !== 0) {
       return yield* PlatformError.systemError({
         _tag: "Unknown",
         module: "ChildProcess",
         method: "ps",
         description: `ps exited ${code}; its process listing is unproved`,
       });
+    }
     return text;
   }).pipe(Effect.scoped);
 
@@ -99,7 +104,9 @@ export const readsSessions = FileSystem.FileSystem.pipe(
 );
 
 export const processOf = Effect.fn("Processes.processOf")(function* (pid: number) {
-  if (yield* readsSessions) return yield* fromProc(pid).pipe(Effect.orElseSucceed(() => null));
+  if (yield* readsSessions) {
+    return yield* fromProc(pid).pipe(Effect.orElseSucceed(() => null));
+  }
   const [row] = psRows(yield* ps(["-ww", "-o", PS_COLUMNS, "-p", String(pid)]));
   return row ?? null;
 });
@@ -108,7 +115,9 @@ export const commandOf = (pid: number, proc = PROC) =>
   procCommand(pid, proc).pipe(Effect.catch(() => ps(["-ww", "-o", "command=", "-p", String(pid)])));
 
 export const startedOf = Effect.fn("Processes.startedOf")(function* (pid: number) {
-  if (yield* readsSessions) return yield* procStarted(pid);
+  if (yield* readsSessions) {
+    return yield* procStarted(pid);
+  }
   return Str.trim(yield* ps(["-o", "lstart=", "-p", String(pid)])) || null;
 });
 
@@ -119,10 +128,14 @@ export const sessionOf = Effect.fn("Processes.sessionOf")(function* (root: numbe
     const found: Array<ProcessInfo> = [];
     for (const name of yield* fs.readDirectory(PROC)) {
       const pid = Number(name);
-      if (!Number.isInteger(pid) || pid === root) continue;
+      if (!Number.isInteger(pid) || pid === root) {
+        continue;
+      }
       const one = yield* Effect.gen(function* () {
         const fields = yield* statFields(pid);
-        if (fields[0] === "Z" || Number(fields[3]) !== root) return null;
+        if (fields[0] === "Z" || Number(fields[3]) !== root) {
+          return null;
+        }
         return yield* fromProc(pid);
       }).pipe(
         Effect.catchTag("PlatformError", (cause) =>
@@ -131,7 +144,9 @@ export const sessionOf = Effect.fn("Processes.sessionOf")(function* (root: numbe
           ),
         ),
       );
-      if (one !== null && one.session === root) found.push(one);
+      if (one !== null && one.session === root) {
+        found.push(one);
+      }
     }
     return found;
   }
@@ -139,11 +154,12 @@ export const sessionOf = Effect.fn("Processes.sessionOf")(function* (root: numbe
   const tree = new Set([root]);
   for (let grew = true; grew;) {
     grew = false;
-    for (const one of all)
+    for (const one of all) {
       if (!tree.has(one.pid) && tree.has(one.parent)) {
         tree.add(one.pid);
         grew = true;
       }
+    }
   }
   return Arr.filter(all, (one) => one.pid !== root && tree.has(one.pid));
 });
@@ -163,12 +179,16 @@ const readBindings = Effect.fnUntraced(function* (pid: number, names: ReadonlyAr
   const environ = yield* fs
     .readFileString(`${PROC}/${pid}/environ`)
     .pipe(Effect.orElseSucceed(() => null));
-  if (environ === null || environ === "") return null;
+  if (environ === null || environ === "") {
+    return null;
+  }
   const found: Record<string, string> = {};
   for (const entry of Str.split(environ, "\0")) {
     const at = Option.getOrElse(pipe_(entry, Str.indexOf("=")), () => -1);
     const name = pipe_(entry, Str.slice(0, at));
-    if (at > 0 && names.includes(name)) found[name] = pipe_(entry, Str.slice(at + 1));
+    if (at > 0 && names.includes(name)) {
+      found[name] = pipe_(entry, Str.slice(at + 1));
+    }
   }
   return found;
 });
@@ -181,17 +201,25 @@ export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
   names: ReadonlyArray<string>,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  if (!(yield* readsSessions)) return [];
+  if (!(yield* readsSessions)) {
+    return [];
+  }
   const looked = yield* Effect.forEach(
     yield* fs.readDirectory(PROC).pipe(Effect.orElseSucceed(() => [])),
     (name) =>
       Effect.gen(function* () {
         const pid = Number(name);
-        if (!Number.isInteger(pid)) return null;
+        if (!Number.isInteger(pid)) {
+          return null;
+        }
         const candidate = yield* readBindings(pid, names);
-        if (candidate === null || Rec.keys(candidate).length === 0) return null;
+        if (candidate === null || Rec.keys(candidate).length === 0) {
+          return null;
+        }
         const started = yield* procStarted(pid);
-        if (started === null) return null;
+        if (started === null) {
+          return null;
+        }
         const bound = yield* readBindings(pid, names);
         return bound !== null && Rec.keys(bound).length > 0 ? { pid, started, bound } : null;
       }),

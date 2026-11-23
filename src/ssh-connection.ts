@@ -30,10 +30,11 @@ export const controlPathOf = (stateDir: string, machine: SshMachine) =>
 export const controlPath = Effect.fn("SshConnection.controlPath")(
   function* (stateDir: string, machine: SshMachine) {
     const path = controlPathOf(stateDir, machine);
-    if (Buffer.byteLength(path) + BIND_SUFFIX > SOCKET_PATH_MAX)
+    if (Buffer.byteLength(path) + BIND_SUFFIX > SOCKET_PATH_MAX) {
       return yield* new HostRefused({
         reason: `${path} is too long for ssh to bind as a control socket within the ${SOCKET_PATH_MAX} bytes a unix socket path may be`,
       });
+    }
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(`${stateDir}/ssh`, {
       recursive: true,
@@ -174,7 +175,9 @@ export const openConnection = Effect.fn("SshConnection.open")(function* (
       }),
     ),
   );
-  if (yield* checked) return { path, opened: false };
+  if (yield* checked) {
+    return { path, opened: false };
+  }
   const contended = new MachineUnreachable({
     machine: machine.label,
     seen: `another opener held its SSH connection for longer than ${Duration.format(bound)}`,
@@ -184,9 +187,13 @@ export const openConnection = Effect.fn("SshConnection.open")(function* (
     `${path}.lock`,
     contended,
     Effect.gen(function* () {
-      if (yield* checked) return { path, opened: false };
+      if (yield* checked) {
+        return { path, opened: false };
+      }
       const within = yield* left;
-      if (Duration.isZero(within)) return yield* contended;
+      if (Duration.isZero(within)) {
+        return yield* contended;
+      }
       return yield* opened(connection, machine, ssh, within, options.said);
     }),
     yield* left,
@@ -242,15 +249,20 @@ const opened = Effect.fnUntraced(function* (
       Effect.forkScoped,
     );
     const code = Number(yield* master.exitCode);
-    if (code !== 0) return yield* Effect.fail(`ssh exited ${code}`);
-    if (!(yield* connection.check))
+    if (code !== 0) {
+      return yield* Effect.fail(`ssh exited ${code}`);
+    }
+    if (!(yield* connection.check)) {
       return yield* Effect.fail("no master answered once ssh returned");
+    }
   }).pipe(
     Effect.scoped,
     Effect.mapError((cause) => (Schema.is(Schema.String)(cause) ? cause : cause.message)),
   );
   const done = yield* opening.pipe(Effect.timeoutOption(bound), Effect.result);
-  if (done._tag === "Success" && Option.isSome(done.success)) return { path, opened: true };
+  if (done._tag === "Success" && Option.isSome(done.success)) {
+    return { path, opened: true };
+  }
   const why =
     done._tag === "Failure" ? done.failure : `no SSH connection within ${Duration.format(bound)}`;
   return yield* new MachineUnreachable({

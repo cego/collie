@@ -65,7 +65,9 @@ const open = (url: string) =>
 
         socket.onmessage = (event) => {
           const decodedReply = decodeReply(event.data);
-          if (decodedReply._tag === "None") return;
+          if (decodedReply._tag === "None") {
+            return;
+          }
           const reply = decodedReply.value;
           const waiting = reply.id === undefined ? undefined : pending.get(reply.id);
           if (waiting !== undefined && reply.id !== undefined) {
@@ -221,7 +223,9 @@ export const boundThread = Effect.fn("Codex.boundThread")(function* (
     LoadedList,
     yield* client.call("thread/loaded/list", {}),
   );
-  if (loaded.data.length === 0) return null;
+  if (loaded.data.length === 0) {
+    return null;
+  }
   const mine: Array<string> = [];
   const elsewhere: Array<string> = [];
   for (const threadId of loaded.data) {
@@ -230,7 +234,9 @@ export const boundThread = Effect.fn("Codex.boundThread")(function* (
       ThreadRead,
       yield* client.call("thread/read", { threadId }),
     );
-    if (read.thread.ephemeral === true || read.thread.parentThreadId) continue;
+    if (read.thread.ephemeral === true || read.thread.parentThreadId) {
+      continue;
+    }
     if (read.thread.cwd !== undefined && read.thread.cwd !== cwd) {
       elsewhere.push(`${threadId} in ${read.thread.cwd}`);
       continue;
@@ -262,9 +268,13 @@ export const currentContext = Effect.fn("Codex.currentContext")(function* (
   const replayed = Effect.gen(function* () {
     for (;;) {
       const note = yield* Queue.take(client.notifications);
-      if (note.method !== "thread/tokenUsage/updated") continue;
+      if (note.method !== "thread/tokenUsage/updated") {
+        continue;
+      }
       const usage = yield* decoded("thread/tokenUsage/updated", TokenUsage, note.params);
-      if (usage.threadId === threadId) return usage.tokenUsage.last.totalTokens;
+      if (usage.threadId === threadId) {
+        return usage.tokenUsage.last.totalTokens;
+      }
     }
   });
   return Option.getOrNull(yield* replayed.pipe(Effect.timeoutOption(REPLAY_MS)));
@@ -319,8 +329,12 @@ export const turnOutcome = Effect.fn("Codex.turnOutcome")(function* (
     yield* client.call("thread/turns/list", { threadId, sortDirection: "desc", limit: 20 }),
   );
   const turn = Option.getOrUndefined(Arr.findFirst(turns.data, (entry) => entry.id === turnId));
-  if (!turn || turn.status === "inProgress") return { kind: "running" } as const;
-  if (turn.status === "completed") return { kind: "completed" } as const;
+  if (!turn || turn.status === "inProgress") {
+    return { kind: "running" } as const;
+  }
+  if (turn.status === "completed") {
+    return { kind: "completed" } as const;
+  }
   return {
     kind: "failed",
     reason: turn.error?.message ?? `the compaction turn ${turn.status}`,
@@ -354,8 +368,9 @@ export const agentThreads = Effect.fn("Codex.agentThreads")(function* (
       yield* client.call("thread/read", { threadId }),
     );
     const own = thread.ephemeral !== true && !thread.parentThreadId;
-    if (own && thread.cwd !== undefined && thread.cwd !== cwd)
+    if (own && thread.cwd !== undefined && thread.cwd !== cwd) {
       return yield* failed(`thread ${threadId} works in ${thread.cwd}, not ${cwd}`);
+    }
     const idle = thread.status?.type === "idle" && thread.turns?.length === 0;
     const unlistable = idle && thread.historyMode === "paginated" && thread.preview === "";
     threads.push({

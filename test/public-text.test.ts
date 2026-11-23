@@ -79,7 +79,9 @@ test.each([
 test("each leak is given once, with why it leaks", () => {
   const leaks = leaksIn("Ask this Run, then this Run again.");
   expect(Arr.map(leaks, (leak) => leak.phrase)).toEqual(["this Run"]);
-  for (const leak of leaks) expect(leak.reason).not.toBe("");
+  for (const leak of leaks) {
+    expect(leak.reason).not.toBe("");
+  }
 });
 
 test.each([

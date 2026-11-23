@@ -114,7 +114,9 @@ test("a Workflow reads its Machine's report inclusively since a moment, with par
         handsOver: true,
       });
       const before = yield* registry.view(old.runId);
-      if (before === null) throw new Error("old Run is missing");
+      if (before === null) {
+        throw new Error("old Run is missing");
+      }
       yield* until(
         () => nowIso,
         (now) => now > before.created,
@@ -129,7 +131,9 @@ test("a Workflow reads its Machine's report inclusively since a moment, with par
         handsOver: true,
       });
       const childView = yield* registry.view(child.runId);
-      if (childView === null) throw new Error("child Run is missing");
+      if (childView === null) {
+        throw new Error("child Run is missing");
+      }
       const since = childView.created;
       const reading = yield* registry.start({
         generation,
@@ -253,7 +257,9 @@ test("an unrelated source project is private when the Run works in another check
               Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
             ).toEqual([]);
             expect(Result.isFailure(answer)).toBe(true);
-            if (Result.isFailure(answer)) expect(answer.failure.reason).toContain(source);
+            if (Result.isFailure(answer)) {
+              expect(answer.failure.reason).toContain(source);
+            }
           }
         }).pipe(withMachine);
         expect(
@@ -314,8 +320,9 @@ test("a directory under the Projects root that Git cannot open does not block fi
             });
             const answer = yield* registry.result(run.runId).pipe(Effect.result);
             expect(Result.isFailure(answer)).toBe(true);
-            if (Result.isFailure(answer))
+            if (Result.isFailure(answer)) {
               expect(answer.failure.reason).toBe(`issue text names another checkout: ${named}`);
+            }
           }
         }).pipe(withMachine);
         expect((yield* fake.model()).issues).toHaveLength(1);
@@ -333,11 +340,13 @@ for (const state of ["bare", "unreadable"] as const) {
         yield* repository(rig.projectDir, `https://${PROJECT.github}.git`);
         const other = `${rig.root}/private`;
         yield* repository(other, "https://gitlab.example.com/private/service.git");
-        if (state === "bare")
+        if (state === "bare") {
           expect((yield* exec(["git", "-C", other, "config", "core.bare", "true"])).exitCode).toBe(
             0,
           );
-        else yield* fs.writeFileString(`${other}/.git/config`, "[broken\n");
+        } else {
+          yield* fs.writeFileString(`${other}/.git/config`, "[broken\n");
+        }
         yield* fs.writeFileString(
           `${rig.userDir}/config.json`,
           json({ projects: { root: rig.root } }),
@@ -368,12 +377,13 @@ for (const state of ["bare", "unreadable"] as const) {
               Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
             ).toEqual([]);
             expect(Result.isFailure(answer)).toBe(true);
-            if (Result.isFailure(answer))
+            if (Result.isFailure(answer)) {
               expect(answer.failure.reason).toBe(
                 state === "bare"
                   ? `issue text names another checkout: ${other}`
                   : `issue privacy check could not read remotes: ${other}`,
               );
+            }
           }).pipe(withMachine);
           expect(
             Arr.filter(yield* fake.calls(), (line) => pipe_(line, Str.startsWith("gh issue"))),
@@ -429,8 +439,9 @@ for (const metadata of [" metadata", "metadata "]) {
               Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
             ).toEqual([]);
             expect(Result.isFailure(answer)).toBe(true);
-            if (Result.isFailure(answer))
+            if (Result.isFailure(answer)) {
               expect(answer.failure.reason).toBe(`issue text names another checkout: ${other}`);
+            }
           }).pipe(withMachine);
           expect(
             Arr.filter(yield* fake.calls(), (line) => pipe_(line, Str.startsWith("gh issue"))),
@@ -522,10 +533,11 @@ test("an issue on Collie's repository may not name the Run's own checkout or its
             });
             const answer = yield* registry.result(run.runId).pipe(Effect.result);
             expect(Result.isFailure(answer)).toBe(true);
-            if (Result.isFailure(answer))
+            if (Result.isFailure(answer)) {
               expect(answer.failure.reason).toBe(
                 `issue text names another checkout: ${rig.projectDir}`,
               );
+            }
           }
         }).pipe(withMachine);
         expect((yield* fake.model()).issues ?? []).toEqual([]);
@@ -684,7 +696,9 @@ test("a stopped Run files nothing, and its forge hears nothing of it", () =>
           return yield* registry.result(run.runId).pipe(Effect.result);
         }).pipe(withMachine);
         expect(Result.isFailure(answer)).toBe(true);
-        if (Result.isFailure(answer)) expect(answer.failure.reason).toContain("stopped");
+        if (Result.isFailure(answer)) {
+          expect(answer.failure.reason).toContain("stopped");
+        }
         expect(Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
           [],
         );
@@ -739,7 +753,9 @@ test("issue text naming Collie's process is refused before filing or commenting,
         const refused = yield* each.pipe(withMachine);
         for (const answer of refused) {
           expect(Result.isFailure(answer)).toBe(true);
-          if (Result.isFailure(answer)) expect(answer.failure.reason).toContain('"run-67a6e669"');
+          if (Result.isFailure(answer)) {
+            expect(answer.failure.reason).toContain('"run-67a6e669"');
+          }
         }
         expect(Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
           [],
@@ -842,7 +858,9 @@ test("the host refuses another checkout's path and remote before filing or comme
                     Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
                   ).toEqual([]);
                   expect(Result.isFailure(answer)).toBe(true);
-                  if (Result.isFailure(answer)) expect(answer.failure.reason).toContain(checkout);
+                  if (Result.isFailure(answer)) {
+                    expect(answer.failure.reason).toContain(checkout);
+                  }
                 }),
               { concurrency: 3 },
             );
@@ -907,8 +925,9 @@ test("a sibling checkout outside the Projects root that another Run worked in is
             [],
           );
           expect(Result.isFailure(answer)).toBe(true);
-          if (Result.isFailure(answer))
+          if (Result.isFailure(answer)) {
             expect(answer.failure.reason).toBe(`issue text names another checkout: ${sibling}`);
+          }
         }).pipe(withMachine);
         expect(
           Arr.filter(yield* fake.calls(), (line) => pipe_(line, Str.startsWith("gh issue"))),
@@ -1088,10 +1107,11 @@ test("a checkout recorded, or a remote added or included, after an inventory was
             Effect.gen(function* () {
               const answer = yield* file(text);
               expect(Result.isFailure(answer)).toBe(true);
-              if (Result.isFailure(answer))
+              if (Result.isFailure(answer)) {
                 expect(answer.failure.reason).toBe(
                   `issue text names another checkout: ${checkout}`,
                 );
+              }
             });
           yield* refused("Seen in private/late", late);
           yield* refused("Seen in private/added", walked);
@@ -1150,10 +1170,11 @@ test("remotes that could not be read once are read again on the next finding", (
             answers.push(yield* registry.result(run.runId).pipe(Effect.result));
           }
           expect(Result.isFailure(answers[0]!)).toBe(true);
-          if (Result.isFailure(answers[0]!))
+          if (Result.isFailure(answers[0]!)) {
             expect(answers[0].failure.reason).toBe(
               `issue privacy check could not read remotes: ${rig.projectDir}`,
             );
+          }
           expect(Result.isSuccess(answers[1]!)).toBe(true);
         }).pipe(withMachine);
         expect((yield* fake.model()).issues).toHaveLength(1);

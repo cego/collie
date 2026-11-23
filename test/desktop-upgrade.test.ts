@@ -47,7 +47,9 @@ const serveRelease = (signature: string | null, tar: Uint8Array = TAR, version =
         ],
         [ARTIFACT, Bun.zstdCompressSync(tar)],
       ]);
-      if (signature !== null) files.set("stable-linux-x64-collie-desktop.tar.sig", signature);
+      if (signature !== null) {
+        files.set("stable-linux-x64-collie-desktop.tar.sig", signature);
+      }
       const server = Bun.serve({
         port: 0,
         fetch: (request) => {
@@ -102,7 +104,9 @@ const staged = (data: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const record = `${data}/${ROOT}/self-extraction/.electrobun-prepared-update.json`;
-    if (!(yield* fs.exists(record))) return null;
+    if (!(yield* fs.exists(record))) {
+      return null;
+    }
     return yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
       yield* fs.readFileString(record),
     );

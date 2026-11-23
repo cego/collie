@@ -92,7 +92,9 @@ test("a retained recovery report keeps every episode and full source text withou
       expect(
         Arr.filter(yield* catalogue.reports(run.id), (report) => report.state === "ready"),
       ).toHaveLength(8);
-      for (let attempt = 0; attempt < 3; attempt++) yield* catalogue.reconcile(run);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        yield* catalogue.reconcile(run);
+      }
       const reports = yield* catalogue.reports(run.id);
       expect(reports).toHaveLength(26);
       for (const report of reports) {
@@ -268,7 +270,7 @@ test("bounded background migration rotates past eight failed reports and leaves 
       const fs = yield* FileSystem.FileSystem;
       const run = yield* madeRun(rig.stateDir, { id: "retained-not-on-board", state: "succeeded" });
       yield* fs.writeFileString(`${rig.stateDir}/installation`, "host-a");
-      for (let n = 0; n < 9; n++)
+      for (let n = 0; n < 9; n++) {
         yield* appendMetric(run.evidence, {
           at: "",
           kind: "recovery",
@@ -277,6 +279,7 @@ test("bounded background migration rotates past eight failed reports and leaves 
           recoveryId: `episode-${n}`,
           note: `Full diagnosis ${n}`,
         });
+      }
       const failed = new Set(
         Array.from(
           { length: 8 },

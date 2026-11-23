@@ -338,7 +338,9 @@ export default defineWorkflow({
       const runId = (yield* Run).id;
       const place = yield* host.place(runId);
       const cwd = place.cwd;
-      if ((asked.then ?? "") !== "") yield* forecast(delivery);
+      if ((asked.then ?? "") !== "") {
+        yield* forecast(delivery);
+      }
       const source = yield* Activity.make({
         name: "work-source",
         success: Schema.Struct({ kind: Schema.String, value: Schema.String }),
@@ -349,10 +351,11 @@ export default defineWorkflow({
       const share = place.options.repo ?? "";
       if (source.kind === "linear") {
         const linear = yield* connection("linear");
-        if (linear.state !== "ok")
+        if (linear.state !== "ok") {
           return yield* new WorkflowError({
             reason: `Cannot read the work source ${source.value}: ${linear.detail}. Fix: ${linear.fix}. Give the issue text as the work source to build without Linear.`,
           });
+        }
       }
       if (source.kind === "plan-dir" && share === "") {
         const plan = yield* Activity.make({
@@ -380,7 +383,9 @@ export default defineWorkflow({
             ),
           ),
         });
-        if (plan.refusal !== null) return yield* new WorkflowError({ reason: plan.refusal });
+        if (plan.refusal !== null) {
+          return yield* new WorkflowError({ reason: plan.refusal });
+        }
         if (!plan.single) {
           yield* forecast([repoRuns]);
           const carried = Rec.fromEntries(
@@ -407,7 +412,9 @@ export default defineWorkflow({
           execute: Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
             const marker = `${place.dir}/${name}.parked`;
-            if (yield* fs.exists(marker).pipe(Effect.orDie)) return yield* host.parked(runId, null);
+            if (yield* fs.exists(marker).pipe(Effect.orDie)) {
+              return yield* host.parked(runId, null);
+            }
             const why = `${reason}. Correct it, then resume ${runId}.`;
             yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
             yield* host.record(runId, why);
@@ -442,7 +449,9 @@ export default defineWorkflow({
           success: IntegrationSchema,
           execute: Effect.gen(function* () {
             const done = yield* host.integrate(runId, cwd);
-            if (done.status !== "unavailable") return done;
+            if (done.status !== "unavailable") {
+              return done;
+            }
             const why = `not integrated: ${done.reason}`;
             yield* host.record(runId, why);
             yield* host.parked(
@@ -453,8 +462,12 @@ export default defineWorkflow({
           }),
         });
         yield* host.parked(runId, null);
-        if (done.sha !== "") base = done.sha;
-        if (done.status === "waiting") yield* host.record(runId, `not integrated: ${done.reason}`);
+        if (done.sha !== "") {
+          base = done.sha;
+        }
+        if (done.status === "waiting") {
+          yield* host.record(runId, `not integrated: ${done.reason}`);
+        }
         return done;
       });
       // WARNING: work goes on only from an integrated checkout.
@@ -477,10 +490,11 @@ export default defineWorkflow({
             });
             merged = yield* integrateNow;
           }
-          if (!settles(merged))
+          if (!settles(merged)) {
             return yield* new WorkflowError({
               reason: `${merged.ref || merged.branch} is not integrated, so the work stops: ${stoppedBy(merged)}`,
             });
+          }
           return { ...merged, base };
         });
       // WARNING: the kind may change while the Run is live, so it is read at each use.
@@ -509,7 +523,9 @@ export default defineWorkflow({
       let readings = 0;
       const ticketsNow = Effect.gen(function* () {
         readings += 1;
-        if (source.kind !== "plan-dir") return [];
+        if (source.kind !== "plan-dir") {
+          return [];
+        }
         const read = yield* Activity.make({
           name: `tickets.${readings}`,
           success: Schema.Array(SliceRecord),
@@ -542,8 +558,12 @@ export default defineWorkflow({
               Effect.orElseSucceed(() => false),
             ),
           });
-          if (readable) return plan;
-          if (source.kind !== "plan-dir") return "";
+          if (readable) {
+            return plan;
+          }
+          if (source.kind !== "plan-dir") {
+            return "";
+          }
           yield* building(
             unbuilt(`spec-${specReadings}`, `${plan}/SPEC.md cannot be read, so no review starts`),
           );
@@ -575,8 +595,9 @@ export default defineWorkflow({
             : host.recovery(runId, recovers, asked.plan),
       });
       const recovery = { ...recovered, entry: recoveryEntry(recovered) };
-      if (recovers !== undefined)
+      if (recovers !== undefined) {
         yield* host.record(runId, `Follow-up enters at ${recovery.entry}: ${recovery.reason}`);
+      }
       let parentDir = "";
       if (recovery.entry !== "Build") {
         const parent = Str.split(recovers ?? "", "/").at(-1) ?? "";
@@ -609,7 +630,7 @@ export default defineWorkflow({
           execute: claimsAt(parent),
         });
         // WARNING: a completed null Activity stays null on replay.
-        if (build === null)
+        if (build === null) {
           build = yield* Activity.make({
             name: "recovery-build-claims-ancestry",
             success: Schema.NullOr(Built),
@@ -628,18 +649,21 @@ export default defineWorkflow({
                   "build",
                   ...Arr.map(tickets, (name) => pipe_(name, Str.slice(0, -5))),
                 ]);
-                if (claims !== null) return claims;
+                if (claims !== null) {
+                  return claims;
+                }
               }
               return null;
             }),
           });
+        }
         yield* forecast([
           ...(recovery.entry === "Review" ? [reviewRound] : []),
           gate,
           mergeRequest,
           next,
         ]);
-        if (recovery.entry === "Checks" && recovery.review !== null)
+        if (recovery.entry === "Checks" && recovery.review !== null) {
           rallied = {
             halted: null,
             unreviewed: "",
@@ -647,6 +671,7 @@ export default defineWorkflow({
             disputes: [],
             reviewed: recovery.review,
           };
+        }
       }
       const needing = (one: Slice) => ({
         runId,
@@ -674,33 +699,42 @@ export default defineWorkflow({
             error: WorkflowError,
             execute: Effect.gen(function* () {
               const standing = yield* host.awaitPrerequisites(needing(one));
-              if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
+              if (standing._tag === "Held") {
+                return yield* Workflow.suspend(yield* WorkflowInstance);
+              }
               return standing;
             }),
           });
-          if (standing._tag === "Never")
+          if (standing._tag === "Never") {
             yield* unbuilt(
               `${one.file}.prerequisites-${prerequisiteWaits}`,
               `${one.file}: ${standing.why}`,
             );
+          }
         });
       const pickable = Effect.gen(function* () {
         for (;;) {
           const left = Arr.filter(tickets, (one) => !built.has(one.file));
-          if (left.length === 0) return undefined;
+          if (left.length === 0) {
+            return undefined;
+          }
           const unblocked = Arr.filter(left, (one) =>
             Arr.every(one.blockedBy, (id) => !Arr.some(left, (other) => other.number === id)),
           );
-          for (const one of unblocked)
-            if (one.prerequisites.length === 0 || (yield* landed(one))) return one;
+          for (const one of unblocked) {
+            if (one.prerequisites.length === 0 || (yield* landed(one))) {
+              return one;
+            }
+          }
           const waiting = unblocked[0];
-          if (waiting === undefined)
+          if (waiting === undefined) {
             return yield* new WorkflowError({
               reason: `these tickets block each other, so none of them can be built first: ${Arr.join(
                 Arr.map(left, (one) => one.file),
                 ", ",
               )}`,
             });
+          }
           yield* building(awaited(waiting), {
             item: waiting.file,
             items: Arr.map(tickets, (one) => one.file),
@@ -710,10 +744,14 @@ export default defineWorkflow({
       for (; recovery.entry === "Build";) {
         // WARNING: identities are checked before work; two tickets nobody can tell apart would share one result.
         const clash = identityProblem(Arr.map(tickets, (ticket) => ticket.file));
-        if (clash !== null) return yield* new WorkflowError({ reason: clash });
+        if (clash !== null) {
+          return yield* new WorkflowError({ reason: clash });
+        }
         const next = yield* pickable;
         const ticket = whole && built.size === 0 ? null : next;
-        if (ticket === undefined) break;
+        if (ticket === undefined) {
+          break;
+        }
         rallied = null;
         let attempt = 0;
         const nextBuild = building(
@@ -722,8 +760,9 @@ export default defineWorkflow({
             const item = ticket?.file ?? "build";
             const operation = attempt === 1 ? item : `${item}-${attempt}`;
             const before = (yield* host.evidence(runId, cwd)).verifications.length;
-            if (ticket !== null)
+            if (ticket !== null) {
               yield* host.checkpoint(runId, { ticket: ticket.file, status: "started", claims: [] });
+            }
             const merged =
               (ticket !== null && built.size > 0) ||
               Arr.some(ticket === null ? tickets : [ticket], (one) => one.prerequisites.length > 0)
@@ -786,7 +825,9 @@ export default defineWorkflow({
                       ),
                     })
                   : given;
-              if (spec !== null) break;
+              if (spec !== null) {
+                break;
+              }
               yield* unbuilt(
                 `${operation}.spec-${reading}`,
                 `${item}: ${place.dir}/plan/SPEC.md cannot be read, so the issue's acceptance criteria cannot be checked and no review starts`,
@@ -803,7 +844,9 @@ export default defineWorkflow({
                 : [];
             let reads = 0;
             const criteriaNow = Effect.gen(function* () {
-              if (read.length === 0) return spec;
+              if (read.length === 0) {
+                return spec;
+              }
               reads += 1;
               const now = yield* Activity.make({
                 name: `${operation}.criteria.read-${reads}`,
@@ -847,7 +890,9 @@ export default defineWorkflow({
             for (let tries = 1, turn = 1; ;) {
               criteria = yield* criteriaNow;
               unmet = unmetCriteria(item, criteria, answers);
-              if (unmet.length === 0) break;
+              if (unmet.length === 0) {
+                break;
+              }
               if (blockers.length > 0) {
                 stalls += 1;
                 if (stalls === 1) {
@@ -948,19 +993,28 @@ export default defineWorkflow({
               answers,
               assumptions,
             });
-            for (const one of assumptions) assumed.push(one);
-            for (const one of read)
+            for (const one of assumptions) {
+              assumed.push(one);
+            }
+            for (const one of read) {
               afterMerged.push(...Arr.map(one.afterMerge, (line) => `after merge: ${line}`));
-            for (const { criterion, met } of afterMergeAnswers(criteria, answers))
+            }
+            for (const { criterion, met } of afterMergeAnswers(criteria, answers)) {
               afterMerged.push(`${criterion} — ${met}`);
+            }
             built.add(done.item);
-            if (ticket === null) for (const one of tickets) built.add(one.file);
-            if (ticket !== null)
+            if (ticket === null) {
+              for (const one of tickets) {
+                built.add(one.file);
+              }
+            }
+            if (ticket !== null) {
               yield* host.checkpoint(runId, {
                 ticket: ticket.file,
                 status: "done",
                 claims: claimsOf(build, ticket),
               });
+            }
             return { done, blocking: Arr.filter(build.findings ?? [], isBlocking) };
           }),
           ticket === null
@@ -968,7 +1022,9 @@ export default defineWorkflow({
             : { item: ticket.file, items: Arr.map(tickets, (one) => one.file) },
         );
         let completed = yield* nextBuild;
-        while (completed === null) completed = yield* nextBuild;
+        while (completed === null) {
+          completed = yield* nextBuild;
+        }
         const { done, blocking } = completed;
         if (blocking.length > 0) {
           rallied = yield* builderRally({
@@ -984,7 +1040,9 @@ export default defineWorkflow({
           });
           for (let attempt = 1; ; attempt++) {
             const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
-            if (unresolved === "") break;
+            if (unresolved === "") {
+              break;
+            }
             yield* reviewRound(
               unbuilt(`${done.item}.rally-${attempt}`, `${done.item}: ${unresolved}`),
               { round: rallyAsk.rounds.n },
@@ -1005,8 +1063,9 @@ export default defineWorkflow({
         }
         tickets = yield* ticketsNow;
       }
-      if (build === null && recovery.entry === "Build")
+      if (build === null && recovery.entry === "Build") {
         return yield* new WorkflowError({ reason: "nothing was built" });
+      }
       input = { ...input, verify: yield* checksNow };
 
       if (rallied === null || rallied.unreviewed !== "") {
@@ -1023,7 +1082,9 @@ export default defineWorkflow({
       }
       for (let attempt = 1; ; attempt++) {
         const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
-        if (unresolved === "") break;
+        if (unresolved === "") {
+          break;
+        }
         yield* reviewRound(unbuilt(`rally-${attempt}`, unresolved), { round: rallyAsk.rounds.n });
         rallied = yield* builderRally({
           ...rallyAsk,
@@ -1042,11 +1103,12 @@ export default defineWorkflow({
               change: place.options.change,
               stacked: place.options.stacked,
             });
-      if (Arr.some(answeredFor, showsAnything))
+      if (Arr.some(answeredFor, showsAnything)) {
         yield* Activity.make({
           name: "builder-answers",
           execute: host.record(runId, renderAnswered(answeredFor)),
         });
+      }
       const delivered = yield* deliver({
         cwd,
         source: { value: source.value, kind: source.kind },
@@ -1085,7 +1147,9 @@ export default defineWorkflow({
             ),
         ),
       });
-      if (delivered.nothing !== undefined) return delivered.nothing;
+      if (delivered.nothing !== undefined) {
+        return delivered.nothing;
+      }
       // oxlint-disable-next-line unicorn/no-thenable -- The workflow input selects the next step using string values.
       return yield* releasing({ mr: delivered.mr, cwd, then: asked.then ?? "" });
     }),
@@ -1101,7 +1165,9 @@ const releasing = (delivered: {
     const host = yield* Host;
     const runId = (yield* Run).id;
     const { mr } = delivered;
-    if (delivered.then === "finish") return mr;
+    if (delivered.then === "finish") {
+      return mr;
+    }
     if (delivered.then === "") {
       const merging = yield* Activity.make({
         name: "auto-merging",
@@ -1147,8 +1213,12 @@ const releasing = (delivered: {
           }),
           { round: n },
         );
-        if (chosen === CHECK_STAGE) continue;
-        if (chosen === STAGE && (yield* stageRefusal(`stage-picked-${n}`)) !== null) continue;
+        if (chosen === CHECK_STAGE) {
+          continue;
+        }
+        if (chosen === STAGE && (yield* stageRefusal(`stage-picked-${n}`)) !== null) {
+          continue;
+        }
         if (chosen === STAGE) {
           const children = yield* Children;
           const invocation = `stage-${n}`;
@@ -1167,7 +1237,9 @@ const releasing = (delivered: {
           yield* host.record(runId, `${invocation}: ${result.said}`);
           continue;
         }
-        if (chosen !== RELEASE) return mr;
+        if (chosen !== RELEASE) {
+          return mr;
+        }
         break;
       }
     }
@@ -1193,7 +1265,9 @@ const buildEach = (fan: {
     const runId = (yield* Run).id;
     const invocation = (key: string) => `implement-${pipe_(key, Str.replaceAll("/", "-"))}`;
     const clash = identityProblem(Arr.map(fan.waves.flat(), invocation));
-    if (clash !== null) return yield* new WorkflowError({ reason: clash });
+    if (clash !== null) {
+      return yield* new WorkflowError({ reason: clash });
+    }
     const changeOf = (key: string) =>
       Option.getOrElse(
         Arr.findFirst(fan.changes, (one) => one.key === key),
@@ -1225,8 +1299,9 @@ const buildEach = (fan: {
               options,
             })
             .pipe(Effect.result, Effect.ensuring(Deferred.succeed(begun, undefined)));
-          if (child._tag === "Failure")
+          if (child._tag === "Failure") {
             return { key, built: null, why: `not started: ${child.failure.reason}` };
+          }
           return yield* children.result(child.success).pipe(
             Effect.map((value) => ({ key, built: String(value), why: "" })),
             Effect.catch((failure) => Effect.succeed({ key, built: null, why: failure.reason })),

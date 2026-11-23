@@ -122,8 +122,9 @@ test("a finished Run shows pushed branch movement without rewriting its failed r
           ["commit", "--allow-empty", "-qm", "base"],
           ["push", "-qu", "origin", "HEAD"],
           ["remote", "set-head", "origin", "-a"],
-        ])
+        ]) {
           yield* exec(["git", ...args], { cwd: world.project });
+        }
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const started = yield* client
           .start({
@@ -1172,8 +1173,9 @@ test("a Run is not quiet while its agent works, a check runs, or its agents writ
       const checking = yield* madeRun(dir, { id: "r-checking" });
       const writing = yield* madeRun(dir, { id: "r-writing" });
       const idle = yield* madeRun(dir, { id: "r-idle" });
-      for (const run of [working, checking, writing, idle])
+      for (const run of [working, checking, writing, idle]) {
         yield* atTime(old, launched(dir, run.id, ["build"]));
+      }
       yield* marking(checking, { started: old });
       yield* workedAt(writing.id, "2026-09-14T10:04:00Z");
 
@@ -1247,13 +1249,14 @@ test("a card says how many messages are held behind the Check it is running", ()
       );
       const [quiet] = yield* board(env, [run]);
       expect(quiet!.sentence).toBe("Running unit on the branch, 2 min.");
-      for (const request of ["steer-1", "steer-2"])
+      for (const request of ["steer-1", "steer-2"]) {
         yield* keepQueued(launchDir(dir, run.id), {
           runId: run.id,
           request,
           text: "stay in src",
           result: null,
         });
+      }
       const [held] = yield* board(env, [run]);
       expect(held!.sentence).toBe(
         "Running unit on the branch, 2 min. 2 messages are held behind it.",
@@ -1494,13 +1497,17 @@ test("a month-old Task pruned after its record was read goes to History, and a r
         state: "failed",
         created: monthAgo,
       });
-      for (const run of [unmerged, bare]) yield* writtenAt(`${run.dir}/log.txt`, monthAgo);
+      for (const run of [unmerged, bare]) {
+        yield* writtenAt(`${run.dir}/log.txt`, monthAgo);
+      }
       const before = yield* board(env, [unmerged, bare], opts);
       expect(Arr.map(before, (view) => [view.run, sectionOf(view)])).toEqual([
         [unmerged.id, "waiting"],
       ]);
 
-      for (const run of [unmerged, bare]) yield* readLogTail(run.dir, 4096);
+      for (const run of [unmerged, bare]) {
+        yield* readLogTail(run.dir, 4096);
+      }
       yield* recordDisposition(unmerged.dir, {
         kind: "abandoned",
         ref: "",
@@ -1804,7 +1811,7 @@ test("merging the leading Run's branch does not settle another Run's open MR", (
     }),
   ));
 
-for (const withMr of [false, true])
+for (const withMr of [false, true]) {
   test(`an unsettled branch remains owed beside ${withMr ? "a merged MR" : "another settled branch"}`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -1839,6 +1846,7 @@ for (const withMr of [false, true])
         expect(sectionOf(card!)).toBe("waiting");
       }),
     ));
+}
 
 const supersededChain = Effect.fn("board.supersededChain")(function* (dir: string) {
   const first = yield* madeRun(dir, {
@@ -1886,7 +1894,7 @@ const unapproved = (state: MrState = "open") => ({
   head: () => Effect.succeed(M_HEAD),
 });
 
-for (const state of ["failed", "stopped"] as const)
+for (const state of ["failed", "stopped"] as const) {
   test(`a ${state} Task reports its owed MR and failed forge read instead of an overruled merged line`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -1918,6 +1926,7 @@ for (const state of ["failed", "stopped"] as const)
         expect(card!.sentence).not.toContain("Merged as");
       }),
     ));
+}
 
 test("an owed Task discloses a removed checkout and refreshes when it is restored", () =>
   runEffect(
@@ -2316,8 +2325,11 @@ test("a Deploy Go uses the host's stage proof for its exact tag, and loses readi
         );
         const [card] = yield* board(env, [run]);
         expect(sectionOf(card!)).toBe(tag === "v1.2.3" && proved ? "ready-to-ship" : "needs-you");
-        if (proved && tag === "v1.2.3") expect(card!.shipping).toBe("deploy");
-        else expect(card!.sentence).toContain("stage");
+        if (proved && tag === "v1.2.3") {
+          expect(card!.shipping).toBe("deploy");
+        } else {
+          expect(card!.sentence).toContain("stage");
+        }
       }
     }),
   ));
@@ -2699,8 +2711,9 @@ test("landed is a disposition, a merge the forge reports, or work with nothing t
       const issues = Effect.fn("board.issues")(function* (run: RunFacts, count: number) {
         const fs = yield* FileSystem.FileSystem;
         yield* fs.makeDirectory(`${run.dir}/plan/issues`, { recursive: true });
-        for (let at = 1; at <= count; at++)
+        for (let at = 1; at <= count; at++) {
           yield* fs.writeFileString(`${run.dir}/plan/issues/0${at}-thing.md`, `# ${at}\n`);
+        }
         return run;
       });
       const done = (id: string, over: Partial<RunFacts> = {}) =>
@@ -3505,7 +3518,9 @@ test("a fan-out is not quiet while one of its Repo runs works or writes", () =>
       });
       const then = DateTime.toDateUtc(DateTime.makeUnsafe(old));
       yield* fs.utimes(`${parent.dir}/plan`, then, then);
-      for (const run of [parent, web]) yield* atTime(old, launched(dir, run.id, ["build"]));
+      for (const run of [parent, web]) {
+        yield* atTime(old, launched(dir, run.id, ["build"]));
+      }
       const stateOf = (over: Partial<Parameters<typeof buildBoard>[0]>) =>
         board(env, [web, parent], over).pipe(Effect.map((views) => views[0]!.state));
 
@@ -4040,8 +4055,9 @@ test("usually is the median of the last five runs of that check in the same repo
         [3, 3],
         [4, 4],
         [5, 5],
-      ] as const)
+      ] as const) {
         yield* took(before, minutes, at(n));
+      }
       yield* took(elsewhere, 60, at(6));
       yield* appendVerification(before.evidence, {
         ...checked("test", "abc"),
@@ -4087,7 +4103,9 @@ test("a running check counts the other checks this host is running", () =>
       const run = yield* madeRun(dir, { task: "task-1" });
       const a = yield* madeRun(dir, { id: "r-a", task: "t-a" });
       const b = yield* madeRun(dir, { id: "r-b", task: "t-b" });
-      for (const one of [run, a, b]) yield* marking(one);
+      for (const one of [run, a, b]) {
+        yield* marking(one);
+      }
       const view = Option.getOrUndefined(
         Arr.findFirst(yield* board(env, [run, a, b]), (one) => one.run === run.id),
       );
@@ -4195,7 +4213,9 @@ const reopened = Effect.fn("board.reopened")(function* (
     mr: "https://github.com/cego/collie/pull/30",
     finished: "2026-09-14T10:00:00Z",
   });
-  if (passedAt !== undefined) yield* appendVerification(run.evidence, checked("test", passedAt));
+  if (passedAt !== undefined) {
+    yield* appendVerification(run.evidence, checked("test", passedAt));
+  }
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(`${dir}/agents/${run.id}`, { recursive: true });
   yield* fs.writeFileString(
@@ -4624,7 +4644,9 @@ const stepsRecorded = Effect.fn("board.stepsRecorded")(function* (
   Arr.forEach(entered, ({ step, left }, at) => {
     const since = (entered.length - at) * 4 * minutes;
     lines.push({ kind: "enter", key: step.id, step, place: null, at: ago(since) });
-    if (left) lines.push({ kind: "leave", key: step.id, at: ago(since - minutes) });
+    if (left) {
+      lines.push({ kind: "leave", key: step.id, at: ago(since - minutes) });
+    }
   });
   yield* Effect.forEach(lines, (line) => appendStepLine(run.dir, line));
 });
@@ -4745,8 +4767,9 @@ test("a fan-out lists Release and Stage per Change, with no Offer on its leading
         ["api", 7],
         ["web", 8],
       ]);
-      for (const run of Arr.filter(runs, (run) => run.mr !== null))
+      for (const run of Arr.filter(runs, (run) => run.mr !== null)) {
         yield* appendVerification(run.evidence, checked("test", M_HEAD));
+      }
       const [card] = yield* board(env, runs, {
         mrStates: new Map([
           [idOf("api", 7), "open"],
@@ -4795,8 +4818,9 @@ test.each([1, 2])(
                 ["web", 8],
               ],
         );
-        for (const run of Arr.filter(runs, (run) => run.mr !== null))
+        for (const run of Arr.filter(runs, (run) => run.mr !== null)) {
           yield* appendVerification(run.evidence, checked("test", M_HEAD));
+        }
         const { flow } = yield* boardAndFlows(env, runs, {
           mrStates: new Map([
             [idOf("api", 7), "open"],
@@ -4925,7 +4949,7 @@ test("a launch from before a Run's Steps is drawn as the Step it was, once", () 
       const { dir, env } = yield* scratch();
       const run = yield* madeRun(dir, { task: "task-1" });
       yield* launched(dir, run.id, ["grill", "spec"]);
-      for (const operation of ["grill", "spec"])
+      for (const operation of ["grill", "spec"]) {
         yield* recordLaunch({
           agent: `${run.id}-${operation}-r1`,
           output: `${dir}/agents/${run.id}/${operation}.json`,
@@ -4938,6 +4962,7 @@ test("a launch from before a Run's Steps is drawn as the Step it was, once", () 
           model: "opus",
           at: epochMs("2026-09-14T08:00:00Z"),
         });
+      }
       const grill = declared("grill", { title: "Grill" });
       yield* stepsRecorded(run, [grill, BUILD], [{ step: grill, left: true }]);
       const { flow } = yield* boardAndFlows(env, [run]);

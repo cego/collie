@@ -221,9 +221,15 @@ export type Asker = Omit<Actor, "requestId">;
 
 export function voiceOf({ conversation, said, attachments }: Voice) {
   let voice: Voice = {};
-  if (conversation !== undefined) voice = { ...voice, conversation };
-  if (said !== undefined) voice = { ...voice, said };
-  if (attachments !== undefined && attachments.length > 0) voice = { ...voice, attachments };
+  if (conversation !== undefined) {
+    voice = { ...voice, conversation };
+  }
+  if (said !== undefined) {
+    voice = { ...voice, said };
+  }
+  if (attachments !== undefined && attachments.length > 0) {
+    voice = { ...voice, attachments };
+  }
   return voice;
 }
 
@@ -235,7 +241,9 @@ export const speaksForHuman = (actor: Asker) =>
   isHuman(actor) || (actor.origin === "chat" && actor.said !== undefined);
 
 export function humanOf(actor: Asker | undefined) {
-  if (actor === undefined || !speaksForHuman(actor)) return null;
+  if (actor === undefined || !speaksForHuman(actor)) {
+    return null;
+  }
   return actor.conversation === undefined
     ? { origin: actor.origin }
     : { origin: actor.origin, conversation: actor.conversation };
@@ -262,7 +270,9 @@ export interface Confirmed {
 function unsettled(lines: ReadonlyArray<ProposalLine>, id: string) {
   const indices: Array<number> = [];
   for (const line of lines) {
-    if (line.kind !== "step" || line.proposal !== id || line.state !== "started") continue;
+    if (line.kind !== "step" || line.proposal !== id || line.state !== "started") {
+      continue;
+    }
     const answered = Arr.some(
       lines,
       (other) =>
@@ -271,7 +281,9 @@ function unsettled(lines: ReadonlyArray<ProposalLine>, id: string) {
         other.index === line.index &&
         other.state !== "started",
     );
-    if (!answered && !indices.includes(line.index)) indices.push(line.index);
+    if (!answered && !indices.includes(line.index)) {
+      indices.push(line.index);
+    }
   }
   return indices;
 }
@@ -294,7 +306,9 @@ const lastUnanswered = new WeakMap<
 
 function unanswered(lines: ReadonlyArray<ProposalLine>, nowMs: number) {
   const kept = lastUnanswered.get(lines);
-  if (kept?.nowMs === nowMs) return kept.records;
+  if (kept?.nowMs === nowMs) {
+    return kept.records;
+  }
   const answered = new Set(
     Arr.flatMap(lines, (line) =>
       line.kind === "confirmed" || line.kind === "declined" ? [line.id] : [],
@@ -409,7 +423,9 @@ export const confirm = Effect.fn("Proposals.confirm")(function* (
         epochMs(at),
         currentVersions,
       );
-      if ("refused" in judged) return judged;
+      if ("refused" in judged) {
+        return judged;
+      }
       yield* append(journal, {
         kind: "confirmed",
         id,
@@ -441,8 +457,9 @@ export const decline = Effect.fn("Proposals.decline")(function* (
   return yield* atomically(
     Effect.gen(function* () {
       const lines = yield* read(journal);
-      if (!Arr.some(lines, (line) => line.kind === "proposal" && line.id === id))
+      if (!Arr.some(lines, (line) => line.kind === "proposal" && line.id === id)) {
         return settledAs("not_found", `no proposal "${id}"`, id);
+      }
       // WARNING: a second answer would leave the journal saying both confirmed and declined.
       const settled = Option.getOrUndefined(
         Arr.findFirst(
@@ -450,7 +467,9 @@ export const decline = Effect.fn("Proposals.decline")(function* (
           (line) => (line.kind === "confirmed" || line.kind === "declined") && line.id === id,
         ),
       );
-      if (settled) return settledAs("not_pending", `"${id}" is already ${settled.kind}`, id);
+      if (settled) {
+        return settledAs("not_pending", `"${id}" is already ${settled.kind}`, id);
+      }
       yield* append(journal, { kind: "declined", id, at, by: actorName(actor), ...voiceOf(actor) });
       return settledAs(null, "", id);
     }),
@@ -480,13 +499,18 @@ export function stepResults(lines: ReadonlyArray<ProposalLine>, id: string) {
     ),
   );
   const last = new Map<number, Schema.Schema.Type<typeof StepSchema>>();
-  for (const line of lines)
-    if (line.kind === "step" && line.proposal === id) last.set(line.index, line);
+  for (const line of lines) {
+    if (line.kind === "step" && line.proposal === id) {
+      last.set(line.index, line);
+    }
+  }
   const results = [];
   for (const [index, action] of (proposal?.actions ?? []).entries()) {
     const step = last.get(index);
     const asked = results.at(-1)?.kind === "ask_human";
-    if (step === undefined && asked) break;
+    if (step === undefined && asked) {
+      break;
+    }
     const [state, note] =
       step === undefined
         ? (["skipped", "not_run"] as const)
@@ -541,14 +565,16 @@ export const reconcileStep = Effect.fn("Proposals.reconcileStep")(function* (
   return yield* atomically(
     Effect.gen(function* () {
       const lines = yield* read(journal);
-      if (!Arr.some(lines, (line) => line.kind === "proposal" && line.id === proposal))
+      if (!Arr.some(lines, (line) => line.kind === "proposal" && line.id === proposal)) {
         return settledAs("not_found", `no proposal "${proposal}"`, proposal);
-      if (!unsettled(lines, proposal).includes(index))
+      }
+      if (!unsettled(lines, proposal).includes(index)) {
         return settledAs(
           "not_pending",
           `action ${index} of "${proposal}" is not waiting to be reconciled`,
           proposal,
         );
+      }
       yield* stepSettled(
         journal,
         proposal,
@@ -591,33 +617,46 @@ const NOT_ABOUT_A_RUN: ReadonlySet<ActionKind> = new Set([
 
 // WARNING: re-asks everything the proposal assumed: time passes between reading a proposal and confirming it.
 export function admit(action: Action, ctx: AdmissionContext) {
-  if (NOT_ABOUT_A_RUN.has(action.kind)) return null;
-  if (!ctx.run) return "the run is gone";
+  if (NOT_ABOUT_A_RUN.has(action.kind)) {
+    return null;
+  }
+  if (!ctx.run) {
+    return "the run is gone";
+  }
 
   const terminal = TERMINAL_STATUSES.has(ctx.run.status);
-  if (action.kind === "followup" && !terminal)
+  if (action.kind === "followup" && !terminal) {
     return "a follow-up is a child of a finished run, and this one is still going";
+  }
   // WARNING: a finished Run's live agents still take steering; only actions needing a step to run are refused.
-  if (terminal && (action.kind === "hold" || action.kind === "release"))
+  if (terminal && (action.kind === "hold" || action.kind === "release")) {
     return "a finished Run has no step left to hold; stop closes its agents";
-  if (terminal && action.kind === "set_verification")
+  }
+  if (terminal && action.kind === "set_verification") {
     return "its checks were collected when it finished; remember_verification keeps them for the next Run";
+  }
 
-  if (action.kind === "hold" && action.until !== undefined)
+  if (action.kind === "hold" && action.until !== undefined) {
     return "nothing lifts a hold at a time: hold it, and release it when it should go on";
-  if (action.kind === "answer" && ctx.pendingChoice !== action.choiceId)
+  }
+  if (action.kind === "answer" && ctx.pendingChoice !== action.choiceId) {
     return ctx.pendingChoice === null
       ? "the run is not asking a Choice"
       : `the run is asking "${ctx.pendingChoice}" now, not "${action.choiceId}"`;
+  }
 
-  if (ctx.proposedIncarnation !== null && ctx.incarnation !== ctx.proposedIncarnation)
+  if (ctx.proposedIncarnation !== null && ctx.incarnation !== ctx.proposedIncarnation) {
     return "the agent this was about is not the one in that pane now";
+  }
   if (
     ctx.proposedIntentVersion !== null &&
     ctx.intentVersion !== null &&
     ctx.intentVersion !== ctx.proposedIntentVersion
-  )
+  ) {
     return `the Intent is v${ctx.intentVersion}, not v${ctx.proposedIntentVersion}`;
-  if (ctx.revision !== null && ctx.revision.card !== ctx.revision.now) return "revision_moved";
+  }
+  if (ctx.revision !== null && ctx.revision.card !== ctx.revision.now) {
+    return "revision_moved";
+  }
   return null;
 }

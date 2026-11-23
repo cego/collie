@@ -17,8 +17,9 @@ const timeYields = (step: (count: Effect.Effect<void>) => Effect.Effect<unknown>
     executionMode: "async",
     shouldYield(fiber) {
       const over = turns.shouldYield(fiber);
-      if (over && steps < 300 && fiber.currentOpCount < opsBeforeYield)
+      if (over && steps < 300 && fiber.currentOpCount < opsBeforeYield) {
         yielded.push({ steps, operations: fiber.currentOpCount });
+      }
       return over;
     },
     makeDispatcher() {
@@ -35,7 +36,9 @@ const timeYields = (step: (count: Effect.Effect<void>) => Effect.Effect<unknown>
   };
   const count = Effect.sync(() => {
     steps++;
-    if (steps === 40) time += 20;
+    if (steps === 40) {
+      time += 20;
+    }
   });
   return Effect.runPromise(
     Effect.forEach(Arr.range(1, 300), () => step(count), { discard: true }).pipe(
@@ -335,8 +338,9 @@ test.each(["failure", "cancel"] as const)(
             const before = yield* foreground.boundary.pipe(Effect.forkScoped);
             yield* clock.adjust("1 millis");
             expect(before.pollUnsafe()).toBeDefined();
-            if (outcome === "cancel") yield* Fiber.interrupt(reading);
-            else {
+            if (outcome === "cancel") {
+              yield* Fiber.interrupt(reading);
+            } else {
               yield* Deferred.succeed(release, undefined);
               expect(yield* Fiber.join(reading)).toEqual(Result.fail("dependency failed"));
             }

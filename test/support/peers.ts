@@ -47,8 +47,9 @@ export const listenerPort = (dialler: Side, listener: Side) =>
     const paired = Option.getOrUndefined(
       Arr.findFirst(yield* peersOf(dialler.world.state), (peer) => peer.name === listener.name),
     );
-    if (paired?.url === undefined)
+    if (paired?.url === undefined) {
       return yield* Effect.die(new Error(`${dialler.name} has no url for ${listener.name}`));
+    }
     return new URL(paired.url).port;
   });
 
@@ -79,12 +80,14 @@ export const twoMachines = <A, E>(
           project: `${dir}/project`,
         };
         yield* Effect.addFinalizer(() => Effect.ignore(stopHost(world.state)));
-        for (const made of [world.user, `${world.install}/workflows`, world.state, world.home])
+        for (const made of [world.user, `${world.install}/workflows`, world.state, world.home]) {
           yield* fs.makeDirectory(made, { recursive: true });
+        }
         yield* fs.makeDirectory(world.project, { recursive: true });
         yield* exec(["git", "init", "-q"], { cwd: world.project });
-        for (const module of modules)
+        for (const module of modules) {
           yield* fs.copyFile(`${fixtures}/${module}`, `${world.user}/${module}`);
+        }
         const bin = `${dir}/bin`;
         yield* fs.makeDirectory(bin);
         const shell = `${bin}/login-shell`;
@@ -100,8 +103,9 @@ export const twoMachines = <A, E>(
           `#!/bin/sh\n[ "$1" = --help ] && echo "  --autocompact <auto|tokens>" && exit 0\nexit 1\n`,
           { mode: 0o755 },
         );
-        for (const harness of ["codex", "pi", "opencode"])
+        for (const harness of ["codex", "pi", "opencode"]) {
           yield* fs.writeFileString(`${bin}/${harness}`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+        }
         yield* fs.writeFileString(
           `${bin}/collie`,
           `#!/bin/sh\nexec ${Arr.join(
@@ -185,7 +189,9 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
           name: "peer-release",
           setup(builder) {
             builder.onLoad({ filter: /\/package\.json$/ }, (args) => {
-              if (args.path !== `${root}package.json`) return undefined;
+              if (args.path !== `${root}package.json`) {
+                return undefined;
+              }
               return { loader: "json", contents: encode({ ...manifest, version }) };
             });
           },
@@ -194,7 +200,7 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
       compile: { outfile: file },
     }),
   );
-  if (!built.success)
+  if (!built.success) {
     return yield* new Cause.UnknownError(
       built.logs,
       `could not build ${version}: ${Arr.join(
@@ -204,4 +210,5 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
         "\n",
       )}`,
     );
+  }
 });

@@ -67,9 +67,15 @@ function glab() {
   const calls: Array<Array<string>> = [];
   const run = (cmd: string, args: Array<string>) => {
     calls.push([cmd, ...args]);
-    if (cmd !== "glab") return Effect.succeed({ code: 1, stdout: "" });
-    if (args[0] === "--version") return Effect.succeed({ code: 0, stdout: "glab 1.40" });
-    if (args[0] === "auth") return Effect.succeed({ code: 0, stdout: "ok" });
+    if (cmd !== "glab") {
+      return Effect.succeed({ code: 1, stdout: "" });
+    }
+    if (args[0] === "--version") {
+      return Effect.succeed({ code: 0, stdout: "glab 1.40" });
+    }
+    if (args[0] === "auth") {
+      return Effect.succeed({ code: 0, stdout: "ok" });
+    }
     return Effect.succeed({ code: 0, stdout: MR_JSON });
   };
   return {

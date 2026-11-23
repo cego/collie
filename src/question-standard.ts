@@ -71,7 +71,9 @@ export const questionRepair = (questions: ReadonlyArray<AskedQuestion>) =>
 
 export const shortfallOf = (question: AskedQuestion) => {
   const gaps = gapsOf(question);
-  if (gaps.length === 0) return null;
+  if (gaps.length === 0) {
+    return null;
+  }
   const count = question.options.length;
   const recommended = recommendedCount(question);
   const recommendation =
@@ -97,8 +99,12 @@ export const solutionsOf = (question: AskedQuestion) => {
       id: String(at + 1),
       title: titleOf(option.label),
     };
-    if (option.description !== undefined) solution.detail = option.description;
-    if (one && isRecommended(option.label)) solution.recommended = true;
+    if (option.description !== undefined) {
+      solution.detail = option.description;
+    }
+    if (one && isRecommended(option.label)) {
+      solution.recommended = true;
+    }
     return solution;
   });
 };

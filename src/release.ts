@@ -39,8 +39,12 @@ export const installation = Effect.fn("release.installation")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
 ) {
   const git = (...args: Array<string>) => run("git", args, root);
-  if (!(yield* isCheckout(root, run))) return RELEASED;
-  if (yield* atCollieDir(root, collieDir)) return RELEASED;
+  if (!(yield* isCheckout(root, run))) {
+    return RELEASED;
+  }
+  if (yield* atCollieDir(root, collieDir)) {
+    return RELEASED;
+  }
   const sha = Str.trim((yield* git("rev-parse", "--short", "HEAD")).stdout);
   return { release: false, build: `${version}+${sha}`, reason: "it is a development checkout" };
 });
@@ -51,7 +55,9 @@ export const releaseVersion = Effect.fn("release.releaseVersion")(function* (roo
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const manifest = path.join(root, "package.json");
-  if (!(yield* fs.exists(manifest))) return "";
+  if (!(yield* fs.exists(manifest))) {
+    return "";
+  }
   const text = yield* fs.readFileString(manifest);
   return Option.match(Schema.decodeOption(PackageVersion)(text), {
     onNone: () => "",
@@ -83,7 +89,9 @@ const filesUnder = Effect.fn("release.filesUnder")(function* (dir: string) {
   const names = yield* fs.readDirectory(dir, { recursive: true });
   const files: Array<string> = [];
   for (const name of names) {
-    if ((yield* fs.stat(path.join(dir, name))).type === "File") files.push(name);
+    if ((yield* fs.stat(path.join(dir, name))).type === "File") {
+      files.push(name);
+    }
   }
   return files.sort();
 });
@@ -131,9 +139,13 @@ export const placeRelease = Effect.fn("release.place")(function* (
     );
     const when = pipe_(yield* nowIso, Str.replaceAll(":", "-"));
     for (const name of yield* filesUnder(current)) {
-      if (name === RECORD) continue;
+      if (name === RECORD) {
+        continue;
+      }
       const bytes = yield* fs.readFile(path.join(current, name));
-      if (recorded[name] === sha256Hex(bytes)) continue;
+      if (recorded[name] === sha256Hex(bytes)) {
+        continue;
+      }
       const aside = path.join("kept", when, name);
       yield* fs.makeDirectory(path.dirname(path.join(collieDir, aside)), { recursive: true });
       yield* fs.writeFile(path.join(collieDir, aside), bytes);

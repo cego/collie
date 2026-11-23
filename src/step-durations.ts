@@ -2,7 +2,9 @@ import { Effect } from "effect";
 import { RunRecords } from "./run-records";
 
 const usualOf = (samples: ReadonlyArray<number>) => {
-  if (samples.length < 3) return undefined;
+  if (samples.length < 3) {
+    return undefined;
+  }
   const values = [...samples].sort((a, b) => a - b);
   const middle = Math.floor(values.length / 2);
   return values.length % 2 === 0 ? (values[middle - 1]! + values[middle]!) / 2 : values[middle]!;
@@ -21,7 +23,9 @@ export const stepTimesByWorkflow = RunRecords.use((records) => records.stepSampl
       const usual = new Map<string, number>();
       for (const [step, samples] of steps) {
         const median = usualOf(samples);
-        if (median !== undefined) usual.set(step, median);
+        if (median !== undefined) {
+          usual.set(step, median);
+        }
       }
       byWorkflow.set(workflow, usual);
     }

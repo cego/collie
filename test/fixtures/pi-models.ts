@@ -72,8 +72,9 @@ for await (const chunk of Bun.stdin.stream()) {
               });
             } else {
               let data: JsonObject;
-              if (command.type === "get_available_models") data = { models };
-              else if (command.type === "set_model") {
+              if (command.type === "get_available_models") {
+                data = { models };
+              } else if (command.type === "set_model") {
                 if (command.modelId === "plain" || command.modelId === "refused") {
                   process.stderr.write("A non-reasoning or refused model was selected");
                   process.exit(4);

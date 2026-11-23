@@ -43,8 +43,9 @@ fi
 exit 1
 `,
   };
-  for (const [name, script] of Rec.toEntries(scripts))
+  for (const [name, script] of Rec.toEntries(scripts)) {
     yield* fs.writeFileString(`${dir}/${name}`, script, { mode: 0o755 });
+  }
   const collieLog = fs.readFileString(`${dir}/collie.log`).pipe(
     Effect.orElseSucceed(() => ""),
     Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),

@@ -74,7 +74,9 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
     const texts: Partial<Record<Credential, string>> = {};
     for (const credential of CREDENTIALS) {
       const text = yield* current(credential);
-      if (text !== null) texts[credential] = text;
+      if (text !== null) {
+        texts[credential] = text;
+      }
     }
     return texts;
   });
@@ -119,7 +121,9 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
             [machine.profile]: { ...record[machine.profile], [credential]: fingerprint(text) },
           };
           yield* save;
-        } else failures.set(key, { print: fingerprint(text), reason: failed });
+        } else {
+          failures.set(key, { print: fingerprint(text), reason: failed });
+        }
         yield* options.tell(stateOf(machine, credential, text));
       }),
     );
@@ -202,7 +206,9 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
         Effect.gen(function* () {
           const { [profile]: _gone, ...kept } = record;
           record = kept;
-          for (const credential of CREDENTIALS) failures.delete(`${profile} ${credential}`);
+          for (const credential of CREDENTIALS) {
+            failures.delete(`${profile} ${credential}`);
+          }
           yield* save;
         }),
       ),

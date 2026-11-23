@@ -73,8 +73,9 @@ test("settled commit and Run references do not inspect a checkout to find a merg
         "vm-mk/run-9284fbdb",
         "",
         "branch:main",
-      ])
+      ]) {
         expect(yield* mrIdIn(ref, "/removed-checkout", run)).toBeNull();
+      }
       expect(calls).toEqual([]);
     }),
   ));
@@ -85,10 +86,11 @@ test("legacy merge request references still resolve against their checkout", () 
       const run = runner({
         "git remote get-url origin": { stdout: "git@gitlab.example.com:group/app.git\n" },
       });
-      for (const ref of ["42", "!42", "mr:42", "app!42", "group/app!42"])
+      for (const ref of ["42", "!42", "mr:42", "app!42", "group/app!42"]) {
         expect(yield* mrIdIn(ref, "/legacy-reference-checkout", run)).toBe(
           "gitlab.example.com/group/app!42",
         );
+      }
     }),
   ));
 
@@ -407,7 +409,9 @@ test("a merge request answers the whole panel from one read of it", () =>
       const details = yield* detailsOver({ project: "gitlab.example.com/g/p", iid: "42" }, glab);
 
       expect(details._tag).toBe("Details");
-      if (details._tag !== "Details") return;
+      if (details._tag !== "Details") {
+        return;
+      }
       expect(details.iid).toBe("42");
       expect(details.title).toBe("Make the tab an application");
       expect(details.state).toBe("opened");
@@ -462,7 +466,9 @@ test("a merge request that has not moved since a review says so, and one that ha
         [viewOf("42")]: { stdout: MR_JSON },
       });
       const details = yield* detailsOver({ project: "gitlab.example.com/g/p", iid: "42" }, glab);
-      if (details._tag !== "Details") throw new Error("expected details");
+      if (details._tag !== "Details") {
+        throw new Error("expected details");
+      }
 
       expect(sinceReview(details, epochMs("2026-09-02T12:00:00.000Z"))).toBe(
         "nothing has moved since this review",
@@ -488,7 +494,9 @@ test("a real merge request decodes, nulls and absent approvals and all", () =>
       const details = yield* detailsOver({ project: "gitlab.example.com/g/p", iid: "17" }, glab);
 
       expect(details._tag).toBe("Details");
-      if (details._tag !== "Details") return;
+      if (details._tag !== "Details") {
+        return;
+      }
       expect(details.iid).toBe("17");
       expect(details.state).toBe("opened");
       expect(details.author).toBe("mk");
@@ -512,7 +520,9 @@ test("a required-but-unknown approval count says what is required, not that none
 
       const details = yield* detailsOver({ project: "gitlab.example.com/g/p", iid: "8" }, glab);
 
-      if (details._tag !== "Details") throw new Error("expected details");
+      if (details._tag !== "Details") {
+        throw new Error("expected details");
+      }
       expect(details.approvals).toBe("2 approval(s) required");
     }),
   ));
@@ -528,7 +538,9 @@ test("a null where a value could have been is the same as no value", () =>
       const details = yield* detailsOver({ project: "gitlab.example.com/g/p", iid: "9" }, glab);
 
       expect(details._tag).toBe("Details");
-      if (details._tag !== "Details") return;
+      if (details._tag !== "Details") {
+        return;
+      }
       expect(details.iid).toBe("9");
       expect(details.title).toBe("");
       expect(details.pipeline).toBe("");

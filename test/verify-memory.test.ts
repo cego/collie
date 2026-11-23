@@ -65,9 +65,13 @@ test("a verify waits while the Machine is short, pausing only its own agent's bu
           }),
           (before) =>
             Effect.sync(() => {
-              for (const [key, value] of Rec.toEntries(before))
-                if (value === undefined) delete Bun.env[key];
-                else Bun.env[key] = value;
+              for (const [key, value] of Rec.toEntries(before)) {
+                if (value === undefined) {
+                  delete Bun.env[key];
+                } else {
+                  Bun.env[key] = value;
+                }
+              }
             }),
         );
         resetExecutors();
@@ -156,10 +160,11 @@ test("a verify waits while the Machine is short, pausing only its own agent's bu
         yield* client
           .steer({ runId, text: "Carry on.", request: "steer-short" })
           .pipe(Effect.orDie);
-        for (const set of [true, false])
+        for (const set of [true, false]) {
           yield* client
             .control({ runId, control: "hold", set, request: `hold-${set}` })
             .pipe(Effect.orDie);
+        }
         yield* client.sweep({ request: "sweep-short" }).pipe(Effect.orDie);
         yield* client
           .control({ runId: second.runId, control: "stop", set: true, request: "stop-short" })

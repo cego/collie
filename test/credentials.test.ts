@@ -33,11 +33,15 @@ const holding = (dir: string, values: ReadonlyArray<string>) =>
         for (const name of yield* fs.readDirectory(at).pipe(Effect.orElseSucceed(() => []))) {
           const file = path.join(at, name);
           const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => null));
-          if (info?.type === "Directory") yield* walk(file);
-          else if (info?.type === "File") {
+          if (info?.type === "Directory") {
+            yield* walk(file);
+          } else if (info?.type === "File") {
             const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-            for (const value of values)
-              if (pipe_(text, Str.includes(value))) found.push(`${file}: ${value}`);
+            for (const value of values) {
+              if (pipe_(text, Str.includes(value))) {
+                found.push(`${file}: ${value}`);
+              }
+            }
           }
         }
       });
@@ -121,9 +125,13 @@ test("an agent's prompt, a delivery to it and everything sent to core carry the 
           }),
           (before) =>
             Effect.sync(() => {
-              for (const [key, value] of Rec.toEntries(before))
-                if (value === undefined) delete Bun.env[key];
-                else Bun.env[key] = value;
+              for (const [key, value] of Rec.toEntries(before)) {
+                if (value === undefined) {
+                  delete Bun.env[key];
+                } else {
+                  Bun.env[key] = value;
+                }
+              }
             }),
         );
         resetExecutors();
@@ -180,7 +188,9 @@ test("an agent's prompt, a delivery to it and everything sent to core carry the 
             .pipe(Effect.orDie),
         ).toContain("the picker, logging in with <gitlab token>");
         expect(prompts).toContain("merge it with <github token>");
-        for (const value of [GITLAB, GITHUB, AWS]) expect(prompts).not.toContain(value);
+        for (const value of [GITLAB, GITHUB, AWS]) {
+          expect(prompts).not.toContain(value);
+        }
         expect(yield* holding(world.state, [GITLAB, GITHUB, AWS])).toEqual([]);
       }).pipe(Effect.provide(recordsAt(world.state)), Effect.ensuring(stopHost(world.state))),
     ["told.workflow.ts"],

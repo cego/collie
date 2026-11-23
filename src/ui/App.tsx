@@ -90,14 +90,18 @@ export function App(props: AppProps) {
   createEffect(() => {
     const view = open();
     const id = view === null ? null : runRowId(view.run);
-    if (id === told) return;
+    if (id === told) {
+      return;
+    }
     told = id;
     props.dispatch({
       _tag: "Select",
       id,
       on: view === null ? null : { task: view.id, run: view.run, name: view.name },
     });
-    if (view?.unseen === true) props.dispatch({ _tag: "Acknowledge", runId: view.run });
+    if (view?.unseen === true) {
+      props.dispatch({ _tag: "Acknowledge", runId: view.run });
+    }
   });
 
   createEffect(() => {
@@ -117,13 +121,17 @@ export function App(props: AppProps) {
   let showingArtefacts = false;
   createEffect(() => {
     const wanted = openId() !== null && tab() === "artefacts";
-    if (wanted === showingArtefacts) return;
+    if (wanted === showingArtefacts) {
+      return;
+    }
     showingArtefacts = wanted;
     props.dispatch({ _tag: "ToggleArtefacts" });
   });
   createEffect(() => {
     const wanted = openId() !== null && tab() === "log";
-    if (wanted === tailing) return;
+    if (wanted === tailing) {
+      return;
+    }
     tailing = wanted;
     props.dispatch({ _tag: "ToggleTail" });
   });
@@ -138,17 +146,21 @@ export function App(props: AppProps) {
     const at = menuOn()?.at;
     closeMenu();
     setToast(null);
-    if (command._tag === "ChooseMr")
+    if (command._tag === "ChooseMr") {
       return queueMicrotask(() =>
         setMenuOn({ items: mrChoices(command), at: at ?? { x: MENU_GAP, y: 1 } }),
       );
+    }
     if (command._tag === "CopyLink") {
       renderer.copyToClipboardOSC52(command.url);
       return setToast(`copied ${command.url}`);
     }
-    if (command._tag === "EditSetting")
+    if (command._tag === "EditSetting") {
       return setEditing({ key: command.key, typed: "", multiline: command.multiline });
-    if (command._tag === "OpenRecord") return setOpenId(command.id);
+    }
+    if (command._tag === "OpenRecord") {
+      return setOpenId(command.id);
+    }
     if (command._tag === "OpenSteer") {
       setOpenId(command.id);
       return focusSteer();
@@ -181,19 +193,27 @@ export function App(props: AppProps) {
   };
   const press = (row: Row) => {
     const action = actionsFor(row, props.state().filter)[0];
-    if (action !== undefined) act(action.command);
+    if (action !== undefined) {
+      act(action.command);
+    }
   };
 
   const onwards = () => {
-    if (menuOn() !== null) return setMenuOn(null);
-    if (openId() !== null && !steering()) return setSteering(true);
+    if (menuOn() !== null) {
+      return setMenuOn(null);
+    }
+    if (openId() !== null && !steering()) {
+      return setSteering(true);
+    }
     setSteering(false);
     openOverflow();
   };
 
   const cutShort = () => {
     const detail = props.state().detail;
-    if (tab() === "review") return truncated(detail?.review);
+    if (tab() === "review") {
+      return truncated(detail?.review);
+    }
     return tab() === "plan" && truncated(detail?.plan?.spec);
   };
 
@@ -216,12 +236,16 @@ export function App(props: AppProps) {
   const steerDraft = () => (openId() === null ? "" : (steers()[openId()!] ?? ""));
   const editSteer = (edit: (was: string) => string) => {
     const id = openId();
-    if (id !== null) setSteers((was) => ({ ...was, [id]: edit(was[id] ?? "") }));
+    if (id !== null) {
+      setSteers((was) => ({ ...was, [id]: edit(was[id] ?? "") }));
+    }
   };
   const sendSteer = () => {
     const view = open();
     const text = Str.trim(steerDraft());
-    if (view === null || text === "") return;
+    if (view === null || text === "") {
+      return;
+    }
     setSteering(false);
     setSteers((was) => ({ ...was, [view.id]: "" }));
     props.dispatch({ _tag: "Steer", runId: view.run, text });
@@ -233,7 +257,9 @@ export function App(props: AppProps) {
 
   const decide: Decide = {
     answer: (question, value) => {
-      if (value === "") return;
+      if (value === "") {
+        return;
+      }
       setTypingTo(null);
       props.dispatch({ _tag: "Answer", runId: question.run, choiceId: question.id, value });
     },
@@ -248,8 +274,12 @@ export function App(props: AppProps) {
 
   const goingNote = () => {
     const going = props.state().stopping;
-    if (going.length === 0) return null;
-    if (going.length > 1) return `Stopped ${going.length} runs`;
+    if (going.length === 0) {
+      return null;
+    }
+    if (going.length > 1) {
+      return `Stopped ${going.length} runs`;
+    }
     return `Stopped ${Option.getOrUndefined(Arr.findFirst(tasks(), (view) => view.run === going[0]))?.name ?? going[0]}`;
   };
 
@@ -259,7 +289,9 @@ export function App(props: AppProps) {
     onPick: (view) =>
       setPicked((was) => {
         const next = new Set(was);
-        if (!next.delete(view.id)) next.add(view.id);
+        if (!next.delete(view.id)) {
+          next.add(view.id);
+        }
         return next;
       }),
   };
@@ -268,17 +300,24 @@ export function App(props: AppProps) {
     Arr.some(menuFor(view), (item) => item.command._tag === "StopRun");
   const pickedViews = () => Arr.filter(tasks(), (view) => picked().has(view.id));
   const stopPicked = () => {
-    for (const view of pickedViews())
-      if (stoppable(view)) props.dispatch({ _tag: "StopRun", runId: view.run });
+    for (const view of pickedViews()) {
+      if (stoppable(view)) {
+        props.dispatch({ _tag: "StopRun", runId: view.run });
+      }
+    }
     setPicked(new Set<string>());
   };
 
   const typingInto = () => {
     const at = typingTo();
-    if (at === null) return null;
+    if (at === null) {
+      return null;
+    }
     for (const view of tasks()) {
       const asked = view.decision;
-      if (asked?.kind === "question" && draftKey(asked) === at) return asked;
+      if (asked?.kind === "question" && draftKey(asked) === at) {
+        return asked;
+      }
     }
     return null;
   };
@@ -293,7 +332,9 @@ export function App(props: AppProps) {
   // WARNING: resolved from what is pending, not what was drawn: a cached id and hash would consent to a superseded payload.
   const previewing = () => {
     const id = props.state().previewing;
-    if (id === null || carded().has(id)) return null;
+    if (id === null || carded().has(id)) {
+      return null;
+    }
     return (
       Option.getOrUndefined(
         Option.map(Option.fromNullishOr(props.state().live), (present) =>
@@ -314,25 +355,42 @@ export function App(props: AppProps) {
   });
 
   usePasteInto((append) => {
-    if (flow() !== null) return;
+    if (flow() !== null) {
+      return;
+    }
     const setting = editing();
-    if (pane() !== null)
+    if (pane() !== null) {
       return setting === null
         ? undefined
         : setEditing({ ...setting, typed: append(setting.typed) });
-    if (steering()) return editSteer(append);
+    }
+    if (steering()) {
+      return editSteer(append);
+    }
     const asked = typingInto();
-    if (asked !== null) return editDraft(asked, append);
-    if (searching()) setQuery(append);
+    if (asked !== null) {
+      return editDraft(asked, append);
+    }
+    if (searching()) {
+      setQuery(append);
+    }
   });
 
   useKeyboard((key: Keypress) => {
     // WARNING: while a flow asks, q is a letter of the goal, not the close key.
-    if (flow() !== null) return;
+    if (flow() !== null) {
+      return;
+    }
     setToast(null);
-    if (helping()) return setHelping(false);
-    if (key.name === "tab") return onwards();
-    if (pane() !== null) return typeIntoSetting(key);
+    if (helping()) {
+      return setHelping(false);
+    }
+    if (key.name === "tab") {
+      return onwards();
+    }
+    if (pane() !== null) {
+      return typeIntoSetting(key);
+    }
     // WARNING: above everything: a confirmation's keys must not act on cards the human cannot see.
     const proposal = previewing();
     if (proposal !== null) {
@@ -343,17 +401,20 @@ export function App(props: AppProps) {
           hash: proposal.content_hash,
         });
       }
-      if (key.name === "escape")
+      if (key.name === "escape") {
         return props.dispatch({
           _tag: "DeclineProposal",
           id: proposal.id,
           hash: proposal.content_hash,
         });
+      }
       return;
     }
     const menu = menuOn();
     if (menu !== null) {
-      if (key.name === "escape") return setMenuOn(null);
+      if (key.name === "escape") {
+        return setMenuOn(null);
+      }
       if ((key.name === "up" || key.name === "down") && menu.items.length > 0) {
         const step = key.name === "down" ? 1 : -1;
         const cursor = menu.cursor ?? (step === 1 ? -1 : 0);
@@ -371,51 +432,95 @@ export function App(props: AppProps) {
             );
       return item === undefined || item.disabled === true ? undefined : act(item.command);
     }
-    if (steering()) return typeIntoSteer(key);
+    if (steering()) {
+      return typeIntoSteer(key);
+    }
     // WARNING: before the board's keys: while typing, q is a letter and / is not the search.
     const asked = typingInto();
-    if (asked !== null) return typeIntoAnswer(asked, key);
-    if (searching()) return typeIntoSearch(key);
+    if (asked !== null) {
+      return typeIntoAnswer(asked, key);
+    }
+    if (searching()) {
+      return typeIntoSearch(key);
+    }
     if (key.name === "escape") {
-      if (openId() !== null) return setOpenId(null);
+      if (openId() !== null) {
+        return setOpenId(null);
+      }
       return setQuery("");
     }
-    if (key.sequence === "m" && cutShort()) return props.dispatch({ _tag: "MoreReview" });
-    if (key.sequence === "/") return focusSearch();
-    if (key.sequence === "?") return setHelping(true);
-    if (key.name === "q") return props.dispatch({ _tag: "Quit" });
-    if (key.name === "r") return props.dispatch({ _tag: "Refresh" });
+    if (key.sequence === "m" && cutShort()) {
+      return props.dispatch({ _tag: "MoreReview" });
+    }
+    if (key.sequence === "/") {
+      return focusSearch();
+    }
+    if (key.sequence === "?") {
+      return setHelping(true);
+    }
+    if (key.name === "q") {
+      return props.dispatch({ _tag: "Quit" });
+    }
+    if (key.name === "r") {
+      return props.dispatch({ _tag: "Refresh" });
+    }
   });
 
   const typeIntoSetting = (key: Keypress) => {
     const at = editing();
-    if (at === null) return key.name === "escape" ? toBoard() : undefined;
-    if (key.name === "escape") return setEditing(null);
-    if (key.name === "return" && key.meta === true && at.multiline)
+    if (at === null) {
+      return key.name === "escape" ? toBoard() : undefined;
+    }
+    if (key.name === "escape") {
+      return setEditing(null);
+    }
+    if (key.name === "return" && key.meta === true && at.multiline) {
       return setEditing({ ...at, typed: `${at.typed}\n` });
+    }
     if (key.name === "return") {
       setEditing(null);
       return props.dispatch({ _tag: "SetDefault", key: at.key, value: at.typed });
     }
-    if (key.name === "backspace")
+    if (key.name === "backspace") {
       return setEditing({ ...at, typed: pipe(at.typed, Str.slice(0, -1)) });
-    if (PRINTABLE.test(key.sequence)) setEditing({ ...at, typed: at.typed + key.sequence });
+    }
+    if (PRINTABLE.test(key.sequence)) {
+      setEditing({ ...at, typed: at.typed + key.sequence });
+    }
   };
 
   const typeIntoSteer = (key: Keypress) => {
     const id = openId();
-    if (id === null) return setSteering(false);
-    if (key.name === "escape") return setSteering(false);
-    if (key.name === "return") return sendSteer();
-    if (key.name === "backspace") return editSteer((was) => pipe(was, Str.slice(0, -1)));
-    if (PRINTABLE.test(key.sequence)) editSteer((was) => was + key.sequence);
+    if (id === null) {
+      return setSteering(false);
+    }
+    if (key.name === "escape") {
+      return setSteering(false);
+    }
+    if (key.name === "return") {
+      return sendSteer();
+    }
+    if (key.name === "backspace") {
+      return editSteer((was) => pipe(was, Str.slice(0, -1)));
+    }
+    if (PRINTABLE.test(key.sequence)) {
+      editSteer((was) => was + key.sequence);
+    }
   };
 
   const typeIntoAnswer = (question: Question, key: Keypress) => {
-    if (key.name === "escape") return setTypingTo(null);
-    if (key.name === "return") return decide.answer(question, Str.trim(decide.draft(question)));
-    if (key.name === "backspace") return editDraft(question, (was) => pipe(was, Str.slice(0, -1)));
-    if (PRINTABLE.test(key.sequence)) editDraft(question, (was) => was + key.sequence);
+    if (key.name === "escape") {
+      return setTypingTo(null);
+    }
+    if (key.name === "return") {
+      return decide.answer(question, Str.trim(decide.draft(question)));
+    }
+    if (key.name === "backspace") {
+      return editDraft(question, (was) => pipe(was, Str.slice(0, -1)));
+    }
+    if (PRINTABLE.test(key.sequence)) {
+      editDraft(question, (was) => was + key.sequence);
+    }
   };
 
   const typeIntoSearch = (key: Keypress) => {
@@ -423,9 +528,15 @@ export function App(props: AppProps) {
       setQuery("");
       return setSearching(false);
     }
-    if (key.name === "return") return setSearching(false);
-    if (key.name === "backspace") return setQuery((was) => pipe(was, Str.slice(0, -1)));
-    if (PRINTABLE.test(key.sequence)) setQuery((was) => was + key.sequence);
+    if (key.name === "return") {
+      return setSearching(false);
+    }
+    if (key.name === "backspace") {
+      return setQuery((was) => pipe(was, Str.slice(0, -1)));
+    }
+    if (PRINTABLE.test(key.sequence)) {
+      setQuery((was) => was + key.sequence);
+    }
   };
 
   return (

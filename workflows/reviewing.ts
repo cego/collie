@@ -180,22 +180,25 @@ export const reviewPass = (ask: ReviewAsk) =>
     const host = yield* Host;
     const { dir, cwd } = yield* host.place(id);
     const confirmHead = Effect.gen(function* () {
-      if (ask.head)
+      if (ask.head) {
         yield* Activity.make({
           name: `${ask.prefix ?? ""}review-head-confirmed-${ask.at}`,
           success: Schema.String,
           error: WorkflowError,
           execute: Effect.gen(function* () {
             const reading = yield* host.mrReading({ target: ask.target, cwd });
-            if (reading.state !== "open")
+            if (reading.state !== "open") {
               return yield* new WorkflowError({ reason: `${MR_ENDED}${reading.state}` });
-            if (reading.head !== ask.head)
+            }
+            if (reading.head !== ask.head) {
               return yield* new WorkflowError({
                 reason: `${HEAD_MOVED} ${ask.head}; review again before posting`,
               });
+            }
             return reading.head;
           }),
         });
+      }
     });
     const record = (report: SynthesisReport) =>
       Effect.gen(function* () {
@@ -220,11 +223,14 @@ export const reviewPass = (ask: ReviewAsk) =>
           );
           let identity = finding.id ?? earlier?.id;
           if (identity === undefined) {
-            while (reserved.has(`${id}-F${next}`)) next += 1;
+            while (reserved.has(`${id}-F${next}`)) {
+              next += 1;
+            }
             identity = `${id}-F${next}`;
           }
-          if (ids.has(identity))
+          if (ids.has(identity)) {
             return yield* new WorkflowError({ reason: `duplicate finding id ${identity}` });
+          }
           ids.add(identity);
           reserved.add(identity);
           const status = finding.status ?? "open";
@@ -237,13 +243,16 @@ export const reviewPass = (ask: ReviewAsk) =>
           });
         }
         for (const earlier of before) {
-          if (Arr.some(findings, (one) => one.id === earlier.id)) continue;
-          if (Arr.some(report.fixed, (one) => findingKey(one) === findingKey(earlier)))
+          if (Arr.some(findings, (one) => one.id === earlier.id)) {
+            continue;
+          }
+          if (Arr.some(report.fixed, (one) => findingKey(one) === findingKey(earlier))) {
             findings.push({ ...earlier, status: "fixed", head: ask.head ?? "", note: "" });
-          else
+          } else {
             return yield* new WorkflowError({
               reason: `review omitted earlier finding ${earlier.id ?? earlier.title}; return its status`,
             });
+          }
         }
         const recorded: SynthesisReport = {
           ...report,
@@ -288,13 +297,17 @@ export const reviewPass = (ask: ReviewAsk) =>
       name: `${synthesis}.scope`,
       success: Schema.NullOr(ReviewScope),
       execute: Effect.gen(function* () {
-        if (ask.source === null || (ask.target !== "" && ask.target !== "worktree")) return null;
+        if (ask.source === null || (ask.target !== "" && ask.target !== "worktree")) {
+          return null;
+        }
         const fs = yield* FileSystem.FileSystem;
         const collected = yield* Effect.forEach(seats, ({ operation }) =>
           fs.exists(agents.outputFor(id, operation)),
         );
         // WARNING: earlier passes without a journaled scope cannot acquire one on replay.
-        if (Arr.some(collected, Boolean)) return null;
+        if (Arr.some(collected, Boolean)) {
+          return null;
+        }
         return yield* host.reviewScope(id, ask.source ?? ask.plan, ask.proves, ask.risks);
       }).pipe(Effect.orDie),
     });
@@ -446,7 +459,9 @@ export const rally = (ask: {
 
     const repair = Effect.gen(function* () {
       const resumed = ask.resume;
-      if (resumed === undefined) return;
+      if (resumed === undefined) {
+        return;
+      }
       const fixed = yield* ask.fix({
         operation: `${prefix}fix`,
         at: 1,
@@ -567,7 +582,7 @@ export const rally = (ask: {
               reviewed: synthesis,
             };
           }
-          if (ask.resume !== undefined)
+          if (ask.resume !== undefined) {
             return {
               halted: `round_unresolved: ${formatFindings(round.live)}`,
               unreviewed: "",
@@ -575,6 +590,7 @@ export const rally = (ask: {
               disputes: Arr.filter(disputed, isBlocking),
               reviewed: synthesis,
             };
+          }
           seen = { at, keys: round.keys };
 
           const fixed = yield* ask.fix({
@@ -589,11 +605,12 @@ export const rally = (ask: {
             ...fixed.disputed,
           ];
           const answered = new Set(Arr.map([...fixed.fixed, ...disputed], findingKey));
-          if (head !== "")
+          if (head !== "") {
             prior = {
               head,
               open: Arr.filter(synthesis.findings, (one) => !answered.has(findingKey(one))),
             };
+          }
 
           if (at === ROUNDS) {
             const settled = settleFinalFix(round.live, fixed, yield* host.evidence(runId, ask.cwd));

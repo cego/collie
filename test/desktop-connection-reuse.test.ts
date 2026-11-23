@@ -91,14 +91,19 @@ const glabOn: (defaultHost: string, logins: Map<string, string>) => Runner =
   (defaultHost, logins) => (_, args) =>
     Effect.sync(() => {
       const said = Arr.join(args, " ");
-      if (said === "config get host --global") return { code: 0, stdout: defaultHost };
+      if (said === "config get host --global") {
+        return { code: 0, stdout: defaultHost };
+      }
       const token = /^config get token --host (\S+)$/.exec(said);
-      if (token !== null) return { code: 0, stdout: logins.get(token[1]!) ?? "" };
+      if (token !== null) {
+        return { code: 0, stdout: logins.get(token[1]!) ?? "" };
+      }
       const user = /^api --hostname (\S+) user$/.exec(said);
-      if (user !== null)
+      if (user !== null) {
         return logins.has(user[1]!)
           ? { code: 0, stdout: '{"username":"mk"}' }
           : { code: 1, stdout: "", stderr: "401" };
+      }
       throw new Error(`unexpected glab ${said}`);
     });
 
@@ -125,10 +130,13 @@ test("Use glab's login from the laptop reaches a VM whose glab defaults to gitla
         machine: { profile: "p-vm", name: "vm-mk" },
         execute: (script, stdin) =>
           Effect.sync(() => {
-            if (!reachable)
+            if (!reachable) {
               return { code: 255, out: "", err: "ssh: connect to host vm-mk: refused" };
+            }
             const host = /glab auth login --hostname '?([^' ]+)'? --stdin/.exec(script)?.[1];
-            if (host === undefined) return { code: 1, out: "", err: "not a glab login" };
+            if (host === undefined) {
+              return { code: 1, out: "", err: "not a glab login" };
+            }
             vmLogins.set(host, Str.trim(new TextDecoder().decode(stdin)));
             return { code: 0, out: "", err: "" };
           }),

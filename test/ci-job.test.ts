@@ -54,8 +54,9 @@ const waiting = Effect.fn("ciJob.waiting")(function* (
       "one",
       "--allow-empty",
     ],
-  ])
+  ]) {
     yield* exec(["git", ...args], { cwd });
+  }
   if (!Rec.isEmptyRecord(adds)) {
     const path = yield* Path.Path;
     yield* exec(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], { cwd });
@@ -196,8 +197,9 @@ test("a target-red park clears only once every recorded job passed on the target
             { agentList: () => Effect.die("CI rechecks must not ask core") },
           ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
         });
-      for (const state of ["failed", "pending", "running"] as const)
+      for (const state of ["failed", "pending", "running"] as const) {
         expect(yield* recheck(state)).toMatchObject({ cleared: false, error: false });
+      }
       const cleared = yield* recheck("passed");
       expect(cleared).toMatchObject({ cleared: true, error: false });
       expect(cleared.note).toContain("main");
@@ -834,7 +836,9 @@ const GATE: VerifySpec = { ...NUXI, ci: "test" };
 const thenLater = (...stages: ReadonlyArray<{ readonly fetch: FetchLike }>) => {
   let reads = 0;
   const fetch: FetchLike = (input, init) => {
-    if (pipe_(input, Str.endsWith("/pulls/31"))) reads++;
+    if (pipe_(input, Str.endsWith("/pulls/31"))) {
+      reads++;
+    }
     return stages[Math.min(Math.max(reads, 1), stages.length) - 1]!.fetch(input, init);
   };
   return { fetch };
@@ -1137,7 +1141,7 @@ test("a GitHub failure whose tests fail in other shards where the branch leaves 
     }),
   ));
 
-for (const name of ["gitlab", "github"] as const)
+for (const name of ["gitlab", "github"] as const) {
   test(`a ${name} retried pass of an own test in an explicitly selected Bun file proves nothing`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -1164,8 +1168,9 @@ for (const name of ["gitlab", "github"] as const)
         expect(yield* journalOf(asked)).toEqual([]);
       }),
     ));
+}
 
-for (const name of ["gitlab", "github"] as const)
+for (const name of ["gitlab", "github"] as const) {
   test(`a ${name} job passing twice still fails when its earlier attempt named an own test`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -1195,6 +1200,7 @@ for (const name of ["gitlab", "github"] as const)
         expect(yield* journalOf(asked)).toEqual([]);
       }),
     ));
+}
 
 test("a GitHub infrastructure failure between an own-test failure and a pass cannot prove the check", () =>
   runEffect(
@@ -1240,7 +1246,7 @@ test("a GitHub infrastructure failure between an own-test failure and a pass can
     }),
   ));
 
-for (const name of ["gitlab", "github"] as const)
+for (const name of ["gitlab", "github"] as const) {
   test(`a ${name} failed own test keeps its file when another job names an untouched test the same`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -1281,6 +1287,7 @@ for (const name of ["gitlab", "github"] as const)
         expect(yield* journalOf(asked)).toEqual([]);
       }),
     ));
+}
 
 test("a GitHub job that passes its rerun, after a failed suite job named a test the branch adds, is failed", () =>
   runEffect(
@@ -1385,7 +1392,7 @@ const jobReads = (requests: ReadonlyArray<FakeRequest>) =>
 for (const [name, mr, spec] of [
   ["github", PULL, GATE],
   ["gitlab", MR, NUXI],
-] as const)
+] as const) {
   test(`a ${name} job missing from a merge request that conflicts with its target says so, and is not waited on`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -1409,11 +1416,12 @@ for (const [name, mr, spec] of [
         expect(jobReads(forge.requests)).toHaveLength(1);
       }),
     ));
+}
 
 for (const [name, mr, spec, none] of [
   ["github", PULL, GATE, { jobs: [] }],
   ["gitlab", MR, NUXI, { jobs: undefined }],
-] as const)
+] as const) {
   test(`a ${name} merge request with no pipeline that conflicts with its target says so, and is not waited on`, () =>
     runEffect(
       fastForward(
@@ -1433,6 +1441,7 @@ for (const [name, mr, spec, none] of [
         600_000,
       ),
     ));
+}
 
 test("a job running in its pipeline while its merge request conflicts is still the job's to finish", () =>
   runEffect(
@@ -1471,7 +1480,9 @@ test("a job missing while the forge has not said whether it can merge is waited 
         });
         let reads = 0;
         const fetch: FetchLike = (input, init) => {
-          if (pipe_(input, Str.includes("check-runs?check_name="))) reads++;
+          if (pipe_(input, Str.includes("check-runs?check_name="))) {
+            reads++;
+          }
           return (reads < 2 ? forge : later).fetch(input, init);
         };
         expect(yield* read({ ...asked, spec: GATE }, { fetch })).toMatchObject({

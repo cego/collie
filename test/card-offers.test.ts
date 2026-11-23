@@ -16,7 +16,9 @@ const cards = (state: string) =>
     const door = yield* frontDoor(socketOf(state));
     const first = yield* Stream.runHead(door.board());
     const snapshot = Option.getOrThrow(first);
-    if (snapshot._tag !== "Snapshot") throw new Error("expected board snapshot");
+    if (snapshot._tag !== "Snapshot") {
+      throw new Error("expected board snapshot");
+    }
     return snapshot.tasks;
   });
 const offers = (view: TaskView) =>
@@ -58,7 +60,9 @@ test("a fan-out card invokes Release on its Change, and the card keeps its Offer
             (action) => action.kind === "offer" && action.offer.run === owner,
           ),
         );
-        if (action.kind !== "offer") throw new Error("expected Release action");
+        if (action.kind !== "offer") {
+          throw new Error("expected Release action");
+        }
         const release = yield* client.invoke({
           runId: action.offer.run!,
           offer: action.offer.id,

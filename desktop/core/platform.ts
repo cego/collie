@@ -21,15 +21,18 @@ console.debug = console.error;
 
 const ndjson = RpcSerialization.ndjson.makeUnsafe();
 const userData = Bun.env.COLLIE_RUNE_USER_DATA ?? "";
-if (Bun.env.COLLIE_RUNE_UPDATE_REFUSED === "1")
+if (Bun.env.COLLIE_RUNE_UPDATE_REFUSED === "1") {
   await rm(preparedRecordOf(userData), { force: true });
+}
 let shell: Rpc | undefined;
 
 const listen = async () => {
-  for await (const bytes of Bun.stdin.stream())
-    for (const frame of ndjson.decode(bytes))
+  for await (const bytes of Bun.stdin.stream()) {
+    for (const frame of ndjson.decode(bytes)) {
       // WARNING: the shell writes only Effect RPC frames, one a line.
       shell?.handlers.messages.frame(frame as Frame);
+    }
+  }
   process.exit(0);
 };
 

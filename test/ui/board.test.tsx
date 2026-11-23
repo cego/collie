@@ -78,16 +78,22 @@ const mount = Effect.fn("board.mount")(function* (
     commands,
     cardNode(name: string) {
       const find: (node: BaseRenderable) => BaseRenderable | undefined = (node) => {
-        if (node instanceof TextRenderable && node.plainText === name) return node;
+        if (node instanceof TextRenderable && node.plainText === name) {
+          return node;
+        }
         for (const child of node.getChildren()) {
           const found = find(child);
-          if (found) return found;
+          if (found) {
+            return found;
+          }
         }
         return undefined;
       };
       const text = find(t.renderer.root);
       const card = text?.parent?.parent?.parent;
-      if (!card) throw new Error(`no card containing ${stringifyJson(name)}`);
+      if (!card) {
+        throw new Error(`no card containing ${stringifyJson(name)}`);
+      }
       return card;
     },
     acted: () => Arr.filter(commands, (c) => c._tag !== "Select"),
@@ -129,8 +135,9 @@ const mount = Effect.fn("board.mount")(function* (
     },
     scrollAt(x: number, y: number, times = 1) {
       return Effect.gen(function* () {
-        for (let n = 0; n < times; n++)
+        for (let n = 0; n < times; n++) {
           yield* Effect.promise(() => t.mockMouse.scroll(x, y, "down"));
+        }
         yield* flush;
       });
     },
@@ -144,7 +151,9 @@ const mount = Effect.fn("board.mount")(function* (
     bgOf(text: string) {
       for (const line of t.captureSpans().lines) {
         for (const span of line.spans) {
-          if (pipe_(span.text, Str.includes(text))) return `${span.bg.r} ${span.bg.g} ${span.bg.b}`;
+          if (pipe_(span.text, Str.includes(text))) {
+            return `${span.bg.r} ${span.bg.g} ${span.bg.b}`;
+          }
         }
       }
       throw new Error(`nothing drawn containing ${stringifyJson(text)}`);
@@ -152,15 +161,20 @@ const mount = Effect.fn("board.mount")(function* (
     fgOf(text: string) {
       for (const line of t.captureSpans().lines) {
         for (const span of line.spans) {
-          if (pipe_(span.text, Str.includes(text))) return `${span.fg.r} ${span.fg.g} ${span.fg.b}`;
+          if (pipe_(span.text, Str.includes(text))) {
+            return `${span.fg.r} ${span.fg.g} ${span.fg.b}`;
+          }
         }
       }
       throw new Error(`nothing drawn containing ${stringifyJson(text)}`);
     },
     attributesOf(text: string) {
       for (const line of t.captureSpans().lines) {
-        for (const span of line.spans)
-          if (pipe_(span.text, Str.includes(text))) return span.attributes;
+        for (const span of line.spans) {
+          if (pipe_(span.text, Str.includes(text))) {
+            return span.attributes;
+          }
+        }
       }
       throw new Error(`nothing drawn containing ${stringifyJson(text)}`);
     },
@@ -188,7 +202,9 @@ const mount = Effect.fn("board.mount")(function* (
         ),
         () => -1,
       );
-      if (y < 0) throw new Error(`no line containing ${stringifyJson(text)}`);
+      if (y < 0) {
+        throw new Error(`no line containing ${stringifyJson(text)}`);
+      }
       return y;
     },
   };
@@ -200,7 +216,9 @@ function spotOf(frame: string, text: string) {
     Arr.findFirstIndex(lines, (line) => pipe_(line, Str.includes(text))),
     () => -1,
   );
-  if (y < 0) throw new Error(`no line containing ${stringifyJson(text)}`);
+  if (y < 0) {
+    throw new Error(`no line containing ${stringifyJson(text)}`);
+  }
   return {
     x:
       Option.getOrElse(pipe_(lines[y]!, Str.indexOf(text)), () => -1) + Math.floor(text.length / 2),
@@ -880,7 +898,9 @@ test("the keyboard selects each named Offer on its owning Change", () =>
         expect(app.said()).toContain(`› ${label}`);
         app.mockInput.pressEnter();
         yield* app.flush;
-        if (enabled) expected.push({ _tag: "InvokeOffer", runId, offer });
+        if (enabled) {
+          expected.push({ _tag: "InvokeOffer", runId, offer });
+        }
         expect(app.acted()).toEqual(expected);
         expect(pipe_(app.said(), Str.includes("Open record"))).toBe(!enabled);
       }

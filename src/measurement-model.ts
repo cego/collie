@@ -50,8 +50,9 @@ export const decodeBenchmarkPlan = flow(
   Effect.mapError((cause) => `the plan is not one: ${cause.message}`),
   Effect.flatMap((plan) => {
     const primaries = Arr.filter(plan.metrics, (one) => one.role === "primary").length;
-    if (primaries !== 1)
+    if (primaries !== 1) {
       return Effect.fail(`a plan declares exactly one primary metric, not ${primaries}`);
+    }
     const unjustified = Arr.filter(
       plan.metrics,
       (one) =>
@@ -209,31 +210,37 @@ export const calibrationOf: (measured: Pick<Measurement, "plan" | "result">) => 
   measured,
 ) => {
   const { plan, result } = measured;
-  if (result._tag !== "Judged") return { _tag: "HarnessBroken", why: [summaryOf(measured)] };
+  if (result._tag !== "Judged") {
+    return { _tag: "HarnessBroken", why: [summaryOf(measured)] };
+  }
   const broken: Array<string> = [];
   const noisy: Array<Lost> = [];
   for (const metric of plan.metrics) {
     const judged = Option.getOrUndefined(
       Arr.findFirst(result.verdicts, (one) => one.metric === metric.name),
     );
-    if (judged === undefined) continue;
+    if (judged === undefined) {
+      continue;
+    }
     const limits = limitsOf(plan, metric);
     if (limits.exact) {
-      if (!judged.held || judged.verdict !== "no-change")
+      if (!judged.held || judged.verdict !== "no-change") {
         broken.push(
           `exact ${metric.name} is not the same number on every sample of identical trees`,
         );
+      }
     } else if (metric.role === "primary") {
-      if (judged.verdict === "inconclusive")
+      if (judged.verdict === "inconclusive") {
         noisy.push({
           metric: metric.name,
           why: `${metric.name} is inconclusive against itself: its 95% interval ${bounds(judged.interval)} is wider than twice its threshold of ${limits.threshold}%`,
         });
-      else if (judged.verdict !== "no-change")
+      } else if (judged.verdict !== "no-change") {
         noisy.push({
           metric: metric.name,
           why: `${metric.name} differs from itself: its 95% interval ${bounds(judged.interval)} leaves out no change`,
         });
+      }
     } else if (!judged.held) {
       const [low, high] = judged.interval;
       const worse = metric.direction === "lower" ? high - 1 : 1 - low;
@@ -243,7 +250,11 @@ export const calibrationOf: (measured: Pick<Measurement, "plan" | "result">) => 
       });
     }
   }
-  if (broken.length > 0) return { _tag: "HarnessBroken", why: broken };
-  if (noisy.length > 0) return { _tag: "ProofUnavailable", lost: noisy };
+  if (broken.length > 0) {
+    return { _tag: "HarnessBroken", why: broken };
+  }
+  if (noisy.length > 0) {
+    return { _tag: "ProofUnavailable", lost: noisy };
+  }
   return { _tag: "Calibrated" };
 };

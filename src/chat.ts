@@ -56,7 +56,9 @@ export const chatPath = Effect.fn("Chat.path")(function* (stateDir: string, key:
 export const readChat = Effect.fn("Chat.read")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-  if (Str.trim(raw) === "") return null;
+  if (Str.trim(raw) === "") {
+    return null;
+  }
   const decoded = Schema.decodeOption(RecordJson)(raw);
   return decoded._tag === "Some" ? decoded.value : null;
 });
@@ -360,15 +362,18 @@ const heardPath = Effect.fn("Chat.heardPath")(function* (stateDir: string, key: 
 export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: string) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const given = Schema.decodeOption(HookInput)(input);
-  if (key === null || given._tag === "None") return;
+  if (key === null || given._tag === "None") {
+    return;
+  }
   const fs = yield* FileSystem.FileSystem;
   const file = yield* heardPath(env.stateDir, key);
   if (given.value.prompt === undefined) {
     const kept = Schema.decodeOption(HeardJson)(
       yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")),
     );
-    if (kept._tag === "Some" && kept.value.session === given.value.session_id)
+    if (kept._tag === "Some" && kept.value.session === given.value.session_id) {
       yield* fs.remove(file, { force: true });
+    }
     return;
   }
   const path = yield* Path.Path;
@@ -386,7 +391,9 @@ export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: str
 
 export const heardVoice = Effect.fn("Chat.heardVoice")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-  if (key === null) return {};
+  if (key === null) {
+    return {};
+  }
   const fs = yield* FileSystem.FileSystem;
   const raw = yield* fs
     .readFileString(yield* heardPath(env.stateDir, key))
@@ -510,8 +517,9 @@ export const startChat = Effect.fn("Chat.start")(function* (
     const returned: Started = { kind: "unavailable", harness, why };
     return returned;
   }
-  if (window.leftOff !== null)
+  if (window.leftOff !== null) {
     yield* log(`chat: started without an auto-compact window: ${window.leftOff}`);
+  }
 
   const cwd = yield* herdDir(env.stateDir, key);
   // WARNING: one object for both adapters; different answers mean two conversations about different Herds. Empty values read as unset.

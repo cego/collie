@@ -32,7 +32,9 @@ export const refRuns = (ref: string, machine: string) => {
   const names = new Set([machine, Str.split(machine, ".")[0]]);
   return Arr.flatMap(refWords(ref), (word) => {
     const colon = Option.getOrElse(Str.indexOf(":")(word), () => -1);
-    if (colon < 0) return [word];
+    if (colon < 0) {
+      return [word];
+    }
     return names.has(Str.slice(0, colon)(word)) ? [Str.slice(colon + 1)(word)] : [];
   });
 };
@@ -43,7 +45,9 @@ export function latest(lines: ReadonlyArray<Disposition>) {
 }
 
 export function statusLine(status: string, line: Disposition | null) {
-  if (line === null) return status;
+  if (line === null) {
+    return status;
+  }
   const where = line.ref === "" ? "" : ` ${line.ref}`;
   return `${status} · ${line.kind}${where} by ${line.by}`;
 }

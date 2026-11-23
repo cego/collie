@@ -36,7 +36,9 @@ const lock = Semaphore.makeUnsafe(1);
 export const readQueue = Effect.fn("DeliveryQueue.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const file = `${dir}/delivery-queue.json`;
-  if (!(yield* fs.exists(file))) return [];
+  if (!(yield* fs.exists(file))) {
+    return [];
+  }
   return yield* fs.readFileString(file).pipe(Effect.flatMap(Schema.decodeEffect(json)));
 });
 
@@ -48,7 +50,9 @@ export const keepQueued = (dir: string, queued: Queued) =>
       const old = Option.getOrUndefined(
         Arr.findFirst(before, (one) => one.request === queued.request),
       );
-      if (old !== undefined && (old.result !== null || queued.result === null)) return;
+      if (old !== undefined && (old.result !== null || queued.result === null)) {
+        return;
+      }
       const next =
         old === undefined
           ? [...before, queued]

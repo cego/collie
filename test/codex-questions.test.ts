@@ -46,9 +46,11 @@ afterEach(() =>
       const events = yield* (yield* FileSystem.FileSystem)
         .readFileString(`${rig.root}/codex-server.events`)
         .pipe(Effect.orElseSucceed(() => ""));
-      for (const line of Str.split(events, "\n"))
-        for (const { pid } of Option.toArray(Schema.decodeOption(Started)(line)))
+      for (const line of Str.split(events, "\n")) {
+        for (const { pid } of Option.toArray(Schema.decodeOption(Started)(line))) {
           yield* Effect.sync(() => process.kill(pid, "SIGKILL")).pipe(Effect.ignore);
+        }
+      }
       yield* rig.close();
     }),
   ),
@@ -108,7 +110,9 @@ const session = <A, E, R>(run: Effect.Effect<A, E, R>, host = hostOf()) =>
 
 const waitFor = <E, R>(reached: Effect.Effect<boolean, E, R>) =>
   Effect.gen(function* () {
-    while (!(yield* reached)) yield* TestClock.withLive(Effect.sleep("10 millis"));
+    while (!(yield* reached)) {
+      yield* TestClock.withLive(Effect.sleep("10 millis"));
+    }
   });
 
 const spend = (ms: number) =>

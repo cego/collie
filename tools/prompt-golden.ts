@@ -30,7 +30,9 @@ export class Drift extends Data.TaggedError("Drift")<{
 }
 
 export const drift = (rendered: string, golden: string) => {
-  if (rendered === golden) return Option.none();
+  if (rendered === golden) {
+    return Option.none();
+  }
   const ours = Str.split(rendered, "\n");
   const theirs = Str.split(golden, "\n");
   const at = Option.getOrElse(
@@ -52,13 +54,16 @@ export const drift = (rendered: string, golden: string) => {
 
 export const matchGolden = Effect.fn("PromptGolden.match")(function* (rendered: string) {
   const fs = yield* FileSystem.FileSystem;
-  if ((yield* Config.String(WRITE).pipe(Config.withDefault(""))) === "1")
+  if ((yield* Config.String(WRITE).pipe(Config.withDefault(""))) === "1") {
     return yield* fs.writeFileString(GOLDEN, rendered);
+  }
   const found = drift(rendered, yield* fs.readFileString(GOLDEN));
-  if (Option.isSome(found)) return yield* found.value;
+  if (Option.isSome(found)) {
+    return yield* found.value;
+  }
 });
 
-if (import.meta.main)
+if (import.meta.main) {
   BunRuntime.runMain(
     Effect.gen(function* () {
       const mode = Bun.argv[2];
@@ -73,3 +78,4 @@ if (import.meta.main)
       return yield* Effect.promise(() => child.exited);
     }).pipe(Effect.flatMap((code) => Effect.sync(() => process.exit(code)))),
   );
+}

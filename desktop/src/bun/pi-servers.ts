@@ -53,8 +53,12 @@ const decodeHttp = Schema.decodeUnknownOption(
 const decodeOAuth = Schema.decodeUnknownOption(PiOAuth);
 
 const asPi: (server: UserMcpServer) => Result.Result<PiServer, string> = (server) => {
-  if ("headersHelper" in server) return Result.fail("its headersHelper runs only in Claude Code");
-  if (server.type === "sse") return Result.fail("Pi does not speak SSE");
+  if ("headersHelper" in server) {
+    return Result.fail("its headersHelper runs only in Claude Code");
+  }
+  if (server.type === "sse") {
+    return Result.fail("Pi does not speak SSE");
+  }
   const stdio = Option.getOrUndefined(decodeStdio(server));
   if (stdio !== undefined) {
     const { type: _, ...pi } = stdio;
@@ -80,11 +84,16 @@ const piName = (name: string) => pipe(name, Str.replaceAll("-", "_"));
 export const piServers = (servers: UserMcpServers) =>
   Arr.reduce(Rec.toEntries(servers), NONE, (so, [name, server]) => {
     const leave = (why: string) => ({ ...so, left: [...so.left, { name, why }] });
-    if (name === "collie") return leave("the name of Collie's own server");
-    if (!PI_NAME.test(name))
+    if (name === "collie") {
+      return leave("the name of Collie's own server");
+    }
+    if (!PI_NAME.test(name)) {
       return leave("Pi takes only letters, digits, _ and - in a server's name");
+    }
     const same = Arr.findFirst(Rec.keys(so.given), (taken) => piName(taken) === piName(name));
-    if (Option.isSome(same)) return leave(`Pi reads it as the same server as ${same.value}`);
+    if (Option.isSome(same)) {
+      return leave(`Pi reads it as the same server as ${same.value}`);
+    }
     return Result.match(asPi(server), {
       onFailure: leave,
       onSuccess: (pi) => ({ ...so, given: { ...so.given, [name]: pi } }),

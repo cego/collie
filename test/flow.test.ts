@@ -148,7 +148,9 @@ test.each(["working", "blocked"])(
             `gates=${gatesOf(world)}`,
           ]);
           const { runId } = yield* Schema.decodeUnknownEffect(RunId)(started.envelope.data);
-          if (status === "blocked") yield* blockedAtItsPrompt(core);
+          if (status === "blocked") {
+            yield* blockedAtItsPrompt(core);
+          }
           const flow = yield* until_(
             world,
             runId,

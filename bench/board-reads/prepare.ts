@@ -15,16 +15,23 @@ const run = (argv: ReadonlyArray<string>) => {
     env: { ...Bun.env, COLLIE_HOST: "/bin/false" },
     stdio: ["ignore", "inherit", "inherit"],
   });
-  if (ran.exitCode !== 0) process.exit(ran.exitCode ?? 1);
+  if (ran.exitCode !== 0) {
+    process.exit(ran.exitCode ?? 1);
+  }
 };
 
-if (!existsSync(`${root}node_modules/effect/package.json`))
+if (!existsSync(`${root}node_modules/effect/package.json`)) {
   run(["bun", "install", "--frozen-lockfile"]);
-if (existsSync(work)) rmSync(work, { recursive: true });
+}
+if (existsSync(work)) {
+  rmSync(work, { recursive: true });
+}
 mkdirSync(`${work}/bin`, { recursive: true });
 mkdirSync(`${work}/home`, { recursive: true });
 const git = Bun.which("git");
-if (git === null) process.exit(1);
+if (git === null) {
+  process.exit(1);
+}
 writeFileSync(
   `${work}/bin/git`,
   `#!/bin/sh

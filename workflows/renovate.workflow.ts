@@ -419,7 +419,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
           tracked,
           assessed,
         };
-        if (!assessed.is_package && !assessed.up_to_date)
+        if (!assessed.is_package && !assessed.up_to_date) {
           yield* forecast([
             trackStep,
             assessStep,
@@ -432,6 +432,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
             recordStep,
             productionStep,
           ]);
+        }
 
         if (assessed.up_to_date) {
           yield* host.record(runId, "nothing to renovate: Renovate has opened nothing here");
@@ -460,11 +461,12 @@ export const renovation = (landing: Landing = shippedLanding) =>
             say: (line) => host.record(runId, line),
           }),
         );
-        if (!("slugs" in held))
+        if (!("slugs" in held)) {
           yield* host.record(
             runId,
             `◦ ${"none" in held ? held.none : held.unresolved} — carrying on without one`,
           );
+        }
         const claim = "slugs" in held && held.slugs.length > 0 ? Arr.join(held.slugs, ", ") : null;
         // WARNING: given back once work is finished, not before; holding it across a consultation stops a half-finished deploy.
         const finished = (outcome: string) =>
@@ -478,7 +480,9 @@ export const renovation = (landing: Landing = shippedLanding) =>
               output: Batched,
             }),
           );
-          if (batched.mr_url !== undefined) yield* host.mergeRequest(runId, batched.mr_url);
+          if (batched.mr_url !== undefined) {
+            yield* host.mergeRequest(runId, batched.mr_url);
+          }
           const staged = yield* stageStep(
             agentWork({
               ...asRenovator(here, "stage"),
@@ -516,7 +520,9 @@ export const renovation = (landing: Landing = shippedLanding) =>
         }
 
         const pending = [...(assessed.merge_requests ?? [])];
-        if (pending.length === 0) yield* mergeStep(landing.merge(here));
+        if (pending.length === 0) {
+          yield* mergeStep(landing.merge(here));
+        }
         for (let index = 0; index < pending.length; index++) {
           const current = pending[index]!;
           const merged = yield* mergeStep(
@@ -530,9 +536,11 @@ export const renovation = (landing: Landing = shippedLanding) =>
             }),
             { item: String(current.iid), items: Arr.map(pending, (one) => String(one.iid)) },
           );
-          for (const discovered of merged.remaining_requests ?? [])
-            if (!Arr.some(pending, (one) => String(one.iid) === String(discovered.iid)))
+          for (const discovered of merged.remaining_requests ?? []) {
+            if (!Arr.some(pending, (one) => String(one.iid) === String(discovered.iid))) {
               pending.push(discovered);
+            }
+          }
         }
         const head =
           claim === null
@@ -564,7 +572,9 @@ export const renovation = (landing: Landing = shippedLanding) =>
             url: here.url,
           }),
         );
-        if (!carried) return yield* Workflow.suspend(yield* WorkflowInstance);
+        if (!carried) {
+          return yield* Workflow.suspend(yield* WorkflowInstance);
+        }
         return yield* finished(`${outcome}; production carries it`);
       }),
   });

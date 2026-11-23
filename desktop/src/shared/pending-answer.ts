@@ -44,8 +44,12 @@ export const answerTried = (
   sent: Omit<InFlight, "confirmed">,
   done: boolean | null,
 ) => {
-  if (state.latest.get(key) !== sent.send) return state;
-  if (done === false) return { ...state, answers: without(state.answers, key) };
+  if (state.latest.get(key) !== sent.send) {
+    return state;
+  }
+  if (done === false) {
+    return { ...state, answers: without(state.answers, key) };
+  }
   return {
     ...state,
     answers: withOne(state.answers, key, { ...sent, confirmed: done === true }),
@@ -62,7 +66,9 @@ export const answersSettled = (
     ),
   );
   const held = [...state.answers.keys(), ...state.latest.keys()];
-  if (Arr.every(held, (key) => open.has(key))) return state;
+  if (Arr.every(held, (key) => open.has(key))) {
+    return state;
+  }
   const settle = <A>(map: ReadonlyMap<string, A>) =>
     new Map(Arr.filter([...map], ([key]) => open.has(key)));
   return {
@@ -87,18 +93,21 @@ export const cardQuestion = (
   installation: string,
   state: Answering,
 ) => {
-  if (task.decision?.kind !== "question") return null;
+  if (task.decision?.kind !== "question") {
+    return null;
+  }
   const open = openQuestions(task);
   const answerOf = (asked: Question) =>
     state.answers.get(answerKey(installation, asked.run, asked.id));
   const unanswered = Arr.filter(open, (asked) => answerOf(asked) === undefined);
   const text = (unanswered[0] ?? open[0] ?? task.decision).text;
-  if (unanswered.length > 0 || open.length === 0)
+  if (unanswered.length > 0 || open.length === 0) {
     return {
       text,
       label: unanswered.length > 1 ? `Answer ${unanswered.length} questions…` : "Answer…",
       pending: null,
     };
+  }
   const answers = Arr.map(open, (asked) => answerOf(asked)!);
   const machine = answers[0]!.machine;
   return {
@@ -144,9 +153,12 @@ const conditionOf: (entry: SittingEntry, now: Now) => Condition = (entry, now) =
   const answer = now.answering.answers.get(
     answerKey(now.installation, entry.question.run, entry.question.id),
   );
-  if (open && answer !== undefined)
+  if (open && answer !== undefined) {
     return { kind: "answered", said: sendingSaid(answer), sending: !answer.confirmed };
-  if (open) return { kind: "unanswered" };
+  }
+  if (open) {
+    return { kind: "unanswered" };
+  }
   return entry.seen?.confirmed !== true
     ? { kind: "gone" }
     : { kind: "answered", said: `Answered ${entry.seen.shown}`, sending: false };
@@ -171,7 +183,9 @@ const refreshed = (entries: ReadonlyArray<SittingEntry>, now: Now) =>
       const question = Option.getOrUndefined(
         Arr.findFirst(now.open, (asked) => sameQuestion(asked, entry.question)),
       );
-      if (question === undefined) return entry;
+      if (question === undefined) {
+        return entry;
+      }
       const answer = now.answering.answers.get(
         answerKey(now.installation, question.run, question.id),
       );

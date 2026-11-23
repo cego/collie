@@ -99,7 +99,9 @@ const aRun = (goal: string) => hostedRun(world, goal);
 const call = (name: string, input: JsonObject = {}) =>
   Effect.suspend(() => {
     const tool = toolNamed(name);
-    if (tool === null) throw new Error(`no tool ${name}`);
+    if (tool === null) {
+      throw new Error(`no tool ${name}`);
+    }
     return tool.call(env, input);
   });
 
@@ -138,15 +140,19 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
     "collie_run",
     "collie_workspaces",
   ]);
-  for (const tool of TOOLS) expect(tool.input).toMatchObject({ type: "object" });
+  for (const tool of TOOLS) {
+    expect(tool.input).toMatchObject({ type: "object" });
+  }
   const propose = encodeJson(toolNamed("collie_propose")!.input);
-  for (const kind of ["hold", "release", "stop", "resume", "answer", "deliver", "start"])
+  for (const kind of ["hold", "release", "stop", "resume", "answer", "deliver", "start"]) {
     expect(propose).toContain(`"${kind}"`);
+  }
   expect(propose).not.toContain('"shell"');
   expect(propose).not.toContain('"confirm"');
   const does = encodeJson(toolNamed("collie_do")!.input);
-  for (const kind of ["stop", "resume", "answer", "confirm", "decline", "disposition"])
+  for (const kind of ["stop", "resume", "answer", "confirm", "decline", "disposition"]) {
     expect(does).toContain(`"${kind}"`);
+  }
   expect(does).not.toContain('"shell"');
 });
 
@@ -471,7 +477,9 @@ test("an outcome change made on an Intent amended since its version is refused f
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
       const intent = yield* readIntent(run.dir);
-      if (intent === null) return yield* Effect.die("the Run has no Intent");
+      if (intent === null) {
+        return yield* Effect.die("the Run has no Intent");
+      }
       yield* writeIntent(
         run.dir,
         amend(intent, { kind: "set-goal", goal: "a wider picker" }, "human:test", yield* nowIso),
@@ -569,7 +577,9 @@ test("chat returns its generated request id so the caller can retry safely", () 
       const first = yield* call("collie_propose", input);
       const requestId = /^Request: (\S+)/.exec(first)?.[1];
       expect(requestId).toBeDefined();
-      if (requestId === undefined) return;
+      if (requestId === undefined) {
+        return;
+      }
       expect(yield* call("collie_propose", { ...input, request_id: requestId })).toBe(first);
       expect((yield* readIntent(run.dir))?.version).toBe(2);
     }),
@@ -661,7 +671,9 @@ test.each(["typed failure", "defect"])(
             details: { outcome: "unknown" },
           },
         });
-        if (first === null || first.ok) return;
+        if (first === null || first.ok) {
+          return;
+        }
         const id = yield* Schema.decodeUnknownEffect(Schema.String)(first.error.details.requestId);
         expect(id).not.toBe("");
         expect(yield* mutation(env, "interrupted", Option.some(id), apply)).toEqual(first);
@@ -723,7 +735,9 @@ test("concurrent retries that both miss the receipt execute the request only onc
                   ? Effect.void
                   : Effect.gen(function* () {
                       // WARNING: Both callers see the absent receipt before either claims its lock.
-                      if (++readers === 2) yield* Deferred.succeed(ready, undefined);
+                      if (++readers === 2) {
+                        yield* Deferred.succeed(ready, undefined);
+                      }
                       yield* Deferred.await(ready);
                     }),
               ),
@@ -883,8 +897,9 @@ test("a start naming a repository finds its checkout under the Projects root, as
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const root = (yield* fs.makeTempDirectoryScoped()) + "/projects";
-      for (const checkout of ["cego/monorepo", "cego/engage", "forks/engage"])
+      for (const checkout of ["cego/monorepo", "cego/engage", "forks/engage"]) {
         yield* fs.makeDirectory(`${root}/${checkout}/.git`, { recursive: true });
+      }
       const elsewhere = { ...env, cwd: "/", raw: { ...env.raw, GITTE_CWD: root } };
 
       expect(yield* workspaceNamed(elsewhere, "monorepo")).toMatchObject({
@@ -1443,10 +1458,11 @@ test("Native chat cleans up its own Machine, with or without naming it, and refu
       expect(yield* proposing({ kind: "cleanup", machine: hostname() })).toContain(
         "cleanup: applied",
       );
-      for (const kind of ["cleanup", "home_cleanup"])
+      for (const kind of ["cleanup", "home_cleanup"]) {
         expect(yield* proposing({ kind, machine: "another-machine" })).toContain(
           `${kind}: failed — Native chat acts on ${hostname()}`,
         );
+      }
     }),
   ));
 
@@ -1475,7 +1491,9 @@ test("chat manages Schedules at once through the host, with the conversation and
           schedules: [{ name: "daily-proof", paused: false, start: { verify: [] }, last: null }],
         },
       });
-      if (!first.ok) throw new Error(first.error.message);
+      if (!first.ok) {
+        throw new Error(first.error.message);
+      }
       const machine = first.value.machine;
       expect(added).toContain(machine.hostname);
       const installation = yield* call("collie_installation");
@@ -1497,14 +1515,20 @@ test("chat manages Schedules at once through the host, with the conversation and
         expect(said).toContain(machine.hostname);
         const now = yield* list();
         expect(now.ok).toBe(true);
-        if (!now.ok) throw new Error(now.error.message);
-        if (change === "remove") expect(now.value.schedules).toEqual([]);
-        else {
+        if (!now.ok) {
+          throw new Error(now.error.message);
+        }
+        if (change === "remove") {
+          expect(now.value.schedules).toEqual([]);
+        } else {
           expect(now.value.schedules[0]?.paused).toBe(change === "pause");
-          if (change === "pause")
+          if (change === "pause") {
             expect(yield* call("collie_installation", {})).toMatch(/daily-proof\t.*\tpaused\t/);
+          }
           expect(now.value.schedules[0]?.last).toBeNull();
-          if (change === "resume") expect(now.value.schedules[0]?.next).not.toBeNull();
+          if (change === "resume") {
+            expect(now.value.schedules[0]?.next).not.toBeNull();
+          }
         }
       }
       const missing = yield* call("collie_propose", {
@@ -1525,7 +1549,9 @@ test("chat manages Schedules at once through the host, with the conversation and
         },
       });
       expect(direct.ok).toBe(false);
-      if (!direct.ok) expect(missing).toContain(direct.error.message);
+      if (!direct.ok) {
+        expect(missing).toContain(direct.error.message);
+      }
       expect(
         yield* call("collie_propose", {
           interpretation: "schedule on a different Machine",
@@ -1536,10 +1562,11 @@ test("chat manages Schedules at once through the host, with the conversation and
         { ...add, start: { ...add.start, here: true } },
         { kind: "schedule_pause", name: 42 },
         { kind: "schedule_destroy", name: add.name },
-      ])
+      ]) {
         expect(
           yield* call("collie_propose", { interpretation: "bad request", actions: [action] }),
         ).toContain("InvalidInput");
+      }
       expect(yield* list()).toMatchObject({ ok: true, value: { schedules: [] } });
       expect(pendingHerdWide(yield* readProposals(KEY), yield* Clock.currentTimeMillis)).toEqual(
         [],
@@ -1938,8 +1965,9 @@ test("a Run shows its plan, findings, disposition, outcome and the last lines it
       const run = yield* settledRun(world, "hello", { outcome: "bug" });
       yield* fs.makeDirectory(`${run.dir}/plan/issues`, { recursive: true });
       yield* fs.writeFileString(`${run.dir}/plan/SPEC.md`, "# spec\n");
-      for (const name of ["01-a.md", "02-b.md"])
+      for (const name of ["01-a.md", "02-b.md"]) {
         yield* fs.writeFileString(`${run.dir}/plan/issues/${name}`, "# ticket\n");
+      }
       yield* fs.writeFileString(`${run.dir}/review.md`, "# review\n");
       yield* fs.writeFileString(
         `${run.dir}/findings.json`,
@@ -1953,8 +1981,9 @@ test("a Run shows its plan, findings, disposition, outcome and the last lines it
       yield* call("collie_do", {
         actions: [{ kind: "disposition", run: run.id, became: "merged", ref: "collie!151" }],
       });
-      for (const line of ["step 1", "step 2", "step 3", "step 4", pipe_("x", Str.repeat(300))])
+      for (const line of ["step 1", "step 2", "step 3", "step 4", pipe_("x", Str.repeat(300))]) {
         yield* appendLog(run.dir, line);
+      }
       yield* appendLog(run.dir, "hello picker, from hello");
 
       const said = yield* call("collie_run", { run: run.id });

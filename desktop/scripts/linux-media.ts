@@ -19,8 +19,9 @@ export const MEDIA_PLUGINS = [
 ] as const;
 
 export const mediaDependencies = (stdout: string) => {
-  if (/=>\s+not found/.test(stdout))
+  if (/=>\s+not found/.test(stdout)) {
     throw new Error("The Linux media runtime has unresolved libraries");
+  }
   const found = Arr.map(
     [...Str.matchAll(/(?:=>\s+|^\s*)(\/[^\s(]+)/gm)(stdout)],
     (match) => match[1]!,
@@ -46,16 +47,22 @@ export const bundleLinuxMedia = Effect.fn("bundle.linuxMedia")(function* (
   const libraries = new Set<string>();
   for (const file of [`${bundle}/bin/launcher`, scanner, ...plugins]) {
     const found = yield* run("ldd", [file], bundle);
-    if (found.code !== 0)
+    if (found.code !== 0) {
       return yield* new Cause.UnknownError(
         null,
         `Could not resolve Linux media dependencies of ${file}: ${found.stderr}`,
       );
-    for (const library of mediaDependencies(found.stdout)) libraries.add(library);
+    }
+    for (const library of mediaDependencies(found.stdout)) {
+      libraries.add(library);
+    }
   }
-  for (const file of libraries) yield* fs.copyFile(file, `${dest}/${path.basename(file)}`);
-  for (const file of plugins)
+  for (const file of libraries) {
+    yield* fs.copyFile(file, `${dest}/${path.basename(file)}`);
+  }
+  for (const file of plugins) {
     yield* fs.copyFile(file, `${dest}/gstreamer-1.0/${path.basename(file)}`);
+  }
   yield* fs.copyFile(scanner, `${bundle}/libexec/gst-plugin-scanner.bin`);
   yield* fs.chmod(`${bundle}/libexec/gst-plugin-scanner.bin`, 0o755);
   yield* fs.writeFileString(
@@ -75,18 +82,21 @@ export const bundleLinuxMedia = Effect.fn("bundle.linuxMedia")(function* (
     fs.realPath(file),
   );
   const owner = yield* run("dpkg-query", ["--search", ...files], bundle);
-  if (owner.code !== 0)
+  if (owner.code !== 0) {
     return yield* new Cause.UnknownError(
       null,
       `Could not resolve distribution copyright records: ${owner.stderr}`,
     );
+  }
   const packages = new Set<string>();
-  for (const line of Str.split(Str.trim(owner.stdout), "\n"))
+  for (const line of Str.split(Str.trim(owner.stdout), "\n")) {
     packages.add(Str.split(Str.split(line, ": ")[0], ":")[0]);
+  }
   yield* fs.makeDirectory(`${bundle}/Resources/media-licenses`, { recursive: true });
-  for (const name of packages)
+  for (const name of packages) {
     yield* fs.copyFile(
       `/usr/share/doc/${name}/copyright`,
       `${bundle}/Resources/media-licenses/${name}`,
     );
+  }
 });

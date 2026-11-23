@@ -66,10 +66,14 @@ export const credentials = Effect.fn("Helle.credentials")(function* (where: {
   const values = new Map<string, string>();
   for (const line of Str.split(text, "\n")) {
     const entry = /^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
-    if (entry) values.set(entry[1]!, pipe(entry[2]!, Str.replaceAll(/^["']|["']$/g, "")));
+    if (entry) {
+      values.set(entry[1]!, pipe(entry[2]!, Str.replaceAll(/^["']|["']$/g, "")));
+    }
   }
   const token = values.get("HELLE_API_TOKEN");
-  if (!token) return yield* failed(`helle credentials: no HELLE_API_TOKEN in ${file}`);
+  if (!token) {
+    return yield* failed(`helle credentials: no HELLE_API_TOKEN in ${file}`);
+  }
   return { url: where.url ?? HELLE_URL, token } satisfies HelleCredentials;
 });
 
@@ -223,8 +227,11 @@ export function resolveProjects(projects: ReadonlyArray<HelleProject>, release: 
         };
         return returned;
       }
-      if (found.length === 0) unknown.push(entry);
-      else slugs.add(found[0]!.slug);
+      if (found.length === 0) {
+        unknown.push(entry);
+      } else {
+        slugs.add(found[0]!.slug);
+      }
     }
     const returned: Needed =
       unknown.length > 0
@@ -268,7 +275,7 @@ export function resolveProjects(projects: ReadonlyArray<HelleProject>, release: 
     }
     slugs.add(found[0]!.slug);
   }
-  for (const job of release.jobs)
+  for (const job of release.jobs) {
     for (const part of partsOf(job)) {
       const found = inGroup(part);
       if (found.length > 1) {
@@ -278,8 +285,11 @@ export function resolveProjects(projects: ReadonlyArray<HelleProject>, release: 
         };
         return returned;
       }
-      if (found.length === 1) slugs.add(found[0]!.slug);
+      if (found.length === 1) {
+        slugs.add(found[0]!.slug);
+      }
     }
+  }
   if (slugs.size === 0) {
     const returned: Needed = {
       _tag: "None",
@@ -292,7 +302,9 @@ export function resolveProjects(projects: ReadonlyArray<HelleProject>, release: 
 }
 
 function positionOf(project: HelleProject, user: string) {
-  if (project.holder?.user_id === user) return 0;
+  if (project.holder?.user_id === user) {
+    return 0;
+  }
   const at = Option.getOrElse(
     Arr.findFirstIndex(project.queue ?? [], (member) => member.user_id === user),
     () => -1,
@@ -301,7 +313,9 @@ function positionOf(project: HelleProject, user: string) {
 }
 
 function holderOf(project: HelleProject, user: string) {
-  if (project.holder?.user_id === user) return null;
+  if (project.holder?.user_id === user) {
+    return null;
+  }
   const other = Option.getOrUndefined(
     Arr.findFirst(
       [project.holder, ...(project.queue ?? [])],
@@ -325,7 +339,7 @@ const neededOf = Effect.fn("Helle.neededOf")(function* (
   projects: ReadonlyArray<HelleProject>,
   where: HelleWhere,
 ) {
-  if (where.deploys !== null || where.declared !== null)
+  if (where.deploys !== null || where.declared !== null) {
     return resolveProjects(projects, {
       repositoryPath: where.repositoryPath,
       repoName: where.repoName,
@@ -333,11 +347,13 @@ const neededOf = Effect.fn("Helle.neededOf")(function* (
       jobs: where.deploys?.jobs ?? [],
       declared: where.declared,
     });
+  }
   const resolved = resolveProject(projects, where.repositoryPath, where.repoName);
-  if (resolved._tag === "Ambiguous")
+  if (resolved._tag === "Ambiguous") {
     return yield* failed(
       `helle has ${resolved.slugs.length} projects matching ${where.repoName}: ${Arr.join(resolved.slugs, ", ")} — say which`,
     );
+  }
   return resolved._tag === "Project"
     ? ({ _tag: "Projects", slugs: [resolved.slug] } satisfies Needed)
     : ({ _tag: "None", why: `no Helle project for ${where.repoName}` } satisfies Needed);
@@ -369,8 +385,9 @@ export const helleHolders = Effect.fn("Helle.holders")(function* (where: HelleWh
   }
   const me = yield* helleMe(creds);
   const read: Array<{ slug: string; holder: string | null }> = [];
-  for (const slug of needed.slugs)
+  for (const slug of needed.slugs) {
     read.push({ slug, holder: holderOf(yield* helleProject(creds, slug), me.user_id) });
+  }
   const applications = where.deploys?.applications ?? [];
   const inGroup = inGroupOf(projects, where.repositoryPath);
   const names = (application: string, part: string) =>
@@ -468,8 +485,11 @@ const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<
         continue;
       }
       const claimed = yield* claimProject(creds, slug);
-      if (claimed.already_queued && !recorded.has(slug)) yield* takeOver(slug);
-      else if (!recorded.has(slug)) yield* gate.record({ slug, claim: "mine" });
+      if (claimed.already_queued && !recorded.has(slug)) {
+        yield* takeOver(slug);
+      } else if (!recorded.has(slug)) {
+        yield* gate.record({ slug, claim: "mine" });
+      }
       recorded.add(slug);
       if (claimed.position === 0) {
         yield* gate.out(`✓ this Run holds ${slug}`);
@@ -507,8 +527,12 @@ const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<
         );
         said = position;
       }
-      if (position === 0) return;
-      if (gate.queued !== undefined) yield* gate.queued(slug, position);
+      if (position === 0) {
+        return;
+      }
+      if (gate.queued !== undefined) {
+        yield* gate.queued(slug, position);
+      }
       yield* Effect.sleep(gate.pollMs ?? POLL_MS);
       // WARNING: Not in the queue any more: keep the last known position rather than a place it does not have.
       position = positionOf(yield* helleProject(creds, slug), me.user_id) ?? position;
@@ -518,25 +542,35 @@ const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<
   // WARNING: Give back a claim on a later project before waiting for an earlier one.
   while (true) {
     const positions: Array<number | null> = [];
-    for (const slug of needed.slugs)
+    for (const slug of needed.slugs) {
       positions.push(positionOf(yield* helleProject(creds, slug), me.user_id));
+    }
     const from = Option.getOrElse(
       Arr.findFirstIndex(needed.slugs, (slug, i) => !recorded.has(slug) || positions[i] !== 0),
       () => -1,
     );
-    if (from < 0) break;
+    if (from < 0) {
+      break;
+    }
     const later = Arr.filter(needed.slugs, (_, i) => i > from && positions[i] !== null);
-    for (const slug of later) if (!recorded.has(slug)) yield* takeOver(slug);
-    if (later.length > 0)
+    for (const slug of later) {
+      if (!recorded.has(slug)) {
+        yield* takeOver(slug);
+      }
+    }
+    if (later.length > 0) {
       yield* gate.out(
         `⚠ this Run does not hold ${needed.slugs[from]}, so it gives back ${Arr.join(later, ", ")} to take them again in order`,
       );
+    }
     for (const slug of later) {
       yield* releaseClaim(creds, slug);
       yield* gate.forget(slug);
       recorded.delete(slug);
     }
-    for (const slug of needed.slugs.slice(from)) yield* hold(slug);
+    for (const slug of needed.slugs.slice(from)) {
+      yield* hold(slug);
+    }
   }
   const returned: Held = { _tag: "Held", slugs: needed.slugs };
   return returned;

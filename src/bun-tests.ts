@@ -21,19 +21,35 @@ export function failedTests(output: string) {
   let listed = false;
   let failCount: number | null = null;
   for (const line of lines) {
-    if (ERROR_COUNT.test(line)) return null;
+    if (ERROR_COUNT.test(line)) {
+      return null;
+    }
     const count = FAIL_COUNT.exec(line);
-    if (count !== null) failCount = Number(count[1]);
-    if (LIST_HEADER.test(line)) listed = true;
-    if (listed) continue;
+    if (count !== null) {
+      failCount = Number(count[1]);
+    }
+    if (LIST_HEADER.test(line)) {
+      listed = true;
+    }
+    if (listed) {
+      continue;
+    }
     const header = FILE_HEADER.exec(line);
-    if (header !== null) file = header[1]!;
+    if (header !== null) {
+      file = header[1]!;
+    }
     const failed = FAILED.exec(line);
-    if (failed === null) continue;
-    if (file === null || failed[1] === HOOK) return null;
+    if (failed === null) {
+      continue;
+    }
+    if (file === null || failed[1] === HOOK) {
+      return null;
+    }
     found.set(`${file}\0${failed[1]}`, { file, name: failed[1]! });
   }
-  if (found.size === 0 || failCount !== found.size || found.size > MAX_FAILED) return null;
+  if (found.size === 0 || failCount !== found.size || found.size > MAX_FAILED) {
+    return null;
+  }
   return [...found.values()];
 }
 
@@ -72,18 +88,28 @@ export const failureReader = () => {
   let listed = false;
   const seen = new Set<string>();
   const line = (text: string) => {
-    if (LIST_HEADER.test(text)) listed = true;
-    if (listed) return;
+    if (LIST_HEADER.test(text)) {
+      listed = true;
+    }
+    if (listed) {
+      return;
+    }
     const header = FILE_HEADER.exec(text);
-    if (header !== null) file = header[1]!;
+    if (header !== null) {
+      file = header[1]!;
+    }
     const failed = FAILED.exec(text);
-    if (failed !== null) seen.add(file === null ? failed[1]! : `${file} > ${failed[1]}`);
+    if (failed !== null) {
+      seen.add(file === null ? failed[1]! : `${file} > ${failed[1]}`);
+    }
   };
   return {
     feed: (chunk: string) => {
       const lines = Str.split(carry + chunk, "\n");
       carry = lines.pop() ?? "";
-      for (const one of lines) line(one);
+      for (const one of lines) {
+        line(one);
+      }
     },
     names: () => {
       line(carry);

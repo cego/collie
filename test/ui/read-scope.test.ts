@@ -105,10 +105,15 @@ test("Task, Settings and Workflows refreshes do not rebuild the workspace lists"
         r.setTasks([task({ name: "The host's latest name" })]);
         const next = yield* r.app.load({ ...at, nonce: 1 });
         expect(next.tasks[0]?.name).toBe("The host's latest name");
-        if (view === "runs")
+        if (view === "runs") {
           expect(Arr.map(next.live?.proposals ?? [], (one) => one.id)).toEqual(["herd"]);
-        if (view === "settings") expect(next.settings).not.toBeNull();
-        if (view === "workflows") expect(next.definitions).not.toBeNull();
+        }
+        if (view === "settings") {
+          expect(next.settings).not.toBeNull();
+        }
+        if (view === "workflows") {
+          expect(next.definitions).not.toBeNull();
+        }
         expect(r.reads).toEqual({
           runs: 0,
           records: 0,

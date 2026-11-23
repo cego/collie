@@ -80,8 +80,9 @@ test("bounded indexing rotates past unfinished Runs to reach later retained mate
       const runs = [];
       for (let n = 0; n < 5; n++) {
         const run = yield* madeRun(rig.stateDir, { id: `r-${n}` });
-        for (let file = 0; file < (n === 4 ? 1 : 20); file++)
+        for (let file = 0; file < (n === 4 ? 1 : 20); file++) {
           yield* fs.writeFileString(`${run.evidence}/${file}.txt`, "evidence");
+        }
         runs.push(run);
       }
       yield* catalogue.index(runs);
@@ -156,8 +157,9 @@ test("search filters by name, description, URL, path, Run, kind, role and unseen
       yield* fs.makeDirectory(`${old.dir}/attachments`, { recursive: true });
       yield* fs.makeDirectory(`${old.dir}/handoffs`, { recursive: true });
       yield* fs.writeFileString(`${old.dir}/attachments/design-brief.md`, "# Brief\n");
-      for (const n of Arr.range(0, 9))
+      for (const n of Arr.range(0, 9)) {
         yield* fs.writeFileString(`${old.dir}/handoffs/h${n}.txt`, `handoff ${n}\n`);
+      }
       yield* fs.writeFileString(`${newer.evidence}/report.txt`, "evidence\n");
       yield* fs.makeDirectory(`${rig.stateDir}/outside`, { recursive: true });
       yield* fs.writeFileString(`${rig.stateDir}/outside/data.csv`, "a,b\n");
@@ -203,8 +205,9 @@ test("search filters by name, description, URL, path, Run, kind, role and unseen
         seen: { revision: 1 },
         updated: { provenance: "filesystem-mtime" },
       });
-      for (const before of halfway.items)
+      for (const before of halfway.items) {
         expect(Arr.some(whole.items, (item) => item.id === before.id)).toBe(true);
+      }
 
       const titles = (matches: ArtefactMatches) => Arr.map(matches.items, (item) => item.title);
       expect(titles(yield* restarted.search({ query: "BRIEF" }, eligible))).toEqual([
@@ -260,7 +263,9 @@ test("search filters by name, description, URL, path, Run, kind, role and unseen
         const page: ArtefactMatches = yield* restarted.search({ limit: 4, after }, eligible);
         expect(page.items.length).toBeLessThanOrEqual(4);
         paged.push(...Arr.map(page.items, (item) => item.id));
-        if (!page.more) break;
+        if (!page.more) {
+          break;
+        }
         const last = page.items.at(-1)!;
         after = { detectedAt: last.detectedAt, run: last.run, id: last.id };
       }
@@ -512,8 +517,9 @@ test("a Task's earlier Run off the board, its active Run and a Run with no Task 
           Effect.map(({ runId }) => runId),
           Effect.orDie,
         );
-        for (const name of ["old", "active", "loose"])
+        for (const name of ["old", "active", "loose"]) {
           yield* fs.writeFileString(`${world.project}/${name}-findings.md`, `# ${name}\n`);
+        }
         const attach = (name: string) => ["--attach", `${world.project}/${name}-findings.md`];
         const old = yield* runIdOf(
           (yield* collie(world, [
@@ -553,8 +559,9 @@ test("a Task's earlier Run off the board, its active Run and a Run with no Task 
         yield* collie(world, ["run", "wait", loose]);
         const door = yield* connect(world.state).pipe(Effect.orDie);
         const looseTask = (yield* door.run({ runId: loose }).pipe(Effect.orDie))?.task;
-        if (looseTask != null)
+        if (looseTask != null) {
           yield* removeTask(looseTask).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
+        }
 
         const search = door.artefactSearch({ query: "findings" }).pipe(Effect.orDie);
         let searched = yield* search;
@@ -562,8 +569,9 @@ test("a Task's earlier Run off the board, its active Run and a Run with no Task 
           let tries = 0;
           searched.coverage.indexed < searched.coverage.runs && tries < 200;
           tries++
-        )
+        ) {
           searched = yield* search;
+        }
         expect(searched.coverage.indexed).toBe(searched.coverage.runs);
         expect(searched.coverage.runs).toBeGreaterThanOrEqual(3);
         const byRow = Order.mapInput(Order.String, (row: ReadonlyArray<string>) =>

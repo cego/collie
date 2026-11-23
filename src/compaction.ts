@@ -52,7 +52,9 @@ export type Threshold =
   | { readonly bad: string };
 
 export function threshold(configured: number) {
-  if (configured === COMPACTION_OFF) return { off: true };
+  if (configured === COMPACTION_OFF) {
+    return { off: true };
+  }
   if (!Number.isSafeInteger(configured) || configured < 0) {
     return {
       bad:
@@ -267,7 +269,9 @@ export const readControl = Effect.fn("Compaction.readControl")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = path.join(yield* controlDir(stateDir, agent), CONTROL_FILE);
-  if (!(yield* fs.exists(file))) return null;
+  if (!(yield* fs.exists(file))) {
+    return null;
+  }
   return yield* fs.readFileString(file).pipe(
     Effect.flatMap(decodeControl),
     Effect.orElseSucceed(() => null),
@@ -310,8 +314,12 @@ const DISPATCH: Boundary = { dispatch: true };
 
 const enabled = Effect.fn("Compaction.enabled")(function* (configured: number) {
   const limit = threshold(configured);
-  if ("off" in limit) return null;
-  if ("bad" in limit) return yield* new Cause.IllegalArgumentError(limit.bad);
+  if ("off" in limit) {
+    return null;
+  }
+  if ("bad" in limit) {
+    return yield* new Cause.IllegalArgumentError(limit.bad);
+  }
   return limit;
 });
 
@@ -329,9 +337,12 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
   const prior = yield* readControl(deps.stateDir, agent.agent);
   const reached =
     prior === null ? null : yield* stopRecord(deps, prior, deps.stopMs ?? STOP_WAIT_MS);
-  if (reached !== null && reached.state !== "quiet")
+  if (reached !== null && reached.state !== "quiet") {
     return yield* new NotQuiet({ message: notStopped(agent.agent, reached, reached.target) });
-  if (reached === null) yield* putDownServer(deps, prior);
+  }
+  if (reached === null) {
+    yield* putDownServer(deps, prior);
+  }
   const kept = yield* Effect.forEach(resumed?.keep ?? [], (name) =>
     fs.readFileString(`${dir}/${name}`).pipe(
       Effect.map((text) => ({ name, text })),
@@ -344,7 +355,9 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
     yield* fs.writeFileString(`${dir}/${name}`, text);
   }
   const port = deps.ports[agent.harness];
-  if (!limit && port?.questions === undefined) return [];
+  if (!limit && port?.questions === undefined) {
+    return [];
+  }
   if (!port) {
     yield* deps.log(`${agent.agent}: ${agent.harness} has no compaction controls in Collie`);
     return [];
@@ -357,7 +370,9 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
         .pipe(Effect.as(false)),
     ),
   );
-  if (!supported) return [];
+  if (!supported) {
+    return [];
+  }
   // WARNING: the engine holds the control lock through install and start; a parallel launch must not prune before herdr lists the agent.
   yield* Effect.ignore(putDownStaleControls(deps, agent.agent));
   yield* fs.makeDirectory(dir, { recursive: true });
@@ -369,7 +384,9 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
     env,
     mcp,
   };
-  if (resumed !== undefined) ctx.session = resumed.session;
+  if (resumed !== undefined) {
+    ctx.session = resumed.session;
+  }
   const installed = yield* port.install(ctx);
   const started = installed.pid === undefined ? null : yield* startedOf(installed.pid);
   yield* writeControl(deps.stateDir, {
@@ -418,7 +435,9 @@ const stopRecord = Effect.fn("Compaction.stopRecord")(function* (
 ) {
   const stop = deps.ports[record.harness]?.stop;
   const target = targetOf(record);
-  if (stop === undefined || target === null) return null;
+  if (stop === undefined || target === null) {
+    return null;
+  }
   const services = yield* Effect.context<PortServices>();
   const told = record.runLog === null ? deps.log : appendTo(record.runLog);
   const note = (line: string) => Effect.ignore(Effect.provideContext(told(line), services));
@@ -439,7 +458,9 @@ const stopRecord = Effect.fn("Compaction.stopRecord")(function* (
 
 const targetOf = (record: ControlRecord) => {
   const { endpoint, pid, command } = record;
-  if (endpoint === null || pid === null || command === null) return null;
+  if (endpoint === null || pid === null || command === null) {
+    return null;
+  }
   return {
     ...record,
     endpoint,
@@ -459,21 +480,30 @@ const appendTo = (file: string) => (line: string) =>
   });
 
 export const mayWrite = Effect.fn("Compaction.mayWrite")(function* (record: ControlRecord) {
-  if (record.pid === null) return false;
+  if (record.pid === null) {
+    return false;
+  }
   const server = yield* processOf(record.pid);
   if (
     server !== null &&
     (record.started === null || server.started === record.started) &&
     (record.command === null || pipe_(server.command, Str.includes(record.command)))
-  )
+  ) {
     return true;
-  for (const one of record.stop?.left ?? []) if (yield* stillRunning(one)) return true;
+  }
+  for (const one of record.stop?.left ?? []) {
+    if (yield* stillRunning(one)) {
+      return true;
+    }
+  }
   return false;
 });
 
 export const keptFor = Effect.fn("Compaction.keptFor")(function* (record: ControlRecord) {
   const target = targetOf(record);
-  if (record.stop === null || target === null || !(yield* mayWrite(record))) return null;
+  if (record.stop === null || target === null || !(yield* mayWrite(record))) {
+    return null;
+  }
   return `its Codex turn has not stopped: ${notStopped(record.agent, record.stop, target)}`;
 });
 
@@ -483,7 +513,9 @@ export const stopAgent = Effect.fn("Compaction.stopAgent")(function* (
   budgetMs: number = STOP_WAIT_MS,
 ) {
   const first = yield* readControl(deps.stateDir, agent);
-  if (first === null || deps.ports[first.harness]?.stop === undefined) return null;
+  if (first === null || deps.ports[first.harness]?.stop === undefined) {
+    return null;
+  }
   return yield* withControlLock(
     deps.stateDir,
     agent,
@@ -514,16 +546,19 @@ export const serversOfRun = Effect.fn("Compaction.serversOfRun")(function* (
     const text = yield* fs.readFileString(path.join(root, name, CONTROL_FILE)).pipe(Effect.result);
     if (text._tag === "Failure") {
       // WARNING: a start writes its record last, under its lock.
-      if (text.failure.reason._tag !== "NotFound")
+      if (text.failure.reason._tag !== "NotFound") {
         unread.push(`${name}'s control record cannot be read (${reason(text.failure)})`);
+      }
       continue;
     }
     const record = yield* decodeControl(text.success).pipe(Effect.option);
     if (record._tag === "None") {
-      if (pipe_(text.success, Str.includes(runLog)))
+      if (pipe_(text.success, Str.includes(runLog))) {
         unread.push(`${name}'s control record does not parse`);
-    } else if (record.value.runLog === runLog && targetOf(record.value) !== null)
+      }
+    } else if (record.value.runLog === runLog && targetOf(record.value) !== null) {
       servers.push(name);
+    }
   }
   return { servers, unread };
 });
@@ -554,15 +589,23 @@ export const unlistedServers = Effect.fn("Compaction.unlistedServers")(function*
   const listed = new Set<string>();
   for (const session of sessions) {
     const agents = yield* Effect.result(session.agentList());
-    if (agents._tag === "Failure") return null;
-    for (const agent of agents.success) listed.add(agent.name);
+    if (agents._tag === "Failure") {
+      return null;
+    }
+    for (const agent of agents.success) {
+      listed.add(agent.name);
+    }
   }
   const found: Array<ControlRecord> = [];
   const root = path.join(stateDir, CONTROL_DIR);
   for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
-    if (listed.has(name)) continue;
+    if (listed.has(name)) {
+      continue;
+    }
     const record = yield* readControl(stateDir, name).pipe(Effect.orElseSucceed(() => null));
-    if (record !== null && (yield* mayWrite(record))) found.push(record);
+    if (record !== null && (yield* mayWrite(record))) {
+      found.push(record);
+    }
   }
   return found;
 });
@@ -579,16 +622,23 @@ export const lostServer = Effect.fn("Compaction.lostServer")(function* (
     Str.trim(record.started ?? "") === "" ||
     Str.trim(record.command ?? "") === "" ||
     !record.endpoint
-  )
+  ) {
     return null;
+  }
   const port = deps.ports[record.harness];
-  if (port?.ready === undefined || port.stop === undefined) return null;
-  if (!(yield* processAbsent(record.pid))) return null;
+  if (port?.ready === undefined || port.stop === undefined) {
+    return null;
+  }
+  if (!(yield* processAbsent(record.pid))) {
+    return null;
+  }
   const ready = yield* port.ready(record).pipe(
     Effect.orElseSucceed(() => false),
     Effect.timeoutOption(2000),
   );
-  if (Option.isNone(ready) || ready.value) return null;
+  if (Option.isNone(ready) || ready.value) {
+    return null;
+  }
   return `${record.harness} server pid ${record.pid} has exited and ${record.endpoint} is unavailable`;
 });
 
@@ -617,7 +667,9 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
       schedule: Schedule.spaced(deps.pollMs).pipe(Schedule.while(({ now }) => now < deadline)),
     }),
   );
-  if (up) return null;
+  if (up) {
+    return null;
+  }
   return `${record.harness} gave no sign it was up within ${Math.round(budgetMs / 1000)}s${why === "" ? "" : ` (${why})`}`;
 });
 
@@ -629,10 +681,14 @@ const putDownStaleControls = Effect.fn("Compaction.putDownStaleControls")(functi
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = path.join(deps.stateDir, CONTROL_DIR);
-  if (!(yield* fs.exists(root))) return;
+  if (!(yield* fs.exists(root))) {
+    return;
+  }
   const live = new Set(Arr.map(yield* deps.herdr.agentList(), (agent) => agent.name));
   for (const name of yield* fs.readDirectory(root)) {
-    if (name === launching || live.has(name)) continue;
+    if (name === launching || live.has(name)) {
+      continue;
+    }
     const listed = deps.herdr.agentList().pipe(
       Effect.map((agents) => Arr.some(agents, (agent) => agent.name === name)),
       Effect.orElseSucceed(() => true),
@@ -653,7 +709,9 @@ export const putDownControl = Effect.fn("Compaction.putDownControl")(function* <
     name,
     Effect.gen(function* () {
       // WARNING: a launch may finish while we wait for its lock; the earlier list cannot prove this agent is still absent.
-      if (yield* listed) return "core lists its agent again";
+      if (yield* listed) {
+        return "core lists its agent again";
+      }
       const record = yield* readControl(deps.stateDir, name);
       // WARNING: a server already signalled is only looked at again, so no launch waits out its budget.
       const signalled =
@@ -666,9 +724,12 @@ export const putDownControl = Effect.fn("Compaction.putDownControl")(function* <
         ) ?? false;
       const budget = signalled ? 0 : (deps.stopMs ?? STOP_WAIT_MS);
       const reached = record === null ? null : yield* stopRecord(deps, record, budget);
-      if (reached !== null && reached.state !== "quiet")
+      if (reached !== null && reached.state !== "quiet") {
         return `its Codex turn has not stopped: ${notStopped(name, reached, reached.target)}`;
-      if (reached === null) yield* putDownServer(deps, record);
+      }
+      if (reached === null) {
+        yield* putDownServer(deps, record);
+      }
       yield* fs.remove(path.join(deps.stateDir, CONTROL_DIR, name), {
         recursive: true,
         force: true,
@@ -683,7 +744,9 @@ const putDownServer = Effect.fn("Compaction.putDownServer")(function* (
   record: ControlRecord | null,
 ) {
   const pid = yield* endpointPid(record);
-  if (record === null || pid === null) return;
+  if (record === null || pid === null) {
+    return;
+  }
   yield* terminate(pid);
   yield* deps.log(`${record.agent}: stopped its compaction endpoint (pid ${pid})`);
 });
@@ -694,7 +757,9 @@ export const endpointPid = Effect.fn("Compaction.endpointPid")(function* (
   proc = "/proc",
 ) {
   const { pid, command } = record ?? {};
-  if (!pid || !command) return null;
+  if (!pid || !command) {
+    return null;
+  }
   return pipe_(yield* commandOf(pid, proc), Str.includes(command)) ? pid : null;
 });
 
@@ -707,11 +772,15 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
   ) => Effect.Effect<A, E | Unsubmitted | SubmissionError, R | PortServices | Records>,
 ) {
   const limit = yield* enabled(deps.configured);
-  if (!limit) return DISPATCH;
+  if (!limit) {
+    return DISPATCH;
+  }
 
   const record = yield* readControl(deps.stateDir, at.agent);
   const port = record ? deps.ports[record.harness] : undefined;
-  if (!record || !port) return DISPATCH;
+  if (!record || !port) {
+    return DISPATCH;
+  }
   const ctx: AgentContext = {
     agent: record.agent,
     run: at.run,
@@ -746,17 +815,20 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
     yield* deps.log(`${at.agent}: no usable context sample; sending the work`);
     return DISPATCH;
   }
-  if (deps.sample) yield* deps.sample(at, sample);
+  if (deps.sample) {
+    yield* deps.sample(at, sample);
+  }
   if (sample < limit.tokens) {
     yield* deps.log(`${at.agent}: ${sample} tokens in context, under ${limit.tokens}`);
     return DISPATCH;
   }
 
-  if (deps.room !== undefined && (yield* deps.room(record.cwd)) === "stopped")
+  if (deps.room !== undefined && (yield* deps.room(record.cwd)) === "stopped") {
     return {
       dispatch: false,
       reason: `${at.agent}: the Run was stopped while its compaction waited for disk`,
     } satisfies Boundary;
+  }
   const now = yield* Clock.currentTimeMillis;
   const attempt = {
     id: `${at.agent}-${now}`,
@@ -811,7 +883,9 @@ export const pollCompaction = Effect.fn("Compaction.pollCompaction")(function* (
 ) {
   const record = yield* readControl(deps.stateDir, agent);
   const port = record ? deps.ports[record.harness] : undefined;
-  if (!record?.attempt || !port) return DISPATCH;
+  if (!record?.attempt || !port) {
+    return DISPATCH;
+  }
   const ctx: AgentContext = {
     agent: record.agent,
     run: record.attempt.run,
@@ -854,7 +928,9 @@ const resolved = Effect.fn("Compaction.resolved")(function* (
           ),
         )
       : outcome;
-  if (settled === null) return null;
+  if (settled === null) {
+    return null;
+  }
   yield* writeControl(deps.stateDir, { ...record, attempt: null });
   if (settled.kind === "success") {
     yield* deps.log(`${ctx.agent}: native compaction ${attempt.id} completed`);
@@ -885,13 +961,16 @@ const settle = Effect.fn("Compaction.settle")(function* (
       ),
     }),
   );
-  if (done !== null) return done;
+  if (done !== null) {
+    return done;
+  }
   // WARNING: the attempt is kept, not cleared: a timeout is not proof the agent stopped compacting, so nothing retries or replays the work.
-  if (deps.waitMs === 0)
+  if (deps.waitMs === 0) {
     return {
       dispatch: false,
       reason: `${ctx.agent}: compaction ${attempt.id} is still in the air — no work sent; try again once it has finished`,
     } satisfies Boundary;
+  }
   return {
     dispatch: false,
     waiting: true,

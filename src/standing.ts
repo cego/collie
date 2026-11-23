@@ -67,7 +67,11 @@ export function settlementOf(item: Owed, recorded: ReadonlyArray<Recorded>, lead
         (one.mr === null &&
           (carries(one.run) || (one.run === leader && one.line.kind === "abandoned")));
   const answers = new Map<string, Recorded>();
-  for (const one of recorded) if (about(one)) answers.set(one.run, one);
+  for (const one of recorded) {
+    if (about(one)) {
+      answers.set(one.run, one);
+    }
+  }
   const latest = (kind: Disposition["kind"], where: (one: Recorded) => boolean = () => true) =>
     Arr.map(
       Arr.filter([...answers.values()], (one) => one.line.kind === kind && where(one)),

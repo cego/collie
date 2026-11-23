@@ -186,8 +186,9 @@ test("a verified remote carrier handoff reaches the native board, CLI and chat w
           expect((yield* first.cli(["run", "show", successor])).envelope.ok).toBe(true);
           const door = yield* frontDoor(socketOf(first.world.state)).pipe(Effect.orDie);
           const initial = yield* Stream.runHead(door.board()).pipe(Effect.orDie);
-          if (Option.isNone(initial) || initial.value._tag !== "Snapshot")
+          if (Option.isNone(initial) || initial.value._tag !== "Snapshot") {
             return yield* Effect.die("no initial board");
+          }
           const before = initial.value;
           const card = Option.getOrThrow(
             Arr.findFirst(before.tasks, (one) => one.runs.includes(runId)),
@@ -228,8 +229,9 @@ test("a verified remote carrier handoff reaches the native board, CLI and chat w
             },
           });
           const changed = yield* Fiber.join(visible).pipe(Effect.orDie);
-          if (Option.isNone(changed) || changed.value._tag !== "Upsert")
+          if (Option.isNone(changed) || changed.value._tag !== "Upsert") {
             return yield* Effect.die("handoff never became visible");
+          }
           expect(sectionOf(changed.value.task)).toBe("finished");
           const machine = {
             installation: before.installation,
@@ -580,8 +582,9 @@ test("a command about a Run on a Machine herdr lists pairs the two by itself and
             { installation: secondId, name: "second", dials: "out" },
           ]);
           expect(secondPeers).toMatchObject([{ installation: firstId, dials: "in" }]);
-          for (const side of [first, second])
+          for (const side of [first, second]) {
             expect((yield* fs.stat(`${side.world.state}/peers.json`)).mode & 0o777).toBe(0o600);
+          }
 
           const delivered = Option.getOrUndefined(
             Arr.findFirst(
@@ -732,15 +735,18 @@ const listensOn = (pid: number, tables = ["/proc/net/tcp", "/proc/net/tcp6"]) =>
         .readLink(`/proc/${pid}/fd/${fd}`)
         .pipe(Effect.orElseSucceed(() => ""));
       const inode = /^socket:\[(\d+)\]$/.exec(target)?.[1];
-      if (inode !== undefined) sockets.add(inode);
+      if (inode !== undefined) {
+        sockets.add(inode);
+      }
     }
     const ports: Array<number> = [];
     for (const table of tables) {
       for (const row of yield* procTable(table)) {
         // WARNING: in /proc/net/tcp the state 0A means LISTEN.
         const [, local, , state, , , , , , inode] = Str.split(Str.trim(row), /\s+/);
-        if (state === "0A" && inode !== undefined && sockets.has(inode))
+        if (state === "0A" && inode !== undefined && sockets.has(inode)) {
           ports.push(Number.parseInt(Str.split(local!, ":")[1]!, 16));
+        }
       }
     }
     return ports;
@@ -818,8 +824,9 @@ test("dial-back tickets are single-use, expire, belong to one installation, and 
               ws.onmessage = (event) => {
                 const Dial = Schema.fromJsonString(Schema.Struct({ dial: Schema.String }));
                 const dial = Schema.decodeUnknownOption(Dial)(event.data);
-                if (dial._tag === "Some")
+                if (dial._tag === "Some") {
                   Deferred.doneUnsafe(minted, Exit.succeed(dial.value.dial));
+                }
               };
             }),
             (ws) => Effect.sync(() => ws.close()),
@@ -838,7 +845,9 @@ test("dial-back tickets are single-use, expire, belong to one installation, and 
             const dial = Schema.decodeUnknownOption(
               Schema.fromJsonString(Schema.Struct({ dial: Schema.String })),
             )(event.data);
-            if (dial._tag === "Some") Deferred.doneUnsafe(expired, Exit.succeed(dial.value.dial));
+            if (dial._tag === "Some") {
+              Deferred.doneUnsafe(expired, Exit.succeed(dial.value.dial));
+            }
           };
           yield* Effect.forkScoped(
             relayAnswer(
@@ -863,7 +872,9 @@ const relayAnswer = (path: string, header: string) =>
     conn.once("connect", () => conn.write(`${header}\n`));
     conn.on("data", (chunk) => {
       said += chunk.toString("utf8");
-      if (pipe_(said, Str.includes("\n"))) conn.destroy();
+      if (pipe_(said, Str.includes("\n"))) {
+        conn.destroy();
+      }
     });
     conn.once("close", () => resume(Effect.succeed(Str.trim(said))));
   });
@@ -1079,8 +1090,11 @@ test("across Machines a Run is answered and stopped, and --machine reaches the b
             Effect.provide(recordsReadLayer(second.world.state)),
             Effect.orDie,
           );
-          for (const line of Arr.filter(trail, (one) => ["start", "stop"].includes(one.operation)))
+          for (const line of Arr.filter(trail, (one) =>
+            ["start", "stop"].includes(one.operation),
+          )) {
             expect(line.actor.from?.machine?.installation).toBe(firstId);
+          }
           const answerLine = Option.getOrUndefined(
             Arr.findFirst(
               yield* readAudit(runDir(second.world.state, runId)).pipe(

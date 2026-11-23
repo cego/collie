@@ -324,7 +324,9 @@ test("a live Machine with no settings exchange is still waiting for the saved ed
 test("a value with a consequence says it on its row, and asks nothing", () => {
   const hint = (key: string, typed: string) => {
     const edited = editSetting(NO_FLOCK_SETTINGS, key, typed, at(12));
-    if ("refused" in edited) throw new Error(edited.refused);
+    if ("refused" in edited) {
+      throw new Error(edited.refused);
+    }
     return Option.getOrThrow(
       Arr.findFirst(
         Arr.flatMap(settingSections(edited, {}, 0), (section) => section.rows),
@@ -357,14 +359,20 @@ test("a duration typed in minutes is the Flock's in milliseconds, and Reset unse
       ),
     )!;
   const typed = settingStored("quiet_ms", "15");
-  if ("refused" in typed) throw new Error(typed.refused);
+  if ("refused" in typed) {
+    throw new Error(typed.refused);
+  }
   const edited = editSetting(NO_FLOCK_SETTINGS, "quiet_ms", typed.stored, at(12));
-  if ("refused" in edited) throw new Error(edited.refused);
+  if ("refused" in edited) {
+    throw new Error(edited.refused);
+  }
 
   expect(edited.settings.quiet_ms!.value).toBe(900_000);
   expect(quiet(edited)).toMatchObject({ value: "15", set: true });
   const reset = editSetting(edited, "quiet_ms", "", at(13));
-  if ("refused" in reset) throw new Error(reset.refused);
+  if ("refused" in reset) {
+    throw new Error(reset.refused);
+  }
   expect(quiet(reset)).toMatchObject({ value: "", fallback: "10", set: false });
 });
 
@@ -381,7 +389,9 @@ test("a Machine's GitLab host and a value its setting refuses are not the Flock'
 test("the agent profile is one shared JSON text: an edit is checked, synced as written, and typed over lines", () => {
   const profile = '{"*": {"env": {"TOKEN": {"file": "~/.secrets/token"}}}}';
   const edited = editSetting(NO_FLOCK_SETTINGS, "agent_profile", profile, at(12));
-  if ("refused" in edited) throw new Error(edited.refused);
+  if ("refused" in edited) {
+    throw new Error(edited.refused);
+  }
   expect(takeFrom(edited, "vm-a", []).give).toEqual([
     { key: "agent_profile", value: profile, at: at(12) },
   ]);
@@ -413,8 +423,9 @@ const machine = (name: string, held: ReadonlyArray<SharedSetting>, meanwhile = E
         asked.push(settings);
         for (const given of settings) {
           const own = Option.getOrUndefined(Arr.findFirst(has, ({ key }) => key === given.key));
-          if (own === undefined || own.at < given.at)
+          if (own === undefined || own.at < given.at) {
             has = [...Arr.filter(has, ({ key }) => key !== given.key), given];
+          }
         }
         return answer();
       }),
@@ -506,7 +517,9 @@ test("an agent choice is validated and given to a Machine as one save, preservin
   Effect.runPromise(
     Effect.gen(function* () {
       const before = editSetting(NO_FLOCK_SETTINGS, "fallbacks", "codex", at(9));
-      if ("refused" in before) throw new Error(before.refused);
+      if ("refused" in before) {
+        throw new Error(before.refused);
+      }
       const edited = editSettings(
         before,
         [
@@ -516,7 +529,9 @@ test("an agent choice is validated and given to a Machine as one save, preservin
         ],
         at(12),
       );
-      if ("refused" in edited) throw new Error(edited.refused);
+      if ("refused" in edited) {
+        throw new Error(edited.refused);
+      }
       const flock = yield* SubscriptionRef.make(edited);
       const vm = machine("vm", [set("fallbacks", ["codex"], 9)]);
       const { syncOn } = yield* syncer(flock, vm);
@@ -543,7 +558,9 @@ test("a Machine is synced through its host: given what it lacks, and asked even 
   Effect.runPromise(
     Effect.gen(function* () {
       const edited = editSetting(NO_FLOCK_SETTINGS, "scope", "all", at(12));
-      if ("refused" in edited) return yield* Effect.die(edited.refused);
+      if ("refused" in edited) {
+        return yield* Effect.die(edited.refused);
+      }
       const flock = yield* SubscriptionRef.make(edited);
       const vmA = machine("vm-a", [set("model", "sonnet", 9)]);
       const { syncOn } = yield* syncer(flock, vmA);
@@ -627,8 +644,9 @@ const definer = (name: string, held: ReadonlyArray<SharedDefinition>, refused?: 
         asked.push(definitions);
         for (const given of definitions) {
           const own = Option.getOrUndefined(Arr.findFirst(has, ({ path }) => path === given.path));
-          if (own === undefined || own.at < given.at)
+          if (own === undefined || own.at < given.at) {
             has = [...Arr.filter(has, ({ path }) => path !== given.path), given];
+          }
         }
         return has;
       }),

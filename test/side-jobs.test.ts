@@ -389,7 +389,7 @@ test("a reply that disputed a reviewer is News, keyed by the comment, and a fixe
         for (const [id, kind, body] of [
           [41, "fixed", "Fixed in `c0ffee12`: renamed it"],
           [42, "disputed", "Not changed: a map costs more here"],
-        ] as const)
+        ] as const) {
           yield* recordReply(runDir(world.state, runId), {
             at: "2026-10-27T10:00:00Z",
             mr,
@@ -397,6 +397,7 @@ test("a reply that disputed a reviewer is News, keyed by the comment, and a fixe
             kind,
             body,
           }).pipe(Effect.provide(recordsAt(world.state)));
+        }
         const told = yield* until(items, (now) => now.length === 2);
         yield* stopHost(world.state);
         expect(Arr.map(told, (item) => item.key)).toEqual([

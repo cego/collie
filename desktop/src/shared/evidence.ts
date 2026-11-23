@@ -63,12 +63,18 @@ export const sortEvidence = (files: ReadonlyArray<EvidenceFile>) => {
         ? "before"
         : "after";
     const pair = pairs.get(key) ?? {};
-    if (side === null || pair[which] !== undefined) alone(file);
-    else pairs.set(key, { ...pair, [which]: file });
+    if (side === null || pair[which] !== undefined) {
+      alone(file);
+    } else {
+      pairs.set(key, { ...pair, [which]: file });
+    }
   }
   for (const [key, { before, after }] of pairs) {
-    if (before !== undefined && after !== undefined) shots.push({ key, before, after });
-    else alone((before ?? after)!);
+    if (before !== undefined && after !== undefined) {
+      shots.push({ key, before, after });
+    } else {
+      alone((before ?? after)!);
+    }
   }
   const rest = Arr.filter(files, (file) => kind(file) !== "image");
   return {

@@ -397,7 +397,9 @@ const ANSWERS = Arr.join(
 
 const readAnswer = (said: string) => {
   const read = ANSWER.exec(said);
-  if (read === null) return null;
+  if (read === null) {
+    return null;
+  }
   const words = Str.trim(pipe(read[2] ?? "", Str.replace(LABEL, "")));
   return { yes: Str.toLowerCase(read[1] ?? "") === "yes", words: words === "" ? null : words };
 };
@@ -498,8 +500,9 @@ const notKept = (
   measured: Measurement,
 ) => {
   const whys = failed.length === 0 ? [] : [`checks failed: ${Arr.join(failed, ", ")}`];
-  if (measured.result._tag !== "Judged")
+  if (measured.result._tag !== "Judged") {
     return Arr.join([...whys, unjudged(measured, measured.result)], "; ");
+  }
   const { verdicts } = measured.result;
   for (const metric of plan.metrics) {
     const judged = Option.getOrUndefined(
@@ -507,9 +510,12 @@ const notKept = (
     );
     const verdict = judged?.verdict ?? "no verdict";
     if (metric.role === "primary") {
-      if (verdict !== "gain") whys.push(`${metric.name} ${verdict}, not a gain`);
-    } else if (judged === undefined || !judged.held || verdict === "inconclusive")
+      if (verdict !== "gain") {
+        whys.push(`${metric.name} ${verdict}, not a gain`);
+      }
+    } else if (judged === undefined || !judged.held || verdict === "inconclusive") {
       whys.push(`guardrail ${metric.name} ${verdict}, not held`);
+    }
   }
   return whys.length === 0 ? null : Arr.join(whys, "; ");
 };
@@ -885,7 +891,9 @@ const carryHarness = ({
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const git = (args: ReadonlyArray<string>) => ChildProcess.make("git", [...args], { cwd });
     for (const commit of yield* harnessLacking(cwd, "HEAD", commits)) {
-      if ((yield* spawner.exitCode(git(["cherry-pick", commit]))) === 0) continue;
+      if ((yield* spawner.exitCode(git(["cherry-pick", commit]))) === 0) {
+        continue;
+      }
       yield* spawner.exitCode(git(["cherry-pick", "--abort"]));
       return yield* new WorkflowError({
         reason: `harness commit ${commit} of ${from} does not apply to ${cwd}`,
@@ -917,7 +925,7 @@ const archivedHarness = ({ cwd, archive, plan }: Archived) =>
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     yield* fs.remove(`${archive}/harness`, { recursive: true, force: true });
     yield* fs.makeDirectory(`${archive}/harness`, { recursive: true });
-    for (const [at, commit] of plan.harness.commits.entries())
+    for (const [at, commit] of plan.harness.commits.entries()) {
       yield* spawner.string(
         ChildProcess.make(
           "git",
@@ -934,6 +942,7 @@ const archivedHarness = ({ cwd, archive, plan }: Archived) =>
           { cwd },
         ),
       );
+    }
   }).pipe(Effect.mapError(unarchived));
 
 const archivedResults = (got: Archived) =>
@@ -947,8 +956,9 @@ const archivedResults = (got: Archived) =>
       yield* Schema.encodeEffect(Schema.fromJsonString(Planned.fields.plan))(plan),
     );
     const lines: Array<string> = [];
-    for (const one of measured)
+    for (const one of measured) {
       lines.push(yield* Schema.encodeEffect(Schema.fromJsonString(MeasurementSchema))(one));
+    }
     yield* fs.writeFileString(`${archive}/measurements.jsonl`, Arr.join([...lines, ""], "\n"));
     const latest = measured.at(-1);
     yield* fs.writeFileString(
@@ -1142,10 +1152,11 @@ export default defineWorkflow({
                 fs.exists(one).pipe(Effect.orElseSucceed(() => false)),
               ),
             );
-            if (file === undefined)
+            if (file === undefined) {
               return yield* new WorkflowError({
                 reason: `${from} has no ${name} Output to carry: none of ${Arr.join(files, ", ")}`,
               });
+            }
             const unreadable = (cause: { readonly message: string }) =>
               new WorkflowError({ reason: `${file} cannot be carried: ${cause.message}` });
             const raw = yield* fs.readFileString(file).pipe(Effect.mapError(unreadable));
@@ -1174,8 +1185,12 @@ export default defineWorkflow({
               }),
             )
           : yield* discover(carried("discover", ["discover"], Discovered));
-      for (const one of found.telemetry) yield* host.record(runId, telemetryLine(one));
-      for (const one of found.research) yield* host.record(runId, researchLine(one));
+      for (const one of found.telemetry) {
+        yield* host.record(runId, telemetryLine(one));
+      }
+      for (const one of found.research) {
+        yield* host.record(runId, researchLine(one));
+      }
 
       const written =
         from === ""
@@ -1214,7 +1229,7 @@ export default defineWorkflow({
               ),
             );
 
-      if (from !== "")
+      if (from !== "") {
         yield* Activity.make({
           name: "harness.carried.onto",
           success: Schema.Void,
@@ -1228,6 +1243,7 @@ export default defineWorkflow({
             ),
           ),
         });
+      }
 
       let plans = 0;
       const reasons: Array<string> = [];
@@ -1274,10 +1290,11 @@ export default defineWorkflow({
         success: Schema.NullOr(text),
         execute: Effect.map(host.evidence(runId, cwd), (got) => got.mergeBase ?? null),
       });
-      if (base === null)
+      if (base === null) {
         return yield* new WorkflowError({
           reason: `${cwd} has no merge base with its default branch to measure against`,
         });
+      }
 
       const calibrations: Array<Measurement> = [];
       const tried = new Set<string>([yield* experimentOf(plan)]);
@@ -1297,16 +1314,19 @@ export default defineWorkflow({
           }),
         );
         const measured = "refused" in result ? null : result;
-        if (measured !== null) calibrations.push(measured);
+        if (measured !== null) {
+          calibrations.push(measured);
+        }
         const itself =
           measured === null ||
           (measured.candidate.harness_applied === undefined
             ? measured.base.content === measured.candidate.content
             : measured.candidate.head_sha === measured.base.commit);
-        if (measured !== null && measured.result._tag === "Judged" && !itself)
+        if (measured !== null && measured.result._tag === "Judged" && !itself) {
           return yield* new WorkflowError({
             reason: `calibration ${measured.id} did not measure the base against itself: ${cwd} at ${measured.candidate.head_sha} holds more than the harness commits ${Arr.join(plan.harness.commits, ", ")}`,
           });
+        }
         const read = measured === null ? null : calibrationOf(measured);
         if (measured !== null && read?._tag === "Calibrated") {
           const primary =
@@ -1370,15 +1390,18 @@ export default defineWorkflow({
         const failed = `${kind}: ${why} (calibration ${measurement})`;
         if (repairs >= REPAIRS) {
           ending = `${failed}; ${REPAIRS} repairs spent`;
-          if (kind === "proof unavailable") break;
+          if (kind === "proof unavailable") {
+            break;
+          }
           yield* calibrate(
             Activity.make({
               name: `calibration.${attempt}.park`,
               execute: Effect.gen(function* () {
                 const fs = yield* FileSystem.FileSystem;
                 const marker = `${place.dir}/calibration.${attempt}.parked`;
-                if (yield* fs.exists(marker).pipe(Effect.orDie))
+                if (yield* fs.exists(marker).pipe(Effect.orDie)) {
                   return yield* host.parked(runId, null);
+                }
                 const reason = `${ending}. Correct it, then resume ${runId}.`;
                 yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
                 yield* host.record(runId, reason);
@@ -1457,8 +1480,9 @@ export default defineWorkflow({
       const settle = (key: string, one: External) =>
         Effect.gen(function* () {
           const decided = `${key}.decided`;
-          if (one.existing !== undefined)
+          if (one.existing !== undefined) {
             return yield* recorded(decided, `external ${key}: existing ${one.existing}`);
+          }
           const finding = previewOf(one);
           const team =
             one.team ??
@@ -1504,9 +1528,13 @@ export default defineWorkflow({
                 : finding,
               options: [IGNORE, { id: POST, recommended: true }],
             });
-            if (chosen !== POST) return yield* recorded(decided, `external ${key}: ignored`);
+            if (chosen !== POST) {
+              return yield* recorded(decided, `external ${key}: ignored`);
+            }
             const known = foundIn(yield* search(named(`${key}-search`)), false);
-            if (known !== null) return yield* recorded(decided, known);
+            if (known !== null) {
+              return yield* recorded(decided, known);
+            }
             const creating = named(`${key}-create`);
             // WARNING: a create launched whose Output was never collected is never collected now; a new agent could file twice.
             const state = yield* FileSystem.FileSystem.pipe(
@@ -1532,7 +1560,9 @@ export default defineWorkflow({
               );
             }
             const refound = foundIn(yield* search(named(`${key}-recheck`)), true);
-            if (refound !== null) return yield* recorded(decided, refound);
+            if (refound !== null) {
+              return yield* recorded(decided, refound);
+            }
             again = true;
           }
         });
@@ -1540,7 +1570,9 @@ export default defineWorkflow({
         Effect.gen(function* () {
           const named = Arr.map(handed, (one) => ({ key: keyOf(one), one }));
           const keyed = Arr.dedupeWith(named, (one, other) => one.key === other.key);
-          if (budget.external === "off" || keyed.length === 0) return ending;
+          if (budget.external === "off" || keyed.length === 0) {
+            return ending;
+          }
           yield* externalReport(
             Effect.gen(function* () {
               const file = `${place.dir}/handoffs/tune-up-external.md`;
@@ -1573,16 +1605,20 @@ export default defineWorkflow({
                   ),
                 ),
               });
-              if (budget.external === "report")
+              if (budget.external === "report") {
                 return yield* recorded("external.unasked", `${file}: written, nothing asked`);
+              }
               const linear = yield* Activity.make({
                 name: "external.linear",
                 success: ConnectionReading,
                 execute: host.connection("linear"),
               });
-              if (linear.state !== "ok")
+              if (linear.state !== "ok") {
                 return yield* recorded("external.unasked", `${file} not asked: ${linear.detail}`);
-              for (const { key, one } of keyed) yield* settle(key, one);
+              }
+              for (const { key, one } of keyed) {
+                yield* settle(key, one);
+              }
             }),
           );
           return ending;
@@ -1628,7 +1664,9 @@ export default defineWorkflow({
             const failing: Array<string> = [];
             for (const spec of owedLocally(yield* host.approved(runId))) {
               const ran = yield* host.verify({ runId, name: spec.name, cwd, pass: "gate" });
-              if (ran.result !== "pass") failing.push(spec.name);
+              if (ran.result !== "pass") {
+                failing.push(spec.name);
+              }
             }
             return failing;
           }),
@@ -1668,16 +1706,23 @@ export default defineWorkflow({
             success: Schema.Struct({ spent: Schema.NullOr(text), tree: Tree }),
             execute: Effect.gen(function* () {
               const tree = yield* treeNow;
-              if (automatic && wall !== null && (yield* Clock.currentTimeMillis) - started >= wall)
+              if (
+                automatic &&
+                wall !== null &&
+                (yield* Clock.currentTimeMillis) - started >= wall
+              ) {
                 return {
                   spent: `wall time ${budget.wall_time} spent ${n === 1 ? "before Cycle 1" : `after Cycle ${n - 1}`}`,
                   tree,
                 };
+              }
               yield* host.record(runId, `cycle ${n} started on ${tree.head} ${tree.fingerprint}`);
               return { spent: null, tree };
             }),
           });
-          if (begun.spent !== null) return { spent: begun.spent, kept: false, stopped: null };
+          if (begun.spent !== null) {
+            return { spent: begun.spent, kept: false, stopped: null };
+          }
           const start = begun.tree;
           const tried = yield* cycles(
             agentWork({
@@ -1718,7 +1763,9 @@ export default defineWorkflow({
               ? yield* judging(n, start.head)
               : { why: stopped, measurement: null, measured: null };
           const kept = judged.why === null;
-          if (kept && tried.result === "changed") keptCommits.push(...tried.commits);
+          if (kept && tried.result === "changed") {
+            keptCommits.push(...tried.commits);
+          }
           if (!kept) {
             const why = judged.why ?? "";
             const movedTo = yield* Activity.make({
@@ -1726,7 +1773,7 @@ export default defineWorkflow({
               success: Schema.NullOr(text),
               execute: Effect.map(treeNow, (now) => (sameTree(now, start) ? null : now.head)),
             });
-            if (movedTo !== null)
+            if (movedTo !== null) {
               yield* cycles(
                 agentWork({
                   operation: `cycle-${n}-revert`,
@@ -1745,16 +1792,18 @@ export default defineWorkflow({
                   },
                 }),
               );
+            }
             yield* Activity.make({
               name: `cycle-${n}.reverted`,
               success: Schema.Void,
               error: WorkflowError,
               execute: Effect.gen(function* () {
                 const now = yield* treeNow;
-                if (!sameTree(now, start))
+                if (!sameTree(now, start)) {
                   return yield* new WorkflowError({
                     reason: `cycle ${n} was reverted to ${now.head} (${now.fingerprint}), not the tree it started on, ${start.head} (${start.fingerprint})`,
                   });
+                }
                 yield* host.record(
                   runId,
                   `cycle ${n} reverted to ${now.head} ${now.fingerprint}: ${why}`,
@@ -1786,7 +1835,9 @@ export default defineWorkflow({
         }
         stopped = one.stopped;
         unkept = one.kept ? 0 : unkept + 1;
-        if (stopped === null && unkept >= 2) stopped = "two consecutive Cycles were not kept";
+        if (stopped === null && unkept >= 2) {
+          stopped = "two consecutive Cycles were not kept";
+        }
       }
       const stop = stopped ?? `cycles spent: ${budget.cycles} of ${budget.cycles}`;
       yield* host.record(runId, `stopped: ${stop}`);
@@ -1849,7 +1900,9 @@ export default defineWorkflow({
         const report = yield* findings("findings", done);
         return yield* handOn(`${report}: ${done}`);
       }
-      if (tradeoff !== null) yield* recorded("tradeoff", `accepted tradeoff: ${tradeoff}`);
+      if (tradeoff !== null) {
+        yield* recorded("tradeoff", `accepted tradeoff: ${tradeoff}`);
+      }
 
       const archive = `${place.dir}/archive`;
       const archiving = { runId, cwd, archive, plan, reasons };
@@ -1883,13 +1936,16 @@ export default defineWorkflow({
             execute: Effect.gen(function* () {
               const fs = yield* FileSystem.FileSystem;
               const left: Array<string> = [];
-              for (const one of plan.harness.paths)
-                if (yield* fs.exists(`${cwd}/${one}`).pipe(Effect.orElseSucceed(() => false)))
+              for (const one of plan.harness.paths) {
+                if (yield* fs.exists(`${cwd}/${one}`).pipe(Effect.orElseSucceed(() => false))) {
                   left.push(one);
-              if (left.length > 0)
+                }
+              }
+              if (left.length > 0) {
                 return yield* new WorkflowError({
                   reason: `cleanup left the harness on the branch: ${Arr.join(left, ", ")}`,
                 });
+              }
               const now = yield* treeNow;
               yield* host.record(runId, `cleaned up to ${now.head} ${now.fingerprint}`);
             }),
@@ -1916,10 +1972,11 @@ export default defineWorkflow({
           error: WorkflowError,
           execute: Effect.gen(function* () {
             const { mergeBase } = yield* host.evidence(runId, cwd);
-            if (mergeBase === null || mergeBase === undefined)
+            if (mergeBase === null || mergeBase === undefined) {
               return yield* new WorkflowError({
                 reason: `${cwd} has no merge base with its default branch to measure against`,
               });
+            }
             const { measurement, ran } = yield* measureOrPark({
               runId,
               base: mergeBase,
@@ -1928,11 +1985,12 @@ export default defineWorkflow({
               reason: reasons.at(-1),
               pass: "final",
             });
-            if (ran)
+            if (ran) {
               yield* host.record(
                 runId,
                 `final Measurement ${measurement.id} of ${measurement.candidate.head_sha} against ${mergeBase}: ${verdictsLine(measurement)}`,
               );
+            }
             yield* archivedResults(archiving);
             return measurement;
           }),
@@ -1967,11 +2025,14 @@ export default defineWorkflow({
             });
             merged = yield* integrateNow;
           }
-          if (!settled(merged))
+          if (!settled(merged)) {
             return yield* new WorkflowError({
               reason: `${merged.ref || merged.branch || "the default branch"} is not integrated, so the Run stops: ${stoppedBy(merged)}`,
             });
-          if (merged.sha !== "") reviewBase = merged.sha;
+          }
+          if (merged.sha !== "") {
+            reviewBase = merged.sha;
+          }
           return { ...merged, base: reviewBase };
         });
       let reviewed = 0;
@@ -2018,7 +2079,7 @@ export default defineWorkflow({
               got.content === measured.base.content ? null : got.final.head_sha,
             ),
           });
-          if (movedTo !== null)
+          if (movedTo !== null) {
             yield* integrate(
               agentWork({
                 operation: "drop",
@@ -2034,6 +2095,7 @@ export default defineWorkflow({
                 },
               }),
             );
+          }
           yield* Activity.make({
             name: "dropped",
             success: Schema.Void,
@@ -2049,10 +2111,11 @@ export default defineWorkflow({
                 roots: [place.dir],
                 tickets: [],
               });
-              if (!back)
+              if (!back) {
                 return yield* new WorkflowError({
                   reason: `the change was dropped to ${evidence.final.head_sha} (${evidence.content ?? "no tree"}), not the base tree ${measured.base.head_sha} (${measured.base.content})`,
                 });
+              }
               yield* host.record(
                 runId,
                 `dropped back to the base tree ${measured.base.head_sha}: ${why}`,
@@ -2070,7 +2133,9 @@ export default defineWorkflow({
           yield* integrated("merge");
           const measured = yield* measureFinal;
           const why = lost(measured);
-          if (why !== null) return { measured, why, original: null };
+          if (why !== null) {
+            return { measured, why, original: null };
+          }
           const original =
             measured.base.commit === base
               ? null
@@ -2093,7 +2158,9 @@ export default defineWorkflow({
           return { measured, why, original };
         }),
       );
-      if (proved.why !== null) return yield* handOn(yield* dropped(proved.measured, proved.why));
+      if (proved.why !== null) {
+        return yield* handOn(yield* dropped(proved.measured, proved.why));
+      }
       yield* findings("findings.integrated", `${stop}; kept ${Arr.join(kept, ", ")}`);
 
       const reviewedOn: Array<typeof Snapshot.Type> = [];
@@ -2129,12 +2196,15 @@ export default defineWorkflow({
           }),
       });
       const on = reviewedOn.at(-1);
-      if (rallied.halted !== null || on === undefined)
+      if (rallied.halted !== null || on === undefined) {
         return yield* new WorkflowError({ reason: rallied.halted ?? "the rally reviewed nothing" });
+      }
       let latest = { reviewed: rallied.reviewed, on };
       const last = yield* measureFinal;
       const gone = lost(last);
-      if (gone !== null) return yield* handOn(yield* dropped(last, gone));
+      if (gone !== null) {
+        return yield* handOn(yield* dropped(last, gone));
+      }
 
       const bodyNow = Effect.gen(function* () {
         const evidence = yield* host.evidence(runId, cwd);
@@ -2142,10 +2212,11 @@ export default defineWorkflow({
         const final = Option.getOrUndefined(
           Arr.findLast(taken, (one) => one.base.commit === evidence.mergeBase),
         );
-        if (final === undefined)
+        if (final === undefined) {
           return yield* new WorkflowError({
             reason: "no `final` Measurement against the merge base to write the merge request from",
           });
+        }
         const fs = yield* FileSystem.FileSystem;
         const body = bodyOf({
           final,
@@ -2225,12 +2296,16 @@ export default defineWorkflow({
         moved: ({ pass, round }) =>
           Effect.gen(function* () {
             const fix = `${pass}-fix-${round}`;
-            if (pass === "ci") ciMoved = true;
-            if (pass === "ci") yield* failingChecks(`${fix}.checks`);
+            if (pass === "ci") {
+              ciMoved = true;
+            }
+            if (pass === "ci") {
+              yield* failingChecks(`${fix}.checks`);
+            }
             const again = reviewOf(`${fix}.`, agents.outputFor(runId, fix));
             latest = yield* pass === "ci" ? reviewRound(again) : again;
             const body = yield* writeBody;
-            if (pass === "ci")
+            if (pass === "ci") {
               yield* Activity.make({
                 name: `${fix}.noted`,
                 success: Schema.Void,
@@ -2241,9 +2316,12 @@ export default defineWorkflow({
                     cwd,
                     body: `Reran the benchmarks after fixing CI:\n\n${body}`,
                   });
-                  if (!posted.ok) return yield* new WorkflowError({ reason: posted.message });
+                  if (!posted.ok) {
+                    return yield* new WorkflowError({ reason: posted.message });
+                  }
                 }),
               });
+            }
             return latest;
           }),
       }).pipe(
@@ -2253,14 +2331,18 @@ export default defineWorkflow({
             : new WorkflowError({ reason: `${failed.reason}; accepted tradeoff: ${tradeoff}` }),
         ),
       );
-      if (delivered.nothing !== undefined) return yield* handOn(delivered.nothing);
+      if (delivered.nothing !== undefined) {
+        return yield* handOn(delivered.nothing);
+      }
       if (!ciMoved) {
         const kept = yield* FileSystem.FileSystem.pipe(
           Effect.flatMap((fs) => fs.readFileString(proofReview)),
           Effect.flatMap(Schema.decodeUnknownEffect(ProofReview)),
           Effect.option,
         );
-        if (Option.isSome(kept)) latest = kept.value;
+        if (Option.isSome(kept)) {
+          latest = kept.value;
+        }
       }
       const gaps = yield* Activity.make({
         name: "outcome",

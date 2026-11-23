@@ -55,8 +55,11 @@ const withPi = <A, E>(
       const previous = env.PI_CODING_AGENT_DIR;
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          if (previous === undefined) delete env.PI_CODING_AGENT_DIR;
-          else env.PI_CODING_AGENT_DIR = previous;
+          if (previous === undefined) {
+            delete env.PI_CODING_AGENT_DIR;
+          } else {
+            env.PI_CODING_AGENT_DIR = previous;
+          }
         }),
       );
       env.PI_CODING_AGENT_DIR = `${dir}/agent`;
@@ -147,7 +150,9 @@ test("Pi's start isolates resources, keeps the token in its environment and send
       const text = Option.getOrUndefined(
         Arr.findFirst(events, (event) => event.type === "TEXT_MESSAGE_CONTENT"),
       );
-      if (text?.type !== "TEXT_MESSAGE_CONTENT") return yield* Effect.die(new Error("No reply"));
+      if (text?.type !== "TEXT_MESSAGE_CONTENT") {
+        return yield* Effect.die(new Error("No reply"));
+      }
       const details = yield* Schema.decodeEffect(
         Schema.fromJsonString(
           Schema.Struct({
@@ -201,8 +206,9 @@ test("Pi's start isolates resources, keeps the token in its environment and send
       for (const name of Arr.map(
         [...FLOCK_TOOLS, ...FILE_TOOLS, { name: "AskUserQuestion" }],
         (tool) => tool.name,
-      ))
+      )) {
         expect(`${prefix}${name}`.length).toBeLessThanOrEqual(64);
+      }
       expect(details.extension).toMatch(/registerMcpServer\("cf-[0-9a-f]{32}"/);
       expect(details.prompt.images).toEqual([
         { type: "image", data: "c2hvdA==", mimeType: "image/png" },
@@ -226,8 +232,9 @@ test("Pi's note carries the Standing direction's words and date beside the Machi
           const text = Option.getOrUndefined(
             Arr.findFirst(events, (event) => event.type === "TEXT_MESSAGE_CONTENT"),
           );
-          if (text?.type !== "TEXT_MESSAGE_CONTENT")
+          if (text?.type !== "TEXT_MESSAGE_CONTENT") {
             return yield* Effect.die(new Error("No reply"));
+          }
           return (yield* Schema.decodeEffect(
             Schema.fromJsonString(
               Schema.Struct({ prompt: Schema.Struct({ message: Schema.String }) }),
@@ -254,7 +261,9 @@ const inspected = (events: ReadonlyArray<AguiEvent>) => {
   const text = Option.getOrUndefined(
     Arr.findFirst(events, (event) => event.type === "TEXT_MESSAGE_CONTENT"),
   );
-  if (text?.type !== "TEXT_MESSAGE_CONTENT") throw new Error("No reply");
+  if (text?.type !== "TEXT_MESSAGE_CONTENT") {
+    throw new Error("No reply");
+  }
   return flow(
     Schema.decodeResult(
       Schema.fromJsonString(
@@ -284,7 +293,9 @@ const startedWith = (
 ) =>
   Effect.gen(function* () {
     const opened = yield* opensOn(settings, NO_FLOCK_SETTINGS, readPiConfig(context.dir));
-    if (!opened.ok) return yield* Effect.die(opened.problem);
+    if (!opened.ok) {
+      return yield* Effect.die(opened.problem);
+    }
     const session = yield* driver.open("pi-effort", opened.choice.model, opened.choice.effort);
     yield* session.offer("inspect");
     const events = yield* Stream.runCollect(session.events.pipe(Stream.takeUntil(ends)));
@@ -383,7 +394,9 @@ test("Pi's own per-model levels constrain settings, selects, the tool and the se
           lists,
         );
         expect(choice).toEqual({ ok: true, choice: { harness: "pi", model, effort: expected } });
-        if (!choice.ok) return yield* Effect.die(choice.problem);
+        if (!choice.ok) {
+          return yield* Effect.die(choice.problem);
+        }
         const session = yield* driver.open("clamped", choice.choice.model, choice.choice.effort);
         yield* session.offer("inspect");
         const inspectedSession = inspected(
@@ -398,7 +411,9 @@ test("Pi's own per-model levels constrain settings, selects, the tool and the se
           readPiConfig(context.dir),
           lists,
         );
-        if (offered.from === "reading") return yield* Effect.die("List did not finish");
+        if (offered.from === "reading") {
+          return yield* Effect.die("List did not finish");
+        }
         const account = {
           heldOn: "pi",
           runsOn: choice.choice,
@@ -470,7 +485,9 @@ test("an added unlisted Pi model's configured default agrees in the session, sel
       ]).flock;
       const opened = yield* opensOn(settings, flock, readPiConfig(context.dir), lists);
       expect(opened).toEqual({ ok: true, choice: { harness: "pi", model, effort: "high" } });
-      if (!opened.ok) return yield* Effect.die(opened.problem);
+      if (!opened.ok) {
+        return yield* Effect.die(opened.problem);
+      }
       const session = yield* driver.open(
         "typed-default",
         opened.choice.model,
@@ -862,11 +879,15 @@ const refusingPi: (registered: Array<Registered>, started: Array<SessionStart>) 
   started,
 ) => ({
   registerMcpServer: (name, config) => {
-    if (name === "refused") throw new Error("names registered by another extension throw");
+    if (name === "refused") {
+      throw new Error("names registered by another extension throw");
+    }
     registered.push([name, config]);
   },
   on: (event, handler) => {
-    if (event === "session_start") started.push(handler);
+    if (event === "session_start") {
+      started.push(handler);
+    }
   },
 });
 
@@ -890,8 +911,9 @@ test("Collie's extension registers its server and the human's, survives one Pi r
         ["docs", piServers(configured).given["docs"]!],
       ]);
       const notices: Array<string> = [];
-      for (const handler of started)
+      for (const handler of started) {
         handler({ type: "session_start" }, { ui: { notify: (message) => notices.push(message) } });
+      }
       expect(notices).toEqual([
         expect.stringContaining("refused: names registered by another extension throw"),
       ]);
@@ -936,7 +958,7 @@ for (const [ending, record] of [
   ],
   ["a refused prompt", { type: "response", command: "prompt", success: false, error: "no" }],
   ["a settled agent", { type: "agent_settled", aborted: false }],
-] as const)
+] as const) {
   test(`a command's turn ends with ${ending}, and a notice after it waits for the next message`, () => {
     const state = piEvents("thread");
     state.begin(true);
@@ -944,6 +966,7 @@ for (const [ending, record] of [
     expect(state.step(notice)).toEqual([]);
     expect(state.reported()).toEqual(["late"]);
   });
+}
 
 test("what Pi reports during a model's turn comes with the next message's note, once", () =>
   withPi((driver) =>

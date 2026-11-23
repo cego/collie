@@ -190,7 +190,9 @@ export const readAhead: (records: RunRecordsApi, runs: ReadonlyArray<string>) =>
     return (name: string) =>
       Effect.suspend(() => {
         const known = reads.get(name);
-        if (known !== undefined) return known;
+        if (known !== undefined) {
+          return known;
+        }
         return Effect.flatMap(Effect.cached(read(name)), (read) => {
           reads.set(name, read);
           return read;
@@ -294,8 +296,11 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
       const byRun = new Map<string, Array<A>>();
       for (const row of rows) {
         const list = byRun.get(row.run);
-        if (list === undefined) byRun.set(row.run, [value(row)]);
-        else list.push(value(row));
+        if (list === undefined) {
+          byRun.set(row.run, [value(row)]);
+        } else {
+          list.push(value(row));
+        }
       }
       return byRun;
     };
@@ -371,14 +376,16 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
                 SELECT max(seq) AS seq FROM collie_run_lines WHERE run = ${run} AND journal = ${journal}
               `;
               let seq = last?.seq ?? -1;
-              for (const line of lines)
+              for (const line of lines) {
                 yield* sql`
                   INSERT INTO collie_run_lines (run, journal, seq, line)
                   VALUES (${run}, ${journal}, ${++seq}, ${line})
                 `;
+              }
               yield* worked(run, journal);
-              if (journal === STEPS)
+              if (journal === STEPS) {
                 yield* keepStepTimes(run).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+              }
             }).pipe(sql.withTransaction, Effect.andThen(moved(run)), Effect.orDie),
       fact: (run, name) => readFact(run, name).pipe(Effect.orDie),
       factsOf: (runs, name) =>
@@ -405,7 +412,9 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
         Effect.gen(function* () {
           const was = yield* readFact(run, name).pipe(Effect.orDie);
           const now = yield* change(was);
-          if (now !== was) yield* writeFact(run, name, now).pipe(Effect.orDie);
+          if (now !== was) {
+            yield* writeFact(run, name, now).pipe(Effect.orDie);
+          }
           return now;
         }).pipe(
           sql.withTransaction,

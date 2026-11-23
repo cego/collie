@@ -83,10 +83,15 @@ const submitCompaction = Effect.fn("Compactors.submitCompaction")(function* (
     attempt: 1,
     requestId,
   });
-  if (outcome.ok) return outcome.submission ?? null;
-  if (outcome.reason === "unknown") return null;
-  if (outcome.reason === "failed")
+  if (outcome.ok) {
+    return outcome.submission ?? null;
+  }
+  if (outcome.reason === "unknown") {
+    return null;
+  }
+  if (outcome.reason === "failed") {
     return yield* new Submitting({ message: outcome.detail, cause: outcome });
+  }
   return yield* new Unsubmitted({ message: outcome.detail, cause: outcome });
 });
 import { selfCommand } from "./env";
@@ -149,7 +154,9 @@ const lostSince = Effect.fn("Compactors.lostSince")(function* (dir: string, sinc
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = path.join(dir, LOSSES);
-  if (!(yield* fs.exists(file))) return false;
+  if (!(yield* fs.exists(file))) {
+    return false;
+  }
   const lines = yield* fs.readFileString(file);
   return Arr.some(Str.split(lines, "\n"), (line) => {
     const decoded = decodeLoss(line);
@@ -162,16 +169,22 @@ const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = path.join(dir, TELEMETRY);
-  if (!(yield* fs.exists(file))) return [];
+  if (!(yield* fs.exists(file))) {
+    return [];
+  }
   const lines = yield* fs
     .readFileString(file)
     .pipe(Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "")));
   const bound = boundSession(lines);
-  if (bound === undefined) return [];
+  if (bound === undefined) {
+    return [];
+  }
   const events: Array<TelemetryEvent> = [];
   for (const line of lines) {
     const decoded = decodeEvent(line);
-    if (decoded._tag === "Some" && decoded.value.session === bound) events.push(decoded.value);
+    if (decoded._tag === "Some" && decoded.value.session === bound) {
+      events.push(decoded.value);
+    }
   }
   return events;
 });
@@ -187,14 +200,20 @@ function protectedLines(lines: ReadonlyArray<string>) {
   let bound = false;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const decoded = decodeEvent(lines[i]!);
-    if (decoded._tag !== "Some") continue;
+    if (decoded._tag !== "Some") {
+      continue;
+    }
     const kind = decoded.value.kind;
     if (kind === "session") {
-      if (bound) continue;
+      if (bound) {
+        continue;
+      }
       bound = true;
     } else if (kind === "usage" || kind === "submit" || lifecycle === KEEP_LIFECYCLE) {
       continue;
-    } else lifecycle += 1;
+    } else {
+      lifecycle += 1;
+    }
     keep.add(i);
   }
   const returned: ReadonlySet<number> = keep;
@@ -209,7 +228,9 @@ function trimmed(lines: ReadonlyArray<string>, room: number) {
   let excess = lines.length - room;
   const keep = protectedLines(lines);
   const kept = Arr.filter(lines, (line, at) => {
-    if (excess === 0 || keep.has(at)) return true;
+    if (excess === 0 || keep.has(at)) {
+      return true;
+    }
     excess -= 1;
     return false;
   });
@@ -278,10 +299,13 @@ const latestUsage = Effect.fn("Compactors.latestUsage")(function* (dir: string) 
 const outcomeOf = Effect.fn("Compactors.outcomeOf")(function* (dir: string, requestId: string) {
   const events = yield* readEvents(dir);
   const mine = Arr.filter(events, (event) => event.request === requestId);
-  if (Arr.some(mine, (event) => event.kind === "done")) return { kind: "success" } as const;
+  if (Arr.some(mine, (event) => event.kind === "done")) {
+    return { kind: "success" } as const;
+  }
   const failed = Option.getOrUndefined(Arr.findFirst(mine, (event) => event.kind === "failed"));
-  if (failed)
+  if (failed) {
     return { kind: "failure", reason: failed.message ?? "the harness reported an error" } as const;
+  }
   return null;
 });
 
@@ -350,7 +374,9 @@ export const installedVersion = Effect.fn("Compactors.installedVersion")(functio
       stderr: "",
     })),
   );
-  if (code !== 0) return null;
+  if (code !== 0) {
+    return null;
+  }
   return (
     Option.getOrUndefined(
       Option.map(Option.fromNullishOr(Str.split(Str.trim(stdout), "\n").at(-1)), (present_) =>
@@ -362,13 +388,16 @@ export const installedVersion = Effect.fn("Compactors.installedVersion")(functio
 
 const gateVersion = Effect.fn("Compactors.gateVersion")(function* (harness: string) {
   const wanted = VERIFIED_VERSIONS.get(harness);
-  if (!wanted) return;
+  if (!wanted) {
+    return;
+  }
   const installed = yield* Cache.get(versions, harness);
-  if (!atLeast(installed, wanted))
+  if (!atLeast(installed, wanted)) {
     return yield* new HarnessVersionError({
       harness,
       message: `${harness} ${installed || "(no version)"} is older than the ${wanted} its compaction controls support`,
     });
+  }
 });
 
 // WARNING: loaded with -e, not written into ~/.pi, which would load into every Pi the human starts.
@@ -682,12 +711,16 @@ export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")
 ) {
   const record = yield* readControl(stateDir, agent);
   const read = record === null ? undefined : ports[record.harness]?.questions;
-  if (record === null || read === undefined) return;
+  if (record === null || read === undefined) {
+    return;
+  }
   const asked = yield* read(record).pipe(Effect.orElseSucceed(() => []));
   const recorded = yield* questionsSince(record.dir, 0);
   const known = new Set(Arr.map(recorded, (call) => call.id));
   const fresh = Arr.filter(asked, (call) => !known.has(call.id));
-  if (fresh.length === 0) return;
+  if (fresh.length === 0) {
+    return;
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const at = yield* Clock.currentTimeMillis;
@@ -709,8 +742,9 @@ const newestIn: (text: string) => StatusSample | null = (text) => {
   let newest: StatusSample | null = null;
   for (const line of Str.split(text, "\n")) {
     const event = Option.getOrNull(decodeEvent(line));
-    if (event?.limits && (newest === null || event.at > newest.at))
+    if (event?.limits && (newest === null || event.at > newest.at)) {
       newest = { at: event.at, limits: event.limits };
+    }
   }
   return newest;
 };
@@ -729,7 +763,11 @@ export const rateLimitsReader = Effect.fn("Compactors.rateLimitsReader")(functio
   const newestNow = Effect.gen(function* () {
     const agents = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
     const present = new Set(agents);
-    for (const agent of read.keys()) if (!present.has(agent)) read.delete(agent);
+    for (const agent of read.keys()) {
+      if (!present.has(agent)) {
+        read.delete(agent);
+      }
+    }
     let newest: StatusSample | null = null;
     for (const agent of agents) {
       const file = path.join(root, agent, TELEMETRY);
@@ -752,7 +790,9 @@ export const rateLimitsReader = Effect.fn("Compactors.rateLimitsReader")(functio
         }
       }
       const sample = known?.newest ?? null;
-      if (sample !== null && (newest === null || sample.at > newest.at)) newest = sample;
+      if (sample !== null && (newest === null || sample.at > newest.at)) {
+        newest = sample;
+      }
     }
     return newest;
   });
@@ -778,7 +818,9 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   stdin: string,
 ) {
   const decoded = decodeClaudePayload(stdin);
-  if (decoded._tag === "None") return "";
+  if (decoded._tag === "None") {
+    return "";
+  }
   const payload = decoded.value;
   const session = payload.session_id ?? null;
   const window = payload.context_window ?? null;
@@ -804,11 +846,15 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   }
   if (event === "PreToolUse") {
     const asked = payload.tool_name === "AskUserQuestion" ? decodeAsked(payload.tool_input) : null;
-    if (asked === null || asked._tag === "None") return "";
+    if (asked === null || asked._tag === "None") {
+      return "";
+    }
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const owner = yield* lockHolder(hostLockOf(path.dirname(path.dirname(dir))));
-    if (owner === null || !(yield* holderLives(owner))) return "";
+    if (owner === null || !(yield* holderLives(owner))) {
+      return "";
+    }
     const at = yield* Clock.currentTimeMillis;
     const { questions } = asked.value;
     const repairing = repairs((yield* questionsSince(dir, 0)).at(-1), questions);
@@ -822,20 +868,21 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   if (event === "StopFailure") {
     // WARNING: StopFailure fires once Claude has given up on the turn; an overload stops nothing.
     const error = payload.error ?? "unknown";
-    if (error === "rate_limit" || error === "billing_error")
+    if (error === "rate_limit" || error === "billing_error") {
       yield* writeEvent(dir, {
         session,
         kind: "out",
         reason: (yield* lastFullWindow(dir)) ?? error,
         ...(transcript && { transcript }),
       });
-    else if (error !== "overloaded")
+    } else if (error !== "overloaded") {
       yield* writeEvent(dir, {
         session,
         kind: "stopped",
         reason: payload.error_details ?? error,
         ...(transcript && { transcript }),
       });
+    }
     return "";
   }
   if (event === "PreCompact" || event === "PostCompact") {
@@ -872,13 +919,14 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     yield* readEvents(dir).pipe(Effect.orElseSucceed(() => [])),
     (one) => one.kind === "out",
   );
-  if (full && !told)
+  if (full && !told) {
     yield* writeEvent(dir, {
       session,
       kind: "out",
       reason: (yield* lastFullWindow(dir)) ?? "a window at 100%",
       ...(transcript && { transcript }),
     });
+  }
   const percent = window?.used_percentage;
   return percent === null || percent === undefined
     ? "context: not measured yet"
@@ -919,10 +967,16 @@ const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (
     Arr.findFirstIndex(events, (event) => event.kind === "start" && event.request === requestId),
     () => -1,
   );
-  if (at < 0) return null;
+  if (at < 0) {
+    return null;
+  }
   for (const event of events.slice(at + 1)) {
-    if (event.kind !== "auto" || event.reason !== "manual") continue;
-    if (event.phase === "pre") return null;
+    if (event.kind !== "auto" || event.reason !== "manual") {
+      continue;
+    }
+    if (event.phase === "pre") {
+      return null;
+    }
     // WARNING: a hole since the request leaves it unresolved, not a success.
     return (yield* lostSince(dir, events[at]!.at)) ? null : ({ kind: "success" } as const);
   }
@@ -945,7 +999,9 @@ const lastFullWindow = Effect.fn("Compactors.lastFullWindow")(function* (dir: st
     (value) => value,
     (a, b) => Num.sign(b.usedPercent - a.usedPercent),
   );
-  if (busiest === undefined) return null;
+  if (busiest === undefined) {
+    return null;
+  }
   const reset = busiest.resetsAt === null ? "" : `, ${resetPhrase(busiest.resetsAt, now)}`;
   return `${Str.toLowerCase(busiest.label)} ${Math.round(busiest.usedPercent)}%${reset}`;
 });
@@ -1008,13 +1064,15 @@ const transcriptCompacted = Effect.fn("Compactors.transcriptCompacted")(function
   const transcript = Option.getOrUndefined(
     Arr.findLast(yield* readEvents(dir), (event) => event.transcript !== undefined),
   )?.transcript;
-  if (transcript === undefined)
+  if (transcript === undefined) {
     return { kind: "failure", reason: "it never said where its transcript is" } as const;
+  }
   const text = yield* (yield* FileSystem.FileSystem).readFileString(transcript);
   for (const line of Str.split(text, "\n")) {
     const entry = Option.getOrUndefined(decodeTranscriptLine(line));
-    if (entry !== undefined && boundary(entry) && epochMs(entry.timestamp) >= since)
+    if (entry !== undefined && boundary(entry) && epochMs(entry.timestamp) >= since) {
       return { kind: "success" } as const;
+    }
   }
   return {
     kind: "failure",
@@ -1108,7 +1166,9 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
       schedule: Schedule.spaced(200).pipe(Schedule.while(({ now }) => now < deadline)),
     }),
   );
-  if (said) return { pid, found: said[1] ?? "" };
+  if (said) {
+    return { pid, found: said[1] ?? "" };
+  }
   return yield* new Cause.TimeoutError(
     `${opts.what} did not come up within ${opts.startMs}ms — see ${opts.log}`,
   );
@@ -1180,9 +1240,10 @@ const stopCodex = (
       left: [],
       noted: target.noted,
     });
-    if (server === null && !(yield* processAbsent(target.pid)))
+    if (server === null && !(yield* processAbsent(target.pid))) {
       return refused(`pid ${target.pid} is live but its process identity could not be read`);
-    if (server === null)
+    }
+    if (server === null) {
       return yield* survivors(
         target.pid,
         target.noted,
@@ -1193,10 +1254,13 @@ const stopCodex = (
         once,
         false,
       );
-    if (!pipe(server.command, Str.includes(target.command)))
+    }
+    if (!pipe(server.command, Str.includes(target.command))) {
       return refused(`pid ${target.pid} is \`${server.command}\`, not \`${target.command}\``);
-    if (target.started !== null && server.started !== target.started)
+    }
+    if (target.started !== null && server.started !== target.started) {
       return refused(`pid ${target.pid} started at ${server.started}, not ${target.started}`);
+    }
 
     let turns: Stopped["turns"] = null;
     let session: Array<ProcessInfo> = [];
@@ -1231,9 +1295,11 @@ const stopCodex = (
         turns = running;
         session = yield* sessionOf(target.pid);
         inspected = yield* stillRunning(server);
-        for (const one of session)
-          if (!Arr.some(noted, (seen) => seen.pid === one.pid && seen.started === one.started))
+        for (const one of session) {
+          if (!Arr.some(noted, (seen) => seen.pid === one.pid && seen.started === one.started)) {
             noted.push(seen(one));
+          }
+        }
         yield* once(server);
         const interrupt = (one: (typeof running)[number]) =>
           Effect.gen(function* () {
@@ -1252,12 +1318,14 @@ const stopCodex = (
             }
           });
         for (const one of running) {
-          if (!(yield* stillRunning(server))) break;
+          if (!(yield* stillRunning(server))) {
+            break;
+          }
           yield* interrupt(one);
         }
         const busy = Arr.filter(threads, (thread) => thread.running.length > 0);
         for (;;) {
-          if (!(yield* stillRunning(server)))
+          if (!(yield* stillRunning(server))) {
             return yield* survivors(
               target.pid,
               noted,
@@ -1268,6 +1336,7 @@ const stopCodex = (
               once,
               inspected,
             );
+          }
           // WARNING: read back rather than assumed: a lost connection is not a turn that ended.
           let unread: string | null = null;
           const unended: typeof running = [];
@@ -1312,7 +1381,9 @@ const stopCodex = (
     ).pipe(
       Effect.catch((cause) =>
         Effect.gen(function* () {
-          if (yield* stillRunning(server)) return notQuiet(reason(cause));
+          if (yield* stillRunning(server)) {
+            return notQuiet(reason(cause));
+          }
           return yield* survivors(
             target.pid,
             noted,
@@ -1345,7 +1416,7 @@ const survivors = (
     const proven = (one: SeenProcess) =>
       Arr.some(noted, (seen) => seen.pid === one.pid && seen.started === one.started);
     const sessions = yield* readsSessions;
-    if (!sessions && !inspected)
+    if (!sessions && !inspected) {
       return {
         state: "failed",
         turns,
@@ -1355,22 +1426,28 @@ const survivors = (
         left: noted,
         noted,
       } satisfies Stopped;
+    }
     const absent = yield* processAbsent(root).pipe(
       Effect.repeat({
         until: Boolean,
         schedule: Schedule.spaced(50).pipe(Schedule.while(({ now }) => now < deadline)),
       }),
     );
-    if (!absent)
+    if (!absent) {
       return yield* new Cause.UnknownError(root, `server process ${root} is not proven absent`);
+    }
     const remaining = Effect.gen(function* () {
       return sessions
         ? yield* sessionOf(root)
         : yield* Effect.filter(noted, (one) =>
             Effect.gen(function* () {
               const now = yield* processOf(one.pid);
-              if (now !== null) return now.started === one.started;
-              if (yield* processAbsent(one.pid)) return false;
+              if (now !== null) {
+                return now.started === one.started;
+              }
+              if (yield* processAbsent(one.pid)) {
+                return false;
+              }
               return yield* new Cause.UnknownError(
                 one.pid,
                 `process ${one.pid} could not be inspected`,
@@ -1378,7 +1455,11 @@ const survivors = (
             }),
           );
     });
-    for (const one of yield* remaining) if (proven(one)) yield* once(one);
+    for (const one of yield* remaining) {
+      if (proven(one)) {
+        yield* once(one);
+      }
+    }
     const until = Math.max(deadline, (yield* Clock.currentTimeMillis) + SURVIVOR_GRACE_MS);
     const left = yield* remaining.pipe(
       Effect.repeat({
@@ -1386,7 +1467,7 @@ const survivors = (
         schedule: Schedule.spaced(50).pipe(Schedule.while(({ now }) => now < until)),
       }),
     );
-    if (left.length === 0)
+    if (left.length === 0) {
       return {
         state: "quiet",
         turns,
@@ -1395,6 +1476,7 @@ const survivors = (
         left: [],
         noted,
       } satisfies Stopped;
+    }
     const named = Arr.map(
       left,
       (one) =>
@@ -1443,7 +1525,9 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
       return yield* withCodex(url, (client) =>
         Effect.gen(function* () {
           const threadId = yield* boundThread(client, ctx.cwd);
-          if (threadId === null) return [];
+          if (threadId === null) {
+            return [];
+          }
           return Arr.map(yield* askedQuestions(client, threadId), (asked) => ({
             id: asked.id,
             questions: Arr.map(asked.questions, (one) => ({
@@ -1460,7 +1544,9 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
       return yield* withCodex(url, (client) =>
         Effect.gen(function* () {
           const threadId = yield* boundThread(client, ctx.cwd);
-          if (threadId === null) return null;
+          if (threadId === null) {
+            return null;
+          }
           yield* writeEvent(ctx.dir, { session: threadId, kind: "session" });
           return yield* codexContext(client, threadId);
         }),
@@ -1498,16 +1584,22 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
       const started = Option.getOrUndefined(
         Arr.findFirst(events, (event) => event.kind === "start" && event.request === requestId),
       );
-      if (!started?.session) return null;
+      if (!started?.session) {
+        return null;
+      }
       const threadId = started.session;
       const before = new Set(started.items ?? []);
       return yield* withCodex(url, (client) =>
         Effect.gen(function* () {
           const now = yield* compactionItems(client, threadId);
           const mine = Option.getOrUndefined(Arr.findFirst(now, (item) => !before.has(item.id)));
-          if (!mine) return null;
+          if (!mine) {
+            return null;
+          }
           const outcome = yield* turnOutcome(client, threadId, mine.turnId);
-          if (outcome.kind === "running") return null;
+          if (outcome.kind === "running") {
+            return null;
+          }
           return outcome.kind === "completed"
             ? ({ kind: "success" } as const)
             : ({ kind: "failure", reason: outcome.reason } as const);
@@ -1628,12 +1720,16 @@ const opencode: CompactionPort = {
           (event) => event.kind === "start" && event.request === requestId,
         ),
       );
-      if (!started?.session) return null;
+      if (!started?.session) {
+        return null;
+      }
       const state = compactionAfter(
         yield* openCodeMessages(base, started.session),
         new Set(started.items ?? []),
       );
-      if (state.kind === "none") return null;
+      if (state.kind === "none") {
+        return null;
+      }
       return state.kind === "done"
         ? ({ kind: "success" } as const)
         : ({ kind: "failure", reason: state.reason } as const);

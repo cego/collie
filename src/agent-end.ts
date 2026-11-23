@@ -45,7 +45,9 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
   listed?: ReadonlyArray<AgentInfo>,
 ) {
   const runId = launched.runId;
-  if (runId === undefined) return yield* ending(deps, launched, why, closes, listed);
+  if (runId === undefined) {
+    return yield* ending(deps, launched, why, closes, listed);
+  }
   return yield* withRelaunchLock(
     deps.stateDir,
     runId,
@@ -62,8 +64,9 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
           (one) => stemOf(one) === stem,
         ),
       );
-      if (now === undefined || now.terminalId === launched.terminalId)
+      if (now === undefined || now.terminalId === launched.terminalId) {
         return yield* ending(deps, launched, why, closes, listed);
+      }
       return yield* ending(
         deps,
         { ...launched, terminalId: now.terminalId, agentSession: now.agentSession },
@@ -106,15 +109,17 @@ const ending = Effect.fnUntraced(function* (
   const one = Option.getOrUndefined(
     Arr.findFirst(agents, (agent) => agent.name === launched.agent),
   );
-  if (one !== undefined && launched.terminalId === undefined)
+  if (one !== undefined && launched.terminalId === undefined) {
     return { _tag: "Unprovable", reason: `${launched.agent} ${UNPROVABLE}` } satisfies Ended;
-  if (one !== undefined && one.terminalId !== launched.terminalId)
+  }
+  if (one !== undefined && one.terminalId !== launched.terminalId) {
     return closes === "caller"
       ? ({
           _tag: "Replaced",
           reason: `${launched.agent} was started again since, and is not this Run's to end`,
         } satisfies Ended)
       : ({ _tag: "Closed", ended: false } satisfies Ended);
+  }
 
   const reached = yield* stopAgent(deps, launched.agent, deps.stopMs ?? STOP_WAIT_MS).pipe(
     Effect.result,
@@ -127,22 +132,26 @@ const ending = Effect.fnUntraced(function* (
       locked,
     } satisfies Ended;
   }
-  if (reached.success !== null && reached.success.state !== "quiet")
+  if (reached.success !== null && reached.success.state !== "quiet") {
     return {
       _tag: "NotQuiet",
       reason: notStopped(launched.agent, reached.success, reached.success.target),
     } satisfies Ended;
+  }
 
   const runId = launched.runId;
-  if (runId !== undefined)
+  if (runId !== undefined) {
     yield* RunRecords.use((records) => records.setControl(RELAUNCH, runId, null, launched.agent));
-  if (one !== undefined && closes === "close")
+  }
+  if (one !== undefined && closes === "close") {
     yield* deps.herdr
       .terminalKill(one.paneId)
       .pipe(Effect.mapError((cause) => new PaneOpen({ paneId: one.paneId, cause })));
+  }
   const ended = one !== undefined || reached.success !== null;
-  if (ended && closes === "close")
+  if (ended && closes === "close") {
     yield* deps.log(endedLine(launched.agent, why)).pipe(Effect.ignore);
+  }
   return { _tag: "Closed", ended } satisfies Ended;
 });
 

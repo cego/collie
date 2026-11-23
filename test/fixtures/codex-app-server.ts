@@ -23,11 +23,12 @@ const send = (message: JsonObject) => process.stdout.write(`${encode(message)}\n
 const notify = (method: string, params: JsonObject) => send({ method, params });
 
 const config = new Map<string, Schema.Json>();
-for (const [at, arg] of Bun.argv.entries())
+for (const [at, arg] of Bun.argv.entries()) {
   if (Bun.argv[at - 1] === "-c") {
     const [key, ...value] = Str.split(arg, "=");
     config.set(key, flow(Schema.decodeResult(Json), Result.getOrThrow)(Arr.join(value, "=")));
   }
+}
 const server = "collie_desktop";
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
@@ -78,14 +79,19 @@ const ask = (method: string, params: JsonObject) =>
   });
 
 const item = (turn: Turn, one: JsonObject, live = true) => {
-  if (live) notify("item/started", { threadId: loaded!.id, turnId: turn.id, item: one });
+  if (live) {
+    notify("item/started", { threadId: loaded!.id, turnId: turn.id, item: one });
+  }
   turn.items.push(one);
 };
 const completed = (turn: Turn, one: JsonObject) => {
   notify("item/completed", { threadId: loaded!.id, turnId: turn.id, item: one });
   const at = Arr.findFirstIndex(turn.items, (held) => held.id === one.id);
-  if (at._tag === "Some") turn.items[at.value] = one;
-  else turn.items.push(one);
+  if (at._tag === "Some") {
+    turn.items[at.value] = one;
+  } else {
+    turn.items.push(one);
+  }
 };
 const finish = async (turn: Turn, status: string, error: JsonObject | null = null) => {
   loaded!.updatedAt += 1;
@@ -179,13 +185,15 @@ const play = async (turn: Turn, params: JsonObject) => {
     });
     return finish(turn, "interrupted");
   }
-  if (pipe(said, Str.startsWith("limit")))
+  if (pipe(said, Str.startsWith("limit"))) {
     return finish(turn, "failed", {
       message: "You've hit your usage limit.",
       codexErrorInfo: "usageLimitExceeded",
     });
-  if (pipe(said, Str.startsWith("signed-out")))
+  }
+  if (pipe(said, Str.startsWith("signed-out"))) {
     return finish(turn, "failed", { message: "Unauthorized", codexErrorInfo: "unauthorized" });
+  }
   if (pipe(said, Str.startsWith("crash"))) {
     process.stderr.write("codex: the model provider refused the connection\n");
     process.exit(3);
@@ -203,13 +211,14 @@ const play = async (turn: Turn, params: JsonObject) => {
     summary: ["Considering"],
     content: [],
   });
-  for (const delta of ["Hel", "lo"])
+  for (const delta of ["Hel", "lo"]) {
     notify("item/agentMessage/delta", {
       threadId: loaded!.id,
       turnId: turn.id,
       itemId: `${turn.id}-text`,
       delta,
     });
+  }
   completed(turn, { type: "agentMessage", id: `${turn.id}-text`, text: "Hello" });
   // WARNING: A request the chat does not answer must be refused, not left waiting.
   await ask("item/tool/requestUserInput", {
@@ -337,9 +346,11 @@ for await (const chunk of Bun.stdin.stream()) {
         break;
       case "thread/read": {
         const thread = Str.isString(params.threadId) ? threads[params.threadId] : undefined;
-        if (thread === undefined)
+        if (thread === undefined) {
           send({ id: message.id!, error: { code: -32_600, message: "no such thread" } });
-        else answer({ thread: { id: thread.id, path: `${process.cwd()}/${thread.id}.jsonl` } });
+        } else {
+          answer({ thread: { id: thread.id, path: `${process.cwd()}/${thread.id}.jsonl` } });
+        }
         break;
       }
       case "thread/items/list": {
@@ -377,7 +388,9 @@ for await (const chunk of Bun.stdin.stream()) {
         });
         break;
       default:
-        if (message.id !== undefined) answer({});
+        if (message.id !== undefined) {
+          answer({});
+        }
     }
   }
 }

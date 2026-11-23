@@ -14,8 +14,12 @@ export interface LinesAsked {
 }
 
 export const linesError = (asked: LinesAsked) => {
-  if (asked.count < 1) return `count takes 1 or more; not ${asked.count}.`;
-  if (asked.search === null) return null;
+  if (asked.count < 1) {
+    return `count takes 1 or more; not ${asked.count}.`;
+  }
+  if (asked.search === null) {
+    return null;
+  }
   const valid = Result.try(() => new RegExp(asked.search!));
   return Result.isFailure(valid)
     ? `"${asked.search}" is not a search pattern: ${String(valid.failure)}`
@@ -55,8 +59,12 @@ export const linesOf = (ref: string, text: string, asked: LinesAsked) => {
   const found: Array<{ line: number; text: string; before: string | null; after: string | null }> =
     [];
   for (let line = from; line <= total; line++) {
-    if (!pattern.test(at(line)!)) continue;
-    if (found.length === asked.count) return answer(line - 1, found);
+    if (!pattern.test(at(line)!)) {
+      continue;
+    }
+    if (found.length === asked.count) {
+      return answer(line - 1, found);
+    }
     found.push({ line, text: at(line)!, before: at(line - 1), after: at(line + 1) });
   }
   return answer(total, found);
@@ -73,13 +81,17 @@ export const wholeText = <E, R>(part: (offset: number) => Effect.Effect<RunFile,
         got.encoding === "utf8"
           ? new TextEncoder().encode(got.content)
           : Result.getOrElse(Base64.decode(got.content), () => new Uint8Array());
-      if (bytes.length === 0) break;
+      if (bytes.length === 0) {
+        break;
+      }
       parts.push(bytes);
       read += bytes.length;
       size = got.size;
     } while (read < size);
     const whole = Buffer.concat(parts);
-    if (whole.includes(0)) return null;
+    if (whole.includes(0)) {
+      return null;
+    }
     return Result.getOrNull(
       Result.try(() => new TextDecoder("utf-8", { fatal: true }).decode(whole)),
     );

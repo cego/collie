@@ -123,9 +123,13 @@ const atQuestion = <A, E>(
           }),
           (before) =>
             Effect.sync(() => {
-              for (const [key, value] of Rec.toEntries(before))
-                if (value === undefined) delete Bun.env[key];
-                else Bun.env[key] = value;
+              for (const [key, value] of Rec.toEntries(before)) {
+                if (value === undefined) {
+                  delete Bun.env[key];
+                } else {
+                  Bun.env[key] = value;
+                }
+              }
             }),
         );
         const env = readEnv({
@@ -282,7 +286,9 @@ test("Desktop's steering entry sends the words to the board's steer target, whic
           text: "Call it the chooser",
         },
       });
-      if (does?.kind !== "send") return;
+      if (does?.kind !== "send") {
+        return;
+      }
       yield* act(reached, does.request, does.action).pipe(Effect.orDie);
       const steered = stepped(sending, {
         kind: "replied",
@@ -770,7 +776,7 @@ test("a human's message to one agent closes that agent's own question, and anoth
         for (const [agent, question] of [
           [at.agents[0]!, "Which database?"],
           [at.agents[1]!, "Which checks?"],
-        ] as const)
+        ] as const) {
           yield* recordClaudeEvent(
             yield* controlDir(at.world.state, agent),
             encode({
@@ -781,6 +787,7 @@ test("a human's message to one agent closes that agent's own question, and anoth
               tool_input: { questions: [{ question, header: question, options: PICKS }] },
             }),
           ).pipe(Effect.orDie);
+        }
         yield* until(
           () => waitingOf(at),
           (rows) => rows.length === 3,

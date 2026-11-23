@@ -38,9 +38,15 @@ const newFlowsOnly: (
   record: KeptRecord,
 ) => readonly [Flow | undefined, ReadonlyArray<KeptRecord>] = (shown, record) => {
   const { detail } = record;
-  if (detail === null) return [undefined, [record]];
-  if (detail.flow === undefined) return [shown, [record]];
-  if (shown === undefined || !sameFlow(detail.flow, shown)) return [detail.flow, [record]];
+  if (detail === null) {
+    return [undefined, [record]];
+  }
+  if (detail.flow === undefined) {
+    return [shown, [record]];
+  }
+  if (shown === undefined || !sameFlow(detail.flow, shown)) {
+    return [detail.flow, [record]];
+  }
   const { flow: _, ...rest } = detail;
   return [shown, [{ ...record, detail: rest }]];
 };
@@ -119,7 +125,9 @@ export const recordKeeper = (doors: DoorMap<RecordDoor>) =>
           fiber: null,
           readers: 0,
         };
-        if (was === undefined) kept.set(key, one);
+        if (was === undefined) {
+          kept.set(key, one);
+        }
         if (one.fiber === null) {
           yield* SubscriptionRef.update(one.told, (told) => ({ ...told, failure: null }));
           one.fiber = yield* follow(one);
@@ -147,7 +155,9 @@ export const recordKeeper = (doors: DoorMap<RecordDoor>) =>
               markFirst("desktop:serve", runId),
               Stream.ensuring(
                 Effect.suspend(() => {
-                  if (--one.readers > 0 || kept.get(key) !== one) return Effect.void;
+                  if (--one.readers > 0 || kept.get(key) !== one) {
+                    return Effect.void;
+                  }
                   kept.delete(key);
                   return one.fiber === null ? Effect.void : Fiber.interrupt(one.fiber);
                 }),

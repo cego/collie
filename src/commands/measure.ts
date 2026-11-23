@@ -44,16 +44,20 @@ export const measure = Command.make(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const text = yield* fs.readFileString(plan).pipe(Effect.option);
-          if (Option.isNone(text)) return err("invalid_input", `No plan to read at "${plan}".`);
+          if (Option.isNone(text)) {
+            return err("invalid_input", `No plan to read at "${plan}".`);
+          }
           const decoded = Schema.decodeOption(Schema.fromJsonString(Schema.Json))(text.value);
-          if (Option.isNone(decoded))
+          if (Option.isNone(decoded)) {
             return err("invalid_input", `The plan at "${plan}" is not JSON.`);
+          }
           const door = yield* cliDoor(env);
           const run = Option.getOrElse(runId, () =>
             Schema.is(FrontDoor)(door) ? null : door.from.run,
           );
-          if (run === null)
+          if (run === null) {
             return err("invalid_input", "measure needs --run outside a Run's agent pane.");
+          }
           const request = {
             runId: run,
             base,
@@ -67,7 +71,9 @@ export const measure = Command.make(
             where === undefined ? request : { ...request, cwd: where },
             door,
           );
-          if (!opened.ok) return opened;
+          if (!opened.ok) {
+            return opened;
+          }
           const stdio = yield* Stdio.Stdio;
           type Answered = { measurement: Measurement; ran: boolean };
           const nothingYet: () => Answered | null = () => null;
@@ -88,9 +94,12 @@ export const measure = Command.make(
               ),
             ),
           );
-          if (answered === null)
+          if (answered === null) {
             return err("operation_failed", "The Measurement ended without a record.");
-          if ("ok" in answered) return answered;
+          }
+          if ("ok" in answered) {
+            return answered;
+          }
           const { measurement, ran } = answered;
           return {
             ok: true as const,

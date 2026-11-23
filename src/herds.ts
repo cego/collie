@@ -29,7 +29,9 @@ export const focusPane = Effect.fn("Herds.focusPane")(function* (
     const live = yield* herdr.agentList().pipe(Effect.orElseSucceed(() => []));
     for (const entry of agents) {
       const identified = verifyIncarnation(entry, live);
-      if (!identified.ok) continue;
+      if (!identified.ok) {
+        continue;
+      }
       const agent = identified.info;
       return {
         session: null,

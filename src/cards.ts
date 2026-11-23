@@ -93,7 +93,9 @@ export const finishedOnRecord = Effect.fn("Cards.finishedOnRecord")(function* (r
 
 export function newest(cards: ReadonlyArray<Card>) {
   const latest = new Map<string, Card>();
-  for (const card of cards) latest.set(`${card.step}#${card.iteration}#${card.kind}`, card);
+  for (const card of cards) {
+    latest.set(`${card.step}#${card.iteration}#${card.kind}`, card);
+  }
   return [...latest.values()];
 }
 
@@ -112,8 +114,12 @@ export interface ReadinessFacts {
 
 // WARNING: a verification on another revision does not verify this card; that is what stale is for.
 export function readiness(facts: ReadinessFacts) {
-  if (facts.verifiedHere && facts.changed) return "verified";
-  if (facts.changed && facts.claimed) return "inspect-ready";
+  if (facts.verifiedHere && facts.changed) {
+    return "verified";
+  }
+  if (facts.changed && facts.claimed) {
+    return "inspect-ready";
+  }
   return "claimed";
 }
 
@@ -137,11 +143,15 @@ export function significance(facts: SignificanceFacts) {
     facts.driftUnresolved ||
     facts.pendingProposal ||
     facts.correctionUnacknowledged
-  )
+  ) {
     return "decision";
-  if (facts.blockingDrift || facts.correctionSent || facts.intentChanged || facts.ended !== null)
+  }
+  if (facts.blockingDrift || facts.correctionSent || facts.intentChanged || facts.ended !== null) {
     return "consequential";
-  if (facts.readiness !== "claimed" || facts.mrTouched) return "try-it";
+  }
+  if (facts.readiness !== "claimed" || facts.mrTouched) {
+    return "try-it";
+  }
   return "routine";
 }
 
@@ -166,19 +176,21 @@ export function inspectFor(options: {
   readonly mr: string | null;
 }) {
   const entries: Array<Card["inspect"][number]> = [];
-  if (options.worktree !== null)
+  if (options.worktree !== null) {
     entries.push({
       what: "what changed",
       how: `git -C ${options.worktree} diff ${options.base}..HEAD`,
       note: "the whole change, as it stands",
     });
+  }
   const mr = options.mr === null ? null : readMrRef(options.mr);
-  if (mr !== null)
+  if (mr !== null) {
     entries.push({
       what: `the ${mrWords(mr).noun}`,
       how: forgeOf(mr).review(mr).view,
       note: "what the reviewers will read",
     });
+  }
   return entries;
 }
 

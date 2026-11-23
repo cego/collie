@@ -22,21 +22,28 @@ const run = (argv: ReadonlyArray<string>, cwd: string, env?: Record<string, stri
     env: { ...Bun.env, ...env },
     stdio: ["ignore", "inherit", "inherit"],
   });
-  if (ran.exitCode !== 0) process.exit(ran.exitCode ?? 1);
+  if (ran.exitCode !== 0) {
+    process.exit(ran.exitCode ?? 1);
+  }
 };
 
-if (!existsSync(`${root}node_modules/effect/package.json`))
+if (!existsSync(`${root}node_modules/effect/package.json`)) {
   run(["bun", "install", "--frozen-lockfile"], root);
+}
 
 if (readOr(`${base}/.bench-base`) !== BASE) {
   rmSync(base, { recursive: true, force: true });
   mkdirSync(base, { recursive: true });
   const archive = Bun.spawn(["git", "archive", BASE], { cwd: root, stdout: "pipe" });
   const untar = Bun.spawn(["tar", "-x", "-C", base], { stdin: archive.stdout });
-  if ((await archive.exited) !== 0 || (await untar.exited) !== 0) process.exit(1);
-  if (readFileSync(`${base}/bun.lock`, "utf8") === readFileSync(`${root}bun.lock`, "utf8"))
+  if ((await archive.exited) !== 0 || (await untar.exited) !== 0) {
+    process.exit(1);
+  }
+  if (readFileSync(`${base}/bun.lock`, "utf8") === readFileSync(`${root}bun.lock`, "utf8")) {
     symlinkSync(`${root}node_modules`, `${base}/node_modules`);
-  else run(["bun", "install", "--frozen-lockfile"], base);
+  } else {
+    run(["bun", "install", "--frozen-lockfile"], base);
+  }
   writeFileSync(`${base}/.bench-base`, BASE);
 }
 rmSync(`${base}/bench/at-rest`, { recursive: true, force: true });

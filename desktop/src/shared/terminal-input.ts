@@ -18,11 +18,16 @@ export const isFocusKey = (key: Key) =>
 
 // WARNING: paste is left to the browser, which xterm.js sends bracketed where the pane asked for it.
 export const keyAction = (key: Key, hasSelection: boolean) => {
-  if (isFocusKey(key)) return "focus";
+  if (isFocusKey(key)) {
+    return "focus";
+  }
   const letter = Str.toLowerCase(key.key);
-  if (letter === "c" && (key.metaKey || (key.ctrlKey && (key.shiftKey || hasSelection))))
+  if (letter === "c" && (key.metaKey || (key.ctrlKey && (key.shiftKey || hasSelection)))) {
     return "copy";
-  if (letter === "v" && (key.metaKey || (key.ctrlKey && key.shiftKey))) return "paste";
+  }
+  if (letter === "v" && (key.metaKey || (key.ctrlKey && key.shiftKey))) {
+    return "paste";
+  }
   return "pane";
 };
 

@@ -62,7 +62,9 @@ const tryClaimLock = Effect.fn("tryClaimLock")(function* (lock: string) {
 });
 
 const claimLock = Effect.fn("claimLock")(function* (lock: string) {
-  if (yield* tryClaimLock(lock)) return true;
+  if (yield* tryClaimLock(lock)) {
+    return true;
+  }
   return (yield* breakStaleLock(lock)) && (yield* tryClaimLock(lock));
 });
 
@@ -126,7 +128,9 @@ export const ensureLockDir = Effect.fn("ensureLockDir")(function* (file: string)
 // WARNING: Break under the guard: a contender that read a stale claim must not delete a fresh one.
 export const breakStaleLock = Effect.fn("breakStaleLock")(function* (lock: string) {
   const guard = `${lock}.break`;
-  if (!(yield* claimBreakGuard(guard))) return false;
+  if (!(yield* claimBreakGuard(guard))) {
+    return false;
+  }
   return yield* inspectAndBreak(lock).pipe(
     Effect.ensuring(releaseOwnLock(guard).pipe(Effect.ignore)),
   );
@@ -135,11 +139,15 @@ export const breakStaleLock = Effect.fn("breakStaleLock")(function* (lock: strin
 // WARNING: Take over a stale guard by renaming over it, never remove then create: two breakers would each delete the other's claim.
 const claimBreakGuard = Effect.fn("claimBreakGuard")(function* (guard: string) {
   const fs = yield* FileSystem.FileSystem;
-  if (yield* tryClaimLock(guard)) return true;
+  if (yield* tryClaimLock(guard)) {
+    return true;
+  }
   const fresh = yield* lockWriteIsFresh(guard).pipe(
     Effect.catchTag("PlatformError", (error) => Effect.succeed(error.reason._tag === "NotFound")),
   );
-  if (fresh) return false;
+  if (fresh) {
+    return false;
+  }
   // WARNING: Per claim, not per process: fibers of one process share a guard too.
   const tmp = `${guard}.${yield* currentPid}.${yield* Random.nextInt}.tmp`;
   yield* fs.writeFileString(tmp, yield* ownClaim());
@@ -152,11 +160,17 @@ const inspectAndBreak = Effect.fn("inspectAndBreak")((lock: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const claim = yield* readClaim(lock);
-    if (claim === null) return true;
+    if (claim === null) {
+      return true;
+    }
     const holder = validHolder(claim);
     const stale = holder ? !(yield* holderLives(holder)) : !(yield* lockWriteIsFresh(lock));
-    if (!stale) return false;
-    if ((yield* readClaim(lock)) !== claim) return false;
+    if (!stale) {
+      return false;
+    }
+    if ((yield* readClaim(lock)) !== claim) {
+      return false;
+    }
     yield* fs.remove(lock, { force: true });
     return true;
   }).pipe(
@@ -185,7 +199,9 @@ export const holdsLock = Effect.fn("holdsLock")(function* (lock: string) {
 
 export const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
-  if (yield* holdsLock(lock)) yield* fs.remove(lock, { force: true });
+  if (yield* holdsLock(lock)) {
+    yield* fs.remove(lock, { force: true });
+  }
 });
 
 // WARNING: A loser waits out the winner, then reads what it wrote, rather than failing as busy.
@@ -244,8 +260,12 @@ export const lockWriteIsFresh = Effect.fn("lockWriteIsFresh")(function* (lock: s
 });
 
 export const holderLives = Effect.fn("holderLives")(function* (holder: LockHolder) {
-  if (!(yield* signalProcess(holder.pid))) return false;
-  if (holder.start === null) return true;
+  if (!(yield* signalProcess(holder.pid))) {
+    return false;
+  }
+  if (holder.start === null) {
+    return true;
+  }
   const start = yield* processStartTime(holder.pid);
   return start === null || start === holder.start;
 });

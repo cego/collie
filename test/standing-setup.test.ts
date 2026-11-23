@@ -220,9 +220,11 @@ test('"Not now" keeps this version in Desktop\'s own settings and "Don\'t ask ag
 
       yield* offer.decline(true);
       expect(yield* fs.readFileString(`${dir}/settings.json`)).toContain('"setupNever":true');
-      for (const name of yield* fs.readDirectory(dir))
-        if (name !== "settings.json")
+      for (const name of yield* fs.readDirectory(dir)) {
+        if (name !== "settings.json") {
           expect(yield* fs.readFileString(`${dir}/${name}`)).not.toContain("setup");
+        }
+      }
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));
 

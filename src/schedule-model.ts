@@ -77,7 +77,9 @@ export const ScheduleListing = Schema.Struct({
 export type ScheduleListing = typeof ScheduleListing.Type;
 
 export const lastLine = (last: ScheduleEntry["last"]) => {
-  if (last === null) return "nothing yet";
+  if (last === null) {
+    return "nothing yet";
+  }
   const outcome = last.outcome;
   const said =
     outcome.kind === "run"
@@ -160,10 +162,11 @@ export const parseSchedule = (
   allow: { readonly seconds: boolean },
 ) => {
   const fields = Str.split(Str.trim(expression), /\s+/).length;
-  if (fields !== 5 && !(allow.seconds && fields === 6))
+  if (fields !== 5 && !(allow.seconds && fields === 6)) {
     return Result.fail(
       `"${expression}" is not a cron expression of five fields: minute, hour, day of month, month, day of week`,
     );
+  }
   return Result.mapError(Cron.parse(expression, tz), (failure) =>
     pipe(failure.message, Str.includes("time zone"))
       ? `"${tz}" is not a time zone`
@@ -191,9 +194,15 @@ export const onWake: (o: {
   readonly occurrence: number;
   readonly now: number;
 }) => Wake = (o) => {
-  if (o.schedule === null) return { _tag: "end", why: "removed" };
-  if (o.schedule.paused) return { _tag: "end", why: "paused" };
-  if (o.schedule.epoch !== o.epoch) return { _tag: "end", why: "superseded" };
+  if (o.schedule === null) {
+    return { _tag: "end", why: "removed" };
+  }
+  if (o.schedule.paused) {
+    return { _tag: "end", why: "paused" };
+  }
+  if (o.schedule.epoch !== o.epoch) {
+    return { _tag: "end", why: "superseded" };
+  }
   return { _tag: "start", occurrence: Math.max(o.occurrence, latestAtOrBefore(o.cron, o.now)) };
 };
 

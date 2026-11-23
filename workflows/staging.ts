@@ -135,8 +135,12 @@ export const claiming =
           const first = yield* take(at, Effect.fail(new WorkflowError({ reason: ADOPTING }))).pipe(
             Effect.result,
           );
-          if (first._tag === "Success") return first.success;
-          if (first.failure.reason !== ADOPTING) return { unresolved: first.failure.reason };
+          if (first._tag === "Success") {
+            return first.success;
+          }
+          if (first.failure.reason !== ADOPTING) {
+            return { unresolved: first.failure.reason };
+          }
           const adopt = yield* ask({
             name: nth("adopt-claim", n),
             prompt: words.adopt,
@@ -152,7 +156,9 @@ export const claiming =
       for (let n = 1; ; n++) {
         const at = nth(name, n);
         const held = yield* attempt(at, n);
-        if ("slugs" in held) return held;
+        if ("slugs" in held) {
+          return held;
+        }
         if ("none" in held) {
           yield* Activity.make({
             name: `${at}.none`,
@@ -165,8 +171,10 @@ export const claiming =
           prompt: words.unclaimed(held.unresolved, how.retaining ?? false),
           options: [{ id: words.again, recommended: true }, words.without, words.finish],
         });
-        if (answer === words.again) continue;
-        if (how.retaining !== true)
+        if (answer === words.again) {
+          continue;
+        }
+        if (how.retaining !== true) {
           yield* Activity.make({
             name: `${at}.give-back`,
             execute: Effect.flatMap(host.release(runId), (kept) =>
@@ -177,7 +185,10 @@ export const claiming =
                   ),
             ),
           });
-        if (answer === words.finish) return null;
+        }
+        if (answer === words.finish) {
+          return null;
+        }
         yield* Activity.make({
           name: `${at}.went`,
           execute: host.record(runId, words.went(held.unresolved, how.retaining ?? false)),
@@ -213,7 +224,9 @@ export const staging = <R1, R2>(options: {
         const host = yield* Host;
         const staged = yield* options.stage(name, head, only);
         heads.push(head);
-        for (const job of only) played.add(job);
+        for (const job of only) {
+          played.add(job);
+        }
         const jobs = [...new Set([...only, ...(staged.stage_jobs ?? [])])];
         const read = yield* Activity.make({
           name: `${name}.read`,
@@ -221,27 +234,32 @@ export const staging = <R1, R2>(options: {
           execute: host.readStage({ runId, cwd, head, jobs }),
         });
         const named = read.environments;
-        if (named === undefined) undiscovered = true;
-        else reached = [...new Set([...reached, ...named])];
+        if (named === undefined) {
+          undiscovered = true;
+        } else {
+          reached = [...new Set([...reached, ...named])];
+        }
         return { read, jobs };
       }),
     off: (name: string, failure: string, failing: string) =>
       Effect.gen(function* () {
         const host = yield* Host;
         yield* options.unstage(name, heads.at(-1) ?? "", failure, [...played]);
-        if (undiscovered)
+        if (undiscovered) {
           return yield* new WorkflowError({
             reason: `${failing}. Its rollback is not shown: stage environments could not be discovered`,
           });
+        }
         const back = yield* Activity.make({
           name: `${name}.read`,
           success: RollbackReadSchema,
           execute: host.readRollback({ runId, cwd, off: [...heads], environments: reached }),
         });
-        if (back._tag === "Unshown")
+        if (back._tag === "Unshown") {
           return yield* new WorkflowError({
             reason: `${failing}. Its rollback is not shown: ${back.why}`,
           });
+        }
       }),
   };
 };
@@ -254,8 +272,11 @@ export interface SetMember {
 }
 
 const PRIMES: Array<number> = [];
-for (let n = 2; PRIMES.length < 64; n++)
-  if (Arr.every(PRIMES, (prime) => n % prime !== 0)) PRIMES.push(n);
+for (let n = 2; PRIMES.length < 64; n++) {
+  if (Arr.every(PRIMES, (prime) => n % prime !== 0)) {
+    PRIMES.push(n);
+  }
+}
 const fraction32 = (x: number) => ((x - Math.floor(x)) * 2 ** 32) >>> 0;
 const ROUND = Arr.map(PRIMES, (prime) => fraction32(Math.cbrt(prime)));
 const START = Arr.map(Arr.take(PRIMES, 8), (prime) => fraction32(Math.sqrt(prime)));
@@ -269,8 +290,12 @@ const sha256 = (text: string) => {
   }
   const bits = bytes.length * 8;
   bytes.push(0x80);
-  while (bytes.length % 64 !== 56) bytes.push(0);
-  for (let shift = 56; shift >= 0; shift -= 8) bytes.push(Math.floor(bits / 2 ** shift) & 0xff);
+  while (bytes.length % 64 !== 56) {
+    bytes.push(0);
+  }
+  for (let shift = 56; shift >= 0; shift -= 8) {
+    bytes.push(Math.floor(bits / 2 ** shift) & 0xff);
+  }
   const hash = [...START];
   for (let block = 0; block < bytes.length; block += 64) {
     const w: Array<number> = [];
@@ -298,7 +323,9 @@ const sha256 = (text: string) => {
       const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
       v.splice(0, 8, (t1 + t2) | 0, a, b, c, (d + t1) | 0, e, f, g);
     }
-    for (let i = 0; i < 8; i++) hash[i] = (hash[i]! + v[i]!) | 0;
+    for (let i = 0; i < 8; i++) {
+      hash[i] = (hash[i]! + v[i]!) | 0;
+    }
   }
   return Arr.join(
     Arr.map(hash, (word) => pipe_((word >>> 0).toString(16), Str.padStart(8, "0"))),
@@ -341,8 +368,9 @@ export const runOn = (
         member.checkout === undefined ? ask : { ...ask, options: { workspace: member.checkout } },
       )
       .pipe(Effect.result);
-    if (child._tag === "Failure")
+    if (child._tag === "Failure") {
       return { ok: false, said: `not started: ${child.failure.reason}` };
+    }
     return yield* children.result(child.success).pipe(
       Effect.match({
         onSuccess: (value) => ({ ok: true, said: String(value) }),

@@ -330,7 +330,7 @@ test("show, wait and metrics refuse a Run of another Task than the selected one,
         ]),
         { concurrency: "unbounded" },
       );
-      for (const { door, workspace, run, said } of answers)
+      for (const { door, workspace, run, said } of answers) {
         expect({ door, workspace, run, said }).toEqual({
           door,
           workspace,
@@ -347,6 +347,7 @@ test("show, wait and metrics refuse a Run of another Task than the selected one,
                 }
               : { ok: true },
         });
+      }
 
       here.run = 0;
       yield* collie("ws-b", ["run", "show", "in-b"]);
@@ -412,7 +413,7 @@ test("an agent reaches a Run of another Task its Run started or was asked about,
         ),
         { concurrency: "unbounded" },
       );
-      for (const { door, run, said } of answers)
+      for (const { door, run, said } of answers) {
         expect({ door, run, said }).toEqual({
           door,
           run,
@@ -433,6 +434,7 @@ test("an agent reaches a Run of another Task its Run started or was asked about,
                   }
                 : { ok: true },
         });
+      }
 
       expect(yield* shownRun("ws-a", "run-b", "run-a")).toBe("run-b");
       expect(yield* shownRun("ws-e", "run-e", "run-a")).toBe("run-e");
@@ -476,7 +478,7 @@ test("an agent known by COLLIE_AGENT, with no COLLIE_RUN, reaches a Run its Run 
         ),
         { concurrency: "unbounded" },
       );
-      for (const { door, run, said } of answers)
+      for (const { door, run, said } of answers) {
         expect({ door, run, said }).toEqual({
           door,
           run,
@@ -492,6 +494,7 @@ test("an agent known by COLLIE_AGENT, with no COLLIE_RUN, reaches a Run its Run 
                 }
               : { ok: true },
         });
+      }
     }),
   ));
 

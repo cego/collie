@@ -72,10 +72,14 @@ const hcInstalled = Effect.fn("Doctor.hcInstalled")(function* (
   const installed = path.join(hcInstallDir(env.raw, env.home), "herdr-core");
   const bin =
     dir !== null ? path.join(dir, "herdr-core") : (yield* runnable(installed)) ? installed : null;
-  if (bin === null) return failed("not installed", HC_INSTALL);
+  if (bin === null) {
+    return failed("not installed", HC_INSTALL);
+  }
   const said = (yield* answered(run(bin, ["--version"], env.home))).stdout;
   const version = hcVersion(said);
-  if (hcMeets(said, hcPin.version)) return passed(`${version} at ${bin}`);
+  if (hcMeets(said, hcPin.version)) {
+    return passed(`${version} at ${bin}`);
+  }
   return failed(
     version === null
       ? `the hc at ${bin} names no version, so it is taken as older than the ${hcPin.version} this Collie needs`
@@ -99,13 +103,16 @@ const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv) {
   const registered = (yield* anyRuns(env))
     ? yield* Effect.result(hostRegistered(env))
     : Result.succeed([]);
-  if (Result.isFailure(registered))
+  if (Result.isFailure(registered)) {
     return warned(
       `could not ask this Machine's host which agents it registered (${registered.failure.message})`,
       "collie host restart",
     );
+  }
   const left = Arr.filter(registered.success, (entry) => entry.incarnation?.backend !== "core");
-  if (left.length === 0) return passed("nothing on this Machine is registered on Herdr 1");
+  if (left.length === 0) {
+    return passed("nothing on this Machine is registered on Herdr 1");
+  }
   return noted(
     `registered on Herdr 1, which Collie no longer reaches: ${Arr.join(
       Arr.map(left, (entry) => `${entry.agent} (run ${entry.runId})`),
@@ -159,7 +166,9 @@ export const behindRemote = Effect.fn("Doctor.behindRemote")(function* (
     known.set(root, { ...seen, fetchedAt: now });
     yield* Effect.forkDetach(fetchRemote(root, run));
   }
-  if (seen.countedAt !== 0 && now - seen.countedAt < COUNT_FOR_MS) return seen.behind;
+  if (seen.countedAt !== 0 && now - seen.countedAt < COUNT_FOR_MS) {
+    return seen.behind;
+  }
   return yield* count(root, run, now);
 });
 
@@ -218,8 +227,12 @@ const personas = Effect.fn("Doctor.personas")(function* (env: PluginEnv) {
 
 const projects = Effect.fn("Doctor.projects")(function* (env: PluginEnv) {
   const root = yield* projectsRoot(env);
-  if (root.source === "config") return passed(`${root.path} (from projects.root)`);
-  if (root.source === "gitte") return passed(`${root.path} (from GITTE_CWD)`);
+  if (root.source === "config") {
+    return passed(`${root.path} (from projects.root)`);
+  }
+  if (root.source === "gitte") {
+    return passed(`${root.path} (from GITTE_CWD)`);
+  }
   return warned(
     `${root.path} (the home directory: neither projects.root nor GITTE_CWD is set)`,
     `set projects.root in ${env.userDir}/config.json to the folder your checkouts live under`,
@@ -279,7 +292,9 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const absent: Array<string> = [];
   for (const harness of needs.harnesses) {
     const kind = HARNESSES[harness]?.kind ?? harness;
-    if ((yield* onPath(search, kind)) === null) absent.push(kind);
+    if ((yield* onPath(search, kind)) === null) {
+      absent.push(kind);
+    }
   }
   checks.push({
     name: "harnesses",
@@ -413,13 +428,14 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   );
 
   const herd = yield* herdOfHost(env.stateDir);
-  if (herd !== undefined)
+  if (herd !== undefined) {
     checks.push({
       name: "host herd",
       ...(herd === null
         ? warned("this host has no Herd: judgements will be skipped", "collie host restart")
         : passed(`the host works for the Herd at ${herd}`)),
     });
+  }
 
   checks.push(
     ...(yield* gitlabChecks(env, search, run)),
@@ -454,9 +470,13 @@ const diskSpace = Effect.fn("Doctor.diskSpace")(function* (
     ],
     run,
   );
-  if (mounts.length === 0) return noted("could not read how much space is free", "df -h");
+  if (mounts.length === 0) {
+    return noted("could not read how much space is free", "df -h");
+  }
   const low = Arr.filter(mounts, lowOn);
-  if (low.length === 0) return passed(Arr.join(Arr.map(mounts, diskSaid), "; "));
+  if (low.length === 0) {
+    return passed(Arr.join(Arr.map(mounts, diskSaid), "; "));
+  }
   const listing = (yield* anyRuns(env)) ? yield* cleanupListing(env, "cli") : null;
   const frees =
     listing !== null && listing.ok
@@ -470,8 +490,12 @@ export const memoryOutcome = (
   short: boolean,
   closing: ReadonlyArray<string> | null,
 ) => {
-  if (!memory.known) return warned(`memory could not be read from ${memory.from}`, "");
-  if (!short) return passed(memorySaid(memory));
+  if (!memory.known) {
+    return warned(`memory could not be read from ${memory.from}`, "");
+  }
+  if (!short) {
+    return passed(memorySaid(memory));
+  }
   const closes =
     closing === null
       ? ""
@@ -487,7 +511,9 @@ const memoryCheck = Effect.fn("Doctor.memoryCheck")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const { memory, short } = yield* machineMemory(env, run);
-  if (!short) return memoryOutcome(memory, short, null);
+  if (!short) {
+    return memoryOutcome(memory, short, null);
+  }
   const listing = (yield* anyRuns(env)) ? yield* cleanupListing(env, "cli") : null;
   const closing =
     listing === null
@@ -545,20 +571,24 @@ export const doctorOn = Effect.fn("Doctor.doctorOn")(function* (
     "doctor",
     ...Option.match(gitlabHost, { onNone: () => [], onSome: (host) => ["--gitlab-host", host] }),
   ]);
-  if (script._tag === "Failure")
+  if (script._tag === "Failure") {
     return err("invalid_input", `--gitlab-host cannot be passed on: ${script.failure.message}`);
+  }
   const request = `doctor:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`;
   const ran = yield* machineShell(env, script.success, request, door);
-  if (!ran.ok) return ran;
+  if (!ran.ok) {
+    return ran;
+  }
   const said = Schema.decodeOption(DoctorSaid)(
     Arr.findLast(Str.split(Str.trim(ran.value.stdout), "\n"), (line) => line !== "").pipe(
       Option.getOrElse(() => ""),
     ),
   );
-  if (Option.isNone(said))
+  if (Option.isNone(said)) {
     return err("operation_failed", `${env.machine}'s doctor did not report its checks.`, {
       output: Str.trim(ran.value.stderr) || Str.trim(ran.value.stdout),
     });
+  }
   return report([...("data" in said.value ? said.value.data : said.value.error.details).checks]);
 });
 

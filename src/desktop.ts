@@ -113,7 +113,9 @@ export const runningFrom = (app: string) =>
     const pids = yield* fs.readDirectory("/proc");
     for (const pid of Arr.filter(pids, (name) => /^\d+$/.test(name))) {
       const exe = yield* fs.readLink(`/proc/${pid}/exe`).pipe(Effect.orElseSucceed(() => ""));
-      if (pipe_(exe, Str.startsWith(`${app}/`))) return true;
+      if (pipe_(exe, Str.startsWith(`${app}/`))) {
+        return true;
+      }
     }
     return false;
   }).pipe(Effect.orElseSucceed(() => false));
@@ -129,7 +131,9 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (platform !== RELEASED_FOR || !RELEASE_TAG.test(to)) return null;
+  if (platform !== RELEASED_FOR || !RELEASE_TAG.test(to)) {
+    return null;
+  }
   const root = path.resolve(dataHome, IDENTIFIER, "stable");
   const app = path.join(root, "app");
   const installed = yield* fs
@@ -140,8 +144,9 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
     installed.value.channel !== "stable" ||
     installed.value.identifier !== IDENTIFIER ||
     !RELEASE_TAG.test(installed.value.version)
-  )
+  ) {
     return null;
+  }
   const from = installed.value.version;
   if (Bun.semver.order(from, to) >= 0) {
     return {
@@ -181,7 +186,9 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
       `${release}/${appliedSignatureOf(manifest.artifact.file)}`,
     );
     const verified = verifyRelease(tar, signature, key);
-    if (!verified.ok) return yield* Effect.fail(verified.reason);
+    if (!verified.ok) {
+      return yield* Effect.fail(verified.reason);
+    }
 
     const extraction = path.join(root, "self-extraction");
     const retained = path.join(extraction, `${manifest.hash}.tar`);
@@ -204,8 +211,9 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
       }),
     );
     yield* fs.rename(`${record}.partial`, record);
-    if (Option.isSome(staged) && staged.value.retained_tar_path !== retained)
+    if (Option.isSome(staged) && staged.value.retained_tar_path !== retained) {
       yield* fs.remove(staged.value.retained_tar_path, { force: true });
+    }
   });
 
   return yield* (target === to ? staging : Effect.void).pipe(
@@ -257,13 +265,19 @@ export const desktopVerdicts = Effect.fn("desktop.verdicts")(function* (own: Des
     onSome: (record) => (record.hash === own.hash ? null : `${record.hash}.tar`),
   });
   for (const name of yield* list(extraction)) {
-    if (!/\.tar(?:\.(?:previous|preprevious))?$/.test(name)) continue;
+    if (!/\.tar(?:\.(?:previous|preprevious))?$/.test(name)) {
+      continue;
+    }
     const target = `${extraction}/${name}`;
-    if (own.hash === null) keep.push({ target, reason: "which bundle Desktop runs is not known" });
-    else if (name === `${own.hash}.tar`)
+    if (own.hash === null) {
+      keep.push({ target, reason: "which bundle Desktop runs is not known" });
+    } else if (name === `${own.hash}.tar`) {
       keep.push({ target, reason: "the running bundle's, the base for its next update" });
-    else if (name === waiting) keep.push({ target, reason: "an update not yet applied" });
-    else remove.push({ target, reason: "a staged update Desktop no longer runs" });
+    } else if (name === waiting) {
+      keep.push({ target, reason: "an update not yet applied" });
+    } else {
+      remove.push({ target, reason: "a staged update Desktop no longer runs" });
+    }
   }
 
   const runners = `${own.root}/runners`;
@@ -273,9 +287,13 @@ export const desktopVerdicts = Effect.fn("desktop.verdicts")(function* (own: Des
   );
   for (const version of versions) {
     const target = `${runners}/${version}`;
-    if (version === own.version) keep.push({ target, reason: "the running version's" });
-    else if (version === newest) keep.push({ target, reason: "the newest" });
-    else remove.push({ target, reason: "a runner copy neither running nor newest" });
+    if (version === own.version) {
+      keep.push({ target, reason: "the running version's" });
+    } else if (version === newest) {
+      keep.push({ target, reason: "the newest" });
+    } else {
+      remove.push({ target, reason: "a runner copy neither running nor newest" });
+    }
   }
 
   const now = yield* Clock.currentTimeMillis;
@@ -287,13 +305,15 @@ export const desktopVerdicts = Effect.fn("desktop.verdicts")(function* (own: Des
   const attachments = `${own.state}/attachments`;
   for (const name of yield* list(attachments)) {
     const target = `${attachments}/${name}`;
-    if (/^[0-9a-f]{64}$/.test(name) && (yield* unchangedFor(target)) > ATTACHMENT_KEEP_MS)
+    if (/^[0-9a-f]{64}$/.test(name) && (yield* unchangedFor(target)) > ATTACHMENT_KEEP_MS) {
       remove.push({ target, reason: "a chat attachment unused for 30 days" });
+    }
   }
   for (const name of yield* list(`${attachments}/.partial`)) {
     const target = `${attachments}/.partial/${name}`;
-    if ((yield* unchangedFor(target)) > PARTIAL_KEEP_MS)
+    if ((yield* unchangedFor(target)) > PARTIAL_KEEP_MS) {
       remove.push({ target, reason: "an attachment's transfer abandoned a day ago" });
+    }
   }
 
   const log = `${own.state}/flock-usage.jsonl`;
@@ -316,9 +336,12 @@ export const desktopVerdicts = Effect.fn("desktop.verdicts")(function* (own: Des
 export const pruneDesktop = Effect.fn("desktop.prune")(function* (own: DesktopOwn) {
   const fs = yield* FileSystem.FileSystem;
   const verdicts = yield* desktopVerdicts(own);
-  for (const { target } of verdicts.remove)
+  for (const { target } of verdicts.remove) {
     yield* fs.remove(target, { recursive: true, force: true }).pipe(Effect.ignore);
-  if (verdicts.usage !== null) yield* trimUsage(verdicts.usage);
+  }
+  if (verdicts.usage !== null) {
+    yield* trimUsage(verdicts.usage);
+  }
   return verdicts;
 });
 
@@ -358,9 +381,11 @@ export const sweepSshControls = Effect.fn("desktop.sweepSshControls")(function* 
   const gone: Array<string> = [];
   for (const name of yield* fs.readDirectory(tmp).pipe(Effect.orElseSucceed(() => []))) {
     const pid = Number(/^collie-ssh-(\d+)-/.exec(name)?.[1] ?? 0);
-    if (pid <= 0 || (yield* alive(pid))) continue;
+    if (pid <= 0 || (yield* alive(pid))) {
+      continue;
+    }
     const dir = `${tmp}/${name}`;
-    for (const socket of yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => [])))
+    for (const socket of yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))) {
       yield* Effect.promise(
         () =>
           Bun.spawn(["ssh", "-S", `${dir}/${socket}`, "-O", "exit", "collie-desktop"], {
@@ -369,6 +394,7 @@ export const sweepSshControls = Effect.fn("desktop.sweepSshControls")(function* 
             stderr: "ignore",
           }).exited,
       );
+    }
     yield* fs.remove(dir, { recursive: true, force: true }).pipe(Effect.ignore);
     gone.push(dir);
   }

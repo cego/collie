@@ -102,12 +102,16 @@ const lines = (text: string) => Arr.filter(Str.split(text, "\n"), (line) => Str.
 
 const crossRunOf = Effect.fn("Oversight.crossRunOf")(function* (at: Watched) {
   const key = at.herd;
-  if (key === null) return "none" as const;
+  if (key === null) {
+    return "none" as const;
+  }
   const found = yield* readElections(yield* electionsPath(at.stateDir, key)).pipe(
     Effect.orElseSucceed(() => []),
   );
   const pending = pendingEvaluation(found);
-  if (pending !== null && pending.runs.includes(at.runId)) return "pending" as const;
+  if (pending !== null && pending.runs.includes(at.runId)) {
+    return "pending" as const;
+  }
   return evaluatedFor(found, at.runId) ? ("evaluated" as const) : ("none" as const);
 });
 
@@ -159,12 +163,17 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
   const missing: Array<string> = [];
   for (const constraint of intent?.constraints ?? []) {
     const rule = constraint.rule;
-    if (rule?.kind === "command_exit" && !Arr.some(verifications, (one) => one.name === rule.name))
+    if (
+      rule?.kind === "command_exit" &&
+      !Arr.some(verifications, (one) => one.name === rule.name)
+    ) {
       missing.push(`no verification named ${rule.name}`);
+    }
   }
   const judged = yield* judgedOf(at);
-  for (const reason of standingSkips(drift, judged))
+  for (const reason of standingSkips(drift, judged)) {
     missing.push(`a judgement was skipped: ${reason}`);
+  }
 
   const card = buildCard({
     run: at.runId,
@@ -258,16 +267,23 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
   const outputs: Record<string, Record<string, string>> = {};
   const names = yield* fs.readDirectory(at.agentsDir).pipe(Effect.orElseSucceed(() => []));
   for (const name of names) {
-    if (!pipe_(name, Str.endsWith(".json"))) continue;
+    if (!pipe_(name, Str.endsWith(".json"))) {
+      continue;
+    }
     const text = yield* fs
       .readFileString(`${at.agentsDir}/${name}`)
       .pipe(Effect.orElseSucceed(() => ""));
-    if (text !== "") outputs[pipe_(name, Str.slice(0, -".json".length))] = flattenOutput(text);
+    if (text !== "") {
+      outputs[pipe_(name, Str.slice(0, -".json".length))] = flattenOutput(text);
+    }
   }
   const verifications: Record<string, { exit: number; ref: string }> = {};
   const verified = yield* readVerifications(at.evidenceDir).pipe(Effect.orElseSucceed(() => []));
-  for (const one of verified)
-    if (!ranOneTest(one)) verifications[one.name] = { exit: one.exit, ref: one.id };
+  for (const one of verified) {
+    if (!ranOneTest(one)) {
+      verifications[one.name] = { exit: one.exit, ref: one.id };
+    }
+  }
   const mr = parseMrUrl(at.mr ?? "");
   const returned: RuleFacts = {
     changedFiles: [...new Set(lines(`${changed}\n${untracked}`))],
@@ -300,7 +316,9 @@ const checkRuleDrift = Effect.fn("Oversight.checkRuleDrift")(function* (
   }
   // WARNING: a report gone is a fix only where the check found fewer things: an unchanged tree finds the same ones.
   for (const report of openReports(before)) {
-    if (Arr.some(found, (still) => still.constraint === report.constraint)) continue;
+    if (Arr.some(found, (still) => still.constraint === report.constraint)) {
+      continue;
+    }
     yield* appendDrift(at.runDir, { ...report, at: yield* nowIso, resolution: "verified" }).pipe(
       Effect.ignore({ log: "Unhandled" }),
     );
@@ -316,7 +334,9 @@ const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
   judging: "boundary" | "finish",
   deps: JudgementDeps | null,
 ) {
-  if (!Arr.some(intent.constraints, (constraint) => constraint.kind === "semantic")) return;
+  if (!Arr.some(intent.constraints, (constraint) => constraint.kind === "semantic")) {
+    return;
+  }
   if (deps === null) {
     yield* recordSkipped(at.runDir, at.runId, "there is no Herd to charge a judgement to").pipe(
       Effect.ignore({ log: "Unhandled" }),
@@ -389,7 +409,9 @@ const noticeOverride = Effect.fn("Oversight.noticeOverride")(function* (
   const run = runOfDir(at.runDir);
   const counted = `steering/externals.${to.agent}`;
   const before = Number((yield* records.fact(run, counted)) ?? "0");
-  if (seen <= before || to.terminalId === undefined) return;
+  if (seen <= before || to.terminalId === undefined) {
+    return;
+  }
   yield* records.put(run, counted, String(seen));
   yield* appendLine({
     kind: "manual_override",
@@ -406,9 +428,13 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
   intent: Intent,
   to: Correcting,
 ) {
-  if (!intent.authority.auto_correct) return NOTHING_CORRECTED;
+  if (!intent.authority.auto_correct) {
+    return NOTHING_CORRECTED;
+  }
   const open = openReports(yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => [])));
-  if (open.length === 0 || to.agent.terminalId === undefined) return NOTHING_CORRECTED;
+  if (open.length === 0 || to.agent.terminalId === undefined) {
+    return NOTHING_CORRECTED;
+  }
   yield* noticeOverride(at, to.agent);
   const lines = yield* readLedger(to.agent.terminalId);
   const deliveries = [...newestById(lines).values()];
@@ -432,7 +458,9 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
     const constraint = Option.getOrUndefined(
       Arr.findFirst(intent.constraints, (one) => one.id === report.constraint),
     );
-    if (constraint === undefined) continue;
+    if (constraint === undefined) {
+      continue;
+    }
     const requestId = `${at.runId}-correction-${report.constraint}-${intent.version}`;
     const went = yield* to.send({
       text: correctionText(requestId, constraint, report),
@@ -442,7 +470,9 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
       intentVersion: intent.version,
       mode,
     });
-    if (!went) continue;
+    if (!went) {
+      continue;
+    }
     yield* appendDrift(at.runDir, {
       ...report,
       at: yield* nowIso,
@@ -454,10 +484,15 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
   }
   const escalated: Array<string> = [];
   for (const report of open) {
-    if (report.resolution === "escalated") continue;
-    if ((sentSoFar[report.constraint] ?? 0) < intent.authority.max_corrections_per_constraint)
+    if (report.resolution === "escalated") {
       continue;
-    if (Arr.some(decided, (one) => one.report.constraint === report.constraint)) continue;
+    }
+    if ((sentSoFar[report.constraint] ?? 0) < intent.authority.max_corrections_per_constraint) {
+      continue;
+    }
+    if (Arr.some(decided, (one) => one.report.constraint === report.constraint)) {
+      continue;
+    }
     yield* appendDrift(at.runDir, { ...report, at: yield* nowIso, resolution: "escalated" }).pipe(
       Effect.ignore({ log: "Unhandled" }),
     );
@@ -473,23 +508,30 @@ const SETTLED: ReadonlySet<string> = new Set(["failed", "superseded"]);
 // WARNING: only a Run on its own worktree builds from its SPEC; elsewhere the SPEC is the product.
 const followRunPlan = Effect.fn("Oversight.followRunPlan")(
   function* (at: Watched) {
-    if (at.worktree === null) return;
+    if (at.worktree === null) {
+      return;
+    }
     const fs = yield* FileSystem.FileSystem;
     const text = yield* fs.readFileString(`${at.runDir}/plan/SPEC.md`);
     const found = extractRequirements(text, "plan/SPEC.md").constraints;
     const followed = MutableRef.make<Intent | null>(null);
     yield* updateIntent(at.runDir, (intent) =>
       Effect.gen(function* () {
-        if (intent === null) return null;
+        if (intent === null) {
+          return null;
+        }
         const next = followPlan(intent, found, yield* nowIso);
-        if (next === intent) return null;
+        if (next === intent) {
+          return null;
+        }
         MutableRef.set(followed, next);
         return next;
       }),
     );
     const next = MutableRef.get(followed);
-    if (next !== null)
+    if (next !== null) {
       yield* said(at, `plan/SPEC.md: ${found.length} constraints followed (v${next.version})`);
+    }
   },
   (effect) => Effect.ignore(effect),
 );
@@ -503,15 +545,23 @@ export const checkDrift = Effect.fn("Oversight.checkDrift")(function* (
 ) {
   yield* followRunPlan(at);
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
-  if (intent === null) return NOTHING_CORRECTED;
+  if (intent === null) {
+    return NOTHING_CORRECTED;
+  }
   // WARNING: mid-Integration the default branch's changes would read as the Run's own.
   const deferred = judging === "boundary" && (yield* merging(at.cwd));
-  if (deferred)
+  if (deferred) {
     yield* said(at, `drift not judged at ${where}: an integration's conflicts are open`);
-  else if (judging !== "none") yield* judgeDrift(at, intent, where, judging, deps);
+  } else if (judging !== "none") {
+    yield* judgeDrift(at, intent, where, judging, deps);
+  }
   const rules = Arr.some(intent.constraints, (constraint) => constraint.kind === "rule");
-  if (rules) yield* checkRuleDrift(at, intent, where);
-  if (to === null || !(rules || judging !== "none")) return NOTHING_CORRECTED;
+  if (rules) {
+    yield* checkRuleDrift(at, intent, where);
+  }
+  if (to === null || !(rules || judging !== "none")) {
+    return NOTHING_CORRECTED;
+  }
   return yield* correctDrift(at, intent, to);
 });
 
@@ -538,14 +588,17 @@ interface CrossRunTarget {
 
 const committedWork: (cwd: string, head: string) => Effect.Effect<CrossRunDiff, never, Services> =
   Effect.fn("Oversight.committedWork")(function* (cwd: string, head: string) {
-    if (head === "") return { kind: "unread", why: "its card names no commit" };
+    if (head === "") {
+      return { kind: "unread", why: "its card names no commit" };
+    }
     const base = yield* baseOf(cwd, head);
     const ran = yield* shell("git", ["diff", `${base}..${head}`, "--unified=3"], cwd);
-    if (ran.code !== 0)
+    if (ran.code !== 0) {
       return {
         kind: "unread",
         why: Str.split(Str.trim(ran.stderr ?? ""), "\n")[0] || `git diff exited ${ran.code}`,
       };
+    }
     return { kind: "shown", blocks: splitDiff(ran.stdout) };
   });
 
@@ -571,9 +624,12 @@ export const familyOf = Effect.fn("Oversight.familyOf")(function* (
 ) {
   const related = new Set([row.run]);
   for (const one of rows) {
-    if (one.parent === row.run) related.add(one.run);
-    if (row.parent !== null && (one.run === row.parent || one.parent === row.parent))
+    if (one.parent === row.run) {
       related.add(one.run);
+    }
+    if (row.parent !== null && (one.run === row.parent || one.parent === row.parent)) {
+      related.add(one.run);
+    }
   }
   const records = yield* RunRecords;
   const recordedBy = (runId: string) =>
@@ -588,15 +644,20 @@ export const familyOf = Effect.fn("Oversight.familyOf")(function* (
     );
   const recorded = yield* recordedBy(row.run);
   const about = new Set([...(recorded === null ? [] : [recorded]), ...(yield* namedBy(row.run))]);
-  if (about.size === 0) return [...related];
+  if (about.size === 0) {
+    return [...related];
+  }
   for (const one of rows) {
-    if (related.has(one.run)) continue;
+    if (related.has(one.run)) {
+      continue;
+    }
     const theirs = yield* recordedBy(one.run);
     if (
       (theirs !== null && about.has(theirs)) ||
       (recorded !== null && (yield* namedBy(one.run)).includes(recorded))
-    )
+    ) {
       related.add(one.run);
+    }
   }
   return [...related];
 });
@@ -707,15 +768,21 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
   targets: ReadonlyArray<CrossRunTarget>,
   snapshotAt: string,
 ) {
-  if (deps === null) return "no Herd to charge a cross-run judgement to";
+  if (deps === null) {
+    return "no Herd to charge a cross-run judgement to";
+  }
   const asked = yield* askJudgement(deps, at.runId, crossRunPack(targets));
-  if (asked.refused !== null) return asked.refused;
+  if (asked.refused !== null) {
+    return asked.refused;
+  }
   const byId = new Map(Arr.map(targets, (target) => [target.id, target]));
   let filed = 0;
   for (const found of asked.reports) {
     // WARNING: a model may cite only a Run the question named or the pack showed; anything else is reaching outside it.
     const target = byId.get(found.run);
-    if (target === undefined || !target.constraintIds.includes(found.constraint)) continue;
+    if (target === undefined || !target.constraintIds.includes(found.constraint)) {
+      continue;
+    }
     const work = citedIn(shownOf(target), target.cwd);
     const othersReplied = new Set(
       Arr.flatMap(targets, (one) =>
@@ -725,7 +792,9 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
     const cited = (ref: Ref) =>
       work(ref) ??
       (ref.kind === "record" && ref.path !== undefined && othersReplied.has(ref.path) ? ref : null);
-    if (!Arr.some(found.evidence, (ref) => cited(ref) !== null)) continue;
+    if (!Arr.some(found.evidence, (ref) => cited(ref) !== null)) {
+      continue;
+    }
     const report = judgedReport(
       found,
       { run: target.id, version: target.intentVersion },
@@ -739,7 +808,9 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
         Effect.ignore({ log: "Unhandled" }),
       );
     } else {
-      if (!(yield* fileReport(target.dir, report))) continue;
+      if (!(yield* fileReport(target.dir, report))) {
+        continue;
+      }
     }
     filed += 1;
   }
@@ -771,25 +842,30 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
 ) {
   const key = at.herd;
   if (key === null) {
-    if (at.family.length > 1)
+    if (at.family.length > 1) {
       yield* said(at, `cross-run check not stood for at ${where}: this host has no Herd`);
+    }
     return;
   }
   const file = yield* electionsPath(at.stateDir, key);
   const standing = yield* readElections(file).pipe(Effect.orElseSucceed(() => []));
-  if (!shouldStand(standing, at.family.length > 1)) return;
+  if (!shouldStand(standing, at.family.length > 1)) {
+    return;
+  }
   const now = yield* nowIso;
-  if (!alreadyStood(standing, at.runId))
+  if (!alreadyStood(standing, at.runId)) {
     yield* appendElection(file, { kind: "candidate", at: now, by: where, run: at.runId }).pipe(
       Effect.ignore({ log: "Unhandled" }),
     );
+  }
   const owed = pendingEvaluation(standing)?.runs ?? [];
   const owe = (why: string) =>
     Effect.gen(function* () {
       if (
         pendingEvaluation(yield* readElections(file).pipe(Effect.orElseSucceed(() => []))) !== null
-      )
+      ) {
         return;
+      }
       yield* appendElection(file, { kind: "pending", since: now, runs: [...at.family] }).pipe(
         Effect.ignore({ log: "Unhandled" }),
       );
@@ -811,25 +887,31 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
               shown.files.length === 0 && shown.outputs.length === 0 && target.replies.length === 0
             );
           })
-        )
+        ) {
           return yield* said(
             at,
             `cross-run judgement not asked at ${snapshotAt}: no related Run's work can be shown`,
           );
+        }
         const why = yield* judgeCrossRun(at, deps, key, targets, snapshotAt).pipe(
           Effect.catch((cause) => Effect.succeed(`the judgement failed: ${reason(cause)}`)),
         );
         if (why !== null) {
           yield* said(at, `cross-run judgement not made at ${snapshotAt}: ${why}`);
           // WARNING: only a leaving Run writes the owed mark: one at every boundary could never be cleared.
-          if (leaving) yield* owe("nobody could make it");
+          if (leaving) {
+            yield* owe("nobody could make it");
+          }
           return;
         }
         if (
           !staleSince(yield* readElections(file).pipe(Effect.orElseSucceed(() => [])), snapshotAt)
-        )
+        ) {
           return;
-        if (passes >= EXTRA_PASSES) return yield* owe("the Herd kept moving through the passes");
+        }
+        if (passes >= EXTRA_PASSES) {
+          return yield* owe("the Herd kept moving through the passes");
+        }
         snapshotAt = yield* nowIso;
       }
     }),
@@ -838,7 +920,9 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
 
 export const grantedToRun = Effect.fn("Oversight.grantedToRun")(function* (at: Watched) {
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
-  if (intent === null) return [];
+  if (intent === null) {
+    return [];
+  }
   const wanted = new Set(
     Arr.flatMap(intent.constraints, (constraint) =>
       constraint.rule?.kind === "command_exit" ? [constraint.rule.name] : [],
@@ -859,12 +943,16 @@ export const grantedToRun = Effect.fn("Oversight.grantedToRun")(function* (at: W
 // WARNING: a finished Run is extended by nobody but its human; a blocker becomes a proposal, not a prompt to an agent.
 export const settleAtFinish = Effect.fn("Oversight.settleAtFinish")(function* (at: Watched) {
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
-  if (intent === null) return null;
+  if (intent === null) {
+    return null;
+  }
   const drift = yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => []));
   const verdict = alignment(intent, drift, yield* judgedOf(at));
   yield* said(at, `aligned: ${verdict.aligned} — ${verdict.why}`);
   const blocking = Arr.filter(openReports(drift), (report) => report.severity === "block");
-  if (blocking.length === 0) return null;
+  if (blocking.length === 0) {
+    return null;
+  }
   const key = at.herd;
   if (key === null) {
     yield* said(at, "no Herd to record a follow-up proposal in; drift is on the Run's journal");
@@ -902,12 +990,16 @@ export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* 
   const run = runOfDir(at.runDir);
   const found = yield* readCheckpoints(at.runDir).pipe(Effect.orElseSucceed(() => []));
   const done = Arr.filter(found, (one) => one.checkpoint.status === "done");
-  if (done.length === 0) return [];
+  if (done.length === 0) {
+    return [];
+  }
   const carded = new Set(yield* records.lines(run, CARDED));
   const written: Array<Card> = [];
   for (const { file, checkpoint } of done) {
     const key = `${file}@${checkpoint.at}`;
-    if (carded.has(key)) continue;
+    if (carded.has(key)) {
+      continue;
+    }
     // WARNING: uninterruptible: a watch cut between the mark and the card would leave a ticket marked and never carded.
     const card = yield* Effect.uninterruptible(
       records

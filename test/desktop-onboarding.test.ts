@@ -274,7 +274,9 @@ const paired: (
     carried,
     execute: (script, stdin) =>
       Effect.flatMap(localSh(home)(script), (command) => {
-        if (stdin !== undefined) carried.push(stdin);
+        if (stdin !== undefined) {
+          carried.push(stdin);
+        }
         return ranWith(command, stdin && new TextEncoder().encode(new TextDecoder().decode(stdin)));
       }),
   };

@@ -553,7 +553,9 @@ const untilPushable = (operation: string, cwd: string) =>
         return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
       }
       const url = read.success;
-      if (url === null) return yield* host.parked(runId, null);
+      if (url === null) {
+        return yield* host.parked(runId, null);
+      }
       const why = `not pushed: auto-merge is on for ${url}`;
       yield* host.record(runId, why);
       yield* host.parked(runId, `${why}. Turn auto-merge off, then resume ${runId}.`);
@@ -600,7 +602,9 @@ export const agentWork: <
     if (yield* host.held(work.runId)) {
       return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
     }
-    if (given.pushes === true) yield* untilPushable(work.operation, work.cwd);
+    if (given.pushes === true) {
+      yield* untilPushable(work.operation, work.cwd);
+    }
     const unsafe = unsafePathComponent(work.operation);
     if (unsafe !== null) {
       return yield* new WorkflowError({
@@ -688,13 +692,23 @@ export const agentWork: <
       authority: place.authority,
       outputSubmit,
     };
-    if (choice.claudeSubagents !== undefined) ask.claudeSubagents = choice.claudeSubagents;
+    if (choice.claudeSubagents !== undefined) {
+      ask.claudeSubagents = choice.claudeSubagents;
+    }
     fellBack(ask, choice.from, choice.why);
-    if (choice.next !== undefined) ask.next = choice.next;
-    if (held !== null && held.sequence > 1) ask.sequence = held.sequence;
+    if (choice.next !== undefined) {
+      ask.next = choice.next;
+    }
+    if (held !== null && held.sequence > 1) {
+      ask.sequence = held.sequence;
+    }
     const at = yield* CurrentStep;
-    if (at !== null) ask.step = at;
-    if (given.clears !== undefined) ask.clears = given.clears;
+    if (at !== null) {
+      ask.step = at;
+    }
+    if (given.clears !== undefined) {
+      ask.clears = given.clears;
+    }
     if ((given.clears ?? []).length > 0) {
       const step = agents.stepMessage(ask);
       const typed = Array.from(step.typed).length;
@@ -706,7 +720,9 @@ export const agentWork: <
     }
 
     const watching = <A, E, R>(collecting: Effect.Effect<A, E, R>) => {
-      if (Option.isNone(oversight)) return collecting;
+      if (Option.isNone(oversight)) {
+        return collecting;
+      }
       const look = oversight.value.checkpoints(work.runId, work.operation);
       // WARNING: first to finish, failure included, wins, so a collection never waits on a watch that never ends.
       return Effect.raceFirst(
@@ -741,7 +757,9 @@ export const agentWork: <
         const idle =
           waiting ??
           `${on.agent} has written nothing to ${output} after ${Math.round(agents.collectMs / 60_000)} minutes idle`;
-        if (why !== null) return `${idle}; ${harnessSaid(on, why)}`;
+        if (why !== null) {
+          return `${idle}; ${harnessSaid(on, why)}`;
+        }
         return waiting === undefined
           ? `${idle}. Collie keeps collecting it; if it has stopped, ask it to write it.`
           : `${idle}. Collie keeps collecting it.`;
@@ -781,14 +799,18 @@ export const agentWork: <
     const reviving = (from: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
-          if (yield* host.stopRequested(runId)) return false;
+          if (yield* host.stopRequested(runId)) {
+            return false;
+          }
           const revived = yield* agents.revive(
             from,
             unless,
             onlyDeadServer,
             unless == null ? undefined : usable,
           );
-          if (revived && (yield* host.stopRequested(runId))) yield* haltLate;
+          if (revived && (yield* host.stopRequested(runId))) {
+            yield* haltLate;
+          }
           return revived;
         }),
       );
@@ -807,13 +829,19 @@ export const agentWork: <
     const untilWritten = (on: Launched, from: AgentAsk, canRevive = true) =>
       Effect.gen(function* () {
         for (;;) {
-          if (canRevive) yield* reviving(from);
+          if (canRevive) {
+            yield* reviving(from);
+          }
           const text = yield* watching(agents.collect(on, null, questions));
-          if (text !== null) return text;
+          if (text !== null) {
+            return text;
+          }
         }
       });
     const remindable = Effect.gen(function* () {
-      if ((yield* host.held(runId)) || (yield* host.stopRequested(runId))) return false;
+      if ((yield* host.held(runId)) || (yield* host.stopRequested(runId))) {
+        return false;
+      }
       return !Arr.some(yield* host.asked(runId), (one) => one.answer === null);
     });
     const collecting = (on: Launched, from: AgentAsk, waiting?: string) => {
@@ -846,7 +874,9 @@ export const agentWork: <
               ? Effect.gen(function* () {
                   // WARNING: reconciles a crash before the incident was journaled, before idle reminders race it.
                   const incident = yield* agents.usageIncident(on);
-                  if (incident !== null) return incident;
+                  if (incident !== null) {
+                    return incident;
+                  }
                   yield* reviving(from);
                   return yield* Effect.raceFirst(
                     Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on)),
@@ -935,7 +965,9 @@ export const agentWork: <
     const launching = (next: AgentAsk) =>
       Effect.gen(function* () {
         const instance = yield* WorkflowEngine.WorkflowInstance;
-        if (yield* host.stopRequested(runId)) return yield* Workflow.suspend(instance);
+        if (yield* host.stopRequested(runId)) {
+          return yield* Workflow.suspend(instance);
+        }
         const launched = yield* parkedWhenStuck(
           agents
             .launch(next, (why) => host.parked(work.runId, why))
@@ -943,7 +975,9 @@ export const agentWork: <
               // WARNING: a stop that landed while a start failed or parked still reaches the server it left.
               Effect.tapError(() =>
                 Effect.gen(function* () {
-                  if (yield* host.stopRequested(runId)) yield* haltLate;
+                  if (yield* host.stopRequested(runId)) {
+                    yield* haltLate;
+                  }
                 }),
               ),
             ),
@@ -989,8 +1023,9 @@ export const agentWork: <
       });
       if (nothingHasRoom(next)) {
         const room = Effect.gen(function* () {
-          while (nothingHasRoom(yield* agents.choose(layers, work, spent)))
+          while (nothingHasRoom(yield* agents.choose(layers, work, spent))) {
             yield* Effect.sleep(READING_EVERY_MS);
+          }
           return out;
         }).pipe(Effect.mapError((cause) => asUncertain(work.operation, cause)));
         collected = yield* Activity.make({
@@ -1019,7 +1054,9 @@ export const agentWork: <
               Effect.ensuring(host.usageWait(runId, null)),
             ),
         });
-        if (isRanOut(collected)) continue;
+        if (isRanOut(collected)) {
+          continue;
+        }
         break;
       }
       const sequence = (current.sequence ?? 1) + 1;
@@ -1038,7 +1075,9 @@ export const agentWork: <
         why: out.why,
       };
       delete nextAsk.claudeSubagents;
-      if (next.claudeSubagents !== undefined) nextAsk.claudeSubagents = next.claudeSubagents;
+      if (next.claudeSubagents !== undefined) {
+        nextAsk.claudeSubagents = next.claudeSubagents;
+      }
       yield* Activity.make({
         name: `${work.operation}.fallback-${n}.close`,
         error: AgentUncertain,
@@ -1058,11 +1097,15 @@ export const agentWork: <
         error: AgentUncertain,
         execute: Effect.gen(function* () {
           const instance = yield* WorkflowEngine.WorkflowInstance;
-          if (yield* host.stopRequested(runId)) return yield* Workflow.suspend(instance);
+          if (yield* host.stopRequested(runId)) {
+            return yield* Workflow.suspend(instance);
+          }
           // WARNING: retirement proved Quiet, but a tool may have finished its Output while it stopped.
           const late = yield* agents.peekOutput(current);
           if (late !== null && decodeOutput(work.output, late, plain).ok) {
-            if (yield* host.stopRequested(runId)) return yield* Workflow.suspend(instance);
+            if (yield* host.stopRequested(runId)) {
+              return yield* Workflow.suspend(instance);
+            }
             yield* host.parked(runId, null);
             return CollectedBeforeFallback.make({ text: late });
           }
@@ -1109,7 +1152,9 @@ export const agentWork: <
           const text = yield* watching(
             agents.collect(current, unusable, questions, undefined, usable),
           );
-          if (text !== null || (yield* agents.stopped(current, since)) === null) return text;
+          if (text !== null || (yield* agents.stopped(current, since)) === null) {
+            return text;
+          }
           yield* reviving(currentAsk, unusable);
         }
       });
@@ -1168,8 +1213,9 @@ export const agentWork: <
                 agents.pollMs,
               ),
             });
-        if (again === null)
+        if (again === null) {
           return { ok: false as const, problem: `did not write ${output} again: ${problem}` };
+        }
         latest = again;
         const repaired = decodeOutput(work.output, again, plain);
         return repaired.ok
@@ -1184,7 +1230,9 @@ export const agentWork: <
         success: Schema.String,
         execute: Effect.gen(function* () {
           const resumed = yield* agents.resumedOutput(current, round);
-          if (resumed !== null) return resumed;
+          if (resumed !== null) {
+            return resumed;
+          }
           yield* stepFailed(why);
           yield* host.parked(runId, why, "step-failed");
           return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
@@ -1213,8 +1261,12 @@ const fellBack = (
   from: AgentChoice | null | undefined,
   why: string | null | undefined,
 ) => {
-  if (from !== null && from !== undefined) onto.from = from;
-  if (why !== null && why !== undefined) onto.why = why;
+  if (from !== null && from !== undefined) {
+    onto.from = from;
+  }
+  if (why !== null && why !== undefined) {
+    onto.why = why;
+  }
 };
 
 const agrees: (held: ChosenAgent, requested: Preferences) => boolean = (held, requested) => {
@@ -1238,8 +1290,9 @@ const agrees: (held: ChosenAgent, requested: Preferences) => boolean = (held, re
           ),
         ),
     )
-  )
+  ) {
     return false;
+  }
   const is = (on: AgentChoice) =>
     (requested.harness === undefined || requested.harness === on.harness) &&
     (requested.model === undefined || requested.model === on.model) &&
@@ -1326,8 +1379,9 @@ const stoppable: <A, E>(
       untilStopped(host, runId, pollMs).pipe(Effect.as({ collected: false as const })),
     );
     // WARNING: a stop closes the agent, which can fail this before the stop is seen; the work waits for the resume either way.
-    if (!raced.collected || (yield* host.stopRequested(runId)))
+    if (!raced.collected || (yield* host.stopRequested(runId))) {
       return yield* Workflow.suspend(wait);
+    }
     return yield* raced.exit;
   });
 
@@ -1506,7 +1560,9 @@ const choiceOfLaunch: (launched: Launched) => AgentChoice = (launched) => {
     model: launched.model ?? DEFAULT_MODEL,
     effort: launched.effort ?? null,
   };
-  if (launched.claudeSubagents !== undefined) choice.claudeSubagents = launched.claudeSubagents;
+  if (launched.claudeSubagents !== undefined) {
+    choice.claudeSubagents = launched.claudeSubagents;
+  }
   return choice;
 };
 
@@ -1524,17 +1580,25 @@ const legacyRetryAvailable = (
   readings: ReadonlyArray<UsageReading>,
   now: number,
 ) => {
-  if (spent.observedAt !== undefined || spent.resetsAt == null) return false;
+  if (spent.observedAt !== undefined || spent.resetsAt == null) {
+    return false;
+  }
   const previousReset = epochMs(spent.resetsAt);
-  if (!Number.isFinite(previousReset)) return false;
+  if (!Number.isFinite(previousReset)) {
+    return false;
+  }
   const matching = Arr.filter(
     readings,
     (reading) => reading.subscription === subscriptionOf(spent.on),
   );
   const reading = matching.length === 1 ? matching[0] : undefined;
-  if (reading === undefined || reading.problem !== null || !reading.account) return false;
+  if (reading === undefined || reading.problem !== null || !reading.account) {
+    return false;
+  }
   const at = epochMs(reading.at);
-  if (!Number.isFinite(at) || at > now || now - at > USAGE_INTERVAL_MS) return false;
+  if (!Number.isFinite(at) || at > now || now - at > USAGE_INTERVAL_MS) {
+    return false;
+  }
   const windows = Arr.filter(reading.windows, (window) => appliesTo(window, spent.on.model));
   return (
     windows.length > 0 &&
@@ -1543,7 +1607,9 @@ const legacyRetryAvailable = (
       (window) => Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && !isFull(window),
     ) &&
     Arr.some(windows, (window) => {
-      if (window.resetsAt === null) return false;
+      if (window.resetsAt === null) {
+        return false;
+      }
       const nextReset = epochMs(window.resetsAt);
       return Number.isFinite(nextReset) && nextReset > previousReset && nextReset > now;
     })
@@ -1554,12 +1620,19 @@ const usageRecovered = (spent: SpentChoice, readings: ReadonlyArray<UsageReading
   const resetPassed = (at: string | null | undefined) =>
     at != null && Number.isFinite(epochMs(at)) && epochMs(at) <= now;
   const held = spent.exhaustion;
-  if (held === undefined)
+  if (held === undefined) {
     return resetPassed(spent.resetsAt) || legacyRetryAvailable(spent, readings, now);
-  if (held.windows.length === 0 || !Number.isFinite(held.at) || held.at > now) return false;
+  }
+  if (held.windows.length === 0 || !Number.isFinite(held.at) || held.at > now) {
+    return false;
+  }
   return Arr.every(held.windows, (window) => {
-    if (resetPassed(window.resetsAt)) return true;
-    if (window.resetsAt === null || !Number.isFinite(epochMs(window.resetsAt))) return false;
+    if (resetPassed(window.resetsAt)) {
+      return true;
+    }
+    if (window.resetsAt === null || !Number.isFinite(epochMs(window.resetsAt))) {
+      return false;
+    }
     const previousReset = epochMs(window.resetsAt);
     return (
       held.account !== null &&
@@ -1635,7 +1708,9 @@ const keyedGate = () => {
         (entry) => entry.gate.withPermits(1)(effect),
         (entry) =>
           Effect.sync(() => {
-            if (--entry.users === 0) gates.delete(key);
+            if (--entry.users === 0) {
+              gates.delete(key);
+            }
           }),
       );
 };
@@ -1657,7 +1732,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = usageWaitPath(launched);
-        if (incident === null) return yield* fs.remove(path, { force: true });
+        if (incident === null) {
+          return yield* fs.remove(path, { force: true });
+        }
         const temporary = `${path}.${yield* (yield* SecureRandom.SecureRandom).uuidV4()}.new`;
         yield* fs
           .writeFileString(temporary, encodeRanOut(incident))
@@ -1746,7 +1823,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const boundThreadOf = (launched: Launched) =>
     Effect.gen(function* () {
       const record = yield* readControl(host.env.stateDir, launched.agent);
-      if (record?.endpoint == null) return null;
+      if (record?.endpoint == null) {
+        return null;
+      }
       return yield* withCodex(record.endpoint, (client) => boundThread(client, record.cwd));
     }).pipe(Effect.orElseSucceed(() => null));
   const unsettled = (ask: AgentAsk, what: string, cause: ParkCause = "unknown") =>
@@ -1806,7 +1885,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         runId: about.runId,
         workflow: about.workflow,
       });
-      if (found.entry === null || place !== null) return found;
+      if (found.entry === null || place !== null) {
+        return found;
+      }
       // WARNING: herdr 1 named agents as core does; only a start on core registers this terminal.
       return (yield* registeredOnCore(about.runId, agent, found.entry.incarnation?.terminalId))
         ? found
@@ -1816,11 +1897,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const fenceOf = (about: Pick<Launched, "runId" | "agent">) =>
     Effect.gen(function* () {
       const check = yield* under(verifyingOf(about.runId));
-      if (check === null || check.pass === "ci") return null;
+      if (check === null || check.pass === "ci") {
+        return null;
+      }
       const cwd = (yield* readControl(host.env.stateDir, about.agent).pipe(
         Effect.orElseSucceed(() => null),
       ))?.cwd;
-      if (check.checkout === undefined || cwd === undefined) return check;
+      if (check.checkout === undefined || cwd === undefined) {
+        return check;
+      }
       const within = (inner: string, outer: string) =>
         inner === outer || pipe(inner, Str.startsWith(`${outer}/`));
       return within(cwd, check.checkout) || within(check.checkout, cwd) ? check : null;
@@ -1834,7 +1919,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       let said = false;
       for (;;) {
         const check = yield* fenceOf(about);
-        if (check === null) return;
+        if (check === null) {
+          return;
+        }
         if (!said) {
           said = true;
           yield* log(
@@ -1865,16 +1952,21 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     },
   ) {
     const lost = yield* lostServer(compactionDeps(host, about.runId), about.agent);
-    if (lost !== null) return { sent: false, why: lost, gone: true };
-    if (delivery.kind !== "steer") yield* untilUnfenced(about, delivery.kind);
+    if (lost !== null) {
+      return { sent: false, why: lost, gone: true };
+    }
+    if (delivery.kind !== "steer") {
+      yield* untilUnfenced(about, delivery.kind);
+    }
     const through = delivery.herdr === undefined ? deps : { ...deps, herdr: delivery.herdr };
     const found = yield* entryFor(about, about.agent, null, through);
-    if (found.entry === null)
+    if (found.entry === null) {
       return {
         sent: false,
         why: found.reason ?? "no such agent",
         gone: found.gone,
       };
+    }
     const entry = found.entry;
     const requestId = delivery.requestId ?? `${about.runId}-${delivery.ref}-${delivery.kind}`;
     const attempt = delivery.attempt ?? 1;
@@ -1909,18 +2001,20 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     ).pipe(Effect.catch((cause) => Effect.succeed(undeliverable(cause))));
     const pane = entry.paneId;
     if (outcome.ok) {
-      if (outcome.submission === "pressed")
+      if (outcome.submission === "pressed") {
         yield* log(
           about.runId,
           `${about.agent}: its ${delivery.kind} ${outcome.id} did not start a turn on core, so Enter was pressed once`,
         );
+      }
       const id = outcome.id;
       if (
         outcome.submission === "observed" &&
         (delivery.kind === "step" || delivery.kind === "repair")
-      )
+      ) {
         turnBegun.add(about.agent);
-      if (outcome.submission === "observed")
+      }
+      if (outcome.submission === "observed") {
         return {
           sent: true,
           why: "",
@@ -1929,8 +2023,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           pane,
           kept: fitted.kept,
         };
-      if (delivery.kind !== "steer" && delivery.kind !== "correction")
+      }
+      if (delivery.kind !== "steer" && delivery.kind !== "correction") {
         return { sent: true, why: "", id };
+      }
       return {
         sent: true,
         why: "",
@@ -1940,7 +2036,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         kept: fitted.kept,
       };
     }
-    if (outcome.reason === "blocked" && outcome.held !== undefined && SENT_STATES.has(outcome.held))
+    if (
+      outcome.reason === "blocked" &&
+      outcome.held !== undefined &&
+      SENT_STATES.has(outcome.held)
+    ) {
       return {
         sent: true,
         why: outcome.detail,
@@ -1948,6 +2048,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         observed: outcome.held === "acknowledged" ? "taken when it was first sent" : null,
         pane,
       };
+    }
     const terminal = entry.incarnation?.terminalId;
     return {
       sent: false,
@@ -2002,8 +2103,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const status = yield* host.herdr
           .agentStatus(launched.agent)
           .pipe(Effect.orElseSucceed(() => "unknown" as const));
-        if (status !== "working" && status !== "blocked") break;
-        if (yield* stopped) return false;
+        if (status !== "working" && status !== "blocked") {
+          break;
+        }
+        if (yield* stopped) {
+          return false;
+        }
         if (since === null) {
           since = yield* Clock.currentTimeMillis;
           yield* log(
@@ -2024,7 +2129,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const boundary = (launched: Launched, note: (why: string | null) => Effect.Effect<void>) =>
     Effect.gen(function* () {
       const found = yield* entryFor(launched, launched.agent, null);
-      if (found.entry === null) return { dispatch: true as const };
+      if (found.entry === null) {
+        return { dispatch: true as const };
+      }
       const entry = found.entry;
       const compaction: CompactionDeps = {
         ...compactionDeps(host, launched.runId),
@@ -2061,10 +2168,14 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             return yield* Effect.fromResult(done);
           }),
       );
-      if (due.dispatch || due.waiting !== true) return due;
+      if (due.dispatch || due.waiting !== true) {
+        return due;
+      }
       yield* note(due.reason);
       for (;;) {
-        if (yield* stoppedRun(launched.runId)) return null;
+        if (yield* stoppedRun(launched.runId)) {
+          return null;
+        }
         yield* Effect.sleep(compaction.pollMs);
         const now = yield* pollCompaction(compaction, launched.agent).pipe(
           Effect.orElseSucceed(() => null),
@@ -2091,10 +2202,14 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     adapter: HarnessAdapter,
     cwd: string,
   ) {
-    if (host.trust === "never") return;
+    if (host.trust === "never") {
+      return;
+    }
     const trust = adapter.trust?.(host.env.home, host.env.stateDir);
     const key = `${runId}\0${adapter.id}\0${cwd}`;
-    if (trust === undefined || checkedTrust.has(key)) return;
+    if (trust === undefined || checkedTrust.has(key)) {
+      return;
+    }
     checkedTrust.add(key);
     const asks = `${adapter.id} will ask in its own pane`;
     const message = yield* trust.state(cwd).pipe(
@@ -2111,7 +2226,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         Effect.succeed(`could not record trust for ${cwd} (${reason(cause)}); ${asks}`),
       ),
     );
-    if (message !== null) yield* log(runId, `trust ${adapter.id}: ${message}`);
+    if (message !== null) {
+      yield* log(runId, `trust ${adapter.id}: ${message}`);
+    }
   });
 
   const quietFor = Effect.fn("Agents.quietFor")(function* (
@@ -2143,7 +2260,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       ...mentionedSkills(`${persona}\n${ask.prompt}`),
       ...Struct.keys(profile.claude?.skillOverrides ?? {}),
     ];
-    if (ask.skill !== null) kept.push(ask.skill);
+    if (ask.skill !== null) {
+      kept.push(ask.skill);
+    }
     return yield* quietSkills(
       {
         claudeDir,
@@ -2190,13 +2309,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       host.help ?? installedHelp,
     );
     // WARNING: parked, never started on the default: a default would replace a window meant to be smaller.
-    if ("refused" in window)
+    if ("refused" in window) {
       return yield* new AgentParked({
         operation: ask.operation,
         reason: `${window.refused} in ${host.env.userDir}/config.json: fix it, then resume this Run`,
       });
-    if (window.leftOff !== null)
+    }
+    if (window.leftOff !== null) {
       yield* log(ask.runId, `${agent}: started without an auto-compact window: ${window.leftOff}`);
+    }
     // WARNING: the remote TUI forwards hook trust to its App Server as a session override.
     const hookTrustArgs =
       adapter.id === "codex" &&
@@ -2206,11 +2327,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         ? ["--dangerously-bypass-hook-trust"]
         : [];
     const parsed = parseProfile(isString(config.agent_profile) ? config.agent_profile : "");
-    if ("refused" in parsed)
+    if ("refused" in parsed) {
       return yield* new AgentParked({
         operation: ask.operation,
         reason: `${parsed.refused} in ${host.env.userDir}/config.json: fix it, then resume this Run`,
       });
+    }
     const profile = roleProfile(parsed.profile, ask.role);
     if (
       adapter.id === "claude" &&
@@ -2219,18 +2341,20 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     ) {
       const needed = subagentVersion(ask.claudeSubagents);
       const installed = yield* (host.version ?? installedVersion)("claude");
-      if (installed === null || !atLeast(installed, needed))
+      if (installed === null || !atLeast(installed, needed)) {
         return yield* new AgentParked({
           operation: ask.operation,
           reason: `claudeSubagents requires Claude Code ${needed} or later; installed: ${installed ?? "unknown"}. Upgrade Claude Code, then resume this Run`,
         });
+      }
     }
     const unreadable = yield* envFileProblems(profile.env ?? {}, host.env.home);
-    if (unreadable.length > 0)
+    if (unreadable.length > 0) {
       return yield* new AgentParked({
         operation: ask.operation,
         reason: `agent_profile for ${ask.role}: ${Arr.join(unreadable, "; ")}. Hold each value in a file of this Machine with mode 0600, then resume this Run`,
       });
+    }
     yield* ensureTrusted(ask.runId, adapter, ask.cwd);
     const persona = `${dirFor(ask.runId)}/${stemOf(ask)}.persona.md`;
     const personaBody = yield* personaOf(ask.persona ?? ask.role);
@@ -2255,7 +2379,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     const configFile = `${dirFor(ask.runId)}/${stemOf(ask)}.mcp.json`;
     const extension = `${dirFor(ask.runId)}/${stemOf(ask)}.tools.ts`;
     yield* write(configFile, mcpConfig(command, serverEnv));
-    if (adapter.id === "pi")
+    if (adapter.id === "pi") {
       yield* write(
         extension,
         piExtension(
@@ -2281,6 +2405,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           piQuestionTool(command, yield* controlDir(host.env.stateDir, agent)),
         ),
       );
+    }
     const operators =
       adapter.id === "opencode" && host.env.raw.OPENCODE_CONFIG_CONTENT !== undefined
         ? yield* Schema.decodeEffect(Schema.fromJsonString(Schema.JsonObject))(
@@ -2400,7 +2525,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         yield* log(ask.runId, `${agent}: ${adapter.id} in core terminal ${terminal}, ${started}`);
         yield* setStarted(ask.runId, agent, encodeStarted(ask));
         const found = yield* entryFor(ask, agent, { paneId: terminal, workspaceId: null });
-        if (found.entry === null) return undefined;
+        if (found.entry === null) {
+          return undefined;
+        }
         yield* registerAgent(scopeFor(ask.cwd), found.entry, alive);
         return found.entry.incarnation;
       }),
@@ -2421,10 +2548,14 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             (one.sequence ?? 1) === sequence &&
             (one.operation === ask.operation || launchedAs(one, role)),
         );
-        if (Option.isSome(held)) return held.value.agent;
+        if (Option.isSome(held)) {
+          return held.value.agent;
+        }
         const canonical = agentName(ask.runId, role, null, sequence);
         const legacy = legacyAgentName(ask.runId, role, null, sequence);
-        if (legacy === canonical) return canonical;
+        if (legacy === canonical) {
+          return canonical;
+        }
         // WARNING: core may have started it before its launch record was written; the saved ask proves which generation owns the name.
         const text = yield* startedWith(ask.runId, legacy);
         if (text !== null) {
@@ -2433,8 +2564,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             started.runId === ask.runId &&
             (started.sequence ?? 1) === sequence &&
             (started.agent ?? started.operation) === role
-          )
+          ) {
             return legacy;
+          }
         }
         return canonical;
       }).pipe(Effect.mapError((cause) => asUncertain(ask.operation, cause))),
@@ -2459,8 +2591,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     });
   const stepGoneOut = (agent: string, out = stepsGoingOut.get(agent)) =>
     Effect.suspend(() => {
-      if (out === undefined) return Effect.void;
-      if (stepsGoingOut.get(agent) === out) stepsGoingOut.delete(agent);
+      if (out === undefined) {
+        return Effect.void;
+      }
+      if (stepsGoingOut.get(agent) === out) {
+        stepsGoingOut.delete(agent);
+      }
       return Deferred.succeed(out, undefined);
     });
 
@@ -2492,22 +2628,26 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           ],
           (name) => name !== agent && Arr.some(listing.success, (one) => one.name === name),
         );
-        if (Option.isSome(alternate))
+        if (Option.isSome(alternate)) {
           return yield* unsettled(
             ask,
             `${alternate.value} is already listed under another spelling; its generation must be established before ${agent} can start`,
           );
-        if (live !== undefined && (yield* retireLost(ask, agent, listing.success)))
+        }
+        if (live !== undefined && (yield* retireLost(ask, agent, listing.success))) {
           return yield* launch(ask, false, note);
+        }
         const alive = live !== undefined && !fresh;
         const back = live === undefined ? comingBack.get(agent) : undefined;
         if (back !== undefined) {
           yield* Deferred.await(back);
           return yield* launch(ask, false, note);
         }
-        if (alive) yield* stepGoneOut(agent);
+        if (alive) {
+          yield* stepGoneOut(agent);
+        }
         // WARNING: core keeps a name while it lists it, so a new agent cannot take it until then.
-        if (fresh && live !== undefined)
+        if (fresh && live !== undefined) {
           yield* host.herdr.terminalKill(live.paneId).pipe(
             Effect.mapError(
               (cause) =>
@@ -2517,6 +2657,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 }),
             ),
           );
+        }
         const memory = alive
           ? "free"
           : yield* waitForMemory({
@@ -2527,7 +2668,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               checkout: ask.cwd,
               stopped: stoppedRun(ask.runId),
             });
-        if (memory === "waited") return yield* launch(ask, fresh, note);
+        if (memory === "waited") {
+          return yield* launch(ask, fresh, note);
+        }
         const replayed = yield* wasOrdered(ask);
         const landedOn = (
           incarnation: Incarnation | undefined,
@@ -2546,21 +2689,37 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               model: ask.model ?? host.model,
               effort: ask.effort,
             };
-            if (ask.claudeSubagents !== undefined) landed.claudeSubagents = ask.claudeSubagents;
-            if ((ask.sequence ?? 1) > 1) landed.sequence = ask.sequence;
-            if (ask.step !== undefined) landed.step = ask.step;
-            if (ask.outputSubmit !== undefined) landed.outputSubmit = ask.outputSubmit;
+            if (ask.claudeSubagents !== undefined) {
+              landed.claudeSubagents = ask.claudeSubagents;
+            }
+            if ((ask.sequence ?? 1) > 1) {
+              landed.sequence = ask.sequence;
+            }
+            if (ask.step !== undefined) {
+              landed.step = ask.step;
+            }
+            if (ask.outputSubmit !== undefined) {
+              landed.outputSubmit = ask.outputSubmit;
+            }
             landed.at = yield* Clock.currentTimeMillis;
             fellBack(landed, ask.from, ask.why);
-            if (ask.next !== undefined) landed.next = ask.next;
+            if (ask.next !== undefined) {
+              landed.next = ask.next;
+            }
             if (incarnation !== undefined) {
               landed.terminalId = incarnation.terminalId;
-              if (incarnation.agentSession !== null) landed.agentSession = incarnation.agentSession;
+              if (incarnation.agentSession !== null) {
+                landed.agentSession = incarnation.agentSession;
+              }
             }
-            if (chosen !== null) landed.agentSession = chosen;
+            if (chosen !== null) {
+              landed.agentSession = chosen;
+            }
             return landed;
           });
-        if (memory === "stopped") return yield* landedOn(undefined);
+        if (memory === "stopped") {
+          return yield* landedOn(undefined);
+        }
         const recorded = (
           incarnation: Incarnation | undefined,
           chosen: AgentSession | null = null,
@@ -2601,11 +2760,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               if (
                 found.entry !== null &&
                 !(yield* registeredOnCore(ask.runId, agent, live.terminalId))
-              )
+              ) {
                 yield* registerAgent(scopeFor(ask.cwd), found.entry, {
                   agents: listing.success,
                   listedAt,
                 });
+              }
               return yield* recorded({ terminalId: live.terminalId, agentSession: null });
             })
           : yield* Effect.uninterruptible(
@@ -2618,7 +2778,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               ).pipe(Effect.flatMap((incarnation) => recorded(incarnation, chosen))),
             );
         if (atLaunch) {
-          if (!replayed) yield* orderLaunch(ask);
+          if (!replayed) {
+            yield* orderLaunch(ask);
+          }
           turnBegun.add(launched.agent);
           yield* write(sentPath(launched, "step"), pointer);
           yield* log(
@@ -2646,9 +2808,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           }
         }
         if (alive && !replayed) {
-          if (!(yield* turnEnded(launched))) return launched;
+          if (!(yield* turnEnded(launched))) {
+            return launched;
+          }
           const due = yield* boundary(launched, note);
-          if (due === null) return launched;
+          if (due === null) {
+            return launched;
+          }
           if (!due.dispatch) {
             return yield* new AgentParked({
               operation: ask.operation,
@@ -2656,7 +2822,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             });
           }
         }
-        if (!replayed) yield* orderLaunch(ask);
+        if (!replayed) {
+          yield* orderLaunch(ask);
+        }
         // WARNING: one send is one message, not a transcript; a skill marked disable-model-invocation refuses an agent invoking it itself, but this human channel runs it.
         yield* write(sentPath(launched, "step"), pointer);
         let asked = yield* deliver(launched, pointer, {
@@ -2677,17 +2845,19 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             );
             return yield* launch(ask, true);
           }
-          if (again._tag === "Success")
+          if (again._tag === "Success") {
             asked = yield* deliver(launched, pointer, {
               kind: "step",
               ref: stemOf(ask),
             });
+          }
         }
         if (asked.refused) {
           return yield* refusedWith(ask, `${agent} was not given its work (${asked.why})`, file);
         }
-        if (!asked.sent)
+        if (!asked.sent) {
           return yield* unsettled(ask, `${agent} was not given its work (${asked.why})`);
+        }
         yield* log(
           ask.runId,
           `${agent}: ${alive ? "reattached to" : "launched for"} ${ask.operation}`,
@@ -2697,12 +2867,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           adapter.id === "codex" &&
           session === null &&
           (yield* readControl(host.env.stateDir, agent))?.endpoint != null
-        )
+        ) {
           return yield* withSession(
             launched,
             boundThreadOf(launched),
             "Codex's App Server named no thread",
           );
+        }
         return launched;
       }).pipe(
         Effect.mapError((cause) => (isParked(cause) ? cause : asUncertain(ask.operation, cause))),
@@ -2712,7 +2883,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const confirmed = (launched: Launched, unless: string | null) =>
     Effect.gen(function* () {
       const found = yield* entryFor(launched, launched.agent, null);
-      if (found.entry === null) return;
+      if (found.entry === null) {
+        return;
+      }
       const dir = yield* controlDir(host.env.stateDir, launched.agent);
       const kind = unless === null ? "step" : "repair";
       const key = causalKey(launched.runId, { kind, ref: stemOf(launched) }, 0);
@@ -2820,15 +2993,18 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               closing !== null ||
               answeredCalls.has(key) ||
               ids.has(`${call.id}${UNREPAIRED}`)
-            )
+            ) {
               continue;
+            }
             const sent = yield* deliver(launched, questionRepair(call.questions), {
               kind: "repair",
               ref: `question-${call.id}`,
               herdr: yield* herdr,
             });
             answeredCalls.add(key);
-            if (sent.sent) continue;
+            if (sent.sent) {
+              continue;
+            }
             yield* log(
               launched.runId,
               `${launched.agent}: was not sent its question's repair (${sent.why}), so the question is posted as asked`,
@@ -2851,7 +3027,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           for (const { call, names } of calls) {
             for (const [at, question] of call.questions.entries()) {
               const name = names[at] ?? "";
-              if (asked.has(name)) continue;
+              if (asked.has(name)) {
+                continue;
+              }
               const shortfall = shortfallOf(question);
               yield* questions.ask(
                 shortfall === null
@@ -2865,16 +3043,21 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             const key = `${launched.agent}\n${call.id}`;
             // WARNING: held until its answers are sent, so Collie's next prompt cannot reach the agent first.
             const holds = (holding: boolean) => {
-              for (const name of names)
-                if (holding) opened.add(`${name} on ${launched.runId}`);
-                else opened.delete(`${name} on ${launched.runId}`);
+              for (const name of names) {
+                if (holding) {
+                  opened.add(`${name} on ${launched.runId}`);
+                } else {
+                  opened.delete(`${name} on ${launched.runId}`);
+                }
+              }
             };
             if (closing !== null) {
-              for (const one of given)
+              for (const one of given) {
                 if (isUnanswered(one)) {
                   yield* questions.close(one.name, closing);
                   asked.set(one.name, { ...one, answer: closing });
                 }
+              }
               holds(false);
               continue;
             }
@@ -2893,11 +3076,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             }
             const fence = yield* fenceOf(launched);
             if (fence !== null) {
-              if (!fencedCalls.has(key))
+              if (!fencedCalls.has(key)) {
                 yield* log(
                   launched.runId,
                   `${launched.agent}: the answers to its question are ${Str.uncapitalize(heldBehind(fence))}`,
                 );
+              }
               fencedCalls.add(key);
               holds(true);
               continue;
@@ -2924,7 +3108,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                   relayed: true,
                 },
               );
-              if (!sent.sent) sentAll = false;
+              if (!sent.sent) {
+                sentAll = false;
+              }
               if (sent.refused) {
                 answeredCalls.add(key);
                 yield* log(
@@ -2940,7 +3126,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 );
               }
             }
-            if (sentAll) answeredCalls.add(key);
+            if (sentAll) {
+              answeredCalls.add(key);
+            }
             holds(!answeredCalls.has(key));
           }
           return open;
@@ -2971,7 +3159,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               log(run, `Delivery queue could not be read: ${reason(cause)}`).pipe(Effect.as([])),
             ),
           )) {
-            if (queued.result !== null) continue;
+            if (queued.result !== null) {
+              continue;
+            }
             yield* submitted(queued, yield* steer({ ...queued, mode: "now" }));
           }
         }
@@ -2990,7 +3180,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             (calls) => calls.length > 0,
           ),
         );
-        if (asking.length === 0) return;
+        if (asking.length === 0) {
+          return;
+        }
         const launches = yield* launchesOfAgents(asking);
         const askedNow = new Map(
           Arr.map(
@@ -3010,7 +3202,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           for (const [at, launched] of own.entries()) {
             const next = own[at + 1];
             collected ||= yield* collecting.has(launched.runId, agent, stemOf(launched));
-            if (collected) continue;
+            if (collected) {
+              continue;
+            }
             const known = askedNow.get(launched.runId) ?? new Map<string, AskedQuestion>();
             askedNow.set(launched.runId, known);
             const tend = yield* questionsOf(
@@ -3020,11 +3214,14 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               Effect.succeed(host.herdr),
               known,
             );
-            if (!(yield* tend(null))) continue;
+            if (!(yield* tend(null))) {
+              continue;
+            }
             if (
               Option.exists(yield* alive, (found) => !Arr.some(found, (one) => one.name === agent))
-            )
+            ) {
               yield* tend(goneAnswer(agent));
+            }
           }
         }
       }),
@@ -3043,7 +3240,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           const ready = record === null ? undefined : ports[record.harness]?.ready;
           const since = yield* Clock.currentTimeMillis;
           if (record?.endpoint != null && ready !== undefined) {
-            if (managed?.endpoint !== record.endpoint) failedAt = null;
+            if (managed?.endpoint !== record.endpoint) {
+              failedAt = null;
+            }
             managed = record;
             const up = yield* ready(record).pipe(
               Effect.orElseSucceed(() => false),
@@ -3053,9 +3252,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               failedAt = null;
               return null;
             }
-          } else if (managed === null) return null;
+          } else if (managed === null) {
+            return null;
+          }
           failedAt ??= since;
-          if ((yield* Clock.currentTimeMillis) - failedAt < budgetMs) return null;
+          if ((yield* Clock.currentTimeMillis) - failedAt < budgetMs) {
+            return null;
+          }
           return `${launched.agent}: ${managed.harness} server health at ${managed.endpoint} remained unavailable or unproved for ${Math.round(budgetMs / 1000)}s. Collie keeps collecting usable Output; replacement requires proven death and a Quiet predecessor.`;
         }).pipe(
           Effect.repeat({
@@ -3092,8 +3295,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               pollMs: host.pollMs ?? DEFAULT_POLL_MS,
               budgetMs: budgetMs ?? host.collectMs ?? DEFAULT_COLLECT_MS,
               counts: Effect.gen(function* () {
-                if (asking !== null && (yield* asking(null))) return false;
-                if (yield* holdsBudgetOf(launched.runId, launched.agent)) return false;
+                if (asking !== null && (yield* asking(null))) {
+                  return false;
+                }
+                if (yield* holdsBudgetOf(launched.runId, launched.agent)) {
+                  return false;
+                }
                 return yield* turnOver;
               }),
               usable: usable ?? (() => true),
@@ -3101,7 +3308,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             }),
             confirmed(launched, unless ?? null).pipe(Effect.andThen(Effect.never)),
           );
-          if (text !== null && asking !== null) yield* asking(closedAnswer(launched.operation));
+          if (text !== null && asking !== null) {
+            yield* asking(closedAnswer(launched.operation));
+          }
           return text;
         }),
         stemOf(launched),
@@ -3113,7 +3322,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const now = yield* fs.readFileString(launched.output).pipe(Effect.orElseSucceed(() => ""));
-        if (Str.trim(now) !== "" && now !== unusable) return true;
+        if (Str.trim(now) !== "" && now !== unusable) {
+          return true;
+        }
         const text = repairText(launched.output, problem);
         const file = sentPath(launched, "repair");
         yield* write(file, text);
@@ -3178,8 +3389,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             (yield* may) &&
             !(yield* holdsBudgetOf(launched.runId, launched.agent)) &&
             (openQuestions.get(launched.agent)?.size ?? 0) === 0
-          )
+          ) {
             return;
+          }
           yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
         }
       }),
@@ -3189,10 +3401,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     Effect.gen(function* () {
       const lines = yield* readLedger(held.terminal);
       const now = newestById(lines).get(held.delivery);
-      if (now === undefined || isSettledDelivery(now)) return true;
+      if (now === undefined || isSettledDelivery(now)) {
+        return true;
+      }
       const dir = yield* controlDir(host.env.stateDir, launched.agent);
-      if (!(yield* submittedDelivery(dir, held.delivery).pipe(Effect.orElseSucceed(() => false))))
+      if (!(yield* submittedDelivery(dir, held.delivery).pipe(Effect.orElseSucceed(() => false)))) {
         return false;
+      }
       yield* appendLine({
         ...now,
         at: yield* nowIso,
@@ -3236,7 +3451,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             ? `${launched.agent}: ended its turn without ${launched.operation}.json, so was reminded to write it (${ordinal} of ${OUTPUT_REMINDERS})`
             : `${launched.agent}: ended its turn without ${launched.operation}.json, and could not be reminded to write it (${sent.why})`,
         );
-        if (wasSent) yield* reminded(launched, ordinal, "still-absent", 0);
+        if (wasSent) {
+          yield* reminded(launched, ordinal, "still-absent", 0);
+        }
         return wasSent ? yield* nowIso : null;
       }).pipe(
         Effect.catchIf(
@@ -3315,7 +3532,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const text = yield* startedWith(runId, agent);
-      if (text === null) return [];
+      if (text === null) {
+        return [];
+      }
       const started = yield* decodeStarted(text);
       const anchor = Arr.findLast(
         launches,
@@ -3339,13 +3558,17 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 sameSession(one.agentSession, anchor.value.agentSession))),
       );
       const latest = own.at(-1);
-      if (latest === undefined) return [];
+      if (latest === undefined) {
+        return [];
+      }
       const usage = yield* fs.exists(usageWaitPath(latest)).pipe(Effect.result);
       if (usage._tag === "Failure") {
         yield* log(runId, `${agent}: not started again on core: its usage wait could not be read`);
         return [];
       }
-      if (usage.success) return [];
+      if (usage.success) {
+        return [];
+      }
       const adapter = adapterFor(started.harness ?? host.harness);
       const had = Option.getOrNull(
         Arr.findLast(own, (one) => one.agentSession?.kind === adapter.kind).pipe(
@@ -3384,8 +3607,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       const incarnation = yield* Effect.uninterruptible(
         start(ask, agent, listed, atLaunch ? told : null, session),
       );
-      if (incarnation === undefined) return [];
-      if (atLaunch) turnBegun.add(agent);
+      if (incarnation === undefined) {
+        return [];
+      }
+      if (atLaunch) {
+        turnBegun.add(agent);
+      }
       let now = latest;
       for (const one of own) {
         const updated: Launched =
@@ -3397,13 +3624,17 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               }
             : { ...one, terminalId: incarnation.terminalId };
         yield* recordLaunch(updated);
-        if (one === latest) now = updated;
+        if (one === latest) {
+          now = updated;
+        }
       }
       yield* log(
         runId,
         `${agent}: started again on core after core lost it, ${had === null ? "in a new session: none was recorded to resume" : `resuming its ${adapter.id} session ${had}`}`,
       );
-      if (told === null || atLaunch) return [];
+      if (told === null || atLaunch) {
+        return [];
+      }
       const tell = Effect.gen(function* () {
         if (adapter.id === "opencode") {
           // WARNING: the reporter's idleness is the signal, never a timer: text typed before the TUI is up is lost.
@@ -3419,25 +3650,29 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               ),
             }),
           );
-          if (!idle)
+          if (!idle) {
             return yield* log(
               runId,
               `${agent}: not resumed: OpenCode reported no idle within ${Math.round(budgetMs / 1000)}s, so it was not told to carry on with ${latest.operation}`,
             );
+          }
         }
         const late = yield* awaitReady(
           compactionDeps(host, runId),
           agent,
           host.readyMs ?? READY_TIMEOUT_MS,
         );
-        if (late !== null)
+        if (late !== null) {
           return yield* log(runId, `${agent}: was not told to carry on with its step: ${late}`);
+        }
         let delivery: Parameters<typeof deliver>[2] = { kind: "step", ref: stemOf(latest) };
         const base =
           adapter.id === "opencode"
             ? ((yield* readControl(host.env.stateDir, agent))?.endpoint ?? null)
             : null;
-        if (base !== null && had !== null) delivery = { ...delivery, herdr: posting(base, had) };
+        if (base !== null && had !== null) {
+          delivery = { ...delivery, herdr: posting(base, had) };
+        }
         const sent = yield* deliver(now, told, delivery);
         yield* log(
           runId,
@@ -3464,27 +3699,39 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               yield* RunRecords.use((records) => records.controlsOf(RELAUNCH, runId)),
               (one) => one.key,
             );
-            if (agents.length === 0 || !(yield* run.running)) return;
+            if (agents.length === 0 || !(yield* run.running)) {
+              return;
+            }
             const backs = Arr.map(agents, (agent) => ({
               agent,
               back: Deferred.makeUnsafe<void>(),
             }));
-            for (const { agent, back } of backs) comingBack.set(agent, back);
+            for (const { agent, back } of backs) {
+              comingBack.set(agent, back);
+            }
             const released = Effect.forEach(backs, ({ agent, back }) =>
               Effect.suspend(() => {
-                if (comingBack.get(agent) === back) comingBack.delete(agent);
+                if (comingBack.get(agent) === back) {
+                  comingBack.delete(agent);
+                }
                 return Deferred.succeed(back, undefined);
               }),
             );
             yield* Effect.gen(function* () {
               const listedAt = yield* nowIso;
               const listing = yield* host.herdr.agentList().pipe(Effect.option);
-              if (Option.isNone(listing)) return;
+              if (Option.isNone(listing)) {
+                return;
+              }
               const launches = yield* launchesOf(runId);
               const tells: Array<Effect.Effect<void, never, AgentServices>> = [];
               for (const agent of agents) {
-                if (Arr.some(listing.value, (one) => one.name === agent)) continue;
-                if (stepsGoingOut.has(agent)) continue;
+                if (Arr.some(listing.value, (one) => one.name === agent)) {
+                  continue;
+                }
+                if (stepsGoingOut.has(agent)) {
+                  continue;
+                }
                 tells.push(
                   ...(yield* withRelaunchLock(
                     host.env.stateDir,
@@ -3497,7 +3744,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                   ).pipe(
                     Effect.catch((cause) =>
                       Effect.sync(() => {
-                        if (isParked(cause)) refusedStarts.set(agent, cause.reason);
+                        if (isParked(cause)) {
+                          refusedStarts.set(agent, cause.reason);
+                        }
                       }).pipe(
                         Effect.andThen(
                           log(
@@ -3511,7 +3760,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                   )),
                 );
               }
-              for (const tell of tells) yield* tell;
+              for (const tell of tells) {
+                yield* tell;
+              }
             }).pipe(Effect.ensuring(released));
           }),
         )
@@ -3532,42 +3783,48 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               /^[1-9]\d*$/.test(pipe(one.cause.ref, Str.slice(stem.length + 1))))) &&
           (one.state === "unknown" || one.state === "reserved" || isUnobserved(one)),
       );
-      if (Option.isSome(held))
+      if (Option.isSome(held)) {
         return yield* new AgentParked({
           operation: ask.operation,
           reason: `${agent}: delivery ${held.value.id} remains ${held.value.state}; server loss does not say whether it was received. Settle it with \`collie run deliveries ${ask.runId} --reconcile ${held.value.id} --as sent|not-sent\`, then \`collie run resume ${ask.runId}\`.`,
         });
+      }
     });
 
   const retireLost = (ask: AgentAsk, agent: string, listed: ReadonlyArray<AgentInfo>) =>
     Effect.gen(function* () {
       const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
-      if (lost === null) return false;
+      if (lost === null) {
+        return false;
+      }
       yield* uncertainStep(ask, agent);
       const owned = yield* readControl(host.env.stateDir, agent).pipe(
         Effect.orElseSucceed(() => null),
       );
-      if (owned?.runLog !== `${dirFor(ask.runId)}/agents.log` || owned.cwd !== ask.cwd)
+      if (owned?.runLog !== `${dirFor(ask.runId)}/agents.log` || owned.cwd !== ask.cwd) {
         return yield* unsettled(
           ask,
           `${lost}; its control identity does not match this Run and checkout`,
         );
+      }
       const launched = Arr.findLast(
         yield* launchesOf(ask.runId),
         (one) => one.agent === agent && (one.sequence ?? 1) === (ask.sequence ?? 1),
       );
-      if (Option.isNone(launched))
+      if (Option.isNone(launched)) {
         return yield* unsettled(ask, `${lost}; its terminal has no launch identity`);
+      }
       const ended = yield* endAgent(endsOf(ask.runId), launched.value, lost, "close", listed).pipe(
         Effect.mapError((cause) =>
           unsettled(ask, `${lost}; it could not be ended (${reason(cause)})`),
         ),
       );
-      if (ended._tag !== "Closed" || !ended.ended)
+      if (ended._tag !== "Closed" || !ended.ended) {
         return yield* unsettled(
           ask,
           `${lost}; ${"reason" in ended ? ended.reason : "its terminal changed before it could be ended"}`,
         );
+      }
       yield* log(ask.runId, `${agent}: ${lost}; recovering its work in the same Run`);
       return true;
     });
@@ -3581,8 +3838,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     under(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        if (yield* fs.exists(usageWaitPath(ask)).pipe(Effect.orElseSucceed(() => true)))
+        if (yield* fs.exists(usageWaitPath(ask)).pipe(Effect.orElseSucceed(() => true))) {
           return false;
+        }
         const agent = yield* nameFor(ask);
         const refused = refusedStarts.get(agent);
         if (refused !== undefined) {
@@ -3591,7 +3849,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           return yield* new AgentParked({ operation: ask.operation, reason: refused });
         }
         const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
-        if (onlyDeadServer && lost === null) return false;
+        if (onlyDeadServer && lost === null) {
+          return false;
+        }
         const completed = waitForOutput(ask.output, unless ?? null, {
           pollMs: host.pollMs ?? DEFAULT_POLL_MS,
           budgetMs: 0,
@@ -3602,7 +3862,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             Effect.map((status) => status !== "working" && status !== "blocked"),
           ),
         });
-        if ((yield* completed) !== null) return false;
+        if ((yield* completed) !== null) {
+          return false;
+        }
         const rows = Arr.filter(
           yield* everyRegistered,
           (one) => one.agent === agent && one.runId === ask.runId,
@@ -3614,12 +3876,20 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           yield* log(ask.runId, `${agent}: started before core, so not started again`);
           return false;
         }
-        if (lost === null && (yield* startedWith(ask.runId, agent)) !== null) return false;
+        if (lost === null && (yield* startedWith(ask.runId, agent)) !== null) {
+          return false;
+        }
         const listing = yield* host.herdr.agentList().pipe(Effect.option);
-        if (listing._tag === "None") return false;
+        if (listing._tag === "None") {
+          return false;
+        }
         if (lost !== null) {
-          if (!(yield* retireLost(ask, agent, listing.value))) return false;
-          if ((yield* completed) !== null) return false;
+          if (!(yield* retireLost(ask, agent, listing.value))) {
+            return false;
+          }
+          if ((yield* completed) !== null) {
+            return false;
+          }
           yield* launch(ask);
           return true;
         }
@@ -3628,7 +3898,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               .agentStatus(agent)
               .pipe(Effect.match({ onFailure: herdrFailureReason, onSuccess: () => "" }))
           : "";
-        if (!isGone(agent, listing.value, refusal)) return false;
+        if (!isGone(agent, listing.value, refusal)) {
+          return false;
+        }
         yield* log(
           ask.runId,
           `${agent}: gone before ${ask.operation} was written; starting it again`,
@@ -3650,8 +3922,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const others = Arr.filter(options.lineage, (runId) => runId !== options.runId);
         const entry = yield* lineageAgent(alive, options.role, others);
         // WARNING: without a proven incarnation the entry names a pane, not the agent now in it.
-        if (entry === null) return null;
-        if (!verifyIncarnation(entry, alive).ok) return null;
+        if (entry === null) {
+          return null;
+        }
+        if (!verifyIncarnation(entry, alive).ok) {
+          return null;
+        }
         const handed = { agent: entry.agent, delivered: true, detail: "" };
         const earlier = Arr.filter(
           yield* deliveriesOf(entry.runId),
@@ -3713,7 +3989,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     under(
       Effect.gen(function* () {
         const incident = yield* usageIncident(launched);
-        if (incident !== null) return incident;
+        if (incident !== null) {
+          return incident;
+        }
         const dir = yield* controlDir(host.env.stateDir, launched.agent);
         const on = pinned(choiceOfLaunch(launched));
         let readAt = Number.NEGATIVE_INFINITY;
@@ -3746,7 +4024,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                     appliesTo(window, on.model) && isFull(currentUsageWindow(window, now)),
                 ),
             );
-            if (Option.isSome(reading))
+            if (Option.isSome(reading)) {
               exhaustion = {
                 at: now,
                 account: reading.value.account,
@@ -3759,6 +4037,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                   ({ kind, model, resetsAt }) => ({ kind, model, resetsAt }),
                 ),
               };
+            }
           }
           const why = exhausted ?? reported?.why;
           if (why !== undefined) {
@@ -3769,7 +4048,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               resetsAt,
               observedAt: now,
             };
-            if (exhaustion !== undefined) result.exhaustion = exhaustion;
+            if (exhaustion !== undefined) {
+              result.exhaustion = exhaustion;
+            }
             // WARNING: core recovery must see the wait even before this RanOut is journaled.
             yield* usageWaiting(launched, result);
             return result;
@@ -3804,14 +4085,17 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 ),
           ),
         );
-        if (ended._tag === "Unprovable") return yield* parked(`it ${UNPROVABLE}`);
-        if (ended._tag === "NotQuiet")
+        if (ended._tag === "Unprovable") {
+          return yield* parked(`it ${UNPROVABLE}`);
+        }
+        if (ended._tag === "NotQuiet") {
           return yield* ended.locked === undefined
             ? new AgentParked({
                 operation: launched.operation,
                 reason: `${ended.reason}. It ran out, and no agent takes its work until it has stopped; resume once it has`,
               })
             : parked(`it could not be stopped (${ended.locked})`);
+        }
         yield* log(launched.runId, line);
       }),
     );
@@ -3837,18 +4121,22 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             name,
             host.stopMs,
           ).pipe(Effect.result);
-          if (reached._tag === "Failure")
+          if (reached._tag === "Failure") {
             left.push(
               reached.failure._tag === "ControlsInUse"
                 ? `${name} could not be stopped yet: a start, prune or stop still holds its controls`
                 : `${name} could not be stopped (${reason(reached.failure)})`,
             );
-          else if (reached.success?.state === "quiet") stopped.push(name);
-          else if (reached.success !== null)
+          } else if (reached.success?.state === "quiet") {
+            stopped.push(name);
+          } else if (reached.success !== null) {
             left.push(notStopped(name, reached.success, reached.success.target));
+          }
         }
         const launches = yield* launchesOf(runId);
-        if (launches.length === 0) return yield* reported(runId, stopped, left);
+        if (launches.length === 0) {
+          return yield* reported(runId, stopped, left);
+        }
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
         if (listing._tag === "Failure") {
           left.push(`core cannot say which agents it has (${reason(listing.failure)})`);
@@ -3870,8 +4158,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 : `core cannot say which agents it has (${reason(failure.cause)})`,
             );
           } else if (ended.success._tag === "Closed") {
-            if (ended.success.ended) stopped.push(name);
-          } else left.push(ended.success.reason);
+            if (ended.success.ended) {
+              stopped.push(name);
+            }
+          } else {
+            left.push(ended.success.reason);
+          }
         }
         return yield* reported(runId, stopped, left);
       }),
@@ -3879,8 +4171,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
 
   const reported = (runId: string, stopped: Array<string>, left: Array<string>) =>
     Effect.gen(function* () {
-      if (stopped.length > 0) yield* log(runId, `stopped ${Arr.join(stopped, ", ")}`);
-      if (left.length > 0) yield* log(runId, `not stopped: ${Arr.join(left, "; ")}`);
+      if (stopped.length > 0) {
+        yield* log(runId, `stopped ${Arr.join(stopped, ", ")}`);
+      }
+      if (left.length > 0) {
+        yield* log(runId, `not stopped: ${Arr.join(left, "; ")}`);
+      }
       return { stopped, left };
     });
 
@@ -3915,7 +4211,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             (one) => one.request === options.request,
           ),
         );
-        if (queued?.result != null) return queued.result;
+        if (queued?.result != null) {
+          return queued.result;
+        }
         const launched = steerTarget(
           yield* candidatesOf(options.runId),
           queued ?? { to, operation, agent },
@@ -3931,7 +4229,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           };
         }
         const out = stepsGoingOut.get(launched.agent);
-        if (out !== undefined) yield* Deferred.await(out);
+        if (out !== undefined) {
+          yield* Deferred.await(out);
+        }
         const unsupported =
           options.mode === "now" &&
           (yield* gate(launched.harness, "now").pipe(
@@ -3955,8 +4255,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           ...(pinned ? { agent: launched.agent } : { operation: launched.operation }),
           result: null,
         };
-        if (options.workflowNotice !== undefined && queued === undefined)
+        if (options.workflowNotice !== undefined && queued === undefined) {
           pending.workflowNotice = options.workflowNotice;
+        }
         if (options.actor !== undefined && queued === undefined) {
           pending.actor = Struct.omit(actorOf(options.actor, options.request), ["requestId"]);
         }
@@ -3973,18 +4274,19 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         }
         if (fallback) {
           const found = yield* entryFor(launched, launched.agent, null);
-          if (found.entry === null)
+          if (found.entry === null) {
             return {
               agent: launched.agent,
               delivered: false,
               detail: found.reason ?? "no such agent",
               gone: found.gone,
             };
+          }
           yield* keepQueued(dirFor(options.runId), pending).pipe(Effect.orDie);
           const status = yield* host.herdr
             .agentStatus(launched.agent)
             .pipe(Effect.orElseSucceed(() => "unknown" as const));
-          if (!isSettled(status))
+          if (!isSettled(status)) {
             return {
               agent: launched.agent,
               delivered: false,
@@ -3992,6 +4294,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               detail:
                 "Queued durably; the host will deliver when this agent is idle, without answering its Run's choices.",
             };
+          }
           const previous = Option.getOrUndefined(
             Arr.findFirst(
               yield* deliveriesOf(options.runId),
@@ -4033,17 +4336,19 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         );
         if (sent.sent) {
           const result = receipt(launched.agent, sent);
-          if (fallback)
+          if (fallback) {
             yield* keepQueued(dirFor(options.runId), { ...pending, result }).pipe(Effect.orDie);
+          }
           return result;
         }
-        if (fallback && !pipe(sent.why, Str.startsWith("unknown:")))
+        if (fallback && !pipe(sent.why, Str.startsWith("unknown:"))) {
           return {
             agent: launched.agent,
             delivered: false,
             queued: true,
             detail: `Queued durably; waiting for a supported idle submission (${sent.why}).`,
           };
+        }
         const alive = yield* host.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
         return {
           agent: launched.agent,
@@ -4138,7 +4443,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             host.models,
             catalogue,
           );
-          if (!resolved.ok) return yield* new WorkflowError({ reason: resolved.problem });
+          if (!resolved.ok) {
+            return yield* new WorkflowError({ reason: resolved.problem });
+          }
           const { choice, from, why, skipped } = resolved.chosen;
           const after = resolveWithRoom(
             [configured, ...layers],
@@ -4151,7 +4458,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             catalogue,
           );
           const next = after.ok && after.chosen.from !== null ? after.chosen.choice : null;
-          for (const line of skipped) yield* log(runId, `${operation}: ${line}`);
+          for (const line of skipped) {
+            yield* log(runId, `${operation}: ${line}`);
+          }
           if (spent.length === 0 && from !== null) {
             yield* log(
               runId,
@@ -4162,8 +4471,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           }
           const chosen: Types.Mutable<ChosenAgent> = { ...choice };
           fellBack(chosen, from, why);
-          if (next !== null)
+          if (next !== null) {
             chosen.next = { harness: next.harness, model: next.model, effort: next.effort };
+          }
           return chosen;
         }),
       ),
@@ -4173,12 +4483,16 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           const held = Option.getOrUndefined(
             Arr.findLast(yield* launchesOf(runId), (one) => launchedAs(one, agent)),
           );
-          if (held === undefined) return null;
+          if (held === undefined) {
+            return null;
+          }
           const listing = yield* host.herdr.agentList().pipe(Effect.option);
           const alive = Option.exists(listing, (agents) =>
             Arr.some(agents, (one) => one.name === held.agent),
           );
-          if (!alive || held.model === undefined) return null;
+          if (!alive || held.model === undefined) {
+            return null;
+          }
           const running: Types.Mutable<
             ChosenAgent & { sequence: number; outputSubmit: "file" | "tool" }
           > = {
@@ -4188,9 +4502,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             sequence: held.sequence ?? 1,
             outputSubmit: held.outputSubmit ?? "file",
           };
-          if (held.claudeSubagents !== undefined) running.claudeSubagents = held.claudeSubagents;
+          if (held.claudeSubagents !== undefined) {
+            running.claudeSubagents = held.claudeSubagents;
+          }
           fellBack(running, held.from, held.why);
-          if (held.next !== undefined) running.next = held.next;
+          if (held.next !== undefined) {
+            running.next = held.next;
+          }
           return running;
         }),
       ),
@@ -4235,8 +4553,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const marker = `${dirFor(launched.runId)}/${stemOf(launched)}.parked-${round}`;
-          if (yield* fs.exists(marker))
+          if (yield* fs.exists(marker)) {
             return yield* fs.readFileString(launched.output).pipe(Effect.orElseSucceed(() => ""));
+          }
           yield* fs.writeFileString(marker, "");
           return null;
         }),
@@ -4261,7 +4580,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       under(
         Effect.gen(function* () {
           const launched = steerTarget(yield* candidatesOf(runId), {});
-          if (launched === undefined) return false;
+          if (launched === undefined) {
+            return false;
+          }
           const sent = yield* deliver(launched, correction.text, {
             kind: "correction",
             ref: correction.constraint,
@@ -4298,10 +4619,18 @@ const receipt: (
     detail: "",
     observed: how !== null,
   };
-  if (how !== null) steered.how = how;
-  if (sent.id !== undefined) steered.delivery = sent.id;
-  if (sent.pane !== undefined) steered.pane = sent.pane;
-  if (sent.kept !== undefined && sent.kept !== null) steered.kept = sent.kept;
+  if (how !== null) {
+    steered.how = how;
+  }
+  if (sent.id !== undefined) {
+    steered.delivery = sent.id;
+  }
+  if (sent.pane !== undefined) {
+    steered.pane = sent.pane;
+  }
+  if (sent.kept !== undefined && sent.kept !== null) {
+    steered.kept = sent.kept;
+  }
   return steered;
 };
 
@@ -4322,8 +4651,9 @@ const stepPointer = (file: string) =>
 const CLEARANCE_CHARS = 400;
 
 const clearanceProblem: (clears: ReadonlyArray<string>) => string | null = (clears) => {
-  if (Arr.some(clears, (one) => /[\r\n]/.test(one)))
+  if (Arr.some(clears, (one) => /[\r\n]/.test(one))) {
     return "a Clearance is one line, and this one has a line break";
+  }
   const joined = Array.from(Arr.join(clears, "; ")).length;
   return joined > CLEARANCE_CHARS
     ? `its Clearance is ${joined} characters, over the ${CLEARANCE_CHARS} a Clearance may be`
@@ -4377,12 +4707,18 @@ export const installedSkills = Effect.fn("Agents.skills")(function* (
   names: ReadonlyArray<string>,
 ) {
   const found = new Map<string, string>();
-  if (names.length === 0) return found;
+  if (names.length === 0) {
+    return found;
+  }
   const dirs = yield* skillDirs(env);
   for (const name of names) {
-    if (unsafePathComponent(name) !== null) continue;
+    if (unsafePathComponent(name) !== null) {
+      continue;
+    }
     const file = yield* skillFile(dirs, name).pipe(Effect.orElseSucceed(() => null));
-    if (file !== null) found.set(name, file);
+    if (file !== null) {
+      found.set(name, file);
+    }
   }
   return found;
 });
@@ -4427,7 +4763,9 @@ const layeredPersona: (
   const fs = yield* FileSystem.FileSystem;
   for (const [at, dir] of dirs.entries()) {
     const file = `${dir}/personas/${role}.md`;
-    if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) continue;
+    if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) {
+      continue;
+    }
     const markdown = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
     const { preamble, sections } = bodySections(
       pipe(markdown, Str.replace(PERSONA_FRONT_MATTER, "")),
@@ -4439,7 +4777,9 @@ const layeredPersona: (
       if (isString(parent) && !followed.includes(file)) {
         const from = parent === role ? at + 1 : at;
         const inherited = yield* layeredPersona(env, parent, dirs.slice(from), [...followed, file]);
-        if (inherited === null || sections.size === 0) return inherited;
+        if (inherited === null || sections.size === 0) {
+          return inherited;
+        }
         const added = Arr.map([...sections], ([name, text]) => `## ${name}\n\n${text}`);
         return `${inherited}\n\n${yield* renderedPersona(env, role, file, Arr.join(added, "\n\n"))}`;
       }
@@ -4520,16 +4860,24 @@ const waitForOutput = <R>(
     for (;;) {
       const text = yield* read;
       if (fresh(text)) {
-        if (every.usable(text)) return text;
+        if (every.usable(text)) {
+          return text;
+        }
         if (yield* every.settled) {
           const after = yield* read;
-          if (fresh(after)) return after;
+          if (fresh(after)) {
+            return after;
+          }
         }
       }
-      if (spent >= every.budgetMs) return null;
+      if (spent >= every.budgetMs) {
+        return null;
+      }
       const before = yield* Clock.currentTimeMillis;
       yield* Effect.sleep(Duration.millis(every.pollMs));
-      if (yield* every.counts) spent += (yield* Clock.currentTimeMillis) - before;
+      if (yield* every.counts) {
+        spent += (yield* Clock.currentTimeMillis) - before;
+      }
     }
   }).pipe(Effect.orDie);
 
@@ -4539,7 +4887,9 @@ const write = (path: string, text: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const at = Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1);
-    if (at > 0) yield* fs.makeDirectory(pipe(path, Str.slice(0, at)), { recursive: true });
+    if (at > 0) {
+      yield* fs.makeDirectory(pipe(path, Str.slice(0, at)), { recursive: true });
+    }
     yield* fs.writeFileString(path, text);
   }).pipe(Effect.orDie);
 
@@ -4596,8 +4946,12 @@ const claudeSettings = (
       ...mergeClaudeSettings(collie, overlay),
       autoMode: { ...autoMode },
     };
-    if (Struct.keys(skillOverrides).length > 0) Object.assign(merged, { skillOverrides });
-    if (policy !== undefined) Object.assign(merged, subagentSettings(policy));
+    if (Struct.keys(skillOverrides).length > 0) {
+      Object.assign(merged, { skillOverrides });
+    }
+    if (policy !== undefined) {
+      Object.assign(merged, subagentSettings(policy));
+    }
     yield* write(path, `${encodeSettings(merged)}\n`);
     return passed === undefined ? [...controls, "--settings", path] : controls;
   });
@@ -4606,7 +4960,9 @@ const append = (path: string, line: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const at = Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1);
-    if (at > 0) yield* fs.makeDirectory(pipe(path, Str.slice(0, at)), { recursive: true });
+    if (at > 0) {
+      yield* fs.makeDirectory(pipe(path, Str.slice(0, at)), { recursive: true });
+    }
     yield* fs.writeFileString(path, `${line}\n`, { flag: "a" });
   }).pipe(Effect.ignore);
 

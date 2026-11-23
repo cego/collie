@@ -57,16 +57,30 @@ const NUMBER = /^\d+$/;
 export const cronWords = (cron: string) => {
   // WARNING: only common five-field shapes; anything else is shown as its expression.
   const [minute, hour, day, month, weekday, ...rest] = Str.split(Str.trim(cron), /\s+/);
-  if (rest.length > 0 || weekday === undefined || day !== "*" || month !== "*") return null;
+  if (rest.length > 0 || weekday === undefined || day !== "*" || month !== "*") {
+    return null;
+  }
   const step = /^\*\/(\d+)$/.exec(minute)?.[1];
-  if (step !== undefined && hour === "*" && weekday === "*") return `every ${step} minutes`;
-  if (!NUMBER.test(minute)) return null;
+  if (step !== undefined && hour === "*" && weekday === "*") {
+    return `every ${step} minutes`;
+  }
+  if (!NUMBER.test(minute)) {
+    return null;
+  }
   const mm = pipe(minute, Str.padStart(2, "0"));
-  if (hour === "*" && weekday === "*") return `every hour at :${mm}`;
-  if (!NUMBER.test(hour!)) return null;
+  if (hour === "*" && weekday === "*") {
+    return `every hour at :${mm}`;
+  }
+  if (!NUMBER.test(hour!)) {
+    return null;
+  }
   const at = `at ${pipe(hour!, Str.padStart(2, "0"))}:${mm}`;
-  if (weekday === "*") return `every day ${at}`;
-  if (weekday === "1-5") return `weekdays ${at}`;
+  if (weekday === "*") {
+    return `every day ${at}`;
+  }
+  if (weekday === "1-5") {
+    return `weekdays ${at}`;
+  }
   const named = NUMBER.test(weekday) ? DAYS[Number(weekday) % 7] : undefined;
   return named === undefined ? null : `every ${named} ${at}`;
 };
@@ -86,23 +100,26 @@ const rowOf = (entry: ScheduleEntry) => {
 };
 
 export const machineSchedules = (machine: MachineSchedules) => {
-  if (machine.unreachable)
+  if (machine.unreachable) {
     return {
       state: "unreachable",
       said: `${machine.name} is unreachable${machine.problem === null ? "" : ` (${machine.problem})`}; its Schedules still fire there while its host runs.`,
       rows: [],
     };
-  if (machine.problem !== null)
+  }
+  if (machine.problem !== null) {
     return {
       state: machine.problem === SCHEDULES_UPGRADE_SAID ? "upgrade" : "problem",
       said: machine.problem,
       rows: [],
     };
-  if (machine.schedules.length === 0)
+  }
+  if (machine.schedules.length === 0) {
     return {
       state: "empty",
       said: `No Schedules on ${machine.name}. Ask the Flock chat to add one.`,
       rows: [],
     };
+  }
   return { state: "listed", said: null, rows: Arr.map(machine.schedules, rowOf) };
 };

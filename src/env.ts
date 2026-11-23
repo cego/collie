@@ -29,7 +29,9 @@ export interface PluginEnv {
 function first(env: Record<string, string | undefined>, ...keys: Array<string>) {
   for (const k of keys) {
     const v = env[k];
-    if (v !== undefined && v !== "") return v;
+    if (v !== undefined && v !== "") {
+      return v;
+    }
   }
   return null;
 }
@@ -40,7 +42,9 @@ export function ownRoot(
   execPath: string = process.execPath,
   collieDir: string | null = null,
 ) {
-  if (!pipe(modulePath, Str.startsWith("/$bunfs/"))) return null;
+  if (!pipe(modulePath, Str.startsWith("/$bunfs/"))) {
+    return null;
+  }
   const at = Option.getOrElse(pipe(execPath, Str.lastIndexOf("/bin/")), () => -1);
   // WARNING: a downloaded runner upgrades the installation, never the caller's stale PWD.
   return at > 0
@@ -76,7 +80,9 @@ export function readEnv(
 
   const raw: Record<string, string> = {};
   for (const [key, value] of Rec.toEntries(env)) {
-    if (value !== undefined) raw[key] = value;
+    if (value !== undefined) {
+      raw[key] = value;
+    }
   }
 
   const returned: PluginEnv = {
@@ -136,7 +142,9 @@ export const currentEnv = Effect.gen(function* () {
   const env: Record<string, string | undefined> = {};
   for (const key of environmentKeys) {
     const value = yield* Config.option(Config.String(key));
-    if (Option.isSome(value)) env[key] = value.value;
+    if (Option.isSome(value)) {
+      env[key] = value.value;
+    }
   }
   return readEnv(env);
 });
@@ -164,9 +172,15 @@ export const withoutLauncher = (
     );
   const preload = without(LD_PRELOAD, (entry) => LAUNCHER_PRELOADS.has(entry));
   const libraries = without(LD_LIBRARY_PATH, (entry) => entry === bin);
-  if (preload !== "") kept.LD_PRELOAD = preload;
-  if (libraries !== "") kept.LD_LIBRARY_PATH = libraries;
-  if (ICU_DATA !== undefined && ICU_DATA !== "" && ICU_DATA !== bin) kept.ICU_DATA = ICU_DATA;
+  if (preload !== "") {
+    kept.LD_PRELOAD = preload;
+  }
+  if (libraries !== "") {
+    kept.LD_LIBRARY_PATH = libraries;
+  }
+  if (ICU_DATA !== undefined && ICU_DATA !== "" && ICU_DATA !== bin) {
+    kept.ICU_DATA = ICU_DATA;
+  }
   return kept;
 };
 
@@ -176,6 +190,10 @@ export const withoutHerdrOne = (env: Readonly<Record<string, string | undefined>
 export const leaveLauncher = () => {
   const env = process.env;
   const kept = withoutLauncher(env);
-  for (const name of Struct.keys(env)) if (!(name in kept)) delete env[name];
+  for (const name of Struct.keys(env)) {
+    if (!(name in kept)) {
+      delete env[name];
+    }
+  }
   Object.assign(env, kept);
 };

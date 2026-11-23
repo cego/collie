@@ -25,8 +25,9 @@ export const viewMismatches = (
       found.delivery !== wanted.delivery ||
       found.closed !== wanted.closed ||
       found.wakes !== wanted.wakes
-    )
+    ) {
       wrong.push(wanted.runId);
+    }
     byId.delete(wanted.runId);
   }
   return [...wrong, ...byId.keys()];
@@ -34,10 +35,13 @@ export const viewMismatches = (
 
 export const logArrivals = (frames: ReadonlyArray<{ at: number; text: string }>) => {
   const arrived = new Map<number, number>();
-  for (const frame of frames)
+  for (const frame of frames) {
     for (const marker of Str.matchAll(/bench-log:(\d+):\d+/g)(frame.text)) {
       const sequence = Number(marker[1]);
-      if (!arrived.has(sequence)) arrived.set(sequence, frame.at);
+      if (!arrived.has(sequence)) {
+        arrived.set(sequence, frame.at);
+      }
     }
+  }
   return arrived;
 };

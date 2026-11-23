@@ -49,7 +49,9 @@ export const actionsLog = (dir: string, maxBytes = LOG_BYTES) =>
           Effect.map((info) => Number(info.size)),
           Effect.orElseSucceed(() => 0),
         );
-        if (size > 0 && size + bytes.length > maxBytes) yield* fs.rename(file, `${file}.1`);
+        if (size > 0 && size + bytes.length > maxBytes) {
+          yield* fs.rename(file, `${file}.1`);
+        }
         yield* fs.writeFile(file, bytes, { flag: "a" });
       }).pipe(lock.withPermits(1), Effect.ignoreCause);
     return returned;
@@ -96,9 +98,15 @@ export const withheldOf: (action: Schema.Json, key?: string) => ReadonlyArray<st
   action: Schema.Json,
   key = "",
 ) => {
-  if (IDS.has(key)) return [];
-  if (isString(action)) return action === "" ? [] : [action];
-  if (Arr.isArray<typeof action>(action)) return Arr.flatMap(action, (value) => withheldOf(value));
+  if (IDS.has(key)) {
+    return [];
+  }
+  if (isString(action)) {
+    return action === "" ? [] : [action];
+  }
+  if (Arr.isArray<typeof action>(action)) {
+    return Arr.flatMap(action, (value) => withheldOf(value));
+  }
   const object = asObject(action);
   return Result.isFailure(object)
     ? []

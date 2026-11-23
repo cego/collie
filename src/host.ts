@@ -597,8 +597,9 @@ export const slowRpcsLayer = Layer.succeed(SlowRpcs)((effect, { rpc }) =>
           Effect.ensuring(
             Effect.gen(function* () {
               const took = (yield* Clock.currentTimeMillis) - started;
-              if (took > SLOW_RPC_MS)
+              if (took > SLOW_RPC_MS) {
                 yield* Effect.logWarning(`the ${rpc._tag} RPC took ${took} ms to answer`);
+              }
             }),
           ),
         );
@@ -609,7 +610,7 @@ const serveAnswer = <A, E, R>(
   answer: Effect.Effect<A, E, R> | Stream.Stream<A, E, R>,
   name: string,
 ) => {
-  if (Stream.isStream(answer))
+  if (Stream.isStream(answer)) {
     return Stream.transformPull(
       firstValueTimed(answer, (ms) =>
         Effect.logWarning(`the ${name} stream took ${ms} ms to send its first value`),
@@ -618,7 +619,9 @@ const serveAnswer = <A, E, R>(
         Effect.map(Foreground, ({ serve }) => {
           let first = true;
           return Effect.suspend(() => {
-            if (!first) return pull;
+            if (!first) {
+              return pull;
+            }
             first = false;
             return Effect.flatMap(
               serve(
@@ -633,6 +636,7 @@ const serveAnswer = <A, E, R>(
           });
         }),
     );
+  }
   return Effect.flatMap(Foreground, ({ serve }) => serve(answer));
 };
 
@@ -642,7 +646,6 @@ export const timingFirstValues: <
   handlers: H,
 ) => H = <H extends Record<string, (...args: ReadonlyArray<never>) => object>>(handlers: H) =>
   // WARNING: each handler is replaced by one taking its arguments and answering its type.
-  // WARNING: Each handler is replaced by one taking its arguments and answering its type.
   Rec.map(handlers, (handler, name) => (...args: ReadonlyArray<never>) => {
     const answer = handler(...args);
     return Stream.isStream(answer) || Effect.isEffect(answer) ? serveAnswer(answer, name) : answer;
@@ -730,20 +733,22 @@ const healerBound =
       Registry,
       (registry) =>
         // WARNING: each handler is replaced by one taking its arguments and answering its type.
-        // WARNING: Each handler is replaced by one taking its arguments and answering its type.
         Rec.map(handlers, (handler, name) =>
           HEALER_READS.has(name)
             ? handler
             : (payload: never, options: never) => {
                 const refusal = Effect.gen(function* () {
                   // WARNING: every RPC handler is called with the options carrying its client.
-                  // WARNING: Every RPC handler is called with the options carrying its client.
                   const who = stampIn(declared, (options as { client: { id: number } }).client);
-                  if (who.origin !== "agent" || who.from?.run === undefined) return;
+                  if (who.origin !== "agent" || who.from?.run === undefined) {
+                    return;
+                  }
                   const heals = (yield* registry
                     .view(who.from.run)
                     .pipe(Effect.orElseSucceed(() => null)))?.heals;
-                  if (heals === undefined) return;
+                  if (heals === undefined) {
+                    return;
+                  }
                   if (name === "artefactRegister") {
                     const asked = Schema.decodeOption(RegistersReport)(payload);
                     if (
@@ -764,8 +769,9 @@ const healerBound =
                         Option.isSome(files) &&
                         Str.startsWith(`${files.value[0]}${path.sep}`)(files.value[1]) &&
                         Str.endsWith(".md")(Str.toLowerCase(files.value[1]))
-                      )
+                      ) {
                         return;
+                      }
                     }
                   }
                   const targets =
@@ -778,8 +784,9 @@ const healerBound =
                       : name === "steer" || name === "resume"
                         ? Option.map(Schema.decodeOption(TargetsOne)(payload), (one) => [one.runId])
                         : Option.none();
-                  if (Option.isSome(targets) && Arr.every(targets.value, (run) => run === heals))
+                  if (Option.isSome(targets) && Arr.every(targets.value, (run) => run === heals)) {
                     return;
+                  }
                   return yield* new HostRefused({
                     reason: `${who.from.run} is a Heal of ${heals}: its agents may only deliver to ${heals}'s agents, resume it, or register Markdown reports in their own Run's handoffs`,
                   });
@@ -858,14 +865,16 @@ const handlers = (
                       (one) => one.installation === sender.installation,
                     ),
                   );
-            if (peer === undefined || sender?.installation !== notice.machine.installation)
+            if (peer === undefined || sender?.installation !== notice.machine.installation) {
               return yield* new HostRefused({
                 reason: "only a paired Machine can send a Run link notice",
               });
-            if (notice.requestedBy.machine.installation !== installation)
+            }
+            if (notice.requestedBy.machine.installation !== installation) {
               return yield* new HostRefused({
                 reason: "the requesting Run belongs to another Machine",
               });
+            }
             if (
               notice.narratives !== undefined &&
               Arr.some(
@@ -875,23 +884,26 @@ const handlers = (
                   (one.address.installation !== notice.machine.installation ||
                     one.address.run !== notice.run),
               )
-            )
+            ) {
               return yield* new HostRefused({
                 reason: "a Run link can report only its own registered material",
               });
+            }
             const runId = notice.requestedBy.run;
-            if ((yield* registry.view(runId)) === null)
+            if ((yield* registry.view(runId)) === null) {
               return yield* new HostRefused({ reason: `No Run "${runId}".` });
+            }
             const launch = Option.getOrUndefined(
               Arr.findLast(
                 yield* readLaunches(runId),
                 (one) => one.agent === notice.requestedBy.agent,
               ),
             );
-            if (launch === undefined)
+            if (launch === undefined) {
               return yield* new HostRefused({
                 reason: "the requesting agent was not launched by that Run",
               });
+            }
             return yield* recordingLinks.withPermits(1)(
               once(
                 runDir(dir, runId),
@@ -918,7 +930,9 @@ const handlers = (
                   }).pipe(Effect.orDie);
                   const catalogue = yield* Artefacts;
                   const parent = yield* registry.view(runId);
-                  if (parent !== null) yield* catalogue.prepareReports(factsOfView(dir, parent));
+                  if (parent !== null) {
+                    yield* catalogue.prepareReports(factsOfView(dir, parent));
+                  }
                   return true;
                 }),
               ),
@@ -967,7 +981,9 @@ const handlers = (
         runWork: ({ runId }) =>
           Effect.gen(function* () {
             const view = yield* registry.view(runId);
-            if (view === null) return null;
+            if (view === null) {
+              return null;
+            }
             const ref = mrOf(factsOfView(dir, view));
             const mr = ref === null ? null : yield* mrIdIn(ref, view.cwd, shell);
             return {
@@ -992,7 +1008,9 @@ const handlers = (
             const views = yield* registry.views(null);
             const runs = Arr.map(views, (view) => factsOfView(dir, view));
             const run = Option.getOrUndefined(Arr.findFirst(runs, (one) => one.id === runId));
-            if (run === undefined) return yield* new HostRefused({ reason: `No Run "${runId}".` });
+            if (run === undefined) {
+              return yield* new HostRefused({ reason: `No Run "${runId}".` });
+            }
             return {
               running: yield* runningCheck(
                 run,
@@ -1009,15 +1027,18 @@ const handlers = (
               const views = yield* registry.views(null);
               const runs = Arr.map(views, (view) => factsOfView(dir, view));
               const run = Option.getOrUndefined(Arr.findFirst(runs, (one) => one.id === runId));
-              if (run === undefined)
+              if (run === undefined) {
                 return yield* new HostRefused({ reason: `No Run "${runId}".` });
+              }
               const running = yield* runningCheck(
                 run,
                 runs,
                 yield* markersOf(),
                 yield* Clock.currentTimeMillis,
               );
-              if (running?.log == null) return Stream.make({ _tag: "Ended" as const, check: null });
+              if (running?.log == null) {
+                return Stream.make({ _tag: "Ended" as const, check: null });
+              }
               return Stream.callback<typeof CheckEvent.Type>((emit) =>
                 Effect.gen(function* () {
                   yield* Queue.offer(emit, { _tag: "Output", text: `${running.sentence}\n` });
@@ -1032,7 +1053,9 @@ const handlers = (
           ),
         deliveries: ({ runId }) =>
           Effect.gen(function* () {
-            if ((yield* registry.view(runId)) === null) return null;
+            if ((yield* registry.view(runId)) === null) {
+              return null;
+            }
             return yield* deliveriesOf(runId);
           }),
         overridden: () => Effect.map(overriddenRuns, (runs) => [...runs]),
@@ -1097,7 +1120,9 @@ const handlers = (
         shown: ({ runId }) =>
           Effect.gen(function* () {
             const view = yield* registry.view(runId);
-            if (view === null) return null;
+            if (view === null) {
+              return null;
+            }
             const all = yield* registry.views(null);
             const hosted = yield* Effect.context<HostServices>();
             return {
@@ -1212,10 +1237,16 @@ const handlers = (
                 agent: agent ?? null,
                 mode: mode ?? null,
               };
-              if (attached !== undefined) asked.attachments = attached;
+              if (attached !== undefined) {
+                asked.attachments = attached;
+              }
               // WARNING: Set only where given, so a request recorded before `to` existed still matches.
-              if (to !== undefined) asked.to = to;
-              if (step !== undefined) asked.step = step;
+              if (to !== undefined) {
+                asked.to = to;
+              }
+              if (step !== undefined) {
+                asked.step = step;
+              }
               return once(
                 runDir(dir, runId),
                 {
@@ -1272,9 +1303,13 @@ type SteerAsked = {
 
 const attachedAs = (into: string | null, paths: ReadonlyArray<string> | undefined) =>
   Effect.gen(function* () {
-    if (paths === undefined || paths.length === 0) return undefined;
+    if (paths === undefined || paths.length === 0) {
+      return undefined;
+    }
     const refused = yield* attachmentRefusal(paths);
-    if (refused !== null) return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${refused}` });
+    if (refused !== null) {
+      return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${refused}` });
+    }
     return Arr.map(yield* namesIn(into, paths), ({ name, from }) => ({ name, from }));
   }).pipe(
     Effect.mapError((cause) =>
@@ -1353,7 +1388,11 @@ const hostBoard = (dir: string) =>
     // WARNING: Told synchronously, so a record opened after aliveNow draws it.
     const agentsSeen = new Set<(alive: ReadonlyArray<AgentInfo>) => void>();
     const agentsNow = Effect.map(agentsCached, (agents) => {
-      if (agents !== agentsRead) for (const told of agentsSeen) told(agents.alive);
+      if (agents !== agentsRead) {
+        for (const told of agentsSeen) {
+          told(agents.alive);
+        }
+      }
       return (agentsRead = agents);
     });
     const agentsLast = Effect.suspend(() =>
@@ -1365,7 +1404,9 @@ const hostBoard = (dir: string) =>
     // WARNING: The same object for as long as the view is: callers key on its identity.
     const factsOf = (view: RunView) => {
       const known = facts.get(view);
-      if (known !== undefined) return known;
+      if (known !== undefined) {
+        return known;
+      }
       const made = factsOfView(env.stateDir, view);
       facts.set(view, made);
       return made;
@@ -1405,7 +1446,9 @@ const hostBoard = (dir: string) =>
         noteIdle(idle, alive, yield* Clock.currentTimeMillis);
         const facts = yield* runs;
         // WARNING: Observed before the build, so each card's key holds the revisions as read.
-        if (model !== undefined) yield* model.observe(facts);
+        if (model !== undefined) {
+          yield* model.observe(facts);
+        }
         const views = yield* boardOf(facts, alive);
         return { runs: facts, views, alive };
       });
@@ -1413,7 +1456,9 @@ const hostBoard = (dir: string) =>
     const listing = Effect.gen(function* () {
       const started = yield* Clock.currentTimeMillis;
       const built = yield* listingOf(agentsNow);
-      if (model === undefined) return built;
+      if (model === undefined) {
+        return built;
+      }
       if (!filled) {
         filled = true;
         const took = (yield* Clock.currentTimeMillis) - started;
@@ -1583,10 +1628,15 @@ const isBookkeeping = ({ _tag, path }: FileSystem.WatchEvent) => {
     path,
     Str.slice(Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1) + 1),
   );
-  if (pipe(name, Str.endsWith(".lock")) || pipe(name, Str.endsWith(".tmp")) || top === "ssh")
+  if (pipe(name, Str.endsWith(".lock")) || pipe(name, Str.endsWith(".tmp")) || top === "ssh") {
     return true;
-  if (isHostLog(path) || /^host\.db-(wal|journal)$/.test(path)) return true;
-  if (top === "compaction") return name !== QUESTIONS;
+  }
+  if (isHostLog(path) || /^host\.db-(wal|journal)$/.test(path)) {
+    return true;
+  }
+  if (top === "compaction") {
+    return name !== QUESTIONS;
+  }
   return (
     _tag === "Update" &&
     ((top === "runs" && below === "handoffs") || (top === "evidence" && below === "verify"))
@@ -1665,7 +1715,9 @@ const targetOf = Schema.decodeUnknownOption(
 const recordSources = (opts: { readonly panels: MrPanels | null; readonly plans: PlanCache }) =>
   Effect.gen(function* () {
     const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
-    if (model === undefined) return undefined;
+    if (model === undefined) {
+      return undefined;
+    }
     const registry = yield* Registry;
     const hosted = yield* Effect.context<HostServices>();
     const { env, bun, alive, kept, factsOf } = yield* SharedBoard;
@@ -1685,8 +1737,9 @@ const recordSources = (opts: { readonly panels: MrPanels | null; readonly plans:
         ),
       mr: (run, fresh) => {
         const target = mrOf(run);
-        if (panels === null || forgeHttp === undefined || target === null)
+        if (panels === null || forgeHttp === undefined || target === null) {
           return Effect.succeed(null);
+        }
         return Clock.currentTimeMillis.pipe(
           Effect.flatMap((now) =>
             watchedMr({
@@ -1711,7 +1764,9 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
     Effect.gen(function* () {
       const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
       const record = yield* recordSources({ panels, plans: new Map() });
-      if (model === undefined || record === undefined) return;
+      if (model === undefined || record === undefined) {
+        return;
+      }
       door.attach(model);
       yield* door.warmed.pipe(
         Effect.flatMap(({ runs, ms }) =>
@@ -1755,9 +1810,15 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
             const moved =
               ids.length !== order.length || Arr.some(ids, (id, at) => order[at] !== id);
             const fresh = listed(Arr.filter(runs, (run) => posted.get(run.id) !== run));
-            for (const id of gone) posted.delete(id);
-            for (const run of runs) posted.set(run.id, run);
-            if (moved) order = ids;
+            for (const id of gone) {
+              posted.delete(id);
+            }
+            for (const run of runs) {
+              posted.set(run.id, run);
+            }
+            if (moved) {
+              order = ids;
+            }
             const offers = [...offered];
             offered.clear();
             door.post({
@@ -1868,7 +1929,9 @@ const finishTakenOver = (stateDir: string) =>
     const { noteVerification } = yield* Effect.promise(() => import("./metrics"));
     const followed = new Map<string, Deferred.Deferred<Verification, HostRefused>>();
     for (const record of yield* checks.takenOver) {
-      if (record.by !== "agent") continue;
+      if (record.by !== "agent") {
+        continue;
+      }
       const done = yield* Deferred.make<Verification, HostRefused>();
       followed.set(record.id, done);
       yield* Effect.scoped(
@@ -1931,10 +1994,14 @@ const frontDoorHandlers = (
       const revisionOfAct = (request: string, index: number, now: RunRevision) => {
         const key = `${request}#${index}`;
         const first = actRevisions.get(key);
-        if (first !== undefined && first.epoch === now.epoch) return first;
+        if (first !== undefined && first.epoch === now.epoch) {
+          return first;
+        }
         if (actRevisions.size >= ACT_REVISIONS_KEPT) {
           const oldest = actRevisions.keys().next();
-          if (oldest.done !== true) actRevisions.delete(oldest.value);
+          if (oldest.done !== true) {
+            actRevisions.delete(oldest.value);
+          }
         }
         actRevisions.set(key, now);
         return now;
@@ -1942,7 +2009,9 @@ const frontDoorHandlers = (
       const { serve } = yield* Foreground;
       const stepStill = (run: string, step: string | undefined, shown: RunRevision | undefined) =>
         Effect.gen(function* () {
-          if (shown === undefined || step === undefined || record === undefined) return;
+          if (shown === undefined || step === undefined || record === undefined) {
+            return;
+          }
           const flow = yield* recordFlow(record, run).pipe(
             Effect.provideContext(bun),
             Effect.orElseSucceed(() => null),
@@ -1953,15 +2022,18 @@ const frontDoorHandlers = (
               (lane) => Arr.findFirst(lane.nodes, (one) => one.id === step),
             ),
           );
-          if (node === undefined || !FINISHED_STEPS.has(node.state)) return;
+          if (node === undefined || !FINISHED_STEPS.has(node.state)) {
+            return;
+          }
           const { model } = record;
           const at = model.finishedAt(run, step, model.revision(run).seq);
-          if (shown.epoch !== model.epoch || at > shown.seq)
+          if (shown.epoch !== model.epoch || at > shown.seq) {
             return yield* new StaleAct({
               run,
               step,
               reason: `${node.title} has finished since the record you acted on was shown`,
             });
+          }
         });
       const followed = yield* finishTakenOver(env.stateDir).pipe(Effect.provideContext(hosted));
       const stampOf = (client: { readonly id: number }) => stampIn(declared, client);
@@ -1977,9 +2049,13 @@ const frontDoorHandlers = (
       const parkHealedBy = (client: { readonly id: number }) =>
         Effect.gen(function* () {
           const who = stampOf(client);
-          if (who.origin !== "agent" || who.from?.run === undefined) return undefined;
+          if (who.origin !== "agent" || who.from?.run === undefined) {
+            return undefined;
+          }
           const view = yield* registry.view(who.from.run).pipe(Effect.orElseSucceed(() => null));
-          if (view?.heals === undefined) return undefined;
+          if (view?.heals === undefined) {
+            return undefined;
+          }
           return Option.getOrElse(
             Schema.decodeUnknownOption(Schema.String)(view.input["park"]),
             () => "",
@@ -1993,11 +2069,16 @@ const frontDoorHandlers = (
       const toldVerifyEnded = (client: { readonly id: number }, verified: Verification) => {
         const asker = whoOf(client);
         const { run, agent } = asker.from ?? {};
-        if (asker.origin !== "agent" || run === undefined || agent === undefined)
+        if (asker.origin !== "agent" || run === undefined || agent === undefined) {
           return Effect.void;
+        }
         return Effect.gen(function* () {
-          if (!(yield* collecting.has(run, agent))) return;
-          if (!isSettled(yield* herdr.agentStatus(agent).pipe(Effect.provideContext(bun)))) return;
+          if (!(yield* collecting.has(run, agent))) {
+            return;
+          }
+          if (!isSettled(yield* herdr.agentStatus(agent).pipe(Effect.provideContext(bun)))) {
+            return;
+          }
           yield* registry.steer({
             runId: run,
             agent,
@@ -2089,7 +2170,9 @@ const frontDoorHandlers = (
         const own = yield* registry.offers(runId);
         const view = yield* registry.view(runId);
         const mrs = view === null ? [] : yield* mrsOfTask(view);
-        if (mrs.length < 2) return own;
+        if (mrs.length < 2) {
+          return own;
+        }
         const owned = yield* Effect.forEach(mrs, (one) =>
           registry.offers(one.owner).pipe(
             Effect.orElseSucceed(() => {
@@ -2105,7 +2188,9 @@ const frontDoorHandlers = (
         Effect.fn("Host.disposedOn")(function* (view: RunView) {
           const asked = { run: view.runId, ref };
           const said = Str.toLowerCase(Str.trim(ref));
-          if (said === "") return asked;
+          if (said === "") {
+            return asked;
+          }
           const mrs = yield* mrsOfTask(view);
           const id = yield* mrIdIn(ref, view.cwd, shell);
           const named = Arr.findFirst(
@@ -2115,9 +2200,13 @@ const frontDoorHandlers = (
               Str.toLowerCase(one.short) === said ||
               Str.toLowerCase(one.label) === said,
           );
-          if (Option.isSome(named)) return { run: named.value.owner, ref: named.value.id };
+          if (Option.isSome(named)) {
+            return { run: named.value.owner, ref: named.value.id };
+          }
           const anMr = id !== null || (readMrRef(ref) ?? readMrRef(`mr:${said}`)) !== null;
-          if (mrs.length === 0 || !anMr) return asked;
+          if (mrs.length === 0 || !anMr) {
+            return asked;
+          }
           return yield* new HostRefused({
             reason: `${ref} is not one of this Task's merge requests: ${Arr.join(
               Arr.map(mrs, (one) => one.label),
@@ -2132,18 +2221,22 @@ const frontDoorHandlers = (
           qualifiedRuns(ref),
           (one) => one.machine !== here && one.machine !== short(here),
         );
-        if (refs.length === 0) return undefined;
-        if (refs.length !== 1)
+        if (refs.length === 0) {
+          return undefined;
+        }
+        if (refs.length !== 1) {
           return yield* new HostRefused({ reason: "a handoff must name one successor" });
+        }
         const named = refs[0]!;
         const matches = Arr.filter(
           yield* peersOf(dir),
           (peer) => peer.name === named.machine || short(peer.name) === named.machine,
         );
-        if (matches.length !== 1)
+        if (matches.length !== 1) {
           return yield* new HostRefused({
             reason: `successor ${ref} has no unambiguous paired Machine`,
           });
+        }
         const peer = matches[0]!;
         return yield* Effect.scoped(
           Effect.gen(function* () {
@@ -2152,13 +2245,15 @@ const frontDoorHandlers = (
             if (
               identity.installation !== peer.installation ||
               identity.installation === installation
-            )
+            ) {
               return yield* new HostRefused({
                 reason: `successor ${ref} did not answer as its paired Machine`,
               });
+            }
             const target = yield* remote.runWork({ runId: named.run });
-            if (target === null)
+            if (target === null) {
               return yield* new HostRefused({ reason: `successor ${ref} does not exist` });
+            }
             const owning = Arr.findFirst(
               yield* mrsOfTask(view),
               (one) => one.id === target.work.mr,
@@ -2177,10 +2272,11 @@ const frontDoorHandlers = (
               carrier.branch === target.work.branch &&
               repository !== null &&
               repository === target.work.repository;
-            if (!sameMr && !sameBranch)
+            if (!sameMr && !sameBranch) {
               return yield* new HostRefused({
                 reason: `successor ${ref} does not carry this Run's work`,
               });
+            }
             return {
               carrier: carrier.runId,
               successor: {
@@ -2233,7 +2329,7 @@ const frontDoorHandlers = (
           const asked = stringifyJson([operation, reason ?? null]);
           return Effect.suspend(() => {
             const running = controlling.get(key);
-            if (running !== undefined)
+            if (running !== undefined) {
               return running.asked === asked
                 ? running.joined
                 : Effect.fail(
@@ -2242,6 +2338,7 @@ const frontDoorHandlers = (
                       reason: `request "${request}" is already running ${running.operation} for something else`,
                     }),
                   );
+            }
             const done = Deferred.makeUnsafe<
               typeof Controlled.Type,
               HostRefused | RequestConflict
@@ -2301,11 +2398,12 @@ const frontDoorHandlers = (
       ) =>
         Effect.gen(function* () {
           const file = yield* journalOf(proposal);
-          if (file === null)
+          if (file === null) {
             return yield* new ProposalRefused({
               refused: "not_found",
               detail: `no proposal "${proposal}"`,
             });
+          }
           const lines = yield* readProposals(file);
           const found = Option.getOrUndefined(
             Arr.findFirst(
@@ -2313,18 +2411,22 @@ const frontDoorHandlers = (
               (line): line is ProposalRecord => line.kind === "proposal" && line.id === proposal,
             ),
           );
-          if (found?.content_hash !== hash)
+          if (found?.content_hash !== hash) {
             return yield* new ProposalRefused({
               refused: "hash_mismatch",
               detail: `"${proposal}" is ${found?.content_hash}, not ${hash}`,
             });
+          }
           const prior = answeredBy(lines, request);
-          if (prior === undefined) return yield* act(file, null);
-          if (prior.kind !== kind || prior.id !== proposal)
+          if (prior === undefined) {
+            return yield* act(file, null);
+          }
+          if (prior.kind !== kind || prior.id !== proposal) {
             return yield* new RequestConflict({
               request,
               reason: `request "${request}" already ${prior.kind} ${prior.id}`,
             });
+          }
           return yield* act(file, lines);
         }).pipe(plainly);
       // WARNING: A Run stopped after its merge request landed stays stopped.
@@ -2342,8 +2444,9 @@ const frontDoorHandlers = (
             : (yield* readMrStates(env.stateDir).pipe(Effect.orElseSucceed(() => new Map()))).get(
                 (yield* mrIdIn(mr, run!.cwd, shell)) ?? "",
               );
-        if (state === undefined || !LANDED_STATES.has(state))
+        if (state === undefined || !LANDED_STATES.has(state)) {
           return yield* registry.resume(runId, recoveryPark, healing);
+        }
         return {
           runId,
           control: STOP,
@@ -2356,7 +2459,9 @@ const frontDoorHandlers = (
       const progressFor = (runId: string) =>
         Effect.gen(function* () {
           const view = yield* registry.view(runId);
-          if (view === null) return null;
+          if (view === null) {
+            return null;
+          }
           const board = Option.getOrElse(yield* Stream.runHead(boards), () => []);
           const card = Option.getOrUndefined(
             Arr.findFirst(board, (one) => one.runs.includes(runId)),
@@ -2384,7 +2489,7 @@ const frontDoorHandlers = (
                 if (
                   (yield* machineMemory(env)).short ||
                   configValue(yield* readConfig(env.userDir), "recovery.resume") === false
-                )
+                ) {
                   return {
                     runId: view.runId,
                     control: STOP,
@@ -2393,6 +2498,7 @@ const frontDoorHandlers = (
                     applied: false,
                     detail: "Recovery waits for memory or its setting",
                   };
+                }
                 return yield* takeUp(view.runId, park);
               }).pipe(Effect.mapError((cause) => new HostRefused({ reason: reason(cause) }))),
             ),
@@ -2418,7 +2524,7 @@ const frontDoorHandlers = (
                 yield* readAudit(trail).pipe(Effect.orElseSucceed(() => [])),
                 (line) => line.request === request,
               );
-              if (!recorded)
+              if (!recorded) {
                 yield* recordAudit(trail, {
                   operation: "start",
                   request,
@@ -2426,6 +2532,7 @@ const frontDoorHandlers = (
                   result: Started,
                   value: admitted,
                 }).pipe(Effect.orDie);
+              }
               return admitted.runId;
             }),
           notify: (runId, kind, body, key) =>
@@ -2445,17 +2552,20 @@ const frontDoorHandlers = (
           { client },
         ) => {
           // WARNING: Which Machine a channel came from is said by this host's own link, never by the channel.
-          if (from?.machine !== undefined && stamped !== stamp)
+          if (from?.machine !== undefined && stamped !== stamp) {
             return Effect.fail(
               new HostRefused({ reason: "a channel cannot say which Machine it came from" }),
             );
-          if (frontDoor === "host" && stamped !== stamp)
+          }
+          if (frontDoor === "host" && stamped !== stamp) {
             return Effect.fail(new HostRefused({ reason: "only a host's own link is host" }));
+          }
           const already = declared.get(client.id);
-          if (frontDoor === "schedule")
+          if (frontDoor === "schedule") {
             return Effect.fail(
               new HostRefused({ reason: "only the host starts a Run as a Schedule" }),
             );
+          }
           if (already !== undefined && already.frontDoor !== frontDoor) {
             return Effect.fail(
               new HostRefused({ reason: `this channel is already ${already.frontDoor}` }),
@@ -2467,10 +2577,11 @@ const frontDoorHandlers = (
               const entry = Option.getOrUndefined(
                 Arr.findLast(yield* everyRegistered, (one) => one.agent === from?.agent),
               );
-              if (entry === undefined || (from?.run !== undefined && from.run !== entry.runId))
+              if (entry === undefined || (from?.run !== undefined && from.run !== entry.runId)) {
                 return yield* new HostRefused({
                   reason: "this agent's Run could not be named from its registration",
                 });
+              }
               where = {
                 ...from,
                 run: entry.runId,
@@ -2565,8 +2676,9 @@ const frontDoorHandlers = (
                             if (
                               view?.requestedBy === undefined ||
                               view.requestedBy.machine.installation === installation
-                            )
+                            ) {
                               return;
+                            }
                             const { notifyRunLink } = yield* Effect.promise(
                               () => import("./run-link-delivery"),
                             );
@@ -2639,7 +2751,9 @@ const frontDoorHandlers = (
               const published = yield* (yield* Host)
                 .publish({ runId, title, file, onto, pushOnly, skipCi })
                 .pipe(Effect.mapError((error) => new HostRefused({ reason: error.reason })));
-              if (!pushOnly) yield* registry.mergeRequest(runId, published.url);
+              if (!pushOnly) {
+                yield* registry.mergeRequest(runId, published.url);
+              }
               return published;
             }),
           ).pipe(Effect.provideContext(hosted)),
@@ -2775,11 +2889,12 @@ const frontDoorHandlers = (
               if (
                 who.origin === "agent" &&
                 Arr.some(settings, ({ key }) => key === "standing_direction")
-              )
+              ) {
                 return yield* new HostRefused({
                   reason:
                     "a Run's agent cannot set standing_direction: it reads repositories and trackers, and what it wrote there would reach every chat as the human's words",
                 });
+              }
               const trail = (yield* Path.Path).join(env.stateDir, "settings");
               const taken = yield* once(
                 trail,
@@ -2949,7 +3064,7 @@ const frontDoorHandlers = (
                 },
                 Effect.gen(function* () {
                   const runs = yield* registry.forgetClaim(slug);
-                  for (const runId of runs)
+                  for (const runId of runs) {
                     yield* recordAudit(trail(runId), {
                       operation: "helle_claimed",
                       request,
@@ -2958,6 +3073,7 @@ const frontDoorHandlers = (
                       result: Schema.String,
                       value: slug,
                     }).pipe(Effect.orDie);
+                  }
                   return runs;
                 }),
               );
@@ -2988,7 +3104,7 @@ const frontDoorHandlers = (
           refusedPlainly(
             Effect.gen(function* () {
               const got = yield* receive(env.stateDir, part);
-              if (got.path !== null && (got.complete || part.offset === 0))
+              if (got.path !== null && (got.complete || part.offset === 0)) {
                 yield* recordAudit(uploadsDir(env.stateDir), {
                   operation: "upload",
                   request: part.sha256,
@@ -3000,6 +3116,7 @@ const frontDoorHandlers = (
                   Effect.andThen(trimAudit(uploadsDir(env.stateDir), UPLOADS_TRAIL)),
                   Effect.orDie,
                 );
+              }
               return { path: got.path };
             }),
           ),
@@ -3046,7 +3163,9 @@ const frontDoorHandlers = (
               ? Effect.uninterruptible(
                   Effect.gen(function* () {
                     const running = carriedBy(proposal, request);
-                    if (running !== null) return yield* running;
+                    if (running !== null) {
+                      return yield* running;
+                    }
                     const done = yield* Deferred.make<Carried>();
                     carrying.set(carryingKey(proposal, request), done);
                     const exit = yield* Effect.exit(
@@ -3089,13 +3208,16 @@ const frontDoorHandlers = (
           return Effect.gen(function* () {
             const asker = askerEnv(client);
             const decoded = Schema.decodeUnknownOption(Schema.Array(ActionSchema))(actions);
-            if (Option.isNone(decoded))
+            if (Option.isNone(decoded)) {
               return outcomeOf(err("invalid_input", `${refusedAction(actions)}.`));
-            if (herd !== null && !isHerdName(herd))
+            }
+            if (herd !== null && !isHerdName(herd)) {
               return outcomeOf(err("invalid_input", `"${herd}" is not a Herd.`));
+            }
             const key = herd ?? (yield* askersHerd(client));
-            if (key === null)
+            if (key === null) {
               return outcomeOf(err("invalid_state", "No Herd to keep the request in."));
+            }
             const actor = { ...whoOf(client), requestId };
             return yield* once(
               yield* herdDir(env.stateDir, key),
@@ -3205,11 +3327,12 @@ const frontDoorHandlers = (
           plainly(
             Effect.gen(function* () {
               const file = yield* journalOf(proposal);
-              if (file === null)
+              if (file === null) {
                 return yield* new ProposalRefused({
                   refused: "not_found",
                   detail: `no proposal "${proposal}"`,
                 });
+              }
               const path = yield* Path.Path;
               return yield* once(
                 path.dirname(file),
@@ -3225,11 +3348,12 @@ const frontDoorHandlers = (
                     ...whoOf(client),
                     requestId: request,
                   });
-                  if (done.refused !== null)
+                  if (done.refused !== null) {
                     return yield* new ProposalRefused({
                       refused: done.refused,
                       detail: done.detail,
                     });
+                  }
                   return { proposal };
                 }),
               );
@@ -3242,17 +3366,19 @@ const frontDoorHandlers = (
               const { collect, insideRun } = yield* Effect.promise(() => import("./verify"));
               const { noteVerification } = yield* Effect.promise(() => import("./metrics"));
               const where = cwd ?? view.cwd;
-              if (!(yield* insideRun(where, { cwd: view.cwd, worktree: null })))
+              if (!(yield* insideRun(where, { cwd: view.cwd, worktree: null }))) {
                 return yield* new HostRefused({
                   reason: `${REFUSED_INPUT}: "${where}" is not inside run ${runId}; a verification names the tree it ran on.`,
                 });
+              }
               const check = yield* reliance.relied(runId, { executable, argv, cwd: where });
               if (check !== null) {
                 const { record } = check;
-                if (record === null)
+                if (record === null) {
                   return yield* new HostRefused({
                     reason: `invalid_state: "${check.check}" is one of this Run's Checks and has no record on this tree; Collie's gate runs it itself, on the final tree.`,
                   });
+                }
                 const log = record.log === undefined ? "" : `; its log is ${record.log}`;
                 return Stream.make(
                   {
@@ -3428,10 +3554,11 @@ const frontDoorHandlers = (
               const { insideRun } = yield* Effect.promise(() => import("./verify"));
               const { measure } = yield* Effect.promise(() => import("./measurement"));
               const where = cwd ?? view.cwd;
-              if (!(yield* insideRun(where, { cwd: view.cwd, worktree: null })))
+              if (!(yield* insideRun(where, { cwd: view.cwd, worktree: null }))) {
                 return yield* new HostRefused({
                   reason: `${REFUSED_INPUT}: "${where}" is not inside run ${runId}; a Measurement's candidate is the Run's own tree.`,
                 });
+              }
               return Stream.callback<typeof MeasureEvent.Type, HostRefused>(
                 (queue) =>
                   Effect.gen(function* () {
@@ -3459,17 +3586,19 @@ const frontDoorHandlers = (
                       ),
                       Effect.result,
                     );
-                    if (answered._tag === "Failure")
+                    if (answered._tag === "Failure") {
                       return yield* Queue.fail(queue, answered.failure);
-                    if (answered.success === "stopped")
+                    }
+                    if (answered.success === "stopped") {
                       return yield* Queue.fail(
                         queue,
                         new HostRefused({
                           reason: `invalid_state: run ${runId} was stopped before its Measurement finished, so none was recorded.`,
                         }),
                       );
+                    }
                     const { measurement, ran } = answered.success;
-                    if (ran)
+                    if (ran) {
                       yield* recordAudit(trail(runId), {
                         operation: "measure",
                         request: measurement.id,
@@ -3484,6 +3613,7 @@ const frontDoorHandlers = (
                         result: Schema.Json,
                         value: { measurement: measurement.id, result: measurement.result._tag },
                       }).pipe(Effect.orDie);
+                    }
                     yield* Queue.offer(queue, { _tag: "Result", measurement, ran });
                     yield* Queue.end(queue);
                   }).pipe(Effect.provideContext(hosted)),
@@ -3556,22 +3686,26 @@ const frontDoorHandlers = (
             Effect.gen(function* () {
               const edit = Effect.gen(function* () {
                 const view = yield* registry.view(runId);
-                if (view === null) return yield* new HostRefused({ reason: `No Run "${runId}".` });
+                if (view === null) {
+                  return yield* new HostRefused({ reason: `No Run "${runId}".` });
+                }
                 if (change.kind === "set-outcome") {
                   const asked = change.outcome;
-                  if (asked !== null && !REQUESTABLE.includes(asked))
+                  if (asked !== null && !REQUESTABLE.includes(asked)) {
                     return yield* new HostRefused({
                       reason: `${REFUSED_INPUT}: "${asked}" is not an outcome; a Run is held to one of ${Arr.join(REQUESTABLE, ", ")}`,
                     });
+                  }
                   const fixed = Option.getOrNull(
                     yield* registry
                       .resolve({ project: view.project, id: view.workflow })
                       .pipe(Effect.option),
                   )?.fixedOutcome;
-                  if (fixed !== null && fixed !== undefined)
+                  if (fixed !== null && fixed !== undefined) {
                     return yield* new HostRefused({
                       reason: `${REFUSED_INPUT}: "${view.workflow}" always proves ${fixed}`,
                     });
+                  }
                 }
                 const by = { ...whoOf(client), requestId: request };
                 const approved =
@@ -3590,11 +3724,14 @@ const frontDoorHandlers = (
                     : undefined;
                 const updated = yield* updateIntent(runDir(env.stateDir, runId), (current) =>
                   Effect.gen(function* () {
-                    if (current === null) return null;
-                    if (expected !== undefined && current.version !== expected)
+                    if (current === null) {
+                      return null;
+                    }
+                    if (expected !== undefined && current.version !== expected) {
                       return yield* new HostRefused({
                         reason: `the Intent is v${current.version}, not v${expected}`,
                       });
+                    }
                     const recorded =
                       change.kind === "verification"
                         ? Option.getOrUndefined(
@@ -3608,8 +3745,9 @@ const frontDoorHandlers = (
                     if (
                       change.kind === "verification" &&
                       Arr.some(current.history, (one) => one.by === actorName(amendedBy))
-                    )
+                    ) {
                       return null;
+                    }
                     const wanted =
                       change.kind === "verification"
                         ? verificationGrant(current, change.name, change.command)
@@ -3625,12 +3763,13 @@ const frontDoorHandlers = (
                   }),
                 ).pipe(Effect.result);
                 if (updated._tag === "Failure") {
-                  if (approved === undefined)
+                  if (approved === undefined) {
                     return yield* new HostRefused({
                       reason: Schema.is(HostRefused)(updated.failure)
                         ? updated.failure.reason
                         : reason(updated.failure),
                     });
+                  }
                   return {
                     version: null,
                     propagated: [],
@@ -3639,18 +3778,21 @@ const frontDoorHandlers = (
                   };
                 }
                 const next = updated.success;
-                if (next === null && change.kind !== "verification")
+                if (next === null && change.kind !== "verification") {
                   return yield* new HostRefused({
                     reason: `Run "${runId}" has no Intent to amend.`,
                   });
+                }
                 const propagated: Array<string> = [];
-                if (spread && next !== null)
+                if (spread && next !== null) {
                   for (const child of Arr.filter(
                     yield* registry.views(null),
                     (view) => view.parent === runId && !terminalStatus(view.status),
                   )) {
                     yield* updateIntent(runDir(env.stateDir, child.runId), (current) => {
-                      if (current === null) return Effect.succeed(null);
+                      if (current === null) {
+                        return Effect.succeed(null);
+                      }
                       const carried = propagateIntent(next, current);
                       propagated.push(
                         `  ${child.runId}: propagated${carried.conflicts.length ? ` (${Arr.join(carried.conflicts, "; ")})` : ""}`,
@@ -3661,6 +3803,7 @@ const frontDoorHandlers = (
                       Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
                     );
                   }
+                }
                 const answer = { version: next?.version ?? null, propagated };
                 return approved === undefined ? answer : { ...answer, approved };
               }).pipe(Effect.map(saying(scrubbed.removed)));
@@ -3695,10 +3838,11 @@ const frontDoorHandlers = (
                 const found = Option.getOrUndefined(
                   Arr.findFirst(yield* deliveriesOf(runId), (one) => one.id === delivery),
                 );
-                if (!found)
+                if (!found) {
                   return yield* new HostRefused({
                     reason: `${REFUSED_INPUT}: no delivery "${delivery}" for this Run`,
                   });
+                }
                 const settled = reconcileDelivery(
                   yield* readLedger(found.incarnation),
                   delivery,
@@ -3706,8 +3850,9 @@ const frontDoorHandlers = (
                   actorName({ ...whoOf(client), requestId: request }),
                   yield* nowIso,
                 );
-                if ("error" in settled)
+                if ("error" in settled) {
                   return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${settled.error}` });
+                }
                 yield* appendLine(settled);
                 return fromText(toText(settled));
               }),
@@ -3716,15 +3861,17 @@ const frontDoorHandlers = (
         news: ({ herd, conversation, as, request, keys }, { client }) =>
           plainly(
             Effect.gen(function* () {
-              if (herd !== null && !isHerdName(herd))
+              if (herd !== null && !isHerdName(herd)) {
                 return yield* new HostRefused({
                   reason: `${REFUSED_INPUT}: "${herd}" is not a Herd`,
                 });
+              }
               const key = herd ?? (yield* askersHerd(client));
-              if (key === null)
+              if (key === null) {
                 return yield* new HostRefused({
                   reason: "invalid_state: no Herd to read News for",
                 });
+              }
               const trail = yield* newsTrail(env.stateDir, key);
               const batch = yield* once(
                 trail,
@@ -3740,14 +3887,17 @@ const frontDoorHandlers = (
                   const lines = yield* readNews(file);
                   if (keys === undefined) {
                     const batch = pendingNews(lines, conversation);
-                    for (const item of batch.items)
+                    for (const item of batch.items) {
                       yield* settleNews(file, item.key, as, conversation);
+                    }
                     return batch;
                   }
                   const batch = pendingNews(lines, conversation, Infinity);
-                  for (const item of batch.items)
-                    if (keys.includes(item.key))
+                  for (const item of batch.items) {
+                    if (keys.includes(item.key)) {
                       yield* settleNews(file, item.key, as, conversation);
+                    }
+                  }
                   return batch;
                 }),
               );
@@ -3807,7 +3957,9 @@ const frontDoorHandlers = (
                   { operation: "seen", request, ...whoOf(client), asked: {}, result: Seen },
                   Effect.gen(function* () {
                     const [first] = yield* readSeen(trail(runId));
-                    if (first !== undefined) return first;
+                    if (first !== undefined) {
+                      return first;
+                    }
                     const line = {
                       at: yield* nowIso,
                       by: actorName({ ...whoOf(client), requestId: request }),
@@ -3851,8 +4003,9 @@ const frontDoorHandlers = (
           const { text, removed } = scrub(given);
           return Effect.gen(function* () {
             const view = yield* registry.view(runId);
-            if (view === null)
+            if (view === null) {
               return { ok: false, code: "run_not_found", human: `No Run "${runId}".`, data: {} };
+            }
             const task = view.task === null ? null : yield* readTask(view.task);
             return yield* once(
               trail(runId),
@@ -3878,7 +4031,7 @@ const frontDoorHandlers = (
                   ...voiceOf(askerOf(client)),
                   origin: doorOf(client),
                 });
-                if (!said.ok)
+                if (!said.ok) {
                   return yield* new SteerUnanswered({
                     outcome: {
                       ok: false,
@@ -3887,6 +4040,7 @@ const frontDoorHandlers = (
                       data: fromText(toText(said.error.details)),
                     },
                   });
+                }
                 return outcomeSaying(removed, {
                   ok: true,
                   code: null,
@@ -3921,25 +4075,28 @@ const frontDoorHandlers = (
               { operation: "followup", request, ...whoOf(client), asked, result: Started },
               Effect.gen(function* () {
                 const view = yield* known(runId);
-                if (!settled(factsOfView(env.stateDir, view)))
+                if (!settled(factsOfView(env.stateDir, view))) {
                   return yield* new HostRefused({
                     reason: "a follow-up is a child of a finished run, and this one is still going",
                   });
+                }
                 const offered = Option.getOrUndefined(
                   Arr.findFirst(yield* registry.offers(runId), (one) => one.kind === "follow-up"),
                 );
-                if (offered === undefined)
+                if (offered === undefined) {
                   return yield* new HostRefused({
                     reason: `${runId} declares no follow-up, so there is nothing to carry on with`,
                   });
+                }
                 const into =
                   offered.textField === undefined
                     ? followUpField(offered.arguments)
                     : { field: offered.textField };
-                if ("refused" in into)
+                if ("refused" in into) {
                   return yield* new HostRefused({
                     reason: `${runId}'s follow-up "${offered.id}" ${into.refused}`,
                   });
+                }
                 return yield* registry.invoke({
                   runId,
                   offer: offered.id,
@@ -3955,7 +4112,9 @@ const frontDoorHandlers = (
           Effect.promise(() => import("./tools")).pipe(
             Effect.flatMap(({ answerRead }) =>
               Effect.gen(function* () {
-                if (tool !== "collie_run") return yield* answerRead(askerEnv(client), tool, input);
+                if (tool !== "collie_run") {
+                  return yield* answerRead(askerEnv(client), tool, input);
+                }
                 const { describeOffers, refusal } = yield* Effect.promise(
                   () => import("./lifecycle"),
                 );
@@ -4017,16 +4176,19 @@ const frontDoorHandlers = (
         runDetail: (key) => {
           const { runId, tail, pages, refreshMr } = key;
           const own = drawerWrites(env.stateDir, runId).pipe(Stream.provideContext(bun));
-          if (record !== undefined)
+          if (record !== undefined) {
             return recordFrames(
               record,
               key,
               Stream.merge(key.parts === true ? writes : changed, own),
             ).pipe(markFirst("host:emit", runId), Stream.provideContext(bun), Stream.orDie);
+          }
           let fresh = refreshMr;
           const detail = Effect.gen(function* () {
             const view = yield* registry.view(runId);
-            if (view === null) return null;
+            if (view === null) {
+              return null;
+            }
             const run = factsOfView(env.stateDir, view);
             const target = mrOf(run);
             const mr =
@@ -4088,8 +4250,9 @@ const frontDoorHandlers = (
               asked,
               Arr.map(runs, (run) => run.id),
             );
-            if (found.coverage.indexed < found.coverage.runs)
+            if (found.coverage.indexed < found.coverage.runs) {
               yield* artefacts.index(runs).pipe(Effect.forkIn(controls));
+            }
             return found;
           }).pipe(Effect.provideContext(bun)),
         artefactRead: ({ runId, id, revision, offset }) =>
@@ -4211,7 +4374,9 @@ const installationOf = Effect.fn("Host.installationOf")(function* (dir: string) 
   const fs = yield* FileSystem.FileSystem;
   const file = `${dir}/installation`;
   const known = Str.trim(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")));
-  if (known !== "") return known;
+  if (known !== "") {
+    return known;
+  }
   const made = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   // WARNING: Renamed into place, so a host that dies mid-write leaves no half an id.
   yield* fs.writeFileString(`${file}.new`, `${made}\n`);
@@ -4223,7 +4388,9 @@ const onLeftoversRun = (dir: string) => (leftover: Leftover, outcome: LeftoverEn
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const at = runDir(dir, leftover.run);
-    if (!(yield* fs.exists(at).pipe(Effect.orElseSucceed(() => false)))) return;
+    if (!(yield* fs.exists(at).pipe(Effect.orElseSucceed(() => false)))) {
+      return;
+    }
     const marker = yield* verifyingOf(leftover.run);
     if (
       outcome !== "still running" &&
@@ -4231,15 +4398,18 @@ const onLeftoversRun = (dir: string) => (leftover: Leftover, outcome: LeftoverEn
       marker.name === leftover.name &&
       marker.pass === leftover.pass &&
       epochMs(marker.started) <= leftover.started
-    )
+    ) {
       yield* RunRecords.use((records) => records.setControl(VERIFYING, leftover.run, null));
+    }
     yield* appendLog(at, line).pipe(Effect.ignore);
   });
 
 const endCiWaits = Effect.gen(function* () {
-  for (const row of yield* RunRecords.use((records) => records.everyControl(VERIFYING)))
-    if (decodeVerifying(row.data)?.pass === "ci")
+  for (const row of yield* RunRecords.use((records) => records.everyControl(VERIFYING))) {
+    if (decodeVerifying(row.data)?.pass === "ci") {
       yield* RunRecords.use((records) => records.setControl(VERIFYING, row.run, null));
+    }
+  }
 });
 
 // WARNING: Losing the lock is not a failure: a host is already here, which is what the caller wanted.
@@ -4304,10 +4474,11 @@ export const serve: (
           Effect.map((defaults) => defaults.runModel),
           Effect.orElseSucceed(() => true),
         );
-        if (!modelled)
+        if (!modelled) {
           yield* Effect.logInfo(
             "the Run model is off: the board is read from disk on every change",
           );
+        }
         const { port, gone } = yield* doorThread;
         const door = yield* engineEnd(port);
         const counter = new SharedArrayBuffer(4);
@@ -4408,17 +4579,22 @@ const boundedStop = (dir: string, lock: string, checks: CheckProcessesApi) =>
     const signalled = () => {
       // WARNING: Decided as the signal lands, before an interrupted check's Scope can end it.
       const asked = handOverAsked(dir);
-      if (asked !== null && asked.pid === process.pid && newer(asked.build, BUILD))
+      if (asked !== null && asked.pid === process.pid && newer(asked.build, BUILD)) {
         handed = { build: asked.build, checks: Effect.runSyncWith(context)(checks.handOver) };
+      }
       Deferred.doneUnsafe(stopping, Effect.succeed(StopReason.Asked()));
     };
     yield* Effect.acquireRelease(
       Effect.sync(() => {
-        for (const signal of STOP_SIGNALS) process.prependOnceListener(signal, signalled);
+        for (const signal of STOP_SIGNALS) {
+          process.prependOnceListener(signal, signalled);
+        }
       }),
       () =>
         Effect.sync(() => {
-          for (const signal of STOP_SIGNALS) process.off(signal, signalled);
+          for (const signal of STOP_SIGNALS) {
+            process.off(signal, signalled);
+          }
         }),
     );
     return (why: StopReason) => Deferred.succeed(stopping, why).pipe(Effect.asVoid);
@@ -4741,8 +4917,11 @@ export const restartHost = Effect.fn("Host.restart")(function* (
       before.build === null
         ? (yield* olderSilentOwner(dir, build)) === owner.pid
         : newer(build, before.build);
-    if (older) yield* replaceOwner(dir, owner.pid, build);
-    else yield* stopOwner(dir, owner.pid);
+    if (older) {
+      yield* replaceOwner(dir, owner.pid, build);
+    } else {
+      yield* stopOwner(dir, owner.pid);
+    }
   }
   const who = yield* ensureRunning(dir, options?.hostEnv ?? {}, options?.build ?? BUILD);
   return { before, after: { pid: who.pid, build: who.build } };
@@ -4773,9 +4952,13 @@ const stopOwner = Effect.fn("Host.stopOwner")(function* (dir: string, pid: numbe
       Effect.map(Option.isSome),
     );
   yield* signalProcess(pid, "SIGTERM");
-  if (yield* goneWithin(Duration.sum(yield* stopGrace, STOP_SLACK))) return;
+  if (yield* goneWithin(Duration.sum(yield* stopGrace, STOP_SLACK))) {
+    return;
+  }
   yield* signalProcess(pid, "SIGKILL");
-  if (yield* goneWithin(STOP_SLACK)) return;
+  if (yield* goneWithin(STOP_SLACK)) {
+    return;
+  }
   return yield* unavailable(dir, `pid ${pid} owns the directory and did not stop`);
 });
 
@@ -4809,7 +4992,9 @@ export const followVerify: <E, R, D>(
     return events.pipe(
       Stream.tap((event) =>
         Effect.sync(() => {
-          if (event._tag === "Started") check = event.check;
+          if (event._tag === "Started") {
+            check = event.check;
+          }
         }),
       ),
       Stream.catchCause((cause) => {
@@ -4858,7 +5043,9 @@ export const peerChannel = (stateDir: string, name: string, header: RelayHeader)
       const take = (chunk: Buffer) => {
         seen = Buffer.concat([seen, chunk]);
         const end = seen.indexOf(10);
-        if (end === -1) return;
+        if (end === -1) {
+          return;
+        }
         conn.off("data", take);
         conn.pause();
         const line = seen.subarray(0, end).toString("utf8");
@@ -4880,7 +5067,9 @@ export const peerChannel = (stateDir: string, name: string, header: RelayHeader)
           );
         }
         const rest = seen.subarray(end + 1);
-        if (rest.length > 0) conn.unshift(rest);
+        if (rest.length > 0) {
+          conn.unshift(rest);
+        }
         resume(Effect.succeed(conn));
       };
       conn.on("data", take);
@@ -4934,7 +5123,7 @@ export const connectPeer: (
         Schema.is(MachineUnreachable)(cause) ? cause : unavailable(stateDir, reason(cause)),
       ),
     );
-    if (who.build !== build && header.as !== "host")
+    if (who.build !== build && header.as !== "host") {
       return yield* new HostVersionMismatch({
         development: who.development,
         dir: who.dir,
@@ -4946,11 +5135,14 @@ export const connectPeer: (
             ? `${name} runs a development checkout of collie (${who.development}) and this is ${build}; nothing upgrades a development checkout`
             : `${name} runs collie ${who.build} and this is ${build}`,
       });
+    }
     return client;
   }).pipe(
     Effect.tapError((cause) =>
       Effect.sync(() => {
-        if (cause instanceof HostVersionMismatch) mismatch = cause;
+        if (cause instanceof HostVersionMismatch) {
+          mismatch = cause;
+        }
       }),
     ),
     Effect.retry({
@@ -4980,7 +5172,9 @@ const unavailable = (dir: string, reason: string) => new HostUnavailable({ dir, 
 
 export const herdOfHost = Effect.fn("Host.herdOfHost")(function* (dir: string) {
   const owner = yield* liveOwner(dir);
-  if (owner === null) return undefined;
+  if (owner === null) {
+    return undefined;
+  }
   const recorded = yield* (yield* FileSystem.FileSystem)
     .readFileString(recordOf(dir))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(HostRecord)), Effect.option);
@@ -5012,12 +5206,16 @@ const REACH_TIMEOUT = Duration.sum(
 
 const olderSilentOwner = Effect.fn("Host.olderSilentOwner")(function* (dir: string, build: string) {
   const owner = yield* liveOwner(dir);
-  if (owner === null) return null;
+  if (owner === null) {
+    return null;
+  }
   const fs = yield* FileSystem.FileSystem;
   const recorded = yield* fs
     .readFileString(recordOf(dir))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(HostRecord)), Effect.option);
-  if (Option.isNone(recorded) || recorded.value.pid !== owner.pid) return null;
+  if (Option.isNone(recorded) || recorded.value.pid !== owner.pid) {
+    return null;
+  }
   const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
   return sameInstallation(recorded.value.root, install) && newer(build, recorded.value.build)
     ? owner.pid
@@ -5034,10 +5232,14 @@ const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
   build: string,
 ) {
   const first = yield* ask(dir).pipe(Effect.result);
-  if (first._tag === "Success") return first.success;
+  if (first._tag === "Success") {
+    return first.success;
+  }
   const silent = yield* olderSilentOwner(dir, build);
   // WARNING: Too slow to answer is not gone: it still hears its signal and hands its checks over.
-  if (silent !== null) yield* replaceOwner(dir, silent, build);
+  if (silent !== null) {
+    yield* replaceOwner(dir, silent, build);
+  }
   const started = Effect.scoped(
     Effect.gen(function* () {
       const host = yield* spawnHost(dir, hostEnv);
@@ -5134,7 +5336,9 @@ const hostCommand: Effect.Effect<ReadonlyArray<string>> = Effect.gen(function* (
   const override = yield* Config.option(Config.String("COLLIE_HOST"));
   if (override._tag === "Some") {
     const value = override.value;
-    if (!pipe(Str.trimStart(value), Str.startsWith("["))) return [value];
+    if (!pipe(Str.trimStart(value), Str.startsWith("["))) {
+      return [value];
+    }
     return yield* Schema.decodeEffect(CommandJson)(value).pipe(Effect.orElseSucceed(() => [value]));
   }
   // WARNING: A compiled binary's entry lives under /$bunfs: passing that path would be read as a subcommand.

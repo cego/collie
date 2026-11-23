@@ -49,9 +49,13 @@ export const usage = Command.make("usage", {}, () =>
     Effect.gen(function* () {
       const door = yield* cliDoor(env);
       const read = yield* usageReadings(env, door);
-      if (!read.ok) return read;
+      if (!read.ok) {
+        return read;
+      }
       const fallbacks = yield* usageFallbacks(env, door);
-      if (!fallbacks.ok) return fallbacks;
+      if (!fallbacks.ok) {
+        return fallbacks;
+      }
       const now = yield* Clock.currentTimeMillis;
       return {
         ok: true as const,

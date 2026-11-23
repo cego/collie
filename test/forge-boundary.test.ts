@@ -46,12 +46,16 @@ const scan = Effect.fn("boundary.scan")(function* () {
     for (const entry of yield* fs.readDirectory(path.join(root, dir), { recursive: true })) {
       const file = `${dir}/${entry}`;
       const matcher = matcherOf(file);
-      if (matcher === null) continue;
+      if (matcher === null) {
+        continue;
+      }
       const text = yield* fs.readFileString(path.join(root, file));
       const clis = new Set(
         Arr.map([...pipe(text, Str.matchAll(matcher))], (m) => m[2] ?? m[3] ?? m[1] ?? ""),
       );
-      if (clis.size > 0) found.set(file, clis);
+      if (clis.size > 0) {
+        found.set(file, clis);
+      }
     }
   }
   return found;
@@ -103,10 +107,13 @@ test("only the forge directory imports forges", () =>
       const path = yield* Path.Path;
       const root = path.dirname(yield* path.fromFileUrl(new URL("./", import.meta.url)));
       const files = new Map<string, string>();
-      for (const dir of ["src", "workflows"])
-        for (const entry of yield* fs.readDirectory(path.join(root, dir), { recursive: true }))
-          if (/\.tsx?$/.test(entry))
+      for (const dir of ["src", "workflows"]) {
+        for (const entry of yield* fs.readDirectory(path.join(root, dir), { recursive: true })) {
+          if (/\.tsx?$/.test(entry)) {
             files.set(`${dir}/${entry}`, yield* fs.readFileString(path.join(root, dir, entry)));
+          }
+        }
+      }
       expect(forgesImportsIn(files)).toEqual([]);
     }),
   ));

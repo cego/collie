@@ -519,8 +519,9 @@ const gatedSpawn = Effect.gen(function* () {
             gate.armed === null ||
             command._tag !== "StandardCommand" ||
             !command.args.includes(gate.armed)
-          )
+          ) {
             return Effect.void;
+          }
           gate.armed = null;
           return Deferred.succeed(gate.reached, undefined).pipe(
             Effect.andThen(Deferred.await(gate.release)),
@@ -701,7 +702,9 @@ test.skipIf(process.platform !== "linux")(
         const slow: FileSystem.FileSystem = {
           ...fs,
           readDirectory: (path, options) => {
-            if (!listing.armed || path !== "/proc") return fs.readDirectory(path, options);
+            if (!listing.armed || path !== "/proc") {
+              return fs.readDirectory(path, options);
+            }
             listing.armed = false;
             return Deferred.await(listing.release).pipe(
               Effect.andThen(fs.readDirectory(path, options)),
@@ -723,7 +726,7 @@ test.skipIf(process.platform !== "linux")(
 for (const { delay, grace } of [
   { delay: 200, grace: 500 },
   { delay: 1700, grace: 2000 },
-])
+]) {
   test.skipIf(process.platform !== "linux")(
     `a check's child that refuses SIGTERM is killed within a ${grace} ms grace, with each look at /proc ${delay} ms slow`,
     () =>
@@ -757,6 +760,7 @@ for (const { delay, grace } of [
         }),
       ),
   );
+}
 
 test.skipIf(process.platform !== "linux")(
   "slow reads of unrelated processes do not leave a check's child alive after its host stops",
@@ -803,11 +807,15 @@ test.skipIf(process.platform !== "linux")(
         const slow: FileSystem.FileSystem = {
           ...fs,
           readDirectory: (path, options) => {
-            if (!armed || path !== "/proc") return fs.readDirectory(path, options);
+            if (!armed || path !== "/proc") {
+              return fs.readDirectory(path, options);
+            }
             const index = ++looks;
             return Effect.gen(function* () {
               const names = yield* fs.readDirectory(path, options);
-              if (index === 1) yield* fs.writeFileString(`${notes}/spawn`, "");
+              if (index === 1) {
+                yield* fs.writeFileString(`${notes}/spawn`, "");
+              }
               yield* Effect.sleep(Duration.millis(index === 1 ? 4400 : index === 2 ? 700 : 1300));
               return names;
             });
@@ -927,7 +935,9 @@ test("ending a marked check waits two seconds for its SIGTERM by the clock, howe
         installation,
         (_target, name) => {
           sent.push(name);
-          if (name === "SIGKILL") alive = false;
+          if (name === "SIGKILL") {
+            alive = false;
+          }
         },
       ).pipe(Effect.provideService(FileSystem.FileSystem, proc));
       expect(gone).toBe(true);
@@ -1182,7 +1192,9 @@ test.skipIf(process.platform !== "linux")(
         let refusing = false;
         const { root, checks } = yield* worldWith({
           kill: (target, name) => {
-            if (refusing) throw refusal();
+            if (refusing) {
+              throw refusal();
+            }
             process.kill(target, name);
           },
         });
@@ -1468,11 +1480,12 @@ const storedOutput = (mode: "slow" | "unwritable", baseline = false) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-check-output-" });
-    if (baseline)
+    if (baseline) {
       yield* fs.writeFileString(
         `${root}/named.test.ts`,
         'import { test, expect } from "bun:test"; test("named", () => expect(1).toBe(2));',
       );
+    }
     const output = (path: string) =>
       pipe_(path, Str.endsWith(".stdout")) || pipe_(path, Str.endsWith(".stderr"));
     const refused = Effect.fail(
@@ -1611,7 +1624,7 @@ test.skipIf(process.platform !== "linux")(
     ),
 );
 
-for (const stream of ["stdout", "stderr"] as const)
+for (const stream of ["stdout", "stderr"] as const) {
   test.skipIf(process.platform !== "linux")(
     `a supervised check whose ${stream} tail cannot be written gives no verdict, and nothing is recorded`,
     () =>
@@ -1632,6 +1645,7 @@ for (const stream of ["stdout", "stderr"] as const)
         }),
       ),
   );
+}
 
 test("a check whose Verification cannot be appended gives no verdict", () =>
   runEffect(

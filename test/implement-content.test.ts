@@ -24,8 +24,11 @@ test.each([
   expect(rendered).toContain("collie run publish run-12345678 --push-only");
   expect(rendered).not.toContain("git push");
   expect(rendered).toContain("--request-id");
-  if (section === "ci-fix") expect(rendered).not.toContain("--skip-ci");
-  else expect(rendered).toContain("--skip-ci");
+  if (section === "ci-fix") {
+    expect(rendered).not.toContain("--skip-ci");
+  } else {
+    expect(rendered).toContain("--skip-ci");
+  }
 });
 
 test.each([implement, tuneUp])(
@@ -79,12 +82,14 @@ test("no shipped content or prompt text Collie types spells out `collie verify -
       expect(typed.length).toBeGreaterThan(0);
       const examples = "src/commands/verify.ts";
       const spelled: Array<string> = [];
-      for (const file of typed)
+      for (const file of typed) {
         if (
           file !== examples &&
           pipe(yield* fs.readFileString(`${root}${file}`), Str.includes("collie verify --run"))
-        )
+        ) {
           spelled.push(file);
+        }
+      }
       expect(spelled).toEqual([]);
     }),
   ));

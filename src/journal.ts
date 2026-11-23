@@ -15,8 +15,11 @@ const tally = <A>(decoded: ReadonlyArray<Option.Option<A>>) => {
   const lines: Array<A> = [];
   let corrupt = 0;
   for (const [at, one] of decoded.entries()) {
-    if (one._tag === "Some") lines.push(one.value);
-    else if (at < decoded.length - 1) corrupt += 1;
+    if (one._tag === "Some") {
+      lines.push(one.value);
+    } else if (at < decoded.length - 1) {
+      corrupt += 1;
+    }
   }
   return { lines, corrupt };
 };
@@ -50,7 +53,9 @@ export const lastRunJournal = Effect.fn("Journal.lastRun")(function* <A>(
   const decode = Schema.decodeUnknownOption(json);
   for (const line of newest) {
     const read = decode(line);
-    if (Option.isSome(read)) return read;
+    if (Option.isSome(read)) {
+      return read;
+    }
   }
   return Option.none<A>();
 });
@@ -117,7 +122,9 @@ export const findLastRunJournal = Effect.fn("Journal.findLastRun")(function* <A>
   const decode = Schema.decodeUnknownOption(json);
   for (let i = lines.length - 1; i >= 0; i--) {
     const read = yield* Effect.sync(() => decode(lines[i]));
-    if (read._tag === "Some" && matches(read.value)) return read;
+    if (read._tag === "Some" && matches(read.value)) {
+      return read;
+    }
   }
   return Option.none<A>();
 });

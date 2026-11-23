@@ -405,7 +405,9 @@ const codexServer = () => {
       message(ws, raw) {
         const { id, method } = decodeFrame(String(raw));
         ws.send(encode({ id, result: method === "initialize" ? { userAgent: "fake" } : {} }));
-        if (method !== "thread/resume") return;
+        if (method !== "thread/resume") {
+          return;
+        }
         resumed((threadId, tokens) => {
           const usage = {
             totalTokens: tokens,

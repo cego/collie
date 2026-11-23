@@ -87,14 +87,17 @@ export const sortOut = (
   const leftOut: Array<LeftOut> = [];
   for (const finding of findings) {
     const runs = new Set(Arr.filter(finding.runs, (run) => window.has(run)));
-    if (Arr.some(kept, (one) => one.key === finding.key))
+    if (Arr.some(kept, (one) => one.key === finding.key)) {
       leftOut.push({ what: finding.title, why: `the same key as another finding, ${finding.key}` });
-    else if (runs.size === 0) leftOut.push({ what: finding.title, why: "no Run of the window" });
-    else if (finding.category === "defect" && !defects)
+    } else if (runs.size === 0) {
+      leftOut.push({ what: finding.title, why: "no Run of the window" });
+    } else if (finding.category === "defect" && !defects) {
       leftOut.push({ what: finding.title, why: "about Collie" });
-    else if (finding.category !== "defect" && runs.size < 2 && targetOf(finding, open) === null)
+    } else if (finding.category !== "defect" && runs.size < 2 && targetOf(finding, open) === null) {
       leftOut.push({ what: finding.title, why: "seen once" });
-    else kept.push({ ...finding, runs: [...runs] });
+    } else {
+      kept.push({ ...finding, runs: [...runs] });
+    }
   }
   return { kept, leftOut };
 };
@@ -165,7 +168,7 @@ export const restartsOf = (
     earlier,
     (value) => value,
     (a, b) => Num.sign(at(a.created) - at(b.created)),
-  ))
+  )) {
     for (const { name, issues, ended: how } of ended) {
       const same = `${name} ${Arr.join(
         Arr.map(
@@ -178,7 +181,9 @@ export const restartsOf = (
         ),
         ",",
       )}`;
-      if (!pipe(how, Str.startsWith(FAILED_TO_START)) || seen.has(same)) continue;
+      if (!pipe(how, Str.startsWith(FAILED_TO_START)) || seen.has(same)) {
+        continue;
+      }
       seen.add(same);
       const taken = Arr.some(
         since,
@@ -190,9 +195,11 @@ export const restartsOf = (
         !taken &&
         Arr.every(issues, (number) => Arr.some(open, (one) => one.number === number)) &&
         !Arr.some(restarts, (one) => one.name === name)
-      )
+      ) {
         restarts.push({ name, issues });
+      }
     }
+  }
   return restarts;
 };
 
@@ -234,8 +241,9 @@ export const questionMeasures = (runs: ReadonlyArray<AskingRun>) => {
 };
 
 export const questionLines = (measures: QuestionMeasures | undefined) => {
-  if (measures === undefined)
+  if (measures === undefined) {
     return ["Question measures were not recorded for this retrospective window."];
+  }
   const { asked, landed, perLanded, implement } = measures;
   return [
     perLanded === null
@@ -265,9 +273,11 @@ export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>) => {
     string,
     { workflow: string; name: string; answers: Array<string>; runs: Array<string> }
   >();
-  for (const run of runs)
+  for (const run of runs) {
     for (const { name, answer } of run.questions) {
-      if (answer === null) continue;
+      if (answer === null) {
+        continue;
+      }
       const id = `${run.workflow} ${classOf(name)}`;
       const one = classes.get(id) ?? {
         workflow: run.workflow,
@@ -277,17 +287,26 @@ export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>) => {
       };
       classes.set(id, one);
       one.answers.push(answer);
-      if (!one.runs.includes(run.runId)) one.runs.push(run.runId);
+      if (!one.runs.includes(run.runId)) {
+        one.runs.push(run.runId);
+      }
     }
+  }
   return Arr.flatMap([...classes.values()], ({ workflow, name, answers, runs: asking }) => {
-    if (answers.length < REPEATED_ASKINGS) return [];
+    if (answers.length < REPEATED_ASKINGS) {
+      return [];
+    }
     const counts = new Map<string, number>();
-    for (const answer of answers) counts.set(answer, (counts.get(answer) ?? 0) + 1);
+    for (const answer of answers) {
+      counts.set(answer, (counts.get(answer) ?? 0) + 1);
+    }
     const none: readonly [string, number] = ["", 0];
     const [answer, count] = Arr.reduce([...counts], none, (top, entry) =>
       entry[1] > top[1] ? entry : top,
     );
-    if (count / answers.length < REPEATED_SHARE) return [];
+    if (count / answers.length < REPEATED_SHARE) {
+      return [];
+    }
     const said = pipe(answer, Str.slice(0, 80));
     return [
       {

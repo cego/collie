@@ -173,13 +173,19 @@ test("noticing something costs a file append, and noticing nothing costs nothing
       const fs = yield* FileSystem.FileSystem;
       const file = yield* newsPath(stateDir, "herd-abc");
       const quiet = [record({ id: "r1" })];
-      for (let tick = 0; tick < 50; tick++)
-        for (const event of eventsIn(quiet)) yield* appendNews(file, event);
+      for (let tick = 0; tick < 50; tick++) {
+        for (const event of eventsIn(quiet)) {
+          yield* appendNews(file, event);
+        }
+      }
       expect(yield* fs.exists(file)).toBe(false);
 
       const ended = [record({ id: "r1", state: "failed" })];
-      for (let tick = 0; tick < 50; tick++)
-        for (const event of eventsIn(ended)) yield* appendNews(file, event);
+      for (let tick = 0; tick < 50; tick++) {
+        for (const event of eventsIn(ended)) {
+          yield* appendNews(file, event);
+        }
+      }
       expect(pendingNews(yield* readNews(file)).items).toHaveLength(1);
     }),
   ));
@@ -202,8 +208,11 @@ test("a Run ready to release when it ends is said once as ready, never as ended"
           significance: "try-it",
         },
       ]);
-      for (let tick = 0; tick < 20; tick++)
-        for (const event of eventsIn(ended, new Map(), ready)) yield* appendNews(file, event);
+      for (let tick = 0; tick < 20; tick++) {
+        for (const event of eventsIn(ended, new Map(), ready)) {
+          yield* appendNews(file, event);
+        }
+      }
       expect(Arr.map(pendingNews(yield* readNews(file)).items, (item) => item.key)).toEqual([
         "r1:ready:1a2b3c4d",
       ]);

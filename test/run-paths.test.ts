@@ -225,7 +225,9 @@ const feed = Effect.fn("test.feed")(function* (fifo: string, text: string) {
         () => false,
       ),
     );
-    if (written) return;
+    if (written) {
+      return;
+    }
     expect(yield* Clock.currentTimeMillis).toBeLessThan(deadline);
     yield* Effect.sleep("10 millis");
   }
@@ -290,11 +292,12 @@ test("fibers of one process contending for one lock each get it in turn, and non
         }),
         2000,
       );
-      for (let round = 0; round < 5; round++)
+      for (let round = 0; round < 5; round++) {
         yield* Effect.all(
           Array.from({ length: 20 }, () => turn),
           { concurrency: "unbounded" },
         );
+      }
       expect(most).toBe(1);
     }),
   ));

@@ -317,8 +317,11 @@ test("loading a module whose generation is already staged counts as using it", (
       Bun.env.XDG_CACHE_HOME = `${dir}/cache`;
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          if (before === undefined) delete Bun.env.XDG_CACHE_HOME;
-          else Bun.env.XDG_CACHE_HOME = before;
+          if (before === undefined) {
+            delete Bun.env.XDG_CACHE_HOME;
+          } else {
+            Bun.env.XDG_CACHE_HOME = before;
+          }
         }),
       );
       yield* load;
@@ -591,8 +594,9 @@ test.skipIf(process.platform !== "linux")(
           for (const args of [
             ["-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A"],
             ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "first"],
-          ])
+          ]) {
             yield* exec(["git", ...args], { cwd: world.project });
+          }
           yield* collie(world, [
             "run",
             "start",

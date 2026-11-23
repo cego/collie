@@ -123,8 +123,12 @@ export const landingOf = (
   { file, line }: { readonly file: string; readonly line: number | null },
   diff: ReadonlyArray<string> | null,
 ) => {
-  if (diff === null) return { tab: "review", at: "source", file, line };
-  if (!diff.includes(file)) return { tab: "diff", at: "source", file, line };
+  if (diff === null) {
+    return { tab: "review", at: "source", file, line };
+  }
+  if (!diff.includes(file)) {
+    return { tab: "diff", at: "source", file, line };
+  }
   return line === null
     ? { tab: "diff", at: "file", file }
     : { tab: "diff", at: "line", file, line };
@@ -152,8 +156,12 @@ export interface KeyFacts {
 export type KeyAction = "previous-tab" | "next-tab" | "next-file" | "previous-file";
 
 export const keyAction = (facts: KeyFacts) => {
-  if (facts.ctrlOrMeta || facts.inField || facts.overlay || !facts.inRecord) return null;
-  if (facts.tab === UNSCROLLED) return null;
+  if (facts.ctrlOrMeta || facts.inField || facts.overlay || !facts.inRecord) {
+    return null;
+  }
+  if (facts.tab === UNSCROLLED) {
+    return null;
+  }
   const onDiff = facts.tab === "diff";
   switch (facts.key) {
     case "[":
@@ -219,7 +227,9 @@ export const recordTiming = (mark: (name: RecordMark, at: number, card: string) 
   let clicked: string | null = null;
   let reached: RecordMark | null = null;
   const after = (previous: RecordMark, next: RecordMark) => (card: string, at: number) => {
-    if (card !== clicked || reached !== previous) return;
+    if (card !== clicked || reached !== previous) {
+      return;
+    }
     reached = next;
     mark(next, at, card);
   };
@@ -260,12 +270,16 @@ export const desktopTiming = (mark: (name: DesktopMark, at: number, card: string
     let waiting: string | null = null;
     return {
       start: (card: string, at: number) => {
-        if (waiting !== null) return;
+        if (waiting !== null) {
+          return;
+        }
         waiting = card;
         mark(start, at, card);
       },
       end: (at: number) => {
-        if (waiting === null) return;
+        if (waiting === null) {
+          return;
+        }
         mark(end, at, waiting);
         waiting = null;
       },
@@ -278,7 +292,9 @@ export const desktopTiming = (mark: (name: DesktopMark, at: number, card: string
   let scrolls = 0;
   return {
     boardUsable: (at: number) => {
-      if (boardDrawn) return;
+      if (boardDrawn) {
+        return;
+      }
       boardDrawn = true;
       mark("board-usable", at, "");
     },
@@ -295,7 +311,9 @@ export const desktopTiming = (mark: (name: DesktopMark, at: number, card: string
       return true;
     },
     frame: (at: number) => {
-      if (scroll === null) return false;
+      if (scroll === null) {
+        return false;
+      }
       if (at - scroll.last > SCROLL_SETTLED_MS) {
         scroll = null;
         return false;

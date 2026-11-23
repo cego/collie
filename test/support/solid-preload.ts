@@ -31,13 +31,16 @@ const LOADS = [
 plugin({
   name: "solid-on-demand",
   setup: (build) => {
-    for (const filter of LOADS)
+    for (const filter of LOADS) {
       build.onLoad({ filter }, (args) =>
         solid().then((found) => {
           const handler = Arr.findFirst(found, (one) => one.filter.test(args.path));
-          if (Option.isNone(handler)) throw new Error(`no Solid transform loads ${args.path}`);
+          if (Option.isNone(handler)) {
+            throw new Error(`no Solid transform loads ${args.path}`);
+          }
           return handler.value.load(args);
         }),
       );
+    }
   },
 });

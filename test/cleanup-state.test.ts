@@ -22,8 +22,11 @@ const aged = (path: string, days: number) =>
     const at = DateTime.toDateUtc(
       DateTime.makeUnsafe((yield* Clock.currentTimeMillis) - days * DAY_MS),
     );
-    if ((yield* fs.stat(path)).type === "Directory")
-      for (const name of yield* fs.readDirectory(path)) yield* fs.utimes(`${path}/${name}`, at, at);
+    if ((yield* fs.stat(path)).type === "Directory") {
+      for (const name of yield* fs.readDirectory(path)) {
+        yield* fs.utimes(`${path}/${name}`, at, at);
+      }
+    }
     yield* fs.utimes(path, at, at);
   });
 
@@ -104,8 +107,9 @@ test("cleanup removes state no Run's row owns once it is a day quiet, and keeps 
 
       const swept = yield* collie(world, ["cleanup", "--apply"]);
       expect(swept.envelope).toMatchObject({ ok: true });
-      for (const gone of removable)
+      for (const gone of removable) {
         expect([gone, yield* fs.exists(`${state}/${gone}`)]).toEqual([gone, false]);
+      }
       for (const kept of [
         "notes.txt",
         "runs/new-x",
@@ -116,8 +120,9 @@ test("cleanup removes state no Run's row owns once it is a day quiet, and keeps 
         "schedules/daily/schedule.json",
         `runs/${real.id}`,
         "host.db",
-      ])
+      ]) {
         expect([kept, yield* fs.exists(`${state}/${kept}`)]).toEqual([kept, true]);
+      }
       const shown = yield* collie(world, ["run", "show", real.id]);
       expect(shown.envelope).toMatchObject({ ok: true });
     }),
@@ -234,8 +239,9 @@ test("of three runner copies, only the one neither running nor newest goes", () 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = `${rig.root}/runners`;
-      for (const version of ["0.9.0", "0.10.0", "0.11.1"])
+      for (const version of ["0.9.0", "0.10.0", "0.11.1"]) {
         yield* written(`${dir}/collie-${version}`, "bin", 0);
+      }
 
       const report = yield* sweep([runnersSweeper(dir, "0.10.0")], rig.stateDir, "host");
       expect(Arr.map(report.remove, (item) => item.target)).toEqual([`${dir}/collie-0.9.0`]);

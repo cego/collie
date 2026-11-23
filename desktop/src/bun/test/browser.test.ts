@@ -13,16 +13,18 @@ test("a Chromium-based browser is started with the page as an app", () => {
     "com.brave.Browser.desktop",
     "microsoft-edge.desktop",
     "vivaldi-stable.desktop",
-  ])
+  ]) {
     expect(appWindow(id, entry("/usr/bin/browser %U"), URL_)).toEqual([
       "/usr/bin/browser",
       `--app=${URL_}`,
     ]);
+  }
 });
 
 test("any other browser is left to open its ordinary tab", () => {
-  for (const id of ["firefox.desktop", "knowledge-browser.desktop"])
+  for (const id of ["firefox.desktop", "knowledge-browser.desktop"]) {
     expect(appWindow(id, entry("firefox %u"), URL_)).toBeNull();
+  }
 });
 
 test("the entry's own command is kept, quoted arguments and all, with its field codes gone", () => {

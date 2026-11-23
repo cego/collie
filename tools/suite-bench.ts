@@ -15,12 +15,14 @@ export const suiteReadings: (
   output: string,
 ) => { ok: true; readings: SuiteReadings } | { ok: false; error: string } = (output) => {
   const timed = /^test: queued ([\d.]+) s, built ([\d.]+) s, ran ([\d.]+) s$/m.exec(output);
-  if (timed === null)
+  if (timed === null) {
     return { ok: false, error: "no `test: queued …, built …, ran …` line in the suite's output" };
+  }
   const passed = /^ *(\d+) pass$/m.exec(output);
   const failed = /^ *(\d+) fail$/m.exec(output);
-  if (passed === null || failed === null)
+  if (passed === null || failed === null) {
     return { ok: false, error: "no Bun `N pass` and `N fail` summary in the suite's output" };
+  }
   return {
     ok: true,
     readings: {
@@ -47,7 +49,7 @@ const passedThrough = (stream: ReadableStream<Uint8Array>) => {
     .then(() => text);
 };
 
-if (import.meta.main)
+if (import.meta.main) {
   BunRuntime.runMain(
     Effect.gen(function* () {
       const child = Bun.spawn(["bun", "run", "test"], {
@@ -69,3 +71,4 @@ if (import.meta.main)
       return exit;
     }).pipe(Effect.flatMap((code) => Effect.sync(() => process.exit(code)))),
   );
+}

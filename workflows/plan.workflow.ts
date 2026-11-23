@@ -239,7 +239,9 @@ export default defineWorkflow({
       const run = yield* Run;
       const place = yield* host.place(run.id);
       const nobodyAsked = asked.then === "implement";
-      if (nobodyAsked) yield* forecast([grill, spec, tickets]);
+      if (nobodyAsked) {
+        yield* forecast([grill, spec, tickets]);
+      }
       const input = {
         inputs: { goal: asked.goal },
         run: { dir: place.dir, id: run.id },
@@ -297,10 +299,11 @@ export default defineWorkflow({
             success: Schema.NullOr(Schema.String),
             execute: benchmarkRefusalOf(planDir),
           });
-          if (refused !== null)
+          if (refused !== null) {
             return yield* new WorkflowError({
               reason: `a ticket's benchmark plan is not one collie measure takes: ${refused}`,
             });
+          }
           return done;
         }),
       );
@@ -316,7 +319,9 @@ export default defineWorkflow({
           }),
         );
         const still = yield* refusalOf("unbuildable");
-        if (still !== null) return yield* new WorkflowError({ reason: still });
+        if (still !== null) {
+          return yield* new WorkflowError({ reason: still });
+        }
       }
 
       let opinions = 0;
@@ -337,12 +342,16 @@ export default defineWorkflow({
               }),
               { round },
             );
-        if (chosen === FINISH) return `${written.issues_dir}: finished planning`;
+        if (chosen === FINISH) {
+          return `${written.issues_dir}: finished planning`;
+        }
 
         if (chosen === IMPLEMENT) {
           const unrunnable = yield* refusalOf(`implement-${round}`);
           if (unrunnable !== null) {
-            if (nobodyAsked) return yield* new WorkflowError({ reason: unrunnable });
+            if (nobodyAsked) {
+              return yield* new WorkflowError({ reason: unrunnable });
+            }
             yield* host.record(run.id, `${IMPLEMENT} cannot run here: ${unrunnable}`);
             yield* host.parked(run.id, `${IMPLEMENT} cannot run here: ${unrunnable}`);
             continue;
@@ -383,7 +392,9 @@ export default defineWorkflow({
             }),
             { round: opinions, of: OPINIONS },
           );
-          if (said.findings.length === 0) continue;
+          if (said.findings.length === 0) {
+            continue;
+          }
           yield* revise(
             agentWork({
               ...planner,

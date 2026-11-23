@@ -53,7 +53,9 @@ test("a Step's usual time is the median of its latest ten runs, from first entry
         { kind: "enter", key: "build", step: meta("build"), place: null, at: at(24) },
         { kind: "leave", key: "build", at: at(28) },
       ]);
-      for (const n of Arr.range(1, 11)) yield* ran(`r${n}`, "implement", took("build", 10, 10 + n));
+      for (const n of Arr.range(1, 11)) {
+        yield* ran(`r${n}`, "implement", took("build", 10, 10 + n));
+      }
       yield* ran("other", "review", took("build", 0, 59));
       yield* ran("few", "review", took("read", 0, 1));
 

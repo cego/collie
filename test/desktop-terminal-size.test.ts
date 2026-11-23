@@ -21,11 +21,12 @@ const world = () => {
   const sizes = settledResizes((cols, rows) => sent.push([cols, rows]), timers);
   const advance = (ms: number) => {
     now += ms;
-    for (const [handle, timer] of [...due].sort((one, other) => one[1].at - other[1].at))
+    for (const [handle, timer] of [...due].sort((one, other) => one[1].at - other[1].at)) {
       if (timer.at <= now) {
         due.delete(handle);
         timer.run();
       }
+    }
   };
   return { sent, sizes, advance, pending: () => due.size > 0 };
 };

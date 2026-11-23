@@ -110,7 +110,9 @@ const digestOf = (text: string) => Bun.hash(text).toString(16);
 const commitOf = (ref: string, cwd: string) =>
   Effect.gen(function* () {
     const ran = yield* git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], cwd);
-    if (ran.code !== 0) return yield* new MeasureRefused({ why: `"${ref}" is not a commit here` });
+    if (ran.code !== 0) {
+      return yield* new MeasureRefused({ why: `"${ref}" is not a commit here` });
+    }
     return Str.trim(ran.stdout);
   });
 
@@ -120,7 +122,9 @@ const lockfilesOf = (root: string) =>
     const found: Record<string, string> = {};
     for (const name of LOCKFILES) {
       const bytes = yield* fs.readFile(`${root}/${name}`).pipe(Effect.option);
-      if (Option.isSome(bytes)) found[name] = digestOf(Buffer.from(bytes.value).toString("latin1"));
+      if (Option.isSome(bytes)) {
+        found[name] = digestOf(Buffer.from(bytes.value).toString("latin1"));
+      }
     }
     return found;
   });
@@ -147,12 +151,14 @@ const outsideHarness = (
     const outside = new Set<string>();
     for (const commit of commits) {
       const touched = yield* git(["show", "--name-only", "--format=", "-m", commit], cwd);
-      for (const file of Str.split(touched.stdout, "\n"))
+      for (const file of Str.split(touched.stdout, "\n")) {
         if (
           file !== "" &&
           !Arr.some(roots, (root) => file === root || pipe_(file, Str.startsWith(`${root}/`)))
-        )
+        ) {
           outside.add(file);
+        }
+      }
     }
     return [...outside].sort();
   });
@@ -168,7 +174,9 @@ const baseTree = (
     const fs = yield* FileSystem.FileSystem;
     const dir = `${baseTreesDir(stateDir, runId)}/${digestOf(Arr.join([commit, ...harness], "\n"))}`;
     const complete = Effect.gen(function* () {
-      if (!(yield* fs.exists(dir))) return false;
+      if (!(yield* fs.exists(dir))) {
+        return false;
+      }
       const above = yield* git(["rev-list", "--count", `${commit}..HEAD`], dir);
       const on = yield* git(["merge-base", "--is-ancestor", commit, "HEAD"], dir);
       const changed = yield* git(["status", "--porcelain", "--untracked-files=no"], dir);
@@ -180,16 +188,21 @@ const baseTree = (
         Str.trim(changed.stdout) === ""
       );
     }).pipe(Effect.orElseSucceed(() => false));
-    if (yield* complete) return dir;
+    if (yield* complete) {
+      return dir;
+    }
     yield* fs.remove(dir, { recursive: true, force: true }).pipe(Effect.ignore);
     yield* git(["worktree", "prune"], repository);
     yield* fs.makeDirectory(baseTreesDir(stateDir, runId), { recursive: true }).pipe(Effect.orDie);
     const added = yield* git(["worktree", "add", "--detach", dir, commit], repository);
-    if (added.code !== 0)
+    if (added.code !== 0) {
       return yield* new MeasureRefused({
         why: `the base tree could not be made at ${commit}: ${Option.getOrUndefined(Option.map(Option.fromNullishOr(added.stderr), (present) => Str.trim(present))) ?? ""}`,
       });
-    if (harness.length === 0) return dir;
+    }
+    if (harness.length === 0) {
+      return dir;
+    }
     const picked = yield* git(
       [
         "-c",
@@ -202,7 +215,9 @@ const baseTree = (
       ],
       dir,
     );
-    if (picked.code === 0) return dir;
+    if (picked.code === 0) {
+      return dir;
+    }
     yield* git(["worktree", "remove", "--force", dir], repository);
     return yield* new MeasureRefused({
       why: `the harness commits do not apply on ${commit}: ${Option.getOrUndefined(Option.map(Option.fromNullishOr(picked.stderr), (present_) => Str.trim(present_))) ?? Str.trim(picked.stdout)}`,
@@ -230,14 +245,18 @@ const runOnce = (
 ) =>
   Effect.gen(function* () {
     const timedOut: Ended = { _tag: "TimedOut" };
-    if ((yield* Clock.currentTimeMillis) >= deadline) return timedOut;
+    if ((yield* Clock.currentTimeMillis) >= deadline) {
+      return timedOut;
+    }
     const checks = yield* CheckProcesses;
     const began = yield* Clock.currentTimeNanos;
     let group: number | undefined;
     let expired = false;
     const end = () => {
       try {
-        if (group !== undefined) process.kill(-group, "SIGKILL");
+        if (group !== undefined) {
+          process.kill(-group, "SIGKILL");
+        }
       } catch {}
     };
     yield* Effect.addFinalizer(() => Effect.sync(end));
@@ -264,12 +283,16 @@ const runOnce = (
             detached: true,
           });
           group = spawned.pid;
-          if (expired) end();
+          if (expired) {
+            end();
+          }
           return spawned;
         }),
       )
       .pipe(Effect.mapError((cause) => new MeasureRefused({ why: cause.why })));
-    if (adopted === null) return yield* Effect.interrupt;
+    if (adopted === null) {
+      return yield* Effect.interrupt;
+    }
     const spawned = adopted.handle;
     const left = deadline - (yield* Clock.currentTimeMillis);
     const collecting = Effect.all(
@@ -308,7 +331,9 @@ const reportedBy = (stdout: string) => {
   const parsed = Schema.decodeOption(
     Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
   )(last);
-  if (Option.isNone(parsed)) return [];
+  if (Option.isNone(parsed)) {
+    return [];
+  }
   return Arr.flatMap(Rec.toEntries(parsed.value), ([key, value]) =>
     Schema.is(Schema.Finite)(value) ? [[key, value] as const] : [],
   );
@@ -360,10 +385,11 @@ export const measure = Effect.fn("Measurement.measure")(function* (opts: Measuri
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const say = opts.say ?? (() => Effect.void);
-  if (!PASS_LABEL.test(ask.pass))
+  if (!PASS_LABEL.test(ask.pass)) {
     return yield* new MeasureRefused({
       why: `the pass is "calibration", "cycle N" or "final", not "${ask.pass}"`,
     });
+  }
   const plan = yield* decodeBenchmarkPlan(ask.plan).pipe(
     Effect.mapError((why) => new MeasureRefused({ why })),
   );
@@ -371,33 +397,41 @@ export const measure = Effect.fn("Measurement.measure")(function* (opts: Measuri
     yield* Schema.encodeEffect(Schema.fromJsonString(BenchmarkPlan))(plan).pipe(Effect.orDie),
   );
   const repository = Str.trim((yield* git(["rev-parse", "--show-toplevel"], ask.cwd)).stdout);
-  if (repository === "")
+  if (repository === "") {
     return yield* new MeasureRefused({ why: `"${ask.cwd}" is not in a git checkout` });
+  }
   const commit = yield* commitOf(ask.base, ask.cwd);
   const harness: Array<string> = [];
-  for (const one of plan.harness.commits) harness.push(yield* commitOf(one, ask.cwd));
+  for (const one of plan.harness.commits) {
+    harness.push(yield* commitOf(one, ask.cwd));
+  }
   const outside = yield* outsideHarness(harness, plan.harness.paths, ask.cwd);
-  if (outside.length > 0)
+  if (outside.length > 0) {
     return yield* new MeasureRefused({
       why: `a harness commit touches ${Arr.join(outside, ", ")}, outside the plan's harness paths (${Arr.join(plan.harness.paths, ", ")})`,
     });
+  }
 
   const present: Array<string> = [];
-  for (const one of plan.harness.paths)
-    if (yield* fs.exists(path.join(repository, one)).pipe(Effect.orElseSucceed(() => false)))
+  for (const one of plan.harness.paths) {
+    if (yield* fs.exists(path.join(repository, one)).pipe(Effect.orElseSucceed(() => false))) {
       present.push(one);
-  if (present.length > 0 && present.length < plan.harness.paths.length)
+    }
+  }
+  if (present.length > 0 && present.length < plan.harness.paths.length) {
     return yield* new MeasureRefused({
       why: `the candidate holds only some of the harness paths: ${Arr.join(
         Arr.filter(plan.harness.paths, (one) => !present.includes(one)),
         ", ",
       )} missing`,
     });
+  }
   const applied = present.length === 0 ? harness : null;
-  if (applied !== null && (yield* treeOf(ask.cwd)).dirty)
+  if (applied !== null && (yield* treeOf(ask.cwd)).dirty) {
     return yield* new MeasureRefused({
       why: `the candidate has none of the harness and has uncommitted work, which a scratch tree with the harness applied cannot carry; commit it first`,
     });
+  }
 
   const recorded = Effect.gen(function* () {
     const now = yield* fingerprint(ask.cwd);
@@ -405,7 +439,9 @@ export const measure = Effect.fn("Measurement.measure")(function* (opts: Measuri
     return recordedFor(records, { commit, digest, head: now.head_sha, print: now.fingerprint });
   });
   const before = yield* recorded;
-  if (before !== null) return { measurement: before, ran: false };
+  if (before !== null) {
+    return { measurement: before, ran: false };
+  }
   const reason =
     Option.getOrUndefined(
       Option.map(Option.fromNullishOr(ask.reason), (present__) => Str.trim(present__)),
@@ -415,10 +451,11 @@ export const measure = Effect.fn("Measurement.measure")(function* (opts: Measuri
     reason === null &&
     earlier.length > 0 &&
     !Arr.some(earlier, (one) => one.plan_digest === digest)
-  )
+  ) {
     return yield* new MeasureRefused({
       why: `run ${ask.runId} was measured under another plan; a new plan is measured only with its reason`,
     });
+  }
 
   const waited: Waited = { memory: false, machine: [] };
   const id = `${ask.runId}-measurement-${yield* Clock.currentTimeMillis}`;
@@ -428,7 +465,9 @@ export const measure = Effect.fn("Measurement.measure")(function* (opts: Measuri
 
   const taken = Effect.gen(function* () {
     const again = yield* recorded;
-    if (again !== null) return { measurement: again, ran: false };
+    if (again !== null) {
+      return { measurement: again, ran: false };
+    }
     yield* fs
       .writeFileString(
         holderFile,
@@ -445,11 +484,13 @@ export const measure = Effect.fn("Measurement.measure")(function* (opts: Measuri
         stopped: opts.stopped,
         say,
       });
-      if (memory === "stopped") return "stopped" as const;
+      if (memory === "stopped") {
+        return "stopped" as const;
+      }
       waited.memory = memory === "waited";
     }
     const checks = yield* CheckProcesses;
-    for (const leftover of yield* checks.left)
+    for (const leftover of yield* checks.left) {
       if (
         Option.getOrUndefined(
           Option.map(Option.fromNullishOr(leftover.name), (present___) =>
@@ -457,10 +498,12 @@ export const measure = Effect.fn("Measurement.measure")(function* (opts: Measuri
           ),
         ) &&
         (yield* checks.endLeftover(leftover)) === "still running"
-      )
+      ) {
         return yield* new MeasureRefused({
           why: `${leftover.name} of ${leftover.run} (pid ${leftover.leader.pid}), left by an earlier host, survived SIGTERM and SIGKILL; \`collie cleanup --apply\` tries to end it again`,
         });
+      }
+    }
     return yield* taking({
       ...opts,
       plan,
@@ -481,8 +524,9 @@ export const measure = Effect.fn("Measurement.measure")(function* (opts: Measuri
     const before = yield* Schema.decodeUnknownEffect(AwaitingJson)(yield* opts.awaiting.get).pipe(
       Effect.option,
     );
-    if (Option.isSome(before) && pipe_(before.value.on, Str.startsWith("this Machine")))
+    if (Option.isSome(before) && pipe_(before.value.on, Str.startsWith("this Machine"))) {
       yield* opts.awaiting.set(null);
+    }
   }).pipe(Effect.ignore);
   return yield* Effect.gen(function* () {
     const since = yield* nowIso;
@@ -492,12 +536,18 @@ export const measure = Effect.fn("Measurement.measure")(function* (opts: Measuri
         Effect.succeedNone,
         Effect.asSome(Effect.result(taken)),
       ).pipe(Effect.orDie);
-      if (Option.isSome(held)) return yield* Effect.fromResult(held.value);
-      if (yield* opts.stopped) return "stopped" as const;
+      if (Option.isSome(held)) {
+        return yield* Effect.fromResult(held.value);
+      }
+      if (yield* opts.stopped) {
+        return "stopped" as const;
+      }
       const holder = yield* fs
         .readFileString(holderFile)
         .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Holder)), Effect.option);
-      if (Option.isNone(holder) || waited.machine.includes(holder.value.id)) continue;
+      if (Option.isNone(holder) || waited.machine.includes(holder.value.id)) {
+        continue;
+      }
       waited.machine.push(holder.value.id);
       const on = `this Machine: Measurement ${holder.value.id} of ${holder.value.run} is running on it`;
       yield* opts.awaiting.set(
@@ -535,10 +585,11 @@ const taking = Effect.fn("Measurement.taking")(function* (
         );
   const lacking = yield* harnessLacking(opts.repository, opts.commit, opts.harness);
   const baseRoot = yield* baseTree(opts.stateDir, ask.runId, opts.repository, opts.commit, lacking);
-  if ((yield* harnessLacking(baseRoot, "HEAD", opts.harness)).length > 0)
+  if ((yield* harnessLacking(baseRoot, "HEAD", opts.harness)).length > 0) {
     return yield* new MeasureRefused({
       why: `the harness commits do not apply on ${opts.commit}: its harness files then differ from theirs`,
     });
+  }
   const base = {
     commit: opts.commit,
     ...(yield* treeAt(path.join(baseRoot, path.relative(opts.repository, ask.cwd)))),
@@ -584,7 +635,9 @@ const taking = Effect.fn("Measurement.taking")(function* (
       ["candidate", candidate],
     ] as const) {
       const now = yield* fingerprint(was.cwd);
-      if (now.head_sha !== was.head_sha || now.fingerprint !== was.fingerprint) trees.push(tree);
+      if (now.head_sha !== was.head_sha || now.fingerprint !== was.fingerprint) {
+        trees.push(tree);
+      }
     }
     return trees.length === 0
       ? null
@@ -592,7 +645,7 @@ const taking = Effect.fn("Measurement.taking")(function* (
   });
 
   const work = Effect.gen(function* () {
-    if (plan.prepare !== null)
+    if (plan.prepare !== null) {
       for (const tree of ["base", "candidate"] as const) {
         const ended = yield* runOnce(
           { ...checkOf, name: `${MEASURING}prepare` },
@@ -601,10 +654,11 @@ const taking = Effect.fn("Measurement.taking")(function* (
           (yield* Clock.currentTimeMillis) + plan.limit * 1000,
         );
         const command = Arr.join([plan.prepare.executable, ...plan.prepare.argv], " ");
-        if (ended._tag === "TimedOut")
+        if (ended._tag === "TimedOut") {
           return yield* record({ _tag: "TimedOut", tree, stage: "prepare", command });
+        }
         prepared.push({ tree, exit: ended.exit, seconds: ended.wall / 1000, output: ended.output });
-        if (ended.exit !== 0)
+        if (ended.exit !== 0) {
           return yield* record({
             _tag: "Failed",
             tree,
@@ -613,9 +667,13 @@ const taking = Effect.fn("Measurement.taking")(function* (
             exit: ended.exit,
             output: ended.output,
           });
+        }
       }
+    }
     const prepareMoved = yield* moved;
-    if (prepareMoved !== null) return yield* record({ _tag: "Unjudged", reason: prepareMoved });
+    if (prepareMoved !== null) {
+      return yield* record({ _tag: "Unjudged", reason: prepareMoved });
+    }
     const order = [
       ...Arr.map(sampleOrder(plan.warmup), (tree) => ({ tree, warmup: true })),
       ...Arr.map(sampleOrder(plan.samples), (tree) => ({ tree, warmup: false })),
@@ -639,9 +697,10 @@ const taking = Effect.fn("Measurement.taking")(function* (
           roots[tree],
           deadline,
         );
-        if (ended._tag === "TimedOut")
+        if (ended._tag === "TimedOut") {
           return yield* record({ _tag: "TimedOut", tree, stage: "sample", command: command.name });
-        if (ended.exit !== 0)
+        }
+        if (ended.exit !== 0) {
           return yield* record({
             _tag: "Failed",
             tree,
@@ -650,8 +709,12 @@ const taking = Effect.fn("Measurement.taking")(function* (
             exit: ended.exit,
             output: ended.output,
           });
-        for (const [key, value] of reportedBy(ended.stdout))
-          if (!HOST_READINGS.has(key)) readings[`${command.name}.${key}`] = value;
+        }
+        for (const [key, value] of reportedBy(ended.stdout)) {
+          if (!HOST_READINGS.has(key)) {
+            readings[`${command.name}.${key}`] = value;
+          }
+        }
         readings[`${command.name}.wall_ms`] = ended.wall;
         readings[`${command.name}.cpu_ms`] = ended.cpu;
         readings[`${command.name}.peak_kb`] = ended.peak;
@@ -668,20 +731,23 @@ const taking = Effect.fn("Measurement.taking")(function* (
         at,
       });
       const sampleMoved = yield* moved;
-      if (sampleMoved !== null) return yield* record({ _tag: "Unjudged", reason: sampleMoved });
+      if (sampleMoved !== null) {
+        return yield* record({ _tag: "Unjudged", reason: sampleMoved });
+      }
     }
     const judged = yield* Effect.forEach(plan.metrics, (metric) => {
       const judgedSamples = Arr.filter(samples, (one) => !one.warmup);
       const gap = Option.getOrUndefined(
         Arr.findFirst(judgedSamples, (one) => one.readings[metric.name] === undefined),
       );
-      if (gap !== undefined)
+      if (gap !== undefined) {
         return Effect.fail(
           new MeasurementRefused({
             metric: metric.name,
             reason: `a ${gap.tree} sample at ${gap.at} has no reading of it`,
           }),
         );
+      }
       const of = (tree: "base" | "candidate") =>
         Arr.flatMap(judgedSamples, (one) => {
           const value = one.readings[metric.name];

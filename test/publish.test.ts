@@ -29,8 +29,9 @@ test.each(["github", "gitlab"] as const)(
             ["checkout", "-b", "fix/cache"],
             ["remote", "add", "origin", `https://${PROJECT[forge]}.git`],
             ["commit", "--allow-empty", "-m", "Keep cached results", "-m", "Built by this Run."],
-          ])
+          ]) {
             expect((yield* git(args)).exitCode).toBe(0);
+          }
           const sha = Str.trim((yield* git(["rev-parse", "--short", "HEAD"])).stdout);
           const bin = yield* Effect.acquireRelease(FakeBin.make(`${world.home}/bin`), (bin) =>
             bin.restore(),

@@ -25,7 +25,9 @@ export const heldUntilListened = <In>() => {
     receive: (frame: In) => receive(frame),
     listen: (listener: (frame: In) => void) => {
       receive = listener;
-      for (const frame of held.splice(0)) listener(frame);
+      for (const frame of held.splice(0)) {
+        listener(frame);
+      }
     },
   };
 };
@@ -69,7 +71,9 @@ export const serverProtocol = (channel: Channel<ToView, ToMain>) =>
       channel.listen((frame) => Queue.offerUnsafe(inbox, frame));
       yield* Queue.take(inbox).pipe(
         Effect.flatMap((message) => {
-          if (message._tag !== "Hello") return writeRequest(clientId, message);
+          if (message._tag !== "Hello") {
+            return writeRequest(clientId, message);
+          }
           Queue.offerUnsafe(disconnects, clientId++);
           return Effect.void;
         }),
@@ -80,7 +84,9 @@ export const serverProtocol = (channel: Channel<ToView, ToMain>) =>
         disconnects,
         send: (id: number, response: ToView) =>
           Effect.sync(() => {
-            if (id === clientId) channel.send(response);
+            if (id === clientId) {
+              channel.send(response);
+            }
           }),
         end: () => Effect.void,
         clientIds: Effect.sync(() => new Set([clientId])),

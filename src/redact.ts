@@ -44,12 +44,13 @@ export interface ScrubbedText {
 export function scrub(text: string) {
   const removed: Array<string> = [];
   let out = text;
-  for (const [looksLike, replacement, kind] of SECRETS)
+  for (const [looksLike, replacement, kind] of SECRETS) {
     // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
     out = out.replace(looksLike, (...match) => {
       removed.push(kind);
       return pipe(replacement, Str.replace("$1", String(match[1])));
     });
+  }
   return { text: out, removed };
 }
 
@@ -63,8 +64,12 @@ export function scrubJson<A extends Given>(value: A) {
       removed.push(...done.removed);
       return done.text;
     }
-    if (one === null || one === undefined || isNumber(one) || isBoolean(one)) return one;
-    if (Arr.isArray<typeof one>(one)) return Arr.map(one, walk);
+    if (one === null || one === undefined || isNumber(one) || isBoolean(one)) {
+      return one;
+    }
+    if (Arr.isArray<typeof one>(one)) {
+      return Arr.map(one, walk);
+    }
     return Rec.fromEntries(
       Arr.map(
         Arr.map(Struct.keys(one), (key) => [key, one[key]] as const),

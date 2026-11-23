@@ -326,9 +326,15 @@ const isStruct = (schema: unknown): schema is { readonly fields: Schema.Struct.F
 
 const declares = (fields: Schema.Struct.Fields, [head = "", ...rest]: ReadonlyArray<string>) => {
   const field = fields[head];
-  if (field === undefined) return false;
-  if (rest.length === 0) return true;
-  if (isStruct(field)) return declares(field.fields, rest);
+  if (field === undefined) {
+    return false;
+  }
+  if (rest.length === 0) {
+    return true;
+  }
+  if (isStruct(field)) {
+    return declares(field.fields, rest);
+  }
   // WARNING: a record's keys are its values', and nothing here can know them ahead.
   return Predicate.hasProperty(field, "key") && Predicate.hasProperty(field, "value");
 };
@@ -1560,7 +1566,9 @@ export type AskOption = typeof AuthoredSolution.Encoded;
 
 const recommendationShortfall = (solutions: ReadonlyArray<Solution>) => {
   const recommended = Arr.filter(solutions, (one) => one.recommended === true).length;
-  if (solutions.length === 0 || recommended === 1) return null;
+  if (solutions.length === 0 || recommended === 1) {
+    return null;
+  }
   return recommended === 0
     ? "this workflow recommended none"
     : "this workflow recommended more than one";
@@ -1603,20 +1611,22 @@ const opened = (question: Question) =>
     const host = yield* Host;
     const runId = (yield* Run).id;
     const at = yield* CurrentStep;
-    if (at !== null)
+    if (at !== null) {
       yield* Activity.make({
         name: `ask.${question.name}.step`,
         execute: host.step(runId, { kind: "question", key: at.key, name: question.name }),
       });
+    }
     const solutions = yield* Schema.decodeEffect(Schema.Array(AuthoredSolution))(
       question.options ?? [],
     ).pipe(Effect.orDie);
     const shortfall = recommendationShortfall(solutions);
-    if (shortfall !== null)
+    if (shortfall !== null) {
       yield* Activity.make({
         name: `ask.${question.name}.shortfall`,
         execute: host.record(runId, `"${question.name}": ${shortfall}`),
       });
+    }
     yield* host.asking(runId, {
       name: question.name,
       prompt: question.prompt ?? question.name,
@@ -1698,7 +1708,9 @@ const watched = (options: Watching, asking: boolean) =>
 
 const withAncestry = (options: Watching, woke: Woke) =>
   Effect.gen(function* () {
-    if (woke._tag === "Ended" || !woke.change.newHead) return woke;
+    if (woke._tag === "Ended" || !woke.change.newHead) {
+      return woke;
+    }
     const host = yield* Host;
     const descends = yield* Activity.make({
       name: `watch.${options.name}.descends`,
@@ -1826,14 +1838,17 @@ export const step: (declared: StepDeclaration) => Step = (declared) => {
       const calls = unplaced.get(instance) ?? new Map<string, number>();
       unplaced.set(instance, calls);
       const n = place === null ? (calls.get(meta.id) ?? 0) + 1 : 0;
-      if (place === null) calls.set(meta.id, n);
+      if (place === null) {
+        calls.set(meta.id, n);
+      }
       const key = runKey(meta.id, place, n);
       yield* Activity.make({
         name: `step.${key}.enter`,
         execute: host.step(runId, { kind: "enter", key, step: meta, place }),
       });
-      if ((yield* host.held(runId)) || (yield* host.stopRequested(runId)))
+      if ((yield* host.held(runId)) || (yield* host.stopRequested(runId))) {
         return yield* Workflow.suspend(yield* WorkflowInstance);
+      }
       const done = yield* Effect.provideService(work, CurrentStep, {
         step: meta.id,
         place,
@@ -1862,7 +1877,9 @@ const Said = Schema.Union([
 const failureOf = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
   const said = Schema.decodeUnknownOption(Said)(error);
-  if (said._tag === "None") return String(error);
+  if (said._tag === "None") {
+    return String(error);
+  }
   return "reason" in said.value ? said.value.reason : said.value.message;
 };
 
@@ -1873,7 +1890,9 @@ const failureOf = (cause: Cause.Cause<unknown>) => {
 export const stepFailed = (why: string) =>
   Effect.gen(function* () {
     const at = yield* CurrentStep;
-    if (at === null) return;
+    if (at === null) {
+      return;
+    }
     yield* (yield* Host).step((yield* Run).id, { kind: "fail", key: at.key, why });
   });
 
@@ -2160,10 +2179,14 @@ export function checkEntry(entry: WorkflowEntry) {
   if (!IDENTITY.test(entry.id)) {
     problems.push(`workflow id "${entry.id}" is not an identity: lower case, digits and dashes`);
   }
-  if (Str.trim(entry.title) === "") problems.push("title is required");
+  if (Str.trim(entry.title) === "") {
+    problems.push("title is required");
+  }
   const fields = new Set(Struct.keys(entry.input));
   for (const [name, field] of Rec.toEntries(entry.input)) {
-    if (!Schema.isSchema(field)) problems.push(`input "${name}" is not a schema`);
+    if (!Schema.isSchema(field)) {
+      problems.push(`input "${name}" is not a schema`);
+    }
   }
   for (const name of fields) {
     if (isReserved(name)) {
@@ -2181,14 +2204,20 @@ export function checkEntry(entry: WorkflowEntry) {
     const connections = entry.metadata?.connections?.[kind] ?? {};
     for (const id of Struct.keys(connections)) {
       const text = connections[id];
-      if (text === undefined) continue;
-      if (!Schema.is(ConnectionId)(id))
+      if (text === undefined) {
+        continue;
+      }
+      if (!Schema.is(ConnectionId)(id)) {
         problems.push(`${entry.id}: unknown Connection "${String(id)}"`);
-      for (const [column, value] of Rec.toEntries(text))
-        if (Str.trim(value) === "")
+      }
+      for (const [column, value] of Rec.toEntries(text)) {
+        if (Str.trim(value) === "") {
           problems.push(`${entry.id}: ${kind}.${id}.${column} must have text`);
-      if (kind === "uses" && id in (entry.metadata?.connections?.needs ?? {}))
+        }
+      }
+      if (kind === "uses" && id in (entry.metadata?.connections?.needs ?? {})) {
         problems.push(`${entry.id}: Connection "${id}" is both needed and used`);
+      }
     }
   }
   problems.push(
@@ -2200,27 +2229,34 @@ export function checkEntry(entry: WorkflowEntry) {
     problems.push(`checkout ${stringifyJson(checkout)} is not branch or roaming`);
   }
   problems.push(...offerProblems(entry.metadata, entry.id));
-  for (const id of repeatedIds(entry.metadata?.path ?? []))
+  for (const id of repeatedIds(entry.metadata?.path ?? [])) {
     problems.push(`path lists the Step "${id}" more than once`);
+  }
   return problems;
 }
 
 function hintProblems(hints: Readonly<Record<string, InputStrategy>>, fields: ReadonlySet<string>) {
   const problems: Array<string> = [];
   for (const [field, strategy] of Rec.toEntries(hints)) {
-    if (!fields.has(field)) problems.push(`hint for "${field}", which is not an input`);
+    if (!fields.has(field)) {
+      problems.push(`hint for "${field}", which is not an input`);
+    }
     if (!KNOWN_STRATEGIES.has(strategy)) {
       problems.push(`input "${field}" has no strategy called "${strategy}"`);
     }
   }
   problems.push(...exclusiveClashes(hints));
   const launch = launchInputProblem([...fields], hints);
-  if (launch !== null) problems.push(launch);
+  if (launch !== null) {
+    problems.push(launch);
+  }
   return problems;
 }
 
 function outcomeProblems(outcome: OutcomeContract | undefined) {
-  if (!outcome) return [];
+  if (!outcome) {
+    return [];
+  }
   const problems: Array<string> = [];
   if (outcome.fixed !== undefined && outcome.selectable !== undefined) {
     problems.push("an outcome is either fixed or selectable, not both");
@@ -2229,10 +2265,13 @@ function outcomeProblems(outcome: OutcomeContract | undefined) {
     problems.push(`no outcome called "${String(outcome.fixed)}" (${Arr.join(KINDS, ", ")})`);
   }
   if (outcome.selectable !== undefined) {
-    if (outcome.selectable.length === 0) problems.push("a selectable outcome offers nothing");
+    if (outcome.selectable.length === 0) {
+      problems.push("a selectable outcome offers nothing");
+    }
     for (const kind of outcome.selectable) {
-      if (!REQUESTABLE.includes(kind))
+      if (!REQUESTABLE.includes(kind)) {
         problems.push(`"${kind}" is not an outcome a human may ask for`);
+      }
     }
   }
   return problems;
@@ -2246,21 +2285,30 @@ function offerProblems(metadata: WorkflowMetadata | undefined, workflow: string)
       if (
         !(id in (metadata?.connections?.uses ?? {})) &&
         !(id in (metadata?.connections?.needs ?? {}))
-      )
+      ) {
         problems.push(
           `${workflow}: offer "${offer.id}" lists Connection "${id}", which its workflow does not declare`,
         );
+      }
     }
-    if (!IDENTITY.test(offer.id)) problems.push(`"${offer.id}" is not an identity for an offer`);
-    if (seen.has(offer.id)) problems.push(`two offers are called "${offer.id}"`);
+    if (!IDENTITY.test(offer.id)) {
+      problems.push(`"${offer.id}" is not an identity for an offer`);
+    }
+    if (seen.has(offer.id)) {
+      problems.push(`two offers are called "${offer.id}"`);
+    }
     seen.add(offer.id);
-    if (Str.trim(offer.title) === "") problems.push(`offer "${offer.id}" has no title`);
+    if (Str.trim(offer.title) === "") {
+      problems.push(`offer "${offer.id}" has no title`);
+    }
     if (!IDENTITY.test(offer.workflow)) {
       problems.push(`offer "${offer.id}" starts "${offer.workflow}", which is not a workflow id`);
     }
-    for (const name of Rec.keys(offer.given ?? {}))
-      if (name in (offer.inputs ?? {}))
+    for (const name of Rec.keys(offer.given ?? {})) {
+      if (name in (offer.inputs ?? {})) {
         problems.push(`offer "${offer.id}" both fills "${name}" from the Run and gives it`);
+      }
+    }
   }
   return problems;
 }
@@ -2297,7 +2345,9 @@ export function describeMetadata(metadata: WorkflowMetadata | undefined) {
       };
     }),
   };
-  if (metadata?.connections === undefined) return described;
+  if (metadata?.connections === undefined) {
+    return described;
+  }
   return {
     ...described,
     connections: {
@@ -2374,12 +2424,16 @@ const isPatternCheck = Schema.is(PatternCheck);
 
 function drawn(check: typeof PatternCheck.Type) {
   const { source, flags } = check.representation.payload;
-  if (!/^[dg]*$/.test(flags) || !sameUnderUnicode(source)) return null;
+  if (!/^[dg]*$/.test(flags) || !sameUnderUnicode(source)) {
+    return null;
+  }
   return { ...check.annotations, toJsonSchema: () => ({ pattern: source }) };
 }
 
 function sameUnderUnicode(source: string) {
-  if (!/^[ -~]*$/.test(source)) return false;
+  if (!/^[ -~]*$/.test(source)) {
+    return false;
+  }
   try {
     new RegExp(source, "u");
   } catch {

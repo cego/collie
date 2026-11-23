@@ -50,8 +50,11 @@ Object.assign(process.env, GIT_QUIET);
 process.env.COLLIE_HOST_WATCH_PID = String(process.pid);
 // WARNING: Kept well inside settled below, so a host told to stop is gone before the check.
 process.env.COLLIE_HOST_STOP_GRACE ??= "500 millis";
-for (const key of Struct.keys(process.env))
-  if (pipe(key, Str.startsWith("HERDR_"))) delete process.env[key];
+for (const key of Struct.keys(process.env)) {
+  if (pipe(key, Str.startsWith("HERDR_"))) {
+    delete process.env[key];
+  }
+}
 delete process.env.COLLIE_USER_DIR;
 delete process.env.COLLIE_STATE_DIR;
 delete process.env.COLLIE_ROOT;
@@ -134,7 +137,9 @@ const settled = <A>(find: () => ReadonlyArray<A>) =>
   });
 
 beforeAll(() => {
-  if (!existsSync(root)) makeRoot();
+  if (!existsSync(root)) {
+    makeRoot();
+  }
 });
 
 let before = new Set<string>();
@@ -147,19 +152,24 @@ afterEach(() =>
   Effect.runPromise(
     Effect.gen(function* () {
       const left = yield* settled(hosts);
-      for (const one of left) kill(one.pid);
+      for (const one of left) {
+        kill(one.pid);
+      }
       const made = Arr.filter(entries(), (name) => !before.has(name));
-      for (const name of made) rmSync(join(root, name), { recursive: true, force: true });
+      for (const name of made) {
+        rmSync(join(root, name), { recursive: true, force: true });
+      }
       const problems = [
         ...Arr.map(left, (one) => `host pid ${one.pid} on ${one.dir}`),
         ...Arr.map(made, (name) => `directory ${join(root, name)}`),
       ];
-      if (problems.length > 0)
+      if (problems.length > 0) {
         return yield* Effect.die(
           new Error(
             `The test left ${problems.length} thing(s) behind: ${Arr.join(problems, "; ")}`,
           ),
         );
+      }
     }),
   ),
 );
@@ -168,24 +178,29 @@ afterAll(() =>
   Effect.runPromise(
     Effect.gen(function* () {
       const left = yield* settled(() => marked(root));
-      for (const one of left) kill(one.pid);
+      for (const one of left) {
+        kill(one.pid);
+      }
       const made = entries();
       rmSync(root, { recursive: true, force: true });
       const problems = [
         ...Arr.map(left, (one) => `process pid ${one.pid} (${one.command})`),
         ...Arr.map(made, (name) => `directory ${join(root, name)}`),
       ];
-      if (problems.length > 0)
+      if (problems.length > 0) {
         return yield* Effect.die(
           new Error(
             `The file left ${problems.length} thing(s) behind: ${Arr.join(problems, "; ")}`,
           ),
         );
+      }
     }),
   ),
 );
 
 process.on("exit", () => {
-  for (const one of hosts()) kill(one.pid);
+  for (const one of hosts()) {
+    kill(one.pid);
+  }
   rmSync(root, { recursive: true, force: true });
 });

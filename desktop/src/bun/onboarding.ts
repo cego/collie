@@ -68,7 +68,9 @@ const place = (route: ShellRoute, version: string, runner: { bytes: Uint8Array; 
   Effect.gen(function* () {
     const file = placedAt(version);
     const there = yield* shOn(route, `${SHA256} < ${file} 2>/dev/null`);
-    if (pipe_(there.out, Str.slice(0, 64)) === runner.sha256) return;
+    if (pipe_(there.out, Str.slice(0, 64)) === runner.sha256) {
+      return;
+    }
     // WARNING: not shOn: a link carries stdin as text, which would change a binary's bytes.
     const upload = yield* route.sh(
       Arr.join(
@@ -81,10 +83,11 @@ const place = (route: ShellRoute, version: string, runner: { bytes: Uint8Array; 
       ),
     );
     const put = yield* ranWith(upload, runner.bytes);
-    if (put.code !== 0)
+    if (put.code !== 0) {
       return yield* Effect.fail(
         Str.trim(put.err) || `could not put the runner on ${route.machine.name}`,
       );
+    }
   });
 
 const Ended = Schema.Literals([
@@ -199,10 +202,11 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
   const placed = yield* Effect.gen(function* () {
     const uname = yield* shOn(route, "uname -sm");
     const platform = platformOf(uname.out);
-    if (platform === null)
+    if (platform === null) {
       return yield* Effect.fail(
         `Collie has no runner for ${Str.trim(uname.out) || "this Machine"}`,
       );
+    }
     const verified = yield* verifiedRunner(releases, version, platform, runners, key);
     yield* place(route, version, verified);
     return verified;
@@ -262,9 +266,10 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
               const left = Arr.some(run.current().steps, ({ status }) => !SETTLED.includes(status));
               return run.end(line.ok, line.ok || left ? null : line.error.message);
             }
-            if (line.event === "start")
+            if (line.event === "start") {
               return run.step({ step: line.step, title: line.title, status: "running" });
-            if (line.event === "human")
+            }
+            if (line.event === "human") {
               return run
                 .step({ step: line.step, detail: line.detail, url: line.url })
                 .pipe(
@@ -278,6 +283,7 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
                   Effect.ignore,
                   Effect.andThen(open(line.url)),
                 );
+            }
             const { event: _, ...result } = line;
             return run.step(result);
           },
@@ -288,13 +294,14 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
     const code = yield* Effect.promise(() => child.exited);
     return { code, said: Str.trim(yield* Effect.promise(() => said)) };
   }).pipe(Effect.scoped, Effect.result);
-  if (run.current().ready === null)
+  if (run.current().ready === null) {
     yield* run.end(
       false,
       ended._tag === "Failure"
         ? ended.failure
         : ended.success.said || `collie onboard exited ${ended.success.code}`,
     );
+  }
   return run.current();
 });
 

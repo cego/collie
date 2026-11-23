@@ -67,7 +67,9 @@ const listed = (
   decode: (text: string) => ReadonlyArray<CatalogueEntry> | null,
 ) =>
   Effect.flatMap(printed, (text) => {
-    if (text === null) return Effect.succeed(null);
+    if (text === null) {
+      return Effect.succeed(null);
+    }
     const entries = decode(text);
     return entries === null
       ? Effect.fail(`${SOURCE[harness]} said: ${firstLine(text)}`)
@@ -92,7 +94,9 @@ const paced = Effect.fn("Catalogue.paced")((harness: Harness, source: HarnessSou
       return single.withPermits(1)(
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          if (shown !== undefined && now < until) return shown;
+          if (shown !== undefined && now < until) {
+            return shown;
+          }
           const read = yield* source.pipe(
             Effect.timeoutOrElse({
               duration: CATALOGUE_CALL_MS,
@@ -151,7 +155,9 @@ const printed = (command: string, args: ReadonlyArray<string>) =>
         }),
       )
       .pipe(Effect.option);
-    if (Option.isNone(spawned)) return null;
+    if (Option.isNone(spawned)) {
+      return null;
+    }
     const [out, err, code] = yield* Effect.all(
       [
         spawned.value.stdout.pipe(Stream.decodeText(), Stream.mkString),
@@ -160,8 +166,9 @@ const printed = (command: string, args: ReadonlyArray<string>) =>
       ],
       { concurrency: "unbounded" },
     ).pipe(Effect.mapError(reason));
-    if (Number(code) !== 0)
+    if (Number(code) !== 0) {
       return yield* Effect.fail(`${command} exited ${code}: ${firstLine(err || out)}`);
+    }
     return out;
   }).pipe(Effect.scoped);
 
@@ -190,7 +197,9 @@ const exchange = <A>(
         }),
       )
       .pipe(Effect.option);
-    if (Option.isNone(spawned)) return null;
+    if (Option.isNone(spawned)) {
+      return null;
+    }
     const answer = yield* spawned.value.stdout.pipe(
       Stream.decodeText(),
       Stream.splitLines,
@@ -199,7 +208,9 @@ const exchange = <A>(
       Stream.runHead,
       Effect.mapError(reason),
     );
-    if (Option.isNone(answer)) return yield* Effect.fail(`${command} stopped before it answered`);
+    if (Option.isNone(answer)) {
+      return yield* Effect.fail(`${command} stopped before it answered`);
+    }
     return yield* Effect.fromResult(answer.value);
   }).pipe(Effect.scoped);
 
@@ -250,9 +261,12 @@ const claudeModels = (cwd: string) =>
     [{ type: "control_request", request_id: "models", request: { subtype: "initialize" } }],
     (line) => {
       const reply = Option.getOrNull(decodeClaudeReply(line))?.response;
-      if (reply?.request_id !== "models") return undefined;
-      if (reply.response === undefined)
+      if (reply?.request_id !== "models") {
+        return undefined;
+      }
+      if (reply.response === undefined) {
         return Result.fail(`claude: ${reply.error ?? "initialize failed"}`);
+      }
       return Option.match(decodeClaudeModels(reply.response.models), {
         onNone: () => undecodable("claude"),
         onSome: (models) => Result.succeed(models),
@@ -278,8 +292,12 @@ const codexModels = (cwd: string) =>
     ],
     (line) => {
       const reply = Option.getOrNull(decodeCodexReply(line));
-      if (reply?.id !== 2) return undefined;
-      if (reply.error !== undefined) return Result.fail(`codex model/list: ${reply.error.message}`);
+      if (reply?.id !== 2) {
+        return undefined;
+      }
+      if (reply.error !== undefined) {
+        return Result.fail(`codex model/list: ${reply.error.message}`);
+      }
       return Option.match(decodeCodexModels(reply.result), {
         onNone: () => undecodable("codex"),
         onSome: (list) => Result.succeed(list),

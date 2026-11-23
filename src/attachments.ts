@@ -25,12 +25,19 @@ export const attachmentRefusal = Effect.fn("attachments.refusal")(function* (
   const fs = yield* FileSystem.FileSystem;
   for (const path of paths) {
     const info = yield* fs.stat(path).pipe(Effect.option);
-    if (info._tag === "None") return `attachment ${path} does not exist`;
-    if (info.value.type !== "File") return `attachment ${path} is not a regular file`;
-    if (Number(info.value.size) > ATTACHMENT_BYTES)
+    if (info._tag === "None") {
+      return `attachment ${path} does not exist`;
+    }
+    if (info.value.type !== "File") {
+      return `attachment ${path} is not a regular file`;
+    }
+    if (Number(info.value.size) > ATTACHMENT_BYTES) {
       return `attachment ${path} is larger than ${ATTACHMENT_BYTES / 1024 / 1024} MB`;
+    }
     const readable = yield* fs.access(path, { readable: true }).pipe(Effect.isSuccess);
-    if (!readable) return `attachment ${path} cannot be read`;
+    if (!readable) {
+      return `attachment ${path} cannot be read`;
+    }
   }
   return null;
 });
@@ -72,10 +79,14 @@ export const copyInto = Effect.fn("attachments.copyInto")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (sources.length === 0) return [];
+  if (sources.length === 0) {
+    return [];
+  }
   const named = yield* namesIn(dir, sources);
   yield* fs.makeDirectory(dir, { recursive: true });
-  for (const { name, bytes } of named) yield* fs.writeFile(path.join(dir, name), bytes);
+  for (const { name, bytes } of named) {
+    yield* fs.writeFile(path.join(dir, name), bytes);
+  }
   return Arr.map(named, ({ name, from }) => ({ name, from }));
 });
 
@@ -97,7 +108,9 @@ export const keepMessage = Effect.fn("attachments.keepMessage")(function* (
         cause.reason._tag === "AlreadyExists" ? Effect.succeed(false) : Effect.fail(cause),
       ),
     );
-    if (written || sameBytes(yield* fs.readFile(file), bytes)) return name;
+    if (written || sameBytes(yield* fs.readFile(file), bytes)) {
+      return name;
+    }
   }
 });
 
@@ -113,7 +126,9 @@ export const listAttachments = Effect.fn("attachments.list")(function* (dir: str
   )) {
     const file = path.join(dir, name);
     const info = yield* fs.stat(file).pipe(Effect.option);
-    if (info._tag === "None" || info.value.type !== "File") continue;
+    if (info._tag === "None" || info.value.type !== "File") {
+      continue;
+    }
     found.push({ name, mediaType: mediaTypeOf(file), size: Number(info.value.size), path: file });
   }
   return found;
@@ -131,18 +146,29 @@ export const typedPaths = (typed: string) => {
   for (let at = 0; at < typed.length; at++) {
     const char = typed[at]!;
     if (quote !== null) {
-      if (char === quote) quote = null;
-      else if (char === "\\" && quote === '"' && at + 1 < typed.length) word += typed[++at]!;
-      else word += char;
+      if (char === quote) {
+        quote = null;
+      } else if (char === "\\" && quote === '"' && at + 1 < typed.length) {
+        word += typed[++at]!;
+      } else {
+        word += char;
+      }
     } else if (char === "'" || char === '"') {
       quote = char;
       word ??= "";
-    } else if (char === "\\" && at + 1 < typed.length) word = (word ?? "") + typed[++at]!;
-    else if (/\s/.test(char)) {
-      if (word !== null) paths.push(word);
+    } else if (char === "\\" && at + 1 < typed.length) {
+      word = (word ?? "") + typed[++at]!;
+    } else if (/\s/.test(char)) {
+      if (word !== null) {
+        paths.push(word);
+      }
       word = null;
-    } else word = (word ?? "") + char;
+    } else {
+      word = (word ?? "") + char;
+    }
   }
-  if (word !== null) paths.push(word);
+  if (word !== null) {
+    paths.push(word);
+  }
   return paths;
 };

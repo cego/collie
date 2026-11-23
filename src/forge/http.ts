@@ -50,16 +50,19 @@ export class ForgeHttp extends Context.Service<
 const library = () => import("forges");
 
 const reasonOf = (forges: Awaited<ReturnType<typeof library>>, display: string, error: Error) => {
-  if (error instanceof forges.RateLimitedError)
+  if (error instanceof forges.RateLimitedError) {
     return `${display} answered ${error.status}: rate limited${error.resetAt === undefined ? "" : `, until ${error.resetAt.toISOString()}`}`;
+  }
   if (error instanceof forges.ForgeApiError) {
     const said = /"message"\s*:\s*"([^"]*)"/.exec(error.body)?.[1] ?? error.message;
     return `${display} answered ${error.status}: ${said}`;
   }
-  if (error instanceof forges.ForgeTimeoutError)
+  if (error instanceof forges.ForgeTimeoutError) {
     return `${display} did not answer within ${error.timeout / 1000} s`;
-  if (error instanceof forges.ForgeNetworkError)
+  }
+  if (error instanceof forges.ForgeNetworkError) {
     return `${display} could not be reached: ${error.message}`;
+  }
   return `${display} could not be asked: ${error.message}`;
 };
 
@@ -85,14 +88,18 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
     const locks = new Map<string, Semaphore.Semaphore>();
     const lockOf = (host: string) => {
       const known = locks.get(host);
-      if (known !== undefined) return known;
+      if (known !== undefined) {
+        return known;
+      }
       const lock = Semaphore.makeUnsafe(1);
       locks.set(host, lock);
       return lock;
     };
     const slotOf = (key: string) => {
       const known = slots.get(key);
-      if (known !== undefined) return known;
+      if (known !== undefined) {
+        return known;
+      }
       const slot: Slot = {
         provider: null,
         token: null,
@@ -105,12 +112,13 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
     const providerOf = (login: ForgeLogin, slot: Slot) =>
       (slot.provider ??= library().then(({ github, gitlab }) => {
         const auth = { type: "token" as const, token: () => slot.token ?? "" };
-        if (login.forge === "github")
+        if (login.forge === "github") {
           return github({
             auth,
             fetch,
             baseUrl: base === null ? undefined : `${base}/api.github.com`,
           });
+        }
         return gitlab({
           auth,
           fetch,
@@ -122,18 +130,25 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
       lockOf(login.host).withPermits(1)(
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          if (slot.token !== null && (slot.expires === null || now < slot.expires))
+          if (slot.token !== null && (slot.expires === null || now < slot.expires)) {
             return slot.token;
+          }
           const cached = slot.token !== null;
           slot.token = null;
           let expires = cached ? slot.expires : yield* login.expiry(run, cwd);
           if (expires !== null && expires <= now) {
-            if (!(yield* login.refresh(run, cwd))) return null;
+            if (!(yield* login.refresh(run, cwd))) {
+              return null;
+            }
             expires = yield* login.expiry(run, cwd);
-            if (expires !== null && expires <= (yield* Clock.currentTimeMillis)) return null;
+            if (expires !== null && expires <= (yield* Clock.currentTimeMillis)) {
+              return null;
+            }
           }
           const token = yield* login.token(run, cwd);
-          if (token === null) return null;
+          if (token === null) {
+            return null;
+          }
           slot.token = token;
           slot.expires = expires;
           return token;
@@ -162,7 +177,9 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
                   failed.cause instanceof Error ? failed.cause : new Error(String(failed.cause));
                 const refused = error instanceof forges.ForgeApiError && error.status === 401;
                 // WARNING: Another call may have read a new token since this one sent its own.
-                if (refused && slot.token === token) slot.token = null;
+                if (refused && slot.token === token) {
+                  slot.token = null;
+                }
                 const reason = reasonOf(forges, login.display, error);
                 const transient =
                   error instanceof forges.RateLimitedError ||
@@ -184,13 +201,21 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
           );
         const notReady = { ok: false, reason: login.notReady } as const;
         const first = yield* tokenOf(login, cwd, slot);
-        if (first === null) return notReady;
+        if (first === null) {
+          return notReady;
+        }
         const sent = yield* send(first);
-        if (!sent.refused) return sent.sent;
+        if (!sent.refused) {
+          return sent.sent;
+        }
         const second = yield* tokenOf(login, cwd, slot);
-        if (second === null) return notReady;
+        if (second === null) {
+          return notReady;
+        }
         const resent = yield* send(second);
-        if (!resent.refused) return resent.sent;
+        if (!resent.refused) {
+          return resent.sent;
+        }
         return {
           ok: false,
           reason: `${login.display} refused ${login.cli}'s login for ${login.host}: run ${login.relogin}`,
@@ -213,7 +238,9 @@ export const loginReadiness: <R>(
   Effect.gen(function* () {
     const http = yield* ForgeHttp;
     const me = yield* http.ask(login, cwd, (provider, signal) => provider.users.me({ signal }));
-    if (me.ok) return { ok: true, reason: "" };
+    if (me.ok) {
+      return { ok: true, reason: "" };
+    }
     const refused = me.status === 401 || (me.status === 403 && /bad credentials/i.test(me.reason));
     return refused || (yield* login.token(run, cwd)) === null
       ? { ok: false, reason: login.notReady, cause: "login-missing" }
@@ -309,9 +336,13 @@ export const pagesAs: <S extends Schema.Decoder<unknown>>(
         cwd,
         `${path}${separator}per_page=${PAGE}&page=${page}`,
       );
-      if (!listed.ok) return listed;
+      if (!listed.ok) {
+        return listed;
+      }
       items.push(...listed.value);
-      if (listed.value.length < PAGE) return { ok: true, value: items };
+      if (listed.value.length < PAGE) {
+        return { ok: true, value: items };
+      }
     }
   });
 

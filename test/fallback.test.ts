@@ -46,7 +46,9 @@ const resolved = (
   readings: ReadonlyArray<UsageReading>,
 ) => {
   const result = resolveWithRoom(layers, chain, roomFor(readings, NOW));
-  if (!result.ok) throw new Error(result.problem);
+  if (!result.ok) {
+    throw new Error(result.problem);
+  }
   return result.chosen;
 };
 const on = ({ choice }: ReturnType<typeof resolved>) =>

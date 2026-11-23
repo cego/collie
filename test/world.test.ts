@@ -44,8 +44,11 @@ printf '{"ok":true,"data":{"root":"%s","pid":"%s","grace":"%s","forge":"%s"}}\\n
           ),
         );
       } finally {
-        if (before === undefined) delete Bun.env.COLLIE_TEST_BINARY;
-        else Bun.env.COLLIE_TEST_BINARY = before;
+        if (before === undefined) {
+          delete Bun.env.COLLIE_TEST_BINARY;
+        } else {
+          Bun.env.COLLIE_TEST_BINARY = before;
+        }
       }
     }).pipe(Effect.scoped),
   ));
@@ -148,7 +151,9 @@ test.skipIf(process.platform !== "linux")(
         Effect.ensuring(
           Effect.gen(function* () {
             for (const pending of [child, other]) {
-              if (pending === undefined) continue;
+              if (pending === undefined) {
+                continue;
+              }
               yield* Effect.try(() => pending.kill()).pipe(Effect.ignore);
               yield* Effect.promise(() => pending.exited);
             }

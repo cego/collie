@@ -22,32 +22,46 @@ function nameDispatch(source: string) {
     "g",
   );
   for (const match of pipe(text, Str.matchAll(compared))) {
-    if (IDENTITY.test(match[1] ?? match[4] ?? "")) found.push(match[0]);
+    if (IDENTITY.test(match[1] ?? match[4] ?? "")) {
+      found.push(match[0]);
+    }
   }
   for (const match of pipe(
     text,
     Str.matchAll(new RegExp(String.raw`\.(startsWith|endsWith)\("(${SHIPPED})`, "g")),
-  ))
+  )) {
     found.push(match[0]);
+  }
   const listed = new RegExp(
     String.raw`\[\s*"(?:${SHIPPED})"(?:\s*,\s*"(?:${SHIPPED})")*\s*,?\s*\]`,
     "g",
   );
   for (const match of pipe(text, Str.matchAll(listed))) {
-    if (Arr.some([...pipe(match[0], Str.matchAll(/"(\w+)"/g))], (name) => ONLY_IDS.has(name[1]!)))
+    if (Arr.some([...pipe(match[0], Str.matchAll(/"(\w+)"/g))], (name) => ONLY_IDS.has(name[1]!))) {
       found.push(match[0]);
+    }
   }
   for (const match of pipe(text, Str.matchAll(/switch\s*\(([^)]*)\)\s*\{/g))) {
-    if (!IDENTITY.test(match[1]!)) continue;
+    if (!IDENTITY.test(match[1]!)) {
+      continue;
+    }
     let depth = 0;
     let end = (match.index ?? 0) + match[0].length - 1;
     for (; end < text.length; end++) {
-      if (text[end] === "{") depth += 1;
-      if (text[end] === "}" && --depth === 0) break;
+      if (text[end] === "{") {
+        depth += 1;
+      }
+      if (text[end] === "}" && --depth === 0) {
+        break;
+      }
     }
     const body = pipe(text, Str.slice(match.index, end));
-    for (const one of pipe(body, Str.matchAll(new RegExp(String.raw`case\s+"(${SHIPPED})"`, "g"))))
+    for (const one of pipe(
+      body,
+      Str.matchAll(new RegExp(String.raw`case\s+"(${SHIPPED})"`, "g")),
+    )) {
       found.push(`switch (${match[1]}) ${one[0]}`);
+    }
   }
   return found;
 }
@@ -65,7 +79,9 @@ const sources = Effect.fn("test.sources")(function* () {
         stack.push(full);
         continue;
       }
-      if (!pipe(name, Str.endsWith(".ts")) && !pipe(name, Str.endsWith(".tsx"))) continue;
+      if (!pipe(name, Str.endsWith(".ts")) && !pipe(name, Str.endsWith(".tsx"))) {
+        continue;
+      }
       found.push({ name: path.relative(srcDir, full), text: yield* fs.readFileString(full) });
     }
   }

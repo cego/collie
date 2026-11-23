@@ -445,7 +445,9 @@ test("nothing under Elsewhere is somewhere this session can go", () => {
     ]),
   );
 
-  for (const row of rows) expect(row.jump?.kind ?? "none").toBe("none");
+  for (const row of rows) {
+    expect(row.jump?.kind ?? "none").toBe("none");
+  }
   expect(keyIntent(keys({ row: rows[0]! }), press("\r", { name: "return" }))).toEqual({
     _tag: "Do",
     command: { _tag: "Jump", jump: rows[0]!.jump! },
@@ -758,7 +760,9 @@ test("the long and short renderings never disagree about the unit", () => {
       : pipe(long, Str.includes("hour"))
         ? "h"
         : "m";
-    if (long === "just now") continue;
+    if (long === "just now") {
+      continue;
+    }
     expect([seconds, pipe(short, Str.includes(unit))]).toEqual([seconds, true]);
   }
 });
@@ -908,7 +912,9 @@ test("a field that has taken the keys says what they do instead", () => {
 
 test("the help overlay lists every key the board handles, each with what it does", () => {
   const keys = Arr.map(ALL_KEYS, (k) => k.key);
-  for (const key of ["Tab", "/", "Esc", "m", "r", "?", "q"]) expect(keys).toContain(key);
+  for (const key of ["Tab", "/", "Esc", "m", "r", "?", "q"]) {
+    expect(keys).toContain(key);
+  }
   expect(Arr.every(ALL_KEYS, (k) => k.what !== "")).toBe(true);
 });
 
@@ -1232,9 +1238,15 @@ test("every one of more than nine merge requests is reachable from the chooser b
       expect(new Set(keys).size).toBe(keys.length);
       let next: ReadonlyArray<MenuItem> = [];
       for (const { command } of page) {
-        if (command._tag === "ChooseMr") next = mrChoices(command);
-        if (command._tag === "OpenMr") reached.push(command.target);
-        if (command._tag === "CopyLink") reached.push(command.url);
+        if (command._tag === "ChooseMr") {
+          next = mrChoices(command);
+        }
+        if (command._tag === "OpenMr") {
+          reached.push(command.target);
+        }
+        if (command._tag === "CopyLink") {
+          reached.push(command.url);
+        }
       }
       page = next;
     }

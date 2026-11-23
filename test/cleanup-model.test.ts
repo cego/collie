@@ -118,8 +118,9 @@ test("the sweep judges from the model as from disk, reading only the files of Ru
         const run = yield* madeRun(dir, { id: `r${n}`, task: record.id, state: "succeeded" });
         const agents = `${dir}/agents/${run.id}`;
         yield* fs.makeDirectory(agents, { recursive: true });
-        for (const at of [run.dir, agents, run.evidence])
+        for (const at of [run.dir, agents, run.evidence]) {
           yield* fs.writeFileString(`${at}/notes.txt`, "kept\n");
+        }
         tasks.push(record);
         runs.push(run);
         views.push(

@@ -86,7 +86,9 @@ const MOVED_SHOWN = 5;
 
 export function movedLine(record: Pick<Verification, "id" | "moved">) {
   const moved = record.moved ?? [];
-  if (moved.length === 0) return "";
+  if (moved.length === 0) {
+    return "";
+  }
   const named = Arr.join(
     Arr.map(moved.slice(0, MOVED_SHOWN), (one) => `${one.change} ${one.class} ${one.path}`),
     ", ",

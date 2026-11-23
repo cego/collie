@@ -18,7 +18,9 @@ const unreadable = (tar: Uint8Array) => {
   const found: Array<string> = [];
   for (let at = 0; at + BLOCK <= tar.length;) {
     const header = tar.subarray(at, at + BLOCK);
-    if (header.every((byte) => byte === 0)) break;
+    if (header.every((byte) => byte === 0)) {
+      break;
+    }
     const name = text(header.subarray(0, 100));
     const ustar = text(header.subarray(257, 262)) === "ustar";
     const prefix = ustar ? text(header.subarray(345, 500)) : "";
@@ -28,8 +30,11 @@ const unreadable = (tar: Uint8Array) => {
     if (type === "L" || type === "K") {
       const long = text(tar.subarray(at + BLOCK, at + BLOCK + size));
       found.push(`${long} (a GNU long-name entry)`);
-    } else if (type === "x" || type === "g") found.push(`${path} (a pax header)`);
-    else if (path.length > LONGEST) found.push(`${path} (${path.length} characters)`);
+    } else if (type === "x" || type === "g") {
+      found.push(`${path} (a pax header)`);
+    } else if (path.length > LONGEST) {
+      found.push(`${path} (${path.length} characters)`);
+    }
     at += BLOCK + Math.ceil(size / BLOCK) * BLOCK;
   }
   return found;

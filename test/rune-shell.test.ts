@@ -27,8 +27,9 @@ describe.skipIf(cargo === null)("the shell's services", () => {
             [cargo!, "build", "--quiet", "-p", "collie-desktop-protocol", "--bin", "notices"],
             { cwd: WORKSPACE },
           );
-          if (built.exitCode !== 0)
+          if (built.exitCode !== 0) {
             throw new Error(`cargo could not build the notices binary: ${built.stderr}`);
+          }
           notices = `${WORKSPACE}target/debug/notices`;
         }),
       ),

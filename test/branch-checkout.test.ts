@@ -26,7 +26,9 @@ const git = (cwd: string, ...args: Array<string>) =>
     cwd,
   }).pipe(
     Effect.map((ran) => {
-      if (ran.exitCode !== 0) throw new Error(`git ${Arr.join(args, " ")}: ${ran.stderr}`);
+      if (ran.exitCode !== 0) {
+        throw new Error(`git ${Arr.join(args, " ")}: ${ran.stderr}`);
+      }
       return Str.trim(ran.stdout);
     }),
   );
@@ -50,7 +52,9 @@ beforeEach(() =>
       yield* git(seed, "commit", "-qm", "the work", "--allow-empty");
       yield* git(seed, "remote", "add", "origin", origin);
       yield* git(seed, "push", "-q", "origin", "master", BRANCH);
-      for (const clone of [cloneA, cloneB]) yield* git(rig.root, "clone", "-q", origin, clone);
+      for (const clone of [cloneA, cloneB]) {
+        yield* git(rig.root, "clone", "-q", origin, clone);
+      }
     }),
   ),
 );
@@ -75,9 +79,13 @@ const filesUnder = Effect.fn("branchCheckoutTest.filesUnder")(function* (dir: st
   const fs = yield* FileSystem.FileSystem;
   const files: Record<string, string> = {};
   for (const name of (yield* fs.readDirectory(dir, { recursive: true })).sort()) {
-    if (pipe_(name, Str.startsWith(".git/"))) continue;
+    if (pipe_(name, Str.startsWith(".git/"))) {
+      continue;
+    }
     const at = `${dir}/${name}`;
-    if ((yield* fs.stat(at)).type === "File") files[name] = yield* fs.readFileString(at);
+    if ((yield* fs.stat(at)).type === "File") {
+      files[name] = yield* fs.readFileString(at);
+    }
   }
   return files;
 });
@@ -466,7 +474,9 @@ test.each([
   runOnPath(
     Effect.gen(function* () {
       const started = yield* startedAt(at);
-      if (dirty) yield* (yield* FileSystem.FileSystem).writeFileString(`${started}/wip`, "half\n");
+      if (dirty) {
+        yield* (yield* FileSystem.FileSystem).writeFileString(`${started}/wip`, "half\n");
+      }
 
       const checkout = yield* askStarted(started, [agentIn(started, status)]);
 

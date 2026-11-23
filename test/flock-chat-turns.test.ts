@@ -64,7 +64,9 @@ const machine: (
     declare: (payload) => Effect.sync(() => void declared.push(payload)),
     news: ({ as, keys }) =>
       Effect.sync(() => {
-        if (as === "read") read.push(...(keys ?? []));
+        if (as === "read") {
+          read.push(...(keys ?? []));
+        }
         return {
           items: Arr.filter(items, ({ key }) => !read.includes(key)),
           omitted: 0,
@@ -143,13 +145,17 @@ const scripted: (
                 { signal: new AbortController().signal, toolUseID: `toolu_${seen.prompts.length}` },
               ),
             );
-            if (asked.behavior === "deny") seen.refusals.push(text);
+            if (asked.behavior === "deny") {
+              seen.refusals.push(text);
+            }
           }
           if (holds(text)) {
             yield* Deferred.await(interrupted);
             interrupted = Deferred.makeUnsafe<void>();
           }
-          if (text === "slow" && gate !== undefined) yield* Deferred.await(gate);
+          if (text === "slow" && gate !== undefined) {
+            yield* Deferred.await(gate);
+          }
           return reply(text);
         }),
       ),
@@ -206,8 +212,9 @@ const answered = (text: string) => [
 
 const eventually = (check: () => boolean) =>
   Effect.gen(function* () {
-    for (let tries = 0; tries < 200 && !check(); tries++)
+    for (let tries = 0; tries < 200 && !check(); tries++) {
       yield* TestClock.withLive(Effect.sleep("10 millis"));
+    }
     expect(check()).toBe(true);
   });
 
@@ -316,8 +323,9 @@ const withChat = <A, E>(
         transcripts: new Map(opts.transcripts),
       };
       const read: Array<string> = [];
-      if (opts.savedFile !== undefined)
+      if (opts.savedFile !== undefined) {
         yield* fs.writeFileString(`${dir}/flock-chat.json`, opts.savedFile);
+      }
       const settings = opts.settings ?? { current: { proactive: opts.proactive } };
       const lists = opts.readers === undefined ? undefined : yield* harnessLists(opts.readers);
       const conversation = yield* openFlockChat({
@@ -328,7 +336,9 @@ const withChat = <A, E>(
               context,
             ),
           };
-          if (opts.pi !== undefined) drivers.pi = opts.pi(context);
+          if (opts.pi !== undefined) {
+            drivers.pi = opts.pi(context);
+          }
           return { ...drivers, ...opts.drivers };
         },
         dir,
@@ -358,7 +368,9 @@ const withChat = <A, E>(
               ...(model !== undefined && { chatModel: model }),
               ...(effort !== undefined && { chatEffort: effort }),
             });
-            if ("refused" in changed) return changed.refused;
+            if ("refused" in changed) {
+              return changed.refused;
+            }
             settings.current = changed;
             return null;
           }),
@@ -386,8 +398,13 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
         // WARNING: Nobody is there to click an answer, so the question is refused rather than waited on.
         expect(seen.refusals).toEqual(seen.prompts.slice(0, 1));
         const fs = yield* FileSystem.FileSystem;
-        for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
+        for (
+          let tries = 0;
+          tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`));
+          tries++
+        ) {
           yield* TestClock.withLive(Effect.sleep("10 millis"));
+        }
         const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
         expect(Str.split(Str.trim(usage), "\n")).toHaveLength(1);
         expect(
@@ -615,10 +632,11 @@ test("a message's files are inlined only while their base64 fits the request, an
   withChat({ items: [], proactive: false }, answered, ({ conversation, seen, dir }) =>
     Effect.gen(function* () {
       const pdfs = [];
-      for (let n = 0; n < 5; n++)
+      for (let n = 0; n < 5; n++) {
         pdfs.push(
           yield* staged(dir, `part${n}.pdf`, "application/pdf", new Uint8Array(4 * 1024 * 1024)),
         );
+      }
       yield* Stream.runDrain(
         conversation.send(
           "read these",
@@ -1203,8 +1221,13 @@ test("Desktop's own turn on Pi records its harness, model and token counts", () 
         yield* TestClock.adjust("3 seconds");
         yield* Fiber.join(ended);
         const fs = yield* FileSystem.FileSystem;
-        for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
+        for (
+          let tries = 0;
+          tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`));
+          tries++
+        ) {
           yield* TestClock.withLive(Effect.sleep("10 millis"));
+        }
         const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
         expect(
           yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(usage).pipe(Effect.orDie),
@@ -1241,7 +1264,9 @@ test("the account says a turn is under way only while one is, Desktop's own or t
         yield* conversation.choices.pipe(
           Stream.runForEach(({ turning }) =>
             Effect.sync(() => {
-              if (told.at(-1) !== turning) told.push(turning);
+              if (told.at(-1) !== turning) {
+                told.push(turning);
+              }
             }),
           ),
           Effect.forkChild,

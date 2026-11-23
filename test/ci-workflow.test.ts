@@ -70,7 +70,7 @@ test("Collie's own check is left to the CI job whose needs run each part of it",
       )(yield* fs.readFileString(`${root}/package.json`)).pipe(Effect.orDie);
       const parts = Str.split(scripts.check, " && ");
       expect(parts.length).toBeGreaterThan(1);
-      for (const part of parts)
+      for (const part of parts) {
         expect(
           Arr.some(runs, (run) =>
             Boolean(
@@ -83,6 +83,7 @@ test("Collie's own check is left to the CI job whose needs run each part of it",
             ),
           ),
         ).toBe(true);
+      }
     }),
   ));
 
@@ -92,7 +93,9 @@ test("CI shards enumerate every partition using the matrix's total", () =>
       const { jobs } = yield* workflow("ci");
       const suite = jobs.suite;
       expect(suite !== undefined && "steps" in suite).toBe(true);
-      if (suite === undefined || !("steps" in suite)) return;
+      if (suite === undefined || !("steps" in suite)) {
+        return;
+      }
       const shards = suite.strategy?.matrix.shard ?? [];
       expect(shards.length).toBeGreaterThan(1);
       expect(shards).toEqual(Array.from({ length: shards.length }, (_, i) => i + 1));
@@ -108,10 +111,11 @@ test("CI requires the Mac runner and the same native desktop builds that the rel
       const ci = yield* workflow("ci");
       const release = yield* workflow("release");
       const native = yield* workflow("rune-bundle");
-      for (const pipeline of [ci, release])
+      for (const pipeline of [ci, release]) {
         expect(pipeline.jobs["desktop-bundle"]).toEqual({
           uses: "./.github/workflows/rune-bundle.yml",
         });
+      }
       for (const name of ["macos", "desktop-checks", "desktop-bundle"]) {
         expect(ci.jobs.test?.needs).toContain(name);
         expect(Arr.join(commands(ci.jobs.test), "\n")).toContain(
@@ -134,8 +138,9 @@ test("CI requires the Mac runner and the same native desktop builds that the rel
         ]),
       );
       expect(release.jobs.release?.needs).toContain("desktop-bundle");
-      for (const platform of ["linux", "macos"])
+      for (const platform of ["linux", "macos"]) {
         expect(commands(native.jobs[platform])).toContain("bun run desktop/scripts/bundle.ts");
+      }
       expect(commands(native.jobs.macos)).toContain("sh tools/verify-mac-app.sh desktop/dist");
     }),
   ));
@@ -160,9 +165,11 @@ test("the required CI gate refuses each failed, cancelled or skipped dependency"
           ),
         ]);
       expect((yield* check(undefined, "success")).exitCode).toBe(0);
-      for (const name of needs)
-        for (const result of ["failure", "cancelled", "skipped"])
+      for (const name of needs) {
+        for (const result of ["failure", "cancelled", "skipped"]) {
           expect((yield* check(name, result)).exitCode).not.toBe(0);
+        }
+      }
     }),
   ));
 
@@ -218,14 +225,16 @@ test("the merge queue's required check is the CI gate Collie's check is left to,
       for (const name of [gate?.needs ?? []].flat()) {
         const job = ci.jobs[name];
         expect({ name, if: job?.if }).toEqual({ name, if: undefined });
-        if (job?.uses !== undefined)
+        if (job?.uses !== undefined) {
           for (const [inner, called] of Rec.toEntries(
             (yield* gated(pipe_(job.uses, Str.replace(/^\.\//, "")))).jobs,
-          ))
+          )) {
             expect({ name: `${name}/${inner}`, if: called.if }).toEqual({
               name: `${name}/${inner}`,
               if: undefined,
             });
+          }
+        }
       }
     }),
   ));

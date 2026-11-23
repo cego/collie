@@ -62,7 +62,9 @@ export const inHunks = (file: FileDiffMetadata, line: number, side: SelectionSid
 
 const textAt = (file: FileDiffMetadata, line: number, side: SelectionSide) => {
   const hunk = hunkAt(file, line, side);
-  if (hunk === undefined) return [];
+  if (hunk === undefined) {
+    return [];
+  }
   const text = (side === "additions" ? file.additionLines : file.deletionLines)[
     hunk.index + line - hunk.start
   ];
@@ -80,7 +82,9 @@ export const diffAnchor: (
   const first = Math.min(range.start, end);
   const last = Math.max(range.start, end);
   const lines: Array<string> = [];
-  for (let line = first; line <= last; line++) lines.push(...textAt(file, line, side));
+  for (let line = first; line <= last; line++) {
+    lines.push(...textAt(file, line, side));
+  }
   return { _tag: "Diff", path, side, first, last, lines };
 };
 
@@ -102,7 +106,9 @@ export const quoteOf = (anchor: Anchor) =>
   anchor._tag === "Plan" ? anchor.quote : Arr.join(anchor.lines, "\n");
 
 export const locationOf = (anchor: Anchor) => {
-  if (anchor._tag === "Plan") return `the plan's \`${anchor.file}\``;
+  if (anchor._tag === "Plan") {
+    return `the plan's \`${anchor.file}\``;
+  }
   const lines = anchor.first === anchor.last ? `${anchor.first}` : `${anchor.first}-${anchor.last}`;
   return `\`${anchor.path}:${lines}\`${anchor.side === "deletions" ? " (as it was)" : ""}`;
 };
@@ -121,9 +127,10 @@ export const compose = (drafts: ReadonlyArray<Draft>) => {
     `${count} from the human in Desktop. Each names where it is, quotes what it is about, then says what they want.`,
     ...items,
   ];
-  if (Arr.some(drafts, (draft) => draft.anchor._tag === "Plan"))
+  if (Arr.some(drafts, (draft) => draft.anchor._tag === "Plan")) {
     message.push(
       "Revise the plan and tickets where these comments call for changes. Preserve the Run's scope and constraints. Leave its next-choice menu unanswered.",
     );
+  }
   return Arr.join(message, "\n\n");
 };

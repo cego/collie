@@ -30,17 +30,21 @@ const checkoutOf: (
 ) => Effect.Effect<CheckoutOf, never, PlatformServices> = Effect.fn("schedule.checkoutOf")(
   function* (env: PluginEnv, given: string) {
     const named = Str.trim(given);
-    if (named === SCHEDULE_PROJECTS_ROOT || pipe_(named, Str.startsWith("/")))
+    if (named === SCHEDULE_PROJECTS_ROOT || pipe_(named, Str.startsWith("/"))) {
       return { path: named };
-    if (named === "") return { path: (yield* insideCheckout(env.cwd)) ? env.cwd : null };
+    }
+    if (named === "") {
+      return { path: (yield* insideCheckout(env.cwd)) ? env.cwd : null };
+    }
     const where = yield* workspaceNamed(env, named);
-    if (where === null || "error" in where)
+    if (where === null || "error" in where) {
       return {
         error: err(
           "invalid_input",
           `${where === null ? `nothing is named "${named}"` : where.error}. ${SCHEDULE_CHECKOUT_FIX}`,
         ),
       };
+    }
     return { path: where.found.cwd };
   },
 );
@@ -62,13 +66,17 @@ const changing = (
     mutation(env, operation, requestId, (request) =>
       Effect.gen(function* () {
         const asked = yield* change(env);
-        if ("refused" in asked) return asked.refused;
+        if ("refused" in asked) {
+          return asked.refused;
+        }
         const changed = yield* changeSchedule(env, {
           door: yield* cliDoor(env),
           change: asked,
           request,
         });
-        if (!changed.ok) return changed;
+        if (!changed.ok) {
+          return changed;
+        }
         return { ok: true as const, data: changed.value, human: changedLine(changed.value) };
       }),
     ),
@@ -120,7 +128,9 @@ const scheduleAdd = Command.make(
         Effect.gen(function* () {
           const refused = (failure: OpResult) => ({ refused: failure });
           const parsed = yield* parseInput(input, inputsJson);
-          if (!parsed.ok) return refused(parsed.error);
+          if (!parsed.ok) {
+            return refused(parsed.error);
+          }
           const given = Rec.fromEntries([
             ...Rec.toEntries(parsed.given.text),
             ...Arr.map(
@@ -133,7 +143,9 @@ const scheduleAdd = Command.make(
             Arr.filter(Rec.toEntries(given), ([key]) => key !== "workspace"),
           );
           const checks = givenVerifications(verify);
-          if (!checks.ok) return refused(err("invalid_input", checks.error));
+          if (!checks.ok) {
+            return refused(err("invalid_input", checks.error));
+          }
           const scheduled = (workspace: string) => ({
             change: "add" as const,
             name,
@@ -142,12 +154,16 @@ const scheduleAdd = Command.make(
             start: { workflow, inputs, workspace, verify: checks.specs },
             ...Option.match(tz, { onNone: () => ({}), onSome: (zone) => ({ tz: zone }) }),
           });
-          if (env.machine !== undefined) return scheduled(Str.trim(where));
+          if (env.machine !== undefined) {
+            return scheduled(Str.trim(where));
+          }
           const checkout = yield* checkoutOf(env, where);
-          if ("error" in checkout) return refused(checkout.error);
+          if ("error" in checkout) {
+            return refused(checkout.error);
+          }
           const at = checkout.path === SCHEDULE_PROJECTS_ROOT ? null : checkout.path;
           const saved = yield* moduleFor({ ...env, cwd: at ?? env.cwd }, workflow);
-          if (saved === null)
+          if (saved === null) {
             return refused(
               err(
                 "workflow_not_found",
@@ -155,6 +171,7 @@ const scheduleAdd = Command.make(
                 { workflow },
               ),
             );
+          }
           if ("inputs" in saved) {
             const needed = yield* agentStartRefusal(
               { ...env, cwd: at ?? env.cwd },
@@ -162,7 +179,9 @@ const scheduleAdd = Command.make(
               { json: {}, text: inputs },
               { named: checkout.path, fix: SCHEDULE_CHECKOUT_FIX },
             );
-            if (needed !== null) return refused(needed);
+            if (needed !== null) {
+              return refused(needed);
+            }
           }
           return scheduled(checkout.path ?? "");
         }).pipe(Effect.orDie),
@@ -183,7 +202,9 @@ const scheduleList = Command.make("list", {}, () =>
   answering((env) =>
     Effect.gen(function* () {
       const listed = yield* flockSchedules(env, yield* cliDoor(env));
-      if (!listed.ok) return listed;
+      if (!listed.ok) {
+        return listed;
+      }
       const { schedules, machines } = listed.value;
       return {
         ok: true as const,
@@ -232,7 +253,9 @@ const scheduleMove = Command.make(
           Effect.gen(function* () {
             const here = machineName();
             const source = env.machine ?? here;
-            if (source === to) return err("invalid_input", `"${name}" is on ${to} already.`);
+            if (source === to) {
+              return err("invalid_input", `"${name}" is on ${to} already.`);
+            }
             const door = yield* cliDoor(env);
             const refusals: Array<Failure> = [];
             const keep = (failure: Failure) => void refusals.push(failure);
@@ -243,9 +266,13 @@ const scheduleMove = Command.make(
               checkout: Option.getOrUndefined(global.workspace),
               request,
             });
-            if (moved.ok) return { ok: true as const, data: moved.moved, human: moved.said };
+            if (moved.ok) {
+              return { ok: true as const, data: moved.moved, human: moved.said };
+            }
             const first = refusals[0];
-            if (moved.code === "machine_unreachable" && first !== undefined) return first;
+            if (moved.code === "machine_unreachable" && first !== undefined) {
+              return first;
+            }
             return err(MOVE_CODES[moved.code], moved.message, { step: moved.code });
           }),
         ),

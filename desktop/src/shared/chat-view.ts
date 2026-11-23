@@ -69,7 +69,9 @@ export const earlierNote = (earlier: Conversations["earlier"], set: string) => {
       Arr.flatMap(earlier, ({ harness }) => (harness === set ? [] : [harnessName(harness)])),
     ),
   ];
-  if (others.length === 0) return null;
+  if (others.length === 0) {
+    return null;
+  }
   return others.length === 1
     ? `Opening a ${others[0]} conversation moves the chat to ${others[0]}.`
     : `Opening a ${Arr.join(others, " or ")} conversation moves the chat to its harness.`;

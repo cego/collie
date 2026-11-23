@@ -62,9 +62,13 @@ test("a human's message closes the agent's own question: nothing asks it again, 
           }),
           (before) =>
             Effect.sync(() => {
-              for (const [key, value] of Rec.toEntries(before))
-                if (value === undefined) delete Bun.env[key];
-                else Bun.env[key] = value;
+              for (const [key, value] of Rec.toEntries(before)) {
+                if (value === undefined) {
+                  delete Bun.env[key];
+                } else {
+                  Bun.env[key] = value;
+                }
+              }
             }),
         );
         resetExecutors();

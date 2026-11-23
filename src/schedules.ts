@@ -182,7 +182,9 @@ export const schedulesLayer = (options: {
               run: outcome.run,
               status,
             };
-          } else said = outcome;
+          } else {
+            said = outcome;
+          }
           last = { occurrence: record.last.occurrence, outcome: said };
         }
         return {
@@ -206,7 +208,9 @@ export const schedulesLayer = (options: {
         const entries: Array<ScheduleEntry> = [];
         for (const name of names.sort()) {
           const record = yield* read(name);
-          if (record !== null) entries.push(yield* entryOf(record));
+          if (record !== null) {
+            entries.push(yield* entryOf(record));
+          }
         }
         return { machine, schedules: entries };
       });
@@ -232,42 +236,49 @@ export const schedulesLayer = (options: {
         start: SavedStart,
         request: string,
       ) {
-        if (Str.trim(start.workspace) === "")
+        if (Str.trim(start.workspace) === "") {
           return yield* new HostRefused({
             reason: `${NEEDS_INPUT}: a Schedule names its checkout: an absolute path, or ${SCHEDULE_PROJECTS_ROOT}`,
           });
+        }
         if (
           start.workspace !== SCHEDULE_PROJECTS_ROOT &&
           !pipe_(start.workspace, Str.startsWith("/"))
-        )
+        ) {
           return yield* refusedInput(
             `workspace: "${start.workspace}" is neither an absolute path nor ${SCHEDULE_PROJECTS_ROOT}`,
           );
-        if ("workspace" in start.inputs)
+        }
+        if ("workspace" in start.inputs) {
           return yield* refusedInput(
             "the checkout is the start's workspace, not one of its Inputs",
           );
+        }
         const where = yield* placed(start);
         const saved = yield* savedModules({ ...env, cwd: where.project });
         const fault = Option.getOrUndefined(
           Arr.findFirst(saved.problems, (one) => one.id === start.workflow),
         );
-        if (fault !== undefined) return yield* refusedInput(`${fault.path}: ${fault.message}`);
+        if (fault !== undefined) {
+          return yield* refusedInput(`${fault.path}: ${fault.message}`);
+        }
         const entry = Option.getOrUndefined(
           Arr.findFirst(saved.entries, (one) => one.id === start.workflow),
         );
-        if (entry === undefined)
+        if (entry === undefined) {
           return yield* refusedInput(
             `no workflow "${start.workflow}" is saved for ${where.project}`,
           );
+        }
         const missing = yield* agentStartRefusal(
           { ...env, cwd: where.project },
           entry,
           { json: {}, text: where.text },
           { named: where.project, fix: "" },
         );
-        if (missing !== null)
+        if (missing !== null) {
           return yield* new HostRefused({ reason: `${NEEDS_INPUT}: ${missing.error.message}` });
+        }
         const generation = yield* registry.resolve({ project: where.project, id: start.workflow });
         yield* registry.check({
           generation,
@@ -312,7 +323,7 @@ export const schedulesLayer = (options: {
           yield* readAudit(trail).pipe(Effect.orElseSucceed(() => [])),
           (line) => line.request === request,
         );
-        if (!recorded)
+        if (!recorded) {
           yield* recordAudit(trail, {
             operation: "start",
             request,
@@ -321,6 +332,7 @@ export const schedulesLayer = (options: {
             result: Started,
             value: admitted,
           }).pipe(Effect.orDie);
+        }
         return admitted.runId;
       }, Effect.provideContext(hosted));
 
@@ -348,8 +360,12 @@ export const schedulesLayer = (options: {
         return yield* writing.withPermits(1)(
           Effect.gen(function* () {
             const record = yield* read(name);
-            if (record === null) return refused("the Schedule was removed");
-            if (record.epoch !== epoch) return refused("the Schedule was resumed");
+            if (record === null) {
+              return refused("the Schedule was removed");
+            }
+            if (record.epoch !== epoch) {
+              return refused("the Schedule was resumed");
+            }
             if (record.paused) {
               const outcome = refused("the Schedule was paused");
               yield* write({ ...record, last: { occurrence, outcome } });
@@ -399,7 +415,9 @@ export const schedulesLayer = (options: {
         return yield* writing.withPermits(1)(
           Effect.gen(function* () {
             const record = yield* read(payload.name);
-            if (record === null) return null;
+            if (record === null) {
+              return null;
+            }
             const own = record.epoch === payload.epoch;
             const handedOver = !own && run !== null && record.running === run;
             const cron = cronOf(record);
@@ -420,7 +438,9 @@ export const schedulesLayer = (options: {
       const forgetFinished = (payload: typeof ScheduleWorkflow.payloadSchema.Type) =>
         Effect.gen(function* () {
           const execution = yield* ScheduleWorkflow.executionId(payload);
-          if (Option.isNone(yield* ScheduleWorkflow.poll(execution))) return;
+          if (Option.isNone(yield* ScheduleWorkflow.poll(execution))) {
+            return;
+          }
           yield* forgetExecution(ScheduleWorkflow._tag, execution);
         }).pipe(Effect.provideContext(hosted), Effect.ignore);
 
@@ -455,18 +475,21 @@ export const schedulesLayer = (options: {
                   : { kind: "start" as const, occurrence: isoOf(decided.occurrence) };
               }),
             });
-            if (woke.kind === "end") return;
+            if (woke.kind === "end") {
+              return;
+            }
             const outcome = yield* Activity.make({
               name: "start",
               success: OccurrenceOutcome,
               execute: startOccurrence(payload.name, payload.epoch, woke.occurrence),
             });
             // WARNING: on this execution's own fiber, so the Run's end wakes it; a suspension passes through.
-            if (outcome.kind === "started")
+            if (outcome.kind === "started") {
               yield* registry.result(outcome.run).pipe(
                 Effect.catch(() => Effect.void),
                 Effect.catchDefect(() => Effect.void),
               );
+            }
             // WARNING: decided once, so a replay starts the same execution rather than a later one.
             const next = yield* Activity.make({
               name: "record",
@@ -475,14 +498,16 @@ export const schedulesLayer = (options: {
               ),
               execute: recordOccurrence(payload, woke.occurrence, outcome),
             });
-            if (next !== null)
+            if (next !== null) {
               yield* startExecution({
                 name: payload.name,
                 ...next,
                 after: next.epoch === payload.epoch ? payload.occurrence : null,
               });
-            if (payload.after !== null)
+            }
+            if (payload.after !== null) {
               yield* forgetFinished({ ...payload, occurrence: payload.after });
+            }
           }),
         ),
         scope,
@@ -490,10 +515,11 @@ export const schedulesLayer = (options: {
 
       const change = (change: ScheduleChange, request: string, by: ScheduleAsker) =>
         Effect.gen(function* () {
-          if (!SCHEDULE_NAME.test(change.name))
+          if (!SCHEDULE_NAME.test(change.name)) {
             return yield* refusedInput(
               `"${change.name}" is not a Schedule's name: lowercase letters, digits and hyphens, at most 40`,
             );
+          }
           return yield* once(
             trailOf(dir, change.name),
             {
@@ -538,19 +564,25 @@ export const schedulesLayer = (options: {
               (present) => pipe_(present, Str.slice(request.length + 1)),
             ),
           );
-          if (removed !== undefined && removed !== record?.added) return yield* done(null);
+          if (removed !== undefined && removed !== record?.added) {
+            return yield* done(null);
+          }
         }
         // WARNING: this request's own write, from an attempt that stopped before its receipt.
-        if (record !== null && record.epoch === request && change.change !== "pause")
+        if (record !== null && record.epoch === request && change.change !== "pause") {
           return yield* done(record);
+        }
         if (change.change === "add") {
-          if (record !== null)
+          if (record !== null) {
             return yield* refusedInput(
               `a Schedule called "${change.name}" is already on this Machine; remove it first`,
             );
+          }
           const tz = change.tz ?? hostZone();
           const cron = parseSchedule(change.cron, tz, { seconds: options.seconds });
-          if (Result.isFailure(cron)) return yield* refusedInput(cron.failure);
+          if (Result.isFailure(cron)) {
+            return yield* refusedInput(cron.failure);
+          }
           yield* checkStart(change.start, request);
           const at = yield* now;
           const added: ScheduleRecord = {
@@ -567,17 +599,19 @@ export const schedulesLayer = (options: {
             running: null,
           };
           yield* write(added);
-          if (added.pending !== null)
+          if (added.pending !== null) {
             yield* startExecution({
               name: added.name,
               epoch: added.epoch,
               occurrence: added.pending,
               after: null,
             });
+          }
           return yield* done(added);
         }
-        if (record === null)
+        if (record === null) {
           return yield* refusedInput(`no Schedule called "${change.name}" is on this Machine`);
+        }
         if (change.change === "remove") {
           yield* fs
             .writeFileString(removedOf(dir, change.name), `${request} ${record.added}\n`, {
@@ -592,33 +626,40 @@ export const schedulesLayer = (options: {
           yield* write(paused);
           return yield* done(paused);
         }
-        if (!record.paused)
+        if (!record.paused) {
           return yield* new HostRefused({
             reason: `invalid_state: "${change.name}" is not paused`,
           });
+        }
         const cron = cronOf(record);
-        if (cron === undefined)
+        if (cron === undefined) {
           return yield* refusedInput(`"${record.cron}" no longer reads as a cron expression here`);
+        }
         const at = yield* now;
         const pending = record.running === null ? isoOf(nextOccurrence(cron, at, at)) : null;
         const resumed = { ...record, paused: false, epoch: request, pending };
         yield* write(resumed);
-        if (pending !== null)
+        if (pending !== null) {
           yield* startExecution({
             name: record.name,
             epoch: request,
             occurrence: pending,
             after: null,
           });
+        }
         return yield* done(resumed);
       });
 
       const handedOverAndLost = (record: ScheduleRecord) =>
         Effect.gen(function* () {
           const cron = cronOf(record);
-          if (record.running === null || cron === undefined) return null;
+          if (record.running === null || cron === undefined) {
+            return null;
+          }
           const status = yield* statusOf(record.running);
-          if (status !== "complete" && status !== "failed") return null;
+          if (status !== "complete" && status !== "failed") {
+            return null;
+          }
           const at = yield* now;
           const pending = isoOf(nextOccurrence(cron, at, at));
           yield* update(record.name, (now) => ({ ...now, pending, running: null }));
@@ -633,9 +674,13 @@ export const schedulesLayer = (options: {
             .pipe(Effect.orElseSucceed(() => []));
           for (const name of names) {
             const record = yield* read(name);
-            if (record === null || record.paused) continue;
+            if (record === null || record.paused) {
+              continue;
+            }
             const pending = record.pending ?? (yield* handedOverAndLost(record));
-            if (pending === null) continue;
+            if (pending === null) {
+              continue;
+            }
             yield* startExecution({
               name,
               epoch: record.epoch,

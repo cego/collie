@@ -154,9 +154,13 @@ const hostedOver = Effect.fn("test.hostedOver")(function* (
     }),
     (before) =>
       Effect.sync(() => {
-        for (const [key, value] of Rec.toEntries(before))
-          if (value === undefined) delete Bun.env[key];
-          else Bun.env[key] = value;
+        for (const [key, value] of Rec.toEntries(before)) {
+          if (value === undefined) {
+            delete Bun.env[key];
+          } else {
+            Bun.env[key] = value;
+          }
+        }
       }),
   );
   resetExecutors();

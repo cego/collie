@@ -216,7 +216,7 @@ export function unmetCriteria(
 ) {
   return Arr.flatMap(criteria, (criterion) => {
     const met = answerFor(criterion, answers)?.met;
-    if (met === undefined)
+    if (met === undefined) {
       return [
         {
           file: ticket,
@@ -225,7 +225,8 @@ export function unmetCriteria(
           detail: "The builder's Output says nothing of how this criterion is met.",
         },
       ];
-    if (/^not met\b/i.test(Str.trim(met)))
+    }
+    if (/^not met\b/i.test(Str.trim(met))) {
       return [
         {
           file: ticket,
@@ -234,6 +235,7 @@ export function unmetCriteria(
           detail: met,
         },
       ];
+    }
     return [];
   });
 }
@@ -302,7 +304,9 @@ export const leaveOutstanding = (dir: string, outstanding: ReadonlyArray<Finding
 
 export function riskLine(risks: string) {
   const asked = Str.trim(risks);
-  if (asked === "") return "";
+  if (asked === "") {
+    return "";
+  }
   return (
     `Additional axes requested for this change: ${asked}. Apply the matching skill where ` +
     `one is installed (\`security-and-hardening\`, \`performance-optimization\`) and say in ` +
@@ -314,7 +318,9 @@ export function riskLine(risks: string) {
 export const findingsIn = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    if (!(yield* fs.exists(`${dir}/${REVIEW_FILE}`))) return [];
+    if (!(yield* fs.exists(`${dir}/${REVIEW_FILE}`))) {
+      return [];
+    }
     return yield* decodeFindings(yield* fs.readFileString(`${dir}/${FINDINGS_FILE}`));
   }).pipe(Effect.orElseSucceed(() => []));
 
@@ -449,11 +455,21 @@ export function parseFindings(raw: YamlValue | undefined, where: string) {
       }
       finding.status = item.status;
     }
-    if (isString(item.head)) finding.head = item.head;
-    if (isString(item.note)) finding.note = item.note;
-    if (isString(item.file)) finding.file = item.file;
-    if (isNumber(item.line)) finding.line = item.line;
-    if (isString(item.detail)) finding.detail = item.detail;
+    if (isString(item.head)) {
+      finding.head = item.head;
+    }
+    if (isString(item.note)) {
+      finding.note = item.note;
+    }
+    if (isString(item.file)) {
+      finding.file = item.file;
+    }
+    if (isNumber(item.line)) {
+      finding.line = item.line;
+    }
+    if (isString(item.detail)) {
+      finding.detail = item.detail;
+    }
     if (item.internal !== undefined) {
       if (!isBoolean(item.internal)) {
         const returned: Parsed<Array<Finding>> = {
@@ -464,8 +480,12 @@ export function parseFindings(raw: YamlValue | undefined, where: string) {
       }
       finding.internal = item.internal;
     }
-    if (isString(item.rebuttal)) finding.rebuttal = item.rebuttal;
-    if (isString(item.reason)) finding.reason = item.reason;
+    if (isString(item.rebuttal)) {
+      finding.rebuttal = item.rebuttal;
+    }
+    if (isString(item.reason)) {
+      finding.reason = item.reason;
+    }
     out.push(finding);
   }
   const returned: Parsed<Array<Finding>> = { ok: true, value: out };
@@ -535,7 +555,9 @@ export function parseSynthesis(text: string, where: string) {
     dropped: dropped.value,
     fixed: fixed.value,
   };
-  if (isString(obj.public_summary)) value.public_summary = Str.trim(obj.public_summary);
+  if (isString(obj.public_summary)) {
+    value.public_summary = Str.trim(obj.public_summary);
+  }
   const returned: Parsed<Synthesis> = { ok: true, value };
   return returned;
 }
@@ -566,8 +588,12 @@ export function parseFixed(value: YamlValue | undefined, where: string) {
       return returned;
     }
     const entry: Fixed = { title: Str.trim(item.title) };
-    if (isString(item.file)) entry.file = item.file;
-    if (isString(item.note)) entry.note = item.note;
+    if (isString(item.file)) {
+      entry.file = item.file;
+    }
+    if (isString(item.note)) {
+      entry.note = item.note;
+    }
     out.push(entry);
   }
   const returned: Parsed<Array<Fixed>> = { ok: true, value: out };
@@ -667,7 +693,9 @@ function parseChecks(value: YamlValue | undefined, where: string) {
       return returned;
     }
     const check: Check = { name: Str.trim(item.name) };
-    if (isString(item.note)) check.note = item.note;
+    if (isString(item.note)) {
+      check.note = item.note;
+    }
     out.push(check);
   }
   const returned: Parsed<Array<Check>> = { ok: true, value: out };
@@ -676,13 +704,17 @@ function parseChecks(value: YamlValue | undefined, where: string) {
 
 // WARNING: a blocker needs a place and a reason, not a changed file: a broken unchanged caller is a valid blocker; minor findings are exempt.
 export function substantiated(finding: Finding) {
-  if (!isBlocking(finding)) return true;
+  if (!isBlocking(finding)) {
+    return true;
+  }
   return Str.trim(finding.file ?? "") !== "" && Str.trim(finding.detail ?? "") !== "";
 }
 
 export function unsubstantiated(findings: ReadonlyArray<Finding>) {
   const bad = Arr.filter(findings, (f) => !substantiated(f));
-  if (bad.length === 0) return null;
+  if (bad.length === 0) {
+    return null;
+  }
   const named = Arr.join(
     Arr.map(bad, (f) => `"${f.title}"`),
     ", ",
@@ -852,8 +884,9 @@ export function settleFinalFix(
   const unverified: Array<string> = [];
   const ownBlocking = Arr.filter(fix.findings, isBlocking);
   const ownMinor = Arr.filter(fix.findings, (f) => !isBlocking(f));
-  if (fix.verdict !== "clean" && fix.findings.length === 0)
+  if (fix.verdict !== "clean" && fix.findings.length === 0) {
     unverified.push(`the fix reports verdict "findings"`);
+  }
   if (ownBlocking.length > 0) {
     unverified.push(
       `the fix reports ${ownBlocking.length} blocking finding(s) of its own: ${Arr.join(Arr.map(ownBlocking, oneLine), ", ")}`,
@@ -882,16 +915,24 @@ export function settleFinalFix(
   // WARNING: a blocking dispute not raised again is still a dispute: leaving it out is not the human deciding.
   const raised = new Set(Arr.map(live, findingKey));
   const standing = Arr.filter(fix.disputed, (d) => isBlocking(d) && !raised.has(findingKey(d)));
-  for (const d of standing) disputes.push(disputeLine(d));
-  if (fix.checks.length === 0) unverified.push("no checks reported");
+  for (const d of standing) {
+    disputes.push(disputeLine(d));
+  }
+  if (fix.checks.length === 0) {
+    unverified.push("no checks reported");
+  }
   const verifiedHere: Array<string> = [];
   const leftToGate: Array<string> = [];
   for (const check of fix.checks) {
     const proof = checkProof(evidence, check.name);
     const gap = checkGap(check.name, proof, evidence);
-    if (gap !== null) unverified.push(`${gap}${check.note ? ` (${check.note})` : ""}`);
-    else if (owesNothingHere(proof)) verifiedHere.push(check.name);
-    else leftToGate.push(check.name);
+    if (gap !== null) {
+      unverified.push(`${gap}${check.note ? ` (${check.note})` : ""}`);
+    } else if (owesNothingHere(proof)) {
+      verifiedHere.push(check.name);
+    } else {
+      leftToGate.push(check.name);
+    }
   }
   const unresolved = [...live, ...fix.findings, ...standing];
   if (unverified.length > 0) {
@@ -1044,7 +1085,9 @@ export function conflictingDispositions(review: Disposed) {
       ...(Arr.some(withdrawn, (drop) => sameEvidence(drop, one)) ? ["withdrawn"] : []),
       ...(Arr.some(review.fixed, (fix) => findingKey(fix) === findingKey(one)) ? ["fixed"] : []),
     ];
-    if (resolutions.length === 0) return [];
+    if (resolutions.length === 0) {
+      return [];
+    }
     const raised = one.status === "disputed" || review.disputed.includes(one) ? "disputed" : "open";
     const at = one.file ? ` (${one.file})` : "";
     return [
@@ -1058,7 +1101,9 @@ export function conflictingDispositions(review: Disposed) {
 export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: ReadonlyArray<Finding>) {
   const split: Split = { live: [], settled: [], rebutted: [] };
   for (const finding of findings) {
-    if (finding.status === "fixed" || finding.status === "obsolete") continue;
+    if (finding.status === "fixed" || finding.status === "obsolete") {
+      continue;
+    }
     if (finding.status === "disputed" && !finding.rebuttal) {
       split.settled.push(finding);
     } else if (!Arr.some(disputed, (one) => sameFinding(one, finding))) {
@@ -1074,7 +1119,9 @@ export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: Readon
 }
 
 export function formatFindings(findings: ReadonlyArray<Finding>) {
-  if (findings.length === 0) return "(none)";
+  if (findings.length === 0) {
+    return "(none)";
+  }
   return Arr.join(
     Arr.map(findings, (f) => {
       const at = f.file ? ` (${f.file}${f.line ? `:${f.line}` : ""})` : "";

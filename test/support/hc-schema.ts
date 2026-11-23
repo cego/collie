@@ -46,7 +46,9 @@ export const jsonText = flow(
 
 const resultOf = (method: string) => {
   const found = Arr.findFirst(doc.methods, (m) => m.name === method);
-  if (found._tag === "None") throw new Error(`${pin.schema} has no method ${method}`);
+  if (found._tag === "None") {
+    throw new Error(`${pin.schema} has no method ${method}`);
+  }
   return found.value.result.schema;
 };
 
@@ -55,7 +57,9 @@ export const hasMethod = (method: string) => Arr.some(doc.methods, (m) => m.name
 const component: (ref: string) => [string, Node] = (ref) => {
   const name = pipe(ref, Str.replace("#/components/schemas/", ""));
   const found = doc.components.schemas[name];
-  if (!found) throw new Error(`${pin.schema} has no component ${name}`);
+  if (!found) {
+    throw new Error(`${pin.schema} has no component ${name}`);
+  }
   return [name, found];
 };
 

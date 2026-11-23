@@ -40,19 +40,21 @@ export const probeGitlab = Effect.fn("Connections.probeGitlab")(function* <R>(
     env.raw.GITLAB_TOKEN || env.raw.GITLAB_ACCESS_TOKEN || env.raw.OAUTH_TOKEN;
   const storedToken = environmentToken ? null : yield* login.token(run, env.cwd);
   const token = environmentToken || (storedToken ?? "");
-  if (token === "")
+  if (token === "") {
     return { state: "absent", detail: `no GitLab login for ${host}`, fix } satisfies Probe;
+  }
   const args = ["api", "--hostname", host, "user"];
   const me = yield* environmentToken
     ? run("env", [`GITLAB_HOST=${host}`, "glab", ...args], env.cwd)
     : run("glab", args, env.cwd);
   const user = Schema.decodeOption(GitlabUser)(me.stdout);
-  if (me.code !== 0 || Option.isNone(user))
+  if (me.code !== 0 || Option.isNone(user)) {
     return {
       state: "broken",
       detail: `${host} did not accept its GitLab login`,
       fix,
     } satisfies Probe;
+  }
   return {
     state: "ok",
     account: user.value.username,
@@ -87,10 +89,16 @@ const tokenExpiry = Effect.fn("Doctor.tokenExpiry")(function* (
     return warned(`${host} would not say when its token expires`, renew);
   }
   const expires = token.value.expires_at;
-  if (expires === null) return passed(`${host}: the token never expires`);
+  if (expires === null) {
+    return passed(`${host}: the token never expires`);
+  }
   const days = daysLeft(expires, yield* Clock.currentTimeMillis);
-  if (days < 0) return failed(`${host}: the token expired on ${expires}`, renew);
-  if (days < RENEW_WITHIN_DAYS) return warned(`${host}: the token expires on ${expires}`, renew);
+  if (days < 0) {
+    return failed(`${host}: the token expired on ${expires}`, renew);
+  }
+  if (days < RENEW_WITHIN_DAYS) {
+    return warned(`${host}: the token expires on ${expires}`, renew);
+  }
   return passed(`${host}: the token expires on ${expires}`);
 });
 
@@ -103,15 +111,24 @@ export const pushCheck = Effect.fn("Doctor.pushCheck")(function* (
   ssh: boolean,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
-  if (host.https) return passed(`pushes to ${host.host} over HTTPS with glab's token`);
-  if (!ssh) return failed("no ssh on PATH", "install the OpenSSH client");
+  if (host.https) {
+    return passed(`pushes to ${host.host} over HTTPS with glab's token`);
+  }
+  if (!ssh) {
+    return failed("no ssh on PATH", "install the OpenSSH client");
+  }
   const forwarded = FORWARDED_AGENT.test(env.raw["SSH_AUTH_SOCK"] ?? "");
   const args = ["-oBatchMode=yes", "-oConnectTimeout=5", "-T"];
-  if (forwarded) args.push("-oIdentityAgent=none");
+  if (forwarded) {
+    args.push("-oIdentityAgent=none");
+  }
   const answer = yield* answered(run("ssh", [...args, `git@${host.host}`], env.pluginRoot));
-  if (answer.code === 0) return passed(`pushes to ${host.host} with this Machine's own key`);
-  if (answer.code === 124)
+  if (answer.code === 0) {
+    return passed(`pushes to ${host.host} with this Machine's own key`);
+  }
+  if (answer.code === 124) {
     return failed(`${host.host} did not answer within ${FETCH_LIMIT}`, `ssh -T git@${host.host}`);
+  }
   if (pipe(whatItSaid(answer), Str.includes("Host key verification failed"))) {
     return failed(
       `${host.host}'s host key is not known here`,

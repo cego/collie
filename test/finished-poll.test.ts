@@ -394,8 +394,9 @@ test("the reports sweep builds a view only for the Run an agent started, and nev
         const quiet = yield* loaded("quiet");
         const asked = yield* started(quiet, "r0", {}, null, asker);
         yield* settled(asked.runId, "complete");
-        for (const request of ["r1", "r2"])
+        for (const request of ["r1", "r2"]) {
           yield* settled((yield* started(quiet, request, {})).runId, "complete");
+        }
         const store = yield* Store;
         yield* store.reported(asked.runId, REPORT);
         const waiting = yield* started(

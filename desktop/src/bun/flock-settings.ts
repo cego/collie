@@ -95,8 +95,9 @@ export const takeDefinitions = (
   has: ReadonlyArray<SharedDefinition>,
 ) => {
   const taken = { ...flock };
-  for (const { path, base64, at } of latestEdits(heldDefinitions(flock), has, byPath).take)
+  for (const { path, base64, at } of latestEdits(heldDefinitions(flock), has, byPath).take) {
     taken[path] = { base64, at, from: machine };
+  }
   return { flock: taken, give: latestEdits(heldDefinitions(taken), has, byPath).give };
 };
 
@@ -231,7 +232,9 @@ export const flockSync = <E, M extends SettingsMachine<E>, SaveError>(
         SubscriptionRef.modifyEffect(options.flock, (current) =>
           Effect.gen(function* () {
             const edited = editSettings(current, changes, now);
-            if ("refused" in edited) return yield* new ActionFailed({ reason: edited.refused });
+            if ("refused" in edited) {
+              return yield* new ActionFailed({ reason: edited.refused });
+            }
             yield* options.save(edited).pipe(
               Effect.mapError(
                 () =>

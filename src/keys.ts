@@ -14,7 +14,9 @@ export function tokenizeKeys(chunk: string) {
         while (end < chunk.length) {
           const code = Option.getOrElse(Str.charCodeAt(chunk, end), () => Number.NaN);
           end += 1;
-          if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 126) break;
+          if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 126) {
+            break;
+          }
         }
       } else if (chunk[end] === "O" && end + 1 < chunk.length) {
         end += 2;
@@ -45,7 +47,9 @@ export const keyboard = (input: KeyboardInput = process.stdin) =>
     Effect.gen(function* () {
       const keys = yield* Queue.unbounded<string>();
       const onData = (buffer: Buffer) => {
-        for (const key of tokenizeKeys(buffer.toString("utf8"))) Queue.offerUnsafe(keys, key);
+        for (const key of tokenizeKeys(buffer.toString("utf8"))) {
+          Queue.offerUnsafe(keys, key);
+        }
       };
       input.setRawMode?.(true);
       input.resume();

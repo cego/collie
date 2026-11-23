@@ -428,8 +428,9 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
     const byId = new Map<string, SetMember>();
     for (const member of members) {
       const now = yield* read(`read-${invocationFor("release", member)}`, member);
-      if (now._tag === "Unreadable")
+      if (now._tag === "Unreadable") {
         return yield* fail(`${member.url} could not be read: ${now.why}, so nothing was released`);
+      }
       branches.push({ id: member.id, source: now.source, target: now.target, wave: now.wave });
       byId.set(
         member.id,
@@ -437,13 +438,14 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
       );
     }
     const stacked = stackOrder(branches);
-    if (stacked._tag === "Cycle")
+    if (stacked._tag === "Cycle") {
       return yield* fail(
         `${Arr.join(
           Arr.map(stacked.ids, (id) => byId.get(id)!.url),
           ", ",
         )} each wait on another, so nothing was released`,
       );
+    }
     yield* forecast([releaseRuns]);
     const items = Arr.map(stacked.order, (one) => invocationFor("release", byId.get(one.id)!));
     const ends = new Map(
@@ -461,7 +463,9 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
     const releaseOne = (member: SetMember) =>
       Effect.gen(function* () {
         const ran = yield* runOn("release", member, "merge");
-        if (!ran.ok) return { _tag: "Failed", said: ran.said } satisfies SetEnd;
+        if (!ran.ok) {
+          return { _tag: "Failed", said: ran.said } satisfies SetEnd;
+        }
         const now = yield* read(`${invocationFor("release", member)}.merged`, member);
         return {
           _tag: now._tag === "Read" && now.state === "merged" ? "Released" : "LeftOpen",
@@ -519,7 +523,9 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
                   ({ member }) => member,
                 );
                 const last = merged.at(-1);
-                if (last === undefined) return null;
+                if (last === undefined) {
+                  return null;
+                }
                 const item = invocationFor("tag", last);
                 const tagged = yield* releaseRuns(
                   runOn(
@@ -558,8 +564,9 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
             "; ",
           )}`
     }`;
-    if (count("Failed") > 0 || Arr.some(tags, (one) => one !== null && !one.ok))
+    if (count("Failed") > 0 || Arr.some(tags, (one) => one !== null && !one.ok)) {
       return yield* fail(said);
+    }
     return said;
   });
 
@@ -581,8 +588,12 @@ const releasedByHuman = (place: {
 }) =>
   Effect.gen(function* () {
     const parent = place.lineage[1];
-    if (parent === undefined) return false;
-    if (place.authority.started !== null) return true;
+    if (parent === undefined) {
+      return false;
+    }
+    if (place.authority.started !== null) {
+      return true;
+    }
     const answered = Arr.findLast(
       yield* (yield* Host).asked(parent),
       (one) => one.answer === GO.release,
@@ -686,8 +697,9 @@ export default defineWorkflow({
         });
 
       const tagOnly = asked.together !== undefined;
-      if (tagOnly && (asked.merge_only === true || asked.together.length === 0))
+      if (tagOnly && (asked.merge_only === true || asked.together.length === 0)) {
         return yield* fail("A tag Run needs merged merge requests and cannot also be merge-only");
+      }
       const set = mrSet(asked.mr);
       const mergeAlone = asked.ship === "merge";
       if (
@@ -695,26 +707,32 @@ export default defineWorkflow({
         (tagOnly ||
           asked.merge_only !== undefined ||
           (set !== null && "mrs" in set && set.mrs.length > 1))
-      )
+      ) {
         return yield* fail(
           "Merge takes one merge request, and a release set's own inputs are the set's to give",
         );
+      }
       const setChild = asked.merge_only === true;
       const mergeOnly = setChild || mergeAlone;
-      if (set !== null && "unresolved" in set)
+      if (set !== null && "unresolved" in set) {
         return yield* fail(
           `${set.unresolved} is not a merge request this Run can find, so nothing was released`,
         );
-      if (tagOnly && set !== null && set.mrs.length > 1)
+      }
+      if (tagOnly && set !== null && set.mrs.length > 1) {
         return yield* fail(
           "A tag Run takes one merge request as mr and its repository's merges as together",
         );
-      if (!tagOnly && set !== null && set.mrs.length > 1) return yield* releaseEach(set.mrs);
+      }
+      if (!tagOnly && set !== null && set.mrs.length > 1) {
+        return yield* releaseEach(set.mrs);
+      }
       const said = set === null ? asked.mr : set.mrs.at(-1)!.target;
       const ref = readMrRef(said);
       const mr = ref === null ? null : mrUrlOf(ref);
-      if (ref === null || mr === null)
+      if (ref === null || mr === null) {
         return yield* fail(`${said || "an empty mr"} is not a merge request this Run can find`);
+      }
       yield* host.mergeRequest(runId, mr);
       const { cwd } = yield* checkingOut(
         Effect.gen(function* () {
@@ -726,8 +744,9 @@ export default defineWorkflow({
             ]),
             execute: host.checkoutReviewed(runId),
           });
-          if ("refused" in checkout)
+          if ("refused" in checkout) {
             return yield* fail(`${mr} has no checkout to release from: ${checkout.refused}`);
+          }
           return checkout;
         }),
       );
@@ -766,13 +785,18 @@ export default defineWorkflow({
         error: WorkflowError,
         execute: host.review({ runId, cwd, proved: "", seen: [] }),
       });
-      if (start._tag === "Unreadable")
+      if (start._tag === "Unreadable") {
         return yield* fail(`${mr} could not be read: ${start.reason}`);
-      if (start._tag === "Closed") return yield* fail(`${mr} is closed, so nothing was released`);
-      if (mergeAlone && start._tag === "Merged")
+      }
+      if (start._tag === "Closed") {
+        return yield* fail(`${mr} is closed, so nothing was released`);
+      }
+      if (mergeAlone && start._tag === "Merged") {
         return yield* fail(`${mr} is already merged, so there is nothing to merge`);
-      if (tagOnly && start._tag !== "Merged")
+      }
+      if (tagOnly && start._tag !== "Merged") {
         return yield* fail(`${mr} is not merged, so nothing was tagged`);
+      }
       const given =
         tagOnly || start._tag !== "Moved"
           ? null
@@ -780,7 +804,9 @@ export default defineWorkflow({
               name: "given-go",
               success: Schema.NullOr(GivenGo),
               execute: Effect.gen(function* () {
-                if (!(yield* releasedByHuman(place))) return null;
+                if (!(yield* releasedByHuman(place))) {
+                  return null;
+                }
                 const at = yield* host
                   .review({ runId, cwd, proved: start.head, seen: [] })
                   .pipe(Effect.orElseSucceed(() => null));
@@ -791,20 +817,24 @@ export default defineWorkflow({
       if (tagOnly) {
         for (const target of asked.together ?? [mr]) {
           const other = readMrRef(target);
-          if (other === null || other.project !== ref.project || forgeOfRef(other) !== forge)
+          if (other === null || other.project !== ref.project || forgeOfRef(other) !== forge) {
             return yield* fail(`${target} is not a merge request of ${url}, so nothing was tagged`);
+          }
           const now = yield* Activity.make({
             name: `tag-merge-${tagMerges.length}`,
             success: MergeRequestReadSchema,
             execute: host.readMergeRequest({ cwd, mr: target }),
           });
-          if (now._tag !== "Read" || now.state !== "merged" || !now.merged)
+          if (now._tag !== "Read" || now.state !== "merged" || !now.merged) {
             return yield* fail(
               `${target} has no merged commit on the forge, so nothing was tagged`,
             );
+          }
           tagMerges.push(now.merged);
         }
-        if (start._tag === "Merged" && !tagMerges.includes(start.sha)) tagMerges.push(start.sha);
+        if (start._tag === "Merged" && !tagMerges.includes(start.sha)) {
+          tagMerges.push(start.sha);
+        }
       }
       const recovering =
         start._tag !== "Merged" || tagOnly
@@ -815,7 +845,9 @@ export default defineWorkflow({
               error: WorkflowError,
               execute: host.takeOverLanding({ runId, cwd }),
             });
-      if (recovering?._tag === "Refused") return yield* fail(recovering.why);
+      if (recovering?._tag === "Refused") {
+        return yield* fail(recovering.why);
+      }
       if (recovering === null && !tagOnly) {
         const merging = yield* Activity.make({
           name: "auto-merging",
@@ -823,10 +855,11 @@ export default defineWorkflow({
           error: WorkflowError,
           execute: host.autoMerging(cwd),
         });
-        if (merging !== null)
+        if (merging !== null) {
           return yield* fail(
             `${mr} is set to merge itself once green, so this Run leaves it to do that`,
           );
+        }
       }
 
       // WARNING: the go's options depend on this, so it comes before the checks and the wait; it reads only.
@@ -839,14 +872,16 @@ export default defineWorkflow({
       );
       const testJobs = assessed.is_package ? [] : (assessed.stage_jobs?.merge_request ?? []);
       const stageJobs = assessed.is_package ? [] : (assessed.stage_jobs?.tag ?? []);
-      if (!mergeAlone && !assessed.is_package && testJobs.length === 0 && stageJobs.length === 0)
+      if (!mergeAlone && !assessed.is_package && testJobs.length === 0 && stageJobs.length === 0) {
         return yield* fail(
           `${mr} is an application with no stage deploy that Collie can prove, on its merge request's pipeline or its tags', so nothing was released${assessed.kind_evidence ? `: ${assessed.kind_evidence}` : ""}`,
         );
-      if ((tagOnly || setChild) && !assessed.is_package && stageJobs.length === 0)
+      }
+      if ((tagOnly || setChild) && !assessed.is_package && stageJobs.length === 0) {
         return yield* fail(
           `${mr} has no stage deploy on its tags, so the set cannot release it to stage`,
         );
+      }
       const finishing = mergeOnly
         ? []
         : assessed.is_package
@@ -911,8 +946,9 @@ export default defineWorkflow({
         const slugs = yield* claim(
           claimed("claim").pipe(Effect.map((held) => held?.slugs ?? null)),
         );
-        if (slugs === null)
+        if (slugs === null) {
           return yield* fail(`${mr} was merged, but tagging stopped without its Helle claims`);
+        }
         landed = {
           sha: start.sha,
           slugs,
@@ -923,10 +959,11 @@ export default defineWorkflow({
         const slugs = yield* claim(
           claimed("claim").pipe(Effect.map((held) => held?.slugs ?? null)),
         );
-        if (slugs === null)
+        if (slugs === null) {
           return yield* fail(
             `${mr} was merged at ${recovering.sha}, and its release was stopped without the Helle claims it needs, so nothing was tagged`,
           );
+        }
         landed = {
           sha: recovering.sha,
           slugs,
@@ -940,7 +977,9 @@ export default defineWorkflow({
             success: Schema.String,
             execute: Effect.gen(function* () {
               const moved = yield* host.fastForward({ runId, cwd, head, branch });
-              if (moved._tag === "Refused") return yield* park(moved.why);
+              if (moved._tag === "Refused") {
+                return yield* park(moved.why);
+              }
               return moved.head;
             }),
           });
@@ -962,8 +1001,11 @@ export default defineWorkflow({
                 const ran = yield* host
                   .verify({ runId, name: spec.name, cwd, ...pass })
                   .pipe(Effect.result);
-                if (ran._tag === "Failure") failed.push(`${spec.name}: ${ran.failure.reason}`);
-                else if (ran.success.result !== "pass") failed.push(`${spec.name} failed`);
+                if (ran._tag === "Failure") {
+                  failed.push(`${spec.name}: ${ran.failure.reason}`);
+                } else if (ran.success.result !== "pass") {
+                  failed.push(`${spec.name} failed`);
+                }
               }
               for (const spec of Arr.filter(checks, (one) => one.ci !== undefined)) {
                 const read = yield* host.ciJob({
@@ -975,7 +1017,7 @@ export default defineWorkflow({
                 });
                 if ("proved" in read) {
                   const flaked = read.proved.job?.flaked ?? [];
-                  if (read.retried === true)
+                  if (read.retried === true) {
                     yield* host.record(
                       runId,
                       `unsettled: ${spec.name}: job ${spec.ci} failed on ${Str.slice(0, 12)(read.proved.end.head_sha)}${
@@ -987,9 +1029,10 @@ export default defineWorkflow({
                             )}`
                       }, then passed when retried — a Flake, so this Run has not settled it.`,
                     );
+                  }
                   continue;
                 }
-                if (read.before?.branch !== undefined)
+                if (read.before?.branch !== undefined) {
                   target ??= {
                     _tag: "TargetRed",
                     head: "",
@@ -998,15 +1041,22 @@ export default defineWorkflow({
                     at: read.before.at,
                     url: read.before.url,
                   };
-                if (read.before !== undefined) continue;
-                if (read.conflicts === true) conflicting = true;
-                else failed.push(read.unproved);
+                }
+                if (read.before !== undefined) {
+                  continue;
+                }
+                if (read.conflicts === true) {
+                  conflicting = true;
+                } else {
+                  failed.push(read.unproved);
+                }
               }
               const head = (yield* host.evidence(runId, cwd)).final.head_sha;
-              if (failed.length > 0 && parkWith !== null && !conflicting)
+              if (failed.length > 0 && parkWith !== null && !conflicting) {
                 return yield* park(
                   `The checks failed at ${short(head)} ${parkWith}: ${Arr.join(failed, "; ")}`,
                 );
+              }
               return {
                 head,
                 failed,
@@ -1109,18 +1159,21 @@ export default defineWorkflow({
                     yield* Effect.sleep("2 seconds");
                     standing = yield* read;
                   }
-                  if (standing._tag === "Held")
+                  if (standing._tag === "Held") {
                     return yield* Workflow.suspend(yield* WorkflowInstance);
+                  }
                   // WARNING: leave this read unfinished when parking; resume must read the forge again.
                   if (standing._tag === "Conflicting") {
-                    if (standing.head === previous)
+                    if (standing.head === previous) {
                       return yield* park(
                         `${mr} still conflicts with its target after fix-${fixes}; its remote head did not advance from ${short(standing.head)}`,
                       );
-                    if (round >= ROUNDS)
+                    }
+                    if (round >= ROUNDS) {
                       return yield* park(
                         `${mr} still conflicts with its target after ${ROUNDS} repair rounds at ${short(standing.head)}`,
                       );
+                    }
                   }
                   return { at, standing };
                 }),
@@ -1139,16 +1192,18 @@ export default defineWorkflow({
                 error: WorkflowError,
                 execute: Effect.gen(function* () {
                   const read = yield* host.readMergeRequest({ cwd, mr });
-                  if (read._tag === "Unreadable")
+                  if (read._tag === "Unreadable") {
                     return yield* park(`Cannot read ${mr}'s conflict target: ${read.why}`);
+                  }
                   if (
                     !["open", "opened", "draft"].includes(read.state) ||
                     read.source === "" ||
                     read.target === ""
-                  )
+                  ) {
                     return yield* park(
                       `Cannot repair ${mr}'s conflict: its open source and target branches could not be confirmed`,
                     );
+                  }
                   return { source: read.source, target: read.target };
                 }),
               });
@@ -1175,15 +1230,18 @@ export default defineWorkflow({
               error: WorkflowError,
               execute: Effect.gen(function* () {
                 const still = yield* host.targetFailure({ runId, cwd });
-                if (still !== null)
+                if (still !== null) {
                   return yield* park(
                     `${mr}'s CI job ${still.job} failed at ${short(red.head)}, and fails on its target branch ${still.branch} at ${short(still.at)} too (${still.url ?? "no job URL"}). The branch's fixer cannot repair its target, so Collie resumes ${runId} once ${still.job} passes on ${still.branch}`,
                     "target-red",
                   );
+                }
                 return yield* host.takeTarget({ runId, cwd, head: red.head });
               }),
             });
-            if (took._tag !== "Take") return null;
+            if (took._tag !== "Take") {
+              return null;
+            }
             const { n } = yield* fixRound(
               [
                 {
@@ -1222,11 +1280,12 @@ export default defineWorkflow({
                     returnConflicts: true,
                     returnFailedCi: true,
                   });
-                  if (standing._tag === "Held")
+                  if (standing._tag === "Held") {
                     return yield* Workflow.suspend(yield* WorkflowInstance);
+                  }
                   if (standing._tag === "FailedCi") {
                     const red = yield* host.targetFailure({ runId, cwd });
-                    if (red !== null)
+                    if (red !== null) {
                       return {
                         _tag: "TargetRed",
                         head: standing.head,
@@ -1235,14 +1294,17 @@ export default defineWorkflow({
                         at: red.at,
                         url: red.url,
                       } satisfies TargetRed;
+                    }
                     const why = notReady(standing);
-                    if (standing.head === ciBefore)
+                    if (standing.head === ciBefore) {
                       return yield* park(
                         `${mr}: ${why}; its remote head did not advance after fix-${fixes}`,
                         repairs >= ROUNDS ? "release-failed" : "ci-failed",
                       );
-                    if (repairs >= ROUNDS)
+                    }
+                    if (repairs >= ROUNDS) {
                       return yield* park(`${mr}: ${why} after ${ROUNDS} CI repair rounds`);
+                    }
                   }
                   return standing;
                 }),
@@ -1253,7 +1315,9 @@ export default defineWorkflow({
                   name = `fix-${n}.checks`;
                   pass = { pass: "fix", round: n };
                 }
-              } else yield* gone(standing);
+              } else {
+                yield* gone(standing);
+              }
               if (standing._tag === "FailedCi") {
                 ciFailure = notReady(standing);
                 ciBefore = standing.head;
@@ -1340,7 +1404,9 @@ export default defineWorkflow({
               returnConflicts: true,
               returnFailedCi: true,
             });
-            if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
+            if (standing._tag === "Held") {
+              return yield* Workflow.suspend(yield* WorkflowInstance);
+            }
             return standing;
           });
         const awaited = (at: number, proved: string) =>
@@ -1368,15 +1434,17 @@ export default defineWorkflow({
           }),
         });
         const channel = sharing.channel;
-        if (sharing.on && channel === "")
+        if (sharing.on && channel === "") {
           yield* host.record(
             runId,
             `${SHARE_SETTINGS.on} is on but ${SHARE_SETTINGS.channel} names no channel, so nothing is shared for approval`,
           );
+        }
         let shared = !sharing.on || channel === "";
         const slack = sharing.on && channel !== "" ? yield* connection("slack") : null;
-        if (slack !== null && slack.state !== "ok")
+        if (slack !== null && slack.state !== "ok") {
           yield* host.record(runId, `not posting for approval as you: ${slack.detail}`);
+        }
         let shares = 0;
         let askedAt: string | null = null;
         const standingAt = (name: string) =>
@@ -1388,7 +1456,9 @@ export default defineWorkflow({
           });
         const offerShare = (at: number) =>
           Effect.gen(function* () {
-            if (!waitsOnApproval(yield* standingAt(`share-standing.${at}`))) return;
+            if (!waitsOnApproval(yield* standingAt(`share-standing.${at}`))) {
+              return;
+            }
             shares += 1;
             askedAt = proved;
             const answer = yield* shareAsk(
@@ -1408,20 +1478,22 @@ export default defineWorkflow({
               }),
               { round: shares },
             );
-            if (answer === SHARE.wait)
+            if (answer === SHARE.wait) {
               return yield* host.record(
                 runId,
                 `not shared at ${short(proved)}: waiting for ${mr} to change`,
               );
+            }
             if (answer === "I shared it") {
               shared = true;
               return yield* host.record(runId, `shared by the operator: ${mr} in ${channel}`);
             }
-            if (!waitsOnApproval(yield* standingAt(`${nth("share", shares)}.standing`)))
+            if (!waitsOnApproval(yield* standingAt(`${nth("share", shares)}.standing`))) {
               return yield* host.record(
                 runId,
                 `not shared: ${mr} no longer waits for a teammate's approval`,
               );
+            }
             const posted = yield* sharePost(
               Activity.make({
                 name: nth("share", shares),
@@ -1440,7 +1512,9 @@ export default defineWorkflow({
           });
         while (merged === null) {
           waits += 1;
-          if (!shared && askedAt !== proved) yield* offerShare(waits);
+          if (!shared && askedAt !== proved) {
+            yield* offerShare(waits);
+          }
           const standing = yield* reviewWait(awaited(waits, proved));
           yield* gone(standing);
           if (
@@ -1490,17 +1564,18 @@ export default defineWorkflow({
                       onHead: read.carries,
                       open: read.open,
                     });
-                    if (answers.replies.length === 0 && answers.carried.length > 0)
+                    if (answers.replies.length === 0 && answers.carried.length > 0) {
                       return yield* park(
                         `answer-${n} answered none of the comments it was given: ${Arr.join(
                           Arr.map(answers.carried, (one) => one.url),
                           ", ",
                         )}`,
                       );
+                    }
                     return { head: read.head, answers };
                   }),
                 });
-                for (const reply of settled.answers.replies)
+                for (const reply of settled.answers.replies) {
                   yield* Activity.make({
                     name: `answer-${n}.reply.${reply.id}`,
                     success: Schema.Literals(["posted", "already"]),
@@ -1513,15 +1588,19 @@ export default defineWorkflow({
                       ...(reply.kind !== undefined && { kind: reply.kind }),
                     }),
                   });
+                }
                 return settled.head;
               }),
               { round: n },
             );
-            if (head !== proved)
+            if (head !== proved) {
               proved = yield* proveHead(proving(`answer-${n}.checks`, { pass: "fix", round: n }));
+            }
             continue;
           }
-          if (standing._tag !== "Ready") continue;
+          if (standing._tag !== "Ready") {
+            continue;
+          }
           repairs = 0;
           ciBefore = null;
 
@@ -1658,7 +1737,9 @@ export default defineWorkflow({
               }),
               { round: n },
             );
-            if (tested._tag === "Moved") continue;
+            if (tested._tag === "Moved") {
+              continue;
+            }
             if (tested._tag === "Fixed") {
               proved = yield* proveHead(
                 proving(`fix-${tested.n}.checks`, { pass: "fix", round: tested.n }),
@@ -1691,9 +1772,13 @@ export default defineWorkflow({
                   error: WorkflowError,
                   execute: Effect.gen(function* () {
                     const standing = yield* reviewAt(head, true);
-                    if (standing._tag !== "Ready") return notReady(standing);
+                    if (standing._tag !== "Ready") {
+                      return notReady(standing);
+                    }
                     const now = yield* tested.readStage;
-                    if (now._tag === "Moved") return `its head moved to ${short(now.head)}`;
+                    if (now._tag === "Moved") {
+                      return `its head moved to ${short(now.head)}`;
+                    }
                     return now._tag === "Failed" ? now.why : null;
                   }),
                 });
@@ -1707,8 +1792,12 @@ export default defineWorkflow({
               }),
               { round: n },
             );
-            if (go === GO.finish) return `${mr} was left open, and stage rolled back`;
-            if (go === null) continue;
+            if (go === GO.finish) {
+              return `${mr} was left open, and stage rolled back`;
+            }
+            if (go === null) {
+              continue;
+            }
             production = go;
           }
           const outcome = yield* merge(
@@ -1732,10 +1821,11 @@ export default defineWorkflow({
             );
             continue;
           }
-          if (outcome._tag === "MergedOutside")
+          if (outcome._tag === "MergedOutside") {
             return yield* fail(
               `${mr} was merged outside this Run by ${outcome.by}, so nothing was tagged`,
             );
+          }
           const refused = yield* Activity.make({
             name: `merge.${gos}.check`,
             success: ReviewStandingSchema,
@@ -1763,12 +1853,20 @@ export default defineWorkflow({
       const readTag = (options: Parameters<typeof host.readTag>[0]) =>
         Effect.gen(function* () {
           let read = yield* host.readTag(options);
-          if (read._tag === "Unproved" || read._tag === "StageFailed") return read;
+          if (read._tag === "Unproved" || read._tag === "StageFailed") {
+            return read;
+          }
           for (const merged of tagMerges) {
-            if (merged === options.merged) continue;
+            if (merged === options.merged) {
+              continue;
+            }
             const included = yield* host.readTag({ ...options, merged });
-            if (included._tag === "Unproved" || included._tag === "StageFailed") return included;
-            if (included._tag === "Proved") read = included;
+            if (included._tag === "Unproved" || included._tag === "StageFailed") {
+              return included;
+            }
+            if (included._tag === "Proved") {
+              read = included;
+            }
           }
           return read;
         });
@@ -1794,8 +1892,9 @@ export default defineWorkflow({
                 proves: "finished",
               }),
             });
-            if (read._tag === "Unproved")
+            if (read._tag === "Unproved") {
               return yield* fail(`${released}, but ${tagged.tag} is not released: ${read.why}`);
+            }
             return tagged;
           }),
         );
@@ -1849,17 +1948,19 @@ export default defineWorkflow({
               execute: host.readRollback({ runId, cwd, off: [landed.sha] }),
             });
             // WARNING: only a stage the forge shows back on production's release is safe to give back.
-            if (back._tag === "Unshown")
+            if (back._tag === "Unshown") {
               return yield* fail(`${stageFailed}. Its rollback is not shown: ${back.why}`);
+            }
             yield* giveBack;
             return yield* fail(
               `${stageFailed}. Stage is back on what production carries, nothing went to production, and the merge stands: the fix is a new merge request`,
             );
           }
-          if (read._tag === "Unproved")
+          if (read._tag === "Unproved") {
             return yield* fail(
               `${released}, but ${staged.tag} is not ready for production: ${read.why}`,
             );
+          }
           return { staged, pipeline, read };
         }),
       );
@@ -1897,17 +1998,22 @@ export default defineWorkflow({
                     pipeline: pipeline ?? "",
                     jobs: Arr.map(jobs, (job) => job.name),
                   });
-                  if (now._tag === "Unproved") return now;
-                  if (now._tag === "Play") pending = now;
+                  if (now._tag === "Unproved") {
+                    return now;
+                  }
+                  if (now._tag === "Play") {
+                    pending = now;
+                  }
                 }
                 return pending;
               }),
             });
-            if (now._tag === "Unproved")
+            if (now._tag === "Unproved") {
               return yield* fail(
                 `${released} and tagged ${staged.tag}, but nothing was sent to production: ${now.why}`,
               );
-            if (now._tag === "Play" && now.jobs.length > 0)
+            }
+            if (now._tag === "Play" && now.jobs.length > 0) {
               yield* agentWork({
                 ...as("production"),
                 input: { ...input, merged: landed.sha, jobs: plays(now.jobs) },
@@ -1915,13 +2021,14 @@ export default defineWorkflow({
                 instructions: steps.production,
                 output: Played,
               });
-            else
+            } else {
               yield* host.record(
                 runId,
                 now._tag === "Carried"
                   ? "production already carries the merge, so nothing was played"
                   : "somebody already started the production jobs, so nothing was played",
               );
+            }
           }
           // WARNING: the forge decides when production carries the merge, never an Output.
           for (const sha of tagOnly ? tagMerges : [landed.sha]) {
@@ -1934,7 +2041,9 @@ export default defineWorkflow({
               url,
               slug: landed.slugs.length === 0 ? undefined : Arr.join(landed.slugs, ", "),
             });
-            if (!carried) return yield* Workflow.suspend(yield* WorkflowInstance);
+            if (!carried) {
+              return yield* Workflow.suspend(yield* WorkflowInstance);
+            }
           }
         }),
       );

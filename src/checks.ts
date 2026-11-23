@@ -51,10 +51,12 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (
   const found = new Map<string, Verifying>();
   for (const row of yield* RunRecords.use((all) => all.everyControl(VERIFYING))) {
     const marker = decodeVerifying(row.data);
-    if (marker !== null) found.set(row.run, marker);
+    if (marker !== null) {
+      found.set(row.run, marker);
+    }
   }
-  for (const record of records)
-    if (!found.has(record.run))
+  for (const record of records) {
+    if (!found.has(record.run)) {
       found.set(record.run, {
         name: record.name,
         executable: "",
@@ -66,6 +68,8 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (
         base: null,
         started: record.started,
       });
+    }
+  }
   return found;
 });
 
@@ -94,7 +98,9 @@ const usualOf = Effect.fn("Checks.usualOf")(function* (
     same.sort((a, b) => pipe_(a.at, Str.localeCompare(b.at))).slice(-USUAL_OF),
     (record) => record.seconds * 1000,
   ).sort((a, b) => a - b);
-  if (last.length === 0) return null;
+  if (last.length === 0) {
+    return null;
+  }
   const mid = Math.floor(last.length / 2);
   return last.length % 2 === 1 ? last[mid]! : (last[mid - 1]! + last[mid]!) / 2;
 });
@@ -107,9 +113,13 @@ const usualRemembered = Effect.fn("Checks.usualRemembered")(function* (
 ) {
   const key = `${run.dir}\0${marker.name}\0${marker.started}`;
   const known = usuals.get(key);
-  if (known !== undefined) return known;
+  if (known !== undefined) {
+    return known;
+  }
   const usual = yield* usualOf(run, runs, marker);
-  if (usuals.size >= USUALS_KEPT) usuals.clear();
+  if (usuals.size >= USUALS_KEPT) {
+    usuals.clear();
+  }
   usuals.set(key, usual);
   return usual;
 });
@@ -123,7 +133,9 @@ export const runningCheck = Effect.fn("Checks.running")(function* (
   now: number,
 ) {
   const marker = markers.get(run.id);
-  if (marker === undefined) return null;
+  if (marker === undefined) {
+    return null;
+  }
   const started = epochMs(marker.started);
   const read = {
     name: marker.name,
@@ -177,7 +189,9 @@ export const followLog = Effect.fn("Checks.followLog")(function* (
     yield* Effect.sleep(FOLLOW_EVERY);
   }
   yield* drain;
-  if (pending.length > 0) yield* say(`${pending.toString("utf8")}\n`);
+  if (pending.length > 0) {
+    yield* say(`${pending.toString("utf8")}\n`);
+  }
   return (
     Option.getOrUndefined(Arr.findLast(yield* readOrNone(run), (record) => record.log === log)) ??
     null
@@ -234,7 +248,9 @@ const unit = (ms: number) => (inMinutes(ms) ? "min" : "s");
 
 function timing(elapsed: number, usual: number | null) {
   const ran = `${amount(elapsed)} ${unit(elapsed)}`;
-  if (usual === null) return ran;
+  if (usual === null) {
+    return ran;
+  }
   const usually = unit(usual) === unit(elapsed) ? amount(usual) : `${amount(usual)} ${unit(usual)}`;
   return elapsed > usual
     ? `${ran}, longer than the usual ${usually}`

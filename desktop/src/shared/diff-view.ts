@@ -65,7 +65,9 @@ export const diffTree = (changed: ReadonlyArray<DiffFile>) => {
 
 const merged: (nodes: ReadonlyArray<DiffTreeNode>) => ReadonlyArray<DiffTreeNode> = (nodes) =>
   Arr.map(nodes, (node) => {
-    if (node.kind === "file") return node;
+    if (node.kind === "file") {
+      return node;
+    }
     const children = merged(node.children);
     const [only] = children;
     return children.length === 1 && only?.kind === "folder"
@@ -74,7 +76,9 @@ const merged: (nodes: ReadonlyArray<DiffTreeNode>) => ReadonlyArray<DiffTreeNode
   });
 
 export const rowHover = (node: DiffTreeNode) => {
-  if (node.kind === "folder") return node.key;
+  if (node.kind === "folder") {
+    return node.key;
+  }
   const { path, status, added, removed } = node.file;
   return `${path}\n${status}, ${added === null ? "binary" : `+${added} −${removed ?? 0}`}`;
 };
@@ -187,7 +191,9 @@ export const rowRoom = ({
     TREE.scrollbar -
     indentedDepth(depth) * TREE.indent -
     (2 * TREE.padding + TREE.icon + 2 * TREE.gap);
-  if (file === undefined) return { counts: false, name: left - TREE.chevron };
+  if (file === undefined) {
+    return { counts: false, name: left - TREE.chevron };
+  }
   const withCounts = left - factsWidth(file, true);
   return withCounts >= TREE.nameMin
     ? { counts: true, name: withCounts }
@@ -196,10 +202,13 @@ export const rowRoom = ({
 
 export const filterTree = (tree: ReadonlyArray<DiffTreeNode>, text: string) => {
   const wanted = Str.toLowerCase(Str.trim(text));
-  if (wanted === "") return tree;
+  if (wanted === "") {
+    return tree;
+  }
   const keep: (node: DiffTreeNode) => ReadonlyArray<DiffTreeNode> = (node) => {
-    if (node.kind === "file")
+    if (node.kind === "file") {
       return pipe(Str.toLowerCase(node.key), Str.includes(wanted)) ? [node] : [];
+    }
     const children = kept(node.children);
     return children.length === 0 ? [] : [{ ...node, children }];
   };
@@ -289,8 +298,12 @@ export interface Reading {
 }
 
 export const activeFile = ({ sections, readingLine, atEnd, held }: Reading) => {
-  if (Arr.some(sections, ({ path }) => path === held)) return held;
-  if (atEnd) return sections.at(-1)?.path ?? null;
+  if (Arr.some(sections, ({ path }) => path === held)) {
+    return held;
+  }
+  if (atEnd) {
+    return sections.at(-1)?.path ?? null;
+  }
   const spanning = Option.getOrUndefined(
     Arr.findFirst(sections, ({ top, bottom }) => top <= readingLine && readingLine < bottom),
   );

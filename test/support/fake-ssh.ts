@@ -119,7 +119,9 @@ const blocker = (listen: (server: Server, listening: () => void) => void, resets
       const server = createServer((conn) => {
         held.add(conn);
         conn.once("close", () => held.delete(conn));
-        if (resets) conn.once("data", () => conn.destroy());
+        if (resets) {
+          conn.once("data", () => conn.destroy());
+        }
         conn.once("error", () => {});
       });
       listen(server, () => resume(Effect.succeed(server)));

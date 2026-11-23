@@ -18,10 +18,11 @@ export const readConnectionLogin = <R = never>(
         ? env.raw.GITLAB_TOKEN || env.raw.GITLAB_ACCESS_TOKEN || env.raw.OAUTH_TOKEN
         : undefined;
     const token = fromEnvironment ?? (yield* login.token(run, env.cwd)) ?? "";
-    if (token === "" || /[\r\n]/.test(token))
+    if (token === "" || /[\r\n]/.test(token)) {
       return yield* Effect.fail(
         `No reusable ${id} login for ${login.host}; sign in on this Machine`,
       );
+    }
     return { host: login.host, token };
   }).pipe(
     Effect.timeoutOrElse({

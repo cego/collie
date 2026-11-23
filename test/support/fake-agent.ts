@@ -47,7 +47,9 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
   const match = /^OUTPUT_PATH: (.+)$/m.exec(text);
   const owes: string | undefined = undefined;
   const unanswered = { answered, status: "idle", owed: owes };
-  if (!match || queuePath === "" || !(yield* fs.exists(queuePath))) return unanswered;
+  if (!match || queuePath === "" || !(yield* fs.exists(queuePath))) {
+    return unanswered;
+  }
   const next = (yield* readQueue(queuePath))[answered];
   const scripted = Option.getOrNull(Schema.decodeUnknownOption(Scripted)(next));
   for (const one of scripted?.writes ?? []) {
@@ -59,7 +61,9 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
       cwd: path.dirname(queuePath),
       env: { ...process.env, OUTPUT_PATH: Str.trim(match[1]!), PROMPT_PATH: ref?.[1] ?? "" },
     });
-    if (ran.exitCode !== 0) return yield* Effect.die(`the agent's sh failed: ${ran.stderr}`);
+    if (ran.exitCode !== 0) {
+      return yield* Effect.die(`the agent's sh failed: ${ran.stderr}`);
+    }
   }
   const output = scripted === null ? next : scripted.output;
   const outputPath = Str.trim(match[1]!);

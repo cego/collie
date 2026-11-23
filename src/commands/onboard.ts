@@ -30,8 +30,12 @@ const secretLines = (text: string) =>
   );
 
 export function eventText(event: OnboardEvent) {
-  if (event.event === "start") return `→ ${event.title}`;
-  if (event.event === "human") return `  … ${event.detail}\n    open: ${event.url}`;
+  if (event.event === "start") {
+    return `→ ${event.title}`;
+  }
+  if (event.event === "human") {
+    return `  … ${event.detail}\n    open: ${event.url}`;
+  }
   return Arr.join(
     [
       `  ${MARK[event.status]} ${event.detail}`,
@@ -67,9 +71,13 @@ export const onboard = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* context(global, false);
-          if (resolved._tag === "ContextFailure") return resolved.result;
+          if (resolved._tag === "ContextFailure") {
+            return resolved.result;
+          }
           const env = withGitlabHost(resolved.env, gitlabHost);
-          if ("ok" in env) return env;
+          if ("ok" in env) {
+            return env;
+          }
           const secrets = secretsStdin ? secretLines(yield* stdinText) : {};
           return yield* onboardMachine(
             env,

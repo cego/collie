@@ -39,7 +39,9 @@ export const standingDirectionOf = (flock: FlockSettings) => {
 
 export const editSetting = (flock: FlockSettings, key: string, typed: string, now: string) => {
   const parsed = parseSetting(key, typed);
-  if ("refused" in parsed) return parsed;
+  if ("refused" in parsed) {
+    return parsed;
+  }
   return {
     ...flock,
     settings: {
@@ -57,7 +59,9 @@ export const editSettings = (
   let edited = flock;
   for (const { key, value } of changes) {
     const next = editSetting(edited, key, value, now);
-    if ("refused" in next) return next;
+    if ("refused" in next) {
+      return next;
+    }
     edited = next;
   }
   return edited;
@@ -165,12 +169,15 @@ export interface SettingSection {
 }
 
 const consequenceOf = (key: string, value: string) => {
-  if (key === "permissions" && value === "bypass")
+  if (key === "permissions" && value === "bypass") {
     return "No one reviews an agent's tool calls: every Machine's agents run what they choose.";
-  if (key === "compact_at_tokens" && value === "0")
+  }
+  if (key === "compact_at_tokens" && value === "0") {
     return "Compaction between pieces of work is off.";
-  if (key === "quiet_ms" && value === "0")
+  }
+  if (key === "quiet_ms" && value === "0") {
     return "A quiet agent is never nudged; it waits as long as it takes.";
+  }
   const bare =
     key === "models.pi"
       ? Option.getOrUndefined(
@@ -215,10 +222,18 @@ const flockRow = (
 
 const defaultSaid = ({ key, kind, unit }: Setting, fallback: string) => {
   const unset = UNSET_SAID.get(key);
-  if (unset !== undefined) return unset;
-  if (kind === "list" || kind === "json") return "Default: none";
-  if (fallback === "") return "Unset: the harness decides";
-  if (kind === "boolean") return `Default: ${fallback === "true" ? "on" : "off"}`;
+  if (unset !== undefined) {
+    return unset;
+  }
+  if (kind === "list" || kind === "json") {
+    return "Default: none";
+  }
+  if (fallback === "") {
+    return "Unset: the harness decides";
+  }
+  if (kind === "boolean") {
+    return `Default: ${fallback === "true" ? "on" : "off"}`;
+  }
   return `Default: ${fallback}${unit === undefined ? "" : ` ${unit}`}`;
 };
 
@@ -294,9 +309,13 @@ const reachedOf = (machines: ReadonlyArray<Reached>) => {
 
 // WARNING: one made while the Flock's settings cannot be read would be made blind.
 export const flockReach = (readable: boolean, machines: ReadonlyArray<Reached>) => {
-  if (!readable) return { refused: "Not set: the Flock's settings could not be read" };
+  if (!readable) {
+    return { refused: "Not set: the Flock's settings could not be read" };
+  }
   const { behind, all, of } = reachedOf(machines);
-  if (all) return { said: `Given to all ${machines.length} Machines`, tone: "ok" };
+  if (all) {
+    return { said: `Given to all ${machines.length} Machines`, tone: "ok" };
+  }
   const names = Arr.map(behind, ({ name }) => name);
   return {
     said: `Given to ${of} · ${listed(names)} ${names.length === 1 ? "gets it when it connects" : "get it when they connect"}`,
@@ -305,9 +324,13 @@ export const flockReach = (readable: boolean, machines: ReadonlyArray<Reached>) 
 };
 
 export const syncPill = (readable: boolean, machines: ReadonlyArray<Reached>) => {
-  if (!readable) return { said: "Showing the Flock's settings as last read", tone: "warn" };
+  if (!readable) {
+    return { said: "Showing the Flock's settings as last read", tone: "warn" };
+  }
   const { behind, all, of } = reachedOf(machines);
-  if (all) return { said: `In sync with all ${machines.length} Machines`, tone: "ok" };
+  if (all) {
+    return { said: `In sync with all ${machines.length} Machines`, tone: "ok" };
+  }
   const lagging = Arr.map(
     behind,
     ({ name, state }) => `${name} ${state === "live" ? "behind" : "out of reach"}`,

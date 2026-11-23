@@ -34,7 +34,9 @@ export const CurrentStep = Context.Reference<At | null>("collie/CurrentStep", {
 });
 
 export const runKey = (id: string, place: StepPlace | null, call: number) => {
-  if (place === null) return call > 1 ? `${id}~${call}` : id;
+  if (place === null) {
+    return call > 1 ? `${id}~${call}` : id;
+  }
   return "item" in place ? `${id}@${place.item}` : `${id}#${place.round}`;
 };
 
@@ -81,7 +83,9 @@ export const readStepLines = Effect.fn("Steps.read")(function* (runDir: string) 
   // WARNING: read a line at a time, so a long Run is read in the scheduler's turns.
   for (const text of texts) {
     const read = yield* Effect.sync(() => decodeLine(text));
-    if (read._tag === "Some") lines.push(read.value);
+    if (read._tag === "Some") {
+      lines.push(read.value);
+    }
   }
   return lines;
 });

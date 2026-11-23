@@ -106,10 +106,11 @@ test("a row's pause, resume and remove ask its Machine's host for that change; m
       kind: "change",
       payload: { installation: "i-vm", name: "daily", change },
     });
-    if (asked.kind === "change")
+    if (asked.kind === "change") {
       expect(flow(Schema.decodeResult(payload), Result.getOrThrow)(asked.payload)).toEqual(
         asked.payload,
       );
+    }
   }
   expect(scheduleAsk("i-vm", "daily", "move")).toEqual({
     kind: "move",
@@ -190,8 +191,9 @@ describe("the main process reaches each Machine's host", () => {
             schedules: [{ name: "daily", workflow: "hello", paused: false }],
           });
           const door = { machine: mkPc, desktop };
-          for (const change of ["pause", "resume", "remove"] as const)
+          for (const change of ["pause", "resume", "remove"] as const) {
             yield* changeScheduleOn(door, { change, name: "daily" }, `desktop-${change}`);
+          }
           expect((yield* schedulesOn(mkPc, desktop)).schedules).toEqual([]);
           const trail = yield* readAudit(`${world.state}/schedules/daily`).pipe(
             Effect.provide(memoryRecords),

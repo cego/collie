@@ -84,8 +84,9 @@ export const electrobunUpdater = (updater: ElectrobunUpdaterApi) =>
       ),
       discard: Effect.gen(function* () {
         const record = yield* readPrepared;
-        if (Option.isSome(record))
+        if (Option.isSome(record)) {
           yield* fs.remove(record.value.retained_tar_path, { force: true });
+        }
         yield* fs.remove(preparedRecordOf(folder), { force: true });
       }).pipe(Effect.ignore),
       signatureOf: (name, version) =>

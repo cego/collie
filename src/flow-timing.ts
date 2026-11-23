@@ -45,7 +45,9 @@ export interface Said {
 
 export const settledSaid = (said: string | null, now: number) => {
   const found = said === null ? null : MARKED.exec(said);
-  if (said === null || found === null) return { said };
+  if (said === null || found === null) {
+    return { said };
+  }
   const clock = {
     from: Number(found[1]),
     before: Str.slice(0, found.index)(said),
@@ -69,7 +71,9 @@ const eachSaid = (flow: Flow, run: <A extends Said>(one: A) => A) => {
     lanes: Arr.map(flow.lanes, (lane) => ({ ...lane, nodes: Arr.map(lane.nodes, ofNode) })),
     release: flow.release === null ? null : Arr.map(flow.release, ofNode),
   };
-  if (flow.releases === undefined) return each;
+  if (flow.releases === undefined) {
+    return each;
+  }
   const releases = Arr.map(flow.releases, (row) => ({ ...row, nodes: Arr.map(row.nodes, ofNode) }));
   return { ...each, releases };
 };
@@ -87,7 +91,9 @@ export const timeless = (flow: Flow) => ({
 export const timedFlow = (flow: Flow, now: number) => {
   const timed = eachSaid(flow, (one) => {
     const said = one.clock === undefined ? one.said : saidAt(one.clock, now);
-    if (!isRun(one) || one.state !== "running" || one.usual == null) return { ...one, said };
+    if (!isRun(one) || one.state !== "running" || one.usual == null) {
+      return { ...one, said };
+    }
     const long = stepElapsed(one, now) > one.usual * 2;
     return { ...one, long, said: long && one.wait !== "hold" ? "Longer than usual" : said };
   });

@@ -118,7 +118,9 @@ test("the agent a lineage asks for is the nearest Run's live one in that role", 
       const parents = entry({ agent: "impl-p", paneId: "1-1", runId: "r-parent" });
       const own = entry({ agent: "impl-own", paneId: "1-2", runId: "r-child" });
       const other = entry({ agent: "impl-other", paneId: "1-3", runId: "r-other" });
-      for (const one of [parents, own, other]) yield* registerAgent(here, one);
+      for (const one of [parents, own, other]) {
+        yield* registerAgent(here, one);
+      }
       const alive = Arr.map([parents, own, other], live);
       expect((yield* lineageAgent(alive, "implementer", ["r-child", "r-parent"]))?.agent).toBe(
         "impl-own",

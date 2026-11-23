@@ -59,8 +59,9 @@ const landing = Effect.fn("landing.landing")(function* (
   const http = forgeHttpTest(fake.run, (input, init = {}) =>
     Effect.runPromiseWith(services)(
       Effect.gen(function* () {
-        if (init.method === "PUT" && pipe_(input, Str.endsWith("/merge")))
+        if (init.method === "PUT" && pipe_(input, Str.endsWith("/merge"))) {
           seen.push(yield* readLanding(runDir));
+        }
         return yield* Effect.promise(() => fake.fetch(input, init));
       }),
     ),
@@ -427,8 +428,9 @@ test("the host merges the merge request a Run recorded, and its landing is a fac
           });
           const refused = yield* registry.result(none.runId).pipe(Effect.result);
           expect(Result.isFailure(refused)).toBe(true);
-          if (Result.isFailure(refused))
+          if (Result.isFailure(refused)) {
             expect(refused.failure.reason).toContain("no merge request");
+          }
           expect((yield* registry.view(none.runId))?.landing).toBeNull();
         }).pipe(
           withMachine,

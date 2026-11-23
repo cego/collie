@@ -56,7 +56,7 @@ test("only reports still owed are selected, including an unfinished Task closure
       const store = yield* Store;
       const sql = yield* SqlClient.SqlClient;
       const placing = '{"from":"/work","taskLabel":null,"closes":"reported"}';
-      for (const run of ["unreported", "closing", "closed", "requested", "ordinary"])
+      for (const run of ["unreported", "closing", "closed", "requested", "ordinary"]) {
         yield* store.admit({
           ...admission(run, run, {}),
           placing:
@@ -66,6 +66,7 @@ test("only reports still owed are selected, including an unfinished Task closure
                 ? '{"from":"/work","taskLabel":null,"requestedBy":{"run":"parent","agent":"a","machine":{"installation":"here","name":"here"}}}'
                 : placing,
         });
+      }
       const report = {
         state: "undelivered" as const,
         at: "2026-11-11T00:00:00Z",
@@ -101,11 +102,12 @@ test("reports are imported once on upgrade and remain authoritative after restar
       yield* Effect.gen(function* () {
         const store = yield* Store;
         const sql = yield* SqlClient.SqlClient;
-        for (const run of ["closed", "missing", "torn"])
+        for (const run of ["closed", "missing", "torn"]) {
           yield* store.admit({
             ...admission(run, run, {}),
             placing: '{"from":"/work","taskLabel":null,"closes":"reported"}',
           });
+        }
         yield* sql`DROP INDEX collie_runs_reports`;
         yield* sql`ALTER TABLE collie_runs DROP COLUMN report_pending`;
         yield* sql`ALTER TABLE collie_runs DROP COLUMN report`;
@@ -130,8 +132,9 @@ test("reports are imported once on upgrade and remain authoritative after restar
         note: "before upgrade",
         closed: true,
       };
-      for (const run of ["closed", "torn"])
+      for (const run of ["closed", "torn"]) {
         yield* fs.makeDirectory(`${dir}/runs/${run}`, { recursive: true });
+      }
       yield* fs.writeFileString(
         `${dir}/runs/closed/report.json`,
         yield* Schema.encodeEffect(ReportJson)(original),
@@ -570,7 +573,9 @@ test("a Run's near rows, with nothing written, are the rows read before", () =>
 
       const near = yield* store.near("lead");
       expect(near.length).toBe(2);
-      for (const row of near) expect(every).toContain(row);
+      for (const row of near) {
+        expect(every).toContain(row);
+      }
     }),
   ));
 

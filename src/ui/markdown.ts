@@ -39,19 +39,29 @@ export function ansiText(ansi: string) {
   // oxlint-disable-next-line no-control-regex -- ANSI SGR sequences begin with the ESC control byte.
   for (const [index, part] of Str.split(ansi, /\u001b\[([\d;]*)m/).entries()) {
     if (index % 2 === 0) {
-      if (part !== "") chunks.push({ __isChunk: true, text: part, fg, attributes });
+      if (part !== "") {
+        chunks.push({ __isChunk: true, text: part, fg, attributes });
+      }
       continue;
     }
     const codes = part === "" ? [0] : Arr.map(Str.split(part, ";"), Number);
     for (let at = 0; at < codes.length; at++) {
       const code = codes[at]!;
-      if (code === 38 || code === 48) at += 1 + (EXTENDED.get(codes[at + 1]!) ?? 0);
-      else if (code === 0) [fg, attributes] = [undefined, 0];
-      else if (SETS.has(code)) attributes |= SETS.get(code)!;
-      else if (CLEARS.has(code)) attributes &= ~CLEARS.get(code)!;
-      else if (code === 39) fg = undefined;
-      else if (code >= 30 && code <= 37) fg = COLOURS[code - 30]!;
-      else if (code >= 90 && code <= 97) fg = COLOURS[code - 90]!;
+      if (code === 38 || code === 48) {
+        at += 1 + (EXTENDED.get(codes[at + 1]!) ?? 0);
+      } else if (code === 0) {
+        [fg, attributes] = [undefined, 0];
+      } else if (SETS.has(code)) {
+        attributes |= SETS.get(code)!;
+      } else if (CLEARS.has(code)) {
+        attributes &= ~CLEARS.get(code)!;
+      } else if (code === 39) {
+        fg = undefined;
+      } else if (code >= 30 && code <= 37) {
+        fg = COLOURS[code - 30]!;
+      } else if (code >= 90 && code <= 97) {
+        fg = COLOURS[code - 90]!;
+      }
     }
   }
   return new StyledText(chunks);

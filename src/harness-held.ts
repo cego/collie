@@ -20,15 +20,18 @@ export const harnessLacking = (cwd: string, at: string, commits: ReadonlyArray<s
         "-z",
         commit,
       );
-      if (files.code !== 0) break;
+      if (files.code !== 0) {
+        break;
+      }
       touched.push(...Arr.filter(Str.split(files.stdout, "\0"), Str.isNonEmpty));
       // WARNING: An empty pathspec would compare the whole tree.
       if (
         touched.length === 0 ||
         (yield* git("--literal-pathspecs", "diff", "--quiet", commit, at, "--", ...touched))
           .code === 0
-      )
+      ) {
         held = index + 1;
+      }
     }
     return commits.slice(held);
   });

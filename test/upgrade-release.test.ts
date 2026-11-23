@@ -94,8 +94,12 @@ echo '{"ok":true,"data":{"root":"'"$COLLIE_DIR"'/release","checkout":false,"rele
 };
 
 const run = (cmd: string, args: Array<string>, cwd: string) => {
-  if (cmd === "git") return Effect.succeed<Ran>({ code: 128, stdout: "", stderr: "not a git" });
-  if (cmd !== "sh") return shell(cmd, args, cwd);
+  if (cmd === "git") {
+    return Effect.succeed<Ran>({ code: 128, stdout: "", stderr: "not a git" });
+  }
+  if (cmd !== "sh") {
+    return shell(cmd, args, cwd);
+  }
   return Effect.sync(() => {
     prepared.push(`${cmd} ${Arr.join(args, " ")} in ${cwd}`);
     return { code: 0, stdout: "prepare: runner: already in place\n" };
@@ -232,7 +236,9 @@ test("placements at once take turns, so the release is wholly one of them", () =
       const placed: Array<string> = [];
       for (const name of yield* fs.readDirectory(`${collieDir}/release`, { recursive: true })) {
         const file = (yield* fs.stat(`${collieDir}/release/${name}`)).type === "File";
-        if (file && name !== "placed.json") placed.push(name);
+        if (file && name !== "placed.json") {
+          placed.push(name);
+        }
       }
       expect(placed.sort()).toEqual(Rec.keys(record.files).sort());
       expect(yield* exists(`${collieDir}/release.new`)).toBe(false);

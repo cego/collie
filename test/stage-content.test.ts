@@ -17,8 +17,9 @@ const flat = (text: string) => Str.trim(pipe(text, Str.replaceAll(/\s+/g, " ")))
 const URL = "https://gitlab.example.com/group/app";
 
 test("both forges' stage content has the steps the module asks for", () => {
-  for (const one of Rec.values(content))
+  for (const one of Rec.values(content)) {
     expect([...one.sections.keys()]).toEqual(["assess", "stage", "unstage"]);
+  }
 });
 
 test("stage decides package or application by release's own rule, word for word", () => {
@@ -91,11 +92,13 @@ test("staging deploys the head's own pipeline and rolls back only what it staged
       "Roll stage back",
       "only in the",
       "Never play, retry or ask about a production job",
-    ])
+    ]) {
       expect(staging).toContain(said);
+    }
     const unstage = flat(one.sections.get("unstage") ?? "");
-    for (const said of ["{{failure}}", "{{head}}", "{{stage_jobs}}", "only in the"])
+    for (const said of ["{{failure}}", "{{head}}", "{{stage_jobs}}", "only in the"]) {
       expect(unstage).toContain(said);
+    }
   }
 });
 
@@ -104,10 +107,11 @@ test("a set child's name ends in the SHA-256 of its MR id, so no two merge reque
   const digest = new Bun.CryptoHasher("sha256")
     .update(Buffer.from(id, "utf16le").swap16())
     .digest("hex");
-  for (const workflow of ["release", "stage"] as const)
+  for (const workflow of ["release", "stage"] as const) {
     expect(invocationFor(workflow, { id, target: `mr:${id}`, url: `https://${id}` })).toEndWith(
       `-${digest}`,
     );
+  }
 });
 
 test("a set child's Run id stays one directory's length however long its merge request's path", () => {
@@ -131,7 +135,9 @@ test("two merge requests whose ids differ only in punctuation are two children o
     ]) {
       const names = Arr.map(pair, (project) => invocationFor(workflow, member(project)));
       expect(names[0]).not.toBe(names[1]);
-      for (const name of names) expect(name).toMatch(/^[a-z0-9-]+$/);
+      for (const name of names) {
+        expect(name).toMatch(/^[a-z0-9-]+$/);
+      }
     }
   }
 });

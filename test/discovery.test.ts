@@ -31,7 +31,9 @@ const layers = Effect.fn("DiscoveryTest.layers")(function* (prefix: string) {
     userDir: `${dir}/install/user`,
     project: `${dir}/project`,
   });
-  for (const layer of roots) yield* fs.makeDirectory(layer.dir, { recursive: true });
+  for (const layer of roots) {
+    yield* fs.makeDirectory(layer.dir, { recursive: true });
+  }
   const dirOf = (layer: EntryLayer) =>
     Option.getOrUndefined(Arr.findFirst(roots, (root) => root.layer === layer))!.dir;
   return {

@@ -62,12 +62,16 @@ export const admission: (
     Num.Order,
   )) {
     const wants = Math.min(one.asked, share);
-    if (wants > free) continue;
+    if (wants > free) {
+      continue;
+    }
     free -= wants;
     ahead.push(one);
   }
   const workers = Math.min(request.asked, share);
-  if (workers > free) return { _tag: "wait", behind: [...ahead, ...holds] };
+  if (workers > free) {
+    return { _tag: "wait", behind: [...ahead, ...holds] };
+  }
   const of = pooled(budget)
     ? `runs share all ${share}`
     : request.kind === "whole"
@@ -170,7 +174,9 @@ type Looked =
 export const look = (dir: string, budget: Budget, id: string) =>
   modify(dir, (state) => {
     const mine = Option.getOrUndefined(Arr.findFirst(state.entries, (one) => one.id === id));
-    if (mine === undefined) throw new Error(`ticket ${id} is not in the budget's store`);
+    if (mine === undefined) {
+      throw new Error(`ticket ${id} is not in the budget's store`);
+    }
     const decided = admission(budget, state.entries, mine);
     if (decided._tag === "wait") {
       const behind = Arr.map(decided.behind, (one) =>
@@ -239,16 +245,18 @@ export const admitted = (
     let told = began;
     for (let first = true; ; first = false) {
       const decided = yield* look(dir, budget, ticket.id);
-      if (decided._tag === "admit")
+      if (decided._tag === "admit") {
         return {
           id: ticket.id,
           workers: decided.workers,
           fewer: decided.fewer,
           waited: (yield* Clock.currentTimeMillis) - began,
         };
+      }
       const now = yield* Clock.currentTimeMillis;
-      if (first) yield* say(yield* behindLine(decided.behind[0]!));
-      else if (now - told >= Duration.toMillis(Duration.fromInputUnsafe(every))) {
+      if (first) {
+        yield* say(yield* behindLine(decided.behind[0]!));
+      } else if (now - told >= Duration.toMillis(Duration.fromInputUnsafe(every))) {
         told = now;
         yield* say(`test: still waiting, ${elapsed(now - began)} so far`);
       }
@@ -292,8 +300,9 @@ export const startOnHold = (
     yield* Effect.flatMap(processOf(child.pid), (named) => join(dir, id, named)).pipe(
       Effect.andThen(
         Effect.sync(() => {
-          if (options.kind === "whole")
+          if (options.kind === "whole") {
             setPriority(child.pid, Math.max(10, getPriority(child.pid)));
+          }
         }),
       ),
       Effect.andThen(Effect.sync(() => writeSync(gate, "go\n"))),

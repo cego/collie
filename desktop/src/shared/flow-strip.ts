@@ -4,7 +4,9 @@ import type { FlowStrip } from "../../../src/board-model";
 type StripGlyph = FlowStrip["glyphs"][number] & { readonly folded?: number };
 
 export const cardFlow = (flow: FlowStrip | undefined) => {
-  if (flow === undefined) return null;
+  if (flow === undefined) {
+    return null;
+  }
   const end = flow.glyphs.length - flow.release;
   const run = flow.glyphs.slice(0, end);
   const done = Arr.filter(run, (one) => one.state === "done").length;
@@ -13,8 +15,12 @@ export const cardFlow = (flow: FlowStrip | undefined) => {
     run.length <= 10
       ? run
       : Arr.flatMap(run, (one) => {
-          if (one.state !== "done") return [one];
-          if (folded) return [];
+          if (one.state !== "done") {
+            return [one];
+          }
+          if (folded) {
+            return [];
+          }
           folded = true;
           return [{ title: `${done} done`, state: "done" as const, folded: done }];
         });

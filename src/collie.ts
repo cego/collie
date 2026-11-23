@@ -86,13 +86,19 @@ export const program = app.pipe(
   Effect.catch((cause) =>
     Effect.gen(function* () {
       const parse = isShowHelp(cause) ? cause : null;
-      if (parse && helpAsked) return;
+      if (parse && helpAsked) {
+        return;
+      }
       const failure = parse
         ? err("invalid_input", parseMessage(parse))
         : err("operation_failed", String(cause));
-      if (jsonAsked) return yield* printResult(failure, true);
+      if (jsonAsked) {
+        return yield* printResult(failure, true);
+      }
       process.exitCode = parse ? 2 : 1;
-      if (!parse) yield* Console.error(failure.error.message);
+      if (!parse) {
+        yield* Console.error(failure.error.message);
+      }
     }),
   ),
   Effect.provide(
@@ -106,10 +112,11 @@ export const program = app.pipe(
 );
 
 function parseMessage(parse: CliError.ShowHelp) {
-  if (parse.errors.length > 0)
+  if (parse.errors.length > 0) {
     return Arr.join(
       Arr.map(parse.errors, (error) => error.message),
       "; ",
     );
+  }
   return `${Arr.join(["collie", ...parse.commandPath.slice(1)], " ")} needs a subcommand.`;
 }

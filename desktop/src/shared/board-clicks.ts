@@ -21,9 +21,12 @@ export const afterGesture = (state: BoardState, gesture: Gesture) => {
     case "click":
     case "double-click": {
       const { landed } = gesture;
-      if (landed.on === "control") return state;
-      if (landed.on === "background")
+      if (landed.on === "control") {
+        return state;
+      }
+      if (landed.on === "background") {
         return state.page === null ? { ...state, selected: null } : state;
+      }
       const opens = gesture.kind === "double-click" && !landed.asOf;
       return { selected: landed.card, page: opens ? landed.card : state.page };
     }
@@ -32,7 +35,9 @@ export const afterGesture = (state: BoardState, gesture: Gesture) => {
     case "close":
       return { ...state, page: null };
     case "escape":
-      if (gesture.overlay || gesture.typing) return state;
+      if (gesture.overlay || gesture.typing) {
+        return state;
+      }
       return state.page === null ? { ...state, selected: null } : { ...state, page: null };
   }
 };
@@ -73,8 +78,12 @@ const OVERLAY =
   '[data-state="open"]:is([role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"])';
 
 export const landedOn = (target: Target) => {
-  if (target === null) return { on: "background" };
-  if (target.closest(CONTROL) !== null) return { on: "control" };
+  if (target === null) {
+    return { on: "background" };
+  }
+  if (target.closest(CONTROL) !== null) {
+    return { on: "control" };
+  }
   const card = target.closest("[data-card]");
   return card === null
     ? { on: "background" }

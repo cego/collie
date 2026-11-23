@@ -448,8 +448,9 @@ test("every operation a human has, native chat has a route to", () =>
         (one) => one.properties.kind.enum,
       );
       expect(kinds).toContain("start");
-      for (const forbidden of ["confirm", "decline", "reconcile", "verify", "grant", "authorize"])
+      for (const forbidden of ["confirm", "decline", "reconcile", "verify", "grant", "authorize"]) {
         expect([forbidden, kinds.includes(forbidden)]).toEqual([forbidden, false]);
+      }
       expect(registeredKinds()).not.toContain("confirm");
     }),
   ));
@@ -481,7 +482,9 @@ test("chat lists a finished Run's offers and takes one, as run actions and run a
         const route = Option.getOrUndefined(
           Arr.findFirst(INVENTORY, ([one]) => one === operation),
         )?.[1];
-        if (route?.route !== "offer") throw new Error(`${operation} is not an offer row`);
+        if (route?.route !== "offer") {
+          throw new Error(`${operation} is not an offer row`);
+        }
         return toolNamed(route.tool)!.call(env, route.input(runId));
       };
 
@@ -732,7 +735,9 @@ test("the card, collie_run and collie_herd say the same of a Run waiting for mem
       const waiting = yield* Effect.forkChild(
         waitForMemory({ env, stateDir, runId: run.id, what: "r-memory-build's launch" }),
       );
-      while ((yield* memoryWaitOf(run.id)) === null) yield* Effect.sleep("10 millis");
+      while ((yield* memoryWaitOf(run.id)) === null) {
+        yield* Effect.sleep("10 millis");
+      }
       const now = epochMs("2026-09-14T10:12:00Z");
       const [card] = yield* buildBoard({
         env,
@@ -828,7 +833,9 @@ test("a Machine's Native chat and Desktop's Flock chat are given the same Standi
         [{ key: "standing_direction", value: "Stage only; production waits for my go." }],
         "2026-10-02T09:30:00.000Z",
       );
-      if ("refused" in edited) throw new Error(edited.refused);
+      if ("refused" in edited) {
+        throw new Error(edited.refused);
+      }
       flock = edited;
       yield* takeShared(
         env.userDir,
@@ -857,7 +864,7 @@ test("chat's disposition is refused a superseded line naming its own Run, as the
     }),
   ));
 
-for (const answer of ["Keep F1 (no approval)", "Drop it (approve abc123)"])
+for (const answer of ["Keep F1 (no approval)", "Drop it (approve abc123)"]) {
   test(`chat answers the keep/drop Decision with ${answer}`, () =>
     hosted(
       "collie-parity-dispute-",
@@ -901,6 +908,7 @@ for (const answer of ["Keep F1 (no approval)", "Drop it (approve abc123)"])
         }),
       [...MODULES, "follows-mr.workflow.ts"],
     ));
+}
 
 test("chat starts a followed merge request as the Run the CLI started, and answers its approval", () =>
   hosted(

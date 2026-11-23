@@ -20,14 +20,20 @@ const loads = (entry: string) =>
     const pending = [`${src}${entry}`];
     while (pending.length > 0) {
       const file = pending.pop()!;
-      if (loaded.has(file)) continue;
+      if (loaded.has(file)) {
+        continue;
+      }
       loaded.add(file);
       const scanner = pipe(file, Str.endsWith(".tsx")) ? scanners.tsx : scanners.ts;
       for (const { kind, path: spec } of scanner.scanImports(yield* fs.readFileString(file))) {
-        if (kind !== "import-statement") continue;
-        if (pipe(spec, Str.startsWith(".")))
+        if (kind !== "import-statement") {
+          continue;
+        }
+        if (pipe(spec, Str.startsWith("."))) {
           pending.push(Bun.resolveSync(spec, path.dirname(file)));
-        else loaded.add(spec);
+        } else {
+          loaded.add(spec);
+        }
       }
     }
     return Arr.map([...loaded], (one) => pipe(one, Str.replace(src, "src/")));

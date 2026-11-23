@@ -72,12 +72,20 @@ const TEXT_SEARCHES = new Set(["grep", "egrep", "fgrep", "rg", "ag", "ack"]);
 
 function textSearch(executable: string, argv: ReadonlyArray<string>) {
   const program = Str.split(executable, "/").at(-1) ?? "";
-  if (TEXT_SEARCHES.has(program)) return true;
-  if (program === "git") return argv[0] === "grep";
-  if (program !== "sh" && program !== "bash") return false;
+  if (TEXT_SEARCHES.has(program)) {
+    return true;
+  }
+  if (program === "git") {
+    return argv[0] === "grep";
+  }
+  if (program !== "sh" && program !== "bash") {
+    return false;
+  }
   const at = argv.indexOf("-c");
   const script = at < 0 ? undefined : argv[at + 1];
-  if (script === undefined) return false;
+  if (script === undefined) {
+    return false;
+  }
   const [first = "", ...rest] = shellWords(script);
   return textSearch(first, rest);
 }
@@ -98,35 +106,50 @@ function shellWords(script: string) {
       continue;
     }
     if (quote === "" && /\s/.test(c)) {
-      if (started) words.push(word);
+      if (started) {
+        words.push(word);
+      }
       word = "";
       started = false;
       continue;
     }
     started = true;
     if (quote === "'") {
-      if (c === "'") quote = "";
-      else word += c;
+      if (c === "'") {
+        quote = "";
+      } else {
+        word += c;
+      }
     } else if (c === "\\" && i + 1 < script.length) {
       const next = Option.getOrElse(Str.charAt(script, ++i), () => "");
       word += quote === '"' && !pipe('"\\$`', Str.includes(next)) ? c + next : next;
-    } else if (c === quote) quote = "";
-    else if (quote === "" && (c === "'" || c === '"')) quote = c;
-    else word += c;
+    } else if (c === quote) {
+      quote = "";
+    } else if (quote === "" && (c === "'" || c === '"')) {
+      quote = c;
+    } else {
+      word += c;
+    }
   }
-  if (started) words.push(word);
+  if (started) {
+    words.push(word);
+  }
   return words;
 }
 
 // WARNING: a passing text search does not prove the check; it shows only that the text is there.
 function provedAtFinal(got: Collected, name: string) {
-  if (lastPassedAtFinal(withoutSearches(got, name), name)) return "passed";
+  if (lastPassedAtFinal(withoutSearches(got, name), name)) {
+    return "passed";
+  }
   return lastPassedAtFinal(got, name) ? "searched" : "unproved";
 }
 
 function withoutSearches(got: Collected, name: string) {
   const ownCheck = Arr.some([...got.approved, ...(got.commands ?? [])], (one) => one.name === name);
-  if (ownCheck) return got;
+  if (ownCheck) {
+    return got;
+  }
   const searched = (v: Verification) =>
     v.name === name && passed(v) && textSearch(v.executable, v.argv);
   return { ...got, verifications: Arr.filter(got.verifications, (v) => !searched(v)) };
@@ -151,8 +174,12 @@ type Journal = Pick<Collected, "verifications" | "final" | "commands"> &
 const runsOf = (got: Journal, name: string) => checkProof(got, name, "collie");
 
 function rerunOf(got: Journal, last: Verification | undefined) {
-  if (last === undefined || last.result !== "fail" || last.expect !== "pass") return null;
-  if (last.failed === undefined || last.failed.length === 0) return null;
+  if (last === undefined || last.result !== "fail" || last.expect !== "pass") {
+    return null;
+  }
+  if (last.failed === undefined || last.failed.length === 0) {
+    return null;
+  }
   const after = got.verifications.slice(got.verifications.indexOf(last) + 1);
   const rerun = (test: FailedTest) =>
     Option.getOrUndefined(
@@ -303,14 +330,20 @@ export const noCheckNamed =
 
 // WARNING: an empty set is a gap, not a pass, or this gate would say yes to anything.
 function approvedSetGaps(got: Collected) {
-  if (got.approved.length === 0) return [noCheckNamed];
+  if (got.approved.length === 0) {
+    return [noCheckNamed];
+  }
   const gaps: Array<string> = [];
   for (const spec of owedLocally(got.approved)) {
     const { state, runs, last } = runsOf(got, spec.name);
-    if (state === "passed") continue;
+    if (state === "passed") {
+      continue;
+    }
     const reran = rerunOf(got, last);
     if (reran !== null) {
-      if (reran.own.length === 0) continue;
+      if (reran.own.length === 0) {
+        continue;
+      }
       gaps.push(
         `${spec.name} failed: ${Arr.join(
           Arr.map(
@@ -321,27 +354,36 @@ function approvedSetGaps(got: Collected) {
           ", ",
         )}`,
       );
-    } else if (state === "never") gaps.push(`${spec.name} was never run`);
-    else if (Arr.some(runs, (v) => v.result === "fail" || v.expect === "fail"))
+    } else if (state === "never") {
+      gaps.push(`${spec.name} was never run`);
+    } else if (Arr.some(runs, (v) => v.result === "fail" || v.expect === "fail")) {
       gaps.push(`${spec.name} failed`);
-    else if (Arr.some(runs, (v) => v.result === "unstable"))
+    } else if (Arr.some(runs, (v) => v.result === "unstable")) {
       gaps.push(`${spec.name} ${unstableWhy(runs)}`);
-    else gaps.push(`${spec.name} last passed on a different tree`);
+    } else {
+      gaps.push(`${spec.name} last passed on a different tree`);
+    }
   }
   return gaps;
 }
 
 function anyField(got: Collected, key: string) {
   for (const output of got.outputs.values()) {
-    if (isYamlMap(output) && key in output) return output[key];
+    if (isYamlMap(output) && key in output) {
+      return output[key];
+    }
   }
   return undefined;
 }
 
 function reviewerField(got: Collected, key: string) {
   for (const [id, output] of got.outputs) {
-    if (!got.reviewed.has(id)) continue;
-    if (isYamlMap(output) && key in output) return output[key];
+    if (!got.reviewed.has(id)) {
+      continue;
+    }
+    if (isYamlMap(output) && key in output) {
+      return output[key];
+    }
   }
   return undefined;
 }
@@ -380,8 +422,12 @@ export function evidenceRoots(own: string, cwd: string, workSource: string) {
 // WARNING: a `..` in a reference is refused, as no one can answer for where it lands.
 export function refInside(roots: ReadonlyArray<string>, ref: string) {
   const value = Str.trim(ref);
-  if (value === "" || pipe(value, Str.includes(".."))) return false;
-  if (!pipe(value, Str.startsWith("/"))) return true;
+  if (value === "" || pipe(value, Str.includes(".."))) {
+    return false;
+  }
+  if (!pipe(value, Str.startsWith("/"))) {
+    return true;
+  }
   return Arr.some(
     roots,
     (root) => root !== "" && (value === root || pipe(value, Str.startsWith(`${root}/`))),
@@ -413,22 +459,32 @@ function gapsOf(kind: Outcome, got: Collected) {
   const check = (text: string) => gaps.push({ text, by: "check" });
   const claim = (text: string) => gaps.push({ text, by: "claim" });
   const judged = (key: string, text: string) => {
-    if (!reviewerSays(got, key)) gaps.push({ text, by: "review" });
+    if (!reviewerSays(got, key)) {
+      gaps.push({ text, by: "review" });
+    }
   };
-  if (needsChecks(kind)) for (const gap of approvedSetGaps(got)) check(gap);
+  if (needsChecks(kind)) {
+    for (const gap of approvedSetGaps(got)) {
+      check(gap);
+    }
+  }
 
   switch (kind) {
     case "unspecified":
       break;
     case "feature": {
       const done = names(anyField(got, "tickets_done"));
-      if (done.length === 0) claim("no ticket is reported built (tickets_done is empty)");
+      if (done.length === 0) {
+        claim("no ticket is reported built (tickets_done is empty)");
+      }
       judged("scope_met", "the review did not report scope_met: true for the agreed scope");
       // WARNING: a ticket's proof counts only as a pass on the tree in front of us, whoever collected it.
       for (const ticket of got.tickets) {
         for (const name of ticket.checks) {
           const proof = provedAtFinal(got, name);
-          if (proof === "passed" || settledUnpassed(got, name)) continue;
+          if (proof === "passed" || settledUnpassed(got, name)) {
+            continue;
+          }
           const earlier = passedOnlyBefore(got, name);
           check(
             proof === "searched"
@@ -444,18 +500,19 @@ function gapsOf(kind: Outcome, got: Collected) {
       const regression = Arr.filter(got.verifications, (v) => v.name === "regression");
       const reproduced = Arr.filter(regression, (v) => v.expect === "fail" && v.result === "pass");
       const before = Arr.filter(reproduced, (v) => earlierTree(v, got.final));
-      if (reproduced.length === 0)
+      if (reproduced.length === 0) {
         check(
           "no regression verification recorded with --expect fail, so the bug was never reproduced",
         );
-      else if (before.length === 0)
+      } else if (before.length === 0) {
         check(
           "the bug was only reproduced on the tree the fix is already on, so nothing shows it failing before the fix",
         );
+      }
       const fix = checkProof(withoutSearches(got, "regression"), "regression");
       const fixedBy = fix.state === "passed" ? fix.last : undefined;
       const earlier = passedOnlyBefore(got, "regression");
-      if (fixedBy === undefined)
+      if (fixedBy === undefined) {
         check(
           lastPassedAtFinal(got, "regression")
             ? onlySearched("regression")
@@ -463,13 +520,15 @@ function gapsOf(kind: Outcome, got: Collected) {
               ? "regression does not pass on the current tree, so the fix is not proven"
               : `regression ${runAgain(earlier, "the current tree, so the fix is not proven")}`,
         );
-      else if (before.length > 0 && !Arr.some(before, (v) => sameAsked(v, fixedBy)))
+      } else if (before.length > 0 && !Arr.some(before, (v) => sameAsked(v, fixedBy))) {
         check(
           `the bug was reproduced by ${shown(before.at(-1)!)} but the fix is proven by ${shown(fixedBy)}: one command has to fail before the fix and pass after it`,
         );
+      }
       const named = anyField(got, "reproduced");
-      if (!isString(named) || Str.trim(named) === "")
+      if (!isString(named) || Str.trim(named) === "") {
         claim("the Output does not name the verification that reproduced the bug");
+      }
       break;
     }
     case "refactor":
@@ -477,27 +536,36 @@ function gapsOf(kind: Outcome, got: Collected) {
       break;
     case "investigation": {
       const conclusion = anyField(got, "conclusion");
-      if (!isString(conclusion) || Str.trim(conclusion) === "")
+      if (!isString(conclusion) || Str.trim(conclusion) === "") {
         claim("the investigation reports no conclusion");
-      const refs = names(anyField(got, "evidence"));
-      if (refs.length === 0) claim("the conclusion is supported by no evidence references");
-      for (const ref of refs) {
-        if (!got.insideRun(ref)) claim(`evidence reference "${ref}" is outside this Run`);
       }
-      if (!isBoolean(anyField(got, "patch")))
+      const refs = names(anyField(got, "evidence"));
+      if (refs.length === 0) {
+        claim("the conclusion is supported by no evidence references");
+      }
+      for (const ref of refs) {
+        if (!got.insideRun(ref)) {
+          claim(`evidence reference "${ref}" is outside this Run`);
+        }
+      }
+      if (!isBoolean(anyField(got, "patch"))) {
         claim("the investigation does not say whether it produced a patch");
+      }
       judged("supported", "the review did not report supported: true for the conclusion");
       break;
     }
     case "docs": {
       const documented = names(anyField(got, "documented_commands"));
-      if (documented.length === 0)
+      if (documented.length === 0) {
         claim("no documented command is named, so the instructions were never run");
+      }
       for (const name of documented) {
         const proof = provedAtFinal(got, name);
-        if (proof === "searched") check(onlySearched(`documented command "${name}"`));
-        else if (proof === "unproved")
+        if (proof === "searched") {
+          check(onlySearched(`documented command "${name}"`));
+        } else if (proof === "unproved") {
           check(`documented command "${name}" has no passing verification on this tree`);
+        }
       }
       judged("accurate", "the review did not report accurate: true for the instructions");
       break;
@@ -509,7 +577,9 @@ function gapsOf(kind: Outcome, got: Collected) {
           one,
           proof: provedAtFinal(got, one),
         }));
-        if (Arr.some(proofs, ({ proof }) => proof === "passed")) continue;
+        if (Arr.some(proofs, ({ proof }) => proof === "passed")) {
+          continue;
+        }
         const searched = Option.getOrUndefined(
           Arr.findFirst(proofs, ({ proof }) => proof === "searched"),
         );
@@ -524,19 +594,26 @@ function gapsOf(kind: Outcome, got: Collected) {
     }
     case "plan": {
       const issues = anyField(got, "issues_dir");
-      if (!isString(issues) || Str.trim(issues) === "") claim("the plan wrote no tickets");
+      if (!isString(issues) || Str.trim(issues) === "") {
+        claim("the plan wrote no tickets");
+      }
       break;
     }
     case "review": {
       const summary = anyField(got, "summary");
-      if (!isString(summary) || Str.trim(summary) === "")
+      if (!isString(summary) || Str.trim(summary) === "") {
         claim("the review has no summary a human can read");
+      }
       break;
     }
     case "performance": {
-      for (const text of finalMeasurementGaps(got)) gaps.push({ text, by: "measure" });
+      for (const text of finalMeasurementGaps(got)) {
+        gaps.push({ text, by: "measure" });
+      }
       for (const key of ["behavior_preserved", "measurement_valid"]) {
-        if (reviewerSaysOfThisTree(got, key)) continue;
+        if (reviewerSaysOfThisTree(got, key)) {
+          continue;
+        }
         gaps.push({
           text: reviewerSays(got, key)
             ? `${key}: true was reported by a review that was not of this tree`
@@ -555,8 +632,12 @@ const isFinal = (tree: Snapshot, final: Snapshot) => sameTree(tree, final);
 function reviewerSaysOfThisTree(got: Collected, key: string) {
   for (const [id, output] of got.outputs) {
     const tree = got.reviewedOn?.get(id);
-    if (!got.reviewed.has(id) || tree === undefined || !isFinal(tree, got.final)) continue;
-    if (isYamlMap(output) && key in output) return output[key] === true;
+    if (!got.reviewed.has(id) || tree === undefined || !isFinal(tree, got.final)) {
+      continue;
+    }
+    if (isYamlMap(output) && key in output) {
+      return output[key] === true;
+    }
   }
   return false;
 }
@@ -567,9 +648,12 @@ function finalMeasurementGaps(got: Collected) {
   const proving = Option.getOrUndefined(
     Arr.findLast(here, (one) => one.base.commit === got.mergeBase),
   );
-  if (finals.length === 0) return ["no `final` Measurement was taken, so no gain is proved"];
-  if (here.length === 0)
+  if (finals.length === 0) {
+    return ["no `final` Measurement was taken, so no gain is proved"];
+  }
+  if (here.length === 0) {
     return [`the latest \`final\` Measurement, ${finals.at(-1)!.id}, was taken on an earlier tree`];
+  }
   if (proving === undefined) {
     const last = here.at(-1)!;
     return [
@@ -579,8 +663,9 @@ function finalMeasurementGaps(got: Collected) {
     ];
   }
   const result = proving.result;
-  if (result._tag !== "Judged")
+  if (result._tag !== "Judged") {
     return [`the \`final\` Measurement ${proving.id} has no verdict: it ended ${result._tag}`];
+  }
   const verdictOf = (metric: string) =>
     Option.getOrUndefined(Arr.findFirst(result.verdicts, (one) => one.metric === metric));
   const gaps: Array<string> = [];
@@ -588,22 +673,28 @@ function finalMeasurementGaps(got: Collected) {
     const judged = verdictOf(metric.name);
     const verdict = judged?.verdict ?? "no verdict";
     if (metric.role === "primary") {
-      if (verdict !== "gain")
+      if (verdict !== "gain") {
         gaps.push(
           `the \`final\` Measurement ${proving.id} shows ${metric.name} ${verdict}, not a gain`,
         );
-    } else if (judged === undefined || !judged.held || verdict === "inconclusive")
+      }
+    } else if (judged === undefined || !judged.held || verdict === "inconclusive") {
       gaps.push(
         `guardrail ${metric.name} is not held in the \`final\` Measurement ${proving.id} (${verdict})`,
       );
+    }
   }
   return gaps;
 }
 
 // WARNING: finishing without a patch is a real outcome for investigations and performance, not a failure.
 export function endsWithoutPatch(kind: Outcome, got: Collected) {
-  if (kind === "investigation") return anyField(got, "patch") === false;
-  if (kind !== "performance") return false;
+  if (kind === "investigation") {
+    return anyField(got, "patch") === false;
+  }
+  if (kind !== "performance") {
+    return false;
+  }
   const base = got.measurements?.at(-1)?.base;
   return (
     base !== undefined &&
@@ -619,16 +710,23 @@ export function renderEvidence(
 ) {
   const latest = new Map<string, Verification>();
   const command = (v: Verification) => CommandLine.display([v.asked ?? v.executable, ...v.argv]);
-  for (const v of got.verifications) if (!ranOneTest(v)) latest.set(`${v.name}:${v.by}`, v);
+  for (const v of got.verifications) {
+    if (!ranOneTest(v)) {
+      latest.set(`${v.name}:${v.by}`, v);
+    }
+  }
   const measured = audience === "public" ? null : finalMeasurementLine(got.measurements ?? []);
   const lines = Arr.map([...latest.values()], (v) => {
     const stale = sameTree(v.end, got.final) ? "" : " (on an earlier tree)";
     const expected = v.expect === "fail" ? ", expected to fail" : "";
-    if (audience === "public")
+    if (audience === "public") {
       return `- \`${command(v)}\`: ${v.result} (exit ${v.exit}${expected})${stale}`;
+    }
     return `- ${v.name}: ${v.result} (by ${v.by}${expected})${stale}`;
   });
-  if (measured !== null) lines.push(`- ${measured}`);
+  if (measured !== null) {
+    lines.push(`- ${measured}`);
+  }
   return lines.length === 0 ? "(nothing was verified)" : Arr.join(lines, "\n");
 }
 
@@ -644,11 +742,16 @@ export function renderRecordedChecks(
 ) {
   const latest = new Map<string, Verification>();
   const baseline = new Map<string, Verification>();
-  for (const v of Arr.filter(got.verifications, (one) => !ranOneTest(one)))
-    if (v.pass === "baseline") baseline.set(v.name, v);
-    else latest.set(`${v.name}:${v.by}`, v);
-  if (latest.size + baseline.size + leftToCi.length === 0)
+  for (const v of Arr.filter(got.verifications, (one) => !ranOneTest(one))) {
+    if (v.pass === "baseline") {
+      baseline.set(v.name, v);
+    } else {
+      latest.set(`${v.name}:${v.by}`, v);
+    }
+  }
+  if (latest.size + baseline.size + leftToCi.length === 0) {
     return "(nothing is recorded for this Run)";
+  }
   const onTree = (v: Verification) =>
     sameTree(v.end, got.final) ? "on this tree" : "on an earlier tree";
   const seenFailing = (v: Verification) =>

@@ -19,7 +19,7 @@ export const toolServer = (
     { capabilities: { tools: { listChanged: false } } },
   );
   const tools = [...FLOCK_TOOLS, ...FILE_TOOLS];
-  if (ask !== undefined)
+  if (ask !== undefined) {
     tools.push({
       name: "AskUserQuestion",
       title: "Ask the human",
@@ -27,6 +27,7 @@ export const toolServer = (
       input: () => jsonSchemaOf(Questions),
       readOnly: true,
     });
+  }
   server.server.setRequestHandler(ListToolsRequestSchema, () =>
     Promise.resolve({
       tools: Arr.map(tools, (tool) => ({
@@ -42,8 +43,9 @@ export const toolServer = (
   server.server.setRequestHandler(CallToolRequestSchema, (request) => {
     const { name } = request.params;
     const input = isJsonObject(request.params.arguments) ? request.params.arguments : {};
-    if (name === "AskUserQuestion" && ask !== undefined)
+    if (name === "AskUserQuestion" && ask !== undefined) {
       return ask(input).then((text) => ({ content: [{ type: "text" as const, text }] }));
+    }
     return isFileTool(name)
       ? run(callFileTool(flock, name, input)).then((content) => ({ content: [...content] }))
       : run(callFlockTool(flock, name, input)).then((text) => ({

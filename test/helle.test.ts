@@ -82,11 +82,17 @@ function serve() {
       const project = one
         ? Option.getOrUndefined(Arr.findFirst(fake.projects, (p) => p.slug === one[1]))
         : undefined;
-      if (!one || !project) return Response.json({ detail: "not found" }, { status: 404 });
+      if (!one || !project) {
+        return Response.json({ detail: "not found" }, { status: 404 });
+      }
       if (one[2] === "/claim") {
         const { taken, ...answer } = fake.claims.shift() ?? { position: 0, already_queued: false };
-        if (taken) project.holder = taken;
-        if (answer.position === 0) project.holder = { user_id: ME, display_name: "mk" };
+        if (taken) {
+          project.holder = taken;
+        }
+        if (answer.position === 0) {
+          project.holder = { user_id: ME, display_name: "mk" };
+        }
         return Response.json(answer);
       }
       if (one[2] === "/release") {
@@ -924,17 +930,26 @@ const sharedHelle = Effect.fn("test.sharedHelle")(function* (
     fetch: (request) => {
       const user = pipe_(request.headers.get("authorization")!, Str.replace("Bearer ", ""));
       const path = pipe_(new URL(request.url).pathname, Str.replace("/api/v1", ""));
-      if (path === "/me") return Response.json({ user_id: user });
-      if (path === "/projects") return Response.json(projects);
+      if (path === "/me") {
+        return Response.json({ user_id: user });
+      }
+      if (path === "/projects") {
+        return Response.json(projects);
+      }
       const one = /^\/projects\/([^/]+)(\/claim|\/release)?$/.exec(path);
       const project = Option.getOrUndefined(Arr.findFirst(projects, (p) => p.slug === one?.[1]));
-      if (!one || !project) return Response.json({}, { status: 404 });
+      if (!one || !project) {
+        return Response.json({}, { status: 404 });
+      }
       if (one[2] === "/claim") {
         const already =
           project.holder?.user_id === user || Arr.some(project.queue, (m) => m.user_id === user);
         if (!already) {
-          if (project.holder) project.queue.push({ user_id: user });
-          else project.holder = { user_id: user };
+          if (project.holder) {
+            project.queue.push({ user_id: user });
+          } else {
+            project.holder = { user_id: user };
+          }
         }
         const at = Option.getOrElse(
           Arr.findFirstIndex(project.queue, (m) => m.user_id === user),
@@ -943,8 +958,11 @@ const sharedHelle = Effect.fn("test.sharedHelle")(function* (
         return Response.json({ position: at + 1, already_queued: already });
       }
       if (one[2] === "/release") {
-        if (project.holder?.user_id === user) project.holder = project.queue.shift();
-        else project.queue = Arr.filter(project.queue, (m) => m.user_id !== user);
+        if (project.holder?.user_id === user) {
+          project.holder = project.queue.shift();
+        } else {
+          project.queue = Arr.filter(project.queue, (m) => m.user_id !== user);
+        }
         return Response.json({ released: true });
       }
       return Response.json(project);

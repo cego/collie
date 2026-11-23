@@ -19,10 +19,13 @@ test("test:live runs every file that holds a test against an installed harness",
       )).scripts["test:live"];
       const holding: Array<string> = [];
       for (const name of yield* fs.readDirectory(`${root}/test`)) {
-        if (!pipe(name, Str.endsWith(".test.ts"))) continue;
+        if (!pipe(name, Str.endsWith(".test.ts"))) {
+          continue;
+        }
         const text = yield* fs.readFileString(`${root}/test/${name}`);
-        if (/import \{[^}]*\bonMachineWith\b[^}]*\} from "\.\/support\/live"/.test(text))
+        if (/import \{[^}]*\bonMachineWith\b[^}]*\} from "\.\/support\/live"/.test(text)) {
           holding.push(`test/${name}`);
+        }
       }
       expect(holding.length).toBeGreaterThan(0);
       expect(Arr.filter(holding, (file) => !Str.split(script, " ").includes(file))).toEqual([]);

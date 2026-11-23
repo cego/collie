@@ -69,7 +69,9 @@ beforeEach(() =>
           if (path === "/latest") {
             return new Response(null, { status: 302, headers: { location: "/tag/99.0.0" } });
           }
-          if (path === `/download/99.0.0/${ASSET}`) return new Response(RUNNER);
+          if (path === `/download/99.0.0/${ASSET}`) {
+            return new Response(RUNNER);
+          }
           if (path === `/download/99.0.0/${ASSET}.sig`) {
             return new Response(
               signRelease(RUNNER, privateKey.export({ type: "pkcs8", format: "pem" }).toString()),
@@ -110,9 +112,13 @@ const files = Effect.gen(function* () {
   const all = yield* fs.readDirectory(clone, { recursive: true });
   const kept: Record<string, string> = {};
   for (const name of all.sort()) {
-    if (/^(\.git|release|kept)(\/|$)/.test(name)) continue;
+    if (/^(\.git|release|kept)(\/|$)/.test(name)) {
+      continue;
+    }
     const at = `${clone}/${name}`;
-    if ((yield* fs.stat(at)).type === "File") kept[name] = yield* fs.readFileString(at);
+    if ((yield* fs.stat(at)).type === "File") {
+      kept[name] = yield* fs.readFileString(at);
+    }
   }
   return kept;
 });

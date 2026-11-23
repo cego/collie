@@ -119,7 +119,9 @@ const inFlight = (state: Questionnaire) => state.status.kind === "sending";
 const settled = (state: Questionnaire) => !state.onBoard || state.status.kind === "answered";
 
 const submission = (state: Questionnaire) => {
-  if (inFlight(state) || settled(state)) return null;
+  if (inFlight(state) || settled(state)) {
+    return null;
+  }
   if (state.question.options.length === 0) {
     const words = Str.trim(state.typed);
     return words === "" ? null : words;
@@ -168,7 +170,9 @@ const moved = (state: Questionnaire, to: (rows: ReadonlyArray<Row>, from: number
     Arr.map(rows, (row, at) => ({ row, at })),
     ({ row }) => !row.disabled,
   );
-  if (enabled.length === 0) return state;
+  if (enabled.length === 0) {
+    return state;
+  }
   const from = Option.getOrElse(
     Arr.findFirstIndex(rows, (row) => row.id === state.checked),
     () => state.focus,
@@ -179,8 +183,9 @@ const moved = (state: Questionnaire, to: (rows: ReadonlyArray<Row>, from: number
 
 const stepThrough = (by: number) => (rows: ReadonlyArray<Row>, from: number) => {
   let at = from;
-  do at = (at + by + rows.length) % rows.length;
-  while (rows[at]!.disabled);
+  do {
+    at = (at + by + rows.length) % rows.length;
+  } while (rows[at]!.disabled);
   return at;
 };
 const firstEnabled = (rows: ReadonlyArray<Row>) =>
@@ -198,12 +203,15 @@ const keyed: (state: Questionnaire, event: Extract<Event, { kind: "key" }>) => S
   state,
   event,
 ) => {
-  if (event.key === "Escape") return { state, does: { kind: "close" } };
-  if (event.where === "steer")
+  if (event.key === "Escape") {
+    return { state, does: { kind: "close" } };
+  }
+  if (event.where === "steer") {
     return event.key === "Enter"
       ? { state, does: event.mod && steerable(state) ? { kind: "steer" } : { kind: "swallow" } }
       : { state, does: null };
-  if (event.key === "Enter")
+  }
+  if (event.key === "Enter") {
     return {
       state,
       does:
@@ -211,7 +219,10 @@ const keyed: (state: Questionnaire, event: Extract<Event, { kind: "key" }>) => S
           ? { kind: "submit" }
           : null,
     };
-  if (event.where === "answer" || inFlight(state) || settled(state)) return { state, does: null };
+  }
+  if (event.where === "answer" || inFlight(state) || settled(state)) {
+    return { state, does: null };
+  }
   switch (event.key) {
     case "ArrowDown":
     case "ArrowRight":
@@ -237,20 +248,24 @@ const keyed: (state: Questionnaire, event: Extract<Event, { kind: "key" }>) => S
 
 const replied = (state: Questionnaire, event: Extract<Event, { kind: "replied" }>) => {
   const pending = state.pending;
-  if (pending?.request !== event.request) return state;
-  if (!event.ok)
+  if (pending?.request !== event.request) {
+    return state;
+  }
+  if (!event.ok) {
     return {
       ...state,
       pending: event.refused ? null : pending,
       status: { kind: "failed", reason: event.reason } as const,
     };
-  if (pending.answer === null)
+  }
+  if (pending.answer === null) {
     return {
       ...state,
       pending: null,
       draft: "",
       status: { kind: "steered" } as const,
     };
+  }
   return {
     ...state,
     pending: null,
@@ -262,9 +277,12 @@ const replied = (state: Questionnaire, event: Extract<Event, { kind: "replied" }
 };
 
 const seen = (state: Questionnaire, question: Question | null) => {
-  if (question === null) return { ...state, onBoard: false };
-  if (question.run !== state.question.run || question.id !== state.question.id)
+  if (question === null) {
+    return { ...state, onBoard: false };
+  }
+  if (question.run !== state.question.run || question.id !== state.question.id) {
     return questionnaire(question);
+  }
   const rows = rowsOf(question);
   const kept = Arr.some(rows, (row) => row.id === state.checked && !row.disabled);
   return {
@@ -299,7 +317,9 @@ export const stepped: (state: Questionnaire, event: Event) => Stepped = (state, 
       return { state: { ...state, draft: event.text }, does: null };
     case "submit": {
       const value = submission(state);
-      if (value === null) return { state, does: null };
+      if (value === null) {
+        return { state, does: null };
+      }
       const go = sent(state, `answer:${value}`, value, event.request);
       return {
         state: go.state,
@@ -307,7 +327,9 @@ export const stepped: (state: Questionnaire, event: Event) => Stepped = (state, 
       };
     }
     case "steer": {
-      if (!steerable(state)) return { state, does: null };
+      if (!steerable(state)) {
+        return { state, does: null };
+      }
       const text = Str.trim(state.draft);
       const go = sent(state, `steer:${text}`, null, event.request);
       const agent = target(state).agent;

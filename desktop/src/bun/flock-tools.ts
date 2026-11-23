@@ -268,10 +268,12 @@ const unanswered = (name: string, cause: Cause.Cause<unknown>) => {
   if (
     Result.isSuccess(defect) &&
     pipe(String(defect.success), Str.startsWith("Unknown request tag:"))
-  )
+  ) {
     return `${name}'s host has no requested operation; upgrade Collie on ${name}`;
-  if (Cause.hasInterruptsOnly(cause))
+  }
+  if (Cause.hasInterruptsOnly(cause)) {
     return `${name}'s chat connection was renewed; retry the read once it reconnects`;
+  }
   const error = Cause.findErrorOption(cause);
   const detail = Str.split(Cause.pretty(cause), "\n")[0];
   return Option.isSome(error) && Predicate.isTagged(error.value, "RpcClientError")
@@ -355,22 +357,24 @@ export const place = (
           Arr.findFirst(owners, ({ machine }) => machine.name === pipe(named, Str.slice(0, colon))),
         )
       : undefined;
-  if (prefixed !== undefined)
+  if (prefixed !== undefined) {
     return Result.succeed({
       machine: prefixed.machine,
       id: pipe(named, Str.slice(colon + 1)),
     });
+  }
   const having = Arr.filter(owners, ({ ids }) => ids?.has(named) === true);
   const unread = Arr.filter(owners, ({ ids }) => ids === null);
-  if (colon > 0 && having.length === 0)
+  if (colon > 0 && having.length === 0) {
     return Result.fail(
       `No Machine "${pipe(named, Str.slice(0, colon))}". Nothing was done; the Machines are ${Arr.join(
         Arr.map(owners, ({ machine }) => machine.name),
         ", ",
       )}.`,
     );
+  }
   const [only] = having;
-  if (only !== undefined && having.length === 1 && unread.length > 0)
+  if (only !== undefined && having.length === 1 && unread.length > 0) {
     return Result.fail(
       `${what} "${named}" is on ${only.machine.name}, and ${Arr.join(
         Arr.map(unread, ({ machine }) => machine.name),
@@ -383,15 +387,21 @@ export const place = (
         "; ",
       )}). Nothing was done; name it as ${only.machine.name}:${named}.`,
     );
-  if (having.length === 1) return Result.succeed({ machine: having[0]!.machine, id: named });
-  if (having.length > 1)
+  }
+  if (having.length === 1) {
+    return Result.succeed({ machine: having[0]!.machine, id: named });
+  }
+  if (having.length > 1) {
     return Result.fail(
       `${what} "${named}" is on more than one Machine: ${Arr.join(
         Arr.map(having, ({ machine }) => `${machine.name}:${named}`),
         ", ",
       )}. Nothing was done; name the one meant.`,
     );
-  if (owners.length === 1) return Result.succeed({ machine: owners[0]!.machine, id: named });
+  }
+  if (owners.length === 1) {
+    return Result.succeed({ machine: owners[0]!.machine, id: named });
+  }
   return Result.fail(
     `No ${what} "${named}" on any Machine. Nothing was done; collie_herd lists them as <machine>:<id>.`,
   );
@@ -424,8 +434,9 @@ const runOwners = (known: Boards, named: string) => {
     Option.getOrElse(pipe(named, Str.indexOf(":")), () => -1) > 0 ||
     owners.length < 2 ||
     Arr.some(owners, ({ ids }) => Boolean(ids?.has(named)))
-  )
+  ) {
     return Effect.succeed(owners);
+  }
   return Effect.forEach(
     owners,
     (owner) =>
@@ -470,8 +481,12 @@ export const declareVoice = (flock: FlockChat, machine: Reached) => {
     frontDoor: "chat",
     conversation: flock.conversation,
   };
-  if (said !== undefined) voice = { ...voice, said };
-  if (files.length > 0) voice = { ...voice, attachments: files };
+  if (said !== undefined) {
+    voice = { ...voice, said };
+  }
+  if (files.length > 0) {
+    voice = { ...voice, attachments: files };
+  }
   return machine.door.declare(voice);
 };
 
@@ -564,8 +579,9 @@ const onRun = Effect.fn("FlockTools.onRun")(function* (
   tool: string,
   answer: (placed: Placed) => Effect.Effect<string>,
 ) {
-  if (input.run === undefined)
+  if (input.run === undefined) {
     return `${tool} takes {"run": "<machine>:<run id>"}; Desktop's chat has no board selection to stand in.`;
+  }
   const known = yield* boards(flock);
   const placed =
     tool === "collie_artefacts"
@@ -673,10 +689,11 @@ const models = Effect.fn("FlockTools.models")(function* (
     flock.machines(),
     (machine) => asked.machine === undefined || machine.name === asked.machine,
   );
-  if (machines.length === 0)
+  if (machines.length === 0) {
     return asked.machine === undefined
       ? "No Machines to read models from."
       : `No Machine "${asked.machine}". Nothing was read; collie_herd names the Machines.`;
+  }
   const sections = yield* Effect.forEach(
     machines,
     (machine) =>
@@ -701,10 +718,11 @@ const connections = Effect.fn("FlockTools.connections")(function* (
     flock.machines(),
     (machine) => asked.machine === undefined || machine.name === asked.machine,
   );
-  if (machines.length === 0)
+  if (machines.length === 0) {
     return asked.machine === undefined
       ? "No Machines to read Connections from."
       : `No Machine "${asked.machine}". Nothing was read; collie_herd names the Machines.`;
+  }
   const sections = yield* Effect.forEach(
     machines,
     (machine) =>
@@ -766,8 +784,9 @@ export const flockBatch = (heard: ReadonlyArray<Heard>) => {
     bySignificance(false),
   );
   const omitted = new Map<string, number>();
-  for (const { machine } of pressing.slice(NEWS_BATCH))
+  for (const { machine } of pressing.slice(NEWS_BATCH)) {
     omitted.set(machine, (omitted.get(machine) ?? 0) + 1);
+  }
   return { items, omitted };
 };
 export type FlockBatch = ReturnType<typeof flockBatch>;
@@ -831,13 +850,15 @@ export const heardNews = Effect.fn("FlockTools.heardNews")(function* (flock: Flo
   );
   const heard: Array<Heard> = [];
   const unread: Array<string> = [];
-  for (const { machine, exit } of told)
-    if (Exit.isSuccess(exit)) heard.push(...exit.value);
-    else {
+  for (const { machine, exit } of told) {
+    if (Exit.isSuccess(exit)) {
+      heard.push(...exit.value);
+    } else {
       const failed = Cause.findError(exit.cause);
       const why = Result.isSuccess(failed) ? reasonOf(failed.success) : "its host did not answer";
       unread.push(`${machine.name}'s News could not be read: ${why}`);
     }
+  }
   return { batch: flockBatch(heard), unread };
 });
 
@@ -851,9 +872,13 @@ export const delivered = Effect.fn("FlockTools.delivered")(function* (
     // WARNING: `groupBy` makes no empty group.
     const { machine: name, herd } = items[0]!;
     const machine = byMachine.get(name);
-    if (machine === undefined) continue;
+    if (machine === undefined) {
+      continue;
+    }
     const reached = yield* reach(machine).pipe(Effect.option);
-    if (Option.isNone(reached)) continue;
+    if (Option.isNone(reached)) {
+      continue;
+    }
     yield* declareVoice(flock, reached.value).pipe(
       Effect.timeout(ANSWER_WITHIN),
       Effect.ignoreCause,
@@ -882,11 +907,14 @@ const news = Effect.fn("FlockTools.news")(function* (flock: FlockChat) {
 
 const hold = Effect.fn("FlockTools.hold")(
   function* (flock: FlockChat, input: typeof HoldInput.Type) {
-    if (input.run === undefined)
+    if (input.run === undefined) {
       return "collie_hold from Desktop's chat takes a Run; hold a workspace's Runs one by one, by the ids collie_herd lists.";
+    }
     const known = yield* boards(flock);
     const placed = place(input.run, yield* runOwners(known, input.run), "Run");
-    if (Result.isFailure(placed)) return placed.failure;
+    if (Result.isFailure(placed)) {
+      return placed.failure;
+    }
     const { machine, id } = placed.success;
     const request = yield* newRequest;
     const holding = {
@@ -915,14 +943,18 @@ const textAt = (action: JsonObject, key: string) => {
 const machineRef = (action: JsonObject) => {
   for (const field of ["run", "workspace"]) {
     const value = action[field];
-    if (isString(value)) return { field, name: value };
+    if (isString(value)) {
+      return { field, name: value };
+    }
   }
   return null;
 };
 
 const machineField = (action: JsonObject, known: Boards) => {
   const explicit = textAt(action, "machine");
-  if (explicit === "") return Result.succeed(null);
+  if (explicit === "") {
+    return Result.succeed(null);
+  }
   const found = Option.getOrUndefined(Arr.findFirst(known, (one) => one.machine.name === explicit));
   return found === undefined
     ? Result.fail(`No Machine "${explicit}". Nothing was done.`)
@@ -946,15 +978,20 @@ const placeOne = Effect.fnUntraced(function* (action: JsonObject, known: Boards,
   const kind = textAt(action, "kind");
   if (kind === "cleanup" || kind === "home_cleanup") {
     const named = machineField(action, known);
-    if (Result.isFailure(named)) return Result.fail(named.failure);
-    if (named.success === null && known.length > 1)
+    if (Result.isFailure(named)) {
+      return Result.fail(named.failure);
+    }
+    if (named.success === null && known.length > 1) {
       return Result.fail('Name the Machine this is for in its "machine" field. Nothing was done.');
+    }
     const { machine: _, ...local } = action;
     return Result.succeed({ machine: named.success, action: local });
   }
   if (pipe(kind, Str.startsWith("schedule_"))) {
     const named = machineField(action, known);
-    if (Result.isFailure(named)) return Result.fail(named.failure);
+    if (Result.isFailure(named)) {
+      return Result.fail(named.failure);
+    }
     let machine = named.success;
     const savedStart = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json))(
       action.start,
@@ -967,31 +1004,45 @@ const placeOne = Effect.fnUntraced(function* (action: JsonObject, known: Boards,
       { field: "workspace", value: start?.workspace },
     ];
     for (const { field, value } of refs) {
-      if (!isString(value) || !value.includes(":")) continue;
+      if (!isString(value) || !value.includes(":")) {
+        continue;
+      }
       const placed = place(
         value,
         owning(known, () => new Set()),
         field === "name" ? "Schedule" : "workspace",
       );
-      if (Result.isFailure(placed)) return Result.fail(placed.failure);
-      if (machine !== null && machine !== placed.success.machine)
+      if (Result.isFailure(placed)) {
+        return Result.fail(placed.failure);
+      }
+      if (machine !== null && machine !== placed.success.machine) {
         return Result.fail("The Schedule names different Machines. Nothing was done.");
+      }
       machine = placed.success.machine;
-      if (field === "name") local.name = placed.success.id;
-      else if (start !== null) start.workspace = placed.success.id;
+      if (field === "name") {
+        local.name = placed.success.id;
+      } else if (start !== null) {
+        start.workspace = placed.success.id;
+      }
     }
-    if (machine === null && kind === "schedule_add" && known.length > 1)
+    if (machine === null && kind === "schedule_add" && known.length > 1) {
       return Result.fail("Name the Machine this Schedule is for. Nothing was done.");
-    if (start !== null) local.start = start;
+    }
+    if (start !== null) {
+      local.start = start;
+    }
     return Result.succeed({ machine, action: local });
   }
   const about = machineRef(action);
-  if (about === null) return Result.succeed({ machine: null, action });
-  if (["artefact_register", "artefact_seen", "artefact_unseen"].includes(kind))
+  if (about === null) {
+    return Result.succeed({ machine: null, action });
+  }
+  if (["artefact_register", "artefact_seen", "artefact_unseen"].includes(kind)) {
     return Result.map(yield* placeArtefact(flock, known, about.name), ({ machine, id }) => ({
       machine,
       action: { ...action, run: id },
     }));
+  }
   const where =
     about.field === "run"
       ? place(about.name, yield* runOwners(known, about.name), "Run")
@@ -1011,13 +1062,16 @@ const placeOne = Effect.fnUntraced(function* (action: JsonObject, known: Boards,
 
 const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: JsonObject) {
   const decoded = decodeAsked(input);
-  if (Result.isFailure(decoded))
+  if (Result.isFailure(decoded)) {
     return refusedActions("collie_do", input, decoded.failure, TAKES.collie_do);
+  }
   const actions = Option.match(decodeLoose(input), {
     onNone: () => [],
     onSome: (loose) => loose.actions,
   });
-  if (actions.length === 0) return "collie_do needs an action. Ask which one they meant.";
+  if (actions.length === 0) {
+    return "collie_do needs an action. Ask which one they meant.";
+  }
   const known = yield* boards(flock);
   const said: Array<string> = [];
   const request = decoded.success.request_id ?? (yield* newRequest);
@@ -1065,9 +1119,13 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
         ),
     ).pipe(Effect.catch((error) => Effect.succeed(endedAs(error))));
     said.push(`${kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
-    if (done.state === "not confirmed") unconfirmed = true;
+    if (done.state === "not confirmed") {
+      unconfirmed = true;
+    }
     // WARNING: what follows a failure was asked on the assumption it did not happen.
-    if (done.state === "failed" || done.state === "not confirmed") break;
+    if (done.state === "failed" || done.state === "not confirmed") {
+      break;
+    }
   }
   return `${unconfirmed ? `Request: ${request}\n` : ""}${Arr.join(said, "\n")}`;
 });
@@ -1088,7 +1146,9 @@ const withFiles = (flock: FlockChat, machine: Reached, action: JsonObject) => {
       }),
     );
   }
-  if (!CARRIES.has(textAt(action, "kind"))) return Effect.succeed(action);
+  if (!CARRIES.has(textAt(action, "kind"))) {
+    return Effect.succeed(action);
+  }
   const named = action["attachments"];
   const given = Arr.isArray<typeof named>(named) ? Arr.filter(named, isString) : undefined;
   return carriedPaths(flock, machine, given).pipe(
@@ -1194,20 +1254,23 @@ const propose = Effect.fn("FlockTools.propose")(
     const placed: Array<Localized> = [];
     for (const action of actions) {
       const one = yield* placeOne(action, known, flock);
-      if (Result.isFailure(one)) return one.failure;
+      if (Result.isFailure(one)) {
+        return one.failure;
+      }
       placed.push(one.success);
     }
     const named = [
       ...new Set(Arr.flatMap(placed, ({ machine }) => (machine === null ? [] : [machine]))),
     ];
     const [machine, ...others] = named.length === 0 ? flock.machines() : named;
-    if (machine === undefined || others.length > 0)
+    if (machine === undefined || others.length > 0) {
       return named.length > 1
         ? `These actions are on ${Arr.join(
             Arr.map(named, (one) => one.name),
             " and ",
           )}; propose each Machine's separately. Nothing was done.`
         : "Name the Machine this is for, as <machine>:<run> or <machine>:<workspace>. Nothing was done.";
+    }
     const request = request_id ?? (yield* newRequest);
     const reached = yield* writable(machine);
     const carrying = yield* Effect.forEach(placed, ({ action }) =>
@@ -1216,8 +1279,9 @@ const propose = Effect.fn("FlockTools.propose")(
     const done = yield* sentOn(flock, machine, request, "propose", "", input, (reached) =>
       reached.door.propose({ herd: null, interpretation, actions: carrying, request }),
     ).pipe(Effect.result);
-    if (Result.isFailure(done))
+    if (Result.isFailure(done)) {
       return `Request: ${request}\ncollie_propose: ${endedAs(done.failure).state} — ${reasonOf(done.failure)}`;
+    }
     const schedules = Arr.flatMap(placed, ({ action }) =>
       pipe(textAt(action, "kind"), Str.startsWith("schedule_"))
         ? [`${machine.name}:${textAt(action, "name")}`]
@@ -1243,18 +1307,21 @@ const moveScheduleBetween = Effect.fn("FlockTools.moveSchedule")(function* (
     Option.getOrUndefined(Arr.findFirst(flock.machines(), (one) => one.name === name));
   const from = colon > 0 ? named(pipe(input.schedule, Str.slice(0, colon))) : undefined;
   const to = named(input.to);
-  if (from === undefined || to === undefined)
+  if (from === undefined || to === undefined) {
     return `Name the Schedule as <machine>:<name> and the Machine it goes to by name; Machines: ${Arr.join(
       Arr.map(flock.machines(), (one) => one.name),
       ", ",
     )}. Nothing was moved.`;
+  }
   const reached = yield* Effect.forEach([from, to], (machine) =>
     writable(machine).pipe(Effect.result),
   );
   const away = Arr.flatMap(reached, (one) =>
     one._tag === "Failure" ? [reasonOf(one.failure)] : [],
   );
-  if (away.length > 0) return `machine_unreachable: ${Arr.join(away, "; ")}`;
+  if (away.length > 0) {
+    return `machine_unreachable: ${Arr.join(away, "; ")}`;
+  }
   const [source, target] = Arr.flatMap(reached, (one) =>
     one._tag === "Success" ? [one.success] : [],
   );
@@ -1363,8 +1430,12 @@ const chatHarness = (
               : `Its session runs on ${runsSaid(choices.runsOn)} now.`
           }`,
           ...Arr.flatMap(choices.harnesses, ({ harness, label, installed, offered }) => {
-            if (!installed) return [];
-            if (offered.from === "reading") return [`${harness}'s models are still being read.`];
+            if (!installed) {
+              return [];
+            }
+            if (offered.from === "reading") {
+              return [`${harness}'s models are still being read.`];
+            }
             return [
               ...(offered.from !== "table"
                 ? []
@@ -1443,8 +1514,9 @@ const forgottenByRuns = Effect.fn("FlockTools.forgottenByRuns")(function* (
 const helle = (flock: FlockChat, asked: { claim?: string; release?: string }) =>
   Effect.gen(function* () {
     const creds = flock.helle === undefined ? null : yield* flock.helle;
-    if (creds === null)
+    if (creds === null) {
       return `Desktop holds no Helle token. To give it one, ${HELLE_TOKEN_STEPS}, and paste it in Desktop's Helle step.`;
+    }
     const done: Array<string> = [];
     if (asked.release !== undefined) {
       yield* releaseClaim(creds, asked.release);
@@ -1453,8 +1525,9 @@ const helle = (flock: FlockChat, asked: { claim?: string; release?: string }) =>
     if (asked.claim !== undefined) {
       const claim = asked.claim;
       const claimed = yield* claimProject(creds, claim).pipe(Effect.result);
-      if (Result.isFailure(claimed)) done.push(claimed.failure.message);
-      else {
+      if (Result.isFailure(claimed)) {
+        done.push(claimed.failure.message);
+      } else {
         const { position } = claimed.success;
         done.push(
           `Claimed ${claim} in Helle: ${
@@ -1464,7 +1537,9 @@ const helle = (flock: FlockChat, asked: { claim?: string; release?: string }) =>
         );
       }
     }
-    if (done.length > 0) return Arr.join(done, "\n");
+    if (done.length > 0) {
+      return Arr.join(done, "\n");
+    }
     const me = yield* helleMe(creds);
     const projects = yield* helleProjects(creds);
     return projects.length === 0

@@ -36,7 +36,9 @@ export const described = (pid: number) =>
 const holderLine = (lock: string) =>
   Effect.gen(function* () {
     const holder = yield* lockHolder(lock);
-    if (holder === null) return "test: waiting for the suite that holds the lock to finish";
+    if (holder === null) {
+      return "test: waiting for the suite that holds the lock to finish";
+    }
     const ps = yield* described(holder.pid);
     return ps === null
       ? `test: waiting for the suite in process ${holder.pid} to finish`
@@ -58,7 +60,9 @@ export const inTurn = <A, E, R>(
   Effect.gen(function* () {
     const ran = run.pipe(Effect.asSome);
     const now = yield* withLock(lock, Effect.succeedNone, ran, 1);
-    if (Option.isSome(now)) return now.value;
+    if (Option.isSome(now)) {
+      return now.value;
+    }
     yield* say(yield* holderLine(lock));
     const began = yield* Clock.currentTimeMillis;
     const telling = yield* Clock.currentTimeMillis.pipe(
@@ -69,6 +73,8 @@ export const inTurn = <A, E, R>(
     );
     const quietly = Fiber.interrupt(telling).pipe(Effect.andThen(ran));
     const later = yield* withLock(lock, Effect.succeedNone, quietly, Number.MAX_SAFE_INTEGER);
-    if (Option.isSome(later)) return later.value;
+    if (Option.isSome(later)) {
+      return later.value;
+    }
     return yield* Effect.die(new Error(`${lock} was never given up`));
   }).pipe(Effect.scoped);

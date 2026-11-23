@@ -44,9 +44,15 @@ export const runWaits = Effect.fn("RunWaits.of")(function* (
         text: asked.prompt,
         options: Arr.map(asked.options, boardOption),
       };
-      if (asked.hold !== undefined) question.hold = asked.hold;
-      if (asked.shortfall !== undefined) question.shortfall = asked.shortfall;
-      if (asked.shipping !== undefined) question.shipping = asked.shipping;
+      if (asked.hold !== undefined) {
+        question.hold = asked.hold;
+      }
+      if (asked.shortfall !== undefined) {
+        question.shortfall = asked.shortfall;
+      }
+      if (asked.shipping !== undefined) {
+        question.shipping = asked.shipping;
+      }
       question.steer = Arr.some(agents, (agent) => agent.name === asked.steer)
         ? { agent: asked.steer ?? null, why: null }
         : { agent: null, why: NO_AGENT_TO_STEER };

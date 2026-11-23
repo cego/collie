@@ -41,7 +41,9 @@ afterEach(() =>
   runLive(
     Effect.gen(function* () {
       const pid = (yield* started())?.pid;
-      if (pid !== undefined) kill(pid);
+      if (pid !== undefined) {
+        kill(pid);
+      }
       yield* rig.close();
     }),
   ),
@@ -129,7 +131,9 @@ const started = () =>
     Effect.map((text) => {
       for (const line of Str.split(text, "\n")) {
         const one = decodeStarted(line);
-        if (one._tag === "Some") return one.value;
+        if (one._tag === "Some") {
+          return one.value;
+        }
       }
       return undefined;
     }),

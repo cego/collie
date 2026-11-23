@@ -24,7 +24,8 @@ export const wakeDeadline = (db: Database, runId: string) => {
     ORDER BY m.deliver_at LIMIT 1
   `)
     .get(runId);
-  if (row?.deliver_at == null || !Number.isFinite(row.deliver_at))
+  if (row?.deliver_at == null || !Number.isFinite(row.deliver_at)) {
     throw new Error(`no durable deadline for ${runId}`);
+  }
   return row.deliver_at;
 };

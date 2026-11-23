@@ -51,7 +51,9 @@ const localMinute = (at: number) => {
 };
 
 const senderLine = (actor: Asker | undefined, at: number) => {
-  if (actor === undefined) return null;
+  if (actor === undefined) {
+    return null;
+  }
   if (actor.origin === "agent" || actor.origin === "host") {
     const sender = actor.from;
     return sender?.run !== undefined && sender.agent !== undefined
@@ -60,9 +62,15 @@ const senderLine = (actor: Asker | undefined, at: number) => {
   }
   const when = localMinute(at);
   const human = HUMAN_DOORS[actor.origin];
-  if (human !== undefined) return `From the human, ${human}, ${when}.`;
-  if (actor.origin !== "chat") return `From ${actor.origin}, ${when}.`;
-  if (actor.said === undefined) return `From chat, ${when}.`;
+  if (human !== undefined) {
+    return `From the human, ${human}, ${when}.`;
+  }
+  if (actor.origin !== "chat") {
+    return `From ${actor.origin}, ${when}.`;
+  }
+  if (actor.said === undefined) {
+    return `From chat, ${when}.`;
+  }
   const quote = actor.said === "" ? "" : ` The human said: "${scrub(actor.said).text}"`;
   return `From chat for the human, ${when}.${quote}`;
 };
@@ -100,8 +108,9 @@ export const fitDelivery = Effect.fn("Dispatcher.fitDelivery")(function* (
   workflowNotice?: string,
 ) {
   const at = yield* Clock.currentTimeMillis;
-  if (fits(`${token}\n${deliveryText(words, actor, at, workflowNotice)}`))
+  if (fits(`${token}\n${deliveryText(words, actor, at, workflowNotice)}`)) {
     return { words, actor, kept: null };
+  }
   const said =
     actor?.origin === "chat" && actor.said !== undefined && actor.said !== ""
       ? scrub(actor.said).text
@@ -241,9 +250,12 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
   body: (channel: Channel) => Effect.Effect<A, E, R>,
 ) {
   const terminalId = entry.incarnation?.terminalId;
-  if (terminalId === undefined)
+  if (terminalId === undefined) {
     return yield* new NotDeliverable({ agent: entry.agent, reason: "no_incarnation" });
-  if (open.has(terminalId)) return yield* new TransactionOpen({ agent: entry.agent });
+  }
+  if (open.has(terminalId)) {
+    return yield* new TransactionOpen({ agent: entry.agent });
+  }
   open.add(terminalId);
   return yield* Effect.gen(function* () {
     let listing = yield* agentsNow(deps);
@@ -266,12 +278,14 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
             yield* Clock.currentTimeMillis,
             draft.workflowNotice,
           );
-          if (closed)
+          if (closed) {
             return yield* new DispatcherDefect({
               why: `${entry.agent}'s channel was used after its transaction closed`,
             });
-          if (Buffer.byteLength(text, "utf8") > MAX_DELIVERY_BYTES)
+          }
+          if (Buffer.byteLength(text, "utf8") > MAX_DELIVERY_BYTES) {
             return refuse(null, "too_long", `over ${MAX_DELIVERY_BYTES} bytes`);
+          }
           // WARNING: fails closed before anything is reserved: an unshown mode would produce a delivery nobody can settle.
           const ungated = yield* gate(draft.harness ?? "", draft.mode).pipe(
             Effect.as(null),
@@ -288,8 +302,9 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
                 deps.herdr.agentStatus?.(entry.agent) ?? Effect.succeed("unknown" as const)
               ).pipe(Effect.orElseSucceed(() => "unknown" as const)),
             )
-          )
+          ) {
             return refuse(null, "deferred", "agent is not idle");
+          }
           // WARNING: a whole compaction can happen inside one transaction, so a listing older than a few seconds is re-read.
           if ((yield* Clock.currentTimeMillis) - listedAt > LISTING_MAX_AGE_MS) {
             listing = yield* agentsNow(deps);
@@ -348,7 +363,9 @@ function deliveryOf(
     attempt: draft.attempt,
     state,
   };
-  if (draft.workflowNotice !== undefined) line = { ...line, workflowNotice: draft.workflowNotice };
+  if (draft.workflowNotice !== undefined) {
+    line = { ...line, workflowNotice: draft.workflowNotice };
+  }
   return draft.human == null ? line : { ...line, human: draft.human };
 }
 
@@ -362,8 +379,9 @@ const send = Effect.fn("Dispatcher.send")(function* (
   const at = yield* nowIso;
   const lines = yield* readLedger(terminalId);
   const now = yield* Clock.currentTimeMillis;
-  for (const stale of settleStaleReservations(lines, now, SUBMIT_TIMEOUT_MS, at))
+  for (const stale of settleStaleReservations(lines, now, SUBMIT_TIMEOUT_MS, at)) {
     yield* appendLine(stale);
+  }
 
   const key = causalKey(draft.run, draft.cause, draft.intentVersion);
   const ledger = yield* readLedgerWhole(terminalId);
@@ -412,8 +430,9 @@ const send = Effect.fn("Dispatcher.send")(function* (
         ? line
         : { ...line, note: sent.success === "pressed" ? ENTER_PRESSED : UNOBSERVED },
     );
-    if (sent.success === "observed")
+    if (sent.success === "observed") {
       yield* appendLine({ ...line, state: "acknowledged", note: TURN_STARTED });
+    }
     return { ok: true as const, id, submission: sent.success };
   }
   // WARNING: a refusal herdr answered with is a fact; a transport that never answered is not.
@@ -434,8 +453,9 @@ const send = Effect.fn("Dispatcher.send")(function* (
   const attempts = before.count + 1;
   const held = before.since === null ? 0 : (yield* Clock.currentTimeMillis) - epochMs(before.since);
   if (held < draft.patienceMs) {
-    if (attempts === 1)
+    if (attempts === 1) {
       yield* deps.log(`${entry.agent} cannot take a prompt yet (${code}); retrying`);
+    }
     yield* appendLine({ ...coded, at: settledAt, state: "deferred", note: why });
     return refuse(id, "deferred", `${code}, attempt ${attempts}`);
   }
@@ -470,9 +490,12 @@ export const submitPatiently = Effect.fn("Dispatcher.submitPatiently")(function*
     if (isLedgerHeld(outcome)) {
       const now = yield* Clock.currentTimeMillis;
       heldSince ??= now;
-      if (now - heldSince >= patience.forMs)
+      if (now - heldSince >= patience.forMs) {
         return refuse(null, "exhausted", `${outcome.message} for ${took(now - heldSince)}`);
-    } else if (outcome.ok || outcome.reason !== "deferred") return outcome;
+      }
+    } else if (outcome.ok || outcome.reason !== "deferred") {
+      return outcome;
+    }
     yield* Effect.sleep(Duration.millis(wait));
   }
 });
@@ -504,7 +527,9 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
   keys: ReadonlyArray<string>,
 ) {
   const terminalId = entry.incarnation?.terminalId;
-  if (terminalId === undefined) return null;
+  if (terminalId === undefined) {
+    return null;
+  }
   const pending = Effect.map(readLedger(terminalId), (lines) =>
     Arr.filter(
       [...newestById(lines).values()],
@@ -514,14 +539,18 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
   const settle = (id: string, note: string, state?: "acknowledged") =>
     Effect.gen(function* () {
       const now = newestById(yield* readLedger(terminalId)).get(id);
-      if (now === undefined || !isUnobserved(now)) return;
+      if (now === undefined || !isUnobserved(now)) {
+        return;
+      }
       yield* appendLine({ ...now, at: yield* nowIso, state: state ?? now.state, note });
     });
   let sawSettled = false;
   let quietSince: number | null = null;
   for (;;) {
     const open = yield* pending;
-    if (open === undefined) return null;
+    if (open === undefined) {
+      return null;
+    }
     const status = yield* deps.herdr
       .agentStatus(entry.agent)
       .pipe(Effect.orElseSucceed(() => "unknown" as const));
@@ -557,7 +586,9 @@ const settlePending = Effect.fn("Dispatcher.settlePending")(function* (
 ) {
   const at = yield* nowIso;
   for (const delivery of newestById(yield* readLedger(terminalId)).values()) {
-    if (delivery.state !== "reserved" && delivery.state !== "deferred") continue;
+    if (delivery.state !== "reserved" && delivery.state !== "deferred") {
+      continue;
+    }
     yield* appendLine({
       ...delivery,
       at,
@@ -572,8 +603,12 @@ export const DELIVERY_TOKEN = "collie-delivery:";
 // WARNING: herdr sees a prompt's first few hundred bytes and a slash command keeps its first line, so the token goes on its own line near the top.
 export function marked(text: string, id: string) {
   const token = `${DELIVERY_TOKEN}${id}`;
-  if (Str.split(text, "\n").includes(token)) return text;
-  if (!pipe_(text, Str.startsWith("/"))) return `${token}\n${text}`;
+  if (Str.split(text, "\n").includes(token)) {
+    return text;
+  }
+  if (!pipe_(text, Str.startsWith("/"))) {
+    return `${token}\n${text}`;
+  }
   const [command, ...rest] = Str.split(text, "\n");
   return Arr.join([command, token, ...rest], "\n");
 }
@@ -596,8 +631,9 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
   const live = Option.getOrUndefined(
     Arr.findFirst(yield* agentsNow(deps), (a) => a.name === about.agent),
   );
-  if (!live)
+  if (!live) {
     return { entry: null, reason: `${about.agent} is gone — core no longer has it`, gone: true };
+  }
   const incarnation: Incarnation = {
     terminalId: live.terminalId,
     agentSession: null,
@@ -646,21 +682,28 @@ export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
     Effect.as(null),
     Effect.catch((cause) => Effect.succeed(cause)),
   );
-  if (ungated) return refuse(null, "failed", ungated.reason);
+  if (ungated) {
+    return refuse(null, "failed", ungated.reason);
+  }
   const keys = interruptKeys(draft.harness ?? "");
-  if (keys === null)
+  if (keys === null) {
     return refuse(null, "failed", `capability_unproven:${draft.harness ?? ""}:interrupt`);
+  }
   const sent = yield* deps.herdr.agentSendKeys(entry.agent, keys).pipe(
     Effect.as(null),
     Effect.catch((cause) => Effect.succeed(herdrFailureReason(cause))),
   );
-  if (sent !== null) return refuse(null, "failed", `interrupt keys not sent: ${sent}`);
+  if (sent !== null) {
+    return refuse(null, "failed", `interrupt keys not sent: ${sent}`);
+  }
   yield* deps.log(`${entry.agent}: interrupt_requested`);
 
   // WARNING: waiting is a courtesy, not a condition: the text goes out whether or not the status moves.
   const deadline = (yield* Clock.currentTimeMillis) + waitMs;
   while ((yield* Clock.currentTimeMillis) < deadline) {
-    if ((yield* deps.status(entry.agent)) !== "working") break;
+    if ((yield* deps.status(entry.agent)) !== "working") {
+      break;
+    }
     yield* Effect.sleep(250);
   }
   return yield* channel.submit(text, { ...draft, mode: "now" });

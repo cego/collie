@@ -273,15 +273,19 @@ const panelOf: (
     let after: string | null = null;
     for (;;) {
       const page: Answered<typeof PanelData.Type> = yield* panelPage(ref, cwd, after);
-      if (!page.ok) return page;
+      if (!page.ok) {
+        return page;
+      }
       const pull: PanelPull | null | undefined = page.value.repository?.pullRequest;
-      if (pull === undefined || pull === null)
+      if (pull === undefined || pull === null) {
         return { ok: false, reason: "GitHub has no such pull request" };
+      }
       const contexts: PanelContexts | undefined =
         pull.commits.nodes[0]?.commit.statusCheckRollup?.contexts;
       rollup.push(...(contexts?.nodes ?? []));
-      if (contexts?.pageInfo.hasNextPage !== true || !contexts.pageInfo.endCursor)
+      if (contexts?.pageInfo.hasNextPage !== true || !contexts.pageInfo.endCursor) {
         return { ok: true, value: { pull, rollup } };
+      }
       after = contexts.pageInfo.endCursor;
     }
   });
@@ -290,12 +294,13 @@ function details(ref: MrRef, cwd: string) {
   const returned: Effect.Effect<MrPanel, never, ForgeHttp> = Effect.map(
     panelOf(ref, cwd),
     (read) => {
-      if (!read.ok)
+      if (!read.ok) {
         return {
           _tag: "Unavailable",
           reason: `could not read ${mrWords(ref).label}: ${read.reason}`,
           transient: read.transient,
         };
+      }
       const { pull, rollup } = read.value;
       const checks = rollupChecks(rollup);
       const head = pull.headRefOid ?? "";
@@ -347,19 +352,26 @@ const RepoJson = Schema.fromJsonString(Schema.Struct({ nameWithOwner: Schema.Str
 function ready<R>(project: string | null, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
     const no = (reason: string) => ({ ok: false, reason });
-    if ((yield* run("gh", ["--version"], cwd)).code !== 0) return no("gh is not installed");
+    if ((yield* run("gh", ["--version"], cwd)).code !== 0) {
+      return no("gh is not installed");
+    }
     const login = yield* loginReadiness(LOGIN, cwd, run);
-    if (!login.ok) return login;
+    if (!login.ok) {
+      return login;
+    }
     const repository = project === null ? "" : mrPath({ project, iid: "" });
-    if (repository === "" || repository === project) return { ok: true, reason: "" };
+    if (repository === "" || repository === project) {
+      return { ok: true, reason: "" };
+    }
     const repo = yield* run("gh", ["repo", "view", repository, "--json", "nameWithOwner"], cwd);
     const decoded = Schema.decodeOption(RepoJson)(repo.stdout);
     if (
       repo.code !== 0 ||
       Option.isNone(decoded) ||
       Str.toLowerCase(decoded.value.nameWithOwner) !== Str.toLowerCase(repository)
-    )
+    ) {
       return no(`gh cannot read ${repository}`);
+    }
     return { ok: true, reason: "" };
   });
 }
@@ -406,21 +418,33 @@ function protects(project: string, branch: string, cwd: string) {
   return Effect.gen(function* () {
     const repo = mrPath({ project, iid: "" });
     const about = yield* rest(DefaultBranch, cwd, `repos/${repo}`);
-    if (!about.ok) return null;
-    if (about.value.default_branch === branch) return true;
+    if (!about.ok) {
+      return null;
+    }
+    if (about.value.default_branch === branch) {
+      return true;
+    }
     const active = yield* rest(
       Schema.Array(Schema.Unknown),
       cwd,
       `repos/${repo}/rules/branches/${encodeURIComponent(branch)}`,
     );
-    if (!active.ok) return null;
-    if (active.value.length > 0) return true;
+    if (!active.ok) {
+      return null;
+    }
+    if (active.value.length > 0) {
+      return true;
+    }
     const [owner, name = ""] = Str.split(repo, "/");
     const classic = yield* graphqlAs(ClassicRules, LOGIN, cwd, CLASSIC_RULES, { owner, name });
-    if (!classic.ok) return null;
+    if (!classic.ok) {
+      return null;
+    }
     const nodes = classic.value.repository.branchProtectionRules.nodes;
     // WARNING: a full page leaves protection unknown, never none.
-    if (nodes.length >= PAGE) return null;
+    if (nodes.length >= PAGE) {
+      return null;
+    }
     return Arr.some(nodes, (rule) => new Bun.Glob(rule.pattern).match(branch));
   });
 }
@@ -430,11 +454,15 @@ function forBranch(project: string, branch: string, cwd: string) {
   const returned: Effect.Effect<ForBranch, never, ForgeHttp> = Effect.map(
     pullsFrom(project, branch, "open", cwd),
     (listed) => {
-      if (!listed.ok) return listed;
+      if (!listed.ok) {
+        return listed;
+      }
       const pull =
         Option.getOrUndefined(Arr.findFirst(listed.value, (one) => one.auto_merge != null)) ??
         listed.value[0];
-      if (pull === undefined) return { ok: true, open: null };
+      if (pull === undefined) {
+        return { ok: true, open: null };
+      }
       const iid = String(pull.number);
       return {
         ok: true,
@@ -453,7 +481,9 @@ function fromBranch(project: string, branch: string, cwd: string) {
   const returned: Effect.Effect<FromBranchList, never, ForgeHttp> = Effect.map(
     pullsFrom(project, branch, "all", cwd),
     (listed) => {
-      if (!listed.ok) return listed;
+      if (!listed.ok) {
+        return listed;
+      }
       return {
         ok: true,
         mrs: Arr.map(listed.value, (pull) => {
@@ -526,7 +556,9 @@ function job(ref: MrRef, name: string, cwd: string) {
     const where = mrWords(ref).label;
     const repo = mrPath({ project: ref.project, iid: "" });
     const pull = yield* rest(PullRefs, cwd, `repos/${repo}/pulls/${ref.iid}`);
-    if (!pull.ok) return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    if (!pull.ok) {
+      return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    }
     const head = pull.value.head.sha;
     const unread = (why: string) =>
       ({ ok: false, reason: `could not list the check runs on ${head}: ${why}` }) as const;
@@ -539,9 +571,13 @@ function job(ref: MrRef, name: string, cwd: string) {
         `check_name=${encodeURIComponent(name)}&filter=all&per_page=100&page=${page}`,
         cwd,
       );
-      if (!some.ok) return unread(some.reason);
+      if (!some.ok) {
+        return unread(some.reason);
+      }
       named.push(...some.value);
-      if (some.value.length < 100) break;
+      if (some.value.length < 100) {
+        break;
+      }
     }
     const [found, ...before] = named;
     const failed = Arr.filter(before, (one) => stateOf(one) === "failed");
@@ -551,12 +587,19 @@ function job(ref: MrRef, name: string, cwd: string) {
       let listed = 0;
       for (let page = 1; absent === "missing"; page++) {
         const some = yield* checkRuns(repo, head, `per_page=100&page=${page}`, cwd);
-        if (!some.ok) return unread(some.reason);
+        if (!some.ok) {
+          return unread(some.reason);
+        }
         listed += some.value.length;
-        if (Arr.some(some.value, (one) => one.status !== "completed")) absent = "pending";
-        else if (some.value.length < 100) break;
+        if (Arr.some(some.value, (one) => one.status !== "completed")) {
+          absent = "pending";
+        } else if (some.value.length < 100) {
+          break;
+        }
       }
-      if (listed === 0) absent = "pending";
+      if (listed === 0) {
+        absent = "pending";
+      }
     }
     return {
       ok: true,
@@ -605,37 +648,48 @@ function baseJob(ref: MrRef, name: string, cwd: string) {
     const where = mrWords(ref).label;
     const repo = mrPath({ project: ref.project, iid: "" });
     const pull = yield* rest(PullRefs, cwd, `repos/${repo}/pulls/${ref.iid}`);
-    if (!pull.ok) return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    if (!pull.ok) {
+      return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    }
     const {
       base: { ref: target },
       head: { sha: head },
     } = pull.value;
     const compared = yield* rest(MergeBase, cwd, `repos/${repo}/compare/${target}...${head}`);
     const base = compared.ok ? compared.value.merge_base_commit?.sha : undefined;
-    if (base === undefined)
+    if (base === undefined) {
       return {
         ok: false,
         reason: `GitHub would not say where ${where} leaves ${target}${compared.ok ? "" : `: ${compared.reason}`}`,
       };
+    }
     const unread = (why: string) =>
       ({ ok: false, reason: `could not list the check runs at ${base}: ${why}` }) as const;
     const there = yield* checkRun(repo, base, name, cwd);
-    if (!there.ok) return unread(there.reason);
+    if (!there.ok) {
+      return unread(there.reason);
+    }
     if (there.value === undefined) {
       // WARNING: the target tip stands in only where CI never ran at the merge-base.
       const any = yield* checkRuns(repo, base, "per_page=1", cwd);
-      if (!any.ok) return unread(any.reason);
-      if (any.value.length > 0)
+      if (!any.ok) {
+        return unread(any.reason);
+      }
+      if (any.value.length > 0) {
         return { ok: true, at: base, state: "missing", url: null, id: null };
+      }
     }
     const tip = there.value === undefined ? yield* checkRun(repo, target, name, cwd) : there;
-    if (!tip.ok) return unread(tip.reason);
+    if (!tip.ok) {
+      return unread(tip.reason);
+    }
     const found = tip.value;
-    if (found === undefined)
+    if (found === undefined) {
       return {
         ok: false,
         reason: `no check run ${name} at ${pipe(base, Str.slice(0, 12))} or on ${target}`,
       };
+    }
     return {
       ok: true,
       at: found.head_sha,
@@ -651,12 +705,14 @@ function targetJob(ref: MrRef, name: string, cwd: string) {
   const returned: Effect.Effect<TargetJobRead, never, ForgeHttp> = Effect.gen(function* () {
     const repo = mrPath({ project: ref.project, iid: "" });
     const pull = yield* rest(PullRefs, cwd, `repos/${repo}/pulls/${ref.iid}`);
-    if (!pull.ok)
+    if (!pull.ok) {
       return { ok: false, reason: `could not read ${mrWords(ref).label}: ${pull.reason}` };
+    }
     const branch = pull.value.base.ref;
     const there = yield* checkRun(repo, branch, name, cwd);
-    if (!there.ok)
+    if (!there.ok) {
       return { ok: false, reason: `could not list the check runs on ${branch}: ${there.reason}` };
+    }
     const found = there.value;
     return {
       ok: true,
@@ -693,7 +749,9 @@ const reviewRequests: (
         cwd,
         `search/issues?q=${encodeURIComponent(`is:pr is:open review-requested:${login}`)}&per_page=100&page=${page}`,
       );
-      if (!listed.ok) return listed;
+      if (!listed.ok) {
+        return listed;
+      }
       requests.push(
         ...Arr.map(listed.value.items, (one) => ({
           url: one.html_url,
@@ -701,7 +759,9 @@ const reviewRequests: (
           author: one.user.login,
         })),
       );
-      if (listed.value.items.length < 100) return { ok: true, value: requests };
+      if (listed.value.items.length < 100) {
+        return { ok: true, value: requests };
+      }
     }
   });
 
@@ -791,18 +851,20 @@ const requiredReviews = (repo: string, base: string, cwd: string) =>
       cwd,
       `repos/${repo}/rules/branches/${encodeURIComponent(base)}`,
     );
-    if (!protection.ok || !rulesets.ok)
+    if (!protection.ok || !rulesets.ok) {
       return {
         ok: false,
         reason: `GitHub would not say how many approvals ${base} requires: ${!protection.ok ? protection.reason : !rulesets.ok ? rulesets.reason : ""}`,
       } as const;
+    }
     const rule = protection.value.repository.ref?.refUpdateRule ?? null;
     const pullRules = Arr.filter(rulesets.value, (one) => one.type === "pull_request");
     if (
       rule?.requiresCodeOwnerReviews === true ||
       Arr.some(pullRules, (one) => one.parameters?.require_code_owner_review === true)
-    )
+    ) {
       return { ok: false, reason: `${base} requires code owners' review` } as const;
+    }
     return {
       ok: true,
       count: Math.max(
@@ -816,26 +878,36 @@ function readReview(ref: MrRef, cwd: string) {
   const answer: Effect.Effect<ReviewRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = mrWords(ref).label;
     const me = yield* login(cwd);
-    if (me === null) return { ok: false, reason: "gh will not say who it is logged in as" };
+    if (me === null) {
+      return { ok: false, reason: "gh will not say who it is logged in as" };
+    }
     const repo = mrPath(ref);
     const pull = yield* panelOf(ref, cwd);
-    if (!pull.ok) return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    if (!pull.ok) {
+      return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    }
     const issueComments = yield* pagesAs(
       IssueComment,
       LOGIN,
       cwd,
       `repos/${repo}/issues/${ref.iid}/comments`,
     );
-    if (!issueComments.ok) return issueComments;
+    if (!issueComments.ok) {
+      return issueComments;
+    }
     const reviewComments = yield* pagesAs(
       ReviewComment,
       LOGIN,
       cwd,
       `repos/${repo}/pulls/${ref.iid}/comments`,
     );
-    if (!reviewComments.ok) return reviewComments;
+    if (!reviewComments.ok) {
+      return reviewComments;
+    }
     const reviews = yield* pagesAs(Review, LOGIN, cwd, `repos/${repo}/pulls/${ref.iid}/reviews`);
-    if (!reviews.ok) return reviews;
+    if (!reviews.ok) {
+      return reviews;
+    }
     const [owner, name = ""] = Str.split(repo, "/");
     const resolved = new Set<string>();
     let endCursor: string | null = null;
@@ -852,20 +924,27 @@ function readReview(ref: MrRef, cwd: string) {
           endCursor,
         },
       );
-      if (!page.ok) return page;
+      if (!page.ok) {
+        return page;
+      }
       const threads: typeof Threads.Type.repository.pullRequest.reviewThreads =
         page.value.repository.pullRequest.reviewThreads;
       for (const thread of threads.nodes) {
         const first = thread.comments.nodes[0]?.databaseId;
-        if (thread.isResolved && first != null) resolved.add(String(first));
+        if (thread.isResolved && first != null) {
+          resolved.add(String(first));
+        }
       }
-      if (!threads.pageInfo.hasNextPage) break;
+      if (!threads.pageInfo.hasNextPage) {
+        break;
+      }
       endCursor = threads.pageInfo.endCursor ?? null;
-      if (endCursor === null)
+      if (endCursor === null) {
         return {
           ok: false,
           reason: `GitHub did not name the next page of ${where}'s review threads`,
         };
+      }
     }
     const kindOf = (user: typeof User.Type | null) => {
       const returned: CommentKind = user?.type === "Bot" ? "bot" : "person";
@@ -913,9 +992,11 @@ function readReview(ref: MrRef, cwd: string) {
       ),
     ];
     const standing = new Map<string, { readonly state: string; readonly bot: boolean }>();
-    for (const one of reviews.value)
-      if (one.user !== null && one.state !== "COMMENTED" && one.state !== "PENDING")
+    for (const one of reviews.value) {
+      if (one.user !== null && one.state !== "COMMENTED" && one.state !== "PENDING") {
         standing.set(one.user.login, { state: one.state, bot: one.user.type === "Bot" });
+      }
+    }
     const approvers = Arr.map(
       Arr.filter([...standing], ([, review]) => review.state === "APPROVED"),
       ([who]) => who,
@@ -928,12 +1009,22 @@ function readReview(ref: MrRef, cwd: string) {
     const said = pull.value.pull;
     const decision = said.reviewDecision ?? "";
     const unapproved = yield* Effect.gen(function* () {
-      if (decision === "CHANGES_REQUESTED") return "changes were requested";
-      if (decision === "REVIEW_REQUIRED") return "a review is still required";
-      if (decision !== "APPROVED") return changesRequested ? "changes were requested" : "";
-      if (!approvers.includes(me)) return "";
+      if (decision === "CHANGES_REQUESTED") {
+        return "changes were requested";
+      }
+      if (decision === "REVIEW_REQUIRED") {
+        return "a review is still required";
+      }
+      if (decision !== "APPROVED") {
+        return changesRequested ? "changes were requested" : "";
+      }
+      if (!approvers.includes(me)) {
+        return "";
+      }
       const required = yield* requiredReviews(repo, said.baseRefName ?? "", cwd);
-      if (!required.ok) return `${required.reason}, and ${me}'s own approval stands`;
+      if (!required.ok) {
+        return `${required.reason}, and ${me}'s own approval stands`;
+      }
       return others.length >= required.count
         ? ""
         : `${said.baseRefName} requires ${required.count} approval(s) and has ${others.length} besides ${me}'s own`;
@@ -1063,9 +1154,13 @@ const mergeQueued: (
       ? undefined
       : { _tag: "HeadMoved", head: pull.headRefOid ?? "" };
   const before = yield* read;
-  if (before?.state === "MERGED") return alreadyMerged(before);
+  if (before?.state === "MERGED") {
+    return alreadyMerged(before);
+  }
   const movedBefore = before === null ? undefined : moved(before);
-  if (movedBefore !== undefined) return movedBefore;
+  if (movedBefore !== undefined) {
+    return movedBefore;
+  }
   if (before?.mergeQueueEntry?.headCommit?.oid !== head) {
     const enqueued = yield* graphqlAs(Mutated, LOGIN, cwd, ENQUEUE, {
       id,
@@ -1073,7 +1168,9 @@ const mergeQueued: (
     });
     if (!enqueued.ok) {
       const after = yield* read;
-      if (after?.state === "MERGED") return alreadyMerged(after);
+      if (after?.state === "MERGED") {
+        return alreadyMerged(after);
+      }
       return (
         (after === null ? undefined : moved(after)) ?? {
           _tag: "Refused",
@@ -1087,21 +1184,26 @@ const mergeQueued: (
   while (true) {
     yield* Effect.sleep(QUEUE_POLL);
     const pull = yield* read;
-    if (pull?.state === "MERGED")
+    if (pull?.state === "MERGED") {
       return (pull.headRefOid ?? "") === head && QUEUE_MERGERS.has(pull.mergedBy?.login ?? "")
         ? { _tag: "Merged", merged: pull.mergeCommit?.oid ?? "" }
         : alreadyMerged(pull);
+    }
     const movedNow = pull === null ? undefined : moved(pull);
-    if (movedNow !== undefined) return movedNow;
-    if (pull !== null && pull.mergeQueueEntry == null)
+    if (movedNow !== undefined) {
+      return movedNow;
+    }
+    if (pull !== null && pull.mergeQueueEntry == null) {
       return {
         _tag: "Refused",
         reason: tookOut
           ? `${where} was still in the merge queue after 2 hours, so Collie took it out`
           : `GitHub's merge queue removed ${where} without merging it: ${pull.timelineItems?.nodes.at(-1)?.reason ?? "no reason given"}`,
       };
-    if ((yield* Clock.currentTimeMillis) >= deadline)
+    }
+    if ((yield* Clock.currentTimeMillis) >= deadline) {
       tookOut = (yield* graphqlAs(Mutated, LOGIN, cwd, DEQUEUE, { id })).ok || tookOut;
+    }
   }
 });
 
@@ -1115,11 +1217,12 @@ function merge(ref: MrRef, head: string, cwd: string) {
       name,
       number: Number(ref.iid),
     });
-    if (!method.ok || method.value.repository === null)
+    if (!method.ok || method.value.repository === null) {
       return {
         _tag: "Refused",
         reason: `gh would not say how ${repo} merges${!method.ok ? `: ${method.reason}` : ""}`,
       };
+    }
     const target = method.value.repository.pullRequest;
     if (target !== null) {
       const queue = yield* graphqlAs(MergeQueue, LOGIN, cwd, MERGE_QUEUE, {
@@ -1127,13 +1230,15 @@ function merge(ref: MrRef, head: string, cwd: string) {
         name,
         branch: target.baseRefName,
       });
-      if (!queue.ok)
+      if (!queue.ok) {
         return {
           _tag: "Refused",
           reason: `gh would not say whether ${target.baseRefName} of ${repo} has a merge queue: ${queue.reason}`,
         };
-      if (queue.value.repository?.mergeQueue != null)
+      }
+      if (queue.value.repository?.mergeQueue != null) {
         return yield* mergeQueued(ref, target.id, head, cwd);
+      }
     }
     const merging = yield* request(LOGIN, cwd, "PUT", `repos/${repo}/pulls/${ref.iid}/merge`, {
       sha: head,
@@ -1145,11 +1250,19 @@ function merge(ref: MrRef, head: string, cwd: string) {
       number: Number(ref.iid),
     });
     const pull = after.ok ? (after.value.repository?.pullRequest ?? null) : null;
-    if (merging.ok) return { _tag: "Merged", merged: pull?.mergeCommit?.oid ?? "" };
+    if (merging.ok) {
+      return { _tag: "Merged", merged: pull?.mergeCommit?.oid ?? "" };
+    }
     const refusal = `GitHub refused to merge ${where}: ${merging.reason}`;
-    if (pull === null) return { _tag: "Refused", reason: refusal };
-    if (pull.state === "MERGED") return alreadyMerged(pull);
-    if ((pull.headRefOid ?? "") !== head) return { _tag: "HeadMoved", head: pull.headRefOid ?? "" };
+    if (pull === null) {
+      return { _tag: "Refused", reason: refusal };
+    }
+    if (pull.state === "MERGED") {
+      return alreadyMerged(pull);
+    }
+    if ((pull.headRefOid ?? "") !== head) {
+      return { _tag: "HeadMoved", head: pull.headRefOid ?? "" };
+    }
     return { _tag: "Refused", reason: refusal };
   });
   return returned;
@@ -1204,15 +1317,21 @@ function failedAttempt(ref: MrRef, id: string, cwd: string) {
       cwd,
       `repos/${repo}/actions/jobs/${Str.split(id, "/")[1]}`,
     );
-    if (!attempt.ok) return { url: null, tests: [], jobs: null };
+    if (!attempt.ok) {
+      return { url: null, tests: [], jobs: null };
+    }
     const url = attempt.value.html_url ?? null;
     const route = `repos/${repo}/actions/runs/${attempt.value.run_id}/attempts/${attempt.value.run_attempt}/jobs`;
     const jobs: Array<(typeof AttemptJobs.Type)["jobs"][number]> = [];
     for (let page = 1; ; page++) {
       const listed = yield* rest(AttemptJobs, cwd, `${route}?per_page=100&page=${page}`);
-      if (!listed.ok) return { url, tests: [], jobs: null };
+      if (!listed.ok) {
+        return { url, tests: [], jobs: null };
+      }
       jobs.push(...listed.value.jobs);
-      if (listed.value.jobs.length < 100) break;
+      if (listed.value.jobs.length < 100) {
+        break;
+      }
     }
     const failed = Arr.filter(jobs, (one) => stateOf(one) === "failed");
     const logs = yield* Effect.forEach(failed, (one) =>
@@ -1254,8 +1373,11 @@ function template(cwd: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    for (const candidate of TEMPLATES)
-      if (yield* fs.exists(path.join(cwd, candidate))) return candidate;
+    for (const candidate of TEMPLATES) {
+      if (yield* fs.exists(path.join(cwd, candidate))) {
+        return candidate;
+      }
+    }
     return null;
   });
 }
@@ -1272,61 +1394,87 @@ const RunState = Schema.Struct({ status: Schema.String, conclusion: optionalText
 
 function tierOf(environment: string, production: boolean) {
   const name = Str.toLowerCase(environment);
-  if (production || name === "production" || name === "prod") return "production";
-  if (name === "staging" || name === "stage") return "staging";
+  if (production || name === "production" || name === "prod") {
+    return "production";
+  }
+  if (name === "staging" || name === "stage") {
+    return "staging";
+  }
   return null;
 }
 
 function liveTier(ref: MrRef, mergedSha: string, cwd: string) {
   return Effect.gen(function* () {
-    if (mergedSha === "" || ref.project === null) return null;
+    if (mergedSha === "" || ref.project === null) {
+      return null;
+    }
     const repo = `repos/${mrPath(ref)}`;
     const listed = yield* pagesAs(Deployment, LOGIN, cwd, `${repo}/deployments`);
-    if (!listed.ok) return null;
+    if (!listed.ok) {
+      return null;
+    }
     const live = new Map<string, { readonly sha: string; readonly tier: DeployTier }>();
     for (const deployment of listed.value) {
       const tier = tierOf(deployment.environment, deployment.production_environment === true);
-      if (tier === null || live.has(deployment.environment)) continue;
+      if (tier === null || live.has(deployment.environment)) {
+        continue;
+      }
       const statuses = yield* rest(
         Statuses,
         cwd,
         `${repo}/deployments/${deployment.id}/statuses?per_page=1`,
       );
-      if (statuses.ok && statuses.value[0]?.state === "success")
+      if (statuses.ok && statuses.value[0]?.state === "success") {
         live.set(deployment.environment, { sha: deployment.sha, tier });
+      }
     }
     const carries = (sha: string) =>
       Effect.gen(function* () {
-        if (sha === mergedSha) return true;
+        if (sha === mergedSha) {
+          return true;
+        }
         const compared = yield* rest(Compare, cwd, `${repo}/compare/${mergedSha}...${sha}`);
         return (
           compared.ok &&
           (compared.value.status === "identical" || compared.value.status === "ahead")
         );
       });
-    for (const tier of ["production", "staging"] as const)
-      for (const one of live.values())
-        if (one.tier === tier && (yield* carries(one.sha))) return tier;
+    for (const tier of ["production", "staging"] as const) {
+      for (const one of live.values()) {
+        if (one.tier === tier && (yield* carries(one.sha))) {
+          return tier;
+        }
+      }
+    }
     return null;
   });
 }
 
 function deployed(ref: MrRef, tier: DeployTier, cwd: string) {
   const returned: Effect.Effect<DeployedRead, never, ForgeHttp> = Effect.gen(function* () {
-    if (ref.project === null) return { ok: false, reason: "no repository to read deployments of" };
+    if (ref.project === null) {
+      return { ok: false, reason: "no repository to read deployments of" };
+    }
     const repo = `repos/${mrPath(ref)}`;
     const pages = yield* pagesAs(Deployment, LOGIN, cwd, `${repo}/deployments`);
-    if (!pages.ok) return pages;
+    if (!pages.ok) {
+      return pages;
+    }
     for (const deployment of pages.value) {
-      if (tierOf(deployment.environment, deployment.production_environment === true) !== tier)
+      if (tierOf(deployment.environment, deployment.production_environment === true) !== tier) {
         continue;
+      }
       const latest = yield* rest(
         Statuses,
         cwd,
         `${repo}/deployments/${deployment.id}/statuses?per_page=1`,
       );
-      if (!latest.ok) return latest;
-      if (latest.value[0]?.state === "success") return { ok: true, sha: deployment.sha };
+      if (!latest.ok) {
+        return latest;
+      }
+      if (latest.value[0]?.state === "success") {
+        return { ok: true, sha: deployment.sha };
+      }
     }
     return { ok: true, sha: null };
   });
@@ -1347,7 +1495,9 @@ function stagingEnvironments<R>(
   jobs?: ReadonlyArray<string>,
 ) {
   const returned: Effect.Effect<StagingRead, never, ForgeHttp> = Effect.gen(function* () {
-    if (ref.project === null) return { ok: false, reason: "no repository to read deployments of" };
+    if (ref.project === null) {
+      return { ok: false, reason: "no repository to read deployments of" };
+    }
     const repo = `repos/${mrPath(ref)}`;
     const unread = (reason: string) => ({
       ok: false as const,
@@ -1362,9 +1512,15 @@ function stagingEnvironments<R>(
             cwd,
             `${repo}/commits/${commit}/check-runs?check_name=${encodeURIComponent(job)}&filter=all&per_page=100&page=${page}`,
           );
-          if (!checks.ok) return unread(checks.reason);
-          for (const check of checks.value.check_runs) selected.add(check.id);
-          if (checks.value.check_runs.length < 100) break;
+          if (!checks.ok) {
+            return unread(checks.reason);
+          }
+          for (const check of checks.value.check_runs) {
+            selected.add(check.id);
+          }
+          if (checks.value.check_runs.length < 100) {
+            break;
+          }
         }
       }
     }
@@ -1375,9 +1531,17 @@ function stagingEnvironments<R>(
         cwd,
         `${repo}/environments?per_page=100&page=${page}`,
       );
-      if (!named.ok) return unread(named.reason);
-      for (const { name } of named.value.environments) if (isStaging(name)) names.push(name);
-      if (named.value.environments.length < 100) break;
+      if (!named.ok) {
+        return unread(named.reason);
+      }
+      for (const { name } of named.value.environments) {
+        if (isStaging(name)) {
+          names.push(name);
+        }
+      }
+      if (named.value.environments.length < 100) {
+        break;
+      }
     }
     const environments: Array<StagingEnvironment> = [];
     for (const name of names) {
@@ -1387,19 +1551,27 @@ function stagingEnvironments<R>(
         cwd,
         `${repo}/deployments?environment=${encodeURIComponent(name)}`,
       );
-      if (!all.ok) return unread(all.reason);
+      if (!all.ok) {
+        return unread(all.reason);
+      }
       let live: string | null = null;
       let hasCommit = false;
       for (const deployment of all.value) {
         const candidate = deployment.sha === commit;
-        if (live !== null && (!candidate || hasCommit)) continue;
+        if (live !== null && (!candidate || hasCommit)) {
+          continue;
+        }
         const latest = yield* rest(
           Statuses,
           cwd,
           `${repo}/deployments/${deployment.id}/statuses?per_page=1`,
         );
-        if (!latest.ok) return unread(latest.reason);
-        if (live === null && latest.value[0]?.state === "success") live = deployment.sha;
+        if (!latest.ok) {
+          return unread(latest.reason);
+        }
+        if (live === null && latest.value[0]?.state === "success") {
+          live = deployment.sha;
+        }
         const link =
           /^https:\/\/github\.com\/([^/]+\/[^/]+)\/actions\/runs\/\d+\/job\/(\d+)(?:[/?#]|$)/.exec(
             latest.value[0]?.log_url ?? "",
@@ -1412,8 +1584,9 @@ function stagingEnvironments<R>(
                 Option.map(Option.fromNullishOr(link[1]), (present) => Str.toLowerCase(present)),
               ) === Str.toLowerCase(mrPath(ref)) &&
               selected.has(Number(link[2]))))
-        )
+        ) {
           hasCommit = true;
+        }
       }
       environments.push({ name, live, hasCommit });
     }
@@ -1428,7 +1601,9 @@ function runStatus(url: string, cwd: string) {
       /^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/(\d+)(?:[/?#]\S*)?$/.exec(
         Str.trim(url),
       );
-    if (!m) return null;
+    if (!m) {
+      return null;
+    }
     const said = yield* rest(RunState, cwd, `repos/${m[1]}/actions/runs/${m[2]}`);
     return said.ok ? (said.value.conclusion ?? said.value.status) : null;
   });
@@ -1453,13 +1628,17 @@ const WorkflowRuns = Schema.Struct({
 
 function tagPipeline(ref: MrRef, tag: string, cwd: string) {
   const returned: Effect.Effect<TagPipelineRead, never, ForgeHttp> = Effect.gen(function* () {
-    if (ref.project === null) return { ok: false, reason: "no repository to read runs of" };
+    if (ref.project === null) {
+      return { ok: false, reason: "no repository to read runs of" };
+    }
     const runs = yield* rest(
       WorkflowRuns,
       cwd,
       `repos/${mrPath(ref)}/actions/runs?branch=${encodeURIComponent(tag)}&per_page=1`,
     );
-    if (!runs.ok) return runs;
+    if (!runs.ok) {
+      return runs;
+    }
     return { ok: true, url: runs.value.workflow_runs[0]?.html_url ?? null };
   });
   return returned;
@@ -1471,16 +1650,24 @@ function pipeline(url: string, cwd: string) {
       /^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/(\d+)(?:[/?#]\S*)?$/.exec(
         Str.trim(url),
       );
-    if (!m) return { ok: false, reason: `${url} is not a GitHub Actions run` };
+    if (!m) {
+      return { ok: false, reason: `${url} is not a GitHub Actions run` };
+    }
     const route = `repos/${m[1]}/actions/runs/${m[2]}`;
     const status = yield* rest(RunIdentity, cwd, route);
-    if (!status.ok) return status;
+    if (!status.ok) {
+      return status;
+    }
     const jobs: Array<typeof RunJob.Type> = [];
     for (let page = 1; ; page++) {
       const listed = yield* rest(RunJobs, cwd, `${route}/jobs?per_page=100&page=${page}`);
-      if (!listed.ok) return listed;
+      if (!listed.ok) {
+        return listed;
+      }
       jobs.push(...listed.value.jobs);
-      if (listed.value.jobs.length < 100) break;
+      if (listed.value.jobs.length < 100) {
+        break;
+      }
     }
     return {
       ok: true,
@@ -1507,11 +1694,12 @@ function pipeline(url: string, cwd: string) {
 
 function clone<R>(project: string, into: string, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
-    if ((yield* run("gh", ["auth", "status", "--hostname", HOST], cwd)).code !== 0)
+    if ((yield* run("gh", ["auth", "status", "--hostname", HOST], cwd)).code !== 0) {
       return {
         ok: false,
         reason: `gh is not logged in to ${HOST}: log in with \`gh auth login --hostname ${HOST}\``,
       };
+    }
     const repo = mrPath({ project, iid: "" });
     const cloned = yield* run("gh", ["repo", "clone", repo, into, "--", "--quiet"], cwd);
     return cloned.code === 0

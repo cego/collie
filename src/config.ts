@@ -36,7 +36,9 @@ export const readConfig = Effect.fn("Config.readConfig")(function* (userDir: str
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
   const path = paths.join(userDir, "config.json");
-  if (!(yield* fs.exists(path))) return {};
+  if (!(yield* fs.exists(path))) {
+    return {};
+  }
   const text = yield* fs.readFileString(path);
   return yield* Schema.decodeEffect(ConfigJson)(text).pipe(
     Effect.mapError((cause) => new Cause.UnknownError(cause, `${path}: ${String(cause)}`)),
@@ -46,9 +48,13 @@ export const readConfig = Effect.fn("Config.readConfig")(function* (userDir: str
 export function configValue(raw: YamlMap, dotted: string) {
   let node: YamlValue = raw;
   for (const key of Str.split(dotted, ".")) {
-    if (!isYamlMap(node)) return undefined;
+    if (!isYamlMap(node)) {
+      return undefined;
+    }
     const next: YamlValue | undefined = node[key];
-    if (next === undefined) return undefined;
+    if (next === undefined) {
+      return undefined;
+    }
     node = next;
   }
   return node;
@@ -72,9 +78,14 @@ export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
     node = child;
   }
   const last = keys.at(-1);
-  if (last === undefined) return;
-  if (value === null) delete node[last];
-  else node[last] = value;
+  if (last === undefined) {
+    return;
+  }
+  if (value === null) {
+    delete node[last];
+  } else {
+    node[last] = value;
+  }
   yield* fs.makeDirectory(userDir, { recursive: true });
   yield* fs.writeFileString(
     paths.join(userDir, "config.json"),
@@ -163,7 +174,7 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
   });
   // WARNING: recorded the first time, so a later write to the file does not make them newer.
   const unstamped = Arr.filter(settings, ({ key }) => stamps.set[key] === undefined);
-  if (unstamped.length > 0)
+  if (unstamped.length > 0) {
     yield* writeSettingsSet(userDir, {
       ...stamps,
       set: {
@@ -171,13 +182,16 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
         ...Rec.fromEntries(Arr.map(unstamped, ({ key, at }) => [key, at] as const)),
       },
     });
+  }
   const returned: SharedSettings = { settings, flock: stamps.flock ?? null };
   return returned;
 });
 
 function reachKeysIn(raw: YamlMap) {
   const held = raw[REACH_SETTING];
-  if (held === undefined || !isYamlMap(held)) return [];
+  if (held === undefined || !isYamlMap(held)) {
+    return [];
+  }
   return Arr.flatMap(Rec.toEntries(held), ([workflow, projects]) =>
     isYamlMap(projects)
       ? Arr.map(Rec.toEntries(projects), ([project]) => `${REACH_SETTING}.${workflow}.${project}`)
@@ -239,20 +253,24 @@ export const takeShared = (
       const parsed = [];
       for (const { key, value, at } of given) {
         const one = parseShared(key, value);
-        if ("refused" in one) return yield* new SettingRefused({ reason: one.refused });
+        if ("refused" in one) {
+          return yield* new SettingRefused({ reason: one.refused });
+        }
         parsed.push({ key, value: one.value, at });
       }
       const before = Arr.map(Rec.toEntries((yield* readSettingsSet(userDir)).set), ([key, at]) => ({
         key,
         at,
       }));
-      for (const { key, value, at } of latestEdits(before, parsed, byKey).take)
+      for (const { key, value, at } of latestEdits(before, parsed, byKey).take) {
         yield* writeSetting(userDir, key, value, at);
-      if (by !== null)
+      }
+      if (by !== null) {
         yield* writeSettingsSet(userDir, {
           ...(yield* readSettingsSet(userDir)),
           flock: { by, at: now },
         });
+      }
       return yield* readShared(userDir);
     }),
   );
@@ -278,7 +296,9 @@ export const gitlabHostOf = Effect.fn("Config.gitlabHostOf")(function* (env: {
 });
 
 export function autoCompactWindowAsWritten(value: YamlValue | undefined) {
-  if (value === undefined) return FALLBACK_DEFAULTS.claudeAutoCompactWindow;
+  if (value === undefined) {
+    return FALLBACK_DEFAULTS.claudeAutoCompactWindow;
+  }
   return isNumber(value) || isString(value) ? value : stringifyJson(value);
 }
 
@@ -332,6 +352,8 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir:
         : FALLBACK_DEFAULTS.gitlabHost,
     agentProfile: isString(raw.agent_profile) ? raw.agent_profile : FALLBACK_DEFAULTS.agentProfile,
   };
-  if (isString(raw.effort)) defaults.effort = raw.effort;
+  if (isString(raw.effort)) {
+    defaults.effort = raw.effort;
+  }
   return defaults;
 });

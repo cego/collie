@@ -46,7 +46,9 @@ const desktop = Effect.gen(function* () {
     lookup: (key) =>
       Effect.tap(stored.lookup(key), () => {
         const now = pause;
-        if (key !== "slack-user-grant" || now === null) return Effect.void;
+        if (key !== "slack-user-grant" || now === null) {
+          return Effect.void;
+        }
         pause = null;
         return Deferred.succeed(now.reached, undefined).pipe(
           Effect.andThen(Deferred.await(now.release)),
@@ -331,9 +333,12 @@ test("one click signs in to Collie's public Slack app, and a grant kept from ano
       const app = yield* desktop;
       yield* app.session.signIn;
       expect(app.opened.at(-1)!.searchParams.get("client_id")).toBe("2673706937.12461393591409");
-      for (const call of app.fake.calls)
+      for (const call of app.fake.calls) {
         expect(call.parameters).not.toHaveProperty("client_secret");
-      for (const url of app.opened) expect(url.searchParams.has("client_secret")).toBe(false);
+      }
+      for (const url of app.opened) {
+        expect(url.searchParams.has("client_secret")).toBe(false);
+      }
 
       const kept = yield* Schema.encodeEffect(Schema.fromJsonString(SlackUserGrant))({
         clientId: "123.456",
@@ -444,14 +449,16 @@ test("a refused exchange or renewal never says the access or refresh token", () 
       );
       const renewal = yield* app.session.renew(true).pipe(Effect.flip);
       expect(renewal).toStartWith("Slack oauth.v2.access: invalid_refresh_token");
-      for (const said of [exchange, renewal])
+      for (const said of [exchange, renewal]) {
         for (const token of [
           "xoxe.xoxp-1-access-1",
           "xoxe-1-refresh-1",
           "xoxe.xoxp-1-access-2",
           "xoxe-1-refresh-2",
-        ])
+        ]) {
           expect(said).not.toContain(token);
+        }
+      }
     }),
   ));
 

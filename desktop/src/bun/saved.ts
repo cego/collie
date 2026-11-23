@@ -87,7 +87,9 @@ export const saving =
       let flock = EMPTY_FLOCK;
       const save = ({ machine, herds, tasks, asOf, build, development }: FlockMachine) =>
         Effect.gen(function* () {
-          if (!flock.machines.has(machine.installation)) return;
+          if (!flock.machines.has(machine.installation)) {
+            return;
+          }
           const at = asOf ?? (yield* Clock.currentTimeMillis);
           const file = fileOf(dir, machine.installation);
           const saved = {
@@ -118,9 +120,14 @@ export const saving =
           Effect.suspend(() => {
             const before = flock.machines;
             flock = applyItem(flock, item);
-            if ("_tag" in item && item._tag === "Saved") return Effect.void;
-            for (const [installation, now] of flock.machines)
-              if (before.get(installation) !== now) due.set(installation, now);
+            if ("_tag" in item && item._tag === "Saved") {
+              return Effect.void;
+            }
+            for (const [installation, now] of flock.machines) {
+              if (before.get(installation) !== now) {
+                due.set(installation, now);
+              }
+            }
             const dropped = Arr.filter([...before.keys()], (one) => !flock.machines.has(one));
             return Effect.forEach(
               dropped,

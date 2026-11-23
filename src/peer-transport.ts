@@ -81,17 +81,22 @@ const dial = (peer: Peer, url: string, words: { refused: string; silent: string 
       done(event.reason);
     };
     const open = yield* Deferred.await(answer).pipe(Effect.timeoutOption(REACH_BOUND));
-    if (Option.isSome(open) && open.value)
+    if (Option.isSome(open) && open.value) {
       return {
         send: (data: Uint8Array) => ws.send(new Uint8Array(data)),
         close: () => ws.close(),
         listen: (to: (data: Uint8Array) => void, then: (reason: string) => void) => {
-          for (const data of queued.splice(0)) to(data);
+          for (const data of queued.splice(0)) {
+            to(data);
+          }
           deliver = to;
           done = then;
-          if (ended !== null) then(ended);
+          if (ended !== null) {
+            then(ended);
+          }
         },
       };
+    }
     ws.close();
     return yield* Effect.fail(Option.isNone(open) ? words.silent : words.refused);
   });
@@ -118,7 +123,9 @@ export const openPeer = (
             Effect.flip,
             Effect.result,
           );
-    if (direct !== null && direct._tag === "Failure") return direct.failure;
+    if (direct !== null && direct._tag === "Failure") {
+      return direct.failure;
+    }
     const directSaw = direct === null ? null : direct.success;
     const unreachable = (ssh: string | null, waits = false) => {
       const seen: Array<string> = [];
@@ -131,17 +138,24 @@ export const openPeer = (
         seen.push(`ssh: ${ssh}`);
         ways.ssh = ssh;
       }
-      if (waits) ways.waits = "ssh_connection";
+      if (waits) {
+        ways.waits = "ssh_connection";
+      }
       return new MachineUnreachable({ machine: peer.name, seen: Arr.join(seen, "; "), ...ways });
     };
-    if (way === "direct") return yield* unreachable(null);
+    if (way === "direct") {
+      return yield* unreachable(null);
+    }
     const ssh = yield* connection;
-    if (ssh === null) return yield* unreachable(`core lists no machine ${peer.name}`);
-    if (!(yield* ssh.check))
+    if (ssh === null) {
+      return yield* unreachable(`core lists no machine ${peer.name}`);
+    }
+    if (!(yield* ssh.check)) {
       return yield* unreachable(
         `no SSH connection is open; \`collie machine connect ${peer.name}\` opens one`,
         true,
       );
+    }
     const outer = yield* Effect.scope;
     const tunnel = yield* Scope.fork(outer);
     const local = yield* freePort;

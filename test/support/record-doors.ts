@@ -29,7 +29,9 @@ export const recordDoor = (asked: Array<Asked>) =>
     const queueOf = (runId: string) =>
       Effect.suspend(() => {
         const was = queues.get(runId);
-        if (was !== undefined) return Effect.succeed(was);
+        if (was !== undefined) {
+          return Effect.succeed(was);
+        }
         return Effect.tap(Queue.unbounded<Answer, Cause.Done>(), (made) =>
           Effect.sync(() => queues.set(runId, made)),
         );

@@ -108,7 +108,9 @@ const readSession = Effect.fnUntraced(function* (path: string) {
   const text = yield* fs.readFileString(path);
   const lines = Arr.flatMap(Str.split(text, "\n"), (line) => Option.toArray(decodeJson(line)));
   const header = decodeHeader(lines[0]);
-  if (Option.isNone(header)) return null;
+  if (Option.isNone(header)) {
+    return null;
+  }
   const entries = Arr.flatMap(lines.slice(1), (line) => Option.toArray(decodeEntry(line)));
   const byId = new Map(Arr.map(entries, (entry) => [entry.id, entry]));
   const branch: typeof entries = [];

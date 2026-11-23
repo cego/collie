@@ -71,7 +71,7 @@ export type FlockArtefacts = typeof FlockArtefacts.Type;
 
 export const artefactOwner = (page: FlockArtefacts, named: string) => {
   const owner = Arr.findFirst(page.machines, (one) => one.state === "searched" && one.runs > 0);
-  if (Option.isNone(owner))
+  if (Option.isNone(owner)) {
     return Effect.fail(
       new HostRefused({
         reason: `Run ${named} was not found; ${Arr.join(
@@ -82,16 +82,18 @@ export const artefactOwner = (page: FlockArtefacts, named: string) => {
         )}`,
       }),
     );
+  }
   if (
     !Str.includes(":")(named) &&
     !page.complete &&
     Arr.some(page.machines, (one) => one.state !== "searched")
-  )
+  ) {
     return Effect.fail(
       new HostRefused({
         reason: `Other Machines could not be checked; name the Run as ${owner.value.installation}:${named}`,
       }),
     );
+  }
   return Effect.succeed({
     machine: owner.value.machine,
     run: Str.slice(Option.getOrElse(Str.indexOf(":")(named), () => -1) + 1)(named),
@@ -156,7 +158,9 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
       });
       continue;
     }
-    if (Arr.some(doors, (one) => one.door.installation === result.success.installation)) continue;
+    if (Arr.some(doors, (one) => one.door.installation === result.success.installation)) {
+      continue;
+    }
     doors.push({ machine, door: result.success });
   }
   const separator =
@@ -164,12 +168,12 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
   const qualifier = separator < 0 ? undefined : Str.slice(0, separator)(asked.run!);
   const run = separator < 0 ? asked.run : Str.slice(separator + 1)(asked.run!);
   let searched = doors;
-  if (qualifier !== undefined)
+  if (qualifier !== undefined) {
     searched = Arr.filter(
       doors,
       (one) => one.door.installation === qualifier || one.machine === qualifier,
     );
-  else if (run !== undefined) {
+  } else if (run !== undefined) {
     const located = yield* Effect.forEach(
       doors,
       (one) =>
@@ -179,8 +183,8 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
         ),
       { concurrency: 4 },
     );
-    for (const one of located)
-      if (one.result._tag === "Failure")
+    for (const one of located) {
+      if (one.result._tag === "Failure") {
         machines.push({
           installation: one.door.installation,
           machine: one.machine,
@@ -189,11 +193,13 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
           runs: 0,
           indexed: 0,
         });
+      }
+    }
     const holding = Arr.filter(
       located,
       (one) => one.result._tag === "Success" && one.result.success,
     );
-    if (holding.length > 1)
+    if (holding.length > 1) {
       return yield* new AmbiguousRun({
         run,
         candidates: Arr.map(holding, (one) => ({
@@ -201,6 +207,7 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
           machine: one.machine,
         })),
       });
+    }
     searched = holding;
   }
   const query = Str.trim(asked.query ?? "");
@@ -247,7 +254,7 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
       reason: null,
       ...page.result.success.coverage,
     });
-    if (cursor[installation] !== "done")
+    if (cursor[installation] !== "done") {
       merged.push(
         ...Arr.map(page.result.success.items, (item) => ({
           installation,
@@ -255,21 +262,25 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
           item,
         })),
       );
+    }
   }
   const taken = Arr.take(merged.sort(before), limit);
   for (const page of pages) {
-    if (page.result._tag === "Failure" || cursor[page.door.installation] === "done") continue;
+    if (page.result._tag === "Failure" || cursor[page.door.installation] === "done") {
+      continue;
+    }
     const { installation } = page.door;
     const mine = Arr.filter(taken, (one) => one.installation === installation);
     const last = Option.getOrUndefined(Arr.last(mine));
-    if (!page.result.success.more && mine.length === page.result.success.items.length)
+    if (!page.result.success.more && mine.length === page.result.success.items.length) {
       cursor[installation] = "done";
-    else if (last !== undefined)
+    } else if (last !== undefined) {
       cursor[installation] = {
         detectedAt: last.item.detectedAt,
         run: last.item.run,
         id: last.item.id,
       };
+    }
   }
   const order = new Map(Arr.map(sources, (source, index) => [source.machine, index]));
   machines.sort((a, b) => (order.get(a.machine) ?? 0) - (order.get(b.machine) ?? 0));
@@ -291,7 +302,9 @@ const UPGRADE = "Upgrade this Machine's Collie host to search Artefacts";
 export const awayFrom = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+      if (Cause.hasInterruptsOnly(cause)) {
+        return Effect.interrupt;
+      }
       const said = Cause.pretty(cause);
       return Effect.fail(
         Str.includes("Unknown request tag")(said)

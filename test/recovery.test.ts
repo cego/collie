@@ -248,8 +248,9 @@ test("clearing rechecks never answer Decisions, release Holds or Stops, or resum
         const ids: Array<string> = [];
         for (const kind of ["hold", "stop", "decision", "superseded", "free"]) {
           const file = `${world.home}/${kind}`;
-          if (kind === "decision" || kind === "superseded")
+          if (kind === "decision" || kind === "superseded") {
             yield* fs.writeFileString(file, "decision").pipe(Effect.orDie);
+          }
           const { runId } = yield* client
             .start({
               project: world.project,
@@ -263,10 +264,11 @@ test("clearing rechecks never answer Decisions, release Holds or Stops, or resum
             () => client.run({ runId }).pipe(Effect.orDie),
             (view) => view?.status.status === "suspended" && view.parked !== null,
           );
-          if (kind === "hold" || kind === "stop")
+          if (kind === "hold" || kind === "stop") {
             yield* client
               .control({ runId, control: kind, set: true, request: `control-${kind}` })
               .pipe(Effect.orDie);
+          }
           if (kind === "superseded") {
             const [launch] = yield* client.launches({ run: runId }).pipe(Effect.orDie);
             core.reportedOnly([launch!.agent]);
@@ -501,7 +503,7 @@ test("ten cleared parks wait for memory and at most two resumes are in flight", 
         expect(started.envelope).toMatchObject({ ok: true });
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const ids = [yield* idOf(started.envelope.data)];
-        for (let i = 1; i < 10; i++)
+        for (let i = 1; i < 10; i++) {
           ids.push(
             (yield* client
               .start({
@@ -516,28 +518,33 @@ test("ten cleared parks wait for memory and at most two resumes are in flight", 
               })
               .pipe(Effect.orDie)).runId,
           );
-        for (const runId of ids)
+        }
+        for (const runId of ids) {
           yield* until(
             () => client.runMetrics({ runId }).pipe(Effect.orDie),
             (lines) => Arr.some(lines, (line) => line.action === "rechecked"),
           );
-        for (const runId of ids)
+        }
+        for (const runId of ids) {
           expect(
             Arr.filter(
               yield* client.runMetrics({ runId }).pipe(Effect.orDie),
               (line) => line.action === "resumed",
             ),
           ).toEqual([]);
-        for (let i = 0; i < 10; i++)
+        }
+        for (let i = 0; i < 10; i++) {
           yield* fs.writeFileString(`${world.home}/fact-${i}`, "ready").pipe(Effect.orDie);
+        }
         yield* fs
           .writeFileString(`${proc}/meminfo`, "MemTotal: 1000000 kB\nMemAvailable: 500000 kB\n")
           .pipe(Effect.orDie);
-        for (const runId of ids)
+        for (const runId of ids) {
           yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
             (view) => view?.status.status === "complete",
           );
+        }
         const events: Array<{ at: string; delta: number }> = [];
         for (const runId of ids) {
           const lines = yield* until(
@@ -646,7 +653,7 @@ test("the fourth park needs you and names the three automatic tries", () =>
     ["rechecks.workflow.ts"],
   ));
 
-for (const point of ["claimed", "recovery-park-cleared", "recovery-entered"] as const)
+for (const point of ["claimed", "recovery-park-cleared", "recovery-entered"] as const) {
   test(`a host killed at ${point} completes the same resume on restart`, () =>
     proves(
       "collie-recovery-crash-",
@@ -736,6 +743,7 @@ for (const point of ["claimed", "recovery-park-cleared", "recovery-entered"] as 
         }),
       ["rechecks.workflow.ts"],
     ));
+}
 
 test("a CI park waits for its job at the parked head and records the recheck on its card", () =>
   proves(
@@ -1135,13 +1143,14 @@ const failedCiRecheck = (now: Partial<FakeMr>, { recorded = true, unreadable = f
         mrs: [{ project: PROJECT.gitlab, iid: "31", state: "open", head: RED_HEAD, ...now }],
         ...(unreadable && { httpFault: { status: 503 } }),
       });
-      if (recorded)
+      if (recorded) {
         yield* rememberFailedCi(`${root}/runs/r1`, {
           head: RED_HEAD,
           name: "build",
           mr: RED_MR,
           cwd: root,
         });
+      }
       return yield* recheckPark(
         {
           runId: "r1",

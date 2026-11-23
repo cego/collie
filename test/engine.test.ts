@@ -366,8 +366,9 @@ test("the provisioned toolchain typechecks every module against the declarations
     Effect.gen(function* () {
       const { wf, state } = yield* workspace("collie-engine-toolchain-");
       const fs = yield* FileSystem.FileSystem;
-      for (const name of ["heal.workflow.ts", "heal.md"])
+      for (const name of ["heal.workflow.ts", "heal.md"]) {
         yield* fs.copyFile(`${root}workflows/${name}`, `${wf}/${name}`).pipe(Effect.orDie);
+      }
       const host = yield* openHost(state);
 
       const unprovisioned = yield* host.ask({
@@ -522,7 +523,9 @@ test("an answer given before its Run waits on the question is handed over only o
         yield* Deferred.succeed(waits, undefined);
         for (let step = 0; step < 30; step++) {
           const polled = yield* asking.poll(executionId);
-          if (Option.isSome(polled) && polled.value._tag === "Complete") break;
+          if (Option.isSome(polled) && polled.value._tag === "Complete") {
+            break;
+          }
           yield* ticks(1);
         }
         return { early, result: yield* asking.poll(executionId) };

@@ -20,7 +20,9 @@ export const cleanup = Command.make(
         const door = yield* cliDoor(env);
         if (!apply) {
           const listed = yield* cleanupListing(env, door);
-          if (!listed.ok) return listed;
+          if (!listed.ok) {
+            return listed;
+          }
           return {
             ok: true as const,
             data: listed.value,
@@ -30,7 +32,9 @@ export const cleanup = Command.make(
         return yield* mutation(env, "cleanup", requestId, (request) =>
           Effect.gen(function* () {
             const swept = yield* sweepNow(env, { door, request });
-            if (!swept.ok) return swept;
+            if (!swept.ok) {
+              return swept;
+            }
             return { ok: true as const, data: swept.value, human: cleanupLines(swept.value, true) };
           }),
         );

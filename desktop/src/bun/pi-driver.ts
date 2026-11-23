@@ -123,8 +123,12 @@ export default function(pi) {
         "--tools",
         "read,bash,edit,write,grep,find,ls,tool_search,mcp__*",
       ];
-      if (model !== "default") args.push("--model", model);
-      if (effort !== null) args.push("--thinking", effort);
+      if (model !== "default") {
+        args.push("--model", model);
+      }
+      if (effort !== null) {
+        args.push("--thinking", effort);
+      }
       const child = Bun.spawn(args, {
         cwd: context.dir,
         env: {
@@ -169,7 +173,9 @@ export default function(pi) {
           started = yield* Clock.currentTimeMillis;
           const command = piCommand(content);
           yield* Queue.offer(output, state.begin(command !== undefined));
-          if (command !== undefined) return yield* write({ type: "prompt", message: command });
+          if (command !== undefined) {
+            return yield* write({ type: "prompt", message: command });
+          }
           const placement = context.placement();
           const reported = state.reported();
           const noticed = context.noticed();
@@ -197,7 +203,9 @@ export default function(pi) {
             while ((at = Option.getOrElse(pipe_(pending, Str.indexOf("\n")), () => -1)) >= 0) {
               const record = decodePiRecord(pipe_(pending, Str.slice(0, at)));
               pending = pipe_(pending, Str.slice(at + 1));
-              if (Option.isNone(record)) continue;
+              if (Option.isNone(record)) {
+                continue;
+              }
               const read = record.value;
               if (
                 read.type === "tool_execution_start" &&

@@ -31,8 +31,9 @@ beforeEach(() =>
         ["init", "-q"],
         ["config", "user.email", "t@example.com"],
         ["config", "user.name", "t"],
-      ])
+      ]) {
         yield* exec(["git", ...args], { cwd: rig.projectDir });
+      }
       yield* fs.writeFileString(`${rig.projectDir}/thing.ts`, "export const one = 1;\n");
       yield* exec(["git", "add", "-A"], { cwd: rig.projectDir });
       yield* exec(["git", "commit", "-qm", "first"], { cwd: rig.projectDir });
@@ -195,7 +196,9 @@ test("a Check pass waits while its Machine is short of memory, runs nothing mean
     Effect.gen(function* () {
       let ranWhileWaiting = -1;
       const freeOnceWaiting = Effect.gen(function* () {
-        while ((yield* waitingFor()) === null) yield* Effect.sleep("20 millis");
+        while ((yield* waitingFor()) === null) {
+          yield* Effect.sleep("20 millis");
+        }
         ranWhileWaiting = (yield* journal()).length;
         yield* rig.memory(50).pipe(Effect.orDie);
       });
@@ -220,7 +223,9 @@ test("a stop of a Run whose Check pass waits for memory runs nothing, however so
   runEffect(
     Effect.gen(function* () {
       const stopOnceWaiting = Effect.gen(function* () {
-        while ((yield* waitingFor()) === null) yield* Effect.sleep("20 millis");
+        while ((yield* waitingFor()) === null) {
+          yield* Effect.sleep("20 millis");
+        }
         yield* RunRecords.use((records) => records.setControl(STOP, runId, "2026-09-14T10:00:00Z"));
         yield* rig.memory(50).pipe(Effect.orDie);
       });

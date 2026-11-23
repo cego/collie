@@ -141,23 +141,34 @@ export function structuredFrom<A, I>(raw: string, schema: Schema.Codec<A, I, nev
   const decode = Schema.decodeUnknownOption(schema);
   const parse = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
   const envelope = parse(raw);
-  if (envelope._tag === "None") return { error: "the CLI did not print JSON" };
+  if (envelope._tag === "None") {
+    return { error: "the CLI did not print JSON" };
+  }
 
   const seen: Array<unknown> = [];
   const queue: Array<unknown> = [envelope.value];
   while (queue.length > 0) {
     const node = queue.shift();
-    if (seen.includes(node)) continue;
-    seen.push(node);
-    const direct = decode(node);
-    if (direct._tag === "Some") return direct.value;
-    if (isString(node)) {
-      const nested = parse(node);
-      if (nested._tag === "Some") queue.push(nested.value);
+    if (seen.includes(node)) {
       continue;
     }
-    if (isArray(node)) queue.push(...node);
-    else if (isRecord(node)) queue.push(...Rec.values(node));
+    seen.push(node);
+    const direct = decode(node);
+    if (direct._tag === "Some") {
+      return direct.value;
+    }
+    if (isString(node)) {
+      const nested = parse(node);
+      if (nested._tag === "Some") {
+        queue.push(nested.value);
+      }
+      continue;
+    }
+    if (isArray(node)) {
+      queue.push(...node);
+    } else if (isRecord(node)) {
+      queue.push(...Rec.values(node));
+    }
   }
   return { error: "nothing in the CLI's envelope matched the schema it was given" };
 }
@@ -202,7 +213,9 @@ export const helpOf = (command: ReadonlyArray<string>) =>
         }),
     ),
     Effect.flatMap((ran) => {
-      if (ran.exitCode === 0 && Str.trim(ran.stdout) !== "") return Effect.succeed(ran.stdout);
+      if (ran.exitCode === 0 && Str.trim(ran.stdout) !== "") {
+        return Effect.succeed(ran.stdout);
+      }
       const said = pipe_(Str.trim(ran.stderr), Str.slice(-HELP_TAIL));
       return Effect.fail(
         new EvaluatorUnavailable({
@@ -249,10 +262,11 @@ export const call = Effect.fn("Evaluator.call")(function* (
   pack: string,
 ) {
   const missing = yield* flagsPresent(deps);
-  if (missing.length > 0)
+  if (missing.length > 0) {
     return yield* new EvaluatorUnavailable({
       reason: `the installed claude does not take ${Arr.join(missing, ", ")}`,
     });
+  }
 
   const argv = argvFor(deps.limits, jsonSchemaFor(kind), deps.systemPromptFile);
   const started = yield* Clock.currentTimeMillis;
@@ -284,11 +298,13 @@ export const call = Effect.fn("Evaluator.call")(function* (
   );
 
   const seconds = ((yield* Clock.currentTimeMillis) - started) / 1000;
-  if (ran === undefined || ran._tag === "None")
+  if (ran === undefined || ran._tag === "None") {
     return { outcome: "timeout" as const, seconds, bytes: 0, stdout: "", stderr: "" };
+  }
   const { read, stderr, code } = ran.value;
-  if (read.bytes > deps.limits.maxOutputBytes)
+  if (read.bytes > deps.limits.maxOutputBytes) {
     return { outcome: "over_output" as const, seconds, bytes: read.bytes, stdout: "", stderr };
+  }
   return {
     outcome: code === 0 ? ("ok" as const) : ("failed" as const),
     seconds,
@@ -315,12 +331,13 @@ export const evaluate = Effect.fn("Evaluator.evaluate")(function* (
   pack: string,
 ) {
   const ran = yield* call(deps, kind, pack);
-  if (ran.outcome !== "ok")
+  if (ran.outcome !== "ok") {
     return {
       spent: ran,
       value: null,
       error: ran.stderr === "" ? ran.outcome : `${ran.outcome}: ${Str.trim(ran.stderr)}`,
     };
+  }
   // WARNING: per kind, since inference over the union picks one member's type.
   const decoded =
     kind === "judgement"
@@ -330,8 +347,9 @@ export const evaluate = Effect.fn("Evaluator.evaluate")(function* (
         : kind === "routing"
           ? structuredFrom(ran.stdout, RouteSchema)
           : structuredFrom(ran.stdout, ProposalSchema);
-  if ("error" in decoded)
+  if ("error" in decoded) {
     return { spent: ran, value: null, error: `evaluator_invalid_output: ${decoded.error}` };
+  }
   return { spent: ran, value: decoded, error: null };
 });
 
@@ -355,9 +373,15 @@ export interface Validated {
 function granted(action: Action, authority: Authority) {
   switch (action.kind) {
     case "deliver":
-      if (!authority.auto_correct) return false;
-      if (action.mode === "now") return authority.now_allowed;
-      if (action.mode === "interrupt") return authority.interrupt_allowed;
+      if (!authority.auto_correct) {
+        return false;
+      }
+      if (action.mode === "now") {
+        return authority.now_allowed;
+      }
+      if (action.mode === "interrupt") {
+        return authority.interrupt_allowed;
+      }
       return true;
     case "stop":
       return authority.stop_allowed;
@@ -374,11 +398,12 @@ function runOf(action: Action) {
 export function validate(proposal: Proposal, ctx: ValidationContext) {
   return Arr.map(proposal.actions, (action) => {
     const refused = refusalFor(action, ctx);
-    if (refused !== null)
+    if (refused !== null) {
       return {
         action: { kind: "ask_human" as const, question: refused },
         state: "pending" as const,
       };
+    }
     const run = runOf(action);
     const intent = run === null ? undefined : ctx.intents.get(run);
     const allowed =
@@ -389,19 +414,23 @@ export function validate(proposal: Proposal, ctx: ValidationContext) {
 
 function refusalFor(action: Action, ctx: ValidationContext) {
   const run = runOf(action);
-  if (run !== null && !ctx.runs.has(run))
+  if (run !== null && !ctx.runs.has(run)) {
     return `I proposed ${action.kind} for run "${run}", which was not among the runs I was shown.`;
+  }
   if (action.kind === "deliver") {
     const agent = action.agent;
-    if (agent !== undefined && !ctx.agents.get(action.run)?.has(agent))
+    if (agent !== undefined && !ctx.agents.get(action.run)?.has(agent)) {
       return `I proposed a message for agent "${agent}", which is not one of run ${action.run}'s.`;
-    if (Buffer.byteLength(action.text, "utf8") > ctx.maxDeliveryBytes)
+    }
+    if (Buffer.byteLength(action.text, "utf8") > ctx.maxDeliveryBytes) {
       return `The message I wrote for ${recipientOf(action)} is over the ${ctx.maxDeliveryBytes}-byte limit.`;
+    }
   }
   if (action.kind === "update_intent") {
     const current = ctx.intents.get(action.run)?.version;
-    if (current !== undefined && current !== action.base_version)
+    if (current !== undefined && current !== action.base_version) {
       return `I wrote an Intent change against v${action.base_version} of run ${action.run}, which is now v${current}.`;
+    }
   }
   return null;
 }
@@ -447,9 +476,13 @@ export const budgetedDeps = Effect.fn("Evaluator.budgetedDeps")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const herd = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-  if (herd === null) return null;
+  if (herd === null) {
+    return null;
+  }
   const systemPromptFile = path.join(env.pluginRoot, "prompts", prompt);
-  if (!(yield* fs.exists(systemPromptFile).pipe(Effect.orElseSucceed(() => false)))) return null;
+  if (!(yield* fs.exists(systemPromptFile).pipe(Effect.orElseSucceed(() => false)))) {
+    return null;
+  }
   const evaluation = yield* evaluationDeps({ pluginRoot: env.pluginRoot, herdKey: herd });
   return {
     evaluator: {

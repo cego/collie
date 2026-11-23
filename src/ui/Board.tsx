@@ -457,8 +457,12 @@ function Card(props: {
         paddingRight: CARD_PAD,
       }}
       onMouseDown={(event: MouseEvent) => {
-        if (event.button === RIGHT_BUTTON) return menu(event);
-        if (event.modifiers.shift) return props.batch.onPick(props.view);
+        if (event.button === RIGHT_BUTTON) {
+          return menu(event);
+        }
+        if (event.modifiers.shift) {
+          return props.batch.onPick(props.view);
+        }
         props.onOpen();
       }}
     >
@@ -655,7 +659,9 @@ export function CardMenu(props: {
               style={{ flexDirection: "row" }}
               onMouseDown={(event: MouseEvent) => {
                 event.stopPropagation();
-                if (item.disabled !== true) props.onAct(item.command);
+                if (item.disabled !== true) {
+                  props.onAct(item.command);
+                }
               }}
             >
               <text fg={C.text} style={{ flexGrow: 1 }}>

@@ -27,8 +27,9 @@ test("both forges' renovate content has the same steps, and every step fills fro
 });
 
 test("tracking and recording are Linear's, and word for word the same on both forges", () => {
-  for (const step of ["track", "record"])
+  for (const step of ["track", "record"]) {
     expect(github.sections.get(step)).toBe(gitlab.sections.get(step));
+  }
 });
 
 test("RENOVATE is still the GitLab content a fork written before there were two reads", () => {

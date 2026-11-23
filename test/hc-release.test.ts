@@ -53,7 +53,9 @@ test("the release tree carries the pinned hc archive, hashing to the pin", () =>
 
       expect(result._tag).toBe("Success");
       expect(bundled._tag).toBe("Some");
-      if (bundled._tag === "Some") expect(sha256Hex(bundled.value)).toBe(sha256Hex(ARCHIVE));
+      if (bundled._tag === "Some") {
+        expect(sha256Hex(bundled.value)).toBe(sha256Hex(ARCHIVE));
+      }
     }),
   ));
 
@@ -63,7 +65,9 @@ test("an archive that does not hash to the pin is refused, and nothing is bundle
       const { result, bundled } = yield* bundle({ "linux-x86_64": sha256Hex(OTHER) });
 
       expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") expect(result.failure.message).toContain(sha256Hex(OTHER));
+      if (result._tag === "Failure") {
+        expect(result.failure.message).toContain(sha256Hex(OTHER));
+      }
       expect(bundled._tag).toBe("None");
     }),
   ));
@@ -77,8 +81,9 @@ test("a target the pin has no hc for fails the build", () =>
       );
 
       expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
+      if (result._tag === "Failure") {
         expect(result.failure.message).toBe("hc-pin.json pins no hc for macos-aarch64");
+      }
       expect(bundled._tag).toBe("None");
       expect(fetched).toEqual([]);
     }),
@@ -99,7 +104,9 @@ test("a kept archive is bundled without a download, and one changed since is fet
       yield* fs.writeFile(`${cache}/0.1.14/herdr-core-linux-x86_64.tar.gz`, OTHER);
       const { bundled } = yield* bundle(pinned, "bun-linux-x64", cache);
       expect(fetched.length).toBe(2);
-      if (bundled._tag === "Some") expect(sha256Hex(bundled.value)).toBe(sha256Hex(ARCHIVE));
+      if (bundled._tag === "Some") {
+        expect(sha256Hex(bundled.value)).toBe(sha256Hex(ARCHIVE));
+      }
     }),
   ));
 
@@ -111,6 +118,8 @@ test("each of the four runners Collie ships has an hc in the committed pin", () 
     "macos-x86_64",
     "macos-aarch64",
   ]);
-  for (const target of targets) expect(pin.sha256).toHaveProperty(hcTarget(target));
+  for (const target of targets) {
+    expect(pin.sha256).toHaveProperty(hcTarget(target));
+  }
   expect(hcTarget("bun-linux-x64-modern-musl")).toBe("linux-x86_64");
 });

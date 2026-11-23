@@ -362,8 +362,11 @@ for (const status of ["succeeded", "failed", "stopped"]) {
   test(`a ${status} Run is admitted on facts, never on its status`, () => {
     for (const [action, refused] of ON_A_FINISHED_RUN) {
       const said = admit(action, ctx({ run: { id: "r1", status } }));
-      if (refused === null) expect([action.kind, said]).toEqual([action.kind, null]);
-      else expect([action.kind, said]).toEqual([action.kind, expect.stringContaining(refused)]);
+      if (refused === null) {
+        expect([action.kind, said]).toEqual([action.kind, null]);
+      } else {
+        expect([action.kind, said]).toEqual([action.kind, expect.stringContaining(refused)]);
+      }
     }
   });
 }
@@ -408,7 +411,9 @@ test("a refused action fails the request and does not execute later actions", ()
 
       const out = yield* carryOutProposal(env, proposal.id, undefined, board);
       expect(out.ok).toBe(false);
-      if (out.ok) return;
+      if (out.ok) {
+        return;
+      }
       expect(out.error.code).toBe("operation_failed");
       expect(out.error.message).toContain("no step left to hold");
       expect(out.error.details).toMatchObject({ results: [{ kind: "hold", state: "skipped" }] });
@@ -485,13 +490,17 @@ test("chat's start names projects-root and every Input, or is told each one it l
         inputs: { size: "small" },
       });
       expect(short.ok).toBe(false);
-      if (short.ok) return;
+      if (short.ok) {
+        return;
+      }
       expect(short.error.message).toContain('"goal"');
       expect(short.error.message).toContain('as ""');
 
       const nowhere = yield* carry({ kind: "start", workflow: "proof", inputs: { note: "x" } });
       expect(nowhere.ok).toBe(false);
-      if (nowhere.ok) return;
+      if (nowhere.ok) {
+        return;
+      }
       expect(nowhere.error.message).toContain('"workspace"');
       expect(nowhere.error.message).toContain("the action's workspace");
       expect(nowhere.error.message).not.toContain("--input");
@@ -554,7 +563,9 @@ test("a confirmed start goes through the same Input settling a typed one does", 
       // WARNING: start takes the same two steps as run start, so an unnamed Input is refused, not guessed; no human is there to ask.
       const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
       expect(out.ok).toBe(false);
-      if (out.ok) return;
+      if (out.ok) {
+        return;
+      }
       expect(out.error.details).toMatchObject({
         results: [{ kind: "start", state: "failed" }, { kind: "hold" }],
       });
@@ -598,7 +609,9 @@ test("a confirmed set_verification grants a running Run a check, and a later one
         command: { executable: "true", argv: [], cwd: "/" },
       });
       expect(away.ok).toBe(false);
-      if (!away.ok) expect(away.error.message).toContain(`is not inside run ${run.id}`);
+      if (!away.ok) {
+        expect(away.error.message).toContain(`is not inside run ${run.id}`);
+      }
       expect((yield* readIntent(run.dir))?.authority.run_verification).toEqual([
         { name: "unit", executable: "true", argv: [], cwd: "worktree" },
       ]);
@@ -617,8 +630,9 @@ test("remember_verification keeps a finished Run's checks for its repository, an
       const worktree = `${world.home}/worktree`;
       yield* fs.makeDirectory(worktree, { recursive: true });
       yield* exec(["git", "init", "-q"], { cwd: worktree });
-      for (const cwd of [world.project, worktree])
+      for (const cwd of [world.project, worktree]) {
         yield* exec(["git", "remote", "add", "origin", "git@example.test:team/app.git"], { cwd });
+      }
       const run = yield* settledRun(world, "hello", { workspace: worktree });
       const client = yield* connect(world.state).pipe(Effect.orDie);
       expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);

@@ -43,7 +43,9 @@ const waiting = (asker: string | null = null) =>
   });
 
 const settle = Effect.gen(function* () {
-  for (let tries = 0; tries < 50; tries++) yield* TestClock.withLive(Effect.sleep("2 millis"));
+  for (let tries = 0; tries < 50; tries++) {
+    yield* TestClock.withLive(Effect.sleep("2 millis"));
+  }
 });
 
 const onTestClock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>

@@ -75,7 +75,9 @@ test("opening rechecks a saved explicit effort after the harness finishes listin
           chatModel: model,
           chatEffort: effort,
         });
-        if ("refused" in saved) return yield* Effect.die(saved.refused);
+        if ("refused" in saved) {
+          return yield* Effect.die(saved.refused);
+        }
         const first = yield* opensOn(saved, NO_FLOCK_SETTINGS, Effect.succeed({}), lists).pipe(
           Effect.forkScoped,
         );

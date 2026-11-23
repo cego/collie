@@ -151,7 +151,9 @@ test("a bare tick reads none of a record's files and sends nothing; a change sen
         Effect.forkScoped,
       );
       let first = yield* Queue.take(frames);
-      while (!isDone(first)) first = yield* Queue.take(frames);
+      while (!isDone(first)) {
+        first = yield* Queue.take(frames);
+      }
 
       yield* Effect.replicateEffect(Queue.take(builds), 2);
       let quiet = 0;
@@ -159,7 +161,9 @@ test("a bare tick reads none of a record's files and sends nothing; a change sen
         yield* TestClock.withLive(Effect.sleep("20 millis"));
         yield* TestClock.adjust("5 seconds");
         const at = yield* Queue.take(builds);
-        if (tick === 1) quiet = at;
+        if (tick === 1) {
+          quiet = at;
+        }
       }
       yield* fs.makeDirectory(`${run.dir}/handoffs`, { recursive: true });
       yield* model.writing.writeFileString(`${run.dir}/handoffs/next.md`, "the next step\n");
@@ -286,13 +290,17 @@ test("a going Run's record shows an edit to its checkout on its next frame", () 
         Effect.forkScoped,
       );
       let first = yield* Queue.take(frames);
-      while (!isDone(first)) first = yield* Queue.take(frames);
+      while (!isDone(first)) {
+        first = yield* Queue.take(frames);
+      }
       expect(first.diff?.files ?? []).toEqual([]);
 
       yield* fs.writeFileString(`${repo}/new.txt`, "hello\n");
       yield* Queue.offer(poked, undefined);
       let next = yield* Queue.take(frames);
-      while (!isDone(next)) next = yield* Queue.take(frames);
+      while (!isDone(next)) {
+        next = yield* Queue.take(frames);
+      }
       expect(Arr.map(next.diff?.files ?? [], (file) => file.path)).toEqual(["new.txt"]);
     }),
   ));
@@ -332,7 +340,9 @@ test("a write while a record's first parts are read is sent once they are", () =
       const handedOff = Effect.gen(function* () {
         for (;;) {
           const frame = yield* Queue.take(frames);
-          if (isDone(frame) && (frame.handoffFiles ?? []).length > 0) return frame.handoffFiles;
+          if (isDone(frame) && (frame.handoffFiles ?? []).length > 0) {
+            return frame.handoffFiles;
+          }
         }
       });
       const shown = yield* handedOff.pipe(Effect.timeoutOption("3 seconds"));

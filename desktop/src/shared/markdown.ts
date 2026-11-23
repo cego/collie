@@ -19,22 +19,27 @@ const referencesIn = (text: string) => {
   const nodes: Array<Node> = [];
   let from = 0;
   for (const found of pipe(text, Str.matchAll(FILE_LINE))) {
-    if ((found.index ?? 0) > from) nodes.push(pipe(text, Str.slice(from, found.index)));
+    if ((found.index ?? 0) > from) {
+      nodes.push(pipe(text, Str.slice(from, found.index)));
+    }
     nodes.push(["file-ref", { file: found[1], line: found[2] }, found[0]]);
     from = (found.index ?? 0) + found[0].length;
   }
-  if (from < text.length) nodes.push(pipe(text, Str.slice(from)));
+  if (from < text.length) {
+    nodes.push(pipe(text, Str.slice(from)));
+  }
   return nodes;
 };
 
 const scripted = (attributes: ElementNodeAttributes, name: string) => {
   let rendered = String(stringifyJson(attributes[name]));
-  if (pipe(name, Str.startsWith(":")))
+  if (pipe(name, Str.startsWith(":"))) {
     try {
       rendered = stringifyJson(parseJson(Schema.Unknown, String(attributes[name])));
     } catch {
       return true;
     }
+  }
   // WARNING: a URL's scheme survives whitespace and control characters, which JSON writes escaped; decode them before testing.
   return /javascript:/i.test(
     pipe(rendered, Str.replaceAll(/\\(?:[bfnrt]|u00[01][\da-f])|\s/gi, "")),
@@ -59,9 +64,11 @@ const confine = (referenced: boolean) => (node: Node) => {
     const returned: Array<Node> = [node];
     return returned;
   }
-  for (const name of Struct.keys(attributes))
-    if (/^:?(style|popover\w*|command\w*|closedby)$/i.test(name) || scripted(attributes, name))
+  for (const name of Struct.keys(attributes)) {
+    if (/^:?(style|popover\w*|command\w*|closedby)$/i.test(name) || scripted(attributes, name)) {
       delete attributes[name];
+    }
+  }
   const [only] = children;
   const text = children.length === 1 && !Arr.isArray<typeof only>(only) ? (only ?? "") : null;
   const whole = referenced && tag === "code" && text !== null ? WHOLE_FILE_LINE.exec(text) : null;

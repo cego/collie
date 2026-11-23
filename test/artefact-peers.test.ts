@@ -152,10 +152,11 @@ test("the CLI's search finds a paired Machine's material by its installation and
           let found = yield* Schema.decodeUnknownEffect(Found)(
             (yield* first.cli(["artefacts", "--query", "remote-findings"])).envelope.data,
           );
-          for (let tries = 0; found.items.length === 0 && tries < 100; tries++)
+          for (let tries = 0; found.items.length === 0 && tries < 100; tries++) {
             found = yield* Schema.decodeUnknownEffect(Found)(
               (yield* first.cli(["artefacts", "--query", "remote-findings"])).envelope.data,
             );
+          }
           expect(found.items).toEqual([
             {
               installation: remote,

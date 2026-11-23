@@ -49,14 +49,16 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
   const herdr = new Herdr(env);
 
   const version = yield* installedVersion(harness);
-  if (version === null)
+  if (version === null) {
     return { version: "not installed", rows: allNotRun(`${harness} is not on PATH`) };
+  }
 
   const scratch = yield* fs.makeTempDirectory({ prefix: `collie-live-${harness}-` });
-  if (!keep)
+  if (!keep) {
     yield* Effect.addFinalizer(() =>
       fs.remove(scratch, { recursive: true, force: true }).pipe(Effect.ignore),
     );
+  }
   const runDir = path.join(scratch, "run");
   // WARNING: the probe's ledger is its own, never the host's that this herdr serves.
   const records = yield* Layer.build(recordsAt(scratch));
@@ -76,13 +78,17 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     workflow: "live",
   });
   const entry = addressed.entry;
-  if (entry === null) return { version, rows: allNotRun(addressed.reason) };
+  if (entry === null) {
+    return { version, rows: allNotRun(addressed.reason) };
+  }
   const hookDir = yield* controlDir(env.stateDir, agent);
 
   const acked = Effect.fn("live.acked")(function* (id: string, budgetMs: number) {
     const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
     while ((yield* Clock.currentTimeMillis) < deadline) {
-      if (yield* fs.exists(ackPath(runDir, id))) return true;
+      if (yield* fs.exists(ackPath(runDir, id))) {
+        return true;
+      }
       yield* Effect.sleep(2000);
     }
     return false;
@@ -178,7 +184,9 @@ const leftWorking = Effect.fn("live.leftWorking")(function* (
     const status = yield* herdr
       .agentStatus(agent)
       .pipe(Effect.orElseSucceed(() => "unknown" as const));
-    if (status !== "working") return true;
+    if (status !== "working") {
+      return true;
+    }
     yield* Effect.sleep(250);
   }
   return false;

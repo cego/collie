@@ -90,7 +90,9 @@ export function StoppedDrawing(props: { why: string; what: string; onQuit: () =>
     renderer.useMouse = false;
   });
   useKeyboard((key) => {
-    if (key.name === "q" || (key.ctrl && key.name === "c")) props.onQuit();
+    if (key.name === "q" || (key.ctrl && key.name === "c")) {
+      props.onQuit();
+    }
   });
   return (
     <box style={{ flexDirection: "column" }}>
@@ -172,7 +174,9 @@ export function driveBridge<E, R>(bridge: Bridge<E, R>) {
         ),
         Stream.runForEach((next) =>
           Effect.sync(() => {
-            if (!next.ok) return;
+            if (!next.ok) {
+              return;
+            }
             const said = next.value.note;
             setState((previous) => ({
               ...next.value,
@@ -196,7 +200,9 @@ export function driveBridge<E, R>(bridge: Bridge<E, R>) {
             return yield* Deferred.succeed(closed, undefined);
           }
           yield* SubscriptionRef.update(focus, (at) => retarget(at, command));
-          if (command._tag === "Select") yield* tell(command.on);
+          if (command._tag === "Select") {
+            yield* tell(command.on);
+          }
         }),
       ),
     );
@@ -211,7 +217,9 @@ export function driveBridge<E, R>(bridge: Bridge<E, R>) {
             marked();
             return yield* Effect.forEach(counting, Fiber.interrupt, { discard: true });
           }
-          if (waiting.has(command.runId)) return;
+          if (waiting.has(command.runId)) {
+            return;
+          }
           const fiber = yield* Effect.forkScoped(
             Effect.sleep(`${bridge.graceMs ?? GRACE_MS} millis`).pipe(
               Effect.andThen(
@@ -235,7 +243,9 @@ export function driveBridge<E, R>(bridge: Bridge<E, R>) {
           const command = yield* Queue.take(work);
           const note = yield* stated(bridge.act(command, prompts));
           // WARNING: only when it worked: a failure already put its reason in the footer, which an unconditional write erases.
-          if (note.ok) setState((previous) => ({ ...previous, note: note.value ?? null }));
+          if (note.ok) {
+            setState((previous) => ({ ...previous, note: note.value ?? null }));
+          }
           yield* SubscriptionRef.update(focus, (at) => ({ ...at, nonce: at.nonce + 1 }));
         }),
       ),
@@ -245,10 +255,13 @@ export function driveBridge<E, R>(bridge: Bridge<E, R>) {
       state,
       pending,
       dispatch: (command) => {
-        if (command._tag === "StopRun" || command._tag === "UndoStop")
+        if (command._tag === "StopRun" || command._tag === "UndoStop") {
           Queue.offerUnsafe(stops, command);
-        else if (changesFocusOnly(command)) Queue.offerUnsafe(control, command);
-        else Queue.offerUnsafe(work, command);
+        } else if (changesFocusOnly(command)) {
+          Queue.offerUnsafe(control, command);
+        } else {
+          Queue.offerUnsafe(work, command);
+        }
       },
       closed: Deferred.await(closed),
     } satisfies Driven;

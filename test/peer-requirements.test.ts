@@ -45,12 +45,13 @@ read -r approval < '${fifo}'`,
         yield* signalProcess(Number(Str.trim(yield* fs.readFileString(`${dir}/started`)))),
       ).toBe(false);
       expect(answer._tag).toBe("Failure");
-      if (answer._tag === "Failure")
+      if (answer._tag === "Failure") {
         expect(
           (yield* Schema.decodeEffect(Schema.Struct({ reason: Schema.String }))(
             answer.failure,
           ).pipe(Effect.orDie)).reason,
         ).toContain("within two minutes");
+      }
     }),
   ));
 
@@ -200,8 +201,9 @@ test("repeated invitations keep one credential despite reversed replies", () =>
             original.secret,
             original.secret,
           ]);
-          for (const invitation of Arr.reverse(invitations))
+          for (const invitation of Arr.reverse(invitations)) {
             yield* caller.pair({ peer: { ...original, secret: invitation.secret } });
+          }
           expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
         }),
       [],

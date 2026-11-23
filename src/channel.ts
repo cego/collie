@@ -56,7 +56,9 @@ export const channelInto = (socket: string | Socket, declaration: Declaration, f
     const handshake = (chunk: Buffer) => {
       reply += chunk.toString("utf8");
       const end = Option.getOrElse(pipe(reply, Str.indexOf("\n")), () => -1);
-      if (end === -1) return;
+      if (end === -1) {
+        return;
+      }
       conn.off("data", handshake);
       const line = pipe(reply, Str.slice(0, end));
       const answer = decodeReply(line);
@@ -69,7 +71,9 @@ export const channelInto = (socket: string | Socket, declaration: Declaration, f
       ready = true;
       far.ready?.();
       const rest = pipe(reply, Str.slice(end + 1));
-      if (rest !== "") far.write(Buffer.from(rest, "utf8"));
+      if (rest !== "") {
+        far.write(Buffer.from(rest, "utf8"));
+      }
       conn.on("data", (more: Buffer) => far.write(more));
       far.read(
         (chunk) => conn.write(chunk),
@@ -77,11 +81,16 @@ export const channelInto = (socket: string | Socket, declaration: Declaration, f
       );
     };
     conn.on("data", handshake);
-    if (conn.connecting) conn.once("connect", () => conn.write(frameOf(declaration)));
-    else conn.write(frameOf(declaration));
+    if (conn.connecting) {
+      conn.once("connect", () => conn.write(frameOf(declaration)));
+    } else {
+      conn.write(frameOf(declaration));
+    }
     conn.on("error", (cause) => refuse(String(cause)));
     conn.on("close", () => {
-      if (!ready) return refuse("the host hung up before it answered the declaration");
+      if (!ready) {
+        return refuse("the host hung up before it answered the declaration");
+      }
       far.end(() => resume(Effect.void));
     });
     conn.resume();

@@ -173,7 +173,9 @@ function applied(intent: Intent, change: Change, version: number) {
 export function amend(intent: Intent, change: Change, by: string, at: string, voice: Voice = {}) {
   const version = intent.version + 1;
   const next = applied(intent, change, version);
-  if (!next) return intent;
+  if (!next) {
+    return intent;
+  }
   return {
     ...next,
     version,
@@ -182,7 +184,9 @@ export function amend(intent: Intent, change: Change, by: string, at: string, vo
 }
 
 export function withOutcome(options: Readonly<Record<string, string>>, intent: Intent | null) {
-  if (intent?.outcome === undefined) return options;
+  if (intent?.outcome === undefined) {
+    return options;
+  }
   const { outcome: _admitted, ...rest } = options;
   return intent.outcome === null ? rest : { ...rest, outcome: intent.outcome };
 }
@@ -231,9 +235,12 @@ export interface SeedOptions {
 // WARNING: Named entries replace a default with the same id, so a stricter one is one constraint, not two.
 export function seedIntent(run: string, options: SeedOptions) {
   const byId = new Map<string, Constraint>();
-  for (const constraint of options.defaults?.constraints ?? []) byId.set(constraint.id, constraint);
-  for (const constraint of options.constraints ?? [])
+  for (const constraint of options.defaults?.constraints ?? []) {
+    byId.set(constraint.id, constraint);
+  }
+  for (const constraint of options.constraints ?? []) {
     byId.set(constraint.id, { ...constraint, since: 1 });
+  }
   return {
     version: 1,
     run,
@@ -258,13 +265,17 @@ export function propagate(parent: Intent, child: Intent) {
     (c) => ({ ...c, source: "parent" as const }),
   );
   const conflicts: Array<string> = [];
-  for (const c of parent.constraints)
-    if (ownIds.has(c.id)) conflicts.push(`constraint ${c.id}: the child's own entry is kept`);
+  for (const c of parent.constraints) {
+    if (ownIds.has(c.id)) {
+      conflicts.push(`constraint ${c.id}: the child's own entry is kept`);
+    }
+  }
   const goal = child.goal ?? parent.goal;
-  if (child.goal !== null && parent.goal !== null && child.goal !== parent.goal)
+  if (child.goal !== null && parent.goal !== null && child.goal !== parent.goal) {
     conflicts.push(
       `goal: parent ${stringifyJson(parent.goal)} differs from the child's ${stringifyJson(child.goal)}`,
     );
+  }
   return {
     intent: {
       ...child,
@@ -294,7 +305,9 @@ export function extractRequirements(text: string, file: string) {
   let heading: string | null = null;
   let bullet: { indent: number; parts: Array<string>; line: number } | null = null;
   const flush = () => {
-    if (bullet === null || heading === null) return;
+    if (bullet === null || heading === null) {
+      return;
+    }
     const body = Arr.join(bullet.parts, " ");
     const text = /^out of scope$/i.test(heading) ? `Out of scope: ${body}` : body;
     constraints.push({
@@ -308,13 +321,17 @@ export function extractRequirements(text: string, file: string) {
     bullet = null;
   };
   for (const [index, line] of lines.entries()) {
-    if (HEADING.test(line) || Str.trim(line) === "") flush();
+    if (HEADING.test(line) || Str.trim(line) === "") {
+      flush();
+    }
     if (HEADING.test(line)) {
       const match = REQUIREMENT_HEADING.exec(line);
       heading = match ? match[1]! : null;
       continue;
     }
-    if (heading === null || Str.trim(line) === "") continue;
+    if (heading === null || Str.trim(line) === "") {
+      continue;
+    }
     const item = BULLET.exec(line);
     const numbered = item === null ? NUMBERED.exec(line) : null;
     const listed = item ?? numbered;
@@ -329,7 +346,9 @@ export function extractRequirements(text: string, file: string) {
     }
     flush();
     // WARNING: A numbered item ends a bullet but is not one.
-    if (item !== null) bullet = { indent, parts: [item[2]!], line: index + 1 };
+    if (item !== null) {
+      bullet = { indent, parts: [item[2]!], line: index + 1 };
+    }
   }
   flush();
   const goal =
@@ -342,11 +361,17 @@ function firstParagraphUnder(lines: ReadonlyArray<string>, heading: RegExp) {
     Arr.findFirstIndex(lines, (line) => heading.test(line)),
     () => -1,
   );
-  if (start < 0) return null;
+  if (start < 0) {
+    return null;
+  }
   const paragraph: Array<string> = [];
   for (const line of lines.slice(start + 1)) {
-    if (HEADING.test(line) || (Str.trim(line) === "" && paragraph.length > 0)) break;
-    if (Str.trim(line) !== "") paragraph.push(Str.trim(line));
+    if (HEADING.test(line) || (Str.trim(line) === "" && paragraph.length > 0)) {
+      break;
+    }
+    if (Str.trim(line) !== "") {
+      paragraph.push(Str.trim(line));
+    }
   }
   return paragraph.length > 0 ? Arr.join(paragraph, " ") : null;
 }
@@ -361,7 +386,9 @@ export const defaultsPath = Effect.fn("Intent.defaultsPath")(function* (
 
 export const readDefaults = Effect.fn("Intent.readDefaults")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) return null;
+  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) {
+    return null;
+  }
   const raw = yield* fs
     .readFileString(file)
     .pipe(Effect.mapError((cause) => new IntentUnreadable({ dir: file, cause: String(cause) })));
@@ -405,12 +432,15 @@ export const fromWorkSource = Effect.fn("Intent.fromWorkSource")(function* (
   value: string,
 ) {
   const none: ReadonlyArray<Omit<Constraint, "since">> = [];
-  if (kind !== "plan-dir") return { goal: value === "" ? null : value, constraints: none };
+  if (kind !== "plan-dir") {
+    return { goal: value === "" ? null : value, constraints: none };
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const spec = path.join(value, "SPEC.md");
-  if (!(yield* fs.exists(spec).pipe(Effect.orElseSucceed(() => false))))
+  if (!(yield* fs.exists(spec).pipe(Effect.orElseSucceed(() => false)))) {
     return { goal: null, constraints: none };
+  }
   const text = yield* fs.readFileString(spec).pipe(Effect.orElseSucceed(() => ""));
   return extractRequirements(text, "SPEC.md");
 });
@@ -422,7 +452,9 @@ export function parseConstraint(text: string, severity: "block" | "warn") {
     severity,
     source: "human" as const,
   };
-  if (!pipe(text, Str.startsWith("rule:"))) return { ...base, kind: "semantic" as const };
+  if (!pipe(text, Str.startsWith("rule:"))) {
+    return { ...base, kind: "semantic" as const };
+  }
   const [, kind, ...rest] = Str.split(text, ":");
   const rule = parseRule(kind ?? "", rest);
   return "error" in rule ? rule : { ...base, kind: "rule" as const, rule };
@@ -476,21 +508,25 @@ export function authorityPatch(pairs: ReadonlyArray<string>) {
   } = {};
   for (const pair of pairs) {
     const at = Option.getOrElse(pipe(pair, Str.indexOf("=")), () => -1);
-    if (at <= 0) return { error: `"${pair}" is not k=v.` };
+    if (at <= 0) {
+      return { error: `"${pair}" is not k=v.` };
+    }
     const key = pipe(pair, Str.slice(0, at));
     const value = pipe(pair, Str.slice(at + 1));
     if (BOOLEAN_AUTHORITIES.has(key)) {
-      if (value !== "true" && value !== "false") return { error: `"${key}" is true or false.` };
+      if (value !== "true" && value !== "false") {
+        return { error: `"${key}" is true or false.` };
+      }
       // WARNING: `key` is in BOOLEAN_AUTHORITIES, so it names one of the boolean grants; they all take the same value type, and the literal picks one of them to say so.
-      // WARNING: `key` is in BOOLEAN_AUTHORITIES, so it names a boolean grant; they all take the same value type.
       patch[key as "auto_correct"] = value === "true";
       continue;
     }
     if (COUNT_AUTHORITIES.has(key)) {
       const count = Number(value);
-      if (!Number.isInteger(count) || count < 0) return { error: `"${key}" is a whole number.` };
+      if (!Number.isInteger(count) || count < 0) {
+        return { error: `"${key}" is a whole number.` };
+      }
       // WARNING: `key` is in COUNT_AUTHORITIES, so it names one of the numeric grants.
-      // WARNING: `key` is in COUNT_AUTHORITIES, so it names a numeric grant.
       patch[key as "max_corrections_per_constraint"] = count;
       continue;
     }

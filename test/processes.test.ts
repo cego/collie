@@ -147,7 +147,9 @@ test.skipIf(process.platform !== "linux").each([
                   if (exited) {
                     yield* child.kill();
                     yield* child.exitCode.pipe(Effect.result);
-                  } else yield* fs.readFileString(path, encoding);
+                  } else {
+                    yield* fs.readFileString(path, encoding);
+                  }
                   absentAtRead.push(yield* processAbsent(child.pid));
                   return yield* unknown;
                 })
@@ -186,7 +188,9 @@ test.skipIf(process.platform !== "linux")(
         const spawned: Array<string> = [];
         const spawner = ChildProcessSpawner.make((command) =>
           Effect.sync(() => {
-            if (command._tag === "StandardCommand") spawned.push(command.command);
+            if (command._tag === "StandardCommand") {
+              spawned.push(command.command);
+            }
           }).pipe(Effect.andThen(Effect.die("nothing may be spawned"))),
         );
         const started = yield* startedOf(2 ** 22 + 1).pipe(
@@ -247,7 +251,9 @@ test("unrelated process metadata cannot delay finding a bound process, whose bin
         readDirectory: () => Effect.succeed(["7", "8"]),
         readFileString: (path) =>
           Effect.suspend(() => {
-            if (path === "/proc/8/stat") return Effect.never;
+            if (path === "/proc/8/stat") {
+              return Effect.never;
+            }
             if (path === "/proc/7/stat") {
               binding = "after-start";
               return Effect.succeed(

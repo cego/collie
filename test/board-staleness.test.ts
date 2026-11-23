@@ -44,7 +44,9 @@ const settled = (root: string, releases: string) =>
   Effect.gen(function* () {
     for (let tries = 0; tries < 20; tries++) {
       const text = yield* board(root, releases);
-      if (pipe_(text, Str.includes("is out"))) return text;
+      if (pipe_(text, Str.includes("is out"))) {
+        return text;
+      }
       yield* Effect.sleep("50 millis");
     }
     return yield* board(root, releases);

@@ -79,37 +79,45 @@ export function followEvents(before: Followed, after: Followed) {
         agents.add(step.agent);
         events.push({ type: "agent", agent: step.agent, operation: step.operation });
       }
-      if (prior === undefined)
+      if (prior === undefined) {
         events.push({
           type: "operation",
           operation: step.operation,
           agent: step.agent,
           state: "started",
         });
-      if (step.done && prior?.done !== true)
+      }
+      if (step.done && prior?.done !== true) {
         events.push({
           type: "operation",
           operation: step.operation,
           agent: step.agent,
           state: "finished",
         });
+      }
     }
     const ci = after.progress.ci;
     const prior = before.progress?.ci ?? null;
-    if (ci !== null && (prior === null ? ci.state !== "none" : ciSaid(prior) !== ciSaid(ci)))
+    if (ci !== null && (prior === null ? ci.state !== "none" : ciSaid(prior) !== ciSaid(ci))) {
       events.push({ type: "ci", ci });
+    }
   }
   const parked = after.view?.parked ?? null;
-  if (parked !== null && parked !== (before.view?.parked ?? null))
+  if (parked !== null && parked !== (before.view?.parked ?? null)) {
     events.push({ type: "parked", reason: parked });
+  }
   const awaiting = after.view?.awaiting ?? null;
-  if (awaiting !== null && awaiting.on !== before.view?.awaiting?.on)
+  if (awaiting !== null && awaiting.on !== before.view?.awaiting?.on) {
     events.push({ type: "awaiting", on: awaiting.on, who: awaiting.who });
+  }
   const mrs = after.progress?.mrs;
-  if (mrs !== undefined) events.push(...mrEvents(before.progress?.mrs ?? [], mrs));
-  else {
+  if (mrs !== undefined) {
+    events.push(...mrEvents(before.progress?.mrs ?? [], mrs));
+  } else {
     const mr = after.view?.mr ?? null;
-    if (mr !== null && mr !== (before.view?.mr ?? null)) events.push({ type: "mr", mr });
+    if (mr !== null && mr !== (before.view?.mr ?? null)) {
+      events.push({ type: "mr", mr });
+    }
   }
   const returned: ReadonlyArray<FollowEvent> = events;
   return returned;

@@ -20,7 +20,9 @@ export const awaitOutput = (
 export const outputCollected = (runId: string, agent: string, text: string) =>
   Effect.sync(() => {
     const entry = awaiting.get(keyOf(runId, agent));
-    if (entry !== undefined) awaiting.set(keyOf(runId, agent), { ...entry, collected: text });
+    if (entry !== undefined) {
+      awaiting.set(keyOf(runId, agent), { ...entry, collected: text });
+    }
   });
 
 const asText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
@@ -31,16 +33,19 @@ export const submitOutput = Effect.fn("OutputSubmit.submit")(function* (
   output: Schema.Json,
 ) {
   const entry = awaiting.get(keyOf(runId, agent));
-  if (entry === undefined)
+  if (entry === undefined) {
     return `No step of ${runId} is waiting for ${agent}'s Output. Nothing was written.`;
+  }
   const text = isString(output) ? output : asText(output);
-  if (entry.collected !== undefined)
+  if (entry.collected !== undefined) {
     return entry.collected === text
       ? "accepted"
       : `${entry.output} was already collected, and this Output differs from it. Nothing was written.`;
+  }
   const problem = entry.problem(text);
-  if (problem !== null)
+  if (problem !== null) {
     return `Your Output is not usable: ${problem}\n\nNothing was written. Correct it and submit it again.`;
+  }
   const fs = yield* FileSystem.FileSystem;
   yield* fs.writeFileString(`${entry.output}.submitted`, text);
   yield* fs.rename(`${entry.output}.submitted`, entry.output);

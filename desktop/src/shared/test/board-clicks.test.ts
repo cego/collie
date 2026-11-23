@@ -26,8 +26,9 @@ const page = (open: string | null) => ({
 
 test("a click on a card's body is the card's, and on one of its controls the control's", () => {
   expect(landedOn(element(["[data-card]"]))).toEqual({ on: "card", card: "pc:a", asOf: false });
-  for (const control of ["button", "a", "input", "label", "form"])
+  for (const control of ["button", "a", "input", "label", "form"]) {
     expect(landedOn(element([control, "[data-card]"]))).toEqual({ on: "control" });
+  }
 });
 
 test("a card whose Machine dropped says so", () => {
@@ -63,18 +64,22 @@ test("Escape finds a dialog, slideover, popover, menu or select open", () => {
     '[role="alertdialog"]',
     '[role="menu"]',
     '[role="listbox"]',
-  ])
+  ]) {
     expect(escapeOn(element([]), page(role))).toMatchObject({ overlay: true });
+  }
 });
 
 test("Escape typed in a field, such as the Log search, is typing", () => {
-  for (const field of ["input", "textarea", "select"])
+  for (const field of ["input", "textarea", "select"]) {
     expect(escapeOn(element([field]), page(null))).toMatchObject({ typing: true });
+  }
   expect(escapeOn(element([], true), page(null))).toMatchObject({ typing: true });
 });
 
 test("focus in a field, or in what is editable, is in a field; anywhere else is not", () => {
-  for (const field of ["input", "textarea", "select"]) expect(inField(element([field]))).toBe(true);
+  for (const field of ["input", "textarea", "select"]) {
+    expect(inField(element([field]))).toBe(true);
+  }
   expect(inField(element([], true))).toBe(true);
   expect(inField(element(["button"]))).toBe(false);
   expect(inField(null)).toBe(false);

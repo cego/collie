@@ -33,6 +33,7 @@ test.each([
 ])("%s is said in a sentence", (_, cause, said) => {
   const text = saidOf(cause);
   expect(text).toBe(said);
-  for (const effect of ["fiber", "[cause]", "InterruptError", "    at "])
+  for (const effect of ["fiber", "[cause]", "InterruptError", "    at "]) {
     expect(text).not.toContain(effect);
+  }
 });

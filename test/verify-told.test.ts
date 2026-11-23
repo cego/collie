@@ -60,9 +60,13 @@ test("a settled agent being collected from is told its verify ended, and no one 
           }),
           (before) =>
             Effect.sync(() => {
-              for (const [key, value] of Rec.toEntries(before))
-                if (value === undefined) delete Bun.env[key];
-                else Bun.env[key] = value;
+              for (const [key, value] of Rec.toEntries(before)) {
+                if (value === undefined) {
+                  delete Bun.env[key];
+                } else {
+                  Bun.env[key] = value;
+                }
+              }
             }),
         );
         resetExecutors();
@@ -162,8 +166,9 @@ test("a settled agent being collected from is told its verify ended, and no one 
             (words) => pipe_(words, Str.includes("Your collie verify")),
           ),
         );
-        for (const part of ['"unit"', "pass (exit 0)", Str.trim(head), ran.verification.log!])
+        for (const part of ['"unit"', "pass (exit 0)", Str.trim(head), ran.verification.log!]) {
           expect(said).toContain(part);
+        }
 
         // WARNING: once it is one of the Run's Checks it is answered from its record, never run, for an agent as for a human.
         yield* grant("unit", "/bin/true");
@@ -174,12 +179,13 @@ test("a settled agent being collected from is told its verify ended, and no one 
           [asHuman, []],
           [asAgent, ["--expect", "fail"]],
           [asHuman, ["--expect", "fail"]],
-        ] as const)
+        ] as const) {
           expect(
             yield* Schema.decodeUnknownEffect(Ran)(
               (yield* asked("unit", "/bin/true", extra, expecting)).envelope.data,
             ).pipe(Effect.orDie),
           ).toEqual(again);
+        }
         yield* grant("gate-only", "/bin/echo");
         for (const [extra, expecting] of [
           [asAgent, []],
@@ -219,7 +225,9 @@ test("the implementer, and every step prompt that has an agent use collie verify
         );
         const verifying = Arr.filter(steps, (step) => pipe_(step, Str.includes("collie verify")));
         expect(verifying.length).toBeGreaterThan(0);
-        for (const step of verifying) expect(flat(step)).toContain(line);
+        for (const step of verifying) {
+          expect(flat(step)).toContain(line);
+        }
       }
     }),
   ));

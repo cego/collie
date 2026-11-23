@@ -388,7 +388,9 @@ const handBuilt = Effect.gen(function* () {
     Queue.offer(builds, next).pipe(
       Effect.andThen(
         Effect.gen(function* () {
-          while ((yield* Queue.size(builds)) > 0) yield* Effect.yieldNow;
+          while ((yield* Queue.size(builds)) > 0) {
+            yield* Effect.yieldNow;
+          }
         }),
       ),
     );
@@ -458,7 +460,9 @@ test("changes that arrive during a build are folded into one more build", () =>
       Effect.gen(function* () {
         const hand = yield* handBuilt;
         const following = yield* hand.follow(1);
-        while (hand.calls() === 0) yield* Effect.yieldNow;
+        while (hand.calls() === 0) {
+          yield* Effect.yieldNow;
+        }
         yield* Queue.offerAll(hand.changed, [undefined, undefined, undefined]);
         yield* hand.built([one]);
         yield* hand.built([one, two]);
@@ -500,7 +504,9 @@ test("the board is built with nobody subscribed, and every reader of one interva
         expect(hand.calls()).toBe(1);
         const clients = [yield* hand.follow(1), yield* hand.follow(1)];
         const latest = [yield* Stream.runHead(hand.boards), yield* Stream.runHead(hand.boards)];
-        for (const client of clients) expect(tags(yield* Fiber.join(client))).toEqual(["Snapshot"]);
+        for (const client of clients) {
+          expect(tags(yield* Fiber.join(client))).toEqual(["Snapshot"]);
+        }
         expect(Arr.map(latest, (read) => read._tag === "Some" && read.value)).toEqual([
           [one],
           [one],
@@ -530,11 +536,14 @@ test("the latest board is read at once while a newer one builds, and the first i
 
         yield* Queue.offer(changed, undefined);
         yield* TestClock.adjust("5 seconds");
-        while (builds < 2) yield* Effect.yieldNow;
+        while (builds < 2) {
+          yield* Effect.yieldNow;
+        }
         const asked = yield* Clock.currentTimeMillis;
         const read = yield* Effect.forkChild(latest);
-        for (let turn = 0; turn < 100 && read.pollUnsafe() === undefined; turn++)
+        for (let turn = 0; turn < 100 && read.pollUnsafe() === undefined; turn++) {
           yield* Effect.yieldNow;
+        }
         expect(read.pollUnsafe()).toBeDefined();
         expect(Arr.map(yield* Fiber.join(read), (view) => view.id)).toEqual(["built-1"]);
         expect(yield* Clock.currentTimeMillis).toBe(asked);
@@ -557,7 +566,9 @@ test("a build waits as long as the last one took, and at most 5 s, before it sta
         });
         yield* shareBoard({ build, changed: Stream.fromQueue(changed) });
         const settle = Effect.gen(function* () {
-          for (let turn = 0; turn < 100; turn++) yield* Effect.yieldNow;
+          for (let turn = 0; turn < 100; turn++) {
+            yield* Effect.yieldNow;
+          }
         });
         yield* settle;
         expect(starts).toEqual([0]);
@@ -587,7 +598,9 @@ const warnedDuring = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const warned: Array<string> = [];
     const logger = Logger.make(({ logLevel, message }) => {
-      if (logLevel === "Warn") warned.push(String(message));
+      if (logLevel === "Warn") {
+        warned.push(String(message));
+      }
     });
     yield* effect.pipe(Effect.provide(Logger.layer([logger])));
     return warned;
@@ -665,7 +678,9 @@ test("a read after verify waits for fresh board facts without holding the build'
         let boundaries = 0;
         const { boards } = yield* shareBoard({
           build: Effect.gen(function* () {
-            if (++builds === 1) return [task({ id: "fresh", ready: false, mr: null })];
+            if (++builds === 1) {
+              return [task({ id: "fresh", ready: false, mr: null })];
+            }
             yield* Deferred.succeed(rebuilding, undefined);
             yield* Deferred.await(buildAllowed);
             for (let at = 0; at < 3; at++) {
@@ -705,8 +720,9 @@ test("a read after verify waits for fresh board facts without holding the build'
         yield* Deferred.succeed(otherAllowed, undefined);
         yield* Fiber.join(other);
         yield* clock.adjust("1 millis");
-        for (let turn = 0; turn < 100 && read.pollUnsafe() === undefined; turn++)
+        for (let turn = 0; turn < 100 && read.pollUnsafe() === undefined; turn++) {
           yield* Effect.yieldNow;
+        }
         expect(read.pollUnsafe()).toBeDefined();
         expect(yield* Fiber.join(read)).toEqual(
           Option.some({
@@ -799,8 +815,9 @@ const watchedState = Effect.gen(function* () {
     "agents/run-a/step.json",
     "tasks/task-a.json",
     "ssh/.made",
-  ])
+  ]) {
     yield* write(file);
+  }
   yield* write("runs/run-a/handoffs/ready", "");
   const seen = yield* Queue.unbounded<string>();
   yield* Effect.forkScoped(Stream.runForEach(boardWrites(dir), (path) => Queue.offer(seen, path)));
@@ -811,9 +828,13 @@ const watchedState = Effect.gen(function* () {
       const paths = new Set<string>();
       while (!Arr.every(wanted, (one) => paths.has(one))) {
         const written = yield* Queue.take(seen);
-        if (!pipe_(written, Str.endsWith("ready")) && !told.has(written)) paths.add(written);
+        if (!pipe_(written, Str.endsWith("ready")) && !told.has(written)) {
+          paths.add(written);
+        }
       }
-      for (const one of paths) told.add(one);
+      for (const one of paths) {
+        told.add(one);
+      }
       return [...paths].sort();
     }).pipe(Effect.timeoutOption("2 seconds"));
   return { dir, write, append, through };
@@ -837,8 +858,9 @@ test("no write to the host's own bookkeeping reaches the board", () =>
         "compaction/agent-a/events.jsonl",
         "compaction/agent-a/events.lock",
         "compaction/agent-a/control.json",
-      ])
+      ]) {
         yield* write(file);
+      }
       yield* write("tasks/marker.json");
       expect(yield* through(["tasks/marker.json"])).toEqual(Option.some(["tasks/marker.json"]));
     }),
@@ -853,7 +875,9 @@ test("a log growing in a Run's handoffs or verify logs reaches no board, and a f
       yield* write("tasks/marker.json");
       expect(yield* through(["tasks/marker.json"])).toEqual(Option.some(["tasks/marker.json"]));
       const created = ["evidence/run-a/verify/w.log", "runs/run-a/handoffs/new.log"];
-      for (const file of created) yield* write(file);
+      for (const file of created) {
+        yield* write(file);
+      }
       expect(yield* through(created)).toEqual(Option.some(created));
     }),
   ));
@@ -891,12 +915,16 @@ test("a write outside every Run's directories reaches the board only where a rea
         "herd/h1/news/new.json",
         "merges/states.json",
       ];
-      for (const file of wanted) yield* write(file);
+      for (const file of wanted) {
+        yield* write(file);
+      }
       const paths = new Set<string>();
       const all = Effect.gen(function* () {
         while (!Arr.every(wanted, (one) => paths.has(one))) {
           const path = yield* Queue.take(seen);
-          if (!pipe_(path, Str.endsWith("ready"))) paths.add(path);
+          if (!pipe_(path, Str.endsWith("ready"))) {
+            paths.add(path);
+          }
         }
       });
       expect(Option.isSome(yield* Effect.timeoutOption(all, "2 seconds"))).toBe(true);

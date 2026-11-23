@@ -32,7 +32,9 @@ export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context
     calls.clear();
   });
   const ask = (input: JsonObject) => {
-    if (context.flock.said() === undefined) return Promise.resolve(NO_HUMAN);
+    if (context.flock.said() === undefined) {
+      return Promise.resolve(NO_HUMAN);
+    }
     const signal = turn.signal;
     return context.run(
       Effect.gen(function* () {
@@ -54,10 +56,12 @@ export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context
         port: 0,
         idleTimeout: 0,
         fetch: (request) => {
-          if (request.headers.get("Authorization") !== `Bearer ${token}`)
+          if (request.headers.get("Authorization") !== `Bearer ${token}`) {
             return new Response("Unauthorized", { status: 401 });
-          if (new URL(request.url).pathname !== "/mcp")
+          }
+          if (new URL(request.url).pathname !== "/mcp") {
             return new Response("Not found", { status: 404 });
+          }
           const mcp = toolServer(context.flock, context.run, ask);
           const transport = new WebStandardStreamableHTTPServerTransport({
             enableJsonResponse: true,

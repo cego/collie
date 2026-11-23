@@ -23,8 +23,12 @@ test("desktop updates follow Collie's release redirect and GitHub's asset CDN", 
       const seen: Array<string> = [];
       const client = transport((url) => {
         seen.push(url);
-        if (url === ASSET) return Response.redirect(TAGGED);
-        if (url === TAGGED) return Response.redirect(CDN);
+        if (url === ASSET) {
+          return Response.redirect(TAGGED);
+        }
+        if (url === TAGGED) {
+          return Response.redirect(CDN);
+        }
         return new Response("signed bytes");
       });
       const body = yield* downloadRelease(ASSET).pipe(

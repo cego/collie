@@ -57,10 +57,13 @@ export function offersFrom(
       one.kind === "follow-up" &&
       facts.disposed &&
       !(options.keepUnavailable === true && refused !== undefined)
-    )
+    ) {
       continue;
+    }
     const unavailable = refused ?? refusal(one, facts);
-    if (unavailable !== null && options.keepUnavailable !== true) continue;
+    if (unavailable !== null && options.keepUnavailable !== true) {
+      continue;
+    }
     const offer: Types.Mutable<Offer> = {
       id: one.id,
       title: one.entry === undefined ? one.title : `${one.title} — ${one.entry(facts)}`,
@@ -71,9 +74,15 @@ export function offersFrom(
       primary: false,
       unavailable,
     };
-    if (one.given !== undefined) offer.given = one.given;
-    if (one.ships !== undefined) offer.ships = one.ships;
-    if (one.confirm !== undefined) offer.confirm = one.confirm;
+    if (one.given !== undefined) {
+      offer.given = one.given;
+    }
+    if (one.ships !== undefined) {
+      offer.ships = one.ships;
+    }
+    if (one.confirm !== undefined) {
+      offer.confirm = one.confirm;
+    }
     offers.push(offer);
   }
   const first = Option.getOrElse(
@@ -89,9 +98,13 @@ const isNames = Schema.is(Schema.Array(Schema.String));
 export function argumentsWithout(drawn: Schema.Json | null, names: ReadonlySet<string>) {
   const document = Option.getOrUndefined(asJsonRecord(drawn));
   const drawnProperties = Option.getOrUndefined(asJsonRecord(document?.properties));
-  if (document === undefined || drawnProperties === undefined) return drawn;
+  if (document === undefined || drawnProperties === undefined) {
+    return drawn;
+  }
   const properties = Rec.filter(drawnProperties, (_, name) => !names.has(name));
-  if (Rec.isEmptyRecord(properties)) return null;
+  if (Rec.isEmptyRecord(properties)) {
+    return null;
+  }
   const { required } = document;
   return isNames(required)
     ? { ...document, properties, required: Arr.filter(required, (name) => !names.has(name)) }
@@ -214,7 +227,9 @@ export function inputsFor(
   const given: Record<string, Schema.Json> = {};
   for (const [name, source] of Rec.toEntries(offer.inputs)) {
     const filled = value(source, name);
-    if (filled !== undefined) given[name] = filled;
+    if (filled !== undefined) {
+      given[name] = filled;
+    }
   }
   return { ...given, ...offer.given };
 }

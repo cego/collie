@@ -131,7 +131,9 @@ export const descendsFrom = (
         cwd,
         `/projects/${encodeURIComponent(path)}/repository/merge_base?refs[]=${encodeURIComponent(previous)}&refs[]=${encodeURIComponent(head)}`,
       );
-      if (!base.ok) return base.status === 404 ? { ok: true as const, value: false } : base;
+      if (!base.ok) {
+        return base.status === 404 ? { ok: true as const, value: false } : base;
+      }
       return { ok: true as const, value: base.value.id === previous };
     }
     const compared = yield* requestAs(
@@ -140,8 +142,9 @@ export const descendsFrom = (
       cwd,
       `/repos/${path}/compare/${encodeURIComponent(previous)}...${encodeURIComponent(head)}`,
     );
-    if (!compared.ok)
+    if (!compared.ok) {
       return compared.status === 404 ? { ok: true as const, value: false } : compared;
+    }
     return {
       ok: true as const,
       value: compared.value.status === "ahead" || compared.value.status === "identical",
@@ -162,7 +165,9 @@ export const approvedAt = (
     if (login.forge === "gitlab") {
       const route = `/projects/${encodeURIComponent(path)}/merge_requests/${ref.iid}`;
       const mr = yield* requestAs(Schema.Struct({ sha: Schema.String }), login, cwd, route);
-      if (!mr.ok) return mr;
+      if (!mr.ok) {
+        return mr;
+      }
       const approvals = yield* requestAs(
         Schema.Struct({
           approved_by: Schema.NullOr(
@@ -173,7 +178,9 @@ export const approvedAt = (
         cwd,
         `${route}/approvals`,
       );
-      if (!approvals.ok) return approvals;
+      if (!approvals.ok) {
+        return approvals;
+      }
       return {
         ok: true as const,
         value:
@@ -188,7 +195,9 @@ export const approvedAt = (
       cwd,
       pull,
     );
-    if (!current.ok) return current;
+    if (!current.ok) {
+      return current;
+    }
     const reviews = yield* pagesAs(
       Schema.Struct({
         user: Schema.NullOr(Schema.Struct({ login: Schema.String })),
@@ -198,7 +207,9 @@ export const approvedAt = (
       cwd,
       `${pull}/reviews`,
     );
-    if (!reviews.ok) return reviews;
+    if (!reviews.ok) {
+      return reviews;
+    }
     const latest = Arr.last(
       Arr.filter(
         reviews.value,
@@ -234,7 +245,9 @@ export const reviewChanges = (
         cwd,
         `${route}/merge_base?refs[]=${encodeURIComponent(previous)}&refs[]=${encodeURIComponent(head)}`,
       );
-      if (!base.ok && base.status !== 404) return base;
+      if (!base.ok && base.status !== 404) {
+        return base;
+      }
       if (base.ok && base.value.id === previous) {
         const compared = yield* requestAs(
           Schema.Struct({
@@ -252,12 +265,14 @@ export const reviewChanges = (
           cwd,
           `${route}/compare?from=${encodeURIComponent(previous)}&to=${encodeURIComponent(head)}&straight=true`,
         );
-        if (!compared.ok) return compared;
+        if (!compared.ok) {
+          return compared;
+        }
         const omitted = Arr.filter(
           compared.value.diffs,
           (one) => one.collapsed === true || one.too_large === true,
         );
-        if (omitted.length > 0)
+        if (omitted.length > 0) {
           return {
             ok: false as const,
             reason: `GitLab interdiff is incomplete: omitted content for ${Arr.join(
@@ -265,11 +280,13 @@ export const reviewChanges = (
               ", ",
             )}; supply the missing diffs before reviewing`,
           };
-        if (!compared.value.compare_timeout)
+        }
+        if (!compared.value.compare_timeout) {
           changes = Arr.join(
             Arr.map(compared.value.diffs, (one) => `${one.new_path}\n${one.diff}`),
             "\n\n",
           );
+        }
       }
     } else {
       const compared = yield* requestAs(
@@ -285,13 +302,15 @@ export const reviewChanges = (
         cwd,
         `/repos/${path}/compare/${encodeURIComponent(previous)}...${encodeURIComponent(head)}`,
       );
-      if (!compared.ok && compared.status !== 404) return compared;
+      if (!compared.ok && compared.status !== 404) {
+        return compared;
+      }
       if (
         compared.ok &&
         (compared.value.status === "ahead" || compared.value.status === "identical") &&
         compared.value.files !== undefined &&
         compared.value.files.length < 300
-      )
+      ) {
         changes = Arr.join(
           Arr.map(
             compared.value.files,
@@ -300,9 +319,11 @@ export const reviewChanges = (
           ),
           "\n\n",
         );
+      }
     }
-    if (changes !== null)
+    if (changes !== null) {
       return { ok: true as const, value: `Interdiff ${previous}..${head}:\n\n${changes}` };
+    }
     const http = yield* ForgeHttp;
     const files = yield* http.ask(login, cwd, (provider, signal) =>
       Array.fromAsync(
@@ -312,7 +333,9 @@ export const reviewChanges = (
         }),
       ),
     );
-    if (!files.ok) return files;
+    if (!files.ok) {
+      return files;
+    }
     return {
       ok: true as const,
       value: `Full diff at ${head} (the earlier head is not an ancestor or the interdiff is incomplete):\n\n${Arr.join(
@@ -364,11 +387,12 @@ export const postReview = (
     const noted = yield* http.ask(login, cwd, (provider, signal) =>
       provider.threads.createComment(thread, body, { signal }),
     );
-    if (!noted.ok)
+    if (!noted.ok) {
       return {
         ok: false,
         message: `could not post the review to ${where}: ${noted.reason}; inspect the merge request before retrying`,
       };
+    }
     return { ok: true, message: `posted the review to ${where}` };
   });
 
@@ -381,14 +405,21 @@ export const approveReview = (
 ) =>
   Effect.gen(function* () {
     const where = mrWords(ref).label;
-    if (head === "") return { ok: false, message: `did not approve ${where}: no reviewed head` };
+    if (head === "") {
+      return { ok: false, message: `did not approve ${where}: no reviewed head` };
+    }
     const http = yield* ForgeHttp;
     const me = yield* http.ask(login, cwd, (provider, signal) => provider.users.me({ signal }));
-    if (!me.ok) return { ok: false, message: me.reason, retryable: me.transient === true };
+    if (!me.ok) {
+      return { ok: false, message: me.reason, retryable: me.transient === true };
+    }
     const existing = yield* approvedAt(login, project, ref, me.value.login, head, cwd);
-    if (!existing.ok)
+    if (!existing.ok) {
       return { ok: false, message: existing.reason, retryable: existing.transient === true };
-    if (existing.value) return { ok: true, message: `approved ${where} at ${head}` };
+    }
+    if (existing.value) {
+      return { ok: true, message: `approved ${where} at ${head}` };
+    }
     const repo = threadRepo(login, project);
     const path = `${repo.owner}/${repo.name}`;
     const pull = `repos/${path}/pulls/${ref.iid}`;
@@ -397,12 +428,13 @@ export const approveReview = (
     // WARNING: GitHub has no atomic head guard, so these checks race; replace them if it gains one.
     if (login.forge === "github") {
       const before = yield* current();
-      if (!before.ok || before.value.head.sha !== head)
+      if (!before.ok || before.value.head.sha !== head) {
         return {
           ok: false,
           message: `did not approve ${where} at ${head}: ${before.ok ? "SHA does not match HEAD" : before.reason}`,
           retryable: !before.ok && before.transient === true,
         };
+      }
     }
     const approved = yield* login.forge === "gitlab"
       ? request(
@@ -474,7 +506,9 @@ export const findReviewNote = (
 export const myMergeRequests = (login: ForgeLogin, project: string, cwd: string) =>
   Effect.gen(function* () {
     const me = yield* viewerLogin(login, cwd);
-    if (me === null) return [];
+    if (me === null) {
+      return [];
+    }
     const http = yield* ForgeHttp;
     const seen = new Map<string, string>();
     for (const who of ["assignee", "author"] as const) {
@@ -489,10 +523,13 @@ export const myMergeRequests = (login: ForgeLogin, project: string, cwd: string)
           }),
         ),
       );
-      if (listed.ok)
-        for (const one of listed.value)
-          if (one.ref.number !== undefined && !seen.has(one.ref.number))
+      if (listed.ok) {
+        for (const one of listed.value) {
+          if (one.ref.number !== undefined && !seen.has(one.ref.number)) {
             seen.set(one.ref.number, one.title ?? "");
+          }
+        }
+      }
     }
     return Arr.map([...seen], ([iid, title]) => ({ iid, title }));
   });

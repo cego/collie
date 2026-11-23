@@ -354,7 +354,9 @@ const flockOf = (asked: Array<Asked>) => ({
         [{ key: "standing_direction", value: text }],
         "2026-11-04T10:00:00.000Z",
       );
-      if ("refused" in edited) return edited.refused;
+      if ("refused" in edited) {
+        return edited.refused;
+      }
       flockSettings = edited;
       return null;
     }),
@@ -393,11 +395,19 @@ const flockOf = (asked: Array<Asked>) => ({
   }) =>
     Effect.sync(() => {
       const changed: Partial<Record<"chatHarness" | "chatModel" | "chatEffort", string>> = {};
-      if (harness !== undefined) changed.chatHarness = harness;
-      if (model !== undefined) changed.chatModel = model;
-      if (effort !== undefined) changed.chatEffort = effort;
+      if (harness !== undefined) {
+        changed.chatHarness = harness;
+      }
+      if (model !== undefined) {
+        changed.chatModel = model;
+      }
+      if (effort !== undefined) {
+        changed.chatEffort = effort;
+      }
       const next = changeSettings(chat, NO_FLOCK_SETTINGS, changed);
-      if ("refused" in next) return next.refused;
+      if ("refused" in next) {
+        return next.refused;
+      }
       chat = next;
       return null;
     }),
@@ -1056,7 +1066,7 @@ const UNREAD: ReadonlyArray<readonly [ChatBoard, string]> = [
   ],
 ];
 
-for (const [board, why] of UNREAD)
+for (const [board, why] of UNREAD) {
   test(`a Machine with no live board (${board._tag}) is said with why in herd and News, and a write to it is refused with it`, () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -1081,6 +1091,7 @@ for (const [board, why] of UNREAD)
         expect(Arr.filter(asked, ({ machine }) => machine === "vm-mk")).toEqual([]);
       }).pipe(Effect.provide([platformLayer, TestClock.layer()])),
     ));
+}
 
 test("startup read tools: workspaces use an open chat door while the first board is still connecting", () =>
   Effect.runPromise(
@@ -1953,8 +1964,9 @@ test("the Flock chat moves a Schedule between two Machines through the shared se
         ["vm-mk", { change: { change: "remove", name: "daily" } }],
         ["mk-pc", { change: { change: "resume", name: "daily" } }],
       ]);
-      for (const on of ["mk-pc", "vm-mk"])
+      for (const on of ["mk-pc", "vm-mk"]) {
         expect(Arr.some(asked, ({ machine, op }) => machine === on && op === "declare")).toBe(true);
+      }
     }),
   ));
 
@@ -2051,7 +2063,7 @@ test("a bare id no board lists yet is read on the one Machine whose host has it"
 for (const [why, answer, said] of [
   ["fails", () => Effect.die("no progress"), "no progress"],
   ["does not answer", () => Effect.never, "mk-pc did not answer within 10 s"],
-] as const)
+] as const) {
   test(`a Machine whose host ${why} when asked about a bare id is unread, and nothing is done`, () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -2073,6 +2085,7 @@ for (const [why, answer, said] of [
         expect(asked).toEqual([]);
       }).pipe(Effect.provide([platformLayer, TestClock.layer()])),
     ));
+}
 
 test("a hold and a run-scoped action on a bare id no board lists go to the Machine whose host has it", () =>
   Effect.runPromise(
@@ -2136,7 +2149,7 @@ const keeping = () => {
   return { lines, log: (line: Attempted) => Effect.sync(() => void lines.push(line)) };
 };
 
-for (const kind of ["start", "deliver"] as const)
+for (const kind of ["start", "deliver"] as const) {
   test(`a disconnected ${kind} is unknown, is not replayed, and an explicit retry keeps its identity`, () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -2197,6 +2210,7 @@ for (const kind of ["start", "deliver"] as const)
         expect(outcomes).toBe(1);
       }).pipe(Effect.provide(platformLayer)),
     ));
+}
 
 test("a host that never takes the chat's declaration ends the write as not confirmed, logged each try", () =>
   Effect.runPromise(
@@ -2400,13 +2414,21 @@ const standInHelle = (projects: ReadonlyArray<HelleProject>, calls: Array<string
     fetch: (request) => {
       const { pathname } = new URL(request.url);
       calls.push(`${request.method} ${pathname}`);
-      if (request.headers.get("authorization") !== "Bearer token-abc")
+      if (request.headers.get("authorization") !== "Bearer token-abc") {
         return Response.json({ detail: "unauthorized" }, { status: 401 });
-      if (pathname === "/api/v1/me") return Response.json({ user_id: "u-mk", display_name: "mk" });
-      if (pathname === "/api/v1/projects") return Response.json(projects);
-      if (pathname === "/api/v1/projects/frontend/claim")
+      }
+      if (pathname === "/api/v1/me") {
+        return Response.json({ user_id: "u-mk", display_name: "mk" });
+      }
+      if (pathname === "/api/v1/projects") {
+        return Response.json(projects);
+      }
+      if (pathname === "/api/v1/projects/frontend/claim") {
         return Response.json({ position: 2, already_queued: false });
-      if (pipe_(pathname, Str.endsWith("/release"))) return Response.json({ released: true });
+      }
+      if (pipe_(pathname, Str.endsWith("/release"))) {
+        return Response.json({ released: true });
+      }
       return Response.json({ detail: "not found" }, { status: 404 });
     },
   });

@@ -71,11 +71,12 @@ test("an act shown before its Step finished is refused as stale; one shown befor
         const door = yield* frontDoor(socketOf(world.state));
         const finishing = yield* shipping(world, "a");
         const working = yield* shipping(world, "b");
-        for (const { runId } of [finishing, working])
+        for (const { runId } of [finishing, working]) {
           yield* until(
             () => recordOf(world, runId),
             (record) => nodeOf(record?.flow, runId, "ship")?.state === "running",
           );
+        }
 
         const shownA = (yield* recordOf(world, finishing.runId))!.revision!;
         yield* finishing.open;
@@ -106,13 +107,17 @@ test("an act shown before its Step finished is refused as stale; one shown befor
             Effect.forkScoped,
           );
         let first = yield* Queue.take(frames);
-        while (!isDone(first)) first = yield* Queue.take(frames);
+        while (!isDone(first)) {
+          first = yield* Queue.take(frames);
+        }
         const shownB = first!.revision!;
         const handoffs = `${runDir(world.state, working.runId)}/handoffs`;
         yield* fs.makeDirectory(handoffs, { recursive: true }).pipe(Effect.orDie);
         yield* fs.writeFileString(`${handoffs}/note.md`, "a note\n").pipe(Effect.orDie);
         let noted = yield* Queue.take(frames);
-        while ((noted?.handoffFiles ?? []).length === 0) noted = yield* Queue.take(frames);
+        while ((noted?.handoffFiles ?? []).length === 0) {
+          noted = yield* Queue.take(frames);
+        }
         const [held] = yield* door
           .act({ actions: holdBefore(working.runId, "wrap"), request: "fresh-b", shown: shownB })
           .pipe(Effect.orDie);

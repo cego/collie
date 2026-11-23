@@ -60,13 +60,16 @@ const kept = <A>(
   return (key: string) =>
     Effect.suspend(() => {
       const hit = reads.get(key);
-      if (hit !== undefined)
+      if (hit !== undefined) {
         return "value" in hit
           ? Effect.succeed(hit.value)
           : Effect.fail(PlatformError.systemError(hit.failed));
+      }
       const keep = (read: Read) =>
         Effect.sync(() => {
-          if (reads.size >= capacity) reads.delete(reads.keys().next().value!);
+          if (reads.size >= capacity) {
+            reads.delete(reads.keys().next().value!);
+          }
           reads.set(key, read);
         });
       return lookup(key).pipe(
@@ -130,27 +133,41 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const touch = (run: string, facts = false) => {
     const at = next();
     revisions.set(run, at);
-    if (facts) factual.set(run, at);
+    if (facts) {
+      factual.set(run, at);
+    }
     link?.touched(run, at, facts);
     return at;
   };
   const touchFacts = (run: string) => touch(run, true);
   const wrote = (runs: ReadonlyArray<string>) => {
-    for (const run of runs) touchFacts(run);
+    for (const run of runs) {
+      touchFacts(run);
+    }
   };
   // WARNING: a Task's records are its Runs' as much as its own rows, so both are invalidated.
   const wroteTasks = (tasks: ReadonlyArray<string>) => {
-    for (const task of tasks) for (const run of indexes.byTask.get(task) ?? []) touchFacts(run);
+    for (const task of tasks) {
+      for (const run of indexes.byTask.get(task) ?? []) {
+        touchFacts(run);
+      }
+    }
   };
   const heard = (run: string, at: number, facts: boolean) => {
-    if (at > (revisions.get(run) ?? 0)) revisions.set(run, at);
-    if (facts && at > (factual.get(run) ?? 0)) factual.set(run, at);
+    if (at > (revisions.get(run) ?? 0)) {
+      revisions.set(run, at);
+    }
+    if (facts && at > (factual.get(run) ?? 0)) {
+      factual.set(run, at);
+    }
   };
 
   const underDir = Str.startsWith(`${dir}/`);
   const below = Str.slice(dir.length + 1);
   const groupOf = (path: string) => {
-    if (!underDir(path)) return null;
+    if (!underDir(path)) {
+      return null;
+    }
     const rest = below(path);
     const own = OWN_DIR.exec(rest);
     return own !== null ? `run/${own[1]}` : "shared";
@@ -174,26 +191,36 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   };
   const groupReads = (group: string) => {
     const found = groups.get(group);
-    if (found !== undefined) return found;
+    if (found !== undefined) {
+      return found;
+    }
     const made = readsOf(group);
     groups.set(group, made);
     return made;
   };
   const drop = (path: string, moving: (run: string) => void) => {
     const group = path === dir ? "shared" : groupOf(path);
-    if (group === null) return;
+    if (group === null) {
+      return;
+    }
     generation++;
     const inside = below(path);
     if (path === dir || inside === "runs" || inside === "agents" || inside === "evidence") {
       groups.clear();
-      for (const run of revisions.keys()) moving(run);
+      for (const run of revisions.keys()) {
+        moving(run);
+      }
       return;
     }
     groups.delete(group);
-    if (group === "shared") return;
+    if (group === "shared") {
+      return;
+    }
     moving(Str.slice(4)(group));
     // WARNING: a Run's directory or control file coming or going changes the listing above it.
-    if (Str.split(inside, "/").length <= 2) groups.delete("shared");
+    if (Str.split(inside, "/").length <= 2) {
+      groups.delete("shared");
+    }
   };
   const invalidate = (path: string) =>
     Effect.sync(() => {
@@ -214,7 +241,9 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   ) => {
     const attempt: () => Effect.Effect<A, E> = () => {
       const group = groupOf(path);
-      if (!enabled || group === null) return direct;
+      if (!enabled || group === null) {
+        return direct;
+      }
       const before = generation;
       return Effect.flatMap(Effect.exit(cached(groupReads(group))), (exit) =>
         before === generation ? exit : Effect.suspend(attempt),
@@ -251,10 +280,14 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const sharedListed = new Set<string>();
   const sharedTrees = new Set<string>();
   const noted = (path: string, into: Set<string>) => {
-    if (groupOf(path) === "shared") into.add(path);
+    if (groupOf(path) === "shared") {
+      into.add(path);
+    }
   };
   const wasRead = (path: string) => {
-    if (!enabled || groupOf(path) !== "shared") return true;
+    if (!enabled || groupOf(path) !== "shared") {
+      return true;
+    }
     const parent = pipe(path, Str.split("/"), Arr.dropRight(1), Arr.join("/"));
     return (
       sharedRead.has(path) ||
@@ -292,28 +325,43 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     for (const name of ["byTask", "byParent", "byRequester", "byPlan"] as const) {
       const was = before?.[name] ?? null;
       const now = next?.[name] ?? null;
-      if (was === now) continue;
+      if (was === now) {
+        continue;
+      }
       if (was !== null) {
         const under = indexes[name].get(was);
         under?.delete(run);
-        if (under?.size === 0) indexes[name].delete(was);
+        if (under?.size === 0) {
+          indexes[name].delete(was);
+        }
       }
-      if (now !== null) indexes[name].set(now, (indexes[name].get(now) ?? new Set()).add(run));
+      if (now !== null) {
+        indexes[name].set(now, (indexes[name].get(now) ?? new Set()).add(run));
+      }
     }
-    if (next === undefined) keys.delete(run);
-    else keys.set(run, next);
+    if (next === undefined) {
+      keys.delete(run);
+    } else {
+      keys.set(run, next);
+    }
   };
 
   const last = new Map<string, RunFacts>();
   const seen = (run: RunFacts) => {
-    if (last.get(run.id) === run) return;
+    if (last.get(run.id) === run) {
+      return;
+    }
     last.set(run.id, run);
     const text = fingerprint(run);
-    if (facts.get(run.id)?.text !== text) facts.set(run.id, { text, revision: touch(run.id) });
+    if (facts.get(run.id)?.text !== text) {
+      facts.set(run.id, { text, revision: touch(run.id) });
+    }
     index(run.id, keysOf(run));
   };
   const mirror = (runs: ReadonlyArray<RunFacts>) => {
-    for (const run of runs) index(run.id, keysOf(run));
+    for (const run of runs) {
+      index(run.id, keysOf(run));
+    }
   };
   const gone = (runs: ReadonlyArray<string>) => {
     for (const run of runs) {
@@ -328,7 +376,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     Effect.sync(() => {
       Arr.forEach(runs, seen);
       const present = new Set(Arr.map(runs, (run) => run.id));
-      for (const run of facts.keys())
+      for (const run of facts.keys()) {
         if (!present.has(run)) {
           facts.delete(run);
           last.delete(run);
@@ -336,6 +384,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
           factual.delete(run);
           index(run, undefined);
         }
+      }
     });
 
   const planned = (run: string) => {
@@ -364,7 +413,9 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   // WARNING: a record that moved while none of its Runs did moves its own Run, as an agent's or merge request's does.
   const stampRecord = (key: string, run: string, runs: ReadonlyArray<string>, text: string) => {
     const was = records.get(key);
-    if (was !== undefined && was.text !== text && highest([run, ...runs]) === was.seq) touch(run);
+    if (was !== undefined && was.text !== text && highest([run, ...runs]) === was.seq) {
+      touch(run);
+    }
     const seq = highest([run, ...runs]);
     records.set(key, { text, seq });
     return { epoch, seq };
@@ -373,10 +424,14 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const stamp = (views: ReadonlyArray<TaskView>) =>
     Arr.map(views, (view) => {
       const was = cards.get(view.id);
-      if (was?.from === view && highest(view.runs) === was.seq) return was.to;
+      if (was?.from === view && highest(view.runs) === was.seq) {
+        return was.to;
+      }
       const { revision: _, ...card } = view;
       const text = fingerprint(card);
-      if (was !== undefined && was.text !== text && highest(view.runs) === was.seq) touch(view.run);
+      if (was !== undefined && was.text !== text && highest(view.runs) === was.seq) {
+        touch(view.run);
+      }
       const at = highest(view.runs);
       const to = { ...card, revision: { epoch, seq: at } };
       cards.set(view.id, { text, seq: at, from: view, to });
@@ -387,7 +442,9 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const finishedAt = (run: string, step: string, seq: number) => {
     const key = `${run}\0${step}`;
     const was = finishes.get(key);
-    if (was !== undefined) return was;
+    if (was !== undefined) {
+      return was;
+    }
     finishes.set(key, seq);
     return seq;
   };
@@ -402,11 +459,17 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const checkouts = new Map<string, number>();
   const moved = (cwd: string) => {
     checkouts.set(cwd, (checkouts.get(cwd) ?? 0) + 1);
-    for (const key of heads.keys()) if (Str.startsWith(`${cwd}\0`)(key)) heads.delete(key);
+    for (const key of heads.keys()) {
+      if (Str.startsWith(`${cwd}\0`)(key)) {
+        heads.delete(key);
+      }
+    }
     for (const run of readers.get(cwd) ?? []) {
       const revision = touch(run);
       const observed = facts.get(run);
-      if (observed !== undefined) facts.set(run, { ...observed, revision });
+      if (observed !== undefined) {
+        facts.set(run, { ...observed, revision });
+      }
     }
     PubSub.publishUnsafe(moves, undefined);
   };
@@ -418,7 +481,9 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
         cwd,
       );
       const [own, common] = Str.split(Str.trim(said.stdout), "\n");
-      if (said.code !== 0 || own === undefined || common === undefined) return;
+      if (said.code !== 0 || own === undefined || common === undefined) {
+        return;
+      }
       const shared = Str.startsWith("/")(common) ? common : `${cwd}/${common}`;
       let ready = 0;
       const onReady = () => {
@@ -452,19 +517,25 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       if (watched === undefined) {
         readers.set(run.cwd, new Set([run.id]));
         yield* Effect.forkIn(watchCheckout(run.cwd), scope);
-      } else watched.add(run.id);
+      } else {
+        watched.add(run.id);
+      }
     });
   const checkout = (run: RunFacts) => Effect.map(watch(run), () => checkouts.get(run.cwd) ?? 0);
   const head = (run: RunFacts) =>
     Effect.gen(function* () {
       const key = `${run.cwd}\0${run.branch}`;
       yield* watch(run);
-      if (heads.has(key)) return heads.get(key) ?? null;
+      if (heads.has(key)) {
+        return heads.get(key) ?? null;
+      }
       const watched = watching.has(run.cwd);
       const at = checkouts.get(run.cwd) ?? 0;
       const read = yield* readBranchHead(run).pipe(Effect.orElseSucceed(() => null));
       // WARNING: a checkout that moved during its head read keeps no head, or the board never shows the move.
-      if (watched && (checkouts.get(run.cwd) ?? 0) === at) heads.set(key, read);
+      if (watched && (checkouts.get(run.cwd) ?? 0) === at) {
+        heads.set(key, read);
+      }
       return read;
     }).pipe(Effect.provideContext(spawning));
 

@@ -25,19 +25,27 @@ class TurnDispatcher implements Scheduler.SchedulerDispatcher {
     }
     const buckets = this.buckets;
     let index = 0;
-    while (index < buckets.length && buckets[index]![0] < priority) index++;
-    if (buckets[index]?.[0] === priority) buckets[index]![1].push(task);
-    else buckets.splice(index, 0, [priority, [task]]);
+    while (index < buckets.length && buckets[index]![0] < priority) {
+      index++;
+    }
+    if (buckets[index]?.[0] === priority) {
+      buckets[index]![1].push(task);
+    } else {
+      buckets.splice(index, 0, [priority, [task]]);
+    }
     this.wake();
   }
 
   flush() {
-    while (this.front.length > 0 || this.left.length > 0 || this.buckets.length > 0)
+    while (this.front.length > 0 || this.left.length > 0 || this.buckets.length > 0) {
       this.turn(Infinity);
+    }
   }
 
   private wake() {
-    if (this.running) return;
+    if (this.running) {
+      return;
+    }
     this.running = true;
     setImmediate(() => {
       this.running = false;
@@ -52,12 +60,18 @@ class TurnDispatcher implements Scheduler.SchedulerDispatcher {
     const started = this.now();
     const over = () => this.now() - started > budget;
     for (this.at = 0; ;) {
-      while (this.front.length > 0 && !over()) this.front.shift()!();
-      if (this.at >= tasks.length || over()) break;
+      while (this.front.length > 0 && !over()) {
+        this.front.shift()!();
+      }
+      if (this.at >= tasks.length || over()) {
+        break;
+      }
       tasks[this.at++]!();
     }
     this.left = tasks.slice(this.at);
-    if (this.front.length > 0 || this.left.length > 0 || this.buckets.length > 0) this.wake();
+    if (this.front.length > 0 || this.left.length > 0 || this.buckets.length > 0) {
+      this.wake();
+    }
   }
 }
 
@@ -74,14 +88,22 @@ export class TurnScheduler implements Scheduler.Scheduler {
   private since = 0;
   private readonly yielded = new WeakSet<object>();
   shouldYield(fiber: Parameters<Scheduler.Scheduler["shouldYield"]>[0]) {
-    if (this.yielded.delete(fiber) || fiber.currentOpCount === 1) this.since = this.now();
-    if (fiber.currentOpCount === 1) return false;
+    if (this.yielded.delete(fiber) || fiber.currentOpCount === 1) {
+      this.since = this.now();
+    }
+    if (fiber.currentOpCount === 1) {
+      return false;
+    }
     const over = this.inner.shouldYield(fiber) || this.overTurn(fiber);
-    if (over) this.yielded.add(fiber);
+    if (over) {
+      this.yielded.add(fiber);
+    }
     return over;
   }
   private overTurn(fiber: Parameters<Scheduler.Scheduler["shouldYield"]>[0]) {
-    if ((fiber.currentOpCount & 63) !== 0) return false;
+    if ((fiber.currentOpCount & 63) !== 0) {
+      return false;
+    }
     return this.now() - this.since > TURN_MS || (this.dispatcher.front.length > 0 && !this.first());
   }
   makeDispatcher() {

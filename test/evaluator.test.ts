@@ -156,8 +156,9 @@ test("every action the model may propose decodes, and nothing else does", () => 
     { kind: "ask_human", question: "which branch did you mean?" },
     { kind: "none", why: "nothing needs doing" },
   ];
-  for (const action of valid)
+  for (const action of valid) {
     expect([action.kind, decode(action)._tag]).toEqual([action.kind, "Some"]);
+  }
 
   expect(decode({ kind: "shell", command: "rm -rf /" })._tag).toBe("None");
   expect(decode({ kind: "deliver", run: "r1", agent: "a", text: "t", mode: "whenever" })._tag).toBe(
@@ -352,8 +353,9 @@ test("the routing answer is one, several or none, and any other shape is no answ
     { answer: "one", checkouts: ["/p/app"] },
     { answer: "several", checkouts: ["/p/app", "/p/api"] },
     { answer: "none", checkouts: [] },
-  ] satisfies ReadonlyArray<Route>)
+  ] satisfies ReadonlyArray<Route>) {
     expect(structuredFrom(envelope({ structured_output: answer }), RouteSchema)).toEqual(answer);
+  }
   expect(
     structuredFrom(
       envelope({ structured_output: { answer: "probably", checkouts: ["/p/app"] } }),

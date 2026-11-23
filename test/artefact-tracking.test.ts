@@ -18,11 +18,12 @@ test("explicit refresh bounds discovery and rotates registered sources", () =>
       const dir = yield* fs.makeTempDirectoryScoped();
       const run = yield* madeRun(dir);
       const catalogue = yield* Artefacts;
-      for (let n = 0; n < 24; n++)
+      for (let n = 0; n < 24; n++) {
         yield* fs.writeFileString(
           `${run.evidence}/${Str.padStart(2, "0")(String(n))}.txt`,
           `evidence ${n}`,
         );
+      }
       expect((yield* catalogue.reconcile(run)).items).toHaveLength(8);
       expect((yield* catalogue.reconcile(run)).items).toHaveLength(16);
       expect((yield* catalogue.reconcile(run)).items).toHaveLength(24);
@@ -113,8 +114,9 @@ test("the host returns a cold cached catalogue before discovery and bounds expli
         yield* collie(world, ["run", "wait", runId]);
         const dir = `${world.state}/runs/${runId}/handoffs`;
         yield* fs.makeDirectory(dir, { recursive: true });
-        for (let n = 0; n < 24; n++)
+        for (let n = 0; n < 24; n++) {
           yield* fs.writeFileString(`${dir}/${n}.md`, `# Finding ${n}\n`);
+        }
         const door = yield* frontDoor(socketOf(world.state));
         expect((yield* door.artefacts({ runId })).items.length).toBeLessThanOrEqual(8);
         expect((yield* door.artefacts({ runId, refresh: true })).items.length).toBeLessThanOrEqual(
@@ -185,7 +187,9 @@ test("bounded discovery rotates through every collection of a large finished Run
         `${run.dir}/handoffs`,
       ]) {
         yield* fs.makeDirectory(root, { recursive: true });
-        for (let i = 0; i < 9; i++) yield* fs.writeFileString(`${root}/${i}.txt`, `${root}:${i}`);
+        for (let i = 0; i < 9; i++) {
+          yield* fs.writeFileString(`${root}/${i}.txt`, `${root}:${i}`);
+        }
       }
       yield* Effect.gen(function* () {
         for (let pass = 0; pass < 8; pass++) {

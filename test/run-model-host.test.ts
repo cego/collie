@@ -118,10 +118,16 @@ test("each change made outside the host reaches the board through its own event,
             Effect.sync(() => {
               if (message._tag === "Snapshot") {
                 board.clear();
-                for (const task of message.tasks) board.set(task.id, task);
-              } else if (message._tag === "Upsert") board.set(message.task.id, message.task);
-              else if (message._tag === "Remove") board.delete(message.id);
-              else return;
+                for (const task of message.tasks) {
+                  board.set(task.id, task);
+                }
+              } else if (message._tag === "Upsert") {
+                board.set(message.task.id, message.task);
+              } else if (message._tag === "Remove") {
+                board.delete(message.id);
+              } else {
+                return;
+              }
               seen.push(new Map(board));
             }),
           ),
@@ -266,8 +272,9 @@ test("each change made outside the host reaches the board through its own event,
         yield* equalsDisk;
 
         mark = seen.length;
-        for (const one of yield* new Herdr(env).agentList().pipe(Effect.orDie))
+        for (const one of yield* new Herdr(env).agentList().pipe(Effect.orDie)) {
           yield* core.report(one.name, "blocked");
+        }
         yield* arrival(mark, (tasks) => {
           const card = cardOf(tasks, agent);
           return card._tag === "Some" && card.value.agents[0]?.status === "blocked";

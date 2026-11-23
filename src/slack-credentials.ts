@@ -41,13 +41,19 @@ const signedInAs = (env: Pick<PluginEnv, "home" | "raw">, api: typeof slackApi) 
       field("SLACK_USER_ID"),
       field("SLACK_TEAM_ID"),
     ];
-    if (!token || !user || !team) return yield* broken(`${file} lacks the token, user or team`);
+    if (!token || !user || !team) {
+      return yield* broken(`${file} lacks the token, user or team`);
+    }
     const owner = yield* api(token).tokenOwner();
-    if (owner.bot_id !== undefined) return yield* broken("token is a bot's");
-    if (owner.user_id !== user)
+    if (owner.bot_id !== undefined) {
+      return yield* broken("token is a bot's");
+    }
+    if (owner.user_id !== user) {
       return yield* broken(`token belongs to ${owner.user_id}, not ${user}`);
-    if (owner.team_id !== team)
+    }
+    if (owner.team_id !== team) {
       return yield* broken(`token is for team ${owner.team_id}, not ${team}`);
+    }
     return { token, owner, scopes: field("SLACK_USER_SCOPES") };
   }).pipe(
     Effect.mapError((reason) => {

@@ -140,11 +140,15 @@ export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: Branch
     source: null,
   });
   const asked = yield* branchName(opts, run);
-  if (asked.refused !== null) return refuse(asked.refused);
+  if (asked.refused !== null) {
+    return refuse(asked.refused);
+  }
   let plan = asked.branch;
   if (asked.generated) {
     const identity = yield* whoami(opts, run);
-    if (!identity.ok) return refuse(identity.reason);
+    if (!identity.ok) {
+      return refuse(identity.reason);
+    }
     const { forge, who } = identity;
     if (who === null) {
       const variable = LOGIN_ENV[forge.name];
@@ -158,14 +162,18 @@ export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: Branch
   if (asked.generated) {
     // WARNING: validated now: an illegal ref would fail at worktree add, after the Run had started.
     const legal = yield* run("git", ["check-ref-format", `refs/heads/${branch}`], opts.cwd);
-    if (legal.code !== 0) return refuse(`${branch} is not a branch name git will accept`);
+    if (legal.code !== 0) {
+      return refuse(`${branch} is not a branch name git will accept`);
+    }
   }
   const fetches = opts.fetches !== false;
   const base =
     opts.stackedOn === undefined
       ? yield* baseFor(branch, opts.cwd, run, { reviewed: asked.reviewed, fetches })
       : yield* stackedBase(branch, changeBranch(plan, opts.stackedOn), opts.cwd, run, fetches);
-  if (base.refused !== undefined) return refuse(base.refused);
+  if (base.refused !== undefined) {
+    return refuse(base.refused);
+  }
   return {
     branch,
     task: changeBranch(asked.branch, opts.change),
@@ -181,7 +189,9 @@ const whoami = Effect.fn("worktree.whoami")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const here = yield* forgeHere(opts.cwd, run, opts.gitlabHost);
-  if (!here.ok) return here;
+  if (!here.ok) {
+    return here;
+  }
   const { forge } = here;
   const named = Option.getOrUndefined(
     Option.map(
@@ -230,12 +240,16 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   const explicit = Option.getOrUndefined(
     Option.map(Option.fromNullishOr(opts.explicit), (present__) => Str.trim(present__)),
   );
-  if (explicit) return verbatim(explicit, "explicit");
+  if (explicit) {
+    return verbatim(explicit, "explicit");
+  }
   // WARNING: reviewed means the branch already holds the work, so it is cut from that work.
   const work = workSourceOf(opts);
   if (work?.kind === "review") {
     const reviewed = yield* reviewedBranch(opts.cwd, diffTargetOf(opts)?.value ?? "", run);
-    if (reviewed.refused !== undefined) return refusedName(reviewed.refused);
+    if (reviewed.refused !== undefined) {
+      return refusedName(reviewed.refused);
+    }
     return verbatim(reviewed.branch, "from the reviewed branch", reviewed.reviewed);
   }
   const mr =
@@ -243,21 +257,29 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   if (mr) {
     const named = yield* reviewedBranch(opts.cwd, mrWords(mr).target, run);
     if (!named.context) {
-      if (named.refused !== undefined) return refusedName(named.refused);
+      if (named.refused !== undefined) {
+        return refusedName(named.refused);
+      }
       return verbatim(named.branch, "from the merge request", true);
     }
   }
   const target = diffTargetOf(opts);
   const fromTarget = target && said(opts, target.name) ? targetBranch(target.value) : null;
-  if (fromTarget) return verbatim(fromTarget, "from target");
+  if (fromTarget) {
+    return verbatim(fromTarget, "from target");
+  }
   const task = Option.getOrUndefined(
     Option.map(Option.fromNullishOr(opts.inputs[TASK_INPUT]), (present___) => Str.trim(present___)),
   );
-  if (task) return generated(task, "from the task");
+  if (task) {
+    return generated(task, "from the task");
+  }
   const taskBranch = Option.getOrUndefined(
     Option.map(Option.fromNullishOr(opts.taskBranch), (present____) => Str.trim(present____)),
   );
-  if (taskBranch) return verbatim(taskBranch, "from the task", true);
+  if (taskBranch) {
+    return verbatim(taskBranch, "from the task", true);
+  }
   // WARNING: a plan's directory name, never a Run's own plan directory, which always reads plan.
   const ownPlan = work !== null && planRunOf(work.value) !== null;
   if (work?.kind === "plan-dir" && !ownPlan && said(opts, work.name)) {
@@ -267,7 +289,9 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   const described = work !== null && !ownPlan && said(opts, work.name);
   // WARNING: an issue's URL names the same work as its id; slugging the URL would name the branch after linear.app.
   const issue = work?.kind === "linear" ? linearIssueOf(work.value) : null;
-  if (described) return generated(issue ?? work.value, "from the work");
+  if (described) {
+    return generated(issue ?? work.value, "from the work");
+  }
   // WARNING: a Run naming no work gets no name: two sharing one would share a branch, checkout and stash.
   return generated(opts.name, "from the run name", `${opts.name}\n${work?.value ?? ""}`);
 });
@@ -304,11 +328,19 @@ const baseFor = Effect.fn("worktree.baseFor")(function* (
   opts: { reviewed: boolean; fetches: boolean },
 ) {
   const exists = (ref: string) => run("git", ["rev-parse", "--verify", ref], cwd);
-  if ((yield* exists(`origin/${branch}`)).code === 0) return { base: `origin/${branch}` };
+  if ((yield* exists(`origin/${branch}`)).code === 0) {
+    return { base: `origin/${branch}` };
+  }
   if (opts.reviewed) {
-    if ((yield* exists(`refs/heads/${branch}`)).code === 0) return { base: branch };
-    if (opts.fetches) yield* run("git", ["fetch", "origin", branch], cwd);
-    if ((yield* exists(`origin/${branch}`)).code === 0) return { base: `origin/${branch}` };
+    if ((yield* exists(`refs/heads/${branch}`)).code === 0) {
+      return { base: branch };
+    }
+    if (opts.fetches) {
+      yield* run("git", ["fetch", "origin", branch], cwd);
+    }
+    if ((yield* exists(`origin/${branch}`)).code === 0) {
+      return { base: `origin/${branch}` };
+    }
     return { refused: `${branch} is not on the remote, so there is no reviewed work to fix` };
   }
   return { base: yield* defaultStart(cwd, run) };
@@ -322,10 +354,18 @@ const stackedBase = Effect.fn("worktree.stackedBase")(function* (
   fetches: boolean,
 ) {
   const exists = (ref: string) => run("git", ["rev-parse", "--verify", ref], cwd);
-  if ((yield* exists(`origin/${branch}`)).code === 0) return { base: `origin/${branch}` };
-  if (fetches) yield* run("git", ["fetch", "origin", blocker], cwd);
-  if ((yield* exists(`origin/${blocker}`)).code === 0) return { base: `origin/${blocker}` };
-  if ((yield* exists(`refs/heads/${blocker}`)).code === 0) return { base: blocker };
+  if ((yield* exists(`origin/${branch}`)).code === 0) {
+    return { base: `origin/${branch}` };
+  }
+  if (fetches) {
+    yield* run("git", ["fetch", "origin", blocker], cwd);
+  }
+  if ((yield* exists(`origin/${blocker}`)).code === 0) {
+    return { base: `origin/${blocker}` };
+  }
+  if ((yield* exists(`refs/heads/${blocker}`)).code === 0) {
+    return { base: blocker };
+  }
   return { refused: `${blocker}, the branch ${branch} is stacked on, is neither pushed nor here` };
 });
 
@@ -363,7 +403,9 @@ const mrUrlsIn = (text: string) =>
   Arr.flatMap(Str.split(text, OUTSIDE_URL), (word) => {
     const said = pipe_(word, Str.replaceAll(PROSE_EDGES, ""));
     const ref = readMrUrl(said);
-    if (Str.split(said, "://").length > 2) return [ref, ref];
+    if (Str.split(said, "://").length > 2) {
+      return [ref, ref];
+    }
     return ref === null ? [] : [ref];
   });
 
@@ -374,9 +416,13 @@ const mrNamedBy = Effect.fn("worktree.mrNamedBy")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const urls = mrUrlsIn(text);
-  if (urls.length > 0) return urls.length === 1 ? urls[0]! : null;
+  if (urls.length > 0) {
+    return urls.length === 1 ? urls[0]! : null;
+  }
   const whole = /\s/.test(Str.trim(text)) ? null : readMrRef(text, { project: null });
-  if (whole?.project === null) return { ...whole, project: yield* projectHere(cwd, run) };
+  if (whole?.project === null) {
+    return { ...whole, project: yield* projectHere(cwd, run) };
+  }
   return whole;
 });
 
@@ -403,13 +449,16 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
       }
     }
     const panel = yield* forgeOf(mr).details(mr, cwd, run);
-    if (panel._tag !== "Details") return { refused: panel.reason };
+    if (panel._tag !== "Details") {
+      return { refused: panel.reason };
+    }
     const context = panel.state === "merged" || panel.state === "closed";
-    if (panel.fork === true)
+    if (panel.fork === true) {
       return {
         refused: `${named} comes from a fork, so its branch is not in this checkout`,
         context,
       };
+    }
     const source = Str.trim(panel.sourceBranch);
     return source
       ? { branch: source, reviewed: true, context }
@@ -417,12 +466,16 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
   }
   const head = branchTargetHead(target);
   if (head !== null) {
-    if (head === "") return { refused: `${target} names no branch to work on` };
+    if (head === "") {
+      return { refused: `${target} names no branch to work on` };
+    }
     return (yield* isBranch(head, cwd, run))
       ? { branch: head, reviewed: true }
       : { refused: `${head} is not a branch, so there is nothing to fix on it` };
   }
-  if (target === "") return { refused: "the review names no target, so no branch holds its work" };
+  if (target === "") {
+    return { refused: "the review names no target, so no branch holds its work" };
+  }
   if (Str.trim(target) !== "worktree") {
     return { refused: `${target} is not a target Collie can find a branch for` };
   }
@@ -440,18 +493,26 @@ export const workOf = Effect.fn("worktree.workOf")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const listing = yield* gitWorktrees(run, opts.cwd);
-  if (listing === null) return null;
+  if (listing === null) {
+    return null;
+  }
   const reviewed =
     opts.branch === null && diffTargetOf(opts) != null
       ? yield* reviewedBranch(opts.cwd, diffTargetOf(opts)?.value ?? "", run)
       : null;
-  if (reviewed !== null && !("branch" in reviewed)) return null;
+  if (reviewed !== null && !("branch" in reviewed)) {
+    return null;
+  }
   const branch = opts.branch ?? reviewed?.branch ?? null;
-  if (branch === null || branch === "" || branch === "HEAD") return null;
+  if (branch === null || branch === "" || branch === "HEAD") {
+    return null;
+  }
   const origin = yield* run("git", ["rev-parse", "--abbrev-ref", "origin/HEAD"], opts.cwd);
   const base =
     origin.code === 0 ? pipe_(Str.trim(origin.stdout), Str.replace(/^origin\//, "")) : "";
-  if (base === "" ? branch === "main" || branch === "master" : branch === base) return null;
+  if (base === "" ? branch === "main" || branch === "master" : branch === base) {
+    return null;
+  }
   return `${listing.repo}#${branch}`;
 });
 
@@ -461,8 +522,9 @@ const isBranch = Effect.fn("worktree.isBranch")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   for (const full of [`refs/heads/${ref}`, `refs/remotes/origin/${ref}`]) {
-    if ((yield* run("git", ["rev-parse", "--verify", "--quiet", full], cwd)).code === 0)
+    if ((yield* run("git", ["rev-parse", "--verify", "--quiet", full], cwd)).code === 0) {
       return true;
+    }
   }
   return false;
 });
@@ -480,7 +542,9 @@ const gitWorktrees = Effect.fn("worktree.gitWorktrees")(function* (
   cwd: string,
 ) {
   const listed = yield* run("git", ["worktree", "list", "--porcelain"], cwd);
-  if (listed.code !== 0) return null;
+  if (listed.code !== 0) {
+    return null;
+  }
   const checkouts: Array<Listed> = [];
   for (const block of Str.split(listed.stdout, /\n\s*\n/)) {
     const at = Option.getOrUndefined(
@@ -490,7 +554,9 @@ const gitWorktrees = Effect.fn("worktree.gitWorktrees")(function* (
         ),
       ),
     );
-    if (at === undefined) continue;
+    if (at === undefined) {
+      continue;
+    }
     const ref = Option.getOrUndefined(
       Option.flatMap(Option.fromNullishOr(/^branch (.+)$/m.exec(block)), (present_______) =>
         Option.map(Option.fromNullishOr(present_______[1]), (present________) =>
@@ -536,7 +602,9 @@ const gitCheckout = Effect.fn("worktree.gitCheckout")(function* (opts: {
   const path = yield* Path.Path;
   const { run, branch } = opts;
   const listing = yield* gitWorktrees(run, opts.cwd);
-  if (!listing) return { refused: `${opts.cwd} is not a git checkout` };
+  if (!listing) {
+    return { refused: `${opts.cwd} is not a git checkout` };
+  }
   // WARNING: git lists a checkout before it is filled, so even a listed slot waits for the lock.
   const first = path.join(opts.worktrees, path.basename(listing.repo), ...branchPath(branch));
   return yield* withLock(
@@ -561,7 +629,9 @@ const freeSlot = Effect.fn("worktree.freeSlot")(function* (opts: {
       (Arr.some(opts.listing.checkouts, (checkout) => checkout.path === slot)
         ? { owner: opts.repo }
         : null);
-    if (taken === null) return { at: slot, passed };
+    if (taken === null) {
+      return { at: slot, passed };
+    }
     const recorded = opts.recordedBy === undefined ? null : yield* opts.recordedBy(slot);
     passed.push(`${slot} is ${occupiedAs(taken.owner, recorded)}`);
   }
@@ -578,14 +648,20 @@ const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opt
 }) {
   const { run, branch } = opts;
   const listing = yield* gitWorktrees(run, opts.repo);
-  if (!listing) return { refused: `${opts.repo} is not a git checkout` };
+  if (!listing) {
+    return { refused: `${opts.repo} is not a git checkout` };
+  }
   const existing = Option.getOrUndefined(
     Arr.findFirst(listing.checkouts, (checkout) => checkout.branch === branch),
   );
-  if (existing) return { path: existing.path, created: false, passed: [] };
+  if (existing) {
+    return { path: existing.path, created: false, passed: [] };
+  }
 
   const slot = yield* freeSlot({ ...opts, listing });
-  if (slot.at === null) return { refused: slot.refused };
+  if (slot.at === null) {
+    return { refused: slot.refused };
+  }
   const { at, passed } = slot;
 
   const known =
@@ -599,19 +675,26 @@ const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opt
       ["rev-parse", "--verify", "--quiet", `${base}^{commit}`],
       opts.repo,
     );
-    if (resolved.code !== 0) return { refused: `${base} is not a commit` };
+    if (resolved.code !== 0) {
+      return { refused: `${base} is not a commit` };
+    }
     start = Str.trim(resolved.stdout);
     // WARNING: git branch, not worktree add -b: -b fails the same whether or not it made the branch.
     const made = yield* run("git", ["branch", branch, start], opts.repo);
-    if (made.code !== 0) return { refused: whatItSaid(made) || `git would not make ${branch}` };
+    if (made.code !== 0) {
+      return { refused: whatItSaid(made) || `git would not make ${branch}` };
+    }
     const remoteBase = opts.base;
-    if (remoteBase !== undefined && pipe_(remoteBase, Str.startsWith("origin/")))
+    if (remoteBase !== undefined && pipe_(remoteBase, Str.startsWith("origin/"))) {
       yield* run("git", ["branch", "--set-upstream-to", remoteBase, branch], opts.repo);
+    }
   }
   const added = yield* run("git", ["worktree", "add", at, branch], opts.repo);
   if (added.code !== 0) {
     // WARNING: deleted only while still where it was made, so nobody else's branch goes with it.
-    if (!known) yield* run("git", ["update-ref", "-d", `refs/heads/${branch}`, start], opts.repo);
+    if (!known) {
+      yield* run("git", ["update-ref", "-d", `refs/heads/${branch}`, start], opts.repo);
+    }
     return { refused: whatItSaid(added) || `git would not add a worktree at ${at}` };
   }
   return { path: at, created: true, passed };
@@ -623,14 +706,18 @@ const newOnOrigin = Effect.fn("worktree.newOnOrigin")(function* (branch: string,
     ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
     cwd,
   );
-  if (local.code === 0) return null;
+  if (local.code === 0) {
+    return null;
+  }
   // WARNING: ls-remote exits 2 for a missing ref; any other failure says nothing.
   const remote = yield* shell(
     "git",
     ["ls-remote", "--exit-code", "--heads", "origin", `refs/heads/${branch}`],
     cwd,
   );
-  if (remote.code !== 2) return null;
+  if (remote.code !== 2) {
+    return null;
+  }
   const url = yield* shell("git", ["remote", "get-url", "origin"], cwd);
   return url.code === 0 && Str.trim(url.stdout) !== ""
     ? withoutCredentials(Str.trim(url.stdout))
@@ -642,7 +729,9 @@ const madeAt = Effect.fn("worktree.madeAt")(function* (worktreePath: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const stat = yield* Effect.result(fs.stat(path.join(worktreePath, ".git")));
-  if (stat._tag === "Failure") return null;
+  if (stat._tag === "Failure") {
+    return null;
+  }
   const mtime = stat.success.mtime;
   return Option.isSome(mtime) ? mtime.value.getTime() : null;
 });
@@ -654,7 +743,9 @@ const occupant = Effect.fn("worktree.occupant")(function* (at: string) {
   const there =
     Option.isSome(yield* fs.readLink(at).pipe(Effect.option)) ||
     (yield* fs.exists(at).pipe(Effect.orElseSucceed(() => true)));
-  if (!there) return null;
+  if (!there) {
+    return null;
+  }
   const marker = yield* fs.readFileString(`${at}/.git`).pipe(Effect.orElseSucceed(() => ""));
   return { owner: /gitdir:\s*(.+?)\/\.git\/worktrees\//.exec(marker)?.[1] ?? null };
 });
@@ -670,7 +761,9 @@ export const isTheOneMade = Effect.fn("worktree.isTheOneMade")(function* (
   at: string,
   record: WorktreeRecord | null,
 ) {
-  if (record === null || !record.created_by_collie || record.made_at === null) return false;
+  if (record === null || !record.created_by_collie || record.made_at === null) {
+    return false;
+  }
   return (yield* madeAt(at)) === record.made_at;
 });
 
@@ -679,10 +772,16 @@ const wouldLose = Effect.fn("worktree.wouldLose")(function* (
   at: string,
 ) {
   const dirty = yield* run("git", ["status", "--porcelain"], at);
-  if (dirty.code !== 0) return { unread: "could not read the working tree" };
-  if (Str.trim(dirty.stdout) !== "") return { lost: "uncommitted changes" };
+  if (dirty.code !== 0) {
+    return { unread: "could not read the working tree" };
+  }
+  if (Str.trim(dirty.stdout) !== "") {
+    return { lost: "uncommitted changes" };
+  }
   const only = yield* run("git", ["rev-list", "HEAD", "--not", "--branches", "--remotes"], at);
-  if (only.code !== 0) return { unread: "could not read what is unpushed" };
+  if (only.code !== 0) {
+    return { unread: "could not read what is unpushed" };
+  }
   const count = commits(only);
   return count === 0
     ? null
@@ -701,7 +800,9 @@ const roamingCheckout = Effect.fn("worktree.roamingCheckout")(function* (opts: {
   const path = yield* Path.Path;
   const { run } = opts;
   const listing = yield* gitWorktrees(run, opts.cwd);
-  if (!listing) return { refused: `${opts.cwd} is not a git checkout` };
+  if (!listing) {
+    return { refused: `${opts.cwd} is not a git checkout` };
+  }
 
   const slots = Arr.map(ROAMING_DIRS, (dir) =>
     path.join(opts.worktrees, path.basename(listing.repo), dir),
@@ -717,7 +818,9 @@ const roamingCheckout = Effect.fn("worktree.roamingCheckout")(function* (opts: {
         slots,
         repo: listing.repo,
       });
-      if (made.refused !== undefined) return made;
+      if (made.refused !== undefined) {
+        return made;
+      }
       const worktree = {
         path: made.path,
         branch: "",
@@ -730,7 +833,9 @@ const roamingCheckout = Effect.fn("worktree.roamingCheckout")(function* (opts: {
         root_tab_id: null,
         root_pane_id: null,
       } satisfies WorktreeRecord;
-      if (opts.claimed !== undefined) yield* opts.claimed(worktree);
+      if (opts.claimed !== undefined) {
+        yield* opts.claimed(worktree);
+      }
       return { ...made, worktree };
     }),
   );
@@ -744,7 +849,9 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
 }) {
   const { run } = opts;
   const listing = yield* gitWorktrees(run, opts.repo);
-  if (listing === null) return { refused: `could not list the worktrees of ${opts.repo}` };
+  if (listing === null) {
+    return { refused: `could not list the worktrees of ${opts.repo}` };
+  }
   const listed = new Set(Arr.map(listing.checkouts, (checkout) => checkout.path));
   const seen: Array<{
     at: string;
@@ -757,8 +864,9 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
       taken === null || opts.recordedBy === undefined ? null : yield* opts.recordedBy(at);
     if (taken !== null && recorded !== null && taken.owner === opts.repo && listed.has(at)) {
       const live = yield* recorded.live;
-      if (live !== null)
+      if (live !== null) {
         return { refused: `${at} is ${occupiedAs(taken.owner, recorded)}: ${live}` };
+      }
     }
     seen.push({ at, taken, recorded });
   }
@@ -785,21 +893,28 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
     }
     const held = occupiedAs(taken.owner, recorded);
     const pass = (why: string) => passed.push({ at, kept: `${held}, kept: ${why}` });
-    if (taken.owner !== null && taken.owner !== opts.repo) pass("another clone's");
-    else if (recorded === null) pass("recorded by no Run");
-    else if (taken.owner === null || !listed.has(at)) pass("not one git lists");
-    else if (!(yield* isTheOneMade(at, recorded.worktree))) pass("not the checkout that Run made");
-    else {
+    if (taken.owner !== null && taken.owner !== opts.repo) {
+      pass("another clone's");
+    } else if (recorded === null) {
+      pass("recorded by no Run");
+    } else if (taken.owner === null || !listed.has(at)) {
+      pass("not one git lists");
+    } else if (!(yield* isTheOneMade(at, recorded.worktree))) {
+      pass("not the checkout that Run made");
+    } else {
       // WARNING: the fetch can prune the only ref a commit was on, so check again after it.
       const before = yield* wouldLose(run, at);
-      if (before !== null && "unread" in before)
+      if (before !== null && "unread" in before) {
         return { refused: `${at} is ${held}: ${before.unread}` };
+      }
       if (before !== null) {
         pass(before.lost);
         continue;
       }
       const released = yield* recorded.release;
-      if (released !== null) return { refused: `${at} is ${held}: ${released}` };
+      if (released !== null) {
+        return { refused: `${at} is ${held}: ${released}` };
+      }
       // WARNING: check again once agents are closed: one could have written until then; past release a slot is refused, never passed over.
       const after = yield* wouldLose(run, at);
       if (after !== null) {
@@ -847,16 +962,23 @@ const whyNotWorkIn = Effect.fn("worktree.whyNotWorkIn")(function* (
   base: { readonly ref: string; readonly in: string },
 ) {
   const status = yield* shell("git", ["status", "--porcelain"], cwd);
-  if (status.code !== 0) return "git could not read it";
-  if (Str.trim(status.stdout) !== "") return "it has uncommitted changes";
+  if (status.code !== 0) {
+    return "git could not read it";
+  }
+  if (Str.trim(status.stdout) !== "") {
+    return "it has uncommitted changes";
+  }
   const head = yield* shell("git", ["rev-parse", "HEAD"], cwd);
-  if (head.code !== 0) return "git could not read it";
+  if (head.code !== 0) {
+    return "git could not read it";
+  }
   const hasOrigin = (yield* shell("git", ["remote", "get-url", "origin"], base.in)).code === 0;
   const remote = hasOrigin
     ? yield* shell("git", ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`], base.in)
     : null;
-  if (remote !== null && remote.code !== 0 && remote.code !== 2)
+  if (remote !== null && remote.code !== 0 && remote.code !== 2) {
     return `origin would not say where ${branch} is`;
+  }
   const wanted =
     remote?.code === 0
       ? { at: Str.split(remote.stdout, "\t")[0], name: `${branch}'s head on origin` }
@@ -866,20 +988,32 @@ const whyNotWorkIn = Effect.fn("worktree.whyNotWorkIn")(function* (
           ),
           name: base.ref,
         };
-  if (Str.trim(head.stdout) !== wanted.at) return `it is not at ${wanted.name}`;
+  if (Str.trim(head.stdout) !== wanted.at) {
+    return `it is not at ${wanted.name}`;
+  }
   const agents = yield* Effect.result(herdr.agentList());
-  if (agents._tag === "Failure") return "core would not say which agents work in it";
+  if (agents._tag === "Failure") {
+    return "core would not say which agents work in it";
+  }
   for (const agent of agents.success) {
-    if (isSettled(agent.status)) continue;
-    if (worksIn(agent, cwd)) return `agent ${agent.name} is ${agent.status} in it`;
+    if (isSettled(agent.status)) {
+      continue;
+    }
+    if (worksIn(agent, cwd)) {
+      return `agent ${agent.name} is ${agent.status} in it`;
+    }
   }
   return null;
 });
 
 const withDependencies = Effect.fn("worktree.withDependencies")(function* (checkout: Checkout) {
   const installed = yield* installDependencies(shell, checkout.cwd);
-  if (installed.refused !== undefined) return { ...checkout, refused: installed.refused };
-  if (installed.ran === null) return checkout;
+  if (installed.refused !== undefined) {
+    return { ...checkout, refused: installed.refused };
+  }
+  if (installed.ran === null) {
+    return checkout;
+  }
   return {
     ...checkout,
     note: Arr.join(
@@ -905,7 +1039,9 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     task: null,
     branchSource: null,
   };
-  if (!mutates(opts.checkout)) return here;
+  if (!mutates(opts.checkout)) {
+    return here;
+  }
 
   if (roams(opts.checkout)) {
     const repository = repositoryOf(opts)?.value ?? "";
@@ -924,7 +1060,9 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       from = path.join(opts.stateDir, "renovate-repositories", Bun.hash(repository).toString(16));
       const host = Str.split(project, "/")[0];
       const forge = forgeOfHost(host, opts.gitlabHost);
-      if (forge === null) return { ...here, refused: `${host} is neither GitHub nor GitLab` };
+      if (forge === null) {
+        return { ...here, refused: `${host} is neither GitHub nor GitLab` };
+      }
       if (!(yield* fs.exists(path.join(from, ".git")))) {
         yield* fs.makeDirectory(path.dirname(from), { recursive: true });
         const cloned = yield* FORGES[forge].clone(project, from, opts.stateDir, shell);
@@ -933,8 +1071,9 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
         }
       }
       const kept = yield* FORGES[forge].credentials(project, from, shell);
-      if (!kept.ok)
+      if (!kept.ok) {
         return { ...here, refused: `could not keep credentials for ${repository}: ${kept.reason}` };
+      }
     }
     const made = yield* roamingCheckout({
       cwd: from,
@@ -965,18 +1104,21 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   }
 
   const plan = yield* branchFor(opts);
-  if (plan.refused) return { ...here, refused: plan.refused } satisfies Checkout;
+  if (plan.refused) {
+    return { ...here, refused: plan.refused } satisfies Checkout;
+  }
   if (opts.branchBase !== undefined) {
     const local = yield* shell(
       "git",
       ["rev-parse", "--verify", "--quiet", `refs/heads/${plan.branch}`],
       opts.cwd,
     );
-    if (local.code === 0 && Str.trim(local.stdout) !== opts.branchBase)
+    if (local.code === 0 && Str.trim(local.stdout) !== opts.branchBase) {
       return {
         ...here,
         refused: `Local branch ${plan.branch} differs from the fetched revision; preserve or move it before starting remotely.`,
       };
+    }
     const trees = yield* gitWorktrees(shell, opts.cwd);
     const existing = Option.getOrUndefined(
       Option.map(Option.fromNullishOr(trees), (present) =>
@@ -987,11 +1129,12 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     );
     if (existing !== undefined) {
       const dirty = yield* shell("git", ["status", "--porcelain"], existing.path);
-      if (dirty.code !== 0 || Str.trim(dirty.stdout) !== "")
+      if (dirty.code !== 0 || Str.trim(dirty.stdout) !== "") {
         return {
           ...here,
           refused: `The checkout of ${plan.branch} has local changes; preserve them before starting remotely.`,
         };
+      }
     }
     plan.base = opts.branchBase;
   }
@@ -1004,12 +1147,13 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     const { run, cwd } = opts.starting;
     const why = yield* whyNotWorkIn(herdr, cwd, plan.branch, { ref: plan.base, in: opts.cwd });
     const whose = `${cwd}, Run ${run}'s checkout`;
-    if (why === null)
+    if (why === null) {
       return yield* withDependencies({
         ...here,
         cwd,
         note: `working in ${whose}: it is clean, at ${plan.branch}'s head, and no agent is working in it`,
       });
+    }
     notTaken = `not working in ${whose}: ${why}; `;
   }
 
@@ -1028,7 +1172,9 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     recordedBy: opts.recordedBy,
     run: shell,
   });
-  if (made.refused !== undefined) return refuse(made.refused);
+  if (made.refused !== undefined) {
+    return refuse(made.refused);
+  }
   const worktree = {
     path: made.path,
     branch: plan.branch,
@@ -1057,18 +1203,25 @@ export const checkoutRefusal = Effect.fn("worktree.checkoutRefusal")(function* (
 ) {
   const path = yield* Path.Path;
   const plan = yield* branchFor(opts);
-  if (plan.refused) return plan.refused;
+  if (plan.refused) {
+    return plan.refused;
+  }
   if (
     opts.starting !== undefined &&
     (yield* whyNotWorkIn(herdr, opts.starting.cwd, plan.branch, {
       ref: plan.base,
       in: opts.cwd,
     })) === null
-  )
+  ) {
     return null;
+  }
   const listing = yield* gitWorktrees(shell, opts.cwd);
-  if (!listing) return `no worktree for ${plan.branch}: ${opts.cwd} is not a git checkout`;
-  if (Arr.some(listing.checkouts, (checkout) => checkout.branch === plan.branch)) return null;
+  if (!listing) {
+    return `no worktree for ${plan.branch}: ${opts.cwd} is not a git checkout`;
+  }
+  if (Arr.some(listing.checkouts, (checkout) => checkout.branch === plan.branch)) {
+    return null;
+  }
   const first = path.join(
     yield* worktreesDirectory(herdr.env),
     path.basename(listing.repo),
@@ -1140,21 +1293,32 @@ const inUse = Effect.fn("worktree.inUse")(function* (
   },
 ) {
   const agents = yield* Effect.result(herdr.agentList());
-  if (agents._tag === "Failure") return null;
+  if (agents._tag === "Failure") {
+    return null;
+  }
   const paths = new Map(opts.paths);
   for (const agent of agents.success) {
     // WARNING: a finished Run's idle agent is what removal ends; counting it as work kept every checkout forever.
-    if (opts.leftovers.has(agent.paneId) && agent.status !== "working") continue;
+    if (opts.leftovers.has(agent.paneId) && agent.status !== "working") {
+      continue;
+    }
     // WARNING: an agent cd-ed into a checkout is working in it, so both directories count.
     for (const dir of [agent.cwd, agent.foregroundCwd]) {
-      if (dir) paths.set(dir, "an agent is working in it");
+      if (dir) {
+        paths.set(dir, "an agent is working in it");
+      }
     }
   }
   const servers = yield* unlistedServers(opts.stateDir, [herdr]);
-  if (servers === null) return null;
-  for (const record of servers)
+  if (servers === null) {
+    return null;
+  }
+  for (const record of servers) {
     paths.set(record.cwd, `${record.agent}'s server may still be writing in it`);
-  if (opts.keep && !paths.has(opts.keep)) paths.set(opts.keep, "a run is starting in it");
+  }
+  if (opts.keep && !paths.has(opts.keep)) {
+    paths.set(opts.keep, "a run is starting in it");
+  }
   return { paths, agents: agents.success } satisfies InUse;
 });
 
@@ -1176,14 +1340,18 @@ const endLeftovers = Effect.fn("worktree.endLeftovers")(function* (
   const why = `its checkout ${opts.at} was removed`;
   let left = 0;
   for (const agent of opts.agents) {
-    if (!opts.leftovers.has(agent.paneId) || !worksIn(agent, opts.at)) continue;
+    if (!opts.leftovers.has(agent.paneId) || !worksIn(agent, opts.at)) {
+      continue;
+    }
     const entry = Option.getOrUndefined(
       Arr.findFirst(
         opts.registered,
         (one) => one.paneId === agent.paneId && one.agent === agent.name,
       ),
     );
-    if (entry === undefined) continue;
+    if (entry === undefined) {
+      continue;
+    }
     const launched = Option.getOrUndefined(
       Arr.findLast(yield* readLaunches(entry.runId), (one) => one.agent === entry.agent),
     );
@@ -1205,8 +1373,11 @@ const endLeftovers = Effect.fn("worktree.endLeftovers")(function* (
         Effect.as(true),
         Effect.orElseSucceed(() => false),
       ));
-    if (!killed) left += 1;
-    else yield* runLog(opts.stateDir, entry.runId)(endedLine(entry.agent, why)).pipe(Effect.ignore);
+    if (!killed) {
+      left += 1;
+    } else {
+      yield* runLog(opts.stateDir, entry.runId)(endedLine(entry.agent, why)).pipe(Effect.ignore);
+    }
   }
   return left;
 });
@@ -1241,28 +1412,41 @@ const settled = Effect.fn("worktree.settled")(function* (
   if (
     settling.owedAt.has(worktree.path) ||
     settling.owedOn.has(onBranch(opts.project, worktree.branch))
-  )
+  ) {
     return keepIt("its Task still owes work");
+  }
   const dirty = yield* run("git", ["status", "--porcelain"], worktree.path);
-  if (dirty.code !== 0) return keepIt("could not read the working tree");
-  if (Str.trim(dirty.stdout) !== "") return keepIt("uncommitted changes");
+  if (dirty.code !== 0) {
+    return keepIt("could not read the working tree");
+  }
+  if (Str.trim(dirty.stdout) !== "") {
+    return keepIt("uncommitted changes");
+  }
 
   const landed =
     settling.landedAt.get(worktree.path) ??
     settling.landedOn.get(onBranch(opts.project, worktree.branch));
   const upstream = yield* upstreamRemote(worktree, run);
   const unpushed = yield* unpushedWork(worktree, run, upstream, landed?.heads ?? []);
-  if (unpushed) return unpushed;
+  if (unpushed) {
+    return unpushed;
+  }
 
   const held = heldBy(opts.use, worktree);
-  if (held) return keepIt(held);
+  if (held) {
+    return keepIt(held);
+  }
 
   // WARNING: a roaming checkout has no branch to ask about: its work was pushed to the Renovate branches it moved across.
   const settledBy = worktree.branch === "" ? null : yield* landedBy(worktree, landed, opts);
-  if (settledBy !== null && settledBy.keep !== undefined) return settledBy;
+  if (settledBy !== null && settledBy.keep !== undefined) {
+    return settledBy;
+  }
   // WARNING: checked last: a checkout is never removed from under its open Task.
   const task = settling.taskHolds.get(worktree.path);
-  if (task !== undefined) return keepIt(task);
+  if (task !== undefined) {
+    return keepIt(task);
+  }
   return settledBy ?? settledBecause("its Run is over and it holds nothing");
 });
 
@@ -1277,11 +1461,16 @@ const landedBy = Effect.fn("worktree.landedBy")(function* (
     project: string;
   },
 ) {
-  if (opts.settling.owedOn.has(onBranch(opts.project, worktree.branch)))
+  if (opts.settling.owedOn.has(onBranch(opts.project, worktree.branch))) {
     return keepIt("its Task still owes work");
-  if (landed !== undefined) return settledBecause(landed.why);
+  }
+  if (landed !== undefined) {
+    return settledBecause(landed.why);
+  }
   const open = opts.settling.openOn.get(onBranch(opts.project, worktree.branch));
-  if (open !== undefined) return keepIt(`${open} is still open`);
+  if (open !== undefined) {
+    return keepIt(`${open} is still open`);
+  }
   const upstream = yield* upstreamRemote(worktree, opts.run);
   const remotes =
     upstream !== null
@@ -1292,15 +1481,21 @@ const landedBy = Effect.fn("worktree.landedBy")(function* (
           ),
           (line) => line !== "",
         );
-  if (remotes.length === 0) return keepIt("no remote to compare against");
+  if (remotes.length === 0) {
+    return keepIt("no remote to compare against");
+  }
   for (const remote of remotes) {
     const heads = yield* opts.run(
       "git",
       ["ls-remote", "--heads", remote, worktree.branch],
       opts.repo,
     );
-    if (heads.code !== 0) return keepIt("could not reach the remote");
-    if (Str.trim(heads.stdout) !== "") return keepIt("still on the remote");
+    if (heads.code !== 0) {
+      return keepIt("could not reach the remote");
+    }
+    if (Str.trim(heads.stdout) !== "") {
+      return keepIt("still on the remote");
+    }
   }
   return settledBecause("its remote branch is gone");
 });
@@ -1331,12 +1526,18 @@ const unpushedWork = Effect.fn("worktree.unpushedWork")(function* (
 ) {
   const remotes = upstream === null ? "--remotes" : `--remotes=${upstream}`;
   const unique = yield* run("git", ["rev-list", "HEAD", "--not", remotes], worktree.path);
-  if (unique.code !== 0) return keepIt("could not read what is unpushed");
+  if (unique.code !== 0) {
+    return keepIt("could not read what is unpushed");
+  }
   const count = commits(unique);
-  if (count === 0) return null;
+  if (count === 0) {
+    return null;
+  }
   if (mergedHeads.length > 0) {
     const head = yield* run("git", ["rev-parse", "HEAD"], worktree.path);
-    if (head.code === 0 && mergedHeads.includes(Str.trim(head.stdout))) return null;
+    if (head.code === 0 && mergedHeads.includes(Str.trim(head.stdout))) {
+      return null;
+    }
   }
   return keepIt(`${count} commit(s) on no remote`);
 });
@@ -1371,16 +1572,26 @@ function fromRuns(
     const resumable =
       (run.state === "stopped" || (run.state === "failed" && !roaming.includes(at ?? ""))) &&
       !landed;
-    if (going) paths.set(run.cwd, "a run is still working in it");
-    else if (checking.has(run.id)) paths.set(run.cwd, "its check is still running in it");
-    else if (resumable) paths.set(run.cwd, `a ${run.state} run can resume in it`);
+    if (going) {
+      paths.set(run.cwd, "a run is still working in it");
+    } else if (checking.has(run.id)) {
+      paths.set(run.cwd, "its check is still running in it");
+    } else if (resumable) {
+      paths.set(run.cwd, `a ${run.state} run can resume in it`);
+    }
     if (worktree !== null) {
       mine.set(worktree.path, worktree);
       projects.set(worktree.path, run.project);
     }
-    if (at === undefined || going || resumable || checking.has(run.id)) continue;
+    if (at === undefined || going || resumable || checking.has(run.id)) {
+      continue;
+    }
     const left = panes.get(at) ?? new Set<string>();
-    for (const entry of registered) if (entry.runId === run.id) left.add(entry.paneId);
+    for (const entry of registered) {
+      if (entry.runId === run.id) {
+        left.add(entry.paneId);
+      }
+    }
     panes.set(at, left);
   }
   return { mine, paths, panes, projects };
@@ -1437,15 +1648,25 @@ const prune = Effect.fn("worktree.prune")(function* (
   // WARNING: match made_at too, or a human's checkout later made at the same path reads as Collie's.
   const candidates: Array<Listed & { branch: string }> = [];
   for (const worktree of listing?.worktrees ?? []) {
-    if (opts.only !== undefined && worktree.path !== opts.only) continue;
+    if (opts.only !== undefined && worktree.path !== opts.only) {
+      continue;
+    }
     const branch = worktree.branch ?? "";
     const record = mine.get(worktree.path);
-    if (!record || record.made_at === null) continue;
-    if (settling.protect.has(worktree.path)) continue;
+    if (!record || record.made_at === null) {
+      continue;
+    }
+    if (settling.protect.has(worktree.path)) {
+      continue;
+    }
     // WARNING: a repository's main checkout is never Collie's, whatever a record says.
     const git = yield* fs.stat(path.join(worktree.path, ".git")).pipe(Effect.option);
-    if (Option.isSome(git) && git.value.type === "Directory") continue;
-    if ((yield* madeAt(worktree.path)) !== record.made_at) continue;
+    if (Option.isSome(git) && git.value.type === "Directory") {
+      continue;
+    }
+    if ((yield* madeAt(worktree.path)) !== record.made_at) {
+      continue;
+    }
     candidates.push({ ...worktree, branch });
   }
 
@@ -1454,9 +1675,15 @@ const prune = Effect.fn("worktree.prune")(function* (
   const round = { state, statePath, before, now, repo };
 
   for (const [known, entry] of Rec.toEntries(state)) {
-    if (entry.repo !== repo || opts.only !== undefined) continue;
-    if (Arr.some(candidates, (worktree) => worktree.path === known)) continue;
-    if (!entry.removed || now - entry.checked_at > REPORT_MS) delete state[known];
+    if (entry.repo !== repo || opts.only !== undefined) {
+      continue;
+    }
+    if (Arr.some(candidates, (worktree) => worktree.path === known)) {
+      continue;
+    }
+    if (!entry.removed || now - entry.checked_at > REPORT_MS) {
+      delete state[known];
+    }
   }
 
   const fresh = opts.dryRun === true || opts.only !== undefined;
@@ -1465,7 +1692,9 @@ const prune = Effect.fn("worktree.prune")(function* (
     return fresh || !entry || entry.removed || now - entry.checked_at >= RECHECK_MS;
   });
   const judged: Array<Judged> = [];
-  if (due.length === 0) return { lines: yield* conclude(round), judged };
+  if (due.length === 0) {
+    return { lines: yield* conclude(round), judged };
+  }
 
   // WARNING: a core that will not answer is no proof nothing is live: judge nothing, write nothing.
   const leftovers = new Set(Arr.flatMap([...panes.values()], (left) => [...left]));
@@ -1580,7 +1809,9 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
   });
   // WARNING: never --force: git's own refusal to drop a dirty or unmerged checkout is the guard.
   const dropped = yield* opts.run("git", ["worktree", "remove", worktree.path], opts.repo);
-  if (dropped.code !== 0) return kept(whatItSaid(dropped) || "git would not remove it");
+  if (dropped.code !== 0) {
+    return kept(whatItSaid(dropped) || "git would not remove it");
+  }
 
   const running = yield* endLeftovers(herdr, {
     at: worktree.path,
@@ -1649,14 +1880,19 @@ const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
   const listed = new Set<string>();
   for (const cwd of new Set([opts.cwd, ...recorded.mine.keys()])) {
     const own = cwd === opts.cwd;
-    if (!own && (listed.has(cwd) || !(yield* fs.exists(cwd)))) continue;
+    if (!own && (listed.has(cwd) || !(yield* fs.exists(cwd)))) {
+      continue;
+    }
     const found = yield* gitWorktrees(opts.run ?? shell, cwd).pipe(
       Effect.orElseSucceed(() => null),
     );
     const listing = found === null ? null : { worktrees: found.checkouts, source: found.repo };
-    if (!own && (listing === null || Arr.every(listing.worktrees, (w) => listed.has(w.path))))
+    if (!own && (listing === null || Arr.every(listing.worktrees, (w) => listed.has(w.path)))) {
       continue;
-    for (const worktree of listing?.worktrees ?? []) listed.add(worktree.path);
+    }
+    for (const worktree of listing?.worktrees ?? []) {
+      listed.add(worktree.path);
+    }
     const round = yield* prune({ ...opts, cwd, recorded, listing });
     lines.push(...round.lines);
     judged.push(...round.judged);
@@ -1679,7 +1915,9 @@ export const pinnedCheckout = Effect.fn("worktree.pinnedCheckout")(function* (op
   const path = yield* Path.Path;
   const { run } = opts;
   const listing = yield* gitWorktrees(run, opts.repo);
-  if (!listing) return { refused: `${opts.repo} is not a git checkout` };
+  if (!listing) {
+    return { refused: `${opts.repo} is not a git checkout` };
+  }
   const kept =
     opts.forge === "gitlab" ? `merge-requests/${opts.iid}/head` : `pull/${opts.iid}/head`;
   let remote = "origin";
@@ -1702,12 +1940,17 @@ export const pinnedCheckout = Effect.fn("worktree.pinnedCheckout")(function* (op
     ["fetch", "--quiet", remote, `+refs/${kept}:${tracking}`],
     listing.repo,
   );
-  if (fetched.code !== 0)
+  if (fetched.code !== 0) {
     return { refused: `could not fetch ${kept} from ${remote}: ${whatItSaid(fetched)}` };
+  }
   const at = yield* run("git", ["rev-parse", tracking], listing.repo);
   const now = Str.trim(at.stdout);
-  if (at.code !== 0 || now === "") return { refused: `could not read ${tracking}` };
-  if (now !== opts.head) return { moved: now };
+  if (at.code !== 0 || now === "") {
+    return { refused: `could not read ${tracking}` };
+  }
+  if (now !== opts.head) {
+    return { moved: now };
+  }
   const where = path.join(opts.worktrees, path.basename(listing.repo), reviewingDir(opts.runId));
   const there = yield* fs.exists(where).pipe(Effect.orElseSucceed(() => false));
   const steps: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = there
@@ -1718,8 +1961,9 @@ export const pinnedCheckout = Effect.fn("worktree.pinnedCheckout")(function* (op
     : [[listing.repo, ["worktree", "add", "--quiet", "--detach", where, opts.head]]];
   for (const [cwd, args] of steps) {
     const done = yield* run("git", [...args], cwd);
-    if (done.code !== 0)
+    if (done.code !== 0) {
       return { refused: `could not check ${opts.head} out in ${where}: ${whatItSaid(done)}` };
+    }
   }
   const worktree = {
     path: where,

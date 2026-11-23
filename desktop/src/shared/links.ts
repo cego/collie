@@ -45,7 +45,9 @@ const cardOf: (url: string, given: string | undefined, mr: MrDetails | null) => 
   given,
   mr,
 ) => {
-  if (url === mr?.url) return { kind: "mr", url, title: mr.title, status: mr.state };
+  if (url === mr?.url) {
+    return { kind: "mr", url, title: mr.title, status: mr.state };
+  }
   if (mr !== null && url === checksUrl(mr)) {
     const heading = mrHeading(mr);
     return {
@@ -55,11 +57,17 @@ const cardOf: (url: string, given: string | undefined, mr: MrDetails | null) => 
       status: mr.pipeline,
     };
   }
-  if (ARTIFACT.test(url)) return { kind: "artifact", url, title: given ?? "Claude artifact" };
+  if (ARTIFACT.test(url)) {
+    return { kind: "artifact", url, title: given ?? "Claude artifact" };
+  }
   const pipeline = PIPELINE.exec(url);
-  if (pipeline) return { kind: "pipeline", url, title: given ?? `Pipeline #${pipeline[1]}` };
+  if (pipeline) {
+    return { kind: "pipeline", url, title: given ?? `Pipeline #${pipeline[1]}` };
+  }
   const other = parseMrUrl(url);
-  if (other) return { kind: "mr", url, title: given ?? mrHeading(other).title };
+  if (other) {
+    return { kind: "mr", url, title: given ?? mrHeading(other).title };
+  }
   return { kind: "link", url, title: given ?? where(url) };
 };
 
@@ -74,10 +82,13 @@ export const webLinks = ({
   const own =
     details === null ? [] : [details.url, details.pipeline === "" ? "" : checksUrl(details)];
   const titles = new Map<string, string | undefined>();
-  for (const text of [...texts, ...own])
+  for (const text of [...texts, ...own]) {
     for (const [bare, given, marked] of pipe(text, Str.matchAll(LINK))) {
       const url = marked ?? pipe(bare, Str.replace(/[.,;:!?]+$/, ""));
-      if (titles.get(url) === undefined) titles.set(url, given);
+      if (titles.get(url) === undefined) {
+        titles.set(url, given);
+      }
     }
+  }
   return Arr.map([...titles], ([url, given]) => cardOf(url, given, details));
 };

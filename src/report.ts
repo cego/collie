@@ -122,19 +122,24 @@ export function reportOf(
     }
     tally.total++;
     tally[status.status]++;
-    if (status.status === "failed") failed.push({ runId, workflow, reason: status.reason });
-    if (status.status === "complete")
+    if (status.status === "failed") {
+      failed.push({ runId, workflow, reason: status.reason });
+    }
+    if (status.status === "complete") {
       completed.push({
         runId,
         workflow,
         value: resultText(status.value),
         mr: view.mr,
       });
+    }
     if (view.controls.includes(STOP)) {
       tally.stopped++;
       stopped.push({ runId, workflow });
     }
-    if (view.mr !== null) tally.withMr++;
+    if (view.mr !== null) {
+      tally.withMr++;
+    }
     tally.open += Arr.filter(view.waiting, isUnanswered).length;
     tally.answered += Arr.filter(
       view.waiting,
@@ -261,7 +266,9 @@ const measureLines = (measures: Measures) => {
 
 export const reportLines = (report: Report, unreadable: string | null) => {
   const unread = unreadable === null ? [] : [`runs: ${unreadable}`];
-  if (report.total === 0) return Arr.join([...unread, "No runs found."], "\n");
+  if (report.total === 0) {
+    return Arr.join([...unread, "No runs found."], "\n");
+  }
   return Arr.join(
     [
       `${report.total} Runs`,

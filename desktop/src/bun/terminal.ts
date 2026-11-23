@@ -95,7 +95,9 @@ export const attachCore = Effect.fn("Desktop.attachCore")(function* (
   const shown = yield* Queue.unbounded<Shown, Cause.Done>();
   const end = (reason: string) =>
     Effect.suspend(() => {
-      if (ended) return Effect.void;
+      if (ended) {
+        return Effect.void;
+      }
       ended = true;
       return Queue.offer(shown, { event: { _tag: "Ended", reason }, channel: 0, bytes: 0 }).pipe(
         Effect.andThen(Queue.end(shown)),
@@ -111,16 +113,22 @@ export const attachCore = Effect.fn("Desktop.attachCore")(function* (
     Effect.gen(function* () {
       for (;;) {
         const frame = yield* Queue.take(channel.frames);
-        if (frame.kind === Kind.CLOSE) return yield* end(endedBy(frame.payload));
-        if (frame.kind !== Kind.DATA) continue;
+        if (frame.kind === Kind.CLOSE) {
+          return yield* end(endedBy(frame.payload));
+        }
+        if (frame.kind !== Kind.DATA) {
+          continue;
+        }
         undrawn += frame.payload.length;
-        if (undrawn >= CORE_WINDOW) yield* repaint;
-        else
+        if (undrawn >= CORE_WINDOW) {
+          yield* repaint;
+        } else {
           yield* Queue.offer(shown, {
             event: { _tag: "Frame", bytes: Base64.encode(frame.payload) },
             channel: channel.id,
             bytes: frame.payload.length,
           });
+        }
       }
     }).pipe(Effect.catch((refused) => end(refused.reason))),
   );
@@ -171,11 +179,12 @@ export const openTerminal = Effect.fn("Desktop.openTerminal")(function* (
   rows: number,
 ) {
   const at = yield* focused;
-  if (at.core === undefined)
+  if (at.core === undefined) {
     return {
       events: Stream.succeed<TerminalEvent>({ _tag: "NoPane", at }),
       send: () => Effect.void,
     };
+  }
   const local = route.machine.profile === "local";
   const command = yield* (local ? route : localRoute([], ""))
     .sh("herdr-core connect")
@@ -210,7 +219,7 @@ export const inTerminal = (
   platform: NodeJS.Platform,
   which: (name: string) => string | null,
 ) => {
-  if (platform === "darwin")
+  if (platform === "darwin") {
     return [
       "osascript",
       "-e",
@@ -218,9 +227,12 @@ export const inTerminal = (
       "-e",
       `tell application "Terminal" to activate`,
     ];
+  }
   for (const [name, run] of TERMINALS) {
     const found = which(name);
-    if (found !== null) return [found, ...run, ...command];
+    if (found !== null) {
+      return [found, ...run, ...command];
+    }
   }
   return null;
 };

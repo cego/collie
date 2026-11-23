@@ -158,9 +158,13 @@ const bindHost = Config.String("COLLIE_PEER_HOST").pipe(
 const sameSecret = (given: string, kept: string) => {
   const a = Buffer.from(given);
   const b = Buffer.from(kept);
-  if (a.length !== b.length) return false;
+  if (a.length !== b.length) {
+    return false;
+  }
   let differ = 0;
-  for (let at = 0; at < a.length; at++) differ |= a[at]! ^ b[at]!;
+  for (let at = 0; at < a.length; at++) {
+    differ |= a[at]! ^ b[at]!;
+  }
   return differ === 0;
 };
 
@@ -181,7 +185,9 @@ export const certificateFor = Effect.fn("Peers.certificateFor")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const kept = yield* fs.readFileString(certOf(stateDir)).pipe(Effect.option);
-  if (Option.isSome(kept)) return kept.value;
+  if (Option.isSome(kept)) {
+    return kept.value;
+  }
   const made = yield* shell(
     "openssl",
     [
@@ -207,10 +213,11 @@ export const certificateFor = Effect.fn("Peers.certificateFor")(function* (
     ],
     stateDir,
   );
-  if (made.code !== 0)
+  if (made.code !== 0) {
     return yield* new HostRefused({
       reason: `openssl could not make this Machine's certificate: ${Str.trim(made.stderr ?? "") || `exit ${made.code}`}`,
     });
+  }
   yield* fs.chmod(keyOf(stateDir), 0o600);
   yield* fs.chmod(certOf(stateDir), 0o600);
   return yield* fs.readFileString(certOf(stateDir));
@@ -228,8 +235,9 @@ const listenerCertificateFor = Effect.fn("Peers.listenerCertificateFor")(functio
   if (
     address === null ||
     (isIP(address) ? issued.checkIP(address) : issued.checkHost(address)) !== undefined
-  )
+  ) {
     return current;
+  }
   const present = Arr.map(Str.split(issued.subjectAltName ?? "", ", "), (name) =>
     pipe(name, Str.replace("IP Address:", "IP:")),
   );
@@ -265,10 +273,11 @@ const listenerCertificateFor = Effect.fn("Peers.listenerCertificateFor")(functio
   ];
   for (const args of commands) {
     const made = yield* shell("openssl", args, stateDir);
-    if (made.code !== 0)
+    if (made.code !== 0) {
       return yield* new HostRefused({
         reason: `openssl could not sign this Machine's listener certificate: ${Str.trim(made.stderr ?? "") || `exit ${made.code}`}`,
       });
+    }
   }
   yield* fs.chmod(next, 0o600);
   yield* fs.rename(next, listenerCertOf(stateDir));
@@ -325,8 +334,9 @@ export const levelPeer = Effect.fn("Peers.level")(function* (link: Link, peer: P
     who.development !== undefined ||
     !RELEASE_TAG.test(who.build) ||
     Bun.semver.order(link.build, who.build) <= 0
-  )
+  ) {
     return who.development ?? who.build;
+  }
   yield* Effect.logInfo(`bringing ${peer.name} from ${who.build} to ${link.build}`);
   const result = yield* door.shell({
     script: Result.getOrThrow(
@@ -334,10 +344,11 @@ export const levelPeer = Effect.fn("Peers.level")(function* (link: Link, peer: P
     ),
     request: `level:${link.installation}:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`,
   });
-  if (result.code !== 0)
+  if (result.code !== 0) {
     return yield* new HostRefused({
       reason: `upgrade to ${link.build} failed: ${Str.trim(result.stderr) || Str.trim(result.stdout) || `exit ${result.code}`}`,
     });
+  }
   yield* door.refresh({
     request: `refresh:${link.installation}:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`,
   });
@@ -345,10 +356,11 @@ export const levelPeer = Effect.fn("Peers.level")(function* (link: Link, peer: P
     Effect.gen(function* () {
       const after = yield* link.connect(peer);
       const now = yield* after.identity;
-      if (now.build !== link.build)
+      if (now.build !== link.build) {
         return yield* new HostRefused({
           reason: `${peer.name} still runs ${now.build} after upgrading to ${link.build}`,
         });
+      }
       return now.build;
     }),
   ).pipe(
@@ -398,7 +410,9 @@ const firstLine = (conn: Socket, then: (line: string, rest: Buffer) => void) => 
     seen = Buffer.concat([seen, chunk]);
     const end = seen.indexOf(10);
     if (end === -1) {
-      if (seen.length > 64 * 1024) conn.destroy();
+      if (seen.length > 64 * 1024) {
+        conn.destroy();
+      }
       return;
     }
     conn.off("data", take);
@@ -444,10 +458,14 @@ const held = () => {
       done();
     },
     listen: (to: (chunk: Uint8Array) => void, then: () => void) => {
-      for (const chunk of queued.splice(0)) to(chunk);
+      for (const chunk of queued.splice(0)) {
+        to(chunk);
+      }
       deliver = to;
       done = then;
-      if (gone) then();
+      if (gone) {
+        then();
+      }
     },
   };
 };
@@ -485,8 +503,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   // WARNING: port 0 is chosen once and kept, so every later opening binds the same port.
   const keptPort = `${link.dir}/peer-port`;
   let listenPort = yield* port;
-  if (listenPort === 0)
+  if (listenPort === 0) {
     listenPort = Number(yield* fs.readFileString(keptPort).pipe(Effect.orElseSucceed(() => "0")));
+  }
   const listenHost = yield* bindHost;
   const startedAt = DateTime.formatIso(DateTime.makeUnsafe(clock.currentTimeMillisUnsafe()));
   let peers = [...(yield* peersOf(link.dir))];
@@ -532,12 +551,15 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
               }),
             );
             const { take } = latestEdits(mine.settings, shared, byKey);
-            if (take.length > 0) yield* takeShared(link.userDir, take, peer.name, yield* nowIso);
-            if (merged.give.length > 0)
+            if (take.length > 0) {
+              yield* takeShared(link.userDir, take, peer.name, yield* nowIso);
+            }
+            if (merged.give.length > 0) {
               yield* door.setSettings({
                 settings: merged.give,
                 request: `sync:${link.installation}:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`,
               });
+            }
           }),
         ),
       )
@@ -564,13 +586,16 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
               take.length > 0
                 ? yield* takeDefinitions(link.userDir, take, peer.name, yield* nowIso)
                 : mine;
-            if (give.length > 0)
+            if (give.length > 0) {
               yield* door.setSharedDefinitions({
                 definitions: give,
                 request: `sync:${link.installation}:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`,
               });
+            }
             const known = holds.get(peer.installation) ?? new Map<string, string>();
-            for (const one of landed([...mine, ...take], held)) known.set(one.path, one.at);
+            for (const one of landed([...mine, ...take], held)) {
+              known.set(one.path, one.at);
+            }
             holds.set(peer.installation, known);
           }),
         ),
@@ -589,7 +614,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         Effect.gen(function* () {
           const failure = Schema.is(HostRefused)(cause) ? cause.reason : reason(cause);
           const standing = standings.get(peer.installation);
-          if (standing !== undefined) stand(peer.installation, { ...standing, failure });
+          if (standing !== undefined) {
+            stand(peer.installation, { ...standing, failure });
+          }
           yield* Effect.logWarning(`could not level ${peer.name}: ${failure}`);
         }),
       ),
@@ -622,8 +649,11 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       const previous = peers;
       yield* writePeers(link.dir, next);
       peers = [...next];
-      for (const prior of previous)
-        if (!Arr.some(peers, (peer) => samePeer(peer, prior))) yield* drop(prior.installation);
+      for (const prior of previous) {
+        if (!Arr.some(peers, (peer) => samePeer(peer, prior))) {
+          yield* drop(prior.installation);
+        }
+      }
       yield* settle;
     }).pipe(
       Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
@@ -637,12 +667,14 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   const validateName = (name: string) =>
     Effect.gen(function* () {
       const path = relayOf(link.dir, name);
-      if (Buffer.byteLength(path) > SOCKET_PATH_MAX)
+      if (Buffer.byteLength(path) > SOCKET_PATH_MAX) {
         return yield* new HostRefused({
           reason: `${path} is longer than the ${SOCKET_PATH_MAX} bytes a unix socket path may be`,
         });
-      if (/[/\\]/.test(name) || name === "" || pipe(name, Str.startsWith(".")))
+      }
+      if (/[/\\]/.test(name) || name === "" || pipe(name, Str.startsWith("."))) {
         return yield* new HostRefused({ reason: `"${name}" cannot name a relay socket` });
+      }
     });
 
   const connectionOf = (peer: Peer) =>
@@ -652,7 +684,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
           Option.getOrUndefined(Arr.findFirst(present_, (one) => one.label === peer.name)),
         ),
       );
-      if (machine === undefined) return null;
+      if (machine === undefined) {
+        return null;
+      }
       return yield* sshConnection(link.dir, machine).pipe(
         Effect.tapError((refused) => Effect.logWarning(refused.reason)),
         Effect.orElseSucceed(() => null),
@@ -676,13 +710,18 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   const dialBack = (peer: Peer, as: FrontDoor, client: string, sender?: AgentAddress) =>
     Effect.gen(function* () {
       const control = controls.get(peer.installation);
-      if (control === undefined)
+      if (control === undefined) {
         return yield* new MachineUnreachable({
           machine: peer.name,
           seen: "no control link from it",
         });
+      }
       const now = clock.currentTimeMillisUnsafe();
-      for (const [id, ticket] of tickets) if (now - ticket.at > TICKET_LIFE_MS) tickets.delete(id);
+      for (const [id, ticket] of tickets) {
+        if (now - ticket.at > TICKET_LIFE_MS) {
+          tickets.delete(id);
+        }
+      }
       const id = Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("base64url");
       let waiting = true;
       const far = yield* Effect.callback<Far>((resume) => {
@@ -698,7 +737,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         );
       }).pipe(Effect.timeoutOption(REACH_BOUND));
       waiting = false;
-      if (Option.isSome(far)) return far.value;
+      if (Option.isSome(far)) {
+        return far.value;
+      }
       return yield* new MachineUnreachable({
         machine: peer.name,
         seen: `no dial-back within ${REACH_BOUND}`,
@@ -709,11 +750,13 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     Effect.gen(function* () {
       const answer = (said: RelayAnswer) => `${encodeAnswer(said)}\n`;
       const header = Schema.decodeOption(RelayHeaderJson)(line);
-      if (Option.isNone(header))
+      if (Option.isNone(header)) {
         return conn.end(answer({ ok: false, refused: `"${line}" is not a relay header` }));
+      }
       const { as, client } = header.value;
-      if (as === "host" && header.value.stamp !== link.stamp)
+      if (as === "host" && header.value.stamp !== link.stamp) {
         return conn.end(answer({ ok: false, refused: "only this Machine's host speaks as host" }));
+      }
       const reach = peer.dials === "out" ? dialOut : dialBack;
       const far = yield* reach(peer, as, client, header.value.sender).pipe(Effect.result);
       if (far._tag === "Failure") {
@@ -728,7 +771,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       }
       const ws = far.success;
       conn.write(answer({ ok: true }));
-      if (rest.length > 0) ws.send(rest);
+      if (rest.length > 0) {
+        ws.send(rest);
+      }
       ws.listen(
         (chunk) => void conn.write(chunk),
         () => conn.end(),
@@ -738,8 +783,11 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       conn.on("error", () => ws.close());
       conn.resume();
       yield* Effect.callback<void>((resume) => {
-        if (conn.destroyed) resume(Effect.void);
-        else conn.once("close", () => resume(Effect.void));
+        if (conn.destroyed) {
+          resume(Effect.void);
+        } else {
+          conn.once("close", () => resume(Effect.void));
+        }
       });
     }).pipe(Effect.scoped);
 
@@ -818,7 +866,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         (data) => {
           heard = clock.currentTimeMillisUnsafe();
           const said = decodeControl(new TextDecoder().decode(data));
-          if (Option.isSome(said) && "dial" in said.value)
+          if (Option.isSome(said) && "dial" in said.value) {
             void runInHost(
               dialledBack(
                 peer,
@@ -828,6 +876,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
                 said.value.sender,
               ),
             );
+          }
         },
         (reason) => Deferred.doneUnsafe(ended, Exit.succeed(reason || "the control link closed")),
       );
@@ -848,7 +897,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         const woken = yield* Deferred.make<void>();
         wakers.set(peer.installation, woken);
         const { up, ended } = yield* controlLink(peer);
-        if (up) failures = 0;
+        if (up) {
+          failures = 0;
+        }
         stand(peer.installation, { state: "connecting", since: null, ...ended });
         yield* Effect.raceFirst(Effect.sleep(backoff(failures)), Deferred.await(woken));
         failures++;
@@ -877,16 +928,23 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
 
   const drop = (installation: string) =>
     Effect.gen(function* () {
-      for (const [conn, owner] of connections) if (owner === installation) conn.destroy();
+      for (const [conn, owner] of connections) {
+        if (owner === installation) {
+          conn.destroy();
+        }
+      }
       const relay = relays.get(installation);
       relays.delete(installation);
-      if (relay !== undefined)
+      if (relay !== undefined) {
         yield* Effect.callback<void>((resume) => {
           relay.close(() => resume(Effect.void));
         });
+      }
       const dialler = diallers.get(installation);
       diallers.delete(installation);
-      if (dialler !== undefined) yield* Fiber.interrupt(dialler);
+      if (dialler !== undefined) {
+        yield* Fiber.interrupt(dialler);
+      }
       controls.get(installation)?.close();
       controls.delete(installation);
       standings.delete(installation);
@@ -895,7 +953,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
 
   const bearerOf = (request: Request) => {
     const given = /^Bearer (.+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
-    if (given === undefined) return undefined;
+    if (given === undefined) {
+      return undefined;
+    }
     return Option.getOrUndefined(
       Arr.findFirst(peers, (peer) => peer.dials === "in" && sameSecret(given, peer.secret)),
     );
@@ -952,7 +1012,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     },
     arrived: () => {},
     hungUp: (ws) => {
-      if (controls.get(peer.installation) !== ws) return;
+      if (controls.get(peer.installation) !== ws) {
+        return;
+      }
       controls.delete(peer.installation);
       stand(peer.installation, {
         state: "away",
@@ -981,17 +1043,21 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   const accept = (request: Request) => {
     const url = new URL(request.url);
     const peer = bearerOf(request);
-    if (peer === undefined) return new Response("not paired", { status: 401 });
+    if (peer === undefined) {
+      return new Response("not paired", { status: 401 });
+    }
     switch (url.pathname) {
       case "/channel": {
         const as = url.searchParams.get("as") ?? "";
-        if (!Schema.is(FrontDoor)(as))
+        if (!Schema.is(FrontDoor)(as)) {
           return new Response(`"${as}" is not a front door`, { status: 400 });
+        }
         const encoded = url.searchParams.get("sender");
         const sender =
           encoded === null ? undefined : Schema.decodeOption(AgentAddressJson)(encoded);
-        if (sender !== undefined && Option.isNone(sender))
+        if (sender !== undefined && Option.isNone(sender)) {
           return new Response("invalid agent address", { status: 400 });
+        }
         return channelFrom(
           peer,
           as,
@@ -1008,13 +1074,16 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       case "/reverse": {
         const id = url.searchParams.get("ticket") ?? "";
         const ticket = tickets.get(id);
-        if (ticket === undefined) return new Response("no such ticket", { status: 403 });
+        if (ticket === undefined) {
+          return new Response("no such ticket", { status: 403 });
+        }
         if (clock.currentTimeMillisUnsafe() - ticket.at > TICKET_LIFE_MS) {
           tickets.delete(id);
           return new Response("the ticket has expired", { status: 403 });
         }
-        if (ticket.installation !== peer.installation)
+        if (ticket.installation !== peer.installation) {
           return new Response("the ticket was minted for another Machine", { status: 403 });
+        }
         tickets.delete(id);
         return reverseFrom(peer, ticket);
       }
@@ -1037,7 +1106,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
           tls: { cert, key },
           fetch: (request, server) => {
             const accepted = accept(request);
-            if (accepted instanceof Response) return accepted;
+            if (accepted instanceof Response) {
+              return accepted;
+            }
             return server.upgrade(request, { data: accepted })
               ? undefined
               : new Response("", { status: 400 });
@@ -1054,19 +1125,26 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   });
 
   const settle: Effect.Effect<void> = Effect.gen(function* () {
-    for (const installation of new Set([...relays.keys(), ...diallers.keys()]))
-      if (!Arr.some(peers, (peer) => peer.installation === installation)) yield* drop(installation);
+    for (const installation of new Set([...relays.keys(), ...diallers.keys()])) {
+      if (!Arr.some(peers, (peer) => peer.installation === installation)) {
+        yield* drop(installation);
+      }
+    }
     for (const peer of peers) {
-      if (!relays.has(peer.installation)) yield* openRelay(peer);
-      if (peer.dials === "out" && !diallers.has(peer.installation))
+      if (!relays.has(peer.installation)) {
+        yield* openRelay(peer);
+      }
+      if (peer.dials === "out" && !diallers.has(peer.installation)) {
         diallers.set(peer.installation, yield* Effect.forkIn(dialling(peer), scope));
-      if (peer.dials === "in" && !standings.has(peer.installation))
+      }
+      if (peer.dials === "in" && !standings.has(peer.installation)) {
         stand(peer.installation, {
           state: "away",
           since: startedAt,
           failure: "no control link from it yet",
           ...NO_WAY,
         });
+      }
     }
     const wanted = Arr.some(peers, (peer) => peer.dials === "in");
     if (wanted && listener === null) {
@@ -1092,13 +1170,19 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       void listener?.stop(true);
-      for (const conn of connections.keys()) conn.destroy();
-      for (const server of relays.values()) server.close();
+      for (const conn of connections.keys()) {
+        conn.destroy();
+      }
+      for (const server of relays.values()) {
+        server.close();
+      }
     }),
   );
   yield* Effect.forkIn(
     Effect.sync(() => {
-      for (const control of controls.values()) control.send(BEAT_MESSAGE);
+      for (const control of controls.values()) {
+        control.send(BEAT_MESSAGE);
+      }
     }).pipe(Effect.repeat(Schedule.spaced(BEAT))),
     scope,
   );
@@ -1127,7 +1211,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   const definitionKinds = ["workflows", "personas"];
   const syncHeldDefinitions = Effect.gen(function* () {
     const live = Arr.filter(peers, (peer) => standings.get(peer.installation)?.state === "live");
-    if (live.length === 0) return;
+    if (live.length === 0) {
+      return;
+    }
     const held = yield* sharedDefinitions(link.userDir, yield* nowIso);
     yield* Effect.forEach(
       Arr.filter(live, (peer) => unsynced(peer, held)),
@@ -1137,10 +1223,14 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   });
   yield* Effect.forkIn(
     Effect.gen(function* () {
-      if (!(yield* fs.exists(link.userDir))) return yield* Effect.sleep("10 seconds");
-      for (const kind of definitionKinds)
-        if (!(yield* fs.exists(`${link.userDir}/${kind}`)))
+      if (!(yield* fs.exists(link.userDir))) {
+        return yield* Effect.sleep("10 seconds");
+      }
+      for (const kind of definitionKinds) {
+        if (!(yield* fs.exists(`${link.userDir}/${kind}`))) {
           yield* fs.makeDirectory(`${link.userDir}/${kind}`);
+        }
+      }
       yield* definitionChanges(link.userDir, definitionKinds).pipe(
         Stream.runForEach(() => syncHeldDefinitions),
       );
@@ -1167,7 +1257,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
             Schema.is(HostRefused)(cause) ? cause : new HostRefused({ reason: reason(cause) }),
           ),
         );
-        if (previous?.dials === "out")
+        if (previous?.dials === "out") {
           return {
             installation: link.installation,
             port: listenPort,
@@ -1175,6 +1265,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
             secret: previous.secret,
             dials: "in",
           } satisfies Invited;
+        }
         const serving = yield* listenerCertificateFor(link.dir, asker.address).pipe(
           Effect.mapError((cause) =>
             Schema.is(HostRefused)(cause) ? cause : new HostRefused({ reason: reason(cause) }),
@@ -1197,8 +1288,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
           ...Arr.filter(peers, (peer) => peer.installation !== asker.installation),
           incoming,
         ]);
-        if (listener === null && incoming.dials === "in")
+        if (listener === null && incoming.dials === "in") {
           return yield* new HostRefused({ reason: listening ?? "the listener did not start" });
+        }
         return { installation: link.installation, port: listenPort, certificate, secret };
       }).pipe(pairing.withPermits(1), Effect.provideContext(services)),
     add: (peer) =>
@@ -1263,7 +1355,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
           const connection = peer.dials === "out" ? yield* connectionOf(peer) : null;
           yield* link.tell(peer);
           yield* forget(peer.installation);
-          if (connection !== null) yield* connection.exit;
+          if (connection !== null) {
+            yield* connection.exit;
+          }
         }
       }),
     wake: (name) =>
@@ -1275,7 +1369,9 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
           peer === undefined || standings.get(peer.installation)?.state === "live"
             ? undefined
             : wakers.get(peer.installation);
-        if (waker !== undefined) Deferred.doneUnsafe(waker, Exit.void);
+        if (waker !== undefined) {
+          Deferred.doneUnsafe(waker, Exit.void);
+        }
       }),
   };
   return peersModule;
@@ -1317,7 +1413,7 @@ export const pairWith = Effect.fn("Peers.pairWith")(
     );
     const last = Str.split(Str.trim(said), "\n").at(-1) ?? "";
     const invited = decodeInvited(last);
-    if (Option.isNone(invited))
+    if (Option.isNone(invited)) {
       return yield* new HostRefused({
         reason: `${machine.label} did not pair: ${Option.match(decodeRefusal(last), {
           onNone: () =>
@@ -1329,6 +1425,7 @@ export const pairWith = Effect.fn("Peers.pairWith")(
           onSome: (refused) => refused.error.message,
         })}`,
       });
+    }
     const { installation, port: at, certificate, secret, dials } = invited.value.data;
     const host = pipe(address, Str.includes(":")) ? `[${address}]` : address;
     const peer: Peer = {
@@ -1363,7 +1460,9 @@ export const definitionChanges = (userDir: string, kinds: ReadonlyArray<string>)
       const watched = yield* Deferred.make<void>();
       let ready = 0;
       const onReady = () => {
-        if (++ready === kinds.length + 1) Deferred.doneUnsafe(watched, Exit.void);
+        if (++ready === kinds.length + 1) {
+          Deferred.doneUnsafe(watched, Exit.void);
+        }
       };
       return Stream.mergeAll(
         [

@@ -126,7 +126,9 @@ const PDF_BYTES = 4 * 1024 * 1024;
 const TEXT_BYTES = 100 * 1024;
 const strictly = new TextDecoder("utf-8", { fatal: true });
 const utf8 = (bytes: Uint8Array) => {
-  if (bytes.includes(0)) return null;
+  if (bytes.includes(0)) {
+    return null;
+  }
   try {
     return strictly.decode(bytes);
   } catch {
@@ -144,8 +146,9 @@ const contentOf = Effect.fnUntraced(function* (
   const files: Array<Staged> = [];
   for (const id of ids) {
     const held = yield* describeAttachment(dir, id).pipe(Effect.orElseSucceed(() => null));
-    if (held === null)
+    if (held === null) {
       return `Desktop no longer has ${Str.split(id, "/").at(-1)}; attach it again.`;
+    }
     files.push(held);
   }
   const images: Array<ContentBlock> = [];
@@ -153,7 +156,9 @@ const contentOf = Effect.fnUntraced(function* (
   const texts: Array<ContentBlock> = [];
   let budget = INLINE_BUDGET;
   const fits = (data: string) => {
-    if (data.length > budget) return false;
+    if (data.length > budget) {
+      return false;
+    }
     budget -= data.length;
     return true;
   };
@@ -165,20 +170,23 @@ const contentOf = Effect.fnUntraced(function* (
       const scaled = yield* scaledCopy(dir, file.id).pipe(Effect.orElseSucceed(() => null));
       const bytes = yield* read(scaled ?? file.path);
       const data = bytes.length <= IMAGE_BYTES && showable(bytes) ? Base64.encode(bytes) : null;
-      if (data !== null && fits(data))
+      if (data !== null && fits(data)) {
         images.push({ type: "image", source: { type: "base64", media_type: media, data } });
+      }
     } else if (file.mediaType === "application/pdf" && file.size <= PDF_BYTES) {
       const data = Base64.encode(yield* read(file.path));
-      if (fits(data))
+      if (fits(data)) {
         documents.push({
           type: "document",
           source: { type: "base64", media_type: "application/pdf", data },
           title: file.name,
         });
+      }
     } else if (file.size <= TEXT_BYTES && TEXTUAL.test(file.mediaType)) {
       const text = utf8(yield* read(file.path));
-      if (text !== null && fits(text))
+      if (text !== null && fits(text)) {
         texts.push({ type: "text", text: `${file.name}:\n\n${text}` });
+      }
     }
   }
   const blocks: Array<ContentBlock> = [
@@ -287,7 +295,9 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   let resting = false;
   const ask = (toolUseID: string, signal: AbortSignal) => {
     // WARNING: a Desktop turn has nobody to click an answer, so it gets none.
-    if (said === undefined) return Promise.resolve(null);
+    if (said === undefined) {
+      return Promise.resolve(null);
+    }
     const early = clicked.get(toolUseID);
     if (early !== undefined) {
       clicked.delete(toolUseID);
@@ -368,23 +378,31 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       )
       .pipe(Effect.andThen(SubscriptionRef.set(changed, id)), Effect.andThen(tell)),
   );
-  if (Option.isNone(saved)) yield* remember;
+  if (Option.isNone(saved)) {
+    yield* remember;
+  }
   const warm = Effect.gen(function* () {
     const resolved = yield* opts.choice().pipe(Effect.provideContext(services));
-    if (!resolved.ok) return resolved.problem;
+    if (!resolved.ok) {
+      return resolved.problem;
+    }
     const { choice } = resolved;
     const driver = drivers[choice.harness];
-    if (driver === undefined) return `The Flock chat has no driver for ${choice.harness}.`;
-    if (!driver.installed)
+    if (driver === undefined) {
+      return `The Flock chat has no driver for ${choice.harness}.`;
+    }
+    if (!driver.installed) {
       return `${choice.harness} is not installed or not on PATH on this computer`;
+    }
     if (
       live !== undefined &&
       live.running.ended() === null &&
       live.choice.harness === choice.harness &&
       live.choice.model === choice.model &&
       live.choice.effort === choice.effort
-    )
+    ) {
       return live.running;
+    }
     yield* switchHarness(choice.harness);
     yield* end;
     const scope = yield* Scope.make();
@@ -404,7 +422,9 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   const turns = yield* Semaphore.make(1);
   const switchHarness = (harness: string) =>
     Effect.gen(function* () {
-      if (harness === heldOn) return;
+      if (harness === heldOn) {
+        return;
+      }
       yield* end;
       id = yield* random.uuidV4();
       heldOn = harness;
@@ -413,7 +433,9 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
 
   let nudged = false;
   const nudge: Effect.Effect<void> = Effect.suspend(() => {
-    if (nudged) return Effect.void;
+    if (nudged) {
+      return Effect.void;
+    }
     nudged = true;
     return Effect.sleep(SETTLE).pipe(
       Effect.andThen(
@@ -470,14 +492,21 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       Stream.takeUntil(ends),
       Stream.tap((event) =>
         Effect.suspend(() => {
-          if (event.type === "TOOL_CALL_START" && event.toolCallName === "AskUserQuestion")
+          if (event.type === "TOOL_CALL_START" && event.toolCallName === "AskUserQuestion") {
             questions.add(event.toolCallId);
-          if (ends(event)) finished = true;
+          }
+          if (ends(event)) {
+            finished = true;
+          }
           // WARNING: the model's first event shows it has the message and its News.
-          if (news === undefined || event.type === "RUN_STARTED" || ends(event)) return Effect.void;
+          if (news === undefined || event.type === "RUN_STARTED" || ends(event)) {
+            return Effect.void;
+          }
           const settled = news;
           news = undefined;
-          for (const placed of settled.items) spoken.add(newsKey(placed));
+          for (const placed of settled.items) {
+            spoken.add(newsKey(placed));
+          }
           // WARNING: a quick reply's settling runs after this turn's voice has ended.
           return delivered(
             { ...flock, said: () => voice.said, attachments: () => voice.files },
@@ -495,11 +524,17 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   );
 
   const speakFirst: Effect.Effect<void> = Effect.gen(function* () {
-    if (!opts.proactive() || resting) return;
+    if (!opts.proactive() || resting) {
+      return;
+    }
     const fresh = worthSpeaking(yield* waiting, spoken);
-    if (fresh === null) return;
+    if (fresh === null) {
+      return;
+    }
     const running = yield* warm;
-    if (isString(running) || running.ended() !== null) return;
+    if (isString(running) || running.ended() !== null) {
+      return;
+    }
     const before = running.session.lastTurn();
     const choice = live!.choice;
     yield* SubscriptionRef.set(desktopTurns, "started");
@@ -511,7 +546,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     // WARNING: a turn that failed before the model had its News waits for the next look, not the next nudge.
     resting = Arr.every(fresh.items, (placed) => !spoken.has(newsKey(placed)));
     const result = running.session.lastTurn();
-    if (result !== undefined && result !== before)
+    if (result !== undefined && result !== before) {
       yield* appendJournal(usage, UsageLine, {
         at: yield* nowIso,
         session: id,
@@ -521,6 +556,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
         duration_ms: result.duration_ms,
         usage: result.usage,
       });
+    }
   }).pipe(turns.withPermitsIfAvailable(1), Effect.provideContext(services), Effect.ignore);
 
   // WARNING: a fixed look-again for News written after its board change settled; a host push would replace it.
@@ -558,17 +594,29 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
           const content = yield* contentOf(opts.dir, text, about, attachments).pipe(
             Effect.provideContext(services),
           );
-          if (isString(content)) return Stream.make(refusal(content));
-          if (now && turning !== undefined) yield* turning.session.interrupt;
+          if (isString(content)) {
+            return Stream.make(refusal(content));
+          }
+          if (now && turning !== undefined) {
+            yield* turning.session.interrupt;
+          }
           yield* Effect.acquireRelease(turns.take(1), () => turns.release(1));
           const running = yield* warm;
-          if (isString(running)) return Stream.make(refusal(running));
+          if (isString(running)) {
+            return Stream.make(refusal(running));
+          }
           const ended = running.ended();
-          if (ended !== null) return Stream.make(refusal(ended));
+          if (ended !== null) {
+            return Stream.make(refusal(ended));
+          }
           const news = yield* waiting;
           const voice: Voice = { said: text };
-          if (content.files.length > 0) voice.files = content.files;
-          if (news.items.length > 0) voice.news = news;
+          if (content.files.length > 0) {
+            voice.files = content.files;
+          }
+          if (news.items.length > 0) {
+            voice.news = news;
+          }
           return yield* turnOn(
             running,
             attachments.length > 0 || about !== null ? content.blocks : text,
@@ -579,8 +627,12 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     answer: (toolCallId, answers) =>
       Effect.suspend(() => {
         const answered = asking.get(toolCallId);
-        if (answered !== undefined) return Deferred.succeed(answered, answers);
-        if (questions.has(toolCallId)) clicked.set(toolCallId, answers);
+        if (answered !== undefined) {
+          return Deferred.succeed(answered, answers);
+        }
+        if (questions.has(toolCallId)) {
+          clicked.set(toolCallId, answers);
+        }
         return Effect.void;
       }),
     transcript: Effect.suspend(() => drivers[heldOn]?.transcript(id) ?? Effect.succeed([])),
@@ -604,13 +656,17 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     // WARNING: a turn under way is interrupted, and its session ends before the next starts.
     reopen: (conversation) =>
       Effect.gen(function* () {
-        if (turning !== undefined) yield* turning.session.interrupt;
+        if (turning !== undefined) {
+          yield* turning.session.interrupt;
+        }
         return yield* turns.withPermits(1)(
           Effect.gen(function* () {
             const set = opts.chatHarness().harness;
             if (conversation !== null && conversation.harness !== set) {
               const refused = yield* opts.setChatHarness({ harness: conversation.harness });
-              if (refused !== null) return refused;
+              if (refused !== null) {
+                return refused;
+              }
             }
             yield* end;
             id = conversation?.session ?? (yield* random.uuidV4());

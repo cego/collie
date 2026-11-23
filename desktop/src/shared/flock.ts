@@ -755,28 +755,34 @@ const removed = (flock: Flock, profile: string) => {
 };
 
 export const applyItem = (flock: Flock, item: FlockItem) => {
-  if ("_tag" in item && item._tag === "Notice")
+  if ("_tag" in item && item._tag === "Notice") {
     return { ...flock, notices: [...flock.notices, item.text] };
-  if ("_tag" in item && item._tag === "Routed")
+  }
+  if ("_tag" in item && item._tag === "Routed") {
     return { ...flock, routes: new Map(flock.routes).set(item.machine.profile, item.machine) };
-  if ("_tag" in item && item._tag === "Onboarding")
+  }
+  if ("_tag" in item && item._tag === "Onboarding") {
     return {
       ...flock,
       onboarding: new Map(flock.onboarding).set(item.job, item),
       onboarded: new Map(flock.onboarded).set(item.machine.profile, item.run),
     };
-  if ("_tag" in item && item._tag === "Doctored")
+  }
+  if ("_tag" in item && item._tag === "Doctored") {
     return { ...flock, doctored: new Map(flock.doctored).set(item.machine.profile, item.run) };
-  if ("_tag" in item && item._tag === "Synced")
+  }
+  if ("_tag" in item && item._tag === "Synced") {
     return item.part === "settings"
       ? { ...flock, synced: new Map(flock.synced).set(item.machine.profile, item.failed) }
       : {
           ...flock,
           definitions: new Map(flock.definitions).set(item.machine.profile, item.failed),
         };
-  if ("_tag" in item && item._tag === "Linked")
+  }
+  if ("_tag" in item && item._tag === "Linked") {
     return { ...flock, links: new Map(flock.links).set(item.machine.profile, item.link) };
-  if ("_tag" in item && item._tag === "OwnRead")
+  }
+  if ("_tag" in item && item._tag === "OwnRead") {
     return {
       ...flock,
       own: new Map(flock.own).set(
@@ -784,6 +790,7 @@ export const applyItem = (flock: Flock, item: FlockItem) => {
         keepOwn(item.reading, flock.own.get(item.machine.profile)),
       ),
     };
+  }
   if ("_tag" in item && item._tag === "Given") {
     const { machine, credential, given, failed } = item;
     const { profile } = machine;
@@ -804,10 +811,14 @@ export const applyItem = (flock: Flock, item: FlockItem) => {
       (left, profile) => removed(left, profile),
     );
   }
-  if ("_tag" in item && item._tag === "Removed") return removed(flock, item.machine.profile);
+  if ("_tag" in item && item._tag === "Removed") {
+    return removed(flock, item.machine.profile);
+  }
   if ("_tag" in item && item._tag === "Saved") {
     const { machine, herds, tasks, at } = item;
-    if (flock.machines.has(machine.installation)) return flock;
+    if (flock.machines.has(machine.installation)) {
+      return flock;
+    }
     const saved = {
       machine,
       herds,
@@ -827,22 +838,31 @@ export const applyItem = (flock: Flock, item: FlockItem) => {
   }
   if ("_tag" in item) {
     const { machine, at } = item;
-    if (item._tag === "Lost")
+    if (item._tag === "Lost") {
       lost.set(machine.profile, { name: machine.name, state: item.state, reason: item.reason });
+    }
     const machines = new Map(flock.machines);
-    for (const [installation, known] of machines)
-      if (known.machine.profile === machine.profile && known.asOf === null)
+    for (const [installation, known] of machines) {
+      if (known.machine.profile === machine.profile && known.asOf === null) {
         machines.set(installation, { ...known, asOf: at });
+      }
+    }
     return { ...flock, machines, lost };
   }
   const { machine, message } = item;
-  if (message._tag === "Unknown") return flock;
+  if (message._tag === "Unknown") {
+    return flock;
+  }
   const known = flock.machines.get(machine.installation);
   const tasks = new Map(
     message._tag === "Snapshot" ? Arr.map(message.tasks, (task) => [task.id, task]) : known?.tasks,
   );
-  if (message._tag === "Upsert") tasks.set(message.task.id, message.task);
-  if (message._tag === "Remove") tasks.delete(message.id);
+  if (message._tag === "Upsert") {
+    tasks.set(message.task.id, message.task);
+  }
+  if (message._tag === "Remove") {
+    tasks.delete(message.id);
+  }
   const herds = message._tag === "Snapshot" ? message.herds : (known?.herds ?? []);
   const build = message._tag === "Snapshot" ? message.build : (known?.build ?? null);
   const development =
@@ -871,7 +891,9 @@ export const applyItem = (flock: Flock, item: FlockItem) => {
 
 export const machineNames = (machines: ReadonlyArray<Machine>) => {
   const counts = new Map<string, number>();
-  for (const { name } of machines) counts.set(name, (counts.get(name) ?? 0) + 1);
+  for (const { name } of machines) {
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
   return new Map(
     Arr.map(machines, (m) => [
       m.installation,
@@ -883,11 +905,14 @@ export const machineNames = (machines: ReadonlyArray<Machine>) => {
 const shownNames = (flock: Flock) => {
   const names = machineNames(Arr.map([...flock.machines.values()], ({ machine }) => machine));
   const counts = new Map<string, number>();
-  for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+  for (const name of names.values()) {
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
   for (const [installation, { asOf }] of flock.machines) {
     const name = names.get(installation)!;
-    if (asOf !== null && counts.get(name)! > 1)
+    if (asOf !== null && counts.get(name)! > 1) {
       names.set(installation, `${pipe_(name, Str.replace(/\)$/, ""))}, saved)`);
+    }
   }
   return names;
 };
@@ -933,7 +958,9 @@ export const flockCards = (flock: Flock, before?: FlockCards) => {
   for (const [installation, { herds, tasks, asOf }] of flock.machines) {
     // WARNING: `names` holds every Machine of this Flock.
     const machine = names.get(installation)!;
-    if (asOf !== null) away.add(machine);
+    if (asOf !== null) {
+      away.add(machine);
+    }
     for (const task of tasks.values()) {
       const herd =
         herds.length > 1
@@ -1091,8 +1118,9 @@ const WAITS_SAID =
   "Its link waits on an SSH connection, which Desktop opens when it next connects.";
 
 const standing = (onboarding?: OnboardRun, doctor?: OnboardRun) => {
-  if (doctor === undefined || (onboarding !== undefined && onboarding.at > doctor.at))
+  if (doctor === undefined || (onboarding !== undefined && onboarding.at > doctor.at)) {
     return onboarding ?? null;
+  }
   const skipped = new Set(
     Option.getOrUndefined(
       Option.map(Option.fromNullishOr(onboarding), (present) =>
@@ -1117,7 +1145,9 @@ const standing = (onboarding?: OnboardRun, doctor?: OnboardRun) => {
 
 export const notLiveOf = (flock: Flock, installation: string) => {
   const shown = flock.machines.get(installation);
-  if (shown === undefined || shown.asOf === null) return null;
+  if (shown === undefined || shown.asOf === null) {
+    return null;
+  }
   const lost = flock.lost.get(shown.machine.profile);
   return lost === undefined
     ? { icon: "i-lucide-refresh-cw", title: `${shown.machine.name} is reconnecting`, reason: "" }

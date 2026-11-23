@@ -21,7 +21,7 @@ let published = "0.131.0";
 let signatureStatus = 200;
 const responseOf = (url: URL) => {
   const path = Str.replace(/^\/cego\/collie\/releases/, "")(url.pathname);
-  if (path === `/latest/download/stable-${PLATFORM}-update.json`)
+  if (path === `/latest/download/stable-${PLATFORM}-update.json`) {
     return Response.json({
       schemaVersion: 1,
       identifier: "dk.cego.collie.desktop",
@@ -32,9 +32,13 @@ const responseOf = (url: URL) => {
       hash,
       artifact: { file: ARCHIVE },
     });
-  if (path === `/latest/download/${ARCHIVE}`) return new Response(Bun.zstdCompressSync(TAR));
-  if (path === `/download/0.131.0/stable-${PLATFORM}-collie-desktop.tar.sig`)
+  }
+  if (path === `/latest/download/${ARCHIVE}`) {
+    return new Response(Bun.zstdCompressSync(TAR));
+  }
+  if (path === `/download/0.131.0/stable-${PLATFORM}-collie-desktop.tar.sig`) {
     return new Response(signature, { status: signatureStatus });
+  }
   return new Response("not found", { status: 404 });
 };
 
@@ -42,7 +46,9 @@ const network = setupServer(
   http.all("*", ({ request }) => {
     const url = new URL(request.url);
     expect(request.redirect).toBe("manual");
-    if (url.origin !== "https://github.com") return HttpResponse.error();
+    if (url.origin !== "https://github.com") {
+      return HttpResponse.error();
+    }
     return responseOf(url);
   }),
 );

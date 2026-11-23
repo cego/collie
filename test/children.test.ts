@@ -522,14 +522,16 @@ test.each([
     (world) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        for (const file of ["plan.workflow.ts", "plan.md", "connections.ts"])
+        for (const file of ["plan.workflow.ts", "plan.md", "connections.ts"]) {
           yield* fs
             .copyFile(`${root}workflows/${file}`, `${world.install}/workflows/${file}`)
             .pipe(Effect.orDie);
-        if (fork)
+        }
+        if (fork) {
           yield* fs
             .writeFileString(`${world.user}/plan.workflow.ts`, SPREADING_FORK)
             .pipe(Effect.orDie);
+        }
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const started = yield* client
           .start({

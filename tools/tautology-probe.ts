@@ -258,7 +258,9 @@ const probe = Effect.fn("probe.run")(function* (runs: number, keep: boolean) {
     });
     yield* fs.writeFileString(`${dir}/out/review-${n}.prompt.md`, prompt);
     const got = yield* review(work, persona, prompt, output);
-    if (got.problem !== null) yield* Effect.logWarning(`run ${n}: ${got.problem}`);
+    if (got.problem !== null) {
+      yield* Effect.logWarning(`run ${n}: ${got.problem}`);
+    }
     yield* Effect.log(`run ${n}: ${got.findings.length} finding(s)`);
     all.push(got.findings);
   }

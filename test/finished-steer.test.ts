@@ -307,9 +307,13 @@ const steerable = <A, E>(
           }),
           (before) =>
             Effect.sync(() => {
-              for (const [key, value] of Rec.toEntries(before))
-                if (value === undefined) delete Bun.env[key];
-                else Bun.env[key] = value;
+              for (const [key, value] of Rec.toEntries(before)) {
+                if (value === undefined) {
+                  delete Bun.env[key];
+                } else {
+                  Bun.env[key] = value;
+                }
+              }
             }),
         );
         return yield* body(world).pipe(
@@ -441,7 +445,9 @@ for (const [status, terminal, offer] of [
             (lines) => lines.length >= 3,
           );
           expect(steered).toHaveLength(3);
-          for (const one of steered) check(one.workflowNotice ?? "");
+          for (const one of steered) {
+            check(one.workflowNotice ?? "");
+          }
           check(yield* toolNamed("collie_receipts")!.call(env, { run: runId }));
           const prompts = (yield* until(
             () => typedTo(agent),
@@ -495,7 +501,9 @@ test("a steer is typed plain within 3 lines and 700 characters, or kept as a fil
           const action: ReturnType<typeof deliver> & {
             attachments?: ReadonlyArray<string>;
           } = deliver(runId, agent.name, text);
-          if (attachments !== undefined) action.attachments = attachments;
+          if (attachments !== undefined) {
+            action.attachments = attachments;
+          }
           const [done] = yield* carryOutAsked(env, [action], actor);
           expect(done).toMatchObject({ kind: "deliver", state: "applied" });
           const lines = Str.split(yield* typedNow, "\n");
@@ -668,7 +676,7 @@ test("a stop closes a succeeded Run's live pane and leaves it succeeded", () =>
 for (const [status, terminal] of [
   ["complete", "succeeded"],
   ["failed", "failed"],
-] as const)
+] as const) {
   test(`a ${terminal} Run's agent is still told after its module was removed`, () =>
     steerable(
       `collie-finished-unregistered-${terminal}-`,
@@ -707,6 +715,7 @@ for (const [status, terminal] of [
       [{ verdict: terminal === "failed" ? "failed" : "built" }],
       ["terminal-delivery.workflow.ts"],
     ));
+}
 
 test("a steer that reached nobody on a running Run is failed, never applied", () =>
   hosted("collie-running-undelivered-", ({ world, env }) =>

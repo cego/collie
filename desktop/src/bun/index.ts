@@ -216,7 +216,9 @@ const OPENER = process.platform === "darwin" ? "open" : "xdg-open";
 
 const openUrl = (url: string) =>
   Effect.sync(() => {
-    if (which(OPENER) === null) return Utils.openExternal(url);
+    if (which(OPENER) === null) {
+      return Utils.openExternal(url);
+    }
     Bun.spawn([OPENER, url], {
       env: childEnv(),
       cwd: CHILD_CWD,
@@ -227,7 +229,9 @@ const openUrl = (url: string) =>
   });
 
 const openSlack = Effect.gen(function* () {
-  if (which(OPENER) === null) return yield* openUrl(SLACK_WEB);
+  if (which(OPENER) === null) {
+    return yield* openUrl(SLACK_WEB);
+  }
   // WARNING: never killed; still running means the app took the link.
   const child = Bun.spawn([OPENER, SLACK_APP], {
     env: childEnv(),
@@ -235,7 +239,9 @@ const openSlack = Effect.gen(function* () {
     stdio: ["ignore", "ignore", "ignore"],
   });
   const code = yield* Effect.promise(() => child.exited).pipe(Effect.timeoutOption("5 seconds"));
-  if (Option.isSome(code) && code.value !== 0) yield* openUrl(SLACK_WEB);
+  if (Option.isSome(code) && code.value !== 0) {
+    yield* openUrl(SLACK_WEB);
+  }
 });
 
 // WARNING: COLLIE_DESKTOP_STATE_HOME moves only Desktop's own state; what it starts keeps XDG_STATE_HOME.
@@ -284,7 +290,9 @@ const main = Effect.gen(function* () {
       const local = Option.getOrUndefined(
         Arr.findFirst([...doors.values()], (door) => door.machine.profile === "local"),
       );
-      if (local === undefined) return own;
+      if (local === undefined) {
+        return own;
+      }
       return local.desktop.models().pipe(
         Effect.map((catalogues) => listedIn(catalogues, harness)),
         Effect.catchCause(() => Effect.succeed(null)),
@@ -463,8 +471,9 @@ const main = Effect.gen(function* () {
             Arr.findFirst(listed, (one) => one.name === machine.name),
           );
           const was = links.get(machine.profile)?.link;
-          if (link === undefined || (was !== undefined && asListed(was) === asListed(link)))
+          if (link === undefined || (was !== undefined && asListed(was) === asListed(link))) {
             return Effect.void;
+          }
           const item = { _tag: "Linked", machine, link } as const;
           links.set(machine.profile, item);
           return PubSub.publish(news, item);
@@ -480,7 +489,9 @@ const main = Effect.gen(function* () {
     changes: ReadonlyArray<{ readonly key: string; readonly value: string }>,
   ) =>
     Effect.gen(function* () {
-      if (!flockReadable) return yield* unreadableFlock;
+      if (!flockReadable) {
+        return yield* unreadableFlock;
+      }
       return yield* settingsSync.edit(changes, yield* nowIso);
     });
   const editFlock = (key: string, typed: string) => editFlockSettings([{ key, value: typed }]);
@@ -616,11 +627,15 @@ const main = Effect.gen(function* () {
     );
   const ended = (job: string, profile: string) =>
     Effect.sync(() => {
-      if (onboarding.get(profile)?.job === job) onboarding.delete(profile);
+      if (onboarding.get(profile)?.job === job) {
+        onboarding.delete(profile);
+      }
     });
   const recorded = (job: string, profile: string) => (fiber: Fiber.Fiber<unknown, unknown>) =>
     Effect.sync(() => {
-      if (onboarding.get(profile)?.job === job) onboarding.set(profile, { job, fiber });
+      if (onboarding.get(profile)?.job === job) {
+        onboarding.set(profile, { job, fiber });
+      }
     });
   const addedToCore = (job: string, machine: KnownMachine, run: OnboardRun, target: string) =>
     Effect.gen(function* () {
@@ -680,7 +695,9 @@ const main = Effect.gen(function* () {
       const run =
         adding === undefined ? onboarded : yield* addedToCore(job, machine, onboarded, adding);
       yield* offer.onboarded(run);
-      if (run.ready === true && secrets !== "") yield* given.handed(machine, handed, run.steps);
+      if (run.ready === true && secrets !== "") {
+        yield* given.handed(machine, handed, run.steps);
+      }
       const unreached = Arr.map(
         Arr.filter(skip, (step) => !Arr.some(run.steps, (one) => one.step === step)),
         (step) => {
@@ -775,8 +792,9 @@ const main = Effect.gen(function* () {
       const row = Option.getOrUndefined(
         Arr.findFirst(machineRows(shown), (one) => one.profile === profile),
       );
-      if (route === undefined || row === undefined)
+      if (route === undefined || row === undefined) {
         return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
+      }
       const { behind } = inSync(row, yield* holds);
       const door = Option.getOrUndefined(
         Arr.findFirst([...doors.values()], (one) => one.machine.profile === profile),
@@ -848,9 +866,15 @@ const main = Effect.gen(function* () {
     }),
     setChatHarness: ({ harness, model, effort }) => {
       const changed: Partial<Record<"chatHarness" | "chatModel" | "chatEffort", string>> = {};
-      if (harness !== undefined) changed.chatHarness = harness;
-      if (model !== undefined) changed.chatModel = Str.trim(model);
-      if (effort !== undefined) changed.chatEffort = Str.trim(effort);
+      if (harness !== undefined) {
+        changed.chatHarness = harness;
+      }
+      if (model !== undefined) {
+        changed.chatModel = Str.trim(model);
+      }
+      if (effort !== undefined) {
+        changed.chatEffort = Str.trim(effort);
+      }
       return saveSettings(changed).pipe(
         Effect.as(null),
         Effect.catch(({ reason }) => Effect.succeed(reason)),
@@ -869,15 +893,18 @@ const main = Effect.gen(function* () {
     inSync: (sync) =>
       Effect.gen(function* () {
         const rows = machineRows(shown);
-        if (sync === undefined) return flockInSyncSaid(rows, yield* holds);
+        if (sync === undefined) {
+          return flockInSyncSaid(rows, yield* holds);
+        }
         const row = Option.getOrUndefined(
           Arr.findFirst(rows, (one) => one.name === sync || one.profile === sync),
         );
-        if (row === undefined)
+        if (row === undefined) {
           return `No Machine "${sync}"; the Machines are ${Arr.join(
             Arr.map(rows, ({ name }) => name),
             ", ",
           )}`;
+        }
         return yield* syncMachine(row.profile).pipe(
           Effect.map(({ said }) => said),
           Effect.catch(({ reason }) => Effect.succeed(reason)),
@@ -886,7 +913,9 @@ const main = Effect.gen(function* () {
     machines: () =>
       Arr.map(chatBoards(shown, routedAt), ({ name, profile, installation, board }) => {
         let held = installation === null ? undefined : doors.get(installation);
-        if (held === undefined && board._tag !== "Live") held = readDoors.get(profile);
+        if (held === undefined && board._tag !== "Live") {
+          held = readDoors.get(profile);
+        }
         const machine: ChatMachine = { name, board, local: profile === "local" };
         return held === undefined ? machine : { ...machine, door: chatDoor(held.chat) };
       }),
@@ -935,7 +964,9 @@ const main = Effect.gen(function* () {
   const keepGitlabToken = (token: string) =>
     Effect.gen(function* () {
       const said = Str.trim(token);
-      if (!oneLine(said)) return yield* Effect.fail("a token is one line");
+      if (!oneLine(said)) {
+        return yield* Effect.fail("a token is one line");
+      }
       const { expires } = yield* gitlabToken(gitlab(), said);
       yield* keyring.store("gitlab-token", `Collie's GitLab token for ${gitlabHost()}`, said);
       yield* SubscriptionRef.update(credentials, (now) => ({ ...now, gitlab: { expires } }));
@@ -953,16 +984,22 @@ const main = Effect.gen(function* () {
             routes.has(machine.profile);
           const checked = new Set<string>();
           const doctorOnceLive = (item: FlockItem) => {
-            if ("_tag" in item || item.message._tag !== "Snapshot") return Effect.void;
+            if ("_tag" in item || item.message._tag !== "Snapshot") {
+              return Effect.void;
+            }
             const route = routes.get(item.machine.profile)?.route;
             // WARNING: again on a new build, which an older one could not answer --gitlab-host for.
             const once = `${item.machine.profile}@${item.message.build}`;
-            if (route === undefined || checked.has(once)) return Effect.void;
+            if (route === undefined || checked.has(once)) {
+              return Effect.void;
+            }
             checked.add(once);
             return doctored(route).pipe(Effect.forkIn(scope));
           };
           const syncOnceLive = (item: FlockItem) => {
-            if ("_tag" in item || item.message._tag !== "Snapshot") return Effect.void;
+            if ("_tag" in item || item.message._tag !== "Snapshot") {
+              return Effect.void;
+            }
             const door = doors.get(item.machine.installation);
             const route = routes.get(item.machine.profile)?.route;
             return Effect.all(
@@ -1023,9 +1060,12 @@ const main = Effect.gen(function* () {
         saving(boards),
         Stream.tap((item) =>
           Effect.map(Clock.currentTimeMillis, (now) => {
-            if ("_tag" in item && item._tag === "Routed" && !routedAt.has(item.machine.profile))
+            if ("_tag" in item && item._tag === "Routed" && !routedAt.has(item.machine.profile)) {
               routedAt.set(item.machine.profile, now);
-            if ("_tag" in item && item._tag === "Lost") routedAt.set(item.machine.profile, item.at);
+            }
+            if ("_tag" in item && item._tag === "Lost") {
+              routedAt.set(item.machine.profile, item.at);
+            }
             shown = applyItem(shown, item);
           }),
         ),
@@ -1035,18 +1075,22 @@ const main = Effect.gen(function* () {
     onboard: ({ profile, skip }) =>
       Effect.gen(function* () {
         const running = onboarding.get(profile);
-        if (running !== undefined) return running.job;
+        if (running !== undefined) {
+          return running.job;
+        }
         const route = routes.get(profile)?.route;
-        if (route === undefined)
+        if (route === undefined) {
           return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
+        }
         const job = yield* uuid;
         yield* onboardAs(job, route, NOT_STARTED, skip);
         return job;
       }),
     addMachine: ({ target, label }) =>
       Effect.gen(function* () {
-        if (Arr.some([target, label], (one) => Str.trim(one) === ""))
+        if (Arr.some([target, label], (one) => Str.trim(one) === "")) {
           return yield* new ActionFailed({ reason: "a Machine needs an SSH target and a label" });
+        }
         const job = yield* uuid;
         yield* addToCoreAs(job, Str.trim(target), Str.trim(label)).pipe(
           Effect.provide(BunServices.layer),
@@ -1090,20 +1134,29 @@ const main = Effect.gen(function* () {
     saveGitlabHost: ({ host }) =>
       Effect.gen(function* () {
         const named = Str.trim(host);
-        if (!isHostName(named))
+        if (!isHostName(named)) {
           return yield* Effect.fail(`"${named}" is not a host name, such as gitlab.example.com`);
-        if (named === gitlabHost()) return `GitLab is ${named} already`;
-        if (!flockReadable) return yield* Effect.fail(unreadableFlock.reason);
+        }
+        if (named === gitlabHost()) {
+          return `GitLab is ${named} already`;
+        }
+        if (!flockReadable) {
+          return yield* Effect.fail(unreadableFlock.reason);
+        }
         // WARNING: a token is made for one GitLab, so the old host's goes before the host changes.
         const token = yield* keyring.lookup("gitlab-token").pipe(Effect.orElseSucceed(() => null));
-        if (token !== null) yield* keyring.clear("gitlab-token");
+        if (token !== null) {
+          yield* keyring.clear("gitlab-token");
+        }
         yield* editFlock("gitlab_host", named).pipe(Effect.mapError((failed) => failed.reason));
         yield* SubscriptionRef.update(credentials, (now) => ({
           ...now,
           ...gitlabPages(),
           gitlab: null,
         }));
-        for (const route of everyRoute()) yield* doctored(route).pipe(Effect.forkIn(scope));
+        for (const route of everyRoute()) {
+          yield* doctored(route).pipe(Effect.forkIn(scope));
+        }
         return `Machines are onboarded and doctored against ${named} from now on; make a token there`;
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
     checkHelle: ({ token }) =>
@@ -1115,7 +1168,9 @@ const main = Effect.gen(function* () {
     saveHelle: ({ token }) =>
       Effect.gen(function* () {
         const said = Str.trim(token);
-        if (!oneLine(said)) return yield* Effect.fail("a token is one line");
+        if (!oneLine(said)) {
+          return yield* Effect.fail("a token is one line");
+        }
         yield* helleOwner(helle, said);
         yield* keyring.store("helle-token", "Collie's Helle token", said);
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, helle: true }));
@@ -1140,10 +1195,13 @@ const main = Effect.gen(function* () {
     claudeLogin: ({ profile }) =>
       Effect.gen(function* () {
         const route = routes.get(profile)?.route;
-        if (route === undefined)
+        if (route === undefined) {
           return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
+        }
         const busy = onboarding.get(profile);
-        if (busy !== undefined) return busy.job;
+        if (busy !== undefined) {
+          return busy.job;
+        }
         const job = yield* uuid;
         onboarding.set(profile, { job });
         yield* loginAs(job, route).pipe(
@@ -1164,10 +1222,11 @@ const main = Effect.gen(function* () {
     removeMachine: ({ profile }) =>
       Effect.gen(function* () {
         const known = routes.get(profile);
-        if (known?.scope === undefined)
+        if (known?.scope === undefined) {
           return yield* new ActionFailed({
             reason: "only a machine in core's list can be removed",
           });
+        }
         yield* forgetMachine(collie, known.route.machine.name).pipe(
           Effect.mapError((reason) => new ActionFailed({ reason })),
         );
@@ -1177,7 +1236,9 @@ const main = Effect.gen(function* () {
         routes.delete(profile);
         ownReadings.delete(profile);
         const running = onboarding.get(profile)?.fiber;
-        if (running !== undefined) yield* Fiber.interrupt(running);
+        if (running !== undefined) {
+          yield* Fiber.interrupt(running);
+        }
         yield* Scope.close(known.scope, Exit.void);
         yield* Effect.all([
           dropOnboarding(onboardings, profile),
@@ -1197,8 +1258,9 @@ const main = Effect.gen(function* () {
       Effect.gen(function* () {
         const door = yield* doorTo(doors, installation);
         const at = yield* focusOn(door, yield* uuid, runId);
-        if (at.core === undefined)
+        if (at.core === undefined) {
           return yield* new ActionFailed({ reason: `${runId} has no live agent on core` });
+        }
         const attach = [
           "hc",
           "attach",
@@ -1213,8 +1275,9 @@ const main = Effect.gen(function* () {
         Effect.gen(function* () {
           const door = yield* doorTo(doors, installation);
           const route = routes.get(door.machine.profile)?.route;
-          if (route === undefined)
+          if (route === undefined) {
             return yield* new ActionFailed({ reason: "that Machine is not connected" });
+          }
           const request = yield* uuid;
           const opened = yield* openTerminal(
             focusOn(door, request, runId, agent),
@@ -1223,7 +1286,9 @@ const main = Effect.gen(function* () {
             rows,
           );
           // WARNING: one terminal at a time: a newer one ends this one.
-          if (shownTerminal !== undefined) Deferred.doneUnsafe(shownTerminal.ended, Effect.void);
+          if (shownTerminal !== undefined) {
+            Deferred.doneUnsafe(shownTerminal.ended, Effect.void);
+          }
           const mine = { send: opened.send, ended: Deferred.makeUnsafe<void>() };
           shownTerminal = mine;
           yield* Effect.addFinalizer(() =>
@@ -1285,21 +1350,24 @@ const main = Effect.gen(function* () {
         const source = Option.getOrUndefined(
           Arr.findFirst([...doors.values()], (door) => door.machine.profile === from),
         );
-        if (source === undefined)
+        if (source === undefined) {
           return yield* Effect.fail("The Machine with the login is not connected");
+        }
         const ready = Option.getOrUndefined(
           Arr.findFirst(yield* source.desktop.connections(), (read) => read.id === id),
         )?.reading;
-        if (ready?.state !== "ok")
+        if (ready?.state !== "ok") {
           return yield* Effect.fail(
             `The source no longer has a working ${id} login; refresh Connections`,
           );
+        }
         const targets = Arr.filter(
           everyRoute(),
           (route) => to.includes(route.machine.profile) && route.machine.profile !== from,
         );
-        if (targets.length !== new Set(Arr.filter(to, (profile) => profile !== from)).size)
+        if (targets.length !== new Set(Arr.filter(to, (profile) => profile !== from)).size) {
           return yield* Effect.fail("A target Machine was removed; refresh Connections");
+        }
         const read = source.desktop.connectionLogin({ id });
         if (id === "github") {
           const login = yield* read;
@@ -1309,10 +1377,13 @@ const main = Effect.gen(function* () {
           read,
           (login) =>
             Effect.gen(function* () {
-              if (!isHostName(login.host))
+              if (!isHostName(login.host)) {
                 return yield* Effect.fail("The source returned an invalid GitLab host");
+              }
               if (login.host !== gitlabHost()) {
-                if (!flockReadable) return yield* Effect.fail(unreadableFlock.reason);
+                if (!flockReadable) {
+                  return yield* Effect.fail(unreadableFlock.reason);
+                }
                 yield* keyring.clear("gitlab-token");
                 yield* editFlock("gitlab_host", login.host).pipe(
                   Effect.mapError((failed) => failed.reason),
@@ -1356,7 +1427,9 @@ const main = Effect.gen(function* () {
     githubLogin: ({ profile }) =>
       Effect.gen(function* () {
         const route = routes.get(profile)?.route;
-        if (route === undefined) return yield* Effect.fail("That Machine is not in the Flock");
+        if (route === undefined) {
+          return yield* Effect.fail("That Machine is not in the Flock");
+        }
         return yield* githubLogin(route, (command) => {
           const terminal = inTerminal(command, process.platform, which);
           return terminal === null ? Effect.succeed(false) : launched(terminal);
@@ -1365,10 +1438,13 @@ const main = Effect.gen(function* () {
     linearSetup: ({ profile }) =>
       Effect.gen(function* () {
         const route = routes.get(profile)?.route;
-        if (route === undefined)
+        if (route === undefined) {
           return yield* new ActionFailed({ reason: "That Machine is not in the Flock" });
+        }
         const busy = onboarding.get(profile);
-        if (busy !== undefined) return busy.job;
+        if (busy !== undefined) {
+          return busy.job;
+        }
         const job = yield* uuid;
         yield* onboardAs(job, route, NOT_STARTED, [], "linear");
         return job;
@@ -1528,7 +1604,9 @@ const main = Effect.gen(function* () {
             Effect.ensuring(Effect.sync(() => (popped = undefined))),
             Effect.forkIn(scope),
           );
-        } else popped.window.activate();
+        } else {
+          popped.window.activate();
+        }
         yield* Deferred.await(popped.closed);
       });
       return returned;
@@ -1570,8 +1648,9 @@ const main = Effect.gen(function* () {
 }).pipe(Effect.scoped, Effect.provide(platformLayer));
 
 // WARNING: a Mac sends Cmd+C, Cmd+V, Cmd+Q and the rest through its menu bar, which is empty until set.
-if (process.platform === "darwin")
+if (process.platform === "darwin") {
   Electrobun.ApplicationMenu.setApplicationMenu(applicationMenu(process.platform));
+}
 
 // WARNING: quitting may end the process before any scope closes, and an SSH master would outlive it.
 Electrobun.events.on("before-quit", endChildren);

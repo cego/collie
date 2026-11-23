@@ -187,14 +187,17 @@ const DoInput = Schema.Struct({
 
 function wrongActions(input: JsonObject) {
   const loose = decodeLoose(input);
-  if (loose._tag === "None") return [];
+  if (loose._tag === "None") {
+    return [];
+  }
   return Arr.flatMap(loose.value.actions, (action, at) => {
     const kind = isString(action["kind"]) ? action["kind"] : stringifyJson(action["kind"] ?? null);
     const member = MEMBERS.get(kind);
-    if (!member)
+    if (!member) {
       return [
         `actions[${at}] has kind ${kind}, which is none of ${Arr.join([...MEMBERS.keys()], ", ")}`,
       ];
+    }
     const takes = Struct.keys(member.fields);
     const extra = Arr.filter(
       Struct.keys(action),
@@ -559,7 +562,9 @@ function cardLine(view: TaskView) {
 }
 
 export function herdLines(views: ReadonlyArray<TaskView>, now: number, after = 0) {
-  if (views.length === 0) return "- (no Runs in this Herd)";
+  if (views.length === 0) {
+    return "- (no Runs in this Herd)";
+  }
   const lines = [headerSentence(views, now).text];
   let skip = after;
   let room = HERD_CARDS;
@@ -568,8 +573,9 @@ export function herdLines(views: ReadonlyArray<TaskView>, now: number, after = 0
     const shown = cards.slice(skip, skip + room);
     skip = Math.max(0, skip - cards.length);
     room -= shown.length;
-    if (shown.length > 0)
+    if (shown.length > 0) {
       lines.push("", `## ${title} · ${cards.length}`, ...Arr.map(shown, cardLine));
+    }
   }
   const left = views.length - after - (HERD_CARDS - room);
   lines.push(
@@ -600,13 +606,19 @@ export const isToolName = (name: string): name is ToolName =>
 export const answerWith = Effect.fn("Toolkit.answer")(function* <
   Tools extends Record<string, Tool.Any>,
 >(toolkit: Toolkit.WithHandler<Tools>, name: string, input: JsonObject) {
-  if (!Rec.has(toolkit.tools, name)) return "";
+  if (!Rec.has(toolkit.tools, name)) {
+    return "";
+  }
   // WARNING: `handle` decodes it, which is what makes untrusted JSON a tool's parameters.
   const results = yield* toolkit.handle(name, input, undefined, STRICT);
   const last = yield* Stream.runLast(results);
-  if (Option.isNone(last)) return "";
+  if (Option.isNone(last)) {
+    return "";
+  }
   const result: unknown = last.value.result;
-  if (isString(result)) return result;
+  if (isString(result)) {
+    return result;
+  }
   const why = !AiError.isAiError(result)
     ? String(result)
     : result.reason._tag === "ToolParameterValidationError"

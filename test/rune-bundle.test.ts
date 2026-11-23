@@ -191,8 +191,9 @@ test("a Linux bundle is the shell, the compiled main process, its icon, launcher
         ),
       );
       const bundle = `${out}/build/linux-x64/collie-desktop`;
-      for (const binary of ["bin/launcher", "bin/collie-core"])
+      for (const binary of ["bin/launcher", "bin/collie-core"]) {
         expect(((yield* fs.stat(`${bundle}/${binary}`)).mode & 0o111) !== 0).toBe(true);
+      }
       const entry = yield* fs.readFileString(`${bundle}/collie-desktop.desktop`);
       expect(entry).toContain("Name=Collie\n");
       expect(entry).toContain("Exec=collie-desktop\n");
@@ -262,8 +263,9 @@ test("a macOS bundle is collie-desktop.app with both executables, its icon, vers
         ["CFBundleExecutable", "launcher"],
         ["CFBundleIconFile", "Collie"],
         ["CFBundleShortVersionString", VERSION],
-      ])
+      ]) {
         expect(plist).toContain(`<key>${key}</key><string>${value}</string>`);
+      }
       const tarred = yield* tarList(
         `${out}/artifacts/stable-macos-arm64-collie-desktop.app.tar.zst`,
       );

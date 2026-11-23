@@ -68,7 +68,9 @@ test("closing a scope reaps a child that ignores SIGTERM", () => {
       Effect.andThen(() => Effect.sync(() => expect(alive(pid!)).toBe(false))),
       Effect.ensuring(
         Effect.sync(() => {
-          if (pid !== undefined && alive(pid)) process.kill(pid, "SIGKILL");
+          if (pid !== undefined && alive(pid)) {
+            process.kill(pid, "SIGKILL");
+          }
         }),
       ),
     ),
@@ -81,7 +83,7 @@ for (const [channel, mode] of [
   ["record", "socket"],
   ["chat", "rpc"],
   ["record", "exit"],
-] as const)
+] as const) {
   test(`a ${channel}-only ${mode} failure replaces the channels while the board stays live`, () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -129,6 +131,7 @@ for (const [channel, mode] of [
         expect(Arr.filter(pids, alive)).toEqual([]);
       }).pipe(Effect.scoped),
     ));
+}
 
 test("failed channel renewals close each generation before capped backoff, and stop when released", () =>
   Effect.runPromise(
@@ -153,11 +156,12 @@ test("failed channel renewals close each generation before capped backoff, and s
                 }),
             );
             times.push(yield* Clock.currentTimeMillis);
-            if (times.length > 1)
+            if (times.length > 1) {
               return yield* Effect.fail({
                 state: "unreachable" as const,
                 reason: "bridge unavailable",
               });
+            }
             return {
               closed: Deferred.await(failed),
               board: Stream.make({

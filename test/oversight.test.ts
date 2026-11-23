@@ -294,8 +294,9 @@ const repository = () =>
       ["config", "user.email", "t@example.com"],
       ["config", "user.name", "t"],
       ["commit", "-q", "--allow-empty", "-m", "first"],
-    ])
+    ]) {
       yield* exec(["git", ...args], { cwd: dir });
+    }
     yield* (yield* FileSystem.FileSystem).writeFileString(
       `${dir}/.git/info/exclude`,
       "/*\n!/notes.txt\n!/src/\n",
@@ -496,8 +497,9 @@ test("a judgement skipped at every boundary for one reason is one line on the ca
       yield* session(
         Effect.gen(function* () {
           const oversight = yield* Oversight;
-          for (const step of ["build", "review", "final"])
+          for (const step of ["build", "review", "final"]) {
             yield* oversight.drift("r1", `boundary before ${step}`, "boundary");
+          }
           yield* oversight.card("r1", { kind: "slice", step: "final", claims: [] });
         }),
       );
@@ -677,8 +679,9 @@ test("a branch past the cap is judged once, at the finish, and each boundary say
       yield* session(
         Effect.gen(function* () {
           const oversight = yield* Oversight;
-          for (const where of ["build-1", "build-2", "build-3"])
+          for (const where of ["build-1", "build-2", "build-3"]) {
             yield* oversight.drift("r1", where, "boundary");
+          }
           yield* oversight.drift("r1", "finish", "finish");
         }),
         { socketPath: `${rig.root}/herd.sock`, pluginRoot: rig.root },
@@ -1002,8 +1005,9 @@ test("a card reads its branch, head and dirtiness from one status, asking git on
           "-m",
           "x",
         ],
-      ])
+      ]) {
         yield* git(args, repo);
+      }
       yield* fs.writeFileString(`${repo}/new.txt`, "new\n");
       const starts = yield* loggedGit(`${rig.root}/bin`, `${rig.root}/git.log`);
       const card = yield* writeCard(
@@ -1055,8 +1059,9 @@ const cardedWork = (runId: string, files: Readonly<Record<string, string>>) =>
     const fs = yield* FileSystem.FileSystem;
     yield* git(["checkout", "-q", "-b", `${runId}-work`]);
     yield* fs.makeDirectory(`${dir}/src`, { recursive: true });
-    for (const [name, text] of Rec.toEntries(files))
+    for (const [name, text] of Rec.toEntries(files)) {
       yield* fs.writeFileString(`${dir}/${name}`, text);
+    }
     yield* git(["add", ...Rec.keys(files)]);
     yield* git(["commit", "-qm", `${runId}'s work`]);
     yield* writeCard(watchedAt(runId), { kind: "slice", step: "build", claims: [] });
@@ -1073,8 +1078,9 @@ const repositoryAt = (path: string, files: Readonly<Record<string, string>>) =>
       ["config", "user.name", "t"],
       ["commit", "-q", "--allow-empty", "-m", "first"],
       ["update-ref", "refs/remotes/origin/main", "HEAD"],
-    ])
+    ]) {
       yield* git(args, path);
+    }
     for (const [name, text] of Rec.toEntries(files)) {
       yield* fs.makeDirectory(
         `${path}/${pipe_(name, Str.slice(0, Option.getOrElse(pipe_(name, Str.lastIndexOf("/")), () => -1) + 1))}`,
@@ -1338,8 +1344,9 @@ test("a related Run's work cut to the cap is said to be, and so is what is filed
         yield* intended("r1", [R1_ONLY]);
         yield* intended("r2", [SMALL]);
         const files: Record<string, string> = {};
-        for (let n = 0; n <= MAX_FILES; n += 1)
+        for (let n = 0; n <= MAX_FILES; n += 1) {
           files[`src/f${pipe_(String(n), Str.padStart(2, "0"))}.ts`] = `${n}\n`;
+        }
         yield* cardedWork("r2", files);
         const cited = [{ kind: "diff" as const, path: "src/f00.ts" }];
         const deps = yield* crossRunJudge([reportOn("r2", "small", cited)]);
@@ -1379,15 +1386,16 @@ const admitted = (runId: string, goal: string | null, recorded: string | null) =
       at,
       seedIntent(runId, { goal, constraints: [{ ...SMALL, id: `${runId}-c` }] }),
     );
-    if (recorded !== null)
+    if (recorded !== null) {
       yield* RunRecords.use((records) => records.put(runId, MERGE_REQUEST, `${recorded}\n`));
+    }
   });
 
 const familiesOf = (runIds: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const rows = yield* (yield* Store).runs;
     const families: Record<string, ReadonlyArray<string>> = {};
-    for (const id of runIds)
+    for (const id of runIds) {
       families[id] = [
         ...(yield* familyOf(
           rows,
@@ -1395,6 +1403,7 @@ const familiesOf = (runIds: ReadonlyArray<string>) =>
           (one) => runDir(dir, one),
         )),
       ].sort();
+    }
     return families;
   });
 
@@ -1514,8 +1523,9 @@ const midMerge = () =>
     yield* fs.makeDirectory(`${dir}/src`, { recursive: true });
     const commitFiles = (files: Readonly<Record<string, string>>) =>
       Effect.gen(function* () {
-        for (const [name, text] of Rec.toEntries(files))
+        for (const [name, text] of Rec.toEntries(files)) {
           yield* fs.writeFileString(`${dir}/${name}`, text);
+        }
         yield* git(["add", ...Rec.keys(files)]);
         yield* git(["commit", "-qm", Arr.join(Rec.keys(files), " ")]);
       });

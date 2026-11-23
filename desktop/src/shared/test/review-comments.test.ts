@@ -160,12 +160,13 @@ test("a diff anchor quotes a line range on either side", () => {
       anchor: { side: "deletions", first: 1, last: 3, lines: ["one", "two", "three"] },
     },
   ];
-  for (const { range, anchor } of ranges)
+  for (const { range, anchor } of ranges) {
     expect(diffAnchor("src/a.ts", range, changed)).toEqual({
       _tag: "Diff",
       path: "src/a.ts",
       ...anchor,
     });
+  }
 });
 
 test("a range from one side to the other is only its first line, so no line is misquoted", () => {

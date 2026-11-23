@@ -106,7 +106,9 @@ function belongs(
   agentsHere: ReadonlyArray<AgentEntry>,
   grouped: boolean,
 ) {
-  if (where === null) return !grouped && agentsHere.length > 0;
+  if (where === null) {
+    return !grouped && agentsHere.length > 0;
+  }
   return where === key.workspaceId;
 }
 
@@ -117,12 +119,20 @@ const activeDetail = Effect.fn("activeDetail")(function* (
 ) {
   const asked = run.asking[0];
   // WARNING: must come before the quiet scan, or a run waiting on the human reads as quiet.
-  if (asked !== undefined) return `waiting on ${asked.name} — your turn`;
-  if (run.state === "waiting") return run.note ?? "parked";
-  if (run.awaiting !== null) return `waiting for ${run.awaiting.on}`;
+  if (asked !== undefined) {
+    return `waiting on ${asked.name} — your turn`;
+  }
+  if (run.state === "waiting") {
+    return run.note ?? "parked";
+  }
+  if (run.awaiting !== null) {
+    return `waiting for ${run.awaiting.on}`;
+  }
   const parts = [run.workflow];
   const quiet = yield* quietFor(run.dir, now, quietMs);
-  if (quiet) parts.push(quiet);
+  if (quiet) {
+    parts.push(quiet);
+  }
   return Arr.join(parts, " · ");
 });
 
@@ -142,14 +152,18 @@ export const touchedDirAt = Effect.fn("touchedDirAt")(function* (dir: string) {
   let newest = 0;
   for (const name of names) {
     const at = yield* mtimeOf(path.join(dir, name));
-    if (at > newest) newest = at;
+    if (at > newest) {
+      newest = at;
+    }
   }
   return newest;
 });
 
 const quietFor = Effect.fn("quietFor")(function* (dir: string, now: number, quietMs: number) {
   const at = yield* touchedDirAt(dir);
-  if (at === 0 || now - at <= quietMs) return null;
+  if (at === 0 || now - at <= quietMs) {
+    return null;
+  }
   return `quiet for ${took(now - at)}`;
 });
 
@@ -171,16 +185,24 @@ function outcomeOf(run: RunFacts) {
 }
 
 const deliveredOf = Effect.fn("deliveredOf")(function* (run: RunFacts) {
-  if (run.state === "succeeded") return null;
+  if (run.state === "succeeded") {
+    return null;
+  }
   const line = latest(yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])));
-  if (line === null) return null;
+  if (line === null) {
+    return null;
+  }
   return line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
 });
 
 function recentDetail(run: RunFacts) {
   const parts: Array<string> = [run.state];
-  if (run.state !== "succeeded" && run.note !== null) parts.push(run.note);
-  if (run.mr !== null) parts.push(run.mr);
+  if (run.state !== "succeeded" && run.note !== null) {
+    parts.push(run.note);
+  }
+  if (run.mr !== null) {
+    parts.push(run.mr);
+  }
   return Arr.join(parts, " · ");
 }
 
@@ -236,7 +258,9 @@ export const buildView = Effect.fn("buildView")(function* (
   const rows: Array<AgentRow> = [];
   for (const run of runs) {
     for (const entry of agentsHere(run)) {
-      if (Arr.some(rows, (r) => r.agent === entry.agent)) continue;
+      if (Arr.some(rows, (r) => r.agent === entry.agent)) {
+        continue;
+      }
       const agent = live.get(entry.agent);
       rows.push({
         key: "",
@@ -254,7 +278,11 @@ export const buildView = Effect.fn("buildView")(function* (
     : Arr.map(rows.slice(0, MAX_AGENTS), (r, i) => ({ ...r, key: String(i + 1) }));
 
   const fixable = new Set<string>();
-  for (const r of runs) if (yield* fixableRun(r)) fixable.add(r.id);
+  for (const r of runs) {
+    if (yield* fixableRun(r)) {
+      fixable.add(r.id);
+    }
+  }
 
   const active: Array<RunRow> = [];
   for (const r of Arr.filter(runs, (r) => !settled(r))) {
@@ -369,14 +397,18 @@ export function renderWorkspace(
   if (view.behind !== null && view.behind > 0) {
     lines.push(`Collie is ${commitsBehind(view.behind)} its remote — \`collie upgrade\``);
   }
-  if (view.newer) lines.push(newerLine(view.newer));
+  if (view.newer) {
+    lines.push(newerLine(view.newer));
+  }
 
   const agents = Arr.map(
     view.agents,
     (a) =>
       `  ${a.key}  ${pipe(a.name, Str.padEnd(22))}${pipe(a.status, Str.padEnd(9))}${a.now ?? a.run}`,
   );
-  if (view.extraAgents > 0) agents.push(`     … and ${view.extraAgents} more without a key`);
+  if (view.extraAgents > 0) {
+    agents.push(`     … and ${view.extraAgents} more without a key`);
+  }
 
   const waiting = askingRun(view);
   const keys = waiting
@@ -403,7 +435,9 @@ export function renderWorkspace(
     "",
     Arr.join(keys, " · "),
   );
-  if (note) lines.push("", note);
+  if (note) {
+    lines.push("", note);
+  }
   return Arr.join(lines, "\n");
 }
 

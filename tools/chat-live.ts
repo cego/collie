@@ -103,7 +103,9 @@ const answers = Effect.fn("live.answers")(function* (
   const until = (yield* Clock.currentTimeMillis) + withinMs;
   while ((yield* Clock.currentTimeMillis) < until) {
     const tail = yield* screen(socket);
-    if (pipe_(tail, Str.includes(marker))) return tail;
+    if (pipe_(tail, Str.includes(marker))) {
+      return tail;
+    }
     yield* Effect.sleep("3 seconds");
   }
   return null;
@@ -116,7 +118,9 @@ const chatOtherThan = Effect.fn("live.chatOtherThan")(function* (
   const until = (yield* Clock.currentTimeMillis) + ANSWER_MS;
   while ((yield* Clock.currentTimeMillis) < until) {
     const record = yield* readChat(file);
-    if (record !== null && record.sessions[record.harness] !== not) return record;
+    if (record !== null && record.sessions[record.harness] !== not) {
+      return record;
+    }
     yield* Effect.sleep("1 second");
   }
   return null;
@@ -157,10 +161,13 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
       ? Effect.log(`kept ${stateDir} and ${userDir}`)
       : Effect.gen(function* () {
           const owner = yield* ownerOf(stateDir);
-          if (owner !== null) process.kill(owner.pid, "SIGTERM");
+          if (owner !== null) {
+            process.kill(owner.pid, "SIGTERM");
+          }
           yield* Effect.sleep("2 seconds");
-          for (const name of [BOARD_TERMINAL, CHAT_TERMINAL])
+          for (const name of [BOARD_TERMINAL, CHAT_TERMINAL]) {
             yield* herdr.terminalKill(name).pipe(Effect.ignore);
+          }
         }).pipe(Effect.ignore),
   );
 

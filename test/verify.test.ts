@@ -508,7 +508,9 @@ test("a command killed mid-run records no pass", () =>
         cwd: repo,
         by: "agent",
       }).pipe(Effect.result);
-      if (killed._tag === "Success") expect(killed.success.result).not.toBe("pass");
+      if (killed._tag === "Success") {
+        expect(killed.success.result).not.toBe("pass");
+      }
       const recorded = yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => []));
       expect(Arr.some(recorded, (one) => one.result === "pass")).toBe(false);
     }),
@@ -792,8 +794,9 @@ test("an edit inside a submodule moves the tree, measured from any directory of 
         ["init", "-q"],
         ["config", "user.email", "t@example.com"],
         ["config", "user.name", "t"],
-      ])
+      ]) {
         yield* git(args, inner);
+      }
       yield* fs.writeFileString(path.join(inner, "lib.txt"), "one\n");
       yield* git(["add", "-A"], inner);
       yield* git(["commit", "-qm", "lib"], inner);
@@ -897,8 +900,11 @@ function nodeOptions(value: string) {
   const before = Bun.env.NODE_OPTIONS;
   Bun.env.NODE_OPTIONS = value;
   return () => {
-    if (before === undefined) delete Bun.env.NODE_OPTIONS;
-    else Bun.env.NODE_OPTIONS = before;
+    if (before === undefined) {
+      delete Bun.env.NODE_OPTIONS;
+    } else {
+      Bun.env.NODE_OPTIONS = before;
+    }
   };
 }
 

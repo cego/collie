@@ -10,7 +10,9 @@ const root = new URL("../../", import.meta.url).pathname;
 
 const run = (argv: Array<string>) => {
   const result = Bun.spawnSync(argv, { cwd: root, stdio: ["ignore", "inherit", "inherit"] });
-  if (result.exitCode !== 0) throw new Error(`${argv[0]} exited ${result.exitCode}`);
+  if (result.exitCode !== 0) {
+    throw new Error(`${argv[0]} exited ${result.exitCode}`);
+  }
 };
 
 if (!existsSync(`${root}node_modules/effect/package.json`)) {
@@ -29,8 +31,9 @@ if (
   new Bun.CryptoHasher("sha256")
     .update(readFileSync(`${root}bench/at-rest/history.tar.gz`))
     .digest("hex") !== source.sha256
-)
+) {
   throw new Error("fixture archive checksum differs");
+}
 rmSync(keptFixture, { recursive: true, force: true });
 rmSync(manifestPath, { force: true });
 mkdirSync(`${root}.scratch/at-rest`, { recursive: true });
@@ -41,8 +44,9 @@ const manifest: Manifest = parseJson(Schema.Unknown, readFileSync(manifestPath, 
 const db = new Database(`${keptFixture}/state/host.db`, { readonly: true });
 try {
   const integrity = db.query<{ integrity_check: string }, []>("PRAGMA integrity_check").get();
-  if (integrity?.integrity_check !== "ok")
+  if (integrity?.integrity_check !== "ok") {
     throw new Error(`fixture integrity: ${stringifyJson(integrity)}`);
+  }
   const expected = [
     ...manifest.settled,
     ...Rec.keys(manifest.reported),
@@ -54,19 +58,23 @@ try {
     .query<{ run: string }, []>("SELECT run FROM collie_runs ORDER BY run")
     .all()
     .map((row) => row.run);
-  if (expected.length !== 800 || stringifyJson(expected) !== stringifyJson(actual))
+  if (expected.length !== 800 || stringifyJson(expected) !== stringifyJson(actual)) {
     throw new Error("fixture lost Runs");
-  for (const table of ["cluster_messages", "cluster_replies"] as const)
+  }
+  for (const table of ["cluster_messages", "cluster_replies"] as const) {
     if (
       db.query<{ n: number }, []>(`SELECT count(*) AS n FROM ${table}`).get()?.n !== manifest[table]
-    )
+    ) {
       throw new Error(`fixture lost ${table}`);
+    }
+  }
   const wakes = Rec.values(manifest.wakes).map(Date.parse);
   if (
     wakes.length !== 4 ||
     wakes.some((at) => !Number.isFinite(at) || at <= Date.now() + 86_400_000)
-  )
+  ) {
     throw new Error("fixture wakes expire within a day; rebuild the base snapshot");
+  }
 } finally {
   db.close();
 }

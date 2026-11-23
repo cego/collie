@@ -6,7 +6,7 @@ import { renameSync, writeFileSync } from "node:fs";
 import { stringifyJson } from "../../src/json";
 
 const file = Bun.env.BENCH_HEAP_FILE;
-if (file !== undefined)
+if (file !== undefined) {
   process.on("SIGUSR2", () => {
     Bun.gc(true);
     const stats = heapStats();
@@ -16,3 +16,4 @@ if (file !== undefined)
     );
     renameSync(`${file}.part`, file);
   });
+}

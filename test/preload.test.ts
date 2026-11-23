@@ -35,7 +35,9 @@ const runFile = (fixture: string, args: ReadonlyArray<string> = [], memory = fal
     const base = memory ? `${dir}/memory` : `${dir}/tmp`;
     const out = `${dir}/out.json`;
     yield* fs.makeDirectory(`${dir}/tmp`);
-    if (memory) yield* fs.makeDirectory(base);
+    if (memory) {
+      yield* fs.makeDirectory(base);
+    }
     yield* fs.writeFileString(`${dir}/bunfig.toml`, `[test]\npreload = ["${preload}"]\n`);
     yield* fs.writeFileString(`${dir}/fixture.test.ts`, fixture);
     const ran = yield* exec(["bun", "test", ...args, "./fixture.test.ts"], {

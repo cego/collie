@@ -16,7 +16,9 @@ const PIPELINE = `https://${PROJECT.gitlab}/-/pipelines/7`;
 const git = (cwd: string, ...args: Array<string>) =>
   Effect.gen(function* () {
     const ran = yield* exec(["git", ...args], { cwd });
-    if (ran.exitCode !== 0) throw new Error(`git ${Arr.join(args, " ")}: ${ran.stderr}`);
+    if (ran.exitCode !== 0) {
+      throw new Error(`git ${Arr.join(args, " ")}: ${ran.stderr}`);
+    }
     return Str.trim(ran.stdout);
   });
 
@@ -43,8 +45,9 @@ const repository = Effect.gen(function* () {
     ["user.email", "test@example.com"],
     ["commit.gpgsign", "false"],
     ["tag.gpgsign", "false"],
-  ] as const)
+  ] as const) {
     yield* git(cwd, "config", key, value);
+  }
   const commit = (file: string) =>
     Effect.gen(function* () {
       yield* fs.writeFileString(`${cwd}/${file}`, file);
@@ -73,7 +76,7 @@ test("a checkout with uncommitted changes is refused even where it is already at
     }).pipe(Effect.scoped),
   ));
 
-for (const detached of [false, true])
+for (const detached of [false, true]) {
   test(`a ${detached ? "detached checkout" : "different branch"} is refused at the requested head when a source branch is required`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -87,10 +90,13 @@ for (const detached of [false, true])
           run: runner(),
         });
         expect(moved._tag).toBe("Refused");
-        if (moved._tag === "Refused") expect(moved.why).toContain("source branch main");
+        if (moved._tag === "Refused") {
+          expect(moved.why).toContain("source branch main");
+        }
         expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(first);
       }).pipe(Effect.scoped),
     ));
+}
 
 test("a plain push past the journaled head is not refused; the checkout is taken at its real tip", () =>
   runEffect(
@@ -125,7 +131,9 @@ test("a true force push (a head the checkout neither is at nor sits behind) is s
       expect(rewritten).not.toBe(first);
       const moved = yield* fastForward({ runDir: `${root}/run`, cwd, head: first, run: runner() });
       expect(moved._tag).toBe("Refused");
-      if (moved._tag === "Refused") expect(moved.why).toContain("force push");
+      if (moved._tag === "Refused") {
+        expect(moved.why).toContain("force push");
+      }
     }).pipe(Effect.scoped),
   ));
 
@@ -287,7 +295,9 @@ test("a tag moved after its proof plays nothing in production, even onto a desce
         production: ["deploy-production"],
         run: fake.run,
       }).pipe(Effect.provide(fake.layer));
-      if (proved._tag !== "Proved") throw new Error(`not proved: ${proved._tag}`);
+      if (proved._tag !== "Proved") {
+        throw new Error(`not proved: ${proved._tag}`);
+      }
       const read = (sha: string) => {
         const fake = onGitlab({ "7": tagRun(sha, { jobs }) });
         return readProduction({

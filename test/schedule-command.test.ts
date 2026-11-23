@@ -173,8 +173,9 @@ test("every command names this Machine, carries the saved start, and replays its
 
 test("a command's text names the Machine it acted on", () => {
   const machine = { installation: "inst-1", hostname: "vm" };
-  for (const change of ["add", "pause", "resume", "remove"] as const)
+  for (const change of ["add", "pause", "resume", "remove"] as const) {
     expect(changedLine({ machine, change, name: "daily", schedule: null })).toContain(
       "vm (inst-1)",
     );
+  }
 });

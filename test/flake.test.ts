@@ -31,8 +31,9 @@ beforeEach(() =>
         ["init", "-q"],
         ["config", "user.email", "t@example.com"],
         ["config", "user.name", "t"],
-      ])
+      ]) {
         yield* exec(["git", ...args], { cwd: rig.projectDir });
+      }
       yield* fs.writeFileString(`${rig.projectDir}/thing.ts`, "export const one = 1;\n");
       yield* exec(["git", "add", "-A"], { cwd: rig.projectDir });
       yield* exec(["git", "commit", "-qm", "first"], { cwd: rig.projectDir });

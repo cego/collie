@@ -37,9 +37,12 @@ const titled = (value: string, title: string | undefined) => ({
 
 function choicesOf(schema: Declared["schema"]) {
   const drawn = Schema.decodeUnknownOption(Drawn)(schema);
-  if (Option.isNone(drawn)) return [];
-  if (drawn.value.enum !== undefined)
+  if (Option.isNone(drawn)) {
+    return [];
+  }
+  if (drawn.value.enum !== undefined) {
     return Arr.map(drawn.value.enum, (value) => titled(value, undefined));
+  }
   return Arr.flatMap(drawn.value.anyOf ?? [], (entry) =>
     Option.match(Schema.decodeUnknownOption(Labelled)(entry), {
       onNone: () => [],
@@ -50,7 +53,9 @@ function choicesOf(schema: Declared["schema"]) {
 
 export function reachOf(inputs: ReadonlyArray<Declared>) {
   const field = Option.getOrUndefined(Arr.findFirst(inputs, (one) => one.strategy === REACH));
-  if (field === undefined) return null;
+  if (field === undefined) {
+    return null;
+  }
   const choices = choicesOf(field.schema);
   return choices.length === 0 ? null : { name: field.name, choices };
 }

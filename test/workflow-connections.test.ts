@@ -46,12 +46,16 @@ test("startRun refuses an absent required Connection with its fix before creatin
           task: { mode: "new" },
         });
         expect(started).toMatchObject({ ok: false });
-        if (started.ok) throw new Error("absent Helle accepted");
+        if (started.ok) {
+          throw new Error("absent Helle accepted");
+        }
         const client = yield* connect(world.state);
         const helle = Option.getOrUndefined(
           Arr.findFirst(yield* client.connections(), ({ id }) => id === "helle"),
         )!.reading;
-        if (helle.state === "ok") throw new Error("fixture has Helle credentials");
+        if (helle.state === "ok") {
+          throw new Error("fixture has Helle credentials");
+        }
         expect(started.error.message).toContain(helle.fix);
         expect(
           Arr.filter(
@@ -362,8 +366,9 @@ test("an offer is listed with the reason its provider's used Connection is absen
           })
           .pipe(Effect.result);
         expect(required._tag).toBe("Failure");
-        if (required._tag === "Failure")
+        if (required._tag === "Failure") {
           expect(required.failure.reason).toContain("Fix: write HELLE_API_TOKEN");
+        }
       }),
     ["connection-offers.workflow.ts", "connection-provider.workflow.ts"],
   ));

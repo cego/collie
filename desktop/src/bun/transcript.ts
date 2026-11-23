@@ -111,7 +111,9 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>) => {
       const content = entry.message.content;
       const said = textOf(content);
       for (const part of isString(content) ? [] : content) {
-        if (!("tool_use_id" in part)) continue;
+        if (!("tool_use_id" in part)) {
+          continue;
+        }
         const answering = messages.at(-1)?.parts ?? [];
         const at = Option.getOrElse(
           Arr.findFirstIndex(
@@ -121,16 +123,21 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>) => {
           () => -1,
         );
         const call = answering[at];
-        if (call?.type === "tool-call") answering[at] = { ...call, output: textOf(part.content) };
+        if (call?.type === "tool-call") {
+          answering[at] = { ...call, output: textOf(part.content) };
+        }
       }
-      if (INTERRUPTED.test(said)) continue;
+      if (INTERRUPTED.test(said)) {
+        continue;
+      }
       const { parts, about } = humanMessage(content);
-      if (parts.length > 0)
+      if (parts.length > 0) {
         messages.push(
           about === null
             ? { id: entry.uuid, role: "user", parts }
             : { id: entry.uuid, role: "user", parts, metadata: { about } },
         );
+      }
       continue;
     }
     const parts = Arr.flatMap(entry.message.content, (block) => {
@@ -153,8 +160,11 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>) => {
       return returned;
     });
     const last = messages.at(-1);
-    if (last?.role === "assistant") last.parts.push(...parts);
-    else messages.push({ id: entry.uuid, role: "assistant", parts });
+    if (last?.role === "assistant") {
+      last.parts.push(...parts);
+    } else {
+      messages.push({ id: entry.uuid, role: "assistant", parts });
+    }
   }
   return messages;
 };

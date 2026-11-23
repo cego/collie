@@ -71,7 +71,9 @@ export const narrativeReports = (
       const episodes = new Map<string, Source>();
       const metrics = yield* readMetrics(run.evidence);
       for (const [index, line] of metrics.entries()) {
-        if (line.kind !== "recovery") continue;
+        if (line.kind !== "recovery") {
+          continue;
+        }
         const key = `recovery:${line.recoveryId ?? index}`;
         let source = episodes.get(key);
         if (source === undefined) {
@@ -96,12 +98,16 @@ export const narrativeReports = (
         source.blocker =
           line.blocker ?? (line.cause === undefined ? null : `Park cause: ${line.cause}`);
         source.nextAction = line.next_action ?? null;
-        if (line.report !== undefined) source.address = line.report;
+        if (line.report !== undefined) {
+          source.address = line.report;
+        }
       }
       const cards = new Map<string, Source>();
       const recordedCards = yield* readCards(run.dir);
       for (const [index, card] of recordedCards.entries()) {
-        if (card.narrative === null || Str.trim(card.narrative) === "") continue;
+        if (card.narrative === null || Str.trim(card.narrative) === "") {
+          continue;
+        }
         const previous = cards.get(card.id);
         const source = {
           ordinal: metrics.length + index,
@@ -169,7 +175,9 @@ export const narrativeReports = (
         const ordinal = source.ordinal;
         const fingerprint = fingerprintOf(source);
         const previous = prior.get(source.key);
-        if (previous?.fingerprint === fingerprint) continue;
+        if (previous?.fingerprint === fingerprint) {
+          continue;
+        }
         const base: NarrativeReport = {
           origin: { installation, run: run.id, step: source.step },
           key: source.key,
@@ -184,7 +192,9 @@ export const narrativeReports = (
         };
         const result = yield* Effect.gen(function* () {
           if (source.linked !== undefined) {
-            if (source.linked.address !== undefined) return source.linked.address;
+            if (source.linked.address !== undefined) {
+              return source.linked.address;
+            }
             return yield* Effect.fail(
               source.linked.reason ?? "The helper's report is not registered yet",
             );
@@ -202,14 +212,16 @@ export const narrativeReports = (
               address.installation !== installation ||
               retained === undefined ||
               !(yield* fs.exists(`${owner}/.artefacts/${retained.digest}`))
-            )
+            ) {
               return yield* Effect.fail(
                 "The supplied report revision is not retained by this host; original detail remains available",
               );
+            }
             return { ...address, digest: retained.digest, size: retained.size };
           }
-          if (installation === "")
+          if (installation === "") {
             return yield* Effect.fail("The owning Machine has no installation identity");
+          }
           const key = sha256Hex(source.key);
           const file = `${run.dir}/.reports/${key}.md`;
           const body = `# ${source.title}\n\nRun: ${run.id} · Step: ${source.step}\n\nSource: ${source.key}\n\nOriginal date: ${source.at ?? "unknown (host observation only)"}\n\n${source.body}`;

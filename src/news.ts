@@ -82,10 +82,16 @@ function live(lines: ReadonlyArray<Line>) {
       continue;
     }
     const entry = entries.get(line.key);
-    if (entry === undefined) continue;
-    if (line.kind === "superseded") entries.delete(line.key);
-    else if (line.kind === "read") entry.read.add(line.conversation);
-    else if (line.kind === "uncertain") entry.uncertain.add(line.conversation);
+    if (entry === undefined) {
+      continue;
+    }
+    if (line.kind === "superseded") {
+      entries.delete(line.key);
+    } else if (line.kind === "read") {
+      entry.read.add(line.conversation);
+    } else if (line.kind === "uncertain") {
+      entry.uncertain.add(line.conversation);
+    }
   }
   return [...entries.values()];
 }
@@ -111,7 +117,9 @@ export const append = Effect.fn("News.append")(function* (
   item: Omit<Item, "at" | "significance"> & { readonly significance?: Significance },
 ) {
   const lines = yield* read(file);
-  if (Arr.some(live(lines), (known) => known.item.key === item.key)) return false;
+  if (Arr.some(live(lines), (known) => known.item.key === item.key)) {
+    return false;
+  }
   yield* appendJournal(file, LineJson, {
     kind: "item",
     significance: "routine",
@@ -142,19 +150,22 @@ export const supersede = Effect.fn("News.supersede")(function* (
   holds: (item: Item) => boolean,
 ) {
   const gone = Arr.filter(live(yield* read(file)), (entry) => !holds(entry.item));
-  for (const { item } of gone)
+  for (const { item } of gone) {
     yield* appendJournal(file, LineJson, {
       kind: "superseded",
       key: item.key,
       at: yield* nowIso,
     }).pipe(Effect.orDie);
+  }
   return gone.length;
 });
 
 const trim = Effect.fn("News.trim")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   const lines = yield* read(file);
-  if (lines.length <= KEEP) return;
+  if (lines.length <= KEEP) {
+    return;
+  }
   const kept = lines.slice(-KEEP);
   const encode = flow(Schema.encodeResult(LineJson), Result.getOrThrow);
   const tmp = `${file}.${process.pid}.tmp`;
@@ -169,7 +180,9 @@ const trim = Effect.fn("News.trim")(function* (file: string) {
 });
 
 export function asText(batch: Batch) {
-  if (batch.items.length === 0) return "Nothing has happened that you have not seen.";
+  if (batch.items.length === 0) {
+    return "Nothing has happened that you have not seen.";
+  }
   return Arr.join(
     [
       ...Arr.map(batch.items, (item) => `- ${item.text}`),

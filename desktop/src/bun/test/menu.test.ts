@@ -44,5 +44,7 @@ test("a Mac gets a Window menu that minimizes, zooms and closes", () => {
 });
 
 test("any other platform has no menu", () => {
-  for (const platform of ["linux", "win32"]) expect(applicationMenu(platform)).toEqual([]);
+  for (const platform of ["linux", "win32"]) {
+    expect(applicationMenu(platform)).toEqual([]);
+  }
 });

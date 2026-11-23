@@ -16,9 +16,12 @@ const machine = (lines: string | null, bot?: string) =>
     const fs = yield* FileSystem.FileSystem;
     const home = yield* fs.makeTempDirectoryScoped({ prefix: "collie-slack-user-" });
     yield* fs.makeDirectory(`${home}/.config/collie`, { recursive: true });
-    if (lines !== null) yield* fs.writeFileString(`${home}/.config/collie/slack-user.env`, lines);
-    if (bot !== undefined)
+    if (lines !== null) {
+      yield* fs.writeFileString(`${home}/.config/collie/slack-user.env`, lines);
+    }
+    if (bot !== undefined) {
       yield* fs.writeFileString(`${home}/.config/collie/slack.env`, `SLACK_BOT_TOKEN=${bot}\n`);
+    }
     const raw: Record<string, string> = bot === undefined ? {} : { SLACK_BOT_TOKEN: bot };
     return { home, raw };
   });
@@ -123,10 +126,11 @@ test("the user token is handed back only once Slack says it is the expected huma
         [signedIn(USER_TOKEN, "U999", "T123"), "token belongs to U456, not U999"],
         [signedIn(USER_TOKEN, "U456", "T999"), "token is for team T123, not T999"],
         [signedIn("xoxb-bot-opaque-secret", "U234", "T123"), "token is a bot's"],
-      ] as const)
+      ] as const) {
         expect(yield* token(lines)).toEqual(
           expect.objectContaining({ _tag: "Failure", failure: reason }),
         );
+      }
       expect(yield* token(null, "xoxb-bot-opaque-secret")).toEqual(
         expect.objectContaining({
           _tag: "Failure",

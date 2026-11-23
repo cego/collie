@@ -246,7 +246,9 @@ const sameViews = (a: ReadonlyArray<ViewName>, b: ReadonlyArray<ViewName>) =>
 
 // WARNING: a field added to Focus without a decision here re-reads every run directory on each cursor move.
 export function rereads(last: Focus | null, next: Focus) {
-  if (last === null) return { reuse: false, forceMr: false };
+  if (last === null) {
+    return { reuse: false, forceMr: false };
+  }
   const asked = last.nonce !== next.nonce;
   const movedOnly =
     last.view === next.view &&
@@ -419,7 +421,9 @@ export function rowsOf(board: WorkspaceView, marks?: Marks) {
   const top = (runs: ReadonlyArray<RunRow>) => Arr.filter(runs, (run) => !nestedIds.has(run.id));
   const active = top(board.active);
   const waiting = Arr.filter(active, (r) => r.needsYou);
-  if (waiting.length > 0) rows.push(headerRow(NEEDS_YOU));
+  if (waiting.length > 0) {
+    rows.push(headerRow(NEEDS_YOU));
+  }
   for (const run of [...waiting, ...Arr.filter(active, (r) => !r.needsYou)]) {
     rows.push(...under(run, "active"));
   }
@@ -436,7 +440,9 @@ export function rowsOf(board: WorkspaceView, marks?: Marks) {
 export function wideRows(wide: WideView, marks?: Marks) {
   const rows: Array<Row> = [];
   for (const [at, group] of wide.groups.entries()) {
-    if (at > 0) rows.push(spacer(`gap:${group.workspaceId ?? ELSEWHERE}`));
+    if (at > 0) {
+      rows.push(spacer(`gap:${group.workspaceId ?? ELSEWHERE}`));
+    }
     const away = group.workspaceId === null;
     const inGroup = [...group.active, ...group.recent];
     const byId = new Map(Arr.map(inGroup, (r) => [r.id, r]));
@@ -492,7 +498,9 @@ export function wideRows(wide: WideView, marks?: Marks) {
 function keyedInOrder(rows: ReadonlyArray<Row>) {
   let digit = 0;
   return Arr.map(rows, (row) => {
-    if (row.kind !== "agent") return row;
+    if (row.kind !== "agent") {
+      return row;
+    }
     digit += 1;
     return { ...row, key: digit <= MAX_AGENTS ? String(digit) : null };
   });
@@ -557,7 +565,9 @@ function headerRow(title: string) {
 
 export function needsYouStatus(rows: ReadonlyArray<Row>, selected: string | null) {
   const waiting = Arr.filter(rows, (row) => row.needsYou);
-  if (waiting.length === 0 || Arr.some(waiting, (row) => row.id === selected)) return null;
+  if (waiting.length === 0 || Arr.some(waiting, (row) => row.id === selected)) {
+    return null;
+  }
   return `${waiting.length} run(s) need you`;
 }
 
@@ -574,12 +584,16 @@ interface RunRowsState {
 
 export function runsRows(state: RunRowsState) {
   const filter = state.filter;
-  if (filter.kind === "run") return onlyRun(everyRow(state), filter.id);
+  if (filter.kind === "run") {
+    return onlyRun(everyRow(state), filter.id);
+  }
   if (filter.kind === "workspace" && state.wide) {
     const group = Option.getOrUndefined(
       Arr.findFirst(state.wide.groups, (g) => g.workspaceId === filter.id),
     );
-    if (!group) return rowsOf(state.board, state.marks);
+    if (!group) {
+      return rowsOf(state.board, state.marks);
+    }
     return wideRows({ ...state.wide, groups: [group], quiet: [] }, state.marks);
   }
   return everyRow(state);
@@ -594,16 +608,22 @@ function onlyRun(rows: ReadonlyArray<Row>, runId: string) {
     Arr.findFirstIndex(rows, (row) => row.kind !== "agent" && row.runId === runId),
     () => -1,
   );
-  if (at < 0) return [];
+  if (at < 0) {
+    return [];
+  }
   const start = rows[at]!;
   const kept = [start];
   const mine = new Set([runId]);
   for (const row of rows.slice(at + 1)) {
     const nestedDeeper = row.depth > start.depth;
     const ofMine = row.runId !== null && mine.has(row.runId);
-    if (!nestedDeeper && !(row.kind === "agent" && ofMine)) break;
+    if (!nestedDeeper && !(row.kind === "agent" && ofMine)) {
+      break;
+    }
     kept.push(row);
-    if (row.kind !== "agent" && row.runId !== null) mine.add(row.runId);
+    if (row.kind !== "agent" && row.runId !== null) {
+      mine.add(row.runId);
+    }
   }
   return kept;
 }
@@ -618,7 +638,9 @@ export function viewRows(state: AppState) {
       return Arr.map(state.definitions?.workflows ?? [], definitionRow);
     case "settings": {
       const settings = state.settings;
-      if (!settings) return [];
+      if (!settings) {
+        return [];
+      }
       return [
         ...Arr.map(settings.defaults, (d) =>
           settingRow(
@@ -662,8 +684,12 @@ export function clampSelection(
   before: ReadonlyArray<Row>,
   after: ReadonlyArray<Row>,
 ) {
-  if (after.length === 0) return null;
-  if (selected !== null && Arr.some(after, (r) => r.id === selected)) return selected;
+  if (after.length === 0) {
+    return null;
+  }
+  if (selected !== null && Arr.some(after, (r) => r.id === selected)) {
+    return selected;
+  }
   const was =
     selected === null
       ? -1
@@ -768,11 +794,21 @@ export function keyboardOn(at: {
   filtering: boolean;
   setting: { key: string; value: string } | null;
 }) {
-  if (at.flow) return { _tag: "Flow" };
-  if (at.proposal) return { _tag: "Proposal", proposal: at.proposal };
-  if (at.choice) return { _tag: "Choice", choice: at.choice };
-  if (at.filtering) return { _tag: "Filter" };
-  if (at.setting) return { _tag: "Setting", setting: at.setting };
+  if (at.flow) {
+    return { _tag: "Flow" };
+  }
+  if (at.proposal) {
+    return { _tag: "Proposal", proposal: at.proposal };
+  }
+  if (at.choice) {
+    return { _tag: "Choice", choice: at.choice };
+  }
+  if (at.filtering) {
+    return { _tag: "Filter" };
+  }
+  if (at.setting) {
+    return { _tag: "Setting", setting: at.setting };
+  }
   return { _tag: "Board" };
 }
 
@@ -783,7 +819,9 @@ export function pasteInto(value: string, bytes: Uint8Array) {
 }
 
 export function optionWindow<T>(items: ReadonlyArray<T>, at: number, room: number) {
-  if (items.length <= room) return { shown: items, hidden: 0 };
+  if (items.length <= room) {
+    return { shown: items, hidden: 0 };
+  }
   const end = Math.min(items.length, Math.max(room, at + 1));
   return { shown: items.slice(end - room, end), hidden: items.length - room };
 }
@@ -1014,7 +1052,9 @@ export function olderFinished(
   pages: number,
   batch = OLDER_BATCH,
 ) {
-  if (history === null) return { rows: [], more: true };
+  if (history === null) {
+    return { rows: [], more: true };
+  }
   const carded = new Set(Arr.flatMap(finished, (view) => view.runs));
   const rest = Arr.filter(history, (row) => !carded.has(row.id));
   const rows = rest.slice(0, pages * batch);
@@ -1064,11 +1104,19 @@ export function footerKeys(opts: {
   on: Keyboarding;
   filter: Filter;
 }) {
-  if (opts.on._tag === "Choice") return "↑↓ move · Enter choose · Esc leave the run open";
-  if (opts.on._tag === "Setting") return "type a value · Enter set it · Esc leave it";
+  if (opts.on._tag === "Choice") {
+    return "↑↓ move · Enter choose · Esc leave the run open";
+  }
+  if (opts.on._tag === "Setting") {
+    return "type a value · Enter set it · Esc leave it";
+  }
   // WARNING: the filter takes keys too, so the board's own keys would be a lie here.
-  if (opts.on._tag === "Filter") return "type to narrow · Enter keep it · Esc drop it";
-  if (opts.on._tag === "Proposal") return "Enter carry it out · Esc decline it";
+  if (opts.on._tag === "Filter") {
+    return "type to narrow · Enter keep it · Esc drop it";
+  }
+  if (opts.on._tag === "Proposal") {
+    return "Enter carry it out · Esc decline it";
+  }
   return Arr.join([...opts.panel, ...globalKeys(opts.filter)], " · ");
 }
 
@@ -1112,7 +1160,9 @@ const PRINTABLE = /^[\u0020-\u007e]$/;
 const NEXT_QUESTION = "n";
 
 function takesText(on: Keyboarding) {
-  if (on._tag === "Filter" || on._tag === "Setting") return true;
+  if (on._tag === "Filter" || on._tag === "Setting") {
+    return true;
+  }
   return on._tag === "Choice" && on.choice.kind === "ask";
 }
 
@@ -1125,7 +1175,9 @@ export function nextQuestionId(rows: ReadonlyArray<Row>, selected: string | null
   const from = at < 0 ? -1 : at;
   for (let step = 1; step <= list.length; step++) {
     const row = list[(from + step + list.length) % list.length]!;
-    if (row.choice) return row.id;
+    if (row.choice) {
+      return row.id;
+    }
   }
   return null;
 }
@@ -1141,24 +1193,38 @@ const doing: (command: Command) => KeyIntent = (command) => ({ _tag: "Do", comma
 
 export function keyIntent(at: KeyContext, key: Keypress) {
   // WARNING: any key closes the overlay and does nothing else; first, since App draws it over the flow.
-  if (at.helping) return { _tag: "Help", open: false };
+  if (at.helping) {
+    return { _tag: "Help", open: false };
+  }
   // WARNING: a flow owns the keyboard; a key that moved the Selection would act on a board nobody sees.
-  if (at.on._tag === "Flow") return null;
+  if (at.on._tag === "Flow") {
+    return null;
+  }
   // WARNING: a human consenting must not stop a run by pressing k: only yes and no are answers.
   if (at.on._tag === "Proposal") {
     const { id, hash } = at.on.proposal;
-    if (key.name === "return") return doing({ _tag: "ConfirmProposal", id, hash });
-    if (key.name === "escape") return doing({ _tag: "DeclineProposal", id, hash });
+    if (key.name === "return") {
+      return doing({ _tag: "ConfirmProposal", id, hash });
+    }
+    if (key.name === "escape") {
+      return doing({ _tag: "DeclineProposal", id, hash });
+    }
     return null;
   }
-  if (key.sequence === NEXT_QUESTION && !takesText(at.on)) return { _tag: "NextQuestion" };
+  if (key.sequence === NEXT_QUESTION && !takesText(at.on)) {
+    return { _tag: "NextQuestion" };
+  }
   if (at.on._tag === "Choice") {
     const next = answerFor(at.on.choice, at.asking, key.sequence);
     return { _tag: "Answered", asking: next.asking, value: next.value };
   }
   if (at.on._tag === "Filter") {
-    if (key.name === "escape") return { _tag: "Filtering", filter: "", typing: false };
-    if (key.name === "return") return { _tag: "Filtering", filter: at.query, typing: false };
+    if (key.name === "escape") {
+      return { _tag: "Filtering", filter: "", typing: false };
+    }
+    if (key.name === "return") {
+      return { _tag: "Filtering", filter: at.query, typing: false };
+    }
     if (key.name === "backspace") {
       return { _tag: "Filtering", filter: pipe(at.query, Str.slice(0, -1)), typing: true };
     }
@@ -1169,7 +1235,9 @@ export function keyIntent(at: KeyContext, key: Keypress) {
   }
   if (at.on._tag === "Setting") {
     const editing = at.on.setting;
-    if (key.name === "escape") return { _tag: "Editing", editing: null };
+    if (key.name === "escape") {
+      return { _tag: "Editing", editing: null };
+    }
     if (key.name === "return") {
       const command: Command = { _tag: "SetDefault", key: editing.key, value: editing.value };
       return { _tag: "Submitted", command };
@@ -1188,45 +1256,83 @@ export function keyIntent(at: KeyContext, key: Keypress) {
   if (key.name === "escape" && at.query !== "") {
     return { _tag: "Filtering", filter: "", typing: false };
   }
-  if (key.name === "escape") return doing({ _tag: "SetFilter", filter: { kind: "all" } });
+  if (key.name === "escape") {
+    return doing({ _tag: "SetFilter", filter: { kind: "all" } });
+  }
   // WARNING: after everything that takes text: a free-text answer must be able to contain a question mark.
-  if (key.sequence === "?") return { _tag: "Help", open: true };
+  if (key.sequence === "?") {
+    return { _tag: "Help", open: true };
+  }
   if (at.scrollable) {
-    if (key.name === "pageup") return { _tag: "Scroll", by: -1, unit: "page" };
-    if (key.name === "pagedown") return { _tag: "Scroll", by: 1, unit: "page" };
-    if (key.shift && key.name === "up") return { _tag: "Scroll", by: -1, unit: "line" };
-    if (key.shift && key.name === "down") return { _tag: "Scroll", by: 1, unit: "line" };
+    if (key.name === "pageup") {
+      return { _tag: "Scroll", by: -1, unit: "page" };
+    }
+    if (key.name === "pagedown") {
+      return { _tag: "Scroll", by: 1, unit: "page" };
+    }
+    if (key.shift && key.name === "up") {
+      return { _tag: "Scroll", by: -1, unit: "line" };
+    }
+    if (key.shift && key.name === "down") {
+      return { _tag: "Scroll", by: 1, unit: "line" };
+    }
   }
   // WARNING: arrows, not hjkl: k is the stop key, and a destructive key that sometimes means up is worse than none.
-  if (key.name === "up") return { _tag: "Move", by: -1 };
-  if (key.name === "down") return { _tag: "Move", by: 1 };
-  if (key.name === "tab") return { _tag: "ShowViewBy", by: key.shift ? -1 : 1 };
-  if (key.sequence === "/") return { _tag: "Filtering", filter: at.query, typing: true };
-  if (key.sequence === "R") return doing({ _tag: "Refresh" });
-  if (key.sequence === "t") return at.row?.runId ? doing({ _tag: "ToggleTail" }) : null;
-  if (key.sequence === "m") return at.cutShort ? doing({ _tag: "MoreReview" }) : null;
+  if (key.name === "up") {
+    return { _tag: "Move", by: -1 };
+  }
+  if (key.name === "down") {
+    return { _tag: "Move", by: 1 };
+  }
+  if (key.name === "tab") {
+    return { _tag: "ShowViewBy", by: key.shift ? -1 : 1 };
+  }
+  if (key.sequence === "/") {
+    return { _tag: "Filtering", filter: at.query, typing: true };
+  }
+  if (key.sequence === "R") {
+    return doing({ _tag: "Refresh" });
+  }
+  if (key.sequence === "t") {
+    return at.row?.runId ? doing({ _tag: "ToggleTail" }) : null;
+  }
+  if (key.sequence === "m") {
+    return at.cutShort ? doing({ _tag: "MoreReview" }) : null;
+  }
   if (key.sequence === "c") {
-    if (at.mrs.length > 1) return doing({ _tag: "ChooseMr", copy: true, mrs: at.mrs });
+    if (at.mrs.length > 1) {
+      return doing({ _tag: "ChooseMr", copy: true, mrs: at.mrs });
+    }
     const url = at.mrs[0]?.url ?? null;
     return url !== null ? { _tag: "Copy", text: url } : null;
   }
-  if (key.name === "q" || (key.ctrl && key.name === "c")) return doing({ _tag: "Quit" });
+  if (key.name === "q" || (key.ctrl && key.name === "c")) {
+    return doing({ _tag: "Quit" });
+  }
   if (/^[1-9]$/.test(key.sequence)) {
     const agent = Option.getOrUndefined(
       Arr.findFirst(at.rows, (r) => r.kind === "agent" && r.key === key.sequence),
     );
     return agent?.agent ? doing({ _tag: "FocusAgent", agent: agent.agent }) : null;
   }
-  if (key.sequence === "g") return at.view === "runs" ? doing({ _tag: "ToggleFilter" }) : null;
+  if (key.sequence === "g") {
+    return at.view === "runs" ? doing({ _tag: "ToggleFilter" }) : null;
+  }
   if (sessionLocal(at.filter)) {
     const mode = SESSION_MODES.get(key.sequence);
-    if (mode) return doing({ _tag: "OpenMode", mode });
-    if (key.sequence === "s") return doing({ _tag: "SendReview", runId: at.row?.runId ?? null });
+    if (mode) {
+      return doing({ _tag: "OpenMode", mode });
+    }
+    if (key.sequence === "s") {
+      return doing({ _tag: "SendReview", runId: at.row?.runId ?? null });
+    }
   }
   if (key.name === "return" && at.row?.kind === "group" && at.row.jump?.kind === "workspace") {
     return doing({ _tag: "SetFilter", filter: { kind: "workspace", id: at.row.jump.workspaceId } });
   }
-  if (key.name === "return" && at.row?.jump) return doing({ _tag: "Jump", jump: at.row.jump });
+  if (key.name === "return" && at.row?.jump) {
+    return doing({ _tag: "Jump", jump: at.row.jump });
+  }
   const action = Option.getOrUndefined(
     Arr.findFirst(
       actionsFor(at.row, at.filter),
@@ -1247,7 +1353,9 @@ export interface Answered {
 }
 
 export function answerFor(choice: PendingChoice, asking: Asking, key: string) {
-  if (key === "\u001b" || key === "\u0003") return { asking, value: "" };
+  if (key === "\u001b" || key === "\u0003") {
+    return { asking, value: "" };
+  }
   if (key === "\r" || key === "\n") {
     const value = choice.kind === "ask" ? asking.typed : (choice.items[asking.index]?.id ?? null);
     return { asking: { index: 0, typed: "" }, value };
@@ -1289,29 +1397,41 @@ export function statusColour(glyph: string) {
 function subsequence(needle: string, hay: string) {
   let at = 0;
   for (const character of hay) {
-    if (character === needle[at]) at += 1;
-    if (at === needle.length) return true;
+    if (character === needle[at]) {
+      at += 1;
+    }
+    if (at === needle.length) {
+      return true;
+    }
   }
   return needle.length === 0;
 }
 
 export function filterItems<T>(items: ReadonlyArray<T>, query: string, hay: (item: T) => string) {
   const needle = Str.toLowerCase(Str.trim(query));
-  if (needle === "") return [...items];
+  if (needle === "") {
+    return [...items];
+  }
   const prefix: Array<T> = [];
   const anywhere: Array<T> = [];
   const fuzzy: Array<T> = [];
   for (const item of items) {
     const straw = Str.toLowerCase(hay(item));
-    if (pipe(straw, Str.startsWith(needle))) prefix.push(item);
-    else if (pipe(straw, Str.includes(needle))) anywhere.push(item);
-    else if (subsequence(needle, straw)) fuzzy.push(item);
+    if (pipe(straw, Str.startsWith(needle))) {
+      prefix.push(item);
+    } else if (pipe(straw, Str.includes(needle))) {
+      anywhere.push(item);
+    } else if (subsequence(needle, straw)) {
+      fuzzy.push(item);
+    }
   }
   return [...prefix, ...anywhere, ...fuzzy];
 }
 
 export function matching(rows: ReadonlyArray<Row>, query: string) {
-  if (Str.trim(query) === "") return [...rows];
+  if (Str.trim(query) === "") {
+    return [...rows];
+  }
   const looked = Arr.filter(rows, (row) => row.kind !== "header");
   const hit = new Set(Arr.map(filterItems(looked, query, rowHay), (row) => row.id));
   return Arr.filter(
@@ -1327,8 +1447,12 @@ function underAMatch(rows: ReadonlyArray<Row>, at: number, hit: ReadonlySet<stri
   let depth = rows[at]!.depth;
   for (let above = at - 1; above >= 0 && depth > 0; above--) {
     const over = rows[above]!;
-    if (over.depth >= depth) continue;
-    if (hit.has(over.id)) return true;
+    if (over.depth >= depth) {
+      continue;
+    }
+    if (hit.has(over.id)) {
+      return true;
+    }
     depth = over.depth;
   }
   return false;
@@ -1344,8 +1468,12 @@ function groupHasAMatch(rows: ReadonlyArray<Row>, at: number, hit: ReadonlySet<s
     (opener.kind === "header" && under.needsYou) ||
     (opener.kind === "group" && under.depth > opener.depth);
   for (const under of rows.slice(at + 1)) {
-    if (!nested(under)) return false;
-    if (hit.has(under.id)) return true;
+    if (!nested(under)) {
+      return false;
+    }
+    if (hit.has(under.id)) {
+      return true;
+    }
   }
   return false;
 }

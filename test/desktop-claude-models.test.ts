@@ -25,7 +25,9 @@ test("Claude Code's catalogue is read without a turn or setup, omits its default
         void prompt[Symbol.asyncIterator]()
           .next()
           .then((result) => {
-            if (!result.done) yielded = true;
+            if (!result.done) {
+              yielded = true;
+            }
           });
         return {
           supportedModels: () =>

@@ -53,8 +53,9 @@ export const zoomWindow = (window: BrowserWindow, title: string, preference: num
 export const followWindow = (window: BrowserWindow) =>
   Effect.gen(function* () {
     const asked = yield* Queue.sliding<void>(1);
-    for (const event of ["move", "resize", "focus"])
+    for (const event of ["move", "resize", "focus"]) {
       window.on(event, () => Queue.offerUnsafe(asked, undefined));
+    }
     const again = Queue.offer(asked, undefined);
     yield* again;
     return {

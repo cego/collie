@@ -31,7 +31,9 @@ export const touching: (
   const owners = new Map<string, string>();
   const ownerOf = (requestId: bigint) => {
     const known = owners.get(String(requestId));
-    if (known !== undefined) return Effect.succeed(known);
+    if (known !== undefined) {
+      return Effect.succeed(known);
+    }
     return sql<{ readonly entity_id: string }>`
       SELECT entity_id FROM cluster_messages WHERE id = ${String(requestId)}
     `.pipe(
@@ -42,9 +44,14 @@ export const touching: (
   const touchOwner = (requestId: bigint, settled: boolean) =>
     Effect.flatMap(ownerOf(requestId), (owner) =>
       Effect.sync(() => {
-        if (owner === undefined) touches.forget();
-        else touches.touch(owner);
-        if (settled) owners.delete(String(requestId));
+        if (owner === undefined) {
+          touches.forget();
+        } else {
+          touches.touch(owner);
+        }
+        if (settled) {
+          owners.delete(String(requestId));
+        }
       }),
     );
   return {

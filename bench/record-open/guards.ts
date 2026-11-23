@@ -12,10 +12,12 @@ export const refusal = Effect.fnUntraced(function* (
 ) {
   const { resolve } = yield* Path.Path;
   const state = resolve(userStateDir(user.home, user.env));
-  if (resolve(ours.state) === state)
+  if (resolve(ours.state) === state) {
     return `${ours.state} is the user's own state directory; the benchmark runs a host of its own`;
-  if (resolve(ours.socket) === resolve(`${state}/host.sock`))
+  }
+  if (resolve(ours.socket) === resolve(`${state}/host.sock`)) {
     return `${ours.socket} is the user's own host socket; the benchmark runs a host of its own`;
+  }
   return null;
 });
 
@@ -23,7 +25,9 @@ const parentOf = (pid: number) => Effect.map(processOf(pid), (one) => one?.paren
 
 const ancestorsOf = Effect.fnUntraced(function* (pid: number) {
   const found: Array<number> = [];
-  for (let at = yield* parentOf(pid); at > 1; at = yield* parentOf(at)) found.push(at);
+  for (let at = yield* parentOf(pid); at > 1; at = yield* parentOf(at)) {
+    found.push(at);
+  }
   return found;
 });
 
@@ -35,15 +39,18 @@ export const measuring = <A, E, R>(
 ) =>
   Effect.gen(function* () {
     const holder = yield* lockHolder(lock);
-    if (holder !== null && (yield* ancestorsOf(process.pid)).includes(holder.pid))
+    if (holder !== null && (yield* ancestorsOf(process.pid)).includes(holder.pid)) {
       return yield* effect;
+    }
     yield* Effect.orDie(ensureLockDir(lock));
     let told = false;
     for (;;) {
       const done = yield* withLock(lock, Effect.succeedNone, Effect.asSome(effect), 1).pipe(
         Effect.catchTag("PlatformError", Effect.die),
       );
-      if (Option.isSome(done)) return done.value;
+      if (Option.isSome(done)) {
+        return done.value;
+      }
       if (!told) {
         told = true;
         const other = yield* lockHolder(lock);

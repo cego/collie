@@ -99,8 +99,9 @@ const harness = Command.make(
           const now = yield* chatHarnessOf(env.userDir);
           return { ok: true as const, data: { preference: now }, human: now };
         }
-        if (!isChatHarness(chosen))
+        if (!isChatHarness(chosen)) {
           return err("invalid_input", `Chat is ${Arr.join(CHAT_HARNESSES, " or ")}.`);
+        }
         return yield* mutation(env, "chat-harness", requestId, () =>
           Effect.gen(function* () {
             yield* writeConfigValue(env.userDir, CHAT_HARNESS_KEY, chosen);
@@ -131,7 +132,9 @@ const news = Command.make(
     answering((env) =>
       Effect.gen(function* () {
         const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-        if (key === null) return err("invalid_state", "Collie cannot reach core.");
+        if (key === null) {
+          return err("invalid_state", "Collie cannot reach core.");
+        }
         // WARNING: sent and uncertain are transport facts; only collie_news being read settles an item.
         const settled =
           sent || unsure
@@ -143,7 +146,9 @@ const news = Command.make(
                 request: yield* newRequestId(),
               })
             : null;
-        if (settled !== null && !settled.ok) return settled;
+        if (settled !== null && !settled.ok) {
+          return settled;
+        }
         const batch =
           settled?.value ??
           pendingNews(yield* readNews(yield* newsPath(env.stateDir, key)), NATIVE);
@@ -244,10 +249,13 @@ const call = Command.make(
     answering((env) =>
       Effect.gen(function* () {
         const found = toolNamed(tool);
-        if (found === null) return err("invalid_input", `No tool "${tool}".`);
+        if (found === null) {
+          return err("invalid_input", `No tool "${tool}".`);
+        }
         const decoded = Schema.decodeOption(UnknownJson)(Option.getOrElse(input, () => "{}"));
-        if (decoded._tag === "None" || !isJsonObject(decoded.value))
+        if (decoded._tag === "None" || !isJsonObject(decoded.value)) {
           return err("invalid_input", "--input is a JSON object.");
+        }
         const text = yield* found.call(env, decoded.value);
         return { ok: true as const, data: { tool, text }, human: text };
       }),

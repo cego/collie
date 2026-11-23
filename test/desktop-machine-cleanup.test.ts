@@ -52,7 +52,9 @@ const fakeHost = (answer: Effect.Effect<CleanupReport, HostRefused> | "older") =
     const client = yield* RpcClient.makeNoSerialization(FrontDoorRpcs, {
       supportsAck: true,
       onFromClient: ({ message }) => {
-        if (message._tag === "Request") asked.push(message.tag);
+        if (message._tag === "Request") {
+          asked.push(message.tag);
+        }
         // WARNING: the host is handed a request it may have no schema for, as over the wire.
         return server.write(0, message as never);
       },
@@ -131,7 +133,7 @@ describe("the main process reads one Machine's cleanup listing over its door", (
       ).pipe(Effect.provide(TestClock.layer())),
     ));
 
-  for (const how of ["closed", "broken"] as const)
+  for (const how of ["closed", "broken"] as const) {
     test(`a door ${how} under the call is followed to the Machine's next door, whose host answers`, () =>
       Effect.runPromise(
         Effect.scoped(
@@ -154,6 +156,7 @@ describe("the main process reads one Machine's cleanup listing over its door", (
           }),
         ),
       ));
+  }
 
   test("a host that never answers is waited on for 2 minutes, then said so", () =>
     Effect.runPromise(

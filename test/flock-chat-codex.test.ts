@@ -78,7 +78,9 @@ const inspected = (events: ReadonlyArray<AguiEvent>) => {
   const text = Option.getOrUndefined(
     Arr.findFirst(events, (event) => event.type === "TEXT_MESSAGE_CONTENT"),
   );
-  if (text?.type !== "TEXT_MESSAGE_CONTENT") throw new Error("No reply");
+  if (text?.type !== "TEXT_MESSAGE_CONTENT") {
+    throw new Error("No reply");
+  }
   return flow(Schema.decodeResult(Inspected), Result.getOrThrow)(text.delta);
 };
 
@@ -389,7 +391,9 @@ test("Codex can be chosen for the chat, offering its own models, and opens on th
         chatModel: "gpt-6.2-sol",
         chatEffort: "high",
       });
-      if ("refused" in saved) return;
+      if ("refused" in saved) {
+        return;
+      }
       expect(yield* opensOn(saved, NO_FLOCK_SETTINGS, Effect.succeed({}), lists)).toEqual({
         ok: true,
         choice: { harness: "codex", model: "gpt-6.2-sol", effort: "high" },

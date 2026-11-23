@@ -55,7 +55,9 @@ const Target = Schema.Union([
 // WARNING: nothing on the build runner can run a cross-built binary to prove its renderer; the asset key is the proof.
 function nativeMarker(target: string, libc: "musl" | "glibc") {
   const [, platform = "", arch = ""] = Str.split(target, "-");
-  if (platform === "darwin") return `@opentui/core-darwin-${arch}/libopentui.dylib`;
+  if (platform === "darwin") {
+    return `@opentui/core-darwin-${arch}/libopentui.dylib`;
+  }
   const suffix = platform === "linux" && libc === "musl" ? "-musl" : "";
   return `@opentui/core-${platform}-${arch}${suffix}/libopentui.so`;
 }
@@ -75,8 +77,9 @@ const program = Effect.gen(function* () {
     yield* fs.makeTempDirectoryScoped({ prefix: "collie-build-" }),
     "release",
   );
-  for (const entry of RELEASE_TREE)
+  for (const entry of RELEASE_TREE) {
     yield* fs.copy(entry, paths.join(tree, entry), { overwrite: true });
+  }
   const hc = yield* bundleHc(hcPin, target, tree, {
     releases: yield* hcReleasesConfig,
     cache: "node_modules/.cache/collie-hc",
@@ -105,7 +108,9 @@ const program = Effect.gen(function* () {
   const marker = nativeMarker(target, libc);
   const artifact = Buffer.from(yield* fs.readFile(staging));
   const missing = Arr.filter([marker, ...carried], (name) => !artifact.includes(name));
-  if (!artifact.includes(hc)) missing.push(`hc ${hcPin.version}'s archive as pinned`);
+  if (!artifact.includes(hc)) {
+    missing.push(`hc ${hcPin.version}'s archive as pinned`);
+  }
   if (missing.length > 0) {
     yield* fs.remove(staging);
     return yield* Effect.die(

@@ -35,8 +35,9 @@ const hostTrail = (file: string, run: string, text: string) => {
   db.run(
     "CREATE TABLE IF NOT EXISTS collie_run_lines (run TEXT, journal TEXT, seq INTEGER, line TEXT, PRIMARY KEY (run, journal, seq))",
   );
-  for (const [seq, line] of Arr.dropRight(Str.split(text, "\n"), 1).entries())
+  for (const [seq, line] of Arr.dropRight(Str.split(text, "\n"), 1).entries()) {
     db.run("INSERT INTO collie_run_lines VALUES (?, 'operations.jsonl', ?, ?)", [run, seq, line]);
+  }
   db.close();
 };
 
@@ -425,8 +426,9 @@ const audit = (
 const hostStore = (file: string, placings: Readonly<Record<string, Json>>) => {
   const db = new Database(file, { create: true });
   db.run(RUNS_TABLE);
-  for (const [run, placing] of Rec.toEntries(placings))
+  for (const [run, placing] of Rec.toEntries(placings)) {
     db.run("INSERT INTO collie_runs VALUES (?, ?, ?)", [run, `r-${run}`, encode(placing)]);
+  }
   db.close();
 };
 
@@ -595,8 +597,9 @@ test("the inventory counts where the human's words are, and holds none of them",
         "Prefer Effect",
         "Ask before deleting",
         "staging database",
-      ])
+      ]) {
         expect(said).not.toContain(typed);
+      }
     }).pipe(Effect.scoped),
   ));
 
