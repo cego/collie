@@ -181,7 +181,6 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
       target: "bun",
       // WARNING: As tools/build.ts pins it: only this libc's renderer package must be installed.
       define: { "process.env.OPENTUI_LIBC": musl ? '"musl"' : '"glibc"' },
-      bytecode: true,
       format: "esm",
       plugins: [
         solidPlugin,
