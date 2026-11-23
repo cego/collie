@@ -59,7 +59,11 @@ world as rows, and each write names what it moved through Reactivity:
   backstop. It also keeps what a follow-up would enter at, as the Run fact `synced-recovery`.
 - **Module revisions** keep `collie_module_revisions`, one row per workflow layer directory.
   A listing reads the row. A Run's start, an offer taken, `collie workflow create`, `fork` and
-  `check`, and the 5-minute backstop compute it and keep it.
+  `check`, and the 5-minute backstop compute it and keep it. The revision also keys what
+  discovery last read from the layer, its entries and faults, kept in the host's memory with
+  nothing expiring on a clock. A listing whose revision has not moved reuses that
+  read, so it imports no module and hashes no tree; any other read imports every entry
+  again and replaces it (cego/collie#534).
 - **Connection readings** keep `collie_connections`, per Connection and checkout. A listing
   reads the row. One it finds missing is read at once by the syncer and offered once it is.
   Taking an offer reads the Connection again.
