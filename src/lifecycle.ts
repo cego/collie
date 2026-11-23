@@ -38,6 +38,7 @@ import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
+import type { Prepare } from "./verify-model";
 import { savedModules, type Fault, type Found } from "./discovery";
 import { LAUNCH_DOORS, reachKey, reachOf } from "./reach";
 import {
@@ -2341,6 +2342,8 @@ export const verifyRun = Effect.fn("Lifecycle.verifyRun")(function* (
     cwd?: string;
     expect: "pass" | "fail";
     again?: boolean;
+    isolated?: boolean;
+    prepare?: Prepare;
   },
   door: Door,
 ) {

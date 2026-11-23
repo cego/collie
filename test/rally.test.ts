@@ -25,7 +25,7 @@ import { agentsLayer, type AgentHost } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { evidenceDir, foundationLayer, loadEntry } from "../src/engine";
 import { fixtures } from "./support/host";
-import { collect } from "../src/verify";
+import { collect, readVerifications, type Verification } from "../src/verify";
 import { Store } from "../src/store";
 import { RunRecords } from "../src/run-records";
 
@@ -473,6 +473,77 @@ const ledgerRally = (runId: string) =>
     Effect.orDie,
   );
 
+/** The shipped rally on a Run started with `static` marked to run before review, then `after`. */
+const staticRally = <A>(
+  runId: string,
+  fixes: boolean,
+  after: (ran: {
+    readonly said: string;
+    readonly asked: (operation: string) => Effect.Effect<boolean>;
+    readonly prompt: (operation: string) => Effect.Effect<string>;
+    readonly records: () => Effect.Effect<ReadonlyArray<Verification>, never, RunRecords>;
+    readonly gate: () => Effect.Effect<Verification>;
+  }) => Effect.Effect<A, never, RunRecords>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* (yield* Store).admit({
+      request: `req-${runId}`,
+      run: runId,
+      workflow: "static-rally",
+      project: rig.projectDir,
+      input: {},
+      provenance: {},
+      options: {},
+      generation: "static-rally@1",
+      execution: `execution-${runId}`,
+      task: null,
+      parent: null,
+    });
+    yield* fs.makeDirectory(evidenceDir(dir, runId), { recursive: true });
+    yield* updateApproved(evidenceDir(dir, runId), () => [
+      {
+        name: "static",
+        executable: "test",
+        argv: ["-f", "lint-ok"],
+        cwd: ".",
+        before_review: true,
+      },
+    ]);
+    yield* RunRecords.use((records) =>
+      records.put(runId, "features.json", `{"before_review":true}`),
+    );
+    const entry = yield* loadEntry(`${fixtures}/static-rally.workflow.ts`);
+    const made = entry.make(`static-rally@${runId}`);
+    // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
+    const result = yield* made.workflow
+      .execute({ runId, input: { cwd: rig.projectDir, fixes } })
+      .pipe(Effect.provide(made.layer), Effect.result);
+    const host = yield* Host;
+    const agentFile = (operation: string) => `${dir}/agents/${runId}/${operation}.prompt.md`;
+    return yield* after({
+      said: said(result),
+      asked: (operation) => fs.exists(agentFile(operation)).pipe(Effect.orDie),
+      prompt: (operation) => fs.readFileString(agentFile(operation)).pipe(Effect.orDie),
+      records: () => readVerifications(evidenceDir(dir, runId)).pipe(Effect.orDie),
+      gate: () =>
+        host
+          .verify({ runId, name: "static", cwd: rig.projectDir, pass: "gate" })
+          .pipe(Effect.orDie),
+    });
+  }).pipe(
+    Effect.provide(
+      agentsLayer(hostOf()).pipe(
+        Layer.provideMerge(
+          Layer.succeed(Children)(Children.of({ start: nothing, result: nothing })),
+        ),
+        Layer.provideMerge(foundationLayer({ dir, userDir: rig.userDir })),
+      ),
+    ),
+    Effect.scoped,
+    Effect.orDie,
+  );
+
 const fixedEmptyList = {
   verdict: "clean",
   fixed: [{ title: "empty list", file: "src/thing.ts" }],
@@ -512,3 +583,57 @@ test("a later round's review that leaves out an earlier finding fails the Run, n
       );
     }),
   ));
+
+/** A fix that changed nothing, which also reads as a clean review. */
+const NOT_FIXED = {
+  verdict: "clean",
+  summary: "nothing changed",
+  findings: [],
+  fixed: [],
+  checks: [],
+};
+
+test(
+  "a check marked to run before review that fails on the builder's tree goes back to the builder by name, and no reviewer starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([NOT_FIXED, NOT_FIXED, NOT_FIXED, NOT_FIXED]);
+        yield* staticRally("r-static-fails", false, (ran) =>
+          Effect.gen(function* () {
+            const [failed] = yield* ran.records();
+            expect(ran.said).toContain("before_review_failed");
+            expect(ran.said).toContain(`"static"`);
+            const fix = yield* ran.prompt("before-review-1-fix-1");
+            expect(fix).toContain(`check "static" failed before review`);
+            expect(fix).toContain(`verification:${failed!.id}`);
+            expect(yield* ran.asked("review-1")).toBe(false);
+          }),
+        );
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a check marked to run before review that passes opens the round, and the gate on the unmoved tree takes its record",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(`${rig.projectDir}/lint-ok`, "already\n");
+        yield* rig.queueOutputs([NOT_FIXED]);
+        yield* staticRally("r-static-passes", false, (ran) =>
+          Effect.gen(function* () {
+            expect(ran.said).toBe("settled");
+            expect(yield* ran.asked("review-1")).toBe(true);
+            const [passed, ...others] = yield* ran.records();
+            expect([passed?.result, others]).toEqual(["pass", []]);
+            expect((yield* ran.gate()).id).toBe(passed!.id);
+            expect(yield* ran.records()).toHaveLength(1);
+          }),
+        );
+      }),
+    ),
+  60_000,
+);

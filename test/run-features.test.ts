@@ -11,7 +11,7 @@ import { until } from "./support/host";
 import { hostRecords } from "./support/records";
 
 test(
-  "a Run started now, and one started from it, record that their follow-up rounds get a delta and their findings ledger ids",
+  "a Run started now, and one started from it, record that their follow-up rounds get a delta, their findings ledger ids and their marked checks run before review",
   () =>
     hosted("hw-features-", ({ world }) =>
       Effect.gen(function* () {
@@ -39,6 +39,7 @@ test(
             findings_ledger: true,
             inline_plan: false,
             agent_sessions: "run",
+            before_review: true,
           });
           yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
