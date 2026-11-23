@@ -184,6 +184,7 @@ export {
 } from "./releasing";
 /** Who holds the shared claims a Run needs (`HostApi.holders`). */
 export { HoldersSchema, type Holders } from "./helle";
+export { OutgoingFields, type HandOverGiven, type Outgoing } from "./hand-over";
 
 export {
   CheckSchema,

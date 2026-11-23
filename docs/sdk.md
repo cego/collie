@@ -711,7 +711,9 @@ const place = yield * host.place((yield * Run).id);
 // place.authority — the branch this Run created, whether it roams, and the human door and
 //                   words that started it: what a Claude agent's auto mode is told
 // place.features  — what its workflow does, fixed when it started: `review_delta` where its
-//                   follow-up review rounds are given a delta; absent on a Run started earlier
+//                   follow-up review rounds are given a delta, `findings_ledger` where
+//                   implement's give findings ledger ids, `inline_plan` where implement
+//                   plans a source that is not a plan; absent on a Run started earlier
 ```
 
 `place.cwd` is decided before your body runs. A workflow that
@@ -1489,7 +1491,11 @@ a list of _work_ needs.
   items already finished left behind — their work, their commits, what was verified while
   they ran — for the next item's prompt. `agent` on `agentWork` puts several items on one
   agent, which is what the baseline does: one implementer, each item its own prompt and its
-  own Output.
+  own Output. Give an item a new `agent` with `takesOver: { agent, why }` and the agent
+  before it is ended and found Quiet first, and the new one's first delivery is the
+  host's **Hand-over** ([`CONTEXT.md`](../CONTEXT.md)). The shipped `implement` does that
+  per ticket under the shared setting `agent_sessions: ticket`, recorded on the Run as
+  `place.features.agent_sessions`.
 
 ```ts
 const tickets = yield * orderedTicketsOf(asked.plan);
@@ -1522,6 +1528,11 @@ for (const [at, ticket] of tickets.entries()) {
   });
 }
 ```
+
+The shipped `implement` reads its tickets this way from a plan directory. Under the shared
+setting `inline_plan: on`, recorded on the Run as `place.features.inline_plan`, it first plans
+any other source into the Run's own `plan/` with one `agentWork` and checks it before reading
+it back. Where the setting is off, a source that is not a plan is one item.
 
 `orderedTickets` (and `orderedTicketsOf`) reads a plan directory as tickets in an order they
 can be built in — `Blocked by` before blocked, plan order among the rest — narrowed to one
@@ -1589,9 +1600,20 @@ that `implement` makes after its rallies, still read the whole change against it
 review workflow's "Fix findings" on a local target is told the same; on a merge request its
 rounds are given the forge's interdiff, as before.
 
-Whether a Run's rounds are told this is fixed when the Run starts, as `Place.features`. A Run with
-no record started on an earlier release and keeps that release's rounds, so its replay meets
-no Activity it did not record.
+Given a `ledger`, `rally` keeps the findings ledger the review workflow keeps: `reviewPass`
+gives each new finding an id, `<run>-F<n>`, skipping the `taken` ids the Run gave outside the
+ledger. It records an earlier finding the review confirms fixed as `fixed` at the reviewed
+head. An earlier finding the review leaves out fails the round with `review omitted earlier
+finding <id>; return its status`. The next round is given the ledger as that round recorded it. `implement` passes
+an empty ledger to each ticket's rally, and to its final rally every finding still open or
+disputed from the tickets. It names every id it gave, at its latest status, in its merge
+request's prompt. The ids are worked out again from the recorded reviews on replay, so a
+host restart does not change them.
+
+Whether a Run's rounds are told this, and whether `implement`'s carry a ledger
+(`findings_ledger`), is fixed when the Run starts, as `Place.features`. A Run with no record
+started on an earlier release and keeps that release's rounds, so its replay meets no
+Activity it did not record.
 
 Before each round's review opens, `rally` runs the Run's checks marked `before_review` on the
 builder's tree, through `checkedBeforeReview`: each through `host.verify`, inside one Activity

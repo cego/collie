@@ -365,6 +365,34 @@ the card's agent (`BoardAgent.fallback`), which Desktop draws under the sentence
 `collie usage` prints. An agent that has gone has no work left to move, and is not named.
 It is worked out at launch, so it reads usage as it stood then.
 
+### The hand-over
+
+A Fallback mid-work builds its successor's hand-over in `src/hand-over.ts`, in the Activity
+`<operation>.fallback-<n>.hand-over`. The host's side:
+
+- `agents.handOver` reads the Intent, the plan revision (`planRevision`: a sha256 over every
+  file's path and content under the plan directory) and the checkout (`AgentHost.checkout`,
+  `git status` through `treeOf` by default);
+- `agentWork` adds the journal, the base and the Run's Checks from `host.evidence` and
+  `host.approved`, and the pending questions from `host.asked`.
+
+The workflow passes what only it knows as `AgentWork.handOver`. Implement passes the ticket,
+the plan directory, the ticket's criteria, the last Output's answers to them, the ticket's
+Checks, the ledger's findings, the builder's last Output, and for a fix the head its findings
+were reviewed at (`reviewed`), which the record renders as a `git diff` starting point. `buildHandOver` keeps only what
+that Output said under `decisions`, `rejected` and `next_action`. Each record is appended to
+the Run's `hand-overs.jsonl` journal, its revision one past the last.
+
+At launch, inside `<operation>.fallback-<n>.launch`, `atDispatch` compares the record's head,
+plan revision and whether it has uncommitted work with `agents.atCheckout`. If any changed,
+for instance the outgoing agent left work uncommitted after the record was built, it builds
+the record once more.
+If that one does not match either, the checkout is appended to `hand-over-stale.jsonl` and
+the Run parks on `hand-over-stale`. Its recheck reads the head and plan revision again: it
+clears when they equal the last ones recorded, and otherwise records them and waits. Because
+the record is rendered into the launch's prompt, the step delivery's causal key in the
+Dispatcher's ledger is what keeps a duplicate or a replay from sending it twice.
+
 ## A workflow made of workflows
 
 `child({ runId, invocation, workflow, input })` starts another workflow as part of a Run
@@ -1337,6 +1365,19 @@ Run's stop, a Fallback's retirement and worktree cleanup. It proves the live ter
 matches the launch record, stops the harness where its work runs, requires Quiet, and
 records the end in `agents.log`. Terminal cleanup kills only the proven core address.
 An agent whose identity or stopped state cannot be proved is left running and named.
+
+Where its work is in its pane (Claude, Pi, OpenCode, and Codex without its controls) and
+`endAgent` closes the pane itself, it requires Quiet after the close. A launch records the
+process at its terminal's root in its launch record as `root` (`rootOf`: core's terminal pid
+from `terminal.list`, with its start time). Before the close, `paneProcesses` takes that root and the pane's root now, drops one
+whose pid is another process, and notes each one's session with `sessionOf`, so a pane that
+already died still has its processes checked. After the close, `settled` waits up to two seconds
+for what the hang-up ends, sends each process still running one SIGTERM, and waits out the
+stop's budget. What is left makes the end `NotQuiet` with `left`; the Fallback's
+retirement records the agent and `left` in the Run's `not-quiet.jsonl` journal and parks
+with the cause `predecessor-not-quiet`, whose recheck clears once none of `left` is still
+the process noted and `keptFor` keeps no control record of the agent. Where no root can be
+named, the end logs `<agent>: Quiet not confirmed: <why>` and the close stands as the stop.
 
 Every path that replaces an agent or releases what it worked in goes through the same stop
 first. `installControls` stops a record left under the name it installs and fails

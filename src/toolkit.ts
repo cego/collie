@@ -16,6 +16,7 @@ import { DEFAULT_LINES } from "./text-lines";
 import { RegisterArtefact } from "./artefact-model";
 import {
   ASKED_KINDS,
+  ENDED_AGENT,
   headerSentence,
   mrLabel,
   mrReadiness,
@@ -599,11 +600,12 @@ function cardLine(view: TaskView): string {
         : view.branch !== null
           ? `, branch ${view.branch}`
           : "";
+  const working = Arr.filter(view.agents, (agent) => agent.status !== ENDED_AGENT);
   const agents =
-    view.agents.length === 0
+    working.length === 0
       ? ""
       : `, agents ${Arr.join(
-          Arr.map(view.agents, (agent) => agent.name),
+          Arr.map(working, (agent) => agent.name),
           ", ",
         )}`;
   const offers = Arr.map(

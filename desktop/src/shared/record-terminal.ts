@@ -3,7 +3,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
-import type { BoardAgent } from "../../../src/board-model";
+import { ENDED_AGENT, type BoardAgent } from "../../../src/board-model";
 import { ROLES } from "../../../src/steer-target";
 
 /**
@@ -57,7 +57,15 @@ export const recipients = (
   launches: ReadonlyArray<{ readonly agent: string }> | undefined,
   live: ReadonlyArray<BoardAgent>,
 ): AgentTab[] => {
-  const tabs = new Map(Arr.map(agentTabs(live, null), (tab) => [tab.name, tab]));
+  const tabs = new Map(
+    Arr.map(
+      agentTabs(
+        Arr.filter(live, (one) => one.status !== ENDED_AGENT),
+        null,
+      ),
+      (tab) => [tab.name, tab],
+    ),
+  );
   const names = Arr.map(launches ?? [], (launch) => launch.agent);
   const latest = Arr.filter(names, (name, at) => names.lastIndexOf(name) === at);
   return Arr.flatMap(latest, (name) => Arr.ensure(tabs.get(name) ?? []));

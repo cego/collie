@@ -151,7 +151,11 @@ export interface ReviewAsk {
   /** The review before this one, for the reviewers to read rather than repeat. */
   readonly previous: string;
   readonly ledger?: ReadonlyArray<Finding>;
+  /** Ids this Run already gave findings outside `ledger`, which a new finding never takes. */
+  readonly taken?: ReadonlyArray<string>;
   readonly head?: string;
+  /** The checkout head a ledgered round reviewed, which its findings are recorded at. */
+  readonly stamped?: string;
   readonly changes?: string;
   /** A follow-up round's prior head, what changed since it and what is still open; see `followUp`. */
   readonly delta?: string;
@@ -252,7 +256,10 @@ export const reviewPass = (ask: ReviewAsk) =>
         const before = ask.ledger;
         const findings: Finding[] = [];
         const ids = new Set<string>();
-        const reserved = new Set(Arr.map([...before, ...report.findings], (one) => one.id));
+        const reserved = new Set([
+          ...Arr.map([...before, ...report.findings], (one) => one.id),
+          ...(ask.taken ?? []),
+        ]);
         let next = 1;
         for (const finding of report.findings) {
           const earlier = Option.getOrUndefined(
@@ -276,14 +283,19 @@ export const reviewPass = (ask: ReviewAsk) =>
             ...finding,
             id: identity,
             status,
-            head: ask.head ?? "",
+            head: ask.head ?? ask.stamped ?? "",
             note: status === earlier?.status ? (earlier.note ?? "") : "",
           });
         }
         for (const earlier of before) {
           if (Arr.some(findings, (one) => one.id === earlier.id)) continue;
           if (Arr.some(report.fixed, (one) => findingKey(one) === findingKey(earlier)))
-            findings.push({ ...earlier, status: "fixed", head: ask.head ?? "", note: "" });
+            findings.push({
+              ...earlier,
+              status: "fixed",
+              head: ask.head ?? ask.stamped ?? "",
+              note: "",
+            });
           else
             return yield* new WorkflowError({
               reason: `review omitted earlier finding ${earlier.id ?? earlier.title}; return its status`,
@@ -449,6 +461,9 @@ export const followUp = (ask: {
     );
   });
 
+const isResolved = (finding: Finding) =>
+  finding.status === "fixed" || finding.status === "obsolete";
+
 /** At most four rounds per rally; it leaves at the first review with nothing blocking. */
 export const ROUNDS = 4;
 
@@ -466,6 +481,7 @@ export const checkedBeforeReview = (ask: {
   readonly fix: (
     operation: string,
     findings: string,
+    open: ReadonlyArray<Finding>,
   ) => Effect.Effect<unknown, WorkflowError, Needs>;
 }): Effect.Effect<
   { readonly halted: string; readonly failed: ReadonlyArray<Finding> } | null,
@@ -507,7 +523,7 @@ export const checkedBeforeReview = (ask: {
           )}, after ${ROUNDS} fixes`,
           failed,
         };
-      yield* ask.fix(`${ask.name}-fix-${attempt}`, formatFindings(failed));
+      yield* ask.fix(`${ask.name}-fix-${attempt}`, formatFindings(failed), failed);
     }
   });
 
@@ -546,6 +562,9 @@ export const rally = (ask: {
   /** What every round's reviewers are told beside the change; empty for nothing. */
   readonly obstacle: string;
   readonly resume?: { readonly previous: Rallied; readonly reviewers: string };
+  /** The findings ledger its first round is given; absent, no round has one. */
+  readonly ledger?: ReadonlyArray<Finding>;
+  readonly taken?: ReadonlyArray<string>;
   /** Integrates the default branch, answering with what a review is diffed against. */
   readonly integrate: (
     operation: string,
@@ -556,6 +575,9 @@ export const rally = (ask: {
     readonly at: number;
     readonly proves: string;
     readonly findings: string;
+    readonly open: ReadonlyArray<Finding>;
+    /** The head the round reviewed; "" or absent where it was not read. */
+    readonly head?: string;
   }) => Effect.Effect<typeof FixOutputSchema.Type, WorkflowError, Needs>;
 }): Effect.Effect<Rallied, WorkflowError, Needs> =>
   Effect.gen(function* () {
@@ -568,25 +590,28 @@ export const rally = (ask: {
     const delta =
       ask.resume === undefined && (yield* host.place(runId)).features?.review_delta === true;
     let prior: { readonly head: string; readonly open: ReadonlyArray<Finding> } | null = null;
+    let ledger = ask.ledger;
 
     const repair = Effect.gen(function* () {
       const resumed = ask.resume;
       if (resumed === undefined) return;
+      const open = [
+        ...Arr.filter(
+          resumed.previous.reviewed.findings,
+          (one) =>
+            !Arr.some(
+              resumed.previous.disputes,
+              (dispute) => findingKey(dispute) === findingKey(one),
+            ),
+        ),
+        ...resumed.previous.disputes,
+      ];
       const fixed = yield* ask.fix({
         operation: `${prefix}fix`,
         at: 1,
         proves: yield* ask.proves,
-        findings: formatFindings([
-          ...Arr.filter(
-            resumed.previous.reviewed.findings,
-            (one) =>
-              !Arr.some(
-                resumed.previous.disputes,
-                (dispute) => findingKey(dispute) === findingKey(one),
-              ),
-          ),
-          ...resumed.previous.disputes,
-        ]),
+        findings: formatFindings(open),
+        open,
       });
       const settled = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
       disputed = [
@@ -605,7 +630,7 @@ export const rally = (ask: {
           const unopened = yield* checkedBeforeReview({
             name: `${prefix}before-review-${at}`,
             cwd: ask.cwd,
-            fix: (operation, findings) => ask.fix({ operation, at, proves, findings }),
+            fix: (operation, findings, open) => ask.fix({ operation, at, proves, findings, open }),
           });
           if (unopened !== null)
             return {
@@ -622,15 +647,16 @@ export const rally = (ask: {
                 fixed: [],
               },
             };
-          const head = delta
-            ? yield* Activity.make({
-                name: `${prefix}review-head-${at}`,
-                success: Schema.String,
-                execute: host.reviewedHead({ target: "", cwd: ask.cwd }),
-              })
-            : "";
+          const head =
+            delta || ledger !== undefined
+              ? yield* Activity.make({
+                  name: `${prefix}review-head-${at}`,
+                  success: Schema.String,
+                  execute: host.reviewedHead({ target: "", cwd: ask.cwd }),
+                })
+              : "";
           const given =
-            prior === null || head === ""
+            !delta || prior === null || head === ""
               ? ""
               : yield* followUp({
                   name: `${prefix}review-changes-${at}`,
@@ -658,6 +684,9 @@ export const rally = (ask: {
                   ? ""
                   : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
             prefix,
+            ledger,
+            stamped: head,
+            taken: ask.taken,
             reviewers: ask.resume?.reviewers,
             obstacle: ask.obstacle,
             risks: ask.risks,
@@ -667,6 +696,8 @@ export const rally = (ask: {
             of: ask.resume === undefined ? ROUNDS : 1,
             disputed,
           });
+          if (ledger !== undefined) ledger = synthesis.findings;
+          const unresolved = Arr.filter(synthesis.findings, (one) => !isResolved(one));
           for (const conflict of conflictingDispositions(synthesis)) {
             yield* host.record(runId, `review ${at}: ${conflict}`);
           }
@@ -699,11 +730,11 @@ export const rally = (ask: {
           if (round.go === "clean") {
             // Nothing blocking is not nothing found: what is left is carried to the merge
             // request unfixed, and the record says so rather than the loop going quiet.
-            if (synthesis.findings.length > 0) {
+            if (unresolved.length > 0) {
               yield* host.record(
                 runId,
-                `carried ${synthesis.findings.length} non-blocking finding(s) unfixed: ${Arr.join(
-                  Arr.map(synthesis.findings, (one) => one.title),
+                `carried ${unresolved.length} non-blocking finding(s) unfixed: ${Arr.join(
+                  Arr.map(unresolved, (one) => one.title),
                   "; ",
                 )}`,
               );
@@ -731,6 +762,8 @@ export const rally = (ask: {
             at,
             proves,
             findings: formatFindings(round.live),
+            open: round.live,
+            head,
           });
           // A dispute is carried, not re-argued: the next review either answers it with a
           // rebuttal or it stops driving the loop. One renewed after a rebuttal carries its new
@@ -744,7 +777,7 @@ export const rally = (ask: {
           if (head !== "")
             prior = {
               head,
-              open: Arr.filter(synthesis.findings, (one) => !answered.has(findingKey(one))),
+              open: Arr.filter(unresolved, (one) => !answered.has(findingKey(one))),
             };
 
           if (at === ROUNDS) {

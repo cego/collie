@@ -13,6 +13,9 @@ import type { CompactionPorts, Stopped } from "../src/compaction";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import * as Layer from "effect/Layer";
+import { IGNORES_TERM, SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
+import { processOf, startedOf } from "../src/processes";
+import { passedOver } from "../src/heal";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
@@ -116,7 +119,10 @@ test("a Claude agent ends: its core terminal closes and the end is logged", () =
       );
       expect(ended._tag).toBe("Closed");
       expect(yield* terminalKills).toEqual([terminalId]);
-      expect(lines).toEqual(["impl ended: its Run was stopped"]);
+      expect(lines).toEqual([
+        "impl: Quiet not confirmed: no process of its pane could be named",
+        "impl ended: its Run was stopped",
+      ]);
     }),
   ));
 
@@ -171,6 +177,7 @@ test("a managed agent's work becomes Quiet before its core terminal ends", () =>
         ports: served("quiet", stops),
         herdr: {
           agentList: () => herdr.agentList(),
+          terminalRoot: (address) => herdr.terminalRoot(address),
           terminalKill: (terminal) =>
             Effect.gen(function* () {
               expect(stops).toEqual(["impl"]);
@@ -195,6 +202,7 @@ test("an unreadable core agent list closes nothing", () =>
         herdr: {
           agentList: () => Effect.fail(new HerdrError({ message: "core unavailable", detail: "" })),
           terminalKill: () => Effect.die("no terminal may close without ownership proof"),
+          terminalRoot: () => Effect.die("no root is read without ownership proof"),
         },
       });
       const ended = yield* endAgent(deps, { agent: "impl", terminalId }, "stopped", "close").pipe(
@@ -276,6 +284,111 @@ test("where the caller ends the terminals, another process under the agent's nam
     }),
   ));
 
+/** `impl` on core, in a terminal whose program is the process `shell`; its address. */
+const paneOn = (shell: number) =>
+  Effect.gen(function* () {
+    (yield* rig.startCore()).runsAs(shell);
+    return yield* arranged("impl");
+  });
+
+// An escalated stop spends the hang-up grace and a SIGTERM wait: past bun's 5s default under load.
+const ESCALATES_MS = 20_000;
+
+/** The Agents service of a host whose stops wait `stopMs`. */
+const agentsWith = (stopMs: number) =>
+  agentsLayer({
+    dir: rig.stateDir,
+    env: rig.pluginEnv(),
+    herdr: new Herdr(rig.pluginEnv()),
+    harness: "claude",
+    model: "opus",
+    permissions: "auto",
+    compactAtTokens: 0,
+    help: () => Effect.succeed(""),
+    stopMs,
+  }).pipe(Layer.provideMerge(foundationLayer({ dir: rig.stateDir })));
+
+test(
+  "a Claude agent whose terminal leaves a child running after its close ends Closed only once the escalation has stopped it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const tree = yield* paneTree(SURVIVES_HANGUP);
+        const terminalId = yield* paneOn(tree.shell);
+        const { deps } = depsOf({ stopMs: 3_000 });
+        const ended = yield* endAgent(
+          deps,
+          { agent: "impl", terminalId, harness: "claude" },
+          "it ran out",
+          "close",
+        );
+        expect(yield* processOf(tree.child)).toBeNull();
+        expect(ended).toEqual({ _tag: "Closed", ended: true });
+        expect(yield* terminalKills).toEqual([terminalId]);
+      }).pipe(Effect.scoped),
+    ),
+  ESCALATES_MS,
+);
+
+test(
+  "a Pi agent whose terminal leaves a child that will not stop is not Quiet, and its Fallback parks on predecessor-not-quiet, which no Heal takes",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const tree = yield* paneTree(IGNORES_TERM);
+        const terminalId = yield* paneOn(tree.shell);
+        const retired = yield* Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.retire({ ...launchedImpl, harness: "pi", terminalId }, "ran out"),
+          ),
+          Effect.flip,
+          Effect.provide(agentsWith(500)),
+          Effect.scoped,
+        );
+        expect(yield* processOf(tree.child)).not.toBeNull();
+        expect(retired.cause).toBe("predecessor-not-quiet");
+        expect(retired.reason).toContain(`impl is not Quiet: pid ${tree.child} of its pane`);
+        expect(
+          passedOver({
+            cause: "predecessor-not-quiet",
+            isHeal: false,
+            on: true,
+            waitsOnYou: false,
+            recoveries: [],
+          }),
+        ).toBe("only what its recheck reads can clear its cause");
+      }).pipe(Effect.scoped),
+    ),
+  ESCALATES_MS,
+);
+
+test(
+  "an agent whose pane has already gone still has the session its start recorded stopped",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const tree = yield* paneTree(SURVIVES_HANGUP);
+        const root = {
+          pid: tree.shell,
+          started: (yield* startedOf(tree.shell))!,
+        };
+        process.kill(tree.shell, "SIGHUP");
+        while ((yield* processOf(tree.shell)) !== null) yield* Effect.sleep(10);
+        const { deps, lines } = depsOf({ stopMs: 3_000 });
+        const ended = yield* endAgent(
+          deps,
+          { agent: "impl", terminalId: "term-impl", harness: "claude", root },
+          "it ran out",
+          "close",
+        );
+        expect(yield* processOf(tree.child)).toBeNull();
+        expect(ended).toEqual({ _tag: "Closed", ended: true });
+        expect(lines).toEqual(["impl ended: it ran out"]);
+      }).pipe(Effect.scoped),
+    ),
+  ESCALATES_MS,
+);
+
 const launchedImpl = {
   agent: "impl",
   output: "out.json",
@@ -320,3 +433,56 @@ test("a Fallback's close parks on an agent it cannot prove is this Run's, and cl
       expect(yield* terminalKills).toEqual([]);
     }),
   ));
+
+test(
+  "a ticket's agent whose pane leaves a child that will not stop parks its boundary on predecessor-not-quiet, saying it finished its ticket",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const tree = yield* paneTree(IGNORES_TERM);
+        const terminalId = yield* paneOn(tree.shell);
+        const retired = yield* Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.retire(
+              { ...launchedImpl, harness: "pi", terminalId },
+              "02-second.md: impl finished 01-first.md; build-02-second takes its work over",
+              "finished 01-first.md",
+            ),
+          ),
+          Effect.flip,
+          Effect.provide(agentsWith(500)),
+          Effect.scoped,
+        );
+        expect(yield* processOf(tree.child)).not.toBeNull();
+        expect(retired.cause).toBe("predecessor-not-quiet");
+        expect(retired.reason).toContain(
+          "It finished 01-first.md, and no agent takes its work until it has stopped",
+        );
+      }).pipe(Effect.scoped),
+    ),
+  ESCALATES_MS,
+);
+
+test.each([
+  "02-second.md: impl finished 01-first.md; build-02-second takes its work over",
+  "mr: impl finished 02-second.md; deliver takes its work over",
+])(
+  "a check a ticket's agent left running in the background is stopped before the close of %s succeeds",
+  (line) =>
+    runEffect(
+      Effect.gen(function* () {
+        const tree = yield* paneTree(SURVIVES_HANGUP);
+        const terminalId = yield* paneOn(tree.shell);
+        yield* Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.retire({ ...launchedImpl, terminalId }, line, "finished its ticket"),
+          ),
+          Effect.provide(agentsWith(3_000)),
+          Effect.scoped,
+        );
+        expect(yield* processOf(tree.child)).toBeNull();
+        expect(yield* terminalKills).toEqual([terminalId]);
+      }).pipe(Effect.scoped),
+    ),
+  ESCALATES_MS,
+);

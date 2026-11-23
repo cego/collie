@@ -593,7 +593,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
     readonly lineage: ReadonlyArray<string>;
     /** What its workflow does, fixed when it started; absent from an older host. */
-    readonly features?: { readonly review_delta?: boolean; readonly before_review?: boolean };
+    readonly features?: {
+      readonly review_delta?: boolean;
+      readonly findings_ledger?: boolean;
+      readonly inline_plan?: boolean;
+      readonly agent_sessions?: "run" | "ticket" | "round";
+      readonly before_review?: boolean;
+    };
     /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
     readonly authority: {
       readonly created: {
@@ -2032,6 +2038,42 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      * role's first seat, and keeps its own persona and instructions.
      */
     readonly seat?: Seat;
+    /** What only the workflow knows of this work, for a hand-over to an agent taking it over. */
+    readonly handOver?: HandOverGiven;
+    /**
+     * The agent whose work this continues, where \`agent\` has not yet run in this Run: it is
+     * ended and found Quiet first, and \`agent\` is first handed the host's hand-over.
+     */
+    readonly takesOver?: { readonly agent: string; readonly why: string };
+  }
+
+  /** What an agent may say beside its Output for whoever takes its work over. */
+  export const OutgoingFields: {
+    readonly decisions: Schema.optionalKey<Schema.$Array<Schema.String>>;
+    readonly rejected: Schema.optionalKey<Schema.$Array<Schema.String>>;
+    readonly next_action: Schema.optionalKey<Schema.String>;
+  };
+  export interface Outgoing {
+    readonly decisions?: ReadonlyArray<string>;
+    readonly rejected?: ReadonlyArray<string>;
+    readonly next_action?: string;
+  }
+
+  /** What only the workflow knows of the work a hand-over is about. */
+  export interface HandOverGiven {
+    readonly ticket?: string;
+    /** The plan directory, whose digest is the plan revision. */
+    readonly plan?: string;
+    /** The ticket's acceptance criteria, from its checkboxes. */
+    readonly criteria?: ReadonlyArray<string>;
+    /** The work's last decoded Output's answers to them. */
+    readonly answers?: ReadonlyArray<{ readonly criterion: string; readonly met: string }>;
+    readonly checks?: ReadonlyArray<string>;
+    readonly findings?: ReadonlyArray<Finding>;
+    /** The head the findings were reviewed at. */
+    readonly reviewed?: string;
+    /** The outgoing agent's last Output. */
+    readonly said?: Outgoing;
   }
 
   /** A message handed to the live agent in this role of a Run this one came from, or null. */
@@ -2449,7 +2491,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     }>;
   }, unknown, never, never>;
   export const SynthesisSchema: Schema.Codec<SynthesisReport, unknown, never, never>;
-  export const FixOutputSchema: Schema.Codec<FixReport, unknown, never, never>;
+  export const FixOutputSchema: Schema.Codec<FixReport & Outgoing, unknown, never, never>;
   export const MrOutputSchema: Schema.Codec<
     { readonly pushed: boolean; readonly mr_url?: string | null; readonly note?: string },
     unknown,
@@ -8941,7 +8983,8 @@ const makeRegistry: (
       Effect.provideContext(bun),
       Effect.ignore({ log: "Unhandled" }),
     );
-    if (claimed.fresh) yield* recordFeatures(claimed.row.run).pipe(Effect.provideContext(bun));
+    if (claimed.fresh)
+      yield* recordFeatures(claimed.row.run, userDir).pipe(Effect.provideContext(bun));
     if (claimed.row.accepted === null) yield* attachInto(claimed.row);
     // The parent hands its own children over, so the receipt is written here: a host
     // sweep dispatching one would give the engine a child with no parent to wake.
@@ -10582,7 +10625,8 @@ const makeRegistry: (
       seed: options.intent,
       parent: options.parent ? yield* store.run(options.parent) : null,
     }).pipe(Effect.provideContext(bun), Effect.ignore({ log: "Unhandled" }));
-    if (claimed.fresh) yield* recordFeatures(claimed.row.run).pipe(Effect.provideContext(bun));
+    if (claimed.fresh)
+      yield* recordFeatures(claimed.row.run, userDir).pipe(Effect.provideContext(bun));
     // A retry of work the engine already has is nothing more to do; one that crashed
     // before it heard is handed over now, under the identity it was admitted with.
     // A caller that executes the Run itself has the receipt first, as a parent does.
