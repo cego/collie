@@ -30,6 +30,11 @@ const correctnessDefaults = {
   "unicorn/prefer-string-starts-ends-with": "warn",
 } as const;
 
+const unfit = {
+  // WARNING: oxlint 1.94 reports a let reassigned after a closure captures it, as in test/run-model.test.ts.
+  "prefer-const": "off",
+} as const;
+
 const migrating = {
   "@nkzw/no-instanceof": "off",
   "array-callback-return": "off",
@@ -41,7 +46,6 @@ const migrating = {
   "no-fallthrough": "off",
   "no-unexpected-multiline": "off",
   "no-useless-assignment": "off",
-  "prefer-const": "off",
   "preserve-caught-error": "off",
   "import/consistent-type-specifier-style": "off",
   "import/no-namespace": "off",
@@ -71,7 +75,6 @@ const migrating = {
   "unicorn/numeric-separators-style": "off",
   "unicorn/prefer-at": "off",
   "unicorn/prefer-native-coercion-functions": "off",
-  "unicorn/prefer-number-properties": "off",
   "unicorn/prefer-set-has": "off",
   "unicorn/prefer-single-call": "off",
   "unicorn/prefer-string-raw": "off",
@@ -173,6 +176,7 @@ export default defineConfig({
       { types: { Date: { message: "A time is a DateTime, or epoch milliseconds." } } },
     ],
     ...migrating,
+    ...unfit,
   },
   overrides: [
     ...cloudflare.overrides,
@@ -249,6 +253,6 @@ export default defineConfig({
         ],
       },
     },
-    { files: ["**/*"], rules: migrating },
+    { files: ["**/*"], rules: { ...migrating, ...unfit } },
   ],
 });

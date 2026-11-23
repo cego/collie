@@ -422,7 +422,7 @@ export function autoCompactWindowOf(typed: string) {
     };
     return returned;
   }
-  const tokens = /^\d+$/.test(said) ? Number(said) : NaN;
+  const tokens = /^\d+$/.test(said) ? Number(said) : Number.NaN;
   const returned: { readonly window: AutoCompactWindow } | { readonly refused: string } =
     tokens >= AUTO_COMPACT_LEAST && tokens <= AUTO_COMPACT_MOST
       ? { window: tokens }
