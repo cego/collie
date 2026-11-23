@@ -4511,10 +4511,10 @@ const STOP_SIGNALS = ["SIGTERM", "SIGINT"] as const;
 const LOG_FLUSH = "200 millis";
 
 type StopReason = Data.TaggedEnum<{
-  Asked: {};
-  LockGone: {};
-  WatchedGone: {};
-  DoorGone: {};
+  Asked: Record<never, never>;
+  LockGone: Record<never, never>;
+  WatchedGone: Record<never, never>;
+  DoorGone: Record<never, never>;
 }>;
 const StopReason = Data.taggedEnum<StopReason>();
 const stopSaid = StopReason.$match({

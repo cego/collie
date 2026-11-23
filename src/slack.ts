@@ -167,7 +167,7 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
         const matches: Array<{ channel: string; ts: string; text: string; thread_ts?: string }> =
           [];
         let page = 1;
-        let pages = 1;
+        let pages: number;
         do {
           const answer = yield* call(
             "search.messages",

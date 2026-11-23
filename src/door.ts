@@ -386,9 +386,10 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           });
         case "Wrote":
           return PubSub.publish(writes, undefined);
-        case "Answer":
+        case "Answer": {
           const answer = answers.get(message.ask);
           return answer === undefined ? Effect.void : Deferred.succeed(answer, message.value);
+        }
         case "Open":
           return Effect.void;
       }

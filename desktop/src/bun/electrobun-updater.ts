@@ -5,7 +5,7 @@ import type { UpdaterPort } from "./updates";
 import { downloadRelease, UNPUBLISHED } from "./release-download";
 
 const promised = <A>(evaluate: () => Promise<A>) =>
-  Effect.tryPromise({ try: evaluate, catch: (cause) => String(cause) });
+  Effect.tryPromise({ try: evaluate, catch: String });
 
 const LocalInfo = Schema.Struct({
   channel: Schema.String,

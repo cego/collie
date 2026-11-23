@@ -69,9 +69,8 @@ function layout(
     pipe(text, Str.slice(0, Math.max(0, room)), Str.replaceAll(/-+$/g, ""));
   const step = sanitize(
     Arr.join(
-      Arr.map(
-        Arr.filter([stepId, variantKey], (p) => Boolean(p)),
-        (part) => (part === null || part === undefined ? "" : globalThis.String(part)),
+      Arr.map(Arr.filter([stepId, variantKey], Boolean), (part) =>
+        part === null || part === undefined ? "" : globalThis.String(part),
       ),
       "-",
     ),
@@ -97,9 +96,8 @@ function layout(
 
 export function stepLabel(slug: string, stepId: string, variantKey: string | null) {
   return Arr.join(
-    Arr.map(
-      Arr.filter([slug, stepId, variantKey], (p) => Boolean(p)),
-      (part) => (part === null || part === undefined ? "" : globalThis.String(part)),
+    Arr.map(Arr.filter([slug, stepId, variantKey], Boolean), (part) =>
+      part === null || part === undefined ? "" : globalThis.String(part),
     ),
     "/",
   );

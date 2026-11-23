@@ -872,7 +872,7 @@ export default defineWorkflow({
             const assumptions = [...(build.assumptions ?? [])];
             const commits = [...(build.commits ?? [])];
             let criteria = spec;
-            let unmet: ReadonlyArray<Finding> = [];
+            let unmet: ReadonlyArray<Finding>;
             // WARNING: another hand-back on an unchanged tree cannot move a blocker, so a stall asks instead.
             let blockers: ReadonlyArray<Finding> = [];
             let stalls = 0;

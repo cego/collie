@@ -163,9 +163,7 @@ export const verify = Command.make(
           const nothingYet: () => Answered | null = () => null;
           const answered = yield* Stream.runFoldEffect(opened.events, nothingYet, (last, event) =>
             event._tag === "Output"
-              ? (byAgent && started ? bounding : shown)
-                  [event.stream](event.text)
-                  .pipe(Effect.as(last))
+              ? Effect.as((byAgent && started ? bounding : shown)[event.stream](event.text), last)
               : event._tag === "Started"
                 ? Effect.sync(() => {
                     started = true;

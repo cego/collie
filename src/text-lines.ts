@@ -74,7 +74,7 @@ export const wholeText = <E, R>(part: (offset: number) => Effect.Effect<RunFile,
   Effect.gen(function* () {
     const parts: Array<Uint8Array> = [];
     let read = 0;
-    let size = 0;
+    let size: number;
     do {
       const got = yield* part(read);
       const bytes =

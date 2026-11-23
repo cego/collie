@@ -407,6 +407,7 @@ export function contentOf(markdown: string) {
       } catch (cause) {
         throw new Error(
           `"## ${section}": ${cause instanceof Error ? cause.message : String(cause)}`,
+          { cause },
         );
       }
     },
@@ -684,7 +685,7 @@ export interface Definition<
  * id, the description is empty, it takes nothing and it gives nothing back.
  */
 export const defineWorkflow = <
-  const Fields extends Schema.Struct.Fields = {},
+  const Fields extends Schema.Struct.Fields = Record<never, never>,
   Output extends Schema.Top = typeof Schema.Void,
   Err extends Schema.Top = typeof Schema.Never,
   Provided = never,

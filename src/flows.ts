@@ -1130,6 +1130,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         case "fork":
           return yield* forkFlow(session.herdr, env, prompts).pipe(Effect.as(null));
       }
+      return null;
 
     case "ResumeRun": {
       const resumed = yield* resumeRun(env, {

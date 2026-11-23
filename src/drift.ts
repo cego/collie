@@ -199,12 +199,13 @@ function breachOf(rule: RuleSpec, facts: RuleFacts) {
 
 function refsOf(rule: Exclude<RuleSpec, { kind: "protected_paths" }>, facts: RuleFacts) {
   switch (rule.kind) {
-    case "branch_is":
+    case "branch_is": {
       const returned: Array<Ref> | null =
         facts.branch === rule.name
           ? null
           : [{ kind: "git", excerpt: `on ${facts.branch ?? "no branch"}, not ${rule.name}` }];
       return returned;
+    }
     case "mr_target": {
       const target = facts.mrTarget;
       if (target === null) {

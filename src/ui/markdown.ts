@@ -52,6 +52,7 @@ export function ansiText(ansi: string) {
       } else if (code === 0) {
         [fg, attributes] = [undefined, 0];
       } else if (SETS.has(code)) {
+        // oxlint-disable-next-line oxc/bad-bitwise-operator
         attributes |= SETS.get(code)!;
       } else if (CLEARS.has(code)) {
         attributes &= ~CLEARS.get(code)!;

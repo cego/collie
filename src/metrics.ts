@@ -268,6 +268,7 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string) {
         break;
       case "evidence":
       case "recovery":
+      case "report":
         break;
     }
   }

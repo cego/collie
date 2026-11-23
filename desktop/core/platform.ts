@@ -49,7 +49,7 @@ interface Notification {
 export const BrowserView = {
   defineRPC: (rpc: {
     readonly maxRequestTime: number;
-    readonly handlers: Rpc["handlers"] & { readonly requests: {} };
+    readonly handlers: Rpc["handlers"] & { readonly requests: Record<never, never> };
   }) => ({ ...rpc, send: { frame: (_frame: Frame) => {} } }),
 };
 

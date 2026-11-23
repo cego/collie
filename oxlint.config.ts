@@ -37,28 +37,23 @@ const unfit = {
   "unicorn/text-encoding-identifier-case": "off",
   // WARNING: it reads Effect.catch as a catch clause, and its fix renames shorthand properties.
   "unicorn/catch-error-name": "off",
+  // WARNING: it reads Effect.map as Array#map.
+  "array-callback-return": "off",
+  // WARNING: it reads Effect.catch as a promise chain.
+  "unicorn/prefer-top-level-await": "off",
+  // WARNING: Effect's tagged errors and forges' errors are told apart by their class.
+  "@nkzw/no-instanceof": "off",
+  // WARNING: a workflow's state is replaced, never mutated, and its loops run a handful of rounds.
+  "oxc/no-accumulating-spread": "off",
 } as const;
 
 const migrating = {
-  "@nkzw/no-instanceof": "off",
-  "array-callback-return": "off",
   eqeqeq: "off",
-  "no-case-declarations": "off",
-  "no-console": "off",
-  "no-empty": "off",
-  "no-fallthrough": "off",
-  "no-unexpected-multiline": "off",
-  "no-useless-assignment": "off",
-  "preserve-caught-error": "off",
   "import/no-namespace": "off",
-  "oxc/bad-bitwise-operator": "off",
-  "oxc/no-accumulating-spread": "off",
   "react/immutability": "off",
   "react/no-unknown-property": "off",
   "react/refs": "off",
   "react-hooks/rules-of-hooks": "off",
-  "typescript/no-empty-object-type": "off",
-  "typescript/no-misused-promises": "off",
   "typescript/no-non-null-assertion": "off",
   "typescript/no-unsafe-argument": "off",
   "typescript/no-unsafe-assignment": "off",
@@ -66,10 +61,7 @@ const migrating = {
   "typescript/no-unsafe-member-access": "off",
   "typescript/no-unsafe-return": "off",
   "typescript/no-unsafe-type-assertion": "off",
-  "typescript/switch-exhaustiveness-check": "off",
   "unicorn/consistent-function-scoping": "off",
-  "unicorn/prefer-native-coercion-functions": "off",
-  "unicorn/prefer-top-level-await": "off",
 } as const;
 
 export default defineConfig({
@@ -167,6 +159,15 @@ export default defineConfig({
       "error",
       { types: { Date: { message: "A time is a DateTime, or epoch milliseconds." } } },
     ],
+    // WARNING: a failed cleanup is ignored on purpose; there is nothing left to tell.
+    "no-empty": ["error", { allowEmptyCatch: true }],
+    // WARNING: an interface extending a Schema's Type names it without widening.
+    "@typescript-eslint/no-empty-object-type": [
+      "error",
+      { allowInterfaces: "with-single-extends" },
+    ],
+    // WARNING: Promise#finally waits for the promise its callback returns.
+    "@typescript-eslint/no-misused-promises": ["error", { checksVoidReturn: { arguments: false } }],
     ...migrating,
     ...unfit,
   },
@@ -199,6 +200,10 @@ export default defineConfig({
         "no-restricted-globals": "off",
         "no-restricted-properties": "off",
       },
+    },
+    {
+      files: ["bench/**", "desktop/core/platform.ts", "desktop/core/record-terminal.ts"],
+      rules: { "no-console": "off" },
     },
     {
       // WARNING: Effect's Crypto has no Ed25519 sign, verify or keypair.

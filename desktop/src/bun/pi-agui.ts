@@ -173,6 +173,7 @@ export const piEvents = (thread: string) => {
           case "toolcall_end":
             return tool(event.toolCall.id, event.toolCall.name, event.toolCall.arguments);
         }
+        return [];
       }
       case "tool_execution_start":
         return tools.has(record.toolCallId)

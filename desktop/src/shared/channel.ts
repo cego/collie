@@ -32,7 +32,7 @@ export const heldUntilListened = <In>() => {
   };
 };
 
-export type FrameSchema = { requests: {}; messages: { frame: ToMain | ToView } };
+export type FrameSchema = { requests: Record<never, never>; messages: { frame: ToMain | ToView } };
 
 // WARNING: Electrobun JSON-encodes its messages already, so a frame goes as a value and the codec only has to make the protocol's `unknown` holes JSON-safe, as Effect's worker protocol does.
 const codecFor = Schema.toCodecJson as RpcSerialization.CodecFor;

@@ -3202,7 +3202,7 @@ const scanners = {
 
 // WARNING: unparseable code imports nothing; an installed package is linked, never copied.
 const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => {
-  let imports: ReadonlyArray<{ readonly path: string }> = [];
+  let imports: ReadonlyArray<{ readonly path: string }>;
   try {
     imports = scanners[loader].scanImports(text);
   } catch {
@@ -11375,10 +11375,7 @@ const runBun: (
       Effect.zipWith(collect(child.stderr), (out, err) => out + err),
     );
     return { code: Number(yield* child.exitCode), output };
-  }).pipe(
-    Effect.scoped,
-    Effect.mapError((cause) => String(cause)),
-  );
+  }).pipe(Effect.scoped, Effect.mapError(String));
 
 const collect = (stream: Stream.Stream<Uint8Array, PlatformError>) =>
   stream.pipe(

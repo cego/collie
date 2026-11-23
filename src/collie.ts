@@ -69,12 +69,7 @@ const helpAsked = Bun.argv.includes("--help") || Bun.argv.includes("-h");
 const consoleToStderr = Console.Console.of({
   ...globalThis.console,
   log: (...args: ReadonlyArray<unknown>) => {
-    process.stderr.write(
-      `${Arr.join(
-        Arr.map(args, (arg) => String(arg)),
-        " ",
-      )}\n`,
-    );
+    process.stderr.write(`${Arr.join(Arr.map(args, String), " ")}\n`);
   },
 });
 

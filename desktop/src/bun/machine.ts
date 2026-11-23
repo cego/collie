@@ -418,7 +418,7 @@ const ran = (command: ReadonlyArray<string>, stdin?: Uint8Array) =>
           stdout: "pipe",
           stderr: "pipe",
         }),
-      catch: (cause) => String(cause),
+      catch: String,
     });
     const [out, err, code] = yield* Effect.promise(() =>
       Promise.all([
