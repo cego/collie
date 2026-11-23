@@ -73,7 +73,6 @@ const migrating = {
   "typescript/switch-exhaustiveness-check": "off",
   "unicorn/catch-error-name": "off",
   "unicorn/consistent-function-scoping": "off",
-  "unicorn/no-hex-escape": "off",
   "unicorn/numeric-separators-style": "off",
   "unicorn/prefer-at": "off",
   "unicorn/prefer-native-coercion-functions": "off",

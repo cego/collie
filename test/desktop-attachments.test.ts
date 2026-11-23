@@ -48,7 +48,7 @@ test("an image's size is read from its header, and null where the header says no
     );
   const png = [
     0x89,
-    ...ascii("PNG\r\n\x1a\n"),
+    ...ascii("PNG\r\n\u001a\n"),
     0,
     0,
     0,

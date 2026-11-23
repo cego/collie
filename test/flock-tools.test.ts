@@ -313,7 +313,7 @@ const unread = (name: string, board: ChatBoard) => ({ name, board });
 
 const png = (width: number, height: number) => {
   const header = Buffer.alloc(24);
-  Buffer.from("\x89PNG\r\n\x1a\n\0\0\0\rIHDR", "latin1").copy(header);
+  Buffer.from("\u0089PNG\r\n\u001a\n\0\0\0\rIHDR", "latin1").copy(header);
   header.writeUInt32BE(width, 16);
   header.writeUInt32BE(height, 20);
   return header.toString("latin1");

@@ -1112,7 +1112,7 @@ export type KeyIntent =
   | { _tag: "Copy"; text: string }
   | { _tag: "Do"; command: Command };
 
-const PRINTABLE = /^[\x20-\x7e]$/;
+const PRINTABLE = /^[\u0020-\u007e]$/;
 
 const NEXT_QUESTION = "n";
 
@@ -1252,24 +1252,24 @@ export interface Answered {
 }
 
 export function answerFor(choice: PendingChoice, asking: Asking, key: string) {
-  if (key === "\x1b" || key === "\x03") return { asking, value: "" };
+  if (key === "\u001b" || key === "\u0003") return { asking, value: "" };
   if (key === "\r" || key === "\n") {
     const value = choice.kind === "ask" ? asking.typed : (choice.items[asking.index]?.id ?? null);
     return { asking: { index: 0, typed: "" }, value };
   }
   if (choice.kind === "ask") {
-    if (key === "\x7f" || key === "\b") {
+    if (key === "\u007f" || key === "\b") {
       return { asking: { ...asking, typed: pipe(asking.typed, Str.slice(0, -1)) }, value: null };
     }
-    if (/^[\x20-\x7e]$/.test(key)) {
+    if (/^[\u0020-\u007e]$/.test(key)) {
       return { asking: { ...asking, typed: asking.typed + key }, value: null };
     }
     return { asking, value: null };
   }
-  if (key === "\x1b[A") {
+  if (key === "\u001b[A") {
     return { asking: { ...asking, index: Math.max(0, asking.index - 1) }, value: null };
   }
-  if (key === "\x1b[B") {
+  if (key === "\u001b[B") {
     const last = Math.max(0, choice.items.length - 1);
     return { asking: { ...asking, index: Math.min(last, asking.index + 1) }, value: null };
   }

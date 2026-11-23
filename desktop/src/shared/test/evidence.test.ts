@@ -5,7 +5,7 @@ import { attachmentsShown } from "../attachments";
 import { mediaType, sortEvidence } from "../evidence";
 
 test("terminal colours become styled spans, and a reset ends them", () => {
-  expect(ansiSpans("ok \x1b[31;1mFAIL\x1b[0m done")).toEqual([
+  expect(ansiSpans("ok \u001b[31;1mFAIL\u001b[0m done")).toEqual([
     { text: "ok ", style: {} },
     { text: "FAIL", style: { color: "var(--ansi-1)", fontWeight: "bold" } },
     { text: " done", style: {} },
@@ -13,7 +13,7 @@ test("terminal colours become styled spans, and a reset ends them", () => {
 });
 
 test("256-colour and true-colour codes keep their colour, and a background is its own", () => {
-  expect(ansiSpans("\x1b[38;5;208ma\x1b[38;2;1;2;3;44mb\x1b[39;49mc")).toEqual([
+  expect(ansiSpans("\u001b[38;5;208ma\u001b[38;2;1;2;3;44mb\u001b[39;49mc")).toEqual([
     { text: "a", style: { color: "rgb(255, 135, 0)" } },
     { text: "b", style: { color: "rgb(1, 2, 3)", backgroundColor: "var(--ansi-4)" } },
     { text: "c", style: {} },
@@ -21,7 +21,7 @@ test("256-colour and true-colour codes keep their colour, and a background is it
 });
 
 test("bright colours, and codes that are not colours, are understood or dropped", () => {
-  expect(ansiSpans("\x1b[92mgreen\x1b[22;3mx\x1b[2Ky\x1b[m")).toEqual([
+  expect(ansiSpans("\u001b[92mgreen\u001b[22;3mx\u001b[2Ky\u001b[m")).toEqual([
     { text: "green", style: { color: "var(--ansi-10)" } },
     { text: "x", style: { color: "var(--ansi-10)", fontStyle: "italic" } },
     { text: "y", style: { color: "var(--ansi-10)", fontStyle: "italic" } },
@@ -29,13 +29,13 @@ test("bright colours, and codes that are not colours, are understood or dropped"
 });
 
 test("escapes that are not colours, a link's or a charset's included, never reach the text", () => {
-  expect(ansiSpans("\x1b]8;;https://x.test\x07link\x1b]8;;\x07 \x1b(Bdone\x1b[2K")).toEqual([
-    { text: "link done", style: {} },
-  ]);
+  expect(
+    ansiSpans("\u001b]8;;https://x.test\u0007link\u001b]8;;\u0007 \u001b(Bdone\u001b[2K"),
+  ).toEqual([{ text: "link done", style: {} }]);
 });
 
 test("a colour carries across the lines it spans", () => {
-  expect(ansiLines("\x1b[31mone\ntwo\x1b[0m\nthree")).toEqual([
+  expect(ansiLines("\u001b[31mone\ntwo\u001b[0m\nthree")).toEqual([
     [{ text: "one", style: { color: "var(--ansi-1)" } }],
     [{ text: "two", style: { color: "var(--ansi-1)" } }],
     [{ text: "three", style: {} }],

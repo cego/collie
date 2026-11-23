@@ -662,7 +662,7 @@ export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
 const REFRESH_MS = 1500;
 const TICK_MS = 120;
 
-const CLEAR = "\x1b[2J\x1b[H";
+const CLEAR = "\u001b[2J\u001b[H";
 
 const WIDTH_FLOOR = 40;
 
@@ -1216,7 +1216,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
         const answered = yield* answerKey(env, waiting, asking, key);
         asking = answered.asking;
         note = answered.note ?? note;
-      } else if (key === "q" || key === "\x03") {
+      } else if (key === "q" || key === "\u0003") {
         return 0;
       } else {
         note = yield* act(session, env, view, key);

@@ -7,7 +7,7 @@ export function tokenizeKeys(chunk: string) {
   const out: string[] = [];
   let i = 0;
   while (i < chunk.length) {
-    if (chunk[i] === "\x1b") {
+    if (chunk[i] === "\u001b") {
       let end = i + 1;
       if (chunk[end] === "[") {
         end += 1;

@@ -21,9 +21,9 @@ const colour256 = (n: number) => {
 };
 
 // oxlint-disable-next-line no-control-regex -- Terminal CSI sequences begin with the ESC control byte.
-const ESCAPE = /\x1b\[([\d;?]*)([A-Za-z])/g;
+const ESCAPE = /\u001b\[([\d;?]*)([A-Za-z])/g;
 // oxlint-disable-next-line no-control-regex -- Terminal OSC sequences use ESC and BEL as protocol delimiters.
-const OTHER = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][\w]/g;
+const OTHER = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[()][\w]/g;
 
 const SETS = new Map<number, readonly [string, string]>([
   [1, ["fontWeight", "bold"]],

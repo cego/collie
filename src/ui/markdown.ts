@@ -36,7 +36,7 @@ export function ansiText(ansi: string) {
   let fg: RGBA | undefined;
   let attributes = 0;
   // oxlint-disable-next-line no-control-regex -- ANSI SGR sequences begin with the ESC control byte.
-  for (const [index, part] of Str.split(ansi, /\x1b\[([\d;]*)m/).entries()) {
+  for (const [index, part] of Str.split(ansi, /\u001b\[([\d;]*)m/).entries()) {
     if (index % 2 === 0) {
       if (part !== "") chunks.push({ __isChunk: true, text: part, fg, attributes });
       continue;

@@ -626,11 +626,11 @@ test("one thing owns the keyboard, in one order", () => {
 
 test("a menu is answered by the option the cursor is on", () => {
   const start = { index: 0, typed: "" };
-  expect(answerFor(MENU, start, "\x1b[B").asking.index).toBe(1);
-  expect(answerFor(MENU, { index: 1, typed: "" }, "\x1b[B").asking.index).toBe(1);
-  expect(answerFor(MENU, start, "\x1b[A").asking.index).toBe(0);
+  expect(answerFor(MENU, start, "\u001b[B").asking.index).toBe(1);
+  expect(answerFor(MENU, { index: 1, typed: "" }, "\u001b[B").asking.index).toBe(1);
+  expect(answerFor(MENU, start, "\u001b[A").asking.index).toBe(0);
   expect(answerFor(MENU, { index: 1, typed: "" }, "\r").value).toBe("Stop here");
-  expect(answerFor(MENU, start, "\x1b").value).toBe("");
+  expect(answerFor(MENU, start, "\u001b").value).toBe("");
   expect(answerFor(MENU, start, "x").value).toBeNull();
 });
 
@@ -724,9 +724,9 @@ test("a capped question shows a window of options that follows the cursor", () =
 test("a question is answered by what was typed", () => {
   const ask: PendingChoice = { ...MENU, kind: "ask", items: [] };
   expect(answerFor(ask, { index: 0, typed: "" }, "h").asking.typed).toBe("h");
-  expect(answerFor(ask, { index: 0, typed: "hi" }, "\x7f").asking.typed).toBe("h");
+  expect(answerFor(ask, { index: 0, typed: "hi" }, "\u007f").asking.typed).toBe("h");
   expect(answerFor(ask, { index: 0, typed: "hi" }, "\r").value).toBe("hi");
-  expect(answerFor(ask, { index: 0, typed: "hi" }, "\x1b[B").asking.typed).toBe("hi");
+  expect(answerFor(ask, { index: 0, typed: "hi" }, "\u001b[B").asking.typed).toBe("hi");
 });
 
 test("a paste fills a field and never submits it", () => {
@@ -738,7 +738,7 @@ test("a paste fills a field and never submits it", () => {
   // WARNING: a pasted newline is the submit key, so it must reach the field as nothing at all.
   expect(pasteInto("", bytes(`${url}\n`))).toBe(url);
   expect(pasteInto("", bytes(`one\r\ntwo\n`))).toBe("onetwo");
-  expect(pasteInto("", bytes("\x1b[Bfix-\x07caf\u00e9"))).toBe("[Bfix-caf\u00e9");
+  expect(pasteInto("", bytes("\u001b[Bfix-\u0007caf\u00e9"))).toBe("[Bfix-caf\u00e9");
 });
 
 test("a row says how long it has been like this, not when", () => {
@@ -1018,7 +1018,7 @@ test("the filter keeps the keyboard until Enter or Esc, and Enter keeps the text
     filter: "revi",
     typing: false,
   });
-  expect(keyIntent(typing, press("\x1b", { name: "escape" }))).toEqual({
+  expect(keyIntent(typing, press("\u001b", { name: "escape" }))).toEqual({
     _tag: "Filtering",
     filter: "",
     typing: false,
@@ -1033,7 +1033,7 @@ test("the filter keeps the keyboard until Enter or Esc, and Enter keeps the text
 
 test("Esc on the board drops a filter it is still narrowed by, and nothing else", () => {
   const narrowed = keys({ query: "gitlab" });
-  const esc = press("\x1b", { name: "escape" });
+  const esc = press("\u001b", { name: "escape" });
 
   expect(keyIntent(narrowed, esc)).toEqual({ _tag: "Filtering", filter: "", typing: false });
   // WARNING: with no filter set Esc widens the board; narrowing to one workspace is a filter too, so both exits share a key.
@@ -1055,7 +1055,7 @@ test("a Settings row being edited owns the keyboard until it is sent or abandone
     _tag: "Submitted",
     command: { _tag: "SetDefault", key: "model", value: "opu" },
   });
-  expect(keyIntent(editing, press("\x1b", { name: "escape" }))).toEqual({
+  expect(keyIntent(editing, press("\u001b", { name: "escape" }))).toEqual({
     _tag: "Editing",
     editing: null,
   });
@@ -1064,18 +1064,21 @@ test("a Settings row being edited owns the keyboard until it is sent or abandone
 test("the panel's scroll keys do not fight the list's arrows", () => {
   const scrollable = keys({ scrollable: true });
 
-  expect(keyIntent(scrollable, press("\x1b[6~", { name: "pagedown" }))).toEqual({
+  expect(keyIntent(scrollable, press("\u001b[6~", { name: "pagedown" }))).toEqual({
     _tag: "Scroll",
     by: 1,
     unit: "page",
   });
-  expect(keyIntent(scrollable, press("\x1b[B", { name: "down", shift: true }))).toEqual({
+  expect(keyIntent(scrollable, press("\u001b[B", { name: "down", shift: true }))).toEqual({
     _tag: "Scroll",
     by: 1,
     unit: "line",
   });
-  expect(keyIntent(scrollable, press("\x1b[B", { name: "down" }))).toEqual({ _tag: "Move", by: 1 });
-  expect(keyIntent(keys(), press("\x1b[6~", { name: "pagedown" }))).toBeNull();
+  expect(keyIntent(scrollable, press("\u001b[B", { name: "down" }))).toEqual({
+    _tag: "Move",
+    by: 1,
+  });
+  expect(keyIntent(keys(), press("\u001b[6~", { name: "pagedown" }))).toBeNull();
 });
 
 test("a key with nothing to act on does nothing, rather than acting on something else", () => {
@@ -1438,7 +1441,7 @@ test("a proposal on screen takes Enter and Esc, and nothing else", () => {
     _tag: "Do",
     command: { _tag: "ConfirmProposal", id: "p1", hash: "deadbeef" },
   });
-  expect(keyIntent(previewing, press("\x1b", { name: "escape" }))).toEqual({
+  expect(keyIntent(previewing, press("\u001b", { name: "escape" }))).toEqual({
     _tag: "Do",
     command: { _tag: "DeclineProposal", id: "p1", hash: "deadbeef" },
   });

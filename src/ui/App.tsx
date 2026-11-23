@@ -31,7 +31,7 @@ import { usePasteInto } from "./paste";
 import { Flow } from "./Flow";
 import type { Pending } from "./prompts";
 
-const PRINTABLE = /^[\x20-\x7e]$/;
+const PRINTABLE = /^[\u0020-\u007e]$/;
 const MENU_GAP = 28;
 
 export interface AppProps {

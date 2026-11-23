@@ -13,7 +13,7 @@ import { recordsAt } from "../src/records";
 import { until } from "./support/host";
 import { proves } from "./support/world";
 
-const CLEAR = "\x1b[2J\x1b[H";
+const CLEAR = "\u001b[2J\u001b[H";
 
 const terminalStdin = Effect.acquireRelease(
   Effect.sync(() => {

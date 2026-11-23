@@ -42,12 +42,12 @@ test("a completed keyboard session releases its terminal reader", () =>
       const key = yield* Effect.scoped(
         Effect.gen(function* () {
           const keys = yield* keyboard(input);
-          input.send("\x1b");
+          input.send("\u001b");
           return yield* Queue.take(keys);
         }),
       );
 
-      expect(key).toBe("\x1b");
+      expect(key).toBe("\u001b");
       expect(input.rawModes).toEqual([true, false]);
       expect(input.resumed).toBe(1);
       expect(input.paused).toBe(1);
@@ -56,7 +56,7 @@ test("a completed keyboard session releases its terminal reader", () =>
   ));
 
 test("a stdin chunk carrying several keypresses is split into keys", () => {
-  expect(tokenizeKeys("\x7f\x7f\x7f")).toEqual(["\x7f", "\x7f", "\x7f"]);
-  expect(tokenizeKeys("re\x1b[Bv\r")).toEqual(["r", "e", "\x1b[B", "v", "\r"]);
-  expect(tokenizeKeys("\x1b")).toEqual(["\x1b"]);
+  expect(tokenizeKeys("\u007f\u007f\u007f")).toEqual(["\u007f", "\u007f", "\u007f"]);
+  expect(tokenizeKeys("re\u001b[Bv\r")).toEqual(["r", "e", "\u001b[B", "v", "\r"]);
+  expect(tokenizeKeys("\u001b")).toEqual(["\u001b"]);
 });

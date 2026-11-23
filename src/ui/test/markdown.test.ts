@@ -34,7 +34,7 @@ test("markdown keeps headings and emphasis when CLI colour is disabled", () =>
 
 test("SGR codes become attributes and the board's colours, and a reset clears both", () => {
   const chunks = ansiText(
-    "\x1b[1;31mbad\x1b[22mstill red\x1b[0mplain\x1b[38;2;1;3;4mrgb\x1b[39m",
+    "\u001b[1;31mbad\u001b[22mstill red\u001b[0mplain\u001b[38;2;1;3;4mrgb\u001b[39m",
   ).chunks;
   expect(Arr.map(chunks, (c) => [c.text, c.attributes, c.fg])).toEqual([
     ["bad", TextAttributes.BOLD, RED],
@@ -47,9 +47,9 @@ test("SGR codes become attributes and the board's colours, and a reset clears bo
 test("an escape the agent wrote is text, never a style", () =>
   runEffect(
     Effect.gen(function* () {
-      const styled = yield* Effect.promise(() => styledMarkdown("\x1b[1mloud", 40));
+      const styled = yield* Effect.promise(() => styledMarkdown("\u001b[1mloud", 40));
       const chunks = styled?.chunks ?? [];
-      expect(Arr.some(chunks, (c) => pipe(c.text, Str.includes("\x1b")))).toBe(false);
+      expect(Arr.some(chunks, (c) => pipe(c.text, Str.includes("\u001b")))).toBe(false);
       expect(Arr.some(chunks, (c) => Boolean((c.attributes ?? 0) & TextAttributes.BOLD))).toBe(
         false,
       );

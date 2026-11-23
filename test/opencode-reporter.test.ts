@@ -60,10 +60,10 @@ test("the reporter reports the agent's own session working, then idle, and a sub
       expect(yield* read(tty)).toBe(
         Arr.join(
           [
-            "\x1b]7501;state=working:app=opencode\x1b\\",
-            "\x1b]7501;state=blocked:kind=permission:app=opencode\x1b\\",
-            "\x1b]7501;state=working:app=opencode\x1b\\",
-            "\x1b]7501;state=idle:app=opencode\x1b\\",
+            "\u001b]7501;state=working:app=opencode\u001b\\",
+            "\u001b]7501;state=blocked:kind=permission:app=opencode\u001b\\",
+            "\u001b]7501;state=working:app=opencode\u001b\\",
+            "\u001b]7501;state=idle:app=opencode\u001b\\",
           ],
           "",
         ),
@@ -75,12 +75,12 @@ test("a reporter on a resumed session reports it idle once loaded, and keeps to 
   runEffect(
     Effect.gen(function* () {
       const { sessionFile, tty, event, read } = yield* loadedOn("ses_resumed");
-      expect(yield* read(tty)).toBe("\x1b]7501;state=idle:app=opencode\x1b\\");
+      expect(yield* read(tty)).toBe("\u001b]7501;state=idle:app=opencode\u001b\\");
       yield* event("session.created", { info: { id: "ses_other" } });
       yield* event("session.status", { sessionID: "ses_resumed", status: { type: "busy" } });
       expect(yield* read(sessionFile)).toBe("ses_resumed");
       expect(yield* read(tty)).toBe(
-        "\x1b]7501;state=idle:app=opencode\x1b\\\x1b]7501;state=working:app=opencode\x1b\\",
+        "\u001b]7501;state=idle:app=opencode\u001b\\\u001b]7501;state=working:app=opencode\u001b\\",
       );
     }),
   ));

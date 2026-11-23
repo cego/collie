@@ -264,7 +264,7 @@ describe("the start-of-suite sweep", () => {
         yield* fs.writeFileString(`${pid}/cmdline`, "");
         yield* fs.writeFileString(`${pid}/stat.next`, stat("140730872492009"));
         yield* fs.writeFileString(`${pid}/environ.next`, `PATH=/bin\0${MARKER}=/root-a\0`);
-        yield* fs.writeFileString(`${pid}/cmdline.next`, "sleep\x0063\0");
+        yield* fs.writeFileString(`${pid}/cmdline.next`, "sleep\u000063\0");
         const exec = Bun.spawn([
           "sh",
           "-c",
@@ -284,7 +284,7 @@ describe("the start-of-suite sweep", () => {
         const proc = yield* fs.makeTempDirectoryScoped({ prefix: "proc-" });
         const pid = `${proc}/4242`;
         yield* fs.makeDirectory(pid);
-        yield* fs.writeFileString(`${pid}/cmdline`, "sleep\x0063\0");
+        yield* fs.writeFileString(`${pid}/cmdline`, "sleep\u000063\0");
         yield* fs.writeFileString(`${pid}/environ.next`, `PATH=/bin\0${MARKER}=/root-a\0`);
         yield* fs.writeFileString(
           `${pid}/stat.next`,
