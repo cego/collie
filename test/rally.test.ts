@@ -415,7 +415,6 @@ test("round 1 and the final review of the integrated tree read the whole change 
     }),
   ));
 
-/** The shipped rally given an implement ticket's ledger, which starts empty. */
 const ledgerRally = (runId: string) =>
   Effect.gen(function* () {
     const base = Str.trim(
@@ -487,7 +486,6 @@ test("a later round's review that leaves out an earlier finding fails the Run, n
     }),
   ));
 
-/** The shipped rally on a Run started with `static` marked to run before review, then `after`. */
 const staticRally = <A>(
   runId: string,
   fixes: boolean,
@@ -558,7 +556,7 @@ const staticRally = <A>(
     Effect.orDie,
   );
 
-/** A fix that changed nothing, which also reads as a clean review. */
+// WARNING: a fix that changed nothing also reads as a clean review.
 const NOT_FIXED = {
   verdict: "clean",
   summary: "nothing changed",
@@ -567,47 +565,39 @@ const NOT_FIXED = {
   checks: [],
 };
 
-test(
-  "a check marked to run before review that fails on the builder's tree goes back to the builder by name, and no reviewer starts",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* rig.queueOutputs([NOT_FIXED, NOT_FIXED, NOT_FIXED, NOT_FIXED]);
-        yield* staticRally("r-static-fails", false, (ran) =>
-          Effect.gen(function* () {
-            const [failed] = yield* ran.records();
-            expect(ran.said).toContain("before_review_failed");
-            expect(ran.said).toContain(`"static"`);
-            const fix = yield* ran.prompt("before-review-1-fix-1");
-            expect(fix).toContain(`check "static" failed before review`);
-            expect(fix).toContain(`verification:${failed!.id}`);
-            expect(yield* ran.asked("review-1")).toBe(false);
-          }),
-        );
-      }),
-    ),
-  60_000,
-);
+test("a check marked to run before review that fails on the builder's tree goes back to the builder by name, and no reviewer starts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([NOT_FIXED, NOT_FIXED, NOT_FIXED, NOT_FIXED]);
+      yield* staticRally("r-static-fails", false, (ran) =>
+        Effect.gen(function* () {
+          const [failed] = yield* ran.records();
+          expect(ran.said).toContain("before_review_failed");
+          expect(ran.said).toContain(`"static"`);
+          const fix = yield* ran.prompt("before-review-1-fix-1");
+          expect(fix).toContain(`check "static" failed before review`);
+          expect(fix).toContain(`verification:${failed!.id}`);
+          expect(yield* ran.asked("review-1")).toBe(false);
+        }),
+      );
+    }),
+  ));
 
-test(
-  "a check marked to run before review that passes opens the round, and the gate on the unmoved tree takes its record",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(`${rig.projectDir}/lint-ok`, "already\n");
-        yield* rig.queueOutputs([NOT_FIXED]);
-        yield* staticRally("r-static-passes", false, (ran) =>
-          Effect.gen(function* () {
-            expect(ran.said).toBe("settled");
-            expect(yield* ran.asked("review-1")).toBe(true);
-            const [passed, ...others] = yield* ran.records();
-            expect([passed?.result, others]).toEqual(["pass", []]);
-            expect((yield* ran.gate()).id).toBe(passed!.id);
-            expect(yield* ran.records()).toHaveLength(1);
-          }),
-        );
-      }),
-    ),
-  60_000,
-);
+test("a check marked to run before review that passes opens the round, and the gate on the unmoved tree takes its record", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${rig.projectDir}/lint-ok`, "already\n");
+      yield* rig.queueOutputs([NOT_FIXED]);
+      yield* staticRally("r-static-passes", false, (ran) =>
+        Effect.gen(function* () {
+          expect(ran.said).toBe("settled");
+          expect(yield* ran.asked("review-1")).toBe(true);
+          const [passed, ...others] = yield* ran.records();
+          expect([passed?.result, others]).toEqual(["pass", []]);
+          expect((yield* ran.gate()).id).toBe(passed!.id);
+          expect(yield* ran.records()).toHaveLength(1);
+        }),
+      );
+    }),
+  ));
